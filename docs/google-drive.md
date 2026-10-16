@@ -201,10 +201,15 @@ and [first-sheet-only CSV export](https://developers.google.com/workspace/drive/
    `GOOGLE_MCP_OAUTH_CLIENT_SECRET` are used together. An incomplete dedicated
    pair is a setup error; credentials from different clients are never mixed.
 5. To show **Add files from Google Drive**, enable the **Google Picker API** in
-   the same Cloud project. Create an API key (APIs & Services → Credentials →
-   Create credentials → API key), restrict it to the Google Picker API and to
-   this deployment's HTTP referrers (for example `http://localhost:3000/*`),
-   and copy the project **number** from Project settings. Then set:
+   the same Cloud project, alongside the Google Drive API. Create an API key
+   (APIs & Services → Credentials → Create credentials → API key) and restrict
+   it the way Google's Picker guide requires: under **API restrictions**
+   select both the Google Picker API and the Google Drive API; under **Website
+   restrictions** add this deployment's origin (for example
+   `http://localhost:3000/*`) **and** `https://docs.google.com/*`, which the
+   Picker's own frame loads from. Without the docs.google.com entry the Picker
+   opens and then reports "API developer key is invalid" although Mike shows
+   the button. Copy the project **number** from Project settings. Then set:
 
    ```dotenv
    GOOGLE_DRIVE_PICKER_API_KEY=YOUR_BROWSER_API_KEY
