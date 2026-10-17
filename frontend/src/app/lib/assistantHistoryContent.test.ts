@@ -9,6 +9,21 @@ describe("assistantHistoryContent", () => {
       { type: "content", text: "After." },
     ] })).toBe("Before.\n\nDraft\nFirst paragraph.\n\nSecond paragraph.\n\nAfter.");
   });
+
+  it.each(["", "Before.After."])("excludes reasoning and tool activity around a card (%s)", (content) => {
+    expect(assistantHistoryContent({
+      content,
+      events: [
+        { type: "reasoning", text: "Consider the drafting options." },
+        { type: "content", text: "Before." },
+        { type: "tool_call_start", name: "create_text_card" },
+        { type: "text_card", card_id: "card-1", title: "Draft", text: "First paragraph.\n\nSecond paragraph." },
+        { type: "doc_read", filename: "reference.docx" },
+        { type: "content", text: "After." },
+      ],
+    })).toBe("Before.\n\nDraft\nFirst paragraph.\n\nSecond paragraph.\n\nAfter.");
+  });
+
   it("keeps content that is already present", () => {
     expect(
       assistantHistoryContent({ content: "Hydrated", events: [] }),
