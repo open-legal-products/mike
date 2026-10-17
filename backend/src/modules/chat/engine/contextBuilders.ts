@@ -807,6 +807,7 @@ export function stripTransientAssistantEvents(events: AssistantEvent[]) {
 // therefore produces a type error until its textless-turn behavior is chosen
 // deliberately, instead of silently dropping an otherwise useful response.
 const COMPLETES_TEXTLESS_TURN = {
+  text_card: true,
   reasoning: false,
   ask_inputs: true,
   ask_inputs_response: false,

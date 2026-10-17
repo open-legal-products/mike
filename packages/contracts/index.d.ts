@@ -328,7 +328,16 @@ export type DocumentSearchEvent = {
   error_code?: DocumentSearchErrorCode;
 };
 
+export type TextCardEvent = {
+  type: "text_card";
+  card_id: string;
+  title: string;
+  /** Literal, copy-ready text. Whitespace and line breaks are significant. */
+  text: string;
+};
+
 export type AssistantEvent =
+  | TextCardEvent
   | DocumentSearchEvent
   | { type: "reasoning"; text: string }
   | AskInputsEvent

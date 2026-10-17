@@ -7,8 +7,10 @@ import type {
   WordDocumentReadEvent,
   WordReasoningEvent,
   WordThinkingEvent,
+  WordTextCardEvent,
 } from "../../types";
 import { PillButtonUI as PillButton } from "@mike/pill-button-ui";
+import { TextCardUI } from "@mike/document-event-blocks-ui";
 import { EXCERPT_SOURCE_PROPS } from "@mike/response-selection-menu-ui";
 import { EditCard } from "./EditCard";
 import { PreResponseWrapper } from "./PreResponseWrapper";
@@ -28,6 +30,7 @@ import {
   isWordEditReferenceEvent,
   isWordReasoningEvent,
   isWordThinkingEvent,
+  isWordTextCardEvent,
 } from "../../lib/wordChatEvents";
 import { getEditKey } from "../../lib/wordTrackedEditKeys";
 import {
@@ -67,6 +70,7 @@ type EventGroup =
       indices: number[];
     }
   | { kind: "prose"; text: string; key: string }
+  | { kind: "text_card"; event: WordTextCardEvent }
   | { kind: "edits"; blockIndexes: number[]; key: string };
 
 function normalizedEditToStreaming(
@@ -208,6 +212,11 @@ function AssistantMessageImpl({
     };
 
     message.events.forEach((event, eventIndex) => {
+      if (isWordTextCardEvent(event)) {
+        flushPre();
+        result.push({ kind: "text_card", event });
+        return;
+      }
       if (isWordContentEvent(event)) {
         flushPre();
         const projection = projectRedlineStream(event.text);
@@ -260,7 +269,10 @@ function AssistantMessageImpl({
   const hasContentAfter = (groupIndex: number): boolean =>
     groups
       .slice(groupIndex + 1)
-      .some((group) => group.kind === "prose" && group.text.length > 0);
+      .some((group) =>
+        group.kind === "text_card" ||
+        (group.kind === "prose" && group.text.length > 0),
+      );
 
   const renderEditGroup = (blockIndexes: number[]): React.ReactNode => {
     const rows = blockIndexes
@@ -382,6 +394,15 @@ function AssistantMessageImpl({
       <ResponseStatus status={responseStatus} />
       <div className="mt-2 flex flex-col gap-3">
         {groups.map((group, groupIndex) => {
+          if (group.kind === "text_card") {
+            return (
+              <TextCardUI
+                key={`card-${group.event.card_id}`}
+                title={group.event.title}
+                text={group.event.text}
+              />
+            );
+          }
           if (group.kind === "prose") {
             const holdForEdit =
               hasProjectedEdits &&
