@@ -1,15 +1,4 @@
-// This hook runs with mocked Office boundaries. The web test program does
-// not load Office runtime declarations; this is the storage boundary used
-// by the imported add-in modules, never a runtime shim.
-declare global {
-    const OfficeRuntime: {
-        storage: {
-            getItem(key: string): Promise<string | null>;
-            setItem(key: string, value: string): Promise<void>;
-            removeItem(key: string): Promise<void>;
-        };
-    };
-}
+/// <reference types="office-runtime" />
 import { act, renderHook, waitFor } from '@testing-library/react';
 import { beforeEach, expect, it, vi } from 'vitest';
 const mocks = vi.hoisted(() => ({ stream: vi.fn(), resume: vi.fn(), notify: vi.fn(), info: vi.fn() }));

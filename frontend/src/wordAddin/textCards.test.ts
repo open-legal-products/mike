@@ -1,16 +1,6 @@
+/// <reference types="office-runtime" />
 import { describe, expect, it, vi } from "vitest";
 
-// The configured Word API is mocked below. Declare its storage boundary for
-// the web test program, which does not install the Office runtime types.
-declare global {
-  const OfficeRuntime: {
-    storage: {
-      getItem(key: string): Promise<string | null>;
-      setItem(key: string, value: string): Promise<void>;
-      removeItem(key: string): Promise<void>;
-    };
-  };
-}
 import type {
   WordAssistantEvent,
   WordTextCardEvent,
