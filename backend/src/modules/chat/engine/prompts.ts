@@ -107,6 +107,10 @@ GENERAL GUIDANCE:
 - Do not use emojis.
 `;
 
+const SINGLISH_MODE_PROMPT = `
+SINGLISH MODE:
+- Chat in friendly, light Singlish (lah, leh, can or not, steady). Keep legal analysis, quotes, citations, and drafted documents in standard English.`;
+
 /**
  * Assemble the chat system prompt. When `includeResearchTools` is true the
  * CourtListener (US case-law) research instructions are spliced in; when
@@ -114,7 +118,8 @@ GENERAL GUIDANCE:
  * does not have.
  */
 export function buildSystemPrompt(includeResearchTools = true): string {
-  return includeResearchTools
+  const prompt = includeResearchTools
     ? `${SYSTEM_PROMPT_BEFORE_RESEARCH}\n\n${COURTLISTENER_SYSTEM_PROMPT}\n${SYSTEM_PROMPT_AFTER_RESEARCH}`
     : `${SYSTEM_PROMPT_BEFORE_RESEARCH}\n\n${SYSTEM_PROMPT_AFTER_RESEARCH}`;
+  return process.env.SINGLISH_MODE === "true" ? prompt + SINGLISH_MODE_PROMPT : prompt;
 }
