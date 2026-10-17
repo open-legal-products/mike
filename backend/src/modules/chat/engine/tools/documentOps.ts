@@ -1469,10 +1469,19 @@ function isPunctuation(ch: string): boolean {
  * normalized form too, making matching tolerant of punctuation drift (e.g. a
  * model that adds a stray comma or drops a period). The index map still points
  * back at the surviving original characters so the recovered excerpt is exact.
+ *
+ * With `joinLineEndHyphens`, a hyphen that ends a line inside a word ("7.5-",
+ * newline, "transactions"; "vorzuneh-", newline, "men") is joined with the
+ * next line: "keep" keeps the hyphen ("7.5-transactions"), "drop" removes it
+ * ("vorzunehmen"). PDF text keeps the line break that a reader, or a model
+ * quoting the passage, does not see.
  */
 export function normalizeWithMap(
   text: string,
-  opts: { stripPunctuation?: boolean } = {},
+  opts: {
+    stripPunctuation?: boolean;
+    joinLineEndHyphens?: "keep" | "drop";
+  } = {},
 ): { norm: string; origIdx: number[] } {
   const stripPunctuation = opts.stripPunctuation ?? false;
   const norm: string[] = [];
@@ -1480,7 +1489,17 @@ export function normalizeWithMap(
   let prevSpace = false;
   for (let i = 0; i < text.length; i++) {
     const ch = text[i];
-    if (/\s/.test(ch)) {
+    const joinTo = opts.joinLineEndHyphens
+      ? lineEndHyphenJoin(text, i)
+      : null;
+    if (joinTo !== null) {
+      if (opts.joinLineEndHyphens === "keep" && !stripPunctuation) {
+        norm.push(ch);
+        origIdx.push(i);
+      }
+      prevSpace = false;
+      i = joinTo - 1;
+    } else if (/\s/.test(ch)) {
       if (!prevSpace) {
         norm.push(" ");
         origIdx.push(i);
@@ -1497,6 +1516,26 @@ export function normalizeWithMap(
     }
   }
   return { norm: norm.join(""), origIdx };
+}
+
+const LINE_END_HYPHENS = new Set(["-", "\u2010", "\u00ad"]);
+
+/**
+ * When `text[i]` is a hyphen between a letter or digit and a line break that
+ * continues with a letter or digit, the index of that continuing character;
+ * otherwise null.
+ */
+function lineEndHyphenJoin(text: string, i: number): number | null {
+  if (!LINE_END_HYPHENS.has(text[i]) || i === 0) return null;
+  if (!/[\p{L}\p{N}]/u.test(text[i - 1])) return null;
+  let j = i + 1;
+  let sawNewline = false;
+  while (j < text.length && /\s/.test(text[j])) {
+    if (text[j] === "\n") sawNewline = true;
+    j++;
+  }
+  if (!sawNewline || j >= text.length) return null;
+  return /[\p{L}\p{N}]/u.test(text[j]) ? j : null;
 }
 
 function normalizeQuery(q: string): string {

@@ -8,6 +8,7 @@ import { describe, it, expect, vi } from "vitest";
 vi.mock("../../../lib/supabase", () => ({ createServerSupabase: vi.fn() }));
 vi.mock("../../../lib/storage", () => ({ downloadFile: vi.fn() }));
 
+import { normalizeWithMap } from "./tools/documentOps";
 import {
   locateQuote,
   verifyQuoteAgainstSource,
@@ -85,6 +86,66 @@ describe("verifyQuoteAgainstSource", () => {
     expect(v.needs_correction).toBe(true);
     expect(v.source_excerpt).toBe("pay rent on the first day");
     expect(SOURCE.slice(v.start_char, v.end_char)).toBe(v.source_excerpt);
+  });
+
+  it("compound hyphenated at a line end → verified, hyphen kept", () => {
+    // PDF text keeps the line break; the model quotes the joined compound.
+    const source =
+      "Both parties confirmed that clause-7.5-\n     transactions below the thresholds exist.";
+    const quote =
+      "Both parties confirmed that clause-7.5-transactions below the thresholds exist";
+    const v = verifyQuoteAgainstSource(source, quote);
+    expect(v.verified).toBe(true);
+    expect(v.needs_correction).toBe(true);
+    expect(v.source_excerpt).toBe(source.slice(0, -1));
+    expect(source.slice(v.start_char, v.end_char)).toBe(v.source_excerpt);
+  });
+
+  it("word hyphenated at a line end → verified, hyphen dropped", () => {
+    const source = "Die Parteien haben die Prüfung vorzuneh-\nmen und zu dokumentieren.";
+    const v = verifyQuoteAgainstSource(
+      source,
+      "die Prüfung vorzunehmen und zu dokumentieren",
+    );
+    expect(v.verified).toBe(true);
+    expect(v.source_excerpt).toBe(
+      "die Prüfung vorzuneh-\nmen und zu dokumentieren",
+    );
+  });
+
+  it("soft or Unicode hyphen at a line end → verified", () => {
+    expect(
+      verifyQuoteAgainstSource("an ter\u00ad\nmination notice", "termination notice")
+        .verified,
+    ).toBe(true);
+    expect(
+      verifyQuoteAgainstSource("a clause\u2010\r\nbased review", "clause\u2010based review")
+        .verified,
+    ).toBe(true);
+  });
+
+  it("joins a line-end hyphen even when the quote drifts in punctuation", () => {
+    const source = "the notice period-\nextension applies";
+    const v = verifyQuoteAgainstSource(source, "the notice, period-extension applies");
+    expect(v.verified).toBe(true);
+    expect(v.source_excerpt).toBe(source);
+  });
+
+  it("does not join a dash that is not inside a word", () => {
+    const join = (text: string) =>
+      normalizeWithMap(text, { joinLineEndHyphens: "keep" }).norm;
+    // Joined: a hyphen inside a word at a line end.
+    expect(join("clause-7.5-\n  transactions")).toBe("clause-7.5-transactions");
+    // Not joined: a dash after a space, a mid-line hyphen, a dash opening or
+    // closing the text, and a line break followed by a bullet.
+    expect(join("the Lease -\nsee clause 4")).toBe("the lease - see clause 4");
+    expect(join("the pre- and post-closing")).toBe("the pre- and post-closing");
+    expect(join("-\nstarts with a dash")).toBe("- starts with a dash");
+    expect(join("ends with a dash-\n")).toBe("ends with a dash- ");
+    expect(join("list ends-\n• next")).toBe("list ends- • next");
+    expect(
+      normalizeWithMap("vorzuneh-\nmen", { joinLineEndHyphens: "drop" }).norm,
+    ).toBe("vorzunehmen");
   });
 
   it("fabricated quote → unverified with no offsets", () => {
