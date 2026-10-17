@@ -65,9 +65,9 @@ describe("playbook panels", () => {
 
   it("drags the divider within both panels' minimum widths", () => {
     const { divider } = renderPanels();
-    fireEvent.pointerDown(divider, { clientX: 280, pointerId: 1, button: 0 });
-    fireEvent.pointerMove(divider, { clientX: 380, pointerId: 1 });
-    expect(divider).toHaveAttribute("aria-valuenow", "380");
+    fireEvent.pointerDown(divider, { clientX: 320, pointerId: 1, button: 0 });
+    fireEvent.pointerMove(divider, { clientX: 420, pointerId: 1 });
+    expect(divider).toHaveAttribute("aria-valuenow", "420");
     fireEvent.pointerMove(divider, { clientX: 1500, pointerId: 1 });
     expect(divider).toHaveAttribute("aria-valuenow", "574");
     fireEvent.pointerMove(divider, { clientX: 0, pointerId: 1 });
@@ -81,9 +81,9 @@ describe("playbook panels", () => {
   it("supports keyboard resizing and fits the available container width", () => {
     const { divider } = renderPanels();
     fireEvent.keyDown(divider, { key: "ArrowRight" });
-    expect(divider).toHaveAttribute("aria-valuenow", "304");
+    expect(divider).toHaveAttribute("aria-valuenow", "344");
     fireEvent.keyDown(divider, { key: "ArrowLeft" });
-    expect(divider).toHaveAttribute("aria-valuenow", "280");
+    expect(divider).toHaveAttribute("aria-valuenow", "320");
     fireEvent.keyDown(divider, { key: "End" });
     expect(divider).toHaveAttribute("aria-valuenow", "574");
     act(() => measure(700));

@@ -32,6 +32,12 @@ import { modelDisplayName } from "@/shared/lib/modelCatalog";
 import { PillButtonUI } from "@/shared/ui/PillButtonUI";
 import { TextSlabUI } from "@/shared/ui/TextSlabUI";
 import { PlaybookPanels } from "./PlaybookPanels";
+import {
+  PLAYBOOK_PANE_BODY_CLASS,
+  PLAYBOOK_PANE_EMPTY_CLASS,
+  PLAYBOOK_PANE_HEADER_CLASS,
+  PLAYBOOK_PANE_LIST_CLASS,
+} from "./playbookPaneStyles";
 
 const STATUS_LABEL: Record<string, string> = {
   unacceptable: "Unacceptable",
@@ -196,7 +202,7 @@ export function PlaybookRuns({
       aria-label="Reviewed document"
       className={`flex min-h-[24rem] min-w-0 flex-col overflow-hidden @[41rem]/run-layout:min-h-0 ${EDITOR_SURFACE_CLASS}`}
     >
-      <div className="flex h-11 shrink-0 items-center gap-2 px-4">
+      <div className={`flex items-center gap-2 ${PLAYBOOK_PANE_HEADER_CLASS}`}>
         <FileTypeIcon
           fileType={selected.documentName ?? ""}
           className="h-4 w-4"
@@ -208,25 +214,27 @@ export function PlaybookRuns({
           {runTitle(selected)}
         </h2>
       </div>
-      {/\.docx$/i.test(selected.documentName ?? "") ? (
-        <DocxView
-          key={selected.documentId}
-          documentId={selected.documentId}
-          refetchKey={documentRevision}
-          filename={selected.documentName ?? undefined}
-          canEdit={false}
-          defaultMode="view"
-          // Read-only here; changes are accepted from the results.
-          toolbarVisible={false}
-          rounded={false}
-        />
-      ) : (
-        <PdfView
-          key={selected.documentId}
-          doc={{ document_id: selected.documentId }}
-          rounded={false}
-        />
-      )}
+      <div className="flex min-h-0 flex-1 flex-col pb-4 pt-2 md:pb-5">
+        {/\.docx$/i.test(selected.documentName ?? "") ? (
+          <DocxView
+            key={selected.documentId}
+            documentId={selected.documentId}
+            refetchKey={documentRevision}
+            filename={selected.documentName ?? undefined}
+            canEdit={false}
+            defaultMode="view"
+            // Read-only here; changes are accepted from the results.
+            toolbarVisible={false}
+            rounded={false}
+          />
+        ) : (
+          <PdfView
+            key={selected.documentId}
+            doc={{ document_id: selected.documentId }}
+            rounded={false}
+          />
+        )}
+      </div>
     </section>
   ) : null;
   const resultsPanel = (
@@ -236,7 +244,7 @@ export function PlaybookRuns({
     >
       {selected ? (
         <>
-          <div className="flex shrink-0 items-baseline gap-3 px-4 pb-2 pt-4 md:px-5 md:pt-5">
+          <div className={`flex items-baseline gap-3 ${PLAYBOOK_PANE_HEADER_CLASS}`}>
             <h2
               className="min-w-0 flex-1 truncate text-sm font-medium text-gray-900"
               title={runTitle(selected)}
@@ -250,7 +258,7 @@ export function PlaybookRuns({
               {formatDateTime(selected.startedAt)}
             </time>
           </div>
-          <div className="min-h-0 flex-1 overflow-y-auto px-4 pb-4 pt-2 md:px-5 md:pb-5">
+          <div className={`min-h-0 flex-1 overflow-y-auto ${PLAYBOOK_PANE_BODY_CLASS}`}>
             <RunResults
               run={selected}
               resolved={resolved}
@@ -265,19 +273,21 @@ export function PlaybookRuns({
         </>
       ) : (
         all !== null && (
-          <EmptyState
-            title="No runs yet"
-            description="Run this playbook on a contract to see your findings here."
-            action={
-              canRun && (
-                <PillButtonUI tone="black" onClick={onRun}>
-                  <Play aria-hidden="true" className="h-3.5 w-3.5" />
-                  Run
-                </PillButtonUI>
-              )
-            }
-            className="m-auto w-fit max-w-full px-4 py-12"
-          />
+          <div className={`flex min-h-0 flex-1 items-center justify-center ${PLAYBOOK_PANE_EMPTY_CLASS}`}>
+            <EmptyState
+              title="No runs yet"
+              description="Run this playbook on a contract to see your findings here."
+              action={
+                canRun && (
+                  <PillButtonUI tone="black" onClick={onRun}>
+                    <Play aria-hidden="true" className="h-3.5 w-3.5" />
+                    Run
+                  </PillButtonUI>
+                )
+              }
+              className="w-fit max-w-full py-12"
+            />
+          </div>
         )
       )}
     </section>
@@ -291,11 +301,11 @@ export function PlaybookRuns({
           aria-label="Your runs"
           className={`flex min-h-0 min-w-0 flex-col ${EDITOR_SURFACE_CLASS}`}
         >
-          <div className="flex h-9 shrink-0 items-center pl-3 pr-1.5">
+          <div className={`flex items-center ${PLAYBOOK_PANE_HEADER_CLASS}`}>
             {/* Runs are listed per person: another member's are not shown. */}
-            <h2 className="text-xs text-gray-700">Your runs</h2>
+            <h2 className="text-sm font-medium text-gray-900">Your runs</h2>
           </div>
-          <div className="max-h-64 min-h-0 space-y-1 overflow-y-auto px-1 pb-2 @[48rem]:max-h-none @[48rem]:flex-1">
+          <div className={`max-h-64 min-h-0 space-y-1 overflow-y-auto @[48rem]:max-h-none @[48rem]:flex-1 ${PLAYBOOK_PANE_LIST_CLASS}`}>
             {all === null ? (
               <div aria-hidden="true" className="space-y-3 px-2 py-1.5">
                 {["w-3/4", "w-1/2", "w-2/3"].map((width) => (

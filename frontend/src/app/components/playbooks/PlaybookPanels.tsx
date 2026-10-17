@@ -26,7 +26,7 @@ export function PlaybookPanels({
 }) {
   const isResults = variant === "results";
   const minWidth = isResults ? 320 : 160;
-  const defaultWidth = isResults ? 448 : 280;
+  const defaultWidth = isResults ? 448 : 320;
   const direction = isResults ? -1 : 1;
   const sidebarId = useId();
   const layoutRef = useRef<HTMLDivElement>(null);
