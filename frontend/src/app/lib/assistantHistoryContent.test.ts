@@ -2,6 +2,13 @@ import { describe, expect, it } from "vitest";
 import { assistantHistoryContent } from "./assistantHistoryContent";
 
 describe("assistantHistoryContent", () => {
+  it.each(["", "Before.After."])("keeps card contents in history for live and reloaded turns (%s)", (content) => {
+    expect(assistantHistoryContent({ content, events: [
+      { type: "content", text: "Before." },
+      { type: "text_card", card_id: "card-1", title: "Draft", text: "First paragraph.\n\nSecond paragraph." },
+      { type: "content", text: "After." },
+    ] })).toBe("Before.\n\nDraft\nFirst paragraph.\n\nSecond paragraph.\n\nAfter.");
+  });
   it("keeps content that is already present", () => {
     expect(
       assistantHistoryContent({ content: "Hydrated", events: [] }),

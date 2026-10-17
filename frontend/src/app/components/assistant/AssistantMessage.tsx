@@ -1,5 +1,6 @@
 "use client";
 
+import { TextCardUI } from "@/shared/ui/TextCardUI";
 import { useRef, useState } from "react";
 import { Check, Copy } from "lucide-react";
 import type {
@@ -322,6 +323,11 @@ export function AssistantMessage({
     type EventGroup =
         | { kind: "pre"; events: AssistantEvent[]; indices: number[] }
         | {
+              kind: "text_card";
+              event: Extract<AssistantEvent, { type: "text_card" }>;
+              index: number;
+          }
+        | {
               kind: "content";
               event: Extract<AssistantEvent, { type: "content" }>;
               index: number;
@@ -332,12 +338,16 @@ export function AssistantMessage({
         let current: Extract<EventGroup, { kind: "pre" }> | null = null;
         events.forEach((e, i) => {
             if (!isRenderableEvent(e)) return;
-            if (e.type === "content") {
+            if (e.type === "content" || e.type === "text_card") {
                 if (current) {
                     groups.push(current);
                     current = null;
                 }
-                groups.push({ kind: "content", event: e, index: i });
+                if (e.type === "text_card") {
+                    groups.push({ kind: "text_card", event: e, index: i });
+                } else {
+                    groups.push({ kind: "content", event: e, index: i });
+                }
             } else {
                 if (!current)
                     current = { kind: "pre", events: [], indices: [] };
@@ -363,7 +373,10 @@ export function AssistantMessage({
     const hasContentAfter = (groupIdx: number): boolean => {
         for (let i = groupIdx + 1; i < groups.length; i++) {
             const g = groups[i];
-            if (g.kind === "content" && g.event.text.length > 0) return true;
+            if (
+                (g.kind === "content" || g.kind === "text_card") &&
+                g.event.text.length > 0
+            ) return true;
         }
         return false;
     };
@@ -848,6 +861,15 @@ export function AssistantMessage({
                 {events && events.length > 0 ? (
                     <div className="flex flex-col gap-4">
                         {groups.map((g, gIdx) => {
+                            if (g.kind === "text_card") {
+                                return (
+                                    <TextCardUI
+                                        key={`card-${g.event.card_id}`}
+                                        title={g.event.title}
+                                        text={g.event.text}
+                                    />
+                                );
+                            }
                             if (g.kind === "content") {
                                 const isLastContent =
                                     g.index === lastContentIdx;
