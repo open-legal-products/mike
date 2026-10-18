@@ -832,6 +832,8 @@ export interface UserProfile extends RouterProfileLists {
     titleModel: string | null;
     tabularModel: string | null;
     memoryCuratorModel: string | null;
+    subagentModel: string | null;
+    subagentReasoning: NonNullable<Message["reasoning"]> | null;
     lastSelectedChatModel: string | null;
     lastSelectedReasoningLevel: NonNullable<Message["reasoning"]>;
     mfaOnLogin: boolean;
@@ -956,6 +958,8 @@ export async function updateUserProfile(payload: {
     titleModel?: string | null;
     tabularModel?: string | null;
     memoryCuratorModel?: string | null;
+    subagentModel?: string | null;
+    subagentReasoning?: NonNullable<Message["reasoning"]> | null;
     lastSelectedChatModel?: string | null;
     lastSelectedReasoningLevel?: NonNullable<Message["reasoning"]>;
     legalResearchUs?: boolean;

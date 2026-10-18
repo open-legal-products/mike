@@ -135,6 +135,8 @@ export type ConnectorApprovalItem = {
   before?: unknown;
   /** Account the action runs as, when known. */
   account?: string;
+  /** Title of the delegated task that asked for this action, if a subagent did. */
+  requested_by?: string;
   /** Server-side binding to the connection that was reviewed. */
   binding: ConnectorApprovalBinding;
 };
@@ -337,6 +339,35 @@ export type WebToolEvent =
   /** Pages the answer cites, as reported by the model provider. */
   | { type: "web_sources"; sources: WebSource[] };
 
+export type DelegationEffort = "quick" | "standard" | "deep";
+export type DelegationModelTier = "light" | "standard" | "same";
+
+/**
+ * One delegated task: a subagent's own steps and the brief it returned to the
+ * assistant. The brief keeps the subagent's citation markers; the assistant
+ * re-cites anything it relies on.
+ */
+export type DelegationEvent = {
+  type: "delegation";
+  delegation_id: string;
+  continued_from?: string;
+  title: string;
+  task: string;
+  /**
+   * `incomplete`: stopped by its time or token budget; the brief is partial.
+   * `needs_input`: paused to ask `question` or for `approval_ids`.
+   */
+  status: "completed" | "incomplete" | "needs_input" | "failed" | "cancelled";
+  brief?: string;
+  question?: string;
+  /** Approval items, held by the answer, that this paused subagent waits on. */
+  approval_ids?: string[];
+  events: AssistantEvent[];
+  model: string;
+  effort: DelegationEffort;
+  usage?: { input_tokens: number; output_tokens: number };
+};
+
 export type DocumentSearchErrorCode =
   | "schema_out_of_date"
   | "invalid_search"
@@ -430,6 +461,7 @@ export type AssistantEvent =
   | CourtlistenerToolEvent
   | McpToolEvent
   | WebToolEvent
+  | DelegationEvent
   | {
       type: "case_opinions";
       cluster_id: number;

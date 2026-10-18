@@ -73,6 +73,8 @@ type TurnEvent = {
     document_id?: string;
     version_id?: string;
   }>;
+  /** A delegation's own events: its subagent's documents are the turn's too. */
+  events?: unknown[];
 };
 
 export type ChatTurnAuditBase = {
@@ -121,8 +123,10 @@ export function chatTurnAuditEvents(
       detail: base.flags && Object.keys(base.flags).length ? base.flags : null,
     },
   ];
-  for (const raw of events ?? []) {
-    const ev = raw as TurnEvent;
+  const turnEvents = ((events ?? []) as TurnEvent[]).flatMap((ev) =>
+    ev?.type === "delegation" ? [ev, ...((ev.events ?? []) as TurnEvent[])] : [ev],
+  );
+  for (const ev of turnEvents) {
     // A single doc_replicated event can produce several copies; emit one
     // document.generated row per copy, reading the copy's own new_filename and
     // document_id rather than the (source) top-level filename / absent id.

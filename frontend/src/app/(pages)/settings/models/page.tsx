@@ -11,7 +11,10 @@ import {
   DropdownSeparator,
   DropdownTrigger,
 } from "@/shared/ui/dropdown";
-import { useUserProfile } from "@/app/contexts/UserProfileContext";
+import {
+  useUserProfile,
+  type PreferenceField,
+} from "@/app/contexts/UserProfileContext";
 import { type ApiKeyState } from "@/app/lib/mikeApi";
 import { mergeConfiguredModelOptions } from "@/app/components/assistant/ModelToggle";
 import {
@@ -22,7 +25,11 @@ import {
   routerSelections,
   type ModelOption,
 } from "@/shared/lib/modelCatalog";
-import { orderedModelGroups } from "@/shared/ui/ModelToggleUI";
+import {
+  REASONING_LEVELS,
+  REASONING_LEVEL_LABELS,
+  orderedModelGroups,
+} from "@/shared/ui/ModelToggleUI";
 import { isModelAvailable } from "@/app/lib/modelAvailability";
 import {
   SettingsDescription,
@@ -35,25 +42,20 @@ import { SETTINGS_CONTROL_CLASS } from "@/app/components/settings/SettingsTextIn
 import { useOllamaModels } from "@/app/hooks/useOllamaModels";
 import { useConfiguredModels } from "@/app/hooks/useConfiguredModels";
 
-type ModelPreferenceField =
-  | "titleModel"
-  | "tabularModel"
-  | "memoryCuratorModel";
-
 export default function ModelPreferencesPage() {
   const { profile, updateModelPreference } = useUserProfile();
   const ollamaModels = useOllamaModels();
   const configuredModels = useConfiguredModels();
   const preferenceModelId = (id: string) =>
     configuredModels.some((model) => model.id === id) ? id : canonicalModelId(id);
-  const [savingField, setSavingField] = useState<ModelPreferenceField | null>(
+  const [savingField, setSavingField] = useState<PreferenceField | null>(
     null,
   );
-  const [savedField, setSavedField] = useState<ModelPreferenceField | null>(
+  const [savedField, setSavedField] = useState<PreferenceField | null>(
     null,
   );
   const [optimisticValues, setOptimisticValues] = useState<
-    Partial<Record<ModelPreferenceField, string>>
+    Partial<Record<PreferenceField, string>>
   >({});
   const savedTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const selectedRouterOptions = allRouterModelOptions(
@@ -66,7 +68,7 @@ export default function ModelPreferencesPage() {
     };
   }, []);
 
-  const handleModelChange = async (field: ModelPreferenceField, id: string) => {
+  const handlePreferenceChange = async (field: PreferenceField, id: string) => {
     setOptimisticValues((current) => ({ ...current, [field]: id }));
     setSavedField(null);
     setSavingField(field);
@@ -116,7 +118,7 @@ export default function ModelPreferencesPage() {
               isSaving={savingField === "titleModel"}
               isSaved={savedField === "titleModel"}
               emptyOptionLabel="Automatic — same provider as chat"
-              onChange={(id) => handleModelChange("titleModel", id)}
+              onChange={(id) => handlePreferenceChange("titleModel", id)}
             />
           </SettingsRow>
           <SettingsRow layout="stacked">
@@ -140,7 +142,7 @@ export default function ModelPreferencesPage() {
               isSaving={savingField === "tabularModel"}
               isSaved={savedField === "tabularModel"}
               emptyOptionLabel="No default model"
-              onChange={(id) => handleModelChange("tabularModel", id)}
+              onChange={(id) => handlePreferenceChange("tabularModel", id)}
             />
           </SettingsRow>
           <SettingsRow layout="stacked">
@@ -167,7 +169,65 @@ export default function ModelPreferencesPage() {
               isSaving={savingField === "memoryCuratorModel"}
               isSaved={savedField === "memoryCuratorModel"}
               emptyOptionLabel="Automatic — use chat model"
-              onChange={(id) => handleModelChange("memoryCuratorModel", id)}
+              onChange={(id) =>
+                handlePreferenceChange("memoryCuratorModel", id)
+              }
+            />
+          </SettingsRow>
+        </GlassCardUI>
+      </section>
+
+      <section className="space-y-3" aria-labelledby="subagents-heading">
+        <SettingsHeading id="subagents-heading">Subagents</SettingsHeading>
+        <SettingsDescription>
+          Mike can hand parts of a task to subagents that work on them
+          separately and report back. These are the defaults it follows unless
+          you ask for something else in the chat.
+        </SettingsDescription>
+        <GlassCardUI>
+          <SettingsRow layout="stacked">
+            <div className="space-y-1">
+              <SettingsLabel>Model</SettingsLabel>
+              <SettingsDescription>
+                The model each subagent runs on. Chosen per task lets Mike
+                match the model to the work.
+              </SettingsDescription>
+            </div>
+            <ModelPreferenceDropdown
+              value={preferenceModelId(
+                optimisticValues.subagentModel ?? profile?.subagentModel ?? "",
+              )}
+              options={mergeConfiguredModelOptions(configuredModels, [
+                ...MODELS,
+                ...selectedRouterOptions,
+                ...ollamaModels,
+              ])}
+              apiKeys={profile?.apiKeys}
+              isSaving={savingField === "subagentModel"}
+              isSaved={savedField === "subagentModel"}
+              emptyOptionLabel="Chosen per task"
+              onChange={(id) => handlePreferenceChange("subagentModel", id)}
+            />
+          </SettingsRow>
+          <SettingsRow layout="stacked">
+            <div className="space-y-1">
+              <SettingsLabel>Reasoning</SettingsLabel>
+              <SettingsDescription>
+                How much each subagent thinks before it answers.
+              </SettingsDescription>
+            </div>
+            <ReasoningPreferenceDropdown
+              value={
+                optimisticValues.subagentReasoning ??
+                profile?.subagentReasoning ??
+                ""
+              }
+              isSaving={savingField === "subagentReasoning"}
+              isSaved={savedField === "subagentReasoning"}
+              emptyOptionLabel="Chosen per task"
+              onChange={(level) =>
+                handlePreferenceChange("subagentReasoning", level)
+              }
             />
           </SettingsRow>
         </GlassCardUI>
@@ -214,30 +274,14 @@ function ModelPreferenceDropdown({
 
   return (
     <Dropdown onOpenChange={setIsOpen}>
-      <DropdownTrigger asChild>
-        <button
-          type="button"
-          disabled={isSaving}
-          className={`flex h-9 items-center justify-between gap-2 hover:bg-gray-200/70 ${SETTINGS_CONTROL_CLASS}`}
-        >
-          <span className="flex items-center gap-2 min-w-0">
-            <span className="truncate text-gray-900">
-              {!value
-                ? emptyOptionLabel
-                : (selected?.label ?? "Select a model")}
-            </span>
-          </span>
-          {isSaving ? (
-            <Loader2 className="h-3.5 w-3.5 shrink-0 animate-spin text-gray-500" />
-          ) : isSaved ? (
-            <Check className="h-3.5 w-3.5 shrink-0 text-green-600" />
-          ) : (
-            <ChevronDown
-              className={`h-3.5 w-3.5 shrink-0 text-gray-500 transition-transform duration-200 ${isOpen ? "rotate-180" : ""}`}
-            />
-          )}
-        </button>
-      </DropdownTrigger>
+      <PreferenceTrigger
+        label={
+          !value ? emptyOptionLabel : (selected?.label ?? "Select a model")
+        }
+        isOpen={isOpen}
+        isSaving={isSaving}
+        isSaved={isSaved}
+      />
       <DropdownContent
         style={{ width: "var(--radix-dropdown-menu-trigger-width)" }}
         align="start"
@@ -282,6 +326,94 @@ function ModelPreferenceDropdown({
             </div>
           );
         })}
+      </DropdownContent>
+    </Dropdown>
+  );
+}
+
+function PreferenceTrigger({
+  label,
+  isOpen,
+  isSaving,
+  isSaved,
+}: {
+  label: string;
+  isOpen: boolean;
+  isSaving?: boolean;
+  isSaved?: boolean;
+}) {
+  return (
+    <DropdownTrigger asChild>
+      <button
+        type="button"
+        disabled={isSaving}
+        className={`flex h-9 items-center justify-between gap-2 hover:bg-gray-200/70 ${SETTINGS_CONTROL_CLASS}`}
+      >
+        <span className="flex items-center gap-2 min-w-0">
+          <span className="truncate text-gray-900">{label}</span>
+        </span>
+        {isSaving ? (
+          <Loader2 className="h-3.5 w-3.5 shrink-0 animate-spin text-gray-500" />
+        ) : isSaved ? (
+          <Check className="h-3.5 w-3.5 shrink-0 text-green-600" />
+        ) : (
+          <ChevronDown
+            className={`h-3.5 w-3.5 shrink-0 text-gray-500 transition-transform duration-200 ${isOpen ? "rotate-180" : ""}`}
+          />
+        )}
+      </button>
+    </DropdownTrigger>
+  );
+}
+
+function ReasoningPreferenceDropdown({
+  value,
+  onChange,
+  isSaving,
+  isSaved,
+  emptyOptionLabel,
+}: {
+  value: string;
+  onChange: (level: string) => void;
+  isSaving?: boolean;
+  isSaved?: boolean;
+  emptyOptionLabel: string;
+}) {
+  const [isOpen, setIsOpen] = useState(false);
+  const selected = REASONING_LEVELS.find((level) => level === value);
+
+  return (
+    <Dropdown onOpenChange={setIsOpen}>
+      <PreferenceTrigger
+        label={selected ? REASONING_LEVEL_LABELS[selected] : emptyOptionLabel}
+        isOpen={isOpen}
+        isSaving={isSaving}
+        isSaved={isSaved}
+      />
+      <DropdownContent
+        style={{ width: "var(--radix-dropdown-menu-trigger-width)" }}
+        align="start"
+      >
+        <DropdownItem
+          className="cursor-pointer"
+          onSelect={() => onChange("")}
+        >
+          <span className="flex-1">{emptyOptionLabel}</span>
+          {!selected && <Check className="h-3.5 w-3.5 text-gray-600 ml-1" />}
+        </DropdownItem>
+        <DropdownSeparator />
+        {REASONING_LEVELS.map((level) => (
+          <DropdownItem
+            key={level}
+            className="cursor-pointer"
+            onSelect={() => onChange(level)}
+          >
+            <span className="flex-1">{REASONING_LEVEL_LABELS[level]}</span>
+            {level === selected && (
+              <Check className="h-3.5 w-3.5 text-gray-600 ml-1" />
+            )}
+          </DropdownItem>
+        ))}
       </DropdownContent>
     </Dropdown>
   );

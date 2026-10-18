@@ -13,7 +13,7 @@
 // DB preparation live here. `prepareChatStream` returns the prepared data the
 // route needs to run the stream; it does not stream.
 import { type Db } from "../../lib/supabase";
-import { withoutEmptyAssistantReservations } from "./engine/index";
+import { withDelegationEvents, withoutEmptyAssistantReservations } from "./engine/index";
 
 // Stored doc_edited events capture the `status` at the time the assistant
 // produced the edit (always "pending"). If the user later accepts or rejects,
@@ -36,7 +36,7 @@ async function hydrateEditStatuses(
     for (const m of messages) {
         const content = m.content;
         if (Array.isArray(content)) {
-            for (const ev of content as Record<string, unknown>[]) {
+            for (const ev of withDelegationEvents(content as Record<string, unknown>[])) {
                 if (ev?.type === "doc_edited") {
                     collectFromAnnList(ev.annotations);
                     if (typeof ev.version_id === "string")
@@ -101,29 +101,33 @@ async function hydrateEditStatuses(
             return next;
         });
     };
+    const patchEvent = (ev: Record<string, unknown>): Record<string, unknown> => {
+        if (ev?.type === "delegation" && Array.isArray(ev.events)) {
+            return {
+                ...ev,
+                events: (ev.events as Record<string, unknown>[]).map(patchEvent),
+            };
+        }
+        if (ev?.type !== "doc_edited") return ev;
+        let patched: Record<string, unknown> = {
+            ...ev,
+            annotations: patchAnnList(ev.annotations),
+        };
+        if (
+            typeof ev.version_id === "string" &&
+            versionNumberById.has(ev.version_id)
+        ) {
+            patched = {
+                ...patched,
+                version_number: versionNumberById.get(ev.version_id) ?? null,
+            };
+        }
+        return patched;
+    };
     return messages.map((m) => {
         const next: Record<string, unknown> = { ...m };
         if (Array.isArray(m.content)) {
-            next.content = (m.content as Record<string, unknown>[]).map(
-                (ev) => {
-                    if (ev?.type !== "doc_edited") return ev;
-                    let patched: Record<string, unknown> = {
-                        ...ev,
-                        annotations: patchAnnList(ev.annotations),
-                    };
-                    if (
-                        typeof ev.version_id === "string" &&
-                        versionNumberById.has(ev.version_id)
-                    ) {
-                        patched = {
-                            ...patched,
-                            version_number:
-                                versionNumberById.get(ev.version_id) ?? null,
-                        };
-                    }
-                    return patched;
-                },
-            );
+            next.content = (m.content as Record<string, unknown>[]).map(patchEvent);
         }
         return next;
     });

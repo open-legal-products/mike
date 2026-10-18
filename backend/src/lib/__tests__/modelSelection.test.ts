@@ -4,6 +4,7 @@ import {
     normalizeOptionalModelPreference,
     resolveEffectiveChatModel,
     resolveEffectiveReasoningLevel,
+    subagentModelFor,
     titleModelForChat,
 } from "../modelSelection";
 import { resetModelRegistryCache } from "../llm/registry";
@@ -53,6 +54,18 @@ describe("titleModelForChat", () => {
         expect(titleModelForChat("gpt-6-astra", "claude-haiku-4-5")).toBe(
             "claude-haiku-4-5",
         );
+    });
+});
+
+describe("subagentModelFor", () => {
+    it.each([
+        ["claude-opus-5-5", "light", "claude-haiku-4-5"],
+        ["claude-opus-5-5", "standard", "claude-sonnet-5-5"],
+        ["claude-opus-5-5", "same", "claude-opus-5-5"],
+        ["claude-haiku-4-5", "standard", "claude-haiku-4-5"],
+        ["openrouter/anthropic/claude-sonnet-4.5", "light", "openrouter/anthropic/claude-sonnet-4.5"],
+    ] as const)("runs a %s chat's %s subagent on %s, never above the chat model", (chatModel, tier, expected) => {
+        expect(subagentModelFor(chatModel, tier)).toBe(expected);
     });
 });
 

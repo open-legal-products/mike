@@ -22,6 +22,7 @@ import {
     AssistantStreamError,
     assistantStreamErrorPayload,
     buildStoppedAssistantMessage,
+    createSubagentRunStore,
     extractCitations,
     isAbortError,
 
@@ -108,6 +109,8 @@ projectChatRouter.post("/", requireAuth, asyncRoute(async (req, res) => {
     const attached_documents = parsedAttachedDocuments.value;
     const askInputsResponse = parsedAskInputsResponse.value;
     const assistantMessageId = askInputsResponse ? null : randomUUID();
+    const turnMessageId =
+        assistantMessageId ?? askInputsResponse?.assistant_message_id ?? "";
     const inputMessageId = askInputsResponse ? null : randomUUID();
 
     const db = createServerSupabase();
@@ -149,6 +152,7 @@ projectChatRouter.post("/", requireAuth, asyncRoute(async (req, res) => {
         apiKeys,
         orgId,
         titleModel,
+        subagentDefaults,
         selectedModel,
         selectedReasoningLevel,
         nonce,
@@ -159,6 +163,13 @@ projectChatRouter.post("/", requireAuth, asyncRoute(async (req, res) => {
     let chatTitle = prep.prepared.chatTitle;
     let completedTurnPersisted = prep.prepared.completedTurnPersisted;
     let memoryTurnScheduled = false;
+    const subagentRuns = createSubagentRunStore({
+        db,
+        userId,
+        userEmail,
+        chatId,
+        messageId: turnMessageId,
+    });
 
     try {
         // The generation is a server-owned run: it survives the caller's
@@ -169,10 +180,7 @@ projectChatRouter.post("/", requireAuth, asyncRoute(async (req, res) => {
             id: assistantMessageId ?? randomUUID(),
             chatId,
             userId,
-            assistantMessageId:
-                assistantMessageId ??
-                askInputsResponse?.assistant_message_id ??
-                "",
+            assistantMessageId: turnMessageId,
         });
         if (!run) {
             return void res.status(409).json({
@@ -258,6 +266,8 @@ projectChatRouter.post("/", requireAuth, asyncRoute(async (req, res) => {
                 workflowStore,
                 includeResearchTools: legalResearchUs,
                 webSearch,
+                subagentRuns,
+                subagentDefaults,
                 model: selectedModel,
                 reasoning: selectedReasoningLevel,
                 apiKeys,
@@ -309,6 +319,7 @@ projectChatRouter.post("/", requireAuth, asyncRoute(async (req, res) => {
                     return;
                 }
             }
+            await subagentRuns.flush();
 
             await abortable(titlePromise, stream.signal).catch(() => {});
             if (titleOutcome.failure) {
@@ -422,6 +433,8 @@ projectChatRouter.post("/", requireAuth, asyncRoute(async (req, res) => {
                             "[project-chat/stream] failed to save aborted stream",
                             saveError,
                         );
+                    } else {
+                        await subagentRuns.flush();
                     }
                 }
                 write(stopOutcomeFrame(run));
@@ -465,6 +478,7 @@ projectChatRouter.post("/", requireAuth, asyncRoute(async (req, res) => {
                         "[project-chat/stream] failed to save error",
                         saveError,
                     );
+                else await subagentRuns.flush();
             } catch (saveErr) {
                 console.error(
                     "[project-chat/stream] failed to save error",

@@ -38,6 +38,7 @@ import {
     parseOptionalReasoning,
     parseOptionalProjectId,
     createReservedAssistantMessageUpdater,
+    createSubagentRunStore,
 
     reserveAssistantMessage,
 } from "./engine/index";
@@ -544,6 +545,8 @@ chatRouter.post("/", requireAuth, asyncRoute(async (req, res) => {
     // Reserve a stable assistant identity before streaming. This lets clients
     // associate streamed UI with the same durable message after a reload.
     const assistantMessageId = askInputsResponse ? null : randomUUID();
+    const turnMessageId =
+        assistantMessageId ?? askInputsResponse?.assistant_message_id ?? "";
     const inputMessageId = askInputsResponse ? null : randomUUID();
 
     devLog("[chat/stream] incoming request", {
@@ -597,6 +600,7 @@ chatRouter.post("/", requireAuth, asyncRoute(async (req, res) => {
         apiKeys,
         orgId,
         titleModel,
+        subagentDefaults,
         selectedModel,
         selectedReasoningLevel,
         nonce,
@@ -605,6 +609,13 @@ chatRouter.post("/", requireAuth, asyncRoute(async (req, res) => {
     let chatTitle = prep.prepared.chatTitle;
     let completedTurnPersisted = prep.prepared.completedTurnPersisted;
     let memoryTurnScheduled = false;
+    const subagentRuns = createSubagentRunStore({
+        db,
+        userId,
+        userEmail,
+        chatId,
+        messageId: turnMessageId,
+    });
 
     devLog("[chat/stream] starting LLM stream", {
         apiMessageCount: apiMessages.length,
@@ -620,10 +631,7 @@ chatRouter.post("/", requireAuth, asyncRoute(async (req, res) => {
             id: assistantMessageId ?? randomUUID(),
             chatId,
             userId,
-            assistantMessageId:
-                assistantMessageId ??
-                askInputsResponse?.assistant_message_id ??
-                "",
+            assistantMessageId: turnMessageId,
         });
         if (!run) {
             return void res.status(409).json({
@@ -741,6 +749,8 @@ chatRouter.post("/", requireAuth, asyncRoute(async (req, res) => {
                 workflowStore,
                 includeResearchTools: legalResearchUs,
                 webSearch,
+                subagentRuns,
+                subagentDefaults,
                 model: selectedModel,
                 reasoning: selectedReasoningLevel,
                 apiKeys,
@@ -818,6 +828,7 @@ chatRouter.post("/", requireAuth, asyncRoute(async (req, res) => {
                     return;
                 }
             }
+            await subagentRuns.flush();
 
             await abortable(titlePromise, stream.signal).catch(() => {});
             if (titleOutcome.failure) {
@@ -954,6 +965,8 @@ chatRouter.post("/", requireAuth, asyncRoute(async (req, res) => {
                             "[chat/stream] failed to save aborted stream",
                             saveError,
                         );
+                    } else {
+                        await subagentRuns.flush();
                     }
                 }
                 // Readers still attached (Stop came from another tab, or
@@ -995,6 +1008,7 @@ chatRouter.post("/", requireAuth, asyncRoute(async (req, res) => {
                         "[chat/stream] failed to save error",
                         saveError,
                     );
+                else await subagentRuns.flush();
             } catch (saveErr) {
                 console.error("[chat/stream] failed to save error", saveErr);
             }

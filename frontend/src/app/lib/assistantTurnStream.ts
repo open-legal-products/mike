@@ -158,6 +158,10 @@ function parseWebToolFailure(data: Record<string, unknown>) {
   return typeof data.error === "string" && data.error ? { error: data.error } : {};
 }
 
+function delegationWithId(id: unknown) {
+  return (e: AssistantEvent) => e.type === "delegation" && e.delegation_id === id;
+}
+
 function parseCourtlistenerEventCases(value: unknown) {
   if (!Array.isArray(value)) return undefined;
   return value
@@ -1140,6 +1144,44 @@ export async function consumeAssistantTurnStream(
         if (data.type === "web_sources") {
           const sources = parseWebSources(data.sources);
           if (sources.length) pushEvent({ type: "web_sources", sources });
+          continue;
+        }
+
+        if (data.type === "delegation_start") {
+          if (typeof data.delegation_id !== "string") continue;
+          pushEvent({
+            type: "delegation",
+            delegation_id: data.delegation_id,
+            ...(typeof data.continued_from === "string"
+              ? { continued_from: data.continued_from }
+              : {}),
+            title: typeof data.title === "string" ? data.title : "",
+            task: typeof data.task === "string" ? data.task : "",
+            events: [],
+            isStreaming: true,
+          });
+          continue;
+        }
+
+        if (data.type === "delegation_activity") {
+          const activity = typeof data.name === "string" ? data.name : "";
+          updateMatchingEvent(delegationWithId(data.delegation_id), (e) => ({
+            ...e,
+            activity,
+          }));
+          continue;
+        }
+
+        if (data.type === "delegation") {
+          if (typeof data.delegation_id !== "string") continue;
+          const event = data as unknown as AssistantEvent;
+          const matches = delegationWithId(data.delegation_id);
+          if (!updateMatchingEvent(matches, () => event)) pushEvent(event);
+          // Parallel subagents share the timeline; "Thinking..." waits for the last.
+          const stillDelegating = eventsRef.current.some(
+            (e) => e.type === "delegation" && e.isStreaming,
+          );
+          if (!stillDelegating) pushThinkingPlaceholder();
           continue;
         }
 

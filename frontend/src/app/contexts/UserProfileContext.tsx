@@ -72,6 +72,8 @@ interface UserProfile extends RouterProfileLists {
     titleModel: string | null;
     tabularModel: string | null;
     memoryCuratorModel: string | null;
+    subagentModel: string | null;
+    subagentReasoning: NonNullable<Message["reasoning"]> | null;
     lastSelectedChatModel: string | null;
     lastSelectedReasoningLevel: NonNullable<Message["reasoning"]>;
     mfaOnLogin: boolean;
@@ -83,6 +85,13 @@ interface UserProfile extends RouterProfileLists {
     /** Settings saved with the user's own keys (region, endpoint, location, base URL). */
     apiKeySettings: ApiKeySettings;
 }
+
+export type PreferenceField =
+    | "titleModel"
+    | "tabularModel"
+    | "memoryCuratorModel"
+    | "subagentModel"
+    | "subagentReasoning";
 
 interface UserProfileContextType {
     profile: UserProfile | null;
@@ -106,7 +115,7 @@ interface UserProfileContextType {
     ) => Promise<boolean>;
     syncPasswordSet: () => Promise<boolean>;
     updateModelPreference: (
-        field: "titleModel" | "tabularModel" | "memoryCuratorModel",
+        field: PreferenceField,
         value: string | null,
     ) => Promise<boolean>;
     persistChatModelSelection: (
@@ -181,6 +190,8 @@ function toProfile(data: ApiUserProfile): UserProfile {
         onboardingComplete: profile.onboardingComplete !== false,
         passwordSet: profile.passwordSet === true,
         memoryCuratorModel: profile.memoryCuratorModel ?? null,
+        subagentModel: profile.subagentModel ?? null,
+        subagentReasoning: profile.subagentReasoning ?? null,
         lastSelectedChatModel: profile.lastSelectedChatModel ?? null,
         lastSelectedReasoningLevel:
             profile.lastSelectedReasoningLevel ?? "high",
@@ -278,6 +289,8 @@ export function UserProfileProvider({ children }: { children: ReactNode }) {
                 titleModel: null,
                 tabularModel: null,
                 memoryCuratorModel: null,
+                subagentModel: null,
+                subagentReasoning: null,
                 lastSelectedChatModel: null,
                 lastSelectedReasoningLevel: "high",
                 mfaOnLogin: false,
@@ -429,7 +442,7 @@ export function UserProfileProvider({ children }: { children: ReactNode }) {
 
     const updateModelPreference = useCallback(
         async (
-            field: "titleModel" | "tabularModel" | "memoryCuratorModel",
+            field: PreferenceField,
             value: string | null,
         ): Promise<boolean> => {
             if (!user) return false;

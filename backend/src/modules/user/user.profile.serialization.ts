@@ -48,6 +48,11 @@ export function serializeProfile(
             row.memory_curator_model,
             routerModels,
         ),
+        subagentModel: normalizeOptionalModelPreference(
+            row.subagent_model,
+            routerModels,
+        ),
+        subagentReasoning: normalizeReasoningLevel(row.subagent_reasoning),
         lastSelectedChatModel: normalizeOptionalModelPreference(
             row.last_selected_chat_model,
             routerModels,

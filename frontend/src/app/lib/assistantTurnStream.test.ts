@@ -1752,3 +1752,42 @@ describe("web activity", () => {
     ]);
   });
 });
+
+describe("delegation", () => {
+  const start = (id: string) => ({
+    type: "delegation_start", delegation_id: id, title: `Review ${id}`, task: "Summarise the lease.",
+  });
+  const running = (id: string) => ({
+    type: "delegation", delegation_id: id, title: `Review ${id}`, task: "Summarise the lease.",
+    events: [], isStreaming: true,
+  });
+  const finished = (id: string) => ({
+    type: "delegation", delegation_id: id, title: `Review ${id}`, task: "Summarise the lease.",
+    status: "completed", brief: "Rent is due monthly.", events: [{ type: "doc_read", filename: "lease.pdf" }],
+    model: "claude-haiku-4-5", effort: "standard",
+  });
+
+  it("shows the running step, then the persisted result", async () => {
+    expect(await eventsOf([
+      { type: "tool_call_start", name: "delegate" },
+      start("d1"),
+      { type: "delegation_activity", delegation_id: "d1", name: "web_search" },
+    ])).toEqual([{ ...running("d1"), activity: "web_search" }]);
+
+    expect(await eventsOf([start("d1"), finished("d1")])).toEqual([finished("d1"), thinking]);
+  });
+
+  it("keeps parallel delegations apart and waits for the last before thinking", async () => {
+    expect(await eventsOf([start("d1"), start("d2"), finished("d1")]))
+      .toEqual([finished("d1"), running("d2")]);
+    expect(await eventsOf([start("d1"), start("d2"), finished("d1"), finished("d2")]))
+      .toEqual([finished("d1"), finished("d2"), thinking]);
+  });
+
+  it("stops a running delegation on Stop", async () => {
+    expect(await eventsOf([start("d1"), { type: "cancelled" }])).toEqual([
+      { ...running("d1"), isStreaming: undefined },
+      { type: "content", text: "Cancelled by user." },
+    ]);
+  });
+});

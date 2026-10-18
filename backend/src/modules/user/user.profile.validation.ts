@@ -154,6 +154,8 @@ export function validateProfilePayload(body: unknown):
               title_model?: string | null;
               tabular_model?: string | null;
               memory_curator_model?: string | null;
+              subagent_model?: string | null;
+              subagent_reasoning?: string | null;
               last_selected_chat_model?: string | null;
               last_selected_reasoning_level?: string | null;
               legal_research_us?: boolean;
@@ -178,6 +180,8 @@ export function validateProfilePayload(body: unknown):
         "titleModel",
         "tabularModel",
         "memoryCuratorModel",
+        "subagentModel",
+        "subagentReasoning",
         "lastSelectedChatModel",
         "lastSelectedReasoningLevel",
         "legalResearchUs",
@@ -206,6 +210,8 @@ export function validateProfilePayload(body: unknown):
         title_model?: string | null;
         tabular_model?: string | null;
         memory_curator_model?: string | null;
+        subagent_model?: string | null;
+        subagent_reasoning?: string | null;
         last_selected_chat_model?: string | null;
         last_selected_reasoning_level?: string | null;
         legal_research_us?: boolean;
@@ -302,6 +308,37 @@ export function validateProfilePayload(body: unknown):
                 };
             }
             update.memory_curator_model = resolved;
+        }
+    }
+
+    if ("subagentModel" in raw) {
+        if (raw.subagentModel === null || raw.subagentModel === "") {
+            update.subagent_model = null;
+        } else if (typeof raw.subagentModel !== "string") {
+            return {
+                ok: false,
+                detail: "subagentModel must be a string or null",
+            };
+        } else {
+            const resolved = resolveModel(raw.subagentModel, "");
+            if (!resolved) {
+                return { ok: false, detail: "Unsupported subagentModel" };
+            }
+            update.subagent_model = resolved;
+        }
+    }
+
+    if ("subagentReasoning" in raw) {
+        if (raw.subagentReasoning === null || raw.subagentReasoning === "") {
+            update.subagent_reasoning = null;
+        } else if (
+            !(REASONING_LEVELS as readonly unknown[]).includes(
+                raw.subagentReasoning,
+            )
+        ) {
+            return { ok: false, detail: "Unsupported subagentReasoning" };
+        } else {
+            update.subagent_reasoning = raw.subagentReasoning as string;
         }
     }
 

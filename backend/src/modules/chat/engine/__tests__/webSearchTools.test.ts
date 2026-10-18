@@ -15,8 +15,10 @@ import { WebSearchUnavailableError } from "../../../../lib/webSearch";
 import { spotlight } from "../contextBuilders";
 import { createProviderWebSearchTracker } from "../tools/providerWebSearch";
 import {
+  createChildWebTurnState,
   createWebTurnState,
   runWebToolCall,
+  webRemaining,
   webToolErrorMessage,
 } from "../tools/webSearchTools";
 
@@ -82,6 +84,27 @@ describe("runWebToolCall", () => {
       error: webToolErrorMessage(code),
       error_code: code,
     });
+  });
+
+  it("stops subagents' searches once they have used the answer's shared allowance", async () => {
+    searchWeb.mockResolvedValue([]);
+    const answer = createWebTurnState("");
+    const subagents = [1, 2, 3, 4].map(() =>
+      createChildWebTurnState(answer, { searches: 60, reads: 100 }),
+    );
+    for (const state of subagents.slice(0, 3)) {
+      for (let i = 0; i < 50; i += 1) {
+        await runWebToolCall(search("ai act"), { ...context(), state });
+      }
+    }
+
+    const { content } = await runWebToolCall(search("ai act"), {
+      ...context(),
+      state: subagents[3],
+    });
+
+    expect(content).toContain("search limit");
+    expect(searchWeb).toHaveBeenCalledTimes(150);
   });
 
   it("refuses to read a URL that no search, page or user message supplied", async () => {
@@ -153,6 +176,6 @@ describe("runWebToolCall", () => {
     expect(second.content).toContain("Characters 20000-20008 of 20008, the end of the page.");
     expect(second.content).toContain("the rest");
     expect(readWebPage).toHaveBeenCalledOnce();
-    expect(ctx.state.reads).toBe(1);
+    expect(webRemaining(ctx.state, "reads")).toBe(11);
   });
 });

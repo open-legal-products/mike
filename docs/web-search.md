@@ -54,6 +54,12 @@ time, and the assistant asks for the next part of a long page when it needs
 more; a page is fetched once per answer however many parts are read. It opens
 at most twelve pages per answer.
 
+[Subagents](subagents.md) have their own search and page limits on top of the
+answer's, set by the effort the assistant chooses (at most 60 searches and 100
+pages each), and together an answer's subagents make at most 150 searches and
+open at most 250 pages. A page already opened in the answer is not fetched
+again. At most, one answer makes 158 searches and opens 262 pages.
+
 ## Search service keys
 
 Keys come from the same places as model API keys, chosen the same way:

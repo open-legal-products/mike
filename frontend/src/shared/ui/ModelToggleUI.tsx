@@ -46,7 +46,7 @@ export const REASONING_LEVELS = [
 
 export type ReasoningLevel = (typeof REASONING_LEVELS)[number];
 
-const REASONING_LEVEL_LABELS: Record<ReasoningLevel, string> = {
+export const REASONING_LEVEL_LABELS: Record<ReasoningLevel, string> = {
   none: "None",
   low: "Low",
   medium: "Medium",

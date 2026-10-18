@@ -4,6 +4,7 @@ import { logError } from "../lib/log";
 import { backfillDocumentText, sweepStaleProcessingDocuments } from "../modules/documents/documents.service";
 import { sweepStaleGeneratingCells } from "../modules/tabular/tabular.service";
 import { expireDepartureArchives, purgeExpiredOrganizations } from "../modules/orgs/orgs.service";
+import { purgeExpiredSubagentRuns } from "../modules/chat/chat.service";
 
 /** Run recovery/expiry sweeps; errors are contained per sweep. */
 export async function runStaleWorkSweep(
@@ -25,6 +26,9 @@ export async function runStaleWorkSweep(
     });
     await purgeExpiredOrganizations(db).catch((err) => {
         logError("stale-sweep", err, { sweep: "organizations" });
+    });
+    await purgeExpiredSubagentRuns(db).catch((err) => {
+        logError("stale-sweep", err, { sweep: "subagent-runs" });
     });
     return { documents, cells };
 }

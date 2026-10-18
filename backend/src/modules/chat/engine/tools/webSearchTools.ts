@@ -13,8 +13,12 @@ import {
 } from "../../../../lib/webSearch";
 import { spotlight } from "../contextBuilders";
 
-const MIKE_MAX_SEARCHES = 8;
-const MIKE_MAX_READS = 12;
+type WebLimits = { searches: number; reads: number };
+
+type WebBudget = { limits: WebLimits; used: WebLimits };
+
+const ANSWER_WEB_LIMITS: WebLimits = { searches: 8, reads: 12 };
+const ALL_SUBAGENTS_WEB_LIMITS: WebLimits = { searches: 150, reads: 250 };
 const READ_CHUNK_CHARS = 20_000;
 const MAX_URL_LENGTH = 2_000;
 const URL_PATTERN = new RegExp(
@@ -49,7 +53,7 @@ export function webToolError(code: WebToolErrorCode) {
     return { error: webToolErrorMessage(code), error_code: code };
 }
 
-const WEB_TOOL_NAMES = {
+export const WEB_TOOL_NAMES = {
     search: "web_search",
     read: "read_webpage",
 } as const;
@@ -129,9 +133,15 @@ function pageKey(raw: string): string | null {
 export type WebTurnState = {
     readable: Set<string>;
     pages: Map<string, Promise<WebPage>>;
-    searches: number;
-    reads: number;
+    budgets: WebBudget[];
+    /** Shared by all of the answer's subagents, on top of each one's own. */
+    subagentBudget: WebBudget;
 };
+
+const webBudget = (limits: WebLimits): WebBudget => ({
+    limits,
+    used: { searches: 0, reads: 0 },
+});
 
 const MAX_SCANNED_MESSAGE_CHARS = 200_000;
 
@@ -139,11 +149,37 @@ export function createWebTurnState(userMessage: string): WebTurnState {
     const state: WebTurnState = {
         readable: new Set(),
         pages: new Map(),
-        searches: 0,
-        reads: 0,
+        budgets: [webBudget(ANSWER_WEB_LIMITS)],
+        subagentBudget: webBudget(ALL_SUBAGENTS_WEB_LIMITS),
     };
     allowLinksIn(state, userMessage.slice(0, MAX_SCANNED_MESSAGE_CHARS));
     return state;
+}
+
+/**
+ * A subagent reads only what the answer's searches and pages already allowed,
+ * or what its own searches find, never a link from its task text.
+ */
+export function createChildWebTurnState(
+    parent: WebTurnState,
+    limits: WebLimits,
+): WebTurnState {
+    return {
+        readable: parent.readable,
+        pages: parent.pages,
+        budgets: [webBudget(limits), parent.subagentBudget],
+        subagentBudget: parent.subagentBudget,
+    };
+}
+
+export function webRemaining(state: WebTurnState, kind: keyof WebLimits): number {
+    return Math.min(
+        ...state.budgets.map((budget) => budget.limits[kind] - budget.used[kind]),
+    );
+}
+
+export function chargeWeb(state: WebTurnState, kind: keyof WebLimits, count = 1) {
+    for (const budget of state.budgets) budget.used[kind] += count;
 }
 
 export function allowWebPage(state: WebTurnState, url: string) {
@@ -226,14 +262,14 @@ async function runSearch(
     if (!query) {
         return failure(search, "failed", stopUsingTool("A search query is required."));
     }
-    if (ctx.state.searches >= MIKE_MAX_SEARCHES) {
+    if (webRemaining(ctx.state, "searches") <= 0) {
         return failure(
             search,
             "failed",
             stopUsingTool("The search limit for this turn has been reached."),
         );
     }
-    ctx.state.searches += 1;
+    chargeWeb(ctx.state, "searches");
 
     let results: WebSearchResult[];
     try {
@@ -314,10 +350,10 @@ async function runRead(
     }
     let pending = ctx.state.pages.get(key);
     if (!pending) {
-        if (ctx.state.reads >= MIKE_MAX_READS) {
+        if (webRemaining(ctx.state, "reads") <= 0) {
             return failed("The page-reading limit for this turn has been reached.");
         }
-        ctx.state.reads += 1;
+        chargeWeb(ctx.state, "reads");
         pending = openPage(url, ctx);
         ctx.state.pages.set(key, pending);
     }

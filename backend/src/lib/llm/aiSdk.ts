@@ -589,18 +589,33 @@ export async function streamAiSdk(
       // where it is classified and the caller reports it once
       // (MIKE-BACKEND-C). Every failure still arrives through fullStream.
       onError: () => {},
-      ...(config.courtlistenerCitationReminder
+      ...(config.courtlistenerCitationReminder ||
+      params.finishWithoutToolsOnLastStep
         ? {
             prepareStep: ({
               steps,
+              stepNumber,
             }: {
               steps: Array<{ toolCalls: Array<{ toolName: string }> }>;
-            }) =>
-              usesCourtlistenerTool(steps)
-                ? {
-                    system: `${params.systemPrompt}\n\n${COURTLISTENER_CITATION_REMINDER}`,
-                  }
-                : undefined,
+              stepNumber: number;
+            }) => {
+              const step: { system?: string; toolChoice?: "none" } = {};
+              if (
+                config.courtlistenerCitationReminder &&
+                usesCourtlistenerTool(steps)
+              ) {
+                step.system = `${params.systemPrompt}\n\n${COURTLISTENER_CITATION_REMINDER}`;
+              }
+              // Removing tools instead would break providers that reject a
+              // history of calls to a tool the request no longer defines.
+              if (
+                params.finishWithoutToolsOnLastStep &&
+                stepNumber === maxIterations - 1
+              ) {
+                step.toolChoice = "none";
+              }
+              return Object.keys(step).length ? step : undefined;
+            },
           }
         : {}),
     });
@@ -655,6 +670,7 @@ export async function streamAiSdk(
             id: part.toolCallId,
             name: part.toolName,
             input: normalizeToolInput(part.input),
+            ...(part.invalid ? { invalid: true as const } : {}),
           };
           params.callbacks?.onToolCallStart?.(call);
           break;
@@ -690,6 +706,18 @@ export async function streamAiSdk(
           }
           break;
         case "finish-step":
+          if (
+            part.usage.inputTokens !== undefined ||
+            part.usage.outputTokens !== undefined
+          ) {
+            params.callbacks?.onUsage?.(
+              {
+                inputTokens: part.usage.inputTokens ?? 0,
+                outputTokens: part.usage.outputTokens ?? 0,
+              },
+              part.finishReason,
+            );
+          }
           lastFinishReason = part.finishReason;
           lastRawFinishReason = part.rawFinishReason;
           break;

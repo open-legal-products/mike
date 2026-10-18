@@ -67,9 +67,11 @@ export function EventDisclosureButton({
             onClick={onToggle}
             className="inline-flex items-center text-left transition-colors hover:text-gray-700"
         >
-            <EventLabel>{label}</EventLabel>
-            {detail ? <span>&nbsp;{detail}</span> : null}
-            {isStreaming ? <span>...</span> : null}
+            <span className="min-w-0">
+                <EventLabel>{label}</EventLabel>
+                {detail ? <>&nbsp;{detail}</> : null}
+                {isStreaming ? "..." : null}
+            </span>
             <EventChevron open={open} />
         </button>
     );

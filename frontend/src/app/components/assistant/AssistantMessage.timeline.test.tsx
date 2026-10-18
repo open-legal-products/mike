@@ -230,4 +230,78 @@ describe("AssistantMessage timeline", () => {
             screen.getByText("The response was interrupted."),
         ).toBeInTheDocument();
     });
+
+    describe("delegation", () => {
+        const delegation = (
+            overrides: Partial<Extract<AssistantEvent, { type: "delegation" }>> = {},
+        ): AssistantEvent => ({
+            type: "delegation",
+            delegation_id: "d1",
+            title: "Review the lease",
+            task: "List every rent review clause in lease.pdf.",
+            status: "completed",
+            brief: "Clause 4.2 sets an annual review.",
+            events: [
+                { type: "doc_read", filename: "lease.pdf" },
+                { type: "case_citation", cluster_id: 1, case_name: null, citation: null, url: "" },
+            ],
+            model: "claude-haiku-4-5",
+            effort: "standard",
+            usage: { input_tokens: 1000, output_tokens: 200 },
+            ...overrides,
+        });
+        const openSteps = () =>
+            fireEvent.click(screen.getByRole("button", { name: "Completed in 1 step" }));
+
+        it("opens to the task, the subagent's steps and its brief", () => {
+            render(<AssistantMessage events={[delegation(), { type: "content", text: "Done." }]} />);
+            openSteps();
+            expect(screen.queryByText(/List every rent review clause/)).toBeNull();
+
+            fireEvent.click(screen.getByRole("button", { name: /^Delegated\s*Review the lease$/ }));
+            expect(screen.getByText(/List every rent review clause/)).toBeVisible();
+            expect(screen.getByText("lease.pdf")).toBeVisible();
+
+            fireEvent.click(screen.getByRole("button", { name: "Returned a brief" }));
+            expect(screen.getByRole("region", { name: "Brief" }))
+                .toHaveTextContent("Clause 4.2 sets an annual review.");
+        });
+
+        it.each([
+            [{}, "Delegated", null],
+            [{ status: "incomplete" as const }, "Delegation incomplete", /Partial brief/],
+            [{ status: "cancelled" as const }, "Delegation stopped", null],
+            [
+                { status: "needs_input" as const, question: "Which lease, the 2019 or the 2021 one?" },
+                "Asked for input",
+                null,
+            ],
+            [{ status: "needs_input" as const, approval_ids: ["approve-1"] }, "Asking for approval", null],
+        ])("reports how the subagent ended", (overrides, label, meta) => {
+            render(<AssistantMessage events={[delegation(overrides), { type: "content", text: "Done." }]} />);
+            openSteps();
+            expect(screen.getByRole("button", { name: new RegExp(`^${label}\\s*Review the lease$`) })).toBeVisible();
+            if (meta) expect(screen.getByText(meta)).toBeVisible();
+        });
+
+        it("finds a nested citation check's cases among the subagent's own steps", () => {
+            render(
+                <AssistantMessage
+                    events={[
+                        delegation({
+                            events: [
+                                { type: "courtlistener_verify_citations", citation_count: 1, match_count: 1 },
+                                { type: "case_citation", cluster_id: 7, case_name: "Roe v. Wade", citation: "410 U.S. 113", url: "" },
+                            ],
+                        }),
+                        { type: "content", text: "Done." },
+                    ]}
+                />,
+            );
+            openSteps();
+            fireEvent.click(screen.getByRole("button", { name: /^Delegated\s*Review the lease$/ }));
+            fireEvent.click(screen.getByRole("button", { name: /Verified 1 citation/ }));
+            expect(screen.getByText("Roe v. Wade, 410 U.S. 113")).toBeVisible();
+        });
+    });
 });

@@ -54,6 +54,8 @@ create table if not exists public.user_profiles (
   memory_curator_model text,
   last_selected_chat_model text,
   last_selected_reasoning_level text check (last_selected_reasoning_level in ('none', 'low', 'medium', 'high', 'xhigh', 'max')),
+  subagent_model text,
+  subagent_reasoning text check (subagent_reasoning in ('none', 'low', 'medium', 'high', 'xhigh', 'max')),
   quote_model text,
   mfa_on_login boolean not null default false,
   legal_research_us boolean not null default true,
@@ -2758,6 +2760,32 @@ create index if not exists chat_messages_chat_created_id_idx
   on public.chat_messages(chat_id, created_at, id);
 create index if not exists chat_messages_author_idx
   on public.chat_messages(author_user_id) where author_user_id is not null;
+
+-- What a subagent did in a chat answer, so the assistant can continue it in a
+-- later turn without the subagent redoing its reading. Only the backend reads
+-- or writes these rows; they expire after 30 days and go with their chat,
+-- answer or account.
+create table if not exists public.chat_subagent_runs (
+  id uuid primary key default gen_random_uuid(),
+  chat_id uuid not null references public.chats(id) on delete cascade,
+  message_id uuid not null references public.chat_messages(id) on delete cascade,
+  delegation_id text not null check (length(delegation_id) between 1 and 100),
+  user_id uuid not null references auth.users(id) on delete cascade,
+  status text not null check (status in ('completed', 'incomplete', 'needs_input')),
+  transcript jsonb not null check (octet_length(transcript::text) <= 400000),
+  created_at timestamptz not null default now(),
+  expires_at timestamptz not null default now() + interval '30 days',
+  unique (chat_id, delegation_id)
+);
+
+create index if not exists chat_subagent_runs_user_expiry
+  on public.chat_subagent_runs(user_id, expires_at);
+create index if not exists chat_subagent_runs_message
+  on public.chat_subagent_runs(message_id);
+
+alter table public.chat_subagent_runs enable row level security;
+revoke all on public.chat_subagent_runs from anon, authenticated;
+grant all on public.chat_subagent_runs to service_role;
 
 create or replace function public.set_chat_updated_at()
 returns trigger
@@ -10928,5 +10956,7 @@ insert into public.schema_migrations (filename) values
   ('20261017_06_remove_unused_playbook_structure.sql'),
   ('20261017_07_playbook_storage_cleanup.sql'),
   ('20261017_08_user_web_search.sql'),
+  ('20261018_01_chat_subagent_runs.sql'),
+  ('20261018_02_user_subagent_defaults.sql'),
   ('20261019_01_web_search_api_keys.sql')
 on conflict (filename) do nothing;

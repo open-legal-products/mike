@@ -31,6 +31,7 @@ import {
     type AssistantEvent,
     type ChatDocumentReference,
     type ChatMessage,
+    type SubagentDefaults,
 } from "../chat/chat.service";
 import { getUserModelSettings, resolveUserChatSelection } from "../user/user.service";
 import {
@@ -136,6 +137,7 @@ export type PreparedProjectChatStream = {
     /** The organization the chat belongs to, whose keys and model lists apply. */
     orgId: string | null;
     titleModel: Awaited<ReturnType<typeof getUserModelSettings>>["title_model"];
+    subagentDefaults: SubagentDefaults;
     selectedModel: string;
     selectedReasoningLevel: ReturnType<
         typeof resolveEffectiveReasoningLevel
@@ -590,6 +592,10 @@ export async function prepareProjectChatStream(
                 apiKeys,
                 orgId: projectAccess.project.org_id ?? null,
                 titleModel,
+                subagentDefaults: {
+                    model: modelSettings.subagent_model,
+                    reasoning: modelSettings.subagent_reasoning,
+                },
                 selectedModel,
                 selectedReasoningLevel,
                 nonce,
