@@ -124,6 +124,13 @@ describe("verifyQuoteAgainstSource", () => {
     ).toBe(true);
   });
 
+  it("joins a line-end hyphen before a carriage-return-only line break", () => {
+    expect(
+      verifyQuoteAgainstSource("die Prüfung vorzuneh-\rmen", "die Prüfung vorzunehmen")
+        .verified,
+    ).toBe(true);
+  });
+
   it("joins a line-end hyphen even when the quote drifts in punctuation", () => {
     const source = "the notice period-\nextension applies";
     const v = verifyQuoteAgainstSource(source, "the notice, period-extension applies");

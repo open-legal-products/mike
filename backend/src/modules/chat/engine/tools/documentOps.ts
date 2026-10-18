@@ -1521,9 +1521,9 @@ export function normalizeWithMap(
 const LINE_END_HYPHENS = new Set(["-", "\u2010", "\u00ad"]);
 
 /**
- * When `text[i]` is a hyphen between a letter or digit and a line break that
- * continues with a letter or digit, the index of that continuing character;
- * otherwise null.
+ * When `text[i]` is a hyphen between a letter or digit and a line break
+ * (`\n`, `\r\n` or `\r`) that continues with a letter or digit, the index of
+ * that continuing character; otherwise null.
  */
 function lineEndHyphenJoin(text: string, i: number): number | null {
   if (!LINE_END_HYPHENS.has(text[i]) || i === 0) return null;
@@ -1531,7 +1531,7 @@ function lineEndHyphenJoin(text: string, i: number): number | null {
   let j = i + 1;
   let sawNewline = false;
   while (j < text.length && /\s/.test(text[j])) {
-    if (text[j] === "\n") sawNewline = true;
+    if (text[j] === "\n" || text[j] === "\r") sawNewline = true;
     j++;
   }
   if (!sawNewline || j >= text.length) return null;
