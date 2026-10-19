@@ -78,7 +78,10 @@ import {
   createPlaybook,
   deletePlaybook,
   getPlaybookConfiguration,
-  importPlaybook,
+  getPlaybook,
+  getPlaybookImport,
+  listRunningPlaybookImports,
+  startPlaybookImport,
   listPlaybooks,
   getPlaybookPeople,
   listPlaybookShares,
@@ -90,6 +93,7 @@ import {
   type PlaybookRunListItem,
   uploadLibraryDocument,
   type Playbook,
+  type PlaybookImport,
   type PlaybookShare,
   type PlaybookContent,
   type PlaybookConfiguration,
@@ -98,6 +102,7 @@ import {
 } from "@/app/lib/mikeApi";
 
 import { useWorkspace } from "@/app/contexts/WorkspaceContext";
+import { showToast } from "@/app/components/ui/toast";
 import { useWorkspaceIdentity } from "@/app/hooks/useWorkspaceIdentity";
 import { assistantPathWithPlaybook } from "@/app/lib/assistantPlaybookLink";
 import {
@@ -117,6 +122,8 @@ import type {
 } from "@/app/components/shared/types";
 
 const PLAYBOOK_IMPORT_FILE = /\.(docx|pdf)$/i;
+/** How often a compiling import is checked on. */
+const IMPORT_POLL_MS = 3000;
 
 function uploadDocument(file: File): ReviewDocument {
   return {
@@ -193,9 +200,7 @@ function PlaybooksWorkspace() {
   const [allRuns, setAllRuns] = useState<PlaybookRunListItem[] | null>(null);
   const [allRunsError, setAllRunsError] = useState<string | null>(null);
   const [allRunsVersion, setAllRunsVersion] = useState(0);
-  const [selectedRunIds, setSelectedRunIds] = useState<Set<string>>(
-    new Set(),
-  );
+  const [selectedRunIds, setSelectedRunIds] = useState<Set<string>>(new Set());
   const [runDeleteTargets, setRunDeleteTargets] = useState<
     PlaybookRunListItem[] | null
   >(null);
@@ -260,13 +265,16 @@ function PlaybooksWorkspace() {
   const [importOpen, setImportOpen] = useState(false);
   // Set when the Word file replaces an existing playbook's content.
   const [importTargetId, setImportTargetId] = useState<string | null>(null);
-  const [importSource, setImportSource] = useState<ReviewDocument | null>(
-    null,
-  );
+  const [importSource, setImportSource] = useState<ReviewDocument | null>(null);
   // The import dialog steps aside while its document picker is open.
   const [importPickerOpen, setImportPickerOpen] = useState(false);
   const [importName, setImportName] = useState("");
   const [importError, setImportError] = useState<string | null>(null);
+  // Imports compiling on the server. They run apart from the page, so closing
+  // the dialog or leaving and coming back does not stop them.
+  const [imports, setImports] = useState<PlaybookImport[]>([]);
+  // The import the dialog's compiling screen is following, if any.
+  const [followedImportId, setFollowedImportId] = useState<string | null>(null);
   const [model, setModel] = useState("");
   // The Runs tab shows the new-run form in place of a run's results.
   const [newRunOpen, setNewRunOpen] = useState(false);
@@ -288,9 +296,7 @@ function PlaybooksWorkspace() {
   const [reviewInstructions, setReviewInstructions] = useState("");
   const [reviewScope, setReviewScope] = useState<PlaybookReviewScope>("full");
   const [reviewError, setReviewError] = useState<string | null>(null);
-  const [reviewMode, setReviewMode] = useState<ReviewMode>(
-    "strict",
-  );
+  const [reviewMode, setReviewMode] = useState<ReviewMode>("strict");
   const [run, setRun] = useState<PlaybookRun | null>(null);
 
   const autosave = usePlaybookAutosave(
@@ -449,7 +455,9 @@ function PlaybooksWorkspace() {
       },
       (err) => {
         if (!current) return;
-        setAllRunsError(describeError(err, { action: "load the runs" }).message);
+        setAllRunsError(
+          describeError(err, { action: "load the runs" }).message,
+        );
         setAllRuns([]);
       },
     );
@@ -523,12 +531,15 @@ function PlaybooksWorkspace() {
     setLoading(true);
     setError(null);
     try {
-      const [items, configuration] = await Promise.all([
+      const [items, configuration, running] = await Promise.all([
         listPlaybooks(workspaceId),
         getPlaybookConfiguration(workspaceId),
+        // Following an import is a convenience; the list loads without it.
+        listRunningPlaybookImports(workspaceId).catch(() => []),
       ]);
       setPlaybooks(items);
       setConfiguration(configuration);
+      setImports(running);
       setSelectedId((current) =>
         current && items.some((item) => item.id === current) ? current : null,
       );
@@ -645,7 +656,7 @@ function PlaybooksWorkspace() {
     setImportError(null);
     try {
       if (!(await autosave.flush())) return;
-      const saved = await importPlaybook(
+      const started = await startPlaybookImport(
         importSource.kind === "upload"
           ? importSource.file
           : { documentId: importSource.document.id },
@@ -654,21 +665,8 @@ function PlaybooksWorkspace() {
         importTargetId ?? undefined,
         workspaceId,
       );
-      setPlaybooks((current) =>
-        importTargetId
-          ? current.map((item) => (item.id === saved.id ? saved : item))
-          : [saved, ...current],
-      );
-      openPlaybook(saved.id);
-      // Replacing the selected playbook does not change selectedId, so the
-      // selection effect will not run. Load the rewritten content here.
-      setContent(structuredClone(saved.content));
-      setEditorRevision((current) => current + 1);
-      setSelectedRuleId(null);
-      setImportOpen(false);
-      setImportSource(null);
-      setImportName("");
-      setImportTargetId(null);
+      setImports((current) => [started, ...current]);
+      setFollowedImportId(started.id);
     } catch (err) {
       setImportError(
         describeError(err, { action: "import the playbook" }).message,
@@ -677,6 +675,107 @@ function PlaybooksWorkspace() {
       setBusy(null);
     }
   }
+
+  function closeImport() {
+    setImportOpen(false);
+    setImportError(null);
+    setImportTargetId(null);
+    setImportSource(null);
+    setImportName("");
+    // Closing while compiling detaches: the import carries on and a notice
+    // says when it is ready.
+    setFollowedImportId(null);
+  }
+
+  /** Shows a finished import's playbook in place of what was loaded. */
+  function showImported(saved: Playbook) {
+    setPlaybooks((current) =>
+      current.some((item) => item.id === saved.id)
+        ? current.map((item) => (item.id === saved.id ? saved : item))
+        : [saved, ...current],
+    );
+    // Replacing the open playbook does not change selectedId, so the
+    // selection effect will not run. Load the rewritten content here.
+    if (saved.id === selectedId) {
+      setContent(structuredClone(saved.content));
+      setEditorRevision((current) => current + 1);
+      setSelectedRuleId(null);
+    }
+  }
+
+  // The latest handlers for the poll below, which outlives renders.
+  const importFinished = useRef<(attempt: PlaybookImport) => Promise<void>>(
+    async () => undefined,
+  );
+  importFinished.current = async (attempt) => {
+    const followed = attempt.id === followedImportId;
+    if (attempt.status === "failed") {
+      const message =
+        attempt.error ??
+        "The playbook could not be imported. Please try again.";
+      if (followed) {
+        // Back to the form, with the chosen file still there to retry.
+        setFollowedImportId(null);
+        setImportError(message);
+      } else {
+        showToast({
+          tone: "error",
+          title: `${attempt.name || attempt.filename} wasn’t imported`,
+          message,
+        });
+      }
+      return;
+    }
+    if (!attempt.playbookId) return;
+    let saved: Playbook;
+    try {
+      saved = await getPlaybook(attempt.playbookId);
+    } catch (err) {
+      notifyError(err, { action: "open the imported playbook" });
+      if (followed) closeImport();
+      return;
+    }
+    showImported(saved);
+    if (followed) {
+      closeImport();
+      openPlaybook(saved.id);
+      return;
+    }
+    showToast({
+      tone: "success",
+      message: `“${saved.name}” is ready.`,
+      durationMs: 10_000,
+      actions: [{ label: "Open", onClick: () => openPlaybook(saved.id) }],
+    });
+  };
+
+  const compiling = busy === "import" || followedImportId !== null;
+  // Each import is reported once, however many polls see it finish.
+  const finishedImports = useRef(new Set<string>());
+  const importIds = imports.map((attempt) => attempt.id).join(",");
+  useEffect(() => {
+    if (!importIds) return;
+    let stopped = false;
+    const timer = window.setInterval(() => {
+      for (const id of importIds.split(",")) {
+        void getPlaybookImport(id)
+          .then(async (attempt) => {
+            if (stopped || attempt.status === "running") return;
+            if (finishedImports.current.has(id)) return;
+            finishedImports.current.add(id);
+            setImports((current) => current.filter((item) => item.id !== id));
+            await importFinished.current(attempt);
+          })
+          .catch(() => {
+            // A missed poll is retried on the next tick.
+          });
+      }
+    }, IMPORT_POLL_MS);
+    return () => {
+      stopped = true;
+      window.clearInterval(timer);
+    };
+  }, [importIds]);
 
   function requestDelete(targetId?: string) {
     const targets = targetId
@@ -773,11 +872,11 @@ function PlaybooksWorkspace() {
 
   /** A playbook compiles from one Word or PDF file; a new pick replaces it. */
   function chooseImportSource(candidates: ReviewDocument[]) {
-    const supported = candidates.find((item) => PLAYBOOK_IMPORT_FILE.test(item.name));
-    if (supported) setImportSource(supported);
-    setImportError(
-      supported ? null : "Choose a Word (.docx) or PDF playbook.",
+    const supported = candidates.find((item) =>
+      PLAYBOOK_IMPORT_FILE.test(item.name),
     );
+    if (supported) setImportSource(supported);
+    setImportError(supported ? null : "Choose a Word (.docx) or PDF playbook.");
   }
 
   async function review() {
@@ -986,7 +1085,10 @@ function PlaybooksWorkspace() {
                         <Dropdown>
                           <DropdownTrigger asChild>
                             <HeaderButtonUI disabled={!!busy}>
-                              <Play aria-hidden="true" className="h-3.5 w-3.5" />
+                              <Play
+                                aria-hidden="true"
+                                className="h-3.5 w-3.5"
+                              />
                               Use
                             </HeaderButtonUI>
                           </DropdownTrigger>
@@ -1182,30 +1284,53 @@ function PlaybooksWorkspace() {
               {...runActions}
             />
           ) : (
-            <PlaybookTable
-              playbooks={visiblePlaybooks}
-              loading={loading}
-              error={error}
-              filtered={!!search.trim()}
-              emptyContext={
-                tab === "all"
-                  ? "all"
-                  : isOrganization
-                    ? tab === "shared"
-                      ? "public"
-                      : "private"
-                    : tab === "shared"
-                      ? "shared"
-                      : "mine"
-              }
-              disabled={!!busy}
-              selectedIds={selectedIds}
-              onSelect={setSelectedIds}
-              {...tableActions}
-              onRetry={() => void load()}
-              onImport={() => openImport(null)}
-              onCreate={() => setNewOpen(true)}
-            />
+            <>
+              {imports.length > 0 && (
+                <ul
+                  aria-label="Playbooks being compiled"
+                  className="mx-3 mb-2 space-y-1 text-xs text-gray-500 md:mx-6.5"
+                >
+                  {imports.map((attempt) => (
+                    <li
+                      key={attempt.id}
+                      className="flex min-w-0 items-start gap-2"
+                    >
+                      <Loader2
+                        aria-hidden="true"
+                        className="mt-0.5 h-3 w-3 shrink-0 animate-spin motion-reduce:animate-none"
+                      />
+                      <span className="min-w-0 [overflow-wrap:anywhere]">
+                        Compiling {attempt.name || attempt.filename}…
+                      </span>
+                    </li>
+                  ))}
+                </ul>
+              )}
+              <PlaybookTable
+                playbooks={visiblePlaybooks}
+                loading={loading}
+                error={error}
+                filtered={!!search.trim()}
+                emptyContext={
+                  tab === "all"
+                    ? "all"
+                    : isOrganization
+                      ? tab === "shared"
+                        ? "public"
+                        : "private"
+                      : tab === "shared"
+                        ? "shared"
+                        : "mine"
+                }
+                disabled={!!busy}
+                selectedIds={selectedIds}
+                onSelect={setSelectedIds}
+                {...tableActions}
+                onRetry={() => void load()}
+                onImport={() => openImport(null)}
+                onCreate={() => setNewOpen(true)}
+              />
+            </>
           )}
         </>
       )}
@@ -1301,14 +1426,13 @@ function PlaybooksWorkspace() {
         uploadStateId="playbook-import"
         onSelect={(documents) => {
           setImportPickerOpen(false);
-          if (documents.length) chooseImportSource(documents.map(savedDocument));
+          if (documents.length)
+            chooseImportSource(documents.map(savedDocument));
         }}
       />
       <ConfirmPopup
         open={!!runDeleteTargets}
-        title={
-          runDeleteTargets?.length === 1 ? "Delete run?" : "Delete runs?"
-        }
+        title={runDeleteTargets?.length === 1 ? "Delete run?" : "Delete runs?"}
         message={
           runDeleteTargets?.length === 1
             ? `The run of “${runDeleteTargets[0].documentName || "Untitled document"}” and its findings will be deleted. Tracked changes it made stay on the document.`
@@ -1346,11 +1470,7 @@ function PlaybooksWorkspace() {
       <Modal
         open={importOpen && !importPickerOpen}
         onClose={() => {
-          if (busy !== "import") {
-            setImportOpen(false);
-            setImportError(null);
-            setImportTargetId(null);
-          }
+          if (busy !== "import") closeImport();
         }}
         size="sm"
         className="h-auto max-h-[calc(100vh-2rem)]"
@@ -1358,121 +1478,119 @@ function PlaybooksWorkspace() {
           "Playbooks",
           importTargetId ? "Replace from file" : "Import playbook",
         ]}
-        footerStatus={
-          busy === "import" ? (
-            <span className="text-xs text-gray-500">
-              Long files can take several minutes
-            </span>
-          ) : null
+        // While compiling, the dialog shows only the progress screen.
+        primaryAction={
+          compiling
+            ? undefined
+            : {
+                label: "Compile",
+                icon: <WandSparkles className="h-4 w-4" />,
+                variant: "blue",
+                disabled: !importSource || !model || !!busy,
+                onClick: () => void doImport(),
+              }
         }
-        primaryAction={{
-          label: busy === "import" ? "Compiling…" : "Compile",
-          icon:
-            busy === "import" ? (
-              <Loader2 className="h-4 w-4 animate-spin" />
-            ) : (
-              <WandSparkles className="h-4 w-4" />
-            ),
-          variant: "blue",
-          disabled: !importSource || !model || !!busy,
-          onClick: () => void doImport(),
-        }}
         cancelAction={{
-          label: "Cancel",
-          onClick: () => {
-            setImportOpen(false);
-            setImportError(null);
-            setImportTargetId(null);
-          },
+          label: compiling ? "Close" : "Cancel",
+          onClick: closeImport,
+          // The upload must finish before there is an import to leave.
           disabled: busy === "import",
         }}
       >
-        <div
-          data-modal-scroll="vertical"
-          className="space-y-4 overflow-y-auto pb-4"
-        >
-          <p className="text-sm text-gray-600">
-            {importTargetId
-              ? "The imported concepts, positions, and sample clauses replace the current rules. Completed reviews keep the rules they used."
-              : "Import concepts, positions, and sample clauses, then refine the rules in the editor. Changes save automatically."}
-          </p>
-          {busy === "import" && (
-            <div
-              role="status"
-              className="flex items-start gap-2 text-sm text-gray-600"
-            >
-              <Loader2 className="mt-0.5 h-4 w-4 shrink-0 animate-spin" />
-              <span>
-                Compiling your playbook. Keep this window open until the rules
-                are ready.
-              </span>
-            </div>
-          )}
-          {importError && (
-            <div
-              role="alert"
-              className="flex items-start gap-2 text-sm text-red-600"
-            >
-              <AlertCircle className="mt-0.5 h-4 w-4 shrink-0" />
-              <span>{importError}</span>
-            </div>
-          )}
-          {!importTargetId && (
-            <div>
-              <ModalFieldLabel htmlFor="playbook-import-name">
-                Playbook name (optional)
-              </ModalFieldLabel>
-              <ModalTextInput
-                id="playbook-import-name"
-                value={importName}
-                onChange={(event) => setImportName(event.target.value)}
-              />
-            </div>
-          )}
-          <div>
-            <p
-              id="playbook-import-document-label"
-              className="mb-2 block text-xs font-medium text-gray-700"
-            >
-              Add document
-            </p>
-            <PlaybookReviewDocuments
-              documents={importSource ? [importSource] : []}
-              disabled={busy === "import"}
-              onAdd={(files) => chooseImportSource(files.map(uploadDocument))}
-              onAddDocuments={() => setImportPickerOpen(true)}
-              onRemove={() => setImportSource(null)}
-              labelledBy="playbook-import-document-label"
-              emptyPrompt="Drag and drop a Word or PDF playbook here, or click to choose a saved file or upload one."
-              addMorePrompt="Drop another file here, or click to choose a different one."
+        {compiling ? (
+          <div
+            role="status"
+            className="flex flex-col items-center px-6 pb-12 pt-8 text-center"
+          >
+            <Loader2
+              aria-hidden="true"
+              className="h-6 w-6 animate-spin text-gray-400 motion-reduce:animate-none"
             />
+            <p className="mt-4 text-sm font-medium text-gray-900">
+              Compiling your playbook
+            </p>
+            <p className="mt-1 max-w-xs text-xs text-gray-500">
+              You’ll be taken to it as soon as it’s ready. Long files can take
+              several minutes. You can close this window; compiling continues
+              and you’ll be told when the playbook is ready.
+            </p>
           </div>
-          <div>
-            <ModalFieldLabel htmlFor="playbook-import-model">
-              Compilation model
-            </ModalFieldLabel>
-            {models.length > 0 ? (
-              <ModalSelect
-                id="playbook-import-model"
-                value={model}
-                onChange={(value) => {
-                  setModel(value);
-                  setImportError(null);
-                }}
-                options={models}
-                menuClassName="max-h-64"
-              />
-            ) : (
-              <p className="text-sm text-amber-700">
-                No compilation model is available.{" "}
-                <a href="/account/api-keys" className="underline">
-                  Configure an API key
-                </a>{" "}
-                or enable a local model.
-              </p>
+        ) : (
+          <div
+            data-modal-scroll="vertical"
+            className="space-y-4 overflow-y-auto pb-4"
+          >
+            {importError && (
+              <div
+                role="alert"
+                className="flex items-start gap-2 text-sm text-red-600"
+              >
+                <AlertCircle className="mt-0.5 h-4 w-4 shrink-0" />
+                <span>{importError}</span>
+              </div>
             )}
+            {!importTargetId && (
+              <div>
+                <ModalFieldLabel htmlFor="playbook-import-name">
+                  Playbook name (optional)
+                </ModalFieldLabel>
+                <ModalTextInput
+                  id="playbook-import-name"
+                  value={importName}
+                  onChange={(event) => setImportName(event.target.value)}
+                />
+              </div>
+            )}
+            <div>
+              <p
+                id="playbook-import-document-label"
+                className="mb-2 block text-xs font-medium text-gray-700"
+              >
+                Add document
+              </p>
+              <PlaybookReviewDocuments
+                documents={importSource ? [importSource] : []}
+                disabled={busy === "import"}
+                onAdd={(files) => chooseImportSource(files.map(uploadDocument))}
+                onAddDocuments={() => setImportPickerOpen(true)}
+                onRemove={() => setImportSource(null)}
+                labelledBy="playbook-import-document-label"
+                emptyPrompt="Drag and drop a Word or PDF playbook here, or click to choose a saved file or upload one."
+                addMorePrompt="Drop another file here, or click to choose a different one."
+              />
+            </div>
+            <div>
+              <ModalFieldLabel htmlFor="playbook-import-model">
+                Compilation model
+              </ModalFieldLabel>
+              {models.length > 0 ? (
+                <ModalSelect
+                  id="playbook-import-model"
+                  value={model}
+                  onChange={(value) => {
+                    setModel(value);
+                    setImportError(null);
+                  }}
+                  options={models}
+                  menuClassName="max-h-64"
+                />
+              ) : (
+                <p className="text-sm text-amber-700">
+                  No compilation model is available.{" "}
+                  <a href="/account/api-keys" className="underline">
+                    Configure an API key
+                  </a>{" "}
+                  or enable a local model.
+                </p>
+              )}
+            </div>
+            <p className="text-xs text-gray-500">
+              {importTargetId
+                ? "The compiled rules replace the current ones; completed reviews keep the rules they used. You can still edit the rules by hand afterwards."
+                : "You can edit the rules by hand once the playbook is created."}
+            </p>
           </div>
-        </div>
+        )}
       </Modal>
     </div>
   );

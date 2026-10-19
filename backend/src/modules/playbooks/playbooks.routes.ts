@@ -18,8 +18,10 @@ import {
   deletePlaybook,
   getPlaybook,
   getPlaybookSource,
-  importPlaybookFromFile,
-  importPlaybookFromDocument,
+  getPlaybookImport,
+  listRunningPlaybookImports,
+  startPlaybookImport,
+  startPlaybookImportFromDocument,
   MAX_PLAYBOOK_IMPORT_BYTES,
   listPlaybookSources,
   listPlaybookPeople,
@@ -165,6 +167,35 @@ playbooksRouter.delete("/runs/:runId", async (req, res) => {
   }
 });
 
+// The caller's imports still compiling in the workspace, so a page opened
+// after starting one can follow it to the end.
+playbooksRouter.get("/imports", async (req, res) => {
+  try {
+    res.json(
+      await listRunningPlaybookImports(
+        res.locals.userId as string,
+        undefined,
+        req.query.workspace,
+      ),
+    );
+  } catch (error) {
+    sendError(res, error);
+  }
+});
+
+playbooksRouter.get("/imports/:importId", async (req, res) => {
+  try {
+    if (!UUID.test(req.params.importId)) {
+      return void res.status(404).json({ detail: "Import not found." });
+    }
+    res.json(
+      await getPlaybookImport(res.locals.userId as string, req.params.importId),
+    );
+  } catch (error) {
+    sendError(res, error);
+  }
+});
+
 playbooksRouter.get("/runs", async (req, res) => {
   try {
     res.json(
@@ -277,7 +308,7 @@ playbooksRouter.post("/import", requireMfaIfEnrolled, async (req, res) => {
   // A saved document is read where it is stored; access is checked there.
   if (typeof req.body?.documentId === "string" && req.body.documentId) {
     try {
-      const playbook = await importPlaybookFromDocument({
+      const { attempt, done } = await startPlaybookImportFromDocument({
         userId,
         userEmail: res.locals.userEmail,
         documentId: req.body.documentId,
@@ -286,7 +317,9 @@ playbooksRouter.post("/import", requireMfaIfEnrolled, async (req, res) => {
         playbookId,
         workspace: req.body?.workspace,
       });
-      return void res.status(playbookId ? 200 : 201).json(playbook);
+      // Compiling continues after the response; its row records how it ended.
+      done.catch(() => undefined);
+      return void res.status(202).json(attempt);
     } catch (error) {
       return void sendError(res, error);
     }
@@ -326,7 +359,7 @@ playbooksRouter.post("/import", requireMfaIfEnrolled, async (req, res) => {
         ? req.body.filename.trim()
         : "playbook.docx";
 
-    const playbook = await importPlaybookFromFile({
+    const { attempt, done } = await startPlaybookImport({
       userId,
       userEmail: res.locals.userEmail,
       filename,
@@ -336,12 +369,14 @@ playbooksRouter.post("/import", requireMfaIfEnrolled, async (req, res) => {
       playbookId,
       workspace: req.body?.workspace,
     });
-    res.status(playbookId ? 200 : 201).json(playbook);
+    // Compiling continues after the response; its row records how it ended.
+    done.catch(() => undefined);
+    res.status(202).json(attempt);
   } catch (error) {
     sendError(res, error);
   } finally {
-    // The import retains its own copy of the source on success, so the staged
-    // object is redundant either way.
+    // The import holds the file in memory and keeps its own copy on success,
+    // so the staged object is redundant once it has been read.
     if (staged) {
       await deleteFile(storageKey).catch((error) => {
         console.error("[playbooks] staged upload cleanup failed", {

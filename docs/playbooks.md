@@ -111,15 +111,17 @@ needs a concept, so the first one carries placeholder text to replace.
 2. Under **Add document**, drop a `.docx` or `.pdf` playbook, or click the
    area to choose a saved file or upload one. Choose a compilation model. Only
    models with usable credentials are offered, and Mike preselects an
-   available one. Select **Compile**.
+   available one. Select **Compile**. The dialog shows that the playbook is
+   compiling and opens it when it is ready. Long files can take several
+   minutes; you can close the dialog or leave the page meanwhile.
 3. Review the extracted topics, concepts, positions, sample clauses, and
    source references.
 4. Refine the rules as needed; corrections save automatically.
 
 A dropped file is uploaded straight to object storage under a presigned URL
 scoped to the signed-in account, then the API compiles it from that key. The
-API never receives the file body, and the staged object is removed once the
-import finishes, successfully or not. A saved file is read from where it is
+API never receives the file body, and the staged object is removed as soon as
+the import has read it. A saved file is read from where it is
 stored, after the same access check as opening it; the playbook keeps its own
 copy, so later edits to the saved file do not change the playbook.
 
@@ -142,10 +144,22 @@ Each model attempt has five minutes by default. Set
 takes precedence. The limit bounds how long an import waits; it does not abort
 the model request already in flight.
 
+`POST /playbooks/import` checks the file, the replace target, and the model,
+then answers `202` with the import record while compiling continues on the
+server. A request that cannot be compiled is still refused by that call. The
+page follows the import by polling `GET /playbooks/imports/:importId`, and
+`GET /playbooks/imports` lists the caller's imports still compiling in the
+workspace, so a page opened later picks them up: the playbooks list shows each
+as **Compiling …**, and a notice says when it is ready (with **Open**) or why
+it failed. An import compiles in the API process that started it and records a
+heartbeat every 30 seconds; one silent for two minutes reads as failed with
+"The import stopped before it finished."
+
 Each import creates an audit record with its current processing stage. Failed
 imports retain the stage and error without retaining the source document,
 making credential, text extraction, model compilation, and output-validation
-failures distinguishable.
+failures distinguishable. The same record is what the page reads to follow
+an import.
 
 ## Replacing a playbook from a newer file
 

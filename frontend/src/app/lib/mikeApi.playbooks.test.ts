@@ -14,7 +14,7 @@ import {
   uploadPlaybookSource,
   addPlaybookSourceFromDocument,
   deletePlaybookSource,
-  importPlaybook,
+  startPlaybookImport,
   listPlaybookRuns,
   listAllPlaybookRuns,
   listPlaybooks,
@@ -267,7 +267,7 @@ describe("Playbook direct upload", () => {
         .mockResolvedValueOnce(new Response(null, { status: 200 }))
         .mockResolvedValueOnce(json(result));
 
-      await expect(importPlaybook(file, "test-model", name)).resolves.toEqual(
+      await expect(startPlaybookImport(file, "test-model", name)).resolves.toEqual(
         result,
       );
       expect(fetchMock).toHaveBeenCalledTimes(3);
@@ -319,7 +319,7 @@ describe("Playbook direct upload", () => {
         .mockResolvedValueOnce(new Response(null, { status: 200 }))
         .mockResolvedValueOnce(json({ id: "pb-1" }));
 
-      await importPlaybook(file, "test-model", undefined, playbookId, workspace);
+      await startPlaybookImport(file, "test-model", undefined, playbookId, workspace);
 
       expect(fetchMock).toHaveBeenNthCalledWith(
         3,
@@ -343,7 +343,7 @@ describe("Playbook direct upload", () => {
         new Response("private storage error", { status: 500 }),
       );
     await expect(
-      importPlaybook(new File(["text"], "guide.docx"), "test-model"),
+      startPlaybookImport(new File(["text"], "guide.docx"), "test-model"),
     ).rejects.toThrow("The playbook could not be uploaded. Please try again.");
     expect(fetchMock).toHaveBeenCalledTimes(2);
   });
@@ -351,7 +351,7 @@ describe("Playbook direct upload", () => {
   it("compiles a saved document without staging an upload", async () => {
     fetchMock.mockResolvedValueOnce(json({ id: "pb-1" }, 201));
     await expect(
-      importPlaybook({ documentId: "doc-1" }, "test-model", " Standards "),
+      startPlaybookImport({ documentId: "doc-1" }, "test-model", " Standards "),
     ).resolves.toEqual({ id: "pb-1" });
     expect(fetchMock).toHaveBeenCalledTimes(1);
     const [url, init] = fetchMock.mock.calls[0];
@@ -368,7 +368,7 @@ describe("Playbook direct upload", () => {
       json({ detail: "Playbook import requires a .docx or .pdf file." }, 400),
     );
     await expect(
-      importPlaybook(new File(["text"], "guide.txt"), "test-model"),
+      startPlaybookImport(new File(["text"], "guide.txt"), "test-model"),
     ).rejects.toThrow("Playbook import requires a .docx or .pdf file.");
     expect(fetchMock).toHaveBeenCalledTimes(1);
   });

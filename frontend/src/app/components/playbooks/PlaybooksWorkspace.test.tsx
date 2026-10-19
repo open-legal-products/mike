@@ -7,14 +7,17 @@ import {
   within,
 } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   getDocumentFile,
   getPlaybookPeople,
   listPlaybookShares,
   createPlaybook,
   getPlaybookConfiguration,
-  importPlaybook,
+  getPlaybook,
+  getPlaybookImport,
+  listRunningPlaybookImports,
+  startPlaybookImport,
   listPlaybooks,
   listAllPlaybookRuns,
   deletePlaybookRun,
@@ -25,8 +28,10 @@ import {
   updatePlaybook,
   deletePlaybook,
   type Playbook,
+  type PlaybookImport,
   type PlaybookRun,
 } from "@/app/lib/mikeApi";
+import { showToast } from "@/app/components/ui/toast";
 import { PlaybooksWorkspaceLayout as PlaybooksPage } from "./PlaybooksWorkspace";
 import { SETTINGS_MODELS } from "@/shared/lib/modelCatalog";
 
@@ -101,7 +106,10 @@ vi.mock("@/app/lib/mikeApi", async (importOriginal) => ({
   createPlaybook: vi.fn(),
   listPlaybooks: vi.fn(),
   getPlaybookConfiguration: vi.fn(),
-  importPlaybook: vi.fn(),
+  startPlaybookImport: vi.fn(),
+  getPlaybookImport: vi.fn(),
+  listRunningPlaybookImports: vi.fn(),
+  getPlaybook: vi.fn(),
   updatePlaybook: vi.fn(),
   deletePlaybook: vi.fn(),
   reviewDocumentWithPlaybook: vi.fn(),
@@ -111,6 +119,32 @@ vi.mock("@/app/lib/mikeApi", async (importOriginal) => ({
   deletePlaybookRun: vi.fn(),
   uploadLibraryDocument: vi.fn(),
 }));
+
+vi.mock("@/app/components/ui/toast", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/app/components/ui/toast")>()),
+  showToast: vi.fn(),
+}));
+
+/** An import as the server reports it while it compiles. */
+function importAttempt(overrides: Partial<PlaybookImport> = {}): PlaybookImport {
+  return {
+    id: "imp-1",
+    status: "running",
+    stage: "checking_model",
+    error: null,
+    filename: "Standards.pdf",
+    name: null,
+    playbookId: null,
+    startedAt: "2026-10-20T00:00:00.000Z",
+    completedAt: null,
+    ...overrides,
+  };
+}
+
+/** Lets the page's import poll run once. */
+async function pollImports() {
+  await act(() => vi.advanceTimersByTimeAsync(3000));
+}
 
 // The real viewer lazy-loads a Word renderer that jsdom cannot run.
 vi.mock("@/app/components/shared/views/DocxView", () => ({
@@ -329,12 +363,21 @@ describe("playbooks page", () => {
     blank.content.rules = blank.content.topics[0].rules;
     blank.content.topics = [];
     vi.mocked(createPlaybook).mockResolvedValue(blank);
-    vi.mocked(importPlaybook).mockResolvedValue(playbook("pb-a", "Replaced"));
+    vi.mocked(listRunningPlaybookImports).mockResolvedValue([]);
+    vi.mocked(startPlaybookImport).mockResolvedValue(importAttempt());
+    vi.mocked(getPlaybookImport).mockResolvedValue(
+      importAttempt({ status: "completed", playbookId: "pb-a" }),
+    );
+    vi.mocked(getPlaybook).mockResolvedValue(playbook("pb-a", "Replaced"));
     vi.mocked(updatePlaybook).mockImplementation(async (id, content) => ({
       ...playbook(id, content.name),
       content,
     }));
     vi.mocked(deletePlaybook).mockResolvedValue(undefined);
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
   });
 
   it("gives each playbook its own page and opens it from its link", async () => {
@@ -1381,6 +1424,10 @@ describe("playbooks page", () => {
   });
 
   it("replaces the selected playbook from a dropped PDF", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    vi.mocked(startPlaybookImport).mockResolvedValue(
+      importAttempt({ filename: "updated.pdf", playbookId: "pb-a" }),
+    );
     render(<PlaybooksPage />);
 
     await userEvent.click(
@@ -1406,13 +1453,17 @@ describe("playbooks page", () => {
     await userEvent.click(screen.getByRole("button", { name: "Compile" }));
 
     await waitFor(() =>
-      expect(importPlaybook).toHaveBeenCalledWith(
+      expect(startPlaybookImport).toHaveBeenCalledWith(
         expect.any(File),
         TEST_MODEL,
         "",
         "pb-a",
         "personal",
       ),
+    );
+    await pollImports();
+    await waitFor(() =>
+      expect(screen.queryByText("Compiling your playbook")).toBeNull(),
     );
 
     // The replacement rewrites a playbook; it must not add a second row.
@@ -1436,7 +1487,11 @@ describe("playbooks page", () => {
   });
 
   it("imports a new playbook from a saved PDF", async () => {
-    vi.mocked(importPlaybook).mockResolvedValue(playbook("pb-new", "Standards"));
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    vi.mocked(getPlaybookImport).mockResolvedValue(
+      importAttempt({ status: "running", stage: "compiling" }),
+    );
+    vi.mocked(getPlaybook).mockResolvedValue(playbook("pb-new", "Standards"));
     render(<PlaybooksPage />);
 
     await userEvent.click(
@@ -1466,7 +1521,7 @@ describe("playbooks page", () => {
     await userEvent.click(screen.getByRole("button", { name: "Compile" }));
 
     await waitFor(() =>
-      expect(importPlaybook).toHaveBeenCalledWith(
+      expect(startPlaybookImport).toHaveBeenCalledWith(
         { documentId: "saved-playbook" },
         TEST_MODEL,
         "",
@@ -1474,6 +1529,105 @@ describe("playbooks page", () => {
         "personal",
       ),
     );
+    // While compiling, the dialog shows only its progress screen.
+    const dialog = screen.getByRole("dialog");
+    expect(within(dialog).getByRole("status")).toHaveTextContent(
+      "Compiling your playbook",
+    );
+    expect(screen.queryByRole("button", { name: "Compile" })).toBeNull();
+    expect(screen.queryByRole("region", { name: "Add document" })).toBeNull();
+
+    // Still compiling: the screen stays.
+    await pollImports();
+    expect(within(dialog).getByRole("status")).toBeInTheDocument();
+
+    vi.mocked(getPlaybookImport).mockResolvedValue(
+      importAttempt({ status: "completed", playbookId: "pb-new" }),
+    );
+    await pollImports();
+    await waitFor(() =>
+      expect(navigation.push).toHaveBeenCalledWith("/playbooks/pb-new"),
+    );
+    expect(screen.queryByText("Compiling your playbook")).toBeNull();
+  });
+
+  it("keeps compiling after the dialog is closed and says when it is ready", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    vi.mocked(getPlaybookImport).mockResolvedValue(importAttempt());
+    vi.mocked(getPlaybook).mockResolvedValue(playbook("pb-new", "Standards"));
+    render(<PlaybooksPage />);
+
+    await userEvent.click(
+      await screen.findByRole("button", { name: /New playbook/i }),
+    );
+    await userEvent.click(
+      await screen.findByRole("menuitem", { name: /Import from file/i }),
+    );
+    await userEvent.click(
+      screen.getByRole("button", { name: /Drag and drop a Word or PDF playbook/ }),
+    );
+    await userEvent.click(
+      screen.getByRole("button", { name: "Choose saved playbook" }),
+    );
+    await userEvent.click(screen.getByRole("button", { name: "Compile" }));
+    // The footer's Close, not the header's icon: both leave it compiling.
+    await userEvent.click(
+      within(await screen.findByRole("dialog")).getByText("Close", {
+        selector: "button",
+      }),
+    );
+
+    expect(screen.queryByRole("dialog")).toBeNull();
+    expect(
+      screen.getByRole("list", { name: "Playbooks being compiled" }),
+    ).toHaveTextContent("Compiling Standards.pdf…");
+
+    vi.mocked(getPlaybookImport).mockResolvedValue(
+      importAttempt({ status: "completed", playbookId: "pb-new" }),
+    );
+    await pollImports();
+    await waitFor(() =>
+      expect(showToast).toHaveBeenCalledWith(
+        expect.objectContaining({ message: "“Standards” is ready." }),
+      ),
+    );
+    // Closing detached it, so the page stays where it is.
+    expect(navigation.push).not.toHaveBeenCalled();
+    expect(
+      screen.queryByRole("list", { name: "Playbooks being compiled" }),
+    ).toBeNull();
+    expect(
+      await screen.findByRole("link", { name: "Standards" }),
+    ).toBeInTheDocument();
+  });
+
+  it("follows an import started before the page was opened", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    vi.mocked(listRunningPlaybookImports).mockResolvedValue([
+      importAttempt({ name: "Vendor standards" }),
+    ]);
+    vi.mocked(getPlaybookImport).mockResolvedValue(
+      importAttempt({
+        name: "Vendor standards",
+        status: "failed",
+        error: "The selected model did not finish within 5 minutes.",
+      }),
+    );
+    render(<PlaybooksPage />);
+
+    expect(
+      await screen.findByText("Compiling Vendor standards…"),
+    ).toBeInTheDocument();
+    await pollImports();
+    await waitFor(() =>
+      expect(showToast).toHaveBeenCalledWith(
+        expect.objectContaining({
+          tone: "error",
+          message: "The selected model did not finish within 5 minutes.",
+        }),
+      ),
+    );
+    expect(screen.queryByText("Compiling Vendor standards…")).toBeNull();
   });
 
   it("does not ask for a name when replacing", async () => {

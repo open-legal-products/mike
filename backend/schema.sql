@@ -5533,10 +5533,13 @@ create table if not exists public.playbook_imports (
   started_at timestamptz not null,
   completed_at timestamptz,
   created_at timestamptz not null default now(),
-  updated_at timestamptz not null default now()
+  updated_at timestamptz not null default now(),
+  org_id uuid references public.organizations(id) on delete cascade
 );
 create index if not exists idx_playbook_imports_user_started
   on public.playbook_imports(user_id, started_at desc);
+create index if not exists idx_playbook_imports_user_status
+  on public.playbook_imports(user_id, status, started_at desc);
 alter table public.playbook_imports enable row level security;
 
 -- Supplementary documents a playbook's rules can refer to: copies the
@@ -10902,5 +10905,6 @@ insert into public.schema_migrations (filename) values
   ('20261017_07_playbook_storage_cleanup.sql'),
   ('20261018_01_remove_playbook_global_guidance.sql'),
   ('20261018_02_playbook_run_history_index.sql'),
-  ('20261019_01_playbook_run_scope.sql')
+  ('20261019_01_playbook_run_scope.sql'),
+  ('20261020_01_playbook_import_status.sql')
 on conflict (filename) do nothing;

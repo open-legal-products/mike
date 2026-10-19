@@ -20,7 +20,11 @@ export {
   getPlaybook,
   getPlaybookSource,
   importPlaybookFromFile,
-  importPlaybookFromDocument,
+  startPlaybookImport,
+  startPlaybookImportFromDocument,
+  getPlaybookImport,
+  listRunningPlaybookImports,
+  INTERRUPTED_IMPORT_ERROR,
   MAX_PLAYBOOK_IMPORT_BYTES,
   updatePlaybookContent,
   reviewWithPlaybook,
@@ -33,6 +37,7 @@ export {
   deletePlaybookRun,
   deletePlaybook,
   playbookConfiguration,
+  type PlaybookImport,
 } from "./playbooks.operations";
 
 export {

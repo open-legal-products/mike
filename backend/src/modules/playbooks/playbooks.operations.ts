@@ -986,38 +986,108 @@ async function playbookSourceStorageKey(
   return data?.source_storage_key ? String(data.source_storage_key) : null;
 }
 
+/** How often a compiling import records that its process is still at it. */
+const IMPORT_HEARTBEAT_MS = 30_000;
+/** A running import silent for this long stopped with its process. */
+const IMPORT_STALE_MS = 2 * 60_000;
+export const INTERRUPTED_IMPORT_ERROR =
+  "The import stopped before it finished. Import the playbook again.";
+
+/** An import attempt as the page follows it. */
+export type PlaybookImport = {
+  id: string;
+  status: "running" | "completed" | "failed";
+  stage: string;
+  error: string | null;
+  filename: string;
+  name: string | null;
+  /** The playbook being replaced, or the one created once completed. */
+  playbookId: string | null;
+  startedAt: string;
+  completedAt: string | null;
+};
+
 /**
- * Compile a playbook from a document already in the caller's files, as
- * importPlaybookFromFile does from an upload. The playbook keeps its own copy
- * of the file, so later changes to the document do not reach it.
+ * An import's state as readers should see it. An import compiles in the
+ * process that started it, so one whose heartbeat has stopped will never
+ * finish.
  */
-export async function importPlaybookFromDocument(
-  args: Omit<Parameters<typeof importPlaybookFromFile>[0], "filename" | "buffer"> & {
-    documentId: string;
-  },
-): Promise<Playbook> {
-  const db = args.db ?? createServerSupabase();
-  const source = await getFileStreamSource(
-    args.documentId,
-    args.userId,
-    args.userEmail ?? undefined,
-    null,
-    db,
-  );
-  if (!source.ok) throw new PlaybookRequestError("Document not found.", 404);
-  if (source.size > MAX_PLAYBOOK_IMPORT_BYTES)
-    throw new PlaybookRequestError("The document is too large to import.");
-  const bytes = await downloadFile(source.storagePath);
-  if (!bytes) throw new PlaybookRequestError("The document could not be read.");
-  return importPlaybookFromFile({
-    ...args,
-    db,
-    filename: source.filename,
-    buffer: Buffer.from(bytes),
-  });
+function publicImport(
+  row: Record<string, unknown>,
+  now = Date.now(),
+): PlaybookImport {
+  const lastSeen = Date.parse(String(row.updated_at ?? row.started_at));
+  const interrupted =
+    row.status === "running" &&
+    Number.isFinite(lastSeen) &&
+    now - lastSeen > IMPORT_STALE_MS;
+  const status = interrupted ? "failed" : String(row.status);
+  return {
+    id: String(row.id),
+    status:
+      status === "completed" || status === "failed" ? status : "running",
+    stage: String(row.stage),
+    error: interrupted
+      ? INTERRUPTED_IMPORT_ERROR
+      : row.error
+        ? String(row.error)
+        : null,
+    filename: String(row.filename),
+    name: row.requested_name ? String(row.requested_name) : null,
+    playbookId: row.playbook_id ? String(row.playbook_id) : null,
+    startedAt: String(row.started_at),
+    completedAt: row.completed_at ? String(row.completed_at) : null,
+  };
 }
 
-export async function importPlaybookFromFile(args: {
+const IMPORT_COLUMNS =
+  "id, status, stage, error, filename, requested_name, playbook_id, started_at, completed_at, updated_at";
+
+/** One of the caller's import attempts. */
+export async function getPlaybookImport(
+  userId: string,
+  importId: string,
+  db: Db = createServerSupabase(),
+): Promise<PlaybookImport> {
+  const { data, error } = await db
+    .from("playbook_imports")
+    .select(IMPORT_COLUMNS)
+    .eq("id", importId)
+    .eq("user_id", userId)
+    .maybeSingle();
+  if (error) throw error;
+  if (!data) throw new PlaybookRequestError("Import not found.", 404);
+  return publicImport(data as Record<string, unknown>);
+}
+
+/**
+ * The caller's imports still compiling in a workspace, newest first, so a
+ * page opened later can follow them.
+ */
+export async function listRunningPlaybookImports(
+  userId: string,
+  db: Db = createServerSupabase(),
+  workspace?: unknown,
+): Promise<PlaybookImport[]> {
+  const orgId = await creationScope(db, userId, workspace);
+  const query = db
+    .from("playbook_imports")
+    .select(IMPORT_COLUMNS)
+    .eq("user_id", userId)
+    .eq("status", "running");
+  const { data, error } = await (orgId
+    ? query.eq("org_id", orgId)
+    : query.is("org_id", null)
+  )
+    .order("started_at", { ascending: false })
+    .limit(20);
+  if (error) throw error;
+  return ((data ?? []) as Record<string, unknown>[])
+    .map((row) => publicImport(row))
+    .filter((attempt) => attempt.status === "running");
+}
+
+type PlaybookImportArgs = {
   userId: string;
   /** Needed to replace a personal playbook shared with the caller. */
   userEmail?: string | null;
@@ -1032,7 +1102,56 @@ export async function importPlaybookFromFile(args: {
   dependencies?: {
     completeText?: typeof completeText;
   };
-}): Promise<Playbook> {
+};
+
+/**
+ * Compile a playbook from a document already in the caller's files, as
+ * startPlaybookImport does from an upload. The playbook keeps its own copy
+ * of the file, so later changes to the document do not reach it.
+ */
+export async function startPlaybookImportFromDocument(
+  args: Omit<PlaybookImportArgs, "filename" | "buffer"> & {
+    documentId: string;
+  },
+) {
+  const db = args.db ?? createServerSupabase();
+  const source = await getFileStreamSource(
+    args.documentId,
+    args.userId,
+    args.userEmail ?? undefined,
+    null,
+    db,
+  );
+  if (!source.ok) throw new PlaybookRequestError("Document not found.", 404);
+  if (source.size > MAX_PLAYBOOK_IMPORT_BYTES)
+    throw new PlaybookRequestError("The document is too large to import.");
+  const bytes = await downloadFile(source.storagePath);
+  if (!bytes) throw new PlaybookRequestError("The document could not be read.");
+  return startPlaybookImport({
+    ...args,
+    db,
+    filename: source.filename,
+    buffer: Buffer.from(bytes),
+  });
+}
+
+/** Starts an import and waits for it: for callers that need the playbook. */
+export async function importPlaybookFromFile(
+  args: PlaybookImportArgs,
+): Promise<Playbook> {
+  const { done } = await startPlaybookImport(args);
+  return done;
+}
+
+/**
+ * Checks and records an import, then compiles it apart from the request: the
+ * attempt is returned once the file, target, and model are known to be
+ * usable, and `done` settles when the playbook is saved. Leaving the page
+ * detaches from the import without stopping it; its row says how it went.
+ */
+export async function startPlaybookImport(
+  args: PlaybookImportArgs,
+): Promise<{ attempt: PlaybookImport; done: Promise<Playbook> }> {
   const db = args.db ?? createServerSupabase();
   const now = new Date().toISOString();
   const attemptId = crypto.randomUUID();
@@ -1040,7 +1159,7 @@ export async function importPlaybookFromFile(args: {
   const compilationTimeoutMs = playbookCompilationTimeoutMs();
   let stage: PlaybookImportStage = "validating_file";
   let uploadedStorageKey: string | null = null;
-  const attempt = await db.from("playbook_imports").insert({
+  const row = {
     id: attemptId,
     user_id: args.userId,
     filename: args.filename,
@@ -1050,185 +1169,16 @@ export async function importPlaybookFromFile(args: {
     stage,
     error: null,
     playbook_id: args.playbookId ?? null,
+    org_id: null as string | null,
     started_at: now,
     completed_at: null,
     created_at: now,
     updated_at: now,
-  });
+  };
+  const attempt = await db.from("playbook_imports").insert(row);
   if (attempt.error) throw attempt.error;
 
-  try {
-    const fileType = playbookImportFileType(args.filename);
-    if (!fileType)
-      throw new PlaybookRequestError(
-        "Playbook import requires a .docx or .pdf file.",
-      );
-    if (!args.buffer.length)
-      throw new PlaybookRequestError("The uploaded playbook is empty.");
-
-    // Resolve the replace target first. An unknown or unowned playbook must
-    // fail before the import spends a model call on it.
-    const replacing = args.playbookId
-      ? await editablePlaybook(args.userId, args.playbookId, db, args.userEmail)
-      : null;
-
-    const orgId = replacing
-      ? replacing.orgId
-      : await creationScope(db, args.userId, args.workspace);
-
-    stage = "checking_model";
-    await updateImportAttempt(db, attemptId, { stage });
-    validateModel(model);
-    const apiKeys = await assertPlaybookModelAvailable(
-      args.userId,
-      model,
-      db,
-      orgId,
-    );
-
-    stage = "extracting_text";
-    await updateImportAttempt(db, attemptId, { stage });
-    const structure =
-      fileType === "pdf"
-        ? await extractPlaybookPdfStructure(args.buffer)
-        : await extractPlaybookWordStructure(args.buffer);
-    if (!structure.text) {
-      throw new PlaybookRequestError(
-        "This PDF has no text layer, so its content cannot be read. It is most likely scanned and needs OCR before it can be imported.",
-      );
-    }
-    if (structure.text.length > 150_000) {
-      throw new PlaybookRequestError(
-        "The playbook is too large to compile in one pass. Split it into smaller playbooks before importing.",
-      );
-    }
-    const fallbackName =
-      args.filename.replace(/\.(docx|pdf)$/i, "").trim() || "Imported playbook";
-    const name = args.name?.trim() || replacing?.name || fallbackName;
-
-    stage = "compiling";
-    await updateImportAttempt(db, attemptId, { stage });
-    const runCompletion = args.dependencies?.completeText ?? completeText;
-    const raw = await withCompilationTimeout(
-      runCompletion({
-        model,
-        systemPrompt:
-          "You compile legal playbooks into auditable structured data. Return only valid JSON and never add legal positions absent from the source.",
-        user: compilationPrompt(structure, name),
-        maxTokens: 16_000,
-        apiKeys,
-      }),
-      compilationTimeoutMs,
-    );
-
-    stage = "validating_output";
-    await updateImportAttempt(db, attemptId, { stage });
-    const content = await validatePlaybookCompilationWithRetry({
-      raw,
-      structure,
-      retry: async (validationError) => {
-        stage = "repairing_output";
-        await updateImportAttempt(db, attemptId, { stage });
-        const retried = await withCompilationTimeout(
-          runCompletion({
-            model,
-            systemPrompt:
-              "You compile legal playbooks into auditable structured data. Your previous response failed validation. Return exactly one complete valid JSON object and no other text.",
-            user: compilationRetryPrompt(structure, name, validationError),
-            maxTokens: 16_000,
-            apiKeys,
-          }),
-          compilationTimeoutMs,
-        );
-        stage = "validating_output";
-        await updateImportAttempt(db, attemptId, { stage });
-        return retried;
-      },
-    });
-    const id = replacing?.id ?? crypto.randomUUID();
-    // The key carries the attempt id so a replacement never overwrites the
-    // current source before its row update commits.
-    // Under the creator's prefix, whoever replaces it.
-    const storageKey = `playbooks/${replacing?.userId ?? args.userId}/${id}/source-${attemptId}.${fileType}`;
-    const previousStorageKey = replacing
-      ? await playbookSourceStorageKey(db, id)
-      : null;
-
-    stage = "storing_source";
-    await updateImportAttempt(db, attemptId, { stage });
-    await uploadFile(
-      storageKey,
-      args.buffer.buffer.slice(
-        args.buffer.byteOffset,
-        args.buffer.byteOffset + args.buffer.byteLength,
-      ) as ArrayBuffer,
-      PLAYBOOK_IMPORT_CONTENT_TYPES[fileType],
-    );
-    uploadedStorageKey = storageKey;
-
-    stage = "saving_playbook";
-    await updateImportAttempt(db, attemptId, { stage });
-    // Review runs retain their own content snapshot when the source changes.
-    const { error } = replacing
-      ? await db
-          .from("playbooks")
-          .update({
-            name: content.name,
-            description: content.description,
-            content_json: content,
-            source_filename: args.filename,
-            source_storage_key: storageKey,
-            import_model: model,
-            updated_at: new Date().toISOString(),
-          })
-          .eq("id", id)
-      : await db.from("playbooks").insert({
-          id,
-          user_id: args.userId,
-          name: content.name,
-          description: content.description,
-          content_json: content,
-          org_id: orgId,
-          source_filename: args.filename,
-          source_storage_key: storageKey,
-          import_model: model,
-          created_at: now,
-          updated_at: now,
-        });
-    if (error) {
-      await deleteFile(storageKey).catch(() => {});
-      uploadedStorageKey = null;
-      throw error;
-    }
-    uploadedStorageKey = null;
-    // The row now points at the new object, so the superseded one is safe to
-    // remove. Losing this cleanup must not fail the import.
-    if (previousStorageKey && previousStorageKey !== storageKey)
-      await deleteFile(previousStorageKey).catch((cleanupError) => {
-        console.error("[playbooks] replaced source cleanup failed", {
-          storageKey: previousStorageKey,
-          error: safeError(cleanupError),
-        });
-      });
-
-    stage = "completed";
-    const completedAt = new Date().toISOString();
-    try {
-      await updateImportAttempt(db, attemptId, {
-        status: "completed",
-        stage,
-        playbook_id: id,
-        completed_at: completedAt,
-      });
-    } catch (auditError) {
-      console.error("[playbooks] failed to complete import audit record", {
-        attemptId,
-        playbookId: id,
-        error: safeError(auditError),
-      });
-    }
-    return getPlaybook(args.userId, id, db, args.userEmail);
-  } catch (error) {
+  async function failed(error: unknown): Promise<PlaybookImportError> {
     console.error("[playbooks] import failed", { attemptId, stage, error: safeError(error) });
     const message = playbookImportFailureMessage(
       stage,
@@ -1252,13 +1202,224 @@ export async function importPlaybookFromFile(args: {
         error: safeError(auditError),
       });
     }
-    throw new PlaybookImportError(
+    return new PlaybookImportError(
       `Playbook import failed during ${importStageLabel(stage)}: ${message}`,
       attemptId,
       stage,
       { cause: error },
     );
   }
+
+  // Everything that can be refused without the model is refused here, so the
+  // request that starts the import reports it.
+  let fileType: PlaybookImportFileType;
+  let replacing: Awaited<ReturnType<typeof editablePlaybook>> | null;
+  let orgId: string | null;
+  let apiKeys: UserApiKeys;
+  try {
+    const type = playbookImportFileType(args.filename);
+    if (!type)
+      throw new PlaybookRequestError(
+        "Playbook import requires a .docx or .pdf file.",
+      );
+    fileType = type;
+    if (!args.buffer.length)
+      throw new PlaybookRequestError("The uploaded playbook is empty.");
+
+    // Resolve the replace target first. An unknown or unowned playbook must
+    // fail before the import spends a model call on it.
+    replacing = args.playbookId
+      ? await editablePlaybook(args.userId, args.playbookId, db, args.userEmail)
+      : null;
+
+    orgId = replacing
+      ? replacing.orgId
+      : await creationScope(db, args.userId, args.workspace);
+    row.org_id = orgId;
+
+    stage = "checking_model";
+    await updateImportAttempt(db, attemptId, { stage, org_id: orgId });
+    validateModel(model);
+    apiKeys = await assertPlaybookModelAvailable(
+      args.userId,
+      model,
+      db,
+      orgId,
+    );
+  } catch (error) {
+    throw await failed(error);
+  }
+
+  async function compile(): Promise<Playbook> {
+    const heartbeat = setInterval(() => {
+      void db
+        .from("playbook_imports")
+        .update({ updated_at: new Date().toISOString() })
+        .eq("id", attemptId)
+        .eq("status", "running")
+        .then(({ error }) => {
+          if (error)
+            console.error("[playbooks] import heartbeat failed", {
+              attemptId,
+              error: safeError(error),
+            });
+        });
+    }, IMPORT_HEARTBEAT_MS);
+    heartbeat.unref?.();
+    try {
+      stage = "extracting_text";
+      await updateImportAttempt(db, attemptId, { stage });
+      const structure =
+        fileType === "pdf"
+          ? await extractPlaybookPdfStructure(args.buffer)
+          : await extractPlaybookWordStructure(args.buffer);
+      if (!structure.text) {
+        throw new PlaybookRequestError(
+          "This PDF has no text layer, so its content cannot be read. It is most likely scanned and needs OCR before it can be imported.",
+        );
+      }
+      if (structure.text.length > 150_000) {
+        throw new PlaybookRequestError(
+          "The playbook is too large to compile in one pass. Split it into smaller playbooks before importing.",
+        );
+      }
+      const fallbackName =
+        args.filename.replace(/\.(docx|pdf)$/i, "").trim() || "Imported playbook";
+      const name = args.name?.trim() || replacing?.name || fallbackName;
+
+      stage = "compiling";
+      await updateImportAttempt(db, attemptId, { stage });
+      const runCompletion = args.dependencies?.completeText ?? completeText;
+      const raw = await withCompilationTimeout(
+        runCompletion({
+          model,
+          systemPrompt:
+            "You compile legal playbooks into auditable structured data. Return only valid JSON and never add legal positions absent from the source.",
+          user: compilationPrompt(structure, name),
+          maxTokens: 16_000,
+          apiKeys,
+        }),
+        compilationTimeoutMs,
+      );
+
+      stage = "validating_output";
+      await updateImportAttempt(db, attemptId, { stage });
+      const content = await validatePlaybookCompilationWithRetry({
+        raw,
+        structure,
+        retry: async (validationError) => {
+          stage = "repairing_output";
+          await updateImportAttempt(db, attemptId, { stage });
+          const retried = await withCompilationTimeout(
+            runCompletion({
+              model,
+              systemPrompt:
+                "You compile legal playbooks into auditable structured data. Your previous response failed validation. Return exactly one complete valid JSON object and no other text.",
+              user: compilationRetryPrompt(structure, name, validationError),
+              maxTokens: 16_000,
+              apiKeys,
+            }),
+            compilationTimeoutMs,
+          );
+          stage = "validating_output";
+          await updateImportAttempt(db, attemptId, { stage });
+          return retried;
+        },
+      });
+      const id = replacing?.id ?? crypto.randomUUID();
+      // The key carries the attempt id so a replacement never overwrites the
+      // current source before its row update commits.
+      // Under the creator's prefix, whoever replaces it.
+      const storageKey = `playbooks/${replacing?.userId ?? args.userId}/${id}/source-${attemptId}.${fileType}`;
+      const previousStorageKey = replacing
+        ? await playbookSourceStorageKey(db, id)
+        : null;
+
+      stage = "storing_source";
+      await updateImportAttempt(db, attemptId, { stage });
+      await uploadFile(
+        storageKey,
+        args.buffer.buffer.slice(
+          args.buffer.byteOffset,
+          args.buffer.byteOffset + args.buffer.byteLength,
+        ) as ArrayBuffer,
+        PLAYBOOK_IMPORT_CONTENT_TYPES[fileType],
+      );
+      uploadedStorageKey = storageKey;
+
+      stage = "saving_playbook";
+      await updateImportAttempt(db, attemptId, { stage });
+      // Review runs retain their own content snapshot when the source changes.
+      const { error } = replacing
+        ? await db
+            .from("playbooks")
+            .update({
+              name: content.name,
+              description: content.description,
+              content_json: content,
+              source_filename: args.filename,
+              source_storage_key: storageKey,
+              import_model: model,
+              updated_at: new Date().toISOString(),
+            })
+            .eq("id", id)
+        : await db.from("playbooks").insert({
+            id,
+            user_id: args.userId,
+            name: content.name,
+            description: content.description,
+            content_json: content,
+            org_id: orgId,
+            source_filename: args.filename,
+            source_storage_key: storageKey,
+            import_model: model,
+            created_at: now,
+            updated_at: now,
+          });
+      if (error) {
+        await deleteFile(storageKey).catch(() => {});
+        uploadedStorageKey = null;
+        throw error;
+      }
+      uploadedStorageKey = null;
+      // The row now points at the new object, so the superseded one is safe to
+      // remove. Losing this cleanup must not fail the import.
+      if (previousStorageKey && previousStorageKey !== storageKey)
+        await deleteFile(previousStorageKey).catch((cleanupError) => {
+          console.error("[playbooks] replaced source cleanup failed", {
+            storageKey: previousStorageKey,
+            error: safeError(cleanupError),
+          });
+        });
+
+      stage = "completed";
+      const completedAt = new Date().toISOString();
+      try {
+        await updateImportAttempt(db, attemptId, {
+          status: "completed",
+          stage,
+          playbook_id: id,
+          completed_at: completedAt,
+        });
+      } catch (auditError) {
+        console.error("[playbooks] failed to complete import audit record", {
+          attemptId,
+          playbookId: id,
+          error: safeError(auditError),
+        });
+      }
+      return getPlaybook(args.userId, id, db, args.userEmail);
+    } catch (error) {
+      throw await failed(error);
+    } finally {
+      clearInterval(heartbeat);
+    }
+  }
+
+  return {
+    attempt: publicImport({ ...row, stage }),
+    done: compile(),
+  };
 }
 
 /**

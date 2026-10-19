@@ -4203,11 +4203,27 @@ export async function createPlaybook(
     });
 }
 
+/** An import compiling on the server, which the page follows by polling. */
+export interface PlaybookImport {
+    id: string;
+    status: "running" | "completed" | "failed";
+    stage: string;
+    error: string | null;
+    filename: string;
+    name: string | null;
+    /** The playbook being replaced, or the one created once completed. */
+    playbookId: string | null;
+    startedAt: string;
+    completedAt: string | null;
+}
+
 /**
- * The source .docx goes straight to object storage under a signed URL, then
- * the API compiles it from that key. The API never receives the file body.
+ * Starts compiling a playbook and returns the running import at once; the
+ * compile continues on the server whether or not the page stays open. An
+ * upload goes straight to object storage under a signed URL, then the API
+ * compiles it from that key, so the API never receives the file body.
  */
-export async function importPlaybook(
+export async function startPlaybookImport(
     /** An upload, or a document already in the caller's files. */
     source: File | { documentId: string },
     model: string,
@@ -4215,7 +4231,7 @@ export async function importPlaybook(
     /** Replace this playbook's content rather than create a new playbook. */
     playbookId?: string,
     workspace?: string | null,
-): Promise<Playbook> {
+): Promise<PlaybookImport> {
     const options = {
         model,
         ...(name?.trim() ? { name: name.trim() } : {}),
@@ -4223,7 +4239,7 @@ export async function importPlaybook(
         ...(workspace ? { workspace } : {}),
     };
     if (!(source instanceof File)) {
-        return apiRequest<Playbook>("/playbooks/import", {
+        return apiRequest<PlaybookImport>("/playbooks/import", {
             method: "POST",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({ documentId: source.documentId, ...options }),
@@ -4249,7 +4265,7 @@ export async function importPlaybook(
         throw new Error("The playbook could not be uploaded. Please try again.");
     }
 
-    return apiRequest<Playbook>("/playbooks/import", {
+    return apiRequest<PlaybookImport>("/playbooks/import", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -4258,6 +4274,21 @@ export async function importPlaybook(
             ...options,
         }),
     });
+}
+
+export async function getPlaybookImport(
+    importId: string,
+): Promise<PlaybookImport> {
+    return apiRequest(`/playbooks/imports/${encodeURIComponent(importId)}`);
+}
+
+/** The caller's imports still compiling in the workspace. */
+export async function listRunningPlaybookImports(
+    workspace?: string | null,
+): Promise<PlaybookImport[]> {
+    return apiRequest(
+        `/playbooks/imports${workspace ? `?workspace=${encodeURIComponent(workspace)}` : ""}`,
+    );
 }
 
 export async function updatePlaybook(
