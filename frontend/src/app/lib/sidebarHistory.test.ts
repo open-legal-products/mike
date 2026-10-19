@@ -63,4 +63,12 @@ describe("sidebar history", () => {
             [chat("chat", 14), chat("older-chat", 1)], [], false, false, [run("run", 5)], true,
         ))).toEqual(["chat", "run"]);
     });
+
+    it("lists a run with an unreadable start time last", () => {
+        const run = {
+            id: "run", playbookId: "pb", playbookName: "MSA", documentName: null, status: "completed",
+            error: null, startedAt: "not a date", completedAt: null,
+        } as PlaybookRunHistoryItem;
+        expect(ids(mergeSidebarHistory([chat("chat", 1)], [], false, false, [run]))).toEqual(["chat", "run"]);
+    });
 });
