@@ -92,7 +92,7 @@ describe("WarningPopup", () => {
         );
         expect(cardShape(screen.getByRole("alert"))).toMatchInlineSnapshot(`
           [
-            "div.pointer-events-auto relative flex rounded-2xl px-3 py-2 text-xs liquid-glass-float focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500/40 focus-visible:ring-offset-2|",
+            "div.pointer-events-auto relative flex rounded-2xl px-2 py-2 text-xs liquid-glass-float focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500/40 focus-visible:ring-offset-2|",
             "div.flex min-w-0 flex-1 items-start gap-1.5 text-red-600|",
             "div.flex shrink-0 items-center h-5|",
             "svg.lucide lucide-circle-alert lucide-alert-circle h-3 w-3 shrink-0 text-red-600|",

@@ -743,9 +743,12 @@ function PlaybooksWorkspace() {
     }
     showToast({
       tone: "success",
-      message: `“${saved.name}” is ready.`,
+      title: "New playbook ready",
+      message: `${saved.name} has been compiled. Open to view.`,
       durationMs: 10_000,
-      actions: [{ label: "Open", onClick: () => openPlaybook(saved.id) }],
+      actions: [
+        { label: "Open", tone: "blue", onClick: () => openPlaybook(saved.id) },
+      ],
     });
   };
 
@@ -1284,53 +1287,37 @@ function PlaybooksWorkspace() {
               {...runActions}
             />
           ) : (
-            <>
-              {imports.length > 0 && (
-                <ul
-                  aria-label="Playbooks being compiled"
-                  className="mx-3 mb-2 space-y-1 text-xs text-gray-500 md:mx-6.5"
-                >
-                  {imports.map((attempt) => (
-                    <li
-                      key={attempt.id}
-                      className="flex min-w-0 items-start gap-2"
-                    >
-                      <Loader2
-                        aria-hidden="true"
-                        className="mt-0.5 h-3 w-3 shrink-0 animate-spin motion-reduce:animate-none"
-                      />
-                      <span className="min-w-0 [overflow-wrap:anywhere]">
-                        Compiling {attempt.name || attempt.filename}…
-                      </span>
-                    </li>
-                  ))}
-                </ul>
+            <PlaybookTable
+              playbooks={visiblePlaybooks}
+              loading={loading}
+              error={error}
+              filtered={!!search.trim()}
+              emptyContext={
+                tab === "all"
+                  ? "all"
+                  : isOrganization
+                    ? tab === "shared"
+                      ? "public"
+                      : "private"
+                    : tab === "shared"
+                      ? "shared"
+                      : "mine"
+              }
+              disabled={!!busy}
+              selectedIds={selectedIds}
+              onSelect={setSelectedIds}
+              {...tableActions}
+              onRetry={() => void load()}
+              onImport={() => openImport(null)}
+              onCreate={() => setNewOpen(true)}
+              // Imports compiling on the server show as loading rows.
+              compiling={imports.filter((attempt) =>
+                `${attempt.name ?? ""} ${attempt.filename}`
+                  .toLowerCase()
+                  .includes(search.trim().toLowerCase()),
               )}
-              <PlaybookTable
-                playbooks={visiblePlaybooks}
-                loading={loading}
-                error={error}
-                filtered={!!search.trim()}
-                emptyContext={
-                  tab === "all"
-                    ? "all"
-                    : isOrganization
-                      ? tab === "shared"
-                        ? "public"
-                        : "private"
-                      : tab === "shared"
-                        ? "shared"
-                        : "mine"
-                }
-                disabled={!!busy}
-                selectedIds={selectedIds}
-                onSelect={setSelectedIds}
-                {...tableActions}
-                onRetry={() => void load()}
-                onImport={() => openImport(null)}
-                onCreate={() => setNewOpen(true)}
-              />
-            </>
+              showNewImports={tab === "all" || tab === "mine"}
+            />
           )}
         </>
       )}
@@ -1478,10 +1465,17 @@ function PlaybooksWorkspace() {
           "Playbooks",
           importTargetId ? "Replace from file" : "Import playbook",
         ]}
-        // While compiling, the dialog shows only the progress screen.
+        // While compiling, the dialog shows only the progress screen, and
+        // closing it leaves the import compiling.
         primaryAction={
           compiling
-            ? undefined
+            ? {
+                label: "Close",
+                variant: "primary",
+                onClick: closeImport,
+                // The upload must finish before there is an import to leave.
+                disabled: busy === "import",
+              }
             : {
                 label: "Compile",
                 icon: <WandSparkles className="h-4 w-4" />,
@@ -1490,12 +1484,9 @@ function PlaybooksWorkspace() {
                 onClick: () => void doImport(),
               }
         }
-        cancelAction={{
-          label: compiling ? "Close" : "Cancel",
-          onClick: closeImport,
-          // The upload must finish before there is an import to leave.
-          disabled: busy === "import",
-        }}
+        cancelAction={
+          compiling ? false : { label: "Cancel", onClick: closeImport }
+        }
       >
         {compiling ? (
           <div
@@ -1510,9 +1501,8 @@ function PlaybooksWorkspace() {
               Compiling your playbook
             </p>
             <p className="mt-1 max-w-xs text-xs text-gray-500">
-              You’ll be taken to it as soon as it’s ready. Long files can take
-              several minutes. You can close this window; compiling continues
-              and you’ll be told when the playbook is ready.
+              This can take a few minutes. You can close this window and
+              we’ll let you know when it’s ready.
             </p>
           </div>
         ) : (

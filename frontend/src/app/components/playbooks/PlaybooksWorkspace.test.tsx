@@ -1571,16 +1571,19 @@ describe("playbooks page", () => {
     );
     await userEvent.click(screen.getByRole("button", { name: "Compile" }));
     // The footer's Close, not the header's icon: both leave it compiling.
+    const footer = (await screen.findByRole("dialog")).querySelector("footer");
     await userEvent.click(
-      within(await screen.findByRole("dialog")).getByText("Close", {
-        selector: "button",
-      }),
+      within(footer!).getByRole("button", { name: "Close" }),
     );
 
     expect(screen.queryByRole("dialog")).toBeNull();
-    expect(
-      screen.getByRole("list", { name: "Playbooks being compiled" }),
-    ).toHaveTextContent("Compiling Standards.pdf…");
+    // It compiles in a loading row of the table, not a notice above it.
+    const table = screen.getByRole("table", { name: "Playbooks" });
+    const row = within(table).getByRole("row", { busy: true });
+    expect(row).toHaveTextContent("Standards");
+    expect(row).toHaveTextContent("Compiling…");
+    expect(within(row).queryByRole("checkbox")).toBeNull();
+    expect(screen.queryByRole("list", { name: "Playbooks being compiled" })).toBeNull();
 
     vi.mocked(getPlaybookImport).mockResolvedValue(
       importAttempt({ status: "completed", playbookId: "pb-new" }),
@@ -1588,17 +1591,34 @@ describe("playbooks page", () => {
     await pollImports();
     await waitFor(() =>
       expect(showToast).toHaveBeenCalledWith(
-        expect.objectContaining({ message: "“Standards” is ready." }),
+        expect.objectContaining({
+          title: "New playbook ready",
+          message: "Standards has been compiled. Open to view.",
+        }),
       ),
     );
     // Closing detached it, so the page stays where it is.
     expect(navigation.push).not.toHaveBeenCalled();
-    expect(
-      screen.queryByRole("list", { name: "Playbooks being compiled" }),
-    ).toBeNull();
+    await waitFor(() =>
+      expect(within(table).queryByRole("row", { busy: true })).toBeNull(),
+    );
     expect(
       await screen.findByRole("link", { name: "Standards" }),
     ).toBeInTheDocument();
+  });
+
+  it("shows a replacement compiling in its playbook's own row", async () => {
+    vi.mocked(listRunningPlaybookImports).mockResolvedValue([
+      importAttempt({ name: "Playbook A", playbookId: "pb-a" }),
+    ]);
+    render(<PlaybooksPage />);
+    const link = await screen.findByRole("link", { name: "Playbook A" });
+    const row = link.closest('[role="row"]') as HTMLElement;
+    expect(await within(row).findByRole("status")).toHaveTextContent(
+      "Compiling…",
+    );
+    // No second row for it.
+    expect(screen.queryByRole("row", { busy: true })).toBeNull();
   });
 
   it("follows an import started before the page was opened", async () => {
@@ -1616,8 +1636,8 @@ describe("playbooks page", () => {
     render(<PlaybooksPage />);
 
     expect(
-      await screen.findByText("Compiling Vendor standards…"),
-    ).toBeInTheDocument();
+      await screen.findByRole("row", { busy: true }),
+    ).toHaveTextContent("Vendor standards");
     await pollImports();
     await waitFor(() =>
       expect(showToast).toHaveBeenCalledWith(
@@ -1627,7 +1647,7 @@ describe("playbooks page", () => {
         }),
       ),
     );
-    expect(screen.queryByText("Compiling Vendor standards…")).toBeNull();
+    expect(screen.queryByRole("row", { busy: true })).toBeNull();
   });
 
   it("does not ask for a name when replacing", async () => {

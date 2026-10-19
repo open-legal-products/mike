@@ -129,6 +129,7 @@ export function ToastActionsUI({ toast }: { toast: ToastRecord }): ReactElement 
                     onClick={() => void runAction(action)}
                     className={noticeActionClassName(
                         noticeActionEmphasis(supportCount + index, count),
+                        action.tone,
                     )}
                 >
                     {action.label}

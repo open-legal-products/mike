@@ -73,13 +73,15 @@ export function noticeActionEmphasis(
 /** Class for a button or link placed in the card's `actions` row. */
 export function noticeActionClassName(
     emphasis: NoticeActionEmphasis = "primary",
+    /** Overrides the pill's colour, for an action that goes somewhere. */
+    tone?: "blue",
 ) {
     if (emphasis === "tertiary") {
         // `h-7` matches the small pills beside it.
         return textButtonUIClassName({ size: "sm", className: "h-7" });
     }
     return pillButtonUIClassName({
-        tone: emphasis === "primary" ? "black" : "white",
+        tone: tone ?? (emphasis === "primary" ? "black" : "white"),
         size: "sm",
     });
 }
@@ -126,7 +128,8 @@ export function NoticeCardUI({
             {...rest}
             className={twMerge(
                 clsx(
-                    "pointer-events-auto relative flex rounded-2xl px-3 py-2 text-xs",
+                    // 8px sides, matching the close button's inset.
+                    "pointer-events-auto relative flex rounded-2xl px-2 py-2 text-xs",
                     LIQUID_GLASS_FLOAT_CLASS,
                     // Only visible when a toast is focused with the keyboard.
                     "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500/40 focus-visible:ring-offset-2",

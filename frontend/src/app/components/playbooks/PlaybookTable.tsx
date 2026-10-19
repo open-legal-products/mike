@@ -5,6 +5,7 @@ import Link from "next/link";
 import {
   Eye,
   Info,
+  Loader2,
   Play,
   Trash2,
   Users,
@@ -34,7 +35,7 @@ import {
 import { EmptyState } from "@/app/components/ui/empty-state";
 import { PillButtonUI } from "@/shared/ui/PillButtonUI";
 import type { ResourceAccessScope } from "@/app/components/shared/types";
-import type { Playbook } from "@/app/lib/mikeApi";
+import type { Playbook, PlaybookImport } from "@/app/lib/mikeApi";
 
 const NAME_COLUMN = "flex min-w-64 flex-1 items-center pl-3 pr-4";
 const CREATOR_COLUMN = "w-36 shrink-0 pr-4";
@@ -222,6 +223,8 @@ export function PlaybookTable({
   onRetry,
   onImport,
   onCreate,
+  compiling = [],
+  showNewImports = true,
 }: PlaybookActionHandlers & {
   playbooks: Playbook[];
   loading: boolean;
@@ -234,6 +237,10 @@ export function PlaybookTable({
   onRetry: () => void;
   onImport: () => void;
   onCreate: () => void;
+  /** Imports compiling on the server, drawn as loading rows. */
+  compiling?: PlaybookImport[];
+  /** A new import becomes the caller's own private playbook. */
+  showNewImports?: boolean;
 }) {
   const [filters, setFilters] = useState<Filters>(NO_FILTERS);
 
@@ -295,6 +302,21 @@ export function PlaybookTable({
     setFilters((current) => ({ ...current, [key]: value }));
     onSelect(new Set());
   }
+
+  // A replacement compiles into its playbook's row; a new import has a row of
+  // its own until its playbook arrives.
+  const replacing = new Set(
+    compiling.flatMap((attempt) =>
+      attempt.playbookId ? [attempt.playbookId] : [],
+    ),
+  );
+  const newImports = showNewImports
+    ? compiling.filter(
+        (attempt) =>
+          !attempt.playbookId ||
+          !playbooks.some((playbook) => playbook.id === attempt.playbookId),
+      )
+    : [];
 
   const showFilters = !loading && !error && playbooks.length > 0;
 
@@ -504,7 +526,7 @@ export function PlaybookTable({
               }
             />
           </TableEmptyState>
-        ) : playbooks.length === 0 ? (
+        ) : playbooks.length === 0 && newImports.length === 0 ? (
           <TableEmptyState>
             <EmptyState
               title={
@@ -548,7 +570,7 @@ export function PlaybookTable({
               }
             />
           </TableEmptyState>
-        ) : displayed.length === 0 ? (
+        ) : displayed.length === 0 && newImports.length === 0 ? (
           <TableEmptyState>
             <EmptyState
               title="No matching playbooks"
@@ -568,6 +590,58 @@ export function PlaybookTable({
           </TableEmptyState>
         ) : (
           <TableBody role="rowgroup" className={TABLE_MIN_WIDTH}>
+            {newImports.map((attempt) => {
+              const name =
+                attempt.name?.trim() ||
+                attempt.filename.replace(/\.(docx|pdf)$/i, "") ||
+                "Imported playbook";
+              return (
+                <TableRow
+                  key={`import:${attempt.id}`}
+                  role="row"
+                  aria-busy="true"
+                  className="min-w-0"
+                  interactive={false}
+                >
+                  <TableCell role="cell" className={NAME_COLUMN}>
+                    {/* In the checkbox's place: nothing to select yet. */}
+                    <Loader2
+                      aria-hidden="true"
+                      className="mr-3 h-2.5 w-2.5 shrink-0 animate-spin text-gray-400 motion-reduce:animate-none"
+                    />
+                    <span className="min-w-0 truncate text-gray-500" title={name}>
+                      <span className="sr-only">Compiling </span>
+                      {name}
+                    </span>
+                    <span className="ml-2 shrink-0 text-xs text-gray-400" aria-hidden="true">
+                      Compiling…
+                    </span>
+                  </TableCell>
+                  <TableCell role="cell" className={CREATOR_COLUMN}>
+                    <SkeletonLine className="w-16" />
+                  </TableCell>
+                  <TableCell role="cell" className={ACCESS_COLUMN}>
+                    <SkeletonLine className="w-14" />
+                  </TableCell>
+                  <TableCell role="cell" className={TYPE_COLUMN}>
+                    <SkeletonLine className="w-16" />
+                  </TableCell>
+                  <TableCell role="cell" className={REPRESENTED_COLUMN}>
+                    <SkeletonLine className="w-16" />
+                  </TableCell>
+                  <TableCell role="cell" className={JURISDICTION_COLUMN}>
+                    <SkeletonLine className="w-20" />
+                  </TableCell>
+                  <TableCell role="cell" className={RULES_COLUMN}>
+                    <SkeletonLine className="w-6" />
+                  </TableCell>
+                  <TableCell role="cell" className={UPDATED_COLUMN}>
+                    <SkeletonLine className="w-20" />
+                  </TableCell>
+                  <TableCell role="cell" className={ACTIONS_COLUMN} />
+                </TableRow>
+              );
+            })}
             {displayed.map((playbook) => (
               <TableRow
                 key={playbook.id}
@@ -627,6 +701,18 @@ export function PlaybookTable({
                     >
                       <span className="truncate">{playbook.name}</span>
                     </Link>
+                  )}
+                  {replacing.has(playbook.id) && (
+                    <span
+                      role="status"
+                      className="ml-2 flex shrink-0 items-center gap-1 text-xs text-gray-400"
+                    >
+                      <Loader2
+                        aria-hidden="true"
+                        className="h-3 w-3 animate-spin motion-reduce:animate-none"
+                      />
+                      Compiling…
+                    </span>
                   )}
                 </TableCell>
                 <TableCell role="cell" className={CREATOR_COLUMN}>
