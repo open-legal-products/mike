@@ -71,7 +71,7 @@ jobs:
       NEXT_PUBLIC_SENTRY_DISABLED: "true"
       E2E_WORKERS: "2"
     steps:
-      - uses: actions/checkout@v7.0.1
+      - uses: actions/checkout@v7
       - uses: actions/setup-node@v7.1.0
         with:
           node-version: 22
@@ -149,7 +149,7 @@ jobs:
       ANTHROPIC_API_KEY: e2e-local-key
       ANTHROPIC_BASE_URL: http://127.0.0.1:4141/v1
     steps:
-      - uses: actions/checkout@v7.0.1
+      - uses: actions/checkout@v7
 
       - uses: actions/setup-node@v7.1.0
         with:
