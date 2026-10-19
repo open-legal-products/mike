@@ -487,6 +487,12 @@ export interface GoogleDrivePickerSession {
 }
 export interface GoogleWorkspaceStatus {
     configured: boolean;
+    /**
+     * False when the operator switched this service off for the deployment
+     * (GOOGLE_WORKSPACE_DISABLED_PROVIDERS): Discover does not offer it, new
+     * connections are refused, and the assistant has none of its tools.
+     */
+    available: boolean;
     schemaReady: boolean;
     connected: boolean;
     /** Google granted write access; false when the user or an admin withheld it. */

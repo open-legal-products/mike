@@ -256,7 +256,7 @@ describe("filesystem storage driver", () => {
         new ArrayBuffer(1),
         "application/octet-stream",
       ),
-    ).rejects.toThrow(/escapes STORAGE_FS_ROOT/);
+    ).rejects.toThrow(/unsafe storage key|escapes STORAGE_FS_ROOT/);
   });
 
   // Containment is the fs driver's whole security boundary: a key is
@@ -271,6 +271,13 @@ describe("filesystem storage driver", () => {
       "traversal that ends up back inside is still a traversal attempt":
         "documents/../../mike-storage-fs-elsewhere/x.bin",
       "absolute key ignores the root entirely": "/etc/passwd",
+      // Resolves inside the root, but outside the prefix a route checked:
+      // the playbook staged-upload traversal.
+      "traversal that stays inside the root":
+        "playbooks/attacker/imports/../../../documents/victim/d1/source.docx",
+      "a single-dot segment": "documents/u1/./d1/source.pdf",
+      "a backslash separator": "documents\\u1\\..\\..\\x.bin",
+      "a NUL byte": "documents/u1/source.pdf\0.png",
     };
 
     for (const [name, key] of Object.entries(escapes)) {
@@ -279,7 +286,7 @@ describe("filesystem storage driver", () => {
         const bytes = new ArrayBuffer(1);
         await expect(
           storage.uploadFile(key, bytes, "application/octet-stream"),
-        ).rejects.toThrow(/escapes STORAGE_FS_ROOT/);
+        ).rejects.toThrow(/unsafe storage key|escapes STORAGE_FS_ROOT/);
         // Every fs entry point shares the one choke-point, so none of them
         // may act on the key — but each surfaces the refusal in its own
         // driver-agnostic way. downloadFile reports "no such object" as null
@@ -288,7 +295,7 @@ describe("filesystem storage driver", () => {
         await expect(storage.downloadFile(key)).resolves.toBeNull();
         await expect(storage.deleteFile(key)).rejects.toMatchObject({
           operation: "delete",
-          cause: expect.objectContaining({ message: expect.stringMatching(/escapes STORAGE_FS_ROOT/) }),
+          cause: expect.objectContaining({ message: expect.stringMatching(/unsafe storage key|escapes STORAGE_FS_ROOT/) }),
         });
       });
     }
@@ -305,8 +312,25 @@ describe("filesystem storage driver", () => {
           new ArrayBuffer(1),
           "application/octet-stream",
         ),
-      ).rejects.toThrow(/escapes STORAGE_FS_ROOT/);
+      ).rejects.toThrow(/unsafe storage key|escapes STORAGE_FS_ROOT/);
       await expect(fs.access(`${root}-evil`)).rejects.toThrow();
+    });
+
+    it("never reads or deletes another prefix through an in-root traversal", async () => {
+      const storage = await loadFsStorage(root);
+      const victim = "documents/victim/d1/source.docx";
+      await storage.uploadFile(
+        victim,
+        new TextEncoder().encode("secret").buffer as ArrayBuffer,
+        "application/octet-stream",
+      );
+      const traversal =
+        "playbooks/attacker/imports/../../../documents/victim/d1/source.docx";
+      await expect(storage.headFile(traversal)).rejects.toThrow();
+      await expect(storage.downloadFile(traversal)).resolves.toBeNull();
+      await expect(storage.deleteFile(traversal)).rejects.toThrow();
+      const kept = await storage.downloadFile(victim);
+      expect(Buffer.from(kept!).toString()).toBe("secret");
     });
 
     it("accepts a normal key and writes it inside the root", async () => {

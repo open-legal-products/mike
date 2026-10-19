@@ -14,6 +14,8 @@ import {
   workspaceAccessToken,
   workspaceStatus,
   type GoogleProvider,
+  assertWorkspaceProviderAvailable,
+  isWorkspaceProviderAvailable,
 } from "./googleWorkspaceAuth";
 import {
   WORKSPACE_TOOLS,
@@ -66,6 +68,9 @@ export async function buildGoogleWorkspaceTools(
 ): Promise<unknown[]> {
   const tools: unknown[] = [];
   for (const provider of Object.keys(GOOGLE_PROVIDERS) as GoogleProvider[]) {
+    // A service the operator switched off has no tools, even for a user who
+    // connected it before the switch; the grant stays until they delete it.
+    if (!isWorkspaceProviderAvailable(provider)) continue;
     try {
       const row = await loadWorkspaceGrant(db, userId, provider);
       if (!row || row.enabled === false) continue;
@@ -170,6 +175,7 @@ async function resolveCall(
   input: unknown,
 ) {
   const provider = providerFor(name);
+  assertWorkspaceProviderAvailable(provider);
   const { tool, args } = parseWorkspaceTool(name, input);
   const grant = await loadWorkspaceGrant(db, userId, provider);
   if (!grant)

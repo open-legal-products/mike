@@ -40,7 +40,8 @@ Gmail access is limited to reading mail, sending new mail, and managing drafts: 
    | Calendar | `openid`, `email`, `https://www.googleapis.com/auth/calendar.calendarlist.readonly`, `https://www.googleapis.com/auth/calendar.events.readonly` | `https://www.googleapis.com/auth/calendar.events` |
 
    OpenID/email identifies the selected account for the Manage dialog and approvals. No Mike login email is passed as a hint or used to restrict account choice. Each deployment's OAuth audience and use determine Google's verification requirements; see the self-hosting guidance below, [Gmail scopes](https://developers.google.com/workspace/gmail/api/auth/scopes), and [Calendar scopes](https://developers.google.com/workspace/calendar/api/auth).
-6. Restart the backend after environment changes. In Testing mode, add each intended Google account as a test user. Verify that the saved client ID matches the one used by Mike; enabling an API does not fix an OAuth redirect mismatch.
+6. Optionally set `GOOGLE_WORKSPACE_DISABLED_PROVIDERS` to switch a service off for the whole deployment, for example `GOOGLE_WORKSPACE_DISABLED_PROVIDERS=gmail` while a Cloud project's Gmail scopes are still unverified. Discover stops offering that service, `POST /user/integrations/<provider>/oauth/start` answers `404 connector_unavailable`, and the assistant is given none of its tools. A connection made before the switch stays under Installed, with its status reporting `available: false`, so the user can delete it; its tools are not offered and direct calls are refused. Unknown ids are logged and ignored. Keep the Cloud Console's Data Access list equal to the scopes of the services that remain on.
+7. Restart the backend after environment changes. In Testing mode, add each intended Google account as a test user. Verify that the saved client ID matches the one used by Mike; enabling an API does not fix an OAuth redirect mismatch.
 
 ## Shipping to self-hosted deployments
 

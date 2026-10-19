@@ -1270,9 +1270,12 @@ export default function ConnectorsPage() {
     (connector) => connector.status?.connected,
   );
   // Discover only offers what is not installed yet: an added connector is
-  // managed from Installed.
+  // managed from Installed. A service the operator switched off is not
+  // offered either; one connected before the switch stays under Installed
+  // so the user can still delete it.
   const discoverGoogle = googleConnectors.filter(
-    (connector) => !connector.status?.connected,
+    (connector) =>
+      !connector.status?.connected && connector.status?.available !== false,
   );
   const discoverPresets = CONNECTOR_PRESETS.filter(
     (preset) =>

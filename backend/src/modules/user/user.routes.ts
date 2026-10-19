@@ -1,4 +1,4 @@
-import { GoogleWorkspaceError, startWorkspaceOAuth, completeWorkspaceOAuth, cancelWorkspaceOAuth, disconnectWorkspace, updateWorkspaceSettings, setWorkspaceToolEnabled } from "../../lib/integrations/googleWorkspaceAuth";
+import { GoogleWorkspaceError, GoogleWorkspaceUnavailableError, assertWorkspaceProviderAvailable, startWorkspaceOAuth, completeWorkspaceOAuth, cancelWorkspaceOAuth, disconnectWorkspace, updateWorkspaceSettings, setWorkspaceToolEnabled } from "../../lib/integrations/googleWorkspaceAuth";
 import { workspaceConnectorStatus, workspaceToolList } from "../../lib/integrations/googleWorkspace";
 // HTTP layer for the user module. Handlers parse params/query/body, call the
 // service functions behind user.service.ts, and map their typed results onto
@@ -1054,6 +1054,7 @@ for (const provider of ["gmail", "google-calendar"] as const) {
         requireMfaIfEnrolled,
         asyncRoute(async (req, res) => {
             try {
+                assertWorkspaceProviderAvailable(provider);
                 res.json(
                     await startWorkspaceOAuth(
                         createServerSupabase(),
@@ -1063,6 +1064,12 @@ for (const provider of ["gmail", "google-calendar"] as const) {
                     ),
                 );
             } catch (error) {
+                // A service the operator switched off is not a setup problem
+                // the user can fix: say so, with no consent URL to open.
+                if (error instanceof GoogleWorkspaceUnavailableError)
+                    return void res
+                        .status(404)
+                        .json({ code: "connector_unavailable", detail: error.message });
                 // As for Slack and Drive: only repo-authored setup steps reach
                 // the browser verbatim, under their machine-readable code.
                 if (error instanceof ConnectorSetupError) {

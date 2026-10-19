@@ -1122,6 +1122,7 @@ describe("Google Drive connection lifecycle", () => {
 describe("Connector write approval settings", () => {
     const gmailStatus: GoogleWorkspaceStatus = {
         configured: true,
+        available: true,
         schemaReady: true,
         connected: true,
         writeEnabled: true,
@@ -1297,7 +1298,7 @@ describe("Connector read-only mode", () => {
         { name: "delete", title: "Delete record", description: "Delete a record.", write: true, enabled: false },
     ];
     const status = {
-        configured: true, schemaReady: true, connected: true, enabled: true,
+        configured: true, available: true, schemaReady: true, connected: true, enabled: true,
         writeEnabled: true, readOnly: false, requireWriteApproval: true,
         scope: null, redirectUri: null, pickerAvailable: false, tools,
     };
@@ -1438,5 +1439,66 @@ describe("Connector read-only mode", () => {
         expect(toggle).toHaveAttribute("aria-checked", "false");
         expect(screen.getByText("Connector update failed")).toBeVisible();
         expect(screen.queryByText("private backend detail")).not.toBeInTheDocument();
+    });
+});
+
+describe("Google services the operator switched off", () => {
+    const status: GoogleWorkspaceStatus = {
+        configured: true,
+        available: true,
+        schemaReady: true,
+        connected: false,
+        writeEnabled: false,
+        enabled: true,
+        requireWriteApproval: false,
+        redirectUri: null,
+        tools: [],
+    };
+    const driveStatus = {
+        ...status,
+        scope: null,
+        pickerAvailable: false,
+    };
+
+    beforeEach(() => {
+        vi.clearAllMocks();
+        vi.useFakeTimers();
+        vi.mocked(needsMfaVerification).mockResolvedValue(false);
+        vi.mocked(listMcpConnectors).mockResolvedValue([]);
+        vi.mocked(getGoogleDriveStatus).mockResolvedValue(driveStatus);
+    });
+
+    afterEach(() => {
+        cleanup();
+        vi.useRealTimers();
+        vi.restoreAllMocks();
+    });
+
+    const discover = () => within(screen.getByRole("region", { name: "Discover" }));
+    const installed = () => within(screen.getByRole("region", { name: "Installed" }));
+
+    it("does not offer an unavailable service in Discover but still offers the others", async () => {
+        vi.mocked(getGoogleWorkspaceStatus).mockImplementation(async (provider) => ({
+            ...status,
+            available: provider !== "gmail",
+        }));
+        render(<ConnectorsPage />);
+        await act(flushMicrotasks);
+        expect(discover().queryByRole("button", { name: "Add Gmail connector" })).toBeNull();
+        expect(discover().getByRole("button", { name: "Add Google Calendar connector" })).toBeTruthy();
+        expect(discover().getByRole("button", { name: "Add Google Drive connector" })).toBeTruthy();
+        expect(installed().queryByRole("button", { name: "Manage Gmail" })).toBeNull();
+    });
+
+    it("keeps a connection made before the switch under Installed so it can be deleted", async () => {
+        vi.mocked(getGoogleWorkspaceStatus).mockImplementation(async (provider) =>
+            provider === "gmail"
+                ? { ...status, available: false, connected: true, grantId: "g1", accountEmail: "old@example.com" }
+                : status,
+        );
+        render(<ConnectorsPage />);
+        await act(flushMicrotasks);
+        expect(installed().getByRole("button", { name: "Manage Gmail" })).toBeTruthy();
+        expect(discover().queryByRole("button", { name: "Add Gmail connector" })).toBeNull();
     });
 });
