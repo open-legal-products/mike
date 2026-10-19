@@ -129,6 +129,36 @@ describe("playbook runs", () => {
     unsubscribe();
   });
 
+  it("keeps polling a running review through a failed poll", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    const running = run({ status: "running", summary: null, findings: [] });
+    api.listPlaybookRuns.mockResolvedValue([running]);
+    render(
+      <PlaybookRuns playbookId="pb" latestRun={null} {...resultsProps()} />,
+    );
+    const results = screen.getByRole("region", { name: "Run results" });
+    expect(await within(results).findByRole("status")).toHaveTextContent(
+      "Reviewing Supply agreement.docx…",
+    );
+
+    api.listPlaybookRuns.mockRejectedValueOnce(new Error("offline"));
+    await act(() => vi.advanceTimersByTimeAsync(3000));
+    expect(
+      await screen.findByRole("button", { name: "Try again" }),
+    ).toBeVisible();
+    // The running review stays on screen while the list could not refresh.
+    expect(within(results).getByRole("status")).toHaveTextContent(
+      "Reviewing Supply agreement.docx…",
+    );
+
+    api.listPlaybookRuns.mockResolvedValue([run()]);
+    await act(() => vi.advanceTimersByTimeAsync(3000));
+    expect(await within(results).findByText("Liability cap")).toBeVisible();
+    expect(
+      screen.queryByRole("button", { name: "Try again" }),
+    ).not.toBeInTheDocument();
+  });
+
   it("can show only the issues of a full review, without losing the rest", async () => {
     const full = run();
     api.listPlaybookRuns.mockResolvedValue([

@@ -176,7 +176,8 @@ export function PlaybookRuns({
       (err) => {
         if (!current) return;
         setError(describeError(err, { action: "load the runs" }).message);
-        setRuns([]);
+        // A failed poll keeps the runs already loaded, so polling goes on.
+        setRuns((existing) => existing ?? []);
       },
     );
     return () => {
@@ -203,7 +204,8 @@ export function PlaybookRuns({
     if (!runningIds) return;
     const timer = setTimeout(() => setAttempt((count) => count + 1), 3000);
     return () => clearTimeout(timer);
-  }, [runningIds, runs]);
+    // `attempt` re-arms the poll after one that failed and changed nothing.
+  }, [runningIds, runs, attempt]);
   const runningBefore = useRef(new Set<string>());
   useEffect(() => {
     if (!runs) return;

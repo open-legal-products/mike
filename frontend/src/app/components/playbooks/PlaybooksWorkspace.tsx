@@ -498,6 +498,10 @@ function PlaybooksWorkspace() {
     try {
       for (const target of targets) {
         await deletePlaybookRun(target.id);
+        // A retry after a partial failure covers only the runs left.
+        setRunDeleteTargets(
+          (current) => current?.filter((item) => item.id !== target.id) ?? null,
+        );
         setAllRuns((items) =>
           (items ?? []).filter((item) => item.id !== target.id),
         );

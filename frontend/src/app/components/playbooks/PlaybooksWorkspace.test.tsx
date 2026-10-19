@@ -1237,6 +1237,51 @@ describe("playbooks page", () => {
     await waitFor(() => expect(rows()).toEqual(["Select busy.docx"]));
   });
 
+  it("retries only the runs left after a partly failed delete", async () => {
+    const run = (id: string) => ({
+      ...RUN,
+      id,
+      documentName: `${id}.docx`,
+      playbookName: "Playbook A",
+    });
+    vi.mocked(listAllPlaybookRuns).mockResolvedValue([run("first"), run("second")]);
+    vi.mocked(deletePlaybookRun)
+      .mockResolvedValueOnce(undefined)
+      .mockRejectedValueOnce(new Error("offline"))
+      .mockResolvedValue(undefined);
+    render(<PlaybooksPage />);
+    await screen.findByRole("link", { name: "Playbook A" });
+    await userEvent.click(screen.getByRole("button", { name: "Runs" }));
+    const table = await screen.findByRole("table", { name: "Playbook runs" });
+    await userEvent.click(
+      within(table).getByRole("checkbox", { name: "Select first.docx" }),
+    );
+    await userEvent.click(
+      within(table).getByRole("checkbox", { name: "Select second.docx" }),
+    );
+    await userEvent.click(screen.getByRole("button", { name: "Actions" }));
+    await userEvent.click(
+      await screen.findByRole("menuitem", { name: "Delete 2 runs" }),
+    );
+    vi.mocked(listAllPlaybookRuns).mockResolvedValue([run("second")]);
+    await userEvent.click(
+      within(screen.getByRole("dialog", { name: "Delete runs?" })).getByRole(
+        "button",
+        { name: "Delete" },
+      ),
+    );
+
+    // The dialog stays open for the run that is left, and only it is retried.
+    const retry = await screen.findByRole("dialog", { name: "Delete run?" });
+    await userEvent.click(within(retry).getByRole("button", { name: "Delete" }));
+    await waitFor(() => expect(deletePlaybookRun).toHaveBeenCalledTimes(3));
+    expect(vi.mocked(deletePlaybookRun).mock.calls.map(([id]) => id)).toEqual([
+      "first",
+      "second",
+      "second",
+    ]);
+  });
+
   it("offers both ways to add a playbook", async () => {
     render(<PlaybooksPage />);
 

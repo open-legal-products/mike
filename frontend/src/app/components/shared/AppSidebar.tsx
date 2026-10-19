@@ -898,7 +898,7 @@ export function AppSidebar({ isOpen, onToggle }: AppSidebarProps) {
                                             onClick={() => void history.retry()}
                                             className="mx-3.5 my-2 rounded text-left text-xs text-gray-500 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500/40"
                                         >
-                                            Reviews could not be loaded. Try again
+                                            Some history could not be loaded. Try again
                                         </button>
                                     )}
                                 </div>
