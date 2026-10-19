@@ -47,10 +47,10 @@
   },
   "devDependencies": {
     "@playwright/test": "^1.64.0",
-    "@sentry/webpack-plugin": "5.4.1",
+    "@sentry/webpack-plugin": "11.8.0",
     "@tailwindcss/postcss": "^4.1.18",
     "@types/node": "^26.6.5",
-    "@types/office-js": "^1.0.611",
+    "@types/office-js": "^1.0.612",
     "@types/office-runtime": "^1.0.40",
     "@types/react": "^19.3.0",
     "@types/react-dom": "^19.3.0",
@@ -67,7 +67,7 @@
     "ts-loader": "^9.5.1",
     "@typescript/native": "npm:typescript@^7.0.2",
     "typescript": "npm:@typescript/typescript6@^6.0.2",
-    "webpack": "^5.111.1",
+    "webpack": "^5.112.0",
     "webpack-cli": "^7.2.3",
     "webpack-dev-server": "^6.0.0"
   },
