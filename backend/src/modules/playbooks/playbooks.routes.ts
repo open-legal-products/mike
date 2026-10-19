@@ -29,7 +29,10 @@ import {
   addPlaybookSourceFromDocument,
   deletePlaybookSource,
   playbookSourceFileType,
+  playbookImportPrefix,
   playbookSourceUploadPrefix,
+  isStagedPlaybookImportKey,
+  isStagedPlaybookSourceKey,
   MAX_PLAYBOOK_SOURCE_FILE_BYTES,
   PLAYBOOK_SOURCE_CONTENT_TYPES,
   listPlaybookRuns,
@@ -50,14 +53,6 @@ const DOCX_CONTENT_TYPE =
 /** Word playbooks are prose; anything this large is not one. */
 const MAX_PLAYBOOK_SOURCE_BYTES = 25 * 1024 * 1024;
 const UPLOAD_URL_TTL_SECONDS = 900;
-
-/**
- * Staged uploads live under a per-user prefix so a request can only ever name
- * an object its own account uploaded.
- */
-function importPrefix(userId: string): string {
-  return `playbooks/${userId}/imports/`;
-}
 
 function sendError(res: Response, error: unknown): void {
   if (error instanceof PlaybookImportError) {
@@ -172,7 +167,7 @@ playbooksRouter.post(
         });
       }
 
-      const storageKey = `${importPrefix(
+      const storageKey = `${playbookImportPrefix(
         res.locals.userId as string,
       )}${crypto.randomUUID()}.docx`;
       const uploadUrl = await getSignedUploadUrl(
@@ -204,9 +199,9 @@ playbooksRouter.post("/import", requireMfaIfEnrolled, async (req, res) => {
     typeof req.body?.storageKey === "string" ? req.body.storageKey : "";
   let staged = false;
   try {
-    // The prefix is the ownership boundary: a caller cannot compile from an
-    // object another account staged, or from anywhere else in the bucket.
-    if (!storageKey.startsWith(importPrefix(userId))) {
+    // Only a key minted for this caller: not another account's staged
+    // object, nor anything else in storage (see playbooks.staging.ts).
+    if (!isStagedPlaybookImportKey(userId, storageKey)) {
       return void res
         .status(400)
         .json({ detail: "Upload the playbook before importing it." });
@@ -504,8 +499,8 @@ playbooksRouter.post(
       sendError(res, error);
     } finally {
       // The playbook keeps its own copy, so the staged object is redundant
-      // whatever happened. Only the caller's own prefix is ever touched.
-      if (storageKey.startsWith(playbookSourceUploadPrefix(userId))) {
+      // whatever happened. Only a key minted for this caller is ever touched.
+      if (isStagedPlaybookSourceKey(userId, storageKey)) {
         await deleteFile(storageKey).catch((error) => {
           console.error("[playbooks] staged source cleanup failed", {
             storageKey,

@@ -72,6 +72,10 @@ vi.mock("../../modules/playbooks/playbooks.service", async (importOriginal) => {
 import { playbooksRouter } from "../../modules/playbooks/playbooks.routes";
 import { PlaybookRequestError } from "../../modules/playbooks/playbooks.service";
 
+// Keys shaped exactly as the upload-URL routes mint them.
+const STAGED_IMPORT_KEY = "playbooks/u1/imports/11111111-2222-4333-8444-555555555555.docx";
+const STAGED_SOURCE_KEY = "playbooks/u1/source-uploads/11111111-2222-4333-8444-555555555555.pdf";
+
 const app = express();
 app.use(express.json());
 app.use("/playbooks", playbooksRouter);
@@ -259,7 +263,7 @@ describe("replacing a playbook from a Word file", () => {
 
   it("passes the target playbook to the import", async () => {
     const response = await request(app).post("/playbooks/import").send({
-      storageKey: "playbooks/u1/imports/new.docx",
+      storageKey: STAGED_IMPORT_KEY,
       filename: "new.docx",
       model: "claude-opus-5",
       playbookId: "pb-1",
@@ -273,7 +277,7 @@ describe("replacing a playbook from a Word file", () => {
 
   it("creates a playbook when no target is given", async () => {
     const response = await request(app).post("/playbooks/import").send({
-      storageKey: "playbooks/u1/imports/new.docx",
+      storageKey: STAGED_IMPORT_KEY,
       filename: "new.docx",
       model: "claude-opus-5",
     });
@@ -467,10 +471,10 @@ describe("playbook supplementary documents over HTTP", () => {
 
     const response = await request(app)
       .post("/playbooks/pb-1/sources")
-      .send({ storageKey: "playbooks/u1/source-uploads/a.pdf", filename: "a.pdf" });
+      .send({ storageKey: STAGED_SOURCE_KEY, filename: "a.pdf" });
 
     expect(response.status).toBe(404);
-    expect(deleteFile).toHaveBeenCalledWith("playbooks/u1/source-uploads/a.pdf");
+    expect(deleteFile).toHaveBeenCalledWith(STAGED_SOURCE_KEY);
   });
 
   it("never deletes an object outside the caller's staging prefix", async () => {
@@ -478,9 +482,24 @@ describe("playbook supplementary documents over HTTP", () => {
 
     const response = await request(app)
       .post("/playbooks/pb-1/sources")
-      .send({ storageKey: "playbooks/u2/source-uploads/a.pdf", filename: "a.pdf" });
+      .send({ storageKey: "playbooks/u2/source-uploads/11111111-2222-4333-8444-555555555555.pdf", filename: "a.pdf" });
 
     expect(response.status).toBe(400);
+    expect(deleteFile).not.toHaveBeenCalled();
+  });
+
+  it("refuses a staged key that traverses out of the caller's prefix", async () => {
+    from.mockImplementation(() => queryReturning(playbookRow()));
+
+    const response = await request(app).post("/playbooks/pb-1/sources").send({
+      storageKey:
+        "playbooks/u1/source-uploads/../../../documents/u2/d1/source.pdf",
+      filename: "a.pdf",
+    });
+
+    expect(response.status).toBe(400);
+    expect(headFile).not.toHaveBeenCalled();
+    expect(downloadFile).not.toHaveBeenCalled();
     expect(deleteFile).not.toHaveBeenCalled();
   });
 
@@ -556,7 +575,7 @@ describe("playbook import upload staging", () => {
   it("refuses to compile an object staged by another account", async () => {
     const response = await request(app)
       .post("/playbooks/import")
-      .send({ storageKey: "playbooks/u2/imports/abc.docx", model: "gpt-5.4" });
+      .send({ storageKey: "playbooks/u2/imports/11111111-2222-4333-8444-555555555555.docx", model: "gpt-5.4" });
 
     expect(response.status).toBe(400);
     expect(headFile).not.toHaveBeenCalled();
@@ -572,11 +591,27 @@ describe("playbook import upload staging", () => {
     expect(downloadFile).not.toHaveBeenCalled();
   });
 
+  it.each([
+    "playbooks/u1/imports/../../../documents/u2/d1/source.docx",
+    `playbooks/u1/imports/${"1".repeat(8)}/../../u2/imports/x.docx`,
+    "playbooks/u1/imports/abc.docx",
+    "playbooks/u1/imports/11111111-2222-4333-8444-555555555555.pdf",
+  ])("refuses a key the upload route never mints: %s", async (storageKey) => {
+    const response = await request(app)
+      .post("/playbooks/import")
+      .send({ storageKey, model: "gpt-5.4" });
+
+    expect(response.status).toBe(400);
+    expect(headFile).not.toHaveBeenCalled();
+    expect(downloadFile).not.toHaveBeenCalled();
+    expect(deleteFile).not.toHaveBeenCalled();
+  });
+
   it("compiles a staged upload and clears the staged object", async () => {
     importPlaybookFromDocx.mockResolvedValue({ id: "pb1", name: "Imported" });
 
     const response = await request(app).post("/playbooks/import").send({
-      storageKey: "playbooks/u1/imports/abc.docx",
+      storageKey: STAGED_IMPORT_KEY,
       filename: "playbook.docx",
       model: "gpt-5.4",
     });
@@ -586,7 +621,7 @@ describe("playbook import upload staging", () => {
     expect(importPlaybookFromDocx).toHaveBeenCalledWith(
       expect.objectContaining({ userId: "u1", filename: "playbook.docx" }),
     );
-    expect(deleteFile).toHaveBeenCalledWith("playbooks/u1/imports/abc.docx");
+    expect(deleteFile).toHaveBeenCalledWith(STAGED_IMPORT_KEY);
   });
 
   it("clears the staged object even when compilation fails", async () => {
@@ -595,13 +630,13 @@ describe("playbook import upload staging", () => {
     );
 
     const response = await request(app).post("/playbooks/import").send({
-      storageKey: "playbooks/u1/imports/abc.docx",
+      storageKey: STAGED_IMPORT_KEY,
       model: "",
     });
 
     expect(response.status).toBe(400);
     expect(response.body.detail).toBe("Select a model.");
-    expect(deleteFile).toHaveBeenCalledWith("playbooks/u1/imports/abc.docx");
+    expect(deleteFile).toHaveBeenCalledWith(STAGED_IMPORT_KEY);
   });
 
   it("reports a staged object that expired before the import ran", async () => {
@@ -609,7 +644,7 @@ describe("playbook import upload staging", () => {
 
     const response = await request(app)
       .post("/playbooks/import")
-      .send({ storageKey: "playbooks/u1/imports/abc.docx", model: "gpt-5.4" });
+      .send({ storageKey: STAGED_IMPORT_KEY, model: "gpt-5.4" });
 
     expect(response.status).toBe(400);
     expect(response.body.detail).toMatch(/no longer available/i);

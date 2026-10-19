@@ -21,6 +21,7 @@ import {
   type PlaybookSourceFileType,
   type PlaybookSourceRow,
 } from "./playbooks.sourceStore";
+import { isStagedPlaybookSourceKey } from "./playbooks.staging";
 
 export const MAX_PLAYBOOK_SOURCES = 20;
 export const MAX_PLAYBOOK_SOURCE_FILE_BYTES = 25 * 1024 * 1024;
@@ -49,11 +50,6 @@ export function playbookSourceFileType(
   const raw = (value ?? "").trim().toLowerCase();
   const ext = raw.includes(".") ? raw.split(".").pop() : raw;
   return ext === "docx" || ext === "pdf" ? ext : null;
-}
-
-/** Staged uploads live under the uploader's own prefix, as imports do. */
-export function playbookSourceUploadPrefix(userId: string): string {
-  return `playbooks/${userId}/source-uploads/`;
 }
 
 function publicSource(row: PlaybookSourceRow): PublicPlaybookSource {
@@ -183,8 +179,8 @@ export async function addPlaybookSourceFromUpload(
   db: Db = createServerSupabase(),
 ): Promise<PublicPlaybookSource> {
   const playbook = await editablePlaybook(userId, playbookId, db, userEmail);
-  // The prefix is the ownership boundary for staged objects.
-  if (!upload.storageKey.startsWith(playbookSourceUploadPrefix(userId)))
+  // Only a key minted for this caller; see playbooks.staging.ts.
+  if (!isStagedPlaybookSourceKey(userId, upload.storageKey))
     throw new PlaybookRequestError("Upload the document before adding it.");
   const fileType = playbookSourceFileType(upload.filename);
   if (!fileType) throw new PlaybookRequestError("Add a .docx or .pdf file.");

@@ -33,11 +33,17 @@ export {
   addPlaybookSourceFromDocument,
   deletePlaybookSource,
   playbookSourceFileType,
-  playbookSourceUploadPrefix,
   MAX_PLAYBOOK_SOURCE_FILE_BYTES,
   PLAYBOOK_SOURCE_CONTENT_TYPES,
   type PublicPlaybookSource,
 } from "./playbooks.sources";
+
+export {
+  playbookImportPrefix,
+  playbookSourceUploadPrefix,
+  isStagedPlaybookImportKey,
+  isStagedPlaybookSourceKey,
+} from "./playbooks.staging";
 
 export {
   listPlaybookPeople,
