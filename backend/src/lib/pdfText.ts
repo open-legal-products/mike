@@ -250,7 +250,10 @@ async function readPdfPages(buf: ArrayBuffer): Promise<PdfPageText[] | null> {
         getDocument: (opts: unknown) => PdfLoadingTask;
       }
     ).getDocument({
-      data: new Uint8Array(buf),
+      // A copy: pdf.js takes the bytes it is given for its worker, which
+      // detaches the buffer. Callers keep using theirs, for example to store
+      // the file once its text has been read.
+      data: new Uint8Array(buf).slice(),
       standardFontDataUrl: STANDARD_FONT_DATA_URL,
     });
     const pdf = await loadingTask.promise;

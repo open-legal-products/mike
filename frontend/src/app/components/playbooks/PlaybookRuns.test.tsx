@@ -1,8 +1,19 @@
-import { render, screen, within } from "@testing-library/react";
+import {
+  act,
+  render,
+  renderHook,
+  screen,
+  waitFor,
+  within,
+} from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { PlaybookRun } from "@/app/lib/mikeApi";
 import { PlaybookRuns } from "./PlaybookRuns";
+import {
+  subscribePlaybookRunChanges,
+  useViewedPlaybookRun,
+} from "@/app/lib/playbookRunActivity";
 
 const api = vi.hoisted(() => ({
   listPlaybookRuns: vi.fn(),
@@ -25,6 +36,15 @@ vi.mock("@/app/lib/mikeApi", async (original) => ({
   ...(await original<typeof import("@/app/lib/mikeApi")>()),
   ...api,
 }));
+
+// Showing a run's results, not the new-run form.
+const resultsProps = () => ({
+  canRun: true,
+  composing: false,
+  newRun: null,
+  onNewRun: vi.fn(),
+  onCloseNewRun: vi.fn(),
+});
 
 function run(overrides: Partial<PlaybookRun> = {}): PlaybookRun {
   return {
@@ -69,6 +89,155 @@ function run(overrides: Partial<PlaybookRun> = {}): PlaybookRun {
 beforeEach(() => vi.clearAllMocks());
 
 describe("playbook runs", () => {
+  afterEach(() => vi.useRealTimers());
+
+  it("shows a review still running on the server, and its findings once it finishes", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    const changed = vi.fn();
+    const unsubscribe = subscribePlaybookRunChanges(changed);
+    const viewed = renderHook(() => useViewedPlaybookRun());
+    const running = run({ status: "running", summary: null, findings: [] });
+    api.listPlaybookRuns.mockResolvedValue([running]);
+    const { unmount } = render(
+      <PlaybookRuns playbookId="pb" latestRun={null} {...resultsProps()} />,
+    );
+
+    const list = screen.getByRole("region", { name: "Your runs" });
+    expect(
+      await within(list).findByRole("button", {
+        name: "Supply agreement.docx, running",
+      }),
+    ).toBeVisible();
+    const results = screen.getByRole("region", { name: "Run results" });
+    expect(within(results).getByRole("status")).toHaveTextContent(
+      "Reviewing Supply agreement.docx…",
+    );
+    // History is told which run is on screen, so it shows no tick for it.
+    await waitFor(() => expect(viewed.result.current).toBe("run-1"));
+
+    api.listPlaybookRuns.mockResolvedValue([run()]);
+    await act(() => vi.advanceTimersByTimeAsync(3000));
+
+    expect(await within(results).findByText("Liability cap")).toBeVisible();
+    expect(
+      within(list).getByRole("button", { name: "Supply agreement.docx" }),
+    ).toBeVisible();
+    // Other lists, such as History, are told it has finished.
+    expect(changed).toHaveBeenCalled();
+    unmount();
+    await waitFor(() => expect(viewed.result.current).toBeNull());
+    unsubscribe();
+  });
+
+  it("can show only the issues of a full review, without losing the rest", async () => {
+    const full = run();
+    api.listPlaybookRuns.mockResolvedValue([
+      {
+        ...full,
+        findings: [
+          ...full.findings,
+          { ...full.findings[1], id: "f-3", ruleId: "term", ruleName: "Term", status: "acceptable" as const },
+        ],
+      },
+    ]);
+    render(<PlaybookRuns playbookId="pb" latestRun={null} {...resultsProps()} />);
+    const results = await screen.findByRole("region", { name: "Run results" });
+    expect(await within(results).findByRole("region", { name: /Acceptable/ })).toBeVisible();
+
+    const show = within(results).getByRole("group", { name: "Findings to show" });
+    await userEvent.click(within(show).getByRole("button", { name: "Issues only" }));
+    expect(within(results).queryByRole("region", { name: /Acceptable/ })).toBeNull();
+    expect(within(results).getByRole("region", { name: /Issues/ })).toBeVisible();
+    expect(within(results).getByRole("region", { name: /Needs review/ })).toBeVisible();
+
+    await userEvent.click(within(show).getByRole("button", { name: "All findings" }));
+    expect(within(results).getByRole("region", { name: /Acceptable/ })).toBeVisible();
+  });
+
+  it("names an issues-only run's scope and offers no filter for it", async () => {
+    api.listPlaybookRuns.mockResolvedValue([run({ reviewScope: "issues" })]);
+    render(<PlaybookRuns playbookId="pb" latestRun={null} {...resultsProps()} />);
+    const results = await screen.findByRole("region", { name: "Run results" });
+    const details = await within(results).findByRole("region", { name: "Run details" });
+    expect(within(details).getByText("Issues only")).toBeVisible();
+    expect(within(results).queryByRole("group", { name: "Findings to show" })).toBeNull();
+  });
+
+  it("follows a run asked for after it opened", async () => {
+    api.listPlaybookRuns.mockResolvedValue([
+      run({ id: "new", documentName: "New.docx" }),
+      run({ id: "old", documentName: "Old.docx" }),
+    ]);
+    const props = resultsProps();
+    const { rerender } = render(
+      <PlaybookRuns playbookId="pb" latestRun={null} {...props} />,
+    );
+    const list = screen.getByRole("region", { name: "Your runs" });
+    expect(
+      await within(list).findByRole("button", { name: "New.docx" }),
+    ).toHaveAttribute("aria-pressed", "true");
+
+    rerender(
+      <PlaybookRuns
+        playbookId="pb"
+        latestRun={null}
+        {...props}
+        initialRunId="old"
+      />,
+    );
+    expect(within(list).getByRole("button", { name: "Old.docx" })).toHaveAttribute(
+      "aria-pressed",
+      "true",
+    );
+  });
+
+  it("opens the hidden document when a tracked change asks to be viewed", async () => {
+    const reviewed = run();
+    api.listPlaybookRuns.mockResolvedValue([
+      {
+        ...reviewed,
+        documentId: "doc-1",
+        editedVersionId: "v2",
+        findings: [
+          {
+            ...reviewed.findings[0],
+            edit: {
+              kind: "edit" as const,
+              edit_id: "e1",
+              document_id: "doc-1",
+              version_id: "v2",
+              version_number: 2,
+              change_id: "c1",
+              deleted_text: "unlimited",
+              inserted_text: "capped at fees paid",
+              context_before: "Liability is ",
+              context_after: ".",
+              status: "pending" as const,
+            },
+          },
+        ],
+      },
+    ]);
+    render(
+      <PlaybookRuns playbookId="pb" latestRun={null} {...resultsProps()} />,
+    );
+
+    const issues = await screen.findByRole("region", { name: /Issues/ });
+    expect(
+      screen.queryByRole("region", { name: "Reviewed document" }),
+    ).toBeNull();
+    await userEvent.click(within(issues).getByRole("button", { name: "View" }));
+    expect(
+      screen.getByRole("region", { name: "Reviewed document" }),
+    ).toBeVisible();
+    await userEvent.click(
+      screen.getByRole("button", { name: "Close document" }),
+    );
+    expect(
+      screen.queryByRole("region", { name: "Reviewed document" }),
+    ).toBeNull();
+  });
+
   it("shows a reviewed Word document beside its results and decides its tracked changes", async () => {
     const edit = {
       kind: "edit" as const,
@@ -99,24 +268,63 @@ describe("playbook runs", () => {
       download_url: null,
     });
     render(
-      <PlaybookRuns playbookId="pb" latestRun={null} canRun onRun={vi.fn()} />,
+      <PlaybookRuns playbookId="pb" latestRun={null} {...resultsProps()} />,
     );
 
-    // The document sits between the runs and the results.
-    const pane = await screen.findByRole("region", { name: "Reviewed document" });
-    expect(screen.getByRole("separator", { name: "Resize runs panel" })).toBeInTheDocument();
-    expect(screen.getByRole("separator", { name: "Resize run results panel" })).toBeInTheDocument();
+    // The document stays hidden until asked for, then opens to the right of
+    // the results.
+    const results = await screen.findByRole("region", { name: "Run results" });
+    const view = await within(results).findByRole("button", {
+      name: "View document",
+    });
+    expect(view).toHaveAttribute("aria-pressed", "false");
     expect(
-      within(pane).getByRole("document", { name: "Document doc-1, revision 0" }),
+      screen.queryByRole("region", { name: "Reviewed document" }),
+    ).toBeNull();
+    expect(
+      within(results).getByRole("heading", { level: 2, name: "Run results" }),
+    ).toBeVisible();
+    await userEvent.click(view);
+    expect(view).toHaveAttribute("aria-pressed", "true");
+    const pane = screen.getByRole("region", { name: "Reviewed document" });
+    expect(
+      screen.getByRole("separator", { name: "Resize runs panel" }),
     ).toBeInTheDocument();
+    expect(
+      screen.getByRole("separator", { name: "Resize document panel" }),
+    ).toBeInTheDocument();
+    expect(
+      results.compareDocumentPosition(pane) & Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
+    expect(
+      within(pane).getByRole("document", {
+        name: "Document doc-1, revision 0",
+      }),
+    ).toBeInTheDocument();
+    // The document pane names the document; the heading stays the same.
+    expect(
+      within(pane).getByRole("heading", {
+        level: 2,
+        name: "Supply agreement.docx",
+      }),
+    ).toBeVisible();
+    expect(
+      within(results).getByRole("heading", { level: 2, name: "Run results" }),
+    ).toBeVisible();
     // A change in the document is decided from an edit card.
     const issues = screen.getByRole("region", { name: /Issues/ });
     expect(within(issues).getByText("Recommended change")).toBeVisible();
     expect(within(issues).queryByText("Recommended changes")).toBeNull();
 
-    await userEvent.click(within(issues).getByRole("button", { name: "Accept" }));
+    await userEvent.click(
+      within(issues).getByRole("button", { name: "Accept" }),
+    );
 
-    expect(api.resolveDocumentEdit).toHaveBeenCalledWith("doc-1", "e1", "accept");
+    expect(api.resolveDocumentEdit).toHaveBeenCalledWith(
+      "doc-1",
+      "e1",
+      "accept",
+    );
     // The document reloads to show the change accepted.
     expect(
       await within(pane).findByRole("document", {
@@ -124,7 +332,6 @@ describe("playbook runs", () => {
       }),
     ).toBeInTheDocument();
   });
-
 
   it("lists past runs with their outcome and shows the selected run's findings", async () => {
     api.listPlaybookRuns.mockResolvedValue([
@@ -138,7 +345,7 @@ describe("playbook runs", () => {
       }),
     ]);
     render(
-      <PlaybookRuns playbookId="pb" latestRun={null} canRun onRun={vi.fn()} />,
+      <PlaybookRuns playbookId="pb" latestRun={null} {...resultsProps()} />,
     );
     const list = screen.getByRole("region", { name: "Your runs" });
     const latest = await within(list).findByRole("button", {
@@ -149,6 +356,23 @@ describe("playbook runs", () => {
     expect(latest).toHaveTextContent(/^Supply agreement\.docx$/);
     expect(api.listPlaybookRuns).toHaveBeenCalledWith("pb");
     const results = screen.getByRole("region", { name: "Run results" });
+    // The heading names the pane; the selected row names the document.
+    expect(
+      within(results).getByRole("heading", { level: 2, name: "Run results" }),
+    ).toBeVisible();
+    // What was reviewed, how, and when, before the findings.
+    const details = within(results).getByRole("region", { name: "Run details" });
+    for (const label of ["Document", "Model", "Scope", "Posture", "Started"])
+      expect(within(details).getByText(label)).toBeVisible();
+    expect(within(details).getByText("Supply agreement.docx")).toBeVisible();
+    expect(details.querySelector("time")).toHaveAttribute(
+      "datetime",
+      expect.stringMatching(/^2026-/),
+    );
+    // The header keeps only the heading and the document's button.
+    expect(
+      results.querySelector("h2")?.parentElement?.querySelector("time"),
+    ).toBeNull();
     // Findings are grouped by urgency, each in its own card.
     const issues = within(results).getByRole("region", { name: /Issues/ });
     expect(within(issues).getByText("Liability cap")).toBeVisible();
@@ -187,8 +411,7 @@ describe("playbook runs", () => {
       <PlaybookRuns
         playbookId="pb"
         latestRun={run({ id: "run-new", documentName: "Fresh.docx" })}
-        canRun
-        onRun={vi.fn()}
+        {...resultsProps()}
       />,
     );
     expect(
@@ -200,19 +423,14 @@ describe("playbook runs", () => {
   it("refreshes history when a batch completes while the Runs tab is already open", async () => {
     api.listPlaybookRuns.mockResolvedValue([]);
     const { rerender } = render(
-      <PlaybookRuns playbookId="pb" latestRun={null} canRun onRun={vi.fn()} />,
+      <PlaybookRuns playbookId="pb" latestRun={null} {...resultsProps()} />,
     );
     await screen.findByText("None yet.");
     const first = run({ id: "batch-1", documentName: "First.txt" });
     const second = run({ id: "batch-2", documentName: "Second.txt" });
     api.listPlaybookRuns.mockResolvedValue([second, first]);
     rerender(
-      <PlaybookRuns
-        playbookId="pb"
-        latestRun={second}
-        canRun
-        onRun={vi.fn()}
-      />,
+      <PlaybookRuns playbookId="pb" latestRun={second} {...resultsProps()} />,
     );
     const list = screen.getByRole("region", { name: "Your runs" });
     expect(
@@ -224,17 +442,47 @@ describe("playbook runs", () => {
     expect(api.listPlaybookRuns).toHaveBeenCalledTimes(2);
   });
 
-  it("offers a run when there are none yet", async () => {
+  it("offers a new run when there are none yet, and from the list header", async () => {
     api.listPlaybookRuns.mockResolvedValue([]);
-    const onRun = vi.fn();
-    render(
-      <PlaybookRuns playbookId="pb" latestRun={null} canRun onRun={onRun} />,
+    const props = resultsProps();
+    render(<PlaybookRuns playbookId="pb" latestRun={null} {...props} />);
+
+    const results = screen.getByRole("region", { name: "Run results" });
+    await userEvent.click(
+      await within(results).findByRole("button", { name: "New run" }),
+    );
+    const list = screen.getByRole("region", { name: "Your runs" });
+    await userEvent.click(
+      within(list).getByRole("button", { name: "New run" }),
     );
 
-    await userEvent.click(await screen.findByRole("button", { name: "Run" }));
-
-    expect(onRun).toHaveBeenCalled();
+    expect(props.onNewRun).toHaveBeenCalledTimes(2);
     expect(screen.getByText("None yet.")).toBeVisible();
+  });
+
+  it("shows the new-run form in place of the results, and leaves it for a chosen run", async () => {
+    api.listPlaybookRuns.mockResolvedValue([run()]);
+    const props = { ...resultsProps(), composing: true };
+    render(
+      <PlaybookRuns
+        playbookId="pb"
+        latestRun={null}
+        {...props}
+        newRun={<section aria-label="New run form" />}
+      />,
+    );
+
+    const list = screen.getByRole("region", { name: "Your runs" });
+    const row = await within(list).findByRole("button", {
+      name: /Supply agreement\.docx/,
+    });
+    expect(screen.getByRole("region", { name: "New run form" })).toBeVisible();
+    expect(screen.queryByRole("region", { name: "Run results" })).toBeNull();
+    // While the form is open, no run is shown as selected.
+    expect(row).toHaveAttribute("aria-pressed", "false");
+
+    await userEvent.click(row);
+    expect(props.onCloseNewRun).toHaveBeenCalled();
   });
 
   it("shows a failed run's error and retries a failed load", async () => {
@@ -244,7 +492,7 @@ describe("playbook runs", () => {
         run({ error: "The model timed out.", findings: [] }),
       ]);
     render(
-      <PlaybookRuns playbookId="pb" latestRun={null} canRun onRun={vi.fn()} />,
+      <PlaybookRuns playbookId="pb" latestRun={null} {...resultsProps()} />,
     );
 
     await userEvent.click(

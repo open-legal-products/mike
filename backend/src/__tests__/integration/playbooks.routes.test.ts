@@ -10,7 +10,8 @@ const {
   downloadFile,
   getSignedUploadUrl,
   headFile,
-  importPlaybookFromDocx,
+  importPlaybookFromFile,
+  importPlaybookFromDocument,
 } = vi.hoisted(() => ({
   from: vi.fn(),
   createFileReadStream: vi.fn(),
@@ -18,7 +19,8 @@ const {
   downloadFile: vi.fn(),
   getSignedUploadUrl: vi.fn(),
   headFile: vi.fn(),
-  importPlaybookFromDocx: vi.fn(),
+  importPlaybookFromFile: vi.fn(),
+  importPlaybookFromDocument: vi.fn(),
 }));
 
 vi.mock("../../lib/supabase", () => ({
@@ -66,7 +68,7 @@ vi.mock("../../modules/playbooks/playbooks.service", async (importOriginal) => {
     await importOriginal<
       typeof import("../../modules/playbooks/playbooks.service")
     >();
-  return { ...actual, importPlaybookFromDocx };
+  return { ...actual, importPlaybookFromFile, importPlaybookFromDocument };
 });
 
 import { playbooksRouter } from "../../modules/playbooks/playbooks.routes";
@@ -110,7 +112,6 @@ function playbookRow(overrides: Record<string, unknown> = {}) {
     content_json: {
       name: "Commercial Playbook",
       description: "",
-      globalGuidance: "",
       representedParty: "Customer",
       documentTypes: [],
       jurisdictions: [],
@@ -198,7 +199,7 @@ describe("creating a playbook without a Word file", () => {
     const response = await request(app).post("/playbooks").send({});
 
     expect(response.status).toBe(201);
-    expect(importPlaybookFromDocx).not.toHaveBeenCalled();
+    expect(importPlaybookFromFile).not.toHaveBeenCalled();
   });
 
   it("accepts a name and details for the new playbook", async () => {
@@ -236,6 +237,19 @@ describe("creating a playbook without a Word file", () => {
     expect(response.body.detail).toMatch(/invalid field/i);
   });
 
+  it("refuses to open a personal playbook to an organization", async () => {
+    const query = queryReturning(playbookRow());
+    from.mockImplementation(() => query);
+
+    const response = await request(app)
+      .post("/playbooks")
+      .send({ name: "Vendor MSA playbook", visibility: "organization" });
+
+    expect(response.status).toBe(400);
+    expect(response.body.detail).toMatch(/organization/i);
+    expect(query.insert).not.toHaveBeenCalled();
+  });
+
   it("refuses a name that is too long", async () => {
     from.mockImplementation(() => queryReturning(playbookRow()));
 
@@ -254,7 +268,7 @@ describe("replacing a playbook from a Word file", () => {
     headFile.mockResolvedValue({ size: 2048, etag: null, contentType: null });
     downloadFile.mockResolvedValue(new TextEncoder().encode("docx").buffer);
     deleteFile.mockResolvedValue(undefined);
-    importPlaybookFromDocx.mockResolvedValue({ id: "pb-1", name: "Replaced" });
+    importPlaybookFromFile.mockResolvedValue({ id: "pb-1", name: "Replaced" });
   });
 
   it("passes the target playbook to the import", async () => {
@@ -266,7 +280,7 @@ describe("replacing a playbook from a Word file", () => {
     });
 
     expect(response.status).toBe(200);
-    expect(importPlaybookFromDocx).toHaveBeenCalledWith(
+    expect(importPlaybookFromFile).toHaveBeenCalledWith(
       expect.objectContaining({ playbookId: "pb-1" }),
     );
   });
@@ -279,7 +293,7 @@ describe("replacing a playbook from a Word file", () => {
     });
 
     expect(response.status).toBe(201);
-    expect(importPlaybookFromDocx).toHaveBeenCalledWith(
+    expect(importPlaybookFromFile).toHaveBeenCalledWith(
       expect.objectContaining({ playbookId: undefined }),
     );
   });
@@ -324,6 +338,27 @@ describe("playbook input validation", () => {
 
 describe("runs across playbooks", () => {
   beforeEach(() => vi.clearAllMocks());
+
+  it.each(["/playbooks/runs/history", "/playbooks/runs/status?ids=" + "0".repeat(8) + "-0000-0000-0000-" + "0".repeat(12)])(
+    "answers %s itself rather than as a playbook id",
+    async (path) => {
+      from.mockImplementation(() => queryReturning([]));
+
+      const response = await request(app).get(path);
+
+      expect(response.status).toBe(200);
+      expect(response.body).toEqual([]);
+    },
+  );
+
+  it.each(["", "?ids=not-a-run", `?ids=${Array(101).fill("00000000-0000-0000-0000-000000000000").join(",")}`])(
+    "refuses run status for %j",
+    async (query) => {
+      const response = await request(app).get(`/playbooks/runs/status${query}`);
+
+      expect(response.status).toBe(400);
+    },
+  );
 
   it("answers /playbooks/runs itself rather than as a playbook id", async () => {
     from.mockImplementation(() => queryReturning([]));
@@ -534,13 +569,28 @@ describe("playbook import upload staging", () => {
     );
   });
 
-  it("rejects a file that is not a .docx", async () => {
+  it("signs a PDF upload with the PDF content type", async () => {
     const response = await request(app)
       .post("/playbooks/import/upload-url")
       .send({ filename: "playbook.pdf", sizeBytes: 2048 });
 
+    expect(response.status).toBe(201);
+    expect(response.body.contentType).toBe("application/pdf");
+    expect(getSignedUploadUrl).toHaveBeenCalledWith(
+      expect.stringMatching(/^playbooks\/u1\/imports\/.+\.pdf$/),
+      "application/pdf",
+      2048,
+      900,
+    );
+  });
+
+  it("rejects a file that is not a .docx or .pdf", async () => {
+    const response = await request(app)
+      .post("/playbooks/import/upload-url")
+      .send({ filename: "playbook.txt", sizeBytes: 2048 });
+
     expect(response.status).toBe(400);
-    expect(response.body.detail).toMatch(/\.docx/);
+    expect(response.body.detail).toMatch(/\.docx or \.pdf/);
     expect(getSignedUploadUrl).not.toHaveBeenCalled();
   });
 
@@ -560,7 +610,7 @@ describe("playbook import upload staging", () => {
 
     expect(response.status).toBe(400);
     expect(headFile).not.toHaveBeenCalled();
-    expect(importPlaybookFromDocx).not.toHaveBeenCalled();
+    expect(importPlaybookFromFile).not.toHaveBeenCalled();
   });
 
   it("refuses a storage key outside the import prefix", async () => {
@@ -573,7 +623,7 @@ describe("playbook import upload staging", () => {
   });
 
   it("compiles a staged upload and clears the staged object", async () => {
-    importPlaybookFromDocx.mockResolvedValue({ id: "pb1", name: "Imported" });
+    importPlaybookFromFile.mockResolvedValue({ id: "pb1", name: "Imported" });
 
     const response = await request(app).post("/playbooks/import").send({
       storageKey: "playbooks/u1/imports/abc.docx",
@@ -583,14 +633,14 @@ describe("playbook import upload staging", () => {
 
     expect(response.status).toBe(201);
     expect(response.body).toMatchObject({ id: "pb1" });
-    expect(importPlaybookFromDocx).toHaveBeenCalledWith(
+    expect(importPlaybookFromFile).toHaveBeenCalledWith(
       expect.objectContaining({ userId: "u1", filename: "playbook.docx" }),
     );
     expect(deleteFile).toHaveBeenCalledWith("playbooks/u1/imports/abc.docx");
   });
 
   it("clears the staged object even when compilation fails", async () => {
-    importPlaybookFromDocx.mockRejectedValue(
+    importPlaybookFromFile.mockRejectedValue(
       new PlaybookRequestError("Select a model."),
     );
 
@@ -602,6 +652,29 @@ describe("playbook import upload staging", () => {
     expect(response.status).toBe(400);
     expect(response.body.detail).toBe("Select a model.");
     expect(deleteFile).toHaveBeenCalledWith("playbooks/u1/imports/abc.docx");
+  });
+
+  it("compiles a saved document without touching staged uploads", async () => {
+    importPlaybookFromDocument.mockResolvedValue({ id: "pb1", name: "Saved" });
+
+    const response = await request(app).post("/playbooks/import").send({
+      documentId: "doc-1",
+      model: "gpt-5.4",
+      name: "Saved",
+    });
+
+    expect(response.status).toBe(201);
+    expect(importPlaybookFromDocument).toHaveBeenCalledWith(
+      expect.objectContaining({
+        userId: "u1",
+        documentId: "doc-1",
+        model: "gpt-5.4",
+        name: "Saved",
+      }),
+    );
+    expect(headFile).not.toHaveBeenCalled();
+    expect(deleteFile).not.toHaveBeenCalled();
+    expect(importPlaybookFromFile).not.toHaveBeenCalled();
   });
 
   it("reports a staged object that expired before the import ran", async () => {

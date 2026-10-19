@@ -17,7 +17,9 @@ const OPTIONS: { value: ContentVisibility; label: string }[] = [
  * organization, not to the world.
  *
  *   Private  only the individuals it is shared with can open it (the default)
- *   Public   every member of the organization can open and edit it
+ *   Public   every member of the organization can open and edit it; a
+ *            public playbook can be viewed and run, and is edited only by
+ *            the people given that role
  *
  * It is not offered for a personal item, which has no "everyone" to be opened
  * to and is always shared by naming people.
@@ -32,12 +34,14 @@ export function AccessVisibilityField({
     visibility: ContentVisibility;
     onChange: (visibility: ContentVisibility) => void;
     organizationName?: string | null;
-    resourceNoun: "project" | "workflow";
+    resourceNoun: "project" | "workflow" | "playbook";
     disabled?: boolean;
 }) {
     const labelId = useId();
     const descriptionId = useId();
     const organizationLabel = organizationName || "the organisation";
+    const publicAbility =
+        resourceNoun === "playbook" ? "view and run" : "open and edit";
 
     return (
         <div
@@ -66,7 +70,7 @@ export function AccessVisibilityField({
                     className="min-w-0 flex-[1_1_8rem] text-xs leading-4 text-gray-500"
                 >
                     {visibility === "organization"
-                        ? `Everyone in ${organizationLabel} can open and edit this ${resourceNoun}.`
+                        ? `Everyone in ${organizationLabel} can ${publicAbility} this ${resourceNoun}.`
                         : `Only the people you share this ${resourceNoun} with can open it.`}
                 </p>
             </div>

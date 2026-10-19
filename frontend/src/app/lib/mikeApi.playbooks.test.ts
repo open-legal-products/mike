@@ -29,7 +29,6 @@ const path = "/api/playbooks/guide%2Fone%3Fview";
 const content: PlaybookContent = {
   name: "Guide",
   description: "",
-  globalGuidance: "",
   representedParty: "",
   documentTypes: [],
   jurisdictions: [],
@@ -205,11 +204,14 @@ describe("Playbooks API requests", () => {
 });
 
 describe("Creating a playbook with no Word source", () => {
-  it("creates in the selected workspace", async () => {
+  it("creates in the selected workspace, with its access", async () => {
     fetchMock.mockResolvedValueOnce(json({ id: "org-guide" }));
-    await createPlaybook({ name: "  Guide  " }, "org-1");
+    await createPlaybook(
+      { name: "  Guide  ", visibility: "organization" },
+      "org-1",
+    );
     expect(JSON.parse(fetchMock.mock.calls[0][1].body)).toEqual({
-      name: "Guide", workspace: "org-1",
+      name: "Guide", visibility: "organization", workspace: "org-1",
     });
   });
 
@@ -346,13 +348,28 @@ describe("Playbook direct upload", () => {
     expect(fetchMock).toHaveBeenCalledTimes(2);
   });
 
+  it("compiles a saved document without staging an upload", async () => {
+    fetchMock.mockResolvedValueOnce(json({ id: "pb-1" }, 201));
+    await expect(
+      importPlaybook({ documentId: "doc-1" }, "test-model", " Standards "),
+    ).resolves.toEqual({ id: "pb-1" });
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    const [url, init] = fetchMock.mock.calls[0];
+    expect(String(url)).toMatch(/\/playbooks\/import$/);
+    expect(JSON.parse(String(init?.body))).toEqual({
+      documentId: "doc-1",
+      model: "test-model",
+      name: "Standards",
+    });
+  });
+
   it("does not upload when the API refuses the upload URL request", async () => {
     fetchMock.mockResolvedValueOnce(
-      json({ detail: "Playbook import currently requires a .docx file." }, 400),
+      json({ detail: "Playbook import requires a .docx or .pdf file." }, 400),
     );
     await expect(
       importPlaybook(new File(["text"], "guide.txt"), "test-model"),
-    ).rejects.toThrow("Playbook import currently requires a .docx file.");
+    ).rejects.toThrow("Playbook import requires a .docx or .pdf file.");
     expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 });

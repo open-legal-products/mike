@@ -32,9 +32,15 @@ import {
   blankPlaybookContent,
   createPlaybook,
   getPlaybook,
+  INTERRUPTED_RUN_ERROR,
+  deletePlaybookRun,
   listAllPlaybookRuns,
+  listPlaybookRunHistory,
+  listPlaybookRuns,
   listPlaybooks,
+  playbookRunStatuses,
   reviewWithPlaybook,
+  startPlaybookReview,
   updatePlaybookContent,
   deletePlaybook,
 } from "../playbooks.operations";
@@ -140,6 +146,10 @@ function database(
       },
       in: (key: string, values: unknown[]) => {
         predicates.push((row) => values.includes(row[key]));
+        return query;
+      },
+      lt: (key: string, value: unknown) => {
+        predicates.push((row) => String(row[key]) < String(value));
         return query;
       },
       contains: (key: string, values: unknown[]) => {
@@ -370,6 +380,30 @@ describe("playbook access and autosave", () => {
       createPlaybook("owner", { documentTypes: [" "] }, db),
     ).rejects.toMatchObject({ status: 400 });
   });
+  it("creates a playbook public to its organization, or private by default", async () => {
+    const { db } = database(
+      [],
+      [{ user_id: "owner", org_id: ORG, role: "member" }],
+    );
+    const shared = await createPlaybook(
+      "owner",
+      { name: "Public guide" },
+      db,
+      ORG,
+      "organization",
+    );
+    expect(shared).toMatchObject({ orgId: ORG, visibility: "organization" });
+    expect(
+      await createPlaybook("owner", { name: "Private guide" }, db, ORG),
+    ).toMatchObject({ orgId: ORG, visibility: "private" });
+    // A personal playbook has no organization to be opened to.
+    await expect(
+      createPlaybook("owner", { name: "Mine" }, db, "personal", "organization"),
+    ).rejects.toMatchObject({ status: 400 });
+    await expect(
+      createPlaybook("owner", { name: "Odd" }, db, ORG, "everyone"),
+    ).rejects.toMatchObject({ status: 400 });
+  });
   it("preserves unfinished content and refuses a public personal playbook", async () => {
     const { db, writes } = database([book()]);
     const content = {
@@ -419,6 +453,231 @@ describe("playbook access and autosave", () => {
     expect(run?.payload.content_json).toEqual(blankPlaybookContent("Guide"));
     expect(run?.payload).not.toHaveProperty("version_id");
     expect(result).not.toHaveProperty("versionNumber");
+  });
+  it("returns a run before the review finishes, and records how it ended", async () => {
+    const { db, tables } = database([book()]);
+    let answer!: (text: string) => void;
+    completeText.mockReturnValueOnce(
+      new Promise<string>((resolve) => {
+        answer = resolve;
+      }),
+    );
+    const { run, done } = await startPlaybookReview({
+      userId: "owner",
+      playbookId: "book",
+      documentText: "Contract",
+      documentName: "msa.txt",
+      model: "claude-opus-5",
+      reviewMode: "strict",
+      db,
+    });
+    // The caller can leave now; the run is stored as running.
+    expect(run).toMatchObject({ status: "running", documentName: "msa.txt" });
+    expect(tables.playbook_runs[0]).toMatchObject({ status: "running" });
+
+    answer(JSON.stringify({ summary: "Reviewed", findings: [] }));
+    await expect(done).resolves.toMatchObject({ status: "completed" });
+    expect(tables.playbook_runs[0]).toMatchObject({
+      status: "completed",
+      summary: "Reviewed",
+    });
+  });
+  it("reports only issues when asked, and records the scope on the run", async () => {
+    const content = {
+      ...blankPlaybookContent("Guide"),
+      rules: [
+        { id: "cap", name: "Liability cap", concept: "A cap on liability." },
+        { id: "law", name: "Governing law", concept: "The governing law." },
+        { id: "term", name: "Term", concept: "How long it lasts." },
+      ],
+    };
+    const { db, tables } = database([book({ content_json: content })]);
+    const finding = (ruleId: string, status: string) => ({
+      ruleId,
+      ruleName: ruleId,
+      status,
+      quote: "",
+      location: "",
+      analysis: `${ruleId} is ${status}.`,
+    });
+    // A model may still report more than it was asked for.
+    completeText.mockResolvedValueOnce(
+      JSON.stringify({
+        summary: "One issue.",
+        findings: [finding("cap", "unacceptable"), finding("law", "acceptable")],
+      }),
+    );
+    const result = await reviewWithPlaybook({
+      userId: "owner",
+      playbookId: "book",
+      documentText: "Contract",
+      model: "claude-opus-5",
+      reviewMode: "strict",
+      reviewScope: "issues",
+      db,
+    });
+
+    expect(completeText.mock.lastCall?.[0].user).toContain(
+      "REVIEW SCOPE: issues only",
+    );
+    // The acceptable finding is dropped, and the unreported rule ("term")
+    // is not flagged as missing a result.
+    expect(result.findings.map((item) => item.ruleId)).toEqual(["cap"]);
+    expect(result.reviewScope).toBe("issues");
+    expect(tables.playbook_runs[0]).toMatchObject({ review_scope: "issues" });
+    expect(
+      (await listPlaybookRuns("owner", "book", db))[0].reviewScope,
+    ).toBe("issues");
+  });
+  it("defaults to a full review that flags every rule it did not report", async () => {
+    const content = {
+      ...blankPlaybookContent("Guide"),
+      rules: [
+        { id: "cap", name: "Liability cap", concept: "A cap on liability." },
+        { id: "law", name: "Governing law", concept: "The governing law." },
+      ],
+    };
+    const { db, tables } = database([book({ content_json: content })]);
+    const result = await reviewWithPlaybook({
+      userId: "owner",
+      playbookId: "book",
+      documentText: "Contract",
+      model: "claude-opus-5",
+      reviewMode: "strict",
+      db,
+    });
+    expect(completeText.mock.lastCall?.[0].user).not.toContain("REVIEW SCOPE");
+    expect(result.findings.map((item) => item.status)).toEqual([
+      "needs_review",
+      "needs_review",
+    ]);
+    expect(tables.playbook_runs[0]).toMatchObject({ review_scope: "full" });
+  });
+  it("records a failed review on its run", async () => {
+    const { db, tables } = database([book()]);
+    completeText.mockRejectedValueOnce(new Error("provider down"));
+    const { done } = await startPlaybookReview({
+      userId: "owner",
+      playbookId: "book",
+      documentText: "Contract",
+      model: "claude-opus-5",
+      reviewMode: "strict",
+      db,
+    });
+    await expect(done).rejects.toThrow();
+    expect(tables.playbook_runs[0]).toMatchObject({ status: "failed" });
+    expect(tables.playbook_runs[0].completed_at).toBeTruthy();
+  });
+  it("reports a running review whose process stopped as interrupted", async () => {
+    const { db, tables } = database([book()]);
+    const silent = new Date(Date.now() - 10 * 60_000).toISOString();
+    const recent = new Date().toISOString();
+    const stored = (id: string, updatedAt: string) => ({
+      id,
+      playbook_id: "book",
+      user_id: "owner",
+      model: "claude-opus-5",
+      document_name: `${id}.docx`,
+      review_mode: "strict",
+      status: "running",
+      summary: null,
+      findings_json: [],
+      content_json: blankPlaybookContent("Guide"),
+      error: null,
+      started_at: updatedAt,
+      updated_at: updatedAt,
+      completed_at: null,
+    });
+    tables.playbook_runs.push(stored("orphan", silent), stored("live", recent));
+
+    const runs = await listPlaybookRuns("owner", "book", db);
+    expect(runs.find((run) => run.id === "orphan")).toMatchObject({
+      status: "failed",
+      error: INTERRUPTED_RUN_ERROR,
+    });
+    expect(runs.find((run) => run.id === "live")).toMatchObject({
+      status: "running",
+      error: null,
+    });
+    expect(
+      await playbookRunStatuses("owner", ["orphan", "live", "missing"], db),
+    ).toEqual([
+      { id: "orphan", status: "failed", completedAt: null },
+      { id: "live", status: "running", completedAt: null },
+    ]);
+    // Only the caller's own runs are reported.
+    expect(await playbookRunStatuses("someone", ["live"], db)).toEqual([]);
+  });
+  it("deletes the caller's finished run, but not a running one or another person's", async () => {
+    const { db, tables } = database([book()]);
+    const now = new Date().toISOString();
+    const stored = (id: string, status: string, userId = "owner") => ({
+      id,
+      playbook_id: "book",
+      user_id: userId,
+      status,
+      error: null,
+      findings_json: [],
+      content_json: blankPlaybookContent("Guide"),
+      started_at: now,
+      updated_at: now,
+    });
+    tables.playbook_runs.push(
+      stored("done", "completed"),
+      stored("busy", "running"),
+      stored("theirs", "completed", "someone"),
+    );
+
+    await deletePlaybookRun("owner", "done", db);
+    expect(tables.playbook_runs.map((run) => run.id)).toEqual(["busy", "theirs"]);
+    await expect(deletePlaybookRun("owner", "busy", db)).rejects.toMatchObject({
+      status: 409,
+    });
+    await expect(deletePlaybookRun("owner", "theirs", db)).rejects.toMatchObject({
+      status: 404,
+    });
+    expect(tables.playbook_runs.map((run) => run.id)).toEqual(["busy", "theirs"]);
+  });
+  it("pages the caller's runs for History, named after their playbooks", async () => {
+    const { db, tables } = database([book()]);
+    for (const [id, startedAt, userId] of [
+      ["new", "2026-10-18T10:00:00.000Z", "owner"],
+      ["old", "2026-10-17T10:00:00.000Z", "owner"],
+      ["theirs", "2026-10-18T11:00:00.000Z", "someone"],
+    ])
+      tables.playbook_runs.push({
+        id,
+        playbook_id: "book",
+        user_id: userId,
+        document_name: `${id}.pdf`,
+        status: "completed",
+        error: null,
+        findings_json: [{ heavy: true }],
+        content_json: blankPlaybookContent("Guide"),
+        started_at: startedAt,
+        updated_at: startedAt,
+        completed_at: startedAt,
+      });
+
+    const page = await listPlaybookRunHistory("owner", db);
+    expect(page.map((run) => run.id)).toEqual(["new", "old"]);
+    expect(page[0]).toEqual({
+      id: "new",
+      playbookId: "book",
+      playbookName: "Guide",
+      documentName: "new.pdf",
+      status: "completed",
+      error: null,
+      startedAt: "2026-10-18T10:00:00.000Z",
+      completedAt: "2026-10-18T10:00:00.000Z",
+    });
+    expect(
+      (
+        await listPlaybookRunHistory("owner", db, {
+          before: "2026-10-18T10:00:00.000Z",
+        })
+      ).map((run) => run.id),
+    ).toEqual(["old"]);
   });
   describe("reviewing a stored Word document", () => {
     const content = {

@@ -5501,6 +5501,9 @@ create table if not exists public.playbook_runs (
   model text not null,
   document_name text,
   review_mode text not null,
+  -- "issues" reported only what needs attention; "full" reviewed every rule.
+  review_scope text not null default 'full'
+    constraint playbook_runs_review_scope_check check (review_scope in ('full', 'issues')),
   status text not null,
   summary text,
   findings_json jsonb,
@@ -5513,6 +5516,8 @@ create table if not exists public.playbook_runs (
 create index if not exists idx_playbook_runs_playbook_started
   on public.playbook_runs(playbook_id, started_at desc);
 create index if not exists idx_playbook_runs_document on public.playbook_runs(document_id);
+create index if not exists idx_playbook_runs_user_started
+  on public.playbook_runs(user_id, started_at desc);
 alter table public.playbook_runs enable row level security;
 
 create table if not exists public.playbook_imports (
@@ -10894,5 +10899,8 @@ insert into public.schema_migrations (filename) values
   ('20261017_04_playbook_access.sql'),
   ('20261017_05_playbook_reviews.sql'),
   ('20261017_06_remove_unused_playbook_structure.sql'),
-  ('20261017_07_playbook_storage_cleanup.sql')
+  ('20261017_07_playbook_storage_cleanup.sql'),
+  ('20261018_01_remove_playbook_global_guidance.sql'),
+  ('20261018_02_playbook_run_history_index.sql'),
+  ('20261019_01_playbook_run_scope.sql')
 on conflict (filename) do nothing;

@@ -7,7 +7,8 @@ import {
   PLAYBOOK_PANE_BODY_CLASS,
   PLAYBOOK_PANE_HEADER_CLASS,
   PLAYBOOK_PANE_INSET_CLASS,
-  PLAYBOOK_PANE_LIST_CLASS,
+  PLAYBOOK_SIDE_HEADER_CLASS,
+  PLAYBOOK_SIDE_LIST_CLASS,
 } from "./playbookPaneStyles";
 
 function PillSkeleton({ className }: { className: string }) {
@@ -47,16 +48,16 @@ export function PlaybookPageSkeleton() {
         />
       </div>
       <div className="@container flex min-h-0 flex-1 flex-col">
-        <div className="mx-3 mb-3 grid min-h-0 flex-1 grid-cols-1 gap-1.5 p-0.5 md:mx-6.5 @[48rem]:grid-cols-[320px_minmax(0,1fr)]">
+        <div className="mx-3 mb-3 grid min-h-0 flex-1 grid-cols-1 gap-1.5 p-0.5 md:mx-6.5 @[48rem]:grid-cols-[360px_minmax(0,1fr)]">
           <section
             className={`flex min-h-0 min-w-0 flex-col ${EDITOR_SURFACE_CLASS}`}
           >
-            <div className={`flex items-center ${PLAYBOOK_PANE_HEADER_CLASS}`}>
+            <div className={`flex items-center ${PLAYBOOK_SIDE_HEADER_CLASS}`}>
               <div className="flex h-5 items-center">
                 <SkeletonLine className="w-12" />
               </div>
             </div>
-            <div className={`space-y-1 ${PLAYBOOK_PANE_LIST_CLASS}`}>
+            <div className={`space-y-1 ${PLAYBOOK_SIDE_LIST_CLASS}`}>
               {["w-3/4", "w-1/2", "w-2/3", "w-3/5"].map((width) => (
                 <div key={width} className="flex h-7 items-center px-2">
                   <SkeletonLine className={width} />

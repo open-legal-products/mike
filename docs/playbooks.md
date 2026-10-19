@@ -1,21 +1,21 @@
 # Playbooks
 
-Mike playbooks convert a human-authored Word negotiation guide into
+Mike playbooks convert a human-authored Word or PDF negotiation guide into
 structured rules that can review contracts.
 
 ## Data model
 
-A playbook contains global guidance and rules, optionally organized into
-topics. Each rule contains:
+A playbook contains rules, optionally organized into topics. Guidance that
+applies throughout a playbook is written as a rule. Each rule contains:
 
 - a concept to identify at clause or agreement scope;
 - a required/optional setting;
 - standard, fallback, and unacceptable positions;
 - illustrative, preferred, verbatim, accepted, or unacceptable sample clauses;
 - conditions, reviewer guidance, and escalation actions; and
-- source references to the imported Word paragraph or table cell.
+- source references to the imported paragraph or Word table cell.
 
-A playbook starts in one of two ways: compiled from a Word negotiation guide,
+A playbook starts in one of two ways: compiled from a Word or PDF negotiation guide,
 or written by hand in the editor. A hand-authored rule carries no source
 references; the strict source check below applies to compiled imports only.
 
@@ -43,13 +43,13 @@ change it. Each person has a role:
 
 - **Viewer**: view the rules and sources and run reviews.
 - **Editor**: also edit rules, details, and supplementary documents, and
-  replace the playbook from Word.
+  replace the playbook from a file.
 - **Owner**: also share it, change its visibility, and delete it. The creator
   is always an owner.
 
 A personal playbook is shared with existing accounts by email; recipients find
 it under **Shared with me**. An organization's playbook is shared only with
-its members. A **Public** one (set in **Overview**) can be viewed and run by
+its members. A **Public** one (set in its details) can be viewed and run by
 every member; unlike a workflow, members do not get Editor by default, so
 editing is granted person by person, and members can be put on a deny list.
 The organization's owners own every public playbook. A **Private** one is
@@ -61,14 +61,16 @@ The editor has two flat glass panels: rules on the left, and the selected
 rule's form on the right. The rules sidebar uses the IDE Explorer's compact
 rows, with a small dot before each rule name. Opening a playbook selects its first rule.
 The sidebar's **+** adds an ungrouped rule. To organize rules, choose
-**Add topic** from **Rules actions**, then use the rule form's **Topic** field
-to move a rule into that topic or back to **No topic**. Existing imported
-topics remain available.
+**Add topic** from **Rules actions**, then drag a rule onto that topic.
+Existing imported topics remain available.
 Drag a rule above or below another rule to reorder it, onto a topic to group
-it, or onto the sidebar's header or empty space to ungroup it. Right-click a
-rule for edit, duplicate, move, and delete actions. Every rule row and the rule
-form have a **…** menu with those same actions. Each topic row also has a **…**
-menu, including **Add rule** to create a rule in that topic.
+it, or onto the sidebar's header or empty space to ungroup it. Clicking a rule
+opens it. Right-click a rule, or use its row's **…** menu, to duplicate it,
+move it out of its topic, or delete it. Reordering rules and putting one into a
+topic take dragging. The open rule's own **…** menu
+offers only **Duplicate rule** and **Delete rule**. Each topic row's **…** menu
+has **Add rule**, to create a rule in that topic, and **Remove topic (keep
+rules)**.
 Duplicating places an independent copy immediately
 after the source rule in the same topic (or in the ungrouped list) and selects
 it for editing. Right-click the sidebar to add a rule
@@ -76,47 +78,61 @@ or topic, or a topic to remove the group while keeping its rules. The same
 menus open with Shift+F10 or the keyboard's context-menu key. Changes autosave.
 Select a rule to edit its concept, scope, positions, and sample clauses. Drag
 the divider to adjust the panel widths, or focus it and use the arrow keys.
-The panels stack on narrow screens. A toolbar above them contains **Overview**,
-**Rules**, **References**, and **Runs**, with a **New rule** button on the right
-of the Rules view that adds and selects an ungrouped rule.
-**Run** is in the page header. Use **Overview** to edit the
-playbook name, represented party, description, and global guidance, alongside
-source metadata, dates, and, in an organization, Private or Public. These fields also save automatically.
+The panels stack on narrow screens. A toolbar above them contains **Rules**,
+**References**, and **Runs**, with a button on the right for the current view:
+**New rule** adds and selects an ungrouped rule, **Upload** adds a reference
+document, and **New run** opens the new-run form.
+**Use** is in the page header: **Run playbook** opens the new-run form on
+**Runs**, and **Use in assistant** saves pending edits and opens a new
+assistant chat with the playbook attached, ready for documents. **Edit details** (**View details** for a
+reader), in the header's actions menu or a table row's menu, opens a dialog for
+the playbook name, represented party, document types, jurisdictions,
+description, and, in an organization, Private or Public. The dialog saves when
+**Update** is pressed, as other details dialogs do.
 
 The header shows **Saving…**, **Saved**, or **Couldn’t save** in its own button
 group. **Saved** disappears after two seconds, as in the workflow editor. Autosave accepts
 unfinished fields; running a review requires complete rules. Pending changes
-are saved before returning to the table, replacing from Word, or starting a
+are saved before returning to the table, replacing from a file, or starting a
 review. A failed save retains the current edits and offers a retry.
 
-## Starting a playbook without a Word file
+## Starting a playbook without a file
 
-Open **Playbooks**, select **New playbook**, then **Start from scratch**. Mike
-opens the new playbook on **Overview**, where its name and scope can be set
-before moving to **Rules**. It starts with one ungrouped rule and no topics. A rule always
+Open **Playbooks**, select **New playbook**, then **Start from scratch**. A
+dialog asks for the playbook's name and, optionally, its represented party,
+document types, jurisdictions, description, and, in an organization, Private
+or Public. Mike then opens the new playbook on **Rules**. It starts with one
+ungrouped rule and no topics. A rule always
 needs a concept, so the first one carries placeholder text to replace.
 
-## Importing a Word playbook
+## Importing a playbook
 
-1. Open **Playbooks**, select **New playbook**, then **Import Word playbook**.
-2. Select a `.docx` playbook and a compilation model. Only models with usable
-   credentials are offered, and Mike preselects an available one.
+1. Open **Playbooks**, select **New playbook**, then **Import from file**.
+2. Under **Add document**, drop a `.docx` or `.pdf` playbook, or click the
+   area to choose a saved file or upload one. Choose a compilation model. Only
+   models with usable credentials are offered, and Mike preselects an
+   available one. Select **Compile**.
 3. Review the extracted topics, concepts, positions, sample clauses, and
    source references.
 4. Refine the rules as needed; corrections save automatically.
 
-The browser uploads the `.docx` straight to object storage under a presigned
-URL scoped to the signed-in account, then asks the API to compile it from that
-key. The API never receives the file body, and the staged object is removed
-once the import finishes, successfully or not.
+A dropped file is uploaded straight to object storage under a presigned URL
+scoped to the signed-in account, then the API compiles it from that key. The
+API never receives the file body, and the staged object is removed once the
+import finishes, successfully or not. A saved file is read from where it is
+stored, after the same access check as opening it; the playbook keeps its own
+copy, so later edits to the saved file do not change the playbook.
 
 The importer reads Word headings, paragraphs, and tables before asking the
-model to compile the material. Mike automatically recompiles once when the
-first response is not valid JSON, fails schema validation, or cannot be tied
-back to the Word source. It retains the original `.docx` only after
+model to compile the material. A PDF has no such markup, so each block of text
+separated by a vertical gap becomes one cited paragraph, and a paragraph never
+spans a page. A PDF without a text layer (a scan) is refused with a message
+that it needs OCR. Mike automatically recompiles once when the first response
+is not valid JSON, fails schema validation, or cannot be tied back to the
+source. It retains the original file only after
 compilation succeeds. Every imported rule must resolve to at least one real
 source reference, or the import fails rather than creating an unauditable
-rule. The parsed Word structure is transient; only the original file and the
+rule. The parsed structure is transient; only the original file and the
 compiled content with source references are retained, avoiding a duplicate
 document copy in the database.
 
@@ -128,17 +144,17 @@ the model request already in flight.
 
 Each import creates an audit record with its current processing stage. Failed
 imports retain the stage and error without retaining the source document,
-making credential, Word extraction, model compilation, and output-validation
+making credential, text extraction, model compilation, and output-validation
 failures distinguishable.
 
-## Replacing a playbook from a newer Word file
+## Replacing a playbook from a newer file
 
-Open the playbook's actions menu, then **Replace from Word**. The compiled
+Open the playbook's actions menu, then **Replace from file**. The compiled
 result rewrites that playbook's content and keeps its name unless you supply a
 new one.
 
 A replacement rewrites the current rules. Completed and in-progress reviews
-retain the rules they started with. The replaced `.docx` is removed once the
+retain the rules they started with. The replaced file is removed once the
 new content is stored, and the same rate limit and ownership checks apply as
 for a first import.
 
@@ -146,13 +162,13 @@ for a first import.
 
 The **References** tab, beside **Rules** in the playbook toolbar, lists the
 documents behind a playbook in one list and shows the selected one read-only
-on the right. The list starts with the Word file the playbook was compiled
+on the right. The list starts with the Word or PDF file the playbook was compiled
 from, if any, followed by up to 20 supplementary `.docx` or `.pdf` documents
 the rules can refer to, such as a data protection policy or a clause template.
 An editor adds supplementary documents with **+** or **Upload** (upload a
 file, or choose one from the library or a project) and removes them from each
-document's menu; the imported Word file changes only through **Replace from
-Word**.
+document's menu; the imported file changes only through **Replace from
+file**.
 
 A supplementary document is a copy the playbook owns: anyone who can view the
 playbook can open it, and later edits to the original do not change it. Its
@@ -179,12 +195,32 @@ effective provider keys. Local Ollama models need none.
 
 ## Contract review
 
-Select **Run**, choose strict or permissive posture, and use
-**Add document** in the modal footer to upload a PDF, DOCX, or TXT contract or
-choose saved files. Multiple files can be dropped into the document area;
-each file gets its own review run. Strict mode flags fallback
-matches for review; permissive mode may accept them but still explains the
-applied fallback.
+Select **New run** on the **Runs** tab (in the toolbar or beside **Your
+runs**), or **Use** then **Run playbook**. The form takes the main pane: drop PDF,
+DOCX, or TXT contracts on the document area, or click it to choose saved files
+or upload more, then choose:
+
+- **Scope**: **Full review** checks every rule and lists what passed;
+  **Issues only** reports only unacceptable, missing, and needs-review terms.
+  It is quicker, but the run never lists what passed. The server holds the
+  findings to the scope and records it on the run (`review_scope`).
+- **Posture**: **Strict** flags clauses that only meet a fallback position for
+  review; **Permissive** may accept them but says which fallback applied.
+- **Review model**, and optional **Additional instructions**, empty by
+  default: the review's own prompt already sets how it reviews.
+
+**Cancel**, or choosing a run, returns to that run's results and keeps what
+the form holds. Multiple files can be dropped into the document area; each
+file gets its own review run.
+
+Starting a review stores its run and returns at once; the review then runs on
+the server apart from the request, so leaving the page does not stop it. The
+run shows a spinner in **Runs** and in the sidebar's History until it
+finishes. While it runs, the server refreshes the run's `updated_at` every 30
+seconds; a running run with no refresh for two minutes stopped with its
+process, and is reported as failed with a message to run it again. History
+polls `GET /playbooks/runs/status?ids=` for running runs and pages through
+`GET /playbooks/runs/history`.
 
 Review findings include the rule, status, exact contract quote,
 location, analysis, and suggested language. Each run is retained with the
@@ -197,10 +233,21 @@ before applying them.
 
 A playbook's **Runs** tab lists your last 50 runs of it, newest first;
 selecting one shows its settings, summary, and findings grouped by outcome,
-with recommended language as a redline of the contract text. A run opens there
+with recommended language as a redline of the contract text. **Run details**
+names the document, model, scope, posture, and start time. For a full review, a
+toggle beside the **Findings** heading switches between **All findings** and
+**Issues only**; this only hides what passed or did not apply, and keeps it on
+the run. **View** opens the
+reviewed document to the right of the results, where tracked changes can be
+followed from their cards; it stays hidden until asked for. A run opens there
 when it finishes. The **Runs** tab on the playbooks list shows your last 100
 runs across every playbook you can still open in the workspace (`GET
-/playbooks/runs`); choosing one opens it on its playbook. Each person sees only
+/playbooks/runs`); choosing one opens it on its playbook. Its table filters by
+playbook, outcome, scope, and posture, and each row has a checkbox, a **…**
+menu, and the same menu on right-click: **Open**, **Open playbook**, and
+**Delete**. Selected rows share the toolbar's **Actions** menu. Deleting a run
+(`DELETE /playbooks/runs/:runId`) removes it and its findings; tracked changes
+it made stay on the document, and a run still in progress cannot be deleted. Each person sees only
 their own runs, including on a shared playbook, and the rules snapshot stored
 with a run is never returned by either list.
 

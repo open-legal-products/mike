@@ -1,7 +1,12 @@
 import { act, renderHook, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { Chat, TabularReview } from "@/app/components/shared/types";
-import { listTabularReviews } from "@/app/lib/mikeApi";
+import {
+    listPlaybookRunHistory,
+    listTabularReviews,
+    type PlaybookRunHistoryItem,
+} from "@/app/lib/mikeApi";
+import { notifyPlaybookRunsChanged } from "@/app/lib/playbookRunActivity";
 import { notifyTabularReviewsChanged } from "@/app/lib/tabularReviewChanges";
 import { useSidebarHistory } from "./useSidebarHistory";
 
@@ -15,7 +20,11 @@ vi.mock("@/app/contexts/WorkspaceContext", () => ({ useWorkspaceParam: () => sta
 vi.mock("@/app/contexts/ChatHistoryContext", () => ({
     useChatHistoryContext: () => ({ ...state, loadingMoreChats: false }),
 }));
-vi.mock("@/app/lib/mikeApi", () => ({ listTabularReviews: vi.fn(), listTabularReviewIds: vi.fn() }));
+vi.mock("@/app/lib/mikeApi", () => ({
+    listTabularReviews: vi.fn(),
+    listTabularReviewIds: vi.fn(),
+    listPlaybookRunHistory: vi.fn(),
+}));
 const review = (id: string, project_id: string | null = null) => ({
     id, title: id, project_id, created_at: "2026-10-01T00:00:00Z", updated_at: "2026-10-15T00:00:00Z",
 }) as TabularReview;
@@ -26,9 +35,51 @@ beforeEach(() => {
     state.chats = [];
     state.hasMoreChats = false;
     vi.mocked(listTabularReviews).mockResolvedValue([]);
+    vi.mocked(listPlaybookRunHistory).mockResolvedValue([]);
 });
 
+const playbookRun = (id: string, startedAt: string, status = "completed") => ({
+    id, playbookId: "pb-1", playbookName: "MSA", documentName: `${id}.docx`,
+    status, error: null, startedAt, completedAt: null,
+}) as PlaybookRunHistoryItem;
+
 describe("useSidebarHistory", () => {
+    it("lists playbook runs among chats and reviews, and refreshes them when a run starts", async () => {
+        state.chats = [{ ...review("chat"), updated_at: "2026-10-16T00:00:00Z" } as Chat];
+        vi.mocked(listPlaybookRunHistory).mockResolvedValueOnce([playbookRun("older-run", "2026-10-14T00:00:00Z")]);
+        const { result } = renderHook(() => useSidebarHistory());
+        await waitFor(() => expect(result.current.loading).toBe(false));
+        expect(listPlaybookRunHistory).toHaveBeenCalledWith(expect.objectContaining({ workspace: "personal" }));
+        expect(result.current.items.map(({ kind, item }) => `${kind}:${item.id}`)).toEqual([
+            "chat:chat", "playbookRun:older-run",
+        ]);
+
+        vi.mocked(listPlaybookRunHistory).mockResolvedValueOnce([
+            playbookRun("new-run", "2026-10-17T00:00:00Z", "running"),
+            playbookRun("older-run", "2026-10-14T00:00:00Z"),
+        ]);
+        act(() => notifyPlaybookRunsChanged());
+        await waitFor(() => expect(result.current.items[0]).toMatchObject({
+            kind: "playbookRun", item: { id: "new-run", status: "running" },
+        }));
+        expect(result.current.loading).toBe(false);
+    });
+
+    it("keeps the rest of History if playbook runs cannot load", async () => {
+        vi.spyOn(console, "error").mockImplementation(() => {});
+        state.chats = [{ ...review("chat"), user_id: "u1" } as Chat];
+        vi.mocked(listPlaybookRunHistory).mockRejectedValueOnce(new Error("unavailable"));
+        const { result } = renderHook(() => useSidebarHistory());
+        await waitFor(() => expect(result.current.loading).toBe(false));
+        expect(result.current.items.map(({ item }) => item.id)).toEqual(["chat"]);
+        expect(result.current.error).toBeTruthy();
+        expect(result.current.hasMore).toBe(false);
+        act(() => { void result.current.retry(); });
+        await waitFor(() => expect(result.current.error).toBeNull());
+        expect(listPlaybookRunHistory).toHaveBeenCalledTimes(2);
+        vi.restoreAllMocks();
+    });
+
     it("promotes an edited or rerun review above newer chats without a loading reset", async () => {
         state.chats = [{ ...review("chat"), updated_at: "2026-10-16T01:00:00Z" } as Chat];
         vi.mocked(listTabularReviews).mockResolvedValueOnce([review("older-review")]);

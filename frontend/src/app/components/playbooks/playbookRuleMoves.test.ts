@@ -12,7 +12,6 @@ const rule = (id: string) =>
 const content = (): PlaybookContent => ({
   name: "Guide",
   description: "",
-  globalGuidance: "",
   representedParty: "",
   documentTypes: [],
   jurisdictions: [],

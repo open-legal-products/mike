@@ -27,12 +27,18 @@ import {
   type OpenAIToolSchema,
   type UserApiKeys,
 } from "../../lib/llm";
-import { builtInModelIds, providerForModel } from "../../lib/llm/models";
+import {
+  builtInModelIds,
+  LEGACY_MODEL_IDS,
+  providerForModel,
+} from "../../lib/llm/models";
 import type { Provider } from "../../lib/llm/types";
 import { hasApiKeyForModel } from "../../lib/modelSelection";
 import { getUserApiKeys, getEffectiveApiKeys } from "../user/user.service";
-import { deleteFile, uploadFile } from "../../lib/storage";
+import { deleteFile, downloadFile, uploadFile } from "../../lib/storage";
+import { getFileStreamSource } from "../documents/documents.service";
 import {
+  extractPlaybookPdfStructure,
   extractPlaybookWordStructure,
   type PlaybookWordStructure,
 } from "./playbooks.word";
@@ -117,7 +123,6 @@ const topicSchema = z.object({
 const playbookContentShape = z.object({
   name: z.string().trim().min(1).max(200),
   description: z.string().trim().max(2_000).default(""),
-  globalGuidance: z.string().trim().max(20_000).default(""),
   representedParty: z.string().trim().max(300).default(""),
   documentTypes: z.array(z.string().trim().min(1).max(200)).max(50).default([]),
   jurisdictions: z.array(z.string().trim().min(1).max(200)).max(50).default([]),
@@ -156,7 +161,6 @@ const editableRuleSchema = ruleSchema.extend({
 export const editablePlaybookSchema = playbookContentShape.extend({
   name: z.string().max(200),
   description: z.string().max(2_000).default(""),
-  globalGuidance: z.string().max(20_000).default(""),
   representedParty: z.string().max(300).default(""),
   rules: z.array(editableRuleSchema).max(200).default([]),
   topics: z
@@ -231,7 +235,7 @@ export type Playbook = {
 export type PlaybookImportStage =
   | "validating_file"
   | "checking_model"
-  | "extracting_word"
+  | "extracting_text"
   | "compiling"
   | "validating_output"
   | "repairing_output"
@@ -473,7 +477,7 @@ function validateImportedSources(
     const sourceRefs = filter([...rule.sourceRefs, ...clauseRefs]);
     if (!sourceRefs.length) {
       throw new PlaybookRequestError(
-        `The model could not tie the imported rule “${rule.name}” to the source Word document.`,
+        `The model could not tie the imported rule “${rule.name}” to the source document.`,
       );
     }
     return { ...rule, standard, fallbacks, unacceptable, sourceRefs };
@@ -573,26 +577,26 @@ async function availablePlaybookModels(
     : await getUserApiKeys(userId, db);
   const { data: profile } = await db
     .from("user_profiles")
-    .select("title_model, tabular_model")
+    .select("last_selected_chat_model, title_model, tabular_model")
     .eq("user_id", userId)
     .maybeSingle();
+  // The assistant composer opens on the last model chosen there, so a
+  // playbook run defaults to the same model before any background-task one.
+  const profileModelIds = [
+    profile?.last_selected_chat_model,
+    profile?.title_model,
+    profile?.tabular_model,
+  ]
+    .filter((modelId): modelId is string => typeof modelId === "string")
+    .map((modelId) => LEGACY_MODEL_IDS[modelId] ?? modelId);
   const candidateIds = [
-    ...new Set([
-      ...builtInModelIds(),
-      ...(typeof profile?.title_model === "string"
-        ? [profile.title_model]
-        : []),
-      ...(typeof profile?.tabular_model === "string"
-        ? [profile.tabular_model]
-        : []),
-    ]),
+    ...new Set([...builtInModelIds(), ...profileModelIds]),
   ];
   const availableModelIds = candidateIds.filter(
     (modelId) => playbookModelAvailability(modelId, apiKeys).available,
   );
-  const preferred = [profile?.title_model, profile?.tabular_model].find(
-    (modelId) =>
-      typeof modelId === "string" && availableModelIds.includes(modelId),
+  const preferred = profileModelIds.find((modelId) =>
+    availableModelIds.includes(modelId),
   );
   return {
     apiKeys,
@@ -614,6 +618,24 @@ async function updateImportAttempt(
     })
     .eq("id", attemptId);
   if (error) throw error;
+}
+
+/** Playbooks are prose; anything this large is not one. */
+export const MAX_PLAYBOOK_IMPORT_BYTES = 25 * 1024 * 1024;
+
+export const PLAYBOOK_IMPORT_CONTENT_TYPES = {
+  docx: "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+  pdf: "application/pdf",
+} as const;
+
+export type PlaybookImportFileType = keyof typeof PLAYBOOK_IMPORT_CONTENT_TYPES;
+
+/** The kind of file a playbook can be imported from, by its name. */
+export function playbookImportFileType(
+  filename: string,
+): PlaybookImportFileType | null {
+  const extension = filename.toLowerCase().match(/\.(docx|pdf)$/)?.[1];
+  return extension === "docx" || extension === "pdf" ? extension : null;
 }
 
 function importStageLabel(stage: PlaybookImportStage): string {
@@ -692,7 +714,6 @@ const UNREADABLE_CONTENT: PlaybookContent = {
   name: "",
   description: "",
   representedParty: "",
-  globalGuidance: "",
   documentTypes: [],
   jurisdictions: [],
   rules: [],
@@ -931,7 +952,7 @@ Rules may contain a standard position, fallback positions, unacceptable position
 The conditions field must always be an array of plain JSON strings, for example ["Applies when annual fees exceed $100,000"]. Never put objects, arrays, numbers, or booleans inside conditions. Express each condition as one readable sentence. Only actions may contain objects, and every action object must contain string fields named scenario and instruction.
 
 Return JSON only with this shape:
-{"name":"${requestedName.replace(/["\\]/g, "")}","description":"","globalGuidance":"","representedParty":"","documentTypes":[],"jurisdictions":[],"topics":[{"id":"topic-1","name":"","rules":[{"id":"topic-1-rule-1","name":"","concept":"","scope":"clause|agreement","required":false,"guidance":"","standard":{"name":"Standard","criteria":"","sampleClauses":[{"text":"","usage":"illustrative|preferred|verbatim|accepted|unacceptable","sourceRefs":["P1"]}]}|null,"fallbacks":[],"unacceptable":[],"conditions":[],"actions":[{"scenario":"","instruction":""}],"sourceRefs":["P1"]}]}]}
+{"name":"${requestedName.replace(/["\\]/g, "")}","description":"","representedParty":"","documentTypes":[],"jurisdictions":[],"topics":[{"id":"topic-1","name":"","rules":[{"id":"topic-1-rule-1","name":"","concept":"","scope":"clause|agreement","required":false,"guidance":"","standard":{"name":"Standard","criteria":"","sampleClauses":[{"text":"","usage":"illustrative|preferred|verbatim|accepted|unacceptable","sourceRefs":["P1"]}]}|null,"fallbacks":[],"unacceptable":[],"conditions":[],"actions":[{"scenario":"","instruction":""}],"sourceRefs":["P1"]}]}]}
 
 SOURCE PLAYBOOK:
 ${structure.text.slice(0, 150_000)}`;
@@ -965,7 +986,38 @@ async function playbookSourceStorageKey(
   return data?.source_storage_key ? String(data.source_storage_key) : null;
 }
 
-export async function importPlaybookFromDocx(args: {
+/**
+ * Compile a playbook from a document already in the caller's files, as
+ * importPlaybookFromFile does from an upload. The playbook keeps its own copy
+ * of the file, so later changes to the document do not reach it.
+ */
+export async function importPlaybookFromDocument(
+  args: Omit<Parameters<typeof importPlaybookFromFile>[0], "filename" | "buffer"> & {
+    documentId: string;
+  },
+): Promise<Playbook> {
+  const db = args.db ?? createServerSupabase();
+  const source = await getFileStreamSource(
+    args.documentId,
+    args.userId,
+    args.userEmail ?? undefined,
+    null,
+    db,
+  );
+  if (!source.ok) throw new PlaybookRequestError("Document not found.", 404);
+  if (source.size > MAX_PLAYBOOK_IMPORT_BYTES)
+    throw new PlaybookRequestError("The document is too large to import.");
+  const bytes = await downloadFile(source.storagePath);
+  if (!bytes) throw new PlaybookRequestError("The document could not be read.");
+  return importPlaybookFromFile({
+    ...args,
+    db,
+    filename: source.filename,
+    buffer: Buffer.from(bytes),
+  });
+}
+
+export async function importPlaybookFromFile(args: {
   userId: string;
   /** Needed to replace a personal playbook shared with the caller. */
   userEmail?: string | null;
@@ -1006,9 +1058,10 @@ export async function importPlaybookFromDocx(args: {
   if (attempt.error) throw attempt.error;
 
   try {
-    if (!args.filename.toLowerCase().endsWith(".docx"))
+    const fileType = playbookImportFileType(args.filename);
+    if (!fileType)
       throw new PlaybookRequestError(
-        "Playbook import currently requires a .docx file.",
+        "Playbook import requires a .docx or .pdf file.",
       );
     if (!args.buffer.length)
       throw new PlaybookRequestError("The uploaded playbook is empty.");
@@ -1033,16 +1086,24 @@ export async function importPlaybookFromDocx(args: {
       orgId,
     );
 
-    stage = "extracting_word";
+    stage = "extracting_text";
     await updateImportAttempt(db, attemptId, { stage });
-    const structure = await extractPlaybookWordStructure(args.buffer);
+    const structure =
+      fileType === "pdf"
+        ? await extractPlaybookPdfStructure(args.buffer)
+        : await extractPlaybookWordStructure(args.buffer);
+    if (!structure.text) {
+      throw new PlaybookRequestError(
+        "This PDF has no text layer, so its content cannot be read. It is most likely scanned and needs OCR before it can be imported.",
+      );
+    }
     if (structure.text.length > 150_000) {
       throw new PlaybookRequestError(
-        "The Word playbook is too large to compile in one pass. Split it into smaller playbooks before importing.",
+        "The playbook is too large to compile in one pass. Split it into smaller playbooks before importing.",
       );
     }
     const fallbackName =
-      args.filename.replace(/\.docx$/i, "").trim() || "Imported playbook";
+      args.filename.replace(/\.(docx|pdf)$/i, "").trim() || "Imported playbook";
     const name = args.name?.trim() || replacing?.name || fallbackName;
 
     stage = "compiling";
@@ -1088,7 +1149,7 @@ export async function importPlaybookFromDocx(args: {
     // The key carries the attempt id so a replacement never overwrites the
     // current source before its row update commits.
     // Under the creator's prefix, whoever replaces it.
-    const storageKey = `playbooks/${replacing?.userId ?? args.userId}/${id}/source-${attemptId}.docx`;
+    const storageKey = `playbooks/${replacing?.userId ?? args.userId}/${id}/source-${attemptId}.${fileType}`;
     const previousStorageKey = replacing
       ? await playbookSourceStorageKey(db, id)
       : null;
@@ -1101,7 +1162,7 @@ export async function importPlaybookFromDocx(args: {
         args.buffer.byteOffset,
         args.buffer.byteOffset + args.buffer.byteLength,
       ) as ArrayBuffer,
-      "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+      PLAYBOOK_IMPORT_CONTENT_TYPES[fileType],
     );
     uploadedStorageKey = storageKey;
 
@@ -1244,8 +1305,11 @@ export async function createPlaybook(
   rawDetails: string | Record<string, unknown> | undefined,
   db: Db = createServerSupabase(),
   workspace?: unknown,
+  rawVisibility?: unknown,
 ): Promise<Playbook> {
   const orgId = await creationScope(db, userId, workspace);
+  const visibility = parseContentVisibility(rawVisibility, orgId);
+  if (!visibility.ok) throw new PlaybookRequestError(visibility.detail);
   const input =
     typeof rawDetails === "string" ? { name: rawDetails } : (rawDetails ?? {});
   const name =
@@ -1268,6 +1332,8 @@ export async function createPlaybook(
     description: content.description,
     content_json: content,
     org_id: orgId,
+    // Absent keeps the column's default: private.
+    ...(visibility.visibility ? { visibility: visibility.visibility } : {}),
     source_filename: null,
     source_storage_key: null,
     import_model: null,
@@ -1363,12 +1429,20 @@ ${sources
 `;
 }
 
+/** Statuses a review reports when its scope is issues only. */
+const ISSUE_STATUSES = new Set<PlaybookFinding["status"]>([
+  "unacceptable",
+  "missing_required",
+  "needs_review",
+]);
+
 function reviewPrompt(
   content: PlaybookContent,
   documentText: string,
   mode: "strict" | "permissive",
   instructions?: string,
   sources: PlaybookSourceRow[] = [],
+  scope: "full" | "issues" = "full",
 ): string {
   return `Review the full contract against the playbook. Apply unacceptable positions first. In strict mode, fallback matches still need review. In permissive mode, a fallback may be acceptable but explain which fallback applies. Flag a missing required rule as missing_required. Use not_applicable only when an optional concept is absent. Quote exact contract text so Word can locate it. suggestedText must be a complete replacement for quote, or the complete clause to insert for missing_required. For missing_required, set insertAfter to the exact final words (up to 200 characters) of the existing clause the new clause should follow, or leave it empty if no clause fits. Do not suggest an edit for acceptable or not_applicable findings. Do not invent contract language or findings.
 
@@ -1378,7 +1452,7 @@ Return JSON only:
 {"summary":"","findings":[{"topicId":"topic-1|null","ruleId":"topic-1-rule-1|null","ruleName":"","status":"not_applicable|acceptable|needs_review|unacceptable|missing_required|outside_scope","quote":"exact contract text or empty when missing","location":"section or heading","analysis":"","suggestedText":"","insertAfter":"exact contract text, only for missing_required"}]}
 
 REVIEW MODE: ${mode}
-${supplementaryDocumentList(sources)}PLAYBOOK:
+${scope === "issues" ? "REVIEW SCOPE: issues only. Report only rules whose status is unacceptable, missing_required, or needs_review; leave acceptable, not_applicable, and outside_scope rules out of findings, and summarise the issues.\n" : ""}${supplementaryDocumentList(sources)}PLAYBOOK:
 ${JSON.stringify(content).slice(0, 100_000)}
 
 CONTRACT:
@@ -1411,6 +1485,11 @@ export function normalizeFindings(
   content: PlaybookContent,
   documentText: string,
   findings: z.infer<typeof findingSchema>[],
+  /**
+   * A full review flags every rule the model skipped. An issues-only review
+   * leaves acceptable rules out on purpose, so they must not be flagged.
+   */
+  options: { flagMissingRules?: boolean } = {},
 ): PlaybookFinding[] {
   const rules = new Map<string, { topicId: string | null; name: string }>();
   // The prompt allows a null ruleId, and models commonly identify a rule by
@@ -1458,7 +1537,7 @@ export function normalizeFindings(
     });
   }
   for (const [ruleId, rule] of rules) {
-    if (seen.has(ruleId)) continue;
+    if (seen.has(ruleId) || options.flagMissingRules === false) continue;
     normalized.push({
       id: crypto.randomUUID(),
       topicId: rule.topicId,
@@ -1594,7 +1673,48 @@ async function applyReviewEdits(args: {
   };
 }
 
-export async function reviewWithPlaybook(args: {
+/** How often a running review records that its process is still at it. */
+const RUN_HEARTBEAT_MS = 30_000;
+/** A running review silent for this long stopped with its process. */
+const RUN_STALE_MS = 2 * 60_000;
+export const INTERRUPTED_RUN_ERROR =
+  "The review stopped before it finished. Run it again.";
+
+/**
+ * A run's status as readers should see it. A review runs in the process that
+ * started it, so one whose heartbeat has stopped will never finish.
+ */
+function runState(row: Record<string, unknown>, now = Date.now()) {
+  const lastSeen = Date.parse(String(row.updated_at ?? row.started_at));
+  const interrupted =
+    row.status === "running" &&
+    Number.isFinite(lastSeen) &&
+    now - lastSeen > RUN_STALE_MS;
+  return {
+    status: interrupted ? "failed" : String(row.status),
+    error: interrupted
+      ? INTERRUPTED_RUN_ERROR
+      : row.error
+        ? String(row.error)
+        : null,
+  };
+}
+
+/** Starts a review and waits for it: for callers that need the findings. */
+export async function reviewWithPlaybook(
+  args: Parameters<typeof startPlaybookReview>[0],
+) {
+  const { done } = await startPlaybookReview(args);
+  return done;
+}
+
+/**
+ * Checks and records a review, then runs it apart from the request: the run
+ * is returned as soon as it is stored, and `done` settles when it finishes.
+ * Leaving the page detaches from the review without stopping it; its row says
+ * how it went.
+ */
+export async function startPlaybookReview(args: {
   userId: string;
   userEmail?: string | null;
   playbookId: string;
@@ -1606,6 +1726,8 @@ export async function reviewWithPlaybook(args: {
   instructions?: string;
   model: string;
   reviewMode: "strict" | "permissive";
+  /** "issues" reports only what needs attention; the run records which. */
+  reviewScope?: "full" | "issues";
   db?: Db;
 }) {
   const db = args.db ?? createServerSupabase();
@@ -1656,6 +1778,7 @@ export async function reviewWithPlaybook(args: {
     document_id: args.documentId ?? null,
     edited_version_id: null,
     review_mode: args.reviewMode,
+    review_scope: args.reviewScope ?? "full",
     status: "running",
     summary: null,
     findings_json: [],
@@ -1667,14 +1790,66 @@ export async function reviewWithPlaybook(args: {
   };
   const inserted = await db.from("playbook_runs").insert(row);
   if (inserted.error) throw inserted.error;
+  const done = runReview({
+    db,
+    args,
+    runId,
+    startedAt,
+    content,
+    documentText,
+    documentName,
+    stored,
+    apiKeys,
+  });
+  return { run: publicRun(row), done };
+}
+
+async function runReview({
+  db,
+  args,
+  runId,
+  startedAt,
+  content,
+  documentText,
+  documentName,
+  stored,
+  apiKeys,
+}: {
+  db: Db;
+  args: Parameters<typeof startPlaybookReview>[0];
+  runId: string;
+  startedAt: string;
+  content: PlaybookContent;
+  documentText: string;
+  documentName: string | undefined;
+  stored: Awaited<ReturnType<typeof loadReviewDocument>> | null;
+  apiKeys: UserApiKeys;
+}) {
+  const heartbeat = setInterval(() => {
+    void db
+      .from("playbook_runs")
+      .update({ updated_at: new Date().toISOString() })
+      .eq("id", runId)
+      .eq("status", "running")
+      .then(({ error }) => {
+        if (error)
+          console.error("[playbooks] review heartbeat failed", {
+            runId,
+            error: safeError(error),
+          });
+      });
+  }, RUN_HEARTBEAT_MS);
+  heartbeat.unref?.();
   try {
     const sources = await listPlaybookSourceRows(db, args.playbookId);
+    const scope = args.reviewScope ?? "full";
     const prompt = reviewPrompt(
       content,
       documentText,
       args.reviewMode,
       args.instructions,
       sources,
+      scope,
     );
     const raw = sources.length
       ? await completeReviewWithSources({
@@ -1693,11 +1868,17 @@ export async function reviewWithPlaybook(args: {
           apiKeys,
         });
     const parsed = reviewSchema.parse(parseModelJson(raw));
-    const reviewed = normalizeFindings(
+    const normalized = normalizeFindings(
       content,
       documentText,
       parsed.findings,
+      { flagMissingRules: scope === "full" },
     );
+    // Held to the scope even if the model reports more.
+    const reviewed =
+      scope === "issues"
+        ? normalized.filter((finding) => ISSUE_STATUSES.has(finding.status))
+        : normalized;
     const { findings, version } =
       args.documentId && stored?.version
         ? await applyReviewEdits({
@@ -1735,6 +1916,7 @@ export async function reviewWithPlaybook(args: {
       editedVersionNumber: version?.number ?? null,
       editedDownloadUrl: version?.downloadUrl ?? null,
       reviewMode: args.reviewMode,
+      reviewScope: scope,
       status: "completed" as const,
       summary: parsed.summary,
       findings,
@@ -1756,6 +1938,8 @@ export async function reviewWithPlaybook(args: {
       .eq("id", runId)
       .eq("user_id", args.userId);
     throw error;
+  } finally {
+    clearInterval(heartbeat);
   }
 }
 
@@ -1889,12 +2073,14 @@ function publicRun(row: Record<string, unknown>) {
     reviewMode: (row.review_mode === "permissive" ? "permissive" : "strict") as
       | "permissive"
       | "strict",
-    status: String(row.status),
+    reviewScope: (row.review_scope === "issues" ? "issues" : "full") as
+      | "full"
+      | "issues",
+    ...runState(row),
     summary: row.summary ? String(row.summary) : null,
     findings: (Array.isArray(row.findings_json)
       ? row.findings_json
       : (parseJson(row.findings_json) ?? [])) as PlaybookFinding[],
-    error: row.error ? String(row.error) : null,
     startedAt: String(row.started_at),
     completedAt: row.completed_at ? String(row.completed_at) : null,
   };
@@ -1930,7 +2116,100 @@ export async function listAllPlaybookRuns(
 }
 
 /**
- * Where the Word file a playbook was imported from is stored, for anyone who
+ * A page of the caller's runs for the sidebar's History, newest first: only
+ * what a row shows. `before` is the `startedAt` of the last run already read.
+ */
+export async function listPlaybookRunHistory(
+  userId: string,
+  db: Db = createServerSupabase(),
+  options: {
+    workspace?: unknown;
+    email?: string | null;
+    limit?: number;
+    before?: string;
+  } = {},
+) {
+  const playbooks = await listPlaybooks(userId, db, options);
+  if (!playbooks.length) return [];
+  const names = new Map(
+    playbooks.map((playbook) => [playbook.id, playbook.name]),
+  );
+  let query = db
+    .from("playbook_runs")
+    .select(
+      "id, playbook_id, document_name, status, error, started_at, updated_at, completed_at",
+    )
+    .eq("user_id", userId)
+    .in("playbook_id", [...names.keys()]);
+  if (options.before) query = query.lt("started_at", options.before);
+  const { data, error } = await query
+    .order("started_at", { ascending: false })
+    .limit(Math.min(Math.max(options.limit ?? 25, 1), 100));
+  if (error) throw error;
+  return ((data ?? []) as Record<string, unknown>[]).map((row) => ({
+    id: String(row.id),
+    playbookId: String(row.playbook_id),
+    playbookName: names.get(String(row.playbook_id)) ?? "",
+    documentName: row.document_name ? String(row.document_name) : null,
+    ...runState(row),
+    startedAt: String(row.started_at),
+    completedAt: row.completed_at ? String(row.completed_at) : null,
+  }));
+}
+
+/**
+ * Deletes one of the caller's runs. A review still running is refused: it
+ * would write its findings to a run that no longer exists. Tracked changes it
+ * made stay on the document, which keeps its own versions.
+ */
+export async function deletePlaybookRun(
+  userId: string,
+  runId: string,
+  db: Db = createServerSupabase(),
+) {
+  const { data, error } = await db
+    .from("playbook_runs")
+    .select("id, status, error, started_at, updated_at")
+    .eq("id", runId)
+    .eq("user_id", userId)
+    .maybeSingle();
+  if (error) throw error;
+  if (!data) throw new PlaybookRequestError("Run not found.", 404);
+  if (runState(data as Record<string, unknown>).status === "running")
+    throw new PlaybookRequestError(
+      "This review is still running. Delete it once it has finished.",
+      409,
+    );
+  const deleted = await db
+    .from("playbook_runs")
+    .delete()
+    .eq("id", runId)
+    .eq("user_id", userId);
+  if (deleted.error) throw deleted.error;
+}
+
+/** Small status snapshots of the caller's own runs, for polling. */
+export async function playbookRunStatuses(
+  userId: string,
+  ids: string[],
+  db: Db = createServerSupabase(),
+) {
+  if (!ids.length) return [];
+  const { data, error } = await db
+    .from("playbook_runs")
+    .select("id, status, error, started_at, updated_at, completed_at")
+    .eq("user_id", userId)
+    .in("id", ids);
+  if (error) throw error;
+  return ((data ?? []) as Record<string, unknown>[]).map((row) => ({
+    id: String(row.id),
+    status: runState(row).status,
+    completedAt: row.completed_at ? String(row.completed_at) : null,
+  }));
+}
+
+/**
+ * Where the Word or PDF file a playbook was imported from is stored, for anyone who
  * can view the playbook. Null when it was written in the app instead.
  */
 export async function getPlaybookSource(

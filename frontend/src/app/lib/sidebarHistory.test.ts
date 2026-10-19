@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { Chat, TabularReview } from "@/app/components/shared/types";
+import type { PlaybookRunHistoryItem } from "./mikeApi";
 import { mergeSidebarHistory } from "./sidebarHistory";
 
 const chat = (id: string, day: number) => ({
@@ -43,5 +44,23 @@ describe("sidebar history", () => {
         expect(result.map(({ kind, item }) => `${kind}:${item.id}`)).toEqual([
             "chat:legacy", "chat:same-id", "review:same-id",
         ]);
+    });
+
+    it("places playbook runs by when they started, and buffers them like the other sources", () => {
+        const run = (id: string, day: number) => ({
+            id, playbookId: "pb", playbookName: "MSA", documentName: null, status: "completed",
+            error: null, startedAt: `2026-10-${String(day).padStart(2, "0")}T00:00:00Z`, completedAt: null,
+        }) as PlaybookRunHistoryItem;
+        const items = mergeSidebarHistory(
+            [chat("chat", 14)], [review("review", 12)], false, false,
+            [run("new-run", 15), run("old-run", 2)], true,
+        );
+        // More runs remain, so nothing older than the last run read is shown.
+        expect(items.map(({ kind, item }) => `${kind}:${item.id}`)).toEqual([
+            "playbookRun:new-run", "chat:chat", "review:review", "playbookRun:old-run",
+        ]);
+        expect(ids(mergeSidebarHistory(
+            [chat("chat", 14), chat("older-chat", 1)], [], false, false, [run("run", 5)], true,
+        ))).toEqual(["chat", "run"]);
     });
 });

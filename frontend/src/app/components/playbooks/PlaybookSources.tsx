@@ -41,7 +41,9 @@ import { PlaybookPanels } from "./PlaybookPanels";
 import {
   PLAYBOOK_PANE_EMPTY_CLASS,
   PLAYBOOK_PANE_HEADER_CLASS,
-  PLAYBOOK_PANE_LIST_CLASS,
+  PLAYBOOK_SIDE_HEADER_CLASS,
+  PLAYBOOK_SIDE_LIST_CLASS,
+  PLAYBOOK_SIDE_TITLE_CLASS,
 } from "./playbookPaneStyles";
 
 const IMPORTED_ID = "imported";
@@ -57,7 +59,7 @@ type ViewedSource = {
 };
 
 /**
- * The documents behind a playbook: the Word file it was imported from, and
+ * The documents behind a playbook: the Word or PDF file it was imported from, and
  * supplementary documents its rules can refer to. Reviews see a list of the
  * supplementary ones and read a document only when they need it.
  */
@@ -123,7 +125,7 @@ export function PlaybookSources({
     ? {
         id: IMPORTED_ID,
         filename: sourceFilename,
-        fileType: "docx",
+        fileType: /\.pdf$/i.test(sourceFilename) ? "pdf" : "docx",
         url: getPlaybookSourceUrl(playbookId),
       }
     : null;
@@ -229,8 +231,8 @@ export function PlaybookSources({
           aria-label="Reference documents"
           className={`flex min-h-0 min-w-0 flex-col ${EDITOR_SURFACE_CLASS}`}
         >
-          <div className={`flex items-center justify-between gap-2 ${PLAYBOOK_PANE_HEADER_CLASS}`}>
-            <h2 className="text-sm font-medium text-gray-900">References</h2>
+          <div className={`flex items-center justify-between gap-2 ${PLAYBOOK_SIDE_HEADER_CLASS}`}>
+            <h2 className={PLAYBOOK_SIDE_TITLE_CLASS}>References</h2>
             {canEdit && (
               <Dropdown>
                 <DropdownTrigger asChild>
@@ -256,8 +258,8 @@ export function PlaybookSources({
               </Dropdown>
             )}
           </div>
-          {/* One list: the Word file it was imported from, then the rest. */}
-          <div className={`max-h-64 min-h-0 overflow-y-auto @[48rem]:max-h-none @[48rem]:flex-1 ${PLAYBOOK_PANE_LIST_CLASS}`}>
+          {/* One list: the file it was imported from, then the rest. */}
+          <div className={`max-h-64 min-h-0 overflow-y-auto @[48rem]:max-h-none @[48rem]:flex-1 ${PLAYBOOK_SIDE_LIST_CLASS}`}>
             <div className="space-y-1">
               {imported && sourceButton(imported)}
               {supplementary === null ? (
@@ -272,7 +274,6 @@ export function PlaybookSources({
                       aria-hidden="true"
                       className="flex h-7 min-w-0 items-center gap-2 px-2 text-gray-400"
                     >
-                      <FileTypeIcon fileType={null} muted />
                       <span className="min-w-0 flex-1">
                         <SkeletonLine className={width} />
                       </span>
@@ -334,7 +335,7 @@ export function PlaybookSources({
           <div className={`flex items-center gap-2 ${PLAYBOOK_PANE_HEADER_CLASS}`}>
             <FileTypeIcon fileType={selected.filename} className="h-4 w-4" />
             <h2
-              className="min-w-0 truncate text-sm font-medium text-gray-900"
+              className={`min-w-0 truncate ${PLAYBOOK_SIDE_TITLE_CLASS}`}
               title={selected.filename}
             >
               {selected.filename}

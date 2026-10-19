@@ -10,7 +10,7 @@ const { getUserApiKeys, deleteFile, uploadFile } = vi.hoisted(() => ({
 vi.mock("../../user/user.service", () => ({ getUserApiKeys }));
 vi.mock("../../../lib/storage", () => ({ deleteFile, uploadFile }));
 
-import { importPlaybookFromDocx } from "../playbooks.operations";
+import { importPlaybookFromFile } from "../playbooks.operations";
 
 const MODEL = "claude-opus-5";
 
@@ -27,7 +27,6 @@ function compiled(name: string): string {
   return JSON.stringify({
     name,
     description: "",
-    globalGuidance: "",
     representedParty: "Customer",
     documentTypes: [],
     jurisdictions: [],
@@ -101,7 +100,6 @@ const EXISTING = {
   content_json: {
     name: "Commercial Playbook",
     description: "",
-    globalGuidance: "",
     representedParty: "Customer",
     documentTypes: [],
     jurisdictions: [],
@@ -144,7 +142,7 @@ describe("replacing a playbook from a Word file", () => {
   it("rewrites the existing content instead of adding a playbook", async () => {
     const { db, calls } = fakeDb(EXISTING);
 
-    await importPlaybookFromDocx({
+    await importPlaybookFromFile({
       userId: "u1",
       filename: "new.docx",
       buffer: await sourceDocx(),
@@ -174,7 +172,7 @@ describe("replacing a playbook from a Word file", () => {
   it("removes the superseded source file", async () => {
     const { db } = fakeDb(EXISTING);
 
-    await importPlaybookFromDocx({
+    await importPlaybookFromFile({
       userId: "u1",
       filename: "new.docx",
       buffer: await sourceDocx(),
@@ -199,7 +197,7 @@ describe("replacing a playbook from a Word file", () => {
   it("keeps the existing name when the caller sends none", async () => {
     const { db, calls } = fakeDb(EXISTING);
 
-    await importPlaybookFromDocx({
+    await importPlaybookFromFile({
       userId: "u1",
       filename: "new.docx",
       buffer: await sourceDocx(),
@@ -226,7 +224,7 @@ describe("replacing a playbook from a Word file", () => {
     const completeText = vi.fn();
 
     await expect(
-      importPlaybookFromDocx({
+      importPlaybookFromFile({
         userId: "u1",
         filename: "new.docx",
         buffer: await sourceDocx(),
@@ -244,7 +242,7 @@ describe("replacing a playbook from a Word file", () => {
   it("still creates a playbook when no playbookId is given", async () => {
     const { db, calls } = fakeDb(EXISTING);
 
-    await importPlaybookFromDocx({
+    await importPlaybookFromFile({
       userId: "u1",
       filename: "new.docx",
       buffer: await sourceDocx(),

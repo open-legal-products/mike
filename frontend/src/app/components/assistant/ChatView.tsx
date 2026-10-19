@@ -85,7 +85,9 @@ import {
 import { can, roleFrom } from "@/app/lib/permissions";
 import { AssistantChatHistoryMenu } from "./AssistantChatHistoryMenu";
 import { cn } from "@/app/lib/utils";
-import { userFacingApiError } from "@/app/lib/userFacingError";
+import { notifyError, userFacingApiError } from "@/app/lib/userFacingError";
+import { getPlaybook } from "@/app/lib/mikeApi";
+import { LINKED_PLAYBOOK_PARAM } from "@/app/lib/assistantPlaybookLink";
 
 interface Props {
     chatId?: string | null;
@@ -966,6 +968,34 @@ export function AssistantChatColumn({
         input.addExcerpt(incomingExcerpt.excerpt);
         onIncomingExcerptAdded?.();
     }, [incomingExcerpt, canWrite, chatLoading, onIncomingExcerptAdded]);
+
+    // "Use in assistant" on a playbook opens a new chat with `?playbook=`:
+    // attach it to the composer once, then drop it from the URL.
+    const linkedPlaybookHandled = useRef(false);
+    useEffect(() => {
+        const input = chatInputRef.current;
+        if (paneId !== "primary" || linkedPlaybookHandled.current) return;
+        if (!input || !canWrite) return;
+        const params = new URLSearchParams(window.location.search);
+        const playbookId = params.get(LINKED_PLAYBOOK_PARAM);
+        if (!playbookId) return;
+        linkedPlaybookHandled.current = true;
+        params.delete(LINKED_PLAYBOOK_PARAM);
+        const search = params.toString();
+        window.history.replaceState(
+            null,
+            "",
+            `${window.location.pathname}${search ? `?${search}` : ""}${window.location.hash}`,
+        );
+        getPlaybook(playbookId).then(
+            (playbook) =>
+                input.attachPlaybook({
+                    id: playbook.id,
+                    title: playbook.name || "Untitled playbook",
+                }),
+            (error) => notifyError(error, { action: "attach the playbook" }),
+        );
+    }, [paneId, canWrite, chatLoading]);
 
     // The panel keeps what it is handed, so hand it a stable way to reach
     // the latest handler: registering on every new handler would re-render
