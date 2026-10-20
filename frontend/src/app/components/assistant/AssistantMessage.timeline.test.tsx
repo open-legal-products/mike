@@ -25,6 +25,22 @@ const reasoning = (text: string): AssistantEvent => ({
 });
 
 describe("AssistantMessage timeline", () => {
+    it("places read-only text cards between surrounding prose, outside collapsed activity", () => {
+        render(<AssistantMessage events={[
+            { type: "content", text: "Here is your draft." },
+            reasoning("Preparing the wording."),
+            { type: "text_card", card_id: "card-1", title: "Email", text: "Dear Alex," },
+            { type: "content", text: "You can also use this version." },
+            { type: "text_card", card_id: "card-2", title: "Alternative", text: "Hello Alex," },
+            { type: "content", text: "Adjust the greeting." },
+        ]} />);
+        const ordered = [screen.getByText("Here is your draft."), screen.getByRole("region", { name: "Email" }), screen.getByText("You can also use this version."), screen.getByRole("region", { name: "Alternative" }), screen.getByText("Adjust the greeting.")];
+        ordered.forEach((element, index) => {
+            expect(element).toBeVisible();
+            if (index) expect(ordered[index - 1].compareDocumentPosition(element) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+        });
+        expect(screen.queryByRole("textbox")).toBeNull();
+    });
     beforeEach(() => {
         vi.stubGlobal("ResizeObserver", class {
             observe() {}

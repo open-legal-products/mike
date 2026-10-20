@@ -53,7 +53,7 @@ jobs:
               REACT_APP_WEB_APP_URL=https://app.example.com
               WORD_ADDIN_PUBLIC_URL=https://word.example.com
     steps:
-      - uses: actions/checkout@v7.0.1
+      - uses: actions/checkout@v7
 
       - uses: docker/setup-buildx-action@v4
 

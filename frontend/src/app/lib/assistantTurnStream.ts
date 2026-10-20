@@ -912,6 +912,23 @@ export async function consumeAssistantTurnStream(
           continue;
         }
 
+        if (data.type === "text_card") {
+          if (
+            typeof data.card_id === "string" &&
+            typeof data.title === "string" &&
+            typeof data.text === "string"
+          ) {
+            pushEvent({
+              type: "text_card",
+              card_id: data.card_id,
+              title: data.title,
+              text: data.text,
+            });
+            pushThinkingPlaceholder();
+          }
+          continue;
+        }
+
         if (data.type === "ask_inputs") {
           const eventId =
             typeof data.event_id === "string" ? data.event_id.trim() : "";

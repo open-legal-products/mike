@@ -45,6 +45,21 @@ afterEach(() => {
 });
 
 describe("consumeAssistantTurnStream", () => {
+  it("keeps text cards between prose segments and ignores malformed cards", async () => {
+    const turn = begin();
+    const card = { type: "text_card" as const, card_id: "card-1", title: "Draft", text: "First paragraph.\n\nSecond paragraph." };
+    await consumeAssistantTurnStream(sseResponse([
+      frame(1, { type: "content_delta", text: "Before." }),
+      frame(2, card),
+      frame(3, { type: "content_delta", text: "After." }),
+      frame(4, { type: "text_card", title: "Incomplete" }),
+      "data: [DONE]\n\n",
+    ]), { turn, sink: createTurnEventSink(turn, []), cursor: createTurnCursor("chat-a") });
+    expect(turn.turn.assistant.events).toEqual([
+      { type: "content", text: "Before." }, card, { type: "content", text: "After.", isStreaming: true },
+    ]);
+    turn.finish();
+  });
   it("tracks the chat, turn and last sequence number from the frames", async () => {
     const turn = begin();
     const sink = createTurnEventSink(turn, []);

@@ -28,6 +28,7 @@ export function connectorToolLabel(
 }
 
 export function toolCallLabel(name: string): string {
+    if (name === "create_text_card") return "Preparing text...";
     if (name === "ask_inputs") return "Asking for input...";
     if (name === "generate_docx") return "Creating document...";
     if (name === "generate_excel") return "Creating spreadsheet...";

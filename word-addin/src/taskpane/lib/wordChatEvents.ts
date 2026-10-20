@@ -3,6 +3,7 @@ import type {
   Message as SavedMessage,
   WordAssistantEvent,
   WordContentEvent,
+  WordTextCardEvent,
   WordDocumentReadEvent,
   WordErrorEvent,
   WordEditBlockEvent,
@@ -58,6 +59,17 @@ export function isWordContentEvent(
     event.type === "content" &&
     typeof event.text === "string" &&
     (event.isStreaming === undefined || typeof event.isStreaming === "boolean")
+  );
+}
+
+export function isWordTextCardEvent(
+  event: WordAssistantEvent,
+): event is WordTextCardEvent {
+  return (
+    event.type === "text_card" &&
+    typeof event.card_id === "string" &&
+    typeof event.title === "string" &&
+    typeof event.text === "string"
   );
 }
 
@@ -318,6 +330,11 @@ export function assistantContentForModel(
     });
   };
   for (const event of message.events) {
+    if (isWordTextCardEvent(event)) {
+      flushEdits();
+      chunks.push(`${event.title}\n${event.text}`);
+      continue;
+    }
     if (isWordContentEvent(event)) {
       flushEdits();
       chunks.push(event.text);
