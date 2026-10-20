@@ -62,7 +62,7 @@
     "@types/html-to-text": "9.0.4",
     "@types/node": "^26.6.5",
     "@types/supertest": "^7.2.1",
-    "@vitest/coverage-v8": "^5.0.3",
+    "@vitest/coverage-v8": "^5.0.5",
     "supertest": "^7.3.1",
     "tsx": "^4.23.15",
     "typescript": "^7.0.2",
