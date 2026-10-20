@@ -280,6 +280,9 @@ app.post(TOOL_RESULT_PATH, toolResultLimiter, express.json({ limit: "2mb" }));
 app.post("/projects/:projectId/chat", chatLimiter);
 app.post("/tabular-review/:reviewId/chat", chatLimiter);
 app.post("/tabular-review/:reviewId/generate", chatLimiter);
+// A playbook review is one large model call (or a tool loop when the playbook
+// has supplementary documents), so it shares the chat lane's budget.
+app.post("/playbooks/:playbookId/review", chatLimiter);
 app.post("/chat/create", chatCreateLimiter);
 app.post("/workflow-addons/:addonId/import", workflowImportLimiter);
 app.post(

@@ -8,6 +8,8 @@ export interface ToastAction {
     onClick: () => void | Promise<void>;
     /** Keep the toast open after the action runs. Default: dismiss. */
     keepOpen?: boolean;
+    /** A blue pill for an action that goes somewhere, such as "Open". */
+    tone?: "blue";
 }
 
 /**

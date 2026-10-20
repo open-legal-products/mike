@@ -25,6 +25,7 @@
 @source "../../../frontend/src/shared/ui/TextButtonUI.tsx";
 @source "../../../frontend/src/shared/ui/TextButtonUI.styles.ts";
 @source "../../../frontend/src/shared/ui/TextSlabUI.tsx";
+@source "../../../frontend/src/shared/ui/TextCardUI.tsx";
 @source "../../../frontend/src/shared/ui/ToggleSwitchUI.tsx";
 @source "../../../frontend/src/shared/ui/dropdown.tsx";
 @source "../../../frontend/src/shared/ui/CitationPillUI.tsx";

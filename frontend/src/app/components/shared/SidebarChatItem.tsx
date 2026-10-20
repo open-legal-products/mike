@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useRef } from "react";
+import { useState } from "react";
 import { useRouter } from "next/navigation";
 import {
     MessageSquare,
@@ -31,12 +31,10 @@ import {
     LIQUID_GLASS_SELECTED_CLASS,
     LIQUID_GLASS_HOVER_CLASS,
 } from "@/app/components/ui/liquid-surface";
-
-// Hover slide for titles too long for the row: paced by distance so a long
-// title glides at the same unhurried speed as a short one.
-const TITLE_SLIDE_MS_PER_PX = 25;
-const TITLE_SLIDE_MIN_MS = 800;
-const TITLE_SLIDE_BACK_MS = 600;
+import {
+    SIDEBAR_TITLE_SLIDE_CLASS,
+    useSidebarTitleSlide,
+} from "./useSidebarTitleSlide";
 
 interface Props {
     chat: Chat;
@@ -63,13 +61,9 @@ export function SidebarChatItem({
     const [renaming, setRenaming] = useState(false);
     const [shareOpen, setShareOpen] = useState(false);
     const [menuOpen, setMenuOpen] = useState(false);
-    const [titleSlide, setTitleSlide] = useState({
-        offset: 0,
-        duration: TITLE_SLIDE_BACK_MS,
-    });
     const [deleteError, setDeleteError] = useState<string | null>(null);
     const [renameError, setRenameError] = useState<string | null>(null);
-    const titleTextRef = useRef<HTMLSpanElement>(null);
+    const { titleRef, titleStyle, slideHandlers } = useSidebarTitleSlide();
     // Chat management belongs to owners; editors can still send messages.
     const role = roleFrom(chat);
     const canRename = can(role, "access.manage");
@@ -117,33 +111,6 @@ export function SidebarChatItem({
         }
     };
 
-    // Runs on hover and on keyboard focus, so a keyboard user can read a
-    // clipped title too. The title stays revealed until both have ended;
-    // focus from a click does not count, or the opened chat's row would stay
-    // slid after the pointer leaves.
-    const revealTitle = (button: HTMLButtonElement) => {
-        const text = titleTextRef.current;
-        if (!text) return;
-        const style = getComputedStyle(button);
-        const available =
-            button.clientWidth -
-            (parseFloat(style.paddingLeft) || 0) -
-            (parseFloat(style.paddingRight) || 0);
-        const overflow = Math.ceil(text.offsetWidth - available);
-        if (overflow <= 0) return;
-        setTitleSlide({
-            offset: overflow,
-            duration: Math.max(
-                TITLE_SLIDE_MIN_MS,
-                overflow * TITLE_SLIDE_MS_PER_PX,
-            ),
-        });
-    };
-
-    const resetTitle = () => {
-        setTitleSlide({ offset: 0, duration: TITLE_SLIDE_BACK_MS });
-    };
-
     return (
         <div
             className={cn(
@@ -178,17 +145,7 @@ export function SidebarChatItem({
                 <button
                     type="button"
                     onClick={onSelect}
-                    onMouseEnter={(e) => revealTitle(e.currentTarget)}
-                    onMouseLeave={(e) => {
-                        if (!e.currentTarget.matches(":focus-visible")) resetTitle();
-                    }}
-                    onFocus={(e) => {
-                        if (e.currentTarget.matches(":focus-visible"))
-                            revealTitle(e.currentTarget);
-                    }}
-                    onBlur={(e) => {
-                        if (!e.currentTarget.matches(":hover")) resetTitle();
-                    }}
+                    {...slideHandlers}
                     // The row owns the hover fill, so it draws the ring.
                     data-focus-fill
                     className={cn(
@@ -208,12 +165,9 @@ export function SidebarChatItem({
                     aria-label={rowLabel}
                 >
                     <span
-                        ref={titleTextRef}
-                        className="inline-block transition-transform ease-in-out motion-reduce:transition-none"
-                        style={{
-                            transform: `translateX(-${titleSlide.offset}px)`,
-                            transitionDuration: `${titleSlide.duration}ms`,
-                        }}
+                        ref={titleRef}
+                        className={SIDEBAR_TITLE_SLIDE_CLASS}
+                        style={titleStyle}
                     >
                         {projectName && (
                             <span className="text-gray-400 font-normal">{projectName}: </span>

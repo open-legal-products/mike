@@ -18,7 +18,6 @@ function content(name = "Commercial Playbook") {
   return {
     name,
     description: "Standard commercial positions",
-    globalGuidance: "Protect the customer.",
     representedParty: "Customer",
     documentTypes: ["MSA"],
     jurisdictions: ["New York"],

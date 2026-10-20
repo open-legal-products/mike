@@ -8,7 +8,13 @@ type WebSearchEvent = Extract<AssistantEvent, { type: "web_search" }>;
 type WebReadEvent = Extract<AssistantEvent, { type: "web_read" }>;
 
 function webAddress(url: string): { href: string | null; host: string } {
-    const parsed = URL.canParse(url) ? new URL(url) : null;
+    // URL.canParse is missing from Safari before 17.
+    let parsed: URL | null = null;
+    try {
+        parsed = new URL(url);
+    } catch {
+        parsed = null;
+    }
     if (parsed?.protocol === "http:" || parsed?.protocol === "https:") {
         return {
             href: parsed.href,

@@ -86,6 +86,11 @@ export type WordDocumentReadEvent = {
   key?: string;
 };
 
+export type WordTextCardEvent = Extract<
+  WireAssistantEvent,
+  { type: "text_card" }
+> & { key?: string };
+
 export type WordErrorEvent = Extract<WireAssistantEvent, { type: "error" }> & {
   key?: string;
 };
@@ -134,6 +139,7 @@ export type WordAssistantEvent =
   | WordThinkingEvent
   | WordReasoningEvent
   | WordContentEvent
+  | WordTextCardEvent
   | WordDocumentReadEvent
   | WordErrorEvent
   | WordEditReferenceEvent

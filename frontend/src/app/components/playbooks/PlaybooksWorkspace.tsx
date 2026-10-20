@@ -1,21 +1,24 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { useParams, useRouter } from "next/navigation";
+import { useParams, useRouter, useSearchParams } from "next/navigation";
 import { useQueryParamTab } from "@/app/hooks/useQueryParamTab";
 import {
   AlertCircle,
   Check,
-  Cloud,
-  FilePlus2,
+  ClipboardCheck,
   Loader2,
+  MessageSquare,
   MoreHorizontal,
+  PenLine,
+  Pencil,
   Play,
   Plus,
   RefreshCw,
   Trash2,
   Upload,
   Users,
+  WandSparkles,
 } from "lucide-react";
 import {
   PlaybookActionItems,
@@ -29,25 +32,30 @@ import {
   PlaybookToolbar,
   type PlaybookView,
 } from "@/app/components/playbooks/PlaybookToolbar";
-import { PlaybookOverview } from "@/app/components/playbooks/PlaybookOverview";
+import { NewPlaybookModal } from "@/app/components/playbooks/NewPlaybookModal";
+import { PlaybookDetailsModal } from "@/app/components/playbooks/PlaybookDetailsModal";
+import type { PlaybookDetails } from "@/app/components/playbooks/PlaybookDetailsFields";
 import { PlaybookPageSkeleton } from "@/app/components/playbooks/PlaybookPageSkeleton";
+import {
+  PlaybookNewRun,
+  type ReviewMode,
+} from "@/app/components/playbooks/PlaybookNewRun";
 import {
   PlaybookReviewDocuments,
   type ReviewDocument,
 } from "@/app/components/playbooks/PlaybookReviewDocuments";
 import { PlaybookRuns } from "@/app/components/playbooks/PlaybookRuns";
-import { PlaybookRunsTable } from "@/app/components/playbooks/PlaybookRunsTable";
+import {
+  PlaybookRunActionItems,
+  PlaybookRunsTable,
+  type PlaybookRunActionHandlers,
+} from "@/app/components/playbooks/PlaybookRunsTable";
 import {
   PlaybookSources,
   type PlaybookSourcesHandle,
 } from "@/app/components/playbooks/PlaybookSources";
 import { createPlaybookRule } from "@/app/components/playbooks/playbookRules";
-import {
-  PlaybookField,
-  PlaybookListField,
-} from "@/app/components/playbooks/PlaybookField";
 import { HeaderButtonUI } from "@/shared/ui/HeaderButtonsUI";
-import { ModalTextarea } from "@/app/components/modals/ModalTextarea";
 import { ConfirmPopup } from "@/app/components/popups/ConfirmPopup";
 import { describeError, notifyError } from "@/app/lib/userFacingError";
 import { PageHeader } from "@/app/components/shared/PageHeader";
@@ -55,7 +63,6 @@ import { Modal } from "@/app/components/modals/Modal";
 import { ModalFieldLabel } from "@/app/components/modals/ModalFieldLabel";
 import { ModalSelect } from "@/app/components/modals/ModalSelect";
 import { ModalTextInput } from "@/app/components/modals/ModalTextInput";
-import { PillButtonUI as PillButton } from "@/shared/ui/PillButtonUI";
 import {
   Dropdown,
   DropdownContent,
@@ -71,23 +78,37 @@ import {
   createPlaybook,
   deletePlaybook,
   getPlaybookConfiguration,
-  importPlaybook,
+  getPlaybook,
+  getPlaybookImport,
+  listRunningPlaybookImports,
+  startPlaybookImport,
   listPlaybooks,
   getPlaybookPeople,
   listPlaybookShares,
   sharePlaybook,
   revokePlaybookShare,
   reviewDocumentWithPlaybook,
+  deletePlaybookRun,
+  listAllPlaybookRuns,
+  type PlaybookRunListItem,
   uploadLibraryDocument,
   type Playbook,
+  type PlaybookImport,
   type PlaybookShare,
   type PlaybookContent,
   type PlaybookConfiguration,
+  type PlaybookReviewScope,
   type PlaybookRun,
 } from "@/app/lib/mikeApi";
 
 import { useWorkspace } from "@/app/contexts/WorkspaceContext";
+import { showToast } from "@/app/components/ui/toast";
 import { useWorkspaceIdentity } from "@/app/hooks/useWorkspaceIdentity";
+import { assistantPathWithPlaybook } from "@/app/lib/assistantPlaybookLink";
+import {
+  notifyPlaybookRunsChanged,
+  subscribePlaybookRunChanges,
+} from "@/app/lib/playbookRunActivity";
 import { usePlaybookAutosave } from "@/app/hooks/usePlaybookAutosave";
 import { TableToolbar } from "@/app/components/shared/TableToolbar";
 import { SelectionActionsMenu } from "@/app/components/shared/SelectionActionsMenu";
@@ -95,7 +116,34 @@ import { AddDocumentsModal } from "@/app/components/modals/AddDocumentsModal";
 import { AccessModal } from "@/app/components/modals/AccessModal";
 import { useAuth } from "@/app/contexts/AuthContext";
 import { userFacingApiError } from "@/app/lib/userFacingError";
-import type { Document } from "@/app/components/shared/types";
+import type {
+  ContentVisibility,
+  Document,
+} from "@/app/components/shared/types";
+
+const PLAYBOOK_IMPORT_FILE = /\.(docx|pdf)$/i;
+/** How often a compiling import is checked on. */
+const IMPORT_POLL_MS = 3000;
+
+function uploadDocument(file: File): ReviewDocument {
+  return {
+    id: JSON.stringify(["upload", file.name, file.size, file.lastModified]),
+    name: file.name,
+    kind: "upload",
+    file,
+    status: "ready",
+  };
+}
+
+function savedDocument(document: Document): ReviewDocument {
+  return {
+    id: JSON.stringify(["saved", document.id, document.current_version_id]),
+    name: document.filename,
+    kind: "saved",
+    document,
+    status: "ready",
+  };
+}
 
 function isWordDocument(filename: string) {
   return filename.toLowerCase().endsWith(".docx");
@@ -131,9 +179,6 @@ async function extractReviewText(file: File): Promise<string> {
 const LIST_TABS = ["all", "mine", "shared", "runs"] as const;
 type ListTab = (typeof LIST_TABS)[number];
 
-const DEFAULT_REVIEW_INSTRUCTIONS =
-  "Run a complete playbook review. Prioritize unacceptable and missing-required terms, quote exact contract language, and provide complete replacement language for issues that need revision.";
-
 /**
  * Rendered by the playbooks layout, so moving between the list and a
  * playbook keeps the loaded list and any pending autosave.
@@ -151,14 +196,22 @@ function PlaybooksWorkspace() {
     typeof params?.playbookId === "string" ? params.playbookId : null;
   const isOrganization = !!workspaceId && workspaceId !== "personal";
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
+  // The list's Runs tab: the caller's runs across the workspace's playbooks.
+  const [allRuns, setAllRuns] = useState<PlaybookRunListItem[] | null>(null);
+  const [allRunsError, setAllRunsError] = useState<string | null>(null);
+  const [allRunsVersion, setAllRunsVersion] = useState(0);
+  const [selectedRunIds, setSelectedRunIds] = useState<Set<string>>(new Set());
+  const [runDeleteTargets, setRunDeleteTargets] = useState<
+    PlaybookRunListItem[] | null
+  >(null);
   const { user } = useAuth();
   const [accessOpen, setAccessOpen] = useState(false);
   const [accessTargetId, setAccessTargetId] = useState<string | null>(null);
+  const [newOpen, setNewOpen] = useState(false);
+  const [detailsTargetId, setDetailsTargetId] = useState<string | null>(null);
   const [shares, setShares] = useState<PlaybookShare[]>([]);
   const [sharesError, setSharesError] = useState<string | null>(null);
   const [savedFilesOpen, setSavedFilesOpen] = useState(false);
-  const reviewFileRef = useRef<HTMLInputElement>(null);
-  const openingDocumentPicker = useRef(false);
   const apiKeys = useModelApiKeys();
   const ollamaModels = useOllamaModels();
   const configuredModelOptions = useMemo(
@@ -212,19 +265,38 @@ function PlaybooksWorkspace() {
   const [importOpen, setImportOpen] = useState(false);
   // Set when the Word file replaces an existing playbook's content.
   const [importTargetId, setImportTargetId] = useState<string | null>(null);
-  const [importFile, setImportFile] = useState<File | null>(null);
+  const [importSource, setImportSource] = useState<ReviewDocument | null>(null);
+  // The import dialog steps aside while its document picker is open.
+  const [importPickerOpen, setImportPickerOpen] = useState(false);
   const [importName, setImportName] = useState("");
   const [importError, setImportError] = useState<string | null>(null);
+  // Imports compiling on the server. They run apart from the page, so closing
+  // the dialog or leaving and coming back does not stop them.
+  const [imports, setImports] = useState<PlaybookImport[]>([]);
+  // The import the dialog's compiling screen is following, if any.
+  const [followedImportId, setFollowedImportId] = useState<string | null>(null);
   const [model, setModel] = useState("");
-  const [reviewOpen, setReviewOpen] = useState(false);
+  // The Runs tab shows the new-run form in place of a run's results.
+  const [newRunOpen, setNewRunOpen] = useState(false);
+  // "Run" from the table opens the form once that playbook is selected.
+  const newRunFor = useRef<string | null>(null);
+  // A link to a run (from History) opens it on the Runs tab.
+  const searchParams = useSearchParams();
+  const linkedRunId = routeId ? searchParams.get("run") : null;
+  const [seenLinkedRunId, setSeenLinkedRunId] = useState<string | null>(null);
+  if (linkedRunId !== seenLinkedRunId) {
+    setSeenLinkedRunId(linkedRunId);
+    if (linkedRunId) {
+      setFocusRunId(linkedRunId);
+      setNewRunOpen(false);
+    }
+  }
   const [reviewDocuments, setReviewDocuments] = useState<ReviewDocument[]>([]);
-  const [reviewInstructions, setReviewInstructions] = useState(
-    DEFAULT_REVIEW_INSTRUCTIONS,
-  );
+  // Optional: the review's own prompt already sets how it reviews.
+  const [reviewInstructions, setReviewInstructions] = useState("");
+  const [reviewScope, setReviewScope] = useState<PlaybookReviewScope>("full");
   const [reviewError, setReviewError] = useState<string | null>(null);
-  const [reviewMode, setReviewMode] = useState<"strict" | "permissive">(
-    "strict",
-  );
+  const [reviewMode, setReviewMode] = useState<ReviewMode>("strict");
   const [run, setRun] = useState<PlaybookRun | null>(null);
 
   const autosave = usePlaybookAutosave(
@@ -237,6 +309,8 @@ function PlaybooksWorkspace() {
   const selected = playbooks.find((item) => item.id === selectedId) ?? null;
   const accessPlaybook =
     playbooks.find((item) => item.id === accessTargetId) ?? null;
+  const detailsPlaybook =
+    playbooks.find((item) => item.id === detailsTargetId) ?? null;
   // A playbook being opened (by a link, a refresh, or from the table) shows a
   // playbook page while it loads, not the table. It follows the selection
   // rather than the URL, which still names the playbook just after Back.
@@ -300,16 +374,6 @@ function PlaybooksWorkspace() {
     autosave.schedule({ id: selected.id, content: next, access });
   }
 
-  function changeAccess(access: Pick<Playbook, "visibility">) {
-    if (!selected || !content || !canManageAccess) return;
-    setPlaybooks((items) =>
-      items.map((item) =>
-        item.id === selected.id ? { ...item, ...access } : item,
-      ),
-    );
-    changeContent(content, access);
-  }
-
   /**
    * Re-read the grants after a change the server accepted, and say so when
    * the read fails rather than show the roles as they were before.
@@ -362,6 +426,99 @@ function PlaybooksWorkspace() {
     setSelectedRuleId(rule.id);
   }
 
+  /** Shows the new-run form on the Runs tab. */
+  function startNewRun() {
+    if (busy) return;
+    setReviewError(null);
+    setNewRunOpen(true);
+    setPlaybookView("runs");
+  }
+
+  /**
+   * Opens a new assistant chat with this playbook attached, after saving
+   * pending edits: the assistant reads the playbook as stored.
+   */
+  async function openInAssistant() {
+    if (!selected || busy || !(await autosave.flush())) return;
+    router.push(assistantPathWithPlaybook(selected.id));
+  }
+
+  const showingRunList = !routeId && tab === "runs";
+  useEffect(() => {
+    if (!showingRunList) return;
+    let current = true;
+    listAllPlaybookRuns(workspaceId).then(
+      (items) => {
+        if (!current) return;
+        setAllRuns(items);
+        setAllRunsError(null);
+      },
+      (err) => {
+        if (!current) return;
+        setAllRunsError(
+          describeError(err, { action: "load the runs" }).message,
+        );
+        setAllRuns([]);
+      },
+    );
+    return () => {
+      current = false;
+    };
+  }, [showingRunList, workspaceId, allRunsVersion]);
+  useEffect(
+    () =>
+      subscribePlaybookRunChanges(() =>
+        setAllRunsVersion((count) => count + 1),
+      ),
+    [],
+  );
+  const checkedRuns = (allRuns ?? []).filter((run) =>
+    selectedRunIds.has(run.id),
+  );
+
+  const runActions: PlaybookRunActionHandlers = {
+    onOpen: (run) => {
+      setSelectedRunIds(new Set());
+      setFocusRunId(run.id);
+      openPlaybook(run.playbookId, { tab: "runs" });
+    },
+    onOpenPlaybook: (run) => {
+      setSelectedRunIds(new Set());
+      openPlaybook(run.playbookId);
+    },
+    onDelete: (runs) => {
+      if (!busy && runs.length) setRunDeleteTargets(runs);
+    },
+  };
+
+  async function removeRuns() {
+    const targets = runDeleteTargets ?? [];
+    if (!targets.length) return;
+    setBusy("delete-runs");
+    try {
+      for (const target of targets) {
+        await deletePlaybookRun(target.id);
+        // A retry after a partial failure covers only the runs left.
+        setRunDeleteTargets(
+          (current) => current?.filter((item) => item.id !== target.id) ?? null,
+        );
+        setAllRuns((items) =>
+          (items ?? []).filter((item) => item.id !== target.id),
+        );
+        setSelectedRunIds(
+          (ids) => new Set([...ids].filter((id) => id !== target.id)),
+        );
+      }
+      setRunDeleteTargets(null);
+    } catch (err) {
+      notifyError(err, { action: "delete the run" });
+    } finally {
+      // History drops what was deleted, including on a partial failure.
+      notifyPlaybookRunsChanged();
+      setBusy(null);
+    }
+  }
+
   async function backToList() {
     if (busy || !(await autosave.flush())) return;
     setDeleteOpen(false);
@@ -378,12 +535,15 @@ function PlaybooksWorkspace() {
     setLoading(true);
     setError(null);
     try {
-      const [items, configuration] = await Promise.all([
+      const [items, configuration, running] = await Promise.all([
         listPlaybooks(workspaceId),
         getPlaybookConfiguration(workspaceId),
+        // Following an import is a convenience; the list loads without it.
+        listRunningPlaybookImports(workspaceId).catch(() => []),
       ]);
       setPlaybooks(items);
       setConfiguration(configuration);
+      setImports(running);
       setSelectedId((current) =>
         current && items.some((item) => item.id === current) ? current : null,
       );
@@ -416,6 +576,8 @@ function PlaybooksWorkspace() {
     setRun(null);
     autosave.resetStatus();
     setReviewDocuments([]);
+    setNewRunOpen(!!selectedId && newRunFor.current === selectedId);
+    newRunFor.current = null;
     if (!selected) {
       setContent(null);
       setSelectedRuleId(null);
@@ -438,55 +600,77 @@ function PlaybooksWorkspace() {
 
   function openImport(targetId: string | null) {
     setImportTargetId(targetId);
-    setImportFile(null);
+    setImportSource(null);
     setImportName("");
     setImportError(null);
     setImportOpen(true);
   }
 
-  async function startBlank() {
+  async function createFromDetails(
+    details: PlaybookDetails,
+    visibility: ContentVisibility,
+  ): Promise<boolean> {
     setBusy("create");
     setError(null);
     try {
-      const created = await createPlaybook(undefined, workspaceId);
+      const created = await createPlaybook(
+        { ...details, visibility },
+        workspaceId,
+      );
       setPlaybooks((current) => [created, ...current]);
-      openPlaybook(created.id, { tab: "overview" });
+      setNewOpen(false);
+      openPlaybook(created.id);
+      return true;
     } catch (err) {
       notifyError(err, { action: "create the playbook" });
+      return false;
     } finally {
       setBusy(null);
     }
   }
 
+  /**
+   * Save the details dialog through the autosave queue, so it cannot race a
+   * rule edit still waiting to be written.
+   */
+  function saveDetails(
+    target: Playbook,
+    details: PlaybookDetails,
+    visibility: ContentVisibility,
+  ): Promise<boolean> {
+    if (!target.canEdit) return Promise.resolve(false);
+    const open = target.id === selected?.id ? content : null;
+    const next = { ...(open ?? target.content), ...details };
+    if (open) setContent(next);
+    autosave.schedule({
+      id: target.id,
+      content: next,
+      // Only an owner changes who can open it.
+      access: {
+        visibility: target.canManageAccess ? visibility : target.visibility,
+      },
+    });
+    return autosave.flush();
+  }
+
   async function doImport() {
-    if (!importFile) return;
+    if (!importSource) return;
     setBusy("import");
     setError(null);
     setImportError(null);
     try {
       if (!(await autosave.flush())) return;
-      const saved = await importPlaybook(
-        importFile,
+      const started = await startPlaybookImport(
+        importSource.kind === "upload"
+          ? importSource.file
+          : { documentId: importSource.document.id },
         model,
         importName,
         importTargetId ?? undefined,
         workspaceId,
       );
-      setPlaybooks((current) =>
-        importTargetId
-          ? current.map((item) => (item.id === saved.id ? saved : item))
-          : [saved, ...current],
-      );
-      openPlaybook(saved.id);
-      // Replacing the selected playbook does not change selectedId, so the
-      // selection effect will not run. Load the rewritten content here.
-      setContent(structuredClone(saved.content));
-      setEditorRevision((current) => current + 1);
-      setSelectedRuleId(null);
-      setImportOpen(false);
-      setImportFile(null);
-      setImportName("");
-      setImportTargetId(null);
+      setImports((current) => [started, ...current]);
+      setFollowedImportId(started.id);
     } catch (err) {
       setImportError(
         describeError(err, { action: "import the playbook" }).message,
@@ -495,6 +679,110 @@ function PlaybooksWorkspace() {
       setBusy(null);
     }
   }
+
+  function closeImport() {
+    setImportOpen(false);
+    setImportError(null);
+    setImportTargetId(null);
+    setImportSource(null);
+    setImportName("");
+    // Closing while compiling detaches: the import carries on and a notice
+    // says when it is ready.
+    setFollowedImportId(null);
+  }
+
+  /** Shows a finished import's playbook in place of what was loaded. */
+  function showImported(saved: Playbook) {
+    setPlaybooks((current) =>
+      current.some((item) => item.id === saved.id)
+        ? current.map((item) => (item.id === saved.id ? saved : item))
+        : [saved, ...current],
+    );
+    // Replacing the open playbook does not change selectedId, so the
+    // selection effect will not run. Load the rewritten content here.
+    if (saved.id === selectedId) {
+      setContent(structuredClone(saved.content));
+      setEditorRevision((current) => current + 1);
+      setSelectedRuleId(null);
+    }
+  }
+
+  // The latest handlers for the poll below, which outlives renders.
+  const importFinished = useRef<(attempt: PlaybookImport) => Promise<void>>(
+    async () => undefined,
+  );
+  importFinished.current = async (attempt) => {
+    const followed = attempt.id === followedImportId;
+    if (attempt.status === "failed") {
+      const message =
+        attempt.error ??
+        "The playbook could not be imported. Please try again.";
+      if (followed) {
+        // Back to the form, with the chosen file still there to retry.
+        setFollowedImportId(null);
+        setImportError(message);
+      } else {
+        showToast({
+          tone: "error",
+          title: `${attempt.name || attempt.filename} wasn’t imported`,
+          message,
+        });
+      }
+      return;
+    }
+    if (!attempt.playbookId) return;
+    let saved: Playbook;
+    try {
+      saved = await getPlaybook(attempt.playbookId);
+    } catch (err) {
+      notifyError(err, { action: "open the imported playbook" });
+      if (followed) closeImport();
+      return;
+    }
+    showImported(saved);
+    if (followed) {
+      closeImport();
+      openPlaybook(saved.id);
+      return;
+    }
+    showToast({
+      tone: "success",
+      title: "New playbook ready",
+      message: `${saved.name} has been compiled. Open to view.`,
+      durationMs: 10_000,
+      actions: [
+        { label: "Open", tone: "blue", onClick: () => openPlaybook(saved.id) },
+      ],
+    });
+  };
+
+  const compiling = busy === "import" || followedImportId !== null;
+  // Each import is reported once, however many polls see it finish.
+  const finishedImports = useRef(new Set<string>());
+  const importIds = imports.map((attempt) => attempt.id).join(",");
+  useEffect(() => {
+    if (!importIds) return;
+    let stopped = false;
+    const timer = window.setInterval(() => {
+      for (const id of importIds.split(",")) {
+        void getPlaybookImport(id)
+          .then(async (attempt) => {
+            if (stopped || attempt.status === "running") return;
+            if (finishedImports.current.has(id)) return;
+            finishedImports.current.add(id);
+            setImports((current) => current.filter((item) => item.id !== id));
+            await importFinished.current(attempt);
+          })
+          .catch(() => {
+            // A missed poll is retried on the next tick.
+          });
+      }
+    }, IMPORT_POLL_MS);
+    return () => {
+      stopped = true;
+      window.clearInterval(timer);
+    };
+  }, [importIds]);
 
   function requestDelete(targetId?: string) {
     const targets = targetId
@@ -519,16 +807,15 @@ function PlaybooksWorkspace() {
       openPlaybook(id);
     },
     onDetails: (id) => {
-      setSelectedIds(new Set());
-      setFocusRunId(null);
-      openPlaybook(id, { tab: "overview" });
+      if (!busy) setDetailsTargetId(id);
     },
     onRun: (id) => {
       setSelectedIds(new Set());
       setFocusRunId(null);
       setReviewError(null);
-      openPlaybook(id);
-      setReviewOpen(true);
+      newRunFor.current = id;
+      openPlaybook(id, { tab: "runs" });
+      if (id === selectedId) setNewRunOpen(true);
     },
     onPeople: openAccess,
     onDelete: requestDelete,
@@ -587,15 +874,16 @@ function PlaybooksWorkspace() {
   }
 
   function addReviewFiles(files: File[]) {
-    addReviewDocuments(
-      files.map((file) => ({
-        id: JSON.stringify(["upload", file.name, file.size, file.lastModified]),
-        name: file.name,
-        kind: "upload",
-        file,
-        status: "ready",
-      })),
+    addReviewDocuments(files.map(uploadDocument));
+  }
+
+  /** A playbook compiles from one Word or PDF file; a new pick replaces it. */
+  function chooseImportSource(candidates: ReviewDocument[]) {
+    const supported = candidates.find((item) =>
+      PLAYBOOK_IMPORT_FILE.test(item.name),
     );
+    if (supported) setImportSource(supported);
+    setImportError(supported ? null : "Choose a Word (.docx) or PDF playbook.");
   }
 
   async function review() {
@@ -650,8 +938,11 @@ function PlaybooksWorkspace() {
             instructions: reviewInstructions,
             model,
             reviewMode,
+            reviewScope,
           });
           setRun(result);
+          // History shows it running while it runs on the server.
+          notifyPlaybookRunsChanged();
           setReviewDocuments((items) =>
             items.map((document) =>
               document.id === item.id
@@ -675,7 +966,7 @@ function PlaybooksWorkspace() {
       }
       if (!failed) {
         setReviewDocuments([]);
-        setReviewOpen(false);
+        setNewRunOpen(false);
         setPlaybookView("runs");
       }
     } finally {
@@ -751,7 +1042,7 @@ function PlaybooksWorkspace() {
                             <HeaderButtonUI
                               iconOnly
                               aria-label="Playbook actions"
-                              disabled={!!busy || !canEdit}
+                              disabled={!!busy}
                             >
                               <MoreHorizontal
                                 aria-hidden="true"
@@ -761,14 +1052,22 @@ function PlaybooksWorkspace() {
                           </DropdownTrigger>
                           <DropdownContent align="end" className="w-52">
                             <DropdownItem
-                              onSelect={() => openImport(selected.id)}
+                              onSelect={() => setDetailsTargetId(selected.id)}
                             >
-                              <RefreshCw
-                                aria-hidden="true"
-                                className="h-4 w-4"
-                              />
-                              Replace from Word
+                              <Pencil aria-hidden="true" className="h-4 w-4" />
+                              {canEdit ? "Edit details" : "View details"}
                             </DropdownItem>
+                            {canEdit && (
+                              <DropdownItem
+                                onSelect={() => openImport(selected.id)}
+                              >
+                                <RefreshCw
+                                  aria-hidden="true"
+                                  className="h-4 w-4"
+                                />
+                                Replace from file
+                              </DropdownItem>
+                            )}
                             {canManageAccess && (
                               <DropdownItem
                                 variant="destructive"
@@ -788,10 +1087,38 @@ function PlaybooksWorkspace() {
                   ],
                   [
                     {
-                      icon: <Play aria-hidden="true" className="h-3.5 w-3.5" />,
-                      label: "Run",
-                      disabled: !!busy,
-                      onClick: () => setReviewOpen(true),
+                      type: "custom",
+                      render: (
+                        <Dropdown>
+                          <DropdownTrigger asChild>
+                            <HeaderButtonUI disabled={!!busy}>
+                              <Play
+                                aria-hidden="true"
+                                className="h-3.5 w-3.5"
+                              />
+                              Use
+                            </HeaderButtonUI>
+                          </DropdownTrigger>
+                          <DropdownContent align="end" className="w-52">
+                            <DropdownItem onSelect={startNewRun}>
+                              <ClipboardCheck
+                                aria-hidden="true"
+                                className="h-4 w-4"
+                              />
+                              Run playbook
+                            </DropdownItem>
+                            <DropdownItem
+                              onSelect={() => void openInAssistant()}
+                            >
+                              <MessageSquare
+                                aria-hidden="true"
+                                className="h-4 w-4"
+                              />
+                              Use in assistant
+                            </DropdownItem>
+                          </DropdownContent>
+                        </Dropdown>
+                      ),
                     },
                   ],
                 ]
@@ -810,7 +1137,7 @@ function PlaybooksWorkspace() {
                         <NewPlaybookMenu
                           disabled={loading || !!busy}
                           onImport={() => openImport(null)}
-                          onBlank={() => void startBlank()}
+                          onBlank={() => setNewOpen(true)}
                         />
                       ),
                     },
@@ -829,108 +1156,49 @@ function PlaybooksWorkspace() {
             onViewChange={setPlaybookView}
             onAddRule={addRule}
             onUpload={() => sourcesRef.current?.upload()}
+            onNewRun={startNewRun}
           />
-          {playbookView === "overview" ? (
-            <PlaybookOverview
-              playbook={selected}
-              ruleCount={
-                (content.rules?.length ?? 0) +
-                content.topics.reduce(
-                  (sum, topic) => sum + topic.rules.length,
-                  0,
-                )
-              }
-              workspaceName={activeOrganization?.name ?? null}
-            >
-              <fieldset
-                disabled={!canEdit || !!busy}
-                className="grid min-w-0 gap-4 @[32rem]:grid-cols-2"
-              >
-                <legend className="sr-only">Playbook details</legend>
-                <PlaybookField
-                  label="Playbook name"
-                  value={content.name}
-                  onChange={(name) => changeContent({ ...content, name })}
-                />
-                <PlaybookField
-                  label="Represented party"
-                  value={content.representedParty}
-                  onChange={(representedParty) =>
-                    changeContent({ ...content, representedParty })
-                  }
-                />
-                <PlaybookListField
-                  label="Document types"
-                  value={content.documentTypes}
-                  placeholder="NDA, MSA"
-                  onChange={(documentTypes) =>
-                    changeContent({ ...content, documentTypes })
-                  }
-                />
-                <PlaybookListField
-                  label="Jurisdictions"
-                  value={content.jurisdictions}
-                  placeholder="England and Wales, New York"
-                  onChange={(jurisdictions) =>
-                    changeContent({ ...content, jurisdictions })
-                  }
-                />
-                <div className="@[32rem]:col-span-2">
-                  <PlaybookField
-                    label="Description"
-                    value={content.description}
-                    onChange={(description) =>
-                      changeContent({ ...content, description })
-                    }
-                    multiline
-                  />
-                </div>
-                <div className="@[32rem]:col-span-2">
-                  <PlaybookField
-                    label="Global guidance"
-                    value={content.globalGuidance}
-                    onChange={(globalGuidance) =>
-                      changeContent({ ...content, globalGuidance })
-                    }
-                    multiline
-                  />
-                </div>
-              </fieldset>
-              {isOrganization && (
-                <div>
-                  <ModalFieldLabel htmlFor="playbook-visibility">
-                    Access
-                  </ModalFieldLabel>
-                  <ModalSelect
-                    id="playbook-visibility"
-                    variant="flat"
-                    value={selected.visibility ?? "private"}
-                    disabled={!canManageAccess || !!busy}
-                    options={[
-                      { value: "private", label: "Private" },
-                      { value: "organization", label: "Public" },
-                    ]}
-                    onChange={(visibility) =>
-                      changeAccess({
-                        visibility: visibility as Playbook["visibility"],
-                      })
-                    }
-                  />
-                  <p className="mt-2 text-xs text-gray-500">
-                    Members can view and run a public playbook. Choose who can
-                    edit it from People.
-                  </p>
-                </div>
-              )}
-            </PlaybookOverview>
-          ) : playbookView === "runs" ? (
+          {playbookView === "runs" ? (
             <PlaybookRuns
               key={selected.id}
               playbookId={selected.id}
               latestRun={run}
               initialRunId={focusRunId}
               canRun={!busy}
-              onRun={() => setReviewOpen(true)}
+              composing={newRunOpen}
+              onNewRun={startNewRun}
+              onCloseNewRun={() => setNewRunOpen(false)}
+              newRun={
+                <PlaybookNewRun
+                  documents={reviewDocuments}
+                  onAddFiles={addReviewFiles}
+                  onRemoveDocument={(id) =>
+                    setReviewDocuments((items) =>
+                      items.filter((item) => item.id !== id),
+                    )
+                  }
+                  onAddDocuments={() => setSavedFilesOpen(true)}
+                  instructions={reviewInstructions}
+                  onInstructionsChange={setReviewInstructions}
+                  model={model}
+                  onModelChange={(value) => {
+                    setModel(value);
+                    setReviewError(null);
+                  }}
+                  mode={reviewMode}
+                  onModeChange={setReviewMode}
+                  scope={reviewScope}
+                  onScopeChange={setReviewScope}
+                  error={reviewError}
+                  reviewing={busy === "review"}
+                  disabled={!!busy}
+                  onStart={() => void review()}
+                  onCancel={() => {
+                    setNewRunOpen(false);
+                    setReviewError(null);
+                  }}
+                />
+              }
             />
           ) : playbookView === "references" ? (
             <PlaybookSources
@@ -974,10 +1242,25 @@ function PlaybooksWorkspace() {
             onChange={(next) => {
               setTab(next as ListTab);
               setSelectedIds(new Set());
+              setSelectedRunIds(new Set());
             }}
             actions={
               // One "Actions" menu for the selection, as on other tables.
-              checkedPlaybooks.length > 0 && tab !== "runs" ? (
+              tab === "runs" ? (
+                checkedRuns.length > 0 ? (
+                  <SelectionActionsMenu
+                    renderItems={(close) => (
+                      <PlaybookRunActionItems
+                        {...runActions}
+                        runs={checkedRuns}
+                        disabled={!!busy}
+                        onActionChosen={close}
+                        onDeselect={() => setSelectedRunIds(new Set())}
+                      />
+                    )}
+                  />
+                ) : undefined
+              ) : checkedPlaybooks.length > 0 ? (
                 <SelectionActionsMenu
                   renderItems={(close) => (
                     <PlaybookActionItems
@@ -994,13 +1277,18 @@ function PlaybooksWorkspace() {
           />
           {tab === "runs" ? (
             <PlaybookRunsTable
-              workspaceId={workspaceId}
+              runs={allRuns}
+              error={allRunsError}
+              onRetry={() => {
+                setAllRuns(null);
+                setAllRunsError(null);
+                setAllRunsVersion((count) => count + 1);
+              }}
               search={search}
               disabled={!!busy}
-              onOpen={(item) => {
-                setFocusRunId(item.id);
-                openPlaybook(item.playbookId, { tab: "runs" });
-              }}
+              selectedIds={selectedRunIds}
+              onSelect={setSelectedRunIds}
+              {...runActions}
             />
           ) : (
             <PlaybookTable
@@ -1025,10 +1313,45 @@ function PlaybooksWorkspace() {
               {...tableActions}
               onRetry={() => void load()}
               onImport={() => openImport(null)}
-              onCreate={() => void startBlank()}
+              onCreate={() => setNewOpen(true)}
+              // Imports compiling on the server show as loading rows.
+              compiling={imports.filter((attempt) =>
+                `${attempt.name ?? ""} ${attempt.filename}`
+                  .toLowerCase()
+                  .includes(search.trim().toLowerCase()),
+              )}
+              showNewImports={tab === "all" || tab === "mine"}
             />
           )}
         </>
+      )}
+      <NewPlaybookModal
+        open={newOpen}
+        organizationName={
+          isOrganization ? (activeOrganization?.name ?? "") : null
+        }
+        onClose={() => setNewOpen(false)}
+        onCreate={createFromDetails}
+      />
+      {detailsPlaybook && (
+        <PlaybookDetailsModal
+          open
+          playbook={detailsPlaybook}
+          content={
+            detailsPlaybook.id === selected?.id && content
+              ? content
+              : detailsPlaybook.content
+          }
+          workspaceName={activeOrganization?.name ?? null}
+          onClose={() => setDetailsTargetId(null)}
+          onSave={(details, visibility) =>
+            saveDetails(detailsPlaybook, details, visibility)
+          }
+          onPeople={() => {
+            setDetailsTargetId(null);
+            openAccess(detailsPlaybook);
+          }}
+        />
       )}
       {accessPlaybook && accessOpen && (
         <AccessModal
@@ -1076,23 +1399,42 @@ function PlaybooksWorkspace() {
       <AddDocumentsModal
         open={savedFilesOpen}
         onClose={() => setSavedFilesOpen(false)}
-        breadcrumb={["Playbooks", "Saved files"]}
+        breadcrumb={["Playbooks", "Add documents"]}
         uploadStateId="playbook-review"
         onSelect={(documents) => {
           setSavedFilesOpen(false);
-          addReviewDocuments(
-            documents.map((document: Document) => ({
-              id: JSON.stringify([
-                "saved",
-                document.id,
-                document.current_version_id,
-              ]),
-              name: document.filename,
-              kind: "saved",
-              document,
-              status: "ready",
-            })),
-          );
+          addReviewDocuments(documents.map(savedDocument));
+        }}
+      />
+      <AddDocumentsModal
+        open={importPickerOpen}
+        onClose={() => setImportPickerOpen(false)}
+        breadcrumb={[
+          "Playbooks",
+          importTargetId ? "Replace from file" : "Import playbook",
+          "Add document",
+        ]}
+        uploadStateId="playbook-import"
+        onSelect={(documents) => {
+          setImportPickerOpen(false);
+          if (documents.length)
+            chooseImportSource(documents.map(savedDocument));
+        }}
+      />
+      <ConfirmPopup
+        open={!!runDeleteTargets}
+        title={runDeleteTargets?.length === 1 ? "Delete run?" : "Delete runs?"}
+        message={
+          runDeleteTargets?.length === 1
+            ? `The run of “${runDeleteTargets[0].documentName || "Untitled document"}” and its findings will be deleted. Tracked changes it made stay on the document.`
+            : `${runDeleteTargets?.length ?? 0} selected runs and their findings will be deleted. Tracked changes they made stay on their documents.`
+        }
+        confirmLabel="Delete"
+        confirmVariant="danger"
+        confirmStatus={busy === "delete-runs" ? "loading" : "idle"}
+        onConfirm={() => void removeRuns()}
+        onCancel={() => {
+          if (!busy) setRunDeleteTargets(null);
         }}
       />
       <ConfirmPopup
@@ -1117,338 +1459,132 @@ function PlaybooksWorkspace() {
         }}
       />
       <Modal
-        open={importOpen}
+        open={importOpen && !importPickerOpen}
         onClose={() => {
-          if (busy !== "import") {
-            setImportOpen(false);
-            setImportError(null);
-            setImportTargetId(null);
-          }
+          if (busy !== "import") closeImport();
         }}
         size="sm"
+        className="h-auto max-h-[calc(100vh-2rem)]"
         breadcrumbs={[
           "Playbooks",
-          importTargetId ? "Replace from Word" : "Import Word playbook",
+          importTargetId ? "Replace from file" : "Import playbook",
         ]}
-        footerStatus={
-          busy === "import" ? (
-            <span className="text-xs text-gray-500">
-              Long files can take several minutes
-            </span>
-          ) : null
-        }
-        primaryAction={{
-          label:
-            busy === "import"
-              ? "Compiling…"
-              : importTargetId
-                ? "Replace and compile"
-                : "Import and compile",
-          icon:
-            busy === "import" ? (
-              <Loader2 className="h-4 w-4 animate-spin" />
-            ) : (
-              <Upload className="h-4 w-4" />
-            ),
-          variant: "blue",
-          disabled: !importFile || !model || !!busy,
-          onClick: () => void doImport(),
-        }}
-        cancelAction={{
-          label: "Cancel",
-          onClick: () => {
-            setImportOpen(false);
-            setImportError(null);
-            setImportTargetId(null);
-          },
-          disabled: busy === "import",
-        }}
-      >
-        <div
-          data-modal-scroll="vertical"
-          className="space-y-4 overflow-y-auto pb-4"
-        >
-          <p className="text-sm text-gray-600">
-            {importTargetId
-              ? "The imported concepts, positions, and sample clauses replace the current rules. Completed reviews keep the rules they used."
-              : "Import concepts, positions, and sample clauses, then refine the rules in the editor. Changes save automatically."}
-          </p>
-          {busy === "import" && (
-            <div
-              role="status"
-              className="flex items-start gap-2 text-sm text-gray-600"
-            >
-              <Loader2 className="mt-0.5 h-4 w-4 shrink-0 animate-spin" />
-              <span>
-                Compiling your playbook. Keep this window open until the rules
-                are ready.
-              </span>
-            </div>
-          )}
-          {importError && (
-            <div
-              role="alert"
-              className="flex items-start gap-2 text-sm text-red-600"
-            >
-              <AlertCircle className="mt-0.5 h-4 w-4 shrink-0" />
-              <span>{importError}</span>
-            </div>
-          )}
-          {!importTargetId && (
-            <div>
-              <ModalFieldLabel htmlFor="playbook-import-name">
-                Playbook name (optional)
-              </ModalFieldLabel>
-              <ModalTextInput
-                id="playbook-import-name"
-                value={importName}
-                onChange={(event) => setImportName(event.target.value)}
-              />
-            </div>
-          )}
-          <div>
-            <ModalFieldLabel htmlFor="playbook-import-file">
-              Word playbook
-            </ModalFieldLabel>
-            <input
-              id="playbook-import-file"
-              type="file"
-              accept=".docx"
-              onChange={(event) => {
-                setImportFile(event.target.files?.[0] ?? null);
-                setImportError(null);
-              }}
-              className="block w-full text-sm"
-            />
-          </div>
-          <div>
-            <ModalFieldLabel htmlFor="playbook-import-model">
-              Compilation model
-            </ModalFieldLabel>
-            {models.length > 0 ? (
-              <ModalSelect
-                id="playbook-import-model"
-                value={model}
-                onChange={(value) => {
-                  setModel(value);
-                  setImportError(null);
-                }}
-                options={models}
-                menuClassName="max-h-64"
-              />
-            ) : (
-              <p className="text-sm text-amber-700">
-                No compilation model is available.{" "}
-                <a href="/account/api-keys" className="underline">
-                  Configure an API key
-                </a>{" "}
-                or enable a local model.
-              </p>
-            )}
-          </div>
-        </div>
-      </Modal>
-      <Modal
-        open={reviewOpen}
-        onClose={() => {
-          if (busy !== "review") {
-            setReviewOpen(false);
-            setReviewError(null);
-          }
-        }}
-        size="lg"
-        className="h-[min(720px,calc(100dvh-2rem))] [&_footer]:flex-wrap [&_footer>div:last-child]:ml-auto [&_footer_button]:whitespace-nowrap"
-        breadcrumbs={["Playbooks", "Run playbook"]}
-        footerLeading={
-          <Dropdown>
-            <DropdownTrigger asChild>
-              <PillButton tone="white" size="normal" disabled={!!busy}>
-                <Plus className="h-4 w-4" />
-                Add document
-              </PillButton>
-            </DropdownTrigger>
-            <DropdownContent
-              side="top"
-              align="start"
-              onCloseAutoFocus={(event) => {
-                if (openingDocumentPicker.current) event.preventDefault();
-                openingDocumentPicker.current = false;
-              }}
-            >
-              <DropdownItem
-                onSelect={() => {
-                  openingDocumentPicker.current = true;
-                  reviewFileRef.current?.click();
-                }}
-              >
-                <Upload className="h-4 w-4" />
-                Upload documents
-              </DropdownItem>
-              <DropdownItem
-                onSelect={() => {
-                  openingDocumentPicker.current = true;
-                  setSavedFilesOpen(true);
-                }}
-              >
-                <Cloud className="h-4 w-4" />
-                Saved files
-              </DropdownItem>
-            </DropdownContent>
-          </Dropdown>
-        }
-        primaryAction={{
-          label:
-            busy === "review"
-              ? "Reviewing…"
-              : pendingReviewDocuments.length > 0 &&
-                  pendingReviewDocuments.every(
-                    (item) => item.status === "failed",
-                  )
-                ? "Retry failed documents"
-                : pendingReviewDocuments.length > 1
-                  ? `Start ${pendingReviewDocuments.length} reviews`
-                  : "Start review",
-          icon:
-            busy === "review" ? (
-              <Loader2 className="h-4 w-4 animate-spin" />
-            ) : (
-              <Play className="h-4 w-4" />
-            ),
-          variant: "blue",
-          disabled: !pendingReviewDocuments.length || !model || !!busy,
-          onClick: () => void review(),
-        }}
-        cancelAction={{
-          label: "Cancel",
-          onClick: () => {
-            setReviewOpen(false);
-            setReviewError(null);
-          },
-          disabled: busy === "review",
-        }}
-      >
-        <div
-          data-modal-scroll="vertical"
-          className="space-y-4 overflow-y-auto pb-4"
-        >
-          {reviewError && (
-            <div
-              role="alert"
-              className="flex items-start gap-2 text-sm text-red-600"
-            >
-              <AlertCircle className="mt-0.5 h-4 w-4 shrink-0" />
-              <span>{reviewError}</span>
-            </div>
-          )}
-          <input
-            ref={reviewFileRef}
-            id="playbook-review-file"
-            aria-label="Upload review document"
-            type="file"
-            accept=".pdf,.docx,.txt"
-            multiple
-            disabled={!!busy}
-            className="hidden"
-            onChange={(event) => {
-              addReviewFiles(Array.from(event.target.files ?? []));
-              event.target.value = "";
-            }}
-          />
-          <PlaybookReviewDocuments
-            documents={reviewDocuments}
-            disabled={!!busy}
-            onAdd={addReviewFiles}
-            onBrowse={() => reviewFileRef.current?.click()}
-            onRemove={(id) =>
-              setReviewDocuments((items) =>
-                items.filter((item) => item.id !== id),
-              )
-            }
-          />
-          <p className="text-xs text-gray-500">
-            Uploaded files are saved to Library Files. Word documents get the
-            recommended changes as tracked changes you can accept or reject.
-          </p>
-          <div>
-            <ModalFieldLabel htmlFor="playbook-review-instructions">
-              Review instructions
-            </ModalFieldLabel>
-            <ModalTextarea
-              id="playbook-review-instructions"
-              disabled={!!busy}
-              value={reviewInstructions}
-              onChange={(event) => setReviewInstructions(event.target.value)}
-              rows={4}
-            />
-            <div
-              className="mt-2 flex flex-wrap gap-2"
-              aria-label="Suggested review prompts"
-            >
-              {[
-                "Run a complete playbook review. Prioritize unacceptable and missing-required terms, quote exact contract language, and provide complete replacement language for issues that need revision.",
-                "Show only unacceptable and missing-required terms.",
-                "Explain the highest-risk deviations and propose redlines.",
-              ].map((suggestion) => (
-                <PillButton
-                  key={suggestion}
-                  tone="white"
-                  size="xs"
-                  disabled={!!busy}
-                  onClick={() => setReviewInstructions(suggestion)}
-                >
-                  {suggestion.startsWith("Run a complete")
-                    ? "Complete review"
-                    : suggestion.startsWith("Show only")
-                      ? "Unacceptable and missing terms"
-                      : "Highest-risk deviations"}
-                </PillButton>
-              ))}
-            </div>
-          </div>
-          <div>
-            <ModalFieldLabel htmlFor="playbook-review-model">
-              Review model
-            </ModalFieldLabel>
-            {models.length > 0 ? (
-              <ModalSelect
-                id="playbook-review-model"
-                disabled={!!busy}
-                value={model}
-                onChange={(value) => {
-                  setModel(value);
-                  setReviewError(null);
-                }}
-                options={models}
-                menuClassName="max-h-64"
-              />
-            ) : (
-              <p className="text-sm text-amber-700">
-                No review model is available.{" "}
-                <a href="/account/api-keys" className="underline">
-                  Configure an API key
-                </a>{" "}
-                or enable a local model.
-              </p>
-            )}
-          </div>
-          <div>
-            <ModalFieldLabel htmlFor="playbook-review-mode">
-              Review posture
-            </ModalFieldLabel>
-            <ModalSelect
-              id="playbook-review-mode"
-              disabled={!!busy}
-              value={reviewMode}
-              onChange={(value) =>
-                setReviewMode(value as "strict" | "permissive")
+        // While compiling, the dialog shows only the progress screen, and
+        // closing it leaves the import compiling.
+        primaryAction={
+          compiling
+            ? {
+                label: "Close",
+                variant: "primary",
+                onClick: closeImport,
+                // The upload must finish before there is an import to leave.
+                disabled: busy === "import",
               }
-              options={[
-                { value: "strict", label: "Strict — push standard positions" },
-                { value: "permissive", label: "Permissive — allow fallbacks" },
-              ]}
+            : {
+                label: "Compile",
+                icon: <WandSparkles className="h-4 w-4" />,
+                variant: "blue",
+                disabled: !importSource || !model || !!busy,
+                onClick: () => void doImport(),
+              }
+        }
+        cancelAction={
+          compiling ? false : { label: "Cancel", onClick: closeImport }
+        }
+      >
+        {compiling ? (
+          <div
+            role="status"
+            className="flex flex-col items-center px-6 pb-12 pt-8 text-center"
+          >
+            <Loader2
+              aria-hidden="true"
+              className="h-6 w-6 animate-spin text-gray-400 motion-reduce:animate-none"
             />
+            <p className="mt-4 text-sm font-medium text-gray-900">
+              Compiling your playbook
+            </p>
+            <p className="mt-1 max-w-xs text-xs text-gray-500">
+              This can take a few minutes. You can close this window and
+              we’ll let you know when it’s ready.
+            </p>
           </div>
-        </div>
+        ) : (
+          <div
+            data-modal-scroll="vertical"
+            className="space-y-4 overflow-y-auto pb-4"
+          >
+            {importError && (
+              <div
+                role="alert"
+                className="flex items-start gap-2 text-sm text-red-600"
+              >
+                <AlertCircle className="mt-0.5 h-4 w-4 shrink-0" />
+                <span>{importError}</span>
+              </div>
+            )}
+            {!importTargetId && (
+              <div>
+                <ModalFieldLabel htmlFor="playbook-import-name">
+                  Playbook name (optional)
+                </ModalFieldLabel>
+                <ModalTextInput
+                  id="playbook-import-name"
+                  value={importName}
+                  onChange={(event) => setImportName(event.target.value)}
+                />
+              </div>
+            )}
+            <div>
+              <p
+                id="playbook-import-document-label"
+                className="mb-2 block text-xs font-medium text-gray-700"
+              >
+                Add document
+              </p>
+              <PlaybookReviewDocuments
+                documents={importSource ? [importSource] : []}
+                disabled={busy === "import"}
+                onAdd={(files) => chooseImportSource(files.map(uploadDocument))}
+                onAddDocuments={() => setImportPickerOpen(true)}
+                onRemove={() => setImportSource(null)}
+                labelledBy="playbook-import-document-label"
+                emptyPrompt="Drag and drop a Word or PDF playbook here, or click to choose a saved file or upload one."
+                addMorePrompt="Drop another file here, or click to choose a different one."
+              />
+            </div>
+            <div>
+              <ModalFieldLabel htmlFor="playbook-import-model">
+                Compilation model
+              </ModalFieldLabel>
+              {models.length > 0 ? (
+                <ModalSelect
+                  id="playbook-import-model"
+                  value={model}
+                  onChange={(value) => {
+                    setModel(value);
+                    setImportError(null);
+                  }}
+                  options={models}
+                  menuClassName="max-h-64"
+                />
+              ) : (
+                <p className="text-sm text-amber-700">
+                  No compilation model is available.{" "}
+                  <a href="/account/api-keys" className="underline">
+                    Configure an API key
+                  </a>{" "}
+                  or enable a local model.
+                </p>
+              )}
+            </div>
+            <p className="text-xs text-gray-500">
+              {importTargetId
+                ? "The compiled rules replace the current ones; completed reviews keep the rules they used. You can still edit the rules by hand afterwards."
+                : "You can edit the rules by hand once the playbook is created."}
+            </p>
+          </div>
+        )}
       </Modal>
     </div>
   );
@@ -1475,24 +1611,14 @@ function NewPlaybookMenu({
           <Plus aria-hidden="true" className="h-4 w-4" />
         </HeaderButtonUI>
       </DropdownTrigger>
-      <DropdownContent align="end" className="w-64">
+      <DropdownContent align="end">
         <DropdownItem onSelect={onImport}>
           <Upload className="h-4 w-4" />
-          <span className="flex flex-col">
-            <span>Import Word playbook</span>
-            <span className="text-xs text-gray-500">
-              Compile a .docx into rules
-            </span>
-          </span>
+          Import from file
         </DropdownItem>
         <DropdownItem onSelect={onBlank}>
-          <FilePlus2 className="h-4 w-4" />
-          <span className="flex flex-col">
-            <span>Start from scratch</span>
-            <span className="text-xs text-gray-500">
-              Write the rules yourself
-            </span>
-          </span>
+          <PenLine className="h-4 w-4" />
+          Start from scratch
         </DropdownItem>
       </DropdownContent>
     </Dropdown>

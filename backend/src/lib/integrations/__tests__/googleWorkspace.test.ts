@@ -371,6 +371,39 @@ describe("Google connector settings", () => {
       true,
     );
   });
+  it("offers nothing for a service the operator switched off, even to a user who connected it", async () => {
+    const s = await connected(true);
+    expect(JSON.stringify(await buildGoogleWorkspaceTools("u1", s.db))).toContain(
+      "gmail_search",
+    );
+    vi.stubEnv("GOOGLE_WORKSPACE_DISABLED_PROVIDERS", " gmail , not-a-service");
+    expect(await buildGoogleWorkspaceTools("u1", s.db)).toEqual([]);
+    expect(console.error).toHaveBeenCalledWith(
+      expect.stringContaining("unknown provider ids"),
+      expect.objectContaining({ unknown: ["not-a-service"] }),
+    );
+    const refused = await executeGoogleWorkspaceToolCall(
+      "u1",
+      "gmail_search",
+      { query: "x" },
+      s.db,
+    );
+    expect(refused.event.status).toBe("error");
+    expect(refused.content).toContain("Gmail is not offered on this Mike server.");
+    expect(
+      (await planGoogleWorkspaceCall("u1", "gmail_send", email, s.db)).type,
+    ).toBe("result");
+    expect(fetchMock).not.toHaveBeenCalled();
+    // Status still describes the grant so Settings can show and delete it.
+    const gmail = await workspaceStatus(s.db, "u1", "gmail");
+    expect(gmail).toMatchObject({ available: false, connected: true });
+    expect(await workspaceStatus(s.db, "u1", "google-calendar")).toMatchObject({
+      available: true,
+      connected: false,
+    });
+    await disconnectWorkspace(s.db, "u1", "gmail");
+    expect((await workspaceStatus(s.db, "u1", "gmail")).connected).toBe(false);
+  });
   it("hides and refuses a turned-off connection or tool", async () => {
     const s = await connected(true);
     await setWorkspaceToolEnabled(s.db, "u1", "gmail", "gmail_send", false);

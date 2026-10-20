@@ -214,12 +214,16 @@ describe("TRView optimistic reverts", () => {
     });
 
     async function renderView() {
-        render(
-            <>
-                <TRView reviewId="review-1" />
-                <ToastViewportUI />
-            </>,
-        );
+        // Flush the initial fetch and its effects before invoking the grid's
+        // callbacks directly; visible columns alone do not mean its refs settled.
+        await act(async () => {
+            render(
+                <>
+                    <TRView reviewId="review-1" />
+                    <ToastViewportUI />
+                </>,
+            );
+        });
         expect(await screen.findByTestId("col-0")).toHaveTextContent("Parties");
         return tableProps.current!;
     }

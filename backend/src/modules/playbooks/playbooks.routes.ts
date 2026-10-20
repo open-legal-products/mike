@@ -18,7 +18,11 @@ import {
   deletePlaybook,
   getPlaybook,
   getPlaybookSource,
-  importPlaybookFromDocx,
+  getPlaybookImport,
+  listRunningPlaybookImports,
+  startPlaybookImport,
+  startPlaybookImportFromDocument,
+  MAX_PLAYBOOK_IMPORT_BYTES,
   listPlaybookSources,
   listPlaybookPeople,
   listPlaybookShares,
@@ -29,35 +33,33 @@ import {
   addPlaybookSourceFromDocument,
   deletePlaybookSource,
   playbookSourceFileType,
+  playbookImportPrefix,
   playbookSourceUploadPrefix,
+  isStagedPlaybookImportKey,
+  isStagedPlaybookSourceKey,
   MAX_PLAYBOOK_SOURCE_FILE_BYTES,
+  PLAYBOOK_IMPORT_CONTENT_TYPES,
   PLAYBOOK_SOURCE_CONTENT_TYPES,
+  playbookImportFileType,
   listPlaybookRuns,
   listAllPlaybookRuns,
+  listPlaybookRunHistory,
+  playbookRunStatuses,
+  deletePlaybookRun,
   listPlaybooks,
   PlaybookImportError,
   PlaybookRequestError,
   playbookConfiguration,
-  reviewWithPlaybook,
+  startPlaybookReview,
   updatePlaybookContent,
 } from "./playbooks.service";
+
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 export const playbooksRouter = Router();
 playbooksRouter.use(requireAuth);
 
-const DOCX_CONTENT_TYPE =
-  "application/vnd.openxmlformats-officedocument.wordprocessingml.document";
-/** Word playbooks are prose; anything this large is not one. */
-const MAX_PLAYBOOK_SOURCE_BYTES = 25 * 1024 * 1024;
 const UPLOAD_URL_TTL_SECONDS = 900;
-
-/**
- * Staged uploads live under a per-user prefix so a request can only ever name
- * an object its own account uploaded.
- */
-function importPrefix(userId: string): string {
-  return `playbooks/${userId}/imports/`;
-}
 
 function sendError(res: Response, error: unknown): void {
   if (error instanceof PlaybookImportError) {
@@ -102,6 +104,93 @@ playbooksRouter.get("/", async (req, res) => {
 });
 
 // Registered before "/:playbookId", which would otherwise match "runs".
+// A page of the caller's runs, as the sidebar's History lists them.
+playbooksRouter.get("/runs/history", async (req, res) => {
+  try {
+    const limit = Number(req.query.limit);
+    const before =
+      typeof req.query.before === "string" &&
+      Number.isFinite(Date.parse(req.query.before))
+        ? req.query.before
+        : undefined;
+    res.json(
+      await listPlaybookRunHistory(res.locals.userId as string, undefined, {
+        workspace: req.query.workspace,
+        email: res.locals.userEmail,
+        limit: Number.isInteger(limit) ? limit : undefined,
+        before,
+      }),
+    );
+  } catch (error) {
+    sendError(res, error);
+  }
+});
+
+// Only small status snapshots, of the caller's own runs.
+playbooksRouter.get("/runs/status", async (req, res) => {
+  try {
+    const ids =
+      typeof req.query.ids === "string" ? req.query.ids.split(",") : [];
+    if (
+      ids.length === 0 ||
+      ids.length > 100 ||
+      ids.some((id) => !UUID.test(id))
+    ) {
+      return void res
+        .status(400)
+        .json({ detail: "Provide between 1 and 100 valid run ids." });
+    }
+    res.json(
+      await playbookRunStatuses(res.locals.userId as string, [
+        ...new Set(ids),
+      ]),
+    );
+  } catch (error) {
+    sendError(res, error);
+  }
+});
+
+// One of the caller's own runs; one still running is refused.
+playbooksRouter.delete("/runs/:runId", async (req, res) => {
+  try {
+    if (!UUID.test(req.params.runId))
+      return void res.status(404).json({ detail: "Run not found." });
+    await deletePlaybookRun(res.locals.userId as string, req.params.runId);
+    res.status(204).send();
+  } catch (error) {
+    sendError(res, error);
+  }
+});
+
+// The caller's imports still compiling in the workspace, so a page opened
+// after starting one can follow it to the end.
+playbooksRouter.get("/imports", async (req, res) => {
+  try {
+    res.json(
+      await listRunningPlaybookImports(
+        res.locals.userId as string,
+        undefined,
+        req.query.workspace,
+      ),
+    );
+  } catch (error) {
+    sendError(res, error);
+  }
+});
+
+playbooksRouter.get("/imports/:importId", async (req, res) => {
+  try {
+    if (!UUID.test(req.params.importId)) {
+      return void res.status(404).json({ detail: "Import not found." });
+    }
+    res.json(
+      await getPlaybookImport(res.locals.userId as string, req.params.importId),
+    );
+  } catch (error) {
+    sendError(res, error);
+  }
+});
+
 playbooksRouter.get("/runs", async (req, res) => {
   try {
     res.json(
@@ -116,7 +205,7 @@ playbooksRouter.get("/runs", async (req, res) => {
 });
 
 /**
- * Hand back a presigned PUT for the source .docx. The browser uploads straight
+ * Hand back a presigned PUT for the source .docx or .pdf. The browser uploads straight
  * to object storage, matching how documents are uploaded, so the API never
  * buffers the file.
  */
@@ -135,6 +224,7 @@ playbooksRouter.post("/", requireMfaIfEnrolled, async (req, res) => {
         },
         undefined,
         body.workspace,
+        body.visibility,
       ),
     );
   } catch (error) {
@@ -155,29 +245,31 @@ playbooksRouter.post(
       const filename =
         typeof req.body?.filename === "string" ? req.body.filename.trim() : "";
       const sizeBytes = Number(req.body?.sizeBytes);
-      if (!/\.docx$/i.test(filename)) {
+      const fileType = playbookImportFileType(filename);
+      if (!fileType) {
         return void res
           .status(400)
-          .json({ detail: "Playbook import currently requires a .docx file." });
+          .json({ detail: "Playbook import requires a .docx or .pdf file." });
       }
       if (
         !Number.isInteger(sizeBytes) ||
         sizeBytes <= 0 ||
-        sizeBytes > MAX_PLAYBOOK_SOURCE_BYTES
+        sizeBytes > MAX_PLAYBOOK_IMPORT_BYTES
       ) {
         return void res.status(400).json({
           detail: `The playbook must be between 1 byte and ${Math.floor(
-            MAX_PLAYBOOK_SOURCE_BYTES / (1024 * 1024),
+            MAX_PLAYBOOK_IMPORT_BYTES / (1024 * 1024),
           )} MB.`,
         });
       }
 
-      const storageKey = `${importPrefix(
+      const storageKey = `${playbookImportPrefix(
         res.locals.userId as string,
-      )}${crypto.randomUUID()}.docx`;
+      )}${crypto.randomUUID()}.${fileType}`;
+      const contentType = PLAYBOOK_IMPORT_CONTENT_TYPES[fileType];
       const uploadUrl = await getSignedUploadUrl(
         storageKey,
-        DOCX_CONTENT_TYPE,
+        contentType,
         sizeBytes,
         UPLOAD_URL_TTL_SECONDS,
       );
@@ -189,7 +281,7 @@ playbooksRouter.post(
       res.status(201).json({
         uploadUrl,
         storageKey,
-        contentType: DOCX_CONTENT_TYPE,
+        contentType,
         expiresInSeconds: UPLOAD_URL_TTL_SECONDS,
       });
     } catch (error) {
@@ -200,13 +292,40 @@ playbooksRouter.post(
 
 playbooksRouter.post("/import", requireMfaIfEnrolled, async (req, res) => {
   const userId = res.locals.userId as string;
+  // A playbookId replaces that playbook's content instead of adding a new
+  // playbook. Ownership is checked inside the import.
+  const playbookId =
+    typeof req.body?.playbookId === "string" && req.body.playbookId.trim()
+      ? req.body.playbookId.trim()
+      : undefined;
+  const model = typeof req.body?.model === "string" ? req.body.model : "";
+  const name = typeof req.body?.name === "string" ? req.body.name : undefined;
+  // A saved document is read where it is stored; access is checked there.
+  if (typeof req.body?.documentId === "string" && req.body.documentId) {
+    try {
+      const { attempt, done } = await startPlaybookImportFromDocument({
+        userId,
+        userEmail: res.locals.userEmail,
+        documentId: req.body.documentId,
+        name,
+        model,
+        playbookId,
+        workspace: req.body?.workspace,
+      });
+      // Compiling continues after the response; its row records how it ended.
+      done.catch(() => undefined);
+      return void res.status(202).json(attempt);
+    } catch (error) {
+      return void sendError(res, error);
+    }
+  }
   const storageKey =
     typeof req.body?.storageKey === "string" ? req.body.storageKey : "";
   let staged = false;
   try {
-    // The prefix is the ownership boundary: a caller cannot compile from an
-    // object another account staged, or from anywhere else in the bucket.
-    if (!storageKey.startsWith(importPrefix(userId))) {
+    // Only a key minted for this caller: not another account's staged
+    // object, nor anything else in storage (see playbooks.staging.ts).
+    if (!isStagedPlaybookImportKey(userId, storageKey)) {
       return void res
         .status(400)
         .json({ detail: "Upload the playbook before importing it." });
@@ -218,7 +337,7 @@ playbooksRouter.post("/import", requireMfaIfEnrolled, async (req, res) => {
         .json({ detail: "The uploaded playbook is no longer available." });
     }
     staged = true;
-    if (stat.size > MAX_PLAYBOOK_SOURCE_BYTES) {
+    if (stat.size > MAX_PLAYBOOK_IMPORT_BYTES) {
       return void res
         .status(400)
         .json({ detail: "The uploaded playbook is too large." });
@@ -230,21 +349,12 @@ playbooksRouter.post("/import", requireMfaIfEnrolled, async (req, res) => {
         .json({ detail: "The uploaded playbook could not be read." });
     }
 
-    const model = typeof req.body?.model === "string" ? req.body.model : "";
-    const name = typeof req.body?.name === "string" ? req.body.name : undefined;
     const filename =
       typeof req.body?.filename === "string" && req.body.filename.trim()
         ? req.body.filename.trim()
         : "playbook.docx";
 
-    // A playbookId replaces that playbook's content instead of adding a new
-    // playbook. Ownership is checked inside the import.
-    const playbookId =
-      typeof req.body?.playbookId === "string" && req.body.playbookId.trim()
-        ? req.body.playbookId.trim()
-        : undefined;
-
-    const playbook = await importPlaybookFromDocx({
+    const { attempt, done } = await startPlaybookImport({
       userId,
       userEmail: res.locals.userEmail,
       filename,
@@ -254,12 +364,14 @@ playbooksRouter.post("/import", requireMfaIfEnrolled, async (req, res) => {
       playbookId,
       workspace: req.body?.workspace,
     });
-    res.status(playbookId ? 200 : 201).json(playbook);
+    // Compiling continues after the response; its row records how it ended.
+    done.catch(() => undefined);
+    res.status(202).json(attempt);
   } catch (error) {
     sendError(res, error);
   } finally {
-    // The import retains its own copy of the source on success, so the staged
-    // object is redundant either way.
+    // The import holds the file in memory and keeps its own copy on success,
+    // so the staged object is redundant once it has been read.
     if (staged) {
       await deleteFile(storageKey).catch((error) => {
         console.error("[playbooks] staged upload cleanup failed", {
@@ -286,7 +398,7 @@ playbooksRouter.get("/:playbookId", async (req, res) => {
   }
 });
 
-// Streams the Word file the playbook was imported from, for the Sources view.
+// Streams the Word or PDF file the playbook was imported from, for the Sources view.
 // Proxying keeps viewers off cross-origin signed storage URLs, as for
 // documents; the stream is opened here so `res` applies backpressure.
 playbooksRouter.get("/:playbookId/source", async (req, res) => {
@@ -303,7 +415,12 @@ playbooksRouter.get("/:playbookId/source", async (req, res) => {
         .status(404)
         .json({ detail: "This playbook has no source document." });
     }
-    res.setHeader("Content-Type", DOCX_CONTENT_TYPE);
+    res.setHeader(
+      "Content-Type",
+      PLAYBOOK_IMPORT_CONTENT_TYPES[
+        playbookImportFileType(source.storageKey) ?? "docx"
+      ],
+    );
     res.setHeader("Content-Length", stat.size);
     res.setHeader(
       "Content-Disposition",
@@ -504,8 +621,8 @@ playbooksRouter.post(
       sendError(res, error);
     } finally {
       // The playbook keeps its own copy, so the staged object is redundant
-      // whatever happened. Only the caller's own prefix is ever touched.
-      if (storageKey.startsWith(playbookSourceUploadPrefix(userId))) {
+      // whatever happened. Only a key minted for this caller is ever touched.
+      if (isStagedPlaybookSourceKey(userId, storageKey)) {
         await deleteFile(storageKey).catch((error) => {
           console.error("[playbooks] staged source cleanup failed", {
             storageKey,
@@ -603,22 +720,29 @@ playbooksRouter.post("/:playbookId/review", async (req, res) => {
       req.body?.reviewMode === "permissive"
         ? ("permissive" as const)
         : ("strict" as const);
-    res.json(
-      await reviewWithPlaybook({
-        userId: res.locals.userId as string,
-        userEmail: res.locals.userEmail,
-        playbookId: req.params.playbookId,
-        documentText: text,
-        documentName,
-        documentId:
-          typeof req.body?.documentId === "string" && req.body.documentId
-            ? req.body.documentId
-            : undefined,
-        instructions,
-        model,
-        reviewMode,
-      }),
-    );
+    const reviewScope =
+      req.body?.reviewScope === "issues"
+        ? ("issues" as const)
+        : ("full" as const);
+    const { run, done } = await startPlaybookReview({
+      userId: res.locals.userId as string,
+      userEmail: res.locals.userEmail,
+      playbookId: req.params.playbookId,
+      documentText: text,
+      documentName,
+      documentId:
+        typeof req.body?.documentId === "string" && req.body.documentId
+          ? req.body.documentId
+          : undefined,
+      instructions,
+      model,
+      reviewMode,
+      reviewScope,
+    });
+    // The review outlives this response; it records its own outcome, and a
+    // failure is already logged there.
+    done.catch(() => undefined);
+    res.status(202).json(run);
   } catch (error) {
     sendError(res, error);
   }

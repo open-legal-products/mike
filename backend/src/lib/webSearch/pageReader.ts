@@ -1,5 +1,5 @@
 import { isBlockedDestinationError } from "../blockedDestination";
-import { guardedFetch } from "../mcp/client";
+import { guardedFetch, validateRemoteMcpUrl } from "../mcp/client";
 import { extractPdfTextForModel } from "../pdfText";
 import { withTimeout } from "./http";
 import { SEARCH_SERVICES } from "./services";
@@ -76,6 +76,23 @@ async function htmlToMarkdown(
     return { title: page.title?.trim() || null, text: page.content ?? "" };
 }
 
+// Many HTML pages declare their encoding only in a <meta> tag. Browsers look
+// for it in the first 1024 bytes, which are ASCII whatever the encoding.
+function metaCharset(body: ArrayBuffer): string | null {
+    const head = new TextDecoder("latin1").decode(body.slice(0, 1024));
+    return /<meta[^>]+charset\s*=\s*["']?\s*([\w.:-]+)/i.exec(head)?.[1] ?? null;
+}
+
+// Older court and legislation sites still serve windows-1252 or ISO-8859-1,
+// where decoding as UTF-8 would corrupt characters such as "§".
+function decodeText(body: ArrayBuffer, charset: string | null): string {
+    try {
+        return new TextDecoder(charset ?? "utf-8").decode(body);
+    } catch {
+        return new TextDecoder().decode(body);
+    }
+}
+
 async function fetchPage(url: string, signal: AbortSignal | undefined) {
     try {
         const response = await guardedFetch(
@@ -92,13 +109,12 @@ async function fetchPage(url: string, signal: AbortSignal | undefined) {
                 `The page answered with HTTP ${response.status}.`,
             );
         }
-        const contentType = (response.headers.get("content-type") ?? "")
-            .split(";")[0]
-            .trim()
-            .toLowerCase();
+        const header = response.headers.get("content-type") ?? "";
+        const contentType = header.split(";")[0].trim().toLowerCase();
         return {
             finalUrl: response.url || url,
             contentType,
+            charset: /;\s*charset\s*=\s*"?([^";\s]+)/i.exec(header)?.[1] ?? null,
             body: await readCapped(
                 response,
                 isText(contentType) ? MAX_TEXT_BYTES : MAX_PDF_BYTES,
@@ -124,18 +140,21 @@ async function readDirectly(
     url: string,
     signal: AbortSignal | undefined,
 ): Promise<WebPage> {
-    const { finalUrl, contentType, body } = await fetchPage(url, signal);
+    const { finalUrl, contentType, charset, body } = await fetchPage(url, signal);
     if (isPdf(contentType, body)) {
         return { url: finalUrl, title: null, text: await extractPdfTextForModel(body) };
     }
     if (contentType === "text/html" || contentType === "application/xhtml+xml") {
         return {
             url: finalUrl,
-            ...(await htmlToMarkdown(new TextDecoder().decode(body), finalUrl)),
+            ...(await htmlToMarkdown(
+                decodeText(body, charset ?? metaCharset(body)),
+                finalUrl,
+            )),
         };
     }
     if (contentType.startsWith("text/")) {
-        return { url: finalUrl, title: null, text: new TextDecoder().decode(body) };
+        return { url: finalUrl, title: null, text: decodeText(body, charset) };
     }
     throw new WebPageUnreadableError(
         "This kind of file cannot be read as a web page.",
@@ -147,12 +166,31 @@ type ReadOptions = {
     account?: WebSearchAccount | null;
 };
 
+async function assertPublicAddress(url: string): Promise<void> {
+    try {
+        await validateRemoteMcpUrl(url, "Web page URL", { allowHttp: true });
+    } catch (error) {
+        if (isBlockedDestinationError(error)) {
+            throw new WebPageUnreadableError(
+                "That address is not a public web page.",
+                { cause: error },
+            );
+        }
+        throw new WebPageUnreadableError("The page could not be reached.", {
+            cause: error,
+        });
+    }
+}
+
 async function readThroughSearchService(
     url: string,
     { signal, account }: ReadOptions,
 ): Promise<WebPage | null> {
     const service = account ? SEARCH_SERVICES[account.backend] : null;
     if (!account || !service?.read) return null;
+    // A private or internal address must not reach a third-party reader,
+    // which would otherwise fetch or log it.
+    await assertPublicAddress(url);
     try {
         const page = await service.read(url, account.apiKey, { fetch, signal });
         return page.text ? page : null;

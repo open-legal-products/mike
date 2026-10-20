@@ -1,4 +1,4 @@
--- Migration date: 2026-10-19
+-- Migration date: 2026-10-20
 -- Tavily and DeepSeek API keys for Mike's own web search are saved like the
 -- Brave Search key, per user or per organization. Existing keys, RLS and
 -- grants are unchanged.

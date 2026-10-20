@@ -32,7 +32,6 @@ function Harness({
   const [content, setContent] = useState<PlaybookContent>({
     name: "Guide",
     description: "",
-    globalGuidance: "",
     representedParty: "",
     documentTypes: [],
     jurisdictions: [],

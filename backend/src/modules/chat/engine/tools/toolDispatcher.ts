@@ -1,4 +1,5 @@
-import type { ConnectorApprovalItem, DocumentSearchEvent } from "@mike/contracts";
+import type { ConnectorApprovalItem, DocumentSearchEvent, TextCardEvent } from "@mike/contracts";
+import { textCardEvent } from "./textCard";
 import { internalFailure } from "../../../../lib/serviceResult";
 import { canUseWorkflowInWorkspace } from "../../../../lib/workflowWorkspace";
 import { safeError } from "../../../../lib/safeError";
@@ -353,6 +354,7 @@ export async function runToolCalls(
   workflowsApplied: { workflow_id: string; title: string }[];
   docsEdited: DocEditedResult[];
   askInputsEvents: AskInputsEvent[];
+  textCardEvents: TextCardEvent[];
   courtlistenerEvents: CourtlistenerToolEvent[];
   caseCitationEvents: CaseCitationEvent[];
   mcpEvents: McpToolEvent[];
@@ -378,6 +380,7 @@ export async function runToolCalls(
   const workflowsApplied: { workflow_id: string; title: string }[] = [];
   const docsEdited: DocEditedResult[] = [];
   const askInputsEvents: AskInputsEvent[] = [];
+  const textCardEvents: TextCardEvent[] = [];
   const courtlistenerEvents: CourtlistenerToolEvent[] = [];
   const caseCitationEvents: CaseCitationEvent[] = [];
   const mcpEvents: McpToolEvent[] = [];
@@ -590,6 +593,26 @@ export async function runToolCalls(
           error: event.error,
         })}\n\n`,
       );
+      continue;
+    }
+
+    if (tc.function.name === "create_text_card") {
+      const event = textCardEvent(tc.id, args);
+      if (event) {
+        textCardEvents.push(event);
+        write(`data: ${JSON.stringify(event)}\n\n`);
+      }
+      toolResults.push({
+        role: "tool",
+        tool_call_id: tc.id,
+        content: JSON.stringify(
+          event
+            ? { card_id: event.card_id, displayed: true }
+            : {
+                error: "Provide a non-empty title (up to 200 characters) and text (up to 100000 characters).",
+              },
+        ),
+      });
       continue;
     }
 
@@ -2323,6 +2346,7 @@ export async function runToolCalls(
     workflowsApplied,
     docsEdited,
     askInputsEvents,
+    textCardEvents,
     courtlistenerEvents,
     caseCitationEvents,
     mcpEvents,

@@ -438,7 +438,7 @@ describe("runDelegateCall", () => {
     const [system] = buildMessages([], docs, "Base prompt.", undefined, false, "n", "replace") as {
       content: string;
     }[];
-    const spawn = vi.fn(async () => ({ fullText: "Done.", events: [], citations: [] }));
+    const spawn = vi.fn<DelegateContext["spawn"]>(async () => ({ fullText: "Done.", events: [], citations: [] }));
     const ctx = context({
       systemPrompt: system.content,
       docStore: new Map(docs.map((d) => [d.doc_id, { ...d, storage_path: d.doc_id, file_type: "pdf" }])),
@@ -469,7 +469,7 @@ describe("runDelegateCall", () => {
   });
 
   it("continues a subagent that waited on approval with the server's record of the outcome", async () => {
-    const spawn = vi.fn(async () => ({ fullText: "Sent.", events: [], citations: [] }));
+    const spawn = vi.fn<DelegateContext["spawn"]>(async () => ({ fullText: "Sent.", events: [], citations: [] }));
     const ctx = context({
       spawn,
       runStore: {

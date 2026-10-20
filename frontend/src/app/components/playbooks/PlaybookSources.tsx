@@ -38,6 +38,13 @@ import {
 import { PillButtonUI } from "@/shared/ui/PillButtonUI";
 import { TextButtonUI } from "@/shared/ui/TextButtonUI";
 import { PlaybookPanels } from "./PlaybookPanels";
+import {
+  PLAYBOOK_PANE_EMPTY_CLASS,
+  PLAYBOOK_PANE_HEADER_CLASS,
+  PLAYBOOK_SIDE_HEADER_CLASS,
+  PLAYBOOK_SIDE_LIST_CLASS,
+  PLAYBOOK_SIDE_TITLE_CLASS,
+} from "./playbookPaneStyles";
 
 const IMPORTED_ID = "imported";
 const ACCEPT =
@@ -52,7 +59,7 @@ type ViewedSource = {
 };
 
 /**
- * The documents behind a playbook: the Word file it was imported from, and
+ * The documents behind a playbook: the Word or PDF file it was imported from, and
  * supplementary documents its rules can refer to. Reviews see a list of the
  * supplementary ones and read a document only when they need it.
  */
@@ -118,7 +125,7 @@ export function PlaybookSources({
     ? {
         id: IMPORTED_ID,
         filename: sourceFilename,
-        fileType: "docx",
+        fileType: /\.pdf$/i.test(sourceFilename) ? "pdf" : "docx",
         url: getPlaybookSourceUrl(playbookId),
       }
     : null;
@@ -224,14 +231,14 @@ export function PlaybookSources({
           aria-label="Reference documents"
           className={`flex min-h-0 min-w-0 flex-col ${EDITOR_SURFACE_CLASS}`}
         >
-          <div className="flex h-9 shrink-0 items-center justify-between gap-2 pl-3 pr-1.5">
-            <h2 className="text-xs text-gray-700">References</h2>
+          <div className={`flex items-center justify-between gap-2 ${PLAYBOOK_SIDE_HEADER_CLASS}`}>
+            <h2 className={PLAYBOOK_SIDE_TITLE_CLASS}>References</h2>
             {canEdit && (
               <Dropdown>
                 <DropdownTrigger asChild>
                   <TextButtonUI
                     size="icon-xs"
-                    className="h-6"
+                    className="-my-0.5 h-6"
                     aria-label="Add reference document"
                     title="Add reference document"
                   >
@@ -251,14 +258,28 @@ export function PlaybookSources({
               </Dropdown>
             )}
           </div>
-          {/* One list: the Word file it was imported from, then the rest. */}
-          <div className="max-h-64 min-h-0 overflow-y-auto px-1 pb-2 @[48rem]:max-h-none @[48rem]:flex-1">
+          {/* One list: the file it was imported from, then the rest. */}
+          <div className={`max-h-64 min-h-0 overflow-y-auto @[48rem]:max-h-none @[48rem]:flex-1 ${PLAYBOOK_SIDE_LIST_CLASS}`}>
             <div className="space-y-1">
               {imported && sourceButton(imported)}
               {supplementary === null ? (
-                <div aria-hidden="true" className="space-y-2 px-2 py-1.5">
-                  <SkeletonLine className="w-3/4" />
-                  <SkeletonLine className="w-1/2" />
+                <div
+                  role="status"
+                  aria-label="Loading reference documents"
+                  className="space-y-1"
+                >
+                  {["w-3/4", "w-1/2"].map((width) => (
+                    <div
+                      key={width}
+                      aria-hidden="true"
+                      className="flex h-7 min-w-0 items-center gap-2 px-2 text-gray-400"
+                    >
+                      <span className="min-w-0 flex-1">
+                        <SkeletonLine className={width} />
+                      </span>
+                      <Loader2 className="h-3.5 w-3.5 shrink-0 animate-spin" />
+                    </div>
+                  ))}
                 </div>
               ) : (
                 others.map(sourceButton)
@@ -267,15 +288,18 @@ export function PlaybookSources({
                 <p
                   key={`${name}:${index}`}
                   role="status"
-                  className="flex min-w-0 items-start gap-2 px-2 py-1.5 text-xs text-gray-500"
+                  title={name}
+                  className="flex h-7 min-w-0 items-center gap-2 px-2 text-xs text-gray-500"
                 >
+                  <FileTypeIcon fileType={name} muted />
+                  <span className="min-w-0 flex-1 truncate">
+                    <span className="sr-only">Adding </span>
+                    {name}
+                  </span>
                   <Loader2
                     aria-hidden="true"
-                    className="mt-px h-3.5 w-3.5 shrink-0 animate-spin"
+                    className="h-3.5 w-3.5 shrink-0 animate-spin text-gray-400"
                   />
-                  <span className="min-w-0 [overflow-wrap:anywhere]">
-                    Adding {name}
-                  </span>
                 </p>
               ))}
               {!imported &&
@@ -308,65 +332,69 @@ export function PlaybookSources({
         className={`flex min-h-[24rem] min-w-0 flex-col overflow-hidden @[48rem]:min-h-0 ${EDITOR_SURFACE_CLASS}`}
       >
         {selected && (
-          <div className="flex h-11 shrink-0 items-center gap-2 px-4">
+          <div className={`flex items-center gap-2 ${PLAYBOOK_PANE_HEADER_CLASS}`}>
             <FileTypeIcon fileType={selected.filename} className="h-4 w-4" />
             <h2
-              className="min-w-0 truncate text-sm font-medium text-gray-900"
+              className={`min-w-0 truncate ${PLAYBOOK_SIDE_TITLE_CLASS}`}
               title={selected.filename}
             >
               {selected.filename}
             </h2>
           </div>
         )}
-        {selected?.fileType === "pdf" ? (
-          <PdfView
-            key={selected.id}
-            doc={{ document_id: `playbook-source:${selected.id}` }}
-            displayUrl={selected.url}
-            // Sits under the title row; the panel clips its outer corners.
-            rounded={false}
-          />
-        ) : selected ? (
-          <DocxView
-            key={`${selected.id}:${revision}`}
-            documentId={`playbook-source:${playbookId}:${selected.id}`}
-            displayUrl={selected.url}
-            refetchKey={selected.id === IMPORTED_ID ? revision : undefined}
-            filename={selected.filename}
-            canEdit={false}
-            defaultMode="view"
-            // A read-only source: no EigenPal editing toolbar.
-            toolbarVisible={false}
-            // Sits under the title row; the panel clips its outer corners.
-            rounded={false}
-          />
+        {selected ? (
+          <div className="flex min-h-0 flex-1 flex-col pb-4 pt-2 md:pb-5">
+            {selected.fileType === "pdf" ? (
+              <PdfView
+                key={selected.id}
+                doc={{ document_id: `playbook-source:${selected.id}` }}
+                displayUrl={selected.url}
+                rounded={false}
+              />
+            ) : (
+              <DocxView
+                key={`${selected.id}:${revision}`}
+                documentId={`playbook-source:${playbookId}:${selected.id}`}
+                displayUrl={selected.url}
+                refetchKey={selected.id === IMPORTED_ID ? revision : undefined}
+                filename={selected.filename}
+                canEdit={false}
+                defaultMode="view"
+                // A read-only source: no EigenPal editing toolbar.
+                toolbarVisible={false}
+                rounded={false}
+              />
+            )}
+          </div>
         ) : (
-          <EmptyState
-            title="No reference documents"
-            description={
-              canEdit
-                ? "Add documents the rules can refer to, such as policies or templates."
-                : "This playbook has no reference documents."
-            }
-            action={
-              canEdit && (
-                <div className="flex flex-wrap items-center gap-2">
-                  <PillButtonUI
-                    tone="black"
-                    onClick={() => fileInput.current?.click()}
-                  >
-                    <Upload aria-hidden="true" className="h-3.5 w-3.5" />
-                    Upload a file
-                  </PillButtonUI>
-                  <PillButtonUI tone="white" onClick={() => setPickerOpen(true)}>
-                    <Cloud aria-hidden="true" className="h-3.5 w-3.5" />
-                    Choose from documents
-                  </PillButtonUI>
-                </div>
-              )
-            }
-            className="m-auto w-fit max-w-full px-4 py-12"
-          />
+          <div className={`flex min-h-0 flex-1 items-center justify-center ${PLAYBOOK_PANE_EMPTY_CLASS}`}>
+            <EmptyState
+              title="No reference documents"
+              description={
+                canEdit
+                  ? "Add documents the rules can refer to, such as policies or templates."
+                  : "This playbook has no reference documents."
+              }
+              action={
+                canEdit && (
+                  <div className="flex flex-wrap items-center gap-2">
+                    <PillButtonUI
+                      tone="black"
+                      onClick={() => fileInput.current?.click()}
+                    >
+                      <Upload aria-hidden="true" className="h-3.5 w-3.5" />
+                      Upload a file
+                    </PillButtonUI>
+                    <PillButtonUI tone="white" onClick={() => setPickerOpen(true)}>
+                      <Cloud aria-hidden="true" className="h-3.5 w-3.5" />
+                      Choose from documents
+                    </PillButtonUI>
+                  </div>
+                )
+              }
+              className="w-fit max-w-full py-12"
+            />
+          </div>
         )}
       </section>
       {canEdit && (

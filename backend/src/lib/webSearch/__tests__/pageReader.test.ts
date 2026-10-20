@@ -1,11 +1,12 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-const { guardedFetch, extractPdfTextForModel } = vi.hoisted(() => ({
+const { guardedFetch, validateRemoteMcpUrl, extractPdfTextForModel } = vi.hoisted(() => ({
     guardedFetch: vi.fn(),
+    validateRemoteMcpUrl: vi.fn(),
     extractPdfTextForModel: vi.fn(),
 }));
 
-vi.mock("../../mcp/client", () => ({ guardedFetch }));
+vi.mock("../../mcp/client", () => ({ guardedFetch, validateRemoteMcpUrl }));
 vi.mock("../../pdfText", () => ({ extractPdfTextForModel }));
 
 import { BlockedDestinationError } from "../../blockedDestination";
@@ -38,6 +39,8 @@ async function unreadable(promise: Promise<unknown>): Promise<string> {
 
 beforeEach(() => {
     guardedFetch.mockReset();
+    validateRemoteMcpUrl.mockReset();
+    validateRemoteMcpUrl.mockImplementation(async (url: string) => url);
     vi.unstubAllGlobals();
 });
 
@@ -53,6 +56,41 @@ describe("readWebPage", () => {
             "[statutory text](https://www.legislation.gov.uk/ukpga/2006/46/section/172)",
         );
         expect(result.text).not.toContain("Copyright Example Law");
+    });
+
+    it("decodes text in the charset the server declares", async () => {
+        guardedFetch.mockResolvedValue(
+            page(
+                new Uint8Array([0xa7, 0x31, 0x37, 0x32, 0x20, 0x43, 0x61, 0x66, 0xe9]),
+                'text/plain; charset="ISO-8859-1"',
+            ),
+        );
+
+        const result = await readWebPage("https://example.test/s172.txt");
+
+        expect(result.text).toBe("\u00a7172 Caf\u00e9");
+    });
+
+    it.each([
+        ['<meta charset="iso-8859-1">'],
+        ['<meta http-equiv="Content-Type" content="text/html; charset=ISO-8859-1">'],
+    ])("decodes HTML in the charset its %s declares", async (meta) => {
+        const html = `<html><head>${meta}<title>Act</title></head><body><article><p>Section \u00a7172 applies to the Caf\u00e9 Company.</p></article></body></html>`;
+        guardedFetch.mockResolvedValue(
+            page(Uint8Array.from(html, (c) => c.charCodeAt(0)), "text/html"),
+        );
+
+        const result = await readWebPage("https://example.test/act");
+
+        expect(result.text).toContain("Section \u00a7172 applies to the Caf\u00e9 Company.");
+    });
+
+    it("decodes as UTF-8 when the declared charset is unknown", async () => {
+        guardedFetch.mockResolvedValue(page("caf\u00e9", "text/plain; charset=bogus"));
+
+        const result = await readWebPage("https://example.test/cafe.txt");
+
+        expect(result.text).toBe("caf\u00e9");
     });
 
     it("reads a PDF served as a generic binary file", async () => {
@@ -109,6 +147,24 @@ describe("readWebPage", () => {
         });
 
         expect(result.text).toBe("The order.");
+    });
+
+    it("does not send a private address to the search service", async () => {
+        const fetch = vi.fn(async () => Response.json({ content: "secret" }));
+        vi.stubGlobal("fetch", fetch);
+        validateRemoteMcpUrl.mockRejectedValue(
+            new BlockedDestinationError("Web page URL resolves to a blocked network address."),
+        );
+
+        await expect(
+            unreadable(
+                readWebPage("http://169.254.169.254/latest/meta-data/", {
+                    account: { backend: "tavily", apiKey: "key" },
+                }),
+            ),
+        ).resolves.toBe("That address is not a public web page.");
+        expect(fetch).not.toHaveBeenCalled();
+        expect(guardedFetch).not.toHaveBeenCalled();
     });
 
     it("explains a blocked address", async () => {

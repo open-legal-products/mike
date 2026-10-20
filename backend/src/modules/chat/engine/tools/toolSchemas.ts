@@ -1,3 +1,5 @@
+import { TEXT_CARD_TOOL } from "./textCard";
+
 /**
  * The tools that WRITE to stored content rather than read it: they create
  * `documents` rows (and, in a project chat, attach them to the project) or
@@ -179,6 +181,7 @@ export const PLAYBOOK_TOOLS = [
 ];
 
 export const TOOLS = [
+  TEXT_CARD_TOOL,
   {
     type: "function",
     function: {

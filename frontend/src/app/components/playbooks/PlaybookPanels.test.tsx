@@ -31,8 +31,8 @@ beforeEach(() => {
 });
 afterEach(() => vi.unstubAllGlobals());
 
-function renderPanels(variant: "sidebar" | "results" = "sidebar") {
-  const resizeLabel = variant === "results" ? "Resize run results panel" : "Resize rules panel";
+function renderPanels(variant: "sidebar" | "trailing" = "sidebar") {
+  const resizeLabel = variant === "trailing" ? "Resize document panel" : "Resize rules panel";
   const view = render(
     <PlaybookPanels variant={variant} resizeLabel={resizeLabel} sidebar={<section>Rules</section>}>
       <section>Form</section>
@@ -46,8 +46,8 @@ function renderPanels(variant: "sidebar" | "results" = "sidebar") {
 }
 
 describe("playbook panels", () => {
-  it("resizes the right-hand results pane in the drag direction and supports keyboard limits", () => {
-    const { divider } = renderPanels("results");
+  it("resizes a right-hand pane in the drag direction and supports keyboard limits", () => {
+    const { divider } = renderPanels("trailing");
     expect(divider).toHaveAttribute("aria-valuenow", "448");
     fireEvent.pointerDown(divider, { clientX: 500, pointerId: 1, button: 0 });
     fireEvent.pointerMove(divider, { clientX: 400, pointerId: 1 });
@@ -65,9 +65,9 @@ describe("playbook panels", () => {
 
   it("drags the divider within both panels' minimum widths", () => {
     const { divider } = renderPanels();
-    fireEvent.pointerDown(divider, { clientX: 280, pointerId: 1, button: 0 });
-    fireEvent.pointerMove(divider, { clientX: 380, pointerId: 1 });
-    expect(divider).toHaveAttribute("aria-valuenow", "380");
+    fireEvent.pointerDown(divider, { clientX: 360, pointerId: 1, button: 0 });
+    fireEvent.pointerMove(divider, { clientX: 460, pointerId: 1 });
+    expect(divider).toHaveAttribute("aria-valuenow", "460");
     fireEvent.pointerMove(divider, { clientX: 1500, pointerId: 1 });
     expect(divider).toHaveAttribute("aria-valuenow", "574");
     fireEvent.pointerMove(divider, { clientX: 0, pointerId: 1 });
@@ -81,9 +81,9 @@ describe("playbook panels", () => {
   it("supports keyboard resizing and fits the available container width", () => {
     const { divider } = renderPanels();
     fireEvent.keyDown(divider, { key: "ArrowRight" });
-    expect(divider).toHaveAttribute("aria-valuenow", "304");
+    expect(divider).toHaveAttribute("aria-valuenow", "384");
     fireEvent.keyDown(divider, { key: "ArrowLeft" });
-    expect(divider).toHaveAttribute("aria-valuenow", "280");
+    expect(divider).toHaveAttribute("aria-valuenow", "360");
     fireEvent.keyDown(divider, { key: "End" });
     expect(divider).toHaveAttribute("aria-valuenow", "574");
     act(() => measure(700));

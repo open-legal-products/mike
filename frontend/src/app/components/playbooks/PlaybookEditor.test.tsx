@@ -37,7 +37,6 @@ function Harness({
   const [content, setContent] = useState<PlaybookContent>({
     name: "Guide",
     description: "",
-    globalGuidance: "",
     representedParty: "",
     documentTypes: [],
     jurisdictions: [],
@@ -80,11 +79,11 @@ describe("playbook rules sidebar", () => {
     const changed = vi.fn();
     render(<Harness changed={changed} />);
     fireEvent.contextMenu(screen.getByRole("button", { name: "Beta" }));
-    const addRule = screen.getByRole("menuitem", { name: "Add rule" });
-    fireEvent.pointerUp(addRule, { button: 2, pointerType: "mouse" });
+    const duplicate = screen.getByRole("menuitem", { name: "Duplicate rule" });
+    fireEvent.pointerUp(duplicate, { button: 2, pointerType: "mouse" });
     expect(changed).not.toHaveBeenCalled();
-    expect(addRule).toBeVisible();
-    await userEvent.click(addRule);
+    expect(duplicate).toBeVisible();
+    await userEvent.click(duplicate);
     expect(changed).toHaveBeenCalledOnce();
   });
 
@@ -290,20 +289,31 @@ describe("playbook rules sidebar", () => {
     );
   });
 
-  it("keeps the rule menu and context menu in sync and duplicates into the original topic", async () => {
+  it("keeps the open rule's menu to the rule itself and duplicates into the original topic", async () => {
     const changed = vi.fn();
     render(<Harness changed={changed} />);
     await userEvent.click(screen.getByRole("button", { name: "Gamma" }));
     await userEvent.click(screen.getByRole("button", { name: "Rule actions" }));
-    const actions = screen
-      .getAllByRole("menuitem")
-      .map((item) => item.textContent);
+    // The open rule's menu acts on the rule itself; the list does the rest.
+    expect(
+      screen.getAllByRole("menuitem").map((item) => item.textContent),
+    ).toEqual(["Duplicate rule", "Delete rule"]);
+    // Each with its icon.
+    for (const item of screen.getAllByRole("menuitem"))
+      expect(item.querySelector("svg")).not.toBeNull();
     await userEvent.keyboard("{Escape}");
     await userEvent.click(screen.getByRole("button", { name: "Alpha" }));
     fireEvent.contextMenu(screen.getByRole("button", { name: "Gamma" }));
     expect(
       screen.getAllByRole("menuitem").map((item) => item.textContent),
-    ).toEqual(actions);
+    ).toEqual([
+      "Duplicate rule",
+      "Move out of topic",
+      "Delete rule",
+    ]);
+    // The list's menus carry icons too, on every item.
+    for (const item of screen.getAllByRole("menuitem"))
+      expect(item.querySelector("svg")).not.toBeNull();
     await userEvent.click(
       screen.getByRole("menuitem", { name: "Duplicate rule" }),
     );
@@ -323,35 +333,24 @@ describe("playbook rules sidebar", () => {
     expect(screen.getByRole("button", { name: "Gamma" })).toBeInTheDocument();
   });
 
-  it("moves a rule into a topic from its menu, without a Topic field", async () => {
-    const changed = vi.fn();
-    render(<Harness changed={changed} />);
+  it("leaves reordering and grouping to dragging", () => {
+    render(<Harness />);
     expect(screen.queryByLabelText("Topic", { exact: true })).toBeNull();
     fireEvent.contextMenu(screen.getByRole("button", { name: "Beta" }));
-    await userEvent.click(
-      screen.getByRole("menuitem", { name: "Move to Commercial" }),
-    );
-    const next = changed.mock.lastCall?.[0] as PlaybookContent;
-    expect(next.rules!.map((entry) => entry.id)).toEqual(["Alpha"]);
-    expect(next.topics[0].rules.map((entry) => entry.id)).toEqual([
-      "Gamma",
-      "Beta",
-    ]);
+    expect(
+      screen.getAllByRole("menuitem").map((item) => item.textContent),
+    ).toEqual(["Duplicate rule", "Delete rule"]);
   });
 
-  it("supports keyboard menu moves and removes a topic without deleting its rules", async () => {
+  it("opens a rule's menu from the keyboard and removes a topic without deleting its rules", async () => {
     render(<Harness />);
     const beta = screen.getByRole("button", { name: "Beta" });
     beta.focus();
     fireEvent.keyDown(beta, { key: "F10", shiftKey: true });
-    await userEvent.click(screen.getByRole("menuitem", { name: "Move up" }));
-    const sidebar = screen.getByRole("region", { name: "Topics and rules" });
     expect(
-      within(sidebar).getAllByRole("button", { pressed: false })[0],
-    ).toHaveTextContent("Alpha");
-    expect(sidebar.querySelector("button[aria-pressed]")).toHaveTextContent(
-      "Beta",
-    );
+      screen.getByRole("menuitem", { name: "Duplicate rule" }),
+    ).toBeVisible();
+    await userEvent.keyboard("{Escape}");
     fireEvent.contextMenu(screen.getByLabelText("Topic 1 name"));
     await userEvent.click(
       screen.getByRole("menuitem", { name: "Remove topic (keep rules)" }),
@@ -442,11 +441,7 @@ describe("playbook rules sidebar", () => {
     expect(screen.getByRole("button", { name: "Rule actions" })).toBeDisabled();
     fireEvent.contextMenu(alpha);
     for (const label of [
-      "Add rule",
-      "Add topic",
       "Duplicate rule",
-      "Move up",
-      "Move down",
       "Delete rule",
     ]) {
       expect(screen.getByRole("menuitem", { name: label })).toHaveAttribute(
@@ -458,6 +453,14 @@ describe("playbook rules sidebar", () => {
       screen.getByRole("menuitem", { name: "Delete rule" }),
     );
     expect(changed).not.toHaveBeenCalled();
+    // Adding lives in the list's own menu, closed to readers too.
+    await userEvent.click(screen.getByRole("button", { name: "Rules actions" }));
+    for (const label of ["Add rule", "Add topic"])
+      expect(screen.getByRole("menuitem", { name: label })).toHaveAttribute(
+        "aria-disabled",
+        "true",
+      );
+    await userEvent.keyboard("{Escape}");
     rerender(<Harness changed={changed} />);
     const dataTransfer = transfer();
     dataTransfer.setData("application/x-mike-playbook-rule", "Alpha");

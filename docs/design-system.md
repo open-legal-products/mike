@@ -267,10 +267,11 @@ applies this participation filter to its already-authorized project list.
 The picker and FileDirectory share the compact native `SelectionCheckbox` in
 `components/ui/selection-checkbox.tsx`, including its mixed and disabled states.
 
-The app sidebar's History combines assistant chats and tabular reviews from
-the active workspace, including reviews inside projects. Both sources are
-fetched by last update and merged newest first. Older rows stay buffered until
-both paginated sources reach them, so fetching another page does not reveal
+The app sidebar's History combines assistant chats, tabular reviews, and the
+caller's own playbook runs from the active workspace, including reviews inside
+projects. Chats and reviews are fetched by last update and runs by start time,
+then merged newest first. Older rows stay buffered until
+every paginated source reaches them, so fetching another page does not reveal
 newer items below older ones. Review rows use the tabular-review SVG icon and
 open the review's project or standalone route. Project reviews prefix their
 title with the project name. Project prefixes and chat Shared labels use the
@@ -282,6 +283,11 @@ green gradient until
 opened, matching unread chat completion. Failed, stopped, and incomplete
 reviews do not get the completion icon. Status polling reads small authorized
 snapshots only for running reviews; it never downloads their documents.
+Playbook run rows use the playbook SVG icon, prefix the document name with the
+playbook's name in the same muted treatment, and open the run on its
+playbook's Runs tab. They show the same spinner while running and the same
+green tick once finished, until the run's results are on screen; a failed or
+interrupted run gets no tick.
 Activity refreshes keep the loaded History rows and pagination visible; only
 the affected review's icon changes. A workspace change still clears the old list.
 Review overview project filters, create choices and move destinations also stay

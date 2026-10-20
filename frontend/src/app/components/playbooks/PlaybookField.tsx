@@ -1,6 +1,6 @@
 "use client";
 
-import { useId, useState } from "react";
+import { useId } from "react";
 import {
   SettingsTextInput,
   SETTINGS_CONTROL_CLASS,
@@ -69,55 +69,6 @@ export function PlaybookField({
           {description}
         </p>
       )}
-    </div>
-  );
-}
-
-function parseList(text: string) {
-  return text
-    .split(",")
-    .map((item) => item.trim())
-    .filter(Boolean);
-}
-
-/**
- * A comma-separated list, such as document types. The field keeps the typed
- * text so a trailing comma survives until the next entry is typed.
- */
-export function PlaybookListField({
-  label,
-  value,
-  onChange,
-  placeholder,
-}: {
-  label: string;
-  value: string[];
-  onChange: (value: string[]) => void;
-  placeholder?: string;
-}) {
-  const id = useId();
-  const [text, setText] = useState(() => value.join(", "));
-  // Adopt a list replaced from outside, such as another playbook or an import.
-  const [synced, setSynced] = useState(value);
-  if (synced !== value) {
-    setSynced(value);
-    if (parseList(text).join("\n") !== value.join("\n"))
-      setText(value.join(", "));
-  }
-  return (
-    <div className="min-w-0">
-      <label htmlFor={id} className={`mb-2 block ${PLAYBOOK_LABEL_CLASS}`}>
-        {label}
-      </label>
-      <SettingsTextInput
-        id={id}
-        value={text}
-        placeholder={placeholder}
-        onChange={(event) => {
-          setText(event.target.value);
-          onChange(parseList(event.target.value));
-        }}
-      />
     </div>
   );
 }

@@ -901,6 +901,7 @@ export async function runLLMStream(params: {
           workflowsApplied,
           docsEdited,
           askInputsEvents,
+          textCardEvents,
           courtlistenerEvents,
           caseCitationEvents,
           mcpEvents,
@@ -950,6 +951,7 @@ export async function runLLMStream(params: {
           });
         }
         events.push(...(documentSearchEvents ?? []));
+        events.push(...(textCardEvents ?? []));
         for (const dl of docsCreated) {
           events.push({
             type: "doc_created",

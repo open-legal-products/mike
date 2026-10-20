@@ -1,4 +1,5 @@
 import JSZip from "jszip";
+import { extractPdfText } from "../../lib/pdfText";
 
 export type PlaybookSourceRef = {
   id: string;
@@ -12,7 +13,7 @@ export type PlaybookSourceRef = {
 };
 
 export type PlaybookWordStructure = {
-  format: "docx";
+  format: "docx" | "pdf";
   blocks: Array<
     | {
         kind: "paragraph";
@@ -198,4 +199,49 @@ export async function extractPlaybookWordStructure(
 
   if (!text) throw new Error("The Word playbook does not contain readable text.");
   return { format: "docx", blocks, sources, text };
+}
+
+/** A line extractPdfText writes between pages, not text from the PDF. */
+const PDF_PAGE_MARKER = /^\[Page \d+(?: form fields)?\]$/;
+
+/**
+ * The same structure for a PDF playbook. A PDF has no paragraph or table
+ * markup, so each block of lines extractPdfText separates with a vertical
+ * gap becomes one cited paragraph, and a paragraph never spans a page.
+ * The text is empty when no page has a text layer.
+ */
+export async function extractPlaybookPdfStructure(
+  buffer: Buffer,
+): Promise<PlaybookWordStructure> {
+  const raw = await extractPdfText(
+    buffer.buffer.slice(
+      buffer.byteOffset,
+      buffer.byteOffset + buffer.byteLength,
+    ) as ArrayBuffer,
+  );
+  const blocks: PlaybookWordStructure["blocks"] = [];
+  const sources: PlaybookSourceRef[] = [];
+  let lines: string[] = [];
+  const flush = () => {
+    const text = lines.join(" ").replace(/\s+/g, " ").trim();
+    lines = [];
+    if (!text) return;
+    const sourceRef = `P${sources.length + 1}`;
+    sources.push({ id: sourceRef, kind: "paragraph", text, style: null, level: null });
+    blocks.push({ kind: "paragraph", sourceRef, text, style: null, level: null });
+  };
+  for (const line of raw.split("\n")) {
+    if (!line.trim() || PDF_PAGE_MARKER.test(line.trim())) flush();
+    else lines.push(line.trim());
+  }
+  flush();
+
+  const text = blocks
+    .map((block) =>
+      block.kind === "paragraph" ? `[${block.sourceRef}] ${block.text}` : "",
+    )
+    .join("\n\n")
+    .trim();
+  // Empty for a scanned PDF; the import explains that to the user.
+  return { format: "pdf", blocks, sources, text };
 }

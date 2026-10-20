@@ -1,4 +1,4 @@
--- Migration date: 2026-10-18
+-- Migration date: 2026-10-21
 -- Defaults for subagents from Settings > Model Preferences. The assistant is
 -- told them and follows them unless the conversation asks for something else.
 alter table public.user_profiles

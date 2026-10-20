@@ -25,7 +25,7 @@ import { UploadOverlay } from "./UploadOverlay";
 import { COMPOSER_SEND_BUTTON_CLASS } from "@/shared/ui/ComposerSendButtonUI.styles";
 import { ExcerptModalUI } from "@/shared/ui/ExcerptModalUI";
 import { ExcerptPillUI } from "@/shared/ui/ExcerptPillUI";
-import { FileTypeIcon } from "../shared/FileTypeIcon";
+import { DocumentPill } from "../shared/DocumentPill";
 import { AddDocumentsModal } from "../modals/AddDocumentsModal";
 import { AssistantWorkflowModal } from "./AssistantWorkflowModal";
 import { WORKFLOW_SLASH_MENU_ID, WorkflowSlashMenu } from "./WorkflowSlashMenu";
@@ -98,6 +98,8 @@ export interface ChatInputHandle {
         prompt?: string,
         options?: { initialDocumentTab?: DirectoryTab },
     ) => void;
+    /** Attaches a playbook to run on the documents, as the picker does. */
+    attachPlaybook: (playbook: { id: string; title: string }) => void;
 }
 
 interface Props {
@@ -515,6 +517,10 @@ function ChatInputForChatImpl(
             );
             requestAnimationFrame(() => textareaRef.current?.focus());
         },
+        attachPlaybook: (playbook) => {
+            setSelectedPlaybook(playbook);
+            requestAnimationFrame(() => textareaRef.current?.focus());
+        },
         startWorkflow: (workflow, prompt) => {
             setSelectedWorkflow(workflow);
             if (prompt !== undefined) setValue(prompt);
@@ -800,56 +806,23 @@ function ChatInputForChatImpl(
                                     </button>
                                 </div>
                             )}
-                            {attachedDocs.map((doc) => {
-                                const documentLabel = (
-                                    <>
-                                        <FileTypeIcon
-                                            fileType={doc.file_type}
-                                            className="h-2.5 w-2.5"
-                                        />
-                                        <span className="max-w-[140px] truncate">
-                                            {doc.filename}
-                                        </span>
-                                    </>
-                                );
-                                return (
-                                    <div
-                                        key={doc.id}
-                                        className={`inline-flex items-center rounded-[10px] text-xs text-gray-800 ${LIQUID_GLASS_FLAT_CLASS}`}
-                                    >
-                                        {onDocumentClick ? (
-                                            <button
-                                                type="button"
-                                                onClick={() =>
-                                                    onDocumentClick(doc)
-                                                }
-                                                aria-label={`Open ${doc.filename}`}
-                                                className="inline-flex min-w-0 items-center gap-1 py-0.5 pl-2 transition-colors hover:text-gray-950"
-                                            >
-                                                {documentLabel}
-                                            </button>
-                                        ) : (
-                                            <span className="inline-flex min-w-0 items-center gap-1 py-0.5 pl-2">
-                                                {documentLabel}
-                                            </span>
-                                        )}
-                                        <button
-                                            type="button"
-                                            onClick={() =>
-                                                setAttachedDocs((prev) =>
-                                                    prev.filter(
-                                                        (d) => d.id !== doc.id,
-                                                    ),
-                                                )
-                                            }
-                                            aria-label={`Remove ${doc.filename}`}
-                                            className="mx-1 rounded-full p-0.5 text-gray-400 transition-colors hover:bg-gray-900/5 hover:text-gray-700"
-                                        >
-                                            <X className="h-2.5 w-2.5" />
-                                        </button>
-                                    </div>
-                                );
-                            })}
+                            {attachedDocs.map((doc) => (
+                                <DocumentPill
+                                    key={doc.id}
+                                    filename={doc.filename}
+                                    fileType={doc.file_type}
+                                    onOpen={
+                                        onDocumentClick
+                                            ? () => onDocumentClick(doc)
+                                            : undefined
+                                    }
+                                    onRemove={() =>
+                                        setAttachedDocs((prev) =>
+                                            prev.filter((d) => d.id !== doc.id),
+                                        )
+                                    }
+                                />
+                            ))}
                             {excerpts.map((excerpt, index) => (
                                 <ExcerptPillUI
                                     key={`${index}-${excerpt.text}`}

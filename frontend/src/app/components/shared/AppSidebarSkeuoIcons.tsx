@@ -84,6 +84,11 @@ export function TabularReviewCompleteIcon(props: IconProps) {
   return <AppSidebarIcon name="features/tabular-review-complete" {...props} />;
 }
 
+/** The same green tick as a finished review, for a finished playbook run. */
+export function PlaybookRunCompleteIcon(props: IconProps) {
+  return <AppSidebarIcon name="features/tabular-review-complete" {...props} />;
+}
+
 export function WorkflowSkeuoIcon(props: IconProps) {
   return <AppSidebarIcon name="features/workflow" {...props} />;
 }

@@ -14,6 +14,17 @@ export function assistantHistoryContent(message: {
   content: string;
   events?: AssistantEvent[];
 }): string {
+  // Cards are delivered outside prose. Include them in order even after a
+  // reload, when `content` contains only the joined prose from this turn.
+  if (message.events?.some((event) => event.type === "text_card")) {
+    return message.events
+      .flatMap((event) => {
+        if (event.type === "content") return [event.text];
+        if (event.type === "text_card") return [`${event.title}\n${event.text}`];
+        return [];
+      })
+      .join("\n\n");
+  }
   if (message.content) return message.content;
   return (message.events ?? [])
     .filter(

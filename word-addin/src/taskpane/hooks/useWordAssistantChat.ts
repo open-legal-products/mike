@@ -790,6 +790,13 @@ export function useWordAssistantChat({
                 );
                 publishAssistantEvents();
               },
+              onTextCard: (event) => {
+                if (!requestIsCurrent()) return;
+                assistantEvents = [
+                  ...completeAssistantEvents(assistantEvents), event,
+                ];
+                publishAssistantEvents();
+              },
           };
           const onStreamText = (chunk: string): void => {
               if (!requestIsCurrent()) return;

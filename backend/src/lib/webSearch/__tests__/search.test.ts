@@ -58,6 +58,7 @@ describe("Mike's web search", () => {
         expect(String(url)).toContain("https://api.search.brave.com/res/v1/web/search");
         expect(url.searchParams.get("q")).toBe("directors duties s172");
         expect(init.headers).toMatchObject({ "x-subscription-token": "brave-key" });
+        expect(init.redirect).toBe("manual");
     });
 
     it.each([

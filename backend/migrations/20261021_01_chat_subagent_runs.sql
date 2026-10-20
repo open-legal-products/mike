@@ -1,4 +1,4 @@
--- Migration date: 2026-10-18
+-- Migration date: 2026-10-21
 -- What a subagent did in a chat answer, so the assistant can continue it in a
 -- later turn without the subagent redoing its reading. Only the backend reads
 -- or writes these rows; they expire after 30 days and go with their chat,

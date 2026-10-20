@@ -4,17 +4,11 @@ import { Plus, Upload } from "lucide-react";
 import { TableToolbar } from "@/app/components/shared/TableToolbar";
 import { TabPillButtonUI } from "@/shared/ui/TabPillButtonUI";
 
-export const PLAYBOOK_VIEWS = [
-  "overview",
-  "rules",
-  "references",
-  "runs",
-] as const;
+// A playbook's details are edited from a dialog, as in other features.
+export const PLAYBOOK_VIEWS = ["rules", "references", "runs"] as const;
 export type PlaybookView = (typeof PLAYBOOK_VIEWS)[number];
 
-const VIEWS: { id: PlaybookView; label: string; name?: string }[] = [
-  // Named apart from the rule editor's own Overview tab.
-  { id: "overview", label: "Overview", name: "Playbook overview" },
+const VIEWS: { id: PlaybookView; label: string }[] = [
   { id: "rules", label: "Rules" },
   { id: "references", label: "References" },
   { id: "runs", label: "Runs" },
@@ -27,6 +21,7 @@ export function PlaybookToolbar({
   onViewChange,
   onAddRule,
   onUpload,
+  onNewRun,
 }: {
   disabled: boolean;
   canEdit: boolean;
@@ -35,6 +30,8 @@ export function PlaybookToolbar({
   onAddRule: () => void;
   /** Adds a reference document; shown on References. */
   onUpload: () => void;
+  /** Opens the new-run form; shown on Runs. */
+  onNewRun: () => void;
 }) {
   return (
     <nav aria-label="Playbook toolbar" className="shrink-0">
@@ -50,7 +47,6 @@ export function PlaybookToolbar({
                 <TabPillButtonUI
                   key={entry.id}
                   active={view === entry.id}
-                  aria-label={entry.name}
                   onClick={() => onViewChange(entry.id)}
                 >
                   {entry.label}
@@ -64,6 +60,12 @@ export function PlaybookToolbar({
               >
                 <Plus aria-hidden="true" className="h-3.5 w-3.5" />
                 New rule
+              </TabPillButtonUI>
+            )}
+            {view === "runs" && (
+              <TabPillButtonUI disabled={disabled} onClick={onNewRun}>
+                <Plus aria-hidden="true" className="h-3.5 w-3.5" />
+                New run
               </TabPillButtonUI>
             )}
             {view === "references" && (

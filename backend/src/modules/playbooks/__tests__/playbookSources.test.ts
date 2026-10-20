@@ -188,6 +188,11 @@ describe("listing supplementary documents", () => {
   });
 });
 
+/** A key shaped exactly as the upload-URL route mints it. */
+function staged(userId: string): string {
+  return `playbooks/${userId}/source-uploads/11111111-2222-4333-8444-555555555555.pdf`;
+}
+
 describe("adding supplementary documents", () => {
   it("copies a staged upload into the playbook with its text", async () => {
     const { db, tables } = database({ playbooks: [book()] });
@@ -196,7 +201,7 @@ describe("adding supplementary documents", () => {
       "owner@example.com",
       "book",
       {
-        storageKey: "playbooks/owner/source-uploads/staged.pdf",
+        storageKey: staged("owner"),
         filename: "Retention policy.pdf",
       },
       db,
@@ -225,10 +230,30 @@ describe("adding supplementary documents", () => {
         "owner",
         "owner@example.com",
         "book",
-        { storageKey: "playbooks/someone/source-uploads/x.pdf", filename: "x.pdf" },
+        { storageKey: staged("someone"), filename: "x.pdf" },
         db,
       ),
     ).rejects.toMatchObject({ status: 400 });
+    expect(downloadFile).not.toHaveBeenCalled();
+    expect(tables.playbook_sources).toHaveLength(0);
+  });
+
+  it("refuses a staged key that traverses out of the caller's prefix", async () => {
+    const { db, tables } = database({ playbooks: [book()] });
+    await expect(
+      addPlaybookSourceFromUpload(
+        "owner",
+        "owner@example.com",
+        "book",
+        {
+          storageKey:
+            "playbooks/owner/source-uploads/../../../documents/victim/d1/source.pdf",
+          filename: "x.pdf",
+        },
+        db,
+      ),
+    ).rejects.toMatchObject({ status: 400 });
+    expect(headFile).not.toHaveBeenCalled();
     expect(downloadFile).not.toHaveBeenCalled();
     expect(tables.playbook_sources).toHaveLength(0);
   });
@@ -240,7 +265,7 @@ describe("adding supplementary documents", () => {
         "reader",
         "reader@example.com",
         "book",
-        { storageKey: "playbooks/reader/source-uploads/x.pdf", filename: "x.pdf" },
+        { storageKey: staged("reader"), filename: "x.pdf" },
         db,
       ),
     ).rejects.toMatchObject({ status: 403 });
@@ -250,7 +275,7 @@ describe("adding supplementary documents", () => {
       "editor",
       "editor@example.com",
       "book",
-      { storageKey: "playbooks/editor/source-uploads/x.pdf", filename: "x.pdf" },
+      { storageKey: staged("editor"), filename: "x.pdf" },
       db,
     );
     // Stored under the creator's prefix, whoever added it.
@@ -272,7 +297,7 @@ describe("adding supplementary documents", () => {
         "owner",
         "owner@example.com",
         "book",
-        { storageKey: "playbooks/owner/source-uploads/x.pdf", filename: "x.pdf" },
+        { storageKey: staged("owner"), filename: "x.pdf" },
         db,
       ),
     ).rejects.toMatchObject({ status: 409 });

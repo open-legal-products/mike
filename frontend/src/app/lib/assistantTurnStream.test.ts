@@ -45,6 +45,21 @@ afterEach(() => {
 });
 
 describe("consumeAssistantTurnStream", () => {
+  it("keeps text cards between prose segments and ignores malformed cards", async () => {
+    const turn = begin();
+    const card = { type: "text_card" as const, card_id: "card-1", title: "Draft", text: "First paragraph.\n\nSecond paragraph." };
+    await consumeAssistantTurnStream(sseResponse([
+      frame(1, { type: "content_delta", text: "Before." }),
+      frame(2, card),
+      frame(3, { type: "content_delta", text: "After." }),
+      frame(4, { type: "text_card", title: "Incomplete" }),
+      "data: [DONE]\n\n",
+    ]), { turn, sink: createTurnEventSink(turn, []), cursor: createTurnCursor("chat-a") });
+    expect(turn.turn.assistant.events).toEqual([
+      { type: "content", text: "Before." }, card, { type: "content", text: "After.", isStreaming: true },
+    ]);
+    turn.finish();
+  });
   it("tracks the chat, turn and last sequence number from the frames", async () => {
     const turn = begin();
     const sink = createTurnEventSink(turn, []);
@@ -1722,6 +1737,87 @@ describe("web activity", () => {
   const web = (events: AssistantEvent[] | undefined) =>
     events!.filter((e) => e.type.startsWith("web_"));
 
+  it("keeps live activity and completes searches by ID without losing their query", async () => {
+    const starts = [
+      { type: "web_search_start", search_id: "ws-1", query: "late payment interest" },
+      { type: "web_search_start", search_id: "ws-2", query: "directors duties" },
+      { type: "web_read_start", read_id: "wr-1", url: "https://law.example/act", title: "Act" },
+    ];
+    const live = web(await eventsOf([...starts, starts[0], starts[2]]));
+    expect(live).toEqual([
+      { type: "web_search", search_id: "ws-1", query: "late payment interest", results: [], isStreaming: true },
+      { type: "web_search", search_id: "ws-2", query: "directors duties", results: [], isStreaming: true },
+      { type: "web_read", read_id: "wr-1", url: "https://law.example/act", title: "Act", isStreaming: true },
+    ]);
+
+    expect(web(await eventsOf([
+      { type: "web_search", search_id: "ws-2", error: "Search timed out." },
+    ], live))).toEqual([
+      live[0],
+      { type: "web_search", search_id: "ws-2", query: "directors duties", results: [], error: "Search timed out.", isStreaming: false },
+      live[2],
+    ]);
+  });
+
+  it("keeps completion frames received without starts after reconnecting", async () => {
+    expect(await eventsOf([
+      { type: "web_search", search_id: "ws-1", query: 42, results: [] },
+      { type: "web_read", read_id: "wr-1", url: "https://law.example/act", title: "Act" },
+    ])).toEqual([
+      { type: "web_search", search_id: "ws-1", query: "", results: [], isStreaming: false },
+      { type: "web_read", read_id: "wr-1", url: "https://law.example/act", title: "Act", isStreaming: false },
+      thinking,
+    ]);
+  });
+
+  it.each([
+    { type: "web_search_start" },
+    { type: "web_search", search_id: 1 },
+    { type: "web_read_start", url: "https://law.example/act" },
+    { type: "web_read", read_id: 1, url: "https://law.example/act" },
+    { type: "web_read_start", read_id: "wr-1" },
+    { type: "web_read", read_id: "wr-1", url: 1 },
+  ])("ignores malformed web activity: %j", async (event) => {
+    expect(await eventsOf([event])).toEqual([]);
+  });
+
+  it.each([undefined, "", 42])("ignores an unusable error or page title: %j", async (value) => {
+    expect(web(await eventsOf([
+      { type: "web_search", search_id: "ws-1", query: "law", error: value },
+      { type: "web_read", read_id: "wr-1", url: "https://law.example/act", title: value, error: value },
+    ]))).toEqual([
+      { type: "web_search", search_id: "ws-1", query: "law", results: [], isStreaming: false },
+      { type: "web_read", read_id: "wr-1", url: "https://law.example/act", isStreaming: false },
+    ]);
+  });
+
+  it("keeps valid cited sources and search results while discarding malformed entries", async () => {
+    const sources = [
+      null, {}, "not a source", { url: 42 }, { url: "" },
+      { url: "https://law.example/act", title: "Act" },
+      { url: "https://law.example/order" },
+      { url: "https://law.example/rules", title: "" },
+      { url: "https://law.example/case", title: 42 },
+    ];
+    const valid = [
+      { url: "https://law.example/act", title: "Act" },
+      { url: "https://law.example/order" },
+      { url: "https://law.example/rules" },
+      { url: "https://law.example/case" },
+    ];
+    expect(web(await eventsOf([
+      { type: "web_search", search_id: "ws-1", query: "law", results: sources },
+      { type: "web_sources", sources },
+    ]))).toEqual([
+      { type: "web_search", search_id: "ws-1", query: "law", results: valid, isStreaming: false },
+      { type: "web_sources", sources: valid },
+    ]);
+  });
+
+  it.each([undefined, null, {}, [], [null, { url: "" }]])("omits empty or malformed source lists: %j", async (sources) => {
+    expect(await eventsOf([{ type: "web_sources", sources }])).toEqual([]);
+  });
+
   it("completes a search and a read from their start frames", async () => {
     const events = await eventsOf([
       { type: "web_search_start", search_id: "ws-1", query: "late payment interest" },
@@ -1765,6 +1861,48 @@ describe("delegation", () => {
     type: "delegation", delegation_id: id, title: `Review ${id}`, task: "Summarise the lease.",
     status: "completed", brief: "Rent is due monthly.", events: [{ type: "doc_read", filename: "lease.pdf" }],
     model: "claude-haiku-4-5", effort: "standard",
+  });
+
+  it("retains the source run when a continued task omits its display labels", async () => {
+    expect(await eventsOf([
+      { type: "delegation_start", delegation_id: "d2", continued_from: "d1", title: null, task: 42 },
+    ])).toEqual([
+      { type: "delegation", delegation_id: "d2", continued_from: "d1", title: "", task: "", events: [], isStreaming: true },
+    ]);
+  });
+
+  it.each([
+    { type: "delegation_start" },
+    { type: "delegation_start", delegation_id: 42 },
+    { type: "delegation" },
+    { type: "delegation", delegation_id: 42 },
+  ])("ignores a delegation without a usable ID: %j", async (event) => {
+    expect(await eventsOf([event])).toEqual([]);
+  });
+
+  it("ignores orphan activity and clears missing activity only on the matching task", async () => {
+    expect(await eventsOf([
+      { type: "delegation_activity", delegation_id: "missing", name: "read_document" },
+      start("d1"),
+      start("d2"),
+      { type: "delegation_activity", delegation_id: "d1", name: "web_search" },
+      { type: "delegation_activity", delegation_id: "d2", name: "read_document" },
+      { type: "delegation_activity", delegation_id: "d1" },
+    ])).toEqual([
+      { ...running("d1"), activity: "" },
+      { ...running("d2"), activity: "read_document" },
+    ]);
+  });
+
+  it("retains a completed delegation received without its start after reconnecting", async () => {
+    expect(await eventsOf([
+      { type: "content_delta", text: "Earlier findings." },
+      finished("d1"),
+    ])).toEqual([
+      { type: "content", text: "Earlier findings." },
+      finished("d1"),
+      thinking,
+    ]);
   });
 
   it("shows the running step, then the persisted result", async () => {

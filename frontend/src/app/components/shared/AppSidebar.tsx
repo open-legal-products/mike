@@ -62,6 +62,9 @@ import { cn } from "@/app/lib/utils";
 import { useAssistantHistoryStatuses } from "@/app/hooks/useAssistantHistoryStatuses";
 import { useSidebarHistory } from "@/app/hooks/useSidebarHistory";
 import { useTabularHistoryStatuses } from "@/app/hooks/useTabularHistoryStatuses";
+import { usePlaybookRunHistoryStatuses } from "@/app/hooks/usePlaybookRunHistoryStatuses";
+import { useViewedPlaybookRun } from "@/app/lib/playbookRunActivity";
+import { SidebarPlaybookRunItem } from "@/app/components/shared/SidebarPlaybookRunItem";
 import { notifyWorkspaceSwitched } from "@/app/hooks/useItemWorkspace";
 import {
     LIQUID_GLASS_FLOAT_CLASS,
@@ -122,6 +125,9 @@ export function AppSidebar({ isOpen, onToggle }: AppSidebarProps) {
     const pathname = usePathname();
     const activeReviewId = pathname.match(/\/tabular-reviews\/([^/]+)/)?.[1] ?? null;
     const reviewStatuses = useTabularHistoryStatuses(history.reviews, activeReviewId);
+    // A run is on screen when its results are shown, wherever its page is.
+    const viewedRunId = useViewedPlaybookRun();
+    const runStatuses = usePlaybookRunHistoryStatuses(history.playbookRuns, viewedRunId);
     const routeChatId = useMemo(() => {
         if (pathname.startsWith("/assistant/chat/")) {
             return pathname.split("/").pop() ?? null;
@@ -819,6 +825,18 @@ export function AppSidebar({ isOpen, onToggle }: AppSidebarProps) {
                                                             </Link>
                                                         );
                                                     }
+                                                    if (entry.kind === "playbookRun") {
+                                                        const run = entry.item;
+                                                        return (
+                                                            <SidebarPlaybookRunItem
+                                                                key={`playbook-run:${run.id}`}
+                                                                run={run}
+                                                                isActive={viewedRunId === run.id}
+                                                                status={runStatuses.statuses[run.id]}
+                                                                onOpen={() => runStatuses.clearStatus(run.id)}
+                                                            />
+                                                        );
+                                                    }
                                                     const chat = entry.item;
                                                     return (
                                                     <SidebarChatItem
@@ -880,7 +898,7 @@ export function AppSidebar({ isOpen, onToggle }: AppSidebarProps) {
                                             onClick={() => void history.retry()}
                                             className="mx-3.5 my-2 rounded text-left text-xs text-gray-500 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500/40"
                                         >
-                                            Reviews could not be loaded. Try again
+                                            Some history could not be loaded. Try again
                                         </button>
                                     )}
                                 </div>

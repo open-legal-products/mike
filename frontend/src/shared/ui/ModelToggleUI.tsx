@@ -10,6 +10,7 @@ import {
 } from "lucide-react";
 import { twMerge } from "tailwind-merge";
 import { TabPillButtonUI } from "./TabPillButtonUI";
+import { textButtonUIClassName } from "./TextButtonUI.styles";
 import {
   DROPDOWN_ROWS_CLASS,
   Dropdown,
@@ -154,7 +155,8 @@ export interface ModelToggleUIProps {
   compact?: boolean;
   /** `default` matches the toolbar's other buttons; `muted` is the lighter chat-composer look. */
   tone?: "muted" | "default";
-  modalInput?: boolean;
+  /** A full-width form field: liquid glass, or "flat" grey like a flat select. */
+  modalInput?: boolean | "flat";
   /** Use the shared table-toolbar pill for the picker trigger. */
   toolbar?: boolean;
   /** Extra classes for the compact trigger button, for a host row's sizing. */
@@ -165,6 +167,13 @@ export interface ModelToggleUIProps {
   onReasoningChange?: (level: ReasoningLevel) => void;
   reasoningLevels?: readonly ReasoningLevel[];
 }
+
+// The grey filled field of ModalSelect's flat variant, so the two can sit
+// side by side in a pane's form.
+const FLAT_INPUT_CLASS = textButtonUIClassName({
+  className:
+    "flex h-10 w-full items-center justify-between gap-2 rounded-xl bg-app-surface-active px-3 text-sm text-gray-700",
+});
 
 const itemClassName =
   "theme-dropdown-item flex cursor-pointer select-none items-center gap-2 rounded-md px-2.5 py-1.5 text-xs text-gray-700 outline-none transition-colors focus:text-gray-900 data-[highlighted]:text-gray-900 data-[disabled]:pointer-events-none data-[disabled]:opacity-50 [&>*]:pointer-events-none";
@@ -234,6 +243,8 @@ export function ModelToggleUI({
         className={
           toolbar
             ? twMerge("min-w-0 max-w-full", triggerClassName)
+            : modalInput === "flat"
+            ? twMerge(FLAT_INPUT_CLASS, "justify-start text-gray-400")
             : modalInput
             ? `flex h-10 w-full items-center rounded-xl px-3 text-sm text-gray-400 ${LIQUID_GLASS_SUBTLE_CLASS} ${LIQUID_GLASS_HOVER_CLASS} transition-colors enabled:cursor-pointer enabled:hover:text-gray-700 disabled:cursor-default focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500/40 focus-visible:ring-offset-2`
             : twMerge(
@@ -266,6 +277,8 @@ export function ModelToggleUI({
           className={
             toolbar
               ? twMerge("min-w-0 max-w-full", triggerClassName)
+              : modalInput === "flat"
+              ? FLAT_INPUT_CLASS
               : modalInput
               ? `flex h-10 w-full items-center justify-between gap-2 rounded-xl px-3 text-sm text-gray-700 ${LIQUID_GLASS_SUBTLE_CLASS} ${LIQUID_GLASS_HOVER_CLASS} transition-colors enabled:cursor-pointer disabled:cursor-default disabled:opacity-60 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500/40 focus-visible:ring-offset-2 ${open ? LIQUID_GLASS_SELECTED_CLASS : ""}`
               : twMerge(

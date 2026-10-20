@@ -55,8 +55,8 @@ interface Props {
   routerSelections?: Partial<RouterSelections>;
   compact?: boolean;
   tone?: "muted" | "default";
-  /** Render as a full-width liquid-glass control inside a modal form. */
-  modalInput?: boolean;
+  /** A full-width form field: liquid glass, or "flat" grey like a flat select. */
+  modalInput?: boolean | "flat";
   toolbar?: boolean;
   /** Extra classes for the compact trigger button, for a host row's sizing. */
   triggerClassName?: string;

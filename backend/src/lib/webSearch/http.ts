@@ -27,6 +27,10 @@ export async function fetchJson(
 ): Promise<Record<string, unknown>> {
     const response = await deps.fetch(url, {
         ...init,
+        // Every request carries an API key, and fetch forwards custom headers
+        // such as Brave's x-subscription-token across origins on a redirect.
+        // No search API needs one, so a 3xx fails like any other status.
+        redirect: "manual",
         signal: withTimeout(deps.signal, timeoutMs),
     });
     if (!response.ok) {

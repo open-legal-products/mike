@@ -1,4 +1,5 @@
 import type { ReactNode } from "react";
+export { TextCardUI } from "./TextCardUI";
 
 type EventDotColor = "green" | "gray" | "red";
 

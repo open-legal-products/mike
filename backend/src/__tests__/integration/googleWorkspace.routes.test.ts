@@ -211,6 +211,21 @@ describe("Google Workspace routes", () => {
       ).status,
     ).toBe(404);
   });
+  it("refuses to start consent for a service the operator switched off", async () => {
+    vi.stubEnv("GOOGLE_WORKSPACE_DISABLED_PROVIDERS", "gmail");
+    const res = await request(app).post("/user/integrations/gmail/oauth/start");
+    expect(res.status).toBe(404);
+    expect(res.body).toEqual({
+      code: "connector_unavailable",
+      detail: "Gmail is not offered on this Mike server.",
+    });
+    expect(mocks.start).not.toHaveBeenCalled();
+    mocks.start.mockResolvedValue({ authorizationUrl: "https://accounts.google.com/x" });
+    const calendar = await request(app).post(
+      "/user/integrations/google-calendar/oauth/start",
+    );
+    expect(calendar.status).toBe(200);
+  });
   it("passes setup steps through with the connector_setup_required code", async () => {
     mocks.start.mockRejectedValue(
       new ConnectorSetupError("Gmail needs an OAuth client."),

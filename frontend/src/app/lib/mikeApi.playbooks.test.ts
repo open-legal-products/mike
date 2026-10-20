@@ -14,9 +14,14 @@ import {
   uploadPlaybookSource,
   addPlaybookSourceFromDocument,
   deletePlaybookSource,
-  importPlaybook,
+  startPlaybookImport,
+  getPlaybookImport,
+  listRunningPlaybookImports,
   listPlaybookRuns,
   listAllPlaybookRuns,
+  deletePlaybookRun,
+  listPlaybookRunHistory,
+  getPlaybookRunStatuses,
   listPlaybooks,
   reviewDocumentWithPlaybook,
   updatePlaybook,
@@ -29,7 +34,6 @@ const path = "/api/playbooks/guide%2Fone%3Fview";
 const content: PlaybookContent = {
   name: "Guide",
   description: "",
-  globalGuidance: "",
   representedParty: "",
   documentTypes: [],
   jurisdictions: [],
@@ -111,6 +115,60 @@ describe("Playbooks API requests", () => {
       name: "all runs without a workspace filter",
       call: () => listAllPlaybookRuns(),
       url: "/api/playbooks/runs",
+      method: "GET",
+      body: undefined,
+    },
+    {
+      name: "run deletion",
+      call: () => deletePlaybookRun("run/one?two"),
+      url: "/api/playbooks/runs/run%2Fone%3Ftwo",
+      method: "DELETE",
+      body: undefined,
+    },
+    {
+      name: "run history",
+      call: () => listPlaybookRunHistory({}),
+      url: "/api/playbooks/runs/history",
+      method: "GET",
+      body: undefined,
+    },
+    {
+      name: "paged run history",
+      call: () =>
+        listPlaybookRunHistory({
+          workspace: "org/a",
+          before: "2026-10-19T00:00:00Z",
+          limit: 20,
+        }),
+      url: "/api/playbooks/runs/history?workspace=org%2Fa&before=2026-10-19T00%3A00%3A00Z&limit=20",
+      method: "GET",
+      body: undefined,
+    },
+    {
+      name: "run statuses",
+      call: () => getPlaybookRunStatuses(["run-1", "run-2"]),
+      url: "/api/playbooks/runs/status?ids=run-1%2Crun-2",
+      method: "GET",
+      body: undefined,
+    },
+    {
+      name: "import status",
+      call: () => getPlaybookImport("import/one?two"),
+      url: "/api/playbooks/imports/import%2Fone%3Ftwo",
+      method: "GET",
+      body: undefined,
+    },
+    {
+      name: "running imports",
+      call: () => listRunningPlaybookImports(),
+      url: "/api/playbooks/imports",
+      method: "GET",
+      body: undefined,
+    },
+    {
+      name: "running imports in a workspace",
+      call: () => listRunningPlaybookImports("org/a"),
+      url: "/api/playbooks/imports?workspace=org%2Fa",
       method: "GET",
       body: undefined,
     },
@@ -205,11 +263,14 @@ describe("Playbooks API requests", () => {
 });
 
 describe("Creating a playbook with no Word source", () => {
-  it("creates in the selected workspace", async () => {
+  it("creates in the selected workspace, with its access", async () => {
     fetchMock.mockResolvedValueOnce(json({ id: "org-guide" }));
-    await createPlaybook({ name: "  Guide  " }, "org-1");
+    await createPlaybook(
+      { name: "  Guide  ", visibility: "organization" },
+      "org-1",
+    );
     expect(JSON.parse(fetchMock.mock.calls[0][1].body)).toEqual({
-      name: "Guide", workspace: "org-1",
+      name: "Guide", visibility: "organization", workspace: "org-1",
     });
   });
 
@@ -265,7 +326,7 @@ describe("Playbook direct upload", () => {
         .mockResolvedValueOnce(new Response(null, { status: 200 }))
         .mockResolvedValueOnce(json(result));
 
-      await expect(importPlaybook(file, "test-model", name)).resolves.toEqual(
+      await expect(startPlaybookImport(file, "test-model", name)).resolves.toEqual(
         result,
       );
       expect(fetchMock).toHaveBeenCalledTimes(3);
@@ -317,7 +378,7 @@ describe("Playbook direct upload", () => {
         .mockResolvedValueOnce(new Response(null, { status: 200 }))
         .mockResolvedValueOnce(json({ id: "pb-1" }));
 
-      await importPlaybook(file, "test-model", undefined, playbookId, workspace);
+      await startPlaybookImport(file, "test-model", undefined, playbookId, workspace);
 
       expect(fetchMock).toHaveBeenNthCalledWith(
         3,
@@ -341,18 +402,33 @@ describe("Playbook direct upload", () => {
         new Response("private storage error", { status: 500 }),
       );
     await expect(
-      importPlaybook(new File(["text"], "guide.docx"), "test-model"),
+      startPlaybookImport(new File(["text"], "guide.docx"), "test-model"),
     ).rejects.toThrow("The playbook could not be uploaded. Please try again.");
     expect(fetchMock).toHaveBeenCalledTimes(2);
   });
 
+  it("compiles a saved document without staging an upload", async () => {
+    fetchMock.mockResolvedValueOnce(json({ id: "pb-1" }, 201));
+    await expect(
+      startPlaybookImport({ documentId: "doc-1" }, "test-model", " Standards "),
+    ).resolves.toEqual({ id: "pb-1" });
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    const [url, init] = fetchMock.mock.calls[0];
+    expect(String(url)).toMatch(/\/playbooks\/import$/);
+    expect(JSON.parse(String(init?.body))).toEqual({
+      documentId: "doc-1",
+      model: "test-model",
+      name: "Standards",
+    });
+  });
+
   it("does not upload when the API refuses the upload URL request", async () => {
     fetchMock.mockResolvedValueOnce(
-      json({ detail: "Playbook import currently requires a .docx file." }, 400),
+      json({ detail: "Playbook import requires a .docx or .pdf file." }, 400),
     );
     await expect(
-      importPlaybook(new File(["text"], "guide.txt"), "test-model"),
-    ).rejects.toThrow("Playbook import currently requires a .docx file.");
+      startPlaybookImport(new File(["text"], "guide.txt"), "test-model"),
+    ).rejects.toThrow("Playbook import requires a .docx or .pdf file.");
     expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 });
