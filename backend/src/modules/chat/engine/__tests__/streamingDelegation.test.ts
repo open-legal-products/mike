@@ -181,7 +181,7 @@ describe("runLLMStream delegation", () => {
       return { fullText: "Brief." };
     });
 
-    await runLLMStream({
+    const result = await runLLMStream({
       ...baseParams(),
       subagentDefaults: { model: "gemini-3.1-pro-preview", reasoning: "high" },
     });
@@ -190,6 +190,12 @@ describe("runLLMStream delegation", () => {
     expect(systemPrompt).toContain("gemini-3.1-pro-preview");
     expect(systemPrompt).toContain("reasoning high");
     expect(subagentReasoning).toBe("high");
+    // The record shows the reasoning it ran at and the tokens its effort allowed.
+    expect(delegationsIn(result.events)[0]).toMatchObject({
+      effort: "quick",
+      reasoning: "high",
+      token_budget: 600_000,
+    });
   });
 
   it("keeps the text of a delegated document out of the brief", async () => {
@@ -318,6 +324,38 @@ describe("runLLMStream delegation", () => {
       brief: "Partial findings.",
       usage: { input_tokens: 600_000, output_tokens: 0 },
     });
+  });
+
+  it("ends the answer with its own model, reasoning and summed tokens, which no subagent repeats", async () => {
+    streamChatWithTools.mockImplementation(async (params) => {
+      if (isSubagent(params)) {
+        params.callbacks?.onUsage?.({ inputTokens: 900, outputTokens: 90 }, "stop");
+        params.callbacks?.onContentDelta?.("Brief.");
+        return { fullText: "Brief." };
+      }
+      params.callbacks?.onUsage?.({ inputTokens: 1000, outputTokens: 50 }, "tool-calls");
+      await params.runTools?.([delegate("d1")]);
+      params.callbacks?.onUsage?.({ inputTokens: 1200, outputTokens: 150 }, "stop");
+      params.callbacks?.onContentDelta?.("Answer");
+      return { fullText: "Answer" };
+    });
+    const params = baseParams();
+
+    const result = await runLLMStream({ ...params, reasoning: "medium" });
+
+    const details = result.events.filter((e) => e.type === "response_details");
+    expect(details).toEqual([
+      {
+        type: "response_details",
+        model: "gemini-3.8-flash",
+        reasoning: "medium",
+        usage: { input_tokens: 2200, output_tokens: 200 },
+      },
+    ]);
+    expect(result.events.at(-1)).toEqual(details[0]);
+    expect(delegationsIn(result.events)[0].events.some((e) => e.type === "response_details")).toBe(false);
+    const frames = params.write.mock.calls.map(([chunk]) => String(chunk));
+    expect(frames.some((chunk) => chunk.includes('"type":"response_details"'))).toBe(true);
   });
 
   it("pauses a subagent that asks a question and hands the question back fenced", async () => {

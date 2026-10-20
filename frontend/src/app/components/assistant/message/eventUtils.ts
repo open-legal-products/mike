@@ -6,7 +6,8 @@ export function isRenderableEvent(event: AssistantEvent): boolean {
         event.type !== "ask_inputs_response" &&
         event.type !== "case_citation" &&
         event.type !== "case_opinions" &&
-        event.type !== "web_sources"
+        event.type !== "web_sources" &&
+        event.type !== "response_details"
     );
 }
 

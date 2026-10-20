@@ -365,6 +365,23 @@ export type DelegationEvent = {
   events: AssistantEvent[];
   model: string;
   effort: DelegationEffort;
+  /** The reasoning level the subagent ran at. Older runs did not record it. */
+  reasoning?: string;
+  /** The tokens its effort allowed. Older runs did not record it. */
+  token_budget?: number;
+  usage?: { input_tokens: number; output_tokens: number };
+};
+
+/**
+ * What an answer ran on, sent once at its end: the model, the reasoning level
+ * it was asked for, and the tokens the assistant itself used (each subagent
+ * reports its own on its delegation event). Shown only when the user turns on
+ * Settings > Features > Response details.
+ */
+export type ResponseDetailsEvent = {
+  type: "response_details";
+  model: string;
+  reasoning?: string;
   usage?: { input_tokens: number; output_tokens: number };
 };
 
@@ -471,6 +488,7 @@ export type AssistantEvent =
   | McpToolEvent
   | WebToolEvent
   | DelegationEvent
+  | ResponseDetailsEvent
   | {
       type: "case_opinions";
       cluster_id: number;

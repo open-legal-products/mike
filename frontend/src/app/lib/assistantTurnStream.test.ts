@@ -60,6 +60,21 @@ describe("consumeAssistantTurnStream", () => {
     ]);
     turn.finish();
   });
+  it("records what the answer ran on and drops malformed details", async () => {
+    const turn = begin();
+    await consumeAssistantTurnStream(sseResponse([
+      frame(1, { type: "response_details", model: "gpt-6-luna", reasoning: "medium", usage: { input_tokens: 1200, output_tokens: 80 } }),
+      frame(2, { type: "response_details", reasoning: "high" }),
+      frame(3, { type: "response_details", model: "gpt-6-luna", usage: { input_tokens: "lots" } }),
+      "data: [DONE]\n\n",
+    ]), { turn, sink: createTurnEventSink(turn, []), cursor: createTurnCursor("chat-a") });
+    expect(turn.turn.assistant.events).toEqual([
+      { type: "response_details", model: "gpt-6-luna", reasoning: "medium", usage: { input_tokens: 1200, output_tokens: 80 } },
+      { type: "response_details", model: "gpt-6-luna" },
+    ]);
+    turn.finish();
+  });
+
   it("tracks the chat, turn and last sequence number from the frames", async () => {
     const turn = begin();
     const sink = createTurnEventSink(turn, []);

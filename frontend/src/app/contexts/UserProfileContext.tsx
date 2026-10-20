@@ -79,6 +79,8 @@ interface UserProfile extends RouterProfileLists {
     mfaOnLogin: boolean;
     legalResearchUs: boolean;
     quickActionsVisible: boolean;
+    /** Whether responses and subagents show the model, effort and tokens they used. */
+    responseDetailsVisible: boolean;
     darkMode: boolean;
     projectMemoryDefault: boolean;
     apiKeys: ApiKeyState;
@@ -129,6 +131,7 @@ interface UserProfileContextType {
     updateMfaOnLogin: (enabled: boolean) => Promise<boolean>;
     updateLegalResearchUs: (enabled: boolean) => Promise<boolean>;
     updateQuickActionsVisible: (visible: boolean) => Promise<boolean>;
+    updateResponseDetailsVisible: (visible: boolean) => Promise<boolean>;
     /** Save one router's Model Selections. */
     updateRouterModels: (
         router: RouterSlug,
@@ -196,6 +199,7 @@ function toProfile(data: ApiUserProfile): UserProfile {
         lastSelectedReasoningLevel:
             profile.lastSelectedReasoningLevel ?? "high",
         mfaOnLogin: profile.mfaOnLogin === true,
+        responseDetailsVisible: profile.responseDetailsVisible === true,
         projectMemoryDefault: profile.projectMemoryDefault !== false,
         ...routerProfileLists(profile),
         apiKeys,
@@ -296,6 +300,7 @@ export function UserProfileProvider({ children }: { children: ReactNode }) {
                 mfaOnLogin: false,
                 legalResearchUs: true,
                 quickActionsVisible: true,
+                responseDetailsVisible: false,
                 ...routerProfileLists({}),
                 darkMode: false,
                 projectMemoryDefault: true,
@@ -629,6 +634,27 @@ export function UserProfileProvider({ children }: { children: ReactNode }) {
         [reportFailure, user],
     );
 
+    const updateResponseDetailsVisible = useCallback(
+        async (visible: boolean): Promise<boolean> => {
+            if (!user) return false;
+            try {
+                const updated = await updateUserProfile({
+                    responseDetailsVisible: visible,
+                });
+                setProfile((prev) =>
+                    prev ? { ...prev, ...toProfile(updated) } : null,
+                );
+                return true;
+            } catch (error) {
+                reportFailure(error, "update your response details setting", () => {
+                    void retryRef.current?.updateResponseDetailsVisible(visible);
+                });
+                return false;
+            }
+        },
+        [reportFailure, user],
+    );
+
     const updateRouterModels = useCallback(
         async (router: RouterSlug, models: string[]): Promise<boolean> => {
             if (!user) return false;
@@ -799,6 +825,7 @@ export function UserProfileProvider({ children }: { children: ReactNode }) {
             updateMfaOnLogin,
             updateLegalResearchUs,
             updateQuickActionsVisible,
+            updateResponseDetailsVisible,
             updateRouterModels,
             updateDarkMode,
             updateProjectMemoryDefault,
@@ -823,6 +850,7 @@ export function UserProfileProvider({ children }: { children: ReactNode }) {
             updateMfaOnLogin,
             updateLegalResearchUs,
             updateQuickActionsVisible,
+            updateResponseDetailsVisible,
             updateRouterModels,
             updateDarkMode,
             updateProjectMemoryDefault,

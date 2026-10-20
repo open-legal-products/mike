@@ -158,6 +158,30 @@ function parseWebToolFailure(data: Record<string, unknown>) {
   return typeof data.error === "string" && data.error ? { error: data.error } : {};
 }
 
+function parseResponseDetails(
+  data: Record<string, unknown>,
+): Extract<AssistantEvent, { type: "response_details" }> | null {
+  if (typeof data.model !== "string" || !data.model) return null;
+  const usage = (data.usage ?? null) as {
+    input_tokens?: unknown;
+    output_tokens?: unknown;
+  } | null;
+  const tokens =
+    usage &&
+    typeof usage.input_tokens === "number" &&
+    typeof usage.output_tokens === "number"
+      ? { input_tokens: usage.input_tokens, output_tokens: usage.output_tokens }
+      : null;
+  return {
+    type: "response_details",
+    model: data.model,
+    ...(typeof data.reasoning === "string" && data.reasoning
+      ? { reasoning: data.reasoning }
+      : {}),
+    ...(tokens ? { usage: tokens } : {}),
+  };
+}
+
 function delegationWithId(id: unknown) {
   return (e: AssistantEvent) => e.type === "delegation" && e.delegation_id === id;
 }
@@ -1161,6 +1185,12 @@ export async function consumeAssistantTurnStream(
         if (data.type === "web_sources") {
           const sources = parseWebSources(data.sources);
           if (sources.length) pushEvent({ type: "web_sources", sources });
+          continue;
+        }
+
+        if (data.type === "response_details") {
+          const details = parseResponseDetails(data);
+          if (details) pushEvent(details);
           continue;
         }
 

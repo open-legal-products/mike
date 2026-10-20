@@ -160,6 +160,7 @@ export function validateProfilePayload(body: unknown):
               last_selected_reasoning_level?: string | null;
               legal_research_us?: boolean;
               quick_actions_visible?: boolean;
+              response_details_visible?: boolean;
               updated_at: string;
           };
           routerModels?: Partial<Record<RouterSlug, string[]>>;
@@ -186,6 +187,7 @@ export function validateProfilePayload(body: unknown):
         "lastSelectedReasoningLevel",
         "legalResearchUs",
         "quickActionsVisible",
+        "responseDetailsVisible",
         "darkMode",
         "projectMemoryDefault",
         ...ROUTER_SLUGS.map((slug) => ROUTER_PROFILE_FIELDS[slug]),
@@ -216,6 +218,7 @@ export function validateProfilePayload(body: unknown):
         last_selected_reasoning_level?: string | null;
         legal_research_us?: boolean;
         quick_actions_visible?: boolean;
+        response_details_visible?: boolean;
         dark_mode?: boolean;
         project_memory_default?: boolean;
         updated_at: string;
@@ -431,6 +434,16 @@ export function validateProfilePayload(body: unknown):
             };
         }
         update.quick_actions_visible = raw.quickActionsVisible;
+    }
+
+    if ("responseDetailsVisible" in raw) {
+        if (typeof raw.responseDetailsVisible !== "boolean") {
+            return {
+                ok: false,
+                detail: "responseDetailsVisible must be a boolean",
+            };
+        }
+        update.response_details_visible = raw.responseDetailsVisible;
     }
 
     if ("darkMode" in raw) {

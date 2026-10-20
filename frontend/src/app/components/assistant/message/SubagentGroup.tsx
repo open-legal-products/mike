@@ -5,6 +5,7 @@ import type { AssistantEvent } from "../../shared/types";
 import { EventBlock, ReasoningContent } from "./EventBlocks";
 import { EventChevron, EventDisclosureButton, EventLabel } from "./EventDisclosure";
 import { isRenderableEvent, toolCallLabel } from "./eventUtils";
+import { subagentDetailsText } from "./responseDetails";
 
 export type DelegationEvent = Extract<AssistantEvent, { type: "delegation" }>;
 
@@ -162,10 +163,12 @@ function SubagentPill({
 function SubagentDetails({
     id,
     event,
+    showDetails,
     renderSteps,
 }: {
     id: string;
     event: DelegationEvent;
+    showDetails: boolean;
     renderSteps: RenderSteps;
 }) {
     const status = subagentStatus(event);
@@ -173,6 +176,7 @@ function SubagentDetails({
     const hasSteps = !streaming && stepCount(event) > 0;
     const hasBrief = !streaming && !!event.brief;
     const hasQuestion = !streaming && !!event.question;
+    const details = showDetails ? subagentDetailsText(event) : "";
 
     return (
         <div
@@ -231,6 +235,13 @@ function SubagentDetails({
                     </p>
                 </EventBlock>
             )}
+            {/* Settings > Features > Response details, at the right end like
+                the details under Mike's own answer. */}
+            {details && (
+                <p className="self-end text-right font-serif text-sm text-gray-400 [overflow-wrap:anywhere]">
+                    {details}
+                </p>
+            )}
         </div>
     );
 }
@@ -244,12 +255,15 @@ function SubagentDetails({
 export function SubagentGroup({
     delegations,
     tints,
+    showDetails = false,
     showConnectorAfter,
     renderSteps,
 }: {
     delegations: DelegationEvent[];
     /** Each subagent's colour, from `subagentTints` over the whole message. */
     tints: Map<string, MikeIconTint>;
+    /** Show each subagent's model, effort and tokens (Settings > Features). */
+    showDetails?: boolean;
     /** Whether one of Mike's steps follows the group. */
     showConnectorAfter: boolean;
     renderSteps: RenderSteps;
@@ -287,6 +301,7 @@ export function SubagentGroup({
                         key={selected.delegation_id}
                         id={detailsId}
                         event={selected}
+                        showDetails={showDetails}
                         renderSteps={renderSteps}
                     />
                 )}

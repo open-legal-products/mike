@@ -26,11 +26,15 @@ export type UserProfileRow = {
     mfa_on_login: boolean | null;
     legal_research_us: boolean | null;
     quick_actions_visible: boolean | null;
+    response_details_visible?: boolean | null;
     dark_mode: boolean | null;
     project_memory_default: boolean | null;
 };
 
 const PROFILE_SELECT_NEWEST =
+    "display_name, organisation, jurisdiction, practice_setting, professional_title, practice_areas, onboarding_version, password_set_at, message_credits_used, credits_reset_date, tier, title_model, tabular_model, memory_curator_model, subagent_model, subagent_reasoning, last_selected_chat_model, last_selected_reasoning_level, mfa_on_login, legal_research_us, quick_actions_visible, response_details_visible, dark_mode, project_memory_default";
+
+const PROFILE_SELECT_NO_RESPONSE_DETAILS =
     "display_name, organisation, jurisdiction, practice_setting, professional_title, practice_areas, onboarding_version, password_set_at, message_credits_used, credits_reset_date, tier, title_model, tabular_model, memory_curator_model, subagent_model, subagent_reasoning, last_selected_chat_model, last_selected_reasoning_level, mfa_on_login, legal_research_us, quick_actions_visible, dark_mode, project_memory_default";
 
 const PROFILE_SELECT_NO_SUBAGENT_DEFAULTS =
@@ -127,6 +131,19 @@ export async function selectProfile(db: Db, userId: string, mode: "maybe" | "sin
     const newest = await read(PROFILE_SELECT_NEWEST);
     if (!newest.error) return newest;
     let cascadeError: unknown = newest.error;
+
+    if (isMissingProfileColumn(cascadeError, "response_details_visible")) {
+        const previous = await read(PROFILE_SELECT_NO_RESPONSE_DETAILS);
+        if (!previous.error) {
+            if (previous.data && typeof previous.data === "object") {
+                Object.assign(previous.data as Record<string, unknown>, {
+                    response_details_visible: false,
+                });
+            }
+            return previous;
+        }
+        cascadeError = previous.error;
+    }
 
     if (
         isMissingProfileColumn(cascadeError, "subagent_model") ||

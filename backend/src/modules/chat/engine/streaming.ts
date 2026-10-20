@@ -497,6 +497,11 @@ export async function runLLMStream(params: {
         : "",
     );
   const providerWebSearch = createProviderWebSearchTracker(webTurnState);
+  // What the answer ran on, reported in its closing response_details event.
+  // The tokens are this assistant's own, summed over its steps; each
+  // subagent reports its own on its delegation event.
+  let answerModel: string | null = null;
+  let answerUsage: { input_tokens: number; output_tokens: number } | null = null;
   let fullText = "";
   let iterText = "";
   let iterVisibleText = "";
@@ -746,6 +751,7 @@ export async function runLLMStream(params: {
       "throw",
       orgId,
     );
+    answerModel = selectedModel;
     const delegateContext = subagentRuns && delegateContextFor(subagentRuns, selectedModel);
     const providerSearches =
       webSearch === "provider" ? providerWebSearch.reserve() : 0;
@@ -768,7 +774,13 @@ export async function runLLMStream(params: {
       finishWithoutToolsOnLastStep: isSubagent,
       callbacks: {
         onActivity: params.onActivity,
-        onUsage: subagentRun?.onUsage,
+        onUsage: (usage, finishReason) => {
+          answerUsage = {
+            input_tokens: (answerUsage?.input_tokens ?? 0) + usage.inputTokens,
+            output_tokens: (answerUsage?.output_tokens ?? 0) + usage.outputTokens,
+          };
+          subagentRun?.onUsage(usage, finishReason);
+        },
         onContentDelta: (delta) => {
           iterText += delta;
           streamVisibleContent(delta);
@@ -1159,6 +1171,16 @@ export async function runLLMStream(params: {
   write(
     `data: ${JSON.stringify({ type: "citations", status: "final", citations })}\n\n`,
   );
+  if (!isSubagent && answerModel) {
+    const details: AssistantEvent = {
+      type: "response_details",
+      model: answerModel,
+      reasoning: params.reasoning ?? "high",
+      ...(answerUsage ? { usage: answerUsage } : {}),
+    };
+    events.push(details);
+    write(`data: ${JSON.stringify(details)}\n\n`);
+  }
   if (params.emitDone !== false) {
     write("data: [DONE]\n\n");
   }

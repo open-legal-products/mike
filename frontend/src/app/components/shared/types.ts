@@ -231,6 +231,7 @@ export type AssistantEvent =
   | (WireActivity<"web_search"> & { isStreaming?: boolean })
   | (WireActivity<"web_read"> & { isStreaming?: boolean })
   | WireActivity<"web_sources">
+  | WireActivity<"response_details">
   | (Omit<WireDelegation, "events" | "status" | "model" | "effort"> & {
       events: AssistantEvent[];
       /** The rest arrive when the subagent finishes; a stopped run never gets them. */

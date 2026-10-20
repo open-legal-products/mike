@@ -324,6 +324,7 @@ function profileRow(overrides: Record<string, unknown> = {}) {
         mfa_on_login: false,
         legal_research_us: true,
         quick_actions_visible: true,
+        response_details_visible: false,
         dark_mode: false,
         ...overrides,
     };
@@ -401,6 +402,7 @@ describe("user.routes", () => {
             expect(removed.body).toEqual({ profilePhoto: null });
         });
         it.each([
+            "response_details_visible",
             "subagent_model", "memory_curator_model", "project_memory_default",
             "last_selected_reasoning_level", "last_selected_chat_model",
             "dark_mode", "password_set_at", "onboarding_version",
@@ -725,6 +727,59 @@ describe("user.routes", () => {
 
             expect(res.status).toBe(400);
             expect(res.body.detail).toMatch(/darkMode must be a boolean/);
+        });
+
+        it("persists and returns the response details preference", async () => {
+            supabaseState.tables.user_profiles = {
+                data: profileRow({ response_details_visible: true }),
+                error: null,
+            };
+
+            const res = await request(app)
+                .patch("/user/profile")
+                .set(...AUTH)
+                .send({ responseDetailsVisible: true });
+
+            expect(res.status).toBe(200);
+            expect(res.body.responseDetailsVisible).toBe(true);
+            expect(supabaseState.updates.user_profiles).toContainEqual(
+                expect.objectContaining({ response_details_visible: true }),
+            );
+        });
+
+        it("rejects a non-boolean response details preference", async () => {
+            const res = await request(app)
+                .patch("/user/profile")
+                .set(...AUTH)
+                .send({ responseDetailsVisible: "yes" });
+
+            expect(res.status).toBe(400);
+            expect(res.body.detail).toBe(
+                "responseDetailsVisible must be a boolean",
+            );
+        });
+
+        it("hides response details on a database without that column and keeps every other preference", async () => {
+            const preMigrationRow = profileRow({ subagent_model: "gpt-6-luna" });
+            delete (preMigrationRow as Record<string, unknown>)
+                .response_details_visible;
+            supabaseState.missingColumns = ["response_details_visible"];
+            supabaseState.tables.user_profiles = {
+                data: preMigrationRow,
+                error: null,
+            };
+
+            const res = await request(app)
+                .get("/user/profile")
+                .set(...AUTH);
+
+            expect(res.status).toBe(200);
+            const selects = supabaseState.selects.user_profiles ?? [];
+            expect(selects).toHaveLength(2);
+            expect(selects[1]).not.toContain("response_details_visible");
+            expect(selects[1]).toContain("subagent_model");
+            expect(res.body.responseDetailsVisible).toBe(false);
+            expect(res.body.subagentModel).toBe("gpt-6-luna");
         });
 
         it("persists and returns the project memory default", async () => {

@@ -63,6 +63,7 @@ export function serializeProfile(
         mfaOnLogin: row.mfa_on_login === true,
         legalResearchUs: row.legal_research_us !== false,
         quickActionsVisible: row.quick_actions_visible !== false,
+        responseDetailsVisible: row.response_details_visible === true,
         darkMode: row.dark_mode === true,
         projectMemoryDefault: row.project_memory_default !== false,
         ...Object.fromEntries(

@@ -60,6 +60,9 @@ create table if not exists public.user_profiles (
   mfa_on_login boolean not null default false,
   legal_research_us boolean not null default true,
   quick_actions_visible boolean not null default true,
+  -- Whether each response and subagent shows the model, reasoning effort and
+  -- token count it used (Settings > Features).
+  response_details_visible boolean not null default false,
   dark_mode boolean not null default false,
   -- Whether projects this user creates start with shared memory enabled. Any
   -- project owner can still turn a given project's memory on or off later.
@@ -10970,5 +10973,6 @@ insert into public.schema_migrations (filename) values
   ('20261020_01_playbook_import_status.sql'),
   ('20261020_02_web_search_api_keys.sql'),
   ('20261021_01_chat_subagent_runs.sql'),
-  ('20261021_02_user_subagent_defaults.sql')
+  ('20261021_02_user_subagent_defaults.sql'),
+  ('20261021_03_user_response_details.sql')
 on conflict (filename) do nothing;

@@ -12,6 +12,7 @@ import type {
 } from "../shared/types";
 import { ConnectorSkeuoIcon } from "@/app/components/shared/AppSidebarSkeuoIcons";
 import { notifyError } from "@/app/lib/userFacingError";
+import { useOptionalUserProfile } from "@/app/contexts/UserProfileContext";
 import { EditCard } from "./EditCard";
 import { PreResponseWrapper } from "./PreResponseWrapper";
 import { ResponseStatus, type StatusState } from "./message/ResponseStatus";
@@ -27,6 +28,7 @@ import {
     timelineStepCount,
     type DelegationEvent,
 } from "./message/SubagentGroup";
+import { responseDetailsText, subagentUsage } from "./message/responseDetails";
 import {
     connectorToolLabel,
     eventErrorMessage,
@@ -889,6 +891,13 @@ export function AssistantMessage({
     // Mike's steps in a pre-answer group. Consecutive delegations are
     // subagents Mike ran in parallel; they render as one group.
     const tints = subagentTints(events ?? []);
+    // Settings > Features > Response details: the model, effort and tokens
+    // under the answer and in each subagent's details. Off without a profile.
+    const showDetails =
+        useOptionalUserProfile()?.profile?.responseDetailsVisible === true;
+    const answerDetails = showDetails
+        ? (events ?? []).findLast((e) => e.type === "response_details")
+        : undefined;
     const renderPreEvents = (g: Extract<EventGroup, { kind: "pre" }>) => {
         const rows: ReactNode[] = [];
         for (let i = 0; i < g.events.length; i++) {
@@ -903,6 +912,7 @@ export function AssistantMessage({
                     key={`s-${g.indices[i]}`}
                     delegations={g.events.slice(i, end + 1) as DelegationEvent[]}
                     tints={tints}
+                    showDetails={showDetails}
                     showConnectorAfter={end + 1 < g.events.length}
                     renderSteps={renderTimeline}
                 />,
@@ -1250,8 +1260,9 @@ export function AssistantMessage({
                     />
                 )}
 
-                {/* Copy button */}
-                <div className="flex items-center gap-2 font-sans justify-start">
+                {/* Copy button on the left; what the answer ran on, when the
+                    user asked to see it, at the right end of the same row. */}
+                <div className="flex flex-wrap items-center gap-x-2 font-sans justify-start">
                     {!isStreaming && !awaitingInput && (
                         <button
                             type="button"
@@ -1267,6 +1278,11 @@ export function AssistantMessage({
                                 <Copy className="h-3 w-3" />
                             )}
                         </button>
+                    )}
+                    {!isStreaming && answerDetails?.type === "response_details" && (
+                        <span className="ml-auto min-w-0 text-right font-serif text-sm text-gray-400 [overflow-wrap:anywhere]">
+                            {responseDetailsText(answerDetails, subagentUsage(events ?? []))}
+                        </span>
                     )}
                 </div>
             </div>

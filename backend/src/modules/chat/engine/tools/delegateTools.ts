@@ -524,6 +524,7 @@ type DelegationRun = {
     events: AssistantEvent[];
     model: string;
     effort: DelegationEffort;
+    reasoning: ReasoningLevel;
     usage?: DelegationEvent["usage"];
 };
 
@@ -541,6 +542,9 @@ function delegationEvent(identity: DelegationIdentity, run: DelegationRun): Dele
         ),
         model: run.model,
         effort: run.effort,
+        reasoning: run.reasoning,
+        // The tokens the effort allows, so the user can see usage against it.
+        token_budget: EFFORT_PRESETS[run.effort].tokens,
         ...(run.usage ? { usage: run.usage } : {}),
     };
 }
@@ -690,6 +694,7 @@ export async function runDelegateCall(
         events: outcome.events,
         model,
         effort,
+        reasoning,
         usage,
     });
     if (status !== "failed" && status !== "cancelled") {

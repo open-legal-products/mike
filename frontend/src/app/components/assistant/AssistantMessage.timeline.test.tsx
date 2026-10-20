@@ -3,6 +3,19 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { AssistantMessage } from "./AssistantMessage";
 import type { AssistantEvent } from "../shared/types";
 
+// Settings > Features > Response details, off unless a test turns it on.
+const profileState = vi.hoisted(() => ({ responseDetailsVisible: false }));
+vi.mock("@/app/contexts/UserProfileContext", async (importOriginal) => ({
+    ...(await importOriginal<typeof import("@/app/contexts/UserProfileContext")>()),
+    useOptionalUserProfile: () => ({
+        profile: { responseDetailsVisible: profileState.responseDetailsVisible },
+    }),
+}));
+
+afterEach(() => {
+    profileState.responseDetailsVisible = false;
+});
+
 const approvalRequest: AssistantEvent = {
     type: "ask_inputs",
     event_id: "ask-1",
@@ -323,6 +336,8 @@ describe("AssistantMessage timeline", () => {
             expect(screen.getByRole("region", { name: "Review the lease" })).toHaveTextContent("Completed in 1 step");
             // The pill names the subagent; its details don't repeat the title.
             expect(screen.getAllByText("Review the lease")).toHaveLength(1);
+            // The model, reasoning and tokens stay hidden until the user asks for them.
+            expect(screen.queryByText(/budget allocated/)).toBeNull();
             expect(screen.queryByText(/List every rent review clause/)).toBeNull();
             fireEvent.click(screen.getByRole("button", { name: "Task from Mike" }));
             expect(screen.getByText(/List every rent review clause/)).toBeVisible();
@@ -331,6 +346,36 @@ describe("AssistantMessage timeline", () => {
             fireEvent.click(screen.getByRole("button", { name: "Returned a brief to Mike" }));
             expect(screen.getByRole("region", { name: "Brief" }))
                 .toHaveTextContent("Clause 4.2 sets an annual review.");
+        });
+
+        it("shows a subagent's model, reasoning, tokens and budget at the bottom of its details when asked to", () => {
+            profileState.responseDetailsVisible = true;
+            render(
+                <AssistantMessage
+                    events={[
+                        delegation({ reasoning: "low", token_budget: 2_500_000 }),
+                        { type: "content", text: "Done." },
+                    ]}
+                />,
+            );
+            openTimeline();
+            fireEvent.click(pill("Review the lease"));
+
+            const details = screen.getByText(/ \(Low\): 1.2K tokens \(2.5M budget allocated\)$/);
+            const region = screen.getByRole("region", { name: "Review the lease" });
+            expect(region.lastElementChild).toBe(details);
+            expect(
+                screen.getByText("Completed in 1 step", { selector: "p" }),
+            ).not.toHaveTextContent("tokens");
+        });
+
+        it("leaves out what an older subagent run did not record", () => {
+            profileState.responseDetailsVisible = true;
+            render(<AssistantMessage events={[delegation(), { type: "content", text: "Done." }]} />);
+            openTimeline();
+            fireEvent.click(pill("Review the lease"));
+            const details = screen.getByText(/: 1.2K tokens$/);
+            expect(details).not.toHaveTextContent("(");
         });
 
         it.each([
@@ -466,5 +511,59 @@ describe("AssistantMessage timeline", () => {
             fireEvent.click(screen.getByRole("button", { name: /Verified 1 citation/ }));
             expect(screen.getByText("Roe v. Wade, 410 U.S. 113")).toBeVisible();
         });
+    });
+});
+
+describe("AssistantMessage response details", () => {
+    const answer = (): AssistantEvent[] => [
+        { type: "content", text: "Here is the answer." },
+        {
+            type: "response_details",
+            model: "gemini-3.8-flash",
+            reasoning: "medium",
+            usage: { input_tokens: 1200, output_tokens: 100 },
+        },
+    ];
+
+    it("keeps what the answer ran on hidden by default", () => {
+        render(<AssistantMessage events={answer()} />);
+        expect(screen.getByText("Here is the answer.")).toBeVisible();
+        expect(screen.queryByText(/tokens/)).toBeNull();
+    });
+
+    it("shows the model, reasoning and tokens beside the copy button when asked to", () => {
+        profileState.responseDetailsVisible = true;
+        render(<AssistantMessage events={answer()} />);
+        const details = screen.getByText("Gemini 3.8 Flash (Medium): 1.3K tokens");
+        expect(details.parentElement).toContainElement(
+            screen.getByRole("button", { name: "Copy response" }),
+        );
+        // The details never open a timeline of their own.
+        expect(screen.queryByRole("button", { name: /^Completed in/ })).toBeNull();
+    });
+
+    it("adds what the answer's subagents used between them", () => {
+        profileState.responseDetailsVisible = true;
+        const subagent = (id: string, input_tokens: number): AssistantEvent => ({
+            type: "delegation",
+            delegation_id: id,
+            title: `Task ${id}`,
+            task: "Review.",
+            status: "completed",
+            events: [],
+            model: "claude-haiku-4-5",
+            effort: "standard",
+            usage: { input_tokens, output_tokens: 0 },
+        });
+        render(<AssistantMessage events={[subagent("d1", 400_000), subagent("d2", 208_000), ...answer()]} />);
+        expect(
+            screen.getByText("Main: Gemini 3.8 Flash (Medium): 1.3K tokens. Subagents total: 608K tokens."),
+        ).toBeVisible();
+    });
+
+    it("waits for the answer to finish", () => {
+        profileState.responseDetailsVisible = true;
+        render(<AssistantMessage isStreaming events={answer()} />);
+        expect(screen.queryByText(/1.3K tokens/)).toBeNull();
     });
 });

@@ -87,6 +87,7 @@ describe("create_text_card", () => {
         text: "Please review the draft.",
       },
       { type: "content", text: "Adjust the greeting before sending." },
+      { type: "response_details", model: "gemini-3.8-flash", reasoning: "high" },
     ]);
     expect(stripTransientAssistantEvents(events)).toEqual(events);
     expect(isMeaningfulTextlessAssistantOutput(card)).toBe(true);

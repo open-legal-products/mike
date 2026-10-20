@@ -19,9 +19,11 @@ export default function FeaturesPage() {
     updateApiKey,
     updateLegalResearchUs,
     updateQuickActionsVisible,
+    updateResponseDetailsVisible,
   } = useUserProfile();
   const [saving, setSaving] = useState(false);
   const [savingQuickActions, setSavingQuickActions] = useState(false);
+  const [savingResponseDetails, setSavingResponseDetails] = useState(false);
   const [optimisticLegalResearchUs, setOptimisticLegalResearchUs] = useState<
     boolean | null
   >(null);
@@ -30,6 +32,7 @@ export default function FeaturesPage() {
   const courtListenerEnabled =
     optimisticLegalResearchUs ?? persistedLegalResearchUs;
   const quickActionsVisible = profile?.quickActionsVisible ?? true;
+  const responseDetailsVisible = profile?.responseDetailsVisible ?? false;
 
   const setQuickActionsVisible = async (visible: boolean) => {
     setSavingQuickActions(true);
@@ -37,6 +40,14 @@ export default function FeaturesPage() {
     // the toggle reads the profile, so it is already back where it was.
     await updateQuickActionsVisible(visible);
     setSavingQuickActions(false);
+  };
+
+  const setResponseDetailsVisible = async (visible: boolean) => {
+    setSavingResponseDetails(true);
+    // As with quick actions, the profile context reports a failure and the
+    // toggle, which reads the profile, stays where it was.
+    await updateResponseDetailsVisible(visible);
+    setSavingResponseDetails(false);
   };
 
   const handleCourtListenerChange = async (enabled: boolean) => {
@@ -69,6 +80,24 @@ export default function FeaturesPage() {
               aria-label="Quick actions"
               onCheckedChange={(checked) => {
                 void setQuickActionsVisible(checked);
+              }}
+            />
+          </SettingsRow>
+          <SettingsRow>
+            <div className="min-w-0 space-y-1">
+              <SettingsLabel>Response details</SettingsLabel>
+              <SettingsDescription>
+                Show the model, reasoning effort and token count under each
+                response and subagent.
+              </SettingsDescription>
+            </div>
+            <ToggleSwitchUI
+              checked={responseDetailsVisible}
+              disabled={savingResponseDetails}
+              aria-busy={savingResponseDetails}
+              aria-label="Response details"
+              onCheckedChange={(checked) => {
+                void setResponseDetailsVisible(checked);
               }}
             />
           </SettingsRow>
