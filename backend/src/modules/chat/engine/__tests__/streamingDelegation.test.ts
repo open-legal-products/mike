@@ -132,7 +132,7 @@ beforeEach(() => {
 });
 
 describe("runLLMStream delegation", () => {
-  it("gives a subagent every tool but delegate and ask_inputs, at both the schema and the call", async () => {
+  it("gives a subagent every tool but delegate, ask_inputs and create_text_card, at both the schema and the call", async () => {
     let subagentTools: string[] = [];
     let subagentResults: ToolResult[] = [];
     parentDelegates([delegate("d1")], async (params) => {
@@ -152,6 +152,7 @@ describe("runLLMStream delegation", () => {
     );
     expect(subagentTools).not.toContain("ask_inputs");
     expect(subagentTools).not.toContain("delegate");
+    expect(subagentTools).not.toContain("create_text_card");
     const dispatched = runToolCalls.mock.calls.flatMap(([calls]) => calls);
     expect(dispatched.map((c) => c.function.name)).toEqual(["edit_document"]);
     expect(subagentResults[0].content).toContain("not available");
@@ -189,6 +190,24 @@ describe("runLLMStream delegation", () => {
     expect(systemPrompt).toContain("gemini-3.1-pro-preview");
     expect(systemPrompt).toContain("reasoning high");
     expect(subagentReasoning).toBe("high");
+  });
+
+  it("keeps the text of a delegated document out of the brief", async () => {
+    let subagentPrompt = "";
+    parentDelegates([delegate("d1")], async (params) => {
+      subagentPrompt = params.systemPrompt;
+      return { fullText: "Brief." };
+    });
+
+    await runLLMStream(baseParams());
+
+    const { systemPrompt } = streamChatWithTools.mock.calls[0][0];
+    expect(systemPrompt).toContain(
+      "When the task creates or edits a document, ask for a summary and the list of changes, not the document's text",
+    );
+    expect(subagentPrompt).toContain(
+      "If you created or edited a document, summarise it instead of repeating its text, even if the task asks for the text",
+    );
   });
 
   it("runs delegations in parallel and refuses those past the limit per answer", async () => {
