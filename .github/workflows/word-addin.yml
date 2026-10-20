@@ -56,7 +56,7 @@ jobs:
       REACT_STRESS: "1"
       E2E_WORKERS: "4"
     steps:
-      - uses: actions/checkout@v7.0.1
+      - uses: actions/checkout@v7
       - uses: actions/setup-node@v7.1.0
         with:
           node-version: 22
@@ -87,7 +87,7 @@ jobs:
       run:
         working-directory: word-addin
     steps:
-      - uses: actions/checkout@v7.0.1
+      - uses: actions/checkout@v7
 
       - uses: actions/setup-node@v7.1.0
         with:
