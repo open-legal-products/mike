@@ -40,7 +40,7 @@
     "express": "^5.3.0",
     "express-rate-limit": "^8.7.1",
     "fast-xml-parser": "^5.11.2",
-    "google-auth-library": "^11.3.1",
+    "google-auth-library": "^10.9.1",
     "helmet": "^8.1.0",
     "html-to-text": "10.0.1",
     "ioredis": "^6.0.0",
