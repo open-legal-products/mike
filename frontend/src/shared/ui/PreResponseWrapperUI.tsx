@@ -55,12 +55,18 @@ function ActivityList({ children }: { children: ReactNode }) {
 
     return (
         <div className="relative mt-3">
+            {/* Rounded only while focused, so the inset ring follows the
+                card's corners. A resting radius would clip this scroller to
+                rounded corners, and Chromium then drops the gradient mask of
+                any blur fade inside it (the thought-process and brief
+                fades), so their blur starts at a hard edge. The content's
+                px-3 already keeps it clear of the card's corners. */}
             <div
                 ref={viewportRef}
                 role="region"
                 aria-label="Assistant activity"
                 tabIndex={0}
-                className="max-h-80 overflow-y-auto overscroll-contain rounded-b-xl focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset"
+                className="max-h-80 overflow-y-auto overscroll-contain focus-visible:rounded-b-xl focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset"
             >
                 <div ref={contentRef} className="flex flex-col gap-4 px-3 pb-2">
                     {children}

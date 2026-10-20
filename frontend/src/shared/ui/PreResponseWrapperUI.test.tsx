@@ -30,6 +30,21 @@ describe("PreResponseWrapperUI", () => {
         expect(screen.queryByText("Reading document")).toBeNull();
     });
 
+    it("keeps the scrolling activity list unclipped by rounded corners until focused", () => {
+        // A rounded scroller makes Chromium drop the gradient mask of the
+        // blur fades inside it, so they start at a hard edge.
+        render(
+            <PreResponseWrapperUI stepCount={1} shouldMinimize={false} isStreaming={false}>
+                <div>Read agreement</div>
+            </PreResponseWrapperUI>,
+        );
+        const classes = screen
+            .getByRole("region", { name: "Assistant activity" })
+            .className.split(/\s+/);
+        expect(classes.filter((name) => name.startsWith("rounded"))).toEqual([]);
+        expect(classes).toContain("focus-visible:rounded-b-xl");
+    });
+
     it("renders a minimized completion summary and supports forceOpen", async () => {
         const { rerender } = render(
             <PreResponseWrapperUI
