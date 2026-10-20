@@ -30,6 +30,7 @@ vi.mock("../../../lib/observability/sentry", async (original) => ({
 
 import type { DbJob } from "../../../lib/dbq/types";
 import type { Db } from "../../../lib/supabase";
+import { scrubEvent } from "../../../lib/observability/sentry";
 import { diagnosticEvent } from "../../../lib/observability/sentryPrivacy";
 import { blankPlaybookContent } from "../playbooks.operations";
 import {
@@ -402,5 +403,26 @@ describe("the outbound privacy boundary", () => {
       playbook_id: IMPORT,
     });
     expect(event.message).toBe("Failure in playbooks / import.validate");
+  });
+
+  it("keeps the ids through the before-send scrub that runs first", () => {
+    // The SDK applies scrubEvent (beforeSend) before the transport filter
+    // above; a key the scrub does not allow reaches the filter as
+    // "[Filtered]" and is dropped there, however the filter lists it.
+    const scrubbed = scrubEvent(
+      {
+        tags: { component: "playbooks", stage: "review.model" },
+        extra: { run_id: RUN, playbook_id: IMPORT, import_id: IMPORT },
+        exception: { values: [{ type: "Error", value: "boom" }] },
+      } as never,
+      {},
+    );
+    const event = diagnosticEvent(scrubbed as never);
+
+    expect(event.extra).toEqual({
+      run_id: RUN,
+      playbook_id: IMPORT,
+      import_id: IMPORT,
+    });
   });
 });
