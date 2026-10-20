@@ -34,7 +34,11 @@ const THINKING_PHRASES = [
 
 function EventConnector() {
     return (
-        <div className="absolute w-[1px] bg-gray-300 top-[14px] left-[3px] translate-x-[-50%] h-[calc(100%+10px)]" />
+        <div
+            aria-hidden="true"
+            data-slot="event-connector"
+            className="absolute w-[1px] bg-gray-300 top-[14px] left-[3px] translate-x-[-50%] h-[calc(100%+10px)]"
+        />
     );
 }
 

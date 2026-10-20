@@ -7,6 +7,8 @@ import { GlassCardUI } from "./GlassCardUI";
 export interface PreResponseWrapperUIProps {
     children: ReactNode;
     stepCount: number;
+    /** Subagents the steps ran, named after the step count when there were any. */
+    subagentCount?: number;
     shouldMinimize: boolean;
     isStreaming: boolean;
     forceOpen?: boolean;
@@ -83,6 +85,7 @@ function ActivityList({ children }: { children: ReactNode }) {
 export function PreResponseWrapperUI({
     children,
     stepCount,
+    subagentCount = 0,
     shouldMinimize,
     isStreaming,
     forceOpen = false,
@@ -105,9 +108,13 @@ export function PreResponseWrapperUI({
     }, [forceOpen, shouldMinimize, userToggled]);
 
     const stepWord = `step${stepCount === 1 ? "" : "s"}`;
+    const subagents =
+        subagentCount > 0
+            ? ` · ${subagentCount} subagent${subagentCount === 1 ? "" : "s"}`
+            : "";
     const label = isStreaming
         ? "Working"
-        : `Completed in ${stepCount} ${stepWord}`;
+        : `Completed in ${stepCount} ${stepWord}${subagents}`;
 
     return (
         <GlassCardUI>

@@ -1,7 +1,7 @@
 "use client";
 
 import { TextCardUI } from "@/shared/ui/TextCardUI";
-import { useRef, useState } from "react";
+import { useRef, useState, type ReactNode } from "react";
 import type { WebSource } from "@mike/contracts";
 import { Check, Copy } from "lucide-react";
 import type {
@@ -21,7 +21,12 @@ import {
     WebSearchBlock,
     WebSourcesBlock,
 } from "./message/WebActivityBlock";
-import { DelegationBlock } from "./message/DelegationBlock";
+import {
+    SubagentGroup,
+    subagentTints,
+    timelineStepCount,
+    type DelegationEvent,
+} from "./message/SubagentGroup";
 import {
     connectorToolLabel,
     eventErrorMessage,
@@ -421,10 +426,13 @@ export function AssistantMessage({
         allEvents: AssistantEvent[],
         globalIdx: number,
         timeline: AssistantEvent[] = events ?? [],
+        connectsToNextRow = false,
     ) => {
         const nextEvent = allEvents[i + 1];
         const showConnector =
-            nextEvent !== undefined && nextEvent.type !== "content";
+            nextEvent !== undefined
+                ? nextEvent.type !== "content"
+                : connectsToNextRow;
 
         if (event.type === "reasoning") {
             return (
@@ -529,10 +537,6 @@ export function AssistantMessage({
         if (event.type === "web_read") {
             return <WebReadBlock key={globalIdx} event={event}
                 isStreaming={event.isStreaming} showConnector={showConnector} />;
-        }
-        if (event.type === "delegation") {
-            return <DelegationBlock key={globalIdx} event={event}
-                showConnector={showConnector} renderSteps={renderTimeline} />;
         }
         if (event.type === "doc_find") {
             return (
@@ -882,11 +886,39 @@ export function AssistantMessage({
         return null;
     };
 
-    const renderTimeline = (steps: AssistantEvent[]) => {
+    // Mike's steps in a pre-answer group. Consecutive delegations are
+    // subagents Mike ran in parallel; they render as one group.
+    const tints = subagentTints(events ?? []);
+    const renderPreEvents = (g: Extract<EventGroup, { kind: "pre" }>) => {
+        const rows: ReactNode[] = [];
+        for (let i = 0; i < g.events.length; i++) {
+            if (g.events[i].type !== "delegation") {
+                rows.push(renderEvent(g.events[i], i, g.events, g.indices[i]));
+                continue;
+            }
+            let end = i;
+            while (g.events[end + 1]?.type === "delegation") end++;
+            rows.push(
+                <SubagentGroup
+                    key={`s-${g.indices[i]}`}
+                    delegations={g.events.slice(i, end + 1) as DelegationEvent[]}
+                    tints={tints}
+                    showConnectorAfter={end + 1 < g.events.length}
+                    renderSteps={renderTimeline}
+                />,
+            );
+            i = end;
+        }
+        return rows;
+    };
+
+    // A subagent's steps; the last one connects to the row its details put
+    // after them (its brief) when there is one.
+    const renderTimeline = (steps: AssistantEvent[], connectsToNextRow: boolean) => {
         const indices = steps.flatMap((step, i) => (isRenderableEvent(step) ? [i] : []));
         const renderable = indices.map((i) => steps[i]);
         return renderable.map((step, i) =>
-            renderEvent(step, i, renderable, indices[i], steps),
+            renderEvent(step, i, renderable, indices[i], steps, connectsToNextRow),
         );
     };
 
@@ -942,7 +974,12 @@ export function AssistantMessage({
                             return (
                                 <PreResponseWrapper
                                     key={`p-${g.indices[0]}`}
-                                    stepCount={g.events.length}
+                                    stepCount={timelineStepCount(g.events)}
+                                    subagentCount={
+                                        g.events.filter(
+                                            (event) => event.type === "delegation",
+                                        ).length
+                                    }
                                     shouldMinimize={
                                         pendingAskInput
                                             ? false
@@ -951,14 +988,7 @@ export function AssistantMessage({
                                     isStreaming={wrapperIsStreaming}
                                     forceOpen={pendingAskInput}
                                 >
-                                    {g.events.map((event, i) =>
-                                        renderEvent(
-                                            event,
-                                            i,
-                                            g.events,
-                                            g.indices[i],
-                                        ),
-                                    )}
+                                    {renderPreEvents(g)}
                                 </PreResponseWrapper>
                             );
                         })}

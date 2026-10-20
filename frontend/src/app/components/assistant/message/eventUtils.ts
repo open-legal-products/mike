@@ -70,7 +70,7 @@ export function toolCallLabel(name: string): string {
         return "Verifying citations...";
     if (name === "web_search") return "Searching the web...";
     if (name === "read_webpage") return "Reading web page...";
-    if (name === "delegate") return "Delegating...";
+    if (name === "delegate") return "Starting a subagent...";
     if (name.startsWith("mcp_")) return "Using connector...";
     return name ? `Running ${name}...` : "Working...";
 }
