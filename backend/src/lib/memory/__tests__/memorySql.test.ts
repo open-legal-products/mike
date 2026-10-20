@@ -401,10 +401,10 @@ const workspaceMigration = readFileSync(
   "utf8",
 );
 
-// Word chats in a workspace (20261016_01_word_chat_workspaces) rewrote two
+// Word chats in a workspace (20261020_02_word_chat_workspaces) rewrote two
 // of them since; a fresh install keeps that migration's definitions.
 const wordWorkspaceMigration = readFileSync(
-  resolve(backendRoot, "migrations/20261016_01_word_chat_workspaces.sql"),
+  resolve(backendRoot, "migrations/20261020_02_word_chat_workspaces.sql"),
   "utf8",
 );
 

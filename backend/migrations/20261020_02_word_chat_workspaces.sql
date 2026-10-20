@@ -1,4 +1,4 @@
--- Migration date: 2026-10-16
+-- Migration date: 2026-10-20
 --
 -- Word chats belong to a workspace, like a chat started on its own in the
 -- web assistant (20261012_07_standalone_org_content.sql).
