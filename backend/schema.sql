@@ -2900,6 +2900,9 @@ create table if not exists public.word_chats (
   title text,
   model text,
   reasoning_level text check (reasoning_level in ('none', 'low', 'medium', 'high', 'xhigh', 'max')),
+  -- The organization whose workspace its author started it in, fixed at
+  -- creation, like a chat started on its own. Null is personal.
+  org_id uuid references public.organizations(id) on delete restrict,
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now()
 );
@@ -2907,8 +2910,15 @@ create table if not exists public.word_chats (
 create index if not exists idx_word_chats_document_updated
   on public.word_chats(word_document_id, updated_at desc);
 
+-- The task pane lists one document's chats in one workspace, newest first.
+create index if not exists idx_word_chats_document_org_updated
+  on public.word_chats(word_document_id, org_id, updated_at desc);
+
 create index if not exists idx_word_chats_user
   on public.word_chats(user_id);
+
+-- Purging an organization deletes its Word chats by organization.
+create index if not exists idx_word_chats_org on public.word_chats(org_id);
 
 create table if not exists public.word_chat_messages (
   id uuid primary key default gen_random_uuid(),
@@ -6395,9 +6405,9 @@ as $$
 $$;
 
 -- The workspace a conversation's own-memory belongs to: the team
--- organization of a chat started on its own there, otherwise null —
--- Personal. A chat in a project, a Word chat and a tabular review chat are
--- never a workspace's: what they may learn is decided by
+-- organization of a chat started on its own there, or of a Word chat started
+-- there, otherwise null — Personal. A chat in a project and a tabular review
+-- chat are never a workspace's: what they may learn is decided by
 -- memory_source_allows_app_memory.
 create or replace function public.memory_source_org_id(
   p_surface text,
@@ -6409,13 +6419,21 @@ stable
 security definer
 set search_path = public, pg_temp
 as $$
-  select case when p_surface = 'chat' then (
-    select chat.org_id
-    from public.chats chat
-    where chat.id = p_conversation_id
-      and chat.project_id is null
-      and public.org_is_team(chat.org_id)
-  ) end;
+  select case
+    when p_surface = 'chat' then (
+      select chat.org_id
+      from public.chats chat
+      where chat.id = p_conversation_id
+        and chat.project_id is null
+        and public.org_is_team(chat.org_id)
+    )
+    when p_surface = 'word' then (
+      select chat.org_id
+      from public.word_chats chat
+      where chat.id = p_conversation_id
+        and public.org_is_team(chat.org_id)
+    )
+  end;
 $$;
 
 -- A person's memory file for one workspace, created if it is not there.
@@ -6514,8 +6532,25 @@ as $$
   -- to its author too, and learns into that author's memory FOR THAT
   -- WORKSPACE (memory_source_org_id says which). A chat in an organization's
   -- project is the project's, and never learns into anybody's own memory.
+  -- A Word chat is never shared and never in a project: it is a standalone
+  -- chat that only its author, while still a member, can reach.
   select case
-    when p_surface = 'word' then p_project_id is null
+    when p_surface = 'word' then
+      p_project_id is null
+      and exists (
+        select 1
+        from public.word_chats chat
+        where chat.id = p_conversation_id
+          and chat.user_id = p_actor_user_id
+          and (
+            not public.org_is_team(chat.org_id)
+            or exists (
+              select 1 from public.org_members member
+              where member.org_id = chat.org_id
+                and member.user_id = p_actor_user_id
+            )
+          )
+      )
     when p_surface = 'chat' then
       exists (
         select 1
@@ -9240,6 +9275,7 @@ begin
     delete from public.documents where org_id=org.id;
     delete from public.tabular_reviews where org_id=org.id;
     delete from public.chats where org_id=org.id;
+    delete from public.word_chats where org_id=org.id;
     delete from public.memory_files where org_id=org.id;
     insert into public.audit_events(org_id,action,title,surface) values(org.id,'org.purged',org.name,'organization');
     delete from public.organizations where id=org.id;
@@ -9549,8 +9585,25 @@ as $$
   -- to its author too, and learns into that author's memory FOR THAT
   -- WORKSPACE (memory_source_org_id says which). A chat in an organization's
   -- project is the project's, and never learns into anybody's own memory.
+  -- A Word chat is never shared and never in a project: it is a standalone
+  -- chat that only its author, while still a member, can reach.
   select case
-    when p_surface = 'word' then p_project_id is null
+    when p_surface = 'word' then
+      p_project_id is null
+      and exists (
+        select 1
+        from public.word_chats chat
+        where chat.id = p_conversation_id
+          and chat.user_id = p_actor_user_id
+          and (
+            not public.org_is_team(chat.org_id)
+            or exists (
+              select 1 from public.active_org_members member
+              where member.org_id = chat.org_id
+                and member.user_id = p_actor_user_id
+            )
+          )
+      )
     when p_surface = 'chat' then
       exists (
         select 1
@@ -10906,5 +10959,6 @@ insert into public.schema_migrations (filename) values
   ('20261018_01_remove_playbook_global_guidance.sql'),
   ('20261018_02_playbook_run_history_index.sql'),
   ('20261019_01_playbook_run_scope.sql'),
-  ('20261020_01_playbook_import_status.sql')
+  ('20261020_01_playbook_import_status.sql'),
+  ('20261020_02_word_chat_workspaces.sql')
 on conflict (filename) do nothing;

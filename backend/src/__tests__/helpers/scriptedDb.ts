@@ -61,7 +61,7 @@ export function scriptedDb(steps: Step[]) {
         return builder;
       };
     }
-    for (const filter of ["eq", "is", "in", "or", "order", "range", "limit"]) {
+    for (const filter of ["eq", "is", "in", "not", "or", "order", "range", "limit"]) {
       builder[filter] = (...args: unknown[]) => {
         call.filters.push([filter, ...args]);
         return builder;
