@@ -5,6 +5,7 @@
 // reconciling the cell grid to the active column set.
 
 import { recordAudit } from "../../lib/audit";
+import { chunkArray } from "../../lib/arrays";
 import type { TabularReviewHistoryStatus } from "@mike/contracts";
 import {
     checkProjectAccess,
@@ -711,24 +712,35 @@ export async function getTabularReviewDetail(
     // Review access says who may open the grid, not whose documents they may
     // read. Rows, cells, and document metadata are narrowed to the caller's
     // own document access (see filterReadableReviewRows).
-    const { rows, readableDocumentIds } = await filterReadableReviewRows(
-        db,
-        allRows,
-        allDocIds,
-        userId,
-        userEmail,
-    );
+    let rows: ReviewRow[];
+    let readableDocumentIds: Set<string>;
+    try {
+        ({ rows, readableDocumentIds } = await filterReadableReviewRows(
+            db,
+            allRows,
+            allDocIds,
+            userId,
+            userEmail,
+        ));
+    } catch (lookupError) {
+        return internalFailure(lookupError);
+    }
     const visibleRowIds = new Set(rows.map((row) => row.id));
     const docIds = allDocIds.filter((id) => readableDocumentIds.has(id));
-    const docsResult =
-        docIds.length > 0
-            ? await db.from("documents").select("*").in("id", docIds)
-            : { data: [] as Record<string, unknown>[] };
-    const docs = (docsResult.data ?? []) as unknown as {
+    const docs: {
         id: string;
         current_version_id?: string | null;
-    }[];
-    await attachActiveVersionPaths(db, docs);
+    }[] = [];
+    for (const batch of chunkArray([...new Set(docIds)], 50)) {
+        const { data, error: documentError } = await db
+            .from("documents")
+            .select("*")
+            .in("id", batch);
+        if (documentError) return internalFailure(documentError);
+        const batchDocs = data ?? [];
+        await attachActiveVersionPaths(db, batchDocs);
+        docs.push(...batchDocs);
+    }
     const clientReview = { ...review };
     delete clientReview.active_generation_id;
     delete clientReview.generation_lease_expires_at;
