@@ -1,9 +1,17 @@
 # MCP connectors
 
 Mike connects to remote [Model Context Protocol](https://modelcontextprotocol.io)
-servers from **Settings > Connectors**. Installed connectors appear under
-**Installed**. Hosted providers appear under **Discover**, and an arbitrary
+servers from **Settings > Connectors**. Integrations that ship with Mike appear
+under **Built in**. Installed connectors appear under **Installed**. Hosted providers appear under **Discover**, and an arbitrary
 remote server can be added with **+ Custom**.
+
+## Built-in connectors
+
+**Built in** lists integrations that ship with Mike rather than connecting to a
+remote MCP server. They are available in every workspace, not only the
+Personal one. [CourtListener](courtlistener.md) is the only built-in connector
+today: its switch turns US case-law research on or off, and **Manage** holds the
+user's own API token.
 
 ## Workspace availability
 

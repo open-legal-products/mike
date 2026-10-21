@@ -12,6 +12,7 @@ import { FolderPlus, Plus } from "lucide-react";
 import { ConnectorSetupGuideLink } from "@/app/components/settings/ConnectorSetupGuideLink";
 import { NewCustomMcpModal } from "@/app/components/settings/NewCustomMcpModal";
 import { ConnectorCard } from "@/app/components/settings/ConnectorCard";
+import { CourtListenerConnector } from "@/app/components/settings/CourtListenerConnector";
 import {
   McpConnectorForm,
   type McpConnectorFormDraft,
@@ -1300,11 +1301,17 @@ export default function ConnectorsPage() {
 
   return (
     <div className="@container">
-      <p className="mb-4 text-sm text-app-text-muted">
-        Connections belong to your Personal workspace and are available only in Personal chats.
-      </p>
-      <section aria-labelledby="installed-connectors-heading">
-        <div className="mb-4 flex items-center justify-between gap-3">
+      <section aria-labelledby="built-in-connectors-heading">
+        <SettingsHeading id="built-in-connectors-heading">Built in</SettingsHeading>
+        <p className="mt-1 mb-4 text-sm text-app-text-muted">
+          Provided by Mike and available in every workspace.
+        </p>
+        <div className="grid grid-cols-1 gap-3 @min-[32rem]:grid-cols-2">
+          <CourtListenerConnector />
+        </div>
+      </section>
+      <section className="mt-6" aria-labelledby="installed-connectors-heading">
+        <div className="flex items-center justify-between gap-3">
           <SettingsHeading id="installed-connectors-heading">
             Installed
           </SettingsHeading>
@@ -1319,6 +1326,9 @@ export default function ConnectorsPage() {
             Custom
           </PillButtonUI>
         </div>
+        <p className="mt-1 mb-4 text-sm text-app-text-muted">
+          Connections belong to your Personal workspace and are available only in Personal chats.
+        </p>
         {error && (
           <div className="mb-4 rounded-lg bg-red-50 px-3 py-2 text-sm text-red-700">
             {error}

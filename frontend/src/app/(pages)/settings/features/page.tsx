@@ -1,7 +1,6 @@
 "use client";
 
 import { useState } from "react";
-import { ApiKeyField } from "@/app/components/settings/ApiKeyField";
 import {
   SettingsDescription,
   SettingsLabel,
@@ -16,21 +15,11 @@ import { useUserProfile } from "@/app/contexts/UserProfileContext";
 export default function FeaturesPage() {
   const {
     profile,
-    updateApiKey,
-    updateLegalResearchUs,
     updateQuickActionsVisible,
     updateResponseDetailsVisible,
   } = useUserProfile();
-  const [saving, setSaving] = useState(false);
   const [savingQuickActions, setSavingQuickActions] = useState(false);
   const [savingResponseDetails, setSavingResponseDetails] = useState(false);
-  const [optimisticLegalResearchUs, setOptimisticLegalResearchUs] = useState<
-    boolean | null
-  >(null);
-
-  const persistedLegalResearchUs = profile?.legalResearchUs ?? true;
-  const courtListenerEnabled =
-    optimisticLegalResearchUs ?? persistedLegalResearchUs;
   const quickActionsVisible = profile?.quickActionsVisible ?? true;
   const responseDetailsVisible = profile?.responseDetailsVisible ?? false;
 
@@ -48,17 +37,6 @@ export default function FeaturesPage() {
     // toggle, which reads the profile, stays where it was.
     await updateResponseDetailsVisible(visible);
     setSavingResponseDetails(false);
-  };
-
-  const handleCourtListenerChange = async (enabled: boolean) => {
-    if (saving) return;
-    setOptimisticLegalResearchUs(enabled);
-    setSaving(true);
-    // A failure is reported by the profile context's notice (with Retry);
-    // dropping the optimistic value puts the toggle back.
-    await updateLegalResearchUs(enabled);
-    setSaving(false);
-    setOptimisticLegalResearchUs(null);
   };
 
   return (
@@ -101,39 +79,6 @@ export default function FeaturesPage() {
               }}
             />
           </SettingsRow>
-        </GlassCardUI>
-      </section>
-
-      <section className="space-y-3">
-        <SettingsHeading>Legal Research</SettingsHeading>
-        <GlassCardUI>
-          <SettingsRow>
-            <div className="min-w-0 space-y-1">
-              <SettingsLabel>Enable CourtListener</SettingsLabel>
-              <SettingsDescription>
-                CourtListener provides access to US case law.
-              </SettingsDescription>
-            </div>
-            <ToggleSwitchUI
-              checked={courtListenerEnabled}
-              disabled={saving}
-              aria-busy={saving}
-              aria-label="Enable CourtListener"
-              onCheckedChange={(enabled) =>
-                void handleCourtListenerChange(enabled)
-              }
-            />
-          </SettingsRow>
-          {courtListenerEnabled && (
-            <ApiKeyField
-              label="CourtListener API Key"
-              hasSavedKey={profile?.apiKeys.courtlistener.source === "user"}
-              onSave={(value) =>
-                updateApiKey("courtlistener", value.trim() || null)
-              }
-              onRemove={() => updateApiKey("courtlistener", null)}
-            />
-          )}
         </GlassCardUI>
       </section>
 

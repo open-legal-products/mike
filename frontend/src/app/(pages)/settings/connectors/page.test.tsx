@@ -51,6 +51,12 @@ vi.mock("@/app/lib/mikeApi", async (importOriginal) => {
     };
 });
 
+// The built-in CourtListener card reads the user profile; it has its own
+// tests, so here it only marks where the page places it.
+vi.mock("@/app/components/settings/CourtListenerConnector", () => ({
+    CourtListenerConnector: () => <div data-testid="courtlistener-connector" />,
+}));
+
 // MFA gate off, and render nothing for the popup itself.
 vi.mock("@/app/components/popups/MfaVerificationPopup", () => ({
     MfaVerificationPopup: () => null,
@@ -1500,5 +1506,31 @@ describe("Google services the operator switched off", () => {
         await act(flushMicrotasks);
         expect(installed().getByRole("button", { name: "Manage Gmail" })).toBeTruthy();
         expect(discover().queryByRole("button", { name: "Add Gmail connector" })).toBeNull();
+    });
+});
+
+describe("ConnectorsPage built-in connectors", () => {
+    beforeEach(() => {
+        vi.clearAllMocks();
+        vi.mocked(listMcpConnectors).mockResolvedValue([]);
+    });
+
+    afterEach(() => {
+        cleanup();
+    });
+
+    it("lists CourtListener under Built in, apart from Personal connections", () => {
+        render(<ConnectorsPage />);
+        const builtIn = screen.getByRole("region", { name: "Built in" });
+        expect(
+            within(builtIn).getByTestId("courtlistener-connector"),
+        ).toBeTruthy();
+        expect(within(builtIn).queryByText(/Personal workspace/)).toBeNull();
+
+        const installed = screen.getByRole("region", { name: "Installed" });
+        expect(
+            within(installed).queryByTestId("courtlistener-connector"),
+        ).toBeNull();
+        expect(within(installed).getByText(/Personal workspace/)).toBeTruthy();
     });
 });

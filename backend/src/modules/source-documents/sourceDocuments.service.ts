@@ -31,7 +31,7 @@ export type SourceDocumentResult =
 // when CourtListener refuses the one it was given; only those markers are read,
 // never the upstream body, which echoes the rejected token back.
 export const COURTLISTENER_CREDENTIAL_DETAIL =
-  "CourtListener rejected the configured API token. Check it in Settings.";
+  "CourtListener rejected the configured API token. Check it in Settings → Connectors.";
 
 function isCourtlistenerCredentialError(error: unknown): boolean {
   const message = error instanceof Error ? error.message : "";
