@@ -21,6 +21,9 @@ import { Transform } from "node:stream";
 import { pipeline } from "node:stream/promises";
 import { pathToFileURL } from "node:url";
 
+import JSZip from "jszip";
+import { XMLParser, XMLValidator } from "fast-xml-parser";
+
 import { resolveContentOrgId } from "../../lib/access";
 import { recordAudit } from "../../lib/audit";
 import { enqueueStorageCleanup } from "../../lib/dbq/enqueue";
@@ -45,7 +48,10 @@ import {
   versionStorageKey,
 } from "../../lib/storage";
 import { createServerSupabase, type Db } from "../../lib/supabase";
-import { UPLOAD_VERIFICATION_LEASE_SECONDS } from "./uploads.manifest";
+import {
+  MAX_UPLOAD_SIZE_BYTES,
+  UPLOAD_VERIFICATION_LEASE_SECONDS,
+} from "./uploads.manifest";
 
 type UploadSessionRow = {
   id: string;
@@ -102,6 +108,7 @@ const TERMINAL_UPLOAD_ERROR_CODES = new Set([
   "direct_upload_failed",
   "size_mismatch",
   "content_type_mismatch",
+  "invalid_docx_package",
   // The destination document no longer exists. Retrying cannot make it exist
   // again — it can only put it back, which is the bug this code prevents.
   "document_deleted",
@@ -133,6 +140,15 @@ class ChangedDocumentError extends Error {
   constructor(readonly orphanedKeys: string[] = []) {
     super("document_changed");
     this.name = "ChangedDocumentError";
+  }
+}
+
+class InvalidUploadedFileError extends Error {
+  readonly code = "invalid_docx_package" as const;
+
+  constructor() {
+    super("invalid_docx_package");
+    this.name = "InvalidUploadedFileError";
   }
 }
 
@@ -323,6 +339,233 @@ async function requireSealedFile(
       throw new Error("sealed_upload_not_found", { cause: error });
     }
     throw error;
+  }
+}
+
+const DOCX_MAIN_DOCUMENT_CONTENT_TYPE =
+  "application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml";
+const DOCX_CONTENT_TYPES_MAX_BYTES = 256 * 1024;
+const docxXmlParser = new XMLParser({
+  ignoreAttributes: false,
+  attributeNamePrefix: "@_",
+  trimValues: false,
+  // Preserve namespace identity while retaining prior text/attribute trimming.
+  tagValueProcessor: (_name, value) => value.trim(),
+  attributeValueProcessor: (name, value) =>
+    name === "xmlns" || name.startsWith("xmlns:") ? value : value.trim(),
+  processEntities: false,
+  ignoreDeclaration: true,
+  ignorePiTags: true,
+});
+
+type XmlElement = Record<string, unknown>;
+
+function parseDocxXml(xml: string): XmlElement {
+  // Package XML must not define entities or depend on an external DTD.
+  if (/<!DOCTYPE\b/i.test(xml) || XMLValidator.validate(xml) !== true) {
+    throw new InvalidUploadedFileError();
+  }
+  return docxXmlParser.parse(xml) as XmlElement;
+}
+
+function xmlChildren(
+  parent: XmlElement,
+  localName: string,
+  namespace: string,
+): XmlElement[] {
+  return Object.entries(parent).flatMap(([name, values]) => {
+    if (name.startsWith("@_") || name.startsWith("#")) return [];
+    // XMLValidator accepts XML Names with extra colons, not just QNames.
+    const parts = name.split(":");
+    if (parts.length > 2 || parts.some((part) => !part)) {
+      throw new InvalidUploadedFileError();
+    }
+    const [prefix, local] = parts.length === 2 ? parts : ["", name];
+    if (local !== localName) return [];
+    const namespaceAttribute = prefix ? `@_xmlns:${prefix}` : "@_xmlns";
+    return (Array.isArray(values) ? values : [values]).flatMap((value) => {
+      const element = value !== null && typeof value === "object"
+        ? value as XmlElement
+        : {};
+      return (element[namespaceAttribute] ?? parent[namespaceAttribute]) === namespace
+        ? [element]
+        : [];
+    });
+  });
+}
+
+function hasDocxMainRelationship(xml: string): boolean {
+  const parsed = parseDocxXml(xml);
+  const namespace = "http://schemas.openxmlformats.org/package/2006/relationships";
+  const roots = xmlChildren(parsed, "Relationships", namespace);
+  if (Object.keys(parsed).length !== 1 || roots.length !== 1) return false;
+  const root = roots[0]!;
+  const relationships = xmlChildren(root, "Relationship", namespace).filter(
+    (relationship) => [
+      "http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument",
+      "http://purl.oclc.org/ooxml/officeDocument/relationships/officeDocument",
+    ].includes(String(relationship["@_Type"])),
+  );
+  if (relationships.length !== 1) return false;
+  const relationship = relationships[0]!;
+  if (
+    relationship["@_TargetMode"] !== undefined &&
+    relationship["@_TargetMode"] !== "Internal"
+  ) return false;
+  const target = relationship["@_Target"];
+  if (
+    typeof target !== "string" || !target ||
+    target.startsWith("//") || /[\\:?#]/.test(target)
+  ) return false;
+  // Resolve a package-relative URI only; this never opens a URL.
+  const resolved = new URL(target, "https://docx.invalid/");
+  return resolved.origin === "https://docx.invalid" &&
+    resolved.pathname === "/word/document.xml";
+}
+
+function hasDocxMainDocument(xml: string): boolean {
+  const parsed = parseDocxXml(xml);
+  if (Object.keys(parsed).length !== 1) return false;
+  return [
+    "http://schemas.openxmlformats.org/wordprocessingml/2006/main",
+    "http://purl.oclc.org/ooxml/wordprocessingml/main",
+  ].some((namespace) => {
+    const documents = xmlChildren(parsed, "document", namespace);
+    return documents.length === 1 &&
+      xmlChildren(documents[0]!, "body", namespace).length === 1;
+  });
+}
+
+function zipEntryUncompressedSize(entry: JSZip.JSZipObject): number | null {
+  const data = (entry as JSZip.JSZipObject & {
+    _data?: { uncompressedSize?: unknown };
+  })._data;
+  const size = data?.uncompressedSize;
+  return typeof size === "number" && Number.isFinite(size) ? size : null;
+}
+
+type BoundedZipEntryStream = {
+  on(event: "data", listener: (chunk: Buffer) => void): BoundedZipEntryStream;
+  on(event: "error", listener: (error: unknown) => void): BoundedZipEntryStream;
+  on(event: "end", listener: () => void): BoundedZipEntryStream;
+  pause(): void;
+  resume(): void;
+};
+
+async function readZipEntryBounded(
+  entry: JSZip.JSZipObject,
+  maxBytes: number,
+): Promise<string> {
+  const declaredSize = zipEntryUncompressedSize(entry);
+  if (
+    declaredSize === null ||
+    declaredSize < 0 ||
+    declaredSize > maxBytes
+  ) {
+    throw new InvalidUploadedFileError();
+  }
+
+  const chunks: Buffer[] = [];
+  let actualSize = 0;
+  const stream = (entry as JSZip.JSZipObject & {
+    internalStream(type: "nodebuffer"): BoundedZipEntryStream;
+  }).internalStream("nodebuffer");
+
+  await new Promise<void>((resolve, reject) => {
+    let settled = false;
+    stream.on("data", (chunk) => {
+      if (settled) return;
+      actualSize += chunk.byteLength;
+      if (actualSize > maxBytes) {
+        settled = true;
+        stream.pause();
+        reject(new InvalidUploadedFileError());
+        return;
+      }
+      chunks.push(chunk);
+    });
+    stream.on("error", () => {
+      if (settled) return;
+      settled = true;
+      reject(new InvalidUploadedFileError());
+    });
+    stream.on("end", () => {
+      if (settled) return;
+      settled = true;
+      resolve();
+    });
+    stream.resume();
+  });
+
+  if (actualSize !== declaredSize) {
+    throw new InvalidUploadedFileError();
+  }
+  const bytes = Buffer.concat(chunks, actualSize);
+  const encoding = bytes[0] === 0xff && bytes[1] === 0xfe
+    ? "utf-16le"
+    : bytes[0] === 0xfe && bytes[1] === 0xff
+      ? "utf-16be"
+      : "utf-8";
+  return new TextDecoder(encoding, { fatal: true }).decode(bytes);
+}
+
+function hasDocxMainDocumentOverride(contentTypes: string): boolean {
+  const parsed = parseDocxXml(contentTypes);
+  const namespace = "http://schemas.openxmlformats.org/package/2006/content-types";
+  const roots = xmlChildren(parsed, "Types", namespace);
+  if (Object.keys(parsed).length !== 1 || roots.length !== 1) return false;
+  return xmlChildren(roots[0]!, "Override", namespace).some(
+    (override) =>
+      override["@_PartName"] === "/word/document.xml" &&
+      override["@_ContentType"] === DOCX_MAIN_DOCUMENT_CONTENT_TYPE,
+  );
+}
+
+async function validateUploadedFilePackage(
+  file: UploadFileRow,
+  artifact: SealedFileArtifact,
+): Promise<void> {
+  if (file.file_type !== "docx") return;
+
+  try {
+    // The manifest caps uploads at 100 MiB. Enforce that policy before
+    // loading the sealed archive into memory for ZIP parsing.
+    if (artifact.size > MAX_UPLOAD_SIZE_BYTES) {
+      throw new InvalidUploadedFileError();
+    }
+
+    const zip = await JSZip.loadAsync(await readFile(artifact.filePath));
+    const contentTypesPart = zip.file("[Content_Types].xml");
+    const relationshipsPart = zip.file("_rels/.rels");
+    const documentPart = zip.file("word/document.xml");
+
+    if (!contentTypesPart || !relationshipsPart || !documentPart) {
+      throw new InvalidUploadedFileError();
+    }
+
+    const contentTypes = await readZipEntryBounded(
+      contentTypesPart,
+      DOCX_CONTENT_TYPES_MAX_BYTES,
+    );
+    if (!hasDocxMainDocumentOverride(contentTypes)) {
+      throw new InvalidUploadedFileError();
+    }
+    const relationships = await readZipEntryBounded(
+      relationshipsPart,
+      DOCX_CONTENT_TYPES_MAX_BYTES,
+    );
+    if (!hasDocxMainRelationship(relationships)) {
+      throw new InvalidUploadedFileError();
+    }
+    // Main document XML can be much larger than package metadata. Reuse the
+    // upload ceiling instead of imposing the small metadata limit on it.
+    const document = await readZipEntryBounded(documentPart, MAX_UPLOAD_SIZE_BYTES);
+    if (!hasDocxMainDocument(document)) {
+      throw new InvalidUploadedFileError();
+    }
+  } catch (error) {
+    if (error instanceof InvalidUploadedFileError) throw error;
+    throw new InvalidUploadedFileError();
   }
 }
 
@@ -703,6 +946,7 @@ export async function processUploadFile(
 ) {
   const artifact = await requireSealedFile(file);
   try {
+    await validateUploadedFilePackage(file, artifact);
     switch (session.purpose) {
       case "document_create":
         return await processCreatedDocument(db, session, file, artifact);
@@ -900,8 +1144,11 @@ export async function processUploadJob(
         await heartbeatJob(db, jobId, workerId);
         failed = true;
         // These failures cannot be fixed by retrying the same upload.
-        terminalProcessingFailure = error instanceof DeletedDocumentError || error instanceof ChangedDocumentError;
-        if (!(error instanceof ChangedDocumentError)) {
+        terminalProcessingFailure =
+          error instanceof DeletedDocumentError ||
+          error instanceof ChangedDocumentError ||
+          error instanceof InvalidUploadedFileError;
+        if (!(error instanceof ChangedDocumentError || error instanceof InvalidUploadedFileError)) {
           reportError(error, {
             tags: {
               component: "upload-worker",
@@ -928,8 +1175,11 @@ export async function processUploadJob(
             status: "error",
             error_code: error instanceof ChangedDocumentError
               ? "document_changed"
-              : error instanceof DeletedDocumentError ? "document_deleted"
-              : "processing_failed",
+              : error instanceof DeletedDocumentError
+                ? "document_deleted"
+                : error instanceof InvalidUploadedFileError
+                  ? error.code
+                  : "processing_failed",
             updated_at: new Date().toISOString(),
           })
           .eq("id", file.id)
