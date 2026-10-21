@@ -18,6 +18,24 @@ function findApiCallError(error: unknown): ApiCallErrorLike | null {
 }
 
 /**
+ * The provider's HTTP answer behind `error`, including one wrapped as the
+ * cause of a user-facing error, or null when it is not a provider answer.
+ */
+export function providerFailureResponse(
+  error: unknown,
+): { status: number; body: string } | null {
+  let current = error;
+  while (current) {
+    const apiError = findApiCallError(current);
+    if (apiError) {
+      return { status: apiError.statusCode, body: apiError.responseBody ?? "" };
+    }
+    current = (current as { cause?: unknown }).cause;
+  }
+  return null;
+}
+
+/**
  * The HTTP status a model provider answered with, when `error` is the
  * provider's answer (an AI SDK APICallError, or a RetryError around one);
  * null for anything else — our own bugs, network failures, DB errors.

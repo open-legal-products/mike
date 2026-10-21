@@ -9,9 +9,11 @@ import type {
   NormalizedToolResult,
   OpenAIToolSchema,
   Provider,
+  ProviderWebSearchEvent,
   StreamChatParams,
   StreamChatResult,
 } from "./types";
+import type { WebSource } from "@mike/contracts";
 import { providerDeadlines } from "./providerDeadlines";
 import { asProviderStallError, streamErrorMessage, toProviderStreamError } from "./providerErrors";
 import { createRawLlmStreamRecorder, logRawLlmStream } from "./rawStreamLog";
@@ -64,7 +66,13 @@ export function stopNotice(
   iterations: number,
   maxIterations: number,
   finishReason: string | undefined,
+  rawFinishReason?: string,
 ): string {
+  // Anthropic pauses a turn whose server-side tools (web search) ran long and
+  // reports it as an ordinary "stop".
+  if (rawFinishReason === "pause_turn") {
+    return "\n\n_Stopped early: the web search for this response ran long. Ask a narrower question to get an answer._";
+  }
   if (finishReason === "length") {
     return "\n\n_Stopped early: this response reached the model's output limit. Asking for one part at a time will get the rest._";
   }
@@ -217,6 +225,8 @@ export type AiSdkAdapterConfig = {
   supportsReasoning?: boolean;
   /** OpenAI's CourtListener tools require an extra instruction after use. */
   courtlistenerCitationReminder?: boolean;
+  /** The provider's own web search tool. */
+  webSearchTool?: (options: { maxUses: number }) => ToolSet[string];
   /** Send stored reasoning on earlier assistant turns; see ConfiguredModel. */
   replayReasoning?: boolean;
   /** Mark the prefix-cache breakpoint with a Bedrock cache point as well. */
@@ -346,6 +356,41 @@ function rethrowable(error: unknown, label: string): Error {
   return error instanceof Error ? error : new Error(streamErrorMessage(error, label));
 }
 
+export const PROVIDER_WEB_SEARCH_TOOL = "web_search";
+
+function webSourcesFrom(output: unknown): WebSource[] {
+  // Anthropic returns the result list itself; OpenAI returns an action with
+  // the sources it read.
+  const items = Array.isArray(output)
+    ? output
+    : (output as { sources?: unknown } | null)?.sources;
+  if (!Array.isArray(items)) return [];
+  return items.flatMap((item) => {
+    const { url, title } = (item ?? {}) as { url?: unknown; title?: unknown };
+    if (typeof url !== "string") return [];
+    return [{ url, ...(typeof title === "string" ? { title } : {}) }];
+  });
+}
+
+/**
+ * What a search looked for. OpenAI also reports opening or searching within
+ * a page as a web search call; those are labelled with the page.
+ */
+function webSearchQueryFrom(input: unknown, output?: unknown): string | undefined {
+  const action = (output as {
+    action?: { query?: unknown; queries?: unknown; url?: unknown };
+  } | null)?.action;
+  const candidates = [
+    (input as { query?: unknown } | null)?.query,
+    action?.query,
+    Array.isArray(action?.queries) ? action.queries.join(", ") : undefined,
+    action?.url,
+  ];
+  return candidates.find(
+    (value): value is string => typeof value === "string" && value !== "",
+  );
+}
+
 function usesCourtlistenerTool(
   steps: Array<{ toolCalls: Array<{ toolName: string }> }>,
 ) {
@@ -451,10 +496,23 @@ export async function streamAiSdk(
   if (params.abortSignal?.aborted) forwardAbort();
   else params.abortSignal?.addEventListener("abort", forwardAbort, { once: true });
   const runToolsFailure: { first: { error: unknown } | null } = { first: null };
-  const tools = toAiSdkTools(params.tools ?? [], params.runTools, sdk, (error) => {
+  const functionTools = toAiSdkTools(params.tools ?? [], params.runTools, sdk, (error) => {
     runToolsFailure.first ??= { error };
     internalAbort.abort();
   });
+  const webSearch =
+    params.providerWebSearch && config.webSearchTool
+      ? {
+          tool: config.webSearchTool({
+            maxUses: params.providerWebSearch.maxSearches,
+          }),
+        }
+      : null;
+  const tools = webSearch
+    ? { ...functionTools, [PROVIDER_WEB_SEARCH_TOOL]: webSearch.tool }
+    : functionTools;
+  const emitWebSearch = (event: ProviderWebSearchEvent) =>
+    params.callbacks?.onWebSearch?.(event);
   // An exception that merely LOOKS like an abort (name "AbortError" or
   // isAbortError's exact message) must not take streaming.ts's silent
   // user-cancel path unless the caller's signal really is aborted.
@@ -494,6 +552,7 @@ export async function streamAiSdk(
   const openReasoningBlocks = new Set<string>();
   const maxIterations = params.maxIterations ?? DEFAULT_MAX_ITERATIONS;
   let lastFinishReason: string | undefined;
+  let lastRawFinishReason: string | undefined;
 
   try {
     const result = sdk.streamText({
@@ -530,18 +589,33 @@ export async function streamAiSdk(
       // where it is classified and the caller reports it once
       // (MIKE-BACKEND-C). Every failure still arrives through fullStream.
       onError: () => {},
-      ...(config.courtlistenerCitationReminder
+      ...(config.courtlistenerCitationReminder ||
+      params.finishWithoutToolsOnLastStep
         ? {
             prepareStep: ({
               steps,
+              stepNumber,
             }: {
               steps: Array<{ toolCalls: Array<{ toolName: string }> }>;
-            }) =>
-              usesCourtlistenerTool(steps)
-                ? {
-                    system: `${params.systemPrompt}\n\n${COURTLISTENER_CITATION_REMINDER}`,
-                  }
-                : undefined,
+              stepNumber: number;
+            }) => {
+              const step: { system?: string; toolChoice?: "none" } = {};
+              if (
+                config.courtlistenerCitationReminder &&
+                usesCourtlistenerTool(steps)
+              ) {
+                step.system = `${params.systemPrompt}\n\n${COURTLISTENER_CITATION_REMINDER}`;
+              }
+              // Removing tools instead would break providers that reject a
+              // history of calls to a tool the request no longer defines.
+              if (
+                params.finishWithoutToolsOnLastStep &&
+                stepNumber === maxIterations - 1
+              ) {
+                step.toolChoice = "none";
+              }
+              return Object.keys(step).length ? step : undefined;
+            },
           }
         : {}),
     });
@@ -582,21 +656,89 @@ export async function streamAiSdk(
           }
           break;
         case "tool-call": {
+          if (part.providerExecuted) {
+            if (part.toolName === PROVIDER_WEB_SEARCH_TOOL) {
+              emitWebSearch({
+                kind: "search_started",
+                id: part.toolCallId,
+                query: webSearchQueryFrom(part.input),
+              });
+            }
+            break;
+          }
           const call: NormalizedToolCall = {
             id: part.toolCallId,
             name: part.toolName,
             input: normalizeToolInput(part.input),
+            ...(part.invalid ? { invalid: true as const } : {}),
           };
           params.callbacks?.onToolCallStart?.(call);
           break;
         }
+        case "tool-result":
+          if (part.providerExecuted && part.toolName === PROVIDER_WEB_SEARCH_TOOL) {
+            emitWebSearch({
+              kind: "search_finished",
+              id: part.toolCallId,
+              query: webSearchQueryFrom(part.input, part.output),
+              results: webSourcesFrom(part.output),
+              failed: false,
+            });
+          }
+          break;
+        case "source":
+          // Anthropic also reports every search result it was shown as a
+          // source, marked by its page age; the ones it cites carry none.
+          if (
+            part.sourceType === "url" &&
+            !(
+              part.providerMetadata?.anthropic &&
+              "pageAge" in part.providerMetadata.anthropic
+            )
+          ) {
+            emitWebSearch({
+              kind: "cited_source",
+              source: {
+                url: part.url,
+                ...(part.title ? { title: part.title } : {}),
+              },
+            });
+          }
+          break;
         case "finish-step":
+          if (
+            part.usage.inputTokens !== undefined ||
+            part.usage.outputTokens !== undefined
+          ) {
+            params.callbacks?.onUsage?.(
+              {
+                inputTokens: part.usage.inputTokens ?? 0,
+                outputTokens: part.usage.outputTokens ?? 0,
+              },
+              part.finishReason,
+            );
+          }
           lastFinishReason = part.finishReason;
+          lastRawFinishReason = part.rawFinishReason;
           break;
         // A tool's own failure is not the model provider's: a search tool
         // answering 401 says nothing about our LLM key, so this path keeps the
         // executor error rather than blaming the user's credentials.
         case "tool-error":
+          // A failed provider-run search (rate limit, too many uses) is
+          // reported to the model by the provider itself; the turn goes on.
+          if (part.providerExecuted) {
+            if (part.toolName === PROVIDER_WEB_SEARCH_TOOL) {
+              emitWebSearch({
+                kind: "search_finished",
+                id: part.toolCallId,
+                query: webSearchQueryFrom(part.input),
+                results: [],
+                failed: true,
+              });
+            }
+            break;
+          }
           // `dynamic: true` = the SDK synthesized this part for a call it could
           // not dispatch (unknown tool / unparseable input); it already queued
           // the error as that call's result and continues the loop so the
@@ -628,7 +770,12 @@ export async function streamAiSdk(
     // function returns whatever text happened to accumulate. That renders as
     // a bare "Completed in N steps" with no answer and no error, which is
     // indistinguishable from the model having nothing to say. Name it instead.
-    const notice = stopNotice(iteration, maxIterations, lastFinishReason);
+    const notice = stopNotice(
+      iteration,
+      maxIterations,
+      lastFinishReason,
+      lastRawFinishReason,
+    );
     if (notice) {
       fullText += notice;
       params.callbacks?.onContentDelta?.(notice);

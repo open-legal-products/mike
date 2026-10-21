@@ -154,10 +154,13 @@ export function validateProfilePayload(body: unknown):
               title_model?: string | null;
               tabular_model?: string | null;
               memory_curator_model?: string | null;
+              subagent_model?: string | null;
+              subagent_reasoning?: string | null;
               last_selected_chat_model?: string | null;
               last_selected_reasoning_level?: string | null;
               legal_research_us?: boolean;
               quick_actions_visible?: boolean;
+              response_details_visible?: boolean;
               updated_at: string;
           };
           routerModels?: Partial<Record<RouterSlug, string[]>>;
@@ -178,10 +181,13 @@ export function validateProfilePayload(body: unknown):
         "titleModel",
         "tabularModel",
         "memoryCuratorModel",
+        "subagentModel",
+        "subagentReasoning",
         "lastSelectedChatModel",
         "lastSelectedReasoningLevel",
         "legalResearchUs",
         "quickActionsVisible",
+        "responseDetailsVisible",
         "darkMode",
         "projectMemoryDefault",
         ...ROUTER_SLUGS.map((slug) => ROUTER_PROFILE_FIELDS[slug]),
@@ -206,10 +212,13 @@ export function validateProfilePayload(body: unknown):
         title_model?: string | null;
         tabular_model?: string | null;
         memory_curator_model?: string | null;
+        subagent_model?: string | null;
+        subagent_reasoning?: string | null;
         last_selected_chat_model?: string | null;
         last_selected_reasoning_level?: string | null;
         legal_research_us?: boolean;
         quick_actions_visible?: boolean;
+        response_details_visible?: boolean;
         dark_mode?: boolean;
         project_memory_default?: boolean;
         updated_at: string;
@@ -305,6 +314,37 @@ export function validateProfilePayload(body: unknown):
         }
     }
 
+    if ("subagentModel" in raw) {
+        if (raw.subagentModel === null || raw.subagentModel === "") {
+            update.subagent_model = null;
+        } else if (typeof raw.subagentModel !== "string") {
+            return {
+                ok: false,
+                detail: "subagentModel must be a string or null",
+            };
+        } else {
+            const resolved = resolveModel(raw.subagentModel, "");
+            if (!resolved) {
+                return { ok: false, detail: "Unsupported subagentModel" };
+            }
+            update.subagent_model = resolved;
+        }
+    }
+
+    if ("subagentReasoning" in raw) {
+        if (raw.subagentReasoning === null || raw.subagentReasoning === "") {
+            update.subagent_reasoning = null;
+        } else if (
+            !(REASONING_LEVELS as readonly unknown[]).includes(
+                raw.subagentReasoning,
+            )
+        ) {
+            return { ok: false, detail: "Unsupported subagentReasoning" };
+        } else {
+            update.subagent_reasoning = raw.subagentReasoning as string;
+        }
+    }
+
     if ("lastSelectedChatModel" in raw) {
         if (
             raw.lastSelectedChatModel === null ||
@@ -394,6 +434,16 @@ export function validateProfilePayload(body: unknown):
             };
         }
         update.quick_actions_visible = raw.quickActionsVisible;
+    }
+
+    if ("responseDetailsVisible" in raw) {
+        if (typeof raw.responseDetailsVisible !== "boolean") {
+            return {
+                ok: false,
+                detail: "responseDetailsVisible must be a boolean",
+            };
+        }
+        update.response_details_visible = raw.responseDetailsVisible;
     }
 
     if ("darkMode" in raw) {

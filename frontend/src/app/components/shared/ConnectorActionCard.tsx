@@ -84,6 +84,11 @@ export function ConnectorActionCard({ item }: { item: ConnectorApprovalItem }) {
           {item.connector_name}
           {item.account ? ` · ${item.account}` : ""}
         </p>
+        {item.requested_by && (
+          <p className="mt-0.5 text-xs text-gray-500 [overflow-wrap:anywhere]">
+            Requested by subagent: {item.requested_by}
+          </p>
+        )}
       </div>
       {note && <p className="text-sm text-gray-700">{note}</p>}
       {args.length > 0 ? (

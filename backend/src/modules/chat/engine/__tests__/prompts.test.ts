@@ -50,6 +50,17 @@ describe("buildSystemPrompt", () => {
         }
     });
 
+    it("keeps the text of a created or edited document out of text cards", () => {
+        for (const prompt of [buildSystemPrompt(true), buildSystemPrompt(false)]) {
+            expect(prompt).toContain(
+                "Never put the text of a document you created or edited into a card",
+            );
+            expect(prompt).toContain(
+                "read the document and copy the passage exactly",
+            );
+        }
+    });
+
     it("never instructs the model to fabricate citation quotes", () => {
         for (const prompt of [buildSystemPrompt(true), buildSystemPrompt(false)]) {
             expect(prompt).not.toContain("TESTING ONLY");

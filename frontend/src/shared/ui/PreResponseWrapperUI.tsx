@@ -7,6 +7,8 @@ import { GlassCardUI } from "./GlassCardUI";
 export interface PreResponseWrapperUIProps {
     children: ReactNode;
     stepCount: number;
+    /** Subagents the steps ran, named after the step count when there were any. */
+    subagentCount?: number;
     shouldMinimize: boolean;
     isStreaming: boolean;
     forceOpen?: boolean;
@@ -53,12 +55,18 @@ function ActivityList({ children }: { children: ReactNode }) {
 
     return (
         <div className="relative mt-3">
+            {/* Rounded only while focused, so the inset ring follows the
+                card's corners. A resting radius would clip this scroller to
+                rounded corners, and Chromium then drops the gradient mask of
+                any blur fade inside it (the thought-process and brief
+                fades), so their blur starts at a hard edge. The content's
+                px-3 already keeps it clear of the card's corners. */}
             <div
                 ref={viewportRef}
                 role="region"
                 aria-label="Assistant activity"
                 tabIndex={0}
-                className="max-h-80 overflow-y-auto overscroll-contain rounded-b-xl focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset"
+                className="max-h-80 overflow-y-auto overscroll-contain focus-visible:rounded-b-xl focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset"
             >
                 <div ref={contentRef} className="flex flex-col gap-4 px-3 pb-2">
                     {children}
@@ -83,6 +91,7 @@ function ActivityList({ children }: { children: ReactNode }) {
 export function PreResponseWrapperUI({
     children,
     stepCount,
+    subagentCount = 0,
     shouldMinimize,
     isStreaming,
     forceOpen = false,
@@ -105,9 +114,13 @@ export function PreResponseWrapperUI({
     }, [forceOpen, shouldMinimize, userToggled]);
 
     const stepWord = `step${stepCount === 1 ? "" : "s"}`;
+    const subagents =
+        subagentCount > 0
+            ? ` · ${subagentCount} subagent${subagentCount === 1 ? "" : "s"}`
+            : "";
     const label = isStreaming
         ? "Working"
-        : `Completed in ${stepCount} ${stepWord}`;
+        : `Completed in ${stepCount} ${stepWord}${subagents}`;
 
     return (
         <GlassCardUI>

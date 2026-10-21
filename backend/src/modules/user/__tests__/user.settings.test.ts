@@ -66,6 +66,7 @@ describe("getUserModelSettings router-model allowlist", () => {
                 practice_areas: ["Litigation"],
                 custom_instructions: "Use British spelling.",
                 response_style: { verbosity: "concise", tone: "formal" },
+                web_search: { enabled: true, other: "brave" },
             }),
         );
 
@@ -83,6 +84,12 @@ describe("getUserModelSettings router-model allowlist", () => {
                 tone: "formal",
                 language: "auto",
             },
+        });
+        expect(settings.web_search).toEqual({
+            enabled: true,
+            claude: "provider",
+            openai: "provider",
+            other: "brave",
         });
     });
 

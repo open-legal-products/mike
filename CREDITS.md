@@ -22,6 +22,8 @@ infrastructure, and development workflow, including optional local integrations.
 | [ExcelJS](https://github.com/exceljs/exceljs) | Building Excel workbook exports. |
 | [JSZip](https://github.com/Stuk/jszip) | Reading and writing ZIP-based document packages. |
 | [fast-xml-parser](https://github.com/NaturalIntelligence/fast-xml-parser) | Parsing document XML. |
+| [Defuddle](https://github.com/kepano/defuddle) | Extracting the main content of web pages the assistant reads. |
+| [linkedom](https://github.com/WebReflection/linkedom) | Parsing web pages on the backend. |
 
 ## Application and interface
 

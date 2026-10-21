@@ -22,6 +22,9 @@ const keys: ApiKeyState = {
     xai: { configured: false, source: null },
     custom: { configured: false, source: null },
     courtlistener: { configured: false, source: null },
+    brave: { configured: false, source: null },
+    tavily: { configured: false, source: null },
+    deepseek: { configured: false, source: null },
 };
 
 const routerSelections = selectionsFromProfile({

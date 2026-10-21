@@ -39,6 +39,18 @@ describe("MikeIcon", () => {
         );
     });
 
+    it("colours a tinted mark in both themes, under the status palettes", () => {
+        const { container, rerender } = render(<MikeIcon tint="violet" />);
+        expect(firstBladeFill(container)).toBe("rgb(139,92,246)");
+
+        document.documentElement.classList.add("dark");
+        rerender(<MikeIcon tint="violet" />);
+        expect(firstBladeFill(container)).toBe("rgb(139,92,246)");
+
+        rerender(<MikeIcon tint="violet" error />);
+        expect(firstBladeFill(container)).toBe("rgb(248,113,113)");
+    });
+
     it("keeps the status palettes in dark mode", () => {
         document.documentElement.classList.add("dark");
         const { container } = render(<MikeIcon done />);

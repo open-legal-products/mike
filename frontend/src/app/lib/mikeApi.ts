@@ -832,11 +832,15 @@ export interface UserProfile extends RouterProfileLists {
     titleModel: string | null;
     tabularModel: string | null;
     memoryCuratorModel: string | null;
+    subagentModel: string | null;
+    subagentReasoning: NonNullable<Message["reasoning"]> | null;
     lastSelectedChatModel: string | null;
     lastSelectedReasoningLevel: NonNullable<Message["reasoning"]>;
     mfaOnLogin: boolean;
     legalResearchUs: boolean;
     quickActionsVisible: boolean;
+    /** Whether responses and subagents show the model, effort and tokens they used. */
+    responseDetailsVisible?: boolean;
     darkMode: boolean;
     projectMemoryDefault: boolean;
     apiKeyStatus: ApiKeyStatus;
@@ -956,10 +960,13 @@ export async function updateUserProfile(payload: {
     titleModel?: string | null;
     tabularModel?: string | null;
     memoryCuratorModel?: string | null;
+    subagentModel?: string | null;
+    subagentReasoning?: NonNullable<Message["reasoning"]> | null;
     lastSelectedChatModel?: string | null;
     lastSelectedReasoningLevel?: NonNullable<Message["reasoning"]>;
     legalResearchUs?: boolean;
     quickActionsVisible?: boolean;
+    responseDetailsVisible?: boolean;
     darkMode?: boolean;
     projectMemoryDefault?: boolean;
 } & Partial<RouterProfileLists>): Promise<UserProfile> {
@@ -1059,6 +1066,38 @@ export async function updateResponseStyle(
     });
 }
 
+/** Mirrors backend/src/lib/webSearch/settings.ts. */
+export const WEB_SEARCH_BACKENDS = ["brave", "tavily", "deepseek"] as const;
+
+export type WebSearchBackend = (typeof WEB_SEARCH_BACKENDS)[number];
+
+export type ProviderFamilyChoice = "provider" | WebSearchBackend | "off";
+
+export type OtherFamilyChoice = WebSearchBackend | "off";
+
+export type WebSearchSettings = {
+    enabled: boolean;
+    claude: ProviderFamilyChoice;
+    openai: ProviderFamilyChoice;
+    other: OtherFamilyChoice;
+};
+
+export async function getWebSearchSettings(
+    signal?: AbortSignal,
+): Promise<WebSearchSettings> {
+    return apiRequest<WebSearchSettings>("/user/web-search", { signal });
+}
+
+export async function updateWebSearchSettings(
+    update: Partial<WebSearchSettings>,
+): Promise<WebSearchSettings> {
+    return apiRequest<WebSearchSettings>("/user/web-search", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(update),
+    });
+}
+
 export async function completeUserOnboarding(
     payload: PersonalisationDetails = {},
 ): Promise<UserProfile> {
@@ -1099,7 +1138,8 @@ export type ApiKeyProvider =
     | "vertex"
     | "xai"
     | "custom"
-    | "courtlistener";
+    | "courtlistener"
+    | WebSearchBackend;
 /**
  * Whose key a provider runs on: the person's own, their organization's, or
  * the deployment's. "org" only ever appears in an organization's status.

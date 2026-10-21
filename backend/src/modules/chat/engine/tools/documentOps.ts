@@ -1138,7 +1138,8 @@ export async function getTurnReadIdentity(params: {
     const active = await loadActiveVersion(documentId, db);
     if (active?.storage_path) {
       return {
-        key: `${documentId}:${active.id}`,
+        // A reused version keeps its id but moves to a new file.
+        key: `${documentId}:${active.id}:${active.storage_path}`,
         docLabel,
         filename: docInfo.filename,
         documentId,

@@ -33,6 +33,7 @@ import { useAuth } from "@/app/contexts/AuthContext";
 import { useUserProfile } from "@/app/contexts/UserProfileContext";
 import { UserMessage } from "@/app/components/assistant/UserMessage";
 import { AssistantMessage } from "@/app/components/assistant/AssistantMessage";
+import { withDelegationEvents } from "@/app/components/assistant/message/eventUtils";
 import {
     ChatInput,
     type ChatInputHandle,
@@ -381,7 +382,7 @@ export function ProjectChatPanel({
         const replicated: string[] = [];
         const edited = new Set<string>();
         for (const msg of messages) {
-            for (const ev of msg.events ?? []) {
+            for (const ev of withDelegationEvents(msg.events ?? [])) {
                 if ("isStreaming" in ev && ev.isStreaming) continue;
                 if (ev.type === "doc_created" && ev.document_id) {
                     created.push(

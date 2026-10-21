@@ -1,4 +1,4 @@
-import { render, screen } from "@testing-library/react";
+import { render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { ModelOption } from "@/shared/lib/modelCatalog";
@@ -22,6 +22,8 @@ vi.mock("@/app/contexts/UserProfileContext", () => ({
             titleModel: "gemini-3.1-flash-lite-preview",
             tabularModel: "gemini-3-flash-preview",
             memoryCuratorModel: "gpt-5.4-mini",
+            subagentModel: null,
+            subagentReasoning: null,
             openRouterModels: [],
             vercelModels: [],
             openCodeGoModels: [],
@@ -68,6 +70,30 @@ describe("model preferences page legacy ids", () => {
         expect(updateModelPreference).toHaveBeenCalledWith(
             "memoryCuratorModel",
             "gpt-6.1-sol",
+        );
+    });
+
+    it("saves subagent defaults from rows that start as chosen per task", async () => {
+        const user = userEvent.setup();
+        render(<ModelPreferencesPage />);
+        const subagents = screen.getByRole("region", { name: "Subagents" });
+        const [modelRow, reasoningRow] = within(subagents).getAllByRole(
+            "button",
+            { name: "Chosen per task" },
+        );
+
+        await user.click(modelRow);
+        await user.click(screen.getByText("GPT-6.1 Sol"));
+        await user.click(reasoningRow);
+        await user.click(screen.getByText("Medium"));
+
+        expect(updateModelPreference).toHaveBeenCalledWith(
+            "subagentModel",
+            "gpt-6.1-sol",
+        );
+        expect(updateModelPreference).toHaveBeenCalledWith(
+            "subagentReasoning",
+            "medium",
         );
     });
 

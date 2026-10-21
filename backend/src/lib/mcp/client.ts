@@ -303,6 +303,7 @@ const DEFAULT_GUARD_LABEL = "MCP server URL";
 export async function validateRemoteMcpUrl(
     rawUrl: string,
     label: string = DEFAULT_GUARD_LABEL,
+    options: { allowHttp?: boolean } = {},
 ): Promise<string> {
     let url: URL;
     try {
@@ -310,8 +311,13 @@ export async function validateRemoteMcpUrl(
     } catch {
         throw new Error(`${label} must be a valid URL.`);
     }
-    if (url.protocol !== "https:") {
-        throw new Error(`${label} must use HTTPS.`);
+    const allowed =
+        url.protocol === "https:" ||
+        (options.allowHttp === true && url.protocol === "http:");
+    if (!allowed) {
+        throw new Error(
+            `${label} must use ${options.allowHttp ? "HTTP or HTTPS" : "HTTPS"}.`,
+        );
     }
     url.username = "";
     url.password = "";
@@ -454,20 +460,27 @@ const guardedAgent = new Agent({
 // aborts discovery even when a later candidate URL would have worked.
 const MAX_MCP_REDIRECTS = 5;
 
+type GuardedFetchOptions = {
+    /**
+     * What the URL is, as guard errors should call it ("Model endpoint
+     * URL"). Defaults to the MCP wording this guard was written for.
+     */
+    label?: string;
+    /** Also allow plain http: URLs (public web pages). */
+    allowHttp?: boolean;
+};
+
 export async function guardedFetch(
     input: Parameters<typeof fetch>[0],
     init?: Parameters<typeof fetch>[1],
-    options: {
-        /**
-         * What the URL is, as guard errors should call it ("Model endpoint
-         * URL"). Defaults to the MCP wording this guard was written for.
-         */
-        label?: string;
-    } = {},
+    options: GuardedFetchOptions = {},
 ): Promise<Response> {
     const label = options.label ?? DEFAULT_GUARD_LABEL;
     try {
-        return await guardedFetchUnlabelled(input, init, label);
+        return await guardedFetchUnlabelled(input, init, {
+            ...options,
+            label,
+        });
     } catch (error) {
         // A connect-time rejection surfaces from undici as "fetch failed"
         // with the shared agent's caller-neutral error as its cause.
@@ -490,8 +503,10 @@ export async function guardedFetch(
 async function guardedFetchUnlabelled(
     input: Parameters<typeof fetch>[0],
     init: Parameters<typeof fetch>[1] | undefined,
-    label: string,
+    options: GuardedFetchOptions & { label: string },
 ): Promise<Response> {
+    const { label } = options;
+    const urlOptions = { allowHttp: options.allowHttp };
     const isRequest = typeof input === "object" && input instanceof Request;
     let url =
         typeof input === "string"
@@ -499,7 +514,7 @@ async function guardedFetchUnlabelled(
             : input instanceof URL
               ? input.toString()
               : input.url;
-    await validateRemoteMcpUrl(url, label);
+    await validateRemoteMcpUrl(url, label, urlOptions);
     // The request MUST go through the `undici` package's own `fetch`, not the
     // global one. Node's built-in fetch is a copy of undici frozen at the
     // version Node was built with (6.x on Node 22), while `guardedAgent` comes
@@ -555,15 +570,16 @@ async function guardedFetchUnlabelled(
         }
         await response.body?.cancel().catch(() => undefined);
 
-        const validated = await validateRemoteMcpUrl(target, label);
+        const validated = await validateRemoteMcpUrl(target, label, urlOptions);
         // Header names configured for connector authentication are arbitrary,
         // so there is no complete denylist for secrets. On a cross-origin hop,
-        // retain only the small set needed for GET/HEAD content negotiation.
+        // retain only content negotiation and the user agent, none of which
+        // carries a secret.
         // Mutate the active set permanently so a later same-origin hop cannot
         // restore credentials from the original request.
         if (new URL(validated).origin !== new URL(url).origin) {
             const safeHeaders = new Headers();
-            for (const name of ["accept", "accept-language"]) {
+            for (const name of ["accept", "accept-language", "user-agent"]) {
                 const value = headers.get(name);
                 if (value !== null) safeHeaders.set(name, value);
             }

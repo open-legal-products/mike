@@ -6,6 +6,7 @@ import FeaturesPage from "./page";
 const state = vi.hoisted(() => ({
     source: "env" as "env" | "user" | null,
     updateLegalResearchUs: vi.fn(),
+    updateResponseDetailsVisible: vi.fn(),
 }));
 
 vi.mock("@/app/contexts/UserProfileContext", () => ({
@@ -23,6 +24,7 @@ vi.mock("@/app/contexts/UserProfileContext", () => ({
         updateApiKey: vi.fn(),
         updateLegalResearchUs: state.updateLegalResearchUs,
         updateQuickActionsVisible: vi.fn(),
+        updateResponseDetailsVisible: state.updateResponseDetailsVisible,
     }),
 }));
 
@@ -32,6 +34,10 @@ vi.mock("@/app/components/settings/ApiKeyField", () => ({
             {hasSavedKey ? "personal" : "server-or-empty"}
         </div>
     ),
+}));
+
+vi.mock("@/app/components/settings/WebSearchSection", () => ({
+    WebSearchSection: () => null,
 }));
 
 describe("FeaturesPage CourtListener key", () => {
@@ -71,5 +77,20 @@ describe("FeaturesPage save failures", () => {
             expect(state.updateLegalResearchUs).toHaveBeenCalledWith(false),
         );
         expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+    });
+});
+
+describe("FeaturesPage response details", () => {
+    it("starts off and saves the user's choice", async () => {
+        state.updateResponseDetailsVisible.mockResolvedValue(true);
+        const user = userEvent.setup();
+        render(<FeaturesPage />);
+
+        const toggle = screen.getByRole("switch", { name: "Response details" });
+        expect(toggle).toHaveAttribute("aria-checked", "false");
+        await user.click(toggle);
+        await waitFor(() =>
+            expect(state.updateResponseDetailsVisible).toHaveBeenCalledWith(true),
+        );
     });
 });

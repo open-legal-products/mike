@@ -34,7 +34,11 @@ const THINKING_PHRASES = [
 
 function EventConnector() {
     return (
-        <div className="absolute w-[1px] bg-gray-300 top-[14px] left-[3px] translate-x-[-50%] h-[calc(100%+10px)]" />
+        <div
+            aria-hidden="true"
+            data-slot="event-connector"
+            className="absolute w-[1px] bg-gray-300 top-[14px] left-[3px] translate-x-[-50%] h-[calc(100%+10px)]"
+        />
     );
 }
 
@@ -74,7 +78,13 @@ export function EventBlock({
 
 // ---------------------------------------------------------------------------
 
-function ReasoningContent({ text }: { text: string }) {
+export function ReasoningContent({
+    text,
+    label = "Thought process",
+}: {
+    text: string;
+    label?: string;
+}) {
     const viewportRef = useRef<HTMLDivElement>(null);
     const contentRef = useRef<HTMLDivElement>(null);
     const [hasMoreBelow, setHasMoreBelow] = useState(false);
@@ -122,7 +132,7 @@ function ReasoningContent({ text }: { text: string }) {
             <div
                 ref={viewportRef}
                 role="region"
-                aria-label="Thought process"
+                aria-label={label}
                 tabIndex={0}
                 className="max-h-36 overflow-y-auto overscroll-contain focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500/40"
             >

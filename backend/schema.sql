@@ -54,10 +54,15 @@ create table if not exists public.user_profiles (
   memory_curator_model text,
   last_selected_chat_model text,
   last_selected_reasoning_level text check (last_selected_reasoning_level in ('none', 'low', 'medium', 'high', 'xhigh', 'max')),
+  subagent_model text,
+  subagent_reasoning text check (subagent_reasoning in ('none', 'low', 'medium', 'high', 'xhigh', 'max')),
   quote_model text,
   mfa_on_login boolean not null default false,
   legal_research_us boolean not null default true,
   quick_actions_visible boolean not null default true,
+  -- Whether each response and subagent shows the model, reasoning effort and
+  -- token count it used (Settings > Features).
+  response_details_visible boolean not null default false,
   dark_mode boolean not null default false,
   -- Whether projects this user creates start with shared memory enabled. Any
   -- project owner can still turn a given project's memory on or off later.
@@ -76,6 +81,14 @@ create table if not exists public.user_profiles (
     check (
       jsonb_typeof(response_style) = 'object'
       and octet_length(response_style::text) <= 2000
+    ),
+  -- Web search preferences from Settings > Features, stored like
+  -- response_style: only the choices that differ from the default.
+  web_search jsonb not null default '{}'::jsonb
+    constraint user_profiles_web_search_check
+    check (
+      jsonb_typeof(web_search) = 'object'
+      and octet_length(web_search::text) <= 1000
     ),
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now()
@@ -203,6 +216,30 @@ $$;
 revoke all on function public.merge_user_response_style(uuid, jsonb)
   from public, anon, authenticated;
 grant execute on function public.merge_user_response_style(uuid, jsonb)
+  to service_role;
+
+-- Merges a change into one user's web search settings and returns the result,
+-- or null when the user has no profile. A null value in the patch removes that
+-- key, which returns the setting to its default.
+create or replace function public.merge_user_web_search(
+  p_user_id uuid,
+  p_patch jsonb
+)
+returns jsonb
+language sql
+set search_path = ''
+as $$
+  update public.user_profiles
+     set web_search = jsonb_strip_nulls(web_search || p_patch),
+         updated_at = now()
+   where user_id = p_user_id
+     and jsonb_typeof(p_patch) = 'object'
+  returning web_search;
+$$;
+
+revoke all on function public.merge_user_web_search(uuid, jsonb)
+  from public, anon, authenticated;
+grant execute on function public.merge_user_web_search(uuid, jsonb)
   to service_role;
 
 create or replace function public.handle_user_email_updated()
@@ -592,7 +629,7 @@ $$;
 create table if not exists public.user_api_keys (
   id uuid primary key default gen_random_uuid(),
   user_id uuid not null references auth.users(id) on delete cascade,
-  provider text not null check (provider in ('claude', 'gemini', 'openai', 'mistral', 'openrouter', 'vercel', 'opencode-go', 'bedrock', 'azure', 'azure-foundry', 'vertex', 'xai', 'custom', 'courtlistener')),
+  provider text not null check (provider in ('claude', 'gemini', 'openai', 'mistral', 'openrouter', 'vercel', 'opencode-go', 'bedrock', 'azure', 'azure-foundry', 'vertex', 'xai', 'custom', 'courtlistener', 'brave', 'tavily', 'deepseek')),
   encrypted_key text not null,
   iv text not null,
   auth_tag text not null,
@@ -630,7 +667,7 @@ create table if not exists public.org_api_keys (
   org_id uuid not null references public.organizations(id) on delete cascade,
   provider text not null
     constraint org_api_keys_provider_check
-    check (provider in ('claude', 'gemini', 'openai', 'mistral', 'openrouter', 'vercel', 'opencode-go', 'bedrock', 'azure', 'azure-foundry', 'vertex', 'xai', 'custom', 'courtlistener')),
+    check (provider in ('claude', 'gemini', 'openai', 'mistral', 'openrouter', 'vercel', 'opencode-go', 'bedrock', 'azure', 'azure-foundry', 'vertex', 'xai', 'custom', 'courtlistener', 'brave', 'tavily', 'deepseek')),
   encrypted_key text not null,
   iv text not null,
   auth_tag text not null,
@@ -2726,6 +2763,32 @@ create index if not exists chat_messages_chat_created_id_idx
   on public.chat_messages(chat_id, created_at, id);
 create index if not exists chat_messages_author_idx
   on public.chat_messages(author_user_id) where author_user_id is not null;
+
+-- What a subagent did in a chat answer, so the assistant can continue it in a
+-- later turn without the subagent redoing its reading. Only the backend reads
+-- or writes these rows; they expire after 30 days and go with their chat,
+-- answer or account.
+create table if not exists public.chat_subagent_runs (
+  id uuid primary key default gen_random_uuid(),
+  chat_id uuid not null references public.chats(id) on delete cascade,
+  message_id uuid not null references public.chat_messages(id) on delete cascade,
+  delegation_id text not null check (length(delegation_id) between 1 and 100),
+  user_id uuid not null references auth.users(id) on delete cascade,
+  status text not null check (status in ('completed', 'incomplete', 'needs_input')),
+  transcript jsonb not null check (octet_length(transcript::text) <= 400000),
+  created_at timestamptz not null default now(),
+  expires_at timestamptz not null default now() + interval '30 days',
+  unique (chat_id, delegation_id)
+);
+
+create index if not exists chat_subagent_runs_user_expiry
+  on public.chat_subagent_runs(user_id, expires_at);
+create index if not exists chat_subagent_runs_message
+  on public.chat_subagent_runs(message_id);
+
+alter table public.chat_subagent_runs enable row level security;
+revoke all on public.chat_subagent_runs from anon, authenticated;
+grant all on public.chat_subagent_runs to service_role;
 
 create or replace function public.set_chat_updated_at()
 returns trigger
@@ -10911,10 +10974,15 @@ insert into public.schema_migrations (filename) values
   ('20261017_05_playbook_reviews.sql'),
   ('20261017_06_remove_unused_playbook_structure.sql'),
   ('20261017_07_playbook_storage_cleanup.sql'),
+  ('20261017_08_user_web_search.sql'),
   ('20261018_01_remove_playbook_global_guidance.sql'),
   ('20261018_02_playbook_run_history_index.sql'),
   ('20261019_01_playbook_run_scope.sql'),
   ('20261020_01_playbook_import_status.sql'),
-  ('20261020_02_word_chat_message_playbook.sql'),
-  ('20261020_03_playbook_import_target_version.sql')
+  ('20261020_02_web_search_api_keys.sql'),
+  ('20261020_03_playbook_import_target_version.sql'),
+  ('20261021_01_chat_subagent_runs.sql'),
+  ('20261021_02_user_subagent_defaults.sql'),
+  ('20261021_03_user_response_details.sql'),
+  ('20261021_04_word_chat_message_playbook.sql')
 on conflict (filename) do nothing;

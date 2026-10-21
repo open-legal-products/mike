@@ -20,6 +20,10 @@
   asynchronous learning, deletion, and operations
 - [CourtListener integration](courtlistener.md) — live US case-law tools and
   optional bulk data
+- [Web search](web-search.md) — provider search and search services, page
+  reading, keys, and safety
+- [Subagents](subagents.md) — delegated tasks, what they may do, approvals,
+  and limits
 - [Microsoft Word add-in](../word-addin/README.md) — concise setup and command
   reference
 - [Word add-in development and deployment](word-addin-development.md) — manual

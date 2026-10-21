@@ -65,6 +65,8 @@ function apiProfile(darkMode: boolean) {
         titleModel: "gemini-3.1-flash-lite-preview",
         tabularModel: "gemini-3-flash-preview",
         memoryCuratorModel: null,
+        subagentModel: null,
+        subagentReasoning: null,
         lastSelectedChatModel: null,
         lastSelectedReasoningLevel: "high",
         mfaOnLogin: false,

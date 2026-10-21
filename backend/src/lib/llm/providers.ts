@@ -17,6 +17,7 @@ import {
 import { guardedFetch } from "../mcp/client";
 import { isBlockedDestinationError } from "../blockedDestination";
 import { localModelToleranceMiddleware } from "./localModelMiddleware";
+import { providerFailureResponse } from "./providerErrors";
 import {
   ACCOUNT_MODEL_LABELS,
   accountModelPrefix,
@@ -170,6 +171,13 @@ async function createAnthropicAdapter(args: {
     model: anthropic(args.model),
     modelId: args.model,
     supportsReasoning: args.supportsReasoning,
+    // Only Anthropic itself runs the search; compatible gateways do not.
+    ...(args.provider === "claude"
+      ? {
+          webSearchTool: ({ maxUses }: { maxUses: number }) =>
+            anthropic.tools.webSearch_20250305({ maxUses }),
+        }
+      : {}),
   };
 }
 
@@ -596,6 +604,7 @@ async function createProviderAdapter(
       model: openai.responses(model),
       modelId: model,
       courtlistenerCitationReminder: true,
+      webSearchTool: () => openai.tools.webSearch({}),
     };
   }
 
@@ -678,9 +687,27 @@ export async function streamWithProvider(
       params.reasoning ?? "none",
     ),
   };
+  let streamed = false;
+  const marking =
+    <A extends unknown[]>(callback?: (...args: A) => void) =>
+    (...args: A) => {
+      streamed = true;
+      callback?.(...args);
+    };
+  const callbacks = params.callbacks;
+  const tracked: StreamChatParams = {
+    ...normalizedParams,
+    callbacks: callbacks && {
+      ...callbacks,
+      onContentDelta: marking(callbacks.onContentDelta),
+      onReasoningDelta: marking(callbacks.onReasoningDelta),
+      onToolCallStart: marking(callbacks.onToolCallStart),
+      onWebSearch: marking(callbacks.onWebSearch),
+    },
+  };
   try {
     return await streamAiSdk(
-      normalizedParams,
+      tracked,
       await createProviderAdapter(params.model, params.apiKeys),
     );
   } catch (error) {
@@ -691,6 +718,17 @@ export async function streamWithProvider(
     if (retryReasoning) {
       return streamAiSdk(
         { ...normalizedParams, reasoning: retryReasoning },
+        await createProviderAdapter(params.model, params.apiKeys),
+      );
+    }
+    if (shouldRetryWithoutWebSearch(error, params, streamed)) {
+      params.callbacks?.onWebSearch?.({ kind: "unavailable" });
+      return streamAiSdk(
+        {
+          ...normalizedParams,
+          systemPrompt: `${normalizedParams.systemPrompt}\n\nWeb search is unavailable for this answer.`,
+          providerWebSearch: null,
+        },
         await createProviderAdapter(params.model, params.apiKeys),
       );
     }
@@ -709,6 +747,29 @@ export async function streamWithProvider(
     }
     throw error;
   }
+}
+
+/**
+ * The provider refused the request itself because of its web search tool:
+ * the model does not support it, or the account has not turned it on. Once
+ * output has streamed, a retry would show it twice.
+ */
+function shouldRetryWithoutWebSearch(
+  error: unknown,
+  params: StreamChatParams,
+  streamed: boolean,
+): boolean {
+  return !!params.providerWebSearch && !streamed && isWebSearchRejection(error);
+}
+
+function isWebSearchRejection(error: unknown): boolean {
+  const response = providerFailureResponse(error);
+  return (
+    response !== null &&
+    response.status >= 400 &&
+    response.status < 500 &&
+    /web[_ ]?search/i.test(response.body)
+  );
 }
 
 /**

@@ -5,7 +5,11 @@ type EventDotColor = "green" | "gray" | "red";
 
 function EventConnector() {
     return (
-        <div className="absolute left-[3px] top-[14px] h-[calc(100%+10px)] w-[1px] -translate-x-1/2 bg-gray-300" />
+        <div
+            aria-hidden="true"
+            data-slot="event-connector"
+            className="absolute left-[3px] top-[14px] h-[calc(100%+10px)] w-[1px] -translate-x-1/2 bg-gray-300"
+        />
     );
 }
 

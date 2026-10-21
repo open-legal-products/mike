@@ -72,17 +72,28 @@ interface UserProfile extends RouterProfileLists {
     titleModel: string | null;
     tabularModel: string | null;
     memoryCuratorModel: string | null;
+    subagentModel: string | null;
+    subagentReasoning: NonNullable<Message["reasoning"]> | null;
     lastSelectedChatModel: string | null;
     lastSelectedReasoningLevel: NonNullable<Message["reasoning"]>;
     mfaOnLogin: boolean;
     legalResearchUs: boolean;
     quickActionsVisible: boolean;
+    /** Whether responses and subagents show the model, effort and tokens they used. */
+    responseDetailsVisible: boolean;
     darkMode: boolean;
     projectMemoryDefault: boolean;
     apiKeys: ApiKeyState;
     /** Settings saved with the user's own keys (region, endpoint, location, base URL). */
     apiKeySettings: ApiKeySettings;
 }
+
+export type PreferenceField =
+    | "titleModel"
+    | "tabularModel"
+    | "memoryCuratorModel"
+    | "subagentModel"
+    | "subagentReasoning";
 
 interface UserProfileContextType {
     profile: UserProfile | null;
@@ -106,7 +117,7 @@ interface UserProfileContextType {
     ) => Promise<boolean>;
     syncPasswordSet: () => Promise<boolean>;
     updateModelPreference: (
-        field: "titleModel" | "tabularModel" | "memoryCuratorModel",
+        field: PreferenceField,
         value: string | null,
     ) => Promise<boolean>;
     persistChatModelSelection: (
@@ -120,6 +131,7 @@ interface UserProfileContextType {
     updateMfaOnLogin: (enabled: boolean) => Promise<boolean>;
     updateLegalResearchUs: (enabled: boolean) => Promise<boolean>;
     updateQuickActionsVisible: (visible: boolean) => Promise<boolean>;
+    updateResponseDetailsVisible: (visible: boolean) => Promise<boolean>;
     /** Save one router's Model Selections. */
     updateRouterModels: (
         router: RouterSlug,
@@ -157,6 +169,9 @@ function emptyApiKeys(): ApiKeyState {
         xai: { configured: false, source: null },
         custom: { configured: false, source: null },
         courtlistener: { configured: false, source: null },
+        brave: { configured: false, source: null },
+        tavily: { configured: false, source: null },
+        deepseek: { configured: false, source: null },
     };
 }
 
@@ -178,10 +193,13 @@ function toProfile(data: ApiUserProfile): UserProfile {
         onboardingComplete: profile.onboardingComplete !== false,
         passwordSet: profile.passwordSet === true,
         memoryCuratorModel: profile.memoryCuratorModel ?? null,
+        subagentModel: profile.subagentModel ?? null,
+        subagentReasoning: profile.subagentReasoning ?? null,
         lastSelectedChatModel: profile.lastSelectedChatModel ?? null,
         lastSelectedReasoningLevel:
             profile.lastSelectedReasoningLevel ?? "high",
         mfaOnLogin: profile.mfaOnLogin === true,
+        responseDetailsVisible: profile.responseDetailsVisible === true,
         projectMemoryDefault: profile.projectMemoryDefault !== false,
         ...routerProfileLists(profile),
         apiKeys,
@@ -275,11 +293,14 @@ export function UserProfileProvider({ children }: { children: ReactNode }) {
                 titleModel: null,
                 tabularModel: null,
                 memoryCuratorModel: null,
+                subagentModel: null,
+                subagentReasoning: null,
                 lastSelectedChatModel: null,
                 lastSelectedReasoningLevel: "high",
                 mfaOnLogin: false,
                 legalResearchUs: true,
                 quickActionsVisible: true,
+                responseDetailsVisible: false,
                 ...routerProfileLists({}),
                 darkMode: false,
                 projectMemoryDefault: true,
@@ -426,7 +447,7 @@ export function UserProfileProvider({ children }: { children: ReactNode }) {
 
     const updateModelPreference = useCallback(
         async (
-            field: "titleModel" | "tabularModel" | "memoryCuratorModel",
+            field: PreferenceField,
             value: string | null,
         ): Promise<boolean> => {
             if (!user) return false;
@@ -613,6 +634,27 @@ export function UserProfileProvider({ children }: { children: ReactNode }) {
         [reportFailure, user],
     );
 
+    const updateResponseDetailsVisible = useCallback(
+        async (visible: boolean): Promise<boolean> => {
+            if (!user) return false;
+            try {
+                const updated = await updateUserProfile({
+                    responseDetailsVisible: visible,
+                });
+                setProfile((prev) =>
+                    prev ? { ...prev, ...toProfile(updated) } : null,
+                );
+                return true;
+            } catch (error) {
+                reportFailure(error, "update your response details setting", () => {
+                    void retryRef.current?.updateResponseDetailsVisible(visible);
+                });
+                return false;
+            }
+        },
+        [reportFailure, user],
+    );
+
     const updateRouterModels = useCallback(
         async (router: RouterSlug, models: string[]): Promise<boolean> => {
             if (!user) return false;
@@ -783,6 +825,7 @@ export function UserProfileProvider({ children }: { children: ReactNode }) {
             updateMfaOnLogin,
             updateLegalResearchUs,
             updateQuickActionsVisible,
+            updateResponseDetailsVisible,
             updateRouterModels,
             updateDarkMode,
             updateProjectMemoryDefault,
@@ -807,6 +850,7 @@ export function UserProfileProvider({ children }: { children: ReactNode }) {
             updateMfaOnLogin,
             updateLegalResearchUs,
             updateQuickActionsVisible,
+            updateResponseDetailsVisible,
             updateRouterModels,
             updateDarkMode,
             updateProjectMemoryDefault,

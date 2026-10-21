@@ -135,6 +135,8 @@ export type ConnectorApprovalItem = {
   before?: unknown;
   /** Account the action runs as, when known. */
   account?: string;
+  /** Title of the delegated task that asked for this action, if a subagent did. */
+  requested_by?: string;
   /** Server-side binding to the connection that was reviewed. */
   binding: ConnectorApprovalBinding;
 };
@@ -300,6 +302,89 @@ export type McpToolEvent = {
   result?: string;
 };
 
+export type WebSource = { url: string; title?: string };
+
+export type WebToolErrorCode =
+  /** Mike's search has no key for the chosen search service. */
+  | "not_configured"
+  /** The search API refused the key: invalid, or its plan does not cover the request. */
+  | "rejected"
+  /** No search backend could run, or the model provider refused its own search. */
+  | "unavailable"
+  /** The page could not be read: a blocked address, an unsupported type, a failed fetch. */
+  | "unreadable"
+  | "failed";
+
+/**
+ * Web activity in a turn. A search done by the model provider and one done
+ * by Mike's own search look the same.
+ */
+export type WebToolEvent =
+  | {
+      type: "web_search";
+      search_id: string;
+      query: string;
+      results: WebSource[];
+      error?: string;
+      error_code?: WebToolErrorCode;
+    }
+  | {
+      type: "web_read";
+      read_id: string;
+      url: string;
+      title?: string;
+      error?: string;
+      error_code?: WebToolErrorCode;
+    }
+  /** Pages the answer cites, as reported by the model provider. */
+  | { type: "web_sources"; sources: WebSource[] };
+
+export type DelegationEffort = "quick" | "standard" | "deep";
+export type DelegationModelTier = "light" | "standard" | "same";
+
+/**
+ * One delegated task: a subagent's own steps and the brief it returned to the
+ * assistant. The brief keeps the subagent's citation markers; the assistant
+ * re-cites anything it relies on.
+ */
+export type DelegationEvent = {
+  type: "delegation";
+  delegation_id: string;
+  continued_from?: string;
+  title: string;
+  task: string;
+  /**
+   * `incomplete`: stopped by its time or token budget; the brief is partial.
+   * `needs_input`: paused to ask `question` or for `approval_ids`.
+   */
+  status: "completed" | "incomplete" | "needs_input" | "failed" | "cancelled";
+  brief?: string;
+  question?: string;
+  /** Approval items, held by the answer, that this paused subagent waits on. */
+  approval_ids?: string[];
+  events: AssistantEvent[];
+  model: string;
+  effort: DelegationEffort;
+  /** The reasoning level the subagent ran at. Older runs did not record it. */
+  reasoning?: string;
+  /** The tokens its effort allowed. Older runs did not record it. */
+  token_budget?: number;
+  usage?: { input_tokens: number; output_tokens: number };
+};
+
+/**
+ * What an answer ran on, sent once at its end: the model, the reasoning level
+ * it was asked for, and the tokens the assistant itself used (each subagent
+ * reports its own on its delegation event). Shown only when the user turns on
+ * Settings > Features > Response details.
+ */
+export type ResponseDetailsEvent = {
+  type: "response_details";
+  model: string;
+  reasoning?: string;
+  usage?: { input_tokens: number; output_tokens: number };
+};
+
 export type DocumentSearchErrorCode =
   | "schema_out_of_date"
   | "invalid_search"
@@ -401,6 +486,9 @@ export type AssistantEvent =
   | CaseCitationEvent
   | CourtlistenerToolEvent
   | McpToolEvent
+  | WebToolEvent
+  | DelegationEvent
+  | ResponseDetailsEvent
   | {
       type: "case_opinions";
       cluster_id: number;

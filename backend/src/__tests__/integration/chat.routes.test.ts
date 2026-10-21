@@ -403,6 +403,7 @@ vi.mock("../../modules/chat/engine/index", async (importOriginal) => {
 vi.mock("../../modules/user/user.settings", () => ({
     getUserModelSettings: vi.fn(async () => ({
         legal_research_us: false,
+        web_search: DEFAULT_WEB_SEARCH_SETTINGS,
         title_model: "test-model",
         tabular_model: "test-model",
         last_selected_chat_model: null,
@@ -434,6 +435,7 @@ vi.mock("../../lib/llm", async (importOriginal) => {
 import { app } from "../../app";
 import { resetAssistantTurnRunsForTests } from "../../lib/assistantTurnRuns";
 import { createServerSupabase } from "../../lib/supabase";
+import { DEFAULT_WEB_SEARCH_SETTINGS } from "../../lib/webSearch";
 
 const VALID_BODY = {
     messages: [{ role: "user", content: "hello" }],
@@ -694,8 +696,11 @@ describe("POST /chat — streaming endpoint", () => {
         const userSettings = await import("../../modules/user/user.settings.js");
         vi.mocked(userSettings.getUserModelSettings).mockResolvedValueOnce({
             legal_research_us: false,
+            web_search: DEFAULT_WEB_SEARCH_SETTINGS,
             title_model: null,
             memory_curator_model: null,
+            subagent_model: null,
+            subagent_reasoning: null,
             last_selected_reasoning_level: null,
             tabular_model: null,
             last_selected_chat_model: "gpt-6-luna",
@@ -1258,8 +1263,11 @@ describe("POST /chat — streaming endpoint", () => {
         const userSettings = await import("../../modules/user/user.settings.js");
         vi.mocked(userSettings.getUserModelSettings).mockResolvedValueOnce({
             legal_research_us: false,
+            web_search: DEFAULT_WEB_SEARCH_SETTINGS,
             title_model: null,
             memory_curator_model: null,
+            subagent_model: null,
+            subagent_reasoning: null,
             last_selected_reasoning_level: null,
             tabular_model: null,
             last_selected_chat_model: "gpt-6-luna",
@@ -1898,10 +1906,13 @@ describe("POST /chat — streaming endpoint", () => {
         vi.mocked(userSettings.getUserModelSettings).mockResolvedValueOnce({
             title_model: "test-model",
             memory_curator_model: null,
+            subagent_model: null,
+            subagent_reasoning: null,
             last_selected_reasoning_level: null,
             tabular_model: "test-model",
             last_selected_chat_model: null,
             legal_research_us: true,
+            web_search: DEFAULT_WEB_SEARCH_SETTINGS,
             api_keys: {
                 gemini: "test-key",
                 courtlistener: "configured-but-unused",
@@ -2284,8 +2295,11 @@ async function seedResolvableModel() {
     const userSettings = await import("../../modules/user/user.settings.js");
     vi.mocked(userSettings.getUserModelSettings).mockResolvedValueOnce({
         legal_research_us: false,
+        web_search: DEFAULT_WEB_SEARCH_SETTINGS,
         title_model: null,
         memory_curator_model: null,
+        subagent_model: null,
+        subagent_reasoning: null,
         last_selected_reasoning_level: null,
         tabular_model: null,
         last_selected_chat_model: "gpt-6-luna",

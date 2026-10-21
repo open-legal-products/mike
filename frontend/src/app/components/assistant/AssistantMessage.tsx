@@ -1,7 +1,8 @@
 "use client";
 
 import { TextCardUI } from "@/shared/ui/TextCardUI";
-import { useRef, useState } from "react";
+import { useRef, useState, type ReactNode } from "react";
+import type { WebSource } from "@mike/contracts";
 import { Check, Copy } from "lucide-react";
 import type {
     AssistantEvent,
@@ -11,14 +12,29 @@ import type {
 } from "../shared/types";
 import { ConnectorSkeuoIcon } from "@/app/components/shared/AppSidebarSkeuoIcons";
 import { notifyError } from "@/app/lib/userFacingError";
+import { useOptionalUserProfile } from "@/app/contexts/UserProfileContext";
 import { EditCard } from "./EditCard";
 import { PreResponseWrapper } from "./PreResponseWrapper";
 import { ResponseStatus, type StatusState } from "./message/ResponseStatus";
 import { DocSearchBlock } from "./message/DocSearchBlock";
 import {
+    WebReadBlock,
+    WebSearchBlock,
+    WebSourcesBlock,
+} from "./message/WebActivityBlock";
+import {
+    SubagentGroup,
+    subagentTints,
+    timelineStepCount,
+    type DelegationEvent,
+} from "./message/SubagentGroup";
+import { responseDetailsText, subagentUsage } from "./message/responseDetails";
+import {
     connectorToolLabel,
     eventErrorMessage,
+    isRenderableEvent,
     toolCallLabel,
+    withDelegationEvents,
 } from "./message/eventUtils";
 import { preprocessCitations, internalCaseHref } from "./message/citationUtils";
 import { useSmoothedReveal } from "./message/useSmoothedReveal";
@@ -186,12 +202,6 @@ export function AssistantMessage({
             ? "waiting"
             : null;
 
-    const isRenderableEvent = (event: AssistantEvent) =>
-        event.type !== "error" &&
-        event.type !== "ask_inputs_response" &&
-        event.type !== "case_citation" &&
-        event.type !== "case_opinions";
-
     // Find the last content event so its raw text can be smoothed before
     // citation preprocessing — slicing already-preprocessed text would risk
     // chopping a `§N§` citation token in half.
@@ -274,6 +284,20 @@ export function AssistantMessage({
     const canOpenCitationSource = (citation: Citation) =>
         !!onOpenCitationSource ||
         (citation.kind !== "case" && !!onOpenDocument);
+    const eventsWithDelegated = withDelegationEvents(events ?? []);
+    // The pages an answer cites follow the answer, not the steps before it.
+    // Several provider steps can cite the same page, so list each URL once.
+    const webSourcesByUrl = new Map<string, WebSource>();
+    for (const event of events ?? []) {
+        if (event.type !== "web_sources") continue;
+        for (const source of event.sources) {
+            const existing = webSourcesByUrl.get(source.url);
+            if (!existing || (!existing.title && source.title)) {
+                webSourcesByUrl.set(source.url, source);
+            }
+        }
+    }
+    const webSources = [...webSourcesByUrl.values()];
     const showCitationBlock =
         !!citationStatus || (!isStreaming && citations.length > 0);
     const handleCopy = async () => {
@@ -403,10 +427,14 @@ export function AssistantMessage({
         i: number,
         allEvents: AssistantEvent[],
         globalIdx: number,
+        timeline: AssistantEvent[] = events ?? [],
+        connectsToNextRow = false,
     ) => {
         const nextEvent = allEvents[i + 1];
         const showConnector =
-            nextEvent !== undefined && nextEvent.type !== "content";
+            nextEvent !== undefined
+                ? nextEvent.type !== "content"
+                : connectsToNextRow;
 
         if (event.type === "reasoning") {
             return (
@@ -502,6 +530,14 @@ export function AssistantMessage({
         }
         if (event.type === "doc_search") {
             return <DocSearchBlock key={globalIdx} event={event}
+                isStreaming={event.isStreaming} showConnector={showConnector} />;
+        }
+        if (event.type === "web_search") {
+            return <WebSearchBlock key={globalIdx} event={event}
+                isStreaming={event.isStreaming} showConnector={showConnector} />;
+        }
+        if (event.type === "web_read") {
+            return <WebReadBlock key={globalIdx} event={event}
                 isStreaming={event.isStreaming} showConnector={showConnector} />;
         }
         if (event.type === "doc_find") {
@@ -822,16 +858,14 @@ export function AssistantMessage({
             // and final verify_citations events (one per matched citation) —
             // collect them so the user can expand to see resolved cases.
             const items: CourtListenerBlockItem[] = [];
-            if (events) {
-                for (let j = globalIdx + 1; j < events.length; j++) {
-                    const e = events[j];
-                    if (e.type !== "case_citation") break;
-                    items.push({
-                        caseName: e.case_name,
-                        citation: e.citation,
-                        url: e.url || null,
-                    });
-                }
+            for (let j = globalIdx + 1; j < timeline.length; j++) {
+                const e = timeline[j];
+                if (e.type !== "case_citation") break;
+                items.push({
+                    caseName: e.case_name,
+                    citation: e.citation,
+                    url: e.url || null,
+                });
             }
             return (
                 <CourtListenerBlock
@@ -852,6 +886,50 @@ export function AssistantMessage({
             );
         }
         return null;
+    };
+
+    // Mike's steps in a pre-answer group. Consecutive delegations are
+    // subagents Mike ran in parallel; they render as one group.
+    const tints = subagentTints(events ?? []);
+    // Settings > Features > Response details: the model, effort and tokens
+    // under the answer and in each subagent's details. Off without a profile.
+    const showDetails =
+        useOptionalUserProfile()?.profile?.responseDetailsVisible === true;
+    const answerDetails = showDetails
+        ? (events ?? []).findLast((e) => e.type === "response_details")
+        : undefined;
+    const renderPreEvents = (g: Extract<EventGroup, { kind: "pre" }>) => {
+        const rows: ReactNode[] = [];
+        for (let i = 0; i < g.events.length; i++) {
+            if (g.events[i].type !== "delegation") {
+                rows.push(renderEvent(g.events[i], i, g.events, g.indices[i]));
+                continue;
+            }
+            let end = i;
+            while (g.events[end + 1]?.type === "delegation") end++;
+            rows.push(
+                <SubagentGroup
+                    key={`s-${g.indices[i]}`}
+                    delegations={g.events.slice(i, end + 1) as DelegationEvent[]}
+                    tints={tints}
+                    showDetails={showDetails}
+                    showConnectorAfter={end + 1 < g.events.length}
+                    renderSteps={renderTimeline}
+                />,
+            );
+            i = end;
+        }
+        return rows;
+    };
+
+    // A subagent's steps; the last one connects to the row its details put
+    // after them (its brief) when there is one.
+    const renderTimeline = (steps: AssistantEvent[], connectsToNextRow: boolean) => {
+        const indices = steps.flatMap((step, i) => (isRenderableEvent(step) ? [i] : []));
+        const renderable = indices.map((i) => steps[i]);
+        return renderable.map((step, i) =>
+            renderEvent(step, i, renderable, indices[i], steps, connectsToNextRow),
+        );
     };
 
     return (
@@ -906,7 +984,12 @@ export function AssistantMessage({
                             return (
                                 <PreResponseWrapper
                                     key={`p-${g.indices[0]}`}
-                                    stepCount={g.events.length}
+                                    stepCount={timelineStepCount(g.events)}
+                                    subagentCount={
+                                        g.events.filter(
+                                            (event) => event.type === "delegation",
+                                        ).length
+                                    }
                                     shouldMinimize={
                                         pendingAskInput
                                             ? false
@@ -915,14 +998,7 @@ export function AssistantMessage({
                                     isStreaming={wrapperIsStreaming}
                                     forceOpen={pendingAskInput}
                                 >
-                                    {g.events.map((event, i) =>
-                                        renderEvent(
-                                            event,
-                                            i,
-                                            g.events,
-                                            g.indices[i],
-                                        ),
-                                    )}
+                                    {renderPreEvents(g)}
                                 </PreResponseWrapper>
                             );
                         })}
@@ -931,7 +1007,7 @@ export function AssistantMessage({
                             rendered above the download card. */}
                         {!isStreaming &&
                             (() => {
-                                const editedEvents = events.filter(
+                                const editedEvents = eventsWithDelegated.filter(
                                     (e) =>
                                         e.type === "doc_edited" &&
                                         !e.isStreaming,
@@ -1057,7 +1133,7 @@ export function AssistantMessage({
                 {events &&
                     !isStreaming &&
                     (() => {
-                        const edited = events.filter(
+                        const edited = eventsWithDelegated.filter(
                             (
                                 e,
                             ): e is Extract<
@@ -1120,12 +1196,12 @@ export function AssistantMessage({
                     them in the DocumentContent (like edited docs). */}
                 {events &&
                     !isStreaming &&
-                    events.some(
+                    eventsWithDelegated.some(
                         (e) => e.type === "doc_created" && e.download_url,
                     ) && (
                         <div className="flex flex-col gap-2 mt-2 mb-3">
                             {(
-                                events.filter(
+                                eventsWithDelegated.filter(
                                     (e) =>
                                         e.type === "doc_created" &&
                                         e.download_url,
@@ -1163,6 +1239,12 @@ export function AssistantMessage({
                         </div>
                     )}
 
+                {webSources.length > 0 && (
+                    <div className="mt-2 mb-3">
+                        <WebSourcesBlock sources={webSources} />
+                    </div>
+                )}
+
                 {showCitationBlock && (
                     <CitationsBlock
                         citations={citations}
@@ -1178,8 +1260,9 @@ export function AssistantMessage({
                     />
                 )}
 
-                {/* Copy button */}
-                <div className="flex items-center gap-2 font-sans justify-start">
+                {/* Copy button on the left; what the answer ran on, when the
+                    user asked to see it, at the right end of the same row. */}
+                <div className="flex flex-wrap items-center gap-x-2 font-sans justify-start">
                     {!isStreaming && !awaitingInput && (
                         <button
                             type="button"
@@ -1195,6 +1278,11 @@ export function AssistantMessage({
                                 <Copy className="h-3 w-3" />
                             )}
                         </button>
+                    )}
+                    {!isStreaming && answerDetails?.type === "response_details" && (
+                        <span className="ml-auto min-w-0 text-right font-serif text-sm text-gray-400 [overflow-wrap:anywhere]">
+                            {responseDetailsText(answerDetails, subagentUsage(events ?? []))}
+                        </span>
                     )}
                 </div>
             </div>

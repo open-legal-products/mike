@@ -224,9 +224,23 @@ type WireActivity<T extends WireAssistantEvent["type"]> = Extract<
   WireAssistantEvent,
   { type: T }
 >;
+type WireDelegation = WireActivity<"delegation">;
 export type AssistantEvent =
   | WireActivity<"text_card">
   | (WireActivity<"doc_search"> & { isStreaming?: boolean })
+  | (WireActivity<"web_search"> & { isStreaming?: boolean })
+  | (WireActivity<"web_read"> & { isStreaming?: boolean })
+  | WireActivity<"web_sources">
+  | WireActivity<"response_details">
+  | (Omit<WireDelegation, "events" | "status" | "model" | "effort"> & {
+      events: AssistantEvent[];
+      /** The rest arrive when the subagent finishes; a stopped run never gets them. */
+      status?: WireDelegation["status"];
+      model?: string;
+      effort?: WireDelegation["effort"];
+      isStreaming?: boolean;
+      activity?: string;
+    })
   | (Omit<WireActivity<"reasoning">, "isStreaming"> & { isStreaming?: boolean })
   | (Omit<WireActivity<"error">, "safe_to_display"> & {
       safe_to_display?: boolean;

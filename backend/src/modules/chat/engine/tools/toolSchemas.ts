@@ -28,7 +28,7 @@ export const DOCUMENT_MUTATING_TOOL_NAMES: ReadonlySet<string> = new Set([
 ]);
 
 /** Read a tool schema's function name, whatever shape the entry arrived in. */
-function toolName(tool: unknown): string | null {
+export function toolName(tool: unknown): string | null {
   const fn = (tool as { function?: { name?: unknown } } | null)?.function;
   return typeof fn?.name === "string" ? fn.name : null;
 }

@@ -1,8 +1,15 @@
+import type { DelegationModelTier } from "@mike/contracts";
 import {
+    builtInModelIds,
     CLAUDE_LOW_MODELS,
+    CLAUDE_MID_MODELS,
     GEMINI_LOW_MODELS,
+    GEMINI_MID_MODELS,
     OPENAI_LOW_MODELS,
+    OPENAI_MID_MODELS,
     MISTRAL_LOW_MODELS,
+    MISTRAL_MID_MODELS,
+    type Provider,
     providerForModel,
     normalizeReasoningLevelForModel,
     resolveModel,
@@ -259,4 +266,53 @@ export function titleModelForChat(
         case "openai-compatible":
             return resolvedChatModel;
     }
+}
+
+export const DELEGATION_MODEL_TIERS: readonly DelegationModelTier[] = [
+    "light",
+    "standard",
+    "same",
+];
+
+function tieredModels(
+    provider: Provider,
+): { light: readonly string[]; standard: readonly string[] } | null {
+    switch (provider) {
+        case "claude":
+            return { light: CLAUDE_LOW_MODELS, standard: CLAUDE_MID_MODELS };
+        case "gemini":
+            return { light: GEMINI_LOW_MODELS, standard: GEMINI_MID_MODELS };
+        case "openai":
+            return { light: OPENAI_LOW_MODELS, standard: OPENAI_MID_MODELS };
+        case "mistral":
+            return { light: MISTRAL_LOW_MODELS, standard: MISTRAL_MID_MODELS };
+        default:
+            return null;
+    }
+}
+
+/** Empty for routers, cloud platforms and local models. */
+export function sameProviderModels(chatModel: string, apiKeys: UserApiKeys): string[] {
+    const provider = providerForModel(chatModel);
+    return builtInModelIds().filter(
+        (model) => providerForModel(model) === provider && hasApiKeyForModel(model, apiKeys),
+    );
+}
+
+/**
+ * As with titles, only first-party chat models step down to a cheaper model of
+ * the same provider; otherwise the chat model runs.
+ */
+export function subagentModelFor(
+    chatModel: string,
+    tier: DelegationModelTier,
+): string {
+    const tiers = tieredModels(providerForModel(chatModel));
+    if (!tiers || tier === "same") return chatModel;
+    const chatRank = [tiers.light, tiers.standard].findIndex((models) =>
+        models.includes(chatModel),
+    );
+    const atOrBelowTier =
+        chatRank >= 0 && chatRank <= DELEGATION_MODEL_TIERS.indexOf(tier);
+    return atOrBelowTier ? chatModel : tiers[tier][0];
 }

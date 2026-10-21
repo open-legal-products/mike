@@ -162,6 +162,7 @@ vi.mock("../../modules/chat/engine/index", async (importOriginal) => {
 vi.mock("../../modules/user/user.settings", () => ({
     getUserModelSettings: vi.fn(async () => ({
         legal_research_us: false,
+        web_search: DEFAULT_WEB_SEARCH_SETTINGS,
         title_model: "test-model",
         tabular_model: "test-model",
         last_selected_chat_model: null,
@@ -203,6 +204,7 @@ import { app } from "../../app";
 import { getActiveAssistantTurn, resetAssistantTurnRunsForTests } from "../../lib/assistantTurnRuns";
 import { spotlight } from "../../modules/chat/engine/index";
 import { createServerSupabase } from "../../lib/supabase";
+import { DEFAULT_WEB_SEARCH_SETTINGS } from "../../lib/webSearch";
 
 const VALID_BODY = {
     messages: [{ role: "user", content: "hello" }],
@@ -421,8 +423,11 @@ describe("POST /projects/:projectId/chat", () => {
         const userSettings = await import("../../modules/user/user.settings.js");
         vi.mocked(userSettings.getUserModelSettings).mockResolvedValueOnce({
             legal_research_us: false,
+            web_search: DEFAULT_WEB_SEARCH_SETTINGS,
             title_model: null,
             memory_curator_model: null,
+            subagent_model: null,
+            subagent_reasoning: null,
             last_selected_reasoning_level: null,
             tabular_model: null,
             last_selected_chat_model: "gpt-6-luna",
@@ -438,6 +443,31 @@ describe("POST /projects/:projectId/chat", () => {
         expect(runLLMStream).toHaveBeenCalledWith(
             expect.objectContaining({ model: "gpt-6-luna" }),
         );
+    });
+
+    it("saves a subagent run only after the answer it belongs to", async () => {
+        runLLMStream.mockImplementationOnce(async ({ subagentRuns }) => {
+            await subagentRuns.save("delegation-1", "completed", {});
+            return { fullText: "Answer", events: [], citations: [] };
+        });
+
+        await request(app)
+            .post("/projects/p1/chat")
+            .set("Authorization", "Bearer test")
+            .send(VALID_BODY);
+
+        const assistant = dbInserts.findIndex(
+            ({ table, value }) =>
+                table === "chat_messages" && (value as { role?: string }).role === "assistant",
+        );
+        const run = dbInserts.findIndex(({ table }) => table === "chat_subagent_runs");
+        expect(assistant).toBeGreaterThanOrEqual(0);
+        expect(run).toBeGreaterThan(assistant);
+        expect(dbInserts[run].value).toEqual([
+            expect.objectContaining({
+                message_id: (dbInserts[assistant].value as { id: string }).id,
+            }),
+        ]);
     });
 
     it("normalizes validated request fields before using them", async () => {

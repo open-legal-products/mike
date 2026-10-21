@@ -64,6 +64,29 @@ function isApprovalItem(
 }
 
 /**
+ * One pause carries every pending decision: approvals join the model's own
+ * questions when it asked any in the same step.
+ */
+export function addApprovalItems(
+  askInputsEvents: AskInputsEvent[],
+  items: ConnectorApprovalItem[],
+): void {
+  if (items.length === 0) return;
+  if (askInputsEvents.length > 0) {
+    askInputsEvents[0] = {
+      ...askInputsEvents[0],
+      items: [...askInputsEvents[0].items, ...items],
+    };
+  } else {
+    askInputsEvents.push({
+      type: "ask_inputs",
+      event_id: crypto.randomUUID(),
+      items,
+    });
+  }
+}
+
+/**
  * Runs the items the user approved in a just-appended ask_inputs_response and
  * appends their results. Call only after the append reported "appended": that
  * append is what guarantees each approval runs at most once.

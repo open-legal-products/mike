@@ -1,5 +1,22 @@
 import type { AssistantEvent } from "../../shared/types";
 
+export function isRenderableEvent(event: AssistantEvent): boolean {
+    return (
+        event.type !== "error" &&
+        event.type !== "ask_inputs_response" &&
+        event.type !== "case_citation" &&
+        event.type !== "case_opinions" &&
+        event.type !== "web_sources" &&
+        event.type !== "response_details"
+    );
+}
+
+export function withDelegationEvents(events: AssistantEvent[]): AssistantEvent[] {
+    return events.flatMap((event) =>
+        event.type === "delegation" ? [event, ...event.events] : [event],
+    );
+}
+
 export function eventErrorMessage(event: AssistantEvent): string | null {
     if (event.type === "error") {
         return event.safe_to_display
@@ -7,7 +24,10 @@ export function eventErrorMessage(event: AssistantEvent): string | null {
             : "Sorry, something went wrong.";
     }
     if ("error" in event && typeof event.error === "string" && event.error) {
-        return "Sorry, something went wrong.";
+        // Web tool errors are written for the user by the server.
+        return event.type === "web_search" || event.type === "web_read"
+            ? event.error
+            : "Sorry, something went wrong.";
     }
     return null;
 }
@@ -49,6 +69,9 @@ export function toolCallLabel(name: string): string {
     if (name === "courtlistener_read_case") return "Reading case...";
     if (name === "courtlistener_verify_citations")
         return "Verifying citations...";
+    if (name === "web_search") return "Searching the web...";
+    if (name === "read_webpage") return "Reading web page...";
+    if (name === "delegate") return "Starting a subagent...";
     if (name.startsWith("mcp_")) return "Using connector...";
     return name ? `Running ${name}...` : "Working...";
 }
