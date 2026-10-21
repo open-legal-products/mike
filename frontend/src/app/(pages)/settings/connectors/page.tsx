@@ -311,9 +311,9 @@ function ConnectorBrandIcon({ name }: { name: string }) {
 }
 
 function googleSetupGuideUrl(provider: GoogleConnectorProvider) {
-  return `https://github.com/open-legal-products/mike/blob/main/docs/${
-    provider === "google-drive" ? "google-drive" : "google-workspace"
-  }.md`;
+  return `https://github.com/open-legal-products/mike/blob/main/docs/google-workspace.md#${
+    provider === "google-drive" ? "google-drive" : "gmail-and-google-calendar"
+  }`;
 }
 
 function GoogleConnectorIcon({

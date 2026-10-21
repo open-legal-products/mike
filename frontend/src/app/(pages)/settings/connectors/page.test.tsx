@@ -926,7 +926,7 @@ describe("Google Drive connection lifecycle", () => {
         ).toBeTruthy();
         expect(
             screen.getByRole("link", { name: /setup guide/i }),
-        ).toHaveAttribute("href", expect.stringContaining("google-drive.md"));
+        ).toHaveAttribute("href", expect.stringContaining("google-workspace.md#google-drive"));
         // The blank window opened for the flow is closed again.
         expect(popup.close).toHaveBeenCalled();
         expect(
