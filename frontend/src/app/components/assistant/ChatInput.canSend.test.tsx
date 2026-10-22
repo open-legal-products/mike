@@ -408,6 +408,45 @@ describe("ChatInput canSend gating", () => {
         expect(uploadProjectDocuments).not.toHaveBeenCalled();
     });
 
+    it("shows uploads as loading document pills side by side, and keeps the + menu ready", async () => {
+        const finish: Array<() => void> = [];
+        vi.mocked(uploadStandaloneDocuments).mockImplementation(
+            () => new Promise((resolve) => finish.push(() => resolve([]))),
+        );
+        const ref = createRef<ChatInputHandle>();
+        render(
+            <ChatInput
+                ref={ref}
+                onSubmit={vi.fn()}
+                onCancel={vi.fn()}
+                isLoading={false}
+                enableGlobalFileDrop={false}
+            />,
+        );
+        const pdf = (name: string) => new File(["x"], name, { type: "application/pdf" });
+
+        act(() => ref.current?.addFiles([pdf("first.pdf")]));
+        act(() => ref.current?.addFiles([pdf("second.pdf")]));
+
+        const first = await screen.findByTitle("first.pdf · Uploading");
+        const second = screen.getByTitle("second.pdf · Uploading");
+        // One row with the attachments, not a stack of rows.
+        expect(first.parentElement).toBe(second.parentElement);
+        expect(first.parentElement).toHaveClass("flex-wrap");
+        // The + keeps its icon and stays usable, and the picker stays enabled.
+        const add = screen.getByRole("button", { name: "Add to message" });
+        expect(add).toBeEnabled();
+        expect(add.querySelector(".animate-spin")).toBeNull();
+        expect(screen.getByLabelText("Upload Documents")).toBeEnabled();
+
+        // The first batch finishing clears only its own pill.
+        await act(async () => finish[0]());
+        expect(screen.queryByTitle("first.pdf · Uploading")).toBeNull();
+        expect(screen.getByTitle("second.pdf · Uploading")).toBeInTheDocument();
+        await act(async () => finish[1]());
+        expect(screen.queryByTitle("second.pdf · Uploading")).toBeNull();
+    });
+
     it("discards an upload that finishes after switching chats", async () => {
         let finishUpload!: (
             outcomes: Awaited<ReturnType<typeof uploadStandaloneDocuments>>,

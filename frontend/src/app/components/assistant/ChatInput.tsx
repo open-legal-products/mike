@@ -13,7 +13,6 @@ import {
 } from "react";
 import {
     ArrowRight,
-    Loader2,
     Square,
     Waypoints,
     X,
@@ -55,10 +54,7 @@ import {
 import type { Document, Message, Workflow } from "../shared/types";
 import type { DirectoryTab } from "../shared/useDirectoryData";
 import { cn } from "@/app/lib/utils";
-import {
-    LIQUID_GLASS_FLAT_CLASS,
-    LIQUID_GLASS_TRANSLUCENT_CLASS,
-} from "@/app/components/ui/liquid-surface";
+import { LIQUID_GLASS_TRANSLUCENT_CLASS } from "@/app/components/ui/liquid-surface";
 import {
     UploadBatchError,
     failedUploadMessage,
@@ -412,12 +408,18 @@ function ChatInputForChatImpl(
                 file,
                 clientId: crypto.randomUUID(),
             }));
-            setUploadingFiles(
-                uploadInputs.map(({ clientId, file }) => ({
+            // Batches can overlap (a second drop or pick while one is still
+            // uploading), so each adds its own pills and clears only those.
+            const batchIds = new Set(
+                uploadInputs.map(({ clientId }) => clientId),
+            );
+            setUploadingFiles((current) => [
+                ...current,
+                ...uploadInputs.map(({ clientId, file }) => ({
                     clientId,
                     filename: file.name,
                 })),
-            );
+            ]);
             const addCompletedDocument = (document: Document) => {
                 if (!uploadGenerationActiveRef.current) return;
                 addAttachedDocuments([document]);
@@ -482,7 +484,11 @@ function ChatInputForChatImpl(
                           ),
                 );
             } finally {
-                if (uploadGenerationActiveRef.current) setUploadingFiles([]);
+                if (uploadGenerationActiveRef.current) {
+                    setUploadingFiles((current) =>
+                        current.filter((upload) => !batchIds.has(upload.clientId)),
+                    );
+                }
             }
         },
         [
@@ -747,6 +753,7 @@ function ChatInputForChatImpl(
                     {(selectedWorkflow ||
                         selectedPlaybook ||
                         attachedDocs.length > 0 ||
+                        uploadingFiles.length > 0 ||
                         excerpts.length > 0) && (
                         <div className="flex flex-wrap gap-1.5 px-2 pt-2">
                             {selectedWorkflow && (
@@ -807,6 +814,16 @@ function ChatInputForChatImpl(
                                     }
                                 />
                             ))}
+                            {/* Still uploading: in the same row as the
+                                attached documents, side by side. */}
+                            {uploadingFiles.map((upload) => (
+                                <DocumentPill
+                                    key={upload.clientId}
+                                    filename={upload.filename}
+                                    status="Uploading"
+                                    loading
+                                />
+                            ))}
                             {excerpts.map((excerpt, index) => (
                                 <ExcerptPillUI
                                     key={`${index}-${excerpt.text}`}
@@ -818,22 +835,6 @@ function ChatInputForChatImpl(
                                         )
                                     }
                                 />
-                            ))}
-                        </div>
-                    )}
-
-                    {uploadingFiles.length > 0 && (
-                        <div className="flex flex-wrap items-center gap-1.5 px-2 pt-2">
-                            {uploadingFiles.map((upload) => (
-                                <div
-                                    key={upload.clientId}
-                                    className={`inline-flex items-center gap-1 rounded-[10px] px-2 py-1 text-xs text-gray-600 ${LIQUID_GLASS_FLAT_CLASS}`}
-                                >
-                                    <Loader2 className="h-2.5 w-2.5 animate-spin" />
-                                    <span className="max-w-[140px] truncate">
-                                        {upload.filename}
-                                    </span>
-                                </div>
                             ))}
                         </div>
                     )}
@@ -879,7 +880,6 @@ function ChatInputForChatImpl(
                             {!hideAddDocButton && composerOpen && (
                                 <AddDocButton
                                     onLocalFiles={() => localFileInputRef.current?.click()}
-                                    uploading={uploadingFiles.length > 0}
                                     onBrowseAll={() => {
                                         setDocSelectorInitialTab("files");
                                         setDocSelectorOpen(true);
@@ -968,7 +968,7 @@ function ChatInputForChatImpl(
                 multiple
                 hidden
                 aria-label="Upload Documents"
-                disabled={!composerOpen || uploadingFiles.length > 0}
+                disabled={!composerOpen}
                 onChange={(event) => {
                     const files = Array.from(event.currentTarget.files ?? []);
                     event.currentTarget.value = "";

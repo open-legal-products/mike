@@ -22,4 +22,15 @@ describe("DocumentPill", () => {
         expect(screen.getByRole("button", { name: "Remove nda.pdf" })).toBeDisabled();
         expect(screen.queryByRole("button", { name: "Open nda.pdf" })).toBeNull();
     });
+
+    it("holds a spinner where the remove button goes while the document uploads", () => {
+        const { container } = render(
+            <DocumentPill filename="lease.pdf" status="Uploading" loading onRemove={vi.fn()} />,
+        );
+        expect(screen.getByTitle("lease.pdf · Uploading")).toHaveTextContent("lease.pdf, Uploading");
+        expect(screen.queryByRole("button", { name: "Remove lease.pdf" })).toBeNull();
+        const spinner = container.querySelector(".animate-spin");
+        expect(spinner?.parentElement).toHaveClass("mx-1", "p-0.5");
+        expect(spinner?.parentElement).toHaveAttribute("aria-hidden", "true");
+    });
 });

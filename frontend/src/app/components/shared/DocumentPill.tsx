@@ -1,7 +1,7 @@
 "use client";
 
 import type { ReactNode } from "react";
-import { X } from "lucide-react";
+import { Loader2, X } from "lucide-react";
 import { FileTypeIcon } from "@/app/components/shared/FileTypeIcon";
 import { LIQUID_GLASS_FLAT_CLASS } from "@/app/components/ui/liquid-surface";
 import { cn } from "@/app/lib/utils";
@@ -16,6 +16,7 @@ export function DocumentPill({
   icon,
   status,
   tone = "default",
+  loading = false,
   onOpen,
   onRemove,
   removeDisabled = false,
@@ -28,6 +29,11 @@ export function DocumentPill({
   /** Read after the name by assistive technology, such as "Started". */
   status?: string;
   tone?: "default" | "error";
+  /**
+   * Still uploading: the file icon is faded and a spinner takes the remove
+   * button's place, so the pill keeps the same size when it finishes.
+   */
+  loading?: boolean;
   onOpen?: () => void;
   onRemove?: () => void;
   removeDisabled?: boolean;
@@ -35,7 +41,10 @@ export function DocumentPill({
   const label = (
     <>
       {icon ?? (
-        <FileTypeIcon fileType={fileType ?? filename} className="h-2.5 w-2.5" />
+        <FileTypeIcon
+          fileType={fileType ?? filename}
+          className={cn("h-2.5 w-2.5", loading && "opacity-40")}
+        />
       )}
       <span className="max-w-[140px] truncate">{filename}</span>
       {status && <span className="sr-only">, {status}</span>}
@@ -48,7 +57,7 @@ export function DocumentPill({
         "inline-flex items-center rounded-[10px] text-xs",
         tone === "error" ? "text-red-600" : "text-gray-800",
         LIQUID_GLASS_FLAT_CLASS,
-        !onRemove && "pr-2",
+        !onRemove && !loading && "pr-2",
       )}
     >
       {onOpen ? (
@@ -65,7 +74,12 @@ export function DocumentPill({
           {label}
         </span>
       )}
-      {onRemove && (
+      {loading ? (
+        // The remove button's box, so the pill does not change size.
+        <span aria-hidden="true" className="mx-1 p-0.5 text-gray-400">
+          <Loader2 className="h-2.5 w-2.5 animate-spin motion-reduce:animate-none" />
+        </span>
+      ) : onRemove && (
         <button
           type="button"
           onClick={onRemove}
