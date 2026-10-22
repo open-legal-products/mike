@@ -139,7 +139,13 @@ function reportRealFault(
         !isReported(error) &&
         (described.kind === "unknown" || described.kind === "server");
     if (!isFault) return;
-    reportError(error, { tags: { component: "notify", action } });
+    // The server's own code and request id are what let this event be
+    // matched to the backend's half of the failure; `action` is free text
+    // for the toast and is dropped at the privacy boundary.
+    const shaped = error && typeof error === "object" ? (error as { code?: unknown; requestId?: unknown; request_id?: unknown }) : null;
+    const code = typeof shaped?.code === "string" ? shaped.code : undefined;
+    const requestId = typeof shaped?.requestId === "string" ? shaped.requestId : typeof shaped?.request_id === "string" ? shaped.request_id : undefined;
+    reportError(error, { tags: { component: "notify", action, error_code: code, request_id: requestId } });
 }
 
 /**

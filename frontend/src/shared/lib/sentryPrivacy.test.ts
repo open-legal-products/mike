@@ -32,11 +32,11 @@ describe('outbound telemetry privacy boundary', () => {
       event_id: eventId, timestamp: 123, level: 'error', platform: 'javascript', release: 'mike@abc123', environment: 'self-hosted',
       tags: { service: 'mike-backend', component: 'upload-worker', stage: 'conversion', http_method: 'POST', http_route: '/api/projects/' + id + '/documents', http_status: '500', request_id: id, network: true, project: 'false', error_code: 'internal_error' },
       extra: { document_id: id, filename: 'Private NDA.pdf' },
-      exception: { values: [{ type: 'TypeError', value: 'Private NDA.pdf', mechanism: { handled: true, data: 'secret' }, stacktrace: { frames: [{ filename: '/Users/private/work/mike/backend/src/convert.ts', abs_path: '/Users/private/work/mike/backend/src/convert.ts', lineno: 42, colno: 7, in_app: true, function: 'privateName', context_line: 'privateName', vars: { secret: true } }] } }] },
+      exception: { values: [{ type: 'TypeError', value: 'Private NDA.pdf', mechanism: { handled: true, data: 'secret' }, stacktrace: { frames: [{ filename: '/Users/private/work/mike/backend/src/convert.ts', abs_path: '/Users/private/work/mike/backend/src/convert.ts', lineno: 42, colno: 7, in_app: true, function: 'convertDocument', context_line: 'privateName', vars: { secret: true } }] } }] },
       debug_meta: { images: [{ type: 'sourcemap', code_file: '/Users/private/work/mike/backend/src/convert.ts', debug_id: id }] },
     });
     expect(out).toMatchObject({ event_id: eventId, timestamp: 123, level: 'error', release: 'mike@abc123', environment: 'self-hosted', extra: { document_id: id }, tags: { request_id: id, http_route: '/api/projects/:id/documents', http_status: 500 } });
-    expect(out.exception).toEqual({ values: [{ type: 'TypeError', value: 'Failure in upload-worker / conversion / POST / /api/projects/:id/documents / 500 / internal_error', mechanism: { type: 'generic', handled: true }, stacktrace: { frames: [{ filename: 'backend/src/convert.ts', abs_path: 'backend/src/convert.ts', lineno: 42, colno: 7, in_app: true }] } }] });
+    expect(out.exception).toEqual({ values: [{ type: 'TypeError', value: 'Failure in upload-worker / conversion / POST / /api/projects/:id/documents / 500 / internal_error', mechanism: { type: 'generic', handled: true }, stacktrace: { frames: [{ filename: 'backend/src/convert.ts', abs_path: 'backend/src/convert.ts', lineno: 42, colno: 7, in_app: true, function: 'convertDocument' }] } }] });
     expect(out.debug_meta).toEqual({ images: [{ type: 'sourcemap', code_file: 'backend/src/convert.ts', debug_id: id }] });
     expect(JSON.stringify(out)).not.toContain('private');
   });
@@ -335,9 +335,76 @@ it('keeps a Node process warning diagnosable: name, code and builtin frames, nev
     { filename: 'node:punycode', lineno: 3, colno: 9 },
   ] } }] });
   // One issue per warning name and code, whichever module triggered it.
-  expect(out.fingerprint).toEqual(['{{ default }}', 'runtime-warning', '', '', '', '', '', '', '', 'DeprecationWarning', 'DEP0040']);
+  expect(out.fingerprint).toEqual(['{{ default }}', '', '', '', 'runtime-warning', '', '', '', '', '', '', '', 'DeprecationWarning', 'DEP0040']);
   expect(JSON.stringify(out)).not.toContain('PRIVATE');
   // Only Node's own vocabulary survives; builtin specifiers cannot smuggle a path.
   expect(diagnosticEvent({ tags: { warning_name: 'PrivateWarning', warning_code: 'PRIVATE-1' } }).tags).toEqual({});
   expect(diagnosticEvent({ stacktrace: { frames: [{ filename: 'node:fs/promises?file=PRIVATE.pdf', lineno: 1 }, { filename: 'node:/Users/private/PRIVATE.pdf', lineno: 2 }] } }).stacktrace).toEqual({ frames: [{ filename: 'node:fs/promises', lineno: 1 }] });
+});
+
+// What makes an event name a bug: the operation the request belonged to and
+// the thrower's own kind, both closed vocabularies; the function that threw;
+// the exception class; and the stages the request passed through.
+describe('operation, error kind and stage trail', () => {
+  it('leads the title and the fingerprint with operation and error_kind', () => {
+    const out = diagnosticEvent({
+      tags: { operation: 'documents.upload.complete', component: 'upload-worker', stage: 'process-file', error_kind: 'conversion.no_output', file_type: 'docx' },
+      exception: { values: [{ type: 'ConversionError', value: 'PRIVATE Jane Doe NDA.docx', mechanism: { type: 'generic', handled: true }, stacktrace: { frames: [
+        { filename: '/app/dist/lib/convert.js', lineno: 252, colno: 11, in_app: true, function: 'convertWithLibreOffice' },
+        { filename: '/app/node_modules/execa/index.js', lineno: 9, colno: 3, in_app: false, function: 'execa' },
+      ] } }] },
+    });
+    expect(out.exception).toEqual({ values: [{ type: 'ConversionError', value: 'Failure in documents.upload.complete / upload-worker / process-file / conversion.no_output', mechanism: { type: 'generic', handled: true }, stacktrace: { frames: [
+      { filename: 'dist/lib/convert.js', lineno: 252, colno: 11, in_app: true, function: 'convertWithLibreOffice' },
+      { filename: 'node_modules/execa/index.js', lineno: 9, colno: 3, in_app: false },
+    ] } }] });
+    expect(out.fingerprint).toEqual(['{{ default }}', 'documents.upload.complete', 'conversion.no_output', '', 'upload-worker', 'process-file', '', '', '', 'docx', '', '', '', '']);
+    expect(JSON.stringify(out)).not.toContain('PRIVATE');
+  });
+
+  it('reads error_kind off an AppError anywhere on the cause chain, vocabulary only', () => {
+    expect(diagnosticErrorTags(new Error('outer', { cause: Object.assign(new Error('inner'), { kind: 'storage.upload_failed', code: 'AccessDenied' }) }))).toEqual({ error_kind: 'storage.upload_failed', failure_code: 'AccessDenied' });
+    expect(diagnosticErrorTags(Object.assign(new Error('x'), { kind: 'Private NDA.pdf' }))).toEqual({});
+    expect(diagnosticEvent({ tags: { operation: 'PRIVATE.pdf', error_kind: 'not.a.kind' } }).tags).toEqual({});
+  });
+
+  it('keeps function names only on repository frames and only in identifier form', () => {
+    const frames = diagnosticEvent({ stacktrace: { frames: [
+      { filename: 'backend/src/lib/storage.ts', lineno: 1, function: 'async uploadFile' },
+      { filename: 'backend/src/lib/storage.ts', lineno: 2, function: 'Object.<anonymous>' },
+      { filename: 'backend/src/lib/storage.ts', lineno: 3, function: 'Jane Doe medical claim' },
+      { filename: 'backend/src/lib/storage.ts', lineno: 4, function: 'Private_NDA.pdf' },
+      { filename: 'backend/src/lib/storage.ts', lineno: 5, function: '秘密の依頼人契約' },
+      { filename: 'node_modules/pg/lib/client.js', lineno: 6, function: 'Client.query' },
+      { filename: 'node:internal/process/task_queues', lineno: 7, function: 'processTicksAndRejections' },
+    ] } }).stacktrace as { frames: Array<Record<string, unknown>> };
+    expect(frames.frames.map(f => f.function ?? null)).toEqual(['async uploadFile', 'Object.<anonymous>', null, null, null, null, null]);
+  });
+
+  it('keeps our own exception class names and nothing that is not shaped like one', () => {
+    const type = (t: string) => (diagnosticEvent({ exception: { values: [{ type: t }] } }).exception as { values: Array<{ type: string }> }).values[0]!.type;
+    expect(type('StorageOperationError')).toBe('StorageOperationError');
+    expect(type('PlaybookRequestError')).toBe('PlaybookRequestError');
+    expect(type('DeprecationWarning')).toBe('DeprecationWarning');
+    expect(type('Private NDA Error')).toBe('Error');
+    expect(type('privateError')).toBe('Error');
+    expect(type('Jane.pdf')).toBe('Error');
+  });
+
+  it('keeps the stage trail and no other breadcrumb', () => {
+    const out = diagnosticEvent({ breadcrumbs: [
+      { category: 'mike.stage', message: 'claim', timestamp: 1 },
+      { category: 'mike.stage', message: 'Private NDA.pdf', timestamp: 2 },
+      { category: 'http', message: 'GET /documents/Private.pdf', data: { url: 'x' }, timestamp: 3 },
+      { category: 'mike.stage', message: 'process-file', timestamp: 4, data: { filename: 'Private.pdf' } },
+    ] });
+    expect(out.breadcrumbs).toEqual([{ category: 'mike.stage', message: 'claim', timestamp: 1 }, { category: 'mike.stage', message: 'process-file', timestamp: 4 }]);
+    expect(JSON.stringify(out)).not.toContain('Private');
+    expect(diagnosticEvent({ breadcrumbs: [{ category: 'http', message: 'x' }] })).not.toHaveProperty('breadcrumbs');
+  });
+
+  it("maps bestEffort's `what` onto the stage vocabulary", () => {
+    expect(diagnosticEvent({ tags: { component: 'best-effort', what: 'copy-rollback' } }).tags).toEqual({ component: 'best-effort', stage: 'copy-rollback' });
+    expect(diagnosticEvent({ tags: { component: 'best-effort', what: 'Private.pdf' } }).tags).toEqual({ component: 'best-effort' });
+  });
 });

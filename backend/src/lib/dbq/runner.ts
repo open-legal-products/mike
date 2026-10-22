@@ -13,6 +13,7 @@
 // query, and FOR UPDATE SKIP LOCKED in the claim RPC makes any number of
 // backend replicas partition the work safely.
 
+import { AppError } from "../appError";
 import { createServerSupabase } from "../supabase";
 import { jobErrorMessage } from "./jobError";
 import { deleteFile } from "../storage";
@@ -106,10 +107,9 @@ export type DbJobFailureHook = (db: Db, job: DbJob) => Promise<void>;
  * members) buries the real reason under a wall of repeats and leaves the
  * user's request in limbo far longer than it needs to be.
  */
-export class NonRetryableJobError extends Error {
+export class NonRetryableJobError extends AppError {
     constructor(message: string) {
-        super(message);
-        this.name = "NonRetryableJobError";
+        super("dbq.non_retryable", message);
     }
 }
 
