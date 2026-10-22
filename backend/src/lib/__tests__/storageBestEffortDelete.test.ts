@@ -130,6 +130,7 @@ describe("deleteFileBestEffort / deleteFilesBestEffort", () => {
     const [{ error }] = mocks.reports;
     expect(error).toBeInstanceOf(storage.StorageOperationError);
     expect(diagnosticErrorTags(error)).toEqual({
+      error_kind: "storage.delete_failed",
       storage_operation: "delete",
       failure_code: "ECONNREFUSED",
     });

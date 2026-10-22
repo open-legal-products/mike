@@ -76,8 +76,11 @@ function spawnWorkerThread(role: WorkerRole): void {
     __dirname,
     isTs ? "workerThread.ts" : "workerThread.js",
   );
+  // Compiled mode inherits the process flags: `--enable-source-maps` from
+  // NODE_OPTIONS or the command line is what makes a thread's Sentry frames
+  // point at src/*.ts instead of dist/*.js.
   const workerThread = new ThreadWorker(entry, {
-    execArgv: isTs ? ["--require", "tsx/cjs"] : [],
+    execArgv: isTs ? ["--require", "tsx/cjs"] : process.execArgv,
     workerData: { role },
   });
   workerThreads.set(role, workerThread);

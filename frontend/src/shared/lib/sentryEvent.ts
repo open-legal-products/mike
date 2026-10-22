@@ -404,7 +404,14 @@ function mapStringLeaves(
 export function minimiseForCommunity<T extends CommunityEvent>(event: T): T {
     delete event.server_name;
     delete event.user;
-    delete event.breadcrumbs;
+    // Breadcrumbs are request history; only our own stage trail stays
+    // (category mike.stage, message a stage name), the privacy boundary
+    // checks each one against the stage vocabulary.
+    const trail = Array.isArray(event.breadcrumbs)
+      ? event.breadcrumbs.filter((crumb) => (crumb as { category?: unknown })?.category === "mike.stage")
+      : [];
+    if (trail.length) event.breadcrumbs = trail;
+    else delete event.breadcrumbs;
     if (event.tags) {
         delete event.tags.server_name;
         delete event.tags.url;

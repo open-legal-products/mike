@@ -12,6 +12,7 @@
  * file and call setStorageAdapter() at boot; no call sites change.
  */
 
+import { AppError, type ErrorKind } from "./appError";
 import { bestEffort } from "./observability/sentry";
 import { Readable } from "node:stream";
 import type {
@@ -43,10 +44,24 @@ export function setStorageAdapter(next: StorageAdapter): void {
   storageEnabled = next.enabled;
 }
 
-export class StorageOperationError extends Error {
-  constructor(readonly operation: string, options?: { cause?: unknown }) {
-    super(`Object storage ${operation} failed`, options);
-    this.name = "StorageOperationError";
+const STORAGE_FAILURE_KIND = {
+  HEAD: "storage.head_failed",
+  copy: "storage.copy_failed",
+  upload: "storage.upload_failed",
+  download: "storage.download_failed",
+  delete: "storage.delete_failed",
+} as const satisfies Record<string, ErrorKind>;
+
+export type StorageOperation = keyof typeof STORAGE_FAILURE_KIND;
+
+/**
+ * One object-storage call failed. The operation is the kind (one issue per
+ * operation), the adapter's own error is the cause (its AWS/system code
+ * reaches Sentry as `failure_code`); the key never leaves the process.
+ */
+export class StorageOperationError extends AppError {
+  constructor(readonly operation: StorageOperation, options?: { cause?: unknown }) {
+    super(STORAGE_FAILURE_KIND[operation], `Object storage ${operation} failed`, options);
   }
 }
 

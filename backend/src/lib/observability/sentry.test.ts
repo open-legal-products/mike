@@ -21,6 +21,7 @@ const isolationScope: FakeScope = {
 
 const sentryMock = vi.hoisted(() => ({
   init: vi.fn(),
+  addBreadcrumb: vi.fn(),
   captureException: vi.fn(() => "event-id-1"),
   captureMessage: vi.fn(() => "event-id-2"),
   flush: vi.fn(() => Promise.resolve(true)),
@@ -57,6 +58,8 @@ import {
   MIKE_SENTRY_DSN,
   flushSentry,
   initSentry,
+  markStage,
+  setOperation,
   redactText,
   redactUrl,
   isSentryEnabled,
@@ -800,6 +803,43 @@ describe("automatic captures of an already-reported error", () => {
     expect(
       scrubEvent(unhandledCopy, { originalException: unrelated }),
     ).not.toBeNull();
+  });
+});
+
+describe("operation and stage trail", () => {
+  const dsnEnv = {
+    ...quietEnv,
+    SENTRY_DSN: "https://key@o1.ingest.sentry.io/1",
+  } as NodeJS.ProcessEnv;
+
+  it("tags the isolation scope with the operation and records stages as our own breadcrumbs", () => {
+    vi.spyOn(console, "log").mockImplementation(() => {});
+    initSentry("worker", dsnEnv);
+    setOperation("documents.upload.complete");
+    markStage("claim");
+    markStage("process-file");
+    expect(isolationScope.setTag).toHaveBeenCalledWith("operation", "documents.upload.complete");
+    expect(sentryMock.addBreadcrumb).toHaveBeenNthCalledWith(1, { category: "mike.stage", message: "claim", level: "info" });
+    expect(sentryMock.addBreadcrumb).toHaveBeenNthCalledWith(2, { category: "mike.stage", message: "process-file", level: "info" });
+  });
+
+  it("does nothing while reporting is off", () => {
+    setOperation("chat.turn");
+    markStage("claim");
+    expect(isolationScope.setTag).not.toHaveBeenCalled();
+    expect(sentryMock.addBreadcrumb).not.toHaveBeenCalled();
+  });
+
+  it("announces the release at boot and warns when a production build has none", () => {
+    const log = vi.spyOn(console, "log").mockImplementation(() => {});
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    initSentry("api", { ...dsnEnv, SENTRY_DSN: undefined, GIT_SHA: "0123456789abcdef0123" } as NodeJS.ProcessEnv);
+    expect(log).toHaveBeenCalledWith(expect.stringContaining("release mike@0123456789ab"));
+    expect(warn).not.toHaveBeenCalled();
+    resetSentryForTests();
+    initSentry("api", { ...dsnEnv, SENTRY_DSN: undefined, NODE_ENV: "production" } as NodeJS.ProcessEnv);
+    expect(log).toHaveBeenCalledWith(expect.stringContaining("release unset"));
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining("no release"));
   });
 });
 
