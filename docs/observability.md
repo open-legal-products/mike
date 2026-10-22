@@ -167,6 +167,14 @@ however many users hit it.
 - Everything else that reaches `console.error`, via Sentry's console bridge.
   The same error object already reported explicitly is recognised and not
   sent twice; unrelated console messages do not share that identity.
+- Node's own process warnings (`DeprecationWarning`, `ExperimentalWarning`,
+  `MaxListenersExceededWarning`, …), as warnings tagged
+  `component=runtime-warning` with `warning_name` and, for deprecations, the
+  `warning_code` (`DEP0040`), grouped per name and code. Node prints these
+  through `console.error` from its own internals, so through the bridge alone
+  they arrived as a context-free "Failure in application"; the printed copy is
+  now dropped and the warning object, whose stack names the module that
+  raised it, is reported instead. `--no-warnings` silences this too.
 
 Backend events carry `service=mike-backend` and `role` (`api`, `worker`,
 `worker-thread`, or `job`); explicit reporting paths add `component`.

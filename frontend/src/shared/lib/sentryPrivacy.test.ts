@@ -315,3 +315,29 @@ it('keeps a bounded folded network-failure count and drops anything else', () =>
     expect(diagnosticEvent({ tags: { network_failure_count: bad } }).tags).toEqual({});
   }
 });
+
+// Node prints its own process warnings through console.error from node:*
+// frames only; before this the boundary reduced them to "Failure in
+// application" with four SDK frames and no identifying tag (MIKE-BACKEND-2).
+it('keeps a Node process warning diagnosable: name, code and builtin frames, never its text', () => {
+  const out = diagnosticEvent({
+    tags: { component: 'runtime-warning', warning_name: 'DeprecationWarning', warning_code: 'DEP0040', stage: 'PRIVATE_STAGE' },
+    exception: { values: [{ type: 'DeprecationWarning', value: 'The `punycode` module is deprecated: PRIVATE_TEXT', mechanism: { type: 'generic', handled: true }, stacktrace: { frames: [
+      { filename: 'node:internal/process/warning', lineno: 85, colno: 9 },
+      { filename: '/app/node_modules/tr46/index.js', abs_path: '/app/node_modules/tr46/index.js', lineno: 3, colno: 18, in_app: false },
+      { filename: 'node:punycode', lineno: 3, colno: 9 },
+    ] } }] },
+  });
+  expect(out.tags).toEqual({ component: 'runtime-warning', warning_name: 'DeprecationWarning', warning_code: 'DEP0040' });
+  expect(out.exception).toEqual({ values: [{ type: 'DeprecationWarning', value: 'Failure in runtime-warning / DeprecationWarning / DEP0040', mechanism: { type: 'generic', handled: true }, stacktrace: { frames: [
+    { filename: 'node:internal/process/warning', lineno: 85, colno: 9 },
+    { filename: 'node_modules/tr46/index.js', abs_path: 'node_modules/tr46/index.js', lineno: 3, colno: 18, in_app: false },
+    { filename: 'node:punycode', lineno: 3, colno: 9 },
+  ] } }] });
+  // One issue per warning name and code, whichever module triggered it.
+  expect(out.fingerprint).toEqual(['{{ default }}', 'runtime-warning', '', '', '', '', '', '', '', 'DeprecationWarning', 'DEP0040']);
+  expect(JSON.stringify(out)).not.toContain('PRIVATE');
+  // Only Node's own vocabulary survives; builtin specifiers cannot smuggle a path.
+  expect(diagnosticEvent({ tags: { warning_name: 'PrivateWarning', warning_code: 'PRIVATE-1' } }).tags).toEqual({});
+  expect(diagnosticEvent({ stacktrace: { frames: [{ filename: 'node:fs/promises?file=PRIVATE.pdf', lineno: 1 }, { filename: 'node:/Users/private/PRIVATE.pdf', lineno: 2 }] } }).stacktrace).toEqual({ frames: [{ filename: 'node:fs/promises', lineno: 1 }] });
+});
