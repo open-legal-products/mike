@@ -132,7 +132,7 @@ describe("upload session routes", () => {
 
   it("rejects unsupported file extensions before reserving a session", async () => {
     const requestBody = manifest();
-    requestBody.files[0].filename = "notes.txt";
+    requestBody.files[0].filename = "notes.exe";
 
     const response = await request(app)
       .post("/upload-sessions")
@@ -141,10 +141,32 @@ describe("upload session routes", () => {
     expect(response.status).toBe(400);
     expect(response.body).toMatchObject({
       code: "invalid_upload_session",
-      detail: expect.stringContaining("Unsupported file type: txt"),
+      detail: expect.stringContaining("Unsupported file type: exe"),
     });
     expect(mocks.rpc).not.toHaveBeenCalled();
     expect(mocks.getSignedUploadUrl).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ["notes.md", "md", "text/markdown"],
+    ["notes.txt", "txt", "text/plain"],
+  ])("accepts %s and signs the appropriate content type", async (filename, extension, mime) => {
+    const body = manifest();
+    body.files[0].filename = filename;
+    const response = await request(app).post("/upload-sessions").send(body);
+    expect(response.status).toBe(201);
+    expect(response.body.files[0].upload.headers["Content-Type"]).toBe(mime);
+    expect(mocks.rpc).toHaveBeenCalledWith(
+      "create_upload_session",
+      expect.objectContaining({
+        target_files: expect.arrayContaining([
+          expect.objectContaining({ file_type: extension, content_type: mime }),
+        ]),
+      }),
+    );
+    expect(mocks.getSignedUploadUrl).toHaveBeenCalledWith(
+      expect.any(String), mime, 1234, expect.any(Number),
+    );
   });
 
   it("returns an explicit 413 when a declared file exceeds 100 MB", async () => {

@@ -4,8 +4,10 @@ import { expect, it, vi } from "vitest";
 import type { Document } from "@/app/components/shared/types";
 import type { DocumentVersion } from "@/app/lib/mikeApi";
 import { DocumentSidePanel } from "./DocumentSidePanel";
+import { SUPPORTED_DOCUMENT_ACCEPT } from "@/app/lib/documentUploadValidation";
 
 // Stand in for a viewer whose context menu portals to document.body.
+vi.mock("@/app/components/shared/views/TextView", () => ({ TextView: () => <div>Text preview</div> }));
 vi.mock("@/app/components/shared/views/DocxView", () => ({
     DocxView: () =>
         createPortal(<button type="button">Viewer menu item</button>, document.body),
@@ -88,4 +90,25 @@ it("titles the document view and lists the latest version first", () => {
         "Download Version 2",
         "Download Version 1",
     ]);
+});
+
+it.each([
+    ["notes.md", ".md"],
+    ["notes.txt", ".txt"],
+])("permits %s uploads and restricts replacement to its own type", async (filename, expected) => {
+    renderPanel(vi.fn(), {
+        readOnly: false,
+        versions: [{
+            id: "v1",
+            version_number: 1,
+            source: "upload",
+            created_at: "2026-09-01T00:00:00Z",
+            filename,
+        }],
+    });
+    const fileInputs = Array.from(document.querySelectorAll('input[type="file"]')) as HTMLInputElement[];
+    expect(fileInputs).toHaveLength(2);
+    expect(fileInputs[0].accept).toBe(SUPPORTED_DOCUMENT_ACCEPT);
+    fireEvent.click(screen.getByRole("button", { name: "Replace Version 1" }));
+    expect(fileInputs[1].accept).toBe(expected);
 });

@@ -16,6 +16,7 @@ import { FileTypeIcon } from "@/app/components/shared/FileTypeIcon";
 import { SkeletonLine } from "@/app/components/shared/TablePrimitive";
 import { DocxView } from "@/app/components/shared/views/DocxView";
 import { PdfView } from "@/app/components/shared/views/PdfView";
+import { TextView } from "@/app/components/shared/views/TextView";
 import { EmptyState } from "@/app/components/ui/empty-state";
 import { EDITOR_SURFACE_CLASS } from "@/app/components/ui/liquid-surface";
 import { showToast } from "@/app/components/ui/toast";
@@ -344,7 +345,14 @@ export function PlaybookSources({
         )}
         {selected ? (
           <div className="flex min-h-0 flex-1 flex-col pb-4 pt-2 md:pb-5">
-            {selected.fileType === "pdf" ? (
+            {/\.(md|txt)$/i.test(selected.filename) ? (
+              <TextView
+                doc={{ document_id: `playbook-source:${selected.id}` }}
+                displayUrl={selected.url}
+                refetchKey={selected.id === IMPORTED_ID ? revision : undefined}
+                rounded={false}
+              />
+            ) : selected.fileType === "pdf" ? (
               <PdfView
                 key={selected.id}
                 doc={{ document_id: `playbook-source:${selected.id}` }}

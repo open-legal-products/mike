@@ -36,6 +36,16 @@ it("registers a fenced search result as a pinned template handle and keeps inter
   expect(mocks.read).toHaveBeenCalledWith(expect.anything(), { userId: "actor", userEmail: "actor@example.test", documentId: "document", versionId: "history" });
   expect(mocks.download).not.toHaveBeenCalled();
 });
+it.each(["md", "txt"])("read_document returns the full UTF-8 content of a %s file", async (type) => {
+  const text = "# Vergilendirme\nMalî güç ve hukukî güvenlik\n";
+  const bytes = new TextEncoder().encode("\uFEFF" + text).buffer;
+  mocks.download.mockResolvedValue(bytes);
+  const store: DocStore = new Map([["note", {
+    filename: "notes." + type, file_type: type, storage_path: "documents/note",
+  }]]);
+  expect(await readDocumentContent("note", store, () => {})).toBe(text);
+  expect(mocks.download).toHaveBeenCalledWith("documents/note");
+});
 it.each([null, { revision: "new-revision", status: "ready", text: "New text" }, { revision: "revision", status: "pending", text: null }])("never falls back to stale bytes after denial, edit or pending extraction: %j", async (stored) => {
   mocks.read.mockResolvedValue(stored);
   const store: DocStore = new Map([["found", { filename: "contract.docx", file_type: "docx", storage_path: "obsolete", search_source: { revision: "revision", userId: "actor" } }]]);

@@ -63,6 +63,16 @@ describe("version text extraction", () => {
     mocks.convert.mockResolvedValue(Buffer.from("pdf")); mocks.pdf.mockResolvedValue({ text: "Pages", textlessPageCount: 0 });
     expect(await extractDocumentText(bytes, type)).toEqual({ text: "Pages", textlessPageCount: 0 });
   });
+  it.each(["md", "txt"])("indexes Unicode %s files without conversion", async (type) => {
+    const text = "# Kamu maliyesi\nÖdeme gücü, eşitlik ve hukuk\n";
+    const data = new TextEncoder().encode("\uFEFF" + text).buffer;
+    expect(await extractDocumentText(data, type)).toEqual({ text, textlessPageCount: null });
+    expect(mocks.convert).not.toHaveBeenCalled();
+    expect(mocks.docx).not.toHaveBeenCalled();
+  });
+  it("rejects malformed UTF-8 in plain-text documents", async () => {
+    await expect(extractDocumentText(Uint8Array.from([0xff]).buffer, "md")).rejects.toThrow();
+  });
   it("extracts slides and rejects unsupported formats", async () => {
     mocks.slides.mockResolvedValue("## Slide 1\nWords");
     expect((await extractDocumentText(bytes, "pptx")).text).toContain("Words");

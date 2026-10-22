@@ -1,7 +1,7 @@
 export const SUPPORTED_DOCUMENT_ACCEPT =
-    ".pdf,.docx,.doc,.xlsx,.xlsm,.xls,.pptx,.ppt";
+    ".pdf,.docx,.doc,.xlsx,.xlsm,.xls,.pptx,.ppt,.md,.txt";
 export const UNSUPPORTED_DOCUMENT_WARNING_MESSAGE =
-    "Unsupported file type. Only PDF, Word, Excel, and PowerPoint files can be uploaded.";
+    "Unsupported file type. Only PDF, Word, Excel, PowerPoint, Markdown, and TXT files can be uploaded.";
 
 const SUPPORTED_DOCUMENT_EXTENSIONS = new Set([
     "pdf",
@@ -12,6 +12,8 @@ const SUPPORTED_DOCUMENT_EXTENSIONS = new Set([
     "xls",
     "pptx",
     "ppt",
+    "md",
+    "txt",
 ]);
 
 export function isSupportedDocumentFile(file: File): boolean {

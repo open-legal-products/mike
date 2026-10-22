@@ -193,7 +193,7 @@ test("create a folder inside a project", async ({ page }) => {
 
 // ─── Test 4: File upload type validation (wrong type rejected) ────────────────
 
-test("file upload type validation — .txt file is rejected", async ({ page }) => {
+test("file upload type validation — .exe file is rejected", async ({ page }) => {
     const projectName = `E2E Proj ${Date.now()}`;
     await createProject(page, projectName);
 
@@ -238,8 +238,8 @@ test("file upload type validation — .txt file is rejected", async ({ page }) =
                 },
                 files: [
                     {
-                        client_id: "unsupported-text-file",
-                        filename: "test.txt",
+                        client_id: "unsupported-binary-file",
+                        filename: "test.exe",
                         size_bytes: 52,
                     },
                 ],
@@ -254,7 +254,7 @@ test("file upload type validation — .txt file is rejected", async ({ page }) =
                 ["This is a plain text file that should be rejected."],
                 { type: "text/plain" },
             ),
-            "test.txt",
+            "test.exe",
         );
         const legacyResponse = await fetch(`/api/projects/${id}/documents`, {
             method: "POST",
@@ -277,7 +277,7 @@ test("file upload type validation — .txt file is rejected", async ({ page }) =
         code: "invalid_upload_session",
     });
     expect(uploadResponses.session.body.detail).toContain(
-        "Unsupported file type: txt",
+        "Unsupported file type: exe",
     );
     expect(uploadResponses.legacy).toEqual({
         status: 410,
@@ -305,8 +305,8 @@ test("file upload type validation — .txt file is rejected", async ({ page }) =
      * logic (not the accept attribute) is what's under test.
      */
     await fileChooser.setFiles({
-        name: "test.txt",
-        mimeType: "text/plain",
+        name: "test.exe",
+        mimeType: "application/octet-stream",
         buffer: Buffer.from("This is a plain text file that should be rejected."),
     });
 
@@ -314,10 +314,10 @@ test("file upload type validation — .txt file is rejected", async ({ page }) =
     // (UNSUPPORTED_DOCUMENT_WARNING_MESSAGE in documentUploadValidation.ts).
     await expect(
         page.getByText(
-            "Unsupported file type. Only PDF, Word, Excel, and PowerPoint files can be uploaded.",
+            "Unsupported file type. Only PDF, Word, Excel, PowerPoint, Markdown, and TXT files can be uploaded.",
         ),
     ).toBeVisible({ timeout: 10_000 });
 
     /* The .txt file must not appear in the modal's document list */
-    await expect(page.getByText("test.txt")).not.toBeVisible();
+    await expect(page.getByText("test.exe")).not.toBeVisible();
 });

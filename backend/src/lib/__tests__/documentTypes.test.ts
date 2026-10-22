@@ -3,6 +3,8 @@ import {
     ALLOWED_DOCUMENT_TYPES,
     ALLOWED_DOCUMENT_TYPES_LABEL,
     contentTypeForDocumentType,
+    decodeUtf8DocumentText,
+    isTextDocumentType,
     isPresentationDocumentType,
     isSpreadsheetDocumentType,
     isWordDocumentType,
@@ -14,6 +16,24 @@ describe("ALLOWED_DOCUMENT_TYPES", () => {
         expect([...ALLOWED_DOCUMENT_TYPES].sort()).toEqual(
             ALLOWED_DOCUMENT_TYPES_LABEL.split(", ").sort(),
         );
+    });
+});
+
+describe("UTF-8 document types", () => {
+    it("recognizes Markdown and plain text case-insensitively", () => {
+        expect(isTextDocumentType("MD")).toBe(true);
+        expect(isTextDocumentType("txt")).toBe(true);
+        expect(isTextDocumentType("docx")).toBe(false);
+        expect(isTextDocumentType(null)).toBe(false);
+    });
+
+    it("preserves Unicode text and removes a UTF-8 BOM", () => {
+        const raw = new TextEncoder().encode("\uFEFF# Giriş\nTürkçe: ğüşİ\n");
+        expect(decodeUtf8DocumentText(raw.buffer)).toBe("# Giriş\nTürkçe: ğüşİ\n");
+    });
+
+    it("rejects invalid UTF-8 bytes", () => {
+        expect(() => decodeUtf8DocumentText(Uint8Array.from([0xff]).buffer)).toThrow();
     });
 });
 
@@ -91,6 +111,8 @@ describe("contentTypeForDocumentType", () => {
             xls: "application/vnd.ms-excel",
             pptx: "application/vnd.openxmlformats-officedocument.presentationml.presentation",
             ppt: "application/vnd.ms-powerpoint",
+            md: "text/markdown",
+            txt: "text/plain",
         };
         for (const type of ALLOWED_DOCUMENT_TYPES) {
             expect(contentTypeForDocumentType(type)).toBe(expected[type]);

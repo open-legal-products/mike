@@ -26,10 +26,12 @@ describe("isSupportedDocumentFile", () => {
     it("is case-insensitive on the extension", () => {
         expect(isSupportedDocumentFile(file("SCAN.PDF"))).toBe(true);
         expect(isSupportedDocumentFile(file("Deed.DocX"))).toBe(true);
+        expect(isSupportedDocumentFile(file("instructions.MD"))).toBe(true);
+        expect(isSupportedDocumentFile(file("notes.TXT"))).toBe(true);
     });
 
     it("rejects unsupported types", () => {
-        expect(isSupportedDocumentFile(file("notes.txt"))).toBe(false);
+        expect(isSupportedDocumentFile(file("program.exe"))).toBe(false);
         expect(isSupportedDocumentFile(file("photo.png"))).toBe(false);
         expect(isSupportedDocumentFile(file("archive.zip"))).toBe(false);
     });
@@ -64,8 +66,8 @@ describe("partitionSupportedDocumentFiles", () => {
             c,
             d,
         ]);
-        expect(supported).toEqual([a, c]);
-        expect(unsupported).toEqual([b, d]);
+        expect(supported).toEqual([a, b, c]);
+        expect(unsupported).toEqual([d]);
     });
 
     it("returns two empty arrays for an empty input", () => {
@@ -82,7 +84,7 @@ describe("formatUnsupportedDocumentWarning", () => {
     });
 
     it("returns the shared warning message when files were rejected", () => {
-        expect(formatUnsupportedDocumentWarning([file("x.txt")])).toBe(
+        expect(formatUnsupportedDocumentWarning([file("x.png")])).toBe(
             UNSUPPORTED_DOCUMENT_WARNING_MESSAGE,
         );
     });
