@@ -12,6 +12,7 @@ import {
   setGoogleDriveToolEnabled,
   GOOGLE_DRIVE_SCOPE,
 } from "../googleDrive";
+import { personalConnectorOwner } from "../../connectorOwner";
 
 const original = {
   id: "file-1",
@@ -81,7 +82,7 @@ async function approval(
   name = "google_drive_update_file",
   args: Record<string, unknown> = { file_id: "file-1", name: "Reviewed name" },
 ) {
-  const plan = await planGoogleDriveCall("user-1", name, args, db);
+  const plan = await planGoogleDriveCall(personalConnectorOwner("user-1"), name, args, db);
   expect(plan.type).toBe("approval");
   if (plan.type !== "approval") throw new Error("Expected approval");
   return { ...plan.item, id: "approval-1" } satisfies ConnectorApprovalItem;
@@ -90,19 +91,19 @@ async function approval(
 describe("Drive write access", () => {
   it("read-only overrides all writes while preserving individual choices", async () => {
     const s = store({ disabled_tools: ["google_drive_trash_file", "google_drive_list_recent"] });
-    await updateGoogleDriveSettings("user-1", { readOnly: true }, s.db);
-    const status = await getGoogleDriveStatus("user-1", s.db);
+    await updateGoogleDriveSettings(personalConnectorOwner("user-1"), { readOnly: true }, s.db);
+    const status = await getGoogleDriveStatus(personalConnectorOwner("user-1"), s.db);
     expect(status.readOnly).toBe(true);
     expect(status.tools.filter(t => t.write).every(t => !t.enabled)).toBe(true);
     expect(status.tools.find(t => t.name === "google_drive_search")?.enabled).toBe(true);
     expect(status.tools.find(t => t.name === "google_drive_list_recent")?.enabled).toBe(false);
-    const names = JSON.stringify(await buildGoogleDriveTools("user-1", s.db));
+    const names = JSON.stringify(await buildGoogleDriveTools(personalConnectorOwner("user-1"), s.db));
     expect(names).toContain("google_drive_search");
     expect(names).not.toContain("google_drive_create_file");
-    expect((await planGoogleDriveCall("user-1", "google_drive_create_folder", { name: "Folder" }, s.db)).type).toBe("result");
+    expect((await planGoogleDriveCall(personalConnectorOwner("user-1"), "google_drive_create_folder", { name: "Folder" }, s.db)).type).toBe("result");
     expect(fetch).not.toHaveBeenCalled();
-    await updateGoogleDriveSettings("user-1", { readOnly: false }, s.db);
-    const restored = await getGoogleDriveStatus("user-1", s.db);
+    await updateGoogleDriveSettings(personalConnectorOwner("user-1"), { readOnly: false }, s.db);
+    const restored = await getGoogleDriveStatus(personalConnectorOwner("user-1"), s.db);
     expect(restored.readOnly).toBe(false);
     expect(restored.tools.find(t => t.name === "google_drive_create_file")?.enabled).toBe(true);
     expect(restored.tools.find(t => t.name === "google_drive_trash_file")?.enabled).toBe(false);
@@ -115,7 +116,7 @@ describe("Drive write access", () => {
       s.tokens[0].read_only = true;
       return Response.json(current);
     });
-    const result = await executeGoogleDriveToolCall("user-1", "google_drive_update_file", { file_id: "file-1", name: "Changed" }, s.db);
+    const result = await executeGoogleDriveToolCall(personalConnectorOwner("user-1"), "google_drive_update_file", { file_id: "file-1", name: "Changed" }, s.db);
     expect(result.event.status).toBe("error");
     expect(result.content).toContain("read-only");
     expect(vi.mocked(fetch).mock.calls.every(([,init]) => !init?.method || init.method === "GET")).toBe(true);
@@ -123,7 +124,7 @@ describe("Drive write access", () => {
 
   it("reads a file's state once for a write that needs no approval", async () => {
     const s = store();
-    const result = await executeGoogleDriveToolCall("user-1", "google_drive_update_file", { file_id: "file-1", name: "Changed" }, s.db);
+    const result = await executeGoogleDriveToolCall(personalConnectorOwner("user-1"), "google_drive_update_file", { file_id: "file-1", name: "Changed" }, s.db);
     expect(result.event.status).toBe("ok");
     expect(mutations()).toHaveLength(1);
     expect(calls.length - mutations().length).toBe(1);
@@ -133,25 +134,25 @@ describe("Drive write access", () => {
     const s = store();
     const names = async () =>
       (
-        (await buildGoogleDriveTools("user-1", s.db)) as {
+        (await buildGoogleDriveTools(personalConnectorOwner("user-1"), s.db)) as {
           function: { name: string };
         }[]
       ).map((t) => t.function.name);
     expect(await names()).toHaveLength(11);
-    expect(await getGoogleDriveStatus("user-1", s.db)).toMatchObject({
+    expect(await getGoogleDriveStatus(personalConnectorOwner("user-1"), s.db)).toMatchObject({
       writeEnabled: true,
       requireWriteApproval: false,
       grantId: "grant-1",
     });
     await setGoogleDriveToolEnabled(
-      "user-1",
+      personalConnectorOwner("user-1"),
       "google_drive_trash_file",
       false,
       s.db,
     );
     expect(await names()).not.toContain("google_drive_trash_file");
     await updateGoogleDriveSettings(
-      "user-1",
+      personalConnectorOwner("user-1"),
       { requireWriteApproval: true },
       s.db,
     );
@@ -162,10 +163,10 @@ describe("Drive write access", () => {
       "google_drive_read_file",
       "google_drive_list_recent",
     ]);
-    expect(await getGoogleDriveStatus("user-1", s.db)).toMatchObject({
+    expect(await getGoogleDriveStatus(personalConnectorOwner("user-1"), s.db)).toMatchObject({
       writeEnabled: false,
     });
-    expect(await buildGoogleDriveTools("other-user", s.db)).toEqual([]);
+    expect(await buildGoogleDriveTools(personalConnectorOwner("other-user"), s.db)).toEqual([]);
   });
 
   it.each([
@@ -179,7 +180,7 @@ describe("Drive write access", () => {
     "blocks direct writes when unavailable or requiring approval: %j",
     async (settings) => {
       const result = await executeGoogleDriveToolCall(
-        "user-1",
+        personalConnectorOwner("user-1"),
         "google_drive_update_file",
         { file_id: "file-1", name: "Changed" },
         store(settings).db,
@@ -199,7 +200,7 @@ describe("Drive write access", () => {
       expect(
         (
           await executeGoogleDriveToolCall(
-            "user-1",
+            personalConnectorOwner("user-1"),
             "google_drive_update_file",
             args,
             store().db,
@@ -271,7 +272,7 @@ describe("Drive write HTTP operations", () => {
     async (name, args, method, path) => {
       if (name === "google_drive_restore_file") current.trashed = true;
       const result = await executeGoogleDriveToolCall(
-        "user-1",
+        personalConnectorOwner("user-1"),
         name,
         args,
         store().db,
@@ -313,7 +314,7 @@ describe("Drive write HTTP operations", () => {
   it("refuses content replacement for binary and spreadsheet files", async () => {
     current.mimeType = "application/vnd.google-apps.spreadsheet";
     const result = await executeGoogleDriveToolCall(
-      "user-1",
+      personalConnectorOwner("user-1"),
       "google_drive_replace_file_content",
       { file_id: "file-1", content: "new" },
       store().db,
@@ -332,7 +333,7 @@ describe("Drive write HTTP operations", () => {
         return new Response("private Google error", { status: Number(status) });
       };
       const result = await executeGoogleDriveToolCall(
-        "user-1",
+        personalConnectorOwner("user-1"),
         "google_drive_trash_file",
         { file_id: "file-1" },
         store().db,
@@ -356,7 +357,7 @@ describe("Drive write approvals", () => {
       return Response.json(current);
     });
     expect(
-      (await executeApprovedGoogleDriveCall("user-1", item, s.db)).event.status,
+      (await executeApprovedGoogleDriveCall(personalConnectorOwner("user-1"), item, s.db)).event.status,
     ).toBe("error");
     expect(mutations()).toEqual([]);
   });
@@ -370,7 +371,7 @@ describe("Drive write approvals", () => {
     });
     expect(mutations()).toEqual([]);
     expect(
-      (await executeApprovedGoogleDriveCall("user-1", item, s.db)).event.status,
+      (await executeApprovedGoogleDriveCall(personalConnectorOwner("user-1"), item, s.db)).event.status,
     ).toBe("ok");
     expect(JSON.parse(String(mutations()[0].init.body))).toEqual({
       name: "Reviewed name",

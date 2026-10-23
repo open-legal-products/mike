@@ -23,7 +23,7 @@ import { GoogleDriveUserError } from "../../lib/integrations/googleDriveHttp";
 import { ConnectorSetupError } from "../../lib/mcp/errors";
 
 import crypto from "crypto";
-import { Router } from "express";
+import { Router, type Request, type Response } from "express";
 import { requireAuth, requireMfaIfEnrolled } from "../../middleware/auth";
 import { asyncRoute, routerErrorHandler } from "../../middleware/asyncRoute";
 import { createServerSupabase } from "../../lib/supabase";
@@ -42,6 +42,12 @@ import {
 import { sendOrgFailure } from "../../lib/orgFailure";
 import { configuredApiPublicUrl } from "../../lib/runtimeConfig";
 import { isWebSearchBackend } from "../../lib/webSearch";
+import type { ConnectorOwner } from "../../lib/connectorOwner";
+import {
+    PERSONAL_WORKSPACE,
+    resolveWorkspaceFilter,
+    sendWorkspaceFailure,
+} from "../../lib/workspace";
 import {
     setUserProfilePhoto,
     bootstrapUserProfile,
@@ -85,9 +91,40 @@ import {
     getWebSearchSettings,
     validateWebSearchPayload,
     saveWebSearchSettings,
+    courtListenerConnectorStatus,
+    setCourtListenerEnabled,
+    setCourtListenerToken,
 } from "./user.service";
 
 export const userRouter = Router();
+
+// Connectors are per workspace. `?workspace=` names the one a connector
+// request reads or changes — "personal", or a team organization the caller
+// belongs to — and its absence means Personal, as before each workspace had
+// its own. Sends the failure and answers null when the workspace is not the
+// caller's.
+async function connectorOwner(
+    req: Request,
+    res: Response,
+): Promise<ConnectorOwner | null> {
+    const userId = res.locals.userId as string;
+    const resolved = await resolveWorkspaceFilter(
+        createServerSupabase(),
+        userId,
+        req.query.workspace,
+    );
+    if (!resolved.ok) {
+        sendWorkspaceFailure(res, resolved);
+        return null;
+    }
+    return {
+        userId,
+        orgId:
+            resolved.workspace && resolved.workspace !== PERSONAL_WORKSPACE
+                ? resolved.workspace
+                : null,
+    };
+}
 
 function backendPublicUrl(req: {
     protocol: string;
@@ -454,6 +491,11 @@ userRouter.put(
             return void res
                 .status(400)
                 .json({ detail: "Unsupported provider" });
+        // A connector, with a token per workspace: see /integrations/courtlistener.
+        if (provider === "courtlistener")
+            return void res.status(400).json({
+                detail: "Manage CourtListener in Settings → Connectors.",
+            });
 
         const apiKey =
             typeof req.body?.api_key === "string" ? req.body.api_key : null;
@@ -505,10 +547,11 @@ userRouter.patch(
 );
 
 // GET /user/mcp-connectors
-userRouter.get("/mcp-connectors", requireAuth, asyncRoute(async (_req, res) => {
-    const userId = res.locals.userId as string;
+userRouter.get("/mcp-connectors", requireAuth, asyncRoute(async (req, res) => {
+    const owner = await connectorOwner(req, res);
+    if (!owner) return;
     const db = createServerSupabase();
-    const result = await listMcpConnectors(db, userId);
+    const result = await listMcpConnectors(db, owner);
     if (!result.ok) return void sendInternalError(res, result.error);
     res.json(result.connectors);
 }));
@@ -539,7 +582,8 @@ userRouter.post(
     requireAuth,
     requireMfaIfEnrolled,
     asyncRoute(async (req, res) => {
-        const userId = res.locals.userId as string;
+        const owner = await connectorOwner(req, res);
+        if (!owner) return;
         const name = typeof req.body?.name === "string" ? req.body.name : "";
         const serverUrl =
             typeof req.body?.serverUrl === "string" ? req.body.serverUrl : "";
@@ -554,7 +598,7 @@ userRouter.post(
                 ? (req.body.headers as Record<string, unknown>)
                 : undefined;
         const db = createServerSupabase();
-        const result = await createMcpConnector(db, userId, {
+        const result = await createMcpConnector(db, owner, {
             name,
             serverUrl,
             bearerToken,
@@ -753,6 +797,8 @@ userRouter.get("/mcp-connectors/oauth/callback", asyncRoute(async (req, res) => 
 // GET /user/integrations/google-drive
 userRouter.get("/integrations/google-drive", requireAuth, async (req, res) => {
     const userId = res.locals.userId as string;
+    const owner = await connectorOwner(req, res);
+    if (!owner) return;
     try {
         // The card shows the exact redirect URI to register while the client
         // is not configured yet, so the operator never has to guess it. In
@@ -765,7 +811,7 @@ userRouter.get("/integrations/google-drive", requireAuth, async (req, res) => {
             redirectUri = null;
         }
         res.json({
-            ...(await getGoogleDriveStatus(userId, createServerSupabase())),
+            ...(await getGoogleDriveStatus(owner, createServerSupabase())),
             redirectUri,
         });
     } catch (err) {
@@ -784,10 +830,12 @@ userRouter.post(
     requireMfaIfEnrolled,
     async (req, res) => {
         const userId = res.locals.userId as string;
+        const owner = await connectorOwner(req, res);
+        if (!owner) return;
         try {
             const redirectUri = `${backendPublicUrl(req)}/user/integrations/google-drive/oauth/callback`;
             const result = await startGoogleDriveOAuth(
-                userId,
+                owner,
                 redirectUri,
                 createServerSupabase(),
             );
@@ -894,10 +942,12 @@ userRouter.delete(
     "/integrations/google-drive",
     requireAuth,
     requireMfaIfEnrolled,
-    async (_req, res) => {
+    async (req, res) => {
         const userId = res.locals.userId as string;
+        const owner = await connectorOwner(req, res);
+        if (!owner) return;
         try {
-            await disconnectGoogleDrive(userId, createServerSupabase());
+            await disconnectGoogleDrive(owner, createServerSupabase());
             res.status(204).end();
         } catch (err) {
             console.error("[google-drive] disconnect failed", {
@@ -918,13 +968,15 @@ userRouter.post(
     "/integrations/google-drive/picker-session",
     requireAuth,
     requireMfaIfEnrolled,
-    asyncRoute(async (_req, res) => {
+    asyncRoute(async (req, res) => {
         const userId = res.locals.userId as string;
         res.set("Cache-Control", "no-store");
+        const owner = await connectorOwner(req, res);
+        if (!owner) return;
         try {
             res.json(
                 await createGoogleDrivePickerSession(
-                    userId,
+                    owner,
                     createServerSupabase(),
                 ),
             );
@@ -969,14 +1021,16 @@ userRouter.patch(
             if (req.body?.[key] !== undefined && typeof req.body[key] !== "boolean")
                 return void res.status(400).json({ detail: `${key} must be a boolean.` });
         }
+        const owner = await connectorOwner(req, res);
+        if (!owner) return;
         const db = createServerSupabase();
         try {
             await updateGoogleDriveSettings(
-                userId,
+                owner,
                 { enabled: req.body?.enabled, requireWriteApproval: req.body?.requireWriteApproval, readOnly: req.body?.readOnly },
                 db,
             );
-            res.json(await getGoogleDriveStatus(userId, db));
+            res.json(await getGoogleDriveStatus(owner, db));
         } catch (err) {
             console.error("[google-drive] settings update failed", {
                 userId,
@@ -1000,15 +1054,17 @@ userRouter.patch(
             return void res
                 .status(400)
                 .json({ detail: "enabled must be a boolean." });
+        const owner = await connectorOwner(req, res);
+        if (!owner) return;
         const db = createServerSupabase();
         try {
             await setGoogleDriveToolEnabled(
-                userId,
+                owner,
                 String(req.params.toolName),
                 req.body.enabled,
                 db,
             );
-            res.json(await getGoogleDriveStatus(userId, db));
+            res.json(await getGoogleDriveStatus(owner, db));
         } catch (err) {
             console.error("[google-drive] tool update failed", {
                 userId,
@@ -1035,9 +1091,11 @@ userRouter.post(
                     detail: "Invalid Google Drive authorization attempt.",
                 });
         }
+        const owner = await connectorOwner(req, res);
+        if (!owner) return;
         try {
             await cancelGoogleDriveOAuth(
-                res.locals.userId as string,
+                owner,
                 state,
                 createServerSupabase(),
             );
@@ -1076,11 +1134,13 @@ for (const provider of ["gmail", "google-calendar"] as const) {
             } catch {
                 /* deployment config absent */
             }
+            const owner = await connectorOwner(req, res);
+            if (!owner) return;
             try {
                 res.json({
                     ...(await workspaceConnectorStatus(
                         createServerSupabase(),
-                        res.locals.userId,
+                        owner,
                         provider,
                     )),
                     redirectUri,
@@ -1095,12 +1155,14 @@ for (const provider of ["gmail", "google-calendar"] as const) {
         requireAuth,
         requireMfaIfEnrolled,
         asyncRoute(async (req, res) => {
+            const owner = await connectorOwner(req, res);
+            if (!owner) return;
             try {
                 assertWorkspaceProviderAvailable(provider);
                 res.json(
                     await startWorkspaceOAuth(
                         createServerSupabase(),
-                        res.locals.userId,
+                        owner,
                         provider,
                         callback(req),
                     ),
@@ -1183,10 +1245,12 @@ for (const provider of ["gmail", "google-calendar"] as const) {
                 return void res
                     .status(400)
                     .json({ detail: "Invalid authorization attempt." });
+            const owner = await connectorOwner(req, res);
+            if (!owner) return;
             try {
                 await cancelWorkspaceOAuth(
                     createServerSupabase(),
-                    res.locals.userId,
+                    owner,
                     provider,
                     req.body.state,
                 );
@@ -1209,19 +1273,17 @@ for (const provider of ["gmail", "google-calendar"] as const) {
                         .status(400)
                         .json({ detail: `${key} must be a boolean.` });
             }
+            const owner = await connectorOwner(req, res);
+            if (!owner) return;
             const db = createServerSupabase();
             try {
-                await updateWorkspaceSettings(db, res.locals.userId, provider, {
+                await updateWorkspaceSettings(db, owner, provider, {
                     enabled: body.enabled,
                     requireWriteApproval: body.requireWriteApproval,
                     readOnly: body.readOnly,
                 });
                 res.json(
-                    await workspaceConnectorStatus(
-                        db,
-                        res.locals.userId,
-                        provider,
-                    ),
+                    await workspaceConnectorStatus(db, owner, provider),
                 );
             } catch (error) {
                 res.status(409).json({ detail: report(error) });
@@ -1241,21 +1303,19 @@ for (const provider of ["gmail", "google-calendar"] as const) {
                     .json({ detail: "enabled must be a boolean." });
             if (!workspaceToolList(provider, null).some((t) => t.name === toolName))
                 return void res.status(404).json({ detail: "Unknown tool." });
+            const owner = await connectorOwner(req, res);
+            if (!owner) return;
             const db = createServerSupabase();
             try {
                 await setWorkspaceToolEnabled(
                     db,
-                    res.locals.userId,
+                    owner,
                     provider,
                     toolName,
                     req.body.enabled,
                 );
                 res.json(
-                    await workspaceConnectorStatus(
-                        db,
-                        res.locals.userId,
-                        provider,
-                    ),
+                    await workspaceConnectorStatus(db, owner, provider),
                 );
             } catch (error) {
                 res.status(409).json({ detail: report(error) });
@@ -1266,11 +1326,13 @@ for (const provider of ["gmail", "google-calendar"] as const) {
         path,
         requireAuth,
         requireMfaIfEnrolled,
-        asyncRoute(async (_req, res) => {
+        asyncRoute(async (req, res) => {
+            const owner = await connectorOwner(req, res);
+            if (!owner) return;
             try {
                 await disconnectWorkspace(
                     createServerSupabase(),
-                    res.locals.userId,
+                    owner,
                     provider,
                 );
                 res.status(204).end();
@@ -1280,6 +1342,79 @@ for (const provider of ["gmail", "google-calendar"] as const) {
         }),
     );
 }
+// ---------------------------------------------------------------------------
+// CourtListener: the switch and the user's own token for one workspace. An
+// organization's token is managed by its admins with its other API keys.
+// ---------------------------------------------------------------------------
+
+// GET /user/integrations/courtlistener
+userRouter.get(
+    "/integrations/courtlistener",
+    requireAuth,
+    asyncRoute(async (req, res) => {
+        const owner = await connectorOwner(req, res);
+        if (!owner) return;
+        res.json(
+            await courtListenerConnectorStatus(createServerSupabase(), owner),
+        );
+    }),
+);
+
+// PATCH /user/integrations/courtlistener — { enabled }
+userRouter.patch(
+    "/integrations/courtlistener",
+    requireAuth,
+    requireMfaIfEnrolled,
+    asyncRoute(async (req, res) => {
+        const parsed = readBooleanBodyField(req.body, "enabled");
+        if (!parsed.ok)
+            return void res.status(400).json({ detail: parsed.detail });
+        const owner = await connectorOwner(req, res);
+        if (!owner) return;
+        res.json(
+            await setCourtListenerEnabled(
+                createServerSupabase(),
+                owner,
+                parsed.value,
+            ),
+        );
+    }),
+);
+
+// PUT /user/integrations/courtlistener/token — { token }
+userRouter.put(
+    "/integrations/courtlistener/token",
+    requireAuth,
+    requireMfaIfEnrolled,
+    asyncRoute(async (req, res) => {
+        const token =
+            typeof req.body?.token === "string" ? req.body.token.trim() : "";
+        if (!token || token.length > 512)
+            return void res
+                .status(400)
+                .json({ detail: "A CourtListener API token is required." });
+        const owner = await connectorOwner(req, res);
+        if (!owner) return;
+        res.json(
+            await setCourtListenerToken(createServerSupabase(), owner, token),
+        );
+    }),
+);
+
+// DELETE /user/integrations/courtlistener/token
+userRouter.delete(
+    "/integrations/courtlistener/token",
+    requireAuth,
+    requireMfaIfEnrolled,
+    asyncRoute(async (req, res) => {
+        const owner = await connectorOwner(req, res);
+        if (!owner) return;
+        res.json(
+            await setCourtListenerToken(createServerSupabase(), owner, null),
+        );
+    }),
+);
+
 // POST /user/mcp-connectors/:connectorId/refresh-tools
 userRouter.post(
     "/mcp-connectors/:connectorId/refresh-tools",

@@ -403,7 +403,7 @@ describe("Google Drive callback and disconnect", () => {
         );
         expect(res.status).toBe(204);
         expect(disconnectGoogleDrive).toHaveBeenCalledWith(
-            "u1",
+            { userId: "u1", orgId: null },
             expect.anything(),
         );
     });
@@ -428,7 +428,7 @@ describe("Google Drive callback and disconnect", () => {
             .send({ state, userId: "attacker-chosen" });
         expect(res.status).toBe(204);
         expect(cancelGoogleDriveOAuth).toHaveBeenCalledWith(
-            "u1",
+            { userId: "u1", orgId: null },
             state,
             expect.anything(),
         );

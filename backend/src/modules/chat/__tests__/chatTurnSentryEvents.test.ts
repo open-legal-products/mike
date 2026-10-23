@@ -41,7 +41,7 @@ function geminiRejectsKey(): Response {
 // Supabase stand-in: thenable chain; nothing in this turn needs rows.
 function emptyDb() {
     const chain: Record<string, unknown> = {};
-    for (const method of ["from", "select", "eq", "order", "in", "is", "limit"]) {
+    for (const method of ["from", "select", "eq", "filter", "order", "in", "is", "limit"]) {
         chain[method] = vi.fn(() => chain);
     }
     chain.then = (resolve: (value: unknown) => unknown) =>

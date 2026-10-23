@@ -19,7 +19,7 @@ Mike provides first-party read and write assistant tools over Drive REST v3.
 Reads are `google_drive_search`, `google_drive_list_recent`, and `google_drive_read_file`.
 Writes create text files or Google Docs, create folders, rename or describe items,
 replace plain-text/Google Doc contents, move and copy files, and trash or restore items.
-Each Mike user connects their own Google account in Settings → Connectors → Discover. Google Drive works like every other connector there: **Add** opens Google OAuth directly (showing **Adding...**, then **Cancel** while Google's window is open), the Discover card then shows **Added**, and the connector appears under **Installed** with an on/off switch. Its Manage dialog switches individual tools on or off, offers a **Read-only** override that disables every write tool while preserving individual choices, configures whether writes need approval, and deletes the connection. If the server has no Google OAuth app configured, **Add** shows the same **Could not add connector** warning as Slack, with setup steps and a guide link.
+Each Mike user connects their own Google account in Settings → Connectors → Discover, separately for each workspace: a connection made with an organization selected is used only in that organization's chats (see [Connectors](connectors.md#workspace-availability)). Google Drive works like every other connector there: **Add** opens Google OAuth directly (showing **Adding...**, then **Cancel** while Google's window is open), the Discover card then shows **Added**, and the connector appears under **Installed** with an on/off switch. Its Manage dialog switches individual tools on or off, offers a **Read-only** override that disables every write tool while preserving individual choices, configures whether writes need approval, and deletes the connection. If the server has no Google OAuth app configured, **Add** shows the same **Could not add connector** warning as Slack, with setup steps and a guide link.
 The integration does not require a Google MCP server or a service account.
 
 Mike asks Google only for the `drive.file` scope, so it reaches two kinds of
@@ -76,13 +76,16 @@ instead. The button appears only when the server has the Picker configured
   A refresh response without a new refresh token preserves the encrypted one.
   A new connection must supply offline access and the requested permission.
 - **Disconnect/cancel:** disconnect atomically removes tokens and all pending
-  states for that user. It does not revoke the entire Google project grant,
+  states for that user in that workspace. It does not revoke the entire Google project grant,
   which would also break Gmail and Calendar sharing the project. To revoke
   every service, remove the app in Google Account settings. Cancel removes just the caller's
   selected attempt; after cancellation the card rechecks status in case consent
   completed first. A disconnected account cannot be recreated by an in-flight
   callback. A new, deliberately initiated connection can still succeed.
-- **Data access:** every token query uses the authenticated Mike user ID. Google
+- **Data access:** every token query uses the authenticated Mike user ID and
+  the workspace the request or conversation is in. Grants are unique per user,
+  workspace and service, and a grant for an organization is deleted when the
+  user leaves it. Google
   enforces that account's file permissions. Drive content is returned as
   untrusted tool context, using the existing connector activity events. There
   are no permanent-deletion or sharing-permission tools. Retrieved content can be included in the chosen
@@ -378,7 +381,7 @@ Drive, Gmail, and Calendar are delivered together in [PR #434](https://github.co
 
 ### User behavior
 
-**Connecting is always opt-in, including for users who sign into Mike with Google.** Mike sign-in tokens are never reused for Gmail or Calendar. Gmail and Calendar behave like every other connector in Settings → Connectors. In **Discover**, choose **Add**: the button shows **Adding...** while Mike starts authorization and **Cancel** while Google's window is open. There is no Mike account-selection dialog. After authorization, the Discover card shows **Added** and the connector appears under **Installed** with an on/off switch. Click it to open the same Manage dialog Slack uses: account, **Read-only** (disable write tools while preserving individual choices), **Ask for permission for write actions**, a switch per tool, **Refresh**, and **Delete**. If the server has no Google OAuth app configured, **Add** shows the same **Could not add connector** warning as Slack, with the server's setup steps and a guide link. Google shows an account chooser: choose a personal Gmail or Workspace account, including one different from your Mike login and different accounts for Gmail and Calendar. Each Mike user has one connection per service; choosing another account replaces that service's connection but keeps its settings.
+**Connecting is always opt-in, including for users who sign into Mike with Google.** Mike sign-in tokens are never reused for Gmail or Calendar. Gmail and Calendar behave like every other connector in Settings → Connectors. In **Discover**, choose **Add**: the button shows **Adding...** while Mike starts authorization and **Cancel** while Google's window is open. There is no Mike account-selection dialog. After authorization, the Discover card shows **Added** and the connector appears under **Installed** with an on/off switch. Click it to open the same Manage dialog Slack uses: account, **Read-only** (disable write tools while preserving individual choices), **Ask for permission for write actions**, a switch per tool, **Refresh**, and **Delete**. If the server has no Google OAuth app configured, **Add** shows the same **Could not add connector** warning as Slack, with the server's setup steps and a guide link. Google shows an account chooser: choose a personal Gmail or Workspace account, including one different from your Mike login and different accounts for Gmail and Calendar. Each Mike user has one connection per service in each workspace; choosing another account replaces that service's connection in the selected workspace but keeps its settings.
 
 Workspace administrators and Google Cloud audience settings can restrict which accounts may authorize the app. Configure an External audience to support accounts outside the Cloud project's organization. Testing mode also requires those accounts in the test-user list. Account selection cannot override Google's policy.
 

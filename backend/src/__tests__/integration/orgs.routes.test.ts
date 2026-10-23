@@ -205,6 +205,12 @@ function query(table: string) {
             filters.push({ type: "eq", col, val });
             return builder;
         },
+        // `.filter(col, "eq" | "is", val)` — the connector workspace filter.
+        filter: (col: string, _operator: string, val: unknown) => {
+            for (const row of tables[table] ?? []) if (!(col in row)) row[col] = null;
+            filters.push({ type: "eq", col, val });
+            return builder;
+        },
         // `.not(col, "is", null)` — the only negation the routes use.
         not: (col: string, operator: string, val: unknown) => {
             if (operator === "is" && val === null) {

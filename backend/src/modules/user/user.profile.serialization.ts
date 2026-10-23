@@ -62,7 +62,6 @@ export function serializeProfile(
             normalizeReasoningLevel(row.last_selected_reasoning_level) ??
             "high",
         mfaOnLogin: row.mfa_on_login === true,
-        legalResearchUs: row.legal_research_us !== false,
         courtlistenerBulkData: courtlistenerBulkDataEnabled(),
         quickActionsVisible: row.quick_actions_visible !== false,
         responseDetailsVisible: row.response_details_visible === true,

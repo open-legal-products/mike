@@ -10,17 +10,35 @@ card never appears in one list and then moves or disappears.
 
 ## Workspace availability
 
-MCP, Drive, Gmail and Calendar connections belong to the user's Personal
-workspace. CourtListener is the exception: once added, the assistant can use
-it in every workspace. Creating a connection from account settings while an organization
-is selected still creates a Personal connection. These connections are not
-advertised or executable in organization chats, project chats or tabular chats;
-pending connector write approvals cannot resume there either. Personal chats
-and the Personal-only Word add-in can continue using them.
+Connectors are per workspace. A user keeps a separate set of connections for
+their Personal workspace and for each team organization they belong to, and
+**Settings > Connectors** shows and changes the set for the workspace selected
+in the workspace switcher. Each set is private to the user: an organization's
+owners and other members cannot see or use it.
 
-Organization-owned credentials or explicit per-workspace connection grants are
-not supported yet. This boundary requires no credential migration and does not
-move existing credentials into an organization.
+A conversation uses only the connections of the workspace it is in. Assistant
+chats, project chats and tabular chats in an organization use the user's
+connections for that organization, and pending connector write approvals
+resume against them. Personal chats and the Personal-only Word add-in use the
+Personal set. A tool from another workspace's connector is never offered, and
+a call naming one resolves to nothing.
+
+Each connector table records the workspace in `org_id` (null for Personal).
+A connection made for an organization is tied to the user's membership, so
+leaving the organization, being removed from it, or its permanent deletion
+deletes those connections and their stored credentials. Connections made
+before workspaces had their own became Personal connections.
+
+Every connector endpoint takes `?workspace=personal` or `?workspace=<org id>`;
+without it a request acts on Personal. A workspace the user does not belong
+to answers 404 with `code: "workspace_not_found"`. Endpoints addressed by an
+MCP connector's id act on that connector wherever it is. OAuth sign-ins
+remember the workspace they were started in, so the callback completes that
+workspace's connection.
+
+Organization-owned connections shared by every member are not supported. An
+organization can supply a CourtListener token for its members; see
+[CourtListener](courtlistener.md).
 
 ## Authentication pathways
 

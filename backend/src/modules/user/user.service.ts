@@ -17,6 +17,7 @@
 //   user.apiKeyStore.ts — the encrypted per-user API-key store itself
 //   user.settings.ts — per-user model settings + last-selected model/reasoning
 //   user.mcp.ts      — MCP connector wrappers over lib/mcpConnectors
+//   user.courtlistener.ts — CourtListener connector status, switch and token
 //   user.account.ts  — destructive account/data deletion (args + ordering kept)
 //   user.export.ts   — the durable async export flow (enqueue / poll /
 //                      download artifact); user.exportJobs.ts builds it
@@ -88,6 +89,12 @@ export {
     refreshMcpConnectorTools,
     setMcpToolEnabled,
 } from "./user.mcp";
+
+export {
+    courtListenerConnectorStatus,
+    setCourtListenerEnabled,
+    setCourtListenerToken,
+} from "./user.courtlistener";
 
 export {
     deletePrivateMemories,

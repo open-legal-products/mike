@@ -10,6 +10,7 @@ import {
 } from "../../../playbooks/playbooks.service";
 import { catalogKeyFromWorkflowId } from "../../../../lib/workflowCatalog";
 import { teamOrgIdOf } from "../../../../lib/personalOrgs";
+import type { ConnectorOwner } from "../../../../lib/connectorOwner";
 import {
   isGoogleWorkspaceTool,
   executeGoogleWorkspaceToolCall,
@@ -492,6 +493,7 @@ export async function runToolCalls(
     args.scope === "document" &&
     !!resolveDocLabel(String(args.doc_id ?? ""), docStore, docIndex);
 
+  let connectorOwner: ConnectorOwner | undefined;
   for (const tc of toolCalls) {
     let args: Record<string, unknown> = {};
     try {
@@ -504,17 +506,15 @@ export async function runToolCalls(
       tc.function.name.startsWith(GOOGLE_DRIVE_TOOL_PREFIX) ||
       isGoogleWorkspaceTool(tc.function.name) ||
       tc.function.name.startsWith("mcp_");
-    if (isConnectorTool && (await teamOrgIdOf(db, options.orgId)) !== null) {
-      toolResults.push({
-        role: "tool",
-        tool_call_id: tc.id,
-        content: "Connectors are available only in the Personal workspace.",
-      });
-      continue;
-    }
     if (isConnectorTool) {
-      const plan = await planConnectorToolCall(
+      // Only the connections for the conversation's workspace: a tool named
+      // after one in another workspace resolves to nothing.
+      connectorOwner ??= {
         userId,
+        orgId: await teamOrgIdOf(db, options.orgId),
+      };
+      const plan = await planConnectorToolCall(
+        connectorOwner,
         tc.function.name,
         args,
         db,
@@ -562,16 +562,21 @@ export async function runToolCalls(
                 },
               }
             : tc.function.name.startsWith("mcp_")
-              ? await executeMcpToolCall(userId, tc.function.name, args, db)
+              ? await executeMcpToolCall(
+                  connectorOwner,
+                  tc.function.name,
+                  args,
+                  db,
+                )
               : isGoogleWorkspaceTool(tc.function.name)
                 ? await executeGoogleWorkspaceToolCall(
-                    userId,
+                    connectorOwner,
                     tc.function.name,
                     args,
                     db,
                   )
                 : await executeGoogleDriveToolCall(
-                    userId,
+                    connectorOwner,
                     tc.function.name,
                     args,
                     db,

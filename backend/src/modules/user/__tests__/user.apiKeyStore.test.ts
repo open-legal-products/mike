@@ -113,6 +113,19 @@ describe("hasEnvApiKey", () => {
     });
 });
 
+// The store reads the person's CourtListener connection beside their keys;
+// these tests have none.
+const CONNECTIONS = "user_courtlistener_connections";
+const noConnection = {
+    select: () => ({
+        eq: () => ({
+            filter: () => ({
+                maybeSingle: async () => ({ data: null, error: null }),
+            }),
+        }),
+    }),
+};
+
 describe("user API key precedence", () => {
     it.each(["openai", "mistral"] as const)("uses a saved %s key before an environment key", async (provider) => {
         const environmentVariable = provider === "mistral" ? "MISTRAL_API_KEY" : "OPENAI_API_KEY";
@@ -120,7 +133,7 @@ describe("user API key precedence", () => {
         process.env.USER_API_KEYS_ENCRYPTION_SECRET = "test-secret";
         let savedRow: Record<string, unknown> | null = null;
         const db = {
-            from: () => ({
+            from: (table: string) => table === CONNECTIONS ? noConnection : ({
                 upsert: async (row: Record<string, unknown>) => {
                     savedRow = { ...row, provider };
                     return { error: null };
@@ -191,7 +204,7 @@ describe("cloud-platform keys", () => {
         return {
             rows,
             db: {
-                from: () => ({
+                from: (table: string) => table === CONNECTIONS ? noConnection : ({
                     // ON CONFLICT DO UPDATE only sets the columns sent, so
                     // unsent ones (like `enabled`) keep their stored value.
                     upsert: async (row: Record<string, unknown>) => {

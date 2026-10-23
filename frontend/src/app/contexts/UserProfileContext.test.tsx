@@ -70,7 +70,6 @@ function apiProfile(darkMode: boolean) {
         lastSelectedChatModel: null,
         lastSelectedReasoningLevel: "high",
         mfaOnLogin: false,
-        legalResearchUs: true,
         emailIntegrationEnabled: false,
         darkMode,
         featureFlags: {},

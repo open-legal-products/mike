@@ -6,7 +6,7 @@ select pg_temp.assert_true((select not read_only from public.user_mcp_connectors
 select pg_temp.assert_true(not has_table_privilege('authenticated','public.user_google_workspace_tokens','SELECT'), 'owner cannot read encrypted grants');
 select pg_temp.assert_true(not has_table_privilege('authenticated','public.user_google_workspace_tokens','UPDATE'), 'owner cannot change connector settings by direct DB writes');
 select pg_temp.assert_true(not has_function_privilege('anon','public.complete_google_workspace_oauth(text,text,jsonb)','EXECUTE'), 'anon cannot complete OAuth');
-select pg_temp.assert_true(not has_function_privilege('authenticated','public.disconnect_google_workspace(uuid,text)','EXECUTE'), 'browser cannot directly disconnect');
+select pg_temp.assert_true(not has_function_privilege('authenticated','public.disconnect_google_workspace(uuid,text,uuid)','EXECUTE'), 'browser cannot directly disconnect');
 select pg_temp.assert_true((select bool_and(relrowsecurity) from pg_class where relname in ('user_google_workspace_tokens','google_workspace_oauth_states')), 'RLS enabled');
 select pg_temp.assert_true(to_regclass('public.google_workspace_actions') is null, 'out-of-turn proposal table removed');
 select pg_temp.assert_true(not exists(select 1 from pg_proc where proname = 'claim_google_workspace_action'), 'proposal claim RPC removed');
@@ -44,3 +44,27 @@ select pg_temp.assert_true(not has_table_privilege('authenticated','public.user_
 select pg_temp.assert_true(not has_function_privilege('authenticated','public.complete_google_drive_oauth(text,jsonb)','EXECUTE'),'browser cannot complete Drive grants');
 select disconnect_google_drive('00000000-0000-0000-0000-000000000001');
 select pg_temp.assert_true(not exists(select 1 from public.user_google_drive_tokens),'Drive disconnect removes grant');
+
+-- Each workspace holds its own grants (20261022_01): Personal is null, and a
+-- team organization's are tied to the membership.
+insert into public.organizations(id) values ('00000000-0000-0000-0000-0000000000f1');
+insert into public.org_members(org_id,user_id) values ('00000000-0000-0000-0000-0000000000f1','00000000-0000-0000-0000-000000000001');
+insert into public.google_workspace_oauth_states(user_id,org_id,provider,state_hash,encrypted_state_config,state_config_iv,state_config_tag,expires_at) values
+  ('00000000-0000-0000-0000-000000000001',null,'gmail','personal-gmail','x','x','x',now()+interval '10 minutes'),
+  ('00000000-0000-0000-0000-000000000001','00000000-0000-0000-0000-0000000000f1','gmail','firm-gmail','x','x','x',now()+interval '10 minutes'),
+  ('00000000-0000-0000-0000-000000000001','00000000-0000-0000-0000-0000000000f1','google-drive','firm-drive','x','x','x',now()+interval '10 minutes');
+select pg_temp.assert_true(complete_google_workspace_oauth('personal-gmail','gmail',(select data from patch)),'Personal Gmail connects');
+select pg_temp.assert_true(complete_google_workspace_oauth('firm-gmail','gmail',(select data from patch)),'organization Gmail connects beside it');
+select pg_temp.assert_true(complete_google_drive_oauth('firm-drive',(select data from patch)),'organization Drive connects');
+select pg_temp.assert_true((select count(*) = 2 from public.user_google_workspace_tokens where provider = 'gmail'),'one Gmail grant per workspace');
+select pg_temp.assert_true((select org_id = '00000000-0000-0000-0000-0000000000f1' from public.user_google_drive_tokens),'Drive grant filed under the organization the sign-in started in');
+select disconnect_google_workspace('00000000-0000-0000-0000-000000000001','gmail');
+select pg_temp.assert_true((select count(*) = 1 and bool_and(org_id is not null) from public.user_google_workspace_tokens),'disconnecting Personal leaves the organization grant');
+select disconnect_google_drive('00000000-0000-0000-0000-000000000001');
+select pg_temp.assert_true(exists(select 1 from public.user_google_drive_tokens),'Personal Drive disconnect leaves the organization grant');
+insert into public.user_courtlistener_connections(user_id,org_id,enabled) values ('00000000-0000-0000-0000-000000000001','00000000-0000-0000-0000-0000000000f1',false);
+insert into public.user_mcp_connectors(id,user_id,org_id) values ('00000000-0000-0000-0000-0000000000c1','00000000-0000-0000-0000-000000000001','00000000-0000-0000-0000-0000000000f1');
+-- Leaving the organization takes every connection made for it.
+delete from public.org_members where org_id = '00000000-0000-0000-0000-0000000000f1';
+select pg_temp.assert_true(not exists(select 1 from public.user_google_workspace_tokens) and not exists(select 1 from public.user_google_drive_tokens) and not exists(select 1 from public.user_courtlistener_connections) and not exists(select 1 from public.user_mcp_connectors where org_id is not null),'membership removal deletes the workspace connections');
+select pg_temp.assert_true(not has_table_privilege('authenticated','public.user_courtlistener_connections','SELECT'),'browser cannot read CourtListener tokens');

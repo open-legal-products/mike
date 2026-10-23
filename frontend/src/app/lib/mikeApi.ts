@@ -837,7 +837,6 @@ export interface UserProfile extends RouterProfileLists {
     lastSelectedChatModel: string | null;
     lastSelectedReasoningLevel: NonNullable<Message["reasoning"]>;
     mfaOnLogin: boolean;
-    legalResearchUs: boolean;
     /**
      * The deployment answers CourtListener lookups from its bulk index, so
      * the connector is installed for everyone without a token.
@@ -969,7 +968,6 @@ export async function updateUserProfile(payload: {
     subagentReasoning?: NonNullable<Message["reasoning"]> | null;
     lastSelectedChatModel?: string | null;
     lastSelectedReasoningLevel?: NonNullable<Message["reasoning"]>;
-    legalResearchUs?: boolean;
     quickActionsVisible?: boolean;
     responseDetailsVisible?: boolean;
     darkMode?: boolean;
@@ -1341,8 +1339,25 @@ export interface McpConnectorCreateResult {
     oauthRequired: boolean;
 }
 
-export async function listMcpConnectors(): Promise<McpConnectorSummary[]> {
-    return apiRequest<McpConnectorSummary[]>("/user/mcp-connectors");
+/**
+ * A connector route in one workspace. A person keeps a separate set of
+ * connections for Personal and for each organization they belong to;
+ * `workspace` names which ("personal" or an organization id). Omitted, the
+ * server reads it as Personal. A workspace the caller has left answers 404
+ * `workspace_not_found`.
+ */
+function connectorPath(path: string, workspace?: string): string {
+    return workspace
+        ? `${path}?${new URLSearchParams({ workspace }).toString()}`
+        : path;
+}
+
+export async function listMcpConnectors(
+    workspace?: string,
+): Promise<McpConnectorSummary[]> {
+    return apiRequest<McpConnectorSummary[]>(
+        connectorPath("/user/mcp-connectors", workspace),
+    );
 }
 
 export async function getMcpConnector(
@@ -1353,17 +1368,23 @@ export async function getMcpConnector(
     );
 }
 
-export async function createMcpConnector(payload: {
-    name: string;
-    serverUrl: string;
-    bearerToken?: string | null;
-    headers?: Record<string, string>;
-}): Promise<McpConnectorCreateResult> {
-    return apiRequest<McpConnectorCreateResult>("/user/mcp-connectors", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(payload),
-    });
+export async function createMcpConnector(
+    payload: {
+        name: string;
+        serverUrl: string;
+        bearerToken?: string | null;
+        headers?: Record<string, string>;
+    },
+    workspace?: string,
+): Promise<McpConnectorCreateResult> {
+    return apiRequest<McpConnectorCreateResult>(
+        connectorPath("/user/mcp-connectors", workspace),
+        {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(payload),
+        },
+    );
 }
 
 export async function updateMcpConnector(
@@ -1452,51 +1473,72 @@ export function isConnectorSetupError(error: unknown): error is MikeApiError {
     );
 }
 
-export async function getGoogleDriveStatus(): Promise<GoogleDriveStatus> {
-    return apiRequest<GoogleDriveStatus>("/user/integrations/google-drive");
+export async function getGoogleDriveStatus(
+    workspace?: string,
+): Promise<GoogleDriveStatus> {
+    return apiRequest<GoogleDriveStatus>(
+        connectorPath("/user/integrations/google-drive", workspace),
+    );
 }
 
-export async function startGoogleDriveOAuth(): Promise<{
+export async function startGoogleDriveOAuth(workspace?: string): Promise<{
     authorizationUrl: string;
 }> {
     return apiRequest<{ authorizationUrl: string }>(
-        "/user/integrations/google-drive/oauth/start",
+        connectorPath("/user/integrations/google-drive/oauth/start", workspace),
         { method: "POST" },
     );
 }
 
-export async function cancelGoogleDriveOAuth(state: string): Promise<void> {
-    await apiRequest("/user/integrations/google-drive/oauth/cancel", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ state }),
-    });
+export async function cancelGoogleDriveOAuth(
+    state: string,
+    workspace?: string,
+): Promise<void> {
+    await apiRequest(
+        connectorPath("/user/integrations/google-drive/oauth/cancel", workspace),
+        {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ state }),
+        },
+    );
 }
 
-export async function disconnectGoogleDrive(): Promise<void> {
-    return apiRequest<void>("/user/integrations/google-drive", {
-        method: "DELETE",
-    });
+export async function disconnectGoogleDrive(workspace?: string): Promise<void> {
+    return apiRequest<void>(
+        connectorPath("/user/integrations/google-drive", workspace),
+        { method: "DELETE" },
+    );
 }
 
-export async function updateGoogleDriveSettings(settings: {
-    enabled?: boolean;
-    requireWriteApproval?: boolean;
-    readOnly?: boolean;
-}): Promise<GoogleDriveStatus> {
-    return apiRequest<GoogleDriveStatus>("/user/integrations/google-drive", {
-        method: "PATCH",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(settings),
-    });
+export async function updateGoogleDriveSettings(
+    settings: {
+        enabled?: boolean;
+        requireWriteApproval?: boolean;
+        readOnly?: boolean;
+    },
+    workspace?: string,
+): Promise<GoogleDriveStatus> {
+    return apiRequest<GoogleDriveStatus>(
+        connectorPath("/user/integrations/google-drive", workspace),
+        {
+            method: "PATCH",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(settings),
+        },
+    );
 }
 
 export async function setGoogleDriveToolEnabled(
     toolName: string,
     enabled: boolean,
+    workspace?: string,
 ): Promise<GoogleDriveStatus> {
     return apiRequest<GoogleDriveStatus>(
-        `/user/integrations/google-drive/tools/${encodeURIComponent(toolName)}`,
+        connectorPath(
+            `/user/integrations/google-drive/tools/${encodeURIComponent(toolName)}`,
+            workspace,
+        ),
         {
             method: "PATCH",
             headers: { "Content-Type": "application/json" },
@@ -1508,11 +1550,73 @@ export async function setGoogleDriveToolEnabled(
 export type GoogleDrivePickerSession =
     import("@mike/contracts").GoogleDrivePickerSession;
 
-/** A short-lived Drive token plus the keys the Google Picker needs. */
-export async function createGoogleDrivePickerSession(): Promise<GoogleDrivePickerSession> {
+/**
+ * A short-lived Drive token plus the keys the Google Picker needs, for the
+ * Drive connection of `workspace`.
+ */
+export async function createGoogleDrivePickerSession(
+    workspace?: string,
+): Promise<GoogleDrivePickerSession> {
     return apiRequest<GoogleDrivePickerSession>(
-        "/user/integrations/google-drive/picker-session",
+        connectorPath(
+            "/user/integrations/google-drive/picker-session",
+            workspace,
+        ),
         { method: "POST" },
+    );
+}
+
+// ---------------------------------------------------------------------------
+// CourtListener connector: an on/off switch and an optional own token, both
+// per workspace.
+// ---------------------------------------------------------------------------
+
+export type CourtListenerConnectorStatus =
+    import("@mike/contracts").CourtListenerConnectorStatus;
+
+export async function getCourtListenerConnector(
+    workspace?: string,
+): Promise<CourtListenerConnectorStatus> {
+    return apiRequest<CourtListenerConnectorStatus>(
+        connectorPath("/user/integrations/courtlistener", workspace),
+    );
+}
+
+export async function setCourtListenerConnectorEnabled(
+    enabled: boolean,
+    workspace?: string,
+): Promise<CourtListenerConnectorStatus> {
+    return apiRequest<CourtListenerConnectorStatus>(
+        connectorPath("/user/integrations/courtlistener", workspace),
+        {
+            method: "PATCH",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ enabled }),
+        },
+    );
+}
+
+/** Saves the caller's own token; the server also turns the switch on. */
+export async function saveCourtListenerConnectorToken(
+    token: string,
+    workspace?: string,
+): Promise<CourtListenerConnectorStatus> {
+    return apiRequest<CourtListenerConnectorStatus>(
+        connectorPath("/user/integrations/courtlistener/token", workspace),
+        {
+            method: "PUT",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ token }),
+        },
+    );
+}
+
+export async function deleteCourtListenerConnectorToken(
+    workspace?: string,
+): Promise<CourtListenerConnectorStatus> {
+    return apiRequest<CourtListenerConnectorStatus>(
+        connectorPath("/user/integrations/courtlistener/token", workspace),
+        { method: "DELETE" },
     );
 }
 
@@ -2981,13 +3085,26 @@ export async function deleteChat(chatId: string): Promise<void> {
 
 const panelDocumentRequests = new Map<string, Promise<PanelDocument>>();
 
+/**
+ * A source document for the side panel, such as a cited case. `workspace`
+ * ("personal" or an organization id) is the workspace of the chat or project
+ * the citation came from: a case is read with that workspace's CourtListener
+ * connection. Omitted, the server reads it as Personal.
+ */
 export async function getPanelDocument(
     documentId: string,
+    workspace?: string,
 ): Promise<PanelDocument> {
-    let request = panelDocumentRequests.get(documentId);
+    // The same document in two workspaces is two requests: each may use a
+    // different token, and one may be refused where the other is not.
+    const key = JSON.stringify([workspace ?? null, documentId]);
+    let request = panelDocumentRequests.get(key);
     if (!request) {
         request = apiRequest<unknown>(
-            `/documents/${encodeURIComponent(documentId)}`,
+            connectorPath(
+                `/documents/${encodeURIComponent(documentId)}`,
+                workspace,
+            ),
         )
             .then((value) => {
                 if (!isPanelDocument(value)) {
@@ -2995,8 +3112,8 @@ export async function getPanelDocument(
                 }
                 return value;
             })
-            .finally(() => panelDocumentRequests.delete(documentId));
-        panelDocumentRequests.set(documentId, request);
+            .finally(() => panelDocumentRequests.delete(key));
+        panelDocumentRequests.set(key, request);
     }
     return request;
 }
@@ -3939,42 +4056,51 @@ export async function deleteWorkflowAsset(
 
 export async function getGoogleWorkspaceStatus(
     provider: import("@mike/contracts").GoogleWorkspaceProvider,
+    workspace?: string,
 ) {
     return apiRequest<import("@mike/contracts").GoogleWorkspaceStatus>(
-        `/user/integrations/${provider}`,
+        connectorPath(`/user/integrations/${provider}`, workspace),
     );
 }
 export async function startGoogleWorkspaceOAuth(
     provider: import("@mike/contracts").GoogleWorkspaceProvider,
+    workspace?: string,
 ) {
     return apiRequest<{ authorizationUrl: string }>(
-        `/user/integrations/${provider}/oauth/start`,
+        connectorPath(`/user/integrations/${provider}/oauth/start`, workspace),
         { method: "POST" },
     );
 }
 export async function cancelGoogleWorkspaceOAuth(
     provider: import("@mike/contracts").GoogleWorkspaceProvider,
     state: string,
+    workspace?: string,
 ) {
-    return apiRequest<void>(`/user/integrations/${provider}/oauth/cancel`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ state }),
-    });
+    return apiRequest<void>(
+        connectorPath(`/user/integrations/${provider}/oauth/cancel`, workspace),
+        {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ state }),
+        },
+    );
 }
 export async function disconnectGoogleWorkspace(
     provider: import("@mike/contracts").GoogleWorkspaceProvider,
+    workspace?: string,
 ) {
-    return apiRequest<void>(`/user/integrations/${provider}`, {
-        method: "DELETE",
-    });
+    return apiRequest<void>(
+        connectorPath(`/user/integrations/${provider}`, workspace),
+        { method: "DELETE" },
+    );
 }
 export async function updateGoogleWorkspaceSettings(
     provider: import("@mike/contracts").GoogleWorkspaceProvider,
     settings: { enabled?: boolean; requireWriteApproval?: boolean; readOnly?: boolean },
+    workspace?: string,
 ) {
     return apiRequest<import("@mike/contracts").GoogleWorkspaceStatus>(
-        `/user/integrations/${provider}`,
+        connectorPath(`/user/integrations/${provider}`, workspace),
         {
             method: "PATCH",
             headers: { "Content-Type": "application/json" },
@@ -3986,9 +4112,13 @@ export async function setGoogleWorkspaceToolEnabled(
     provider: import("@mike/contracts").GoogleWorkspaceProvider,
     toolName: string,
     enabled: boolean,
+    workspace?: string,
 ) {
     return apiRequest<import("@mike/contracts").GoogleWorkspaceStatus>(
-        `/user/integrations/${provider}/tools/${encodeURIComponent(toolName)}`,
+        connectorPath(
+            `/user/integrations/${provider}/tools/${encodeURIComponent(toolName)}`,
+            workspace,
+        ),
         {
             method: "PATCH",
             headers: { "Content-Type": "application/json" },

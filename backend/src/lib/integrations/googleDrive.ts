@@ -31,6 +31,7 @@ import {
 } from "../mcp/client";
 import { ConnectorSetupError } from "../mcp/errors";
 import type { Db } from "../supabase";
+import { type ConnectorOwner, workspaceFilter } from "../connectorOwner";
 import type { ConnectorCallPlan, McpToolEvent } from "../mcp/types";
 import {
     connectorSettingsPatch,
@@ -196,7 +197,7 @@ export function googleDriveSetupInstructions(redirectUri: string): string {
 }
 
 export async function startGoogleDriveOAuth(
-    userId: string,
+    owner: ConnectorOwner,
     redirectUri: string,
     db: Db = createServerSupabase(),
 ): Promise<{ authorizationUrl: string }> {
@@ -211,7 +212,8 @@ export async function startGoogleDriveOAuth(
     const { error: cleanupError } = await db
         .from(OAUTH_STATES_TABLE)
         .delete()
-        .eq("user_id", userId)
+        .eq("user_id", owner.userId)
+        .filter(...workspaceFilter(owner))
         .eq("provider", OAUTH_STATE_PROVIDER)
         .lt("expires_at", new Date().toISOString());
     if (cleanupError) throw cleanupError;
@@ -225,7 +227,8 @@ export async function startGoogleDriveOAuth(
         JSON.stringify({ codeVerifier, redirectUri } satisfies StateConfig),
     );
     const { error } = await db.from(OAUTH_STATES_TABLE).insert({
-        user_id: userId,
+        user_id: owner.userId,
+        org_id: owner.orgId,
         provider: OAUTH_STATE_PROVIDER,
         state_hash: stateHash(stateToken),
         encrypted_state_config: encrypted.encrypted,
@@ -419,11 +422,12 @@ type TokenRow = {
     read_only?: boolean;
 };
 
-async function loadTokenRow(userId: string, db: Db): Promise<TokenRow | null> {
+async function loadTokenRow(owner: ConnectorOwner, db: Db): Promise<TokenRow | null> {
     const { data, error } = await db
         .from("user_google_drive_tokens")
         .select("*")
-        .eq("user_id", userId)
+        .eq("user_id", owner.userId)
+        .filter(...workspaceFilter(owner))
         .maybeSingle();
     if (error) throw error;
     return (data as TokenRow | null) ?? null;
@@ -446,7 +450,7 @@ function isMissingTableError(error: unknown): boolean {
 }
 
 export async function getGoogleDriveStatus(
-    userId: string,
+    owner: ConnectorOwner,
     db: Db = createServerSupabase(),
 ): Promise<GoogleDriveStatus> {
     const env = googleDriveOAuthEnv();
@@ -454,11 +458,12 @@ export async function getGoogleDriveStatus(
     const available = isGoogleServiceAvailable("google-drive");
     let row: TokenRow | null;
     try {
-        row = await loadTokenRow(userId, db);
+        row = await loadTokenRow(owner, db);
         const { error } = await db
             .from(OAUTH_STATES_TABLE)
             .select("id")
-            .eq("user_id", userId)
+            .eq("user_id", owner.userId)
+        .filter(...workspaceFilter(owner))
             .eq("provider", OAUTH_STATE_PROVIDER)
             .limit(1);
         if (error) throw error;
@@ -499,7 +504,7 @@ export async function getGoogleDriveStatus(
 
 /** Settings live on the token row, so they exist only while connected. */
 export async function updateGoogleDriveSettings(
-    userId: string,
+    owner: ConnectorOwner,
     settings: NativeConnectorSettings,
     db: Db = createServerSupabase(),
 ): Promise<void> {
@@ -508,7 +513,8 @@ export async function updateGoogleDriveSettings(
     const { data, error } = await db
         .from("user_google_drive_tokens")
         .update({ ...patch, updated_at: new Date().toISOString() })
-        .eq("user_id", userId)
+        .eq("user_id", owner.userId)
+        .filter(...workspaceFilter(owner))
         .select("user_id")
         .maybeSingle();
     if (error) throw error;
@@ -516,14 +522,14 @@ export async function updateGoogleDriveSettings(
 }
 
 export async function setGoogleDriveToolEnabled(
-    userId: string,
+    owner: ConnectorOwner,
     toolName: string,
     enabled: boolean,
     db: Db = createServerSupabase(),
 ): Promise<void> {
     if (!ALL_GOOGLE_DRIVE_TOOLS.some((tool) => tool.function.name === toolName))
         throw new GoogleDriveUserError("Unknown Google Drive tool.");
-    const row = await loadTokenRow(userId, db);
+    const row = await loadTokenRow(owner, db);
     if (!row?.encrypted_access_token)
         throw new GoogleDriveUserError("Connect Google Drive first.");
     const next = toggleDisabledTool(
@@ -536,14 +542,15 @@ export async function setGoogleDriveToolEnabled(
     let update = db
         .from("user_google_drive_tokens")
         .update({ disabled_tools: next, updated_at: new Date().toISOString() })
-        .eq("user_id", userId);
+        .eq("user_id", owner.userId)
+        .filter(...workspaceFilter(owner));
     if (row.grant_id) update = update.eq("grant_id", row.grant_id);
     const { error } = await update;
     if (error) throw error;
 }
 
 export async function disconnectGoogleDrive(
-    userId: string,
+    owner: ConnectorOwner,
     db: Db = createServerSupabase(),
 ): Promise<void> {
     // Google revocation is project-wide: it would also invalidate Gmail,
@@ -551,41 +558,43 @@ export async function disconnectGoogleDrive(
     // service's local credentials and pending states atomically instead.
     // Users can revoke the whole app from their Google Account settings.
     const { error } = await db.rpc("disconnect_google_drive", {
-        p_user_id: userId,
+        p_user_id: owner.userId,
+        p_org_id: owner.orgId,
     });
     if (error) throw error;
 }
 
 export async function cancelGoogleDriveOAuth(
-    userId: string,
+    owner: ConnectorOwner,
     state: string,
     db: Db = createServerSupabase(),
 ): Promise<void> {
     const { error } = await db
         .from(OAUTH_STATES_TABLE)
         .delete()
-        .eq("user_id", userId)
+        .eq("user_id", owner.userId)
+        .filter(...workspaceFilter(owner))
         .eq("provider", OAUTH_STATE_PROVIDER)
         .eq("state_hash", stateHash(state));
     if (error) throw error;
 }
 
 async function getAccessToken(
-    userId: string,
+    owner: ConnectorOwner,
     db: Db,
     expectedGrantId?: string,
 ): Promise<string> {
-    return (await getFreshAccessToken(userId, db, expectedGrantId))
+    return (await getFreshAccessToken(owner, db, expectedGrantId))
         .accessToken;
 }
 
 /** A usable access token, refreshed first when it is near expiry. */
 async function getFreshAccessToken(
-    userId: string,
+    owner: ConnectorOwner,
     db: Db,
     expectedGrantId?: string,
 ): Promise<{ accessToken: string; expiresAt: string }> {
-    const row = await loadTokenRow(userId, db);
+    const row = await loadTokenRow(owner, db);
     if (!row?.encrypted_access_token) throw new GoogleDriveAuthRequiredError();
     if (expectedGrantId && row.grant_id !== expectedGrantId)
         throw new GoogleDriveUserError(
@@ -637,7 +646,8 @@ async function getFreshAccessToken(
             const { error } = await db
                 .from("user_google_drive_tokens")
                 .delete()
-                .eq("user_id", userId)
+                .eq("user_id", owner.userId)
+        .filter(...workspaceFilter(owner))
                 .eq("encrypted_refresh_token", row.encrypted_refresh_token);
             if (error) throw error;
             throw new GoogleDriveAuthRequiredError(
@@ -654,13 +664,14 @@ async function getFreshAccessToken(
     const { data: updated, error } = await db
         .from("user_google_drive_tokens")
         .update(patch)
-        .eq("user_id", userId)
+        .eq("user_id", owner.userId)
+        .filter(...workspaceFilter(owner))
         .eq("encrypted_access_token", row.encrypted_access_token)
         .select("user_id")
         .maybeSingle();
     if (error) throw error;
     if (!updated) {
-        const current = await loadTokenRow(userId, db);
+        const current = await loadTokenRow(owner, db);
         if (
             current &&
             (!expectedGrantId || current.grant_id === expectedGrantId) &&
@@ -745,13 +756,13 @@ export type GoogleDrivePickerSession =
  * server.
  */
 export async function createGoogleDrivePickerSession(
-    userId: string,
+    owner: ConnectorOwner,
     db: Db = createServerSupabase(),
 ): Promise<GoogleDrivePickerSession> {
     assertGoogleDriveAvailable();
     const { developerKey, appId } = googleDrivePickerEnv();
     if (!developerKey || !appId) throw new GoogleDrivePickerUnavailableError();
-    const row = await loadTokenRow(userId, db);
+    const row = await loadTokenRow(owner, db);
     if (!row?.encrypted_access_token) throw new GoogleDriveAuthRequiredError();
     if (row.enabled === false)
         throw new GoogleDriveUserError(
@@ -762,7 +773,7 @@ export async function createGoogleDrivePickerSession(
     if (!driveScopeGrants(row.scope, "picker"))
         throw new GoogleDrivePickerReconnectError();
     const { accessToken, expiresAt } = await getFreshAccessToken(
-        userId,
+        owner,
         db,
         row.grant_id,
     );
@@ -1073,14 +1084,14 @@ function hasDriveWriteAccess(row: TokenRow | null) {
 }
 
 async function resolveDriveWrite(
-    userId: string,
+    owner: ConnectorOwner,
     name: string,
     args: unknown,
     db: Db,
 ) {
     assertGoogleDriveAvailable();
     const parsed = parseDriveWrite(name, args);
-    const row = await loadTokenRow(userId, db);
+    const row = await loadTokenRow(owner, db);
     if (!row?.encrypted_access_token) throw new GoogleDriveAuthRequiredError();
     if (row.enabled === false || row.disabled_tools?.includes(name))
         throw new GoogleDriveUserError(
@@ -1113,14 +1124,14 @@ function driveFailure(name: string, error: unknown) {
 /** Metadata reads may take time; repeat local authorization immediately before
  * sending the mutation, including settings changed while a request was pending. */
 async function recheckDriveWrite(
-    userId: string,
+    owner: ConnectorOwner,
     name: string,
     args: unknown,
     db: Db,
     grantId: string,
     approved: boolean,
 ) {
-    const { row } = await resolveDriveWrite(userId, name, args, db);
+    const { row } = await resolveDriveWrite(owner, name, args, db);
     if (row.grant_id !== grantId)
         throw new GoogleDriveUserError(
             "The Google Drive connection changed. Review the action again.",
@@ -1132,7 +1143,7 @@ async function recheckDriveWrite(
 }
 
 export async function planGoogleDriveCall(
-    userId: string,
+    owner: ConnectorOwner,
     name: string,
     input: Record<string, unknown>,
     db: Db,
@@ -1140,14 +1151,14 @@ export async function planGoogleDriveCall(
     if (!driveWriteTool(name)) return { type: "run" };
     try {
         const { tool, args, row } = await resolveDriveWrite(
-            userId,
+            owner,
             name,
             input,
             db,
         );
         if (!row.require_write_approval) return { type: "run" };
         const grantId = row.grant_id!;
-        const token = await getAccessToken(userId, db, grantId);
+        const token = await getAccessToken(owner, db, grantId);
         const action = await prepareDriveWrite(name, args, token);
         return {
             type: "approval",
@@ -1174,13 +1185,13 @@ export async function planGoogleDriveCall(
 }
 
 export async function executeApprovedGoogleDriveCall(
-    userId: string,
+    owner: ConnectorOwner,
     item: ConnectorApprovalItem,
     db: Db,
 ) {
     try {
         const { args, row } = await resolveDriveWrite(
-            userId,
+            owner,
             item.tool_name,
             item.arguments,
             db,
@@ -1194,7 +1205,7 @@ export async function executeApprovedGoogleDriveCall(
                 "The Google Drive connection changed after this action was reviewed. Review a new action.",
             );
         const grantId = item.binding.grant_id;
-        const token = await getAccessToken(userId, db, grantId);
+        const token = await getAccessToken(owner, db, grantId);
         const data = await executeDriveWrite(
             {
                 name: item.tool_name,
@@ -1205,7 +1216,7 @@ export async function executeApprovedGoogleDriveCall(
             token,
             () =>
                 recheckDriveWrite(
-                    userId,
+                    owner,
                     item.tool_name,
                     args,
                     db,
@@ -1224,14 +1235,14 @@ export async function executeApprovedGoogleDriveCall(
 
 /** Drive writes require the full grant; old read-only connections still read. */
 export async function buildGoogleDriveTools(
-    userId: string,
+    owner: ConnectorOwner,
     db: Db = createServerSupabase(),
 ): Promise<unknown[]> {
     // A switched-off service has no tools, even for a user who connected it
     // before the switch; the grant stays until they delete it.
     if (!isGoogleServiceAvailable("google-drive")) return [];
     try {
-        const row = await loadTokenRow(userId, db);
+        const row = await loadTokenRow(owner, db);
         if (!row?.encrypted_access_token || row.enabled === false) return [];
         const disabled = row.disabled_tools ?? [];
         return ALL_GOOGLE_DRIVE_TOOLS.filter(
@@ -1242,7 +1253,7 @@ export async function buildGoogleDriveTools(
         );
     } catch (error) {
         console.error("[google-drive] failed to load token row", {
-            userId,
+            userId: owner.userId,
             error: safeError(error),
         });
         return [];
@@ -1268,7 +1279,7 @@ function driveEvent(
 }
 
 export async function executeGoogleDriveToolCall(
-    userId: string,
+    owner: ConnectorOwner,
     toolName: string,
     args: Record<string, unknown>,
     db: Db = createServerSupabase(),
@@ -1277,7 +1288,7 @@ export async function executeGoogleDriveToolCall(
         assertGoogleDriveAvailable();
         if (driveWriteTool(toolName)) {
             const { row, args: parsed } = await resolveDriveWrite(
-                userId,
+                owner,
                 toolName,
                 args,
                 db,
@@ -1287,9 +1298,9 @@ export async function executeGoogleDriveToolCall(
                     "This Google Drive action requires approval in the assistant.",
                 );
             const grantId = row.grant_id!;
-            const token = await getAccessToken(userId, db, grantId);
+            const token = await getAccessToken(owner, db, grantId);
             const data = await runDriveWrite(toolName, parsed, token, () =>
-                recheckDriveWrite(userId, toolName, parsed, db, grantId, false),
+                recheckDriveWrite(owner, toolName, parsed, db, grantId, false),
             );
             return {
                 content: JSON.stringify({
@@ -1300,7 +1311,7 @@ export async function executeGoogleDriveToolCall(
                 event: driveEvent(toolName, "ok"),
             };
         }
-        const row = await loadTokenRow(userId, db);
+        const row = await loadTokenRow(owner, db);
         if (
             row &&
             (row.enabled === false ||
@@ -1309,7 +1320,7 @@ export async function executeGoogleDriveToolCall(
             throw new GoogleDriveUserError(
                 "This Google Drive tool is turned off in Settings → Connectors.",
             );
-        const token = await getAccessToken(userId, db);
+        const token = await getAccessToken(owner, db);
         let payload: unknown;
         if (toolName === "google_drive_search") {
             const query =
@@ -1342,7 +1353,7 @@ export async function executeGoogleDriveToolCall(
                 ? error.message
                 : "Google Drive call failed. Please try again.";
         console.error("[google-drive] tool call failed", {
-            userId,
+            userId: owner.userId,
             toolName,
             error: safeError(error),
         });

@@ -1,12 +1,16 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-const { getEffectiveApiKeys, getEffectiveRouterModels } = vi.hoisted(() => ({
-    getEffectiveApiKeys: vi.fn(),
-    getEffectiveRouterModels: vi.fn(),
-}));
+const { getEffectiveApiKeys, getEffectiveRouterModels, loadCourtListenerConnection } =
+    vi.hoisted(() => ({
+        getEffectiveApiKeys: vi.fn(),
+        getEffectiveRouterModels: vi.fn(),
+        loadCourtListenerConnection: vi.fn(),
+    }));
 
 vi.mock("../user.apiKeyStore", () => ({
     getEffectiveApiKeys: (...args: unknown[]) => getEffectiveApiKeys(...args),
+    loadCourtListenerConnection: (...args: unknown[]) =>
+        loadCourtListenerConnection(...args),
 }));
 
 vi.mock("../../../lib/routerModels", async () => ({
@@ -43,6 +47,7 @@ const NO_KEYS = {
 beforeEach(() => {
     vi.clearAllMocks();
     getEffectiveApiKeys.mockResolvedValue(NO_KEYS);
+    loadCourtListenerConnection.mockResolvedValue({ enabled: true, token: null });
     getEffectiveRouterModels.mockResolvedValue({
         openrouter: ["allowed/model"],
         vercel: [],
@@ -57,7 +62,6 @@ describe("getUserModelSettings router-model allowlist", () => {
             profileDb({
                 title_model: "claude-haiku-4-5",
                 tabular_model: "claude-sonnet-5-5",
-                legal_research_us: true,
                 display_name: "Ada",
                 organisation: "Acme LLP",
                 jurisdiction: "Singapore",
@@ -100,7 +104,6 @@ describe("getUserModelSettings router-model allowlist", () => {
                 title_model: "openrouter/allowed/model",
                 tabular_model: "openrouter/allowed/model",
                 memory_curator_model: "openrouter/allowed/model",
-                legal_research_us: true,
             }),
         );
 
@@ -116,7 +119,6 @@ describe("getUserModelSettings router-model allowlist", () => {
                 title_model: "openrouter/pricy/frontier-model",
                 tabular_model: "vercel/pricy/frontier-model",
                 memory_curator_model: "openrouter/pricy/frontier-model",
-                legal_research_us: true,
             }),
         );
 
@@ -132,7 +134,6 @@ describe("getUserModelSettings router-model allowlist", () => {
                 title_model: "claude-haiku-4-5",
                 tabular_model: "claude-sonnet-5-5",
                 memory_curator_model: "gpt-6-luna",
-                legal_research_us: true,
             }),
         );
 
@@ -229,7 +230,6 @@ describe("getUserModelSettings on an un-migrated database", () => {
                         tabular_model: "claude-sonnet-5-5",
                         last_selected_chat_model: "claude-sonnet-5-5",
                         last_selected_reasoning_level: "high",
-                        legal_research_us: true,
                     },
                     error: null,
                 },
@@ -257,7 +257,6 @@ describe("getUserModelSettings on an un-migrated database", () => {
                     data: {
                         title_model: "claude-haiku-4-5",
                         tabular_model: "claude-sonnet-5-5",
-                        legal_research_us: false,
                     },
                     error: null,
                 },
@@ -308,10 +307,8 @@ describe("getUserModelSettings CourtListener connector", () => {
     });
     const settingsWith = (courtlistener: string | null, enabled = true) => {
         getEffectiveApiKeys.mockResolvedValue({ ...NO_KEYS, courtlistener });
-        return getUserModelSettings(
-            "user-1",
-            profileDb({ legal_research_us: enabled }),
-        );
+        loadCourtListenerConnection.mockResolvedValue({ enabled, token: null });
+        return getUserModelSettings("user-1", profileDb({}));
     };
 
     it("offers research tools only with a saved token or the bulk index", async () => {
@@ -319,6 +316,29 @@ describe("getUserModelSettings CourtListener connector", () => {
         expect((await settingsWith("saved-token")).legal_research_us).toBe(true);
         vi.stubEnv("COURTLISTENER_BULK_DATA_ENABLED", "true");
         expect((await settingsWith(null)).legal_research_us).toBe(true);
+    });
+
+    it("reads the switch of the workspace the work is in", async () => {
+        const db = profileDb({});
+        await getUserModelSettings("user-1", db, { orgId: "org-1" });
+        expect(loadCourtListenerConnection).toHaveBeenCalledWith(
+            { userId: "user-1", orgId: "org-1" },
+            db,
+        );
+        await getUserModelSettings("user-1", db);
+        expect(loadCourtListenerConnection).toHaveBeenLastCalledWith(
+            { userId: "user-1", orgId: null },
+            db,
+        );
+    });
+
+    it("leaves research off when the switch cannot be read", async () => {
+        getEffectiveApiKeys.mockResolvedValue({ ...NO_KEYS, courtlistener: "t" });
+        loadCourtListenerConnection.mockRejectedValue(new Error("db down"));
+        vi.spyOn(console, "error").mockImplementation(() => {});
+        expect(
+            (await getUserModelSettings("user-1", profileDb({}))).legal_research_us,
+        ).toBe(false);
     });
 
     it("keeps the user's switch off whatever is configured", async () => {

@@ -58,6 +58,8 @@ create table if not exists public.user_profiles (
   subagent_reasoning text check (subagent_reasoning in ('none', 'low', 'medium', 'high', 'xhigh', 'max')),
   quote_model text,
   mfa_on_login boolean not null default false,
+  -- Superseded by user_courtlistener_connections.enabled (20261022_01) and
+  -- no longer read; kept for a backend that predates that migration.
   legal_research_us boolean not null default true,
   quick_actions_visible boolean not null default true,
   -- Whether each response and subagent shows the model, reasoning effort and
@@ -881,6 +883,9 @@ $$;
 create table if not exists public.user_mcp_connectors (
   id uuid primary key default gen_random_uuid(),
   user_id uuid not null references auth.users(id) on delete cascade,
+  -- The workspace this connection is for: an organization, or null for
+  -- Personal. Tied to the membership, so it goes when the person leaves.
+  org_id uuid,
   name text not null,
   transport text not null default 'streamable_http'
     check (transport in ('streamable_http')),
@@ -897,11 +902,16 @@ create table if not exists public.user_mcp_connectors (
   auth_config_iv text,
   auth_config_tag text,
   created_at timestamptz not null default now(),
-  updated_at timestamptz not null default now()
+  updated_at timestamptz not null default now(),
+  constraint user_mcp_connectors_workspace_member_fkey
+    foreign key (org_id, user_id)
+    references public.org_members(org_id, user_id) on delete cascade
 );
 
-create index if not exists idx_user_mcp_connectors_user
-  on public.user_mcp_connectors(user_id);
+create index if not exists idx_user_mcp_connectors_user_workspace
+  on public.user_mcp_connectors(user_id, org_id);
+create index if not exists idx_user_mcp_connectors_org
+  on public.user_mcp_connectors(org_id) where org_id is not null;
 
 alter table public.user_mcp_connectors enable row level security;
 
@@ -8727,7 +8737,11 @@ grant execute on function public.document_cache_writer_active(text[])
 -- backend (service key) can read the encrypted tokens.
 
 CREATE TABLE IF NOT EXISTS public.user_google_drive_tokens (
-  user_id uuid PRIMARY KEY REFERENCES auth.users(id) ON DELETE CASCADE,
+  id uuid NOT NULL DEFAULT gen_random_uuid(),
+  user_id uuid NOT NULL REFERENCES auth.users(id) ON DELETE CASCADE,
+  -- One grant per person per workspace: an organization, or null for
+  -- Personal (20261022_01).
+  org_id uuid,
   encrypted_access_token text,
   access_token_iv text,
   access_token_tag text,
@@ -8744,8 +8758,17 @@ CREATE TABLE IF NOT EXISTS public.user_google_drive_tokens (
   -- The Google account this connection signed in as; display only.
   account_email text,
   created_at timestamptz NOT NULL DEFAULT now(),
-  updated_at timestamptz NOT NULL DEFAULT now()
+  updated_at timestamptz NOT NULL DEFAULT now(),
+  CONSTRAINT user_google_drive_tokens_pkey PRIMARY KEY (id),
+  CONSTRAINT user_google_drive_tokens_workspace_key
+    UNIQUE NULLS NOT DISTINCT (user_id, org_id),
+  CONSTRAINT user_google_drive_tokens_workspace_member_fkey
+    FOREIGN KEY (org_id, user_id)
+    REFERENCES public.org_members(org_id, user_id) ON DELETE CASCADE
 );
+
+CREATE INDEX IF NOT EXISTS idx_user_google_drive_tokens_org
+  ON public.user_google_drive_tokens(org_id) WHERE org_id IS NOT NULL;
 
 ALTER TABLE public.user_google_drive_tokens ENABLE ROW LEVEL SECURITY;
 
@@ -8768,26 +8791,29 @@ create or replace function public.complete_google_drive_oauth(p_state_hash text,
 returns boolean language plpgsql security definer set search_path = '' as $$
 declare
   v_user_id uuid;
+  v_org_id uuid;
 begin
   select user_id into v_user_id from public.google_workspace_oauth_states
     where state_hash = p_state_hash and provider = 'google-drive';
   if not found then return false; end if;
   perform 1 from auth.users where id = v_user_id for update;
   if not found then return false; end if;
+  -- The workspace the sign-in was started in.
   delete from public.google_workspace_oauth_states
     where state_hash = p_state_hash and provider = 'google-drive'
-      and user_id = v_user_id and expires_at > now();
+      and user_id = v_user_id and expires_at > now()
+    returning org_id into v_org_id;
   if not found then return false; end if;
   insert into public.user_google_drive_tokens (
-    user_id, account_email, encrypted_access_token, access_token_iv, access_token_tag,
+    user_id, org_id, account_email, encrypted_access_token, access_token_iv, access_token_tag,
     encrypted_refresh_token, refresh_token_iv, refresh_token_tag, scope, expires_at
   ) values (
-    v_user_id, p_tokens->>'account_email', p_tokens->>'encrypted_access_token',
+    v_user_id, v_org_id, p_tokens->>'account_email', p_tokens->>'encrypted_access_token',
     p_tokens->>'access_token_iv', p_tokens->>'access_token_tag',
     p_tokens->>'encrypted_refresh_token', p_tokens->>'refresh_token_iv',
     p_tokens->>'refresh_token_tag', p_tokens->>'scope',
     (p_tokens->>'expires_at')::timestamptz
-  ) on conflict (user_id) do update set
+  ) on conflict (user_id, org_id) do update set
     grant_id = gen_random_uuid(),
     account_email = excluded.account_email,
     encrypted_access_token = excluded.encrypted_access_token,
@@ -8801,25 +8827,30 @@ $$;
 revoke all on function public.complete_google_drive_oauth(text, jsonb) from public, anon, authenticated;
 grant execute on function public.complete_google_drive_oauth(text, jsonb) to service_role;
 
-create or replace function public.disconnect_google_drive(p_user_id uuid)
+create or replace function public.disconnect_google_drive(p_user_id uuid, p_org_id uuid default null)
 returns jsonb language plpgsql security definer set search_path = '' as $$
 declare v_token jsonb;
 begin
   perform 1 from auth.users where id = p_user_id for update;
   if not found then return null; end if;
   delete from public.google_workspace_oauth_states
-    where user_id = p_user_id and provider = 'google-drive';
-  delete from public.user_google_drive_tokens where user_id = p_user_id
+    where user_id = p_user_id and provider = 'google-drive'
+      and org_id is not distinct from p_org_id;
+  delete from public.user_google_drive_tokens
+    where user_id = p_user_id and org_id is not distinct from p_org_id
     returning to_jsonb(user_google_drive_tokens) into v_token;
   return v_token;
 end;
 $$;
-revoke all on function public.disconnect_google_drive(uuid) from public, anon, authenticated;
-grant execute on function public.disconnect_google_drive(uuid) to service_role;
+revoke all on function public.disconnect_google_drive(uuid, uuid) from public, anon, authenticated;
+grant execute on function public.disconnect_google_drive(uuid, uuid) to service_role;
 -- Migration date: 2026-09-22
 -- Independent Gmail/Calendar grants. Connector settings survive reconnects.
 create table if not exists public.user_google_workspace_tokens (
+  id uuid not null default gen_random_uuid(),
   user_id uuid not null references auth.users(id) on delete cascade,
+  -- An organization, or null for Personal (20261022_01).
+  org_id uuid,
   provider text not null check (provider in ('gmail', 'google-calendar')),
   grant_id uuid not null default gen_random_uuid(),
   account_email text not null, account_id text not null,
@@ -8831,16 +8862,28 @@ create table if not exists public.user_google_workspace_tokens (
   require_write_approval boolean not null default false,
   read_only boolean not null default false,
   disabled_tools text[] not null default '{}',
-  primary key (user_id, provider)
+  constraint user_google_workspace_tokens_pkey primary key (id),
+  constraint user_google_workspace_tokens_workspace_key
+    unique nulls not distinct (user_id, org_id, provider),
+  constraint user_google_workspace_tokens_workspace_member_fkey
+    foreign key (org_id, user_id)
+    references public.org_members(org_id, user_id) on delete cascade
 );
+create index if not exists idx_user_google_workspace_tokens_org
+  on public.user_google_workspace_tokens(org_id) where org_id is not null;
 create table if not exists public.google_workspace_oauth_states (
   id uuid primary key default gen_random_uuid(),
   user_id uuid not null references auth.users(id) on delete cascade,
+  -- The workspace the sign-in was started in; the callback completes its grant.
+  org_id uuid,
   -- Every Google connection's pending OAuth sign-ins, including Drive's.
   provider text not null check (provider in ('gmail', 'google-calendar', 'google-drive')),
   state_hash text not null unique,
   encrypted_state_config text not null, state_config_iv text not null, state_config_tag text not null,
-  expires_at timestamptz not null
+  expires_at timestamptz not null,
+  constraint google_workspace_oauth_states_workspace_member_fkey
+    foreign key (org_id, user_id)
+    references public.org_members(org_id, user_id) on delete cascade
 );
 create index if not exists google_workspace_states_owner on public.google_workspace_oauth_states(user_id, provider);
 alter table public.user_google_workspace_tokens enable row level security;
@@ -8858,9 +8901,9 @@ begin
   if not found then return false; end if;
   delete from public.google_workspace_oauth_states where state_hash = p_state_hash and provider = p_provider and expires_at > now() returning * into v_state;
   if not found then return false; end if;
-  insert into public.user_google_workspace_tokens(user_id, provider, account_email, account_id, encrypted_access_token, access_token_iv, access_token_tag, encrypted_refresh_token, refresh_token_iv, refresh_token_tag, scope, expires_at, write_enabled)
-  values (v_state.user_id, p_provider, p_tokens->>'account_email', p_tokens->>'account_id', p_tokens->>'encrypted_access_token', p_tokens->>'access_token_iv', p_tokens->>'access_token_tag', p_tokens->>'encrypted_refresh_token', p_tokens->>'refresh_token_iv', p_tokens->>'refresh_token_tag', p_tokens->>'scope', (p_tokens->>'expires_at')::timestamptz, coalesce((p_tokens->>'write_enabled')::boolean, false))
-  on conflict (user_id, provider) do update set
+  insert into public.user_google_workspace_tokens(user_id, org_id, provider, account_email, account_id, encrypted_access_token, access_token_iv, access_token_tag, encrypted_refresh_token, refresh_token_iv, refresh_token_tag, scope, expires_at, write_enabled)
+  values (v_state.user_id, v_state.org_id, p_provider, p_tokens->>'account_email', p_tokens->>'account_id', p_tokens->>'encrypted_access_token', p_tokens->>'access_token_iv', p_tokens->>'access_token_tag', p_tokens->>'encrypted_refresh_token', p_tokens->>'refresh_token_iv', p_tokens->>'refresh_token_tag', p_tokens->>'scope', (p_tokens->>'expires_at')::timestamptz, coalesce((p_tokens->>'write_enabled')::boolean, false))
+  on conflict (user_id, org_id, provider) do update set
     grant_id = gen_random_uuid(), account_email = excluded.account_email, account_id = excluded.account_id, encrypted_access_token = excluded.encrypted_access_token,
     access_token_iv = excluded.access_token_iv, access_token_tag = excluded.access_token_tag,
     encrypted_refresh_token = excluded.encrypted_refresh_token, refresh_token_iv = excluded.refresh_token_iv, refresh_token_tag = excluded.refresh_token_tag,
@@ -8869,18 +8912,59 @@ begin
 end;
 $$;
 
-create or replace function public.disconnect_google_workspace(p_user_id uuid, p_provider text)
+create or replace function public.disconnect_google_workspace(p_user_id uuid, p_provider text, p_org_id uuid default null)
 returns void language plpgsql security definer set search_path = '' as $$
 begin
   perform 1 from auth.users where id = p_user_id for update;
   if not found then return; end if;
-  delete from public.google_workspace_oauth_states where user_id = p_user_id and provider = p_provider;
-  delete from public.user_google_workspace_tokens where user_id = p_user_id and provider = p_provider;
+  delete from public.google_workspace_oauth_states
+    where user_id = p_user_id and provider = p_provider
+      and org_id is not distinct from p_org_id;
+  delete from public.user_google_workspace_tokens
+    where user_id = p_user_id and provider = p_provider
+      and org_id is not distinct from p_org_id;
 end;
 $$;
 
-revoke all on function public.complete_google_workspace_oauth(text,text,jsonb), public.disconnect_google_workspace(uuid,text) from public, anon, authenticated;
-grant execute on function public.complete_google_workspace_oauth(text,text,jsonb), public.disconnect_google_workspace(uuid,text) to service_role;
+revoke all on function public.complete_google_workspace_oauth(text,text,jsonb), public.disconnect_google_workspace(uuid,text,uuid) from public, anon, authenticated;
+grant execute on function public.complete_google_workspace_oauth(text,text,jsonb), public.disconnect_google_workspace(uuid,text,uuid) to service_role;
+
+-- CourtListener: the switch and the person's own token, per workspace
+-- (20261022_01). An organization's own token stays in org_api_keys and is
+-- laid over the member's when it has one. Replaces
+-- user_profiles.legal_research_us and the 'courtlistener' row of
+-- user_api_keys, which are no longer read or written.
+create table if not exists public.user_courtlistener_connections (
+  id uuid primary key default gen_random_uuid(),
+  user_id uuid not null references auth.users(id) on delete cascade,
+  org_id uuid,
+  enabled boolean not null default true,
+  -- The person's own API token for this workspace, encrypted like
+  -- user_api_keys. Null when they have not saved one.
+  encrypted_key text,
+  iv text,
+  auth_tag text,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now(),
+  constraint user_courtlistener_connections_key_check check (
+    (encrypted_key is null) = (iv is null) and (iv is null) = (auth_tag is null)
+  ),
+  constraint user_courtlistener_connections_workspace_key
+    unique nulls not distinct (user_id, org_id),
+  constraint user_courtlistener_connections_workspace_member_fkey
+    foreign key (org_id, user_id)
+    references public.org_members(org_id, user_id) on delete cascade
+);
+
+create index if not exists idx_user_courtlistener_connections_org
+  on public.user_courtlistener_connections(org_id) where org_id is not null;
+
+alter table public.user_courtlistener_connections enable row level security;
+revoke all on public.user_courtlistener_connections from public, anon, authenticated;
+grant select, insert, update, delete
+  on public.user_courtlistener_connections
+  to service_role;
+
 
 -- Organization departure recovery and expiry.
 
@@ -10984,5 +11068,6 @@ insert into public.schema_migrations (filename) values
   ('20261021_01_chat_subagent_runs.sql'),
   ('20261021_02_user_subagent_defaults.sql'),
   ('20261021_03_user_response_details.sql'),
-  ('20261021_04_word_chat_message_playbook.sql')
+  ('20261021_04_word_chat_message_playbook.sql'),
+  ('20261022_01_workspace_connectors.sql')
 on conflict (filename) do nothing;

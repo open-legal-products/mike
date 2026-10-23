@@ -374,16 +374,17 @@ export async function runLLMStream(params: {
     unsafeWrite(sanitizeAssistantSseChunk(chunk));
   const isSubagent = subagentRun !== undefined;
   const researchTools = includeResearchTools ? COURTLISTENER_TOOLS : [];
-  // Account-owned credentials are enabled only in Personal.
+  // The person's own connections for the workspace this conversation is in.
   const connectorTools =
     subagentRun?.connectorTools ??
-    ((await teamOrgIdOf(db, orgId)) === null
-      ? [
-          ...(await buildUserMcpTools(userId, db)),
-          ...(await buildGoogleDriveTools(userId, db)),
-          ...(await buildGoogleWorkspaceTools(userId, db)),
-        ]
-      : []);
+    (await (async () => {
+      const owner = { userId, orgId: await teamOrgIdOf(db, orgId) };
+      return [
+        ...(await buildUserMcpTools(owner, db)),
+        ...(await buildGoogleDriveTools(owner, db)),
+        ...(await buildGoogleWorkspaceTools(owner, db)),
+      ];
+    })());
   // A subagent's approvals pause its answer, which puts them to the user.
   const canPauseForApproval =
     connectorApprovals && (includeAskInputs || isSubagent);
