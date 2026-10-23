@@ -36,7 +36,7 @@ describe("account export: shared projects", () => {
 
     it("lists exactly the grant-reachable projects", async () => {
         const { db, reads } = makeDb(tables);
-        const exported = await buildUserAccountExport(db, "u1", "u1@example.com");
+        const exported = await buildUserAccountExport(db, "u1", "u1@example.com", null);
         const shared = (exported as any).shared_access.projects as Row[];
         expect(shared.map((p) => p.id)).toEqual(["granted-p"]);
         expect(reads.filter((r) => r.startsWith("projects."))).toEqual([]);
@@ -74,6 +74,7 @@ describe("memory exports", () => {
             db,
             "u1",
             "u1@example.com",
+            null,
         );
 
         expect(exported.memory).toMatchObject({
@@ -105,7 +106,7 @@ describe("memory exports", () => {
         });
 
         await expect(
-            buildUserAccountExport(db, "u1", "u1@example.com"),
+            buildUserAccountExport(db, "u1", "u1@example.com", null),
         ).rejects.toThrow(/checksum mismatch/i);
     });
 
@@ -169,7 +170,7 @@ describe("account export: API keys", () => {
                 },
             ],
         });
-        const exported = (await buildUserAccountExport(db, "u1")) as any;
+        const exported = (await buildUserAccountExport(db, "u1", undefined, null)) as any;
         expect(exported.api_keys).toEqual([
             {
                 provider: "bedrock",
