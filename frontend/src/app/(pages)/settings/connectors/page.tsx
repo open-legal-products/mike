@@ -1504,7 +1504,7 @@ function WorkspaceConnectors({
             <DiscoverCard
               name={COURTLISTENER_NAME}
               icon={<CourtListenerIcon />}
-              adding={false}
+              adding={busyKey === "connector:courtlistener"}
               authorizing={false}
               loading={false}
               disabled={busyKey !== null || googleAdding}
@@ -1513,6 +1513,15 @@ function WorkspaceConnectors({
                   setAddErrorGuideUrl(null);
                   setAddError(
                     `Could not load ${COURTLISTENER_NAME}. Reload this page and try again.`,
+                  );
+                  return;
+                }
+                // With the organization's token or the bulk index there is
+                // nothing to enter: adding it switches it back on.
+                const status = courtListener.status;
+                if (status && (status.tokenSource !== null || status.bulkData)) {
+                  void runNativeUpdate("connector:courtlistener", () =>
+                    courtListener.setEnabled(true),
                   );
                   return;
                 }

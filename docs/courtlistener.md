@@ -37,9 +37,12 @@ Live requests remain subject to CourtListener's API limits.
 
 Set `COURTLISTENER_BULK_DATA_ENABLED=true` to make Mike try local Supabase and
 R2 data before falling back to CourtListener's API. CourtListener is then
-installed for every user without a token, and its **Manage** dialog reads
-"Bulk data installed and in use". A user's own token still adds the live API
-fallback and opinion search:
+installed for every user without a token, and while it is switched on its
+**Manage** dialog reads "Bulk data installed and in use". Switched off without
+a token of the user's own, it moves back to **Discover**, where **Add** turns
+it on again (as it does when the organization supplies the token). A user's
+own token still adds the live API fallback and opinion search, and keeps the
+connector under **Installed** while it is off:
 
 - Citation metadata is read from `public.courtlistener_citation_index`.
 - Case-cluster metadata is read from

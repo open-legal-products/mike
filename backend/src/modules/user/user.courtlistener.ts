@@ -26,10 +26,16 @@ export async function courtListenerConnectorStatus(
     const source = keys.courtlistener ? keys.sources.courtlistener : null;
     const tokenSource = source === "user" || source === "org" ? source : null;
     const bulkData = courtlistenerBulkDataEnabled();
+    const ownToken = !!connection.token;
     return {
         enabled: connection.enabled,
-        installed: !!tokenSource || bulkData,
-        ownToken: !!connection.token,
+        // Listed under Installed while it is on and lookups can run, or while
+        // the user has a token of their own here to manage. Switched off with
+        // nothing of theirs saved, it goes back to Discover: the bulk index or
+        // the organization's token was never something they added.
+        installed:
+            ownToken || (connection.enabled && (!!tokenSource || bulkData)),
+        ownToken,
         tokenSource,
         bulkData,
     };

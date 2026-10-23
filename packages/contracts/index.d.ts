@@ -616,7 +616,11 @@ export interface GoogleWorkspaceStatus {
 export interface CourtListenerConnectorStatus {
     /** The workspace's on/off switch for US case law research. */
     enabled: boolean;
-    /** Lookups can run: a usable token here, or the deployment's bulk index. */
+    /**
+     * Listed under Installed: switched on with a usable token here (the
+     * user's or the organization's) or the deployment's bulk index, or the
+     * user has saved their own token here. Otherwise it is offered in Discover.
+     */
     installed: boolean;
     /** The user saved their own token for this workspace. */
     ownToken: boolean;

@@ -69,6 +69,42 @@ describe("CourtListener connector status", () => {
             bulkData: true,
         });
     });
+
+    it("goes back to Discover when switched off with nothing of the user's saved", async () => {
+        vi.stubEnv("COURTLISTENER_BULK_DATA_ENABLED", "true");
+        store.loadCourtListenerConnection.mockResolvedValue({ enabled: false, token: null });
+        expect(await courtListenerConnectorStatus(db, personal)).toMatchObject({
+            enabled: false,
+            installed: false,
+            bulkData: true,
+        });
+
+        vi.unstubAllEnvs();
+        store.getEffectiveApiKeyStatus.mockResolvedValue(keyStatus("org"));
+        expect(await courtListenerConnectorStatus(db, inFirm)).toMatchObject({
+            enabled: false,
+            installed: false,
+            tokenSource: "org",
+        });
+    });
+
+    it("stays installed while switched off when the user saved a token here", async () => {
+        store.loadCourtListenerConnection.mockResolvedValue({ enabled: false, token: "t" });
+        // Even where the organization keeps personal tokens out of play.
+        store.getEffectiveApiKeyStatus.mockResolvedValue(keyStatus(null));
+        expect(await courtListenerConnectorStatus(db, inFirm)).toMatchObject({
+            installed: true,
+            ownToken: true,
+            tokenSource: null,
+        });
+    });
+
+    it("is not installed when switched on with nothing to answer lookups", async () => {
+        expect(await courtListenerConnectorStatus(db, personal)).toMatchObject({
+            enabled: true,
+            installed: false,
+        });
+    });
 });
 
 describe("CourtListener connector changes", () => {

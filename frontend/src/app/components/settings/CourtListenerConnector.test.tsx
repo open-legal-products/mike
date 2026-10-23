@@ -256,6 +256,14 @@ describe("CourtListenerTokenModal", () => {
         expect(screen.getByText("Bulk data installed and in use")).toBeTruthy();
     });
 
+    it("does not call the bulk data in use while CourtListener is off", async () => {
+        api.get.mockResolvedValue(
+            status({ installed: true, bulkData: true, enabled: false, ownToken: true }),
+        );
+        await renderModal({ onClose: vi.fn() });
+        expect(screen.queryByText("Bulk data installed and in use")).toBeNull();
+    });
+
     it("renders nothing while closed", async () => {
         await renderModal({ onClose: vi.fn(), open: false });
         expect(screen.queryByTestId("courtlistener-key-state")).toBeNull();

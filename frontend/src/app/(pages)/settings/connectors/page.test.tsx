@@ -88,6 +88,7 @@ const courtListener = vi.hoisted(() => ({
     installed: false,
     enabled: true,
     setEnabled: vi.fn(),
+    status: null as null | { tokenSource: "user" | "org" | null; bulkData: boolean },
     workspaces: [] as (string | undefined)[],
 }));
 vi.mock("@/app/components/settings/CourtListenerConnector", () => ({
@@ -99,7 +100,6 @@ vi.mock("@/app/components/settings/CourtListenerConnector", () => ({
         courtListener.workspaces.push(workspace);
         return {
             ...courtListener,
-            status: null,
             busy: false,
             saveToken: vi.fn(),
             deleteToken: vi.fn(),
@@ -1580,6 +1580,7 @@ describe("ConnectorsPage CourtListener", () => {
         vi.mocked(listMcpConnectors).mockResolvedValue([]);
         courtListener.installed = false;
         courtListener.loading = false;
+        courtListener.status = null;
     });
 
     afterEach(() => {
@@ -1587,6 +1588,21 @@ describe("ConnectorsPage CourtListener", () => {
     });
 
     const discover = () => within(screen.getByRole("region", { name: "Discover" }));
+
+    it.each([
+        ["the deployment's bulk data", { tokenSource: null, bulkData: true }],
+        ["the organization's token", { tokenSource: "org", bulkData: false }],
+    ] as const)("switches CourtListener back on from Discover when %s needs no token", async (_case, status) => {
+        courtListener.status = status;
+        courtListener.setEnabled.mockResolvedValue(undefined);
+        render(<ConnectorsPage />);
+        await act(flushMicrotasks);
+        await act(async () => {
+            fireEvent.click(discover().getByRole("button", { name: "Add CourtListener connector" }));
+        });
+        expect(courtListener.setEnabled).toHaveBeenCalledWith(true);
+        expect(screen.queryByRole("dialog", { name: "CourtListener token" })).toBeNull();
+    });
     const installed = () => within(screen.getByRole("region", { name: "Installed" }));
 
     it("offers CourtListener in Discover until it is installed, with no extra text", async () => {

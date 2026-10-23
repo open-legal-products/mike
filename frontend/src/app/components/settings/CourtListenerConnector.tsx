@@ -30,11 +30,12 @@ export function CourtListenerIcon() {
 
 /**
  * CourtListener as a connector in one workspace ("personal" or an
- * organization id; undefined is read as Personal). It is installed once the
- * workspace has a token (the user's own for this workspace, or the
- * organization's) or the deployment answers lookups from its bulk index. The
- * on/off switch and the user's own token are kept per workspace; the token is
- * managed in CourtListenerTokenModal.
+ * organization id; undefined is read as Personal). It is listed under
+ * Installed while it is switched on and has a token (the user's own for this
+ * workspace, or the organization's) or the deployment's bulk index, or while
+ * the user has saved a token of their own here; otherwise it is offered in
+ * Discover. The on/off switch and the user's own token are kept per
+ * workspace; the token is managed in CourtListenerTokenModal.
  *
  * Every action throws on failure, so the caller can route errors and MFA
  * challenges as it does for the other connectors.
@@ -111,8 +112,8 @@ export type CourtListenerConnector = ReturnType<
 /**
  * Add (no token yet) or Manage (token saved) dialog: the token field, Save,
  * and Delete for a token the user saved themselves in this workspace. When
- * the organization supplies a token, or the deployment answers lookups from
- * its bulk index, the dialog says so.
+ * the organization supplies a token, or the deployment's bulk index is in
+ * use (it is installed and CourtListener is on), the dialog says so.
  */
 export function CourtListenerTokenModal({
   open,
@@ -173,7 +174,7 @@ export function CourtListenerTokenModal({
                 CourtListener token, so your own token is optional.
               </p>
             )}
-            {status?.bulkData && (
+            {status?.bulkData && connector.enabled && (
               <p className="text-sm text-gray-500">
                 Bulk data installed and in use
               </p>
