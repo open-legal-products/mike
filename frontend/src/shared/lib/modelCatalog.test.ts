@@ -187,14 +187,9 @@ describe("noModelsReason", () => {
             enabled: false,
             source: "org",
         } as const;
-        const blocked = { allowPersonalKeys: false };
-        const allowed = { allowPersonalKeys: true };
 
-        it("says the organization has set nothing up, and whether a member's own key would do", () => {
-            expect(noModelsReason(state({}), {}, blocked)).toBe("org-api-keys");
-            expect(noModelsReason(state({}), {}, allowed)).toBe(
-                "org-api-keys-or-own",
-            );
+        it("says the organization has set nothing up", () => {
+            expect(noModelsReason(state({}), {}, true)).toBe("org-api-keys");
         });
 
         it("points at the organization's admins when its key has no models added", () => {
@@ -202,21 +197,9 @@ describe("noModelsReason", () => {
                 noModelsReason(
                     state({ openrouter: orgOn }),
                     { openrouter: [] },
-                    blocked,
+                    true,
                 ),
             ).toBe("org-router-models");
-        });
-
-        it("keeps a member's own router their own to fix", () => {
-            // Personal keys are allowed and this one is the member's: the
-            // list it lacks is theirs, in Bring Your Own Keys.
-            expect(
-                noModelsReason(
-                    state({ openrouter: on }),
-                    { openrouter: [] },
-                    allowed,
-                ),
-            ).toBe("router-models");
         });
 
         it("prefers the organization's cause when both have an empty router", () => {
@@ -224,18 +207,14 @@ describe("noModelsReason", () => {
                 noModelsReason(
                     state({ openrouter: on, bedrock: orgOn }),
                     { openrouter: [], bedrock: [] },
-                    allowed,
+                    true,
                 ),
             ).toBe("org-router-models");
         });
 
         it("says the organization switched its providers off", () => {
-            expect(noModelsReason(state({ claude: orgOff }), {}, blocked)).toBe(
+            expect(noModelsReason(state({ claude: orgOff }), {}, true)).toBe(
                 "org-providers-disabled",
-            );
-            // The member's own switched-off key is theirs to turn back on.
-            expect(noModelsReason(state({ claude: off }), {}, allowed)).toBe(
-                "providers-disabled",
             );
         });
 
@@ -249,7 +228,7 @@ describe("noModelsReason", () => {
         });
 
         it("stays generic while key state is unknown", () => {
-            expect(noModelsReason(null, {}, blocked)).toBe("api-keys");
+            expect(noModelsReason(null, {}, true)).toBe("api-keys");
         });
     });
 });

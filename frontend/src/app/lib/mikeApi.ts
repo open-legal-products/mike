@@ -1946,8 +1946,6 @@ export interface OrgApiKeySettings {
      * each provider whose key it holds, their own for the rest.
      */
     effective_router_models: Record<string, string[]>;
-    /** Whether a member's own key is used where the organization has none. */
-    allow_personal_api_keys: boolean;
     /** Whether the caller may change any of this (owners and admins). */
     can_manage: boolean;
 }
@@ -2003,17 +2001,6 @@ export async function setOrgApiKeyEnabled(
             body: JSON.stringify({ enabled }),
         },
     );
-}
-
-export async function setOrgPersonalApiKeysAllowed(
-    orgId: string,
-    allowed: boolean,
-): Promise<OrgApiKeySettings> {
-    return apiRequest<OrgApiKeySettings>(`/orgs/${orgId}/api-keys/policy`, {
-        method: "PUT",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ allow_personal_api_keys: allowed }),
-    });
 }
 
 export async function listOrgMembers(orgId: string): Promise<OrgMember[]> {
