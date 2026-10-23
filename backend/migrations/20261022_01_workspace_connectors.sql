@@ -263,7 +263,8 @@ grant select, insert, update, delete
   to service_role;
 
 -- Copy each person's switch and token to Personal and to every team
--- organization they belong to. Rows that already exist are left alone, so a
+-- organization they belong to. A token the person had switched off was not
+-- used, so it is not copied. Rows that already exist are left alone, so a
 -- re-run never overwrites a choice made since.
 insert into public.user_courtlistener_connections (
   user_id, org_id, enabled, encrypted_key, iv, auth_tag
@@ -292,7 +293,9 @@ cross join lateral (
 ) workspaces
 left join public.user_profiles profiles on profiles.user_id = people.user_id
 left join public.user_api_keys keys
-  on keys.user_id = people.user_id and keys.provider = 'courtlistener'
+  on keys.user_id = people.user_id
+  and keys.provider = 'courtlistener'
+  and keys.enabled
 where exists (select 1 from auth.users u where u.id = people.user_id)
 on conflict (user_id, org_id) do nothing;
 
