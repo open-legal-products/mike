@@ -535,19 +535,8 @@ export type NoModelsReason =
   | "router-models"
   | "providers-disabled"
   | "org-api-keys"
-  | "org-api-keys-or-own"
   | "org-router-models"
   | "org-providers-disabled";
-
-/**
- * The organization the caller is working in, when they are in one. Its keys
- * and model lists are set by its admins, so the fix for an empty picker is
- * usually theirs to make, not the member's.
- */
-export interface NoModelsOrganization {
-  /** Whether a member's own key is used where the organization has none. */
-  allowPersonalKeys: boolean;
-}
 
 /**
  * Why the model list is empty, so the warning can point at the fix:
@@ -557,24 +546,25 @@ export interface NoModelsOrganization {
  *   (GET /user/api-keys reports those as not configured, enabled: false);
  * - "api-keys": nothing usable is saved, or key state is unknown.
  *
- * Inside an `organization`, the same three causes name who can fix them:
+ * Inside an organization (`inOrganization`), whose keys and model lists its
+ * admins set, the same three causes name who can fix them:
  * - "org-router-models": the organization's key for a provider has no
  *   models added yet;
  * - "org-providers-disabled": the organization has switched its providers
  *   off;
- * - "org-api-keys" / "org-api-keys-or-own": the organization has set up no
- *   provider, and members' own keys are not / are allowed in its place.
- * A cause that sits with the member's own key (theirs to fix in Bring Your
- * Own Keys) keeps its personal reason.
+ * - "org-api-keys": the organization has set up no provider. A member's own
+ *   keys are never used in its place.
+ * A cause that sits with a key that is not the organization's keeps its
+ * personal reason.
  */
 export function noModelsReason(
   keys: ProviderKeyStates | null | undefined,
   selections: Partial<RouterSelections>,
-  organization?: NoModelsOrganization | null,
+  inOrganization = false,
 ): NoModelsReason {
   if (!keys) return "api-keys";
   const fromOrganization = (provider: string) =>
-    !!organization && keys[provider]?.source === "org";
+    inOrganization && keys[provider]?.source === "org";
   const routersWithoutModels = ROUTER_SLUGS.filter(
     (slug) =>
       isProviderAvailable(slug, keys) && (selections[slug]?.length ?? 0) === 0,
@@ -592,10 +582,7 @@ export function noModelsReason(
       ? "org-providers-disabled"
       : "providers-disabled";
   }
-  if (!organization) return "api-keys";
-  return organization.allowPersonalKeys
-    ? "org-api-keys-or-own"
-    : "org-api-keys";
+  return inOrganization ? "org-api-keys" : "api-keys";
 }
 
 export const NO_MODELS_MESSAGES: Record<NoModelsReason, string> = {
@@ -611,8 +598,6 @@ export const NO_MODELS_MESSAGES: Record<NoModelsReason, string> = {
     "Your organization has turned its model providers off. Ask an organization admin to turn one back on in Organization.",
   "org-api-keys":
     "Your organization has not set up a model provider yet. Ask an organization admin to add one in Organization.",
-  "org-api-keys-or-own":
-    "Your organization has not set up a model provider yet. Ask an organization admin to add one in Organization, or add your own API key in Bring Your Own Keys.",
 };
 
 /** Whether the fix for an empty picker sits with the organization's admins. */

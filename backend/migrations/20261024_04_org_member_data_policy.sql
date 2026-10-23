@@ -1,4 +1,4 @@
--- Migration date: 2026-10-23
+-- Migration date: 2026-10-24
 --
 -- Whether an organization's members may export, or bulk-delete, their own
 -- work in it from Settings > Privacy & Data.

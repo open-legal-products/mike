@@ -49,12 +49,6 @@ export type OrgApiKeySettings = {
      * each provider whose key it holds, their own for the rest.
      */
     effective_router_models: RouterModelSelections;
-    /**
-     * Whether a member's own key is used for a provider the organization has
-     * no key for. When false, work in the organization never runs on a
-     * personal key.
-     */
-    allow_personal_api_keys: boolean;
     /** Whether the caller may change any of this. */
     can_manage: boolean;
 };
@@ -67,7 +61,7 @@ async function readSettings(
 ): Promise<OrgResult<{ settings: OrgApiKeySettings }>> {
     const { data, error } = await db
         .from("organizations")
-        .select("allow_personal_api_keys")
+        .select("id")
         .eq("id", orgId)
         .maybeSingle();
     if (error) return { ok: false, kind: "db_error", detail: error.message };
@@ -87,9 +81,6 @@ async function readSettings(
                 effective,
                 router_models: routerModels,
                 effective_router_models: effectiveRouterModels,
-                allow_personal_api_keys:
-                    (data as { allow_personal_api_keys?: boolean })
-                        .allow_personal_api_keys !== false,
                 can_manage: canManage,
             },
         };
@@ -281,52 +272,6 @@ export async function saveOrgRouterModels(
             provider: params.provider,
             model_count: models.length,
         },
-    });
-    return readSettings(db, params.orgId, params.actorId, true);
-}
-
-/**
- * Decide whether members' own keys may be used for work in the
- * organization. Turning it off is how a firm makes sure its matters only
- * ever run on accounts it holds.
- */
-export async function setOrgPersonalApiKeysAllowed(
-    db: Db,
-    params: {
-        actorId: string;
-        actorEmail?: string | null;
-        orgId: string;
-        allowed: unknown;
-    },
-): Promise<OrgResult<{ settings: OrgApiKeySettings }>> {
-    const role = await getOrgRole(params.actorId, params.orgId, db);
-    if (!role) return { ok: false, kind: "not_found" };
-    if (!isOrgAdmin(role)) return { ok: false, kind: "forbidden" };
-    if (typeof params.allowed !== "boolean")
-        return {
-            ok: false,
-            kind: "validation",
-            detail: "allow_personal_api_keys must be true or false",
-        };
-
-    const { data, error } = await db
-        .from("organizations")
-        .update({
-            allow_personal_api_keys: params.allowed,
-            updated_at: new Date().toISOString(),
-        })
-        .eq("id", params.orgId)
-        .select("id");
-    if (error) return { ok: false, kind: "db_error", detail: error.message };
-    if (!data?.length) return { ok: false, kind: "not_found" };
-
-    await recordAudit(db, {
-        userId: params.actorId,
-        userEmail: params.actorEmail ?? null,
-        action: params.allowed
-            ? "org.personal_api_keys.allowed"
-            : "org.personal_api_keys.blocked",
-        detail: { org_id: params.orgId },
     });
     return readSettings(db, params.orgId, params.actorId, true);
 }

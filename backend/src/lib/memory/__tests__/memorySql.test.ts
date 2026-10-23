@@ -563,7 +563,7 @@ describe("per-workspace memory SQL", () => {
 });
 
 const scopedDeletionMigration = readFileSync(
-  resolve(backendRoot, "migrations/20261023_01_workspace_scoped_data_deletion.sql"),
+  resolve(backendRoot, "migrations/20261024_02_workspace_scoped_data_deletion.sql"),
   "utf8",
 );
 

@@ -1,4 +1,4 @@
--- Migration date: 2026-10-23
+-- Migration date: 2026-10-24
 --
 -- Settings > Privacy & Data now deletes, and exports, one workspace at a
 -- time by each row's org_id. A chat, tabular review or document inside a
