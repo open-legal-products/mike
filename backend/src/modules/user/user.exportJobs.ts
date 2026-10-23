@@ -21,7 +21,9 @@ import { downloadFilenameForVersion, loadActiveVersion } from "../../lib/documen
 import { downloadFile, uploadFile } from "../../lib/storage";
 import { type Db, type DbJob } from "../../lib/dbq/types";
 import { buildMemoryArchive } from "../../lib/memory/archive";
-import { JsonExportType, MAX_ZIP_EXPORT_DOCUMENTS, ExportType, EXPORT_TYPES } from "./user.exportContracts";
+import { NonRetryableJobError } from "../../lib/dbq/runner";
+import { memberDataActionAllowed } from "../orgs/orgs.service";
+import { JsonExportType, MAX_ZIP_EXPORT_DOCUMENTS, ExportType, EXPORT_TYPES, isWorkspaceExportType } from "./user.exportContracts";
 
 /** One finished artifact, ready to park in storage. */
 type ExportArtifact = {
@@ -42,16 +44,17 @@ async function buildJsonExport(
     userId: string,
     userEmail: string | null,
     type: JsonExportType,
+    orgId: string | null,
 ): Promise<ExportArtifact> {
     const data =
         type === "account"
-            ? await buildUserAccountExport(db, userId, userEmail)
+            ? await buildUserAccountExport(db, userId, userEmail, orgId)
             : type === "chats"
-              ? await buildUserChatsExport(db, userId, userEmail)
-              : await buildUserTabularReviewsExport(db, userId, userEmail);
+              ? await buildUserChatsExport(db, userId, userEmail, orgId)
+              : await buildUserTabularReviewsExport(db, userId, userEmail, orgId);
     return {
         body: Buffer.from(JSON.stringify(data, null, 2), "utf8"),
-        filename: userExportFilename(type, userId),
+        filename: userExportFilename(type, userId, orgId),
         contentType: "application/json",
     };
 }
@@ -158,10 +161,13 @@ async function buildMemoryZipExport(
     db: Db,
     userId: string,
     userEmail: string | null,
+    orgId: string | null,
 ): Promise<ExportArtifact> {
     return {
-        body: await buildMemoryArchive(db, userId, userEmail),
-        filename: "mike-memory-export.zip",
+        body: await buildMemoryArchive(db, userId, userEmail, orgId),
+        filename: orgId
+            ? `mike-memory-export-${orgId.slice(0, 8)}.zip`
+            : "mike-memory-export.zip",
         contentType: "application/zip",
     };
 }
@@ -176,6 +182,22 @@ export async function handleExportBuild(
         throw new Error(`[export.build] malformed payload on job ${job.id}`);
     }
     const userEmail = (job.payload.userEmail as string | undefined) ?? null;
+    // The workspace a Settings export covers. A job queued before exports
+    // had one carries none and is built as Personal, never as every
+    // workspace.
+    const orgId =
+        typeof job.payload.orgId === "string" ? job.payload.orgId : null;
+    // Checked again now: membership, or the organization's policy, may have
+    // changed while the job waited.
+    if (
+        orgId &&
+        isWorkspaceExportType(type) &&
+        !(await memberDataActionAllowed(db, userId, orgId, "export"))
+    ) {
+        throw new NonRetryableJobError(
+            `[export.build] exports are not allowed for this member in ${orgId}`,
+        );
+    }
 
     const artifact =
         type === "audit-csv"
@@ -183,8 +205,8 @@ export async function handleExportBuild(
             : type === "documents-zip"
               ? await buildDocumentsZipExport(db, job, userId, userEmail)
               : type === "memory-zip"
-                ? await buildMemoryZipExport(db, userId, userEmail)
-              : await buildJsonExport(db, userId, userEmail, type);
+                ? await buildMemoryZipExport(db, userId, userEmail, orgId)
+              : await buildJsonExport(db, userId, userEmail, type, orgId);
 
     // Path is namespaced under the user (account erasure purges the prefix)
     // and keyed by job id (a re-run overwrites its own artifact — idempotent).

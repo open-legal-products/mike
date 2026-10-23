@@ -194,6 +194,8 @@ export const CODE_KINDS: Readonly<Record<string, UserErrorKind>> = {
     cookie_session_required: "unauthenticated",
     mfa_verification_required: "forbidden",
     untrusted_origin: "forbidden",
+    // An organization's owners have not allowed this in its workspace.
+    member_data_action_disabled: "forbidden",
     // Something else changed first
     review_running: "conflict",
     review_stale: "conflict",

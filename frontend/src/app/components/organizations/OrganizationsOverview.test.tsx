@@ -31,6 +31,7 @@ vi.mock("@/app/contexts/AuthContext", () => ({
   }),
 }));
 vi.mock("@/app/contexts/WorkspaceContext", () => ({
+  PERSONAL_WORKSPACE: "personal",
   useWorkspace: () => ({
     workspaceId: mocks.workspaceId,
     setWorkspace: mocks.setWorkspace,

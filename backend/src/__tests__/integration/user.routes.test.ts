@@ -1,4 +1,8 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
+
+// The data-deletion limiter counts every DELETE in this file, and the
+// per-workspace cases alone make more requests than its default allows.
+vi.hoisted(() => { process.env.RATE_LIMIT_DATA_DELETE_MAX = "1000"; });
 import request from "supertest";
 
 // ---------------------------------------------------------------------------
@@ -1793,12 +1797,13 @@ describe("user.routes", () => {
             ["/user/tabular-reviews", () => deleteAllUserTabularReviews],
             ["/user/memories", () => deleteUserPrivateMemories],
         ] as const)("DELETE %s deletes in the organization workspace named", async (path, helper) => {
+            // A member, in an organization whose owners allow bulk deletes.
             supabaseState.tables.org_members = {
-                data: { org_id: ORG_ID },
+                data: { org_id: ORG_ID, role: "member" },
                 error: null,
             };
             supabaseState.tables.organizations = {
-                data: { kind: "team" },
+                data: { kind: "team", allow_member_deletes: true },
                 error: null,
             };
 
@@ -1808,6 +1813,48 @@ describe("user.routes", () => {
 
             expect(res.status).toBe(204);
             expect(helper()).toHaveBeenCalledWith(expect.anything(), "u1", ORG_ID);
+        });
+
+        it.each([
+            ["/user/chats", () => deleteAllUserChats],
+            ["/user/projects", () => deleteUserProjects],
+            ["/user/tabular-reviews", () => deleteAllUserTabularReviews],
+            ["/user/memories", () => deleteUserPrivateMemories],
+        ] as const)("DELETE %s refuses a member when the organization has not allowed it", async (path, helper) => {
+            supabaseState.tables.org_members = {
+                data: { org_id: ORG_ID, role: "admin" },
+                error: null,
+            };
+            supabaseState.tables.organizations = {
+                data: { kind: "team", allow_member_deletes: false },
+                error: null,
+            };
+
+            const res = await request(app)
+                .delete(`${path}?workspace=${ORG_ID}`)
+                .set(...AUTH);
+
+            expect(res.status).toBe(403);
+            expect(res.body.code).toBe("member_data_action_disabled");
+            expect(helper()).not.toHaveBeenCalled();
+        });
+
+        it("DELETE /user/chats lets an owner delete whatever the organization allows members", async () => {
+            supabaseState.tables.org_members = {
+                data: { org_id: ORG_ID, role: "owner" },
+                error: null,
+            };
+            supabaseState.tables.organizations = {
+                data: { kind: "team", allow_member_deletes: false },
+                error: null,
+            };
+
+            const res = await request(app)
+                .delete(`/user/chats?workspace=${ORG_ID}`)
+                .set(...AUTH);
+
+            expect(res.status).toBe(204);
+            expect(deleteAllUserChats).toHaveBeenCalledWith(expect.anything(), "u1", ORG_ID);
         });
 
         it.each([

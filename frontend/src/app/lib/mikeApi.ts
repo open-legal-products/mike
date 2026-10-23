@@ -1797,6 +1797,13 @@ export interface Org {
     logo_updated_at?: string | null;
     /** Accepted roster size, so a card can say "N members" without a fetch. */
     member_count?: number;
+    /**
+     * Whether members other than owners may export, and bulk-delete, their
+     * own work in this organization from Settings > Privacy & Data. Absent
+     * from a server that predates them, which reads as not allowed.
+     */
+    allow_member_exports?: boolean;
+    allow_member_deletes?: boolean;
 }
 
 /**
@@ -2027,6 +2034,23 @@ export async function setOrgPersonalApiKeysAllowed(
         method: "PUT",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ allow_personal_api_keys: allowed }),
+    });
+}
+
+export interface OrgMemberDataPolicy {
+    allow_member_exports: boolean;
+    allow_member_deletes: boolean;
+}
+
+/** Whether members may export and bulk-delete their work here (owners only). */
+export async function setOrgMemberDataPolicy(
+    orgId: string,
+    policy: OrgMemberDataPolicy,
+): Promise<OrgMemberDataPolicy> {
+    return apiRequest<OrgMemberDataPolicy>(`/orgs/${orgId}/member-data-policy`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(policy),
     });
 }
 

@@ -408,6 +408,11 @@ create table if not exists public.organizations (
   -- Whether work in this organization may run on a member's own provider
   -- key when the organization has none for that provider (org_api_keys).
   allow_personal_api_keys boolean not null default true,
+  -- Whether members other than its owners may export, and bulk-delete, their
+  -- own work in this organization from Settings > Privacy & Data. Off until
+  -- an owner allows it.
+  allow_member_exports boolean not null default false,
+  allow_member_deletes boolean not null default false,
   -- When the organization's logo (org_logos) was last set, or null for none.
   -- Kept in step by a trigger on org_logos; clients read it to know whether
   -- there is a logo and when to fetch it again.
@@ -11093,5 +11098,6 @@ insert into public.schema_migrations (filename) values
   ('20261021_03_user_response_details.sql'),
   ('20261021_04_word_chat_message_playbook.sql'),
   ('20261022_01_workspace_connectors.sql'),
-  ('20261023_01_workspace_scoped_data_deletion.sql')
+  ('20261023_01_workspace_scoped_data_deletion.sql'),
+  ('20261023_02_org_member_data_policy.sql')
 on conflict (filename) do nothing;

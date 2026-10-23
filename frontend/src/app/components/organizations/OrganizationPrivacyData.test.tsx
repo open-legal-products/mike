@@ -18,6 +18,9 @@ const mocks = vi.hoisted(() => ({
   needsMfaVerification: vi.fn(async () => false),
   loadChats: vi.fn(async () => {}),
   setCurrentChatId: vi.fn(),
+  setOrg: vi.fn(),
+  refreshOrganizations: vi.fn(async () => {}),
+  setOrgMemberDataPolicy: vi.fn(),
 }));
 
 vi.mock("next/navigation", () => ({
@@ -32,11 +35,19 @@ vi.mock("@/app/contexts/ChatHistoryContext", () => ({
 vi.mock("./OrganizationSettingsShell", () => ({
   organizationSettingsHref: (orgId: string, section?: string) =>
     `/organizations/${orgId}/settings${section ? `/${section}` : ""}`,
-  useOrganizationSettings: () => ({ orgId: "org-1", org: mocks.org }),
+  useOrganizationSettings: () => ({
+    orgId: "org-1",
+    org: mocks.org,
+    setOrg: mocks.setOrg,
+  }),
+}));
+vi.mock("@/app/contexts/WorkspaceContext", () => ({
+  useWorkspace: () => ({ refreshOrganizations: mocks.refreshOrganizations }),
 }));
 vi.mock("@/app/lib/mikeApi", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/app/lib/mikeApi")>()),
   deleteOrgData: mocks.deleteOrgData,
+  setOrgMemberDataPolicy: mocks.setOrgMemberDataPolicy,
 }));
 vi.mock("@/app/components/popups/MfaVerificationPopup", () => ({
   MfaVerificationPopup: ({
@@ -214,5 +225,81 @@ describe("deleting organization data", () => {
       await screen.findByText("Failed to delete data. Please try again."),
     ).toBeInTheDocument();
     expect(screen.queryByText(/relation boom/)).not.toBeInTheDocument();
+  });
+});
+
+// Whether members may export, and bulk-delete, their own work: off until an
+// owner allows it.
+describe("OrganizationPrivacyData member data policy", () => {
+  it("starts with both off", () => {
+    render(<OrganizationPrivacyData />);
+
+    expect(
+      screen.getByRole("switch", { name: "Let members export their data" }),
+    ).toHaveAttribute("aria-checked", "false");
+    expect(
+      screen.getByRole("switch", { name: "Let members delete their data in bulk" }),
+    ).toHaveAttribute("aria-checked", "false");
+  });
+
+  it("saves one change, keeping the other setting, and refreshes the organizations", async () => {
+    const user = userEvent.setup();
+    mocks.org = { ...orgAs("owner"), allow_member_deletes: true };
+    mocks.setOrgMemberDataPolicy.mockResolvedValue({
+      allow_member_exports: true,
+      allow_member_deletes: true,
+    });
+    render(<OrganizationPrivacyData />);
+
+    await user.click(
+      screen.getByRole("switch", { name: "Let members export their data" }),
+    );
+
+    await waitFor(() =>
+      expect(mocks.setOrgMemberDataPolicy).toHaveBeenCalledWith("org-1", {
+        allow_member_exports: true,
+        allow_member_deletes: true,
+      }),
+    );
+    expect(mocks.setOrg).toHaveBeenCalledWith(
+      expect.objectContaining({ allow_member_exports: true }),
+    );
+    expect(mocks.refreshOrganizations).toHaveBeenCalled();
+  });
+
+  it("asks for a second factor and then sends the same change again", async () => {
+    const user = userEvent.setup();
+    mocks.setOrgMemberDataPolicy
+      .mockRejectedValueOnce(
+        new MikeApiError({
+          message: "MFA required",
+          status: 403,
+          code: "mfa_verification_required",
+        }),
+      )
+      .mockResolvedValueOnce({
+        allow_member_exports: false,
+        allow_member_deletes: true,
+      });
+    render(<OrganizationPrivacyData />);
+
+    await user.click(
+      screen.getByRole("switch", { name: "Let members delete their data in bulk" }),
+    );
+    await user.click(await screen.findByRole("button", { name: "Verify MFA" }));
+
+    await waitFor(() =>
+      expect(mocks.setOrgMemberDataPolicy).toHaveBeenCalledTimes(2),
+    );
+    expect(mocks.setOrgMemberDataPolicy).toHaveBeenLastCalledWith("org-1", {
+      allow_member_exports: false,
+      allow_member_deletes: true,
+    });
+  });
+
+  it("is not shown to an admin", () => {
+    mocks.org = orgAs("admin");
+    render(<OrganizationPrivacyData />);
+    expect(screen.queryByRole("switch")).toBeNull();
   });
 });

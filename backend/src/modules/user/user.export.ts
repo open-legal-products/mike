@@ -98,14 +98,15 @@ export async function startUserExport(
     if (orgId && !(await canReadOrgAudit(db, userId, orgId)))
         return { ok: false, forbidden: true, detail: "Only organization owners and admins can export its audit log." };
     try {
-        // Deduped per (user, type) for the whole-account exports: double
+        // Deduped per (user, type, workspace) for the Settings exports: double
         // clicks and impatient retries collapse into the already-running
         // build. The filtered exports opt out — two requests differing
         // only in their filters or selection are different artifacts.
+        // Each workspace's export is its own artifact.
         const dedupeKey =
             type === "audit-csv" || type === "documents-zip"
                 ? undefined
-                : `export:${userId}:${type}`;
+                : `export:${userId}:${type}:${typeof payload.orgId === "string" ? payload.orgId : "personal"}`;
         const out = await enqueueDbJob(db, {
             kind: "export.build",
             payload,

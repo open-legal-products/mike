@@ -49,6 +49,10 @@ import {
     sendWorkspaceFailure,
 } from "../../lib/workspace";
 import {
+    memberDataActionAllowed,
+    type MemberDataAction,
+} from "../orgs/orgs.service";
+import {
     setUserProfilePhoto,
     bootstrapUserProfile,
     completeUserOnboarding,
@@ -94,6 +98,7 @@ import {
     courtListenerConnectorStatus,
     setCourtListenerEnabled,
     setCourtListenerToken,
+    isWorkspaceExportType,
 } from "./user.service";
 
 export const userRouter = Router();
@@ -1499,15 +1504,18 @@ userRouter.delete(
     }),
 );
 
-// Settings' "Delete all" actions clear one workspace: `?workspace=` names it,
-// "personal" or an organization the caller belongs to. Absent means
-// Personal, as for the caller's memory, so a client that predates the
-// parameter never deletes beyond it. Answers for an unknown or removed
-// workspace itself and returns null.
-async function deletionWorkspace(
+// Settings' "Delete all" actions and exports work on one workspace:
+// `workspace` names it, "personal" or an organization the caller belongs to.
+// Absent means Personal, as for the caller's memory, so a client that
+// predates the parameter never reaches beyond it. In an organization the
+// action must also be one its owners allow members (owners always may).
+// Answers for an unknown workspace or a refused action itself and returns
+// null.
+async function dataActionWorkspace(
     db: Db,
     userId: string,
     raw: unknown,
+    action: MemberDataAction,
     res: Response,
 ): Promise<{ orgId: string | null } | null> {
     const resolved = await resolveWorkspaceFilter(db, userId, raw);
@@ -1515,12 +1523,21 @@ async function deletionWorkspace(
         sendWorkspaceFailure(res, resolved);
         return null;
     }
-    return {
-        orgId:
-            resolved.workspace && resolved.workspace !== PERSONAL_WORKSPACE
-                ? resolved.workspace
-                : null,
-    };
+    const orgId =
+        resolved.workspace && resolved.workspace !== PERSONAL_WORKSPACE
+            ? resolved.workspace
+            : null;
+    if (orgId && !(await memberDataActionAllowed(db, userId, orgId, action))) {
+        res.status(403).json({
+            detail:
+                action === "export"
+                    ? "This organization's owners have not allowed members to export their data."
+                    : "This organization's owners have not allowed members to delete their data in bulk.",
+            code: "member_data_action_disabled",
+        });
+        return null;
+    }
+    return { orgId };
 }
 
 // DELETE /user/chats?workspace=
@@ -1531,7 +1548,7 @@ userRouter.delete(
     asyncRoute(async (req, res) => {
         const userId = res.locals.userId as string;
         const db = createServerSupabase();
-        const workspace = await deletionWorkspace(db, userId, req.query.workspace, res);
+        const workspace = await dataActionWorkspace(db, userId, req.query.workspace, "delete", res);
         if (!workspace) return;
         const result = await deleteUserChats(db, userId, workspace.orgId);
         if (!result.ok) return void sendInternalError(res, result.error);
@@ -1547,7 +1564,7 @@ userRouter.delete(
     asyncRoute(async (req, res) => {
         const userId = res.locals.userId as string;
         const db = createServerSupabase();
-        const workspace = await deletionWorkspace(db, userId, req.query.workspace, res);
+        const workspace = await dataActionWorkspace(db, userId, req.query.workspace, "delete", res);
         if (!workspace) return;
         const result = await deleteUserProjectsData(db, userId, workspace.orgId);
         if (!result.ok) return void sendInternalError(res, result.error);
@@ -1563,7 +1580,7 @@ userRouter.delete(
     asyncRoute(async (req, res) => {
         const userId = res.locals.userId as string;
         const db = createServerSupabase();
-        const workspace = await deletionWorkspace(db, userId, req.query.workspace, res);
+        const workspace = await dataActionWorkspace(db, userId, req.query.workspace, "delete", res);
         if (!workspace) return;
         const result = await deleteUserTabularReviews(db, userId, workspace.orgId);
         if (!result.ok) return void sendInternalError(res, result.error);
@@ -1582,7 +1599,7 @@ userRouter.delete(
     asyncRoute(async (req, res) => {
         const userId = res.locals.userId as string;
         const db = createServerSupabase();
-        const workspace = await deletionWorkspace(db, userId, req.query.workspace, res);
+        const workspace = await dataActionWorkspace(db, userId, req.query.workspace, "delete", res);
         if (!workspace) return;
         const result = await deletePrivateMemories(db, userId, workspace.orgId);
         if (!result.ok) return void sendInternalError(res, result.error);
@@ -1629,10 +1646,23 @@ userRouter.post(
             });
 
         const db = createServerSupabase();
+        // Settings' exports cover one workspace, `params.workspace`.
+        let payload = parsed.payload;
+        if (isWorkspaceExportType(parsed.type)) {
+            const workspace = await dataActionWorkspace(
+                db,
+                userId,
+                body.params?.workspace,
+                "export",
+                res,
+            );
+            if (!workspace) return;
+            payload = { ...payload, orgId: workspace.orgId };
+        }
         const result = await startUserExport(db, {
             userId,
             type: parsed.type,
-            payload: parsed.payload,
+            payload,
         });
         if (!result.ok)
             return void res.status(result.forbidden ? 403 : 500).json({ detail: result.detail });

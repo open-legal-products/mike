@@ -136,7 +136,7 @@ export { resolveUserChatSelection } from "./user.chatSelection";
 export { handleAccountDelete } from "./user.accountJobs";
 export { handleExportBuild } from "./user.exportJobs";
 export { handleMcpRefreshToken, MCP_TOKEN_REFRESH_WINDOW_MS } from "./user.mcpJobs";
-export { MAX_ZIP_EXPORT_DOCUMENTS } from "./user.exportContracts";
+export { MAX_ZIP_EXPORT_DOCUMENTS, isWorkspaceExportType } from "./user.exportContracts";
 
 export { deleteProjectsByIds } from "./user.dataCleanup";
 export { describeAccountDeletionBlockers } from "./user.account";

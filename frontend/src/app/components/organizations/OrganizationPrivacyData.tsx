@@ -18,14 +18,19 @@ import {
 import { OrganizationSkeuoIcon } from "@/app/components/shared/AppSidebarSkeuoIcons";
 import { EmptyState } from "@/app/components/ui/empty-state";
 import { useChatHistoryContext } from "@/app/contexts/ChatHistoryContext";
+import { useWorkspace } from "@/app/contexts/WorkspaceContext";
 import {
   deleteOrgData,
   isMfaRequiredError,
+  setOrgMemberDataPolicy,
   type OrgDataKind,
+  type OrgMemberDataPolicy,
 } from "@/app/lib/mikeApi";
 import { isOrgOwner } from "@/app/lib/permissions";
+import { notifyError } from "@/app/lib/userFacingError";
 import { GlassCardUI } from "@/shared/ui/GlassCardUI";
 import { PillButtonUI } from "@/shared/ui/PillButtonUI";
+import { ToggleSwitchUI } from "@/shared/ui/ToggleSwitchUI";
 import {
   organizationSettingsHref,
   useOrganizationSettings,
@@ -90,6 +95,104 @@ const DELETE_ROWS: {
   },
 ];
 
+const POLICY_ROWS: {
+  key: keyof OrgMemberDataPolicy;
+  label: string;
+  description: (orgName: string) => string;
+}[] = [
+  {
+    key: "allow_member_exports",
+    label: "Let members export their data",
+    description: (orgName) =>
+      `Members can export their own chats, tabular reviews, projects and memory in ${orgName} from Settings › Privacy & Data. Owners always can.`,
+  },
+  {
+    key: "allow_member_deletes",
+    label: "Let members delete their data in bulk",
+    description: (orgName) =>
+      `Members can delete all of their own chats, tabular reviews, projects or memory in ${orgName} at once. Deleting one item at a time is not affected.`,
+  },
+];
+
+/**
+ * Whether members may export, and bulk-delete, their own work here. Both
+ * start off; when neither is allowed, members do not see Privacy & Data in
+ * this organization's workspace at all.
+ */
+function MemberDataPolicySection() {
+  const { orgId, org, setOrg } = useOrganizationSettings();
+  const { refreshOrganizations } = useWorkspace();
+  const [savingKey, setSavingKey] = useState<keyof OrgMemberDataPolicy | null>(
+    null,
+  );
+  // A change the server asked a second factor for, to send again after it.
+  const [pendingMfa, setPendingMfa] = useState<{
+    next: OrgMemberDataPolicy;
+    key: keyof OrgMemberDataPolicy;
+  } | null>(null);
+  const policy: OrgMemberDataPolicy = {
+    allow_member_exports: org?.allow_member_exports === true,
+    allow_member_deletes: org?.allow_member_deletes === true,
+  };
+
+  async function save(next: OrgMemberDataPolicy, key: keyof OrgMemberDataPolicy) {
+    setSavingKey(key);
+    try {
+      const saved = await setOrgMemberDataPolicy(orgId, next);
+      if (org) setOrg({ ...org, ...saved });
+      // Members' own Settings follow the organization list.
+      void refreshOrganizations();
+    } catch (error) {
+      if (isMfaRequiredError(error)) setPendingMfa({ next, key });
+      else
+        notifyError(error, {
+          action: "change what members can do with their data",
+          onRetry: () => void save(next, key),
+        });
+    } finally {
+      setSavingKey(null);
+    }
+  }
+
+  return (
+    <section aria-labelledby="org-privacy-members" className="space-y-3">
+      <SettingsHeading id="org-privacy-members">Members&apos; data</SettingsHeading>
+      <GlassCardUI>
+        {POLICY_ROWS.map((row) => (
+          <SettingsRow key={row.key}>
+            <div className="space-y-1">
+              <SettingsLabel>{row.label}</SettingsLabel>
+              <SettingsDescription>
+                {row.description(org?.name ?? "this organization")}
+              </SettingsDescription>
+            </div>
+            <ToggleSwitchUI
+              checked={policy[row.key]}
+              aria-label={row.label}
+              disabled={!org || savingKey !== null}
+              onCheckedChange={(checked) =>
+                void save({ ...policy, [row.key]: checked }, row.key)
+              }
+              className="shrink-0"
+            />
+          </SettingsRow>
+        ))}
+      </GlassCardUI>
+      <MfaVerificationPopup
+        open={pendingMfa !== null}
+        onCancel={() => setPendingMfa(null)}
+        onVerified={() => {
+          const pending = pendingMfa;
+          setPendingMfa(null);
+          if (pending) void save(pending.next, pending.key);
+        }}
+        title="Two-factor verification required"
+        message="This setting is sensitive. Enter a code from your authenticator app to continue."
+      />
+    </section>
+  );
+}
+
 export function OrganizationPrivacyData() {
   const router = useRouter();
   const { orgId, org } = useOrganizationSettings();
@@ -148,6 +251,7 @@ export function OrganizationPrivacyData() {
 
   return (
     <div className="space-y-8">
+      {org && isOrgOwner(org.role) ? <MemberDataPolicySection /> : null}
       {/* The archive itself is a table of people and their work, so it
           lives with the roster; this is the way to it from here. */}
       {org && isOrgOwner(org.role) ? (

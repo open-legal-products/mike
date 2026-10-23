@@ -5,6 +5,7 @@ import { usePathname, useRouter } from "next/navigation";
 import { Loader2 } from "lucide-react";
 import { useAuth } from "@/app/contexts/AuthContext";
 import { useOrganizationInvitationCount } from "@/app/hooks/useOrganizationInvitationCount";
+import { useMemberDataActions } from "@/app/hooks/useMemberDataActions";
 import {
     SettingsShell,
     type SettingsShellTab,
@@ -59,6 +60,10 @@ export default function SettingsLayout({
     const invitationCount = useOrganizationInvitationCount(
         isAuthenticated && !authLoading ? user?.id : undefined,
     );
+    // Privacy & Data has nothing to offer a member of an organization whose
+    // owners allow neither exports nor bulk deletes, so it is not listed.
+    const { canExport, canDelete } = useMemberDataActions();
+    const hidePrivacyData = !canExport && !canDelete;
 
     useEffect(() => {
         if (!authLoading && !isAuthenticated) {
@@ -87,7 +92,9 @@ export default function SettingsLayout({
         <SettingsShell
             title="Settings"
             navLabel="Settings"
-            tabs={TABS.map((tab) =>
+            tabs={TABS.filter(
+                (tab) => !(hidePrivacyData && tab.id === "privacy-data"),
+            ).map((tab) =>
                 tab.id === "organizations" && invitationCount > 0
                     ? {
                           ...tab,

@@ -44,6 +44,7 @@ import {
     saveOrgApiKey,
     setOrgApiKeyEnabled,
     setOrgPersonalApiKeysAllowed,
+    setOrgMemberDataPolicy,
     getOrgLogo,
     saveOrgLogo,
     removeOrgLogo,
@@ -481,6 +482,26 @@ orgsRouter.put(
         });
         if (!result.ok) return sendOrgFailure(res, result);
         res.json(result.settings);
+    }),
+);
+
+// PUT /orgs/:orgId/member-data-policy — whether members may export, and
+// bulk-delete, their own work in the organization (owners only).
+orgsRouter.put(
+    "/:orgId/member-data-policy",
+    requireOrgAuth,
+    requireMfaIfEnrolled,
+    asyncRoute(async (req, res) => {
+        const db = createServerSupabase();
+        const result = await setOrgMemberDataPolicy(db, {
+            actorId: res.locals.userId as string,
+            actorEmail: res.locals.userEmail as string | undefined,
+            orgId: req.params.orgId,
+            allowExports: req.body?.allow_member_exports,
+            allowDeletes: req.body?.allow_member_deletes,
+        });
+        if (!result.ok) return sendOrgFailure(res, result);
+        res.json(result.policy);
     }),
 );
 

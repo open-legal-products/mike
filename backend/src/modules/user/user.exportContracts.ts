@@ -12,6 +12,22 @@ export const EXPORT_TYPES = [
 
 export type ExportType = (typeof EXPORT_TYPES)[number];
 
+/**
+ * The exports Settings > Privacy & Data offers. Each covers one workspace,
+ * named by `params.workspace`, and in an organization needs its owners to
+ * allow members to export.
+ */
+const WORKSPACE_EXPORT_TYPES = [
+    "account",
+    "chats",
+    "tabular-reviews",
+    "memory-zip",
+] as const satisfies readonly ExportType[];
+
+export function isWorkspaceExportType(type: ExportType): boolean {
+    return (WORKSPACE_EXPORT_TYPES as readonly ExportType[]).includes(type);
+}
+
 /** The whole-account JSON exports: one artifact per (user, type). */
 const JSON_EXPORT_TYPES = ["account", "chats", "tabular-reviews"] as const;
 

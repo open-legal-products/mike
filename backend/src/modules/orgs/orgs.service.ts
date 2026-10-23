@@ -59,6 +59,12 @@ export {
 
 export { deleteOrgContent } from "./orgs.dataCleanup";
 export {
+    memberDataActionAllowed,
+    setOrgMemberDataPolicy,
+    type MemberDataAction,
+    type OrgMemberDataPolicy,
+} from "./orgs.memberDataPolicy";
+export {
     listDepartureArchives, listDepartures, resolveDepartureArchive, resolveDepartureArchives,
     expireDepartureArchives,
 } from "./orgs.retention";

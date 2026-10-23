@@ -37,7 +37,13 @@ vi.mock("@/app/contexts/ChatHistoryContext", () => ({
 // default outside a provider, where the page deletes in Personal.
 const workspaceState = vi.hoisted(() => ({
     workspaceId: null as string | null,
-    activeOrganization: null as { id: string; name: string } | null,
+    activeOrganization: null as {
+        id: string;
+        name: string;
+        role?: string;
+        allow_member_exports?: boolean;
+        allow_member_deletes?: boolean;
+    } | null,
     organizations: [] as { id: string; name: string }[] | null,
 }));
 
@@ -100,7 +106,9 @@ describe("privacy-data async exports", () => {
         await waitFor(() =>
             expect(mockedDownload).toHaveBeenCalledWith("job-9"),
         );
-        expect(mockedStart).toHaveBeenCalledWith("account");
+        expect(mockedStart).toHaveBeenCalledWith("account", {
+            workspace: "personal",
+        });
         expect(mockedStatus).toHaveBeenCalledTimes(2);
     });
 
@@ -133,7 +141,9 @@ describe("privacy-data async exports", () => {
             screen.getByRole("button", { name: "Retry" }),
         ).toBeInTheDocument();
         expect(alertSpy).not.toHaveBeenCalled();
-        expect(mockedStart).toHaveBeenCalledWith("chats");
+        expect(mockedStart).toHaveBeenCalledWith("chats", {
+            workspace: "personal",
+        });
         expect(mockedDownload).not.toHaveBeenCalled();
         clearToasts();
     });
@@ -159,7 +169,9 @@ describe("privacy-data async exports", () => {
         await waitFor(() =>
             expect(mockedDownload).toHaveBeenCalledWith("job-memory"),
         );
-        expect(mockedStart).toHaveBeenCalledWith("memory-zip");
+        expect(mockedStart).toHaveBeenCalledWith("memory-zip", {
+            workspace: "personal",
+        });
     });
 
     it("confirms and deletes app and private-project memory", async () => {
@@ -204,7 +216,12 @@ describe("privacy-data async exports", () => {
 
     it("deletes in the active organization only, and says so", async () => {
         workspaceState.workspaceId = "org-1";
-        workspaceState.activeOrganization = { id: "org-1", name: "Acme LLP" };
+        workspaceState.activeOrganization = {
+            id: "org-1",
+            name: "Acme LLP",
+            role: "member",
+            allow_member_deletes: true,
+        };
         workspaceState.organizations = [workspaceState.activeOrganization];
         mockedDeleteChats.mockResolvedValue();
 
@@ -265,5 +282,64 @@ describe("privacy-data async exports", () => {
         expect(mockedDeleteMemories).toHaveBeenCalledOnce();
         expect(await screen.findByText("Delete all memory?")).toBeVisible();
         clearToasts();
+    });
+
+    it("exports the active organization's data when its owners allow members to", async () => {
+        workspaceState.workspaceId = "org-1";
+        workspaceState.activeOrganization = {
+            id: "org-1",
+            name: "Acme LLP",
+            role: "admin",
+            allow_member_exports: true,
+            allow_member_deletes: false,
+        };
+        workspaceState.organizations = [workspaceState.activeOrganization];
+        mockedStart.mockRejectedValue(new Error("stop after scheduling"));
+        vi.spyOn(console, "error").mockImplementation(() => {});
+
+        render(<PrivacyDataPage />);
+        expect(screen.getByText(/Exports data in Acme LLP only/)).toBeVisible();
+        // Bulk deletion is not this member's to do here.
+        expect(screen.queryByText("Delete data")).toBeNull();
+
+        await userEvent.click(
+            screen.getAllByRole("button", { name: "Export" })[0],
+        );
+        await waitFor(() =>
+            expect(mockedStart).toHaveBeenCalledWith("chats", {
+                workspace: "org-1",
+            }),
+        );
+    });
+
+    it("explains, rather than offering nothing, when the owners allow neither", async () => {
+        workspaceState.workspaceId = "org-1";
+        workspaceState.activeOrganization = {
+            id: "org-1",
+            name: "Acme LLP",
+            role: "member",
+        };
+        workspaceState.organizations = [workspaceState.activeOrganization];
+
+        render(<PrivacyDataPage />);
+
+        expect(screen.getByText("Managed by your organization")).toBeVisible();
+        expect(screen.queryByRole("button", { name: "Export" })).toBeNull();
+        expect(screen.queryByRole("button", { name: "Delete" })).toBeNull();
+    });
+
+    it("offers an organization's owners everything", async () => {
+        workspaceState.workspaceId = "org-1";
+        workspaceState.activeOrganization = {
+            id: "org-1",
+            name: "Acme LLP",
+            role: "owner",
+        };
+        workspaceState.organizations = [workspaceState.activeOrganization];
+
+        render(<PrivacyDataPage />);
+
+        expect(screen.getByText("Export data")).toBeVisible();
+        expect(screen.getByText("Delete data")).toBeVisible();
     });
 });

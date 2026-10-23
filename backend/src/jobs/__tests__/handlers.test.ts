@@ -69,6 +69,12 @@ vi.mock("../../lib/auditExport", async (importOriginal) => {
 const buildMemoryArchive = vi.fn(async (..._a: unknown[]) =>
     Buffer.from("memory-zip"),
 );
+// Whether the organization lets this member export; settled per test.
+const memberDataActionAllowed = vi.fn(async (..._a: unknown[]) => true);
+vi.mock("../../modules/orgs/orgs.service", async (importOriginal) => ({
+    ...(await importOriginal<typeof import("../../modules/orgs/orgs.service")>()),
+    memberDataActionAllowed: (...a: unknown[]) => memberDataActionAllowed(...a),
+}));
 vi.mock("../../lib/memory/archive", () => ({
     buildMemoryArchive: (...a: unknown[]) => buildMemoryArchive(...a),
 }));
@@ -482,10 +488,12 @@ describe("handleExportBuild", () => {
             }),
         );
 
+        // No workspace in the payload is Personal, never every workspace.
         expect(buildMemoryArchive).toHaveBeenCalledWith(
             db,
             "u1",
             "u@x.test",
+            null,
         );
         const [path, , contentType] = uploadFile.mock.calls[0];
         expect(path).toBe(
@@ -497,6 +505,38 @@ describe("handleExportBuild", () => {
             db,
             expect.objectContaining({ action: "export.memory" }),
         );
+    });
+
+    it("builds an organization's export when its owners still allow it", async () => {
+        memberDataActionAllowed.mockResolvedValueOnce(true);
+        const db = makeDb();
+        const out = await handleExportBuild(
+            db as never,
+            JOB("export.build", {
+                userId: "u1",
+                userEmail: "u@x.test",
+                type: "memory-zip",
+                orgId: "org-1",
+            }),
+        );
+
+        expect(memberDataActionAllowed).toHaveBeenCalledWith(db, "u1", "org-1", "export");
+        expect(buildMemoryArchive).toHaveBeenCalledWith(db, "u1", "u@x.test", "org-1");
+        expect(out.filename).toBe("mike-memory-export-org-1.zip");
+    });
+
+    it("fails an organization's export, without retrying, once its owners turn exports off", async () => {
+        memberDataActionAllowed.mockResolvedValueOnce(false);
+        buildUserAccountExport.mockClear();
+
+        await expect(
+            handleExportBuild(
+                makeDb() as never,
+                JOB("export.build", { userId: "u1", type: "account", orgId: "org-1" }),
+            ),
+        ).rejects.toMatchObject({ name: "NonRetryableJobError" });
+        expect(buildUserAccountExport).not.toHaveBeenCalled();
+        expect(uploadFile).not.toHaveBeenCalled();
     });
 
     it("builds the My Activity CSV from the job's stored filters", async () => {
