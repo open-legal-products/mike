@@ -350,12 +350,9 @@ function PrivacyData({
     }
   };
 
+  const personal = workspace === PERSONAL_WORKSPACE;
   const pendingDeleteCopy = pendingDeleteAction
-    ? deleteDataCopy(
-        pendingDeleteAction,
-        workspaceName,
-        workspace === PERSONAL_WORKSPACE,
-      )
+    ? deleteDataCopy(pendingDeleteAction, workspaceName, personal)
     : null;
 
   return (
@@ -497,8 +494,9 @@ function PrivacyData({
             <div className="space-y-1">
               <SettingsLabel>Delete all projects</SettingsLabel>
               <SettingsDescription>
-                Permanently delete all projects you own, including documents,
-                chats, and tabular reviews.
+                {personal
+                  ? "Permanently delete all projects you own, including documents, chats, and tabular reviews."
+                  : "Permanently delete all projects you created here, including documents, chats, and tabular reviews."}
               </SettingsDescription>
             </div>
             <PillButtonUI
@@ -517,8 +515,9 @@ function PrivacyData({
             <div className="space-y-1">
               <SettingsLabel>Delete all memory</SettingsLabel>
               <SettingsDescription>
-                Permanently delete your app memory and memories for private
-                projects you created.
+                {personal
+                  ? "Permanently delete your Personal memory and memories for private projects you created."
+                  : `Permanently delete your memory in ${workspaceName}.`}
               </SettingsDescription>
             </div>
             <PillButtonUI

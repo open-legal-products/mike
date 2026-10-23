@@ -191,6 +191,13 @@ describe("privacy-data async exports", () => {
         expect(
             screen.getByText(/Deletes data in Acme LLP only/),
         ).toBeVisible();
+        // The rows describe what is deleted here, not Personal's private projects.
+        expect(
+            screen.getByText("Permanently delete your memory in Acme LLP."),
+        ).toBeVisible();
+        expect(
+            screen.queryByText(/private projects you created/i),
+        ).not.toBeInTheDocument();
 
         await userEvent.click(
             screen.getAllByRole("button", { name: "Delete" })[0],
