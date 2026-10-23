@@ -411,6 +411,8 @@ describe("a personal organization", () => {
         ["get", "/orgs/mine/logo", undefined],
         ["put", "/orgs/mine/logo", { data_url: "data:image/png;base64,AAAA" }],
         ["delete", "/orgs/mine/logo", undefined],
+        ["get", "/orgs/mine/profile", undefined],
+        ["put", "/orgs/mine/profile", { group_name: "Mine" }],
         ["get", "/orgs/mine/resources", undefined],
         ["get", "/orgs/mine/members", undefined],
         ["patch", "/orgs/mine/members/owner-1", { role: "member" }],
@@ -1946,5 +1948,79 @@ describe("sendOrgFailure db_error", () => {
         expect(res.body.detail).toBe(
             "An organization must keep at least one owner.",
         );
+    });
+});
+
+// ---------------------------------------------------------------------------
+// Organization workspace profile
+// ---------------------------------------------------------------------------
+
+describe("organization workspace profile", () => {
+    const PROFILE = {
+        group_name: "Example Group",
+        headquarters_jurisdiction: "NL",
+        operating_jurisdictions: ["NL", "DE"],
+        fiscal_year_end: "12-31",
+        reporting_currency: "EUR",
+        group_structure: "Holding in NL with two operating subsidiaries.",
+        house_positions: "SECRET-HOUSE-POSITION",
+        standing_instructions: "Cite Dutch sources first.",
+        reviewed_on: "2026-10-18",
+    };
+
+    beforeEach(() => {
+        tables.org_profiles = [];
+    });
+
+    const putProfile = (body: unknown) =>
+        request(app).put("/orgs/org-1/profile").set(...AUTH).send(body as object);
+    const getProfile = () => request(app).get("/orgs/org-1/profile").set(...AUTH);
+
+    it("reads as empty until one is saved", async () => {
+        const res = await getProfile();
+        expect(res.status).toBe(200);
+        expect(res.body).toMatchObject({
+            group_name: null,
+            operating_jurisdictions: [],
+            house_positions: null,
+        });
+        expect(res.body).not.toHaveProperty("ok");
+    });
+
+    it("lets an owner save it and a member read it, without its text in the audit trail", async () => {
+        const saved = await putProfile(PROFILE);
+        expect(saved.status).toBe(200);
+        expect(saved.body).toMatchObject(PROFILE);
+        expect(tables.org_profiles).toHaveLength(1);
+        expect(tables.audit_events.at(-1)).toMatchObject({
+            action: "org.profile.updated",
+        });
+        expect(JSON.stringify(tables.audit_events)).not.toContain(
+            "SECRET-HOUSE-POSITION",
+        );
+
+        as("member-1", "member@firm.example");
+        const read = await getProfile();
+        expect(read.status).toBe(200);
+        expect(read.body).toMatchObject(PROFILE);
+    });
+
+    it("refuses a member's write", async () => {
+        as("member-1", "member@firm.example");
+        const res = await putProfile(PROFILE);
+        expect(res.status).toBe(403);
+        expect(tables.org_profiles).toEqual([]);
+    });
+
+    it("refuses an invalid profile with its reason", async () => {
+        const res = await putProfile({ ...PROFILE, reporting_currency: "euro" });
+        expect(res.status).toBe(400);
+        expect(res.body.detail).toMatch(/reporting_currency/);
+        expect(tables.org_profiles).toEqual([]);
+    });
+
+    it("is not found for someone outside the organization", async () => {
+        as("stranger-1", "stranger@else.example");
+        expect((await getProfile()).status).toBe(404);
     });
 });

@@ -77,7 +77,12 @@ export function organizationSettingsHref(
 }
 
 type OrganizationSettingsSection =
-  "general" | "members" | "audit" | "providers" | "privacy-data";
+  | "general"
+  | "members"
+  | "audit"
+  | "providers"
+  | "profile"
+  | "privacy-data";
 
 export function OrganizationSettingsProvider({
   orgId,
@@ -219,6 +224,17 @@ export function OrganizationSettingsFrame({
             },
           ]
         : []),
+      // Every member may read the profile (owners and admins edit it), once
+      // the caller's role is known.
+      ...(org !== null
+        ? [
+            {
+              id: "profile",
+              label: "Workspace profile",
+              href: organizationSettingsHref(orgId, "profile"),
+            },
+          ]
+        : []),
       // Its actions reach every member's work, so it is its owners' alone.
       ...(isOwner
         ? [
@@ -231,7 +247,7 @@ export function OrganizationSettingsFrame({
           ]
         : []),
     ],
-    [canManage, isOwner, orgId],
+    [canManage, isOwner, org, orgId],
   );
 
   return (

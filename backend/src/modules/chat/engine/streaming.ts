@@ -88,6 +88,7 @@ import {
 } from "./tools/documentOps";
 import { verifyCitations } from "./verifyCitations";
 import { buildMemoryTurn } from "../../../lib/memory/prompt";
+import { buildWorkspaceProfileTurn } from "../../../lib/orgProfile/prompt";
 
 export type { AssistantEvent } from "@mike/contracts";
 import type { AssistantEvent, AssistantErrorCode } from "@mike/contracts";
@@ -375,9 +376,11 @@ export async function runLLMStream(params: {
   const isSubagent = subagentRun !== undefined;
   const researchTools = includeResearchTools ? COURTLISTENER_TOOLS : [];
   // Account-owned credentials are enabled only in Personal.
+  // The conversation's team organization, or null in a personal workspace.
+  const teamOrgId = await teamOrgIdOf(db, orgId);
   const connectorTools =
     subagentRun?.connectorTools ??
-    ((await teamOrgIdOf(db, orgId)) === null
+    (teamOrgId === null
       ? [
           ...(await buildUserMcpTools(userId, db)),
           ...(await buildGoogleDriveTools(userId, db)),
@@ -445,8 +448,14 @@ export async function runLLMStream(params: {
     orgId,
     sharedAudience: memorySharedAudience,
   });
+  const profile = await buildWorkspaceProfileTurn({
+    db,
+    orgId: teamOrgId,
+    sharedAudience: memorySharedAudience,
+    systemPrompt: memory.systemPrompt,
+  });
   const systemPrompt = [
-    memory.systemPrompt,
+    profile.systemPrompt,
     ...(webSearch
       ? [
           WEB_SEARCH_SYSTEM_PROMPT,
@@ -474,6 +483,8 @@ export async function runLLMStream(params: {
     .filter((m) => m.role === "user" || m.content.trim().length > 0);
   // Before every real turn: see MemoryTurn for why it goes there.
   if (memory.message) chatMessages.unshift(memory.message);
+  // The organization's profile goes before memory: the most general context first.
+  if (profile.message) chatMessages.unshift(profile.message);
 
   const events: AssistantEvent[] = [];
   // One assistant turn produces at most one document_versions row per

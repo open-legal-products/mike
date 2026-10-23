@@ -47,6 +47,8 @@ import {
     getOrgLogo,
     saveOrgLogo,
     removeOrgLogo,
+    getOrgProfile,
+    saveOrgProfile,
     saveOrgRouterModels,
     normalizeOrgRouterSlug,
     listDepartureArchives,
@@ -253,6 +255,32 @@ orgsRouter.delete("/:orgId/logo", requireOrgAuth, asyncRoute(async (req, res) =>
     });
     if (!result.ok) return sendOrgFailure(res, result);
     res.json({ logo_updated_at: result.logo_updated_at });
+}));
+
+// GET /orgs/:orgId/profile — the workspace profile (any member).
+orgsRouter.get("/:orgId/profile", requireOrgAuth, asyncRoute(async (req, res) => {
+    const db = createServerSupabase();
+    const result = await getOrgProfile(db, {
+        actorId: res.locals.userId as string,
+        orgId: req.params.orgId,
+    });
+    if (!result.ok) return sendOrgFailure(res, result);
+    const { ok: _ok, ...profile } = result;
+    res.json(profile);
+}));
+
+// PUT /orgs/:orgId/profile — replace the workspace profile (owner or admin).
+orgsRouter.put("/:orgId/profile", requireOrgAuth, asyncRoute(async (req, res) => {
+    const db = createServerSupabase();
+    const result = await saveOrgProfile(db, {
+        actorId: res.locals.userId as string,
+        actorEmail: res.locals.userEmail as string | undefined,
+        orgId: req.params.orgId,
+        body: req.body,
+    });
+    if (!result.ok) return sendOrgFailure(res, result);
+    const { ok: _ok, ...profile } = result;
+    res.json(profile);
 }));
 
 // DELETE /orgs/:orgId/data/:kind — permanently delete one kind of content

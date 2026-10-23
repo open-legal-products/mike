@@ -269,7 +269,11 @@ it.each([
 });
 
 it("does not assemble account connectors for an organization conversation", async () => {
-  const fake = scriptedDb([{ table: "organizations", data: { kind: "team" } }]);
+  const fake = scriptedDb([
+    { table: "organizations", data: { kind: "team" } },
+    // A team conversation reads its workspace profile; none is stored here.
+    { table: "org_profiles", data: null },
+  ]);
   await runLLMStream({ ...baseParams(), db: fake.db, orgId: "firm" });
   expect(buildUserMcpTools).not.toHaveBeenCalled();
   expect(advertisedToolNames().some(name => /^(mcp_|google_drive_|gmail_|google_calendar_)/.test(name))).toBe(false);

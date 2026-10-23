@@ -807,6 +807,47 @@ create trigger org_logos_sync_updated_at
   after insert or update or delete on public.org_logos
   for each row execute procedure public.sync_org_logo_updated_at();
 
+-- An organization's workspace profile: facts about the organization and the
+-- positions and instructions its owners and admins write for the assistant.
+-- Chats in its workspace receive it as reference context (lib/orgProfile).
+create table if not exists public.org_profiles (
+  org_id uuid primary key references public.organizations(id) on delete cascade,
+  group_name text
+    constraint org_profiles_group_name_check
+    check (group_name is null or char_length(group_name) between 1 and 200),
+  headquarters_jurisdiction text
+    constraint org_profiles_headquarters_jurisdiction_check
+    check (headquarters_jurisdiction is null
+           or char_length(headquarters_jurisdiction) between 1 and 200),
+  operating_jurisdictions text[] not null default '{}'
+    constraint org_profiles_operating_jurisdictions_check
+    check (cardinality(operating_jurisdictions) <= 100
+           and array_position(operating_jurisdictions, null) is null),
+  fiscal_year_end text
+    constraint org_profiles_fiscal_year_end_check
+    check (fiscal_year_end is null or char_length(fiscal_year_end) between 1 and 20),
+  reporting_currency text
+    constraint org_profiles_reporting_currency_check
+    check (reporting_currency is null or reporting_currency ~ '^[A-Z]{3}$'),
+  group_structure text
+    constraint org_profiles_group_structure_check
+    check (group_structure is null or char_length(group_structure) between 1 and 4000),
+  house_positions text
+    constraint org_profiles_house_positions_check
+    check (house_positions is null or char_length(house_positions) between 1 and 4000),
+  standing_instructions text
+    constraint org_profiles_standing_instructions_check
+    check (standing_instructions is null
+           or char_length(standing_instructions) between 1 and 4000),
+  reviewed_on date,
+  -- Who saved it last. Provenance for the organization's admins; the profile
+  -- outlives the account.
+  updated_by uuid references auth.users(id) on delete set null,
+  updated_at timestamptz not null default now()
+);
+
+alter table public.org_profiles enable row level security;
+
 -- An organization's own model list for each "model list" provider. Where
 -- the organization holds the key (org_api_keys), this list decides which
 -- models it may run; a member's own list (user_router_models) still decides
@@ -8008,6 +8049,7 @@ revoke all on public.auth_handoff_tickets from anon, authenticated;
 revoke all on public.user_router_models from anon, authenticated;
 revoke all on public.org_router_models from anon, authenticated;
 revoke all on public.org_logos from anon, authenticated;
+revoke all on public.org_profiles from anon, authenticated;
 revoke all on public.user_mcp_connectors from anon, authenticated;
 revoke all on public.user_mcp_oauth_tokens from anon, authenticated;
 revoke all on public.user_mcp_oauth_states from anon, authenticated;
@@ -10984,5 +11026,6 @@ insert into public.schema_migrations (filename) values
   ('20261021_01_chat_subagent_runs.sql'),
   ('20261021_02_user_subagent_defaults.sql'),
   ('20261021_03_user_response_details.sql'),
-  ('20261021_04_word_chat_message_playbook.sql')
+  ('20261021_04_word_chat_message_playbook.sql'),
+  ('20261023_01_org_profiles.sql')
 on conflict (filename) do nothing;

@@ -1816,6 +1816,44 @@ export async function saveOrgLogo(
     });
 }
 
+/**
+ * An organization's workspace profile: facts about the organization and the
+ * positions and instructions its owners and admins write for the assistant.
+ * Chats in the organization's workspace receive it as reference context.
+ */
+export interface OrgProfile {
+    group_name: string | null;
+    headquarters_jurisdiction: string | null;
+    operating_jurisdictions: string[];
+    fiscal_year_end: string | null;
+    reporting_currency: string | null;
+    group_structure: string | null;
+    house_positions: string | null;
+    standing_instructions: string | null;
+    reviewed_on: string | null;
+    updated_at: string | null;
+}
+
+/** What a client sends: the profile without its server-set timestamp. */
+export type OrgProfileInput = Omit<OrgProfile, "updated_at">;
+
+/** The organization's workspace profile; empty fields when none is saved. */
+export async function getOrgProfile(orgId: string): Promise<OrgProfile> {
+    return apiRequest<OrgProfile>(`/orgs/${orgId}/profile`);
+}
+
+/** Replace the whole workspace profile (owners and admins). */
+export async function saveOrgProfile(
+    orgId: string,
+    profile: OrgProfileInput,
+): Promise<OrgProfile> {
+    return apiRequest<OrgProfile>(`/orgs/${orgId}/profile`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(profile),
+    });
+}
+
 export async function deleteOrgLogo(orgId: string): Promise<void> {
     await apiRequest(`/orgs/${orgId}/logo`, { method: "DELETE" });
 }

@@ -97,7 +97,7 @@ beforeEach(() => {
 });
 
 describe("the sections each role is offered", () => {
-  it("offers an owner General, Members, Bring Your Own Keys and Privacy & Data", async () => {
+  it("offers an owner General, Members, Bring Your Own Keys, Workspace profile and Privacy & Data", async () => {
     mocks.role = "owner";
     renderShell();
     await screen.findByText("section for Elite Law LLP");
@@ -106,22 +106,29 @@ describe("the sections each role is offered", () => {
       "Members",
       "Audit log",
       "Bring Your Own Keys",
+      "Workspace profile",
       "Privacy & Data",
     ]);
   });
 
-  it("offers an admin General, Members and Bring Your Own Keys, not Privacy & Data", async () => {
+  it("offers an admin General, Members, Bring Your Own Keys and Workspace profile, not Privacy & Data", async () => {
     mocks.role = "admin";
     renderShell();
     await screen.findByText("section for Elite Law LLP");
-    expect(sections()).toEqual(["General", "Members", "Audit log", "Bring Your Own Keys"]);
+    expect(sections()).toEqual([
+      "General",
+      "Members",
+      "Audit log",
+      "Bring Your Own Keys",
+      "Workspace profile",
+    ]);
   });
 
-  it("offers a member General and Members only", async () => {
+  it("offers a member General, Members and Workspace profile", async () => {
     mocks.role = "member";
     renderShell();
     await screen.findByText("section for Elite Law LLP");
-    expect(sections()).toEqual(["General", "Members"]);
+    expect(sections()).toEqual(["General", "Members", "Workspace profile"]);
   });
 
   it("does not offer Bring Your Own Keys before the caller's role is known", () => {
@@ -138,7 +145,7 @@ describe("the sections each role is offered", () => {
     mocks.role = "member";
     await act(() => latest.reload());
 
-    expect(sections()).toEqual(["General", "Members"]);
+    expect(sections()).toEqual(["General", "Members", "Workspace profile"]);
   });
 });
 

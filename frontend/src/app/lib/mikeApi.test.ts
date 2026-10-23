@@ -115,6 +115,8 @@ import {
     deleteOrgData,
     getOrgLogo,
     saveOrgLogo,
+    getOrgProfile,
+    saveOrgProfile,
     deleteOrgLogo,
     getOrgApiKeys,
     saveOrgApiKey,
@@ -223,6 +225,18 @@ import {
     importWorkflowAddon,
     listQuickActions,
 } from "./mikeApi";
+
+const PROFILE_INPUT = {
+    group_name: "Example Group",
+    headquarters_jurisdiction: "NL",
+    operating_jurisdictions: ["NL", "DE"],
+    fiscal_year_end: "12-31",
+    reporting_currency: "EUR",
+    group_structure: null,
+    house_positions: null,
+    standing_instructions: null,
+    reviewed_on: null,
+};
 
 const fetchMock = vi.fn();
 
@@ -3276,6 +3290,13 @@ describe("thin endpoint wrappers", () => {
         {
             name: "deleteOrgLogo", call: () => deleteOrgLogo("org-1"),
             url: "/orgs/org-1/logo", method: "DELETE",
+        },
+        {
+            name: "getOrgProfile", call: () => getOrgProfile("org-1"), url: "/orgs/org-1/profile",
+        },
+        {
+            name: "saveOrgProfile", call: () => saveOrgProfile("org-1", PROFILE_INPUT),
+            url: "/orgs/org-1/profile", method: "PUT", body: PROFILE_INPUT,
         },
         {
             name: "getOrgApiKeys", call: () => getOrgApiKeys("org-1"), url: "/orgs/org-1/api-keys",
