@@ -64,15 +64,24 @@ function defaultDeps(): ExtractionDeps {
  * that clears the last generation stamp releases it. Cells still queued keep
  * their stamp, so the lease is never released while work remains.
  */
+/**
+ * A single-cell job (regenerate) is a cell operation; a row job fills every
+ * outstanding column of the row. The worker's `failed` handler, which runs
+ * outside the job's scope, names the same operation.
+ */
+export function extractionJobOperation(
+    data: Pick<ExtractionJobData, "columnIndex">,
+): "tabular.cell" | "tabular.row" {
+    return data.columnIndex != null ? "tabular.cell" : "tabular.row";
+}
+
 export async function runExtractionJob(
     data: ExtractionJobData,
     deps: ExtractionDeps = defaultDeps(),
 ): Promise<void> {
     const { reviewId, userId, rowId, generationId, columnIndex } = data;
     const { db, publish } = deps;
-    // A single-cell job (regenerate) is a cell operation; a row job fills
-    // every outstanding column of the row.
-    setOperation(columnIndex != null ? "tabular.cell" : "tabular.row");
+    setOperation(extractionJobOperation(data));
 
     const leaseHeartbeat = generationId
         ? setInterval(() => {

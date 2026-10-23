@@ -101,8 +101,8 @@ async function signPendingFiles(
         file.expected_size_bytes,
         ttl,
       );
-      // storage.ts reported the signing failure with its cause; this names
-      // the same kind on the 503 the route answers with.
+      // A signing failure throws from storage.ts with its cause; null only
+      // means the store is not configured.
       if (!url)
         throw new AppError(
           "storage.signed_url_failed",

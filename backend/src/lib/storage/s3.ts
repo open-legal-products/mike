@@ -153,10 +153,18 @@ export function createS3StorageAdapter(): StorageAdapter {
 
     async downloadFile(key) {
       const abortSignal = AbortSignal.timeout(downloadTimeoutMs());
-      const response = (await client().send(
-        new GetObjectCommand({ Bucket: bucket, Key: key }),
-        { abortSignal },
-      )) as any;
+      let response: any;
+      try {
+        response = await client().send(
+          new GetObjectCommand({ Bucket: bucket, Key: key }),
+          { abortSignal },
+        );
+      } catch (error) {
+        // A missing object is an answer (null), the same translation as
+        // headFile: GET names it NoSuchKey. Anything else is a failure.
+        if ((error as { name?: unknown } | null)?.name === "NoSuchKey") return null;
+        throw error;
+      }
       if (!response.Body) return null;
       const stop = () => response.Body.destroy?.(abortSignal.reason);
       abortSignal.addEventListener("abort", stop, { once: true });

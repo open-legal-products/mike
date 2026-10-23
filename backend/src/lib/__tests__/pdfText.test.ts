@@ -68,24 +68,24 @@ describe("unreadable PDF", () => {
     ["for the model", extractPdfTextForModel, ""],
     ["as plain text", extractPdfText, ""],
     ["page count", countPagesWithoutText, null],
-  ])("%s: keeps the lenient contract and reports the parse failure once", async (_label, read, expected) => {
+  ])("%s: keeps the lenient contract and logs, without reporting, the user's unreadable file", async (_label, read, expected) => {
     const log = vi.spyOn(console, "warn").mockImplementation(() => undefined);
 
     expect(await read(notAPdf())).toBe(expected);
 
-    expect(mocks.reportError).toHaveBeenCalledOnce();
-    const [reported, context] = mocks.reportError.mock.calls[0]!;
-    expect(diagnosticErrorTags(reported)).toEqual({
+    // An unreadable PDF is the user's file, not a fault: the strict index
+    // path throws once per document (its job reports that); every lenient
+    // read of the same file only logs, so one bad upload is one event.
+    expect(mocks.reportError).not.toHaveBeenCalled();
+    // pdf.js prints its own warnings for a malformed file; ours is the one
+    // line that carries the kind.
+    const ours = log.mock.calls.filter(([message]) => String(message).startsWith("[pdf-text]"));
+    expect(ours).toHaveLength(1);
+    const [, logged] = ours[0]! as [string, { error: unknown }];
+    expect(diagnosticErrorTags(logged.error)).toEqual({
       error_kind: "extraction.pdf_parse_failed",
     });
-    expect(context).toMatchObject({
-      level: "warning",
-      tags: { file_type: "pdf" },
-    });
-    expect((reported as Error).cause).toBeInstanceOf(Error);
-    // The document's bytes and name never reach the report.
-    expect(JSON.stringify(context)).not.toContain("PRIVATE_NAME");
-    expect(log).toHaveBeenCalledWith(expect.any(String), reported);
+    expect((logged.error as Error).cause).toBeInstanceOf(Error);
     log.mockRestore();
   });
 

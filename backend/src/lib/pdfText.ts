@@ -11,7 +11,6 @@ export const STANDARD_FONT_DATA_URL = (() => {
 
 import { AppError } from "./appError";
 import { docxToPdf } from "./convert";
-import { reportError } from "./observability/sentry";
 import { orderTextItemLines } from "./pdfTextOrder";
 
 type PdfTextItem = {
@@ -250,17 +249,13 @@ type PdfReadResult =
  * strict index path throws instead, so its job runner reports it.
  */
 function reportUnreadablePdf(cause: unknown): void {
-  const failure = new AppError(
-    "extraction.pdf_parse_failed",
-    "pdf.js could not read the document",
-    { cause },
-  );
-  reportError(failure, {
-    level: "warning",
-    tags: { file_type: "pdf" },
+  // Logged, not reported: an unreadable PDF is the user's file (encrypted,
+  // truncated), and the strict index path throws once per document with
+  // the kind, which its job reports. Reporting here filed the same file on
+  // every lenient read, upload count, row and regenerate.
+  console.warn("[pdf-text] pdf.js could not read the document", {
+    error: new AppError("extraction.pdf_parse_failed", "pdf.js could not read the document", { cause }),
   });
-  // console.warn never reaches Sentry: the report above is the one event.
-  console.warn("[pdf-text] pdf.js could not read the document", failure);
 }
 
 /**

@@ -198,6 +198,10 @@ export async function docxToPdf(buffer: Buffer): Promise<Buffer> {
     return await convert(normalized, ".pdf", undefined);
   } catch (error) {
     if (error instanceof AppError) throw error;
+    // The library spawns soffice itself: a spawn failure is the converter
+    // missing or unexecutable, the same condition officeFileToPdf names.
+    const code = (error as { code?: unknown } | null)?.code;
+    if (code === "ENOENT" || code === "EACCES") throw converterUnavailable(error);
     throw new ConversionError(
       "conversion.failed",
       "conversion_failed",

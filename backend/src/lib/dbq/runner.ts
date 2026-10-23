@@ -164,7 +164,7 @@ export async function processClaimedJob(
                 last_error: `unknown job kind: ${job.kind}`,
             }),
         );
-        const unknownKind = new Error(`Unknown db_jobs kind: ${job.kind}`);
+        const unknownKind = new AppError("dbq.unknown_job_kind", `Unknown db_jobs kind: ${job.kind}`);
         reportError(unknownKind, {
             tags: { component: "dbq", job_kind: job.kind },
             extra: { job_id: job.id },
@@ -194,7 +194,7 @@ async function runClaimedJob(
     failureHooks: Readonly<Record<string, DbJobFailureHook>>,
 ): Promise<void> {
     try {
-        if (!handler) throw new Error(`unknown job kind: ${job.kind}`);
+        if (!handler) throw new AppError("dbq.unknown_job_kind", `unknown job kind: ${job.kind}`);
         const result = await handler(db, job);
         await fence(
             db.from("db_jobs").update({

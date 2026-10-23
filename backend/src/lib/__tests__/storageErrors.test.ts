@@ -138,33 +138,44 @@ describe("storage error logging", () => {
     }
   });
 
-  // The absorbed failures (the caller gets null) are reported here, once,
-  // with the storage kind and the SDK's error as the cause, and the console
-  // line carries the SAME object so the bridge files no second event.
-  it("reports and logs download failures with the object key and the kind", async () => {
-    const failure = Object.assign(new Error("download failed"), {
-      name: "NoSuchKey",
-    });
-    mocks.send.mockRejectedValue(failure);
+  // A missing object is an answer, not a failure: null, nothing reported.
+  it("answers null for an object the store does not have", async () => {
+    mocks.send.mockRejectedValue(
+      Object.assign(new Error("gone"), { name: "NoSuchKey" }),
+    );
     const log = vi.spyOn(console, "error").mockImplementation(() => undefined);
 
     await expect(
       downloadFile("documents/u1/d1/source.pdf"),
     ).resolves.toBeNull();
 
-    expect(mocks.reportError).toHaveBeenCalledOnce();
-    const [reported, context] = mocks.reportError.mock.calls[0]!;
-    expect(diagnosticErrorTags(reported)).toEqual({
+    expect(mocks.reportError).not.toHaveBeenCalled();
+    expect(log).not.toHaveBeenCalled();
+    log.mockRestore();
+  });
+
+  // A real failure is thrown once with the SDK's code on the cause; the
+  // caller's handler reports it. Logging and returning null here filed the
+  // failure twice (once from storage, once from the caller's bare throw).
+  it("throws download failures with the kind and the store's code, unlogged", async () => {
+    const failure = Object.assign(new Error("download failed"), {
+      name: "AccessDenied",
+    });
+    mocks.send.mockRejectedValue(failure);
+    const log = vi.spyOn(console, "error").mockImplementation(() => undefined);
+
+    const thrown = await downloadFile("documents/u1/d1/source.pdf").catch(
+      (error: unknown) => error,
+    );
+
+    expect(diagnosticErrorTags(thrown)).toEqual({
       error_kind: "storage.download_failed",
       storage_operation: "download",
-      failure_code: "NoSuchKey",
+      failure_code: "AccessDenied",
     });
-    expect(context).toMatchObject({ tags: { component: "storage" } });
-    expect(log).toHaveBeenCalledWith("[storage] downloadFile failed", {
-      key: "documents/u1/d1/source.pdf",
-      error: reported,
-    });
-    expect((reported as Error).cause).toBe(failure);
+    expect((thrown as Error).cause).toBe(failure);
+    expect(mocks.reportError).not.toHaveBeenCalled();
+    expect(log).not.toHaveBeenCalled();
     log.mockRestore();
   });
 
@@ -200,24 +211,19 @@ describe("storage error logging", () => {
           1_234,
         ),
     ],
-  ])("reports and logs %s failures with the object key and the kind", async (label, sign) => {
+  ])("throws %s failures with the kind and the cause, unlogged", async (_label, sign) => {
     const failure = new Error("signing failed");
     mocks.getSignedUrl.mockRejectedValue(failure);
     const log = vi.spyOn(console, "error").mockImplementation(() => undefined);
 
-    await expect(sign()).resolves.toBeNull();
+    const thrown = await sign().catch((error: unknown) => error);
 
-    expect(mocks.reportError).toHaveBeenCalledOnce();
-    const [reported, context] = mocks.reportError.mock.calls[0]!;
-    expect(diagnosticErrorTags(reported)).toEqual({
+    expect(diagnosticErrorTags(thrown)).toEqual({
       error_kind: "storage.signed_url_failed",
     });
-    expect(context).toMatchObject({ tags: { component: "storage" } });
-    expect(log).toHaveBeenCalledWith(`[storage] ${label} failed`, {
-      key: "documents/u1/d1/source.pdf",
-      error: reported,
-    });
-    expect((reported as Error).cause).toBe(failure);
+    expect((thrown as Error).cause).toBe(failure);
+    expect(mocks.reportError).not.toHaveBeenCalled();
+    expect(log).not.toHaveBeenCalled();
     log.mockRestore();
   });
 

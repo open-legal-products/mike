@@ -23,10 +23,10 @@ const HEX_ID = /^[0-9a-f]{16,32}$/i;
  */
 export const OPERATIONS = [
   'documents.upload', 'documents.upload.complete', 'documents.convert', 'documents.extract', 'documents.precompute_text',
-  'documents.open', 'documents.preview', 'documents.version', 'documents.edit', 'documents.delete', 'documents.directory',
+  'documents.open', 'documents.version', 'documents.edit', 'documents.delete', 'documents.directory',
   'upload_session.control', 'upload_session.storage',
   'chat.turn', 'chat.title', 'chat.subagent', 'chat.tool', 'chat.web_search', 'chat.mcp', 'project_chat.turn', 'word_chat.turn',
-  'tabular.cell', 'tabular.row', 'tabular.run', 'tabular.export', 'tabular.chat',
+  'tabular.cell', 'tabular.row', 'tabular.run', 'tabular.chat',
   'playbooks.import', 'playbooks.review', 'playbooks.save',
   'workflows.run', 'workflows.sync', 'quick_actions.run', 'audit.write',
   'google.drive', 'google.gmail', 'google.calendar',
@@ -39,26 +39,25 @@ export type Operation = (typeof OPERATIONS)[number];
 
 export const ERROR_KINDS = [
   'storage.head_failed', 'storage.upload_failed', 'storage.download_failed', 'storage.delete_failed', 'storage.copy_failed',
-  'storage.signed_url_failed', 'storage.not_configured', 'storage.object_missing', 'storage.blob_too_large',
+  'storage.signed_url_failed',
   'conversion.unavailable', 'conversion.timeout', 'conversion.failed', 'conversion.no_output',
-  'extraction.pdf_parse_failed', 'extraction.failed', 'extraction.empty',
-  'upload.session_invalid', 'upload.sealed_missing', 'upload.document_deleted', 'upload.document_changed', 'upload.manifest_invalid',
+  'extraction.pdf_parse_failed', 'extraction.failed',
+  'upload.session_invalid', 'upload.sealed_missing', 'upload.document_deleted', 'upload.document_changed',
   'chat.stream_failed', 'chat.provider_rejected', 'chat.provider_rate_limited', 'chat.provider_unavailable', 'chat.tool_failed',
   'chat.subagent_failed', 'chat.message_save_failed', 'chat.message_reserve_failed', 'chat.title_failed', 'chat.context_failed',
   'web_search.not_configured', 'web_search.rejected', 'web_search.failed', 'web_search.page_unreadable', 'web_search.api_error',
   'mcp.setup_failed', 'mcp.oauth_required', 'mcp.call_failed', 'mcp.call_rejected', 'mcp.decrypt_failed', 'mcp.blocked_destination',
   'google.auth_failed', 'google.api_failed', 'google.user_error', 'google.scope_missing',
   'tabular.generation_failed', 'tabular.prompt_failed', 'tabular.lease_lost', 'tabular.stream_failed',
-  'playbooks.request_invalid', 'playbooks.import_failed', 'playbooks.review_failed', 'playbooks.cleanup_failed',
+  'playbooks.request_invalid', 'playbooks.import_failed', 'playbooks.cleanup_failed',
   'memory.validation', 'memory.revision_conflict', 'memory.disabled', 'memory.job_superseded', 'memory.epoch_superseded',
   'memory.conversation_not_quiet', 'memory.consolidation_failed',
-  'dbq.deferred', 'dbq.non_retryable', 'dbq.unknown_job_kind', 'dbq.claim_failed', 'dbq.enqueue_failed', 'dbq.failure_hook_crashed',
-  'queue.enqueue_failed', 'queue.redis_unavailable',
+  'dbq.deferred', 'dbq.non_retryable', 'dbq.unknown_job_kind', 'dbq.enqueue_failed', 'dbq.failure_hook_crashed',
+  'queue.enqueue_failed',
   'auth.session_lookup_failed', 'auth.mfa_assurance_failed', 'auth.handoff_failed', 'auth.supabase_unavailable',
   'audit.write_failed', 'export.failed', 'account.delete_failed', 'user.api_key_failed',
-  'workflows.sync_failed', 'workflows.addon_failed', 'workflows.default_install_failed',
-  'word.document_read_failed', 'word.edit_apply_failed', 'word.edit_resolve_failed', 'word.session_failed',
-  'db.query_failed', 'db.rpc_failed', 'config.invalid', 'user_facing',
+  'workflows.sync_failed', 'workflows.addon_failed', 'workflows.default_install_failed', 'word.session_failed',
+  'db.query_failed', 'db.rpc_failed', 'user_facing',
 ] as const;
 export type ErrorKind = (typeof ERROR_KINDS)[number];
 
@@ -175,7 +174,9 @@ export function diagnosticErrorTags(error: unknown): Record<string, string | num
       if (providerError && tags.provider_error === undefined) tags.provider_error = providerError;
       if (item.code === 'sentry_test') tags.diagnostic_test = 'true';
       // AppError.kind: the thrower's own name for what went wrong (closed vocabulary).
-      if (typeof item.kind === 'string' && ENUMS.error_kind!.has(item.kind) && tags.error_kind === undefined) tags.error_kind = item.kind;
+      // The deepest kind wins: a wrapper names the operation that failed, the
+      // cause names why (breadth-first, so a later visit is never shallower).
+      if (typeof item.kind === 'string' && ENUMS.error_kind!.has(item.kind)) tags.error_kind = item.kind;
       for (const code of [item.code, item.name]) {
         if (typeof code === 'string' && ENUMS.failure_code!.has(code) && tags.failure_code === undefined) tags.failure_code = code;
       }
