@@ -221,6 +221,8 @@ function scriptedDb(results: QueryResult[]) {
   };
 }
 
+const pdfBytes = Buffer.from("%PDF-1.7\n");
+
 const baseFile = {
   id: "22222222-2222-4222-8222-222222222222",
   session_id: "11111111-1111-4111-8111-111111111111",
@@ -229,7 +231,7 @@ const baseFile = {
   filename: "contract.pdf",
   file_type: "pdf",
   content_type: "application/pdf",
-  expected_size_bytes: 4,
+  expected_size_bytes: pdfBytes.length,
   sealed_storage_path: "upload-sessions/user/session/file/sealed",
   target_folder_id: null,
   status: "uploaded",
@@ -260,7 +262,7 @@ describe("upload processing", () => {
     processingTempRoot = await mkdtemp(join(tmpdir(), "mike-upload-test-"));
     process.env.UPLOAD_PROCESSING_TEMP_DIR = processingTempRoot;
     mocks.createFileReadStream.mockImplementation(() =>
-      Readable.from([Buffer.from([1, 2, 3, 4])]),
+      Readable.from([pdfBytes]),
     );
     mocks.copyFile.mockResolvedValue(undefined);
     mocks.officeFileToPdf.mockResolvedValue("/tmp/converted.pdf");
@@ -312,9 +314,84 @@ describe("upload processing", () => {
     });
   });
 
+  it.each(["", " \t\r\n\f", "\uFEFF", " \n\uFEFF\t"])(
+    "accepts a PDF header with leading prefix %j",
+    async (prefix) => {
+      const bytes = Buffer.concat([Buffer.from(prefix), pdfBytes]);
+      mocks.createFileReadStream.mockImplementation(() => Readable.from([bytes]));
+      const db = fakeDb({ documents: [{ data: { id: baseFile.resource_id } }] });
+      await processUploadFile(db as never, baseSession, {
+        ...baseFile, expected_size_bytes: bytes.length,
+      });
+      expect(mocks.copyFile).toHaveBeenCalledOnce();
+      expect(mocks.officeFileToPdf).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each(["", "plain text", "PK\u0003\u0004Office bytes", "%PDF", "junk%PDF-1.7", " \uFEFF\n"])(
+    "rejects non-PDF bytes %j before destination writes and removes the artifact",
+    async (content) => {
+      const bytes = Buffer.from(content);
+      mocks.createFileReadStream.mockImplementation(() => Readable.from([bytes]));
+      const db = fakeDb();
+      await expect(processUploadFile(db as never, baseSession, {
+        ...baseFile, expected_size_bytes: bytes.length,
+      })).rejects.toThrow("invalid_pdf_file");
+      expect(db.from).not.toHaveBeenCalled();
+      expect(db.rpc).not.toHaveBeenCalled();
+      expect(mocks.copyFile).not.toHaveBeenCalled();
+      expect(mocks.uploadFileFromPath).not.toHaveBeenCalled();
+      expect(mocks.officeFileToPdf).not.toHaveBeenCalled();
+      expect(await readdir(processingTempRoot)).toEqual([]);
+    },
+  );
+
+  it.each([false, true])("keeps invalid PDFs terminal when already failed=%s", async (alreadyFailed) => {
+    const bytes = Buffer.from("not a PDF");
+    mocks.createFileReadStream.mockImplementation(() => Readable.from([bytes]));
+    const db = scriptedDb([
+      { data: { id: "job-1", session_id: baseSession.id, file_id: baseFile.id, attempts: 1, locked_by: "worker-1" } },
+      { data: baseSession },
+      { data: { ...baseFile, expected_size_bytes: bytes.length,
+        ...(alreadyFailed ? { status: "error", error_code: "invalid_pdf_file" } : {}),
+      } },
+      ...(!alreadyFailed ? [
+        { data: { id: "job-1" } }, // Initial heartbeat.
+        { error: null }, // Processing status.
+        { data: { id: "job-1" } }, // Failure heartbeat.
+        { error: null }, // File error.
+        { error: null }, // Document error.
+        { data: { id: "job-1" } }, // Final heartbeat.
+        { error: null }, // Remove failed document.
+      ] : []),
+      { data: [{ sealed_storage_path: baseFile.sealed_storage_path }] },
+      { data: { id: "job-1" } },
+    ]);
+    await processUploadJob(db as never, "job-1", "worker-1");
+    if (alreadyFailed) {
+      expect(mocks.createFileReadStream).not.toHaveBeenCalled();
+    } else {
+      expect(db.calls).toContainEqual(expect.objectContaining({
+        table: "upload_session_files", operation: "update",
+        payload: expect.objectContaining({ status: "error", error_code: "invalid_pdf_file" }),
+      }));
+    }
+    expect(db.calls.some((call) => (call.payload as { status?: string })?.status === "queued")).toBe(false);
+    expect(db.calls).toContainEqual(expect.objectContaining({
+      table: "upload_processing_jobs", operation: "update",
+      payload: expect.objectContaining({ status: "completed", error_code: "partial_failure" }),
+    }));
+    expect(mocks.deleteFile).toHaveBeenCalledWith(baseFile.sealed_storage_path);
+    expect(mocks.copyFile).not.toHaveBeenCalled();
+    expect(db.remaining).toHaveLength(0);
+  });
+
   it("converts Office files from temporary paths and streams the PDF upload", async () => {
+    const officeBytes = Buffer.from([1, 2, 3, 4]);
+    mocks.createFileReadStream.mockImplementation(() => Readable.from([officeBytes]));
     const officeFile = {
       ...baseFile,
+      expected_size_bytes: officeBytes.length,
       filename: "contract.docx",
       file_type: "docx",
       content_type:
@@ -330,7 +407,7 @@ describe("upload processing", () => {
     mocks.officeFileToPdf.mockImplementation(
       async (inputPath: string, outputDirectory: string) => {
         expect(inputPath).toBe(join(outputDirectory, "source.docx"));
-        expect(await readFile(inputPath)).toEqual(Buffer.from([1, 2, 3, 4]));
+        expect(await readFile(inputPath)).toEqual(officeBytes);
         return join(outputDirectory, "source.pdf");
       },
     );
@@ -347,8 +424,11 @@ describe("upload processing", () => {
 
   it("keeps the upload and reports a missing LibreOffice once, as a warning grouped by file type", async () => {
     // MIKE-BACKEND-9: the worker on a host without soffice.
+    const officeBytes = Buffer.from([1, 2, 3, 4]);
+    mocks.createFileReadStream.mockImplementation(() => Readable.from([officeBytes]));
     const officeFile = {
       ...baseFile,
+      expected_size_bytes: officeBytes.length,
       filename: "PRIVATE_NAME.docx",
       file_type: "docx",
       content_type:
@@ -504,6 +584,8 @@ describe("upload processing", () => {
   });
 
   it.each([false, undefined])("replaces DOCX bytes with generate_pdf=%s and invalidates obsolete renditions", async (generatePdf) => {
+    const officeBytes = Buffer.from([1, 2, 3, 4]);
+    mocks.createFileReadStream.mockImplementation(() => Readable.from([officeBytes]));
     const db = scriptedDb([
       { data: { id: "v", storage_path: "old/source.docx", pdf_storage_path: "old/rendition.pdf", content_sha256: "a".repeat(64) } },
       { data: { id: "v" } },
@@ -515,7 +597,13 @@ describe("upload processing", () => {
         document_id: "doc", version_id: "v", expected_content_sha256: "a".repeat(64),
         ...(generatePdf === undefined ? {} : { generate_pdf: generatePdf }),
       },
-    }, { ...baseFile, filename: "edited.docx", file_type: "docx" })).toEqual({ id: "v" });
+    }, {
+      ...baseFile,
+      filename: "edited.docx",
+      file_type: "docx",
+      content_type: "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+      expected_size_bytes: officeBytes.length,
+    })).toEqual({ id: "v" });
 
     expect(mocks.copyFile).toHaveBeenCalledOnce();
     expect(mocks.officeFileToPdf).toHaveBeenCalledTimes(generatePdf === false ? 0 : 1);
@@ -525,7 +613,7 @@ describe("upload processing", () => {
       payload: expect.objectContaining({
         storage_path: expect.stringMatching(/\/versions\/[^/]+\.docx$/),
         filename: "edited.docx",
-        content_sha256: createHash("sha256").update(Buffer.from([1, 2, 3, 4])).digest("hex"),
+        content_sha256: createHash("sha256").update(officeBytes).digest("hex"),
         pdf_storage_path: generatePdf === false ? null : expect.stringContaining("converted-pdfs/"),
         page_count: null,
       }),
@@ -556,7 +644,7 @@ describe("upload processing", () => {
   });
 
   it("treats an already-committed editor save as a successful retry", async () => {
-    const current = { id: "v", storage_path: "saved/key", content_sha256: createHash("sha256").update(Buffer.from([1, 2, 3, 4])).digest("hex") };
+    const current = { id: "v", storage_path: "saved/key", content_sha256: createHash("sha256").update(pdfBytes).digest("hex") };
     const db = fakeDb({ document_versions: [{ data: current }] });
     expect(await processUploadFile(db as never, {
       ...baseSession, purpose: "document_version_replace",
@@ -581,7 +669,7 @@ describe("upload processing", () => {
       { data: { id: "v", storage_path: "old/key", content_sha256: null } },
       { data: { id: "v" } },
     ] });
-    const expected = createHash("sha256").update(Buffer.from([1, 2, 3, 4])).digest("hex");
+    const expected = createHash("sha256").update(pdfBytes).digest("hex");
     expect(await processUploadFile(db as never, {
       ...baseSession, purpose: "document_version_replace",
       destination: { document_id: "doc", version_id: "v", expected_content_sha256: expected },
