@@ -11093,5 +11093,6 @@ insert into public.schema_migrations (filename) values
   ('20261021_03_user_response_details.sql'),
   ('20261021_04_word_chat_message_playbook.sql'),
   ('20261022_01_workspace_connectors.sql'),
-  ('20261023_01_workspace_scoped_data_deletion.sql')
+  ('20261023_01_workspace_scoped_data_deletion.sql'),
+  ('20261023_02_backfill_project_child_org_id.sql')
 on conflict (filename) do nothing;
