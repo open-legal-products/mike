@@ -38,6 +38,7 @@ vi.mock("@/app/contexts/ChatHistoryContext", () => ({
 const workspaceState = vi.hoisted(() => ({
     workspaceId: null as string | null,
     activeOrganization: null as { id: string; name: string } | null,
+    organizations: [] as { id: string; name: string }[] | null,
 }));
 
 vi.mock("@/app/contexts/WorkspaceContext", async (importOriginal) => ({
@@ -62,6 +63,7 @@ beforeEach(() => {
     vi.clearAllMocks();
     workspaceState.workspaceId = null;
     workspaceState.activeOrganization = null;
+    workspaceState.organizations = [];
     // The page shortens its poll interval to 10ms under NODE_ENV=test, so
     // these tests run on real timers (fake timers fight userEvent).
 });
@@ -168,7 +170,10 @@ describe("privacy-data async exports", () => {
             screen.getByRole("button", { name: "Delete all memory" }),
         );
 
-        expect(screen.getByText("Delete all memory in Personal?")).toBeVisible();
+        // With only Personal there is no other workspace to tell it from.
+        expect(screen.getByText("Delete all memory?")).toBeVisible();
+        expect(screen.queryByText(/Deletes data in/)).toBeNull();
+        expect(screen.queryByText(/other workspaces/)).toBeNull();
         expect(
             screen.getAllByText(/private projects you created/i),
         ).toHaveLength(2);
@@ -182,9 +187,25 @@ describe("privacy-data async exports", () => {
         );
     });
 
+    it("names Personal to someone who also belongs to an organization", async () => {
+        workspaceState.organizations = [{ id: "org-1", name: "Acme LLP" }];
+        mockedDeleteMemories.mockResolvedValue();
+
+        render(<PrivacyDataPage />);
+        expect(screen.getByText(/Deletes data in Personal only/)).toBeVisible();
+        await userEvent.click(
+            screen.getByRole("button", { name: "Delete all memory" }),
+        );
+        expect(screen.getByText("Delete all memory in Personal?")).toBeVisible();
+        expect(
+            screen.getByText(/This permanently deletes your Personal memory/),
+        ).toBeVisible();
+    });
+
     it("deletes in the active organization only, and says so", async () => {
         workspaceState.workspaceId = "org-1";
         workspaceState.activeOrganization = { id: "org-1", name: "Acme LLP" };
+        workspaceState.organizations = [workspaceState.activeOrganization];
         mockedDeleteChats.mockResolvedValue();
 
         render(<PrivacyDataPage />);
@@ -242,9 +263,7 @@ describe("privacy-data async exports", () => {
 
         // Nothing is erased straight from the toast; the dialog comes back.
         expect(mockedDeleteMemories).toHaveBeenCalledOnce();
-        expect(
-            await screen.findByText("Delete all memory in Personal?"),
-        ).toBeVisible();
+        expect(await screen.findByText("Delete all memory?")).toBeVisible();
         clearToasts();
     });
 });

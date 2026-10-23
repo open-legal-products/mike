@@ -27,6 +27,7 @@ const profileState = vi.hoisted(() => ({
 const workspaceState = vi.hoisted(() => ({
   workspaceId: "personal" as string,
   activeOrganization: null as { id: string; name: string } | null,
+  organizations: [] as { id: string; name: string }[] | null,
 }));
 vi.mock("@/app/contexts/WorkspaceContext", () => ({
   useWorkspace: () => workspaceState,
@@ -82,6 +83,7 @@ describe("UserMemoryPage", () => {
     window.localStorage.clear();
     workspaceState.workspaceId = "personal";
     workspaceState.activeOrganization = null;
+    workspaceState.organizations = [];
     profileState.projectMemoryDefault = true;
     profileState.updateProjectMemoryDefault.mockResolvedValue(undefined);
     vi.mocked(getUserMemory).mockResolvedValue(current());
@@ -99,6 +101,26 @@ describe("UserMemoryPage", () => {
         source: "settings",
       }),
     );
+  });
+
+  it("says nothing about other workspaces to someone who has only Personal", async () => {
+    render(<UserMemoryPage />);
+
+    expect(
+      await screen.findByText(
+        "Let Mike curate useful details after your saved conversations and use them in future answers.",
+      ),
+    ).toBeInTheDocument();
+    expect(screen.queryByText(/separate memory for each workspace/)).toBeNull();
+  });
+
+  it("tells someone in an organization that Personal has its own memory", async () => {
+    workspaceState.organizations = [{ id: "org-1", name: "Acme LLP" }];
+    render(<UserMemoryPage />);
+
+    expect(
+      await screen.findByText(/in Personal and use them in future answers there\. You have a separate memory for each workspace\./),
+    ).toBeInTheDocument();
   });
 
   it("loads the current file independently and autosaves editor changes", async () => {
@@ -528,7 +550,7 @@ describe("UserMemoryPage", () => {
       screen.getByText("Turn off and delete your Personal memory?"),
     ).toBeVisible();
     expect(
-      screen.getByText(/delete the existing memory\.md file for Personal/i),
+      screen.getByText(/delete the existing memory\.md file and your unsaved draft/i),
     ).toBeVisible();
     expect(screen.getByText(/and your unsaved draft/i)).toBeVisible();
     expect(screen.getByText(/cancel pending memory updates/i)).toBeVisible();
@@ -649,6 +671,7 @@ describe("UserMemoryPage in an organization's workspace", () => {
     window.localStorage.clear();
     workspaceState.workspaceId = ACME.id;
     workspaceState.activeOrganization = ACME;
+    workspaceState.organizations = [ACME];
     profileState.projectMemoryDefault = true;
     vi.mocked(getUserMemory).mockResolvedValue(
       current({ content: "# Learned at Acme" }),

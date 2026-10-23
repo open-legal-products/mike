@@ -3,6 +3,7 @@
 import { useCallback, useState } from "react";
 import { useUserProfile } from "@/app/contexts/UserProfileContext";
 import { useWorkspace } from "@/app/contexts/WorkspaceContext";
+import { useHasMultipleWorkspaces } from "@/app/hooks/useHasMultipleWorkspaces";
 import { ConfirmPopup } from "@/app/components/popups/ConfirmPopup";
 import { GlassCardUI } from "@/shared/ui/GlassCardUI";
 import { SettingsHeading } from "@/app/components/settings/SettingsHeading";
@@ -40,12 +41,14 @@ type ConfirmAction = "disable";
 // and a draft still being saved is flushed to the workspace it was typed in.
 export function UserMemoryPage() {
   const { workspaceId, activeOrganization } = useWorkspace();
+  const multipleWorkspaces = useHasMultipleWorkspaces();
   const workspace = workspaceId ?? undefined;
   return (
     <WorkspaceMemory
       key={workspace ?? "personal"}
       workspace={workspace}
       organizationName={activeOrganization?.name ?? null}
+      multipleWorkspaces={multipleWorkspaces}
     />
   );
 }
@@ -53,11 +56,17 @@ export function UserMemoryPage() {
 function WorkspaceMemory({
   workspace,
   organizationName,
+  multipleWorkspaces,
 }: {
   /** "personal", an organization id, or undefined outside a workspace. */
   workspace: string | undefined;
   /** The active organization's name, or null in Personal. */
   organizationName: string | null;
+  /**
+   * Whether the person has more than one workspace. Only then does the page
+   * say that this memory is the workspace's own.
+   */
+  multipleWorkspaces: boolean;
 }) {
   // What this memory is called, wherever the page names it.
   const memoryName = organizationName
@@ -195,8 +204,10 @@ function WorkspaceMemory({
                 <SettingsLabel>{memoryName}</SettingsLabel>
                 <SettingsDescription>
                   {organizationName
-                    ? `Let Mike curate useful details after your own conversations in ${organizationName} and use them in future answers there. Only you can see it. You have a separate memory for each workspace.`
-                    : "Let Mike curate useful details after your saved conversations in Personal and use them in future answers there. You have a separate memory for each workspace."}
+                    ? `Let Mike curate useful details after your own conversations in ${organizationName} and use them in future answers there. Only you can see it.${multipleWorkspaces ? " You have a separate memory for each workspace." : ""}`
+                    : multipleWorkspaces
+                      ? "Let Mike curate useful details after your saved conversations in Personal and use them in future answers there. You have a separate memory for each workspace."
+                      : "Let Mike curate useful details after your saved conversations and use them in future answers."}
                 </SettingsDescription>
               </div>
               <div className="flex items-center gap-3">
@@ -292,7 +303,7 @@ function WorkspaceMemory({
             ? `Turn off and delete your memory in ${organizationName}?`
             : "Turn off and delete your Personal memory?"
         }
-        message={`This will delete the existing memory.md file for ${organizationName ?? "Personal"}${dirty ? " and your unsaved draft" : ""}, cancel pending memory updates, and stop future memory updates here until you turn it on again. Your memory in other workspaces is not affected.`}
+        message={`This will delete the existing memory.md file${multipleWorkspaces ? ` for ${organizationName ?? "Personal"}` : ""}${dirty ? " and your unsaved draft" : ""}, cancel pending memory updates, and stop future memory updates here until you turn it on again.${multipleWorkspaces ? " Your memory in other workspaces is not affected." : ""}`}
         confirmLabel="Disable"
         confirmVariant="danger"
         confirmStatus={settingsMutation ? "loading" : "idle"}

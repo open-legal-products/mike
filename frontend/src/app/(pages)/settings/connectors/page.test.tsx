@@ -65,18 +65,22 @@ vi.mock("@/app/lib/mikeApi", async (importOriginal) => {
 const workspaceState = vi.hoisted(() => ({
     workspaceId: "personal" as string | null,
     activeOrganization: null as { id: string; name: string } | null,
+    // Only Personal unless a test says otherwise.
+    organizations: [] as { id: string; name: string }[] | null,
 }));
 vi.mock("@/app/contexts/WorkspaceContext", async (importOriginal) => ({
     ...(await importOriginal<typeof import("@/app/contexts/WorkspaceContext")>()),
     useWorkspace: () => ({
         workspaceId: workspaceState.workspaceId,
         activeOrganization: workspaceState.activeOrganization,
+        organizations: workspaceState.organizations,
     }),
 }));
 
 beforeEach(() => {
     workspaceState.workspaceId = "personal";
     workspaceState.activeOrganization = null;
+    workspaceState.organizations = [];
     courtListener.workspaces = [];
 });
 
@@ -1706,6 +1710,35 @@ describe("ConnectorsPage workspaces", () => {
     });
 
     const installed = () => within(screen.getByRole("region", { name: "Installed" }));
+
+    it("says nothing about workspaces to someone who has only Personal", async () => {
+        render(<ConnectorsPage />);
+        await act(flushMicrotasks);
+
+        expect(screen.queryByText(/Each workspace has its own connectors/)).toBeNull();
+    });
+
+    it("says which workspace the installed connectors are saved for", async () => {
+        workspaceState.organizations = [{ id: "org-1", name: "Acme LLP" }];
+        const { unmount } = render(<ConnectorsPage />);
+        await act(flushMicrotasks);
+        expect(
+            installed().getByText(
+                "Saved for Personal. Each workspace has its own connectors.",
+            ),
+        ).toBeInTheDocument();
+        unmount();
+
+        workspaceState.workspaceId = "org-1";
+        workspaceState.activeOrganization = { id: "org-1", name: "Acme LLP" };
+        render(<ConnectorsPage />);
+        await act(flushMicrotasks);
+        expect(
+            installed().getByText(
+                "Saved for Acme LLP. Each workspace has its own connectors.",
+            ),
+        ).toBeInTheDocument();
+    });
 
     it("reads and adds connectors in the active organization's workspace", async () => {
         workspaceState.workspaceId = "org-1";
