@@ -6891,10 +6891,16 @@ begin
 end;
 $$;
 
--- Account-level deletion is all-or-nothing and deliberately excludes every
--- organization project and every personal project with a direct grant.
+-- Settings' "Delete all memory" clears one workspace. With p_org_id null that
+-- is Personal: the person's Personal memory and the memories of the private
+-- projects they created, all-or-nothing, excluding every organization project
+-- and every personal project with a direct grant. With an organization it is
+-- only the person's own memory there; the organization's project memories
+-- are its own, cleared from its Privacy & Data settings.
+drop function if exists public.delete_user_private_memories(uuid);
 create or replace function public.delete_user_private_memories(
-  p_user_id uuid
+  p_user_id uuid,
+  p_org_id uuid default null
 )
 returns integer
 language plpgsql
@@ -6905,6 +6911,21 @@ declare
   target record;
   deleted_projects integer := 0;
 begin
+  if p_org_id is not null then
+    -- One file per person per workspace; none for a non-member, since the
+    -- file is tied to the membership.
+    for target in
+      select file.id
+      from public.memory_files file
+      where file.scope = 'user'
+        and file.user_id = p_user_id
+        and file.org_id = p_org_id
+    loop
+      perform public.wipe_memory_file(target.id, null, p_user_id, 'wipe');
+    end loop;
+    return 0;
+  end if;
+
   -- Lock the caller's own private projects rather than the whole table.
   -- FOR UPDATE on a project row blocks both a move into an organization (an
   -- UPDATE of that row) and a new access grant (the grant's foreign key takes
@@ -6924,11 +6945,13 @@ begin
   for target in
     select eligible.id, eligible.scope
     from (
-      -- Every memory that is this person's own: Personal, and the one
-      -- they have in each organization they belong to.
+      -- The person's Personal memory. Their memory in each organization is
+      -- that workspace's, deleted from it.
       select file.id, file.scope
       from public.memory_files file
-      where file.scope = 'user' and file.user_id = p_user_id
+      where file.scope = 'user'
+        and file.user_id = p_user_id
+        and file.org_id is null
       union all
       select file.id, file.scope
       from public.memory_files file
@@ -8060,7 +8083,7 @@ revoke all on function public.write_memory_file(uuid, bigint, bigint, text, text
   from public, anon, authenticated;
 revoke all on function public.wipe_memory_file(uuid, boolean, uuid, text)
   from public, anon, authenticated;
-revoke all on function public.delete_user_private_memories(uuid)
+revoke all on function public.delete_user_private_memories(uuid, uuid)
   from public, anon, authenticated;
 revoke all on function public.append_chat_assistant_events(uuid, uuid, uuid, jsonb, jsonb)
   from public, anon, authenticated;
@@ -8178,7 +8201,7 @@ grant execute
   on function public.wipe_memory_file(uuid, boolean, uuid, text)
   to service_role;
 grant execute
-  on function public.delete_user_private_memories(uuid)
+  on function public.delete_user_private_memories(uuid, uuid)
   to service_role;
 grant execute
   on function public.append_chat_assistant_events(uuid, uuid, uuid, jsonb, jsonb)
@@ -10984,5 +11007,6 @@ insert into public.schema_migrations (filename) values
   ('20261021_01_chat_subagent_runs.sql'),
   ('20261021_02_user_subagent_defaults.sql'),
   ('20261021_03_user_response_details.sql'),
-  ('20261021_04_word_chat_message_playbook.sql')
+  ('20261021_04_word_chat_message_playbook.sql'),
+  ('20261023_01_workspace_scoped_data_deletion.sql')
 on conflict (filename) do nothing;

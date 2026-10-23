@@ -299,6 +299,8 @@ vi.mock("../../modules/user/user.dataExport", () => ({
 import { app } from "../../app";
 
 const AUTH = ["Authorization", "Bearer test"] as const;
+// A team organization the caller may name as their workspace.
+const ORG_ID = "11111111-1111-4111-8111-111111111111";
 
 // A complete user_profiles row with credits_reset_date in the future so the
 // monthly-reset branch in loadProfile is not triggered.
@@ -1738,21 +1740,24 @@ describe("user.routes", () => {
                 .set(...AUTH);
 
             expect(res.status).toBe(204);
+            // No workspace named is Personal, never every workspace.
             expect(deleteAllUserChats).toHaveBeenCalledWith(
                 expect.anything(),
                 "u1",
+                null,
             );
         });
 
         it("DELETE /user/projects invokes deleteUserProjects and returns 204", async () => {
             const res = await request(app)
-                .delete("/user/projects")
+                .delete("/user/projects?workspace=personal")
                 .set(...AUTH);
 
             expect(res.status).toBe(204);
             expect(deleteUserProjects).toHaveBeenCalledWith(
                 expect.anything(),
                 "u1",
+                null,
             );
         });
 
@@ -1765,6 +1770,7 @@ describe("user.routes", () => {
             expect(deleteAllUserTabularReviews).toHaveBeenCalledWith(
                 expect.anything(),
                 "u1",
+                null,
             );
         });
 
@@ -1777,7 +1783,57 @@ describe("user.routes", () => {
             expect(deleteUserPrivateMemories).toHaveBeenCalledWith(
                 expect.anything(),
                 "u1",
+                null,
             );
+        });
+
+        it.each([
+            ["/user/chats", () => deleteAllUserChats],
+            ["/user/projects", () => deleteUserProjects],
+            ["/user/tabular-reviews", () => deleteAllUserTabularReviews],
+            ["/user/memories", () => deleteUserPrivateMemories],
+        ] as const)("DELETE %s deletes in the organization workspace named", async (path, helper) => {
+            supabaseState.tables.org_members = {
+                data: { org_id: ORG_ID },
+                error: null,
+            };
+            supabaseState.tables.organizations = {
+                data: { kind: "team" },
+                error: null,
+            };
+
+            const res = await request(app)
+                .delete(`${path}?workspace=${ORG_ID}`)
+                .set(...AUTH);
+
+            expect(res.status).toBe(204);
+            expect(helper()).toHaveBeenCalledWith(expect.anything(), "u1", ORG_ID);
+        });
+
+        it.each([
+            ["/user/chats", () => deleteAllUserChats],
+            ["/user/projects", () => deleteUserProjects],
+            ["/user/tabular-reviews", () => deleteAllUserTabularReviews],
+            ["/user/memories", () => deleteUserPrivateMemories],
+        ] as const)("DELETE %s deletes nothing in a workspace the caller is not in", async (path, helper) => {
+            supabaseState.tables.org_members = { data: null, error: null };
+
+            const res = await request(app)
+                .delete(`${path}?workspace=${ORG_ID}`)
+                .set(...AUTH);
+
+            expect(res.status).toBe(404);
+            expect(res.body.code).toBe("workspace_not_found");
+            expect(helper()).not.toHaveBeenCalled();
+        });
+
+        it("DELETE /user/chats refuses a malformed workspace", async () => {
+            const res = await request(app)
+                .delete("/user/chats?workspace=everything")
+                .set(...AUTH);
+
+            expect(res.status).toBe(400);
+            expect(deleteAllUserChats).not.toHaveBeenCalled();
         });
 
         // ERASURE ORDERING. documents.user_id references auth.users ON DELETE

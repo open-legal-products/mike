@@ -689,16 +689,20 @@ describe("listOrgsBlockingAccountDeletion", () => {
     });
 });
 
-describe("deleteUserProjects and organization ownership", () => {
+describe("deleteUserProjects and workspaces", () => {
     const seed = () =>
         makeDb({
             projects: [
                 { id: "personal", user_id: "u1", org_id: null },
                 { id: "firm", user_id: "u1", org_id: "o1" },
+                { id: "other-firm", user_id: "u1", org_id: "o2" },
+                { id: "colleague", user_id: "u2", org_id: "o1" },
             ],
             documents: [
                 { id: "d-personal", project_id: "personal" },
                 { id: "d-firm", project_id: "firm" },
+                { id: "d-other-firm", project_id: "other-firm" },
+                { id: "d-colleague", project_id: "colleague" },
             ],
             chats: [],
             tabular_reviews: [],
@@ -706,29 +710,39 @@ describe("deleteUserProjects and organization ownership", () => {
             document_versions: [],
         });
 
-    it("destroys personal projects but detaches organization ones", async () => {
+    it("destroys Personal projects and leaves every organization's alone", async () => {
         const db = seed();
-        // The count reports what was actually destroyed, so a caller deleting
-        // only an org project is told nothing was removed.
-        await expect(deleteUserProjects(db, "u1")).resolves.toBe(1);
+        await expect(deleteUserProjects(db, "u1", null)).resolves.toBe(1);
 
         const projects = db._tables.projects as Row[];
-        expect(projects.map((p) => p.id)).toEqual(["firm"]);
-        // The organization's project survives its creator, with no creator.
-        expect(projects[0].user_id).toBeNull();
-        expect(projects[0].org_id).toBe("o1");
-        // …and so does the content inside it.
+        expect(projects.map((p) => p.id)).toEqual([
+            "firm",
+            "other-firm",
+            "colleague",
+        ]);
+        // Not even detached: they keep their creator.
+        expect(projects.find((p) => p.id === "firm")?.user_id).toBe("u1");
         expect((db._tables.documents as Row[]).map((d) => d.id)).toEqual([
             "d-firm",
+            "d-other-firm",
+            "d-colleague",
         ]);
     });
 
-    it("detaches an organization project even when named explicitly", async () => {
+    it("destroys only the projects the user created in the organization named", async () => {
         const db = seed();
-        await expect(deleteUserProjects(db, "u1", ["firm"])).resolves.toBe(0);
-        const projects = db._tables.projects as Row[];
-        expect(projects).toHaveLength(2);
-        expect(projects.find((p) => p.id === "firm")?.user_id).toBeNull();
+        await expect(deleteUserProjects(db, "u1", "o1")).resolves.toBe(1);
+
+        expect((db._tables.projects as Row[]).map((p) => p.id)).toEqual([
+            "personal",
+            "other-firm",
+            "colleague",
+        ]);
+        expect((db._tables.documents as Row[]).map((d) => d.id)).toEqual([
+            "d-personal",
+            "d-other-firm",
+            "d-colleague",
+        ]);
     });
 });
 

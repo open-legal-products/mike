@@ -23,10 +23,15 @@ import { GoogleDriveUserError } from "../../lib/integrations/googleDriveHttp";
 import { ConnectorSetupError } from "../../lib/mcp/errors";
 
 import crypto from "crypto";
-import { Router } from "express";
+import { Router, type Response } from "express";
 import { requireAuth, requireMfaIfEnrolled } from "../../middleware/auth";
 import { asyncRoute, routerErrorHandler } from "../../middleware/asyncRoute";
-import { createServerSupabase } from "../../lib/supabase";
+import { createServerSupabase, type Db } from "../../lib/supabase";
+import {
+    PERSONAL_WORKSPACE,
+    resolveWorkspaceFilter,
+    sendWorkspaceFailure,
+} from "../../lib/workspace";
 import { INTERNAL_ERROR_CODE, sendInternalError } from "../../lib/httpError";
 import { sendServiceFailure } from "../../lib/serviceResult";
 import { dbJobsEnabled } from "../../lib/dbq/runner";
@@ -1364,59 +1369,92 @@ userRouter.delete(
     }),
 );
 
-// DELETE /user/chats
+// Settings' "Delete all" actions clear one workspace: `?workspace=` names it,
+// "personal" or an organization the caller belongs to. Absent means
+// Personal, as for the caller's memory, so a client that predates the
+// parameter never deletes beyond it. Answers for an unknown or removed
+// workspace itself and returns null.
+async function deletionWorkspace(
+    db: Db,
+    userId: string,
+    raw: unknown,
+    res: Response,
+): Promise<{ orgId: string | null } | null> {
+    const resolved = await resolveWorkspaceFilter(db, userId, raw);
+    if (!resolved.ok) {
+        sendWorkspaceFailure(res, resolved);
+        return null;
+    }
+    return {
+        orgId:
+            resolved.workspace && resolved.workspace !== PERSONAL_WORKSPACE
+                ? resolved.workspace
+                : null,
+    };
+}
+
+// DELETE /user/chats?workspace=
 userRouter.delete(
     "/chats",
     requireAuth,
     requireMfaIfEnrolled,
-    asyncRoute(async (_req, res) => {
+    asyncRoute(async (req, res) => {
         const userId = res.locals.userId as string;
         const db = createServerSupabase();
-        const result = await deleteUserChats(db, userId);
+        const workspace = await deletionWorkspace(db, userId, req.query.workspace, res);
+        if (!workspace) return;
+        const result = await deleteUserChats(db, userId, workspace.orgId);
         if (!result.ok) return void sendInternalError(res, result.error);
         res.status(204).send();
     }),
 );
 
-// DELETE /user/projects
+// DELETE /user/projects?workspace=
 userRouter.delete(
     "/projects",
     requireAuth,
     requireMfaIfEnrolled,
-    asyncRoute(async (_req, res) => {
+    asyncRoute(async (req, res) => {
         const userId = res.locals.userId as string;
         const db = createServerSupabase();
-        const result = await deleteUserProjectsData(db, userId);
+        const workspace = await deletionWorkspace(db, userId, req.query.workspace, res);
+        if (!workspace) return;
+        const result = await deleteUserProjectsData(db, userId, workspace.orgId);
         if (!result.ok) return void sendInternalError(res, result.error);
         res.status(204).send();
     }),
 );
 
-// DELETE /user/tabular-reviews
+// DELETE /user/tabular-reviews?workspace=
 userRouter.delete(
     "/tabular-reviews",
     requireAuth,
     requireMfaIfEnrolled,
-    asyncRoute(async (_req, res) => {
+    asyncRoute(async (req, res) => {
         const userId = res.locals.userId as string;
         const db = createServerSupabase();
-        const result = await deleteUserTabularReviews(db, userId);
+        const workspace = await deletionWorkspace(db, userId, req.query.workspace, res);
+        if (!workspace) return;
+        const result = await deleteUserTabularReviews(db, userId, workspace.orgId);
         if (!result.ok) return void sendInternalError(res, result.error);
         res.status(204).send();
     }),
 );
 
-// DELETE /user/memories
-// Wipes the user's app memory and memories belonging to private projects they
-// created. Organization and merely shared projects are intentionally outside
-// this account-level destructive action.
+// DELETE /user/memories?workspace=
+// Wipes the user's own memory for the workspace and, in Personal, memories
+// belonging to private projects they created. Organization and merely
+// shared projects are intentionally outside this destructive action.
 userRouter.delete(
     "/memories",
     requireAuth,
     requireMfaIfEnrolled,
-    asyncRoute(async (_req, res) => {
+    asyncRoute(async (req, res) => {
         const userId = res.locals.userId as string;
-        const result = await deletePrivateMemories(createServerSupabase(), userId);
+        const db = createServerSupabase();
+        const workspace = await deletionWorkspace(db, userId, req.query.workspace, res);
+        if (!workspace) return;
+        const result = await deletePrivateMemories(db, userId, workspace.orgId);
         if (!result.ok) return void sendInternalError(res, result.error);
         res.status(204).send();
     }),

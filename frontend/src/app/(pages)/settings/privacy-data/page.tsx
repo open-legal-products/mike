@@ -11,6 +11,11 @@ import { GlassCardUI } from "@/shared/ui/GlassCardUI";
 import { SettingsHeading } from "@/app/components/settings/SettingsHeading";
 import { SettingsRow } from "@/app/components/settings/SettingsRow";
 import { useChatHistoryContext } from "@/app/contexts/ChatHistoryContext";
+import {
+  PERSONAL_WORKSPACE,
+  PERSONAL_WORKSPACE_LABEL,
+  useWorkspace,
+} from "@/app/contexts/WorkspaceContext";
 import { ConfirmPopup } from "@/app/components/popups/ConfirmPopup";
 import {
   MfaVerificationPopup,
@@ -42,34 +47,44 @@ const devLog = (...args: Parameters<typeof console.log>) => {
   if (isDev) console.log(...args);
 };
 
-const DELETE_DATA_COPY: Record<
-  DeleteDataAction,
-  {
-    title: string;
-    message: string;
+/**
+ * The confirmation for deleting data in one workspace. Each "Delete all"
+ * reaches the active workspace only, and says so by name.
+ */
+function deleteDataCopy(
+  action: DeleteDataAction,
+  workspaceName: string,
+  personal: boolean,
+): { title: string; message: string } {
+  const others = "Your other workspaces are not affected.";
+  const undo = "This action cannot be undone.";
+  switch (action) {
+    case "chats":
+      return {
+        title: `Delete all chats in ${workspaceName}?`,
+        message: `This will permanently delete your assistant and tabular review chat history in ${workspaceName}. ${others} ${undo}`,
+      };
+    case "tabular-reviews":
+      return {
+        title: `Delete all tabular reviews in ${workspaceName}?`,
+        message: `This will permanently delete all tabular reviews you own in ${workspaceName}, including their cells and review chats. ${others} ${undo}`,
+      };
+    case "projects":
+      return {
+        title: `Delete all projects in ${workspaceName}?`,
+        message: personal
+          ? `This will permanently delete all projects you own in ${workspaceName}, including their documents, chats, and tabular reviews. ${others} ${undo}`
+          : `This will permanently delete all projects you created in ${workspaceName}, including their documents, chats, and tabular reviews. Colleagues lose them too. ${others} ${undo}`,
+      };
+    case "memory":
+      return {
+        title: `Delete all memory in ${workspaceName}?`,
+        message: personal
+          ? `This permanently deletes your ${workspaceName} memory and memories for private projects you created. Project collaborators will also lose those memories. ${others} Memory remains enabled and can be rebuilt from future conversations. ${undo}`
+          : `This permanently deletes your memory in ${workspaceName}. Project memories there are not affected, and neither are your other workspaces. Memory remains enabled and can be rebuilt from future conversations. ${undo}`,
+      };
   }
-> = {
-  chats: {
-    title: "Delete all chats?",
-    message:
-      "This will permanently delete your assistant and tabular review chat history. This action cannot be undone.",
-  },
-  "tabular-reviews": {
-    title: "Delete all tabular reviews?",
-    message:
-      "This will permanently delete all tabular reviews you own, including their cells and review chats. This action cannot be undone.",
-  },
-  projects: {
-    title: "Delete all projects?",
-    message:
-      "This will permanently delete all projects you own, including their documents, chats, and tabular reviews. This action cannot be undone.",
-  },
-  memory: {
-    title: "Delete all memory?",
-    message:
-      "This permanently deletes your app memory and memories for private projects you created. Project collaborators will also lose those memories. Memory remains enabled and can be rebuilt from future conversations. This action cannot be undone.",
-  },
-};
+}
 
 /** Imperative, lower case: "Couldn't delete your chats". */
 const DELETE_ACTION_LABELS: Record<DeleteDataAction, string> = {
@@ -79,7 +94,29 @@ const DELETE_ACTION_LABELS: Record<DeleteDataAction, string> = {
   memory: "delete your memory",
 };
 
+// Deletion works on the active workspace. Keyed by it, so switching
+// workspace drops a confirmation or verification still open for the old one
+// rather than carrying it into the new one.
 export default function PrivacyDataPage() {
+  const { workspaceId, activeOrganization } = useWorkspace();
+  const workspace = workspaceId ?? PERSONAL_WORKSPACE;
+  return (
+    <PrivacyData
+      key={workspace}
+      workspace={workspace}
+      workspaceName={activeOrganization?.name ?? PERSONAL_WORKSPACE_LABEL}
+    />
+  );
+}
+
+function PrivacyData({
+  workspace,
+  workspaceName,
+}: {
+  /** "personal" or an organization id. */
+  workspace: string;
+  workspaceName: string;
+}) {
   const { loadChats, setCurrentChatId } = useChatHistoryContext();
   const [pendingDeleteAction, setPendingDeleteAction] =
     useState<DeleteDataAction | null>(null);
@@ -258,15 +295,15 @@ export default function PrivacyDataPage() {
         return;
       }
       if (action === "chats") {
-        await deleteAllChats();
+        await deleteAllChats(workspace);
         setCurrentChatId(null);
         await loadChats();
       } else if (action === "tabular-reviews") {
-        await deleteAllTabularReviews();
+        await deleteAllTabularReviews(workspace);
       } else if (action === "memory") {
-        await deleteAllMemories();
+        await deleteAllMemories(workspace);
       } else {
-        await deleteAllProjects();
+        await deleteAllProjects(workspace);
         setCurrentChatId(null);
         await loadChats();
       }
@@ -314,7 +351,11 @@ export default function PrivacyDataPage() {
   };
 
   const pendingDeleteCopy = pendingDeleteAction
-    ? DELETE_DATA_COPY[pendingDeleteAction]
+    ? deleteDataCopy(
+        pendingDeleteAction,
+        workspaceName,
+        workspace === PERSONAL_WORKSPACE,
+      )
     : null;
 
   return (
@@ -407,6 +448,10 @@ export default function PrivacyDataPage() {
 
       <section className="space-y-3">
         <SettingsHeading>Delete data</SettingsHeading>
+        <SettingsDescription>
+          Deletes data in {workspaceName} only. To delete data in another
+          workspace, switch to it first.
+        </SettingsDescription>
         <GlassCardUI>
           <SettingsRow>
             <div className="space-y-1">

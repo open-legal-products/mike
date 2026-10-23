@@ -697,27 +697,94 @@ export async function deleteUserOrganizations(
     }
 }
 
-export async function deleteAllUserChats(db: Db, userId: string) {
+/**
+ * The chats a user started in one workspace: an organization's (`orgId`), or
+ * Personal's (`orgId` null), matching public.workspace_matches. Settings'
+ * "Delete all" works on the active workspace only, so clearing Personal
+ * history never reaches a firm's, nor one firm's another's.
+ */
+export async function deleteAllUserChats(
+    db: Db,
+    userId: string,
+    orgId: string | null,
+) {
     // Conversation BEFORE DELETE triggers fence in-flight curator promotion
     // in the same transaction, including Word chats removed by document
-    // cascades. No pre-enumeration is needed, so new children cannot slip
-    // between a scan and deletion.
-    const [assistantChats, tabularChats, wordDocuments] = await Promise.all([
-        db.from("chats").delete().eq("user_id", userId),
-        db.from("tabular_review_chats").delete().eq("user_id", userId),
-        db.from("word_documents").delete().eq("user_id", userId),
+    // cascades. An assistant chat carries its workspace (a project chat its
+    // project's), so it is deleted by filter, with no pre-enumeration for a
+    // new one to slip past. Word chats exist only in Personal: the add-in
+    // works nowhere else.
+    const assistantChats = db.from("chats").delete().eq("user_id", userId);
+    const [assistantResult, wordResult] = await Promise.all([
+        orgId
+            ? assistantChats.eq("org_id", orgId)
+            : assistantChats.is("org_id", null),
+        orgId
+            ? Promise.resolve({ error: null })
+            : db.from("word_documents").delete().eq("user_id", userId),
     ]);
 
-    await throwIfError(assistantChats.error, "Failed to delete assistant chats");
-    await throwIfError(tabularChats.error, "Failed to delete tabular chats");
-    await throwIfError(wordDocuments.error, "Failed to delete Word chats");
+    await throwIfError(assistantResult.error, "Failed to delete assistant chats");
+    await throwIfError(wordResult.error, "Failed to delete Word chats");
+    await deleteUserTabularReviewChats(db, userId, orgId);
 }
 
-export async function deleteAllUserTabularReviews(db: Db, userId: string) {
-    const { data: reviews, error: reviewsError } = await db
-        .from("tabular_reviews")
-        .select("id")
+/**
+ * A tabular review chat has no workspace of its own; it is in its review's.
+ * The user's chats on other people's reviews count too, as in the
+ * unscoped delete this replaced.
+ */
+async function deleteUserTabularReviewChats(
+    db: Db,
+    userId: string,
+    orgId: string | null,
+) {
+    const { data: chats, error: chatsError } = await db
+        .from("tabular_review_chats")
+        .select("id, review_id")
         .eq("user_id", userId);
+    await throwIfError(chatsError, "Failed to load tabular chats");
+    const rows = (chats ?? []) as {
+        id: string | null;
+        review_id: string | null;
+    }[];
+
+    const reviewsInWorkspace = new Set<string>();
+    for (const batch of chunkArray(
+        uniqueStrings(rows.map((row) => row.review_id)),
+        DELETE_BATCH_SIZE,
+    )) {
+        const reviews = db.from("tabular_reviews").select("id").in("id", batch);
+        const { data, error } = await (orgId
+            ? reviews.eq("org_id", orgId)
+            : reviews.is("org_id", null));
+        await throwIfError(error, "Failed to load tabular reviews");
+        for (const row of (data ?? []) as { id: string | null }[]) {
+            if (row.id) reviewsInWorkspace.add(row.id);
+        }
+    }
+
+    await deleteByIds(
+        db,
+        "tabular_review_chats",
+        uniqueStrings(
+            rows
+                .filter((row) => !!row.review_id && reviewsInWorkspace.has(row.review_id))
+                .map((row) => row.id),
+        ),
+    );
+}
+
+/** The tabular reviews a user owns in one workspace (`orgId` null is Personal). */
+export async function deleteAllUserTabularReviews(
+    db: Db,
+    userId: string,
+    orgId: string | null,
+) {
+    const owned = db.from("tabular_reviews").select("id").eq("user_id", userId);
+    const { data: reviews, error: reviewsError } = await (orgId
+        ? owned.eq("org_id", orgId)
+        : owned.is("org_id", null));
     await throwIfError(reviewsError, "Failed to load tabular reviews");
 
     const reviewIds = uniqueStrings(
@@ -826,56 +893,30 @@ export async function deleteProjectsByIds(db: Db, projectIds: string[]) {
 }
 
 /**
- * Remove the projects a user created — but only the personal ones.
+ * Destroy the projects a user created in one workspace (`orgId` null is
+ * Personal), with everything inside them.
  *
- * A project that belongs to an organization is the organization's, not the
- * creator's: the firm's other owners and admins are still administering it and its
- * matter documents are still live. Those projects are DETACHED instead
- * (user_id → NULL, which the nullable FK now permits) so they survive their
- * creator's departure with their contents intact. Only `org_id IS NULL`
- * projects — the genuinely personal ones — are destroyed.
- *
- * The return value counts destroyed projects, so a caller deleting a single
- * org project sees 0 and can report "nothing was removed" accurately.
+ * In an organization this is what deleting each one would do: its creator is
+ * its owner (public.project_access_role), and an owner may delete it. Other
+ * members' projects, and the projects of other workspaces, are untouched.
  */
 export async function deleteUserProjects(
     db: Db,
     userId: string,
-    projectIds?: string[],
+    orgId: string | null,
 ) {
-    const requestedProjectIds = projectIds
-        ? uniqueStrings(projectIds)
-        : undefined;
-    if (requestedProjectIds && requestedProjectIds.length === 0) return 0;
-
-    let query = db.from("projects").select("id, org_id").eq("user_id", userId);
-    if (requestedProjectIds) query = query.in("id", requestedProjectIds);
-
-    const { data: projects, error: projectsError } = await query;
+    const created = db.from("projects").select("id").eq("user_id", userId);
+    const { data: projects, error: projectsError } = await (orgId
+        ? created.eq("org_id", orgId)
+        : created.is("org_id", null));
     await throwIfError(projectsError, "Failed to load user projects");
 
-    const rows = (projects ?? []) as {
-        id: string | null;
-        org_id?: string | null;
-    }[];
-    const personalProjectIds = uniqueStrings(
-        rows.filter((row) => !row.org_id).map((row) => row.id),
+    return deleteProjectsByIds(
+        db,
+        ((projects ?? []) as { id: string | null }[])
+            .map((row) => row.id)
+            .filter((id): id is string => !!id),
     );
-    const orgProjectIds = uniqueStrings(
-        rows.filter((row) => !!row.org_id).map((row) => row.id),
-    );
-
-    if (orgProjectIds.length > 0) {
-        for (const batch of chunkArray(orgProjectIds, DELETE_BATCH_SIZE)) {
-            const { error } = await db
-                .from("projects")
-                .update({ user_id: null })
-                .in("id", batch);
-            await throwIfError(error, "Failed to detach organization projects");
-        }
-    }
-
-    return deleteProjectsByIds(db, personalProjectIds);
 }
 
 /**

@@ -617,20 +617,33 @@ export async function deleteAccount(): Promise<void> {
     return apiRequest<void>("/user/account", { method: "DELETE" });
 }
 
-export async function deleteAllChats(): Promise<void> {
-    return apiRequest<void>("/user/chats", { method: "DELETE" });
+// Settings' "Delete all" actions clear one workspace: `workspace` is
+// "personal" or an organization id; omitted, the server deletes in Personal.
+
+export async function deleteAllChats(workspace?: string): Promise<void> {
+    return apiRequest<void>(workspacePath("/user/chats", workspace), {
+        method: "DELETE",
+    });
 }
 
-export async function deleteAllProjects(): Promise<void> {
-    return apiRequest<void>("/user/projects", { method: "DELETE" });
+export async function deleteAllProjects(workspace?: string): Promise<void> {
+    return apiRequest<void>(workspacePath("/user/projects", workspace), {
+        method: "DELETE",
+    });
 }
 
-export async function deleteAllTabularReviews(): Promise<void> {
-    return apiRequest<void>("/user/tabular-reviews", { method: "DELETE" });
+export async function deleteAllTabularReviews(
+    workspace?: string,
+): Promise<void> {
+    return apiRequest<void>(workspacePath("/user/tabular-reviews", workspace), {
+        method: "DELETE",
+    });
 }
 
-export async function deleteAllMemories(): Promise<void> {
-    return apiRequest<void>("/user/memories", { method: "DELETE" });
+export async function deleteAllMemories(workspace?: string): Promise<void> {
+    return apiRequest<void>(workspacePath("/user/memories", workspace), {
+        method: "DELETE",
+    });
 }
 
 export type MemoryStatus = "idle" | "scheduled" | "processing" | "failed";
@@ -651,11 +664,12 @@ export interface MemoryCurrent {
 }
 
 /**
- * The caller's own memory. They have one per workspace — Personal, and one
- * for each organization they belong to — each private to them. `workspace`
- * names which ("personal" or an organization id); omitted, it is Personal.
+ * `path` for one of the caller's workspaces: "personal" or an organization
+ * id. Omitted, the endpoint takes Personal. The caller's own memory is one
+ * per workspace — Personal, and one for each organization they belong to —
+ * each private to them.
  */
-function userMemoryPath(path: string, workspace?: string): string {
+function workspacePath(path: string, workspace?: string): string {
     return workspace
         ? `${path}?${new URLSearchParams({ workspace }).toString()}`
         : path;
@@ -665,7 +679,7 @@ export async function getUserMemory(
     signal?: AbortSignal,
     workspace?: string,
 ): Promise<MemoryCurrent> {
-    return apiRequest<MemoryCurrent>(userMemoryPath("/user/memory", workspace), {
+    return apiRequest<MemoryCurrent>(workspacePath("/user/memory", workspace), {
         signal,
     });
 }
@@ -675,7 +689,7 @@ export async function updateUserMemory(
     expectedRevision: number,
     workspace?: string,
 ): Promise<MemoryCurrent> {
-    return apiRequest<MemoryCurrent>(userMemoryPath("/user/memory", workspace), {
+    return apiRequest<MemoryCurrent>(workspacePath("/user/memory", workspace), {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -690,7 +704,7 @@ export async function setUserMemoryEnabled(
     workspace?: string,
 ): Promise<MemoryCurrent> {
     return apiRequest<MemoryCurrent>(
-        userMemoryPath("/user/memory/settings", workspace),
+        workspacePath("/user/memory/settings", workspace),
         {
             method: "PATCH",
             headers: { "Content-Type": "application/json" },

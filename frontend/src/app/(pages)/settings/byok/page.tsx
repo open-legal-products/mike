@@ -113,6 +113,11 @@ export default function ByokPage() {
 
     return (
         <div className="@container space-y-8">
+            <SettingsDescription>
+                Your keys apply in every workspace. In an organization, its
+                own key for a provider is used first, and it can turn off
+                personal keys.
+            </SettingsDescription>
             {PROVIDER_SECTIONS.map((section) => {
                 // While the profile loads, which providers are active is not
                 // known yet: every card waits in the second section.

@@ -6,11 +6,22 @@ describe("deleteUserPrivateMemories", () => {
     const rpc = vi.fn(async () => ({ data: 2, error: null }));
     const db = { rpc };
 
-    await expect(deleteUserPrivateMemories(db as never, "u1")).resolves.toEqual(
-      { projectMemoriesDeleted: 2 },
-    );
+    await expect(
+      deleteUserPrivateMemories(db as never, "u1", null),
+    ).resolves.toEqual({ projectMemoriesDeleted: 2 });
     expect(rpc).toHaveBeenCalledWith("delete_user_private_memories", {
       p_user_id: "u1",
+      p_org_id: null,
+    });
+  });
+
+  it("names the organization whose memory is wiped", async () => {
+    const rpc = vi.fn(async () => ({ data: 0, error: null }));
+
+    await deleteUserPrivateMemories({ rpc } as never, "u1", "org-1");
+    expect(rpc).toHaveBeenCalledWith("delete_user_private_memories", {
+      p_user_id: "u1",
+      p_org_id: "org-1",
     });
   });
 
@@ -22,7 +33,7 @@ describe("deleteUserPrivateMemories", () => {
       })),
     };
 
-    await expect(deleteUserPrivateMemories(db as never, "u1")).rejects.toThrow(
+    await expect(deleteUserPrivateMemories(db as never, "u1", null)).rejects.toThrow(
       "Failed to delete private memories",
     );
   });

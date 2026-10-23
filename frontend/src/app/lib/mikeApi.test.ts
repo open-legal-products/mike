@@ -2430,6 +2430,30 @@ describe("thin endpoint wrappers", () => {
             method: "DELETE",
         },
         {
+            name: "deleteAllChats in an organization workspace",
+            call: () => deleteAllChats("org-1"),
+            url: "/user/chats?workspace=org-1",
+            method: "DELETE",
+        },
+        {
+            name: "deleteAllProjects in Personal",
+            call: () => deleteAllProjects("personal"),
+            url: "/user/projects?workspace=personal",
+            method: "DELETE",
+        },
+        {
+            name: "deleteAllTabularReviews in an organization workspace",
+            call: () => deleteAllTabularReviews("org-1"),
+            url: "/user/tabular-reviews?workspace=org-1",
+            method: "DELETE",
+        },
+        {
+            name: "deleteAllMemories in an organization workspace",
+            call: () => deleteAllMemories("org-1"),
+            url: "/user/memories?workspace=org-1",
+            method: "DELETE",
+        },
+        {
             name: "getUserMemory",
             call: () => getUserMemory(),
             url: "/user/memory",

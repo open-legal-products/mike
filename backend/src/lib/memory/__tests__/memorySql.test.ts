@@ -406,7 +406,6 @@ describe("per-workspace memory SQL", () => {
     "initialize_new_user_memory",
     "memory_source_allows_app_memory",
     "write_memory_file",
-    "delete_user_private_memories",
     "schedule_memory_consolidation",
     "refresh_memory_file_status",
   ])("a fresh install defines %s exactly as the migration does", (name) => {
@@ -560,5 +559,45 @@ describe("per-workspace memory SQL", () => {
         `create or replace function public.${name}(`,
       );
     }
+  });
+});
+
+const scopedDeletionMigration = readFileSync(
+  resolve(backendRoot, "migrations/20261023_01_workspace_scoped_data_deletion.sql"),
+  "utf8",
+);
+
+describe("workspace-scoped memory deletion SQL", () => {
+  it("a fresh install defines delete_user_private_memories exactly as the migration does", () => {
+    expect(functionBody(schemaSql, "delete_user_private_memories")).toBe(
+      functionBody(scopedDeletionMigration, "delete_user_private_memories"),
+    );
+  });
+
+  it.each([
+    ["schema", schemaSql],
+    ["migration", scopedDeletionMigration],
+  ] as const)("%s wipes one workspace's memory, never every workspace's", (_name, sql) => {
+    const body = functionBody(sql, "delete_user_private_memories");
+    expect(body).toContain("p_org_id uuid default null");
+    // An organization: only the person's own file there.
+    expect(body).toMatch(
+      /if p_org_id is not null then[\s\S]*and file\.org_id = p_org_id[\s\S]*return 0;\s+end if;/,
+    );
+    // Personal: the Personal file alone, not one per organization.
+    expect(body).toMatch(
+      /where file\.scope = 'user'\s+and file\.user_id = p_user_id\s+and file\.org_id is null/,
+    );
+    // The one-argument form is replaced, not left beside it to make a
+    // one-argument call ambiguous.
+    expect(sql).toContain(
+      "drop function if exists public.delete_user_private_memories(uuid);",
+    );
+    expect(sql).toContain(
+      "revoke all on function public.delete_user_private_memories(uuid, uuid)\n  from public, anon, authenticated;",
+    );
+    expect(sql).toMatch(
+      /grant execute\s+on function public\.delete_user_private_memories\(uuid, uuid\)\s+to service_role;/,
+    );
   });
 });

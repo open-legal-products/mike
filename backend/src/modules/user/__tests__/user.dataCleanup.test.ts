@@ -327,25 +327,61 @@ beforeEach(() => {
 // ---------------------------------------------------------------------------
 
 describe("deleteAllUserChats", () => {
-    it("deletes only the target user's assistant, Word, and tabular chats", async () => {
-        const { db, tables } = makeDb({
+    const fixture = () =>
+        makeDb({
             chats: [
-                { id: "c1", user_id: "u1" },
-                { id: "c2", user_id: "u2" },
+                { id: "c-personal", user_id: "u1", org_id: null },
+                { id: "c-firm", user_id: "u1", org_id: "o1" },
+                { id: "c-other-firm", user_id: "u1", org_id: "o2" },
+                { id: "c-colleague", user_id: "u2", org_id: "o1" },
+            ],
+            tabular_reviews: [
+                { id: "r-personal", user_id: "u1", org_id: null },
+                { id: "r-firm", user_id: "u2", org_id: "o1" },
+                { id: "r-other-firm", user_id: "u1", org_id: "o2" },
             ],
             tabular_review_chats: [
-                { id: "tc1", user_id: "u1" },
-                { id: "tc2", user_id: "u2" },
+                { id: "tc-personal", user_id: "u1", review_id: "r-personal" },
+                // On a colleague's review in the firm: still the user's chat.
+                { id: "tc-firm", user_id: "u1", review_id: "r-firm" },
+                { id: "tc-other-firm", user_id: "u1", review_id: "r-other-firm" },
+                { id: "tc-colleague", user_id: "u2", review_id: "r-firm" },
             ],
             word_documents: [
                 { id: "wd1", user_id: "u1" },
                 { id: "wd2", user_id: "u2" },
             ],
         });
-        await deleteAllUserChats(db, "u1");
-        expect(ids(tables.chats)).toEqual(["c2"]);
-        expect(ids(tables.tabular_review_chats)).toEqual(["tc2"]);
+
+    it("deletes only the user's Personal assistant, Word, and tabular chats", async () => {
+        const { db, tables } = fixture();
+        await deleteAllUserChats(db, "u1", null);
+        expect(ids(tables.chats)).toEqual(["c-firm", "c-other-firm", "c-colleague"]);
+        expect(ids(tables.tabular_review_chats)).toEqual([
+            "tc-firm",
+            "tc-other-firm",
+            "tc-colleague",
+        ]);
         expect(ids(tables.word_documents)).toEqual(["wd2"]);
+    });
+
+    it("deletes only the user's chats in the organization named", async () => {
+        const { db, tables } = fixture();
+        await deleteAllUserChats(db, "u1", "o1");
+        expect(ids(tables.chats)).toEqual([
+            "c-personal",
+            "c-other-firm",
+            "c-colleague",
+        ]);
+        expect(ids(tables.tabular_review_chats)).toEqual([
+            "tc-personal",
+            "tc-other-firm",
+            "tc-colleague",
+        ]);
+        // The Word add-in works in Personal only.
+        expect(ids(tables.word_documents)).toEqual(["wd1", "wd2"]);
+        // The reviews themselves stay.
+        expect(tables.tabular_reviews).toHaveLength(3);
     });
 
     it("surfaces delete failures with context", async () => {
@@ -353,7 +389,7 @@ describe("deleteAllUserChats", () => {
             { chats: [{ id: "c1", user_id: "u1" }], tabular_review_chats: [] },
             { deleteErrors: { chats: "boom" } },
         );
-        await expect(deleteAllUserChats(db, "u1")).rejects.toThrow(
+        await expect(deleteAllUserChats(db, "u1", null)).rejects.toThrow(
             "Failed to delete assistant chats: boom",
         );
     });
@@ -367,12 +403,14 @@ describe("deleteAllUserTabularReviews", () => {
     const fixture = () =>
         makeDb({
             tabular_reviews: [
-                { id: "r1", user_id: "u1" },
-                { id: "r2", user_id: "u1" },
-                { id: "r-other", user_id: "u2" },
+                { id: "r1", user_id: "u1", org_id: null },
+                { id: "r2", user_id: "u1", org_id: null },
+                { id: "r-firm", user_id: "u1", org_id: "o1" },
+                { id: "r-other", user_id: "u2", org_id: null },
             ],
             tabular_review_chats: [
                 { id: "rc1", review_id: "r1" },
+                { id: "rc-firm", review_id: "r-firm" },
                 { id: "rc-other", review_id: "r-other" },
             ],
             tabular_review_chat_messages: [
@@ -385,19 +423,26 @@ describe("deleteAllUserTabularReviews", () => {
             ],
         });
 
-    it("atomically cascades messages, chats, and cells with the reviews", async () => {
+    it("atomically cascades messages, chats, and cells with the Personal reviews", async () => {
         const { db, tables } = fixture();
-        await expect(deleteAllUserTabularReviews(db, "u1")).resolves.toBe(2);
-        expect(ids(tables.tabular_reviews)).toEqual(["r-other"]);
-        expect(ids(tables.tabular_review_chats)).toEqual(["rc-other"]);
+        await expect(deleteAllUserTabularReviews(db, "u1", null)).resolves.toBe(2);
+        expect(ids(tables.tabular_reviews)).toEqual(["r-firm", "r-other"]);
+        expect(ids(tables.tabular_review_chats)).toEqual(["rc-firm", "rc-other"]);
         expect(ids(tables.tabular_review_chat_messages)).toEqual(["rm-other"]);
         expect(ids(tables.tabular_cells)).toEqual(["cell-other"]);
     });
 
+    it("deletes only the user's reviews in the organization named", async () => {
+        const { db, tables } = fixture();
+        await expect(deleteAllUserTabularReviews(db, "u1", "o1")).resolves.toBe(1);
+        expect(ids(tables.tabular_reviews)).toEqual(["r1", "r2", "r-other"]);
+        expect(ids(tables.tabular_review_chats)).toEqual(["rc1", "rc-other"]);
+    });
+
     it("returns 0 and deletes nothing for a user with no reviews", async () => {
         const { db, tables } = fixture();
-        await expect(deleteAllUserTabularReviews(db, "u3")).resolves.toBe(0);
-        expect(tables.tabular_reviews).toHaveLength(3);
+        await expect(deleteAllUserTabularReviews(db, "u3", null)).resolves.toBe(0);
+        expect(tables.tabular_reviews).toHaveLength(4);
         expect(tables.tabular_cells).toHaveLength(2);
     });
 });
@@ -410,9 +455,9 @@ describe("deleteUserProjects", () => {
     const fixture = (options: { deleteErrors?: Record<string, string> } = {}) =>
         makeDb({
             projects: [
-                { id: "p1", user_id: "u1" },
-                { id: "p2", user_id: "u1" },
-                { id: "p-other", user_id: "u2" },
+                { id: "p1", user_id: "u1", org_id: null },
+                { id: "p2", user_id: "u1", org_id: null },
+                { id: "p-other", user_id: "u2", org_id: null },
             ],
             documents: [
                 { id: "d1", user_id: "u1", project_id: "p1" },
@@ -485,7 +530,7 @@ describe("deleteUserProjects", () => {
 
     it("cascades project contents and storage files for owned projects", async () => {
         const { db, tables } = fixture();
-        await expect(deleteUserProjects(db, "u1")).resolves.toBe(2);
+        await expect(deleteUserProjects(db, "u1", null)).resolves.toBe(2);
 
         expect(ids(tables.projects)).toEqual(["p-other"]);
         expect(ids(tables.documents)).toEqual(["d-loose", "d-other"]);
@@ -517,25 +562,9 @@ describe("deleteUserProjects", () => {
         ]);
     });
 
-    it("restricts deletion to the requested owned projects", async () => {
-        const { db, tables } = fixture();
-        // p-other belongs to u2, so requesting it must not delete anything of theirs.
-        await expect(
-            deleteUserProjects(db, "u1", ["p2", "p-other", "p2"]),
-        ).resolves.toBe(1);
-        expect(ids(tables.projects)).toEqual(["p1", "p-other"]);
-        expect(ids(tables.documents)).toEqual(["d1", "d-loose", "d-other"]);
-    });
-
-    it("returns 0 for an explicitly empty project list", async () => {
-        const { db, tables } = fixture();
-        await expect(deleteUserProjects(db, "u1", [])).resolves.toBe(0);
-        expect(tables.projects).toHaveLength(3);
-    });
-
     it("returns 0 when the user owns no projects", async () => {
         const { db, tables } = fixture();
-        await expect(deleteUserProjects(db, "u3")).resolves.toBe(0);
+        await expect(deleteUserProjects(db, "u3", null)).resolves.toBe(0);
         expect(tables.projects).toHaveLength(3);
         expect(deleteFileMock).not.toHaveBeenCalled();
     });
@@ -548,7 +577,7 @@ describe("deleteUserProjects", () => {
             deleteErrors: { projects: "connection reset" },
         });
 
-        await expect(deleteUserProjects(db, "u1")).rejects.toThrow();
+        await expect(deleteUserProjects(db, "u1", null)).rejects.toThrow();
         expect(deleteFileMock).not.toHaveBeenCalled();
     });
 });
