@@ -25,6 +25,7 @@ import {
 } from "../primitives/ModalForm";
 import { PageTitle } from "../primitives/PageTitle";
 import { notifyError, userMessage } from "../../lib/notify";
+import { APP_NAME } from "../../../shared/branding";
 
 interface DocumentActionsProps {
   createOpen: boolean;
@@ -65,7 +66,7 @@ export function DocumentActions({
         if (cancelled) return;
         setWorkflowsError(
           userMessage(reason, {
-            fallback: "Mike couldn't load your quick actions. Try again.",
+            fallback: `${APP_NAME} couldn't load your quick actions. Try again.`,
           }),
         );
         notifyError(reason, {

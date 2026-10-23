@@ -108,6 +108,7 @@ import { SUPPORTED_DOCUMENT_ACCEPT } from "@/app/lib/documentUploadValidation";
 import { useConfiguredModels } from "@/app/hooks/useConfiguredModels";
 import { useItemWorkspace } from "@/app/hooks/useItemWorkspace";
 import { notifyTabularReviewsChanged } from "@/app/lib/tabularReviewChanges";
+import { APP_NAME } from "@/shared/lib/branding";
 
 interface Props {
     reviewId: string;
@@ -340,7 +341,7 @@ export function TRView({ reviewId, projectId }: Props) {
                             notifyError(err, {
                                 action: "reconnect to the running review",
                                 fallback:
-                                    "Mike lost contact with the run in progress. Results already saved are still here.",
+                                    `${APP_NAME} lost contact with the run in progress. Results already saved are still here.`,
                                 dedupeKey: `tr-resume:${reviewId}`,
                                 // Returned, so a failed retry is reported
                                 // again by notifyError's Retry wrapper.
@@ -691,7 +692,7 @@ export function TRView({ reviewId, projectId }: Props) {
                     notifyError(err, {
                         action: "follow this cell's regeneration",
                         fallback:
-                            "The cell is still being generated, but Mike lost contact with the run. Reload to see the result.",
+                            `The cell is still being generated, but ${APP_NAME} lost contact with the run. Reload to see the result.`,
                         dedupeKey: `tr-resume:${reviewId}`,
                     }),
                 );
@@ -804,7 +805,7 @@ export function TRView({ reviewId, projectId }: Props) {
                 notifyError(err, {
                     action: "show a generated cell",
                     fallback:
-                        "A result arrived that Mike couldn't display. Reload to see it.",
+                        `A result arrived that ${APP_NAME} couldn't display. Reload to see it.`,
                     dedupeKey: `tr-cell-update:${reviewId}`,
                 });
             }

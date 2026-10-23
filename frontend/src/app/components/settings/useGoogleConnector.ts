@@ -19,6 +19,7 @@ import {
   updateGoogleDriveSettings,
   updateGoogleWorkspaceSettings,
 } from "@/app/lib/mikeApi";
+import { APP_NAME } from "@/shared/lib/branding";
 
 export type GoogleConnectorProvider = "google-drive" | GoogleWorkspaceProvider;
 
@@ -140,7 +141,7 @@ export function useGoogleConnector(
     try {
       if (!popup)
         throw new GoogleConnectorFlowError(
-          "Allow popups for Mike, then try adding the connector again.",
+          `Allow popups for ${APP_NAME}, then try adding the connector again.`,
         );
       const { authorizationUrl } = await api.start();
       pending = new URL(authorizationUrl).searchParams.get("state");

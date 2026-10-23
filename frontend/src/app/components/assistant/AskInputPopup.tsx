@@ -13,6 +13,7 @@ import {
     LIQUID_GLASS_SUBTLE_CLASS,
     LIQUID_GLASS_TRANSLUCENT_CLASS,
 } from "@/app/components/ui/liquid-surface";
+import { APP_NAME } from "@/shared/lib/branding";
 
 type AskInputsEvent = Extract<AssistantEvent, { type: "ask_inputs" }>;
 type AskInputItem = AskInputsEvent["items"][number];
@@ -367,7 +368,7 @@ export function AskInputPopup({
         const onlyApprovals = response.responses.every(
             (item) => item.kind === "approval",
         );
-        return `${onlyApprovals ? "Decisions on Mike's requested actions" : "Responses to Mike's questions"}:\n${lines.join("\n\n")}`;
+        return `${onlyApprovals ? `Decisions on ${APP_NAME}'s requested actions` : `Responses to ${APP_NAME}'s questions`}:\n${lines.join("\n\n")}`;
     };
 
     // Called straight from the handler that resolves the last outstanding
@@ -492,7 +493,7 @@ export function AskInputPopup({
                                             <DocumentPrompt />
                                         ) : activeItem.kind === "approval" ? (
                                             <p className="text-sm text-gray-800">
-                                                Mike wants to run this action.
+                                                {APP_NAME} wants to run this action.
                                                 Approve it to run it now.
                                             </p>
                                         ) : (

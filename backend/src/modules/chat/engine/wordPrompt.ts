@@ -1,3 +1,5 @@
+import { appDomain, appName } from "../../../lib/branding";
+
 const WORD_EDITS_PROTOCOL = `<EDITS>
 [
   {"type":"edit_data","kind":"edit","deleted_text":"exact text copied from the active Word document","inserted_text":"replacement text","reason":"one short sentence explaining the change"},
@@ -24,7 +26,7 @@ export const ACTIVE_WORD_DOCUMENT_LIVE_FILENAME = "Active Word document (live)";
  * the edit channel is irrelevant — see the byte-identity assertion in
  * engine/__tests__/documentContext.test.ts.
  */
-const WORD_CHAT_SHARED_PREAMBLE = `You are Mike, an AI legal assistant running inside Microsoft Word. Be precise, professional, and evidence-aware. Follow the user's request without inventing document content.
+const WORD_CHAT_SHARED_PREAMBLE = `Be precise, professional, and evidence-aware. Follow the user's request without inventing document content.
 
 WORKFLOWS AND DOCUMENTS
 - If the user selects a workflow with [Workflow: <title> (id: <id>)], call read_workflow with that id first and follow it.
@@ -112,7 +114,10 @@ ${WORD_CHAT_CITATIONS_SECTION}`;
  * cannot answer client_tool_call frames is never handed one.
  */
 export function buildWordChatSystemPrompt(clientTools = false): string {
-  return clientTools
+  const instructions = clientTools
     ? WORD_CHAT_CLIENT_TOOLS_INSTRUCTIONS
     : WORD_CHAT_INSTRUCTIONS;
+  // The identity sentence reads the product name and domain at call time
+  // (lib/branding); everything after it is shared, fixed text.
+  return `You are ${appName()}, an AI ${appDomain()} assistant running inside Microsoft Word. ${instructions}`;
 }

@@ -21,6 +21,7 @@ import {
     MAX_PASSWORD_LENGTH,
     MIN_PASSWORD_LENGTH,
 } from "@/app/components/auth/passwordPolicy";
+import { APP_NAME } from "@/shared/lib/branding";
 
 export const TOO_MANY_ATTEMPTS_MESSAGE =
     "Too many attempts. Wait a moment and try again.";
@@ -58,11 +59,11 @@ export const AUTH_ERROR_MESSAGES = {
     signup_disabled: "New accounts aren't open right now.",
     email_address_invalid: "Enter a valid email address.",
     email_address_not_authorized:
-        "Mike can't send email to this address. Use a different one.",
+        `${APP_NAME} can't send email to this address. Use a different one.`,
 
     // Passwords
     weak_password: WEAK_PASSWORD_MESSAGE,
-    same_password: "Choose a password you haven't used on Mike before.",
+    same_password: `Choose a password you haven't used on ${APP_NAME} before.`,
     password_too_short: `Password must be at least ${MIN_PASSWORD_LENGTH} characters.`,
     password_too_long: `Password must be at most ${MAX_PASSWORD_LENGTH} UTF-8 bytes. Accented characters and emoji can use more than one byte.`,
 

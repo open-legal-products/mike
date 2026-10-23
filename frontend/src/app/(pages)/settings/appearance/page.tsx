@@ -11,6 +11,7 @@ import { GlassCardUI } from "@/shared/ui/GlassCardUI";
 import { SettingsHeading } from "@/app/components/settings/SettingsHeading";
 import { SettingsRow } from "@/app/components/settings/SettingsRow";
 import { ToggleSwitchUI } from "@/shared/ui/ToggleSwitchUI";
+import { APP_NAME } from "@/shared/lib/branding";
 
 export default function AppearancePage() {
   const { profile, updateDarkMode } = useUserProfile();
@@ -45,7 +46,7 @@ export default function AppearancePage() {
           <div className="min-w-0 space-y-1">
             <SettingsLabel>Dark mode</SettingsLabel>
             <SettingsDescription>
-              Use a darker color palette throughout Mike.
+              Use a darker color palette throughout {APP_NAME}.
             </SettingsDescription>
             {darkModeError && (
               <p role="alert" className="text-xs text-red-600">

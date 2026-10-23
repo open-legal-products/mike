@@ -12,6 +12,7 @@ import { useUserProfile } from "@/app/contexts/UserProfileContext";
 import { updateUserProfile } from "@/app/lib/mikeApi";
 import { FieldLabel } from "@/app/components/ui/form-field";
 import { describeError } from "@/app/lib/userFacingError";
+import { APP_NAME } from "@/shared/lib/branding";
 
 export default function OnboardingProfilePage() {
     const router = useRouter();
@@ -79,7 +80,7 @@ function ProfileDetailsForm({
         <OnboardingShell
             step="Step 1 of 3"
             title="Tell us about you"
-            description="Add the details we should use across Mike."
+            description={`Add the details we should use across ${APP_NAME}.`}
         >
             <form onSubmit={handleSubmit} className="space-y-4">
                 <div>

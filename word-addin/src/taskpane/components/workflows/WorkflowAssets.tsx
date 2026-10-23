@@ -9,6 +9,7 @@ import {
 } from "../../api/mikeApi";
 import { userMessage } from "../../lib/notify";
 import { openExternalUrl } from "../../lib/openExternalUrl";
+import { APP_NAME } from "../../../shared/branding";
 
 export function WorkflowAssets({
   workflowId,
@@ -44,7 +45,7 @@ export function WorkflowAssets({
           setFiles([]);
           setError(
             userMessage(reason, {
-              fallback: "Mike couldn't load this workflow's files. Try again.",
+              fallback: `${APP_NAME} couldn't load this workflow's files. Try again.`,
             }),
           );
         }
@@ -67,7 +68,7 @@ export function WorkflowAssets({
     } catch (reason) {
       setError(
         userMessage(reason, {
-          fallback: "Mike couldn't upload that file. Try again.",
+          fallback: `${APP_NAME} couldn't upload that file. Try again.`,
         }),
       );
     } finally {
@@ -85,7 +86,7 @@ export function WorkflowAssets({
     } catch (reason) {
       setError(
         userMessage(reason, {
-          fallback: "Mike couldn't upload the new version. Try again.",
+          fallback: `${APP_NAME} couldn't upload the new version. Try again.`,
         }),
       );
     } finally {
@@ -155,7 +156,7 @@ export function WorkflowAssets({
                     .catch((reason: unknown) =>
                       setError(
                         userMessage(reason, {
-                          fallback: "Mike couldn't open that file. Try again.",
+                          fallback: `${APP_NAME} couldn't open that file. Try again.`,
                         }),
                       ),
                     )
@@ -185,7 +186,7 @@ export function WorkflowAssets({
                           setError(
                             userMessage(reason, {
                               fallback:
-                                "Mike couldn't delete that file. Try again.",
+                                `${APP_NAME} couldn't delete that file. Try again.`,
                             }),
                           ),
                         )

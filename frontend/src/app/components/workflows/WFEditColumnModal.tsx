@@ -12,6 +12,7 @@ import { ModalSelect } from "../modals/ModalSelect";
 import { ModalTextarea } from "../modals/ModalTextarea";
 import { FieldLabel, FormTextInput } from "../ui/form-field";
 import { LIQUID_GLASS_FLOAT_CLASS } from "@/shared/ui/LiquidGlassUI";
+import { APP_NAME } from "@/shared/lib/branding";
 
 interface ColumnDraft {
     name: string;
@@ -285,7 +286,7 @@ export function WFEditColumnModal({ column, onClose, onSave, onDelete }: Props) 
                             rows={6}
                             value={draft.prompt}
                             onChange={(e) => update({ prompt: e.target.value })}
-                            placeholder="Write the analysis prompt — describe what Mike should extract from each document for this column…"
+                            placeholder={`Write the analysis prompt — describe what ${APP_NAME} should extract from each document for this column…`}
                             className="mt-2 min-h-36"
                         />
                 </div>

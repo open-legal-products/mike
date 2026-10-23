@@ -56,6 +56,7 @@ import {
   TURN_OUTCOME_UNKNOWN_MESSAGE,
   failedTurnRecovery,
 } from "../lib/wordTurnRecovery";
+import { APP_NAME } from "../../shared/branding";
 
 /**
  * What one run of the turn pipeline was asked to do. Sending and resuming
@@ -326,7 +327,7 @@ export function useWordAssistantChat({
             console.error("Failed to read the current Word document", error);
             if (requestIsCurrent()) {
               setRequestError(
-                "Mike couldn't read this Word document. Try again.",
+                `${APP_NAME} couldn't read this Word document. Try again.`,
               );
             }
             return;
@@ -998,7 +999,7 @@ export function useWordAssistantChat({
           // carries what the bubble cannot: the actions on the failure.
           const failureCopy = {
             action: "get a response",
-            fallback: "Mike couldn't finish that answer. Try again.",
+            fallback: `${APP_NAME} couldn't finish that answer. Try again.`,
           };
           const recovery = failedTurnRecovery({
             wasSend: input.kind === "send",

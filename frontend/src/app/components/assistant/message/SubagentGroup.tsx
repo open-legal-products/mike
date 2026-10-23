@@ -6,6 +6,7 @@ import { EventBlock, ReasoningContent } from "./EventBlocks";
 import { EventChevron, EventDisclosureButton, EventLabel } from "./EventDisclosure";
 import { isRenderableEvent, toolCallLabel } from "./eventUtils";
 import { subagentDetailsText } from "./responseDetails";
+import { APP_NAME } from "@/shared/lib/branding";
 
 export type DelegationEvent = Extract<AssistantEvent, { type: "delegation" }>;
 
@@ -54,7 +55,7 @@ function subagentStatus(event: DelegationEvent): { text: string; failed: boolean
         case "needs_input":
             return line(
                 resumed,
-                event.approval_ids?.length ? "Waiting for your approval" : "Asked Mike a question",
+                event.approval_ids?.length ? "Waiting for your approval" : `Asked ${APP_NAME} a question`,
                 steps,
             );
         case "failed":
@@ -198,7 +199,7 @@ function SubagentDetails({
                 {status.text}
             </p>
             <DetailDisclosureRow
-                label="Task from Mike"
+                label={`Task from ${APP_NAME}`}
                 showConnector={streaming || hasSteps || hasBrief || hasQuestion}
             >
                 <p className="mt-2 whitespace-pre-wrap text-gray-600 [overflow-wrap:anywhere]">
@@ -219,8 +220,8 @@ function SubagentDetails({
                 <DetailDisclosureRow
                     label={
                         event.status === "incomplete"
-                            ? "Returned a partial brief to Mike"
-                            : "Returned a brief to Mike"
+                            ? `Returned a partial brief to ${APP_NAME}`
+                            : `Returned a brief to ${APP_NAME}`
                     }
                     showConnector={hasQuestion}
                 >
@@ -229,7 +230,7 @@ function SubagentDetails({
             )}
             {hasQuestion && (
                 <EventBlock dotColor="gray">
-                    <EventLabel>Asked Mike</EventLabel>
+                    <EventLabel>Asked {APP_NAME}</EventLabel>
                     <p className="mt-0.5 whitespace-pre-wrap text-gray-800 [overflow-wrap:anywhere]">
                         {event.question}
                     </p>

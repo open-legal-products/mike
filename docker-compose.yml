@@ -371,6 +371,13 @@ services:
         # Opt-out and install kind reach the browser bundle at build time.
         NEXT_PUBLIC_SENTRY_DISABLED: ${SENTRY_DISABLED:-}
         NEXT_PUBLIC_SENTRY_INSTALL: ${SENTRY_INSTALL:-}
+        # Product name and link-preview copy; empty keeps Mike's.
+        NEXT_PUBLIC_APP_NAME: ${NEXT_PUBLIC_APP_NAME:-}
+        NEXT_PUBLIC_APP_TAGLINE: ${NEXT_PUBLIC_APP_TAGLINE:-}
+        NEXT_PUBLIC_APP_HOME_URL: ${NEXT_PUBLIC_APP_HOME_URL:-}
+        NEXT_PUBLIC_APP_URL: ${NEXT_PUBLIC_APP_URL:-}
+        NEXT_PUBLIC_APP_DESCRIPTION: ${NEXT_PUBLIC_APP_DESCRIPTION:-}
+        NEXT_PUBLIC_APP_DOMAIN: ${NEXT_PUBLIC_APP_DOMAIN:-}
         GIT_SHA: ${GIT_SHA:-}
     environment:
       - API_BASE_URL=${API_BASE_URL:-http://backend:3001}

@@ -47,6 +47,7 @@ import {
   PLAYBOOK_SIDE_LIST_CLASS,
   PLAYBOOK_SIDE_TITLE_CLASS,
 } from "./playbookPaneStyles";
+import { APP_NAME } from "@/shared/lib/branding";
 
 const STATUS_LABEL: Record<string, string> = {
   unacceptable: "Unacceptable",
@@ -655,7 +656,7 @@ function RunResults({
           This review used extracted text from{" "}
           <span className="font-medium">{run.documentName}</span>. For a
           formatting-preserving Word redline, provide the original DOCX in
-          Assistant; if it is unavailable, Mike can create a text-reconstructed
+          Assistant; if it is unavailable, {APP_NAME} can create a text-reconstructed
           DOCX and will warn that formatting may differ.
         </p>
       )}

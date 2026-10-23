@@ -1,6 +1,7 @@
 import React from "react";
 import { MikeIcon } from "../../../shared/chat/mike-icon";
 import { cn } from "../../../shared/lib/utils";
+import { APP_NAME } from "../../../shared/branding";
 
 interface WordAddinLogoProps {
   size?: "md" | "lg";
@@ -22,7 +23,7 @@ export function WordAddinLogo({
           large ? "text-4xl" : "text-2xl"
         )}
       >
-        Mike
+        {APP_NAME}
       </span>
     </div>
   );

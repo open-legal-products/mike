@@ -27,6 +27,7 @@ import {
   updateUserMemory,
 } from "@/app/lib/mikeApi";
 import { userFacingApiError } from "@/app/lib/userFacingError";
+import { APP_NAME } from "@/shared/lib/branding";
 
 type ConfirmAction = "disable";
 
@@ -195,8 +196,8 @@ function WorkspaceMemory({
                 <SettingsLabel>{memoryName}</SettingsLabel>
                 <SettingsDescription>
                   {organizationName
-                    ? `Let Mike curate useful details after your own conversations in ${organizationName} and use them in future answers there. Only you can see it. You have a separate memory for each workspace.`
-                    : "Let Mike curate useful details after your saved conversations in Personal and use them in future answers there. You have a separate memory for each workspace."}
+                    ? `Let ${APP_NAME} curate useful details after your own conversations in ${organizationName} and use them in future answers there. Only you can see it. You have a separate memory for each workspace.`
+                    : `Let ${APP_NAME} curate useful details after your saved conversations in Personal and use them in future answers there. You have a separate memory for each workspace.`}
                 </SettingsDescription>
               </div>
               <div className="flex items-center gap-3">

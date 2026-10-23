@@ -7,6 +7,7 @@ import type { WordChatStorageMode } from "../../lib/wordChatSettings";
 import { Modal } from "../primitives/Modal";
 import { GlassCardUI } from "@mike/glass-card-ui";
 import { userMessage } from "../../lib/notify";
+import { APP_NAME } from "../../../shared/branding";
 
 interface SettingsPageProps {
   storageMode: WordChatStorageMode;
@@ -32,7 +33,7 @@ export function SettingsPage({
     } catch (reason) {
       setError(
         userMessage(reason, {
-          fallback: "Mike couldn't save that setting. Try again.",
+          fallback: `${APP_NAME} couldn't save that setting. Try again.`,
         }),
       );
     } finally {
@@ -114,7 +115,7 @@ export function SettingsPage({
                 setError(
                   userMessage(reason, {
                     fallback:
-                      "Mike couldn't delete the device-only chats. Try again.",
+                      `${APP_NAME} couldn't delete the device-only chats. Try again.`,
                   }),
                 ),
               )

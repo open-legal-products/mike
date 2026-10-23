@@ -7,6 +7,7 @@ import {
   ALREADY_APPLIED_MESSAGE,
   UNVERIFIED_APPLY_MESSAGE,
 } from "../../lib/editApplyOutcome";
+import { APP_NAME } from "../../../shared/branding";
 
 interface EditCardProps {
   /** Fields can arrive independently while a streamed edit is being parsed. */
@@ -142,7 +143,7 @@ export function EditCard({
   // reported how many places the passage matched.
   const ambiguousCopy =
     status === "ambiguous" && matches !== undefined && matches > 1
-      ? `Skipped — this text appears ${matches} times in the document. Tell Mike which one to change.`
+      ? `Skipped — this text appears ${matches} times in the document. Tell ${APP_NAME} which one to change.`
       : undefined;
   // A replace-all edit names its breadth so "Applied" can't be misread as a
   // single change.

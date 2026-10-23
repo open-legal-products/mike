@@ -28,6 +28,7 @@ import {
   type UserExportType,
 } from "@/app/lib/mikeApi";
 import { UserVisibleError, notifyError } from "@/app/lib/userFacingError";
+import { APP_NAME } from "@/shared/lib/branding";
 
 type DeleteDataAction = "chats" | "tabular-reviews" | "projects" | "memory";
 type ExportDataAction =
@@ -121,7 +122,7 @@ export default function PrivacyDataPage() {
       const status = await getUserExportStatus(export_id);
       if (status.status === "failed") {
         throw new UserVisibleError(
-          "Mike couldn't build the export. Try again, and contact support if it keeps happening.",
+          `${APP_NAME} couldn't build the export. Try again, and contact support if it keeps happening.`,
           { retryable: true },
         );
       }

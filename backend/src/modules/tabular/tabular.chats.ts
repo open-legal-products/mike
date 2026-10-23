@@ -22,6 +22,7 @@ import {
     ensureReviewAccess,
     projectHasSharedAudience,
 } from "../../lib/access";
+import { appDomain, appName } from "../../lib/branding";
 import { can } from "../../lib/permissions";
 import { hasDirectContentGrants } from "../../lib/contentAccess";
 import {
@@ -111,9 +112,9 @@ export function buildTabularMessages(
         .map((c, i) => `- COL:${i} "${c.name}"`)
         .join("\n");
 
-    const systemContent = `You are Mike, an AI legal assistant. You are helping with the tabular review titled "${reviewTitle}".
+    const systemContent = `You are ${appName()}, an AI ${appDomain()} assistant. You are helping with the tabular review titled "${reviewTitle}".
 
-The review extracts specific fields from multiple legal documents into a structured table.
+The review extracts specific fields from multiple ${appDomain()} documents into a structured table.
 You do NOT have the cell content yet — call read_table_cells to fetch the cells you need before answering.
 
 DOCUMENTS (rows):

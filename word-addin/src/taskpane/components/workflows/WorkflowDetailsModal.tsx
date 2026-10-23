@@ -17,6 +17,7 @@ import {
   WORKFLOW_PRACTICE_OPTIONS,
 } from "../../lib/workflowMetadata";
 import { userMessage } from "../../lib/notify";
+import { APP_NAME } from "../../../shared/branding";
 
 function valueOrOther(
   value: string,
@@ -148,7 +149,7 @@ export function WorkflowDetailsModal({
     } catch (reason) {
       setError(
         userMessage(reason, {
-          fallback: "Mike couldn't save this workflow. Try again.",
+          fallback: `${APP_NAME} couldn't save this workflow. Try again.`,
         }),
       );
     } finally {
@@ -168,7 +169,7 @@ export function WorkflowDetailsModal({
     } catch (reason) {
       setDeleteError(
         userMessage(reason, {
-          fallback: "Mike couldn't delete this workflow. Try again.",
+          fallback: `${APP_NAME} couldn't delete this workflow. Try again.`,
         }),
       );
     } finally {

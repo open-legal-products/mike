@@ -10,6 +10,8 @@
  * Shared by the Drive and Gmail/Calendar integrations, which otherwise keep
  * separate OAuth clients, grants and tools.
  */
+import { appName } from "../branding";
+
 export const GOOGLE_SERVICES = {
   "google-drive": "Google Drive",
   gmail: "Gmail",
@@ -37,5 +39,5 @@ export function isGoogleServiceAvailable(service: GoogleService): boolean {
 
 /** Repo-authored, safe to show the user as written. */
 export function googleServiceUnavailableMessage(service: GoogleService): string {
-  return `${GOOGLE_SERVICES[service]} is not offered on this Mike server.`;
+  return `${GOOGLE_SERVICES[service]} is not offered on this ${appName()} server.`;
 }

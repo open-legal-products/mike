@@ -4,6 +4,7 @@ import { listWorkflows } from "../../api/mikeApi";
 import { Modal } from "../primitives/Modal";
 import { WorkflowList } from "./WorkflowList";
 import { userMessage } from "../../lib/notify";
+import { APP_NAME } from "../../../shared/branding";
 
 interface WorkflowModalProps {
   open: boolean;
@@ -43,7 +44,7 @@ export function WorkflowModal({
         setWorkflows([]);
         setError(
           userMessage(reason, {
-            fallback: "Mike couldn't load your workflows. Try again.",
+            fallback: `${APP_NAME} couldn't load your workflows. Try again.`,
           })
         );
       })

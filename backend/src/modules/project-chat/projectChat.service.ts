@@ -46,6 +46,7 @@ import {
     DOCUMENT_WORKSPACE_MISMATCH_DETAIL,
     findNewAttachmentsOutsideWorkspace,
 } from "../../lib/documentWorkspace";
+import { appDomain } from "../../lib/branding";
 import { can, type ProjectRole } from "../../lib/permissions";
 import {
     resolveEffectiveReasoningLevel,
@@ -65,13 +66,16 @@ import { updateChatTitle, type ChatWriteResult } from "../chat/chat.service";
 export { updateChatTitle };
 export type { ChatWriteResult };
 
-const PROJECT_SYSTEM_PROMPT_EXTRA = `PROJECT CONTEXT:
-You are operating within a project folder that contains a collection of legal documents the user has organised for a single matter. The user's questions will usually refer to one or more documents in this project — your job is to find the relevant files to work on. Use list_documents to see what is available and fetch_documents / read_document to pull in any documents you need before answering.
+/** The project-context addition to the system prompt; its domain adjective comes from lib/branding. */
+export function projectSystemPromptExtra(): string {
+    return `PROJECT CONTEXT:
+You are operating within a project folder that contains a collection of ${appDomain()} documents the user has organised for a single matter. The user's questions will usually refer to one or more documents in this project — your job is to find the relevant files to work on. Use list_documents to see what is available and fetch_documents / read_document to pull in any documents you need before answering.
 
 A document may currently be displayed in the user's side panel; when provided, treat it as context for the user's likely focus, but do NOT assume it is the only or definitive document the user is asking about. If the request could apply to other files in the project, identify and read those as well. Prefer coverage across the relevant project documents over an over-narrow reading of only the displayed one.
 
 REPLICATING A DOCUMENT:
 Copies created with replicate_document are saved as project documents in this project. After replication, use the returned doc_id for any requested edits.`;
+}
 
 // Persist the assistant's turn for a project chat.
 //
@@ -526,7 +530,7 @@ export async function prepareProjectChatStream(
         // the system prompt with the current-turn doc_id slugs so the model
         // knows which docs the user is highlighting *now*, distinct from
         // the broader project doc list.
-        let systemPromptExtra = PROJECT_SYSTEM_PROMPT_EXTRA;
+        let systemPromptExtra = projectSystemPromptExtra();
         if (attached_documents?.length) {
             const lines = attached_documents.map((d) => {
                 const document = documentPromptRef(d.document_id, d.filename);

@@ -31,6 +31,7 @@ import {
   PROXY_CLEANUP_FAILURE,
   cleanupSentence,
 } from "../lib/trackedEditCleanup";
+import { APP_NAME } from "../../shared/branding";
 
 interface PersistedRedlineEdit extends RedlineEdit {
   /** Stable `${assistantMessageId}:edit-${blockIndex}` identity. */
@@ -1352,7 +1353,7 @@ async function resolveTrackedEditNow(
         handle,
         status: "error",
         error:
-          "The revisions in this passage changed after Mike applied the edit. Review them directly in Word.",
+          `The revisions in this passage changed after ${APP_NAME} applied the edit. Review them directly in Word.`,
       };
     }
     if (entry.stableEditId && entry.bookmarkName) {
@@ -2952,7 +2953,7 @@ export function useWordDoc() {
                 result.reason = outcome.reason;
                 if (outcome.status === "applied-unmanaged") {
                   result.error =
-                    "Applied in Word, but Mike couldn’t retain its review controls. Review it from Word’s Review tab.";
+                    `Applied in Word, but ${APP_NAME} couldn’t retain its review controls. Review it from Word’s Review tab.`;
                   if (edit.stableEditId) {
                     newlyAppliedEditIds.push(edit.stableEditId);
                   }

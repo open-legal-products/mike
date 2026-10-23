@@ -22,6 +22,7 @@ import type {
 import type { WordEditApplyMode } from "../../lib/wordChatSettings";
 import { selectDocumentText } from "../../hooks/useWordDoc";
 import { UserVisibleError, notifyError } from "../../lib/notify";
+import { APP_NAME } from "../../../shared/branding";
 
 const CHAT_MESSAGE_TOP_GAP = 12;
 const CHAT_MESSAGES_BOTTOM_GAP = 16;
@@ -274,7 +275,7 @@ export function ChatView({
             notifyError(
                 new UserVisibleError(
                     status === "not-found"
-                        ? "Mike couldn't find that passage in this document. It may have changed since the answer was written."
+                        ? `${APP_NAME} couldn't find that passage in this document. It may have changed since the answer was written.`
                         : "Word couldn't scroll to that passage. Try finding it with Word's search.",
                     { kind: status === "not-found" ? "not_found" : "unknown" },
                 ),

@@ -15,6 +15,7 @@ import { SettingsPersonalisationFields } from "@/app/components/settings/Setting
 import { SettingsRow } from "@/app/components/settings/SettingsRow";
 import { useUserProfile } from "@/app/contexts/UserProfileContext";
 import type { PersonalisationDetails } from "@/app/lib/mikeApi";
+import { APP_NAME } from "@/shared/lib/branding";
 
 function fieldStatus(
   field: PersonalisationField,
@@ -141,7 +142,7 @@ function PersonalisationForm({
       <section className="space-y-3">
         <SettingsHeading>Your background</SettingsHeading>
         <SettingsDescription>
-          Tell Mike about your role and practice so responses can be tailored to
+          Tell {APP_NAME} about your role and practice so responses can be tailored to
           your professional context.
         </SettingsDescription>
         <GlassCardUI>

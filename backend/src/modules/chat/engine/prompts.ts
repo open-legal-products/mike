@@ -1,6 +1,7 @@
+import { appName, assistantPersona } from "../../../lib/branding";
 import { COURTLISTENER_SYSTEM_PROMPT } from "./tools/courtlistenerTools";
 
-const SYSTEM_PROMPT_BEFORE_RESEARCH = `You are Mike, an AI legal assistant for lawyers and legal professionals. Help analyze documents, answer legal questions, and draft legal documents.
+const SYSTEM_PROMPT_RULES = `
 
 CORE RULES:
 - Be precise, professional, and evidence-aware.
@@ -74,6 +75,12 @@ When edit_document adds, deletes, moves, or reorders any numbered clause, sectio
 - If a reference might point to a shifted number, include the update and explain the reason.
 - When deleting square brackets, delete both "[" and "]".`;
 
+// The identity sentence reads the product name and persona at build time
+// (lib/branding), so a deployment can rebrand the assistant by environment.
+function systemPromptBeforeResearch(): string {
+    return `You are ${appName()}, ${assistantPersona()}${SYSTEM_PROMPT_RULES}`;
+}
+
 const SYSTEM_PROMPT_AFTER_RESEARCH = `DOCUMENT NAMES IN PROSE:
 - Chat-local labels such as "doc-0" are internal. Use them only in tool arguments and citation JSON.
 - Never show "doc-N" labels to the user in prose, headings, lists, or tool activity text.
@@ -116,6 +123,6 @@ GENERAL GUIDANCE:
  */
 export function buildSystemPrompt(includeResearchTools = true): string {
   return includeResearchTools
-    ? `${SYSTEM_PROMPT_BEFORE_RESEARCH}\n\n${COURTLISTENER_SYSTEM_PROMPT}\n${SYSTEM_PROMPT_AFTER_RESEARCH}`
-    : `${SYSTEM_PROMPT_BEFORE_RESEARCH}\n\n${SYSTEM_PROMPT_AFTER_RESEARCH}`;
+    ? `${systemPromptBeforeResearch()}\n\n${COURTLISTENER_SYSTEM_PROMPT}\n${SYSTEM_PROMPT_AFTER_RESEARCH}`
+    : `${systemPromptBeforeResearch()}\n\n${SYSTEM_PROMPT_AFTER_RESEARCH}`;
 }

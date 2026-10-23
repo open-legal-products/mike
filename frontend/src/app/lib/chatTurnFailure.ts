@@ -1,4 +1,5 @@
 import { UserVisibleError, describeError } from "@/app/lib/userFacingError";
+import { APP_NAME } from "@/shared/lib/branding";
 
 // What a chat surface says, and offers, when a turn fails. The assistant chat
 // (useAssistantChat) and the tabular review chat (TRChatPanel) stream turns
@@ -6,7 +7,7 @@ import { UserVisibleError, describeError } from "@/app/lib/userFacingError";
 // here once instead of drifting apart in each.
 
 /** A turn the server failed; re-sending it is honest. */
-export const TURN_FAILED_MESSAGE = "Mike couldn't finish this answer. Try again.";
+export const TURN_FAILED_MESSAGE = `${APP_NAME} couldn't finish this answer. Try again.`;
 
 /** The bubble line for an answer whose stream broke part-way. */
 export const TURN_INTERRUPTED_MESSAGE = "The answer stopped before it finished.";

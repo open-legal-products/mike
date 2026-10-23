@@ -7,6 +7,7 @@ import {
 } from "@/app/lib/mikeApi";
 import { openGoogleDrivePicker } from "@/app/lib/googlePicker";
 import { userFacingApiError } from "@/app/lib/userFacingError";
+import { APP_NAME } from "@/shared/lib/branding";
 
 /**
  * "Add files from Google Drive": fetch a short-lived token, open Google's
@@ -27,7 +28,7 @@ export function useGoogleDrivePicker() {
       );
       setMessage(
         picked.length
-          ? `Added ${picked.length} ${picked.length === 1 ? "file" : "files"}. Mike can now search and read them.`
+          ? `Added ${picked.length} ${picked.length === 1 ? "file" : "files"}. ${APP_NAME} can now search and read them.`
           : "No files added.",
       );
     } catch (error) {

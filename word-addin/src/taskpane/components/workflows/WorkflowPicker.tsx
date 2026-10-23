@@ -9,6 +9,7 @@ import { WorkflowList } from "./WorkflowList";
 import { PageTitle } from "../primitives/PageTitle";
 import { WorkflowAssets } from "./WorkflowAssets";
 import { notifyError, userMessage } from "../../lib/notify";
+import { APP_NAME } from "../../../shared/branding";
 
 const WorkflowPromptEditor = lazy(() =>
   import("./WorkflowPromptEditor").then((module) => ({
@@ -203,7 +204,7 @@ export function WorkflowPicker({
           setSaveError(
             userMessage(reason, {
               fallback:
-                "Mike couldn't save these instructions. Try again.",
+                `${APP_NAME} couldn't save these instructions. Try again.`,
             })
           );
         });

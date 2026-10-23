@@ -12,6 +12,7 @@ import {
   updateCustomInstructions,
 } from "@/app/lib/mikeApi";
 import { userFacingApiError } from "@/app/lib/userFacingError";
+import { APP_NAME } from "@/shared/lib/branding";
 
 /** Mirrors CUSTOM_INSTRUCTIONS_MAX_LENGTH in the backend user module. */
 export const CUSTOM_INSTRUCTIONS_MAX_LENGTH = 8000;
@@ -98,7 +99,7 @@ export function CustomInstructionsSection() {
         ) : null}
       </div>
       <SettingsDescription>
-        Tell Mike how you would like it to respond in chats.
+        Tell {APP_NAME} how you would like it to respond in chats.
       </SettingsDescription>
 
       {loading ? (

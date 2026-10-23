@@ -1,8 +1,32 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 import { buildSystemPrompt } from "../prompts";
 import { COURTLISTENER_SYSTEM_PROMPT } from "../tools/courtlistenerTools";
 
 describe("buildSystemPrompt", () => {
+    afterEach(() => {
+        delete process.env.APP_NAME;
+        delete process.env.APP_ASSISTANT_PERSONA;
+    });
+
+    it("opens with the product name and persona from the environment", () => {
+        process.env.APP_NAME = "Acme";
+        process.env.APP_ASSISTANT_PERSONA = "a test persona.";
+        for (const prompt of [buildSystemPrompt(true), buildSystemPrompt(false)]) {
+            expect(prompt.startsWith("You are Acme, a test persona.\n")).toBe(true);
+            expect(prompt).not.toContain("You are Mike");
+        }
+    });
+
+    it("keeps Mike's identity sentence when the environment is unset", () => {
+        for (const prompt of [buildSystemPrompt(true), buildSystemPrompt(false)]) {
+            expect(
+                prompt.startsWith(
+                    "You are Mike, an AI legal assistant for lawyers and legal professionals. Help analyze documents, answer legal questions, and draft legal documents.\n",
+                ),
+            ).toBe(true);
+        }
+    });
+
     it("always contains the core identity and rules", () => {
         for (const prompt of [buildSystemPrompt(true), buildSystemPrompt(false)]) {
             expect(prompt).toContain(

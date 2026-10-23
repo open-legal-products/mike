@@ -40,6 +40,7 @@ import {
   type UserFacingError,
 } from "@/app/lib/userFacingError";
 import { authMessages } from "@/app/lib/authMessages";
+import { APP_NAME } from "@/shared/lib/branding";
 
 /** The shared auth table with this page's deltas, keyed by the `code` the
  *  `/api/auth/mfa/*` routes return. */
@@ -204,7 +205,7 @@ export default function SecurityPage() {
     const described = describeError(error, {
       action,
       codeMessages: MFA_ERROR_MESSAGES,
-      fallback: `Mike couldn't ${action}. Try again.`,
+      fallback: `${APP_NAME} couldn't ${action}. Try again.`,
     });
     setStatus(described.message);
     setStatusError(described);
@@ -280,13 +281,13 @@ export default function SecurityPage() {
 
       let data;
       try {
-        data = await enrollMfa("Mike");
+        data = await enrollMfa(APP_NAME);
       } catch (error) {
         if (!isDuplicateFriendlyNameError(error)) throw error;
         traceMfa("[security/mfa] retrying enrollment with unique name", {
           error: error instanceof Error ? error.message : String(error),
         });
-        data = await enrollMfa(`Mike ${Date.now()}`);
+        data = await enrollMfa(`${APP_NAME} ${Date.now()}`);
       }
       traceMfa("[security/mfa] enrollment created", {
         factorId: data.id,

@@ -7,6 +7,7 @@ import { Modal } from "@/app/components/modals/Modal";
 import { LIQUID_GLASS_FLAT_CLASS } from "@/shared/ui/LiquidGlassUI";
 import { TabPillButtonUI } from "@/shared/ui/TabPillButtonUI";
 import { ToggleSwitchUI } from "@/shared/ui/ToggleSwitchUI";
+import { APP_NAME } from "@/shared/lib/branding";
 
 export type ConnectorToolView = {
     id: string;
@@ -174,7 +175,7 @@ export function ConnectorDetailsModal({
                                             </p>
                                             <p className="mt-0.5 text-xs text-gray-500">
                                                 {hasWriteTools || toolsLoading
-                                                    ? "Mike asks you in the chat before running an action that changes data."
+                                                    ? `${APP_NAME} asks you in the chat before running an action that changes data.`
                                                     : "This connector has no write actions right now."}
                                             </p>
                                         </div>

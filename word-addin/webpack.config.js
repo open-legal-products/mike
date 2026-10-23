@@ -293,6 +293,15 @@ module.exports = async (_env, options) => {
         template: "./src/oauth-dialog/index.html",
         chunks: ["oauthDialog"],
       }),
+      // Shared frontend code (frontend/src/shared) reads the product name from
+      // NEXT_PUBLIC_APP_NAME. The add-in defines it from its own variable, as a
+      // fixed value rather than an EnvironmentPlugin default, so a
+      // NEXT_PUBLIC_APP_NAME set in the build environment never leaks in.
+      new webpack.DefinePlugin({
+        "process.env.NEXT_PUBLIC_APP_NAME": JSON.stringify(
+          process.env.REACT_APP_APP_NAME || "",
+        ),
+      }),
       // Expose env vars to the bundle so TypeScript process.env calls compile
       new webpack.EnvironmentPlugin({
         // Development defaults stay on the HTTPS dev-server origin, whose
@@ -306,6 +315,8 @@ module.exports = async (_env, options) => {
         // model — this config file cannot import that TypeScript constant, so
         // repeating its value here would be a second copy that silently drifts.
         REACT_APP_DEFAULT_MODEL: process.env.REACT_APP_DEFAULT_MODEL || "",
+        // The product name the pane shows; empty keeps "Mike" (src/shared/branding.ts).
+        REACT_APP_APP_NAME: process.env.REACT_APP_APP_NAME || "",
         // The Mike web app origin — the task pane links here (e.g. the
         // account/api-keys page); it never fetches from it.
         REACT_APP_WEB_APP_URL: isDev

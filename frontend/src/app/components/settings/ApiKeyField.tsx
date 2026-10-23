@@ -19,6 +19,7 @@ import {
 } from "@/app/lib/userFacingError";
 import { useLatestRef } from "@/app/hooks/useLatestRef";
 import { settingsGlassIconButtonClassName } from "@/app/(pages)/settings/settingsStyles";
+import { APP_NAME } from "@/shared/lib/branding";
 
 // The backend never returns saved keys, so the mask is a fixed-length stand-in.
 const SAVED_KEY_MASK = "x".repeat(24);
@@ -170,7 +171,7 @@ export function ApiKeyField({
         // The caller reports failure as `false`, with no error to classify.
         notifyError(
           new UserVisibleError(
-            `Mike couldn't save your ${label}. The key was not changed.`,
+            `${APP_NAME} couldn't save your ${label}. The key was not changed.`,
             { retryable: true },
           ),
           {
@@ -209,7 +210,7 @@ export function ApiKeyField({
       } else {
         notifyError(
           new UserVisibleError(
-            `Mike couldn't remove your ${label}. The key is still saved.`,
+            `${APP_NAME} couldn't remove your ${label}. The key is still saved.`,
             { retryable: true },
           ),
           {

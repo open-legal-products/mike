@@ -14,6 +14,7 @@
  * screen to copy by hand.
  */
 import { SUPPORT_EMAIL, supportDetailLines, type UserFacingError } from "@mike/user-error";
+import { APP_NAME } from "../../shared/branding";
 
 export type SupportErrorFields = Pick<
   UserFacingError,
@@ -48,7 +49,7 @@ export function buildSupportDiagnostics(
   context: SupportContext = {},
 ): string {
   const lines: string[] = [
-    "Mike support details",
+    `${APP_NAME} support details`,
     `What happened: ${error.title}`,
     `Message shown: ${error.message}`,
   ];

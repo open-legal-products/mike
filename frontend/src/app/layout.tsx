@@ -3,12 +3,18 @@ import type { Metadata } from "next";
 import "./fonts/fonts.css";
 import "./globals.css";
 import { Providers } from "@/app/components/providers";
+import {
+    APP_DESCRIPTION,
+    APP_NAME,
+    APP_TAGLINE,
+    APP_URL,
+    appTitle,
+} from "@/shared/lib/branding";
 
 export const metadata: Metadata = {
-    metadataBase: new URL("https://app.mikeoss.com"),
-    title: "Mike - Legal AI Platform",
-    description:
-        "AI-powered legal document analysis and contract review platform.",
+    metadataBase: new URL(APP_URL),
+    title: appTitle(APP_TAGLINE),
+    description: APP_DESCRIPTION,
     icons: {
         icon: [
             { url: "/icon.svg", type: "image/svg+xml" },
@@ -18,25 +24,23 @@ export const metadata: Metadata = {
     },
     openGraph: {
         type: "website",
-        url: "https://app.mikeoss.com",
-        siteName: "Mike",
-        title: "Mike - Legal AI Platform",
-        description:
-            "AI-powered legal document analysis and contract review platform.",
+        url: APP_URL,
+        siteName: APP_NAME,
+        title: appTitle(APP_TAGLINE),
+        description: APP_DESCRIPTION,
         images: [
             {
                 url: "/link-image.jpg",
                 width: 1200,
                 height: 651,
-                alt: "Mike",
+                alt: APP_NAME,
             },
         ],
     },
     twitter: {
         card: "summary_large_image",
-        title: "Mike - Legal AI Platform",
-        description:
-            "AI-powered legal document analysis and contract review platform.",
+        title: appTitle(APP_TAGLINE),
+        description: APP_DESCRIPTION,
         images: ["/link-image.jpg"],
     },
 };

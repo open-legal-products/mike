@@ -71,6 +71,7 @@ import {
     LIQUID_GLASS_SELECTED_CLASS,
     LIQUID_GLASS_HOVER_CLASS,
 } from "@/app/components/ui/liquid-surface";
+import { APP_NAME } from "@/shared/lib/branding";
 
 /** Where a workspace opens: the page the logo leads to. */
 const WORKSPACE_HOME = "/assistant";
@@ -272,7 +273,7 @@ export function AppSidebar({ isOpen, onToggle }: AppSidebarProps) {
             workspaceId !== PERSONAL_WORKSPACE &&
             organizations === null
           ? null
-          : "Mike";
+          : APP_NAME;
     const [recentProjects, setRecentProjects] = useState<Project[] | null>(
         null,
     );

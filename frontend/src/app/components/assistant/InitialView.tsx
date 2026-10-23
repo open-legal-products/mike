@@ -7,6 +7,7 @@ import { MoreHorizontal } from "lucide-react";
 import { useAuth } from "@/app/contexts/AuthContext";
 import { useUserProfile } from "@/app/contexts/UserProfileContext";
 import { MikeIcon } from "@/shared/ui/MikeIconUI";
+import { APP_DISCLAIMER } from "@/shared/lib/branding";
 import { ChatInput, type ChatInputHandle } from "./ChatInput";
 import type { Document, Message, QuickAction } from "../shared/types";
 import {
@@ -128,7 +129,7 @@ export function InitialView({
             <div className="min-h-0 w-full max-w-4xl justify-self-center px-0 pt-1 xl:px-8">
                 <div className="text-center">
                     <p className="text-xs py-2 mb-12 text-gray-500">
-                        AI can make mistakes. Answers are not legal advice.
+                        {APP_DISCLAIMER}
                     </p>
                 </div>
 

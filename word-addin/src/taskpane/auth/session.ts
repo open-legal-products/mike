@@ -3,6 +3,7 @@ import { networkFailure } from "../lib/networkError";
 import { responseError } from "../api/client";
 import { notifyError, userMessage } from "../lib/notify";
 import { parseGoogleOAuthDialogMessage } from "./oauthProtocol";
+import { APP_NAME } from "../../shared/branding";
 
 const LEGACY_ACCESS_KEY = "mike_token";
 const LEGACY_REFRESH_KEY = "mike_refresh_token";
@@ -137,7 +138,7 @@ export function initialize(): void {
       _user = null;
       _error = userMessage(error, {
         action: "sign in",
-        fallback: "Mike couldn't sign you in. Try again.",
+        fallback: `${APP_NAME} couldn't sign you in. Try again.`,
       });
     })
     .finally(() => {
@@ -174,7 +175,7 @@ export async function signIn(email: string, password: string): Promise<void> {
     _user = null;
     _error = userMessage(error, {
       action: "sign in",
-      fallback: "Mike couldn't sign you in. Try again.",
+      fallback: `${APP_NAME} couldn't sign you in. Try again.`,
       codeMessages: {
         invalid_credentials: "That email and password don't match an account.",
       },
@@ -270,7 +271,7 @@ export async function signInWithGoogle(): Promise<void> {
                   if (generation === _sessionGeneration) {
                     _error = userMessage(error, {
                       action: "complete Google sign-in",
-                      fallback: "Mike couldn't complete Google sign-in.",
+                      fallback: `${APP_NAME} couldn't complete Google sign-in.`,
                     });
                   }
                 })
@@ -300,7 +301,7 @@ export async function signInWithGoogle(): Promise<void> {
       // to a URL..."), which means nothing to a user.
       fail(
         userMessage(error, {
-          fallback: "Mike couldn't open Google sign-in. Try again.",
+          fallback: `${APP_NAME} couldn't open Google sign-in. Try again.`,
         }),
       );
     }
@@ -336,7 +337,7 @@ export async function signOut(): Promise<void> {
     // out again, not the sign-in screen's error state.
     notifyError(error, {
       action: "sign out",
-      fallback: "Mike couldn't sign you out. Try again.",
+      fallback: `${APP_NAME} couldn't sign you out. Try again.`,
       dedupeKey: "sign-out",
       onRetry: signOut,
     });

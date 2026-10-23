@@ -6,6 +6,7 @@ import type { WordChatStorageMode } from "../lib/wordChatSettings";
 import { WORD_CHAT_HISTORY_CHANGED } from "../lib/wordChatHistoryEvents";
 import { userMessage } from "../lib/notify";
 import { onSessionRecovered } from "../lib/sessionRefresh";
+import { APP_NAME } from "../../shared/branding";
 
 export interface PaginatedChatsState {
   chats: Chat[];
@@ -109,7 +110,7 @@ export function usePaginatedChats(
           timedOut
             ? "Chat history took too long to load."
             : userMessage(reason, {
-                fallback: "Mike couldn't load your chat history. Try again.",
+                fallback: `${APP_NAME} couldn't load your chat history. Try again.`,
               }),
         );
       })

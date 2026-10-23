@@ -26,6 +26,7 @@ import {
   type WebSearchSettings,
 } from "@/app/lib/mikeApi";
 import { notifyError } from "@/app/lib/userFacingError";
+import { APP_NAME } from "@/shared/lib/branding";
 
 const SEARCH_SERVICES: Record<
   WebSearchBackend,
@@ -33,7 +34,7 @@ const SEARCH_SERVICES: Record<
 > = {
   brave: {
     label: "Brave Search",
-    description: "Mike searches with Brave Search. Works with any model.",
+    description: `${APP_NAME} searches with Brave Search. Works with any model.`,
     keyLabel: "Brave Search API Key",
   },
   tavily: {
@@ -212,7 +213,7 @@ export function WebSearchSection() {
               <div className="min-w-0 space-y-1">
                 <SettingsLabel>Enable web search</SettingsLabel>
                 <SettingsDescription>
-                  Let Mike search the web and read pages when an answer needs
+                  Let {APP_NAME} search the web and read pages when an answer needs
                   current or public information.
                 </SettingsDescription>
               </div>
