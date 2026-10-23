@@ -6,10 +6,7 @@ import { WarningPopup } from "@/app/components/popups/WarningPopup";
 import { ByokProviderModal } from "@/app/components/settings/ByokProviderModal";
 import { ConnectorCard } from "@/app/components/settings/ConnectorCard";
 import { SettingsHeading } from "@/app/components/settings/SettingsHeading";
-import {
-  SettingsDescription,
-  SettingsLabel,
-} from "@/app/components/settings/SettingsText";
+import { SettingsDescription } from "@/app/components/settings/SettingsText";
 import {
   MODEL_API_KEY_FIELDS,
   ModelProviderIcon,
@@ -24,34 +21,30 @@ import {
   saveOrgApiKey,
   saveOrgRouterModels,
   setOrgApiKeyEnabled,
-  setOrgPersonalApiKeysAllowed,
   type ApiKeyProvider,
   type ApiKeySettings,
   type OrgApiKeySettings,
 } from "@/app/lib/mikeApi";
 import { userFacingApiError } from "@/app/lib/userFacingError";
 import type { RouterSlug } from "@/shared/lib/modelCatalog";
-import { GlassCardUI } from "@/shared/ui/GlassCardUI";
 import { PillButtonUI } from "@/shared/ui/PillButtonUI";
 import { ToggleSwitchUI } from "@/shared/ui/ToggleSwitchUI";
 
-// An organization's model providers: the keys its work runs on, the models
-// each may run, and whether a member's own key may stand in where it has
-// none. These are the sections of the Organization page, which is
-// its owners' and admins' alone; they manage it with the same cards and the
-// same key dialog as a person's Bring Your Own Keys page.
+// An organization's model providers: the keys its work runs on and the
+// models each may run. A member's own keys never stand in where it has none.
+// These are the sections of the Organization page, which is its owners' and
+// admins' alone; they manage it with the same cards and the same key dialog
+// as a person's Bring Your Own Keys page.
 //
 // `can_manage` is the server's word on the caller. Somebody demoted while
 // the page was open is shown what is set up and offered nothing to change.
 
 type PendingMfa =
   | { kind: "toggle"; provider: ApiKeyProvider; enabled: boolean }
-  | { kind: "policy"; allowed: boolean }
   | { kind: "models"; provider: RouterSlug; models: string[] };
 
 const LOAD_ERROR = "The organization's model providers could not be loaded.";
 const UPDATE_ERROR = "The provider could not be updated. Please try again.";
-const POLICY_ERROR = "The setting could not be updated. Please try again.";
 
 export function OrganizationProviderKeys({
   orgId,
@@ -63,7 +56,7 @@ export function OrganizationProviderKeys({
   const { refreshOrgApiKeys } = useWorkspace();
   const [settings, setSettings] = useState<OrgApiKeySettings | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
-  const [busy, setBusy] = useState<ApiKeyProvider | "policy" | null>(null);
+  const [busy, setBusy] = useState<ApiKeyProvider | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
   const [pendingMfa, setPendingMfa] = useState<PendingMfa | null>(null);
   const [selectedProvider, setSelectedProvider] =
@@ -110,18 +103,6 @@ export function OrganizationProviderKeys({
       if (isMfaRequiredError(error))
         setPendingMfa({ kind: "toggle", provider, enabled });
       else setActionError(userFacingApiError(error, UPDATE_ERROR));
-    } finally {
-      setBusy(null);
-    }
-  }
-
-  async function setPersonalKeysAllowed(allowed: boolean) {
-    setBusy("policy");
-    try {
-      applied(await setOrgPersonalApiKeysAllowed(orgId, allowed));
-    } catch (error) {
-      if (isMfaRequiredError(error)) setPendingMfa({ kind: "policy", allowed });
-      else setActionError(userFacingApiError(error, POLICY_ERROR));
     } finally {
       setBusy(null);
     }
@@ -233,7 +214,6 @@ export function OrganizationProviderKeys({
   const availableFields = MODEL_API_KEY_FIELDS.filter(
     (field) => loading || !hasOrgKey(field.provider),
   );
-  const allowPersonal = settings?.allow_personal_api_keys !== false;
 
   return (
     <>
@@ -245,6 +225,10 @@ export function OrganizationProviderKeys({
           <SettingsHeading id="org-providers-saved">
             Organization Providers
           </SettingsHeading>
+          <SettingsDescription>
+            Members&rsquo; own keys are never used for work in this
+            organization.
+          </SettingsDescription>
           {loading ? (
             <span className="block h-5 w-56 max-w-full animate-pulse rounded bg-gray-200" />
           ) : savedFields.length === 0 ? (
@@ -285,43 +269,6 @@ export function OrganizationProviderKeys({
             )}
           </section>
         ) : null}
-
-        <section aria-labelledby="org-providers-personal" className="space-y-3">
-          <SettingsHeading id="org-providers-personal">
-            Members&rsquo; Own Keys
-          </SettingsHeading>
-          <GlassCardUI>
-            <div className="flex flex-wrap items-center gap-x-6 gap-y-3 px-4 py-4">
-              <div className="min-w-0 flex-[1_1_16rem] space-y-1">
-                <SettingsLabel>Allow members&rsquo; own keys</SettingsLabel>
-                <SettingsDescription>
-                  {allowPersonal
-                    ? "A member's own key is used for a provider the organization has not set up."
-                    : "A member's own keys are never used for work in this organization."}
-                </SettingsDescription>
-              </div>
-              <div className="ml-auto flex shrink-0 items-center">
-                {loading ? (
-                  <span className="block h-5 w-9 animate-pulse rounded-full bg-gray-200" />
-                ) : canManage ? (
-                  <ToggleSwitchUI
-                    checked={allowPersonal}
-                    disabled={busy !== null || pendingMfa !== null}
-                    aria-busy={busy === "policy"}
-                    aria-label="Allow members' own keys"
-                    onCheckedChange={(allowed) =>
-                      void setPersonalKeysAllowed(allowed)
-                    }
-                  />
-                ) : (
-                  <span className="text-sm text-gray-500">
-                    {allowPersonal ? "On" : "Off"}
-                  </span>
-                )}
-              </div>
-            </div>
-          </GlassCardUI>
-        </section>
       </div>
 
       {canManage ? (
@@ -363,8 +310,6 @@ export function OrganizationProviderKeys({
           setPendingMfa(null);
           if (action.kind === "toggle")
             void toggleProvider(action.provider, action.enabled);
-          else if (action.kind === "policy")
-            void setPersonalKeysAllowed(action.allowed);
           else {
             const answer = modelsAfterMfa.current;
             modelsAfterMfa.current = null;

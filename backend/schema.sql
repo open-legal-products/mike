@@ -405,9 +405,10 @@ create table if not exists public.organizations (
   id uuid primary key default gen_random_uuid(),
   name text not null,
   created_by uuid references auth.users(id) on delete set null,
-  -- Whether work in this organization may run on a member's own provider
-  -- key when the organization has none for that provider (org_api_keys).
-  allow_personal_api_keys boolean not null default true,
+  -- No longer read: work in an organization never runs on a member's own
+  -- provider key (20261024_01). Kept, always false, so a backend on the
+  -- previous release follows the same rule during a deploy.
+  allow_personal_api_keys boolean not null default false,
   -- When the organization's logo (org_logos) was last set, or null for none.
   -- Kept in step by a trigger on org_logos; clients read it to know whether
   -- there is a logo and when to fetch it again.
@@ -660,10 +661,8 @@ alter table public.user_api_keys enable row level security;
 -- are user_api_keys' exactly, so one store reads and writes both
 -- (modules/user/user.apiKeyStore.ts).
 --
--- organizations.allow_personal_api_keys decides what happens for a provider
--- the organization has no key for: when true (the default, and the behaviour
--- before this table existed) a member's own key is used; when false, work in
--- the organization never runs on a member's personal key.
+-- For a provider the organization has no key for, its work runs on the
+-- deployment's key. It never runs on a member's personal key.
 create table if not exists public.org_api_keys (
   id uuid primary key default gen_random_uuid(),
   org_id uuid not null references public.organizations(id) on delete cascade,
@@ -11093,6 +11092,7 @@ insert into public.schema_migrations (filename) values
   ('20261021_03_user_response_details.sql'),
   ('20261021_04_word_chat_message_playbook.sql'),
   ('20261022_01_workspace_connectors.sql'),
-  ('20261023_01_workspace_scoped_data_deletion.sql'),
-  ('20261023_02_backfill_project_child_org_id.sql')
+  ('20261024_01_org_keys_central_only.sql'),
+  ('20261024_02_workspace_scoped_data_deletion.sql'),
+  ('20261024_03_backfill_project_child_org_id.sql')
 on conflict (filename) do nothing;

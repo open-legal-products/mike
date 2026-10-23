@@ -1,4 +1,4 @@
--- Migration date: 2026-10-23
+-- Migration date: 2026-10-24
 -- Settings > Privacy & Data deletes data in the active workspace only.
 -- "Delete all memory" used to wipe the person's memory in every workspace;
 -- it now takes the workspace (null is Personal). Only the service role calls

@@ -301,9 +301,11 @@ Model-provider keys can be configured globally in `backend/.env` or per user
 under **Settings > API Keys**. CourtListener tokens are never read from
 `backend/.env`: each user saves their own under **Settings > Connectors**, or an
 organization admin saves one for its members; see
-[CourtListener](courtlistener.md). A personal key takes
-precedence over the matching globally configured key; removing the personal
-key restores the global key as the fallback.
+[CourtListener](courtlistener.md). In a user's Personal workspace, a personal
+key takes precedence over the matching globally configured key; removing the
+personal key restores the global key as the fallback. Work in an organization
+never uses personal keys: it runs on the organization's key for a provider,
+and otherwise on the globally configured key.
 
 ### Error tracking
 

@@ -12,8 +12,9 @@ token for the selected workspace; Mike stores it encrypted in
 `user_courtlistener_connections`, separately for Personal and each
 organization. An organization can also hold a token for its members, which
 its admins save with its other API keys; it takes precedence over a member's
-own token in that organization. When the organization does not allow personal
-API keys, a member's own token is not used there. There is no deployment-wide
+own token in that organization. A member's token for an organization is a
+connector they set up in that workspace, so it is still used there even though
+their personal model-provider keys never are. There is no deployment-wide
 token: `COURTLISTENER_API_TOKEN` is no longer read from `backend/.env`.
 
 Once added, CourtListener appears under **Installed**. Its switch turns case-law
