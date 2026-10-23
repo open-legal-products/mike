@@ -2,9 +2,9 @@
 import { Worker, type Job } from "bullmq";
 import { runIsolated } from "../lib/dbq/jobScope";
 import { getRedisConnection } from "../lib/queue/connection";
-import { reportError, setOperation } from "../lib/observability/sentry";
+import { reportError } from "../lib/observability/sentry";
 import { EXTRACTION_QUEUE, type ExtractionJobData } from "../lib/queue/extractionQueue";
-import { runExtractionJob, markExtractionFailed } from "../modules/tabular/tabular.service";
+import { extractionJobOperation, runExtractionJob, markExtractionFailed } from "../modules/tabular/tabular.service";
 
 /** True once a job has exhausted its retries (BullMQ 'failed', no attempts left). */
 export function isPermanentFailure(job: Job<ExtractionJobData>): boolean {
@@ -19,10 +19,9 @@ export function createExtractionWorker(): Worker<ExtractionJobData> {
     worker = new Worker<ExtractionJobData>(
         EXTRACTION_QUEUE,
         async (job: Job<ExtractionJobData>) => {
-            // Own isolation scope per job (concurrency is 3); the tabular
-            // module's job body does not name its operation, so name it here.
+            // Own isolation scope per job (concurrency is 3); the job body
+            // names its operation (tabular.cell or tabular.row).
             await runIsolated(async () => {
-                setOperation("documents.extract");
                 await runExtractionJob(job.data);
             });
         },
@@ -50,7 +49,7 @@ export function createExtractionWorker(): Worker<ExtractionJobData> {
             level: permanent ? "error" : "warning",
             tags: {
                 component: "extraction-worker",
-                operation: "documents.extract",
+                operation: extractionJobOperation(job?.data ?? {}),
                 terminal: permanent,
                 attempt: job?.attemptsMade,
             },

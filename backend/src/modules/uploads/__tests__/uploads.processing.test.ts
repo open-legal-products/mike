@@ -693,9 +693,11 @@ describe("upload processing", () => {
     const thrown = await processUploadFile(db as never, baseSession, baseFile)
       .catch((error: unknown) => error);
 
-    expect(thrown).toMatchObject({ message: "sealed_upload_not_found", cause: storageError });
+    expect(thrown).toMatchObject({ message: "sealed_upload_not_found", kind: "upload.sealed_missing", cause: storageError });
+    // The deepest kind on the chain is the one reported: the store's own
+    // answer, with its code; the wrapper's kind stays on the thrown object.
     expect(diagnosticErrorTags(thrown)).toEqual({
-      error_kind: "upload.sealed_missing",
+      error_kind: "storage.download_failed",
       storage_operation: "download",
       failure_code: "NoSuchKey",
     });

@@ -69,12 +69,11 @@ function spawnWorkerThread(): void {
     __dirname,
     isTs ? "workerThread.ts" : "workerThread.js",
   );
-  // Compiled mode inherits the process flags: `--enable-source-maps` from
-  // NODE_OPTIONS or the command line is what makes a thread's Sentry frames
-  // point at src/*.ts instead of dist/*.js.
-  workerThread = new ThreadWorker(entry, {
-    execArgv: isTs ? ["--require", "tsx/cjs"] : process.execArgv,
-  });
+  // Compiled mode leaves execArgv unset so the thread inherits the parent's
+  // flags (`--enable-source-maps` is what makes its Sentry frames point at
+  // src/*.ts). Passing process.execArgv explicitly would make Node validate
+  // every flag and throw on V8 options such as --max-old-space-size.
+  workerThread = new ThreadWorker(entry, isTs ? { execArgv: ["--require", "tsx/cjs"] } : {});
   workerThread.on("error", (err) => {
     // An uncaught throw inside the thread. The thread's own Sentry client
     // reports it with the real stack and job context; what arrives here is

@@ -169,6 +169,11 @@ function reportRealFault(
     const shaped = error && typeof error === "object" ? (error as { code?: unknown; requestId?: unknown; request_id?: unknown }) : null;
     const code = typeof shaped?.code === "string" ? shaped.code : undefined;
     const requestId = typeof shaped?.requestId === "string" ? shaped.requestId : typeof shaped?.request_id === "string" ? shaped.request_id : undefined;
+    // A stream error frame (server kind, a request id, no HTTP status) is a
+    // failure the backend already reported with its stack; the toast is for
+    // the user, not a second report. An HTTP 5xx keeps both halves.
+    const status = typeof (shaped as { status?: unknown } | null)?.status === "number" ? (shaped as { status: number }).status : undefined;
+    if (described.kind === "server" && requestId && status === undefined) return;
     reportError(error, { tags: { component: "notify", action, error_code: code, request_id: requestId, operation } });
 }
 
@@ -214,6 +219,12 @@ export function reportFlowFailure(args: {
     const status = typeof args.status === "number" ? args.status : undefined;
     if (status !== undefined && status < 500) return;
     if (args.error !== undefined && isReported(args.error)) return;
+    // A stream error frame (no HTTP status: the request itself succeeded)
+    // that carries the server's request id is a failure the backend already
+    // reported with the real stack; a second, stackless event from the
+    // browser would only split the issue. An HTTP 5xx keeps both halves,
+    // joined by the request id, as the API client does.
+    if (args.error === undefined && status === undefined && args.requestId) return;
     reportError(
         args.error ?? new Error(`Failure in ${args.operation}`),
         {

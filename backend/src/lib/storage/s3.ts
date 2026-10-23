@@ -145,9 +145,17 @@ export function createS3StorageAdapter(): StorageAdapter {
     },
 
     async downloadFile(key) {
-      const response = (await client().send(
-        new GetObjectCommand({ Bucket: bucket, Key: key }),
-      )) as any;
+      let response: any;
+      try {
+        response = await client().send(
+          new GetObjectCommand({ Bucket: bucket, Key: key }),
+        );
+      } catch (error) {
+        // A missing object is an answer (null), the same translation as
+        // headFile: GET names it NoSuchKey. Anything else is a failure.
+        if ((error as { name?: unknown } | null)?.name === "NoSuchKey") return null;
+        throw error;
+      }
       if (!response.Body) return null;
       const bytes = await response.Body.transformToByteArray();
       return bytes.buffer as ArrayBuffer;
