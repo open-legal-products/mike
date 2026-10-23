@@ -24,8 +24,8 @@ const session = {
   developerKey: "picker-key",
 };
 
-async function addFiles() {
-  const { result } = renderHook(() => useGoogleDrivePicker());
+async function addFiles(workspace?: string) {
+  const { result } = renderHook(() => useGoogleDrivePicker(workspace));
   await act(() => result.current.addFiles());
   return result.current.message;
 }
@@ -46,6 +46,12 @@ describe("useGoogleDrivePicker", () => {
       "Added 3 files. Mike can now search and read them.",
     );
     expect(mocks.open).toHaveBeenCalledWith(session);
+  });
+
+  it("opens the Drive connection of the workspace it is given", async () => {
+    mocks.open.mockResolvedValue([]);
+    await addFiles("org-1");
+    expect(mocks.session).toHaveBeenCalledWith("org-1");
   });
 
   it("says nothing was added when the Picker is closed", async () => {

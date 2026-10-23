@@ -28,6 +28,11 @@ Archived content is excluded from ordinary access, including access by
 organization owners; it must be reassigned first. Removal previews show counts for private work and never
 expose its titles to administrators.
 
+Connectors a member added for the organization (MCP servers, Google Drive,
+Gmail, Calendar and their own CourtListener token) belong to them alone and are
+deleted, with their stored credentials, when they leave or are removed. Their
+Personal connections are unaffected.
+
 Admins can remove ordinary members and transfer their shared work. They cannot
 manage the private archive or remove organization owners/admins. The last owner
 must appoint another owner or explicitly delete the organization, even when the

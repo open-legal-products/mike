@@ -612,6 +612,23 @@ export interface GoogleWorkspaceStatus {
     accountEmail?: string;
     redirectUri: string | null;
 }
+/** The CourtListener connector in one workspace (GET /user/integrations/courtlistener). */
+export interface CourtListenerConnectorStatus {
+    /** The workspace's on/off switch for US case law research. */
+    enabled: boolean;
+    /**
+     * Listed under Installed: switched on with a usable token here (the
+     * user's or the organization's) or the deployment's bulk index, or the
+     * user has saved their own token here. Otherwise it is offered in Discover.
+     */
+    installed: boolean;
+    /** The user saved their own token for this workspace. */
+    ownToken: boolean;
+    /** Whose token lookups run on: the user's own or their organization's. */
+    tokenSource: "user" | "org" | null;
+    /** The deployment answers lookups from its bulk index. */
+    bulkData: boolean;
+}
 /** A built-in connector tool and whether the user has switched it on. */
 export interface NativeConnectorTool {
     name: string;

@@ -61,20 +61,50 @@ vi.mock("@/app/lib/mikeApi", async (importOriginal) => {
     };
 });
 
-// CourtListener's state comes from the user profile and its dialog has its
-// own tests; here a test sets where the page should place it.
+// The active workspace. Every test runs in Personal unless it says otherwise.
+const workspaceState = vi.hoisted(() => ({
+    workspaceId: "personal" as string | null,
+    activeOrganization: null as { id: string; name: string } | null,
+}));
+vi.mock("@/app/contexts/WorkspaceContext", async (importOriginal) => ({
+    ...(await importOriginal<typeof import("@/app/contexts/WorkspaceContext")>()),
+    useWorkspace: () => ({
+        workspaceId: workspaceState.workspaceId,
+        activeOrganization: workspaceState.activeOrganization,
+    }),
+}));
+
+beforeEach(() => {
+    workspaceState.workspaceId = "personal";
+    workspaceState.activeOrganization = null;
+    courtListener.workspaces = [];
+});
+
+// CourtListener's state and dialog have their own tests; here a test sets
+// where the page should place it, and sees which workspace it was asked for.
 const courtListener = vi.hoisted(() => ({
     loading: false,
+    loadFailed: false,
     installed: false,
     enabled: true,
     setEnabled: vi.fn(),
+    status: null as null | { tokenSource: "user" | "org" | null; bulkData: boolean },
+    workspaces: [] as (string | undefined)[],
 }));
 vi.mock("@/app/components/settings/CourtListenerConnector", () => ({
     COURTLISTENER_NAME: "CourtListener",
     CourtListenerIcon: () => null,
     CourtListenerTokenModal: ({ open }: { open: boolean }) =>
         open ? <div role="dialog" aria-label="CourtListener token" /> : null,
-    useCourtListenerConnector: () => ({ ...courtListener, busy: false }),
+    useCourtListenerConnector: (workspace?: string) => {
+        courtListener.workspaces.push(workspace);
+        return {
+            ...courtListener,
+            busy: false,
+            saveToken: vi.fn(),
+            deleteToken: vi.fn(),
+        };
+    },
 }));
 
 // MFA gate off, and render nothing for the popup itself.
@@ -577,11 +607,14 @@ describe("ConnectorsPage suggested connectors", () => {
             await flushMicrotasks();
         });
 
-        expect(createMcpConnector).toHaveBeenCalledWith({
-            name: "Notion",
-            serverUrl: "https://mcp.notion.com/mcp",
-            bearerToken: null,
-        });
+        expect(createMcpConnector).toHaveBeenCalledWith(
+            {
+                name: "Notion",
+                serverUrl: "https://mcp.notion.com/mcp",
+                bearerToken: null,
+            },
+            "personal",
+        );
         expect(startMcpConnectorOAuth).toHaveBeenCalledWith("notion-1");
         expect(refreshMcpConnectorTools).toHaveBeenCalledTimes(1);
         expect(screen.queryByText("Connector added")).toBeNull();
@@ -618,11 +651,14 @@ describe("ConnectorsPage suggested connectors", () => {
             await flushMicrotasks();
         });
 
-        expect(createMcpConnector).toHaveBeenCalledWith({
-            name: "Airtable",
-            serverUrl: "https://mcp.airtable.com/mcp",
-            bearerToken: null,
-        });
+        expect(createMcpConnector).toHaveBeenCalledWith(
+            {
+                name: "Airtable",
+                serverUrl: "https://mcp.airtable.com/mcp",
+                bearerToken: null,
+            },
+            "personal",
+        );
         expect(startMcpConnectorOAuth).toHaveBeenCalledWith("airtable-1");
         expect(refreshMcpConnectorTools).toHaveBeenCalledTimes(1);
         // Once installed, the preset leaves Discover.
@@ -672,11 +708,14 @@ describe("ConnectorsPage suggested connectors", () => {
             await flushMicrotasks();
         });
 
-        expect(createMcpConnector).toHaveBeenCalledWith({
-            name: "Linear",
-            serverUrl: "https://mcp.linear.app/mcp",
-            bearerToken: null,
-        });
+        expect(createMcpConnector).toHaveBeenCalledWith(
+            {
+                name: "Linear",
+                serverUrl: "https://mcp.linear.app/mcp",
+                bearerToken: null,
+            },
+            "personal",
+        );
         expect(startMcpConnectorOAuth).toHaveBeenCalledWith("linear-1");
         expect(popupClose).toHaveBeenCalled();
         expect(screen.queryByText("New Custom Connector")).toBeNull();
@@ -869,12 +908,12 @@ describe("Google Drive connection lifecycle", () => {
             fireEvent.click(dialog.getByRole("switch", { name: "Ask for permission for write actions" }));
             await flushMicrotasks();
         });
-        expect(updateGoogleDriveSettings).toHaveBeenCalledWith({ requireWriteApproval: true });
+        expect(updateGoogleDriveSettings).toHaveBeenCalledWith({ requireWriteApproval: true }, "personal");
         await act(async () => {
             fireEvent.click(dialog.getByRole("switch", { name: "Move to Trash enabled" }));
             await flushMicrotasks();
         });
-        expect(setGoogleDriveToolEnabled).toHaveBeenCalledWith("google_drive_trash_file", false);
+        expect(setGoogleDriveToolEnabled).toHaveBeenCalledWith("google_drive_trash_file", false, "personal");
     });
 
     it("offers Add files from Google Drive only when the server can open the Picker", async () => {
@@ -1062,7 +1101,7 @@ describe("Google Drive connection lifecycle", () => {
             await vi.advanceTimersByTimeAsync(0);
             await flushMicrotasks();
         });
-        expect(cancelGoogleDriveOAuth).toHaveBeenCalledWith(state);
+        expect(cancelGoogleDriveOAuth).toHaveBeenCalledWith(state, "personal");
         expect(screen.queryByText("Could not add connector")).toBeNull();
         const count = vi.mocked(getGoogleDriveStatus).mock.calls.length;
         await act(async () => {
@@ -1137,9 +1176,10 @@ describe("Google Drive connection lifecycle", () => {
             );
             await flushMicrotasks();
         });
-        expect(updateGoogleDriveSettings).toHaveBeenCalledWith({
-            enabled: false,
-        });
+        expect(updateGoogleDriveSettings).toHaveBeenCalledWith(
+            { enabled: false },
+            "personal",
+        );
         expect(
             installed().getByRole("switch", { name: "Google Drive connector" }),
         ).toHaveAttribute("aria-checked", "false");
@@ -1236,9 +1276,11 @@ describe("Connector write approval settings", () => {
             fireEvent.click(approval);
             await flushMicrotasks();
         });
-        expect(updateGoogleWorkspaceSettings).toHaveBeenCalledWith("gmail", {
-            requireWriteApproval: true,
-        });
+        expect(updateGoogleWorkspaceSettings).toHaveBeenCalledWith(
+            "gmail",
+            { requireWriteApproval: true },
+            "personal",
+        );
         expect(approval).toHaveAttribute("aria-checked", "true");
 
         await act(async () => {
@@ -1251,6 +1293,7 @@ describe("Connector write approval settings", () => {
             "gmail",
             "gmail_send",
             false,
+            "personal",
         );
     });
 
@@ -1395,8 +1438,8 @@ describe("Connector read-only mode", () => {
         expect(read).toBeEnabled();
         expect(read).toHaveAttribute("aria-checked", "true");
         if (provider === "mcp") expect(updateMcpConnector).toHaveBeenCalledWith(mcp.id, { readOnly: true });
-        else if (provider === "google-drive") expect(updateGoogleDriveSettings).toHaveBeenCalledWith({ readOnly: true });
-        else expect(updateGoogleWorkspaceSettings).toHaveBeenCalledWith(provider, { readOnly: true });
+        else if (provider === "google-drive") expect(updateGoogleDriveSettings).toHaveBeenCalledWith({ readOnly: true }, "personal");
+        else expect(updateGoogleWorkspaceSettings).toHaveBeenCalledWith(provider, { readOnly: true }, "personal");
         await act(async () => { fireEvent.click(toggle); await flushMicrotasks(); });
         expect(toggle).toHaveAttribute("aria-checked", "false");
         expect(write).toBeEnabled();
@@ -1537,6 +1580,7 @@ describe("ConnectorsPage CourtListener", () => {
         vi.mocked(listMcpConnectors).mockResolvedValue([]);
         courtListener.installed = false;
         courtListener.loading = false;
+        courtListener.status = null;
     });
 
     afterEach(() => {
@@ -1544,6 +1588,21 @@ describe("ConnectorsPage CourtListener", () => {
     });
 
     const discover = () => within(screen.getByRole("region", { name: "Discover" }));
+
+    it.each([
+        ["the deployment's bulk data", { tokenSource: null, bulkData: true }],
+        ["the organization's token", { tokenSource: "org", bulkData: false }],
+    ] as const)("switches CourtListener back on from Discover when %s needs no token", async (_case, status) => {
+        courtListener.status = status;
+        courtListener.setEnabled.mockResolvedValue(undefined);
+        render(<ConnectorsPage />);
+        await act(flushMicrotasks);
+        await act(async () => {
+            fireEvent.click(discover().getByRole("button", { name: "Add CourtListener connector" }));
+        });
+        expect(courtListener.setEnabled).toHaveBeenCalledWith(true);
+        expect(screen.queryByRole("dialog", { name: "CourtListener token" })).toBeNull();
+    });
     const installed = () => within(screen.getByRole("region", { name: "Installed" }));
 
     it("offers CourtListener in Discover until it is installed, with no extra text", async () => {
@@ -1553,7 +1612,8 @@ describe("ConnectorsPage CourtListener", () => {
         expect(installed().queryByRole("button", { name: "Manage CourtListener" })).toBeNull();
         fireEvent.click(discover().getByRole("button", { name: "Add CourtListener connector" }));
         expect(screen.getByRole("dialog", { name: "CourtListener token" })).toBeTruthy();
-        expect(screen.getAllByText(/Personal workspace/)).toHaveLength(1);
+        // No explanatory line above the lists.
+        expect(screen.queryByText(/workspace|Personal/)).toBeNull();
     });
 
     it("lists an installed CourtListener with its switch under Installed", async () => {
@@ -1561,7 +1621,12 @@ describe("ConnectorsPage CourtListener", () => {
         render(<ConnectorsPage />);
         await act(flushMicrotasks);
         expect(discover().queryByRole("button", { name: "Add CourtListener connector" })).toBeNull();
-        fireEvent.click(installed().getByRole("switch", { name: "CourtListener connector" }));
+        // A connector write, so it passes the MFA gate first.
+        await act(async () => {
+            fireEvent.click(installed().getByRole("switch", { name: "CourtListener connector" }));
+            await flushMicrotasks();
+        });
+        expect(needsMfaVerification).toHaveBeenCalled();
         expect(courtListener.setEnabled).toHaveBeenCalledWith(false);
         fireEvent.click(installed().getByRole("button", { name: "Manage CourtListener" }));
         expect(screen.getByRole("dialog", { name: "CourtListener token" })).toBeTruthy();
@@ -1618,5 +1683,95 @@ describe("ConnectorsPage first load", () => {
         render(<ConnectorsPage />);
         await act(flushMicrotasks);
         expect(discover().queryByRole("button", { name: /^Add / })).toBeNull();
+    });
+});
+
+describe("ConnectorsPage workspaces", () => {
+    beforeEach(() => {
+        vi.clearAllMocks();
+        vi.useRealTimers();
+        vi.mocked(needsMfaVerification).mockResolvedValue(false);
+        vi.mocked(listMcpConnectors).mockResolvedValue([]);
+        vi.mocked(getGoogleWorkspaceStatus).mockResolvedValue({
+            configured: true, available: true, schemaReady: true, connected: false,
+            writeEnabled: false, enabled: true, requireWriteApproval: false,
+            readOnly: false, tools: [], redirectUri: null,
+        });
+        courtListener.installed = false;
+        courtListener.loading = false;
+    });
+
+    afterEach(() => {
+        cleanup();
+    });
+
+    const installed = () => within(screen.getByRole("region", { name: "Installed" }));
+
+    it("reads and adds connectors in the active organization's workspace", async () => {
+        workspaceState.workspaceId = "org-1";
+        workspaceState.activeOrganization = { id: "org-1", name: "Acme LLP" };
+        const notion = makeSummary({
+            id: "notion-1",
+            name: "Notion",
+            serverUrl: "https://mcp.notion.com/mcp",
+        });
+        vi.mocked(createMcpConnector).mockResolvedValue({
+            connector: notion,
+            oauthRequired: false,
+        });
+        render(<ConnectorsPage />);
+        await act(flushMicrotasks);
+
+        expect(listMcpConnectors).toHaveBeenCalledWith("org-1");
+        expect(getGoogleDriveStatus).toHaveBeenCalledWith("org-1");
+        expect(getGoogleWorkspaceStatus).toHaveBeenCalledWith("gmail", "org-1");
+        expect(getGoogleWorkspaceStatus).toHaveBeenCalledWith("google-calendar", "org-1");
+        expect(courtListener.workspaces).toContain("org-1");
+        expect(courtListener.workspaces).not.toContain("personal");
+
+        vi.spyOn(window, "open").mockReturnValue({
+            location: { href: "" },
+            close: vi.fn(),
+            closed: false,
+        } as unknown as Window);
+        vi.mocked(startMcpConnectorOAuth).mockResolvedValue({
+            authorizationUrl: null,
+            alreadyAuthorized: true,
+            callbackOrigin: "https://api.example",
+        });
+        vi.mocked(refreshMcpConnectorTools).mockResolvedValue(notion);
+        await act(async () => {
+            fireEvent.click(screen.getByRole("button", { name: "Add Notion connector" }));
+            await flushMicrotasks();
+        });
+        expect(createMcpConnector).toHaveBeenCalledWith(
+            expect.objectContaining({ name: "Notion" }),
+            "org-1",
+        );
+    });
+
+    it("starts again from the other workspace's connectors on a switch", async () => {
+        const slack = makeSummary({
+            id: "slack-1",
+            name: "Slack",
+            serverUrl: "https://mcp.slack.com/mcp",
+        });
+        vi.mocked(listMcpConnectors).mockImplementation(async (workspace) =>
+            workspace === "personal" ? [slack] : [],
+        );
+        const { rerender } = render(<ConnectorsPage />);
+        await act(flushMicrotasks);
+        expect(installed().getByRole("button", { name: "Manage Slack" })).toBeTruthy();
+
+        workspaceState.workspaceId = "org-2";
+        workspaceState.activeOrganization = { id: "org-2", name: "Beta LLP" };
+        rerender(<ConnectorsPage />);
+        await act(flushMicrotasks);
+
+        expect(listMcpConnectors).toHaveBeenLastCalledWith("org-2");
+        expect(getGoogleDriveStatus).toHaveBeenLastCalledWith("org-2");
+        expect(courtListener.workspaces.at(-1)).toBe("org-2");
+        expect(installed().queryByRole("button", { name: "Manage Slack" })).toBeNull();
+        expect(screen.getByText("No connectors yet.")).toBeTruthy();
     });
 });

@@ -18,14 +18,16 @@ import {
     startUserMcpConnectorOAuth,
     updateUserMcpConnector,
 } from "../../lib/mcpConnectors";
+import type { ConnectorOwner } from "../../lib/connectorOwner";
 import { type Db, errorMessage } from "./user.shared";
 
 export async function listMcpConnectors(
     db: Db,
-    userId: string,
+    owner: ConnectorOwner,
 ): Promise<{ ok: true; connectors: unknown } | { ok: false; error: unknown }> {
+    const { userId } = owner;
     try {
-        const connectors = await listUserMcpConnectors(userId, db, {
+        const connectors = await listUserMcpConnectors(owner, db, {
             includeTools: false,
         });
         return { ok: true, connectors };
@@ -60,7 +62,7 @@ export async function getMcpConnector(
 
 export async function createMcpConnector(
     db: Db,
-    userId: string,
+    owner: ConnectorOwner,
     params: {
         name: string;
         serverUrl: string;
@@ -78,6 +80,7 @@ export async function createMcpConnector(
       }
     | { ok: false; kind: "failed"; error: unknown }
 > {
+    const { userId } = owner;
     let createdConnectorId: string | null = null;
     try {
         if (!params.bearerToken?.trim()) {
@@ -88,7 +91,7 @@ export async function createMcpConnector(
                 throw new ConnectorSetupError(setupInstructions);
             }
         }
-        const connector = await createUserMcpConnector(userId, params, db);
+        const connector = await createUserMcpConnector(owner, params, db);
         createdConnectorId = connector.id;
         try {
             return {

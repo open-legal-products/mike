@@ -4,8 +4,10 @@ import {
     getEffectiveApiKeyStatus,
     getEffectiveApiKeys,
     getUserApiKeys,
+    loadCourtListenerConnection,
     orgKeyOwner,
     saveApiKeyFor,
+    saveCourtListenerConnection,
     userKeyOwner,
 } from "../user.apiKeyStore";
 
@@ -26,13 +28,14 @@ function memoryDb(seed: { members?: Row[]; organizations?: Row[] } = {}) {
         org_api_keys: [],
         org_members: seed.members ?? [],
         organizations: seed.organizations ?? [],
+        user_courtlistener_connections: [],
     };
     const errors: Record<string, { code: string; message: string }> = {};
 
     function query(table: string, mode: "select" | "delete") {
         const filters: [string, unknown][] = [];
         const matches = (row: Row) =>
-            filters.every(([column, value]) => row[column] === value);
+            filters.every(([column, value]) => (row[column] ?? null) === value);
         const run = () => {
             if (errors[table]) return { data: null, error: errors[table] };
             const found = tables[table].filter(matches);
@@ -43,6 +46,11 @@ function memoryDb(seed: { members?: Row[]; organizations?: Row[] } = {}) {
         const builder = {
             is: () => builder,
             eq(column: string, value: unknown) {
+                filters.push([column, value]);
+                return builder;
+            },
+            // The workspace filter: `org_id` eq an id, or is null.
+            filter(column: string, _op: string, value: unknown) {
                 filters.push([column, value]);
                 return builder;
             },
@@ -67,10 +75,14 @@ function memoryDb(seed: { members?: Row[]; organizations?: Row[] } = {}) {
             // ON CONFLICT (owner, provider) DO UPDATE sets only what is sent.
             upsert: async (row: Row) => {
                 const owner = KEY_COLUMN[table];
-                const index = tables[table].findIndex(
-                    (existing) =>
-                        existing[owner] === row[owner] &&
-                        existing.provider === row.provider,
+                // user_courtlistener_connections: UNIQUE NULLS NOT DISTINCT
+                // (user_id, org_id).
+                const index = tables[table].findIndex((existing) =>
+                    owner
+                        ? existing[owner] === row[owner] &&
+                          existing.provider === row.provider
+                        : existing.user_id === row.user_id &&
+                          (existing.org_id ?? null) === (row.org_id ?? null),
                 );
                 if (index >= 0)
                     tables[table][index] = { ...tables[table][index], ...row };
@@ -372,5 +384,71 @@ describe("getEffectiveApiKeyStatus", () => {
         const status = await getEffectiveApiKeyStatus(USER, ORG, db);
         expect(status.bedrock).toBe(false);
         expect(JSON.stringify(status.settings)).not.toContain("us-east-1");
+    });
+});
+
+describe("CourtListener, per workspace", () => {
+    const personal = { userId: USER, orgId: null };
+    const inFirm = { userId: USER, orgId: ORG };
+
+    it("keeps a token and a switch for each workspace", async () => {
+        const { db } = firm(true);
+        await saveCourtListenerConnection(personal, { token: "personal-token" }, db);
+        await saveCourtListenerConnection(inFirm, { enabled: false }, db);
+
+        expect(await loadCourtListenerConnection(personal, db)).toEqual({
+            enabled: true,
+            token: "personal-token",
+        });
+        expect(await loadCourtListenerConnection(inFirm, db)).toEqual({
+            enabled: false,
+            token: null,
+        });
+    });
+
+    it("runs Personal work on the Personal token and organization work on that workspace's own", async () => {
+        const { db } = firm(true);
+        await saveCourtListenerConnection(personal, { token: "personal-token" }, db);
+
+        expect((await getUserApiKeys(USER, db)).courtlistener).toBe("personal-token");
+        expect((await getEffectiveApiKeys(USER, ORG, db)).courtlistener).toBeNull();
+
+        await saveCourtListenerConnection(inFirm, { token: "firm-token" }, db);
+        expect((await getEffectiveApiKeys(USER, ORG, db)).courtlistener).toBe("firm-token");
+        expect((await getEffectiveApiKeys(USER, null, db)).courtlistener).toBe("personal-token");
+        expect(
+            (await getEffectiveApiKeyStatus(USER, ORG, db)).sources.courtlistener,
+        ).toBe("user");
+    });
+
+    it("lays the organization's token over the member's", async () => {
+        const { db } = firm(true);
+        await saveCourtListenerConnection(inFirm, { token: "firm-token" }, db);
+        await saveApiKeyFor(orgKeyOwner(ORG), "courtlistener", "org-token", db);
+
+        expect((await getEffectiveApiKeys(USER, ORG, db)).courtlistener).toBe("org-token");
+        expect(
+            (await getEffectiveApiKeyStatus(USER, ORG, db)).sources.courtlistener,
+        ).toBe("org");
+    });
+
+    it("never uses a member's own token where the organization forbids personal keys", async () => {
+        const { db } = firm(false);
+        await saveCourtListenerConnection(inFirm, { token: "firm-token" }, db);
+
+        expect((await getEffectiveApiKeys(USER, ORG, db)).courtlistener).toBeNull();
+        expect((await getEffectiveApiKeyStatus(USER, ORG, db)).courtlistener).toBe(false);
+    });
+
+    it("removes a token without forgetting the switch", async () => {
+        const { db, tables } = firm(true);
+        await saveCourtListenerConnection(personal, { token: "t", enabled: false }, db);
+        await saveCourtListenerConnection(personal, { token: null }, db);
+
+        expect(await loadCourtListenerConnection(personal, db)).toEqual({
+            enabled: false,
+            token: null,
+        });
+        expect(tables.user_courtlistener_connections).toHaveLength(1);
     });
 });

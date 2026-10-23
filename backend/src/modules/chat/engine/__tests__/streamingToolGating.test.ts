@@ -35,6 +35,14 @@ vi.mock("../../../../lib/llm", async () => ({
 vi.mock("../../../../lib/mcpConnectors", () => ({
   buildUserMcpTools: vi.fn(async () => []),
 }));
+vi.mock("../../../../lib/integrations/googleDrive", async importOriginal => ({
+  ...await importOriginal<typeof import("../../../../lib/integrations/googleDrive")>(),
+  buildGoogleDriveTools: vi.fn(async () => []),
+}));
+vi.mock("../../../../lib/integrations/googleWorkspace", async importOriginal => ({
+  ...await importOriginal<typeof import("../../../../lib/integrations/googleWorkspace")>(),
+  buildGoogleWorkspaceTools: vi.fn(async () => []),
+}));
 
 vi.mock("../tools/toolDispatcher", () => ({
   runToolCalls: (calls: { function: { name: string } }[]) =>
@@ -43,6 +51,8 @@ vi.mock("../tools/toolDispatcher", () => ({
 
 import { scriptedDb } from "../../../../__tests__/helpers/scriptedDb";
 import { buildUserMcpTools } from "../../../../lib/mcpConnectors";
+import { buildGoogleDriveTools } from "../../../../lib/integrations/googleDrive";
+import { buildGoogleWorkspaceTools } from "../../../../lib/integrations/googleWorkspace";
 import { runLLMStream, sanitizeAssistantSseChunk } from "../streaming";
 import { PROJECT_EXTRA_TOOLS } from "../tools/toolSchemas";
 
@@ -268,10 +278,16 @@ it.each([
   expect(chunk).not.toContain("private");
 });
 
-it("does not assemble account connectors for an organization conversation", async () => {
+it("assembles the person's connectors for the organization a conversation is in", async () => {
+  vi.mocked(buildUserMcpTools).mockResolvedValueOnce([
+    { type: "function", function: { name: "mcp_firm_search", description: "", parameters: { type: "object", properties: {} } } },
+  ]);
   const fake = scriptedDb([{ table: "organizations", data: { kind: "team" } }]);
   await runLLMStream({ ...baseParams(), db: fake.db, orgId: "firm" });
-  expect(buildUserMcpTools).not.toHaveBeenCalled();
-  expect(advertisedToolNames().some(name => /^(mcp_|google_drive_|gmail_|google_calendar_)/.test(name))).toBe(false);
+  const owner = { userId: baseParams().userId, orgId: "firm" };
+  expect(buildUserMcpTools).toHaveBeenCalledWith(owner, fake.db);
+  expect(buildGoogleDriveTools).toHaveBeenCalledWith(owner, fake.db);
+  expect(buildGoogleWorkspaceTools).toHaveBeenCalledWith(owner, fake.db);
+  expect(advertisedToolNames()).toContain("mcp_firm_search");
   fake.done();
 });

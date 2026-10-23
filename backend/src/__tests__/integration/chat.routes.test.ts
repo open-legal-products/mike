@@ -1621,7 +1621,7 @@ describe("POST /chat — streaming endpoint", () => {
             }));
             if (decision === "approve") {
                 expect(execute).toHaveBeenCalledExactlyOnceWith(
-                    "u1", approval, expect.anything(),
+                    { userId: "u1", orgId: null }, approval, expect.anything(),
                 );
                 expect(row.content).toContainEqual(expect.objectContaining({
                     type: "mcp_tool_call", approval_id: approval.id, status: "ok",

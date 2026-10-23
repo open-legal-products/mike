@@ -1,6 +1,8 @@
 import { act, renderHook, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { getPanelDocument } from "@/app/lib/mikeApi";
+import type { ReactNode } from "react";
+import { DocumentWorkspaceScope } from "@/app/contexts/WorkspaceContext";
 import { useResolvedPanelDocument } from "./useResolvedPanelDocument";
 
 vi.mock("@/app/lib/mikeApi", () => ({
@@ -105,5 +107,15 @@ describe("useResolvedPanelDocument", () => {
         );
         expect(getPanelDocumentMock).toHaveBeenCalledTimes(2);
         expect(result.current.error).toBeNull();
+    });
+    it("reads the case in the workspace of the item it is opened from", async () => {
+        getPanelDocumentMock.mockResolvedValue({ ...summary, subdocuments: [] });
+        const wrapper = ({ children }: { children: ReactNode }) => (
+            <DocumentWorkspaceScope orgId="org-1">{children}</DocumentWorkspaceScope>
+        );
+        renderHook(() => useResolvedPanelDocument(summary), { wrapper });
+        await waitFor(() =>
+            expect(getPanelDocumentMock).toHaveBeenCalledWith("case:123", "org-1"),
+        );
     });
 });

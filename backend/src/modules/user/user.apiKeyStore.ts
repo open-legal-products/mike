@@ -16,6 +16,11 @@ import {
     normalizeVertexLocation,
 } from "../../lib/llm/cloudProviders";
 import { WEB_SEARCH_BACKENDS, type WebSearchBackend } from "../../lib/webSearch";
+import {
+    type ConnectorOwner,
+    personalConnectorOwner,
+    workspaceFilter,
+} from "../../lib/connectorOwner";
 
 export type ApiKeyProvider =
     | "claude"
@@ -284,6 +289,11 @@ export async function getApiKeyStatusFor(
 ): Promise<ApiKeyStatus> {
     const status = envApiKeyStatus();
     overlayStatusRows(status, await loadStatusRows(owner, db), owner.kind);
+    if (owner.kind === "user")
+        overlayCourtListenerStatus(
+            status,
+            await readCourtListenerConnection(personalConnectorOwner(owner.id), db),
+        );
     return status;
 }
 
@@ -307,6 +317,12 @@ export async function getEffectiveApiKeyStatus(
             await loadStatusRows(userKeyOwner(userId), db),
             "user",
         );
+    overlayCourtListenerStatus(
+        status,
+        scope.allowPersonal
+            ? await readCourtListenerConnection({ userId, orgId }, db)
+            : WITHOUT_COURTLISTENER,
+    );
     overlayStatusRows(
         status,
         await loadStatusRows(orgKeyOwner(orgId), db),
@@ -596,6 +612,10 @@ export async function getUserApiKeys(
 ): Promise<UserApiKeys> {
     const apiKeys = envApiKeys();
     overlayKeyRows(apiKeys, await loadKeyRows(userKeyOwner(userId), db));
+    overlayCourtListenerKey(
+        apiKeys,
+        await readCourtListenerConnection(personalConnectorOwner(userId), db),
+    );
     return apiKeys;
 }
 
@@ -631,6 +651,14 @@ export async function getEffectiveApiKeys(
     const apiKeys = scope.allowPersonal
         ? await getUserApiKeys(userId, db)
         : envApiKeys();
+    // The member's own CourtListener token for this organization, never
+    // their Personal one.
+    overlayCourtListenerKey(
+        apiKeys,
+        scope.allowPersonal
+            ? await readCourtListenerConnection({ userId, orgId }, db)
+            : WITHOUT_COURTLISTENER,
+    );
     overlayKeyRows(apiKeys, await loadKeyRows(orgKeyOwner(orgId), db));
     return apiKeys;
 }
@@ -732,4 +760,121 @@ export async function updateApiKeySettings(
         .select("provider");
     if (error) throw error;
     return (data ?? []).length > 0;
+}
+
+// ---------------------------------------------------------------------------
+// CourtListener is a connector, so a person's own token belongs to one
+// workspace (user_courtlistener_connections, 20261022_01) rather than sitting
+// with their provider keys. An organization's token stays in org_api_keys and
+// is laid over the member's like any of its keys. The table shares this
+// file's encryption.
+// ---------------------------------------------------------------------------
+
+export type CourtListenerConnection = {
+    /** The on/off switch; on until the person turns it off. */
+    enabled: boolean;
+    /** The person's own token for the workspace. */
+    token: string | null;
+};
+
+const WITHOUT_COURTLISTENER: CourtListenerConnection = {
+    enabled: true,
+    token: null,
+};
+
+type CourtListenerRow = {
+    enabled: boolean | null;
+    encrypted_key: string | null;
+    iv: string | null;
+    auth_tag: string | null;
+};
+
+/**
+ * "unmigrated" until 20261022_01 lands: the token is then still a
+ * user_api_keys row, and the overlays below leave whatever it gave alone.
+ */
+async function readCourtListenerConnection(
+    owner: ConnectorOwner,
+    db: Db,
+): Promise<CourtListenerConnection | "unmigrated"> {
+    const { data, error } = await db
+        .from("user_courtlistener_connections")
+        .select("enabled, encrypted_key, iv, auth_tag")
+        .eq("user_id", owner.userId)
+        .filter(...workspaceFilter(owner))
+        .maybeSingle();
+    if (error) {
+        if (isMissingOrgKeySchema(error)) return "unmigrated";
+        throw error;
+    }
+    const row = data as CourtListenerRow | null;
+    if (!row) return WITHOUT_COURTLISTENER;
+    return {
+        enabled: row.enabled !== false,
+        token:
+            row.encrypted_key && row.iv && row.auth_tag
+                ? decrypt({
+                      provider: "courtlistener",
+                      encrypted_key: row.encrypted_key,
+                      iv: row.iv,
+                      auth_tag: row.auth_tag,
+                  })?.trim() || null
+                : null,
+    };
+}
+
+export async function loadCourtListenerConnection(
+    owner: ConnectorOwner,
+    db: Db = createServerSupabase(),
+): Promise<CourtListenerConnection> {
+    const connection = await readCourtListenerConnection(owner, db);
+    return connection === "unmigrated" ? WITHOUT_COURTLISTENER : connection;
+}
+
+/**
+ * Change `owner`'s switch, token, or both, creating their connection for
+ * the workspace on first use. A null or blank token removes theirs.
+ */
+export async function saveCourtListenerConnection(
+    owner: ConnectorOwner,
+    patch: { enabled?: boolean; token?: string | null },
+    db: Db = createServerSupabase(),
+): Promise<void> {
+    const row: Record<string, unknown> = {
+        user_id: owner.userId,
+        org_id: owner.orgId,
+        updated_at: new Date().toISOString(),
+    };
+    if (typeof patch.enabled === "boolean") row.enabled = patch.enabled;
+    if (patch.token !== undefined) {
+        const token = patch.token?.trim() || null;
+        if (token) {
+            const { encrypted_key, iv, auth_tag } = encrypt(token);
+            Object.assign(row, { encrypted_key, iv, auth_tag });
+        } else {
+            Object.assign(row, { encrypted_key: null, iv: null, auth_tag: null });
+        }
+    }
+    const { error } = await db
+        .from("user_courtlistener_connections")
+        .upsert(row, { onConflict: "user_id,org_id" });
+    if (error) throw error;
+}
+
+function overlayCourtListenerKey(
+    apiKeys: UserApiKeys,
+    connection: CourtListenerConnection | "unmigrated",
+): void {
+    if (connection === "unmigrated") return;
+    apiKeys.courtlistener = connection.token;
+}
+
+function overlayCourtListenerStatus(
+    status: ApiKeyStatus,
+    connection: CourtListenerConnection | "unmigrated",
+): void {
+    if (connection === "unmigrated") return;
+    status.courtlistener = !!connection.token;
+    status.sources.courtlistener = connection.token ? "user" : null;
+    delete status.enabled.courtlistener;
 }

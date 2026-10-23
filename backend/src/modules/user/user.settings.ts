@@ -1,7 +1,10 @@
 import { createServerSupabase, type Db } from "../../lib/supabase";
 import { type UserApiKeys } from "../../lib/llm";
 import { type ReasoningLevel } from "../../lib/llm";
-import { getEffectiveApiKeys } from "./user.apiKeyStore";
+import {
+    getEffectiveApiKeys,
+    loadCourtListenerConnection,
+} from "./user.apiKeyStore";
 import { courtlistenerBulkDataEnabled } from "../../lib/courtlistener";
 import { loadCustomInstructions } from "./user.customInstructions";
 import {
@@ -78,11 +81,12 @@ export async function getUserModelSettings(
         customInstructions,
         responseStyle,
         webSearch,
+        courtListener,
     ] = await Promise.all([
         client
             .from("user_profiles")
             .select(
-                "title_model, tabular_model, memory_curator_model, subagent_model, subagent_reasoning, last_selected_chat_model, last_selected_reasoning_level, legal_research_us, display_name, organisation, jurisdiction, practice_setting, professional_title, practice_areas",
+                "title_model, tabular_model, memory_curator_model, subagent_model, subagent_reasoning, last_selected_chat_model, last_selected_reasoning_level, display_name, organisation, jurisdiction, practice_setting, professional_title, practice_areas",
             )
             .eq("user_id", userId)
             .single(),
@@ -110,6 +114,18 @@ export async function getUserModelSettings(
             );
             return DEFAULT_WEB_SEARCH_SETTINGS;
         }),
+        // The CourtListener switch is per workspace, like the connector.
+        // Research is an enhancement: a failed read leaves it off.
+        loadCourtListenerConnection(
+            { userId, orgId: options.orgId ?? null },
+            client,
+        ).catch((error: unknown) => {
+            console.error(
+                "[user-settings] CourtListener connection load failed",
+                safeError(error),
+            );
+            return { enabled: false, token: null };
+        }),
     ]);
     let data = profileResult.data;
     let profileError = profileResult.error;
@@ -123,7 +139,7 @@ export async function getUserModelSettings(
         const withoutSubagentDefaults = await client
             .from("user_profiles")
             .select(
-                "title_model, tabular_model, memory_curator_model, last_selected_chat_model, last_selected_reasoning_level, legal_research_us, display_name, organisation, jurisdiction, practice_setting, professional_title, practice_areas",
+                "title_model, tabular_model, memory_curator_model, last_selected_chat_model, last_selected_reasoning_level, display_name, organisation, jurisdiction, practice_setting, professional_title, practice_areas",
             )
             .eq("user_id", userId)
             .single();
@@ -150,7 +166,7 @@ export async function getUserModelSettings(
         const withoutMemoryCuratorModel = await client
             .from("user_profiles")
             .select(
-                "title_model, tabular_model, last_selected_chat_model, last_selected_reasoning_level, legal_research_us, display_name, organisation, jurisdiction, practice_setting, professional_title, practice_areas",
+                "title_model, tabular_model, last_selected_chat_model, last_selected_reasoning_level, display_name, organisation, jurisdiction, practice_setting, professional_title, practice_areas",
             )
             .eq("user_id", userId)
             .single();
@@ -174,7 +190,7 @@ export async function getUserModelSettings(
         const withoutLastSelected = await client
             .from("user_profiles")
             .select(
-                "title_model, tabular_model, last_selected_chat_model, legal_research_us, display_name, organisation, jurisdiction, practice_setting, professional_title, practice_areas",
+                "title_model, tabular_model, last_selected_chat_model, display_name, organisation, jurisdiction, practice_setting, professional_title, practice_areas",
             )
             .eq("user_id", userId)
             .single();
@@ -187,7 +203,7 @@ export async function getUserModelSettings(
         } else if (withoutLastSelected.error.code === "42703") {
             const legacy = await client
                 .from("user_profiles")
-                .select("title_model, tabular_model, legal_research_us")
+                .select("title_model, tabular_model")
                 .eq("user_id", userId)
                 .single();
             // A second failure (a database even older than the pre-migration
@@ -231,8 +247,7 @@ export async function getUserModelSettings(
             data?.last_selected_reasoning_level,
         ),
         legal_research_us:
-            (data as { legal_research_us?: boolean | null } | null)
-                ?.legal_research_us !== false &&
+            courtListener.enabled &&
             (!!api_keys.courtlistener || courtlistenerBulkDataEnabled()),
         web_search: webSearch,
         personalisation: {

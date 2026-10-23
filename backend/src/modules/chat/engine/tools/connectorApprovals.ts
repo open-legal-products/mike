@@ -16,6 +16,7 @@ import type {
   McpToolEvent,
 } from "@mike/contracts";
 import type { Db } from "../../../../lib/supabase";
+import type { ConnectorOwner } from "../../../../lib/connectorOwner";
 import type { ConnectorCallPlan } from "../../../../lib/mcp/types";
 import {
   planGoogleDriveCall,
@@ -41,16 +42,16 @@ export const MAX_APPROVAL_RESULT_CHARS = 4_000;
 
 /** All writable connectors share the same assistant approval flow. */
 export async function planConnectorToolCall(
-  userId: string,
+  owner: ConnectorOwner,
   name: string,
   args: Record<string, unknown>,
   db: Db,
 ): Promise<ConnectorCallPlan> {
   if (name.startsWith("google_drive_"))
-    return planGoogleDriveCall(userId, name, args, db);
+    return planGoogleDriveCall(owner, name, args, db);
   if (isGoogleWorkspaceTool(name))
-    return planGoogleWorkspaceCall(userId, name, args, db);
-  if (name.startsWith("mcp_")) return planMcpToolCall(userId, name, args, db);
+    return planGoogleWorkspaceCall(owner, name, args, db);
+  if (name.startsWith("mcp_")) return planMcpToolCall(owner, name, args, db);
   return { type: "run" };
 }
 
@@ -100,7 +101,6 @@ export async function runApprovedConnectorActions(args: {
   orgId?: string | null;
 }): Promise<McpToolEvent[]> {
   const { db, chatId, messageId, askEventId, userId } = args;
-  if ((await teamOrgIdOf(db, args.orgId)) !== null) return [];
   const row = await loadAssistantMessage(db, chatId, messageId);
   const content = Array.isArray(row?.content)
     ? (row.content as Record<string, unknown>[])
@@ -120,15 +120,22 @@ export async function runApprovedConnectorActions(args: {
       .filter((item) => item.kind === "approval" && item.decision === "approve")
       .map((item) => item.id),
   );
+  // An approval runs on the connections of the conversation's workspace,
+  // as the call it reviews would have; its binding pins the exact connector
+  // and grant, so one replaced or removed since is refused.
+  const owner: ConnectorOwner = {
+    userId,
+    orgId: await teamOrgIdOf(db, args.orgId),
+  };
   const events: McpToolEvent[] = [];
   for (const item of ask.items.filter(isApprovalItem)) {
     if (!approved.has(item.id)) continue;
     const { content: result, event } =
       item.binding.type === "google"
         ? item.binding.provider === "google-drive"
-          ? await executeApprovedGoogleDriveCall(userId, item, db)
-          : await executeApprovedGoogleWorkspaceCall(userId, item, db)
-        : await executeApprovedMcpToolCall(userId, item, db);
+          ? await executeApprovedGoogleDriveCall(owner, item, db)
+          : await executeApprovedGoogleWorkspaceCall(owner, item, db)
+        : await executeApprovedMcpToolCall(owner, item, db);
     // These events are stored and streamed outside runLLMStream, so apply its
     // rule here: the user never sees a connector's raw error text.
     events.push({

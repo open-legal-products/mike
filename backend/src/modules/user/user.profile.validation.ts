@@ -158,7 +158,6 @@ export function validateProfilePayload(body: unknown):
               subagent_reasoning?: string | null;
               last_selected_chat_model?: string | null;
               last_selected_reasoning_level?: string | null;
-              legal_research_us?: boolean;
               quick_actions_visible?: boolean;
               response_details_visible?: boolean;
               updated_at: string;
@@ -185,7 +184,6 @@ export function validateProfilePayload(body: unknown):
         "subagentReasoning",
         "lastSelectedChatModel",
         "lastSelectedReasoningLevel",
-        "legalResearchUs",
         "quickActionsVisible",
         "responseDetailsVisible",
         "darkMode",
@@ -216,7 +214,6 @@ export function validateProfilePayload(body: unknown):
         subagent_reasoning?: string | null;
         last_selected_chat_model?: string | null;
         last_selected_reasoning_level?: string | null;
-        legal_research_us?: boolean;
         quick_actions_visible?: boolean;
         response_details_visible?: boolean;
         dark_mode?: boolean;
@@ -414,16 +411,6 @@ export function validateProfilePayload(body: unknown):
             };
         }
         routerModels[slug] = models;
-    }
-
-    if ("legalResearchUs" in raw) {
-        if (typeof raw.legalResearchUs !== "boolean") {
-            return {
-                ok: false,
-                detail: "legalResearchUs must be a boolean",
-            };
-        }
-        update.legal_research_us = raw.legalResearchUs;
     }
 
     if ("quickActionsVisible" in raw) {

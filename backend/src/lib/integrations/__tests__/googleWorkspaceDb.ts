@@ -24,6 +24,11 @@ export function workspaceDb() {
           filters.push((r) => r[k] === v);
           return query;
         },
+        // Only the workspace filter (`org_id` eq/is) is used.
+        filter(k: string, op: string, v: unknown) {
+          filters.push((r) => (op === "is" ? (r[k] ?? null) === v : r[k] === v));
+          return query;
+        },
         neq(k: string, v: unknown) {
           filters.push((r) => r[k] !== v);
           return query;
@@ -112,7 +117,10 @@ export function workspaceDb() {
         if (!state) return { data: false, error: null };
         states.splice(states.indexOf(state), 1);
         const prior = grants.find(
-          (g) => g.user_id === state.user_id && g.provider === state.provider,
+          (g) =>
+            g.user_id === state.user_id &&
+            (g.org_id ?? null) === (state.org_id ?? null) &&
+            g.provider === state.provider,
         );
         if (prior) grants.splice(grants.indexOf(prior), 1);
         const tokens = args.p_tokens as Row;
@@ -124,6 +132,7 @@ export function workspaceDb() {
           disabled_tools: prior?.disabled_tools ?? [],
           ...tokens,
           user_id: state.user_id,
+          org_id: state.org_id ?? null,
           provider: state.provider,
           write_enabled: tokens.write_enabled === true,
           grant_id: randomUUID(),
@@ -133,7 +142,11 @@ export function workspaceDb() {
       if (name === "disconnect_google_workspace") {
         for (const rows of [grants, states])
           for (const r of [...rows])
-            if (r.user_id === args.p_user_id && r.provider === args.p_provider)
+            if (
+              r.user_id === args.p_user_id &&
+              (r.org_id ?? null) === (args.p_org_id ?? null) &&
+              r.provider === args.p_provider
+            )
               rows.splice(rows.indexOf(r), 1);
         return { data: null, error: null };
       }

@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useState } from "react";
 import { getPanelDocument } from "@/app/lib/mikeApi";
+import { useDocumentWorkspace } from "@/app/contexts/WorkspaceContext";
 import type { PanelDocument } from "../shared/types";
 
 function mergePanelDocuments(
@@ -43,6 +44,10 @@ export function useResolvedPanelDocument(document: PanelDocument): {
     retry: () => void;
 } {
     const documentId = document.document_id;
+    // The workspace of the chat, review or project the document is opened
+    // from (else the active one): a case is read with its CourtListener
+    // connection.
+    const workspace = useDocumentWorkspace();
     const needsHydration =
         document.type === "case" && !document.subdocuments?.length;
     const [request, setRequest] = useState<{
@@ -62,7 +67,7 @@ export function useResolvedPanelDocument(document: PanelDocument): {
         let cancelled = false;
         // eslint-disable-next-line react-hooks/set-state-in-effect -- start the request for a new case or explicit retry
         setRequest({ documentId, loaded: null, loading: true, error: null });
-        void getPanelDocument(documentId)
+        void getPanelDocument(documentId, workspace)
             .then((loaded) => {
                 if (!cancelled)
                     setRequest({
@@ -87,7 +92,7 @@ export function useResolvedPanelDocument(document: PanelDocument): {
         return () => {
             cancelled = true;
         };
-    }, [documentId, needsHydration, requestVersion]);
+    }, [documentId, needsHydration, requestVersion, workspace]);
 
     // File metadata is complete: pass the current version through synchronously
     // with its refetch key. Case hydration is keyed by identity, not by incoming

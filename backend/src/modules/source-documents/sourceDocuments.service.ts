@@ -56,7 +56,15 @@ const documentFetches = new Map<string, Promise<unknown>>();
  */
 export async function getSourceDocument(
   db: Db,
-  args: { userId: string; documentId: string },
+  args: {
+    userId: string;
+    documentId: string;
+    /**
+     * The workspace the citation was opened from: its CourtListener token
+     * is the one used. Null for Personal.
+     */
+    orgId?: string | null;
+  },
 ): Promise<SourceDocumentResult> {
   const clusterId = caseClusterId(args.documentId);
   if (!clusterId) {
@@ -66,8 +74,10 @@ export async function getSourceDocument(
   try {
     // One Supabase client for the whole request: the settings lookup used to
     // build a second one by omitting `db`.
-    const settings = await getUserModelSettings(args.userId, db);
-    const fetchKey = `${args.userId}:${args.documentId}`;
+    const settings = await getUserModelSettings(args.userId, db, {
+      orgId: args.orgId ?? null,
+    });
+    const fetchKey = `${args.userId}:${args.orgId ?? "personal"}:${args.documentId}`;
     let request = documentFetches.get(fetchKey);
     if (!request) {
       request = getCourtlistenerCaseOpinions({

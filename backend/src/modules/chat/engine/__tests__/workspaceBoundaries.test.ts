@@ -9,9 +9,28 @@ vi.mock("../../../../lib/documentVersions", async importOriginal => ({
   ...await importOriginal<typeof import("../../../../lib/documentVersions")>(),
   attachActiveVersionPaths: vi.fn(async () => {}),
 }));
+const connectors = vi.hoisted(() => {
+  const result = { content: "{}", event: { type: "mcp_tool_call", connector_id: "", connector_name: "", tool_name: "", openai_tool_name: "", status: "ok" } };
+  const family = () => ({ plan: vi.fn(async () => ({ type: "run" })), execute: vi.fn(async () => result) });
+  return { mcp: family(), drive: family(), google: family() };
+});
+vi.mock("../../../../lib/mcpConnectors", async importOriginal => ({
+  ...await importOriginal<typeof import("../../../../lib/mcpConnectors")>(),
+  planMcpToolCall: connectors.mcp.plan,
+  executeMcpToolCall: connectors.mcp.execute,
+}));
+vi.mock("../../../../lib/integrations/googleDrive", async importOriginal => ({
+  ...await importOriginal<typeof import("../../../../lib/integrations/googleDrive")>(),
+  planGoogleDriveCall: connectors.drive.plan,
+  executeGoogleDriveToolCall: connectors.drive.execute,
+}));
+vi.mock("../../../../lib/integrations/googleWorkspace", async importOriginal => ({
+  ...await importOriginal<typeof import("../../../../lib/integrations/googleWorkspace")>(),
+  planGoogleWorkspaceCall: connectors.google.plan,
+  executeGoogleWorkspaceToolCall: connectors.google.execute,
+}));
 import { buildWorkflowStore } from "../contextBuilders";
 import { runToolCalls } from "../tools/toolDispatcher";
-import { runApprovedConnectorActions } from "../tools/connectorApprovals";
 import { catalogWorkflowId } from "../../../../lib/workflowCatalog";
 import type { WorkflowStore } from "../types";
 
@@ -49,16 +68,23 @@ describe("assistant workspace boundaries", () => {
     fake.done();
   });
 
-  it.each(["mcp_secret_search", "google_drive_search", "gmail_search"])("refuses unadvertised connector tool %s before credential lookup", async name => {
+  it.each([
+    ["mcp_secret_search", "mcp"],
+    ["google_drive_search", "drive"],
+    ["gmail_search", "google"],
+  ] as const)("runs %s on the person's connections for the conversation's organization", async (name, family) => {
     const fake = scriptedDb([{ table: "organizations", data: { kind: "team" } }]);
-    const result = await runToolCalls([{ id: "call", function: { name, arguments: "{}" } }], new Map(), "u", fake.db, vi.fn(), undefined, undefined, undefined, undefined, undefined, undefined, undefined, undefined, undefined, { orgId: "firm" });
-    expect(JSON.stringify(result.toolResults)).toContain("Personal workspace");
+    await runToolCalls([{ id: "call", function: { name, arguments: "{}" } }], new Map(), "u", fake.db, vi.fn(), undefined, undefined, undefined, undefined, undefined, undefined, undefined, undefined, undefined, { orgId: "firm" });
+    const owner = { userId: "u", orgId: "firm" };
+    expect(connectors[family].plan).toHaveBeenCalledWith(owner, name, {}, fake.db);
+    expect(connectors[family].execute).toHaveBeenCalledWith(owner, name, {}, fake.db);
     fake.done();
   });
 
-  it("does not resume a connector write approval in an organization", async () => {
-    const fake = scriptedDb([{ table: "organizations", data: { kind: "team" } }]);
-    expect(await runApprovedConnectorActions({ db: fake.db, chatId: "chat", messageId: "message", askEventId: "ask", userId: "u", orgId: "firm" })).toEqual([]);
+  it("runs connector tools on Personal connections in a person's own organization", async () => {
+    const fake = scriptedDb([{ table: "organizations", data: { kind: "personal" } }]);
+    await runToolCalls([{ id: "call", function: { name: "mcp_search", arguments: "{}" } }], new Map(), "u", fake.db, vi.fn(), undefined, undefined, undefined, undefined, undefined, undefined, undefined, undefined, undefined, { orgId: "mine" });
+    expect(connectors.mcp.execute).toHaveBeenCalledWith({ userId: "u", orgId: null }, "mcp_search", {}, fake.db);
     fake.done();
   });
 });
