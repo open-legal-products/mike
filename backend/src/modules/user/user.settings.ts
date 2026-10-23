@@ -13,7 +13,8 @@ import {
     DEFAULT_WEB_SEARCH_SETTINGS,
     type WebSearchSettings,
 } from "../../lib/webSearch";
-import { safeError } from "../../lib/safeError";
+import { AppError } from "../../lib/appError";
+import { reportError } from "../../lib/observability/sentry";
 import { getEffectiveRouterModels } from "../../lib/routerModels";
 import {
     normalizeOptionalModelPreference,
@@ -59,6 +60,17 @@ export type UserModelSettings = {
  * the lists that govern those keys (getEffectiveRouterModels). Everything
  * else here is the person's own, whichever workspace they are in.
  */
+/**
+ * A settings read that fell back to its default. The chat goes ahead, so this
+ * is a warning; the failed query is the cause so its code still extracts, and
+ * the same object is logged once (the console bridge knows it is reported).
+ */
+function reportSettingsReadFailure(message: string, error: unknown): void {
+    const failure = new AppError("db.query_failed", message, { cause: error });
+    reportError(failure, { level: "warning" });
+    console.error(`[user-settings] ${message}`, failure);
+}
+
 export async function getUserModelSettings(
     userId: string,
     db?: Db,
@@ -84,24 +96,15 @@ export async function getUserModelSettings(
         getEffectiveRouterModels(userId, options.orgId, client),
         // Instructions are an enhancement: a failed read must not block chat.
         loadCustomInstructions(client, userId).catch((error: unknown) => {
-            console.error(
-                "[user-settings] custom instructions load failed",
-                safeError(error),
-            );
+            reportSettingsReadFailure("custom instructions load failed", error);
             return "";
         }),
         loadResponseStyle(client, userId).catch((error: unknown) => {
-            console.error(
-                "[user-settings] response style load failed",
-                safeError(error),
-            );
+            reportSettingsReadFailure("response style load failed", error);
             return DEFAULT_RESPONSE_STYLE;
         }),
         loadWebSearchSettings(client, userId).catch((error: unknown) => {
-            console.error(
-                "[user-settings] web search settings load failed",
-                safeError(error),
-            );
+            reportSettingsReadFailure("web search settings load failed", error);
             return DEFAULT_WEB_SEARCH_SETTINGS;
         }),
     ]);

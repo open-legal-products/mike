@@ -538,7 +538,11 @@ export function useWordAssistantChat({
                   (error instanceof Error && error.name === "AbortError");
                 if (!cancelled) {
                   reportError(error, {
-                    tags: { component: "word-chat", stage: "tool-result" },
+                    tags: {
+                      component: "word-chat",
+                      operation: "word_chat.turn",
+                      stage: "tool-result",
+                    },
                     extra: { tool_call_id: call.toolCallId, tool: call.name },
                   });
                 }
@@ -942,9 +946,19 @@ export function useWordAssistantChat({
             // The stream failed for a reason other than the user stopping
             // it. The 5xx/network layers already reported transport-level
             // failures; this is the only report for mid-stream `error`
-            // frames and Office.js failures inside the turn.
+            // frames and Office.js failures inside the turn. A terminal
+            // frame's backend code (when it is one the privacy boundary
+            // knows) says which server-side failure ended the turn.
             reportError(error, {
-              tags: { component: "word-chat", storage: wordChatStorage },
+              tags: {
+                component: "word-chat",
+                operation: "word_chat.turn",
+                storage: wordChatStorage,
+                error_code:
+                  error instanceof WordChatTerminalError
+                    ? error.code ?? undefined
+                    : undefined,
+              },
             });
           }
           if (controller.signal.aborted) {
@@ -1031,6 +1045,7 @@ export function useWordAssistantChat({
             ...failureCopy,
             dedupeKey: "assistant-turn",
             page: "Assistant",
+            operation: "word_chat.turn",
             onRetry: retryInput
               ? async () => {
                   if (!sendIsCurrent()) {

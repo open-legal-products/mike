@@ -9,11 +9,14 @@
 // text, file names, or emails: the boundary would drop them, but they must
 // not be offered in the first place.
 
+import { AppError } from "../../lib/appError";
 import { asReportableError } from "../../lib/httpError";
 import {
   reportError,
   type ReportLevel,
 } from "../../lib/observability/sentry";
+import { safeError } from "../../lib/safeError";
+import { deleteFile } from "../../lib/storage";
 import type { PlaybookImportStage } from "./playbooks.operations";
 
 export type PlaybookJobKind = "playbook.review" | "playbook.import";
@@ -108,5 +111,49 @@ export function reportPlaybookFailure(
       file_type: context.fileType ?? undefined,
     },
     extra,
+  });
+}
+
+/**
+ * Remove stored objects nothing refers to any more: an upload whose row was
+ * never written, the source a saved import replaced, the files of a deleted
+ * playbook. Losing one must not fail the caller, but `.catch(() => {})` lost
+ * it entirely. Every key is attempted; at most one warning is reported, under
+ * its own kind, with the storage adapter's error as the cause (its code
+ * reaches Sentry as failure_code). Keys never go on the event: they embed
+ * the user's original filename.
+ */
+export async function removePlaybookObjects(
+  keys: ReadonlyArray<string | null | undefined>,
+  context: {
+    stage?: "import.cleanup";
+    ids?: { import_id?: string; playbook_id?: string | null };
+  } = {},
+): Promise<void> {
+  const targets = keys.filter((key): key is string => !!key);
+  if (targets.length === 0) return;
+  const results = await Promise.allSettled(
+    targets.map((key) => deleteFile(key)),
+  );
+  const failed = results.find(
+    (result): result is PromiseRejectedResult => result.status === "rejected",
+  );
+  if (!failed) return;
+  const extra: Record<string, string> = {};
+  for (const [key, value] of Object.entries(context.ids ?? {}))
+    if (typeof value === "string" && value) extra[key] = value;
+  const failure = new AppError(
+    "playbooks.cleanup_failed",
+    "Playbook object cleanup failed",
+    { cause: failed.reason },
+  );
+  reportError(failure, {
+    level: "warning",
+    tags: { component: "playbooks", stage: context.stage },
+    extra,
+  });
+  console.warn("[playbooks] object cleanup failed", {
+    stage: context.stage,
+    error: safeError(failed.reason),
   });
 }

@@ -335,6 +335,7 @@ export function DocumentSidePanel({
                 describeError(err, {
                     action: "rename this version",
                     fallback: "Could not save the new name. Try again.",
+                    operation: "documents.edit",
                 }).message,
             );
         } finally {
@@ -356,6 +357,7 @@ export function DocumentSidePanel({
                     action: "upload a new version",
                     fallback:
                         "The new version could not be uploaded. Try again.",
+                    operation: "documents.upload",
                 }).message,
             );
         } finally {
@@ -374,6 +376,7 @@ export function DocumentSidePanel({
         } catch (err) {
             notifyError(err, {
                 action: "delete this version",
+                operation: "documents.edit",
                 onRetry: () => void handleDeleteVersion(versionIdToDelete),
                 supportNote: `Document: ${selectedFilename}`,
             });
@@ -419,6 +422,7 @@ export function DocumentSidePanel({
                 describeError(err, {
                     action: "replace this version",
                     fallback: "This version could not be replaced. Try again.",
+                    operation: "documents.upload",
                 }).message,
             );
         } finally {
@@ -442,6 +446,7 @@ export function DocumentSidePanel({
             setDeleteDocumentStatus("idle");
             notifyError(err, {
                 action: "delete this document",
+                operation: "documents.edit",
                 onRetry: requestDeleteDocument,
                 supportNote: `Document: ${selectedFilename}`,
             });

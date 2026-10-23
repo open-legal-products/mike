@@ -11,6 +11,11 @@ vi.mock("../../../lib/storage", () => ({
 }));
 const appJobs = vi.hoisted(() => ({ enqueueAppJobDelivery: vi.fn() }));
 vi.mock("../../../lib/queue/appJobsQueue", () => appJobs);
+const sentry = vi.hoisted(() => ({ setOperation: vi.fn() }));
+vi.mock("../../../lib/observability/sentry", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../../lib/observability/sentry")>()),
+  setOperation: sentry.setOperation,
+}));
 import {
   handleDocumentCleanup,
   captureInlineDocumentCleanup,
@@ -190,6 +195,8 @@ describe("document cleanup job", () => {
     });
     const settled = fake.calls.slice(2);
     expect(settled.map((call) => (call.payload as { status: string }).status)).toEqual(["done", "done"]);
+    // A claimed row is the documents.delete job: its events carry that name.
+    expect(sentry.setOperation).toHaveBeenCalledWith("documents.delete");
     // Fenced to the claim we hold, exactly like the runner's own writes.
     expect(settled[0].filters).toEqual([
       ["eq", "id", "j2"],
@@ -297,6 +304,9 @@ describe("document cleanup job", () => {
       completeInlineDocumentCleanup(fake.db, ["gone"]),
     ).resolves.toBeUndefined();
     fake.done();
+    // The inline form runs on a request thread that already named its own
+    // operation (documents.delete via the route); it must not overwrite it.
+    expect(sentry.setOperation).not.toHaveBeenCalled();
   });
 
   it("never fails the request when the object store is unconfigured", async () => {

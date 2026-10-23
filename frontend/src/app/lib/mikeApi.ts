@@ -28,9 +28,11 @@ import type { RouterProfileLists } from "@/shared/lib/modelCatalog";
 import {
     markErrorHandled,
     reportApiFailure,
+    reportError,
     reportNetworkFailure,
     trackPendingRequest,
 } from "@/app/lib/errorReporting";
+import { isAbortError } from "@/shared/lib/userError";
 import {
     UploadBatchError,
     createControlRequestRetryPolicy,
@@ -243,6 +245,66 @@ async function apiRequest<T>(path: string, init?: RequestInit): Promise<T> {
 }
 
 /**
+ * The parts (one `File` each) whose storage PUT has already been reported.
+ * The upload client retries a part up to three times, each attempt with a
+ * fresh signed URL; one event per failed part is what tells an operator how
+ * many uploads failed, not how many attempts.
+ */
+const reportedStorageParts = new WeakSet<object>();
+
+/**
+ * The storage transport the upload client PUTs file bytes through. A storage
+ * failure never reaches `apiRequest`, so it would otherwise leave no trace
+ * beyond a `direct_upload_failed` outcome in a toast: report it here, under
+ * the upload flow, once per part. The signed URL and the filename never go
+ * into the event; the status is the only detail kept.
+ */
+const reportingStorageFetch: typeof fetch = async (input, init) => {
+    const part =
+        init?.body && typeof init.body === "object" ? init.body : null;
+    const once = (report: () => void) => {
+        if (part) {
+            if (reportedStorageParts.has(part)) return;
+            reportedStorageParts.add(part);
+        }
+        report();
+    };
+    let response: Response;
+    try {
+        response = await fetch(input, init);
+    } catch (error) {
+        // The caller's abort and the per-attempt timeout both arrive as an
+        // aborted signal; neither is a storage failure.
+        if (init?.signal?.aborted || isAbortError(error)) throw error;
+        once(() =>
+            reportError(error, {
+                level: "warning",
+                tags: {
+                    component: "mike-api",
+                    operation: "upload_session.storage",
+                    http_method: init?.method ?? "PUT",
+                    network: true,
+                },
+            }),
+        );
+        throw error;
+    }
+    if (!response.ok) {
+        once(() =>
+            reportError(new Error(`Object storage returned ${response.status}`), {
+                tags: {
+                    component: "mike-api",
+                    operation: "upload_session.storage",
+                    http_method: init?.method ?? "PUT",
+                    http_status: response.status,
+                },
+            }),
+        );
+    }
+    return response;
+};
+
+/**
  * Every upload entry point takes the same options bag so a caller can watch
  * progress and cancel the batch (an unmounting screen, a "stop" control)
  * without reaching past the API layer.
@@ -263,7 +325,7 @@ export async function uploadFilesWithSession<T>(args: {
         ...args,
         transport: {
             apiRequest,
-            fetchStorage: (...fetchArgs) => fetch(...fetchArgs),
+            fetchStorage: reportingStorageFetch,
             shouldRetryControlRequest: createControlRequestRetryPolicy(
                 (error) =>
                     error instanceof MikeApiError

@@ -58,6 +58,7 @@ function describeLoginError(error: unknown): UserFacingError {
         action: "log in",
         codeMessages: LOGIN_ERROR_MESSAGES,
         fallback: "Unable to log in right now. Try again.",
+        operation: "auth.signin",
     });
     // A 429 without a GoTrue code still means "you tried too often".
     return described.kind === "rate_limited"
@@ -160,6 +161,7 @@ export default function LoginPage() {
                 describeError(caught, {
                     action: "restore your session",
                     fallback: "Unable to restore your session. Try again.",
+                    operation: "auth.session",
                 }),
             );
             setSessionWarningDismissed(false);
@@ -214,6 +216,7 @@ export default function LoginPage() {
                     action: "open your local workspace",
                     codeMessages: LOGIN_ERROR_MESSAGES,
                     fallback: "Unable to continue as guest right now. Please try again.",
+                    operation: "auth.signin",
                 }),
             );
         } finally {

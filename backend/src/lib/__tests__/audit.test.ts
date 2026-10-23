@@ -1,5 +1,23 @@
-import { describe, it, expect } from "vitest";
-import { chatTurnAuditEvents, recordChatTurn } from "../audit";
+import { afterEach, describe, it, expect, vi } from "vitest";
+import { AppError } from "../appError";
+
+const mocks = vi.hoisted(() => ({
+    reportError: vi.fn((..._args: unknown[]) => "event-1"),
+    enqueueDbJob: vi.fn(),
+}));
+vi.mock("../observability/sentry", async (importOriginal) => ({
+    ...(await importOriginal<Record<string, unknown>>()),
+    reportError: mocks.reportError,
+}));
+vi.mock("../dbq/enqueue", () => ({
+    enqueueDbJob: (...args: unknown[]) => mocks.enqueueDbJob(...args),
+}));
+import {
+    chatTurnAuditEvents,
+    enqueueChatTurnAudit,
+    recordAudit,
+    recordChatTurn,
+} from "../audit";
 
 type Insert = Record<string, unknown>;
 
@@ -111,5 +129,64 @@ describe("chatTurnAuditEvents surface", () => {
         );
         expect(rows[0].surface).toBe("word");
         expect(rows[0].projectId).toBe("p1");
+    });
+});
+
+// Recording an event never throws, so the report is the only trace a lost
+// audit row leaves: one event, the kind naming it, the real error as cause.
+describe("audit write failure reporting", () => {
+    afterEach(() => {
+        vi.clearAllMocks();
+        vi.restoreAllMocks();
+    });
+
+    it("reports a lost audit row under audit.write_failed with the PostgREST error as cause, and never throws", async () => {
+        vi.spyOn(console, "error").mockImplementation(() => {});
+        const cause = { code: "42P01", message: 'relation "audit_events" does not exist' };
+        const db = {
+            from: () => ({ insert: () => Promise.resolve({ error: cause }) }),
+        } as any;
+
+        await expect(
+            recordAudit(db, { userId: "u1", action: "chat.message" }),
+        ).resolves.toBeUndefined();
+
+        expect(mocks.reportError).toHaveBeenCalledOnce();
+        const [failure, context] = mocks.reportError.mock.calls[0] as unknown as [
+            AppError,
+            { extra?: Record<string, unknown> },
+        ];
+        expect(failure).toBeInstanceOf(AppError);
+        expect(failure.kind).toBe("audit.write_failed");
+        expect(failure.cause).toBe(cause);
+        expect(context.extra).toEqual({ action: "chat.message" });
+        expect((context as { tags?: unknown }).tags).toEqual({ operation: "audit.write" });
+        // The log line carries the reported object, so the console bridge
+        // files nothing twice.
+        expect(console.error).toHaveBeenCalledWith("[audit] insert threw:", failure);
+    });
+
+    it("reports a failed chat-turn enqueue as a warning, then records the rows directly", async () => {
+        vi.spyOn(console, "error").mockImplementation(() => {});
+        const cause = new Error("db_jobs insert failed");
+        mocks.enqueueDbJob.mockRejectedValue(cause);
+        const { db, inserts } = makeDb();
+
+        await enqueueChatTurnAudit(db, base, [
+            { type: "doc_created", filename: "brief.docx", document_id: "d1" },
+        ]);
+
+        expect(inserts.map((r) => r.action)).toEqual([
+            "chat.message",
+            "document.generated",
+        ]);
+        expect(mocks.reportError).toHaveBeenCalledOnce();
+        const [failure, context] = mocks.reportError.mock.calls[0] as unknown as [
+            AppError,
+            { level?: string },
+        ];
+        expect(failure.kind).toBe("audit.write_failed");
+        expect(failure.cause).toBe(cause);
+        expect(context.level).toBe("warning");
     });
 });

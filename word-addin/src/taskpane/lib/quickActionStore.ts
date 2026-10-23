@@ -39,6 +39,7 @@ function loadQuickActions(): Promise<void> {
       notifyError(error, {
         action: "load your quick actions",
         dedupeKey: "quick-action-store",
+        operation: "quick_actions.run",
         onRetry: () => {
           loaded = false;
           void loadQuickActions();

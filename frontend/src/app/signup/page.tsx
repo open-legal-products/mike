@@ -51,6 +51,7 @@ function describeSignupError(error: unknown): UserFacingError {
         action: "create your account",
         codeMessages: SIGNUP_ERROR_MESSAGES,
         fallback: "Unable to create your account right now. Try again.",
+        operation: "auth.signup",
     });
     return described.kind === "rate_limited"
         ? { ...described, message: TOO_MANY_ATTEMPTS_MESSAGE }

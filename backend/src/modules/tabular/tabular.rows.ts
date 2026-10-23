@@ -10,6 +10,8 @@ import { downloadFile } from "../../lib/storage";
 import { attachActiveVersionPaths } from "../../lib/documentVersions";
 import { filterAccessibleDocumentIds } from "../../lib/access";
 import { extractDocumentMarkdown } from "./tabular.extract";
+import { AppError } from "../../lib/appError";
+import { reportError } from "../../lib/observability/sentry";
 import { type Db } from "./tabular.shared";
 
 export type ReviewRow = {
@@ -162,9 +164,19 @@ export async function loadRowDocumentText(
                         doc.file_type,
                     );
                 } catch (error) {
+                    // The row goes on with an empty source section; the
+                    // parser's or converter's error is the cause, so its
+                    // class and code say what failed. Logging the reported
+                    // object keeps the console bridge from filing it twice.
+                    const failure = new AppError(
+                        "extraction.failed",
+                        "Tabular source document text extraction failed",
+                        { cause: error },
+                    );
+                    reportError(failure, { extra: { document_id: doc.id } });
                     console.error(
                         `[tabular] extraction error doc=${doc.id}`,
-                        error,
+                        failure,
                     );
                 }
             }

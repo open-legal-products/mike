@@ -86,6 +86,7 @@ function connectorMessage(error: unknown, action: string): string {
   return describeError(error, {
     action,
     fallback: `Mike couldn't ${action}. Try again.`,
+    operation: "settings.connectors",
   }).message;
 }
 

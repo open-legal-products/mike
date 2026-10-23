@@ -255,12 +255,15 @@ export async function googleJson(
     ? {}
     : ((await response.json()) as Record<string, unknown>);
 }
+/** Google answered with an error status; `status` lands in `dependency_status`. */
 export class GoogleApiError extends GoogleWorkspaceError {
   constructor(
     message: string,
     readonly status: number,
   ) {
-    super(message);
+    super(message, {
+      kind: status === 401 ? "google.auth_failed" : "google.api_failed",
+    });
   }
 }
 function asRecord(value: unknown): Record<string, unknown> {

@@ -16,7 +16,11 @@ import type { RouterProfileLists } from "@mike/model-catalog";
 import { SERVER_FAILURE_MESSAGE } from "@mike/user-error";
 import { networkFailure } from "../lib/networkError";
 import { sessionHandledError } from "../lib/sessionRefresh";
-import { reportApiFailure, reportNetworkFailure } from "../lib/errorReporting";
+import {
+  reportApiFailure,
+  reportNetworkFailure,
+  type AddinOperation,
+} from "../lib/errorReporting";
 import type { ReasoningLevel } from "../lib/wordChatTypes";
 import {
   createControlRequestRetryPolicy,
@@ -202,6 +206,8 @@ export async function responseError(
   response: Response,
   path?: string,
   method = "GET",
+  /** The user-level flow the request belonged to, for a 5xx's report. */
+  operation?: AddinOperation,
 ): Promise<MikeApiError> {
   const text = await response.text().catch(() => "");
   const parsed = parseApiErrorBody({
@@ -232,6 +238,7 @@ export async function responseError(
     reportApiFailure({
       path: path ?? response.url,
       method,
+      operation,
       status: response.status,
       code: parsed.code,
       requestId: parsed.requestId,

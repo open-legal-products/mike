@@ -51,6 +51,7 @@ export function PlaybookModal({
         setError(
           userMessage(reason, {
             fallback: "Mike couldn't load your playbooks. Try again.",
+            operation: "playbooks.review",
           }),
         );
       })

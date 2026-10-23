@@ -282,6 +282,7 @@ export function ChatView({
                     action: "go to that passage",
                     dedupeKey: "citation-locate",
                     page: "Assistant",
+                    operation: "word.document_read",
                 },
             );
         });

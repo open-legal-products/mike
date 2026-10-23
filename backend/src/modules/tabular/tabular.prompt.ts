@@ -4,6 +4,8 @@
 // title.
 
 import { completeText } from "../../lib/llm";
+import { AppError } from "../../lib/appError";
+import { reportError } from "../../lib/observability/sentry";
 import type { Db } from "../../lib/supabase";
 import { getUserModelSettings } from "../user/user.service";
 import { failure } from "../../lib/serviceResult";
@@ -127,7 +129,18 @@ export async function draftColumnPrompt(
             };
         }
         return statusFailure(502, { detail: "LLM returned an empty prompt" });
-    } catch {
+    } catch (error) {
+        // The provider's or the model's failure (a rejected call, an answer
+        // that is not JSON), not ours: a warning, with the cause kept so its
+        // class and status say which. The 502 is unchanged.
+        reportError(
+            new AppError(
+                "tabular.prompt_failed",
+                "Column prompt could not be generated",
+                { cause: error },
+            ),
+            { level: "warning" },
+        );
         return statusFailure(502, {
             detail: "Failed to generate prompt from LLM",
         });

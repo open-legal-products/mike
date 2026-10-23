@@ -2,6 +2,8 @@ import type { ConnectorApprovalItem, DocumentSearchEvent, TextCardEvent } from "
 import { textCardEvent } from "./textCard";
 import { internalFailure } from "../../../../lib/serviceResult";
 import { canUseWorkflowInWorkspace } from "../../../../lib/workflowWorkspace";
+import { AppError } from "../../../../lib/appError";
+import { reportError } from "../../../../lib/observability/sentry";
 import { safeError } from "../../../../lib/safeError";
 import {
   listPlaybooks,
@@ -100,6 +102,25 @@ import {
   type CourtlistenerTurnState,
 } from "./courtlistenerTurnState";
 import type { Db } from "../../../../lib/supabase";
+
+/**
+ * Report a server-side tool's failure and return what to log for it. The
+ * kind is the one issue every tool failure files under; which tool fired is
+ * the function name on the frame, not a tag (tool names are not a closed
+ * vocabulary). The provider's or database's own error is the cause, so its
+ * code reaches Sentry. Log the returned wrapper where the raw error was
+ * logged before (the console bridge then recognises the line as already
+ * sent); where the log line was a safeError() category, keep it and log at
+ * warn level, which the bridge does not forward.
+ */
+function reportToolFailure(error: unknown): AppError {
+  const failure =
+    error instanceof AppError
+      ? error
+      : new AppError("chat.tool_failed", "Tool call failed", { cause: error });
+  reportError(failure, { tags: { component: "chat-stream", operation: "chat.tool" } });
+  return failure;
+}
 
 function sourceMaterialNotice(
   sourceKind: "document" | "library_template" | "workflow_asset" | undefined,
@@ -912,7 +933,8 @@ export async function runToolCalls(
           ),
         });
       } catch (error) {
-        console.error("[run_tools] list_playbooks failed", safeError(error));
+        reportToolFailure(error);
+        console.warn("[run_tools] list_playbooks failed", safeError(error));
         toolResults.push({
           role: "tool",
           tool_call_id: tc.id,
@@ -1033,7 +1055,8 @@ export async function runToolCalls(
         } catch (error) {
           if (error instanceof PlaybookRequestError) fail(error.message);
           else {
-            console.error("[run_tools] run_playbook failed", safeError(error));
+            reportToolFailure(error);
+            console.warn("[run_tools] run_playbook failed", safeError(error));
             fail("The playbook review failed. Try again.");
           }
         } finally {
@@ -2078,7 +2101,7 @@ export async function runToolCalls(
             ) {
               console.error(
                 "[replicate-document] failed to record documents",
-                docErr,
+                reportToolFailure(docErr ?? new Error("document insert returned a short result")),
               );
               fail("Failed to record replicated documents");
             } else {
@@ -2117,7 +2140,7 @@ export async function runToolCalls(
                   );
                 console.error(
                   "[replicate-document] failed to record document versions",
-                  verErr,
+                  reportToolFailure(verErr ?? new Error("version insert returned a short result")),
                 );
                 fail("Failed to record replicated document versions");
               } else {
@@ -2246,7 +2269,7 @@ export async function runToolCalls(
             }
           }
         } catch (e) {
-          console.error("[replicate-document] failed", e);
+          console.error("[replicate-document] failed", reportToolFailure(e));
           fail("replicate_document failed");
         }
       }

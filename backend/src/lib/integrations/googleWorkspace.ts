@@ -6,7 +6,8 @@ import type {
 import { z } from "zod";
 import type { Db } from "../supabase";
 import type { ConnectorCallPlan, McpToolEvent } from "../mcp/types";
-import { safeError } from "../safeError";
+import { AppError, findAppError, type ErrorKind } from "../appError";
+import { reportError } from "../observability/sentry";
 import {
   GOOGLE_PROVIDERS,
   GoogleWorkspaceError,
@@ -28,6 +29,21 @@ import {
 } from "./googleWorkspaceApi";
 
 type Grant = Record<string, unknown>;
+
+/**
+ * The failure as Sentry should see it: a GoogleWorkspaceError already names
+ * its kind; anything else (a query, a crypto or parsing failure) is wrapped
+ * with the kind that fits where it was caught, the original kept as the
+ * cause so its code or status still extracts.
+ */
+function workspaceFailureError(
+  error: unknown,
+  kind: ErrorKind,
+  message: string,
+): Error {
+  if (findAppError(error) && error instanceof Error) return error;
+  return new AppError(kind, message, { cause: error });
+}
 
 function disabledTools(grant: Grant | null): string[] {
   return Array.isArray(grant?.disabled_tools)
@@ -98,10 +114,15 @@ export async function buildGoogleWorkspaceTools(
         });
       }
     } catch (error) {
-      console.error(
-        "[google-workspace] tool discovery failed",
-        safeError(error),
+      // Skipping the provider hides its tools from this turn; the failure (a
+      // grant query, normally) must not hide with it.
+      const failure = workspaceFailureError(
+        error,
+        "db.query_failed",
+        "Google Workspace grant could not be loaded",
       );
+      reportError(failure, { extra: { provider } });
+      console.error("[google-workspace] tool discovery failed", failure);
     }
   }
   return tools;
@@ -132,9 +153,23 @@ function failure(
   event: McpToolEvent,
   error: unknown,
 ): { content: string; event: McpToolEvent } {
+  // A GoogleWorkspaceError is a fixed answer for the user (not connected,
+  // read-only, item unavailable) and is only worth an event when Google
+  // itself failed (a 5xx); everything else is a bug or an outage. Reported
+  // before it is logged so the console bridge files nothing twice.
+  const failure = workspaceFailureError(
+    error,
+    "google.api_failed",
+    `Google tool call failed (${event.tool_name})`,
+  );
+  if (!(error instanceof GoogleWorkspaceError)) {
+    reportError(failure, { extra: { name: event.tool_name } });
+  } else if (error instanceof GoogleApiError && error.status >= 500) {
+    reportError(failure, { level: "warning", extra: { name: event.tool_name } });
+  }
   console.error("[google-workspace] tool failed", {
     name: event.tool_name,
-    error: safeError(error),
+    error: failure,
   });
   const message =
     error instanceof GoogleWorkspaceError

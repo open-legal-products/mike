@@ -51,6 +51,15 @@ vi.mock("../tabular.shared", async (importOriginal) => ({
     validateSelectedModel,
 }));
 
+const reportError = vi.hoisted(() => vi.fn());
+vi.mock("../../../lib/observability/sentry", async (importOriginal) => ({
+    ...(await importOriginal<
+        typeof import("../../../lib/observability/sentry")
+    >()),
+    reportError,
+}));
+
+import { AppError } from "../../../lib/appError";
 import {
     clearTabularReviewCells,
     regenerateTabularCell,
@@ -390,6 +399,43 @@ describe("regenerateTabularCell", () => {
             payload: { status: "error", generation_id: null },
         });
         expect(fake.rpcCalls[1].fn).toBe("finish_tabular_review_generation");
+        // queryTabularCell reported the provider failure itself; the 500 is
+        // the same failure, not a second one.
+        expect(reportError).not.toHaveBeenCalled();
+    });
+
+    it("reports a generation that threw under its kind, with the cause, and releases the lease", async () => {
+        const cause = new Error("stream reset");
+        queryTabularCell.mockRejectedValue(cause);
+        const fake = makeFakeDb({
+            tables: { tabular_reviews: { data: REVIEW, error: null } },
+            rpc: (fn) =>
+                fn === "begin_tabular_review_generation"
+                    ? started()
+                    : { data: null, error: null },
+        });
+        const result = await regenerateTabularCell(fake.db, {
+            reviewId: "rev-1",
+            ...WHO,
+            rowId: "row-1",
+            columnIndex: 0,
+            log: LOG,
+        });
+        expect(
+            result.ok === false && result.kind === "status" && result.body,
+        ).toEqual({ detail: "Generation failed" });
+        expect(reportError).toHaveBeenCalledTimes(1);
+        const [reported] = reportError.mock.calls[0];
+        expect(reported).toBeInstanceOf(AppError);
+        expect(reported.kind).toBe("tabular.generation_failed");
+        expect(reported.cause).toBe(cause);
+        // The log carries the reported object, so the console bridge files
+        // nothing twice.
+        expect(LOG.error).toHaveBeenCalledWith(
+            "[tabular/regenerate-cell] generation failed",
+            reported,
+        );
+        expect(fake.rpcCalls[1].fn).toBe("finish_tabular_review_generation");
     });
 
     it("keeps the lease for the worker once the job is enqueued", async () => {
@@ -448,6 +494,11 @@ describe("regenerateTabularCell", () => {
             expect.objectContaining({ status: "error" }),
         );
         expect(fake.rpcCalls[1].fn).toBe("finish_tabular_review_generation");
+        // The queue's error is the cause under the kind that names it.
+        const [reported] = reportError.mock.calls[0];
+        expect(reported).toBeInstanceOf(AppError);
+        expect(reported.kind).toBe("queue.enqueue_failed");
+        expect(reported.cause).toEqual(new Error("no redis"));
     });
 
     it("reports a queued job that ended in error as a 500", async () => {

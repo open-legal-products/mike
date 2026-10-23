@@ -18,7 +18,38 @@ import {
     startUserMcpConnectorOAuth,
     updateUserMcpConnector,
 } from "../../lib/mcpConnectors";
-import { type Db, errorMessage } from "./user.shared";
+import { AppError, type ErrorKind } from "../../lib/appError";
+import { reportError } from "../../lib/observability/sentry";
+import { type Db } from "./user.shared";
+
+/**
+ * The failure as Sentry should see it: `mcp.setup_failed` for managing a
+ * connector's row (create, update, delete, list, OAuth start, tool toggle),
+ * `mcp.call_failed` for talking to its server (tool refresh). The thrown
+ * value stays the cause so an SDK error's status or a PostgREST code still
+ * extracts; its message (which may embed a whole upstream response body)
+ * never leaves the process.
+ */
+function mcpFailure(kind: ErrorKind, message: string, cause: unknown): AppError {
+    return cause instanceof AppError ? cause : new AppError(kind, message, { cause });
+}
+
+/**
+ * For a failure the route answers with 4xx and fixed text: reported here, as
+ * a warning (the user may well be able to fix it), then logged once — the
+ * console bridge knows the object is already reported, so this is one event.
+ * Failures the route answers with sendInternalError are not reported here;
+ * that call reports and logs them with the request id.
+ */
+function reportMcpFailure(
+    label: string,
+    failure: AppError,
+    context: Record<string, unknown>,
+): AppError {
+    reportError(failure, { level: "warning", extra: context });
+    console.error(label, { ...context, error: failure });
+    return failure;
+}
 
 export async function listMcpConnectors(
     db: Db,
@@ -30,12 +61,10 @@ export async function listMcpConnectors(
         });
         return { ok: true, connectors };
     } catch (err) {
-        const detail = errorMessage(err);
-        console.error("[user/mcp-connectors] list failed", {
-            userId,
-            error: detail,
-        });
-        return { ok: false, error: err };
+        return {
+            ok: false,
+            error: mcpFailure("mcp.setup_failed", "connector list failed", err),
+        };
     }
 }
 
@@ -48,11 +77,12 @@ export async function getMcpConnector(
         const connector = await getUserMcpConnector(userId, connectorId, db);
         return { ok: true, connector };
     } catch (err) {
-        const detail = errorMessage(err);
-        console.error("[user/mcp-connectors] get failed", {
+        // The route answers 404: an unknown or foreign id is the common case
+        // here, not a fault, so this is a log line and not an event.
+        console.warn("[user/mcp-connectors] get failed", {
             userId,
             connectorId,
-            error: detail,
+            error: err,
         });
         return { ok: false, error: err };
     }
@@ -111,29 +141,26 @@ export async function createMcpConnector(
             try {
                 await deleteUserMcpConnector(userId, connector.id, db);
             } catch (cleanupError) {
-                console.error("[user/mcp-connectors] cleanup failed", {
-                    userId,
-                    connectorId: connector.id,
-                    registrationError: errorMessage(err),
-                    cleanupError: errorMessage(cleanupError),
-                });
+                // A half-installed row the user has to remove by hand: the
+                // cleanup failure is the one to see, the registration error
+                // rides along as context.
+                const failure = reportMcpFailure(
+                    "[user/mcp-connectors] cleanup failed",
+                    mcpFailure("mcp.setup_failed", "connector cleanup after failed validation", cleanupError),
+                    { userId, connectorId: connector.id, registrationError: err },
+                );
                 return {
                     ok: false,
                     kind: "cleanup",
                     connectorId: connector.id,
-                    error: cleanupError,
+                    error: failure,
                 };
             }
             createdConnectorId = null;
             throw err;
         }
     } catch (err) {
-        const detail = errorMessage(err);
-        console.error("[user/mcp-connectors] create failed", {
-            userId,
-            createdConnectorId,
-            error: detail,
-        });
+        // Setup instructions are the answer the user needs, not a failure.
         if (err instanceof ConnectorSetupError) {
             return {
                 ok: false,
@@ -142,7 +169,12 @@ export async function createMcpConnector(
                 detail: err.message,
             };
         }
-        return { ok: false, kind: "failed", error: err };
+        const failure = reportMcpFailure(
+            "[user/mcp-connectors] create failed",
+            mcpFailure("mcp.setup_failed", "connector creation failed", err),
+            { userId, createdConnectorId },
+        );
+        return { ok: false, kind: "failed", error: failure };
     }
 }
 
@@ -161,13 +193,12 @@ export async function updateMcpConnector(
         );
         return { ok: true, connector };
     } catch (err) {
-        const detail = errorMessage(err);
-        console.error("[user/mcp-connectors] update failed", {
-            userId,
-            connectorId,
-            error: detail,
-        });
-        return { ok: false, error: err };
+        const failure = reportMcpFailure(
+            "[user/mcp-connectors] update failed",
+            mcpFailure("mcp.setup_failed", "connector update failed", err),
+            { userId, connectorId },
+        );
+        return { ok: false, error: failure };
     }
 }
 
@@ -180,13 +211,10 @@ export async function deleteMcpConnector(
         await deleteUserMcpConnector(userId, connectorId, db);
         return { ok: true };
     } catch (err) {
-        const detail = errorMessage(err);
-        console.error("[user/mcp-connectors] delete failed", {
-            userId,
-            connectorId,
-            error: detail,
-        });
-        return { ok: false, error: err };
+        return {
+            ok: false,
+            error: mcpFailure("mcp.setup_failed", "connector deletion failed", err),
+        };
     }
 }
 
@@ -217,16 +245,15 @@ export async function startMcpConnectorOAuth(
         );
         return { ok: true, result };
     } catch (err) {
-        const detail = errorMessage(err);
-        console.error("[user/mcp-connectors] oauth start failed", {
-            userId,
-            connectorId,
-            error: detail,
-        });
         if (err instanceof ConnectorSetupError) {
             return { ok: false, kind: "setup", code: err.code, detail: err.message };
         }
-        return { ok: false, kind: "failed", error: err };
+        const failure = reportMcpFailure(
+            "[user/mcp-connectors] oauth start failed",
+            mcpFailure("mcp.setup_failed", "connector OAuth start failed", err),
+            { userId, connectorId },
+        );
+        return { ok: false, kind: "failed", error: failure };
     }
 }
 
@@ -248,18 +275,19 @@ export async function refreshMcpConnectorTools(
         );
         return { ok: true, connector };
     } catch (err) {
-        // Full message (with any embedded response body) goes to the log;
-        // the user gets the concise diagnostic — never a raw HTML error
-        // page — plus the versioned-endpoint hint for Google URLs.
-        console.error("[user/mcp-connectors] refresh failed", {
-            userId,
-            connectorId,
-            error: errorMessage(err),
-        });
+        // Needing authorization is an expected intermediate state, not a
+        // failure. Everything else: the full error (with any embedded
+        // response body) goes to the log as the cause; the user gets fixed
+        // text from the route.
         if (err instanceof McpOAuthRequiredError) {
             return { ok: false, kind: "oauth_required", code: err.code };
         }
-        return { ok: false, kind: "refresh_failed", error: err };
+        const failure = reportMcpFailure(
+            "[user/mcp-connectors] refresh failed",
+            mcpFailure("mcp.call_failed", "connector tool refresh failed", err),
+            { userId, connectorId },
+        );
+        return { ok: false, kind: "refresh_failed", error: failure };
     }
 }
 
@@ -280,13 +308,11 @@ export async function setMcpToolEnabled(
         );
         return { ok: true, connector };
     } catch (err) {
-        const detail = errorMessage(err);
-        console.error("[user/mcp-connectors] tool toggle failed", {
-            userId,
-            connectorId,
-            toolId,
-            error: detail,
-        });
-        return { ok: false, error: err };
+        const failure = reportMcpFailure(
+            "[user/mcp-connectors] tool toggle failed",
+            mcpFailure("mcp.setup_failed", "connector tool toggle failed", err),
+            { userId, connectorId, toolId },
+        );
+        return { ok: false, error: failure };
     }
 }

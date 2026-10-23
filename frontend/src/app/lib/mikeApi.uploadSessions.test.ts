@@ -4,6 +4,11 @@ const { getSessionMock } = vi.hoisted(() => ({ getSessionMock: vi.fn() }));
 vi.mock("@/app/lib/supabase", () => ({
     supabase: { auth: { getSession: getSessionMock } },
 }));
+const reporting = vi.hoisted(() => ({ reportError: vi.fn() }));
+vi.mock("@/app/lib/errorReporting", async (importOriginal) => ({
+    ...(await importOriginal<typeof import("@/app/lib/errorReporting")>()),
+    ...reporting,
+}));
 
 import {
     UploadBatchError,
@@ -909,6 +914,66 @@ describe("direct upload sessions", () => {
             },
         ]);
         expect(progress).toHaveBeenCalled();
+    });
+
+    it("reports a failed storage PUT once per part, with the status and no URL or filename", async () => {
+        reporting.reportError.mockClear();
+        const server = installSuccessfulSessionServer({
+            storageUpload: async () => new Response(null, { status: 503 }),
+        });
+
+        const outcomes = await uploadFilesWithSession({
+            purpose: "document_create",
+            destination: { scope: "standalone" },
+            files: [
+                { file: new File(["a"], "secret-deal.pdf") },
+                { file: new File(["b"], "other.pdf") },
+            ],
+        });
+
+        expect(outcomes.map((outcome) => outcome.errorCode)).toEqual([
+            "direct_upload_failed",
+            "direct_upload_failed",
+        ]);
+        // Three attempts per part, two parts: two events, not six.
+        expect(server.storageRequests.length).toBeGreaterThan(2);
+        expect(reporting.reportError).toHaveBeenCalledTimes(2);
+        for (const [, context] of reporting.reportError.mock.calls) {
+            expect(context).toEqual({
+                tags: {
+                    component: "mike-api",
+                    operation: "upload_session.storage",
+                    http_method: "PUT",
+                    http_status: 503,
+                },
+            });
+            expect(JSON.stringify(context)).not.toMatch(/secret-deal|storage\.test/);
+        }
+    });
+
+    it("reports a storage PUT that never got a response as a warning, not a caller abort", async () => {
+        reporting.reportError.mockClear();
+        let attempts = 0;
+        installSuccessfulSessionServer({
+            storageUpload: async () => {
+                attempts += 1;
+                if (attempts === 1) throw new TypeError("Failed to fetch");
+                return new Response(null, { status: 200 });
+            },
+        });
+
+        const outcomes = await uploadFilesWithSession({
+            purpose: "document_create",
+            destination: { scope: "standalone" },
+            files: [{ file: new File(["a"], "contract.pdf") }],
+        });
+
+        expect(outcomes).toMatchObject([{ status: "completed" }]);
+        expect(reporting.reportError).toHaveBeenCalledTimes(1);
+        expect(reporting.reportError.mock.calls[0]![1]).toMatchObject({
+            level: "warning",
+            tags: { operation: "upload_session.storage", network: true },
+        });
     });
 
     it("throws with the per-file accounting when a single-file upload fails", async () => {

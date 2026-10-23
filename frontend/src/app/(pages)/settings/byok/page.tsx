@@ -17,6 +17,7 @@ import { SettingsHeading } from "@/app/components/settings/SettingsHeading";
 import { SettingsDescription } from "@/app/components/settings/SettingsText";
 import { useUserProfile } from "@/app/contexts/UserProfileContext";
 import { isMfaRequiredError, type ApiKeyProvider } from "@/app/lib/mikeApi";
+import { reportFault } from "@/app/lib/userFacingError";
 /**
  * A provider is listed as saved once the user has saved their own key for it. It
  * stays there while switched off, so the switch does not move under the
@@ -57,7 +58,11 @@ export default function ByokPage() {
             if (!saved) setToggleError("The provider could not be updated. Please try again.");
         } catch (error) {
             if (isMfaRequiredError(error)) setPendingToggle({ provider, enabled });
-            else setToggleError("The provider could not be updated. Please try again.");
+            else {
+                // The message is fixed; the report keeps the fault's identity.
+                reportFault(error, { operation: "settings.keys" });
+                setToggleError("The provider could not be updated. Please try again.");
+            }
         } finally {
             setBusyProvider(null);
         }

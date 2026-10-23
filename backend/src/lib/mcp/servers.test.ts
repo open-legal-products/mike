@@ -9,6 +9,14 @@ const { validateRemoteMcpUrlMock } = vi.hoisted(() => ({
     validateRemoteMcpUrlMock: vi.fn(),
 }));
 
+const { reportErrorMock } = vi.hoisted(() => ({
+    reportErrorMock: vi.fn((..._args: unknown[]) => null),
+}));
+vi.mock("../observability/sentry", async (importOriginal) => ({
+    ...(await importOriginal<Record<string, unknown>>()),
+    reportError: (...args: unknown[]) => reportErrorMock(...args),
+}));
+
 vi.mock("./client", async (importOriginal) => {
     const actual = await importOriginal<typeof import("./client")>();
     return {
@@ -313,5 +321,84 @@ describe("previously cached tools without annotations", () => {
         expect(toConnectorSummary(connector, [tool]).tools[0]).toMatchObject({ write: true, enabled: false });
         expect(await buildUserMcpTools("user-1", db)).toEqual([]);
         expect((await executeMcpToolCall("user-1", tool.openai_tool_name, {}, db)).event.status).toBe("error");
+    });
+});
+
+describe("MCP failures in Sentry", () => {
+    beforeEach(() => {
+        vi.clearAllMocks();
+    });
+
+    it("reports a failed call under mcp.call_failed with the transport's error as cause", async () => {
+        const transportError = new Error(INJECTION);
+        validateRemoteMcpUrlMock.mockRejectedValue(transportError);
+        const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+        const db = makeDb(makeTool(), makeConnector(), []);
+
+        await executeMcpToolCall("user-1", "evil_do_thing", {}, db);
+
+        expect(reportErrorMock).toHaveBeenCalledTimes(1);
+        const [reported, context] = reportErrorMock.mock.calls[0] as unknown as [
+            { kind?: string; cause?: unknown },
+            { tags?: Record<string, string>; level?: string },
+        ];
+        expect(reported.kind).toBe("mcp.call_failed");
+        expect(reported.cause).toBe(transportError);
+        expect(context.tags).toEqual({ component: "chat-stream", operation: "chat.mcp" });
+        expect(context.level).toBeUndefined();
+        // The log carries the reported object so the console bridge skips it.
+        expect(errorSpy).toHaveBeenCalledWith(
+            "[mcp-connectors] tool call failed",
+            expect.objectContaining({ reported }),
+        );
+        errorSpy.mockRestore();
+    });
+
+    it("reports a lost audit row as a warning without failing the call", async () => {
+        validateRemoteMcpUrlMock.mockRejectedValue(new Error("offline"));
+        const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+        const base = makeDb(makeTool(), makeConnector(), []);
+        const dbError = { code: "42501", message: "permission denied" };
+        const db = {
+            from(table: string) {
+                if (table === "user_mcp_tool_audit_logs") {
+                    return { insert: () => Promise.resolve({ error: dbError }) };
+                }
+                return base.from(table);
+            },
+        } as unknown as Db;
+
+        const { event } = await executeMcpToolCall("user-1", "evil_do_thing", {}, db);
+
+        expect(event.status).toBe("error");
+        expect(reportErrorMock).toHaveBeenCalledWith(
+            expect.objectContaining({ kind: "db.query_failed", cause: dbError }),
+            { level: "warning", tags: { component: "chat-stream", operation: "chat.mcp" } },
+        );
+        errorSpy.mockRestore();
+    });
+
+    it("reports a failed tools lookup and advertises no tools", async () => {
+        const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+        const dbError = { code: "57014", message: "canceling statement" };
+        const chain = {
+            select: () => chain,
+            eq: () => chain,
+            then: (resolve: (value: unknown) => unknown) =>
+                Promise.resolve({ data: null, error: dbError }).then(resolve),
+        };
+        const db = { from: () => chain } as unknown as Db;
+
+        await expect(buildUserMcpTools("user-1", db)).resolves.toEqual([]);
+
+        expect(reportErrorMock).toHaveBeenCalledWith(
+            expect.objectContaining({ kind: "db.query_failed", cause: dbError }),
+            { tags: { component: "chat-stream", operation: "chat.mcp" } },
+        );
+        expect(errorSpy).toHaveBeenCalledWith(
+            "[mcp-connectors] failed to load tools",
+            expect.objectContaining({ error: expect.objectContaining({ kind: "db.query_failed" }) }),
+        );
+        errorSpy.mockRestore();
     });
 });

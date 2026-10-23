@@ -66,12 +66,14 @@ export function DocumentActions({
         setWorkflowsError(
           userMessage(reason, {
             fallback: "Mike couldn't load your quick actions. Try again.",
+            operation: "quick_actions.run",
           }),
         );
         notifyError(reason, {
           action: "load your quick actions",
           dedupeKey: "quick-actions",
           page: "Quick actions",
+          operation: "quick_actions.run",
           onRetry: () => setWorkflowsAttempt((count) => count + 1),
         });
       });
@@ -139,6 +141,7 @@ export function DocumentActions({
       setSaveError(
         userMessage(reason, {
           fallback: "Failed to save quick action",
+          operation: "quick_actions.run",
         }),
       );
     } finally {
@@ -166,6 +169,7 @@ export function DocumentActions({
       setCreateError(
         userMessage(reason, {
           fallback: "Could not create quick action.",
+          operation: "quick_actions.run",
         }),
       );
     } finally {

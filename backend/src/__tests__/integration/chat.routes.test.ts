@@ -1416,12 +1416,24 @@ describe("POST /chat — streaming endpoint", () => {
         const doneIndex = res.text.indexOf("data: [DONE]");
         expect(errorIndex).toBeGreaterThanOrEqual(0);
         expect(doneIndex).toBeGreaterThan(errorIndex);
+        // The database's error is logged wrapped in the AppError that names
+        // the kind (and was reported first), not as a bare PostgREST object.
         expect(errorSpy).toHaveBeenCalledWith(
             "[chat/stream] failed to save assistant response",
             expect.objectContaining({
-                message: "terminal update failed (attempt 3)",
+                kind: "chat.message_save_failed",
+                cause: expect.objectContaining({
+                    message: "terminal update failed (attempt 3)",
+                }),
             }),
         );
+        const errorFrame = JSON.parse(
+            res.text
+                .split("\n")
+                .find((line) => line.includes("could not be saved"))!
+                .replace(/^data:\s*/, ""),
+        ) as { request_id?: string };
+        expect(errorFrame.request_id).toBe(res.headers["x-request-id"]);
     expect(scheduleMemoryConsolidation).not.toHaveBeenCalled();
         errorSpy.mockRestore();
     });
@@ -1452,7 +1464,10 @@ describe("POST /chat — streaming endpoint", () => {
         expect(errorSpy).toHaveBeenCalledWith(
             "[chat/stream] failed to reserve assistant message",
             expect.objectContaining({
-                message: "assistant reservation failed",
+                kind: "chat.message_reserve_failed",
+                cause: expect.objectContaining({
+                    message: "assistant reservation failed",
+                }),
             }),
         );
         errorSpy.mockRestore();
@@ -1471,6 +1486,18 @@ describe("POST /chat — streaming endpoint", () => {
         expect(res.status).toBe(200);
         expect(res.text).toContain('"type":"error"');
         expect(res.text).toContain("[DONE]");
+        // The terminal frame carries the request id (the X-Request-ID header)
+        // so the user can quote the one handle that finds this failure.
+        const errorFrame = JSON.parse(
+            res.text
+                .split("\n")
+                .filter((line) => line.includes('"type":"error"'))
+                .at(-1)!
+                .replace(/^data:\s*/, ""),
+        ) as { message: string; request_id?: string; safe_to_display?: boolean };
+        expect(errorFrame.request_id).toBe(res.headers["x-request-id"]);
+        expect(errorFrame.request_id).toMatch(/^[0-9a-f-]{36}$/);
+        expect(errorFrame.safe_to_display).toBeUndefined();
 
         const metadata = JSON.parse(
             res.text

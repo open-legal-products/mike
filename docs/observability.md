@@ -227,14 +227,18 @@ the backend, Next server/edge, browser, and all Word add-in entries.
   client reports, attachments, replay, traces, logs, metrics and unknown future
   item types are dropped locally without a network request.
 - Error/console prose is replaced with a description made from approved
-  component, stage, method, normalized route, status, and error-code values.
-  For example: `Failure in upload-worker / conversion`. Native exception
-  classes, relative source-code file paths and line/column numbers remain.
+  operation, component, stage, error-kind, method, normalized route, status,
+  and error-code values. For example:
+  `Failure in documents.upload.complete / upload-worker / process-file / conversion.no_output`.
+  Exception class names of the `…Error` / `…Warning` shape, relative
+  source-code file paths with line/column numbers, and the function name on
+  frames in our own files (identifier shape only) remain.
 - Request data, headers, cookies, URLs and queries are absent. Routes retain
   only fixed endpoint vocabulary; other segments become `:id`.
-- User objects, machine details, breadcrumbs, arbitrary contexts, source
-  snippets, frame locals, function names, custom tags and free-form extras
-  are absent. Correlation/domain IDs are allowed only under named keys and
+- User objects, machine details, arbitrary contexts, source snippets, frame
+  locals, custom tags and free-form extras are absent. Of breadcrumbs only
+  the stage trail survives (`markStage`, category `mike.stage`): stage names
+  from the vocabulary, with timestamps, never a message or data. Correlation/domain IDs are allowed only under named keys and
   only in UUID format. IDs remain linkable to internal records; this is data
   minimization, not a claim of anonymity.
 - Finite failure codes, dependency HTTP status, storage operation, file type,
@@ -413,10 +417,39 @@ and `office_code` to identify the failing Word operation. Retryable job
 attempts are warnings; exhausted attempts are errors. These fields make an
 issue useful even when its exception title is a generic provider message.
 
+What leaves the process is an allowlist, so an event names a bug only when
+the code that failed named it. Two literals do that, both closed vocabularies
+in `sentryPrivacy.ts` (the drift tests `diagnosticVocabulary.test.ts` in the
+backend and the frontend fail when a call site uses a value that is not
+listed):
+
+- `operation`: the user-level flow a request or job belongs to
+  (`documents.upload.complete`, `chat.turn`, `playbooks.import`). Set it once
+  at the entry with `setOperation(...)` in the backend, or pass `operation`
+  to the client reporters; every event captured until the request or job
+  finishes carries it, and it leads the title and the fingerprint. One
+  failing operation is one issue, whatever route or stack it fails in.
+- `error_kind`: what went wrong, from the code that threw. Throw an
+  `AppError` (or a subclass: `StorageOperationError`, `AssistantStreamError`,
+  `DbJobDeferredError`, `NonRetryableJobError`) with a kind such as
+  `conversion.no_output` or `chat.provider_rate_limited`; the boundary reads
+  the first kind on the cause chain. Wrap a dependency's error as the cause
+  rather than re-throwing a bare `new Error(...)`: its errno, SQLSTATE,
+  PostgREST or AWS code and HTTP status already extract as `failure_code`
+  and `dependency_status`.
+- `markStage("seal-recover")` records the stages a request passed through as
+  its breadcrumb trail, so a throw reached via one path is distinguishable
+  from the same throw reached via another.
+
+Messages never leave the process in either install mode, so they stay what
+they always were: text for logs, job rows and tests. The kind is the
+identity. Add a vocabulary member first (both mirrored copies of
+`sentryPrivacy.ts`), then use it.
+
 For each new reporting path:
 
-- Use a static operation/component and stage, plus a stable error code where
-  available. Keep request/job IDs out of the title and grouping fingerprint.
+- Use a static operation/component and stage, plus a stable error kind or
+  code. Keep request/job IDs out of the title and grouping fingerprint.
 - Retain safe diagnostic IDs and the original stack. Check the scrubber's
   allowlist before assuming a new `extra` field will survive transmission.
 - Set release metadata and upload matching browser/add-in source maps in

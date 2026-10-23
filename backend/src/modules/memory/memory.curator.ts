@@ -15,6 +15,8 @@ import {
   type UserModelSettings,
 } from "../user/user.service";
 import { DbJobDeferredError, type Db, type DbJob } from "../../lib/dbq/types";
+import { AppError } from "../../lib/appError";
+import { setOperation } from "../../lib/observability/sentry";
 import { ensureMemoryFile, getMemoryCurrentForFile, MemoryConversationNotQuietError, MemoryDisabledError, MemoryEpochSupersededError, MemoryJobSupersededError, MemoryValidationError, writeMemoryFile, type MemoryFileRow, type MemoryScope, type MemorySurface } from "../../lib/memory/files";
 import { MEMORY_INACTIVITY_MS } from "../../lib/memory/schedule";
 import { teamOrgIdOf } from "../../lib/personalOrgs";
@@ -699,6 +701,12 @@ export function memoryScopeFailureCause(
   let current: unknown = error;
   for (let depth = 0; depth < 3 && current && typeof current === "object"; depth++) {
     const raw = current as Record<string, unknown>;
+    // Our own wrappers (a scope failure wrapped again at the job level) say
+    // nothing about the dependency; the classification is further down.
+    if (current instanceof AppError) {
+      current = raw.cause;
+      continue;
+    }
     const diagnostics: { name?: string; code?: string; statusCode?: number } = {};
     if (typeof raw.name === "string" && raw.name !== "Error" && SAFE_DIAGNOSTIC_CODE.test(raw.name)) {
       diagnostics.name = raw.name;
@@ -716,11 +724,39 @@ export function memoryScopeFailureCause(
   return undefined;
 }
 
-/** The fixed-text scope failure, with the original's classification as its cause. */
+const SCOPE_DEPENDENCY_FAILURE = "Memory curator scope dependency failed";
+
+/**
+ * The fixed-text scope failure, under its kind, with the original's
+ * classification and stack frames as its cause. A `new Error` built here had
+ * only this function's stack, so Sentry could not say where the dependency
+ * failed (MIKE-BACKEND-F). The frames are code locations and travel; the
+ * stack's first line is the original message and is replaced, so neither
+ * the event nor the operator log (which renders the cause chain) sees it.
+ * A failure with no stack and nothing safe to say has no cause.
+ */
 export function memoryScopeFailure(error: unknown): Error {
-  return new Error("Memory curator scope failed", {
-    cause: memoryScopeFailureCause(error),
-  });
+  const diagnostics = memoryScopeFailureCause(error);
+  const frames = scopeFailureFrames(error);
+  let cause: Error | undefined;
+  if (diagnostics || frames) {
+    cause = Object.assign(new Error(SCOPE_DEPENDENCY_FAILURE), diagnostics);
+    if (frames) {
+      cause.stack = `${cause.name}: ${SCOPE_DEPENDENCY_FAILURE}${frames}`;
+    }
+  }
+  return new AppError(
+    "memory.consolidation_failed",
+    "Memory curator scope failed",
+    cause ? { cause } : undefined,
+  );
+}
+
+/** The `    at …` lines of the original stack, without its message line. */
+function scopeFailureFrames(error: unknown): string {
+  if (!(error instanceof Error) || typeof error.stack !== "string") return "";
+  const at = error.stack.indexOf("\n    at ");
+  return at >= 0 ? error.stack.slice(at) : "";
 }
 
 export async function runMemoryCuratorScope(
@@ -928,7 +964,7 @@ export async function runMemoryCuratorScope(
   }
   if (writeFailure) throw memoryScopeFailure(writeFailure);
   if (invalidCalls > 0 && !written && !terminalReason) {
-    throw new Error("Memory curator scope failed");
+    throw memoryScopeFailure(undefined);
   }
   // `written` is assigned from the async runTools callback. TypeScript does
   // not include callback side effects in outer control-flow narrowing.
@@ -1162,6 +1198,7 @@ export async function handleMemoryConsolidation(
   db: Db,
   job: DbJob,
 ): Promise<Record<string, unknown>> {
+  setOperation("memory.consolidate");
   const stateId = payloadString(job, "stateId");
   const requestedGeneration = Number(job.payload.generation);
   if (!stateId || !Number.isSafeInteger(requestedGeneration)) {

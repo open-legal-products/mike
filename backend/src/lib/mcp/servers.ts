@@ -2,6 +2,8 @@ import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 import type { ConnectorApprovalItem } from "@mike/contracts";
 import type { OpenAIToolSchema } from "../llm";
+import { AppError } from "../appError";
+import { reportError } from "../observability/sentry";
 import { createServerSupabase } from "../supabase";
 import {
     authConfigPatch,
@@ -449,9 +451,19 @@ export async function buildUserMcpTools(
         .eq("user_mcp_connectors.user_id", userId)
         .eq("user_mcp_connectors.enabled", true);
     if (error) {
+        // Without this the turn silently runs with no connector tools; the
+        // database's code rides on the cause, the message stays in the log.
+        const failure = new AppError(
+            "db.query_failed",
+            "Failed to load the user's MCP tools",
+            { cause: error },
+        );
+        reportError(failure, {
+            tags: { component: "chat-stream", operation: "chat.mcp" },
+        });
         console.error("[mcp-connectors] failed to load tools", {
             userId,
-            error: error.message,
+            error: failure,
         });
         return [];
     }
@@ -721,12 +733,24 @@ async function callResolvedTool(
         );
         const toolError = mcpToolResultErrorMessage(result);
         if (toolError) {
+            // The server answered, and said no: usually the model's arguments,
+            // sometimes the server. Its text stays in the log; Sentry gets the
+            // kind. Logged alongside so the console bridge skips this line.
+            const rejected = new AppError(
+                "mcp.call_rejected",
+                "MCP tool call rejected by server",
+            );
+            reportError(rejected, {
+                level: "warning",
+                tags: { component: "chat-stream", operation: "chat.mcp" },
+            });
             console.error("[mcp-connectors] tool call rejected by server", {
                 connectorId: connector.id,
                 connectorName: connector.name,
                 toolName: tool.tool_name,
                 error: toolError,
                 serverResponse: sanitizeMcpToolErrorResult(result),
+                reported: rejected,
             });
             const content = stringifyMcpResult({
                 ok: false,
@@ -786,11 +810,25 @@ async function callResolvedTool(
         };
     } catch (err) {
         const diagnostic = formatMcpErrorForAgent(err);
+        // An error that names itself (OAuth required, blocked destination)
+        // keeps its kind and is the user's connector, not our bug: warning.
+        // Anything else is a failed call with the transport's error as cause.
+        const failure =
+            err instanceof AppError
+                ? err
+                : new AppError("mcp.call_failed", "MCP tool call failed", {
+                      cause: err,
+                  });
+        reportError(failure, {
+            tags: { component: "chat-stream", operation: "chat.mcp" },
+            ...(failure !== err ? {} : { level: "warning" as const }),
+        });
         console.error("[mcp-connectors] tool call failed", {
             connectorId: connector.id,
             connectorName: connector.name,
             toolName: tool.tool_name,
             ...diagnostic,
+            reported: failure,
         });
         // This payload can embed remote-server-authored text (diagnostic.message
         // and diagnostic.serverError originate from the MCP server's error
@@ -855,8 +893,19 @@ async function insertMcpAuditLog(
 ) {
     const { error } = await db.from("user_mcp_tool_audit_logs").insert(row);
     if (error) {
+        // The call already ran; a lost audit row is a warning, not a failure
+        // of the turn, but one somebody must see.
+        const failure = new AppError(
+            "db.query_failed",
+            "Failed to write the MCP tool audit log",
+            { cause: error },
+        );
+        reportError(failure, {
+            level: "warning",
+            tags: { component: "chat-stream", operation: "chat.mcp" },
+        });
         console.error("[mcp-connectors] failed to write audit log", {
-            error: error.message,
+            error: failure,
         });
     }
 }

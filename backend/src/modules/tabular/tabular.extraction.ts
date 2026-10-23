@@ -4,6 +4,34 @@ import { publishCellUpdate as defaultPublish, type RunProgressUpdate } from "../
 import { assistantStreamErrorPayload } from "../chat/chat.service";
 import { extractRowColumns, finalizeCell, finishGenerationIfIdle, loadReviewRow, renewGeneration, validateSelectedModel, TABULAR_GENERATION_HEARTBEAT_MS, type Column } from "./tabular.service";
 import { createServerSupabase, type Db } from "../../lib/supabase";
+import { AppError } from "../../lib/appError";
+import { asReportableError } from "../../lib/httpError";
+import { reportError, setOperation } from "../../lib/observability/sentry";
+
+/**
+ * The lease was lost, or its bookkeeping failed, while a row was still being
+ * filled. Reported as a warning: the extraction itself goes on, but another
+ * generation may now start over this one. Only ids travel with the event; the
+ * reported object is also what gets logged, so the console bridge files no
+ * second event.
+ */
+function reportLeaseLost(
+    message: string,
+    ids: { reviewId: string; rowId: string },
+    cause?: unknown,
+): AppError {
+    const failure = new AppError(
+        "tabular.lease_lost",
+        message,
+        cause === undefined ? undefined : { cause: asReportableError(cause) },
+    );
+    reportError(failure, {
+        level: "warning",
+        tags: { component: "extraction-worker" },
+        extra: { review_id: ids.reviewId, row_id: ids.rowId },
+    });
+    return failure;
+}
 
 export interface ExtractionDeps {
     db: Db;
@@ -41,6 +69,9 @@ export async function runExtractionJob(
 ): Promise<void> {
     const { reviewId, userId, rowId, generationId, columnIndex } = data;
     const { db, publish } = deps;
+    // A single-cell job (regenerate) is a cell operation; a row job fills
+    // every outstanding column of the row.
+    setOperation(columnIndex != null ? "tabular.cell" : "tabular.row");
 
     const leaseHeartbeat = generationId
         ? setInterval(() => {
@@ -49,13 +80,28 @@ export async function runExtractionJob(
                       if (!held)
                           console.error(
                               "[extraction-worker] generation lease lost",
-                              { reviewId, rowId },
+                              {
+                                  reviewId,
+                                  rowId,
+                                  err: reportLeaseLost(
+                                      "Generation lease lost while extracting",
+                                      { reviewId, rowId },
+                                  ),
+                              },
                           );
                   })
                   .catch((err) =>
                       console.error(
                           "[extraction-worker] failed to renew generation lease",
-                          { reviewId, rowId, err },
+                          {
+                              reviewId,
+                              rowId,
+                              err: reportLeaseLost(
+                                  "Generation lease could not be renewed",
+                                  { reviewId, rowId },
+                                  err,
+                              ),
+                          },
                       ),
                   );
           }, TABULAR_GENERATION_HEARTBEAT_MS)
@@ -181,10 +227,17 @@ export async function runExtractionJob(
         //    the still-outstanding ones. Cells are left "generating" (still
         //    stamped, so the lease stays held) — the permanent-failure handler
         //    flips the survivors to "error" once retries run out.
+        //    The model's or provider's error — when extractRowColumns saw one
+        //    — is the cause, so the retry report says why the columns are
+        //    missing instead of only that they are.
         if (missing.length > 0) {
-            throw new Error(
+            throw new AppError(
+                "tabular.generation_failed",
                 `[extraction-worker] incomplete extraction for row ${rowId}: ` +
                     `missing columns ${missing.join(", ")}`,
+                error === undefined || error === null
+                    ? undefined
+                    : { cause: error },
             );
         }
         settled = true;
@@ -234,11 +287,16 @@ async function clearRowGenerationStamp(
         .eq("generation_id", generationId);
     if (columnIndex != null) query = query.eq("column_index", columnIndex);
     const { error } = await query;
+    // A stamp that stays set keeps the lease held until it times out.
     if (error)
         console.error("[extraction-worker] failed to clear generation stamp", {
             reviewId,
             rowId,
-            error,
+            error: reportLeaseLost(
+                "Generation stamp could not be cleared",
+                { reviewId, rowId },
+                error,
+            ),
         });
 }
 

@@ -16,6 +16,7 @@
 import { AppError } from "../appError";
 import { createServerSupabase } from "../supabase";
 import { jobErrorMessage } from "./jobError";
+import { runIsolated } from "./jobScope";
 import { deleteFile } from "../storage";
 import { enqueueAppJobDelivery } from "../queue/appJobsQueue";
 import { redisEnabled } from "./driver";
@@ -178,6 +179,20 @@ export async function processClaimedJob(
         return;
     }
 
+    // One isolation scope per job: the operation a handler names with
+    // setOperation and the stages it marks stay with this job's events, not
+    // with whichever concurrent job on this runner fails next.
+    await runIsolated(() => runClaimedJob(db, handler, job, fence, retryUntilSuccess, failureHooks));
+}
+
+async function runClaimedJob(
+    db: Db,
+    handler: DbJobHandlers[string] | undefined,
+    job: DbJob,
+    fence: <T extends { eq(column: string, value: unknown): T }>(query: T) => T,
+    retryUntilSuccess: boolean,
+    failureHooks: Readonly<Record<string, DbJobFailureHook>>,
+): Promise<void> {
     try {
         if (!handler) throw new Error(`unknown job kind: ${job.kind}`);
         const result = await handler(db, job);

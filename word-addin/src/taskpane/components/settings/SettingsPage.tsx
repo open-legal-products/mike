@@ -33,6 +33,7 @@ export function SettingsPage({
       setError(
         userMessage(reason, {
           fallback: "Mike couldn't save that setting. Try again.",
+          operation: "settings.keys",
         }),
       );
     } finally {
@@ -115,6 +116,7 @@ export function SettingsPage({
                   userMessage(reason, {
                     fallback:
                       "Mike couldn't delete the device-only chats. Try again.",
+                    operation: "settings.keys",
                   }),
                 ),
               )

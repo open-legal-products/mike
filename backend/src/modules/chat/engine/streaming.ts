@@ -18,7 +18,8 @@ import {
 } from "../../../lib/modelSelection";
 import { UserFacingError } from "../../../lib/userFacingError";
 import { InvalidApiKeyError } from "../../../lib/llm/apiKeyErrors";
-import { reportError } from "../../../lib/observability/sentry";
+import { markStage, reportError } from "../../../lib/observability/sentry";
+import { providerFailureKind } from "../../../lib/llm/providerErrors";
 import { safeError } from "../../../lib/safeError";
 import type { Db } from "../../../lib/supabase";
 import { buildUserMcpTools } from "../../../lib/mcpConnectors";
@@ -135,11 +136,18 @@ export const ASSISTANT_ERROR_MESSAGE =
  * which sends the user to retry something that cannot succeed — so the choice
  * lives here once instead of in each route's catch.
  */
-export function assistantStreamErrorPayload(error: unknown): {
+export function assistantStreamErrorPayload(
+  error: unknown,
+  requestId?: string | null,
+): {
   message: string;
   safe_to_display?: true;
   code?: AssistantErrorCode;
+  request_id?: string;
 } {
+  // The request id is the one handle a user can quote that finds the Sentry
+  // event and the access-log line for this failure; it carries no content.
+  const withRequestId = requestId ? { request_id: requestId } : {};
   const safe =
     error instanceof AssistantStreamError
       ? [...error.events]
@@ -149,11 +157,12 @@ export function assistantStreamErrorPayload(error: unknown): {
               event.type === "error" && event.safe_to_display === true,
           )
       : undefined;
-  if (!safe) return { message: ASSISTANT_ERROR_MESSAGE };
+  if (!safe) return { message: ASSISTANT_ERROR_MESSAGE, ...withRequestId };
   return {
     message: safe.message,
     safe_to_display: true,
     ...(safe.code ? { code: safe.code } : {}),
+    ...withRequestId,
   };
 }
 
@@ -640,7 +649,15 @@ export async function runLLMStream(params: {
         db,
         orgId,
       }).catch((error) => {
-        console.error("[subagents] model check failed", safeError(error));
+        reportError(
+          new AppError("chat.context_failed", "Subagent model check failed", {
+            cause: error,
+          }),
+          { tags: { component: "chat-stream", operation: "chat.subagent" } },
+        );
+        // warn: the report above is the Sentry event; the log keeps its
+        // redacted category.
+        console.warn("[subagents] model check failed", safeError(error));
         return null;
       });
       return checked?.ok ? checked.model : null;
@@ -941,6 +958,9 @@ export async function runLLMStream(params: {
             documentsScoped: subagentRun?.documentsScoped,
           },
         );
+        // A failure after this point happened with tool results in hand; the
+        // breadcrumb tells it apart from one in the first model call.
+        markStage("tool-result");
         throwIfAborted(signal);
         for (const r of docsRead) {
           events.push({
@@ -1086,11 +1106,27 @@ export async function runLLMStream(params: {
       // operators see a rejected key with its provider_error tag, but a
       // warning, not an error. (Left unreported, the console bridge filed it
       // anyway, at error level, as MIKE-BACKEND-E.)
-      reportError(err, {
-        tags: { component: "chat-stream" },
+      // The kind says what the provider did (rejected the key, rate limited,
+      // unavailable) so one cause is one issue; the provider's own error
+      // stays underneath as the cause, where provider_error and
+      // dependency_status are still read from it. An error that already
+      // names its kind (a blocked destination, an unreadable page) keeps it.
+      const failure =
+        err instanceof AppError
+          ? err
+          : new AppError(providerFailureKind(err), "Model stream failed", {
+              cause: err,
+            });
+      // A subagent's run is its own flow inside the turn's request: name it
+      // on the event so a failing delegate is not filed under the answer.
+      reportError(failure, {
+        tags: {
+          component: "chat-stream",
+          ...(isSubagent ? { operation: "chat.subagent" as const } : {}),
+        },
         ...(safeToDisplay ? { level: "warning" as const } : {}),
       });
-      console.error("[chat/stream] model stream failed", err);
+      console.error("[chat/stream] model stream failed", failure);
       const message = safeToDisplay ? err.message : ASSISTANT_ERROR_MESSAGE;
       events.push({
         type: "error",
@@ -1106,7 +1142,7 @@ export async function runLLMStream(params: {
         message,
         fullText,
         events.map(sanitizeAssistantEvent),
-        { cause: err },
+        { cause: failure },
       );
     }
   }

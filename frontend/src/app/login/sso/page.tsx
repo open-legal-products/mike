@@ -57,6 +57,7 @@ export default function SsoLoginPage() {
                 action: "start single sign-on",
                 codeMessages: SSO_ERROR_MESSAGES,
                 fallback: "Unable to start single sign-on. Try again.",
+                operation: "auth.signin",
             });
             setError(
                 described.kind === "rate_limited"

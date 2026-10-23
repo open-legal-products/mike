@@ -30,6 +30,7 @@ import {
 import {
     notifyError,
     notifyPartialFailure,
+    uploadBatchFault,
     userFacingApiError,
 } from "@/app/lib/userFacingError";
 import { EmptyState } from "@/app/components/ui/empty-state";
@@ -48,6 +49,9 @@ import {
   TableScrollArea,
   TableStickyCell,
 } from "../shared/TablePrimitive";
+
+/** Every failure on this screen belongs to the workflow it serves. */
+const ASSET_FLOW = { operation: "workflows.run" } as const;
 
 const ASSET_NAME_COL_W =
   "w-[292px] sm:w-[332px] md:w-[392px] lg:w-[452px] shrink-0";
@@ -124,7 +128,7 @@ export const WorkflowAssets = forwardRef<
       setFiles(await listWorkflowAssets(workflowId));
       setError("");
     } catch (caught) {
-      setError(userFacingApiError(caught, "Unable to load assets."));
+      setError(userFacingApiError(caught, "Unable to load assets.", ASSET_FLOW));
     } finally {
       setLoading(false);
     }
@@ -191,12 +195,17 @@ export const WorkflowAssets = forwardRef<
           {
             action: uploadAction(failedFiles.length, supported.length),
             onRetry: () => void upload(failedFiles),
+            // Storage failures were reported per part by the API client;
+            // what is left to report is a file the server never finished.
+            ...ASSET_FLOW,
+            cause: uploadBatchFault(outcomes) ?? undefined,
           },
         );
       }
     } catch (caught) {
       notifyError(caught, {
         action: uploadAction(supported.length, supported.length),
+        ...ASSET_FLOW,
         fallback:
           supported.length === 1
             ? `${supported[0]?.name ?? "That file"} could not be uploaded. Try again.`
@@ -227,7 +236,7 @@ export const WorkflowAssets = forwardRef<
       );
       setFiles((current) => [...current, ...created]);
     } catch (caught) {
-      setError(userFacingApiError(caught, "Unable to add saved files."));
+      setError(userFacingApiError(caught, "Unable to add saved files.", ASSET_FLOW));
     } finally {
       uploadInFlightRef.current = false;
       setBusyId(null);
@@ -248,7 +257,7 @@ export const WorkflowAssets = forwardRef<
         return next;
       });
     } catch (caught) {
-      setError(userFacingApiError(caught, "Unable to load asset versions."));
+      setError(userFacingApiError(caught, "Unable to load asset versions.", ASSET_FLOW));
     } finally {
       setLoadingVersionAssetIds((current) => {
         const next = new Set(current);
@@ -273,7 +282,7 @@ export const WorkflowAssets = forwardRef<
       setViewingVersionId(null);
       await refreshVersionState(target.id);
     } catch (caught) {
-      setError(userFacingApiError(caught, "Version upload failed."));
+      setError(userFacingApiError(caught, "Version upload failed.", ASSET_FLOW));
     } finally {
       setBusyId(null);
     }
@@ -288,7 +297,7 @@ export const WorkflowAssets = forwardRef<
       anchor.download = resolved.filename || file.filename;
       anchor.click();
     } catch (caught) {
-      setError(userFacingApiError(caught, "Download failed."));
+      setError(userFacingApiError(caught, "Download failed.", ASSET_FLOW));
     } finally {
       setBusyId(null);
     }
@@ -318,7 +327,7 @@ export const WorkflowAssets = forwardRef<
     try {
       await deleteAsset(file);
     } catch (caught) {
-      setError(userFacingApiError(caught, "Delete failed."));
+      setError(userFacingApiError(caught, "Delete failed.", ASSET_FLOW));
     } finally {
       setBusyId(null);
       setPendingDeleteFile(null);

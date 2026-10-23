@@ -24,7 +24,8 @@ import {
     updateApiKeySettings,
     userKeyOwner,
 } from "./user.apiKeyStore";
-import { type Db, errorMessage } from "./user.shared";
+import { AppError } from "../../lib/appError";
+import { type Db } from "./user.shared";
 
 export function getApiKeyStatus(db: Db, userId: string) {
     return getUserApiKeyStatus(userId, db);
@@ -182,12 +183,14 @@ export async function saveApiKeyForOwner(
         const status = await getApiKeyStatusFor(owner, db);
         return { ok: true, status };
     } catch (err) {
-        const detail = errorMessage(err);
-        console.error("[user/api-keys] save failed", {
-            provider,
-            owner: owner.kind,
-            error: detail,
-        });
-        return { ok: false, kind: "save_failed", error: err };
+        // One event, from the route's sendInternalError: the kind names the
+        // flow, the thrown value stays the cause so its code still extracts.
+        return {
+            ok: false,
+            kind: "save_failed",
+            error: new AppError("user.api_key_failed", "API key save failed", {
+                cause: err,
+            }),
+        };
     }
 }
