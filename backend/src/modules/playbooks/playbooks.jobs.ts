@@ -10,6 +10,8 @@
 
 import { deleteFile, downloadFile } from "../../lib/storage";
 import { safeError } from "../../lib/safeError";
+import { AppError } from "../../lib/appError";
+import { reportError, setOperation } from "../../lib/observability/sentry";
 import { enqueueDbJob } from "../../lib/dbq/enqueue";
 import { dbJobsEnabled } from "../../lib/dbq/runner";
 import {
@@ -155,6 +157,7 @@ async function markFailed(
 }
 
 export async function handlePlaybookReview(db: Db, job: DbJob): Promise<void> {
+  setOperation("playbooks.review");
   const input = job.payload as unknown as PlaybookReviewInput;
   const row = await claimRow(db, "playbook_runs", input.runId, job);
   if (!row) return;
@@ -232,6 +235,7 @@ async function readImportFile(
 }
 
 export async function handlePlaybookImport(db: Db, job: DbJob): Promise<void> {
+  setOperation("playbooks.import");
   const payload = job.payload as unknown as PlaybookImportJobPayload;
   const row = await claimRow(db, "playbook_imports", payload.attemptId, job);
   if (row)
@@ -310,7 +314,9 @@ async function dispatch(
         kind,
         error: safeError(error),
       });
-      await onFailure(db, job).catch(() => undefined);
+      await onFailure(db, job).catch((hookError: unknown) =>
+        reportFailureHookCrash(hookError, kind),
+      );
     });
     return;
   }
@@ -322,9 +328,34 @@ async function dispatch(
       maxAttempts: PLAYBOOK_JOB_ATTEMPTS,
     });
   } catch (error) {
-    await onFailure(db, job).catch(() => undefined);
+    await onFailure(db, job).catch((hookError: unknown) =>
+      reportFailureHookCrash(hookError, kind),
+    );
     throw error;
   }
+}
+
+/**
+ * The failure hook could not record the row's outcome: the review or import
+ * stays "running" until it reads as interrupted. The original failure is
+ * already reported (or rethrown) by the caller, so this names the second,
+ * independent fault the runner would otherwise have been the only one to see.
+ */
+function reportFailureHookCrash(hookError: unknown, kind: string): void {
+  reportError(
+    new AppError(
+      "dbq.failure_hook_crashed",
+      "Playbook job failure hook crashed",
+      { cause: hookError },
+    ),
+    {
+      tags: { component: "playbooks", stage: "failure-hook", job_kind: kind },
+    },
+  );
+  console.warn("[playbooks] job failure hook crashed", {
+    kind,
+    error: safeError(hookError),
+  });
 }
 
 /**

@@ -45,6 +45,7 @@ export function WorkflowAssets({
           setError(
             userMessage(reason, {
               fallback: "Mike couldn't load this workflow's files. Try again.",
+              operation: "workflows.run",
             }),
           );
         }
@@ -68,6 +69,7 @@ export function WorkflowAssets({
       setError(
         userMessage(reason, {
           fallback: "Mike couldn't upload that file. Try again.",
+          operation: "workflows.run",
         }),
       );
     } finally {
@@ -86,6 +88,7 @@ export function WorkflowAssets({
       setError(
         userMessage(reason, {
           fallback: "Mike couldn't upload the new version. Try again.",
+          operation: "workflows.run",
         }),
       );
     } finally {
@@ -156,6 +159,7 @@ export function WorkflowAssets({
                       setError(
                         userMessage(reason, {
                           fallback: "Mike couldn't open that file. Try again.",
+                          operation: "workflows.run",
                         }),
                       ),
                     )
@@ -186,6 +190,7 @@ export function WorkflowAssets({
                             userMessage(reason, {
                               fallback:
                                 "Mike couldn't delete that file. Try again.",
+                              operation: "workflows.run",
                             }),
                           ),
                         )

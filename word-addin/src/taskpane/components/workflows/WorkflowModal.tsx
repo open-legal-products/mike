@@ -44,6 +44,7 @@ export function WorkflowModal({
         setError(
           userMessage(reason, {
             fallback: "Mike couldn't load your workflows. Try again.",
+            operation: "workflows.run",
           })
         );
       })

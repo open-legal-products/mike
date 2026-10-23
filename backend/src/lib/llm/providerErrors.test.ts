@@ -1,7 +1,13 @@
 import { describe, expect, it } from "vitest";
+import { AppError } from "../appError";
+import { diagnosticErrorTags } from "../observability/sentryPrivacy";
 import { UserFacingError } from "../userFacingError";
 import { InvalidApiKeyError } from "./apiKeyErrors";
-import { asProviderStallError, toProviderStreamError } from "./providerErrors";
+import {
+  asProviderStallError,
+  providerFailureKind,
+  toProviderStreamError,
+} from "./providerErrors";
 
 const gemini = { label: "Gemini", modelId: "gemini-2.5-pro" };
 
@@ -123,5 +129,68 @@ describe("asProviderStallError", () => {
     expect(asProviderStallError("Stream aborted.", ctx)).toBeNull();
     expect(asProviderStallError(new Error("boom"), ctx)).toBeNull();
     expect(asProviderStallError(undefined, ctx)).toBeNull();
+  });
+});
+
+describe("providerFailureKind", () => {
+  it.each([
+    [401, "chat.provider_rejected"],
+    [403, "chat.provider_rejected"],
+    [429, "chat.provider_rate_limited"],
+    [500, "chat.provider_unavailable"],
+    [503, "chat.provider_unavailable"],
+    [402, "chat.stream_failed"],
+    [404, "chat.stream_failed"],
+  ] as const)("maps a provider %i to %s", (status, kind) => {
+    expect(providerFailureKind(apiCallError(status))).toBe(kind);
+  });
+
+  it("classifies the error toProviderStreamError returns the same as its API error", () => {
+    const wrapped = toProviderStreamError(apiCallError(429), gemini);
+    expect(wrapped).toBeInstanceOf(UserFacingError);
+    expect(providerFailureKind(wrapped)).toBe("chat.provider_rate_limited");
+  });
+
+  it("names a rejected key whatever wraps it", () => {
+    const rejected = new InvalidApiKeyError("Gemini");
+    expect(providerFailureKind(rejected)).toBe("chat.provider_rejected");
+    expect(providerFailureKind(new Error("outer", { cause: rejected }))).toBe(
+      "chat.provider_rejected",
+    );
+  });
+
+  it("treats a stalled stream or an unreachable provider as unavailable", () => {
+    expect(
+      providerFailureKind(new Error("first chunk timeout of 30000ms exceeded")),
+    ).toBe("chat.provider_unavailable");
+    expect(
+      providerFailureKind(
+        new TypeError("fetch failed", { cause: Object.assign(new Error("connect"), { code: "ECONNREFUSED" }) }),
+      ),
+    ).toBe("chat.provider_unavailable");
+  });
+
+  it("falls back to the generic stream failure", () => {
+    expect(providerFailureKind(new Error("something else"))).toBe("chat.stream_failed");
+    expect(providerFailureKind(undefined)).toBe("chat.stream_failed");
+  });
+});
+
+describe("a classified provider failure at the privacy boundary", () => {
+  it("carries the kind, the provider's status and its error class, never its text", () => {
+    const original = apiCallError(429, "private provider response");
+    const wrapped = toProviderStreamError(original, gemini);
+    const failure = new AppError(providerFailureKind(wrapped), "Model stream failed", {
+      cause: wrapped,
+    });
+
+    const tags = diagnosticErrorTags(failure);
+
+    expect(tags).toMatchObject({
+      error_kind: "chat.provider_rate_limited",
+      dependency_status: 429,
+      provider_error: "api_call",
+    });
+    expect(JSON.stringify(tags)).not.toContain("private provider response");
   });
 });

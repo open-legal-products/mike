@@ -23,6 +23,29 @@ import {
 
 export type ReportLevel = "fatal" | "error" | "warning";
 
+/**
+ * The user-level flows of the add-in, named the way the privacy boundary
+ * (frontend/src/shared/lib/sentryPrivacy.ts, OPERATIONS) knows them. The
+ * `operation` tag puts the flow in the event title ("Failure in
+ * word.edit_apply / word-office / GeneralException") and in the grouping;
+ * a value missing from the boundary's list is dropped there, so add it to
+ * the shared vocabulary first, then here.
+ */
+export const ADDIN_OPERATIONS = [
+  "word.session",
+  "word.document_read",
+  "word.edit_apply",
+  "word.edit_resolve",
+  "word_chat.turn",
+  "workflows.run",
+  "quick_actions.run",
+  "playbooks.review",
+  "settings.keys",
+  "documents.upload",
+  "documents.directory",
+] as const;
+export type AddinOperation = (typeof ADDIN_OPERATIONS)[number];
+
 export type ReportContext = {
   tags?: Record<string, string | number | boolean | null | undefined>;
   extra?: Record<string, unknown>;
@@ -35,6 +58,25 @@ const scrubber = createEventScrubber({
 });
 
 export const scrubEvent = scrubber.scrubEvent;
+
+/**
+ * The scrubber's "already sent" registry is a closure, so it can answer the
+ * console bridge but not a caller. This mirror answers callers: a screen
+ * that shows an error the API client already reported (every 5xx, every
+ * transport failure) or that `reportWordFailure` already filed must not
+ * report it a second time under its own tags.
+ */
+const reportedHere = new WeakSet<object>();
+
+function markReported(error: unknown): void {
+  scrubber.markReported(error);
+  if (error && typeof error === "object") reportedHere.add(error);
+}
+
+/** Has this exact error object already been sent to Sentry with context? */
+export function isReported(error: unknown): boolean {
+  return error !== null && typeof error === "object" && reportedHere.has(error);
+}
 
 /** `service`/`surface` distinguish the pane from its ribbon and OAuth pages. */
 export type AddinSurface = "taskpane" | "commands" | "oauth-dialog";
@@ -155,7 +197,7 @@ export function reportError(
   error: unknown,
   context: ReportContext = {},
 ): string | null {
-  scrubber.markReported(error);
+  markReported(error);
   if (!Sentry.isEnabled()) return null;
   return Sentry.withScope((scope) => {
     applyContext(scope, context);
@@ -175,8 +217,14 @@ export function reportError(
 export function reportWordFailure(
   error: unknown,
   context: {
-    /** Low-cardinality step name: "resolve", "restore", "reveal", ... */
-    stage: string;
+    /**
+     * Low-cardinality step name: "resolve", "restore", "reveal", ... Omit
+     * for a step the vocabulary has no name for (applying an edit); the
+     * operation then carries the grouping on its own.
+     */
+    stage?: string;
+    /** The user-level flow: reading the document, applying or resolving an edit. */
+    operation?: AddinOperation;
     level?: ReportLevel;
     extra?: Record<string, unknown>;
   },
@@ -189,9 +237,18 @@ export function reportWordFailure(
     error instanceof Error ? error.name : officeCode ?? "UnknownWordError";
   return reportError(error, {
     level: context.level ?? "error",
-    tags: { component: "word-office", stage: context.stage, office_code: officeCode },
+    tags: {
+      component: "word-office",
+      operation: context.operation,
+      stage: context.stage,
+      office_code: officeCode,
+    },
     extra: context.extra,
-    fingerprint: ["word-office", context.stage, officeCode ?? name],
+    fingerprint: [
+      "word-office",
+      context.stage ?? context.operation ?? "",
+      officeCode ?? name,
+    ],
   });
 }
 
@@ -202,10 +259,12 @@ export function reportApiFailure(failure: {
   code?: string | null;
   requestId?: string | null;
   method?: string;
+  /** The user-level flow the request belonged to, when the caller knows it. */
+  operation?: AddinOperation;
   /** The error about to be thrown; its later console.error copy is dropped. */
   error?: unknown;
 }): string | null {
-  scrubber.markReported(failure.error);
+  markReported(failure.error);
   if (!Sentry.isEnabled()) return null;
   const route = normalizeApiPath(failure.path);
   const method = failure.method ?? "GET";
@@ -214,6 +273,7 @@ export function reportApiFailure(failure: {
       level: "error",
       tags: {
         component: "mike-api",
+        operation: failure.operation,
         http_status: failure.status,
         http_method: method,
         http_route: route,
@@ -237,15 +297,21 @@ export function reportApiFailure(failure: {
  */
 export function reportNetworkFailure(
   error: unknown,
-  request: { method: string; url: string },
+  request: { method: string; url: string; operation?: AddinOperation },
 ): string | null {
-  scrubber.markReported(error);
+  markReported(error);
   if (!Sentry.isEnabled()) return null;
   const route = normalizeApiPath(request.url);
   return Sentry.withScope((scope) => {
     applyContext(scope, {
       level: "warning",
-      tags: { component: "mike-api", network: true, http_method: request.method, http_route: route },
+      tags: {
+        component: "mike-api",
+        operation: request.operation,
+        network: true,
+        http_method: request.method,
+        http_route: route,
+      },
       extra: { url: route },
       fingerprint: ["api-network", request.method, route],
     });

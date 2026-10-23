@@ -67,3 +67,15 @@ it('offers no repost when delivery failed before turn metadata', async () => {
     expect(mocks.notify.mock.calls[0][1].onRetry).toBeUndefined();
     expect(mocks.notify.mock.calls[0][0].message).toContain('may still be running');
 });
+it('reports a failed turn under word_chat.turn with the terminal frame\'s backend code', async () => {
+    const { reportError } = await import('../../../word-addin/src/taskpane/lib/errorReporting');
+    const terminal = Object.assign(new WordChatTerminalError('terminal failure'), { code: 'missing_api_key' });
+    mocks.stream.mockRejectedValueOnce(terminal);
+    const { result } = setup();
+    await act(async () => { await result.current.handleChat(submission('insert clause')); });
+    expect(reportError).toHaveBeenCalledWith(terminal, {
+        tags: { component: 'word-chat', operation: 'word_chat.turn', storage: 'cloud', error_code: 'missing_api_key' },
+    });
+    // The notice names the same flow, so a fault it files groups with this one.
+    expect(mocks.notify.mock.calls[0][1].operation).toBe('word_chat.turn');
+});

@@ -1,8 +1,9 @@
 // extraction transport — implementation behind the module facade.
 import { Worker, UnrecoverableError, type Job } from "bullmq";
 import { ExtractionLimitError } from "../lib/extraction/limits";
+import { runIsolated } from "../lib/dbq/jobScope";
 import { getRedisConnection } from "../lib/queue/connection";
-import { reportError } from "../lib/observability/sentry";
+import { reportError, setOperation } from "../lib/observability/sentry";
 import { EXTRACTION_QUEUE, type ExtractionJobData } from "../lib/queue/extractionQueue";
 import { runExtractionJob, markExtractionFailed } from "../modules/tabular/tabular.service";
 
@@ -19,12 +20,15 @@ export function createExtractionWorker(): Worker<ExtractionJobData> {
     worker = new Worker<ExtractionJobData>(
         EXTRACTION_QUEUE,
         async (job: Job<ExtractionJobData>) => {
-            try {
-                await runExtractionJob(job.data);
-            } catch (error) {
-                if (error instanceof ExtractionLimitError) throw new UnrecoverableError("document_too_large");
-                throw error;
-            }
+            await runIsolated(async () => {
+                setOperation("documents.extract");
+                try {
+                    await runExtractionJob(job.data);
+                } catch (error) {
+                    if (error instanceof ExtractionLimitError) throw new UnrecoverableError("document_too_large");
+                    throw error;
+                }
+            });
         },
         {
             connection: getRedisConnection(),
@@ -44,10 +48,13 @@ export function createExtractionWorker(): Worker<ExtractionJobData> {
     });
     worker.on("failed", async (job, err) => {
         const permanent = !!job && isPermanentFailure(job, err);
+        // The 'failed' event fires outside the processor's isolation scope,
+        // so the operation is named here rather than inherited.
         reportError(err, {
             level: permanent ? "error" : "warning",
             tags: {
                 component: "extraction-worker",
+                operation: "documents.extract",
                 terminal: permanent,
                 attempt: job?.attemptsMade,
             },
@@ -80,9 +87,19 @@ export function createExtractionWorker(): Worker<ExtractionJobData> {
         try {
             await markExtractionFailed(job.data);
         } catch (updateErr) {
+            // Cells stay "generating" forever if this write is lost: reported
+            // with the terminal stage, logged as the same object.
+            reportError(updateErr, {
+                tags: {
+                    component: "extraction-worker",
+                    operation: "documents.extract",
+                    stage: "job.terminal",
+                },
+                extra: { job_id: job.id, review_id: job.data.reviewId },
+            });
             console.error(
                 "[extraction-worker] failed to mark cells error",
-                { jobId: job.id, updateErr },
+                { jobId: job.id, error: updateErr },
             );
         }
     });

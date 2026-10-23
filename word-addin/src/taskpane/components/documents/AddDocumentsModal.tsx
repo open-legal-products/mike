@@ -218,6 +218,7 @@ export function AddDocumentsModal({
         setError(
           userMessage(reason, {
             fallback: "Failed to load documents.",
+            operation: "documents.directory",
           }),
         );
       })
@@ -308,6 +309,7 @@ export function AddDocumentsModal({
       setError(
         userMessage(reason, {
           fallback: "Failed to load project documents.",
+          operation: "documents.directory",
         }),
       );
     } finally {
@@ -355,6 +357,7 @@ export function AddDocumentsModal({
       setError(
         userMessage(reason, {
           fallback: "Failed to load projects.",
+          operation: "documents.directory",
         }),
       );
     } finally {
@@ -419,6 +422,7 @@ export function AddDocumentsModal({
       setError(
         userMessage(reason, {
           fallback: "Documents could not be uploaded. Please try again.",
+          operation: "documents.upload",
         }),
       );
     } finally {
@@ -561,6 +565,7 @@ export function AddDocumentsModal({
       setError(
         userMessage(reason, {
           fallback: "Failed to load folder documents.",
+          operation: "documents.directory",
         }),
       );
     }
@@ -589,6 +594,7 @@ export function AddDocumentsModal({
       setError(
         userMessage(reason, {
           fallback: "Failed to load documents.",
+          operation: "documents.directory",
         }),
       );
     } finally {

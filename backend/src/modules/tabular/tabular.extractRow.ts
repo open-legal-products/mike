@@ -228,8 +228,11 @@ export async function extractRowColumns(args: {
         error = err;
         // An abort re-thrown by the stream is the caller stopping us, not a
         // failure worth logging; the unreturned columns are reported below.
+        // Not console.error: queryTabularAllColumns reported this failure
+        // under its kind, and the console bridge would file the raw error a
+        // second time, without one.
         if (!abortSignal?.aborted) {
-            console.error(
+            console.warn(
                 `[tabular/extract-row] queryTabularAllColumns error row=${row.id}`,
                 err,
             );

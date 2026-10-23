@@ -205,20 +205,35 @@ describe("extractRowColumns", () => {
     it("returns the stream error alongside missing columns", async () => {
         const streamError = new Error("provider rejected credential");
         queryTabularAllColumns.mockRejectedValue(streamError);
+        const error = vi.spyOn(console, "error").mockImplementation(() => {});
+        const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
 
-        const out = await extractRowColumns({
-            db: makeDb() as never,
-            reviewId: "rev-1",
-            row: ROW,
-            columns: COLUMNS,
-            existingByColumn: new Map(),
-            model: "m",
-            apiKeys: {},
-            sink: sinkSpy(),
-        });
+        try {
+            const out = await extractRowColumns({
+                db: makeDb() as never,
+                reviewId: "rev-1",
+                row: ROW,
+                columns: COLUMNS,
+                existingByColumn: new Map(),
+                model: "m",
+                apiKeys: {},
+                sink: sinkSpy(),
+            });
 
-        expect(out.error).toBe(streamError);
-        expect(out.missing).toEqual([0, 1]);
+            expect(out.error).toBe(streamError);
+            expect(out.missing).toEqual([0, 1]);
+            // queryTabularAllColumns reported this failure under its kind; a
+            // console.error of the raw error here would have the bridge file
+            // it again, without one.
+            expect(error).not.toHaveBeenCalled();
+            expect(warn).toHaveBeenCalledWith(
+                "[tabular/extract-row] queryTabularAllColumns error row=row-1",
+                streamError,
+            );
+        } finally {
+            error.mockRestore();
+            warn.mockRestore();
+        }
     });
 });
 

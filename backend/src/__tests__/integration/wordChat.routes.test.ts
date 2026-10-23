@@ -643,6 +643,16 @@ describe("POST /word-chat — local storage", () => {
       turn: { activityId: "activity-1" },
     });
     expect(scheduleMemoryConsolidation).not.toHaveBeenCalled();
+    // The terminal error frame names the request so the pane can show an id
+    // a user can quote; it is the X-Request-ID header of this response.
+    const errorFrame = JSON.parse(
+      res.text
+        .split("\n")
+        .filter((line) => line.includes('"type":"error"'))
+        .at(-1)!
+        .replace(/^data:\s*/, ""),
+    ) as { request_id?: string };
+    expect(errorFrame.request_id).toBe(res.headers["x-request-id"]);
     errorSpy.mockRestore();
   });
 });

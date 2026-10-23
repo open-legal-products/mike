@@ -7,6 +7,8 @@ import {
     streamChatWithTools,
     type UserApiKeys,
 } from "../../lib/llm";
+import { AppError } from "../../lib/appError";
+import { reportError } from "../../lib/observability/sentry";
 import { formatPromptSuffix } from "./tabular.prompt";
 import { type CellResult, type Column } from "./tabular.shared";
 
@@ -43,7 +45,19 @@ The "summary" field must contain only the extracted value with inline citations 
             apiKeys,
         });
     } catch (err) {
-        console.error("[queryTabularCell] completion failed", err);
+        // Reported once, here, under the kind that names the failure; the
+        // provider's own error is the cause, so its class and HTTP status
+        // reach Sentry as provider_error / dependency_status. The caller
+        // answers its existing 500 and must not report again. Logging the
+        // reported object (not the raw one) keeps the console bridge from
+        // filing a second event.
+        const failure = new AppError(
+            "tabular.generation_failed",
+            "Tabular cell completion failed",
+            { cause: err },
+        );
+        reportError(failure);
+        console.error("[queryTabularCell] completion failed", failure);
         return null;
     }
     try {
@@ -204,7 +218,18 @@ Rules:
     } catch (err) {
         streamError = err;
         if (!abortSignal?.aborted) {
-            console.error("[queryTabularAllColumns] stream failed", err);
+            // Reported once, here, under the kind that names the failure, with
+            // the provider's error as the cause (provider_error and
+            // dependency_status come from it). The raw error is still what is
+            // rethrown: the row orchestrator classifies it for the grid, and
+            // its own log of it is a warning, not a second event.
+            const failure = new AppError(
+                "tabular.generation_failed",
+                "Tabular row completion stream failed",
+                { cause: err },
+            );
+            reportError(failure);
+            console.error("[queryTabularAllColumns] stream failed", failure);
         }
     }
 

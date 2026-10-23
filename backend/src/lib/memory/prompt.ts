@@ -1,5 +1,7 @@
 import { createHash } from "node:crypto";
+import { AppError } from "../appError";
 import type { Db } from "../dbq/types";
+import { reportError } from "../observability/sentry";
 import { teamOrgIdOf } from "../personalOrgs";
 import { getMemoryCurrent } from "./files";
 
@@ -95,10 +97,20 @@ async function buildMemoryDocuments(args: {
           return current.enabled && current.content.trim()
             ? fenceMemory(current.content, candidate.scope)
             : null;
-        } catch {
+        } catch (error) {
           // Memory is optional context for the live answer. Strict storage
           // reads deliberately reach this branch on operational failure
-          // instead of pretending a missing object is an empty file.
+          // instead of pretending a missing object is an empty file. The
+          // answer goes on without it; the failure is still reported, with
+          // the read's own error as the cause.
+          reportError(
+            new AppError(
+              "memory.consolidation_failed",
+              "Scoped memory could not be loaded",
+              { cause: error },
+            ),
+            { level: "warning" },
+          );
           console.warn("[memory-context] scoped memory could not be loaded", {
             scope: candidate.scope,
           });

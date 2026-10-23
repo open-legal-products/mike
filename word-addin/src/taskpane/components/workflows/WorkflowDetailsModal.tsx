@@ -149,6 +149,7 @@ export function WorkflowDetailsModal({
       setError(
         userMessage(reason, {
           fallback: "Mike couldn't save this workflow. Try again.",
+          operation: "workflows.run",
         }),
       );
     } finally {
@@ -169,6 +170,7 @@ export function WorkflowDetailsModal({
       setDeleteError(
         userMessage(reason, {
           fallback: "Mike couldn't delete this workflow. Try again.",
+          operation: "workflows.run",
         }),
       );
     } finally {

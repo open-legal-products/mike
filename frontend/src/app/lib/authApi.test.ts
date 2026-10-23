@@ -22,6 +22,15 @@ import {
     verifyMfa,
 } from "./authApi";
 
+const reporting = vi.hoisted(() => ({
+    reportApiFailure: vi.fn(),
+    reportNetworkFailure: vi.fn(),
+}));
+vi.mock("@/app/lib/errorReporting", async (importOriginal) => ({
+    ...(await importOriginal<typeof import("@/app/lib/errorReporting")>()),
+    ...reporting,
+}));
+
 const fetchMock = vi.fn();
 const user = {
     id: "user-1",
@@ -40,6 +49,55 @@ describe("cookie auth client", () => {
 
     afterEach(() => {
         vi.unstubAllGlobals();
+        vi.clearAllMocks();
+    });
+
+    describe("reporting", () => {
+        it("reports a 5xx like the API client, with the route, code and request id", async () => {
+            fetchMock.mockResolvedValue(
+                new Response(
+                    JSON.stringify({ code: "internal_error", request_id: "req-1" }),
+                    { status: 500, headers: { "Content-Type": "application/json" } },
+                ),
+            );
+
+            const error = await login(user.email, "nope").catch((e) => e);
+
+            expect(reporting.reportApiFailure).toHaveBeenCalledWith({
+                path: "/api/auth/login",
+                method: "POST",
+                status: 500,
+                code: "internal_error",
+                requestId: "req-1",
+                error,
+            });
+        });
+
+        it("does not report a 4xx: it is the auth server's answer", async () => {
+            fetchMock.mockResolvedValue(
+                new Response(JSON.stringify({ code: "invalid_credentials" }), {
+                    status: 400,
+                    headers: { "Content-Type": "application/json" },
+                }),
+            );
+
+            await login(user.email, "nope").catch(() => undefined);
+
+            expect(reporting.reportApiFailure).not.toHaveBeenCalled();
+            expect(reporting.reportNetworkFailure).not.toHaveBeenCalled();
+        });
+
+        it("reports a request that never got a response as a network failure", async () => {
+            const failure = new TypeError("Failed to fetch");
+            fetchMock.mockRejectedValue(failure);
+
+            await expect(getMfaAssurance()).rejects.toBe(failure);
+
+            expect(reporting.reportNetworkFailure).toHaveBeenCalledWith(failure, {
+                method: "GET",
+                url: "/api/auth/mfa/assurance",
+            });
+        });
     });
 
     it("carries the request id off an auth failure, body first", async () => {

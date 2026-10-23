@@ -97,6 +97,7 @@ export function useOpenWordChat(
       setOpenError(
         userMessage(reason, {
           fallback: "Failed to open this chat.",
+          operation: "word_chat.turn",
         }),
       );
     } finally {

@@ -39,6 +39,8 @@ export {
   type PlaybookImport,
 } from "./playbooks.operations";
 
+export { removePlaybookObjects } from "./playbooks.reporting";
+
 export {
   queuePlaybookReview,
   queuePlaybookImport,

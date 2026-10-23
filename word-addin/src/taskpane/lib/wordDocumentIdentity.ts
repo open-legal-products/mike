@@ -114,6 +114,7 @@ export function useWordDocumentIdentity(): {
           setError(
             userMessage(reason, {
               fallback: "Could not identify this Word document.",
+              operation: "word.document_read",
             })
           );
         }

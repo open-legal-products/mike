@@ -51,7 +51,8 @@ import {
     runDriveWrite,
     type DriveWriteSnapshot,
 } from "./googleDriveWrites";
-import { safeError } from "../safeError";
+import { AppError, findAppError, type ErrorKind } from "../appError";
+import { reportError } from "../observability/sentry";
 import { extractGoogleDriveBinary } from "./googleDriveExtract";
 import {
     googleDriveRequest,
@@ -69,6 +70,47 @@ const GOOGLE_TOKEN_ENDPOINT = "https://oauth2.googleapis.com/token";
 const GOOGLE_USERINFO_ENDPOINT =
     "https://openidconnect.googleapis.com/v1/userinfo";
 const DRIVE_API = "https://www.googleapis.com/drive/v3";
+
+/**
+ * The Drive failure as Sentry should see it: a GoogleDriveUserError already
+ * names its kind; anything else (a query, a crypto or parsing failure) is
+ * wrapped with the kind that fits where it was caught, the original kept as
+ * the cause so its code or status still extracts.
+ */
+function driveFailureError(
+    error: unknown,
+    kind: ErrorKind,
+    message: string,
+): Error {
+    const named = findAppError(error);
+    if (named && error instanceof Error) return error;
+    return new AppError(kind, message, { cause: error });
+}
+
+/**
+ * Report a Drive tool failure. A GoogleDriveUserError is a fixed answer for
+ * the user (not connected, read-only, file unavailable) and is only worth an
+ * event when Google itself failed (its status is 5xx); everything else is a
+ * bug or an outage and is reported as the error it is.
+ */
+function reportDriveToolFailure(
+    error: unknown,
+    toolName: string,
+    extra: Record<string, unknown>,
+): Error {
+    const failure = driveFailureError(
+        error,
+        "google.api_failed",
+        `Google Drive tool call failed (${toolName})`,
+    );
+    if (error instanceof GoogleDriveUserError) {
+        if (error.status === undefined || error.status < 500) return failure;
+        reportError(failure, { level: "warning", extra });
+        return failure;
+    }
+    reportError(failure, { extra });
+    return failure;
+}
 
 /**
  * What Mike asks Google for on every connect: per-file access to files Mike
@@ -298,8 +340,10 @@ export async function completeGoogleDriveOAuth(
     });
     const token = (await response.json()) as Record<string, unknown>;
     if (!response.ok || typeof token.access_token !== "string") {
-        throw new Error(
+        throw new AppError(
+            "google.auth_failed",
             `Google token exchange failed (HTTP ${response.status}).`,
+            { cause: { status: response.status } },
         );
     }
 
@@ -351,7 +395,17 @@ async function googleDriveAccountEmail(
             typeof identity.email === "string"
             ? identity.email
             : null;
-    } catch {
+    } catch (error) {
+        // Display only, so the connection still completes — but a userinfo
+        // endpoint that keeps failing is Google's problem to see, not to hide.
+        reportError(
+            driveFailureError(
+                error,
+                "google.api_failed",
+                "Google account email lookup failed",
+            ),
+            { level: "warning" },
+        );
         return null;
     }
 }
@@ -654,8 +708,10 @@ async function getFreshAccessToken(
                 "Google Drive access was revoked. Reconnect Google Drive.",
             );
         }
-        throw new Error(
+        throw new AppError(
+            "google.auth_failed",
             `Google token refresh failed (HTTP ${response.status}).`,
+            { cause: { status: response.status } },
         );
     }
     // Compare-and-set: refresh must not recreate a disconnected connection or
@@ -1107,10 +1163,9 @@ async function resolveDriveWrite(
 }
 
 function driveFailure(name: string, error: unknown) {
-    console.error("[google-drive] write failed", {
-        name,
-        error: safeError(error),
-    });
+    // Reported before it is logged so the console bridge files nothing twice.
+    const failure = reportDriveToolFailure(error, name, { name });
+    console.error("[google-drive] write failed", { name, error: failure });
     const message =
         error instanceof GoogleDriveUserError
             ? error.message
@@ -1252,9 +1307,17 @@ export async function buildGoogleDriveTools(
                     (!row.read_only && hasDriveWriteAccess(row))),
         );
     } catch (error) {
+        // Returning no tools hides the connector from this turn; the failure
+        // (a token-row query, normally) must not hide with it.
+        const failure = driveFailureError(
+            error,
+            "db.query_failed",
+            "Google Drive token row could not be loaded",
+        );
+        reportError(failure, { extra: { userId: owner.userId } });
         console.error("[google-drive] failed to load token row", {
             userId: owner.userId,
-            error: safeError(error),
+            error: failure,
         });
         return [];
     }
@@ -1352,10 +1415,14 @@ export async function executeGoogleDriveToolCall(
             error instanceof GoogleDriveUserError
                 ? error.message
                 : "Google Drive call failed. Please try again.";
+        const failure = reportDriveToolFailure(error, toolName, {
+            userId: owner.userId,
+            toolName,
+        });
         console.error("[google-drive] tool call failed", {
             userId: owner.userId,
             toolName,
-            error: safeError(error),
+            error: failure,
         });
         return {
             content: JSON.stringify({ ok: false, error: message }),

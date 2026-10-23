@@ -1,3 +1,5 @@
+import { AppError } from "../../../lib/appError";
+import { reportError } from "../../../lib/observability/sentry";
 import type { Db } from "../../../lib/supabase";
 
 type AssistantMessageTable = "chat_messages" | "word_chat_messages";
@@ -51,4 +53,37 @@ export function withoutEmptyAssistantReservations<
   return messages.filter(
     (message) => !(message.role === "assistant" && message.content == null),
   );
+}
+
+/** The id the request middleware minted for this response, for the SSE error frame. */
+export function requestIdOf(res: { locals: Record<string, unknown> }): string | undefined {
+  return typeof res.locals.requestId === "string" ? res.locals.requestId : undefined;
+}
+
+export type AssistantMessageFailureKind =
+  | "chat.message_reserve_failed"
+  | "chat.message_save_failed"
+  | "chat.title_failed";
+
+/**
+ * Report and log a failed write of a turn's rows: the reservation of the
+ * assistant message, its final content, its title. The database's error is a
+ * plain PostgREST object, which the console bridge filed as a message with no
+ * stack and no code; wrapped in an AppError it carries the kind (one issue per
+ * kind) and the SQLSTATE/PGRST code of the cause, and the same object goes to
+ * the log so the bridge recognises it as already sent. Returns the wrapper.
+ */
+export function logAssistantMessageFailure(args: {
+  kind: AssistantMessageFailureKind;
+  label: string;
+  cause: unknown;
+  component: "chat-stream" | "assistant-chat" | "word-chat";
+}): AppError {
+  const failure =
+    args.cause instanceof AppError
+      ? args.cause
+      : new AppError(args.kind, args.label, { cause: args.cause });
+  reportError(failure, { tags: { component: args.component } });
+  console.error(args.label, failure);
+  return failure;
 }

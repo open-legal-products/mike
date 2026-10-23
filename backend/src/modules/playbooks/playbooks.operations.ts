@@ -1,4 +1,5 @@
 import crypto from "node:crypto";
+import { AppError } from "../../lib/appError";
 import { safeError } from "../../lib/safeError";
 const { jsonrepair } = require("jsonrepair") as {
   jsonrepair: (text: string) => string;
@@ -35,7 +36,7 @@ import {
 import type { Provider } from "../../lib/llm/types";
 import { hasApiKeyForModel } from "../../lib/modelSelection";
 import { getUserApiKeys, getEffectiveApiKeys } from "../user/user.service";
-import { deleteFile, uploadFile } from "../../lib/storage";
+import { uploadFile } from "../../lib/storage";
 import { getFileStreamSource } from "../documents/documents.service";
 import { liveDbJobDedupeKeys } from "../../lib/dbq/enqueue";
 import {
@@ -67,9 +68,11 @@ import {
 import { UserFacingError } from "../../lib/userFacingError";
 import {
   importReportStage,
+  removePlaybookObjects,
   reportPlaybookFailure,
   type PlaybookReportStage,
 } from "./playbooks.reporting";
+import { markStage } from "../../lib/observability/sentry";
 
 type Db = ReturnType<typeof createServerSupabase>;
 
@@ -260,7 +263,7 @@ export type PlaybookImportStage =
  * A failure whose message is written for the user. The router forwards these
  * verbatim; every other error becomes a generic 500.
  */
-export class PlaybookRequestError extends Error {
+export class PlaybookRequestError extends AppError {
   readonly status: 400 | 403 | 404 | 409;
 
   constructor(
@@ -268,9 +271,8 @@ export class PlaybookRequestError extends Error {
     status: 400 | 403 | 404 | 409 = 400,
     options?: ErrorOptions,
   ) {
-    super(message, options);
+    super("playbooks.request_invalid", message, options);
     this.status = status;
-    this.name = "PlaybookRequestError";
   }
 }
 
@@ -298,7 +300,7 @@ export function isPlaybookRefusal(error: unknown): boolean {
   );
 }
 
-export class PlaybookImportError extends Error {
+export class PlaybookImportError extends AppError {
   readonly code = "PLAYBOOK_IMPORT_FAILED";
 
   constructor(
@@ -307,8 +309,7 @@ export class PlaybookImportError extends Error {
     readonly stage: PlaybookImportStage,
     options?: ErrorOptions,
   ) {
-    super(message, options);
-    this.name = "PlaybookImportError";
+    super("playbooks.import_failed", message, options);
   }
 }
 
@@ -1413,6 +1414,16 @@ export async function playbookImportDocument(
  * file type, an empty file, the replace target, the workspace, and the model.
  * Compiling is compilePlaybookImport's job, wherever it runs.
  */
+/**
+ * Enter an import stage: the stage the row records, and the breadcrumb a
+ * failure later in the import arrives with, so a throw in `saving_playbook`
+ * is told apart from the same throw reached from `storing_source`.
+ */
+function enterImportStage(stage: PlaybookImportStage): PlaybookImportStage {
+  markStage(importReportStage(stage));
+  return stage;
+}
+
 export async function beginPlaybookImport(
   args: PlaybookImportRequest,
 ): Promise<{ attempt: PlaybookImport; work: PlaybookImportWork }> {
@@ -1420,7 +1431,7 @@ export async function beginPlaybookImport(
   const now = new Date().toISOString();
   const attemptId = crypto.randomUUID();
   const model = args.model.trim();
-  let stage: PlaybookImportStage = "validating_file";
+  let stage: PlaybookImportStage = enterImportStage("validating_file");
   const row = {
     id: attemptId,
     user_id: args.userId,
@@ -1461,7 +1472,7 @@ export async function beginPlaybookImport(
     // is recorded, or detected when the import saves.
     const targetUpdatedAt = replacing?.updatedAt ?? null;
 
-    stage = "checking_model";
+    stage = enterImportStage("checking_model");
     row.stage = stage;
     await updateImportAttempt(db, attemptId, {
       stage,
@@ -1514,7 +1525,7 @@ export async function compilePlaybookImport(
 ): Promise<Playbook> {
   const { attemptId, userId, model } = work;
   const compilationTimeoutMs = playbookCompilationTimeoutMs();
-  let stage: PlaybookImportStage = "validating_file";
+  let stage: PlaybookImportStage = enterImportStage("validating_file");
   let uploadedStorageKey: string | null = null;
   const stopHeartbeat = keepPlaybookWorkAttended(
     db,
@@ -1528,7 +1539,7 @@ export async function compilePlaybookImport(
       throw new PlaybookRequestError(
         "Playbook import requires a .docx or .pdf file.",
       );
-    stage = "checking_model";
+    stage = enterImportStage("checking_model");
     // Checked again rather than trusted from the request: access to the
     // target, or the key for the model, can be lost while a job waits.
     const replacing = work.replacePlaybookId
@@ -1541,7 +1552,7 @@ export async function compilePlaybookImport(
       work.orgId,
     );
 
-    stage = "extracting_text";
+    stage = enterImportStage("extracting_text");
     await updateImportAttempt(db, attemptId, { stage });
     const structure =
       fileType === "pdf"
@@ -1561,7 +1572,7 @@ export async function compilePlaybookImport(
       work.filename.replace(/\.(docx|pdf)$/i, "").trim() || "Imported playbook";
     const name = work.name?.trim() || replacing?.name || fallbackName;
 
-    stage = "compiling";
+    stage = enterImportStage("compiling");
     await updateImportAttempt(db, attemptId, { stage });
     const runCompletion = dependencies.completeText ?? completeText;
     const raw = await withCompilationTimeout(
@@ -1576,13 +1587,13 @@ export async function compilePlaybookImport(
       compilationTimeoutMs,
     );
 
-    stage = "validating_output";
+    stage = enterImportStage("validating_output");
     await updateImportAttempt(db, attemptId, { stage });
     const content = await validatePlaybookCompilationWithRetry({
       raw,
       structure,
       retry: async (validationError) => {
-        stage = "repairing_output";
+        stage = enterImportStage("repairing_output");
         await updateImportAttempt(db, attemptId, { stage });
         const retried = await withCompilationTimeout(
           runCompletion({
@@ -1595,7 +1606,7 @@ export async function compilePlaybookImport(
           }),
           compilationTimeoutMs,
         );
-        stage = "validating_output";
+        stage = enterImportStage("validating_output");
         await updateImportAttempt(db, attemptId, { stage });
         return retried;
       },
@@ -1609,7 +1620,7 @@ export async function compilePlaybookImport(
       ? await playbookSourceStorageKey(db, id)
       : null;
 
-    stage = "storing_source";
+    stage = enterImportStage("storing_source");
     await updateImportAttempt(db, attemptId, { stage });
     await uploadFile(
       storageKey,
@@ -1621,7 +1632,7 @@ export async function compilePlaybookImport(
     );
     uploadedStorageKey = storageKey;
 
-    stage = "saving_playbook";
+    stage = enterImportStage("saving_playbook");
     await updateImportAttempt(db, attemptId, { stage });
     // Review runs retain their own content snapshot when the source changes.
     const { data: replaced, error } = replacing
@@ -1651,7 +1662,10 @@ export async function compilePlaybookImport(
     // this same import already saved it, under the same source key: the
     // playbook exists, so this run only has to record that.
     if (error && (replacing || error.code !== UNIQUE_VIOLATION)) {
-      await deleteFile(storageKey).catch(() => {});
+      await removePlaybookObjects([storageKey], {
+        stage: "import.cleanup",
+        ids: { import_id: attemptId, playbook_id: id },
+      });
       uploadedStorageKey = null;
       throw error;
     }
@@ -1672,14 +1686,12 @@ export async function compilePlaybookImport(
     // The row now points at the new object, so the superseded one is safe to
     // remove. Losing this cleanup must not fail the import.
     if (previousStorageKey && previousStorageKey !== storageKey)
-      await deleteFile(previousStorageKey).catch((cleanupError) => {
-        console.error("[playbooks] replaced source cleanup failed", {
-          storageKey: previousStorageKey,
-          error: safeError(cleanupError),
-        });
+      await removePlaybookObjects([previousStorageKey], {
+        stage: "import.cleanup",
+        ids: { import_id: attemptId, playbook_id: id },
       });
 
-    stage = "completed";
+    stage = enterImportStage("completed");
     // Not swallowed: an attempt left running after its playbook was saved
     // would read as interrupted, so a failed write here fails the run, and a
     // queued import runs again and lands on the unique-violation branch.
@@ -1694,7 +1706,11 @@ export async function compilePlaybookImport(
     if (recorded) await recordPlaybookImportAudit(db, work, { playbook });
     return playbook;
   } catch (error) {
-    if (uploadedStorageKey) await deleteFile(uploadedStorageKey).catch(() => {});
+    if (uploadedStorageKey)
+      await removePlaybookObjects([uploadedStorageKey], {
+        stage: "import.cleanup",
+        ids: { import_id: attemptId, playbook_id: work.replacePlaybookId },
+      });
     throw await recordImportFailure(db, attemptId, stage, error, {
       filename: work.filename,
       playbookId: work.replacePlaybookId,
@@ -2398,6 +2414,7 @@ export async function runPlaybookReview(
   const { runId } = work;
   const stopHeartbeat = keepPlaybookWorkAttended(db, "playbook_runs", runId);
   let stage: PlaybookReportStage = "review.model";
+  markStage(stage);
   try {
     // Checked again rather than trusted from the request: access to the
     // playbook can be lost while a job waits, as compilePlaybookImport
@@ -2450,6 +2467,7 @@ export async function runPlaybookReview(
         ? normalized.filter((finding) => ISSUE_STATUSES.has(finding.status))
         : normalized;
     stage = "review.apply_edits";
+    markStage(stage);
     const { findings, version } =
       work.documentId && work.expectedVersion
         ? await applyReviewEdits({
@@ -2464,6 +2482,7 @@ export async function runPlaybookReview(
     const versionId = version?.id ?? null;
     const completedAt = new Date().toISOString();
     stage = "review.save";
+    markStage(stage);
     const updated = await db
       .from("playbook_runs")
       .update({
@@ -2878,12 +2897,15 @@ export async function deletePlaybook(
     title: playbook.name,
     detail: { playbook_id: id },
   });
-  if (data.source_storage_key)
-    await deleteFile(String(data.source_storage_key)).catch(() => {});
   // Clear bytes promptly; the database also queues durable cleanup for failed
   // deletes and for cascades that do not pass through this request handler.
-  for (const source of sources)
-    await deleteFile(source.storageKey).catch(() => {});
+  await removePlaybookObjects(
+    [
+      data.source_storage_key ? String(data.source_storage_key) : null,
+      ...sources.map((source) => source.storageKey),
+    ],
+    { ids: { playbook_id: id } },
+  );
 }
 
 export async function playbookConfiguration(

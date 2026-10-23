@@ -119,6 +119,7 @@ export default function VerifyMfaPage() {
                         codeMessages: MFA_ERROR_MESSAGES,
                         fallback:
                             "Unable to load authenticator verification. Try again.",
+                        operation: "auth.mfa",
                     }),
                 );
             } finally {
@@ -147,6 +148,7 @@ export default function VerifyMfaPage() {
                     action: "verify that code",
                     codeMessages: MFA_ERROR_MESSAGES,
                     fallback: "That code is invalid or expired.",
+                    operation: "auth.mfa",
                 }),
             );
             return;
@@ -168,6 +170,7 @@ export default function VerifyMfaPage() {
                 describeError(caught, {
                     action: "sign out",
                     fallback: "Unable to sign out. Try again.",
+                    operation: "auth.session",
                 }),
             );
         }

@@ -70,6 +70,7 @@ import {
     UserVisibleError,
     notifyError,
     notifyPartialFailure,
+    uploadBatchFault,
 } from "@/app/lib/userFacingError";
 import { useAssignLatest } from "@/app/hooks/useLatestRef";
 import { restoreOptimisticallyDeletedRows } from "@/app/lib/optimisticRows";
@@ -1918,6 +1919,11 @@ export function DocTable({
                     failedUploadMessage(outcomes),
                     {
                         action: "upload every file",
+                        // Storage failures were reported per part by the API
+                        // client; a file the server never finished is what is
+                        // left to report under the upload flow.
+                        operation: "documents.upload",
+                        cause: uploadBatchFault(outcomes) ?? undefined,
                         // Retry re-uploads only the files that failed, so the
                         // ones already stored are not duplicated.
                         onRetry:

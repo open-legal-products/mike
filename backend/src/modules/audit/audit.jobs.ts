@@ -15,8 +15,10 @@
 //   memory.consolidate — curate scoped Markdown after chat inactivity
 import { chatTurnAuditEvents, insertAuditEvent, type ChatTurnAuditBase } from "../../lib/audit";
 import { type Db, type DbJob } from "../../lib/dbq/types";
+import { setOperation } from "../../lib/observability/sentry";
 
 export async function handleChatTurnAudit(db: Db, job: DbJob): Promise<void> {
+    setOperation("audit.write");
     const base = job.payload.base as ChatTurnAuditBase | undefined;
     if (!base?.userId) return; // malformed payload — nothing to retry into
     const events = (job.payload.events as unknown[] | undefined) ?? [];

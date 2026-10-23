@@ -18,6 +18,7 @@ import {
 } from "./googleAvailability";
 import { ConnectorSetupError } from "../mcp/errors";
 import { googleDriveRequest } from "./googleDriveHttp";
+import { AppError, type ErrorKind } from "../appError";
 import {
   connectorSettingsPatch,
   toggleDisabledTool,
@@ -40,7 +41,20 @@ export const GOOGLE_PROVIDERS = {
     write: ["https://www.googleapis.com/auth/calendar.events"],
   },
 } as const;
-export class GoogleWorkspaceError extends Error {}
+/**
+ * A Gmail/Calendar failure with a fixed, user-facing message. The message is
+ * for the user; the `kind` is what Sentry gets: `google.api_failed` unless the
+ * thrower says otherwise (`google.auth_failed` for a grant that could not be
+ * used or refreshed, `google.user_error` for something only the user can fix).
+ */
+export class GoogleWorkspaceError extends AppError {
+  constructor(
+    message: string,
+    options: { kind?: ErrorKind; cause?: unknown } = {},
+  ) {
+    super(options.kind ?? "google.api_failed", message, { cause: options.cause });
+  }
+}
 /** The operator has switched this service off for the whole deployment. */
 export class GoogleWorkspaceUnavailableError extends GoogleWorkspaceError {}
 /** See GOOGLE_WORKSPACE_DISABLED_PROVIDERS in ./googleAvailability. */
@@ -137,9 +151,10 @@ export async function workspaceRequest(
 ): Promise<Response> {
   try {
     return await googleDriveRequest(url, init, 8 * 1024 * 1024);
-  } catch {
+  } catch (error) {
     throw new GoogleWorkspaceError(
       "Google did not return a complete response within the request limits. Try a smaller request.",
+      { cause: error },
     );
   }
 }
@@ -224,6 +239,7 @@ export async function updateWorkspaceSettings(
   if (!data)
     throw new GoogleWorkspaceError(
       `Connect ${GOOGLE_PROVIDERS[provider].name} first.`,
+      { kind: "google.user_error" },
     );
 }
 export async function setWorkspaceToolEnabled(
@@ -237,6 +253,7 @@ export async function setWorkspaceToolEnabled(
   if (!row)
     throw new GoogleWorkspaceError(
       `Connect ${GOOGLE_PROVIDERS[provider].name} first.`,
+      { kind: "google.user_error" },
     );
   const next = toggleDisabledTool(
     Array.isArray(row.disabled_tools) ? (row.disabled_tools as string[]) : [],
@@ -316,6 +333,7 @@ function tokenPatch(
   if (!GOOGLE_PROVIDERS[provider].read.every((s) => scopes.includes(s)))
     throw new GoogleWorkspaceError(
       "Required Google permissions were not granted. Reconnect and grant the requested access.",
+      { kind: "google.scope_missing" },
     );
   return {
     ...encryptFields("access_token", token.access_token),
@@ -346,6 +364,7 @@ export async function completeWorkspaceOAuth(
   if (!data)
     throw new GoogleWorkspaceError(
       "Authorization expired or was cancelled. Connect again.",
+      { kind: "google.user_error" },
     );
   const config = JSON.parse(decryptFields(data, "state_config")) as {
     verifier: string;
@@ -376,6 +395,7 @@ export async function completeWorkspaceOAuth(
   )
     throw new GoogleWorkspaceError(
       "Google authorization did not provide offline access. Reconnect.",
+      { kind: "google.auth_failed", cause: { status: response.status } },
     );
   const patch = tokenPatch(token, provider);
   const identityResponse = await workspaceRequest(
@@ -391,6 +411,7 @@ export async function completeWorkspaceOAuth(
   )
     throw new GoogleWorkspaceError(
       "Could not verify the selected Google account. Connect again.",
+      { kind: "google.auth_failed", cause: { status: identityResponse.status } },
     );
   const { data: saved, error: saveError } = await db.rpc(
     "complete_google_workspace_oauth",
@@ -408,6 +429,7 @@ export async function completeWorkspaceOAuth(
   if (!saved)
     throw new GoogleWorkspaceError(
       "Authorization expired or was cancelled. Connect again.",
+      { kind: "google.user_error" },
     );
 }
 export async function cancelWorkspaceOAuth(
@@ -448,12 +470,15 @@ export async function workspaceAccessToken(
   if (!row)
     throw new GoogleWorkspaceError(
       "Google connection changed or is disconnected. Reconnect it in Settings → Connectors.",
+      { kind: "google.auth_failed" },
     );
   if (Date.parse(String(row.expires_at)) - Date.now() > 60_000)
     return decryptFields(row, "access_token");
   const env = googleWorkspaceEnv();
   if (!env.clientId || !env.clientSecret)
-    throw new GoogleWorkspaceError("Google OAuth is not configured.");
+    throw new GoogleWorkspaceError("Google OAuth is not configured.", {
+      kind: "google.auth_failed",
+    });
   const response = await workspaceRequest(
     "https://oauth2.googleapis.com/token",
     {
@@ -480,6 +505,7 @@ export async function workspaceAccessToken(
     }
     throw new GoogleWorkspaceError(
       "Google access could not be refreshed. Reconnect this integration.",
+      { kind: "google.auth_failed", cause: { status: response.status } },
     );
   }
   const { data: saved, error } = await db
@@ -503,6 +529,7 @@ export async function workspaceAccessToken(
       return decryptFields(current, "access_token");
     throw new GoogleWorkspaceError(
       "Google connection changed. Please try again.",
+      { kind: "google.auth_failed" },
     );
   }
   return token.access_token as string;

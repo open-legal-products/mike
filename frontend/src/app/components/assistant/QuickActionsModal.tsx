@@ -108,7 +108,11 @@ function QuickActionsModalForWorkspace({
       await onSave(selected);
       resetToList();
     } catch (reason) {
-      setError(userFacingApiError(reason, "Could not save quick action."));
+      setError(
+        userFacingApiError(reason, "Could not save quick action.", {
+          operation: "quick_actions.run",
+        }),
+      );
     } finally {
       setSaving(false);
     }
@@ -127,7 +131,11 @@ function QuickActionsModalForWorkspace({
       });
       resetToList();
     } catch (reason) {
-      setError(userFacingApiError(reason, "Could not create quick action."));
+      setError(
+        userFacingApiError(reason, "Could not create quick action.", {
+          operation: "quick_actions.run",
+        }),
+      );
     } finally {
       setSaving(false);
     }

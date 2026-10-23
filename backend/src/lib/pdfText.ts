@@ -9,7 +9,9 @@ export const STANDARD_FONT_DATA_URL = (() => {
   }
 })();
 
+import { AppError } from "./appError";
 import { docxToPdf } from "./convert";
+import { reportError } from "./observability/sentry";
 import { orderTextItemLines } from "./pdfTextOrder";
 
 type PdfTextItem = {
@@ -235,13 +237,39 @@ type PdfPageText = {
   empty: boolean;
 };
 
+type PdfReadResult =
+  | { pages: PdfPageText[] }
+  /** pdf.js rejected the bytes; `cause` is its error, for the one report. */
+  | { pages: null; cause: unknown };
+
 /**
- * Read every page of a PDF, or null when pdfjs cannot open it. Whether a page
- * is empty is decided here, from the extracted items, rather than by parsing
- * the joined text afterwards: a PDF line that happens to read "[Page 2]" is
- * content, not a page boundary.
+ * The warning for a PDF pdf.js could not open, filed by the callers that
+ * swallow the failure (an empty string or a null count is their contract).
+ * Without it a corrupt or encrypted PDF was indistinguishable from a blank
+ * one: readPdfPages returned null and nothing anywhere recorded why. The
+ * strict index path throws instead, so its job runner reports it.
  */
-async function readPdfPages(buf: ArrayBuffer): Promise<PdfPageText[] | null> {
+function reportUnreadablePdf(cause: unknown): void {
+  const failure = new AppError(
+    "extraction.pdf_parse_failed",
+    "pdf.js could not read the document",
+    { cause },
+  );
+  reportError(failure, {
+    level: "warning",
+    tags: { file_type: "pdf" },
+  });
+  // console.warn never reaches Sentry: the report above is the one event.
+  console.warn("[pdf-text] pdf.js could not read the document", failure);
+}
+
+/**
+ * Read every page of a PDF, or the failure when pdfjs cannot open it. Whether
+ * a page is empty is decided here, from the extracted items, rather than by
+ * parsing the joined text afterwards: a PDF line that happens to read
+ * "[Page 2]" is content, not a page boundary.
+ */
+async function readPdfPages(buf: ArrayBuffer): Promise<PdfReadResult> {
   let loadingTask: PdfLoadingTask | undefined;
   try {
     const pdfjsLib = await import("pdfjs-dist/legacy/build/pdf.mjs" as string);
@@ -286,9 +314,9 @@ async function readPdfPages(buf: ArrayBuffer): Promise<PdfPageText[] | null> {
         empty: !layout.trim() && unpositionedFields.length === 0,
       });
     }
-    return pages;
-  } catch {
-    return null;
+    return { pages };
+  } catch (cause) {
+    return { pages: null, cause };
   } finally {
     // Releases the pdfjs worker-side document; resolving the promise does not.
     await loadingTask?.destroy?.().catch(() => {});
@@ -297,8 +325,13 @@ async function readPdfPages(buf: ArrayBuffer): Promise<PdfPageText[] | null> {
 
 /** Strict extraction for persisted search: unreadable is not a successful blank. */
 export async function extractPdfTextForIndex(buf: ArrayBuffer): Promise<{ text: string; textlessPageCount: number }> {
-  const pages = await readPdfPages(buf);
-  if (!pages) throw new Error("document_text_pdf_unreadable");
+  const read = await readPdfPages(buf);
+  if (!read.pages) {
+    throw new AppError("extraction.pdf_parse_failed", "document_text_pdf_unreadable", {
+      cause: read.cause,
+    });
+  }
+  const { pages } = read;
   const textlessPageCount = pages.filter((page) => page.empty).length;
   return {
     text: textlessPageCount === pages.length ? "" : pages.map((page) => page.text).join("\n\n"),
@@ -307,8 +340,12 @@ export async function extractPdfTextForIndex(buf: ArrayBuffer): Promise<{ text: 
 }
 
 export async function extractPdfText(buf: ArrayBuffer): Promise<string> {
-  const pages = await readPdfPages(buf);
-  return pages ? pages.map((page) => page.text).join("\n\n") : "";
+  const read = await readPdfPages(buf);
+  if (!read.pages) {
+    reportUnreadablePdf(read.cause);
+    return "";
+  }
+  return read.pages.map((page) => page.text).join("\n\n");
 }
 
 /**
@@ -318,8 +355,12 @@ export async function extractPdfText(buf: ArrayBuffer): Promise<string> {
 export async function countPagesWithoutText(
   buf: ArrayBuffer,
 ): Promise<number | null> {
-  const pages = await readPdfPages(buf);
-  return pages ? pages.filter((page) => page.empty).length : null;
+  const read = await readPdfPages(buf);
+  if (!read.pages) {
+    reportUnreadablePdf(read.cause);
+    return null;
+  }
+  return read.pages.filter((page) => page.empty).length;
 }
 
 function formatPageRanges(pages: number[]): string {
@@ -357,8 +398,12 @@ export function textLayerNotice(
  * with the notice in front.
  */
 export async function extractPdfTextForModel(buf: ArrayBuffer): Promise<string> {
-  const pages = await readPdfPages(buf);
-  if (!pages) return "";
+  const read = await readPdfPages(buf);
+  if (!read.pages) {
+    reportUnreadablePdf(read.cause);
+    return "";
+  }
+  const { pages } = read;
   const text = pages.map((page) => page.text).join("\n\n");
   const emptyPages = pages.flatMap((page, i) => (page.empty ? [i + 1] : []));
   const notice = textLayerNotice(emptyPages, pages.length);

@@ -67,7 +67,7 @@ describe("logChatTitleFailure", () => {
         expect(reportError).toHaveBeenCalledTimes(1);
         expect(reportError).toHaveBeenCalledWith(retryError, {
             level: "warning",
-            tags: { component: "chat-title" },
+            tags: { component: "chat-title", operation: "chat.title" },
         });
         expect(console.error).not.toHaveBeenCalled();
         expect(console.warn).toHaveBeenCalledTimes(1);

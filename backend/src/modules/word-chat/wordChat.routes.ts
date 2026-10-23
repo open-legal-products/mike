@@ -34,13 +34,15 @@ import {
   createReservedAssistantMessageUpdater,
   createWordClientToolsAdapter,
   isClientToolCallPending,
-
+  logAssistantMessageFailure,
+  requestIdOf,
   reserveAssistantMessage,
   runLLMStream,
   stripTransientAssistantEvents,
   submitClientToolResult,
 } from "../chat/chat.service";
 import { enqueueChatTurnAudit } from "../../lib/audit";
+import { setOperation } from "../../lib/observability/sentry";
 import {
   persistWordDocumentEdits,
   WORD_EDIT_FORMATS,
@@ -280,7 +282,7 @@ wordChatRouter.get("/", requireAuth, asyncRoute(async (req, res) => {
     offset,
   });
   if (!result.ok) {
-    return void res.status(500).json({ detail: "Failed to load Word chats" });
+    return void sendInternalError(res, result.error);
   }
   res.json(result.chats);
 }));
@@ -305,7 +307,7 @@ wordChatRouter.get("/:chatId", requireAuth, asyncRoute(async (req, res) => {
     if (result.kind === "not_found") {
       return void res.status(404).json({ detail: "Chat not found" });
     }
-    return void res.status(500).json({ detail: "Failed to load Word chat" });
+    return void sendInternalError(res, result.error);
   }
   res.json({
     chat: result.chat,
@@ -404,7 +406,7 @@ wordChatRouter.patch("/:chatId/model", requireAuth, asyncRoute(async (req, res) 
         detail: result.detail,
       });
     }
-    return void res.status(500).json({ detail: "Failed to save chat model" });
+    return void sendInternalError(res, result.error);
   }
   res.json({ id: req.params.chatId, model: result.model });
 }));
@@ -439,7 +441,7 @@ wordChatRouter.patch("/:chatId/reasoning", requireAuth, asyncRoute(async (req, r
     if (result.kind === "not_found") {
       return void res.status(404).json({ detail: "Chat not found" });
     }
-    return void res.status(500).json({ detail: "Failed to save reasoning" });
+    return void sendInternalError(res, result.error);
   }
   res.json({
     id: req.params.chatId,
@@ -483,7 +485,7 @@ wordChatRouter.put(
       if (result.kind === "not_found") {
         return void res.status(404).json({ detail: "Message not found" });
       }
-      return void res.status(500).json({ detail: "Failed to save Word edit" });
+      return void sendInternalError(res, result.error);
     }
     res.json(result.edit);
   }),
@@ -582,9 +584,7 @@ wordChatRouter.patch(
       if (result.kind === "edit_not_found") {
         return void res.status(404).json({ detail: "Edit not found" });
       }
-      return void res
-        .status(500)
-        .json({ detail: "Failed to update Word edit" });
+      return void sendInternalError(res, result.error);
     }
     res.json(result.edit);
   }),
@@ -621,6 +621,8 @@ wordChatRouter.post("/tool-result", requireAuth, (req, res) => {
 
 // POST /word-chat — Word-specific streaming endpoint.
 wordChatRouter.post("/", requireAuth, asyncRoute(async (req, res) => {
+  setOperation("word_chat.turn");
+  const requestId = requestIdOf(res);
   const userId = res.locals.userId as string;
   const userEmail = res.locals.userEmail as string | undefined;
   const body =
@@ -753,7 +755,12 @@ wordChatRouter.post("/", requireAuth, asyncRoute(async (req, res) => {
         authorUserId: userId,
     });
     if (error) {
-      console.error("[word-chat] failed to reserve assistant message", error);
+      logAssistantMessageFailure({
+        kind: "chat.message_reserve_failed",
+        label: "[word-chat] failed to reserve assistant message",
+        cause: error,
+        component: "word-chat",
+      });
       run.finish();
       return void res
         .status(500)
@@ -868,12 +875,18 @@ wordChatRouter.post("/", requireAuth, asyncRoute(async (req, res) => {
     );
     await updateChatActivity();
     if (saveError) {
-      console.error("[word-chat] failed to save assistant response", saveError);
+      logAssistantMessageFailure({
+        kind: "chat.message_save_failed",
+        label: "[word-chat] failed to save assistant response",
+        cause: saveError,
+        component: "word-chat",
+      });
       write(
         `data: ${JSON.stringify({
           type: "error",
           message:
             "The response was generated but could not be saved. Keep this document open and review its tracked changes in Word.",
+          ...(requestId ? { request_id: requestId } : {}),
         })}\n\n`,
       );
       write("data: [DONE]\n\n");
@@ -958,7 +971,12 @@ wordChatRouter.post("/", requireAuth, asyncRoute(async (req, res) => {
           partial.citations.length ? partial.citations : null,
         );
         if (saveError) {
-          console.error("[word-chat] failed to save aborted stream", saveError);
+          logAssistantMessageFailure({
+            kind: "chat.message_save_failed",
+            label: "[word-chat] failed to save aborted stream",
+            cause: saveError,
+            component: "word-chat",
+          });
         }
       }
       await updateChatActivity();
@@ -969,7 +987,7 @@ wordChatRouter.post("/", requireAuth, asyncRoute(async (req, res) => {
       return;
     }
     console.error("[word-chat] stream error", error);
-    const errorPayload = assistantStreamErrorPayload(error);
+    const errorPayload = assistantStreamErrorPayload(error, requestId);
     const message = errorPayload.message;
     const errorEvents =
       error instanceof AssistantStreamError
@@ -985,10 +1003,20 @@ wordChatRouter.post("/", requireAuth, asyncRoute(async (req, res) => {
         citations.length ? citations : null,
       );
       if (saveError) {
-        console.error("[word-chat] failed to save stream error", saveError);
+        logAssistantMessageFailure({
+          kind: "chat.message_save_failed",
+          label: "[word-chat] failed to save stream error",
+          cause: saveError,
+          component: "word-chat",
+        });
       }
     } catch (saveError) {
-      console.error("[word-chat] failed to persist stream error", saveError);
+      logAssistantMessageFailure({
+        kind: "chat.message_save_failed",
+        label: "[word-chat] failed to persist stream error",
+        cause: saveError,
+        component: "word-chat",
+      });
     }
     try {
       write(

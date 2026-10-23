@@ -12,7 +12,9 @@
 // its ordering is delicate. Only the NON-streaming logic and the pre-stream
 // DB preparation live here. `prepareChatStream` returns the prepared data the
 // route needs to run the stream; it does not stream.
+import { AppError } from "../../lib/appError";
 import { getActiveAssistantTurn } from "../../lib/assistantTurnRuns";
+import { reportError } from "../../lib/observability/sentry";
 import { type Db } from "../../lib/supabase";
 import {
     webSearchPlanFor,
@@ -357,7 +359,16 @@ export async function prepareChatStream(
             .select("id, title")
             .single();
         if (error || !newChat) {
-            console.error("[chat/stream] failed to create chat", error);
+            // The route answers 500 without throwing, so this is the one
+            // report; the PostgREST error is the cause (its code reaches
+            // Sentry), the same wrapper is logged so the bridge skips it.
+            const failure = new AppError(
+                "db.query_failed",
+                "Failed to create chat",
+                { cause: error ?? { result: newChat } },
+            );
+            reportError(failure, { tags: { component: "chat-stream" } });
+            console.error("[chat/stream] failed to create chat", failure);
             return { ok: false, status: 500, detail: "Failed to create chat" };
         }
         chatId = newChat.id as string;

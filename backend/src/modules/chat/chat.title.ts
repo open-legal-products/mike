@@ -70,9 +70,11 @@ export function logChatTitleFailure(
         console.warn(label, error);
         return;
     }
+    // The title runs inside the turn's request, so the request's operation
+    // is chat.turn; the tag here names the title's own flow for this event.
     reportError(error, {
         level: "warning",
-        tags: { component: "chat-title" },
+        tags: { component: "chat-title", operation: "chat.title" },
     });
     console.warn(label, error);
 }

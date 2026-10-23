@@ -100,6 +100,7 @@ export function WorkflowPicker({
           action: "load your workflows",
           dedupeKey: "workflow-list",
           page: "Workflows",
+          operation: "workflows.run",
           onRetry: () => {
             setFetchLoading(true);
             setFetchFailed(false);
@@ -204,6 +205,7 @@ export function WorkflowPicker({
             userMessage(reason, {
               fallback:
                 "Mike couldn't save these instructions. Try again.",
+              operation: "workflows.run",
             })
           );
         });

@@ -157,6 +157,8 @@ describe("one failed chat turn in Sentry", () => {
         expect(sent[0]?.tags).toMatchObject({
             provider_error: "invalid_api_key",
             dependency_status: 400,
+            // What the provider did, read off the AppError that wraps it.
+            error_kind: "chat.provider_rejected",
         });
     });
 
@@ -186,7 +188,10 @@ describe("one failed chat turn in Sentry", () => {
                 event.level,
             ]),
         ).toEqual([["chat-title", "exception", "warning"]]);
-        expect(sent[0]?.tags).toMatchObject({ dependency_status: 400 });
+        expect(sent[0]?.tags).toMatchObject({
+            dependency_status: 400,
+            operation: "chat.title",
+        });
     });
 
     it("still files a genuinely different failure that follows it", async () => {

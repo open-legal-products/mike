@@ -417,6 +417,23 @@ describe("error frames", () => {
     ]);
   });
 
+  it("hands the error frame's code and request id to the hook, and tolerates their absence", async () => {
+    const onErrorFrame = vi.fn();
+    const run = (data: object) =>
+      consumeAssistantTurnStream(sseResponse([frame(1, data), "data: [DONE]\n\n"]), {
+        turn: begin(),
+        sink: createTurnEventSink(begin(), []),
+        cursor: createTurnCursor("chat-a"),
+        hooks: { onErrorFrame },
+      });
+    await run({ type: "error", message: "x", code: "internal_error", request_id: "req-1" });
+    await run({ type: "error", message: "x", request_id: 42 });
+    expect(onErrorFrame.mock.calls.map(([f]) => [f.code, f.requestId])).toEqual([
+      ["internal_error", "req-1"],
+      [null, null],
+    ]);
+  });
+
   it("raises a rejected key as its own signal and stops the citation spinner", async () => {
     const turn = begin();
     const sink = createTurnEventSink(turn, []);
@@ -442,6 +459,8 @@ describe("error frames", () => {
     expect(onErrorFrame).toHaveBeenCalledWith({
       message: expect.any(String),
       safeToDisplay: expect.any(Boolean),
+      code: "invalid_api_key",
+      requestId: null,
     });
     expect(turn.turn.loadingCitations).toBe(false);
     expect(turn.turn.assistant.events).toEqual([

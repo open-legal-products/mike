@@ -1,6 +1,10 @@
 import { useEffect } from "react";
 import { isReported, reportError } from "@/app/lib/errorReporting";
-import { describeError, supportMailtoFor } from "@/app/lib/userFacingError";
+import {
+    describeError,
+    supportMailtoFor,
+    type Operation,
+} from "@/app/lib/userFacingError";
 
 type CrashError = Error & { digest?: string };
 
@@ -15,17 +19,26 @@ type CrashError = Error & { digest?: string };
  */
 export function useCrashBoundary(
     error: CrashError,
-    { component, level }: { component: string; level?: "fatal" },
+    {
+        component,
+        level,
+        operation,
+    }: {
+        component: string;
+        level?: "fatal";
+        /** The flow the crashed route belongs to, when the boundary knows it. */
+        operation?: Operation;
+    },
 ): string {
     useEffect(() => {
         if (!isReported(error)) {
             reportError(error, {
                 ...(level ? { level } : {}),
-                tags: { component, digest: error.digest },
+                tags: { component, operation, digest: error.digest },
             });
         }
         console.error(`[${component}]`, error);
-    }, [component, error, level]);
+    }, [component, error, level, operation]);
 
     return supportMailtoFor(
         describeError(error, { action: "load this page" }),

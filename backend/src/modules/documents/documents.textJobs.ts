@@ -5,6 +5,7 @@ import { withBackgroundExtraction, ExtractionBusyError, ExtractionLimitError } f
 import { NonRetryableJobError } from "../../lib/dbq/runner";
 import { DbJobDeferredError, type Db, type DbJob } from "../../lib/dbq/types";
 import { enqueueDbJob } from "../../lib/dbq/enqueue";
+import { setOperation } from "../../lib/observability/sentry";
 
 /**
  * Precompute a legacy Office version's plain text into the read_document
@@ -22,6 +23,7 @@ export async function handleDocumentPrecomputeText(
   db: Db,
   job: DbJob,
 ): Promise<void> {
+  setOperation("documents.precompute_text");
   const versionId = job.payload.versionId as string | undefined;
   const storagePath = job.payload.storagePath as string | undefined;
   const fileType = job.payload.fileType as string | undefined;
