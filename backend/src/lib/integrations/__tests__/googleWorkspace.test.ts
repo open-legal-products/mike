@@ -167,7 +167,7 @@ describe("Google Workspace opt-in and OAuth", () => {
     vi.stubEnv("GOOGLE_DRIVE_OAUTH_CLIENT_SECRET", "other-secret");
     const started = startWorkspaceOAuth(
       workspaceDb().db,
-      "u",
+      personalConnectorOwner("u"),
       "gmail",
       "https://mike.test/callback",
     );
@@ -445,7 +445,7 @@ describe("Google connector settings", () => {
   });
   it("requires a connection before saving settings", async () => {
     await expect(
-      updateWorkspaceSettings(workspaceDb().db, "u1", "gmail", {
+      updateWorkspaceSettings(workspaceDb().db, personalConnectorOwner("u1"), "gmail", {
         enabled: false,
       }),
     ).rejects.toThrow("Connect Gmail first");
@@ -563,7 +563,7 @@ describe("Google write access", () => {
       if (kind === "read-only-mode") grant.read_only = true;
       if (kind === "tool-off") grant.disabled_tools = ["gmail_send"];
       const result = await executeApprovedGoogleWorkspaceCall(
-        kind === "wrong-user" ? "u2" : "u1",
+        personalConnectorOwner(kind === "wrong-user" ? "u2" : "u1"),
         item,
         s.db,
       );

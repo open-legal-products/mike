@@ -29,6 +29,10 @@ leaving the organization, being removed from it, or its permanent deletion
 deletes those connections and their stored credentials. Connections made
 before workspaces had their own became Personal connections.
 
+Existing deployments must apply
+`backend/migrations/20261022_01_workspace_connectors.sql` before running this
+backend. Fresh installations already include it in `backend/schema.sql`.
+
 Every connector endpoint takes `?workspace=personal` or `?workspace=<org id>`;
 without it a request acts on Personal. A workspace the user does not belong
 to answers 404 with `code: "workspace_not_found"`. Endpoints addressed by an

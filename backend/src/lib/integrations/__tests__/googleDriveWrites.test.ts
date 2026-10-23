@@ -391,7 +391,7 @@ describe("Drive write approvals", () => {
       if (change === "tool") s.tokens[0].disabled_tools = [item.tool_name];
       if (change === "file") current.version = "2";
       const result = await executeApprovedGoogleDriveCall(
-        change === "actor" ? "other-user" : "user-1",
+        personalConnectorOwner(change === "actor" ? "other-user" : "user-1"),
         item,
         s.db,
       );
