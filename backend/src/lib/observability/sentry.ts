@@ -37,6 +37,24 @@ export type ReportContext = {
 const CONSOLE_MECHANISM = "auto.core.capture_console";
 const NESTED_SEARCH_DEPTH = 2;
 
+/**
+ * What Node's warning writer hands to console.error: one string shaped
+ * `(node:<pid>) [<code>] <Name>: <text>` (`node:internal/process/warning`).
+ * It arrives through the console bridge from node:* frames only, so the
+ * privacy boundary left "Failure in application" with four SDK frames and no
+ * tag that said what happened (MIKE-BACKEND-2). The process 'warning'
+ * listener reports the warning object instead; this copy is dropped.
+ */
+const NODE_WARNING_TEXT = /^\(node:\d+\) (?:\[[\w-]+\] )?[\w$]+: /;
+
+function isNodeWarningText(args: unknown[]): boolean {
+  return (
+    args.length === 1 &&
+    typeof args[0] === "string" &&
+    NODE_WARNING_TEXT.test(args[0])
+  );
+}
+
 // BEGIN shared-redaction
 // This block is the privacy control for every runtime. It is authored once
 // and mirrored, indentation aside, between backend/src/lib/observability/
@@ -702,6 +720,8 @@ export function scrubEvent(
     if (args.some((arg) => findNested(arg, isReported))) {
       return null;
     }
+    // Node's own warning printer; reportProcessWarning() filed the object.
+    if (isNodeWarningText(args)) return null;
     // Positional payloads after the label are never titles or grouping keys.
     const label = typeof args[0] === "string" ? args[0].trim() : "Console error";
     const nestedError = args
@@ -862,6 +882,7 @@ export function initSentry(
     beforeSend: scrubEvent,
   });
   initialized = true;
+  installProcessWarningReporter(env);
   if (config.dsnSource === "default") {
     console.log(
       `[sentry] enabled for ${role} → Mike project Sentry (${config.install} install). ` +
@@ -874,6 +895,40 @@ export function initSentry(
     );
   }
   return true;
+}
+
+/**
+ * Node process warnings (DeprecationWarning, ExperimentalWarning,
+ * MaxListenersExceededWarning, …) are printed by Node itself through
+ * console.error, which the console bridge captures as free text from node:*
+ * frames; after the privacy boundary nothing identified them. Reported as the
+ * warning object, the name, the code (DEP0040) and the stack of the module
+ * that triggered it survive, so an install's next warning says what it is.
+ * Not an application failure: level "warning", one issue per name and code.
+ */
+export function reportProcessWarning(warning: unknown): string | null {
+  const shaped = warning as { name?: unknown; code?: unknown } | null;
+  const name = typeof shaped?.name === "string" ? shaped.name : "Warning";
+  const code = typeof shaped?.code === "string" ? shaped.code : undefined;
+  if (name === "DeprecationWarning" && process.noDeprecation) return null;
+  return reportError(warning, {
+    level: "warning",
+    tags: { component: "runtime-warning", warning_name: name, warning_code: code },
+    fingerprint: ["runtime-warning", name, code ?? ""],
+  });
+}
+
+/**
+ * `--no-warnings` is the operator saying "do not tell me about these"; honour
+ * it the way Node's own printer does. Registered once per process: a second
+ * initSentry() returns before reaching here.
+ */
+function installProcessWarningReporter(env: NodeJS.ProcessEnv): void {
+  const silenced =
+    process.execArgv.includes("--no-warnings") ||
+    /(?:^|\s)--no-warnings(?:\s|=|$)/.test(env.NODE_OPTIONS ?? "");
+  if (silenced) return;
+  process.on("warning", reportProcessWarning);
 }
 
 /**
@@ -1014,8 +1069,14 @@ function describe(value: unknown): string {
 }
 
 /** Test seam: forget init and throttle state between unit tests. */
-export function resetSentryForTests(install: InstallKind = "official"): void {
-  initialized = false;
+export function resetSentryForTests(
+  install: InstallKind = "official",
+  options: { initialized?: boolean } = {},
+): void {
+  // A test that calls Sentry.init() itself (real SDK, fake transport) opts in
+  // so reportError() and friends treat that client as ours.
+  initialized = options.initialized ?? false;
+  process.off("warning", reportProcessWarning);
   // Tests exercise the full event shape unless they opt into community mode.
   currentInstall = install;
   throttleBuckets.clear();

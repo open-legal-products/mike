@@ -803,6 +803,61 @@ describe("automatic captures of an already-reported error", () => {
   });
 });
 
+describe("Node process warnings", () => {
+  const dsnEnv = {
+    ...quietEnv,
+    SENTRY_DSN: "https://key@o1.ingest.sentry.io/1",
+  } as NodeJS.ProcessEnv;
+  const warning = Object.assign(new Error("The `punycode` module is deprecated"), {
+    name: "DeprecationWarning",
+    code: "DEP0040",
+  });
+  // What node:internal/process/warning then hands to console.error.
+  const printed =
+    "(node:4242) [DEP0040] DeprecationWarning: The `punycode` module is deprecated. Please use a userland alternative instead.\n(Use `node --trace-deprecation ...` to show where the warning was created)";
+
+  it("reports the warning object with its name and code at warning level", () => {
+    vi.spyOn(console, "log").mockImplementation(() => {});
+    const stderr = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
+    initSentry("job", dsnEnv);
+
+    process.emit("warning", warning);
+    stderr.mockRestore();
+
+    expect(Sentry.captureException).toHaveBeenCalledWith(warning);
+    const scope = scopes[0];
+    expect(scope.setLevel).toHaveBeenCalledWith("warning");
+    expect(scope.setTag).toHaveBeenCalledWith("component", "runtime-warning");
+    expect(scope.setTag).toHaveBeenCalledWith("warning_name", "DeprecationWarning");
+    expect(scope.setTag).toHaveBeenCalledWith("warning_code", "DEP0040");
+    expect(scope.setFingerprint).toHaveBeenCalledWith([
+      "runtime-warning",
+      "DeprecationWarning",
+      "DEP0040",
+    ]);
+  });
+
+  it("drops the console bridge's copy of Node's printed warning, not application labels", () => {
+    const consoleEvent = (text: string) =>
+      scrubEvent({ logger: "console", message: text } as unknown as Sentry.ErrorEvent, {
+        captureContext: { extra: { arguments: [text] } },
+      });
+    expect(consoleEvent(printed)).toBeNull();
+    expect(consoleEvent("(node:1) ExperimentalWarning: SQLite is an experimental feature")).toBeNull();
+    expect(consoleEvent("[dbq] tick failed")).not.toBeNull();
+    expect(consoleEvent("Mike workflow sync failed")).not.toBeNull();
+  });
+
+  it("stays silent when the operator passed --no-warnings", () => {
+    vi.spyOn(console, "log").mockImplementation(() => {});
+    initSentry("job", { ...dsnEnv, NODE_OPTIONS: "--enable-source-maps --no-warnings" });
+    const stderr = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
+    process.emit("warning", warning);
+    stderr.mockRestore();
+    expect(Sentry.captureException).not.toHaveBeenCalled();
+  });
+});
+
 describe("community install minimisation", () => {
   afterEach(() => resetSentryForTests());
 
