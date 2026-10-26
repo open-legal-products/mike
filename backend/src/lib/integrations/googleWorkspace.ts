@@ -7,7 +7,7 @@ import { z } from "zod";
 import type { Db } from "../supabase";
 import type { ConnectorOwner } from "../connectorOwner";
 import type { ConnectorCallPlan, McpToolEvent } from "../mcp/types";
-import { AppError, findAppError, type ErrorKind } from "../appError";
+import { withKind, type ErrorKind } from "../appError";
 import { reportError } from "../observability/sentry";
 import {
   GOOGLE_PROVIDERS,
@@ -42,8 +42,7 @@ function workspaceFailureError(
   kind: ErrorKind,
   message: string,
 ): Error {
-  if (findAppError(error) && error instanceof Error) return error;
-  return new AppError(kind, message, { cause: error });
+  return withKind(error, kind, message);
 }
 
 function disabledTools(grant: Grant | null): string[] {

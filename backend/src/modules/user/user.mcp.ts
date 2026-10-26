@@ -19,7 +19,7 @@ import {
     updateUserMcpConnector,
 } from "../../lib/mcpConnectors";
 import type { ConnectorOwner } from "../../lib/connectorOwner";
-import { AppError, type ErrorKind } from "../../lib/appError";
+import { withKind, type ErrorKind } from "../../lib/appError";
 import { reportError } from "../../lib/observability/sentry";
 import { type Db } from "./user.shared";
 
@@ -31,8 +31,8 @@ import { type Db } from "./user.shared";
  * extracts; its message (which may embed a whole upstream response body)
  * never leaves the process.
  */
-function mcpFailure(kind: ErrorKind, message: string, cause: unknown): AppError {
-    return cause instanceof AppError ? cause : new AppError(kind, message, { cause });
+function mcpFailure(kind: ErrorKind, message: string, cause: unknown): Error {
+    return withKind(cause, kind, message);
 }
 
 /**
@@ -44,9 +44,9 @@ function mcpFailure(kind: ErrorKind, message: string, cause: unknown): AppError 
  */
 function reportMcpFailure(
     label: string,
-    failure: AppError,
+    failure: Error,
     context: Record<string, unknown>,
-): AppError {
+): Error {
     // The ids and the upstream error are for the operator's log line only;
     // the report carries the kind and the cause's code, nothing else.
     reportError(failure, { level: "warning" });

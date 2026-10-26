@@ -51,7 +51,7 @@ import {
     runDriveWrite,
     type DriveWriteSnapshot,
 } from "./googleDriveWrites";
-import { AppError, findAppError, type ErrorKind } from "../appError";
+import { AppError, withKind, type ErrorKind } from "../appError";
 import { reportError } from "../observability/sentry";
 import { extractGoogleDriveBinary } from "./googleDriveExtract";
 import {
@@ -82,9 +82,7 @@ function driveFailureError(
     kind: ErrorKind,
     message: string,
 ): Error {
-    const named = findAppError(error);
-    if (named && error instanceof Error) return error;
-    return new AppError(kind, message, { cause: error });
+    return withKind(error, kind, message);
 }
 
 /**

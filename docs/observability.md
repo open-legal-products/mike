@@ -434,7 +434,8 @@ listed):
   `DbJobDeferredError`, `NonRetryableJobError`) with a kind such as
   `conversion.no_output` or `chat.provider_rate_limited`; the boundary reads
   the deepest kind on the cause chain, so a wrapper's kind never hides the
-  cause's (`withKind` in `appError.ts` wraps without shadowing). Wrap a dependency's error as the cause
+  cause's. `withKind` in `appError.ts` preserves an Error already carrying a
+  named cause. Wrap a dependency's error as the cause
   rather than re-throwing a bare `new Error(...)`: its errno, SQLSTATE,
   PostgREST or AWS code and HTTP status already extract as `failure_code`
   and `dependency_status`.
@@ -490,3 +491,8 @@ not an exact count of every failure experienced by users.
   in event titles or grouping keys. Attach safe diagnostic ids explicitly.
   The final transport discards raw error prose rather than guessing which
   parts are private. Source logs should still avoid privileged information.
+
+Unknown database-queue job kinds use `operation=jobs.dispatch` inside the
+same per-job isolation scope as normal handlers. Their
+`error_kind=dbq.unknown_job_kind` identifies the dispatch failure; destructive
+cleanup kinds retain their retry-until-success policy during rolling upgrades.

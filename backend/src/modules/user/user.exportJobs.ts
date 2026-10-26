@@ -18,7 +18,7 @@ import { buildUserAccountExport, buildUserChatsExport, buildUserTabularReviewsEx
 import { AUDIT_CSV_FILENAME, buildAuditCsv, type AuditQuery } from "../../lib/auditExport";
 import { ensureDocAccess } from "../../lib/access";
 import { downloadFilenameForVersion, loadActiveVersion } from "../../lib/documentVersions";
-import { downloadFileIfAvailable, uploadFile } from "../../lib/storage";
+import { downloadFile, uploadFile } from "../../lib/storage";
 import { type Db, type DbJob } from "../../lib/dbq/types";
 import { buildMemoryArchive } from "../../lib/memory/archive";
 import { NonRetryableJobError } from "../../lib/dbq/runner";
@@ -126,7 +126,7 @@ async function buildDocumentsZipExport(
         if (!access.ok) continue;
         const active = await loadActiveVersion(doc.id, db);
         if (!active) continue;
-        const raw = await downloadFileIfAvailable(active.storage_path);
+        const raw = await downloadFile(active.storage_path);
         if (!raw) continue;
         // Sequential, unlike the sync route's Promise.all: this path exists
         // for selections large enough that fetching every file at once is

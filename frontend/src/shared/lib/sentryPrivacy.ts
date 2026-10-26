@@ -31,7 +31,7 @@ export const OPERATIONS = [
   'workflows.run', 'workflows.sync', 'quick_actions.run', 'audit.write',
   'google.drive', 'google.gmail', 'google.calendar',
   'auth.signin', 'auth.signup', 'auth.session', 'auth.mfa', 'auth.handoff',
-  'storage.cleanup', 'memory.consolidate', 'memory.read', 'export.build', 'account.delete',
+  'jobs.dispatch', 'storage.cleanup', 'memory.consolidate', 'memory.read', 'export.build', 'account.delete',
   'mcp.connect', 'mcp.refresh', 'settings.keys', 'settings.connectors',
   'word.document_read', 'word.edit_apply', 'word.edit_resolve', 'word.session',
 ] as const;

@@ -26,7 +26,7 @@ import {
     type DbJob,
     type DbJobHandlers,
 } from "./types";
-import { reportError } from "../observability/sentry";
+import { reportError, setOperation } from "../observability/sentry";
 import {
     createPollFailureGate,
     type PollFailureGate,
@@ -129,6 +129,16 @@ export async function processClaimedJob(
     job: DbJob,
     failureHooks: Readonly<Record<string, DbJobFailureHook>> = {},
 ): Promise<void> {
+    // Dispatch failures need the same per-job scope as handler failures.
+    await runIsolated(() => dispatchClaimedJob(db, handlers, job, failureHooks));
+}
+
+async function dispatchClaimedJob(
+    db: Db,
+    handlers: DbJobHandlers,
+    job: DbJob,
+    failureHooks: Readonly<Record<string, DbJobFailureHook>> = {},
+): Promise<void> {
     /**
      * FENCING TOKEN. Every write below is addressed to "the job as THIS claim
      * left it", not merely to the row id.
@@ -156,6 +166,7 @@ export async function processClaimedJob(
 
     const retryUntilSuccess = RETRY_UNTIL_SUCCESS_KINDS.has(job.kind);
     const handler = handlers[job.kind];
+    if (!handler) setOperation("jobs.dispatch");
     if (!handler && !retryUntilSuccess) {
         await fence(
             db.from("db_jobs").update({
@@ -179,10 +190,7 @@ export async function processClaimedJob(
         return;
     }
 
-    // One isolation scope per job: the operation a handler names with
-    // setOperation and the stages it marks stay with this job's events, not
-    // with whichever concurrent job on this runner fails next.
-    await runIsolated(() => runClaimedJob(db, handler, job, fence, retryUntilSuccess, failureHooks));
+    await runClaimedJob(db, handler, job, fence, retryUntilSuccess, failureHooks);
 }
 
 async function runClaimedJob(

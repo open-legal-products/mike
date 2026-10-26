@@ -14,7 +14,7 @@ import {
     listOrgsBlockingAccountDeletion,
     type AccountDeletionOrgBlocker,
 } from "./user.dataCleanup";
-import { AppError, type ErrorKind } from "../../lib/appError";
+import { withKind, type ErrorKind } from "../../lib/appError";
 import { reportError } from "../../lib/observability/sentry";
 import { type Db } from "./user.shared";
 
@@ -24,8 +24,8 @@ import { type Db } from "./user.shared";
  * object) stays the cause so its code still extracts. Nothing is logged
  * here — the route logs the same object once, with the request id.
  */
-function deletionFailure(kind: ErrorKind, message: string, cause: unknown): AppError {
-    return cause instanceof AppError ? cause : new AppError(kind, message, { cause });
+function deletionFailure(kind: ErrorKind, message: string, cause: unknown): Error {
+    return withKind(cause, kind, message);
 }
 
 /** Explain which organizations need an owner before account deletion. */

@@ -322,6 +322,36 @@ describe("Google Workspace opt-in and OAuth", () => {
   });
 });
 
+describe.each(["gmail", "google-calendar"] as const)("%s OAuth error classification", (provider) => {
+  it.each([401, 503])("classifies token-exchange HTTP %i without losing the status", async (status) => {
+    const store = workspaceDb();
+    const start = await startWorkspaceOAuth(store.db, personalConnectorOwner("u1"), provider, "https://mike.test/callback");
+    fetchMock.mockResolvedValueOnce(json({ error: "provider failure" }, status));
+    await expect(completeWorkspaceOAuth(store.db, "u1", provider, new URL(start.authorizationUrl).searchParams.get("state")!, "code"))
+      .rejects.toMatchObject({ kind: status >= 500 ? "google.api_failed" : "google.auth_failed", cause: { status } });
+    expect(store.tables.user_google_workspace_tokens).toHaveLength(0);
+  });
+
+  it.each([401, 503])("classifies userinfo HTTP %i without losing the status", async (status) => {
+    const store = workspaceDb();
+    const start = await startWorkspaceOAuth(store.db, personalConnectorOwner("u1"), provider, "https://mike.test/callback");
+    fetchMock.mockResolvedValueOnce(json({ access_token: "access", refresh_token: "refresh", expires_in: 3600, scope: grantedScope(provider, false) }))
+      .mockResolvedValueOnce(json({ error: "provider failure" }, status));
+    await expect(completeWorkspaceOAuth(store.db, "u1", provider, new URL(start.authorizationUrl).searchParams.get("state")!, "code"))
+      .rejects.toMatchObject({ kind: status >= 500 ? "google.api_failed" : "google.auth_failed", cause: { status } });
+    expect(store.tables.user_google_workspace_tokens).toHaveLength(0);
+  });
+
+  it.each([401, 503])("classifies refresh HTTP %i and keeps the existing grant", async (status) => {
+    const store = await connected(false, provider);
+    store.tables.user_google_workspace_tokens[0].expires_at = "2000-01-01";
+    fetchMock.mockResolvedValueOnce(json({ error: "provider failure" }, status));
+    await expect(workspaceAccessToken(store.db, personalConnectorOwner("u1"), provider))
+      .rejects.toMatchObject({ kind: status >= 500 ? "google.api_failed" : "google.auth_failed", cause: { status } });
+    expect(store.tables.user_google_workspace_tokens).toHaveLength(1);
+  });
+});
+
 describe("Google connector settings", () => {
   it.each(["gmail", "google-calendar"] as const)("read-only overrides %s writes and restores individual choices", async (provider) => {
     const s = await connected(true, provider);

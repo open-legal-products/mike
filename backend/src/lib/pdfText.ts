@@ -265,6 +265,7 @@ function reportUnreadablePdf(cause: unknown): void {
  * "[Page 2]" is content, not a page boundary.
  */
 async function readPdfPages(buf: ArrayBuffer): Promise<PdfReadResult> {
+  let opened = false;
   let loadingTask: PdfLoadingTask | undefined;
   // A pdf.js that cannot be loaded is a broken install, not an unreadable
   // document: it carries its own kind so the two never share an issue.
@@ -290,6 +291,7 @@ async function readPdfPages(buf: ArrayBuffer): Promise<PdfReadResult> {
       standardFontDataUrl: STANDARD_FONT_DATA_URL,
     });
     const pdf = await loadingTask.promise;
+    opened = true;
     const pages: PdfPageText[] = [];
     for (let i = 1; i <= pdf.numPages; i++) {
       const page = await pdf.getPage(i);
@@ -321,7 +323,14 @@ async function readPdfPages(buf: ArrayBuffer): Promise<PdfReadResult> {
     }
     return { pages };
   } catch (cause) {
-    return { pages: null, cause };
+    // A document that opened successfully but failed during page/text
+    // processing is an extraction failure, not an invalid-input verdict.
+    return {
+      pages: null,
+      cause: opened
+        ? new AppError("extraction.failed", "PDF text processing failed", { cause })
+        : cause,
+    };
   } finally {
     // Releases the pdfjs worker-side document; resolving the promise does not.
     await loadingTask?.destroy?.().catch(() => {});

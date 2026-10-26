@@ -31,16 +31,19 @@ export class AppError extends Error {
 }
 
 /**
- * Give `cause` a kind when it does not have one. An AppError passes through
- * unchanged: the thrower's own kind is more specific than a caller's, and
- * the privacy boundary prefers the deepest kind on the chain anyway.
+ * Give `cause` a kind when its Error chain does not already carry one.
+ * Preserve the original Error, including a plain wrapper around an AppError:
+ * its stack and identity remain useful, and the boundary reads the named
+ * cause's kind. Non-Errors and unnamed Errors are wrapped once.
  */
 export function withKind(
   cause: unknown,
   kind: ErrorKind,
   message: string,
-): AppError {
-  return cause instanceof AppError ? cause : new AppError(kind, message, { cause });
+): Error {
+  return cause instanceof Error && findAppError(cause)
+    ? cause
+    : new AppError(kind, message, { cause });
 }
 
 /** True when `error`, or any error on its `cause` chain, is an AppError. */
