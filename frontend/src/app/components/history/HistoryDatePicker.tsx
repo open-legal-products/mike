@@ -30,8 +30,8 @@ import {
   DropdownItem,
   DropdownSurface,
   DropdownTrigger,
-} from "@/shared/ui/dropdown";
-import { TextButtonUI } from "@/shared/ui/TextButtonUI";
+  TextButtonUI,
+} from "@mike/ui";
 import { cn } from "@/app/lib/utils";
 
 export function localDateValue(date: Date): string {

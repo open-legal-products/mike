@@ -20,7 +20,7 @@ import { Modal } from "../modals/Modal";
 import { ModalSegmentedToggle } from "../modals/ModalSegmentedToggle";
 import { ModalSelect } from "../modals/ModalSelect";
 import { FieldLabel, FormTextInput } from "../ui/form-field";
-import { WorkflowSlashCommandUI } from "@/shared/ui/WorkflowSlashCommandUI";
+import { WorkflowSlashCommandUI } from "@mike/ui";
 import {
     ChatSkeuoIcon,
     TabularReviewSkeuoIcon,

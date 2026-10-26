@@ -24,20 +24,30 @@
       "@sentry/react": ["./node_modules/@sentry/react"],
       "react-markdown": ["./node_modules/react-markdown"],
       "remark-gfm": ["./node_modules/remark-gfm"],
+      "@/*": ["./src/*"],
+      // Shared packages (packages/*), reached by name. frontend/Dockerfile
+      // copies each target into the image at the path the alias resolves to;
+      // src/__tests__/architecture.test.ts checks the two agree.
+      "@mike/contracts": ["../packages/contracts/index.d.ts"],
+      "@mike/ui": ["../packages/ui/src/index.ts"],
+      "@mike/client": ["../packages/client/src/index.ts"],
+      // The packages have no node_modules of their own: their dependencies
+      // are this application's. Node-style lookup from packages/ walks up to
+      // the repository root and never reaches frontend/node_modules, so name
+      // each dependency a package imports here. Keep the list in step with
+      // packages/*/package.json peerDependencies (and the test tooling the
+      // packages' colocated tests use).
+      "react": ["./node_modules/@types/react/index.d.ts"],
+      "react/jsx-runtime": ["./node_modules/@types/react/jsx-runtime.d.ts"],
+      "react-dom": ["./node_modules/@types/react-dom/index.d.ts"],
+      "lucide-react": ["./node_modules/lucide-react"],
       "clsx": ["./node_modules/clsx"],
       "tailwind-merge": ["./node_modules/tailwind-merge"],
-      "@mike/contracts": ["../packages/contracts/index.d.ts"],
-      "@/*": ["./src/*"],
-      "@mike/upload-session-client": ["./src/shared/api/uploadSessionClient.ts"],
-      "@mike/secure-uuid": ["./src/shared/lib/secureUuid.ts"],
-      "@mike/sentry-event": ["./src/shared/lib/sentryEvent.ts"],
-      "@mike/user-error": ["./src/shared/lib/userError.ts"],
-      "@mike/toast-store": ["./src/shared/lib/toastStore.ts"],
-      "@mike/error-notifier": ["./src/shared/lib/errorNotifier.ts"],
-      "@mike/citation-pill-ui": ["./src/shared/ui/CitationPillUI.tsx"],
-      "@mike/response-selection-menu-ui": ["./src/shared/ui/ResponseSelectionMenuUI.tsx"],
-      "@mike/toast-ui": ["./src/shared/ui/ToastUI.tsx"],
-      "@mike/model-catalog": ["./src/shared/lib/modelCatalog.ts"]
+      "@radix-ui/react-dropdown-menu": ["./node_modules/@radix-ui/react-dropdown-menu"],
+      "vitest": ["./node_modules/vitest"],
+      "@testing-library/react": ["./node_modules/@testing-library/react"],
+      "@testing-library/user-event": ["./node_modules/@testing-library/user-event"],
+      "postcss": ["./node_modules/postcss"]
     }
   },
   "include": [
@@ -46,7 +56,13 @@
     "**/*.tsx",
     ".next/types/**/*.ts",
     ".next/dev/types/**/*.ts",
-    "**/*.mts"
+    "**/*.mts",
+    // The shared packages are part of this program: `next build` type-checks
+    // what it bundles, and `npm run typecheck` covers their colocated tests.
+    "../packages/ui/src/**/*.ts",
+    "../packages/ui/src/**/*.tsx",
+    "../packages/ui/stories/*.tsx",
+    "../packages/client/src/**/*.ts"
   ],
   "exclude": ["node_modules"]
 }

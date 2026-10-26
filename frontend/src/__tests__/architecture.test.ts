@@ -11,9 +11,11 @@
 //
 // The rules:
 //
-//   1. Every file in the production build program (`tsconfig.build.json`, the
-//      config `next build` uses) stays inside `frontend/`: no relative import
-//      may resolve to a path outside it.
+//   1. Every relative import in the production build program
+//      (`tsconfig.build.json`, the config `next build` uses) resolves to a
+//      file that is in the image: inside `frontend/`, or inside the same
+//      Dockerfile-copied directory as the importing file (the shared
+//      packages under `packages/` import their own files relatively).
 //   2. Production code reaches outside `frontend/` only through a `paths`
 //      alias, and every alias target outside `frontend/` must be copied by
 //      the Dockerfile to exactly the path the alias resolves to in the image.
@@ -99,22 +101,31 @@ describe("frontend build boundaries", () => {
     const build = loadProgram("tsconfig.build.json");
     const full = loadProgram("tsconfig.json");
 
-    it("rule 1: nothing in the production build program imports from outside frontend/", () => {
+    it("rule 1: every relative import in the production build program stays inside the image", () => {
+        // A directory the Dockerfile copies whole keeps its internal layout, so
+        // a relative import between two files under the same copied directory
+        // resolves in the image too.
+        const copiedDirs = readDockerfile()
+            .copies.map((c) => resolve(REPO, c.src))
+            .filter((dir) => !isInside(FRONTEND, dir));
+        const sameCopiedDir = (file: string, target: string) =>
+            copiedDirs.some((dir) => isInside(dir, file) && isInside(dir, target));
         const violations: string[] = [];
         for (const file of build.fileNames) {
             for (const spec of importSpecifiers(file)) {
                 if (!spec.startsWith("./") && !spec.startsWith("../")) continue;
                 const target = resolve(dirname(file), spec);
-                if (!isInside(FRONTEND, target)) {
+                if (!isInside(FRONTEND, target) && !sameCopiedDir(file, target)) {
                     violations.push(`${relToFrontend(file)} -> ${spec}`);
                 }
             }
         }
         expect(
             violations,
-            "A file `next build` type-checks reaches outside frontend/. The Docker " +
-                "image is built from an allowlisted context and will not contain the " +
-                "target. Import it through a tsconfig `paths` alias whose target the " +
+            "A file `next build` type-checks reaches outside frontend/ and outside " +
+                "the directory the Dockerfile copies it from. The Docker image is " +
+                "built from an allowlisted context and will not contain the target. " +
+                "Import it through a tsconfig `paths` alias whose target the " +
                 "Dockerfile copies, or, if it is a test, name it so " +
                 "tsconfig.build.json excludes it.",
         ).toEqual([]);

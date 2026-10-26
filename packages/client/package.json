@@ -1,0 +1,18 @@
+{
+  "name": "@mike/client",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Framework-free client behavior shared by the Mike web app and the Word add-in.",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "sideEffects": false,
+  "peerDependencies": {
+    "@types/react": "^19.3.0"
+  },
+  "peerDependenciesMeta": {
+    "@types/react": {
+      "optional": true
+    }
+  }
+}

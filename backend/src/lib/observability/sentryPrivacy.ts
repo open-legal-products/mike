@@ -1,6 +1,6 @@
 /**
  * Final outbound boundary, after SDK processors and before transport serialization.
- * Mirrored in frontend/src/shared/lib/sentryPrivacy.ts; the sync test guards drift.
+ * Mirrored in packages/client/src/sentryPrivacy.ts; the sync test guards drift.
  * Never infer whether arbitrary text is PII. Rebuild diagnostic events from an
  * allowlist and reject every other envelope item, including automatic sessions.
  */

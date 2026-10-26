@@ -1,6 +1,6 @@
 import React, { useEffect, useRef } from "react";
 import type { Workflow } from "../../types";
-import { workflowSlashCommandFromTitle } from "@mike/workflow-slash-command-ui";
+import { workflowSlashCommandFromTitle } from "@mike/ui";
 
 export const WORD_WORKFLOW_SLASH_MENU_ID = "word-workflow-slash-menu";
 

@@ -3,7 +3,7 @@
 import { useEffect, useState, type ReactElement } from "react";
 import { useChatHistoryContext } from "@/app/contexts/ChatHistoryContext";
 import { buildChatHistoryItems } from "@/app/components/shared/ChatPanelHeader";
-import { ChatHistoryDropdownUI } from "@/shared/ui/ChatHistoryDropdownUI";
+import { ChatHistoryDropdownUI } from "@mike/ui";
 
 /**
  * The assistant's chat history, as a menu on one of a chat's header buttons.

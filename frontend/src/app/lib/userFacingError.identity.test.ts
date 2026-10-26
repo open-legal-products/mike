@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { clearToasts, getSnapshot } from "@/shared/lib/toastStore";
+import { clearToasts, getSnapshot } from "@mike/client";
 import { MikeApiError, UploadBatchError } from "./mikeApi";
 import { firstUploadResult } from "@/shared/api/uploadSessionClient";
 import { errorFrameFailure } from "./chatTurnFailure";
