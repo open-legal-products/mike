@@ -55,7 +55,7 @@ import {
   devLog,
   resolveDocLabel,
 } from "../types";
-import { downloadFile, storageKey, uploadFile } from "../../../../lib/storage";
+import { downloadFile, downloadFileIfAvailable, storageKey, uploadFile } from "../../../../lib/storage";
 import { convertedPdfKey, docxToPdf } from "../../../../lib/convert";
 import { enqueueConversion } from "../../../../lib/queue/conversionQueue";
 import {
@@ -1997,7 +1997,7 @@ export async function runToolCalls(
           const sourcePdfPath = active?.pdf_storage_path ?? null;
           const raw = await downloadFile(sourcePath);
           let pdfBytes = sourcePdfPath
-            ? await downloadFile(sourcePdfPath)
+            ? await downloadFileIfAvailable(sourcePdfPath)
             : null;
           if (!raw) {
             fail("Could not read the source document's bytes from storage.");

@@ -66,10 +66,12 @@ describe("consumeAssistantTurnStream", () => {
       frame(1, { type: "response_details", model: "gpt-6-luna", reasoning: "medium", usage: { input_tokens: 1200, output_tokens: 80 } }),
       frame(2, { type: "response_details", reasoning: "high" }),
       frame(3, { type: "response_details", model: "gpt-6-luna", usage: { input_tokens: "lots" } }),
+      frame(4, { type: "response_details", model: "gpt-6-luna" }),
       "data: [DONE]\n\n",
     ]), { turn, sink: createTurnEventSink(turn, []), cursor: createTurnCursor("chat-a") });
     expect(turn.turn.assistant.events).toEqual([
       { type: "response_details", model: "gpt-6-luna", reasoning: "medium", usage: { input_tokens: 1200, output_tokens: 80 } },
+      { type: "response_details", model: "gpt-6-luna" },
       { type: "response_details", model: "gpt-6-luna" },
     ]);
     turn.finish();
@@ -671,6 +673,19 @@ describe("MCP tool frames", () => {
       },
       thinking,
     ]);
+  });
+
+  it("keeps a tool's title only when the result names one", async () => {
+    const titled = await eventsOf([
+      { type: "mcp_tool_start", name: "drive__search" },
+      { type: "mcp_tool_result", name: "drive__search", connector_name: "Drive", tool_name: "search", tool_title: "Search Drive", status: "ok" },
+    ]);
+    expect(titled?.[0]).toMatchObject({ type: "mcp_tool_call", tool_title: "Search Drive" });
+    const untitled = await eventsOf([
+      { type: "mcp_tool_start", name: "drive__search" },
+      { type: "mcp_tool_result", name: "drive__search", connector_name: "Drive", tool_name: "search", tool_title: "", status: "ok" },
+    ]);
+    expect((untitled?.[0] as { tool_title?: string } | undefined)?.tool_title).toBeUndefined();
   });
 
   it("keeps the approval id a result names, so the timeline can tie it to its decision", async () => {

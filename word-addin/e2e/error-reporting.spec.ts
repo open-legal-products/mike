@@ -190,7 +190,7 @@ test("a mid-stream chat failure is reported once, tagged as word-chat", async ({
     officeEvents.map((candidate) => [tagsOf(candidate).stage, candidate.level]),
   ).toEqual([["document-read", "warning"]]);
   const exception = (event.exception as { values: { value: string }[] }).values[0]!;
-  expect(exception.value).toBe("Failure in word-chat");
+  expect(exception.value).toBe("Failure in word_chat.turn / word-chat");
   expect(sentry.bodies.join("\n")).not.toContain("Synthetic_Client_Jane_Doe_NDA.pdf");
   expect(sentry.bodies.join("\n")).not.toContain('"type":"session"');
   // The console.error that accompanies the failure is bridged into Sentry

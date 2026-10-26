@@ -15,6 +15,7 @@ const reportApiFailure = vi.hoisted(() => vi.fn());
 const reportNetworkFailure = vi.hoisted(() => vi.fn());
 const markErrorHandled = vi.hoisted(() => vi.fn());
 vi.mock("@/app/lib/errorReporting", () => ({
+    claimApiFailure: () => false,
     trackPendingRequest: () => () => {},
     markErrorHandled,
     reportApiFailure,
@@ -716,6 +717,9 @@ describe("audit history", () => {
         fetchMock.mockResolvedValueOnce(jsonResponse(result));
         expect(await getAuditActors({ orgId: "org-1", search: "Alex & Pat", offset: 20 })).toEqual(result);
         expect(lastFetchCall().url).toBe("/api/audit/actors?org_id=org-1&q=Alex+%26+Pat&offset=20");
+        fetchMock.mockResolvedValueOnce(jsonResponse(result));
+        expect(await getAuditActors({ orgId: "org-1" })).toEqual(result);
+        expect(lastFetchCall().url).toBe("/api/audit/actors?org_id=org-1");
         fetchMock.mockResolvedValueOnce(jsonResponse({ events: [], total: 0, page: 1, pageSize: 50 }));
         await getAuditHistory({ orgId: "org-1", actorUserId: "actor-1" });
         expect(lastFetchCall().url).toBe("/api/audit?org_id=org-1&actor_user_id=actor-1");

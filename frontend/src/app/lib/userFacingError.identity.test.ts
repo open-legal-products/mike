@@ -1,9 +1,11 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { clearToasts, getSnapshot } from "@/shared/lib/toastStore";
 import { MikeApiError, UploadBatchError } from "./mikeApi";
+import { errorFrameFailure } from "./chatTurnFailure";
 import {
     UserVisibleError,
     describeError,
+    isOnAuthRoute,
     notifyError,
     notifyPartialFailure,
     reportFault,
@@ -215,5 +217,42 @@ describe("uploadBatchFault", () => {
 
         expect(fault).toBeInstanceOf(UploadBatchError);
         expect(fault?.outcomes).toHaveLength(2);
+    });
+});
+
+describe("which faults a notice reports", () => {
+    it("treats a server render, with no window, as not on an auth route", () => {
+        vi.stubGlobal("window", undefined);
+        try {
+            expect(isOnAuthRoute()).toBe(false);
+        } finally {
+            vi.unstubAllGlobals();
+        }
+    });
+
+    it("leaves a stream error frame to the server's own event, but files an HTTP 5xx", () => {
+        // A frame: server kind, a request id, no HTTP status. The backend
+        // reported it with the stack; the toast is for the user.
+        notifyError(errorFrameFailure("x", false, { code: "internal_error", requestId: "11111111-2222-4333-8444-555555555555" }), { action: "get a response" });
+        expect(reporting.reportError).not.toHaveBeenCalled();
+        // An HTTP 5xx keeps both halves, joined by the request id.
+        notifyError(new MikeApiError({ status: 500, code: "internal_error", message: "x", requestId: "11111111-2222-4333-8444-555555555555" }), { action: "load documents" });
+        expect(tagsOfLastReport()).toMatchObject({ component: "notify", error_code: "internal_error", request_id: "11111111-2222-4333-8444-555555555555" });
+    });
+
+    it("reads a snake_case request id off an unknown failure", () => {
+        notifyError(Object.assign(new Error("boom"), { request_id: "11111111-2222-4333-8444-555555555555" }), { action: "save" });
+        expect(tagsOfLastReport()).toMatchObject({ component: "notify", request_id: "11111111-2222-4333-8444-555555555555" });
+    });
+
+    it("does not file a flow failure the API client already reported, nor a frame the server filed", () => {
+        reporting.isReported.mockReturnValue(true);
+        reportFlowFailure({ operation: "tabular.run", status: 500, error: new Error("already sent") });
+        expect(reporting.reportError).not.toHaveBeenCalled();
+        reporting.isReported.mockReturnValue(false);
+        reportFlowFailure({ operation: "tabular.run", code: "internal_error", requestId: "11111111-2222-4333-8444-555555555555" });
+        expect(reporting.reportError).not.toHaveBeenCalled();
+        reportFlowFailure({ operation: "tabular.run", code: "internal_error" });
+        expect(tagsOfLastReport()).toMatchObject({ operation: "tabular.run", error_code: "internal_error" });
     });
 });

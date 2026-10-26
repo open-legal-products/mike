@@ -272,12 +272,19 @@ playbooksRouter.post(
         res.locals.userId as string,
       )}${crypto.randomUUID()}.${fileType}`;
       const contentType = PLAYBOOK_IMPORT_CONTENT_TYPES[fileType];
-      const uploadUrl = await getSignedUploadUrl(
-        storageKey,
-        contentType,
-        sizeBytes,
-        UPLOAD_URL_TTL_SECONDS,
-      );
+      let uploadUrl: string | null;
+      try {
+        uploadUrl = await getSignedUploadUrl(
+          storageKey,
+          contentType,
+          sizeBytes,
+          UPLOAD_URL_TTL_SECONDS,
+        );
+      } catch (error) {
+        // Signing failed (credentials, endpoint): reported once with the
+        // store's code, answered as the same 503 as an unconfigured store.
+        return void sendInternalError(res, error, 503);
+      }
       if (!uploadUrl) {
         return void res
           .status(503)
@@ -546,12 +553,19 @@ playbooksRouter.post(
       const storageKey = `${playbookSourceUploadPrefix(
         res.locals.userId as string,
       )}${crypto.randomUUID()}.${fileType}`;
-      const uploadUrl = await getSignedUploadUrl(
-        storageKey,
-        contentType,
-        sizeBytes,
-        UPLOAD_URL_TTL_SECONDS,
-      );
+      let uploadUrl: string | null;
+      try {
+        uploadUrl = await getSignedUploadUrl(
+          storageKey,
+          contentType,
+          sizeBytes,
+          UPLOAD_URL_TTL_SECONDS,
+        );
+      } catch (error) {
+        // Signing failed (credentials, endpoint): reported once with the
+        // store's code, answered as the same 503 as an unconfigured store.
+        return void sendInternalError(res, error, 503);
+      }
       if (!uploadUrl) {
         return void res
           .status(503)

@@ -8,12 +8,7 @@ import {
 // Tracked-change editing lives in the documents module; the tool dispatcher
 // keeps calling it by its tool-facing name.
 export { applyTrackedEditsToDocument as runEditDocument, loadCurrentVersionBytes };
-import {
-  downloadFile,
-  extractedTextKey,
-  generatedDocKey,
-  uploadFile,
-} from "../../../../lib/storage";
+import { downloadFileIfAvailable, extractedTextKey, generatedDocKey, uploadFile } from "../../../../lib/storage";
 import { convertedPdfKey, docxToPdf } from "../../../../lib/convert";
 import { enqueueConversion } from "../../../../lib/queue/conversionQueue";
 import { enqueueDbJob } from "../../../../lib/dbq/enqueue";
@@ -1309,7 +1304,7 @@ export async function readDocumentContent(
         }
       }
       if (!raw) {
-        raw = await downloadFile(docInfo.storage_path);
+        raw = await downloadFileIfAvailable(docInfo.storage_path);
         if (raw) {
           devLog(
             `[read_document] fallback download from storage_path="${docInfo.storage_path}" (bytes=${raw.byteLength})`,
@@ -1385,7 +1380,7 @@ export async function readDocumentContent(
           versionId && requiresLibreOfficeTextExtraction(fileType)
             ? extractedTextKey(versionId)
             : null;
-        const cached = cacheKey ? await downloadFile(cacheKey) : null;
+        const cached = cacheKey ? await downloadFileIfAvailable(cacheKey) : null;
         if (cached) {
           text = Buffer.from(cached).toString("utf8");
           devLog(

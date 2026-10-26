@@ -3,6 +3,7 @@ import { describe, expect, it, vi } from "vitest";
 import GlobalError from "./global-error";
 
 vi.mock("@/app/lib/errorReporting", () => ({
+    claimApiFailure: () => false,
     reportError: vi.fn(),
     isReported: vi.fn(() => false),
 }));

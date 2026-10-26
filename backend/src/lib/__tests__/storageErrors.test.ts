@@ -18,7 +18,20 @@ vi.mock("../observability/sentry", async (importOriginal) => {
   const actual =
     await importOriginal<typeof import("../observability/sentry")>();
   mocks.reportError.mockImplementation(actual.reportError);
-  return { ...actual, reportError: mocks.reportError };
+  return {
+    ...actual,
+    reportError: mocks.reportError,
+    // The real bestEffort reports through the module's own reportError, which
+    // the mock above cannot see; mirror its shape through the mock instead.
+    bestEffort: (work: Promise<unknown>, context: { what: string }) =>
+      work.catch((error: unknown) => {
+        mocks.reportError(error, {
+          level: "warning",
+          tags: { component: "best-effort", what: context.what },
+        });
+        return undefined;
+      }),
+  };
 });
 
 vi.mock("@aws-sdk/client-s3", () => {
@@ -46,6 +59,7 @@ vi.mock("@aws-sdk/s3-request-presigner", () => ({
 }));
 
 let downloadFile: typeof import("../storage").downloadFile;
+let downloadFileIfAvailable: typeof import("../storage").downloadFileIfAvailable;
 let createFileReadStream: typeof import("../storage").createFileReadStream;
 let getSignedUrl: typeof import("../storage").getSignedUrl;
 let getSignedUploadUrl: typeof import("../storage").getSignedUploadUrl;
@@ -61,6 +75,7 @@ beforeAll(async () => {
   ({
     createFileReadStream,
     downloadFile,
+    downloadFileIfAvailable,
     getSignedUploadUrl,
     getSignedUrl,
     headFile,
@@ -244,5 +259,32 @@ describe("storage error logging", () => {
     expect(log).not.toHaveBeenCalled();
     expect(mocks.reportError).not.toHaveBeenCalled();
     log.mockRestore();
+  });
+});
+
+describe("optional reads", () => {
+  it("answers null for a missing object without reporting", async () => {
+    mocks.send.mockRejectedValue(Object.assign(new Error("gone"), { name: "NoSuchKey" }));
+    await expect(downloadFileIfAvailable("documents/u1/d1/source.pdf")).resolves.toBeNull();
+    expect(mocks.reportError).not.toHaveBeenCalled();
+  });
+
+  it("answers null for a failure too, reported once as a warning with the store's code", async () => {
+    const failure = Object.assign(new Error("denied"), { name: "AccessDenied" });
+    mocks.send.mockRejectedValue(failure);
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+
+    await expect(downloadFileIfAvailable("documents/u1/d1/source.pdf")).resolves.toBeNull();
+
+    expect(mocks.reportError).toHaveBeenCalledOnce();
+    const [reported, context] = mocks.reportError.mock.calls[0]!;
+    expect(diagnosticErrorTags(reported)).toEqual({
+      error_kind: "storage.download_failed",
+      storage_operation: "download",
+      failure_code: "AccessDenied",
+    });
+    expect(context).toMatchObject({ level: "warning", tags: { component: "best-effort", what: "optional-read" } });
+    expect(JSON.stringify(context)).not.toContain("documents/u1/d1");
+    warn.mockRestore();
   });
 });

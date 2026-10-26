@@ -59,8 +59,9 @@ async function authRequest<T>(path: string, init?: RequestInit): Promise<T> {
         });
     } catch (error) {
         // Same rule as mikeApi: a request that never got a response is one
-        // "API unreachable" event per outage, never one per auth screen.
-        if (!init?.signal?.aborted && !isAbortError(error)) {
+        // "API unreachable" event per outage, never one per auth screen. An
+        // abort is the caller's doing, not an outage.
+        if (!isAbortError(error)) {
             reportNetworkFailure(error, { method, url });
         }
         throw error;

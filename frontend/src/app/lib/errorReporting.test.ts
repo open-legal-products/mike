@@ -38,6 +38,7 @@ import * as Sentry from "@sentry/nextjs";
 import {
     browserSentryOptions,
     isReported,
+    claimApiFailure,
     reportApiFailure,
     reportError,
     scrubEvent,
@@ -51,6 +52,8 @@ import {
 } from "./errorReporting";
 import { MIKE_SENTRY_DSN } from "@/shared/lib/sentryEvent";
 import { diagnosticEvent } from "@/shared/lib/sentryPrivacy";
+import { MikeApiError } from "./mikeApi";
+import { notifyError } from "./userFacingError";
 
 afterEach(() => {
     resetApiUnreachableWindow();
@@ -135,6 +138,46 @@ describe("markErrorHandled", () => {
         const error = new Error("schema_out_of_date, filed by the backend");
         markErrorHandled(error);
         expect(isReported(error)).toBe(true);
+    });
+});
+
+describe("reportApiFailure holds its event for the screen's operation", () => {
+    afterEach(() => vi.useRealTimers());
+
+    it("sends after a tick without one, or at once with it when the screen claims the error", () => {
+        vi.useFakeTimers();
+        state.enabled = true;
+        const unclaimed = new Error("x");
+        expect(reportApiFailure({ path: "/x", status: 500, error: unclaimed })).toBeNull();
+        expect(Sentry.captureMessage).not.toHaveBeenCalled();
+        vi.runAllTimers();
+        expect(Sentry.captureMessage).toHaveBeenCalledTimes(1);
+        expect(state.scopes[0].setTag).not.toHaveBeenCalledWith("operation", expect.anything());
+
+        const claimed = new Error("y");
+        reportApiFailure({ path: "/y", status: 503, error: claimed });
+        expect(claimApiFailure(claimed, "tabular.run")).toBe(true);
+        expect(Sentry.captureMessage).toHaveBeenCalledTimes(2);
+        expect(state.scopes[1].setTag).toHaveBeenCalledWith("operation", "tabular.run");
+        expect(state.scopes[1].setTag).toHaveBeenCalledWith("component", "mike-api");
+        vi.runAllTimers();
+        expect(Sentry.captureMessage).toHaveBeenCalledTimes(2);
+        expect(claimApiFailure(claimed, "tabular.run")).toBe(false);
+        expect(claimApiFailure(new Error("never reported"), "tabular.run")).toBe(false);
+        expect(claimApiFailure("not an object", "tabular.run")).toBe(false);
+    });
+
+    it("lets notifyError with an operation name the API client's one event", () => {
+        vi.useFakeTimers();
+        state.enabled = true;
+        const error = new MikeApiError({ status: 500, code: "internal_error", message: "x", requestId: "11111111-2222-4333-8444-555555555555" });
+        reportApiFailure({ path: "/tabular-reviews/abc/run", status: 500, code: "internal_error", requestId: error.requestId, method: "POST", error });
+        notifyError(error, { action: "run this review", operation: "tabular.run" });
+        vi.runAllTimers();
+        expect(Sentry.captureMessage).toHaveBeenCalledTimes(1);
+        expect(Sentry.captureException).not.toHaveBeenCalled();
+        expect(state.scopes[0].setTag).toHaveBeenCalledWith("operation", "tabular.run");
+        expect(state.scopes[0].setTag).toHaveBeenCalledWith("request_id", error.requestId);
     });
 });
 

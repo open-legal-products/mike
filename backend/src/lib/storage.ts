@@ -186,6 +186,20 @@ export async function downloadFile(key: string): Promise<ArrayBuffer | null> {
 }
 
 /**
+ * Read an object the caller can go on without: a cached rendition, an
+ * optional PDF copy, a fallback source. null for an object that is not
+ * there, and null for a failure too, which is reported once here as a
+ * warning with the store's code, because the caller will carry on and
+ * nothing else would file it. A read the caller cannot do without uses
+ * downloadFile, whose failure propagates to the handler that reports it.
+ */
+export async function downloadFileIfAvailable(
+  key: string,
+): Promise<ArrayBuffer | null> {
+  return (await bestEffort(downloadFile(key), { what: "optional-read" })) ?? null;
+}
+
+/**
  * Lazily stream an object from the store. The read starts only when a consumer
  * reads from the returned stream, allowing archive writers to apply
  * backpressure without buffering whole files or opening every object

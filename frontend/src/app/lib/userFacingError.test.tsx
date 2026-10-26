@@ -10,6 +10,7 @@ const reported = vi.hoisted(() => ({
     isReported: vi.fn(() => false),
 }));
 vi.mock("@/app/lib/errorReporting", () => ({
+    claimApiFailure: () => false,
     reportError: reported.reportError,
     isReported: reported.isReported,
     reportApiFailure: vi.fn(),
