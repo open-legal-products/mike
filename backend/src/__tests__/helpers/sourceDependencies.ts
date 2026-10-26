@@ -76,7 +76,7 @@ export function resolveDependency(file: string, spec: string, root: string, path
             return;
         if (matches)
             for (const target of targets)
-                candidates.push(resolve(root, target.replace("*", spec.slice(prefix.length, suffix ? -suffix.length : undefined))));
+                candidates.push(resolve(root, target.replaceAll("*", spec.slice(prefix.length, suffix ? -suffix.length : undefined))));
     }
     for (const candidate of candidates) {
         const stem = /\.[cm]?jsx?$/.test(candidate) ? candidate.slice(0, -extname(candidate).length) : candidate;
