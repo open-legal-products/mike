@@ -1413,7 +1413,8 @@ export async function executeGoogleDriveToolCall(
                 ? error.message
                 : "Google Drive call failed. Please try again.";
         const failure = reportDriveToolFailure(error, toolName);
-        console.error("[google-drive] tool call failed", {
+        const unreported = error instanceof GoogleDriveUserError && (error.status === undefined || error.status < 500);
+        (unreported ? console.warn : console.error)("[google-drive] tool call failed", {
             userId: owner.userId,
             toolName,
             error: failure,
