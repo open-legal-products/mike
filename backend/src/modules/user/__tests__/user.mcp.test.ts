@@ -106,7 +106,7 @@ describe("MCP connector failure reporting", () => {
             headers: undefined,
         };
 
-        const setup = await createMcpConnector(db, "u1", params);
+        const setup = await createMcpConnector(db, personalConnectorOwner("u1"), params);
         expect(setup).toMatchObject({
             ok: false,
             kind: "setup",
@@ -117,7 +117,7 @@ describe("MCP connector failure reporting", () => {
 
         const cause = new Error("insert failed");
         mocks.createUserMcpConnector.mockRejectedValueOnce(cause);
-        const failed = await createMcpConnector(db, "u1", params);
+        const failed = await createMcpConnector(db, personalConnectorOwner("u1"), params);
         expect(failed).toMatchObject({ ok: false, kind: "failed" });
         const failure = (failed as { error: unknown }).error as AppError;
         expect(failure.kind).toBe("mcp.setup_failed");
