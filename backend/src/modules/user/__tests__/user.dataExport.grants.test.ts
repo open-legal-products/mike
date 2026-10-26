@@ -1,9 +1,7 @@
 import { describe, expect, it } from "vitest";
 
-import {
-    buildProjectExportManifest,
-    buildUserAccountExport,
-} from "../user.dataExport";
+import { buildProjectExportManifest } from "../../projects/projects.export";
+import { buildUserAccountExport } from "../../../application/exports/buildJsonExport";
 
 import { makeExportDb as makeDb, type Row } from "./user.dataExport.fixture";
 

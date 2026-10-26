@@ -33,7 +33,7 @@ export interface Chat {
   user_id: string;
   title: string | null;
   model?: string | null;
-  reasoning_level?: import("./lib/wordChatTypes").ReasoningLevel | null;
+  reasoning_level?: import("./lib/modelSelectionTypes").ReasoningLevel | null;
   created_at: string;
   /**
    * A turn the server is still generating into this chat, so a pane opening

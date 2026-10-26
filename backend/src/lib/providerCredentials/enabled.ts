@@ -1,28 +1,10 @@
-import type { Db } from "../../lib/supabase";
-import { failure, internalFailure, ok, type ServiceResult } from "../../lib/serviceResult";
-import {
-    getApiKeyStatusFor,
-    userKeyOwner,
-    type ApiKeyOwner,
-    type ApiKeyProvider,
-    type ApiKeyStatus,
-} from "./user.apiKeyStore";
-
+import type { Db } from "../supabase";
+import { failure, internalFailure, ok, type ServiceResult } from "../serviceResult";
+import { getApiKeyStatusFor, type ApiKeyOwner, type ApiKeyProvider, type ApiKeyStatus, } from "./store";
 const OWNER_TABLE = {
     user: { table: "user_api_keys", column: "user_id" },
     org: { table: "org_api_keys", column: "org_id" },
 } as const;
-
-/** Toggle a saved credential without changing its encrypted value or models. */
-export function setApiKeyEnabled(
-    db: Db,
-    userId: string,
-    provider: ApiKeyProvider,
-    enabled: boolean,
-): Promise<ServiceResult<ApiKeyStatus>> {
-    return setApiKeyEnabledFor(db, userKeyOwner(userId), provider, enabled);
-}
-
 /** The same toggle, for a person's key or an organization's. */
 export async function setApiKeyEnabledFor(
     db: Db,

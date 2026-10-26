@@ -3,7 +3,7 @@
 // Conventions are worthless if nothing checks them. This test walks every
 // TypeScript file under `src/`, reads its import statements, and fails when a
 // file crosses a boundary the module layout forbids. It needs no lint plugin
-// or dependency-cruiser: a directory walk and a regex are enough to make the
+// or dependency-cruiser: a directory walk and a syntax parser make the
 // rules in `AGENTS.md` ("Backend Structure") load-bearing.
 //
 // The rules:
@@ -33,8 +33,10 @@
 // decision with a comment explaining why; silently widening one is not.
 
 import { readdirSync, readFileSync, statSync, existsSync } from "node:fs";
-import { dirname, join, relative, resolve, sep } from "node:path";
+import { join, relative, resolve, sep } from "node:path";
 import { describe, expect, it } from "vitest";
+
+import { dependencies, readPaths, resolveDependency } from "./helpers/sourceDependencies";
 
 const SRC = resolve(__dirname, "..");
 
@@ -59,24 +61,12 @@ function read(file: string): string {
   return readFileSync(join(SRC, file), "utf8");
 }
 
-const IMPORT_RE =
-  /(?:^|\n)\s*(?:import|export)\s+(?:type\s+)?(?:[^'";]*?\s+from\s+)?["']([^"']+)["']|import\(\s*["']([^"']+)["']\s*\)/g;
-
-/** Every import specifier in a file, resolved to an `src`-relative path when it is relative. */
+const PATHS = readPaths(resolve(SRC, "../tsconfig.json"));
 function importsOf(file: string): string[] {
-  const text = read(file);
-  const specs: string[] = [];
-  for (const match of text.matchAll(IMPORT_RE)) {
-    const spec = match[1] ?? match[2];
-    if (!spec) continue;
-    if (spec.startsWith(".")) {
-      const abs = resolve(SRC, dirname(file), spec);
-      specs.push(relative(SRC, abs).split(sep).join("/"));
-    } else {
-      specs.push(spec);
-    }
-  }
-  return specs;
+  return dependencies(read(file), file).map(({ specifier }) => {
+    const resolved = resolveDependency(join(SRC, file), specifier, resolve(SRC, ".."), PATHS);
+    return resolved ? relative(SRC, resolved).split(sep).join("/").replace(/\.[cm]?[jt]sx?$/, "") : specifier;
+  });
 }
 
 const moduleOf = (file: string): string | null => {
@@ -103,6 +93,30 @@ const MODULES = existsSync(join(SRC, "modules"))
   : [];
 
 describe("backend architecture", () => {
+  it("domain implementations cannot import application workflows or their own facade", () => {
+    const offenders: string[] = [];
+    for (const file of PRODUCTION_FILES) {
+      const domain = moduleOf(file);
+      if (!domain || /\.routes\.ts$/.test(file)) continue;
+      for (const spec of importsOf(file)) {
+        if (spec.startsWith("application/") || spec === facadeOf(domain)) offenders.push(`${file} -> ${spec}`);
+      }
+    }
+    expect(offenders).toEqual([]);
+  });
+
+  it("application workflows are HTTP-agnostic", () => {
+    expect(PRODUCTION_FILES.filter(f => f.startsWith("application/") && importsOf(f).includes("express"))).toEqual([]);
+  });
+
+  it("credential consumers use its public API", () => {
+    const offenders: string[] = [];
+    for (const file of PRODUCTION_FILES.filter(f => !f.startsWith("lib/providerCredentials/"))) {
+      for (const spec of importsOf(file)) if (spec.startsWith("lib/providerCredentials/") && spec !== "lib/providerCredentials/index") offenders.push(`${file} -> ${spec}`);
+    }
+    expect(offenders).toEqual([]);
+  });
+
   it("every module has exactly one facade and at least one routes file", () => {
     for (const domain of MODULES) {
       expect(() => facadeOf(domain)).not.toThrow();
@@ -118,7 +132,7 @@ describe("backend architecture", () => {
     const offenders: string[] = [];
     for (const file of PRODUCTION_FILES.filter((f) => f.startsWith("lib/"))) {
       for (const spec of importsOf(file)) {
-        if (spec.startsWith("modules/")) offenders.push(`${file} -> ${spec}`);
+        if (spec.startsWith("modules/") || spec.startsWith("application/")) offenders.push(`${file} -> ${spec}`);
       }
     }
     expect(offenders).toEqual([]);
@@ -194,7 +208,7 @@ describe("backend architecture", () => {
     const offenders: string[] = [];
     for (const file of PRODUCTION_FILES.filter((f) => f.startsWith("middleware/"))) {
       for (const spec of importsOf(file)) {
-        if (spec.startsWith("modules/")) offenders.push(`${file} -> ${spec}`);
+        if (spec.startsWith("modules/") || spec.startsWith("application/")) offenders.push(`${file} -> ${spec}`);
       }
     }
     expect(offenders).toEqual([]);

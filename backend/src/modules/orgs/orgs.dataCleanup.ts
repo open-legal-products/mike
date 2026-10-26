@@ -12,7 +12,7 @@ import {
     captureInlineDocumentCleanup,
     completeInlineDocumentCleanup,
 } from "../documents/documents.service";
-import { deleteProjectsByIds } from "../user/user.service";
+import { deleteProjectsByIds } from "../projects/projects.service";
 import { chunkArray } from "../../lib/arrays";
 import { selectAllByKey, selectInBatches } from "../../lib/batchedQuery";
 import { wipeMemoryFiles as wipeMemoryFilesBatch } from "../../lib/memory/files";
@@ -306,17 +306,4 @@ async function wipeMemoryFiles(db: Db, ids: string[]): Promise<void> {
     } catch {
         fail("Failed to delete organization memory");
     }
-}
-
-/**
- * Everything the organization owns. Projects go first because their cascade
- * takes most documents, chats and reviews with them; what is left is content
- * tagged to the organization outside any project.
- */
-export async function deleteOrgContent(db: Db, orgId: string): Promise<void> {
-    await deleteOrgProjects(db, orgId);
-    await deleteOrgWorkflows(db, orgId);
-    await deleteOrgDocuments(db, orgId);
-    await deleteOrgTabularReviews(db, orgId);
-    await deleteOrgChats(db, orgId);
 }

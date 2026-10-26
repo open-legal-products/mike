@@ -1,7 +1,7 @@
 # Backend architecture
 
 The Express backend in `backend/` is organized as **domain modules over a
-shared kernel**. This page is the reference for that layout: what goes where,
+shared kernel, with application services for cross-domain workflows**. This page is the reference for that layout: what goes where,
 the rules that keep the layers honest, and the test that enforces them.
 
 ```
@@ -11,6 +11,7 @@ backend/src/
 ├── workerRuntime.ts       queue workers entrypoint (imports modules through facades)
 ├── middleware/            request plumbing (auth, trusted origin) — depends on lib/ only
 ├── modules/<domain>/      one directory per HTTP surface (see "Module anatomy")
+├── application/           account, purge and export orchestration; called by entrypoints
 ├── lib/                   shared kernel: infrastructure + cross-domain primitives
 ├── workers/, jobs/        queue consumers and scheduled jobs — reach modules via facades
 └── __tests__/             cross-cutting suites, incl. architecture.test.ts
@@ -208,21 +209,28 @@ new code uses the shared one.
 
 ## The rules
 
-1. **`lib/` never imports from `modules/`.** The kernel does not know which
+1. **`lib/` never imports from `modules/` or `application/`.** The kernel does not know which
    domains exist. There are no dependency exceptions.
 2. **A module is reached from outside only through its facade.** Another
    module, a worker, a job, `app.ts` — none may import a module's topic files.
-   The facade is where a module decides what it exposes.
+   The facade is where a module decides what it exposes. Module implementations
+   import siblings directly, never their own facade.
 3. **Inside a module, only `*.routes.ts` may import `express`.** Everything
    else is HTTP-agnostic and testable with a fake `db`.
 4. **Route files do not query the database.** Every `db.from(...)` /
    `db.rpc(...)` belongs to a service function with a name and a typed result.
 5. **Facades re-export by name.** `export *` hides what a module exposes and
    invites accidental coupling.
-6. **`middleware/` depends on `lib/`, not on modules.** Request plumbing must
+6. **`middleware/` depends on `lib/`, not on modules or application workflows.** Request plumbing must
    not pull a domain into every request.
 7. **`src/routes/` does not exist.** A new HTTP surface is a new module.
 8. **Document version writes belong to `modules/documents/`.** Creation, activation, replacement, and deletion go through its facade. The architecture test also rejects direct lifecycle RPC calls from other modules.
+
+9. **Domain implementations and facades cannot import `application/`.** Routes
+   are entrypoints and may call workflows. Application services are HTTP-agnostic
+   and reach domains through their facades.
+10. **Source dependencies are acyclic, including erased type references.** Shared
+    contracts belong below their consumers, not in the calling orchestrator.
 
 ## Enforcement
 
@@ -230,7 +238,12 @@ new code uses the shared one.
 reads its imports, and fails on a violation of any rule above. It runs with the
 normal unit suite (`npm test --prefix backend`), so a layering regression fails
 CI the same way a broken assertion does. It needs no lint plugin: a directory
-walk and an import regex are enough.
+walk and the Babel syntax parser resolve imports, re-exports, literal dynamic
+imports, `require` and type references, including configured path aliases.
+`dependencyCycles.test.ts` checks all production source in backend, web, Word and
+desktop for strongly connected components; type-only edges are included, so the
+gate is stronger than runtime-cycle detection. Nonliteral and unresolved local
+imports fail explicitly rather than silently escaping the graph.
 
 Each rule has an explicit allowlist in the test. Adding an entry is a reviewed
 decision and needs a comment saying why; the ratchet for rule 4 records the
@@ -248,7 +261,8 @@ remaining inline queries per routes file and only ever goes down.
 - **Cross-domain primitives** that several modules and the job handlers share:
   `access` (project/document authorization), `audit` (audit-row writes),
   `documentTypes`, `documentVersions`, `modelSelection`, `routerModels`,
-  `userLookup`, `workflowCatalog*` (used by the chat tools), `sourceDocuments`
+  `providerCredentials/` (owner-aware encrypted keys and settings, via `index.ts`),
+  `routerModelValidation`, `userLookup`, `workflowCatalog*` (used by the chat tools), `sourceDocuments`
   and pure shared utilities. Document-version reads can join across domains;
   mutations have one owner in the documents module.
 
@@ -265,7 +279,27 @@ retention; domain job bodies live with documents, tabular, user, audit, and memo
 BullMQ workers are transport adapters to those same domain operations.
 
 Stale-work sweeps live in documents and tabular. `jobs/maintenance.ts` composes
-them. Account erasure and export orchestration belong to the user module.
+them. Account erasure and export orchestration live in `application/`, with
+queue adapters in `application/jobs/`. The registry imports these adapters directly.
+
+## Cross-domain application services
+
+`application/accounts/` coordinates account deletion, retention and data clearing.
+`application/organizations/purgeContent.ts` composes permanent content cleanup;
+`orgs.deletion.ts` retains recovery-period organization suspension.
+`application/exports/` validates/enqueues requests and builds artifacts, checking
+permissions again when a queued request executes. No domain facade re-exports
+these workflows.
+
+Projects own `projects.lifecycle.ts` and `projects.export.ts`. Document lifecycle
+mutations continue through documents. Shared credential persistence, precedence
+and encryption live in `lib/providerCredentials/`; user and org adapters retain
+their caller-specific policy. Shared DTOs and schemas live below implementations.
+
+These workflows preserve existing transaction and retry boundaries. Account
+erasure must refuse sole-owner blockers before destruction, retain organization
+content, delete export objects before their pointers and delete auth identity last.
+A cross-system workflow is not one database transaction.
 
 ## Shared operations and caller-specific policy
 

@@ -32,7 +32,7 @@ Per-area statement coverage from `npm run test:coverage`:
 
 | Lib area                                                                                | % statements |               Tested?               |
 | --------------------------------------------------------------------------------------- | -----------: | :---------------------------------: |
-| `modules/user/user.dataCleanup.ts`, `lib/manifestSigning.ts`, `lib/supabase.ts`         |          100 |                  ✓                  |
+| `application/accounts/dataCleanup.ts`, `lib/manifestSigning.ts`, `lib/supabase.ts`         |          100 |                  ✓                  |
 | `lib/llm/models.ts`                                                                     |           96 |                  ✓                  |
 | `modules/chat/engine/types.ts`                                                          |           95 |                  ✓                  |
 | `lib/documentVersions.ts`                                                               |           98 |                  ✓                  |
@@ -44,7 +44,7 @@ Per-area statement coverage from `npm run test:coverage`:
 | `lib/storage.ts`, `lib/upload.ts`                                                       |           58 |               partial               |
 | `lib/workflowCatalog.ts`                                                                |           69 |               partial               |
 | `lib/workflowCatalogSource.ts`, `lib/workflowCatalogSync.ts`                            |        74–96 |                  ✓                  |
-| `modules/user/user.dataExport.ts`                                                       |           43 |               partial               |
+| `application/exports/buildJsonExport.ts`                                                       |           43 |               partial               |
 | `modules/chat/engine/contextBuilders.ts`, `modules/chat/engine/tools/toolDispatcher.ts` |        37–38 |               partial               |
 | `lib/userApiKeys.ts`                                                                    |           13 | partial — provider/env helpers only |
 | `modules/chat/engine/tools/documentOps.ts`                                              |           10 |               partial               |
@@ -85,7 +85,7 @@ Size is a rough guess: S ≈ an hour, M ≈ an afternoon.
       load/store paths with a mocked Supabase client. (M)
 - [ ] `lib/storage.ts` (rest) — S3 upload/download/list/delete wrappers with a
       mocked AWS SDK client. (M)
-- [ ] `modules/user/user.dataExport.ts` — export assembly: given seeded mock tables,
+- [ ] `application/exports/buildJsonExport.ts` — export assembly: given seeded mock tables,
       assert the export contains the user's data and nobody else's. (M)
 - [ ] `lib/spreadsheet.ts` — parse a small in-memory xlsx fixture; assert sheet
       and cell extraction, including empty/edge cells. (M)

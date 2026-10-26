@@ -1,4 +1,8 @@
-import { captureInlineDocumentCleanup, completeInlineDocumentCleanup } from "../documents/documents.service";
+import { deleteProjectsByIds } from "../../modules/projects/projects.service";
+import {
+    captureInlineDocumentCleanup,
+    completeInlineDocumentCleanup,
+} from "../../modules/documents/documents.service";
 import { type Db } from "../../lib/supabase";
 import { assertStorageConfigured, deleteFile, deleteFileBestEffort, listFiles } from "../../lib/storage";
 import { NonRetryableJobError } from "../../lib/dbq/runner";
@@ -7,8 +11,8 @@ import { removeContentGrantsForEmail } from "../../lib/contentAccess";
 import { chunkArray } from "../../lib/arrays";
 import { wipeMemoryFiles } from "../../lib/memory/files";
 import { listPersonalOrgIds } from "../../lib/personalOrgs";
-import { deleteOrgContent } from "../orgs/orgs.service";
-import { throwIfError, uniqueStrings } from "./user.shared";
+import { deleteOrgContent } from "../organizations/purgeContent";
+import { throwIfError, uniqueStrings } from "../../lib/serviceData";
 
 const DELETE_BATCH_SIZE = 500;
 
@@ -872,23 +876,6 @@ async function deleteUserPlaybooks(
 
     const { error } = await db.from("playbooks").delete().eq("user_id", userId);
     await throwIfError(error, "Failed to delete playbooks");
-}
-
-/**
- * Delete projects (and everything inside them) by id, with no ownership
- * filter. Callers must have authorised the delete themselves — routes do that
- * through the `container.delete` capability, and an organization project may
- * have no creator left to scope by anyway.
- */
-export async function deleteProjectsByIds(db: Db, projectIds: string[]) {
-    const ownedProjectIds = uniqueStrings(projectIds);
-    if (ownedProjectIds.length === 0) return 0;
-    const keys = await captureInlineDocumentCleanup(db, { projectIds: ownedProjectIds });
-    // Parent DELETE owns the relational cascades and all durable cleanup.
-    await deleteByIds(db, "projects", ownedProjectIds);
-    await completeInlineDocumentCleanup(db, keys);
-
-    return ownedProjectIds.length;
 }
 
 /**
