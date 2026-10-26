@@ -177,7 +177,6 @@ const EXTRA_KEY_ALLOWLIST = new Set([
     "kind",
     "message",
     "name",
-    "path",
     "playbook_id",
     "request_id",
     "requestId",

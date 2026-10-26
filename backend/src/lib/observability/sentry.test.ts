@@ -647,9 +647,9 @@ describe("scrubEvent URL hygiene", () => {
       "http://localhost:3001/download/[Filtered]?x=1",
     );
     expect(out.request?.query_string).toBe("code=[Filtered]&page=2");
-    expect(out.extra?.path).toBe(
-      "/user/oauth/callback?code=[Filtered]&state=[Filtered]",
-    );
+    // A request path is not an allowlisted extra: the route tag names the
+    // endpoint, and the path (ids, filenames) never enters the event.
+    expect(out.extra?.path).toBe("[Filtered]");
     expect(out.breadcrumbs?.[0]?.data?.url).toBe(
       "https://s3.local/b/k?X-Amz-Signature=[Filtered]&X-Amz-Expires=60",
     );

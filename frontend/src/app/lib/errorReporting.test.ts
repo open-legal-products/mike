@@ -213,10 +213,9 @@ describe("reportApiFailure", () => {
         expect(scope.setTag).toHaveBeenCalledWith("request_id", "req-9");
         expect(scope.setTag).toHaveBeenCalledWith("error_code", "internal_error");
         expect(scope.setTag).toHaveBeenCalledWith("http_status", 502);
-        expect(scope.setExtra).toHaveBeenCalledWith(
-            "path",
-            "/projects/8f1c2a3e-1234-4bcd-9e0f-1234567890ab?x=1",
-        );
+        // The raw path (with its ids) is not offered to the event at all; the
+        // normalised route tag is what identifies the endpoint.
+        expect(scope.setExtra).not.toHaveBeenCalledWith("path", expect.anything());
     });
 
     it("marks the thrown error so the console bridge drops its later copy", () => {

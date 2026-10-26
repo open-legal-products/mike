@@ -163,12 +163,17 @@ function failure(
     "google.api_failed",
     `Google tool call failed (${event.tool_name})`,
   );
+  let reported = true;
   if (!(error instanceof GoogleWorkspaceError)) {
-    reportError(failure, { extra: { name: event.tool_name } });
+    reportError(failure);
   } else if (error instanceof GoogleApiError && error.status >= 500) {
-    reportError(failure, { level: "warning", extra: { name: event.tool_name } });
+    reportError(failure, { level: "warning" });
+  } else {
+    reported = false;
   }
-  console.error("[google-workspace] tool failed", {
+  // An unreported user error logs at warn: at error level the console bridge
+  // would file it as a context-free event of its own.
+  (reported ? console.error : console.warn)("[google-workspace] tool failed", {
     name: event.tool_name,
     error: failure,
   });

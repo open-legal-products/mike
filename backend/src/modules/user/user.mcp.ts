@@ -47,7 +47,9 @@ function reportMcpFailure(
     failure: AppError,
     context: Record<string, unknown>,
 ): AppError {
-    reportError(failure, { level: "warning", extra: context });
+    // The ids and the upstream error are for the operator's log line only;
+    // the report carries the kind and the cause's code, nothing else.
+    reportError(failure, { level: "warning" });
     console.error(label, { ...context, error: failure });
     return failure;
 }

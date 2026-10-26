@@ -146,7 +146,6 @@ export function reportApiFailure(failure: {
                     error_code: failure.code,
                     ...(route === "/observability/sentry-test" ? { diagnostic_test: "true" } : {}),
                 },
-                extra: { path: failure.path },
                 fingerprint: ["api-5xx", method, route, String(failure.status)],
             });
             return Sentry.captureMessage(

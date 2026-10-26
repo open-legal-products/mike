@@ -93,11 +93,7 @@ function driveFailureError(
  * event when Google itself failed (its status is 5xx); everything else is a
  * bug or an outage and is reported as the error it is.
  */
-function reportDriveToolFailure(
-    error: unknown,
-    toolName: string,
-    extra: Record<string, unknown>,
-): Error {
+function reportDriveToolFailure(error: unknown, toolName: string): Error {
     const failure = driveFailureError(
         error,
         "google.api_failed",
@@ -105,10 +101,10 @@ function reportDriveToolFailure(
     );
     if (error instanceof GoogleDriveUserError) {
         if (error.status === undefined || error.status < 500) return failure;
-        reportError(failure, { level: "warning", extra });
+        reportError(failure, { level: "warning" });
         return failure;
     }
-    reportError(failure, { extra });
+    reportError(failure);
     return failure;
 }
 
@@ -1164,8 +1160,11 @@ async function resolveDriveWrite(
 
 function driveFailure(name: string, error: unknown) {
     // Reported before it is logged so the console bridge files nothing twice.
-    const failure = reportDriveToolFailure(error, name, { name });
-    console.error("[google-drive] write failed", { name, error: failure });
+    const failure = reportDriveToolFailure(error, name);
+    // A user error under 500 was not reported; logging it at error level
+    // would make the console bridge file it as a context-free event.
+    const unreported = error instanceof GoogleDriveUserError && (error.status === undefined || error.status < 500);
+    (unreported ? console.warn : console.error)("[google-drive] write failed", { name, error: failure });
     const message =
         error instanceof GoogleDriveUserError
             ? error.message
@@ -1314,7 +1313,7 @@ export async function buildGoogleDriveTools(
             "db.query_failed",
             "Google Drive token row could not be loaded",
         );
-        reportError(failure, { extra: { userId: owner.userId } });
+        reportError(failure);
         console.error("[google-drive] failed to load token row", {
             userId: owner.userId,
             error: failure,
@@ -1415,10 +1414,7 @@ export async function executeGoogleDriveToolCall(
             error instanceof GoogleDriveUserError
                 ? error.message
                 : "Google Drive call failed. Please try again.";
-        const failure = reportDriveToolFailure(error, toolName, {
-            userId: owner.userId,
-            toolName,
-        });
+        const failure = reportDriveToolFailure(error, toolName);
         console.error("[google-drive] tool call failed", {
             userId: owner.userId,
             toolName,

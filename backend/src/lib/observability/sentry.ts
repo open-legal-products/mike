@@ -18,7 +18,7 @@
 //      explicitly are remembered so the bridge does not double-report them.
 
 import * as Sentry from "@sentry/node";
-import { diagnosticErrorTags, privacyBoundaryIntegration, type Operation } from "./sentryPrivacy";
+import { diagnosticErrorTags, privacyBoundaryIntegration, type Operation, type Stage } from "./sentryPrivacy";
 
 export type SentryRole = "api" | "worker" | "worker-thread" | "job";
 
@@ -210,7 +210,6 @@ const EXTRA_KEY_ALLOWLIST = new Set([
   "kind",
   "message",
   "name",
-  "path",
   "playbook_id",
   "request_id",
   "requestId",
@@ -1071,7 +1070,7 @@ export function setOperation(operation: Operation): void {
  * via `copy-rollback`. Only the stage name travels: it is a vocabulary
  * member, never a message or data.
  */
-export function markStage(stage: string): void {
+export function markStage(stage: Stage): void {
   if (!initialized) return;
   Sentry.addBreadcrumb({ category: "mike.stage", message: stage, level: "info" });
 }

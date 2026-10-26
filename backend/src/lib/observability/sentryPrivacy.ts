@@ -37,6 +37,19 @@ export const OPERATIONS = [
 ] as const;
 export type Operation = (typeof OPERATIONS)[number];
 
+/** The named steps of an operation, for `stage` tags and the markStage trail. */
+export const STAGES = [
+  'runtime-config', 'manifest-key', 'listen', 'shutdown-http', 'shutdown-workers', 'shutdown-flush', 'gateway-config', 'gateway-fetch',
+  'gateway-response', 'api-unreachable', 'conversion', 'heartbeat', 'process-file', 'iteration', 'failure-hook', 'claim',
+  'tick', 'retention', 'delivery', 'docx-to-pdf', 'copy-rollback', 'anchor-cleanup', 'resolve-cleanup', 'resolve',
+  'restore', 'reveal', 'locate', 'citation-select', 'release', 'document-read', 'resolve-batch', 'tool-result',
+  'sealed-source-after-process', 'failed-file-sealed', 'session-expiry', 'seal-mismatch', 'seal-recover', 'session-cancel', 'user-prefix-cleanup', 'failed-document-remove',
+  'import.read', 'import.check', 'import.extract', 'import.compile', 'import.validate', 'import.store', 'import.save', 'import.record',
+  'import.cleanup', 'review.model', 'review.apply_edits', 'review.save', 'review.record', 'job.terminal', 'assistant-edit-conflict', 'edit-resolution-conflict',
+  'org-playbook-purge', 'optional-read',
+] as const;
+export type Stage = (typeof STAGES)[number];
+
 export const ERROR_KINDS = [
   'storage.head_failed', 'storage.upload_failed', 'storage.download_failed', 'storage.delete_failed', 'storage.copy_failed',
   'storage.signed_url_failed',
@@ -69,7 +82,7 @@ export const DIAGNOSTIC_VOCABULARY: Record<string, ReadonlySet<string>> = Object
   surface: 'taskpane commands dialog',
   install: 'community official',
   component: 'http mike-api api-gateway dbq storage upload-worker conversion-worker extraction-worker app-jobs chat-stream chat-title assistant-chat word-chat word-office boot shutdown worker-shutdown worker-thread worker-thread-supervisor stale-sweep mcp-refresh-sweep workflow-sync best-effort route-error-boundary global-error-boundary playbooks runtime-warning notify',
-  stage: 'runtime-config manifest-key listen shutdown-http shutdown-workers shutdown-flush gateway-config gateway-fetch gateway-response api-unreachable conversion heartbeat process-file iteration failure-hook claim tick retention delivery docx-to-pdf copy-rollback anchor-cleanup resolve-cleanup resolve restore reveal locate citation-select release document-read resolve-batch tool-result sealed-source-after-process failed-file-sealed session-expiry seal-mismatch seal-recover session-cancel user-prefix-cleanup failed-document-remove import.read import.check import.extract import.compile import.validate import.store import.save import.record import.cleanup review.model review.apply_edits review.save review.record job.terminal assistant-edit-conflict edit-resolution-conflict org-playbook-purge optional-read',
+  stage: STAGES.join(' '),
   http_method: 'GET POST PUT PATCH DELETE HEAD OPTIONS',
   // Every code a server emits (frontend/src/shared/lib/userError.ts CODE_KINDS) plus the client's own two.
   error_code: 'internal_error network_error upstream_unavailable schema_out_of_date rate_limited upload_session_control_rate_limit upload_session_poll_rate_limit upload_session_rate_limit_exceeded request_too_large upload_file_too_large upload_batch_too_large validation_failed invalid_request invalid_json password_too_short password_too_long email_address_invalid upload_incomplete missing_api_key model_unavailable model_required authentication_failed session_expired cookie_session_required mfa_verification_required untrusted_origin review_running review_stale memory_revision_conflict upload_target_busy access_inherited ask_inputs_stale',

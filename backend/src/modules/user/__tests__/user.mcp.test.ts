@@ -73,10 +73,8 @@ describe("MCP connector failure reporting", () => {
         expect(failure.kind).toBe("mcp.call_failed");
         expect(failure.cause).toBe(cause);
         expect(mocks.reportError).toHaveBeenCalledOnce();
-        expect(mocks.reportError).toHaveBeenCalledWith(failure, {
-            level: "warning",
-            extra: { userId: "u1", connectorId: "connector-1" },
-        });
+        // Ids stay in the log line; the report carries the kind and the cause.
+        expect(mocks.reportError).toHaveBeenCalledWith(failure, { level: "warning" });
         expect(console.error).toHaveBeenCalledWith(
             "[user/mcp-connectors] refresh failed",
             expect.objectContaining({ error: failure }),
