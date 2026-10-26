@@ -1216,8 +1216,9 @@ function startUploadProcessingWorker(options: {
     try {
       const db = createServerSupabase();
       if (options.runCleanup && Date.now() - lastCleanupAt >= 60_000) {
+        // Own scope: the stages cleanup marks must not land on a later job.
         await Promise.all([
-          cleanupUploadSessions(db),
+          runIsolated(() => cleanupUploadSessions(db)),
           cleanupUploadProcessingTempFiles(),
         ]);
         lastCleanupAt = Date.now();

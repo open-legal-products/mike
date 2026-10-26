@@ -273,9 +273,9 @@ const reportingStorageFetch: typeof fetch = async (input, init) => {
     try {
         response = await fetch(input, init);
     } catch (error) {
-        // The caller's abort and the per-attempt timeout both arrive as an
-        // aborted signal; neither is a storage failure.
-        if (init?.signal?.aborted || isAbortError(error)) throw error;
+        // The caller's abort (an AbortError) is not a storage failure; the
+        // per-attempt timeout (a TimeoutError) is, and is reported.
+        if (isAbortError(error)) throw error;
         once(() =>
             reportError(error, {
                 level: "warning",

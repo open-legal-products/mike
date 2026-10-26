@@ -93,7 +93,7 @@ export function createExtractionWorker(): Worker<ExtractionJobData> {
             reportError(updateErr, {
                 tags: {
                     component: "extraction-worker",
-                    operation: "documents.extract",
+                    operation: extractionJobOperation(job.data),
                     stage: "job.terminal",
                 },
                 extra: { job_id: job.id, review_id: job.data.reviewId },

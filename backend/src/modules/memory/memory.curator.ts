@@ -752,11 +752,19 @@ export function memoryScopeFailure(error: unknown): Error {
   );
 }
 
-/** The `    at …` lines of the original stack, without its message line. */
+/**
+ * The `    at …` lines of the original stack, without its message line.
+ * Our own wrappers (a scope failure wrapped again at the job level) hold the
+ * frames of the wrap, not of the dependency; skip them like the cause reader.
+ */
 function scopeFailureFrames(error: unknown): string {
-  if (!(error instanceof Error) || typeof error.stack !== "string") return "";
-  const at = error.stack.indexOf("\n    at ");
-  return at >= 0 ? error.stack.slice(at) : "";
+  let current: unknown = error;
+  for (let depth = 0; depth < 3 && current instanceof AppError && current.cause !== undefined; depth++) {
+    current = current.cause;
+  }
+  if (!(current instanceof Error) || typeof current.stack !== "string") return "";
+  const at = current.stack.indexOf("\n    at ");
+  return at >= 0 ? current.stack.slice(at) : "";
 }
 
 export async function runMemoryCuratorScope(

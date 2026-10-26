@@ -90,8 +90,13 @@ export function providerFailureKind(error: unknown): ErrorKind {
     if (response.status >= 500) return "chat.provider_unavailable";
     return "chat.stream_failed";
   }
-  if (asProviderStallError(error, { label: "", modelId: "" }) || isNetworkFailure(error)) {
-    return "chat.provider_unavailable";
+  // A stall or a network failure may arrive wrapped (toProviderStreamError
+  // around the first-chunk timeout); look down the chain for it.
+  for (let current = error, depth = 0; current && depth < 8; depth++) {
+    if (asProviderStallError(current, { label: "", modelId: "" }) || isNetworkFailure(current)) {
+      return "chat.provider_unavailable";
+    }
+    current = (current as { cause?: unknown }).cause;
   }
   return "chat.stream_failed";
 }

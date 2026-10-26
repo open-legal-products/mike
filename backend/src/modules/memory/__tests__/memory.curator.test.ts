@@ -705,6 +705,17 @@ describe("scope-bound memory curator tool", () => {
   });
 });
 
+describe("memoryScopeFailure frames", () => {
+  it("keeps the dependency's frames when a scope failure is wrapped again at the job level", () => {
+    const provider = Object.assign(new Error("secret"), { name: "InvalidApiKeyError" });
+    provider.stack = "InvalidApiKeyError: secret\n    at callProvider (backend/src/lib/llm/providers.ts:10:5)";
+    const outer = memoryScopeFailure(memoryScopeFailure(provider));
+    const stack = (outer.cause as Error).stack ?? "";
+    expect(stack).toContain("callProvider (backend/src/lib/llm/providers.ts:10:5)");
+    expect(stack).not.toContain("secret");
+  });
+});
+
 describe("memoryScopeFailureCause", () => {
   it("copies only allowlist-shaped name, code and HTTP status", () => {
     expect(

@@ -178,6 +178,7 @@ export async function requestDocumentCleanupDelivery(
 ): Promise<number> {
     if (process.env.DB_JOBS_ENABLED === "false") return 0;
     if (!redisEnabled()) return 0;
+    let ids: string[];
     try {
         const { data, error } = await db
             .from("db_jobs")
@@ -186,7 +187,22 @@ export async function requestDocumentCleanupDelivery(
             .eq("status", "pending")
             .limit(limit);
         if (error) throw error;
-        const ids = (data ?? []).map((row) => row.id as string);
+        ids = (data ?? []).map((row) => row.id as string);
+    } catch (err) {
+        // The backlog query, not Redis: a database failure with its SQLSTATE.
+        const failure = new AppError(
+            "db.query_failed",
+            "[dbq] document.cleanup backlog query failed; poll backstop will run the jobs",
+            { cause: err },
+        );
+        reportError(failure, {
+            level: "warning",
+            tags: { component: "dbq", job_kind: "document.cleanup" },
+        });
+        console.error(failure.message, failure);
+        return 0;
+    }
+    try {
         await Promise.all(ids.map((id) => enqueueAppJobDelivery(id)));
         return ids.length;
     } catch (err) {

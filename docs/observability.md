@@ -433,7 +433,8 @@ listed):
   `AppError` (or a subclass: `StorageOperationError`, `AssistantStreamError`,
   `DbJobDeferredError`, `NonRetryableJobError`) with a kind such as
   `conversion.no_output` or `chat.provider_rate_limited`; the boundary reads
-  the first kind on the cause chain. Wrap a dependency's error as the cause
+  the deepest kind on the cause chain, so a wrapper's kind never hides the
+  cause's (`withKind` in `appError.ts` wraps without shadowing). Wrap a dependency's error as the cause
   rather than re-throwing a bare `new Error(...)`: its errno, SQLSTATE,
   PostgREST or AWS code and HTTP status already extract as `failure_code`
   and `dependency_status`.

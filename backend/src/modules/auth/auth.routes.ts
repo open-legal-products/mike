@@ -205,7 +205,7 @@ async function startSso(req: Request, res: Response) {
             detail: "Unable to start single sign-on for this domain.",
           });
       }
-      throw new Error("SSO provider request failed");
+      throw new Error("SSO provider request failed", { cause: error });
     }
     if (!data?.url) throw new Error("Missing SSO redirect");
     return res.json({ url: data.url });

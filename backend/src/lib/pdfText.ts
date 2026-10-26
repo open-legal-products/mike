@@ -266,8 +266,18 @@ function reportUnreadablePdf(cause: unknown): void {
  */
 async function readPdfPages(buf: ArrayBuffer): Promise<PdfReadResult> {
   let loadingTask: PdfLoadingTask | undefined;
+  // A pdf.js that cannot be loaded is a broken install, not an unreadable
+  // document: it carries its own kind so the two never share an issue.
+  let pdfjsLib: unknown;
   try {
-    const pdfjsLib = await import("pdfjs-dist/legacy/build/pdf.mjs" as string);
+    pdfjsLib = await import("pdfjs-dist/legacy/build/pdf.mjs" as string);
+  } catch (cause) {
+    return {
+      pages: null,
+      cause: new AppError("extraction.failed", "pdf.js could not be loaded", { cause }),
+    };
+  }
+  try {
     loadingTask = (
       pdfjsLib as unknown as {
         getDocument: (opts: unknown) => PdfLoadingTask;

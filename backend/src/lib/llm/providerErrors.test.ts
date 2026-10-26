@@ -151,6 +151,13 @@ describe("providerFailureKind", () => {
     expect(providerFailureKind(wrapped)).toBe("chat.provider_rate_limited");
   });
 
+  it("classifies a stalled stream as unavailable whatever wraps it", () => {
+    const stall = new Error("first chunk timeout of 30000ms exceeded");
+    expect(providerFailureKind(stall)).toBe("chat.provider_unavailable");
+    expect(providerFailureKind(toProviderStreamError(stall, gemini))).toBe("chat.provider_unavailable");
+    expect(providerFailureKind(new Error("turn failed", { cause: stall }))).toBe("chat.provider_unavailable");
+  });
+
   it("names a rejected key whatever wraps it", () => {
     const rejected = new InvalidApiKeyError("Gemini");
     expect(providerFailureKind(rejected)).toBe("chat.provider_rejected");
