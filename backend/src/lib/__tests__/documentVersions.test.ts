@@ -11,11 +11,17 @@ type Row = Record<string, unknown>;
 /**
  * Read-only Supabase mock covering the query chains documentVersions uses:
  * select/eq/in/is/not filters plus single() and awaiting the builder.
+ * `maxInValues` makes a longer in() list fail the way the gateway rejects an
+ * over-long URL (414), and `inCalls` records each list's length.
  */
-function makeDb(tables: Record<string, Row[]>) {
+function makeDb(
+    tables: Record<string, Row[]>,
+    options: { maxInValues?: number; inCalls?: number[] } = {},
+) {
     return {
         from(table: string) {
             let rows = [...(tables[table] ?? [])];
+            let error: { message: string } | null = null;
             const query: any = {
                 select: () => query,
                 eq: (column: string, value: unknown) => {
@@ -23,6 +29,13 @@ function makeDb(tables: Record<string, Row[]>) {
                     return query;
                 },
                 in: (column: string, values: unknown[]) => {
+                    options.inCalls?.push(values.length);
+                    if (
+                        options.maxInValues !== undefined &&
+                        values.length > options.maxInValues
+                    ) {
+                        error = { message: "414 Request-URI Too Large" };
+                    }
                     rows = rows.filter((row) => values.includes(row[column]));
                     return query;
                 },
@@ -38,9 +51,15 @@ function makeDb(tables: Record<string, Row[]>) {
                 },
                 single: async () => ({ data: rows[0] ?? null, error: null }),
                 then: (
-                    resolve: (value: { data: Row[]; error: null }) => unknown,
+                    resolve: (value: {
+                        data: Row[] | null;
+                        error: { message: string } | null;
+                    }) => unknown,
                     reject?: (reason: unknown) => unknown,
-                ) => Promise.resolve({ data: rows, error: null }).then(resolve, reject),
+                ) =>
+                    Promise.resolve(
+                        error ? { data: null, error } : { data: rows, error: null },
+                    ).then(resolve, reject),
             };
             return query;
         },
@@ -282,6 +301,34 @@ describe("attachActiveVersionPaths", () => {
         expect(doc.storage_path).toBeNull();
         expect(doc.filename).toBe("Untitled document");
     });
+
+    it("names every document in a project too large for one gateway URL", async () => {
+        const versions = Array.from({ length: 230 }, (_, i) => ({
+            ...FULL_VERSION,
+            id: `ver-${i}`,
+            filename: `doc-${i}.pdf`,
+        }));
+        const inCalls: number[] = [];
+        const db = makeDb(
+            { document_versions: versions },
+            { maxInValues: 50, inCalls },
+        );
+        const docs = await attachActiveVersionPaths<TestDoc>(
+            db,
+            versions.map((v, i) => ({ id: `doc-${i}`, current_version_id: v.id })),
+        );
+        expect(docs.map((d) => d.filename)).toEqual(versions.map((v) => v.filename));
+        expect(Math.max(...inCalls)).toBeLessThanOrEqual(50);
+    });
+
+    it("throws when the version lookup fails instead of naming everything 'Untitled document'", async () => {
+        const db = makeDb({ document_versions: [FULL_VERSION] }, { maxInValues: 0 });
+        await expect(
+            attachActiveVersionPaths<TestDoc>(db, [
+                { id: "doc-1", current_version_id: "ver-1" },
+            ]),
+        ).rejects.toThrow("Active version lookup failed");
+    });
 });
 
 // ---------------------------------------------------------------------------
@@ -334,6 +381,33 @@ describe("attachLatestVersionNumbers", () => {
         });
         const docs = await attachLatestVersionNumbers<TestDoc>(db, [{ id: "doc-1" }]);
         expect(docs[0].latest_version_number).toBe(2);
+    });
+
+    it("looks up a project too large for one gateway URL in batches", async () => {
+        const inCalls: number[] = [];
+        const db = makeDb(
+            {
+                document_versions: Array.from({ length: 230 }, (_, i) =>
+                    versionRow(`doc-${i}`, i + 1),
+                ),
+            },
+            { maxInValues: 50, inCalls },
+        );
+        const docs = await attachLatestVersionNumbers<TestDoc>(
+            db,
+            Array.from({ length: 230 }, (_, i) => ({ id: `doc-${i}` })),
+        );
+        expect(docs.map((d) => d.latest_version_number)).toEqual(
+            Array.from({ length: 230 }, (_, i) => i + 1),
+        );
+        expect(Math.max(...inCalls)).toBeLessThanOrEqual(50);
+    });
+
+    it("throws when the version-number lookup fails", async () => {
+        const db = makeDb({ document_versions: [versionRow("doc-1", 2)] }, { maxInValues: 0 });
+        await expect(
+            attachLatestVersionNumbers<TestDoc>(db, [{ id: "doc-1" }]),
+        ).rejects.toThrow("Latest version number lookup failed");
     });
 });
 

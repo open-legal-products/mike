@@ -1,7 +1,15 @@
 import { createHash } from "node:crypto";
+import { chunkArray } from "./arrays";
 import type { Db } from "./supabase";
 
 type Supa = Db;
+
+/**
+ * UUIDs per `in()` filter. A project's whole document list goes through these
+ * helpers, and a few hundred ids overflow the gateway's request-line limit
+ * (414), so look them up in batches as access.ts does.
+ */
+const VERSION_LOOKUP_BATCH_SIZE = 50;
 
 /**
  * SHA-256 hex digest of a version's file bytes. Stored on
@@ -129,8 +137,8 @@ export function downloadFilenameForVersion(
 
 /**
  * For a list of documents, look up the active version for each and merge
- * `storage_path` + `pdf_storage_path` onto the row. One round-trip total
- * regardless of list size. Documents with no current_version_id retain
+ * `storage_path` + `pdf_storage_path` onto the row. One round-trip per
+ * 50 versions. Documents with no current_version_id retain
  * null paths.
  */
 export async function attachActiveVersionPaths<T extends VersionPathRow>(
@@ -155,13 +163,25 @@ export async function attachActiveVersionPaths<T extends VersionPathRow>(
         }
         return docs;
     }
-    const { data: rows } = await db
-        .from("document_versions")
-        .select(
-            "id, storage_path, pdf_storage_path, version_number, filename, source, file_type, size_bytes, page_count, textless_page_count, content_sha256",
-        )
-        .in("id", versionIds)
-        .is("deleted_at", null);
+    const rows: unknown[] = [];
+    for (const batch of chunkArray(
+        [...new Set(versionIds)],
+        VERSION_LOOKUP_BATCH_SIZE,
+    )) {
+        const { data, error } = await db
+            .from("document_versions")
+            .select(
+                "id, storage_path, pdf_storage_path, version_number, filename, source, file_type, size_bytes, page_count, textless_page_count, content_sha256",
+            )
+            .in("id", batch)
+            .is("deleted_at", null);
+        // A failed batch is not "no versions": that would rename every
+        // document "Untitled document" and blank its storage paths.
+        if (error) {
+            throw new Error("Active version lookup failed", { cause: error });
+        }
+        rows.push(...(data ?? []));
+    }
     const byId = new Map<
         string,
         {
@@ -177,7 +197,7 @@ export async function attachActiveVersionPaths<T extends VersionPathRow>(
             content_sha256: string | null;
         }
     >();
-    for (const r of (rows ?? []) as {
+    for (const r of rows as {
         id: string;
         storage_path: string | null;
         pdf_storage_path: string | null;
@@ -223,24 +243,33 @@ export async function attachActiveVersionPaths<T extends VersionPathRow>(
  * Given a list of document rows, attach `latest_version_number` — the
  * max `version_number` across all assistant_edit rows for that doc, or
  * null if none. Mutates rows in place and returns the same reference.
- * One extra query regardless of list size.
+ * One extra query per 50 documents.
  */
 export async function attachLatestVersionNumbers<T extends DocRow>(
     db: Supa,
     docs: T[],
 ): Promise<T[]> {
     if (docs.length === 0) return docs;
-    const ids = docs.map((d) => d.id);
-    const { data: rows } = await db
-        .from("document_versions")
-        .select("document_id, version_number")
-        .in("document_id", ids)
-        .eq("source", "assistant_edit")
-        .is("deleted_at", null)
-        .not("version_number", "is", null);
+    const ids = [...new Set(docs.map((d) => d.id))];
+    const rows: unknown[] = [];
+    for (const batch of chunkArray(ids, VERSION_LOOKUP_BATCH_SIZE)) {
+        const { data, error } = await db
+            .from("document_versions")
+            .select("document_id, version_number")
+            .in("document_id", batch)
+            .eq("source", "assistant_edit")
+            .is("deleted_at", null)
+            .not("version_number", "is", null);
+        if (error) {
+            throw new Error("Latest version number lookup failed", {
+                cause: error,
+            });
+        }
+        rows.push(...(data ?? []));
+    }
 
     const latestByDoc = new Map<string, number>();
-    for (const r of (rows ?? []) as {
+    for (const r of rows as {
         document_id: string;
         version_number: number | null;
     }[]) {
