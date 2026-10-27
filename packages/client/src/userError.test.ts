@@ -55,6 +55,21 @@ describe("describeError", () => {
         });
     });
 
+    it("drops trailing punctuation from the action title, in linear time", () => {
+        const failure = new FakeApiError({ status: 500, message: "boom" });
+        expect(describeError(failure, { action: " save the draft!.! " }).title).toBe(
+            "Couldn't save the draft",
+        );
+        expect(describeError(failure, { action: "..." }).title).not.toMatch(/^Couldn't/);
+        // A long run of "!" followed by anything else made /[.!]+$/ retry from
+        // every "!" (~15 s here); vitest cannot time out a synchronous test,
+        // so bound the elapsed time instead.
+        const shouted = `${"!".repeat(100_000)}x`;
+        const started = performance.now();
+        expect(describeError(failure, { action: shouted }).title).toBe(`Couldn't ${shouted}`);
+        expect(performance.now() - started).toBeLessThan(1_000);
+    });
+
     it("never echoes a 5xx body and offers retry plus support", () => {
         const described = describeError(
             new FakeApiError({

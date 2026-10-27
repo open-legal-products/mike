@@ -74,6 +74,19 @@ describe("cloud platform options", () => {
         });
     });
 
+    it("drops the version pin from the last path segment only, in linear time", () => {
+        expect(vertexCatalogModel("claude@v1@v2")).toBe("claude");
+        expect(vertexCatalogModel("publisher@x/model@20260101")).toBe("publisher@x/model");
+        expect(vertexCatalogModel("publisher/model")).toBe("publisher/model");
+        // A long run of "@" ending in "/" made /@[^/]*$/ retry from every "@".
+        // The old regex took ~15 s on this; vitest cannot time out a
+        // synchronous test, so bound the elapsed time instead.
+        const ats = `${"@".repeat(100_000)}/`;
+        const started = performance.now();
+        expect(vertexCatalogModel(ats)).toBe(ats);
+        expect(performance.now() - started).toBeLessThan(1_000);
+    });
+
     it("reads Vertex ids without the version pin or partner suffix", () => {
         expect(vertexCatalogModel("claude-opus-5-5@20260101")).toBe(
             "claude-opus-5-5",

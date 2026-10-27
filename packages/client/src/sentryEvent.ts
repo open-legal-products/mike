@@ -558,7 +558,24 @@ function findNested(
  */
 const DEV_TOOLCHAIN_FRAME =
     /(?:^|\/)node_modules\/(?:next\/dist|react-dom|react|scheduler)\/|(?:^|\/)_next\/static\/chunks\/(?:node_modules_(?:next_dist|react-dom|react|scheduler)_|(?:\[|%5B)turbopack(?:\]|%5D)_)/i;
-const STACK_LINE_LOCATION = /\(?([^\s()]+):\d+:\d+\)?\s*$/;
+
+/**
+ * The file of a V8/JSC stack line ("    at fn (file:12:5)" or "file:12:5"):
+ * the run of non-space, non-parenthesis characters before the trailing
+ * ":line:column", as `/\(?([^\s()]+):\d+:\d+\)?\s*$/` matched. That
+ * regex is anchored only at the end, so the engine retries it from every
+ * position and it is quadratic on a long line; isolating the last token
+ * first leaves one start-anchored match.
+ */
+function stackLineLocation(line: string): string | undefined {
+    let end = line.trimEnd();
+    if (end.endsWith(")")) end = end.slice(0, -1);
+    let start = end.length;
+    while (start > 0 && !STACK_TOKEN_BOUNDARY.test(end.charAt(start - 1))) start--;
+    return STACK_TOKEN_LOCATION.exec(end.slice(start))?.[1];
+}
+const STACK_TOKEN_BOUNDARY = /[\s()]/;
+const STACK_TOKEN_LOCATION = /^([^\s()]+):\d+:\d+$/;
 
 /**
  * True for an AUTOMATIC capture (console bridge, global unhandled handler)
@@ -588,7 +605,7 @@ function isDevToolchainNoise(event: ScrubbableEvent, automatic: boolean): boolea
     const nestedStack = event.extra?.error_stack;
     if (typeof nestedStack === "string") {
         for (const line of nestedStack.split("\n").slice(1)) {
-            const location = line.match(STACK_LINE_LOCATION)?.[1];
+            const location = stackLineLocation(line);
             if (location) locations.push(location);
         }
     }

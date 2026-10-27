@@ -569,6 +569,34 @@ describe("next dev toolchain noise", () => {
         ).not.toBeNull();
     });
 
+    it("reads nested stack-line locations exactly, in linear time", () => {
+        const { scrubEvent } = createEventScrubber();
+        const nextFrame = { filename: `${origin}/_next/static/chunks/node_modules_next_dist_07iqgt0._.js` };
+        const loggedWithStack = (stack: string): [ScrubbableEvent, { captureContext: unknown }] => {
+            const nested = new Error("render failed");
+            nested.stack = stack;
+            return [
+                { logger: "console", tags: { ...devTags }, stacktrace: { frames: [nextFrame] } },
+                { captureContext: { extra: { arguments: ["[chat] failed", { error: nested }] } } },
+            ];
+        };
+        // A parenthesised location with trailing whitespace, and a bare one,
+        // both in Mike's code: the event is kept.
+        expect(scrubEvent(...loggedWithStack(
+            `Error: x\n    at ChatView (${origin}/_next/static/chunks/src_app_page_tsx_1a._.js:12:5)  \t`,
+        ))).not.toBeNull();
+        expect(scrubEvent(...loggedWithStack(
+            `Error: x\n    ${origin}/_next/static/chunks/src_app_page_tsx_1a._.js:12:5`,
+        ))).not.toBeNull();
+        // A line with no location adds nothing, so only the Next frame counts.
+        // The long run of "!" made the old end-anchored regex retry from
+        // every position (~15 s here); vitest cannot time out a synchronous
+        // test, so bound the elapsed time instead.
+        const started = performance.now();
+        expect(scrubEvent(...loggedWithStack(`Error: x\n${"!".repeat(100_000)} `))).toBeNull();
+        expect(performance.now() - started).toBeLessThan(1_000);
+    });
+
     it("keeps the same toolchain-only event in production, from explicit reports, and without frames", () => {
         const { scrubEvent } = createEventScrubber();
         const frames = [{ filename: "/app/node_modules/next/dist/server/base-server.js" }];
