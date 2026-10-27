@@ -43,7 +43,7 @@ import {
 import { hasDirectContentGrants } from "../../lib/contentAccess";
 import {
     DOCUMENT_WORKSPACE_MISMATCH_CODE,
-    DOCUMENT_WORKSPACE_MISMATCH_DETAIL,
+    CHAT_ATTACHMENT_WORKSPACE_MISMATCH_DETAIL,
     findNewAttachmentsOutsideWorkspace,
 } from "../../lib/documentWorkspace";
 import { can, type ProjectRole } from "../../lib/permissions";
@@ -315,7 +315,7 @@ export async function prepareProjectChatStream(
                 ok: false,
                 status: 400,
                 code: DOCUMENT_WORKSPACE_MISMATCH_CODE,
-                detail: DOCUMENT_WORKSPACE_MISMATCH_DETAIL,
+                detail: CHAT_ATTACHMENT_WORKSPACE_MISMATCH_DETAIL,
             };
     } catch (error) {
         return { ok: false, internal: true, error };

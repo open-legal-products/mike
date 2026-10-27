@@ -175,7 +175,7 @@ export async function listQuickActions(
       args.userId,
       args.userEmail,
       db,
-      surface === "word" ? "personal" : args.workspace,
+      args.workspace,
     ),
   );
 }

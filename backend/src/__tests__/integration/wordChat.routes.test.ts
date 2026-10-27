@@ -21,6 +21,8 @@ const { dbState, recordedQueries } = vi.hoisted(() => ({
     messageDetail: { data: null, error: null },
     edits: { data: [], error: null },
     editDetail: { data: null, error: null },
+    orgMember: { data: null, error: null },
+    organization: { data: null, error: null },
   } as {
     document: QueryResult;
     chatList: QueryResult;
@@ -29,6 +31,10 @@ const { dbState, recordedQueries } = vi.hoisted(() => ({
     messageDetail: QueryResult;
     edits: QueryResult;
     editDetail: QueryResult;
+    /** The caller's org_members row (getOrgRole, resolveWorkspaceFilter). */
+    orgMember: QueryResult;
+    /** The organization's kind (isPersonalOrg); null reads as a team. */
+    organization: QueryResult;
   },
   recordedQueries: [] as RecordedQuery[],
 }));
@@ -62,6 +68,8 @@ function resultForSingleQuery(table: string): QueryResult {
   if (table === "word_chats") return dbState.chatDetail;
   if (table === "word_chat_messages") return dbState.messageDetail;
   if (table === "word_document_edits") return dbState.editDetail;
+  if (table === "org_members") return dbState.orgMember;
+  if (table === "organizations") return dbState.organization;
   return { data: null, error: null };
 }
 
@@ -76,7 +84,6 @@ function makeQuery(table: string) {
     "upsert",
     "neq",
     "in",
-    "is",
     "or",
     "not",
     "lt",
@@ -104,6 +111,10 @@ function makeQuery(table: string) {
   });
   query.eq = vi.fn((column: string, value: unknown) => {
     recorded.filters.push({ column, value });
+    return query;
+  });
+  query.is = vi.fn((column: string, value: unknown) => {
+    recorded.filters.push({ column: `is:${column}`, value });
     return query;
   });
   query.single = vi.fn(() => Promise.resolve(resultForSingleQuery(table)));
@@ -213,6 +224,8 @@ function resetDbState() {
   dbState.messageDetail = { data: null, error: null };
   dbState.edits = { data: [], error: null };
   dbState.editDetail = { data: null, error: null };
+  dbState.orgMember = { data: null, error: null };
+  dbState.organization = { data: null, error: null };
 }
 
 describe("Word chat history routes", () => {
@@ -1104,5 +1117,178 @@ describe("server-owned Word turns", () => {
     // The keep-alive comments the adapter wrote while the call was
     // outstanding were never buffered, so they cannot be replayed either.
     expect(settledReplay.text).not.toContain("tool-wait");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// A Word chat belongs to a workspace, fixed at creation, like a standalone
+// web chat: Personal (org_id null) or one team organization.
+// ---------------------------------------------------------------------------
+describe("Word chat workspaces", () => {
+  const FIRM = "0b9e3c1e-6a43-4b5e-9a57-2f1f1d7f2c10";
+  const send = (body: Record<string, unknown>) =>
+    request(app)
+      .post("/word-chat")
+      .set(...AUTH)
+      .send({
+        messages: [{ role: "user", content: "Revise this clause" }],
+        document_id: DOCUMENT_ID,
+        model: "gemini-3-flash-preview",
+        ...body,
+      });
+  const chatInsert = () =>
+    recordedQueries.find(
+      ({ table, op }) => table === "word_chats" && op === "insert",
+    );
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    recordedQueries.length = 0;
+    resetDbState();
+    runLLMStream.mockResolvedValue({
+      events: [{ type: "content", text: "Response" }],
+      citations: [],
+    });
+  });
+
+  it("starts a chat in a team organization the caller belongs to, and runs every org-aware step in it", async () => {
+    const chatLib = await import("../../modules/chat/engine/index.js");
+    const settings = await import("../../modules/user/user.settings.js");
+    dbState.orgMember = { data: { role: "member" }, error: null };
+    dbState.chatDetail = {
+      data: { id: CHAT_ID, title: null, user_id: "u1" },
+      error: null,
+    };
+
+    const res = await send({ org_id: FIRM });
+
+    expect(res.status).toBe(200);
+    expect(chatInsert()?.payload).toMatchObject({ org_id: FIRM });
+    // Keys and models (resolveUserChatSelection), workflows, the stream
+    // (connectors, memory, generated files) and the audit row.
+    expect(settings.getUserModelSettings).toHaveBeenCalledWith(
+      "u1",
+      expect.anything(),
+      { orgId: FIRM },
+    );
+    expect(chatLib.buildWorkflowStore).toHaveBeenCalledWith(
+      "u1",
+      "u1@test.local",
+      expect.anything(),
+      FIRM,
+    );
+    expect(runLLMStream).toHaveBeenCalledWith(
+      expect.objectContaining({ orgId: FIRM }),
+    );
+    const auditJob = recordedQueries.find(({ table }) => table === "db_jobs");
+    expect(auditJob?.payload).toMatchObject({
+      kind: "audit.chat_turn",
+      payload: { base: { orgId: FIRM, surface: "word" } },
+    });
+  });
+
+  it.each([
+    ["a non-member", { data: null, error: null }, { data: null, error: null }],
+    [
+      "the caller's own (personal) organization",
+      { data: { role: "owner" }, error: null },
+      { data: { kind: "personal" }, error: null },
+    ],
+  ])("refuses to start a chat in %s", async (_label, member, organization) => {
+    dbState.orgMember = member;
+    dbState.organization = organization;
+
+    const res = await send({ org_id: FIRM });
+
+    expect(res.status).toBe(400);
+    expect(res.body.detail).toBe("You are not a member of that organization.");
+    expect(chatInsert()).toBeUndefined();
+    expect(runLLMStream).not.toHaveBeenCalled();
+  });
+
+  it("refuses a device-only chat in an organization", async () => {
+    dbState.orgMember = { data: { role: "member" }, error: null };
+
+    const res = await send({ org_id: FIRM, storage: "local" });
+
+    expect(res.status).toBe(400);
+    expect(res.body.code).toBe("word_org_chat_requires_cloud");
+    expect(runLLMStream).not.toHaveBeenCalled();
+  });
+
+  it("keeps a resumed chat in its own workspace, whatever the pane asks for", async () => {
+    dbState.chatDetail = {
+      data: { id: CHAT_ID, title: "Draft", user_id: "u1", org_id: null },
+      error: null,
+    };
+
+    const res = await send({ chat_id: CHAT_ID, org_id: FIRM });
+
+    expect(res.status).toBe(200);
+    expect(runLLMStream).toHaveBeenCalledWith(
+      expect.objectContaining({ orgId: null }),
+    );
+    expect(recordedQueries.some(({ table }) => table === "org_members")).toBe(
+      false,
+    );
+  });
+
+  it("hides an organization's chat from an author who has left it", async () => {
+    dbState.chatDetail = {
+      data: { id: CHAT_ID, user_id: "u1", org_id: FIRM },
+      error: null,
+    };
+
+    const detail = await request(app)
+      .get(`/word-chat/${CHAT_ID}?document_id=${DOCUMENT_ID}`)
+      .set(...AUTH);
+    const resume = await send({ chat_id: CHAT_ID });
+    dbState.chatList = {
+      data: [
+        { id: "personal-chat", org_id: null },
+        { id: CHAT_ID, org_id: FIRM },
+      ],
+      error: null,
+    };
+    const list = await request(app)
+      .get(`/word-chat?document_id=${DOCUMENT_ID}`)
+      .set(...AUTH);
+
+    expect(detail.status).toBe(404);
+    expect(resume.status).toBe(404);
+    expect(list.body.map((chat: { id: string }) => chat.id)).toEqual([
+      "personal-chat",
+    ]);
+  });
+
+  it.each([
+    ["personal", { column: "is:org_id", value: null }],
+    [FIRM, { column: "org_id", value: FIRM }],
+  ])("narrows the list to the %s workspace", async (workspace, filter) => {
+    dbState.orgMember = { data: { org_id: FIRM }, error: null };
+    dbState.chatList = {
+      data: [{ id: CHAT_ID, org_id: workspace === "personal" ? null : FIRM }],
+      error: null,
+    };
+
+    const res = await request(app)
+      .get(`/word-chat?document_id=${DOCUMENT_ID}&workspace=${workspace}`)
+      .set(...AUTH);
+
+    expect(res.status).toBe(200);
+    expect(res.body[0]).toMatchObject({ id: CHAT_ID });
+    expect(res.body[0]).toHaveProperty("org_id");
+    expect(
+      recordedQueries.find(({ table }) => table === "word_chats")?.filters,
+    ).toContainEqual(filter);
+  });
+
+  it("answers workspace_not_found for an organization the caller is not in", async () => {
+    const res = await request(app)
+      .get(`/word-chat?document_id=${DOCUMENT_ID}&workspace=${FIRM}`)
+      .set(...AUTH);
+
+    expect(res.status).toBe(404);
+    expect(res.body.code).toBe("workspace_not_found");
   });
 });

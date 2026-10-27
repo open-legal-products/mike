@@ -31,7 +31,7 @@ import {
 import { teamOrgIdOf } from "../../lib/personalOrgs";
 import {
     DOCUMENT_WORKSPACE_MISMATCH_CODE,
-    DOCUMENT_WORKSPACE_MISMATCH_DETAIL,
+    CHAT_ATTACHMENT_WORKSPACE_MISMATCH_DETAIL,
     findNewAttachmentsOutsideWorkspace,
 } from "../../lib/documentWorkspace";
 import { hasDirectContentGrants } from "../../lib/contentAccess";
@@ -298,7 +298,7 @@ export async function prepareChatStream(
                 ok: false,
                 status: 400,
                 code: DOCUMENT_WORKSPACE_MISMATCH_CODE,
-                detail: DOCUMENT_WORKSPACE_MISMATCH_DETAIL,
+                detail: CHAT_ATTACHMENT_WORKSPACE_MISMATCH_DETAIL,
             };
     } catch (error) {
         return { ok: false, internal: true, error };

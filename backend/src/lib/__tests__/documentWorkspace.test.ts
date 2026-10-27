@@ -212,4 +212,95 @@ describe("findNewAttachmentsOutsideWorkspace", () => {
         ).toEqual(["other-file"]);
         fake.done();
     });
+    it("places a workflow's file, attached by id, by its workflow", async () => {
+        const fake = scriptedDb([
+            {
+                table: "documents",
+                data: [doc("asset", { workflow_id: "wf", org_id: null })],
+            },
+            { table: "workflows", data: [{ id: "wf", org_id: FIRM }] },
+            organizations,
+        ]);
+        expect(
+            await findNewAttachmentsOutsideWorkspace(fake.db, {
+                messages: [{ files: [{ document_id: "asset" }] }],
+                chatId: null,
+                orgId: null,
+            }),
+        ).toEqual(["asset"]);
+        fake.done();
+    });
+
+    it("refuses a saved workflow from another workspace, never a catalog one", async () => {
+        const fake = scriptedDb([
+            { table: "workflows", data: [{ id: "wf", org_id: null }] },
+            organizations,
+        ]);
+        expect(
+            await findNewAttachmentsOutsideWorkspace(fake.db, {
+                messages: [
+                    { workflow: { id: "wf" } },
+                    { workflow: { id: "builtin-nda-review" } },
+                ],
+                chatId: null,
+                orgId: FIRM,
+            }),
+        ).toEqual(["wf"]);
+        // The catalog workflow was never looked up.
+        expect(fake.calls[0].filters).toEqual([["in", "id", ["wf"]]]);
+        fake.done();
+    });
+
+    it("refuses another workspace's playbook, and ignores an id that cannot name one", async () => {
+        const playbookId = "5d0c1c7e-8f0e-4c55-9a43-3c1d2f9f6b10";
+        const fake = scriptedDb([
+            { table: "playbooks", data: [{ id: playbookId, org_id: FIRM }] },
+            organizations,
+        ]);
+        expect(
+            await findNewAttachmentsOutsideWorkspace(fake.db, {
+                messages: [
+                    { playbook: { id: playbookId } },
+                    { playbook: { id: "not-a-uuid" } },
+                ],
+                chatId: null,
+                orgId: null,
+            }),
+        ).toEqual([playbookId]);
+        expect(fake.calls[0].filters).toEqual([["in", "id", [playbookId]]]);
+        fake.done();
+    });
+
+    it("refuses what a checked conversation already holds, from its own table", async () => {
+        const fake = scriptedDb([
+            { table: "word_chat_messages", data: [{ files: [firmFile] }] },
+            { table: "documents", data: [doc("firm-file", { org_id: FIRM })] },
+            organizations,
+        ]);
+        expect(
+            await findNewAttachmentsOutsideWorkspace(fake.db, {
+                messages: [],
+                chatId: "word-chat",
+                orgId: null,
+                messagesTable: "word_chat_messages",
+                storedHistory: "checked",
+            }),
+        ).toEqual(["firm-file"]);
+        fake.done();
+    });
+
+    it("throws rather than wave a conversation through when its history cannot be read", async () => {
+        const fake = scriptedDb([
+            { table: "word_chat_messages", error: { message: "offline" } },
+        ]);
+        await expect(
+            findNewAttachmentsOutsideWorkspace(fake.db, {
+                messages: [],
+                chatId: "word-chat",
+                orgId: null,
+                messagesTable: "word_chat_messages",
+                storedHistory: "checked",
+            }),
+        ).rejects.toThrow("Failed to read the chat's attachments");
+    });
 });

@@ -23,8 +23,10 @@ const sources = [
   ["migration", memoryMigration],
 ] as const;
 
-function functionBody(sql: string, name: string): string {
-  const start = sql.indexOf(`create or replace function public.${name}`);
+/** The function's definition; `last` takes the one a fresh install keeps. */
+function functionBody(sql: string, name: string, last = false): string {
+  const marker = `create or replace function public.${name}`;
+  const start = last ? sql.lastIndexOf(marker) : sql.indexOf(marker);
   expect(start).toBeGreaterThanOrEqual(0);
   const end = sql.indexOf("\n$$;", start);
   expect(end).toBeGreaterThan(start);
@@ -399,12 +401,26 @@ const workspaceMigration = readFileSync(
   "utf8",
 );
 
+// Word chats in a workspace (20261020_04_word_chat_workspaces) rewrote two
+// of them since; a fresh install keeps that migration's definitions.
+const wordWorkspaceMigration = readFileSync(
+  resolve(backendRoot, "migrations/20261020_04_word_chat_workspaces.sql"),
+  "utf8",
+);
+
 describe("per-workspace memory SQL", () => {
+  it.each(["memory_source_org_id", "memory_source_allows_app_memory"])(
+    "a fresh install defines %s exactly as the Word workspace migration does",
+    (name) => {
+      expect(functionBody(schemaSql, name, true)).toBe(
+        functionBody(wordWorkspaceMigration, name),
+      );
+    },
+  );
+
   it.each([
-    "memory_source_org_id",
     "ensure_user_memory_file",
     "initialize_new_user_memory",
-    "memory_source_allows_app_memory",
     "write_memory_file",
     "schedule_memory_consolidation",
     "refresh_memory_file_status",
@@ -452,11 +468,32 @@ describe("per-workspace memory SQL", () => {
     },
   );
 
-  it("gives only a standalone chat in a team organization a workspace", () => {
+  it("gives a standalone chat or a Word chat in a team organization a workspace", () => {
     const body = functionBody(schemaSql, "memory_source_org_id");
-    expect(body).toContain("case when p_surface = 'chat' then");
-    expect(body).toContain("and chat.project_id is null");
-    expect(body).toContain("and public.org_is_team(chat.org_id)");
+    expect(body).toMatch(
+      /when p_surface = 'chat' then \(\s+select chat\.org_id\s+from public\.chats chat\s+where chat\.id = p_conversation_id\s+and chat\.project_id is null\s+and public\.org_is_team\(chat\.org_id\)/,
+    );
+    expect(body).toMatch(
+      /when p_surface = 'word' then \(\s+select chat\.org_id\s+from public\.word_chats chat\s+where chat\.id = p_conversation_id\s+and public\.org_is_team\(chat\.org_id\)/,
+    );
+  });
+
+  it("lets a Word chat learn only for its author, and in an organization only while they are a member", () => {
+    const body = functionBody(schemaSql, "memory_source_allows_app_memory", true);
+    expect(body).toMatch(
+      /when p_surface = 'word' then\s+p_project_id is null\s+and exists \(\s+select 1\s+from public\.word_chats chat\s+where chat\.id = p_conversation_id\s+and chat\.user_id = p_actor_user_id\s+and \(\s+not public\.org_is_team\(chat\.org_id\)\s+or exists \(\s+select 1 from public\.active_org_members member\s+where member\.org_id = chat\.org_id\s+and member\.user_id = p_actor_user_id/,
+    );
+  });
+
+  it("purges an organization's Word chats before the organization itself", () => {
+    for (const sql of [schemaSql, wordWorkspaceMigration]) {
+      const body = functionBody(sql, "purge_expired_organizations", true);
+      const words = body.indexOf("delete from public.word_chats where org_id=org.id;");
+      expect(words).toBeGreaterThan(0);
+      expect(words).toBeLessThan(
+        body.indexOf("delete from public.organizations where id=org.id;"),
+      );
+    }
   });
 
   it("lets an organization's chat learn only when it is standalone and its author is still a member", () => {
