@@ -4,9 +4,10 @@ const fs = require("fs");
 const HtmlWebpackPlugin = require("html-webpack-plugin");
 const webpack = require("webpack");
 
-const frontendShared = (...segments) =>
-  path.resolve(__dirname, "..", "frontend", "src", "shared", ...segments);
-const frontendSharedUi = (filename) => frontendShared("ui", filename);
+// The packages shared with the web app (packages/*). Each is consumed by its
+// name only; tsconfig.json maps the same names for type-checking.
+const sharedPackage = (name) =>
+  path.resolve(__dirname, "..", "packages", name, "src", "index.ts");
 
 module.exports = async (_env, options) => {
   const isDev = options.mode !== "production";
@@ -170,6 +171,8 @@ module.exports = async (_env, options) => {
       extensions: [".ts", ".tsx", ".js", ".jsx"],
       // Resolve each package's nested dependencies before the add-in fallback.
       // Sentry's build plugin and runtime SDK can require different versions.
+      // The absolute fallback is also what lets packages/ui and
+      // packages/client, which have no node_modules, find their dependencies.
       modules: ["node_modules", path.resolve(__dirname, "node_modules")],
       alias: {
         // Cross-app source files must use the add-in's React runtime so the
@@ -181,76 +184,11 @@ module.exports = async (_env, options) => {
         // The frontend's public icon set is canonical. Webpack imports those
         // same SVGs and emits content-hashed copies for the add-in bundle.
         "@icons": path.resolve(__dirname, "..", "frontend", "public", "icons"),
-        "@mike/edit-card-ui": frontendSharedUi("EditCardUI.tsx"),
-        "@mike/edit-cards-section-ui": frontendSharedUi(
-          "EditCardsSectionUI.tsx",
-        ),
-        "@mike/reasoning-disclosure": frontendShared(
-          "hooks",
-          "useReasoningDisclosure.ts",
-        ),
-        "@mike/pre-response-wrapper-ui": frontendSharedUi(
-          "PreResponseWrapperUI.tsx",
-        ),
-        "@mike/document-event-blocks-ui": frontendSharedUi(
-          "DocumentEventBlocksUI.tsx",
-        ),
-        "@mike/input-ui": frontendSharedUi("InputUI.tsx"),
-        "@mike/glass-card-ui": frontendSharedUi("GlassCardUI.tsx"),
-        "@mike/modal-ui": frontendSharedUi("ModalUI.tsx"),
-        "@mike/header-buttons-ui": frontendSharedUi(
-          "HeaderButtonsUI.tsx",
-        ),
-        "@mike/pill-button-ui": frontendSharedUi("PillButtonUI.tsx"),
-        "@mike/tab-pill-button-ui": frontendSharedUi(
-          "TabPillButtonUI.tsx",
-        ),
-        "@mike/toggle-switch-ui": frontendSharedUi("ToggleSwitchUI.tsx"),
-        "@mike/dropdown-ui": frontendSharedUi("dropdown.tsx"),
-        "@mike/citation-pill-ui": frontendSharedUi("CitationPillUI.tsx"),
-        "@mike/model-toggle-ui": frontendSharedUi("ModelToggleUI.tsx"),
-        "@mike/mike-icon-ui": frontendSharedUi("MikeIconUI.tsx"),
-        "@mike/google-icon-ui": frontendSharedUi("GoogleIconUI.tsx"),
-        "@mike/auth-styles-ui": frontendSharedUi("AuthStylesUI.ts"),
-        "@mike/auth-divider-ui": frontendSharedUi("AuthDividerUI.tsx"),
-        "@mike/workflow-slash-command-ui": frontendSharedUi(
-          "WorkflowSlashCommandUI.tsx",
-        ),
-        // Non-UI shared modules: the upload-session client and the UUID helper
-        // it mints client ids with.
-        "@mike/upload-session-client": frontendShared(
-          "api",
-          "uploadSessionClient.ts",
-        ),
-        "@mike/secure-uuid": frontendShared("lib", "secureUuid.ts"),
-        // Sentry event hygiene (PII scrub + console-bridge dedupe) is one
-        // policy for the web app and the add-in.
-        "@mike/sentry-event": frontendShared("lib", "sentryEvent.ts"),
-        // Error presentation: one classifier and one toast stack for both
-        // clients, so a failure reads the same in Word as it does on the web.
-        "@mike/toast-store": frontendShared("lib", "toastStore.ts"),
-        "@mike/error-notifier": frontendShared("lib", "errorNotifier.ts"),
-        "@mike/toast-ui": frontendSharedUi("ToastUI.tsx"),
-        "@mike/user-error": frontendShared("lib", "userError.ts"),
-        // One model catalog (routers, picker rows, key-based availability)
-        // for the web app and the add-in.
-        "@mike/model-catalog": frontendShared("lib", "modelCatalog.ts"),
-        // Quoting and annotating a passage of a response: one wire format,
-        // menu, pill and modal for the web app and the add-in.
-        "@mike/message-excerpts": frontendShared("lib", "messageExcerpts.ts"),
-        "@mike/response-selection-menu-ui": frontendSharedUi(
-          "ResponseSelectionMenuUI.tsx",
-        ),
-        "@mike/excerpt-pill-ui": frontendSharedUi("ExcerptPillUI.tsx"),
-        // The attached-playbook pill: the same in both composers.
-        "@mike/playbook-pill-ui": frontendSharedUi("PlaybookPillUI.tsx"),
-        "@mike/excerpt-modal-ui": frontendSharedUi("ExcerptModalUI.tsx"),
-        "@mike/chat-history-dropdown-ui": frontendSharedUi(
-          "ChatHistoryDropdownUI.tsx",
-        ),
-        "@mike/composer-send-button-ui": frontendSharedUi(
-          "ComposerSendButtonUI.styles.ts",
-        ),
+        // Shared UI primitives and the framework-free client behavior behind
+        // them (error presentation, the model catalog, uploads, excerpts,
+        // Sentry hygiene): one implementation for the web app and the add-in.
+        "@mike/ui": sharedPackage("ui"),
+        "@mike/client": sharedPackage("client"),
       },
     },
     module: {

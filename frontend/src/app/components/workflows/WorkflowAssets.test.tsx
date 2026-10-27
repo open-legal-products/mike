@@ -2,7 +2,7 @@ import { act, createRef } from "react";
 import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { ToastViewportUI, clearToasts } from "@/shared/ui/ToastUI";
+import { ToastViewportUI, clearToasts } from "@mike/ui";
 import type { Document } from "../shared/types";
 import { WorkflowAssets, type WorkflowAssetsHandle } from "./WorkflowAssets";
 

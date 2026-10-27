@@ -14,7 +14,7 @@ import { FieldLabel, FormTextInput } from "../ui/form-field";
 import {
     LIQUID_GLASS_FLOAT_CLASS,
     LIQUID_GLASS_SUBTLE_CLASS,
-} from "@/shared/ui/LiquidGlassUI";
+} from "@mike/ui";
 
 interface ColumnDraft {
     name: string;

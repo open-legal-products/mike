@@ -1,6 +1,5 @@
 import { useId, useState, type ReactNode } from "react";
-import { MIKE_ICON_TINTS, MikeIcon, type MikeIconTint } from "@/shared/ui/MikeIconUI";
-import { TabPillButtonUI } from "@/shared/ui/TabPillButtonUI";
+import { MIKE_ICON_TINTS, MikeIcon, type MikeIconTint, TabPillButtonUI } from "@mike/ui";
 import type { AssistantEvent } from "../../shared/types";
 import { EventBlock, ReasoningContent } from "./EventBlocks";
 import { EventChevron, EventDisclosureButton, EventLabel } from "./EventDisclosure";

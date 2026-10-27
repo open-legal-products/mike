@@ -9,7 +9,7 @@ import type { AssistantDocumentPanel } from "@/app/components/assistant/useAssis
 import { loadAssistantChat } from "@/app/lib/assistantTurns";
 import { can, roleFrom } from "@/app/lib/permissions";
 import type { Chat } from "@/app/components/shared/types";
-import type { MessageExcerpt } from "@/shared/lib/messageExcerpts";
+import type { MessageExcerpt } from "@mike/client";
 
 interface Props {
     /** The chat to show, or `""` for a new one. */

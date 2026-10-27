@@ -5,7 +5,7 @@ import { ChevronDown } from "lucide-react";
 import { Modal } from "@/app/components/modals/Modal";
 import { ModalSelect } from "@/app/components/modals/ModalSelect";
 import { SkeletonLine } from "@/app/components/shared/TablePrimitive";
-import { textButtonUIClassName } from "@/shared/ui/TextButtonUI.styles";
+import { textButtonUIClassName } from "@mike/ui";
 import {
   getOrgMemberHandover,
   listOrgMembers,

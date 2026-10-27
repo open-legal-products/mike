@@ -4,10 +4,9 @@ import { useEffect, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { Loader2 } from "lucide-react";
 import { SiteLogo } from "@/app/components/site-logo";
-import { PillButtonUI } from "@/shared/ui/PillButtonUI";
+import { PillButtonUI, authGlassCardUIClassName } from "@mike/ui";
 import { useAuth } from "@/app/contexts/AuthContext";
 import { challengeAndVerifyMfa, listMfaFactors } from "@/app/lib/authApi";
-import { authGlassCardUIClassName } from "@/shared/ui/AuthStylesUI";
 import {
     needsMfaVerification,
     VerificationCodeInput,

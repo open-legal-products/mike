@@ -205,7 +205,7 @@ synthetic code. See [Sentry's source-map documentation](https://docs.sentry.io/p
 
 Reviewed code:
 
-- [Shared event scrubber and community minimization](../frontend/src/shared/lib/sentryEvent.ts)
+- [Shared event scrubber and community minimization](../packages/client/src/sentryEvent.ts)
 - [Backend initialization and scrubber](../backend/src/lib/observability/sentry.ts)
 - [Web reporting and user scope](../frontend/src/app/lib/errorReporting.ts)
 - [Word reporting and user scope](../word-addin/src/taskpane/lib/errorReporting.ts)

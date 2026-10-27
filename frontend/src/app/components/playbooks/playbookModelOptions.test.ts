@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import type { ModelOption } from "@/shared/lib/modelCatalog";
+import type { ModelOption } from "@mike/client";
 import type {
     ApiKeyState,
     PlaybookConfiguration,

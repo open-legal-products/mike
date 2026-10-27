@@ -57,8 +57,7 @@ import { AddDocumentsModal } from "@/app/components/modals/AddDocumentsModal";
 import { OpenSourceWorkflowModal } from "@/app/components/workflows/OpenSourceWorkflowModal";
 import { PageHeader } from "@/app/components/shared/PageHeader";
 import { EmptyState } from "@/app/components/ui/empty-state";
-import { PillButtonUI } from "@/shared/ui/PillButtonUI";
-import { TabPillButtonUI } from "@/shared/ui/TabPillButtonUI";
+import { PillButtonUI, TabPillButtonUI } from "@mike/ui";
 import {
   EDITOR_SURFACE_CLASS,
 } from "@/app/components/ui/liquid-surface";

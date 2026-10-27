@@ -51,11 +51,9 @@ import {
     describeError as describeSharedError,
     type DescribeErrorOptions,
     type UserFacingError,
-} from "@/shared/lib/userError";
-import {
     createErrorNotifier,
     type NotifyErrorOptions,
-} from "@/shared/lib/errorNotifier";
+} from "@mike/client";
 import { isReported, reportError } from "@/app/lib/errorReporting";
 
 export {
@@ -65,13 +63,13 @@ export {
     isNetworkError,
     type UserErrorKind,
     type UserFacingError,
-} from "@/shared/lib/userError";
+} from "@mike/client";
 
 export {
     notifyInfo,
     notifySuccess,
     type NotifyErrorOptions,
-} from "@/shared/lib/errorNotifier";
+} from "@mike/client";
 
 /** The pre-filled support email for a described failure on this page. */
 export function supportMailtoFor(
@@ -176,7 +174,7 @@ export function describeError(
  * also render it inline, or `null` when the failure is a cancellation the
  * user caused and does not need to hear about.
  *
- * The shared notifier (`@/shared/lib/errorNotifier`) owns the toast, the
+ * The shared notifier (`createErrorNotifier` in `@mike/client`) owns the toast, the
  * Retry and the cancellation rule; the web app adds its upstream copy, its
  * Sentry reporting, "Sign in", and a `mailto:` support link.
  */

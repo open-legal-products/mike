@@ -31,7 +31,7 @@ import {
 import {
     DropdownAtPoint,
     DropdownItem,
-} from "@/shared/ui/dropdown";
+} from "@mike/ui";
 import {
     notifyMoveFailure,
     type ProjectTreeItemKind,

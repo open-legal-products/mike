@@ -5,7 +5,7 @@ import { SvgAssetIcon } from "@/app/components/ui/svg-asset-icon";
 import ide from "../../../../public/icons/features/ide-new.svg";
 import { useRouter } from "next/navigation";
 import { EmptyState } from "@/app/components/ui/empty-state";
-import { PillButtonUI } from "@/shared/ui/PillButtonUI";
+import { PillButtonUI } from "@mike/ui";
 import { ProjectPickerModal } from "@/app/components/modals/ProjectPickerModal";
 import { NewProjectModal } from "@/app/components/projects/NewProjectModal";
 import type { Project } from "@/app/components/shared/types";

@@ -98,12 +98,12 @@ import {
 } from "@/app/contexts/WorkspaceContext";
 import { PageHeader } from "../shared/PageHeader";
 import { TableToolbar } from "../shared/TableToolbar";
-import { TabPillButtonUI } from "@/shared/ui/TabPillButtonUI";
+import { TabPillButtonUI } from "@mike/ui";
 import { LIQUID_GLASS_SUBTLE_CLASS } from "@/app/components/ui/liquid-surface";
 import { ModelToggle } from "../assistant/ModelToggle";
 import {
     type NoModelsReason,
-} from "@/shared/lib/modelCatalog";
+} from "@mike/client";
 import { SUPPORTED_DOCUMENT_ACCEPT } from "@/app/lib/documentUploadValidation";
 import { useConfiguredModels } from "@/app/hooks/useConfiguredModels";
 import { useItemWorkspace } from "@/app/hooks/useItemWorkspace";

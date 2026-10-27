@@ -8,8 +8,7 @@ import { createPortal } from "react-dom";
 import { MessageSquarePlus } from "lucide-react";
 import type { Editor } from "@docx-editor.dev/core/contracts/editor";
 import { useEditorSnapshot } from "@docx-editor.dev/react";
-import { PillButtonUI } from "@/shared/ui/PillButtonUI";
-import { TextButtonUI } from "@/shared/ui/TextButtonUI";
+import { PillButtonUI, TextButtonUI } from "@mike/ui";
 import {
   Popover,
   PopoverAnchor,

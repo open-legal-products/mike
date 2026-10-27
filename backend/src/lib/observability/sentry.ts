@@ -40,7 +40,7 @@ const NESTED_SEARCH_DEPTH = 2;
 // BEGIN shared-redaction
 // This block is the privacy control for every runtime. It is authored once
 // and mirrored, indentation aside, between backend/src/lib/observability/
-// sentry.ts and frontend/src/shared/lib/sentryEvent.ts (the backend cannot
+// sentry.ts and packages/client/src/sentryEvent.ts (the backend cannot
 // import the frontend tree at build time). sentryEvent.sync.test.ts fails
 // the moment the two copies differ, so edit both or neither.
 const SENSITIVE_HEADERS = new Set([

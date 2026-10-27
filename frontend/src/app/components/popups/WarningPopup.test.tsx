@@ -1,7 +1,7 @@
 import { act, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { WarningPopup } from "./WarningPopup";
-import { clearToasts, showToast, ToastViewportUI } from "@/shared/ui/ToastUI";
+import { clearToasts, showToast, ToastViewportUI } from "@mike/ui";
 
 describe("WarningPopup", () => {
     afterEach(() => clearToasts());

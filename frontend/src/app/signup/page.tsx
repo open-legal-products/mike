@@ -3,19 +3,20 @@
 import { Suspense, useEffect, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { signup } from "@/app/lib/authApi";
-import { InputUI } from "@/shared/ui/InputUI";
-import { PillButtonUI } from "@/shared/ui/PillButtonUI";
-import { pillButtonUIClassName } from "@/shared/ui/PillButtonUI.styles";
+import {
+    InputUI,
+    PillButtonUI,
+    pillButtonUIClassName,
+    noticeActionClassName,
+    authGlassCardUIClassName,
+    authInputUIClassName,
+    AuthDividerUI,
+} from "@mike/ui";
 import Link from "next/link";
 import { SiteLogo } from "@/app/components/site-logo";
 import { useAuth } from "@/app/contexts/AuthContext";
 import { cn } from "@/app/lib/utils";
 import { WarningPopup } from "@/app/components/popups/WarningPopup";
-import { noticeActionClassName } from "@/shared/ui/NoticeCardUI";
-import {
-    authGlassCardUIClassName,
-    authInputUIClassName,
-} from "@/shared/ui/AuthStylesUI";
 import {
     UserVisibleError,
     describeError,
@@ -63,7 +64,6 @@ import {
     minimumPasswordMessage,
 } from "@/app/components/auth/passwordPolicy";
 import { TOO_MANY_ATTEMPTS_MESSAGE, authMessages } from "@/app/lib/authMessages";
-import { AuthDividerUI } from "@/shared/ui/AuthDividerUI";
 import { GoogleAuthButton } from "@/app/components/auth/GoogleAuthButton";
 import { FieldLabel } from "@/app/components/ui/form-field";
 

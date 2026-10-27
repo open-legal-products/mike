@@ -1,4 +1,4 @@
-import type { ModelOption } from "@/shared/lib/modelCatalog";
+import type { ModelOption } from "@mike/client";
 import { isModelAvailable } from "@/app/lib/modelAvailability";
 import type {
     ApiKeyState,

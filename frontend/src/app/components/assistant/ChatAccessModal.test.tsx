@@ -4,7 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { Chat } from "@/app/components/shared/types";
 import { MikeApiError } from "@/app/lib/mikeApi";
 import { userFacingApiError } from "@/app/lib/userFacingError";
-import { ToastViewportUI, clearToasts } from "@/shared/ui/ToastUI";
+import { ToastViewportUI, clearToasts } from "@mike/ui";
 import { ChatAccessModal } from "./ChatAccessModal";
 
 const { getChatAccess, getChatPeople, grantChatAccess, revokeChatAccess } =

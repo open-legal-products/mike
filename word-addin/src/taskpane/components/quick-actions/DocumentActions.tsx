@@ -1,6 +1,6 @@
 import React, { useEffect, useMemo, useState } from "react";
 import { Search } from "lucide-react";
-import { ToggleSwitchUI } from "@mike/toggle-switch-ui";
+import { ToggleSwitchUI } from "@mike/ui";
 import {
   createQuickAction,
   listWorkflows,

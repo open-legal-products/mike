@@ -8,7 +8,7 @@
  * a key only the user can fix.
  */
 import { describe, expect, it } from "vitest";
-import { describeError } from "@/shared/lib/userError";
+import { describeError } from "@mike/client";
 import { terminalErrorFromFrame } from "../../../word-addin/src/taskpane/lib/wordChatTerminalError";
 
 describe("terminalErrorFromFrame", () => {

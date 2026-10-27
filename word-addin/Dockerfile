@@ -1,8 +1,9 @@
 # Build from the repository root: `docker build -f word-addin/Dockerfile .`
-# The add-in bundles the UI it shares with the web app (frontend/src/shared,
-# reached through webpack aliases, tsconfig paths, and Tailwind @source
-# entries), the web app's icons (frontend/public/icons, the @icons alias), and
-# the @mike/contracts declarations. Nothing else outside word-addin/ is read.
+# The add-in bundles the packages it shares with the web app (packages/ui and
+# packages/client, reached through webpack aliases, tsconfig paths, and a
+# Tailwind @source entry), the web app's icons (frontend/public/icons, the
+# @icons alias), and the @mike/contracts declarations. Nothing else outside
+# word-addin/ is read.
 # .github/workflows/docker-images.yml builds this file in CI so a new outside
 # dependency fails the pull request, not the next deploy.
 FROM node:22-slim AS build
@@ -11,9 +12,10 @@ WORKDIR /app
 COPY word-addin/package*.json ./
 RUN npm ci
 COPY word-addin/ ./
-COPY frontend/src/shared /frontend/src/shared
 COPY frontend/public/icons /frontend/public/icons
 COPY packages/contracts /packages/contracts
+COPY packages/ui /packages/ui
+COPY packages/client /packages/client
 
 ARG REACT_APP_WEB_APP_URL
 ARG WORD_ADDIN_PUBLIC_URL

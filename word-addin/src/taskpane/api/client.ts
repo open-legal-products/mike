@@ -12,28 +12,28 @@ import type {
 // parity tests) never pull this module, and its runtime imports, into
 // the web app's type-check graph.
 export type { ApiKeyStatus } from "../types";
-import type { RouterProfileLists } from "@mike/model-catalog";
-import { SERVER_FAILURE_MESSAGE } from "@mike/user-error";
-import { networkFailure } from "../lib/networkError";
-import { sessionHandledError } from "../lib/sessionRefresh";
-import { reportApiFailure, reportNetworkFailure } from "../lib/errorReporting";
-import type { ReasoningLevel } from "../lib/wordChatTypes";
+import type { RouterProfileLists } from "@mike/client";
 import {
+  SERVER_FAILURE_MESSAGE,
   createControlRequestRetryPolicy,
   firstUploadResult,
   uploadFilesWithSessionCore,
   type UploadOutcome,
   type UploadProgress,
-} from "@mike/upload-session-client";
+} from "@mike/client";
+import { networkFailure } from "../lib/networkError";
+import { sessionHandledError } from "../lib/sessionRefresh";
+import { reportApiFailure, reportNetworkFailure } from "../lib/errorReporting";
+import type { ReasoningLevel } from "../lib/wordChatTypes";
 
 export {
   UploadBatchError,
   failedUploadMessage,
-} from "@mike/upload-session-client";
+} from "@mike/client";
 export type {
   UploadOutcome,
   UploadProgress,
-} from "@mike/upload-session-client";
+} from "@mike/client";
 
 type AuthHeaderProvider = () => Promise<Record<string, string>>;
 

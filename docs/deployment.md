@@ -630,8 +630,9 @@ can compile against `packages/contracts`. For a manual backend image build use
 `docker build -f backend/Dockerfile -t mike-backend .` from the root.
 
 Each image reads only what its Dockerfile copies: the frontend image contains
-`frontend/` and `packages/contracts`; the add-in image adds `frontend/src/shared`
-and `frontend/public/icons`, which its bundle includes. In the frontend image
+`frontend/`, `packages/contracts`, `packages/ui` and `packages/client`; the
+add-in image holds `word-addin/`, the same three packages and
+`frontend/public/icons`, which its bundle includes. In the frontend image
 `next build` type-checks `frontend/tsconfig.build.json`, which excludes test
 files, so test fixtures and sibling applications never become build inputs. CI builds all three
 images on every pull request (`.github/workflows/docker-images.yml`), so a

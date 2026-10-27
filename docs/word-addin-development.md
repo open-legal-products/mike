@@ -196,10 +196,11 @@ therefore initially share the source document's chat history.
 ## Errors and support
 
 The task pane never renders a raw `error.message`. `describeError` (shared
-with the web app, `frontend/src/shared/lib/userError.ts`) classifies a thrown
-value once, and `word-addin/src/taskpane/lib/notify.ts` shows the result as a
-toast with an honest "Retry", built on the toast core it shares with the web
-app (`frontend/src/shared/lib/errorNotifier.ts`). Transport failures go through
+with the web app through `@mike/client`, `packages/client/src/userError.ts`)
+classifies a thrown value once, and `word-addin/src/taskpane/lib/notify.ts`
+shows the result as a toast with an honest "Retry", built on the toast core it
+shares with the web app (`createErrorNotifier` in `@mike/client`). Transport
+failures go through
 `word-addin/src/taskpane/lib/networkError.ts`, which calls the shared
 `networkMessage(origin)` so both clients say the same sentence; the add-in
 passes the API origin, because a self-hoster whose own container is down is
@@ -249,15 +250,20 @@ compare:
   counterparts, retaining narrow-pane adaptations.
 
 Design tokens are not compared by hand: both targets import
-`frontend/src/shared/ui/DesignTokensUI.css`, and `src/shared/styles/tokens.css`
+`packages/ui/styles/DesignTokensUI.css`, and `src/shared/styles/tokens.css`
 holds only the add-in's base layer.
 
-Files with no add-in-specific behavior are not vendored at all: they are
-aliased straight at the web source (`@mike/*` in `webpack.config.js` and
-`tsconfig.json`), so there is nothing to keep in sync. The model catalog is one
-of them: `@mike/model-catalog` is `frontend/src/shared/lib/modelCatalog.ts`,
-and `src/taskpane/lib/modelCatalog.ts` only adapts the add-in's key-status
-shape to it.
+Code with no add-in-specific behavior is not vendored at all: it lives in the
+two packages the add-in shares with the web app, `@mike/ui` (`packages/ui`,
+React primitives) and `@mike/client` (`packages/client`, framework-free client
+behavior), each consumed by name through `webpack.config.js` and
+`tsconfig.json` and exposing one public `src/index.ts`. There is nothing to
+keep in sync. The model catalog is one example: it is exported by
+`@mike/client` (`packages/client/src/modelCatalog.ts`), and
+`src/taskpane/lib/modelCatalog.ts` only adapts the add-in's key-status shape
+to it. The packages have no `node_modules` of their own; their dependencies
+resolve to the add-in's through the `paths` entries in `tsconfig.json` and the
+absolute `resolve.modules` fallback in `webpack.config.js`.
 
 ## Troubleshooting
 

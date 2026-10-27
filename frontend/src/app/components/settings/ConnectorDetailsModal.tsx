@@ -4,9 +4,7 @@ import { useState, type ReactNode } from "react";
 import { ChevronDown, Loader2, RefreshCw } from "lucide-react";
 import { FieldLabel } from "@/app/components/ui/form-field";
 import { Modal } from "@/app/components/modals/Modal";
-import { LIQUID_GLASS_FLAT_CLASS } from "@/shared/ui/LiquidGlassUI";
-import { TabPillButtonUI } from "@/shared/ui/TabPillButtonUI";
-import { ToggleSwitchUI } from "@/shared/ui/ToggleSwitchUI";
+import { LIQUID_GLASS_FLAT_CLASS, TabPillButtonUI, ToggleSwitchUI } from "@mike/ui";
 
 export type ConnectorToolView = {
     id: string;

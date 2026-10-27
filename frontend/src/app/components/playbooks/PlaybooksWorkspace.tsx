@@ -55,7 +55,7 @@ import {
   type PlaybookSourcesHandle,
 } from "@/app/components/playbooks/PlaybookSources";
 import { createPlaybookRule } from "@/app/components/playbooks/playbookRules";
-import { HeaderButtonUI } from "@/shared/ui/HeaderButtonsUI";
+import { HeaderButtonUI, Dropdown, DropdownContent, DropdownItem, DropdownTrigger } from "@mike/ui";
 import { ConfirmPopup } from "@/app/components/popups/ConfirmPopup";
 import { describeError, notifyError } from "@/app/lib/userFacingError";
 import { PageHeader } from "@/app/components/shared/PageHeader";
@@ -63,13 +63,7 @@ import { Modal } from "@/app/components/modals/Modal";
 import { ModalFieldLabel } from "@/app/components/modals/ModalFieldLabel";
 import { ModalSelect } from "@/app/components/modals/ModalSelect";
 import { ModalTextInput } from "@/app/components/modals/ModalTextInput";
-import {
-  Dropdown,
-  DropdownContent,
-  DropdownItem,
-  DropdownTrigger,
-} from "@/shared/ui/dropdown";
-import { modelDisplayName, SETTINGS_MODELS } from "@/shared/lib/modelCatalog";
+import { modelDisplayName, SETTINGS_MODELS } from "@mike/client";
 import { useOllamaModels } from "@/app/hooks/useOllamaModels";
 import { useModelApiKeys } from "@/app/hooks/useModelApiKeys";
 import { buildPlaybookModelOptions } from "@/app/components/playbooks/playbookModelOptions";

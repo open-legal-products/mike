@@ -18,7 +18,7 @@ import {
     listQuickActions,
     streamWordChat,
 } from "../../../word-addin/src/taskpane/api/client";
-import { describeError } from "@/shared/lib/userError";
+import { describeError } from "@mike/client";
 
 const fetchMock = vi.fn<typeof fetch>();
 const payload = {

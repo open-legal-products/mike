@@ -44,10 +44,13 @@ import {
   HeaderActionsMenu,
   type HeaderActionsMenuItem,
 } from "@/app/components/shared/HeaderActionsMenu";
-import { TextButtonUI } from "@/shared/ui/TextButtonUI";
-import { PillButtonUI } from "@/shared/ui/PillButtonUI";
-import { TabPillButtonUI } from "@/shared/ui/TabPillButtonUI";
-import { DropdownAtPoint, DropdownItem } from "@/shared/ui/dropdown";
+import {
+  TextButtonUI,
+  PillButtonUI,
+  TabPillButtonUI,
+  DropdownAtPoint,
+  DropdownItem,
+} from "@mike/ui";
 import { setRowDragPreview } from "@/app/lib/rowDragPreview";
 import { movePlaybookRule, type RuleDropTarget } from "./playbookRuleMoves";
 import { createPlaybookRule } from "./playbookRules";

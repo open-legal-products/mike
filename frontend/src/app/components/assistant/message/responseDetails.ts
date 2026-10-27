@@ -1,5 +1,5 @@
-import { modelDisplayName } from "@/shared/lib/modelCatalog";
-import { REASONING_LEVEL_LABELS, REASONING_LEVELS } from "@/shared/ui/ModelToggleUI";
+import { modelDisplayName } from "@mike/client";
+import { REASONING_LEVEL_LABELS, REASONING_LEVELS } from "@mike/ui";
 import type { AssistantEvent } from "../../shared/types";
 
 /**

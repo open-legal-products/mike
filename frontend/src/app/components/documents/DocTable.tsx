@@ -46,7 +46,7 @@ import {
     type RowAddStatus,
 } from "@/app/components/shared/RowActions";
 import { SubfolderSvgIcon } from "@/app/components/shared/FolderSvgIcon";
-import { DropdownAtPoint } from "@/shared/ui/dropdown";
+import { DropdownAtPoint, PillButtonUI } from "@mike/ui";
 import { useAuth } from "@/app/contexts/AuthContext";
 import { useOptionalUserProfile } from "@/app/contexts/UserProfileContext";
 import {
@@ -93,7 +93,7 @@ import {
     type DocumentUploadFolderPathResolution,
     type DocumentUploadProgressEntry,
 } from "@/app/lib/documentDirectoryUpload";
-import { settleWithConcurrency } from "@/shared/lib/settleWithConcurrency";
+import { settleWithConcurrency } from "@mike/client";
 import {
     collectionSelectAllState,
     folderSelectionRootIds,
@@ -118,7 +118,6 @@ import { DocumentSidePanel } from "@/app/components/shared/DocumentSidePanel";
 import { TableLoadMoreRow } from "@/app/components/shared/TableLoadMoreRow";
 import { LibrarySkeuoIcon } from "@/app/components/shared/AppSidebarSkeuoIcons";
 import { EmptyState } from "@/app/components/ui/empty-state";
-import { PillButtonUI } from "@/shared/ui/PillButtonUI";
 import {
     LIQUID_GLASS_SELECTED_CLASS,
     LIQUID_GLASS_GROUP_HOVER_CLASS,

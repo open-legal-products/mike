@@ -6,7 +6,7 @@ import {
     PERSONAL_WORKSPACE_LABEL,
     useWorkspace,
 } from "@/app/contexts/WorkspaceContext";
-import { showToast } from "@/shared/lib/toastStore";
+import { showToast } from "@mike/client";
 
 /** One notice for a switch, however many things on the page ask for it. */
 export const WORKSPACE_SWITCH_TOAST_KEY = "workspace-switch";

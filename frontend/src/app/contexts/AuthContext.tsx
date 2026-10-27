@@ -21,7 +21,7 @@ import {
 import { AUTH_SESSION_INVALIDATED_EVENT } from "@/app/lib/authEvents";
 import { setReportingUser } from "@/app/lib/errorReporting";
 import { isOnAuthRoute, notifyError } from "@/app/lib/userFacingError";
-import { clearToasts } from "@/shared/ui/ToastUI";
+import { clearToasts } from "@mike/ui";
 
 type User = AuthUser;
 

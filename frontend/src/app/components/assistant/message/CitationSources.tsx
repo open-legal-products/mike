@@ -4,7 +4,7 @@ import { Loader2 } from "lucide-react";
 import { FileTypeIcon } from "../../shared/FileTypeIcon";
 import { displayCitationQuote, formatCitationPage } from "../../shared/types";
 import type { Citation } from "../../shared/types";
-import { CitationPillUI } from "@/shared/ui/CitationPillUI";
+import { CitationPillUI } from "@mike/ui";
 import { RESPONSE_GLASS_SURFACE } from "./messageStyles";
 import {
     citationVerificationAriaLabel,

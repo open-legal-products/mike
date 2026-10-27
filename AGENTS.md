@@ -36,10 +36,12 @@ Before creating UI markup, search these locations in order:
 
 1. `frontend/src/app/components/ui/` contains reusable web primitives such as
    buttons, inputs, dropdowns, search, empty states, and liquid-glass surfaces.
-2. `frontend/src/shared/ui/` contains framework-light components rendered by
-   both the web app and Word add-in. Files use the `XxxUI.tsx` convention, with
-   thin web adapters or re-exports in `frontend/src/app/components/ui/` where
-   appropriate. Code here must not import from `frontend/src/app/`.
+2. `packages/ui/` (imported as `@mike/ui`) contains framework-light
+   components rendered by both the web app and Word add-in. Files use the
+   `XxxUI.tsx` convention and are exported from `packages/ui/src/index.ts`,
+   with thin web adapters or re-exports in `frontend/src/app/components/ui/`
+   where appropriate. Code here may import `@mike/client` but never an
+   application (`frontend/src/app/`, `word-addin/src/`).
 3. `frontend/src/app/components/shared/` contains web-app building blocks that
    understand the application shell, including `PageHeader`,
    `TablePrimitive`, `TableToolbar`, `FileDirectory`, and side panels.
@@ -53,9 +55,9 @@ Before creating UI markup, search these locations in order:
 For add-in-only work, low-level controls live in `word-addin/src/shared/ui/`
 and reusable task-pane compositions live in
 `word-addin/src/taskpane/components/primitives/`. If a component must render in
-both the web app and add-in, prefer `frontend/src/shared/ui/`. When adding a
-cross-target file there, also add its `@source` entry to
-`word-addin/src/taskpane/styles.css` so Tailwind discovers its classes.
+both the web app and add-in, prefer `packages/ui/`. Export a new file from
+`packages/ui/src/index.ts`; both targets already scan the package for Tailwind
+classes.
 
 The web app is configured for shadcn's `new-york` style in
 `frontend/components.json`. If no existing primitive fits a non-trivial
@@ -96,6 +98,11 @@ Preserve the accessibility baseline:
   authentication, API error parsing, and request behavior stay consistent.
 - Reusable client behavior belongs in `frontend/src/app/hooks/` or
   `frontend/src/app/lib/`, with a colocated `*.test.ts` or `*.test.tsx` file.
+  Behavior the Word add-in also needs (error classification and toasts, the
+  model catalog, upload sessions, response excerpts, Sentry event hygiene)
+  lives in `packages/client/`, imported as `@mike/client`, and must stay
+  framework-free. Its public surface is `packages/client/src/index.ts`; its
+  tests are colocated and run with the frontend's Vitest.
 - Use the `@/` alias for imports rooted at `frontend/src/`.
 - Production frontend code must not import anything outside `frontend/`
   except through a `paths` alias in `frontend/tsconfig.json` whose target
@@ -165,7 +172,7 @@ send internal exception messages to clients: use the helpers in
 `backend/src/lib/httpError.ts`; logging must use the redaction helpers in
 `backend/src/lib/safeError.ts`. Intentional validation and permission failures
 should remain explicit 4xx responses, and a `code` a client is expected to act
-on must be listed in `CODE_KINDS` in `frontend/src/shared/lib/userError.ts` (a
+on must be listed in `CODE_KINDS` in `packages/client/src/userError.ts` (a
 drift test keeps that table to codes some server really emits).
 
 ## Database Migrations

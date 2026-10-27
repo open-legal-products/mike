@@ -6,7 +6,7 @@ import {
     LIQUID_GLASS_FLAT_CLASS,
     LIQUID_GLASS_HOVER_CLASS,
     LIQUID_GLASS_SUBTLE_CLASS,
-} from "@/shared/ui/LiquidGlassUI";
+} from "@mike/ui";
 
 export type OptionPillProps = ButtonHTMLAttributes<HTMLButtonElement> & {
     surface?: "subtle" | "flat";

@@ -3,7 +3,7 @@ import { render, screen } from "@testing-library/react";
 
 import { getTabularReview, listProjects } from "@/app/lib/mikeApi";
 import { TRView } from "./TabularReviewView";
-import { ToastViewportUI, clearToasts } from "@/shared/ui/ToastUI";
+import { ToastViewportUI, clearToasts } from "@mike/ui";
 
 vi.mock("@/app/lib/mikeApi", async (importOriginal) => ({
     ...(await importOriginal<typeof import("@/app/lib/mikeApi")>()),

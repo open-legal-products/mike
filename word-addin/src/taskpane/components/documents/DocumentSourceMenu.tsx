@@ -6,7 +6,7 @@ import {
   DropdownContent,
   DropdownItem,
   DropdownTrigger,
-} from "@mike/dropdown-ui";
+} from "@mike/ui";
 import desktopIcon from "@icons/desktop.svg";
 import cloudIcon from "@icons/cloud.svg";
 

@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { listDocumentVersions, replaceDocumentVersionFile } from "@/app/lib/mikeApi";
 import { userFacingApiError } from "@/app/lib/userFacingError";
-import { UploadBatchError } from "@/shared/api/uploadSessionClient";
+import { UploadBatchError } from "@mike/client";
 import { invalidateDocxBytes } from "./useFetchDocxBytes";
 
 export const DOCX_AUTOSAVE_DELAY = 1500;

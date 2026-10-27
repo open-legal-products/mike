@@ -23,7 +23,7 @@ import {
   DropdownContent,
   DropdownItem,
   DropdownTrigger,
-} from "@/shared/ui/dropdown";
+} from "@mike/ui";
 import { cn } from "@/app/lib/utils";
 
 export interface MarkdownEditorProps {

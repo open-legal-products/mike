@@ -34,9 +34,9 @@ import {
   DropdownContent,
   DropdownItem,
   DropdownTrigger,
-} from "@/shared/ui/dropdown";
-import { PillButtonUI } from "@/shared/ui/PillButtonUI";
-import { TextButtonUI } from "@/shared/ui/TextButtonUI";
+  PillButtonUI,
+  TextButtonUI,
+} from "@mike/ui";
 import { PlaybookPanels } from "./PlaybookPanels";
 import {
   PLAYBOOK_PANE_EMPTY_CLASS,

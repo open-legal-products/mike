@@ -4,14 +4,14 @@ import { Suspense, useEffect, useState } from "react";
 import Link from "next/link";
 import { useSearchParams } from "next/navigation";
 import { Loader2 } from "lucide-react";
-import { InputUI } from "@/shared/ui/InputUI";
-import { PillButtonUI } from "@/shared/ui/PillButtonUI";
-import { pillButtonUIClassName } from "@/shared/ui/PillButtonUI.styles";
-import { SiteLogo } from "@/app/components/site-logo";
 import {
+    InputUI,
+    PillButtonUI,
+    pillButtonUIClassName,
     authGlassCardUIClassName,
     authInputUIClassName,
-} from "@/shared/ui/AuthStylesUI";
+} from "@mike/ui";
+import { SiteLogo } from "@/app/components/site-logo";
 import {
     MIN_PASSWORD_LENGTH,
     isPasswordTooLong,

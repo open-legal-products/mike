@@ -6,7 +6,7 @@ import { useRouter } from "next/navigation";
 import { useAuth } from "@/app/contexts/AuthContext";
 import { FieldLabel } from "@/app/components/ui/form-field";
 import { authenticatedFetch } from "@/app/lib/authEvents";
-import { textButtonUIClassName } from "@/shared/ui/TextButtonUI.styles";
+import { textButtonUIClassName } from "@mike/ui";
 import {
     describeError,
     supportMailtoFor,

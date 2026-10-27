@@ -49,8 +49,7 @@ import {
     resetApiUnreachableWindow,
     trackPendingRequest,
 } from "./errorReporting";
-import { MIKE_SENTRY_DSN } from "@/shared/lib/sentryEvent";
-import { diagnosticEvent } from "@/shared/lib/sentryPrivacy";
+import { MIKE_SENTRY_DSN, diagnosticEvent } from "@mike/client";
 
 afterEach(() => {
     resetApiUnreachableWindow();

@@ -21,7 +21,7 @@ import {
     DropdownContent,
     DropdownItem,
     DropdownTrigger,
-} from "@/shared/ui/dropdown";
+} from "@mike/ui";
 import { WarningPopup } from "@/app/components/popups/WarningPopup";
 import { userFacingApiError } from "@/app/lib/userFacingError";
 import type { HeaderActionsMenuItem } from "./HeaderActionsMenu";

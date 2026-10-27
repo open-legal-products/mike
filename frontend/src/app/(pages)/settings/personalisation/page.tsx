@@ -3,7 +3,7 @@
 import { useEffect, useRef, useState } from "react";
 import { CustomInstructionsSection } from "@/app/components/settings/CustomInstructionsSection";
 import { ResponseStyleSection } from "@/app/components/settings/ResponseStyleSection";
-import { GlassCardUI } from "@/shared/ui/GlassCardUI";
+import { GlassCardUI } from "@mike/ui";
 import { SettingsHeading } from "@/app/components/settings/SettingsHeading";
 import { SettingsDescription } from "@/app/components/settings/SettingsText";
 import {

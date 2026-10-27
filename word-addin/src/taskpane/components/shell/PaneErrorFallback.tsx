@@ -1,5 +1,5 @@
 import React from "react";
-import { PillButtonUI as PillButton } from "@mike/pill-button-ui";
+import { PillButtonUI as PillButton } from "@mike/ui";
 
 /**
  * What the pane shows when a render error escapes every component. The

@@ -219,7 +219,7 @@ mappings.
 ## Catalog maintenance
 
 Keep `backend/src/lib/llm/models.ts` and the client catalog
-`frontend/src/shared/lib/modelCatalog.ts` (used by both the web app and the
+`packages/client/src/modelCatalog.ts` (used by both the web app and the
 Word add-in) synchronized, including legacy mappings;
 `frontend/src/wordAddin/catalogParity.test.ts` compares them. Update
 reasoning capabilities in the backend and shared `ModelToggleUI.tsx` together.

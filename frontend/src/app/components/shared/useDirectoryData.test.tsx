@@ -3,7 +3,7 @@ import { act, renderHook, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { DocumentWorkspaceScope } from "@/app/contexts/WorkspaceContext";
-import { ToastViewportUI, clearToasts } from "@/shared/ui/ToastUI";
+import { ToastViewportUI, clearToasts } from "@mike/ui";
 import { useDirectoryData } from "./useDirectoryData";
 
 const { getLibrary, getLibraryFolderChildren, listProjectSummaries } =

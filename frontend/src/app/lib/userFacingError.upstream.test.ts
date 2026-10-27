@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { clearToasts, getSnapshot } from "@/shared/lib/toastStore";
+import { clearToasts, getSnapshot } from "@mike/client";
 import {
     MikeApiError,
     SCHEMA_OUT_OF_DATE_MESSAGE,

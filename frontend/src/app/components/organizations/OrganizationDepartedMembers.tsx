@@ -63,7 +63,7 @@ import {
 } from "@/app/lib/mikeApi";
 import { notifySuccess, userFacingApiError } from "@/app/lib/userFacingError";
 import { cn } from "@/app/lib/utils";
-import { DropdownItem } from "@/shared/ui/dropdown";
+import { DropdownItem } from "@mike/ui";
 
 type Kind = OrgDepartureItem["kind"];
 

@@ -7,10 +7,9 @@ import {
   SettingsDescription,
   SettingsLabel,
 } from "@/app/components/settings/SettingsText";
-import { GlassCardUI } from "@/shared/ui/GlassCardUI";
+import { GlassCardUI, ToggleSwitchUI } from "@mike/ui";
 import { SettingsHeading } from "@/app/components/settings/SettingsHeading";
 import { SettingsRow } from "@/app/components/settings/SettingsRow";
-import { ToggleSwitchUI } from "@/shared/ui/ToggleSwitchUI";
 
 export default function AppearancePage() {
   const { profile, updateDarkMode } = useUserProfile();

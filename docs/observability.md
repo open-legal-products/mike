@@ -260,7 +260,7 @@ Performance tracing settings do not bypass the error-only transport boundary;
 tracing is unsupported until a separate outbound policy is reviewed.
 
 The boundary is mirrored in `backend/src/lib/observability/sentryPrivacy.ts`
-and `frontend/src/shared/lib/sentryPrivacy.ts`, with a synchronization test.
+and `packages/client/src/sentryPrivacy.ts`, with a synchronization test.
 When adding diagnostics, extend reviewed enum/ID fields and their tests. Do not
 add free-form text just to restore a more detailed exception message.
 

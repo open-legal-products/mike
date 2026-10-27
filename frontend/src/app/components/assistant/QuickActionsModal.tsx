@@ -10,7 +10,7 @@ import { Modal } from "../modals/Modal";
 import { ModalSelect } from "../modals/ModalSelect";
 import { ModalTextarea } from "../modals/ModalTextarea";
 import { FieldLabel, FormTextInput } from "../ui/form-field";
-import { ToggleSwitchUI } from "@/shared/ui/ToggleSwitchUI";
+import { ToggleSwitchUI } from "@mike/ui";
 import { SearchBar } from "../ui/search-bar";
 import { listWorkflows } from "@/app/lib/mikeApi";
 import { userFacingApiError } from "@/app/lib/userFacingError";

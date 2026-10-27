@@ -18,14 +18,14 @@ import { useAuth } from "@/app/contexts/AuthContext";
 import { useUserProfile } from "@/app/contexts/UserProfileContext";
 import { Modal } from "../modals/Modal";
 import { FieldLabel, FormTextInput } from "../ui/form-field";
-import { ToggleSwitchUI } from "@/shared/ui/ToggleSwitchUI";
+import { ToggleSwitchUI } from "@mike/ui";
 import { ProjectPracticeField } from "./ProjectPracticeField";
 import { userFacingApiError } from "@/app/lib/userFacingError";
 import {
     PERSONAL_WORKSPACE as ACTIVE_PERSONAL_WORKSPACE,
     useWorkspace,
 } from "@/app/contexts/WorkspaceContext";
-import { createSecureUuid } from "@/shared/lib/secureUuid";
+import { createSecureUuid } from "@mike/client";
 import {
     CreateAccessStep,
     type PendingDirectGrant,

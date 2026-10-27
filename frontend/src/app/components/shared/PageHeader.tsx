@@ -16,7 +16,10 @@ import {
     DropdownContent,
     DropdownItem,
     DropdownTrigger,
-} from "@/shared/ui/dropdown";
+    HeaderButtonUI,
+    HeaderButtonsUI,
+    headerButtonClassName,
+} from "@mike/ui";
 import {
     LIQUID_GLASS_SELECTED_CLASS,
 } from "@/app/components/ui/liquid-surface";
@@ -24,11 +27,6 @@ import {
     PAGE_HEADER_ROW_CLASS,
     PAGE_HEADER_TITLE_CLASS,
 } from "./pageHeaderStyles";
-import {
-    HeaderButtonUI,
-    HeaderButtonsUI,
-    headerButtonClassName,
-} from "@/shared/ui/HeaderButtonsUI";
 
 export interface PageHeaderBreadcrumb {
     label?: ReactNode;

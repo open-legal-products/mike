@@ -1,10 +1,6 @@
 import React, { useEffect, useState, type ReactNode } from "react";
-import { useReasoningDisclosure } from "@mike/reasoning-disclosure";
+import { useReasoningDisclosure, DocFindBlockUI, DocReadBlockUI } from "@mike/ui";
 import { ChevronDown } from "lucide-react";
-import {
-  DocFindBlockUI,
-  DocReadBlockUI,
-} from "@mike/document-event-blocks-ui";
 import { Markdown } from "../../../../shared/chat/Markdown";
 
 const THINKING_PHRASES = [

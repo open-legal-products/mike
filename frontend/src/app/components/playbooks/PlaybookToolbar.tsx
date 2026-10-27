@@ -2,7 +2,7 @@
 
 import { Plus, Upload } from "lucide-react";
 import { TableToolbar } from "@/app/components/shared/TableToolbar";
-import { TabPillButtonUI } from "@/shared/ui/TabPillButtonUI";
+import { TabPillButtonUI } from "@mike/ui";
 
 // A playbook's details are edited from a dialog, as in other features.
 export const PLAYBOOK_VIEWS = ["rules", "references", "runs"] as const;

@@ -3,7 +3,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import DOMPurify from "dompurify";
 import { Loader2 } from "lucide-react";
-import { PillButtonUI } from "@/shared/ui/PillButtonUI";
+import { PillButtonUI, LIQUID_GLASS_FLAT_CLASS } from "@mike/ui";
 import { cn } from "@/app/lib/utils";
 import type {
     PanelDocument,
@@ -15,7 +15,6 @@ import {
     highlightDocxQuote,
     QUOTE_HIGHLIGHT_CLASS,
 } from "../shared/views/highlightDocxQuote";
-import { LIQUID_GLASS_FLAT_CLASS } from "@/shared/ui/LiquidGlassUI";
 
 const CASE_HTML_SANITIZER_CONFIG = {
     ALLOWED_TAGS: [

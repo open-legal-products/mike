@@ -3,10 +3,8 @@
 import { createPortal } from "react-dom";
 import { useEffect, useId, type ReactNode } from "react";
 import { Trash2 } from "lucide-react";
-import { PillButtonUI } from "@/shared/ui/PillButtonUI";
-import { CloseButton } from "@/shared/ui/CloseButton";
+import { PillButtonUI, CloseButton, LIQUID_GLASS_FLOAT_CLASS } from "@mike/ui";
 import { cn } from "@/app/lib/utils";
-import { LIQUID_GLASS_FLOAT_CLASS } from "@/shared/ui/LiquidGlassUI";
 
 type ConfirmStatus = "idle" | "loading" | "complete";
 

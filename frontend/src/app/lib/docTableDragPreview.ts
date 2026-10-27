@@ -1,4 +1,4 @@
-import { LIQUID_GLASS_FLOAT_CLASS } from "@/shared/ui/LiquidGlassUI";
+import { LIQUID_GLASS_FLOAT_CLASS } from "@mike/ui";
 
 type DragPreviewOptions = {
     dataTransfer: Pick<DataTransfer, "setDragImage">;

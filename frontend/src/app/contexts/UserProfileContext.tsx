@@ -47,7 +47,7 @@ import {
     routerProfileLists,
     type RouterProfileLists,
     type RouterSlug,
-} from "@/shared/lib/modelCatalog";
+} from "@mike/client";
 import { publishTabularChatSettingsUpdate } from "@/app/lib/tabularChatSettingsEvents";
 import {
     clearConfiguredModels,

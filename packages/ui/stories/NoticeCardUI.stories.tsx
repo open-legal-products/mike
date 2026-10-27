@@ -1,0 +1,39 @@
+import { Lock } from "lucide-react";
+import { NoticeCardUI, noticeActionClassName } from "../src/NoticeCardUI";
+
+const meta = { title: "Shared UI / Notice card" };
+export default meta;
+
+/** The card both toasts and WarningPopup render. */
+export const Tones = () => (
+    <div className="flex w-[460px] flex-col gap-3">
+        <NoticeCardUI
+            tone="error"
+            title="Couldn't save your changes"
+            message="Mike couldn't reach the server. Check your connection and try again."
+            onDismiss={() => {}}
+            actions={
+                <button type="button" className={noticeActionClassName()}>
+                    Retry
+                </button>
+            }
+        />
+        <NoticeCardUI tone="success" message="Changes saved" onDismiss={() => {}} />
+        <NoticeCardUI tone="info" message="Your export is ready" onDismiss={() => {}} />
+    </div>
+);
+
+export const SupplementaryText = () => (
+    <div className="w-full max-w-[460px]">
+        <NoticeCardUI
+            title="Editors only"
+            message="You need editor access to make changes."
+            icon={<Lock className="h-3.5 w-3.5 text-red-600" aria-hidden />}
+            onDismiss={() => {}}
+        >
+            <p className="mt-1 text-xs text-gray-600">
+                Ask Tom Okafor (tom.okafor@example.test) if you need editor access.
+            </p>
+        </NoticeCardUI>
+    </div>
+);

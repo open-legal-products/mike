@@ -10,8 +10,7 @@ import {
 import { SearchBar } from "@/app/components/ui/search-bar";
 import { UserAvatar } from "@/app/components/ui/user-avatar";
 import { SkeletonLine } from "@/app/components/shared/TablePrimitive";
-import { DropdownButton, DropdownSurface } from "@/shared/ui/dropdown";
-import { textButtonUIClassName } from "@/shared/ui/TextButtonUI.styles";
+import { DropdownButton, DropdownSurface, textButtonUIClassName } from "@mike/ui";
 
 /** A person a table can be filtered by. */
 export interface PersonOption {

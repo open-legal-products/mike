@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { MikeIcon } from "@/shared/ui/MikeIconUI";
+import { MikeIcon } from "@mike/ui";
 
 /**
  * `waiting`: the response has paused to ask the user for input or approval.

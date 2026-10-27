@@ -11,7 +11,7 @@ import { ChatInput } from "./ChatInput";
 import type { ChatInputHandle } from "./ChatInput";
 import { InitialView } from "./InitialView";
 import { UserMessage } from "./UserMessage";
-import { ResponseSelectionMenuUI } from "@mike/response-selection-menu-ui";
+import { ResponseSelectionMenuUI } from "@mike/ui";
 import type {
     EditDecision,
     ReasoningLevel,

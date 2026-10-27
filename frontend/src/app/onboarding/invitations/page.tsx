@@ -8,7 +8,7 @@ import { WarningPopup } from "@/app/components/popups/WarningPopup";
 import { FullScreenLoader } from "@/app/components/shared/FullScreenLoader";
 import { useAuth } from "@/app/contexts/AuthContext";
 import { useUserProfile } from "@/app/contexts/UserProfileContext";
-import { PillButtonUI } from "@/shared/ui/PillButtonUI";
+import { PillButtonUI } from "@mike/ui";
 
 export default function OnboardingInvitationsPage() {
     const router = useRouter();

@@ -33,12 +33,8 @@ import {
   type PlaybookRun,
 } from "@/app/lib/mikeApi";
 import { showToast } from "@/app/components/ui/toast";
-import {
-  clearToasts,
-  getSnapshot as getToastSnapshot,
-} from "@/shared/lib/toastStore";
+import { clearToasts, getSnapshot as getToastSnapshot, SETTINGS_MODELS } from "@mike/client";
 import { PlaybooksWorkspaceLayout as PlaybooksPage } from "./PlaybooksWorkspace";
-import { SETTINGS_MODELS } from "@/shared/lib/modelCatalog";
 
 const TEST_MODEL = SETTINGS_MODELS[0].id;
 

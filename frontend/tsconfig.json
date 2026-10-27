@@ -22,16 +22,35 @@
     ],
     "paths": {
       "@sentry/react": ["./node_modules/@sentry/react"],
-      "@mike/contracts": ["../packages/contracts/index.d.ts"],
       "@/*": ["./src/*"],
-      "@mike/upload-session-client": ["./src/shared/api/uploadSessionClient.ts"],
-      "@mike/secure-uuid": ["./src/shared/lib/secureUuid.ts"],
-      "@mike/sentry-event": ["./src/shared/lib/sentryEvent.ts"],
-      "@mike/user-error": ["./src/shared/lib/userError.ts"],
-      "@mike/toast-store": ["./src/shared/lib/toastStore.ts"],
-      "@mike/error-notifier": ["./src/shared/lib/errorNotifier.ts"],
-      "@mike/toast-ui": ["./src/shared/ui/ToastUI.tsx"],
-      "@mike/model-catalog": ["./src/shared/lib/modelCatalog.ts"]
+      // Shared packages (packages/*), reached by name. frontend/Dockerfile
+      // copies each target into the image at the path the alias resolves to;
+      // src/__tests__/architecture.test.ts checks the two agree.
+      "@mike/contracts": ["../packages/contracts/index.d.ts"],
+      "@mike/ui": ["../packages/ui/src/index.ts"],
+      "@mike/client": ["../packages/client/src/index.ts"],
+      // The packages have no node_modules of their own: their dependencies
+      // are this application's. Node-style lookup from packages/ walks up to
+      // the repository root and never reaches frontend/node_modules, so name
+      // each dependency a package imports here. Keep the list in step with
+      // packages/*/package.json peerDependencies (and the test tooling the
+      // packages' colocated tests use).
+      //
+      // react, react/jsx-runtime and react-dom are deliberately absent.
+      // Turbopack applies these paths at runtime, not only to types, and
+      // their only type-checkable targets are @types declaration files with
+      // no runtime exports: mapping react/jsx-runtime to one compiled every
+      // JSX call to `(void 0)(...)`. Next's import map supplies the runtime
+      // copies and `typeRoots` above supplies their types, for files under
+      // packages/ too.
+      "lucide-react": ["./node_modules/lucide-react"],
+      "clsx": ["./node_modules/clsx"],
+      "tailwind-merge": ["./node_modules/tailwind-merge"],
+      "@radix-ui/react-dropdown-menu": ["./node_modules/@radix-ui/react-dropdown-menu"],
+      "vitest": ["./node_modules/vitest"],
+      "@testing-library/react": ["./node_modules/@testing-library/react"],
+      "@testing-library/user-event": ["./node_modules/@testing-library/user-event"],
+      "postcss": ["./node_modules/postcss"]
     }
   },
   "include": [
@@ -40,7 +59,13 @@
     "**/*.tsx",
     ".next/types/**/*.ts",
     ".next/dev/types/**/*.ts",
-    "**/*.mts"
+    "**/*.mts",
+    // The shared packages are part of this program: `next build` type-checks
+    // what it bundles, and `npm run typecheck` covers their colocated tests.
+    "../packages/ui/src/**/*.ts",
+    "../packages/ui/src/**/*.tsx",
+    "../packages/ui/stories/*.tsx",
+    "../packages/client/src/**/*.ts"
   ],
   "exclude": ["node_modules"]
 }

@@ -18,7 +18,12 @@ import {
 import {
   HeaderButtonUI,
   HeaderButtonsUI,
-} from "@mike/header-buttons-ui";
+  Dropdown,
+  DropdownContent,
+  DropdownItem,
+  DropdownSeparator,
+  DropdownTrigger,
+} from "@mike/ui";
 import chatIcon from "@icons/features/chat.svg";
 import quickActionsIcon from "@icons/features/quick-actions.svg";
 import workflowIcon from "@icons/features/workflow.svg";
@@ -26,13 +31,6 @@ import chatHistoryIcon from "@icons/features/chat-history.svg";
 import settingsIcon from "@icons/settings.svg";
 import signOutIcon from "@icons/sign-out.svg";
 import { ChatHistoryDropdown } from "../history/ChatHistoryDropdown";
-import {
-  Dropdown,
-  DropdownContent,
-  DropdownItem,
-  DropdownSeparator,
-  DropdownTrigger,
-} from "@mike/dropdown-ui";
 import type { WordChatStorageMode } from "../../lib/wordChatSettings";
 
 export type AddinSection =

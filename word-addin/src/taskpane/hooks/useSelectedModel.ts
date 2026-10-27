@@ -5,7 +5,7 @@ import {
   isAllowedModelId,
   isRouterModelSelected,
   type RouterSelections,
-} from "@mike/model-catalog";
+} from "@mike/client";
 import { isModelAvailable } from "../lib/modelCatalog";
 
 interface SelectedModelSources {

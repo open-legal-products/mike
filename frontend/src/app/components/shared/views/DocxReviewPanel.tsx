@@ -20,7 +20,7 @@ import {
     useEditorState,
 } from "@docx-editor.dev/react";
 import { X } from "lucide-react";
-import { TextButtonUI } from "@/shared/ui/TextButtonUI";
+import { TextButtonUI } from "@mike/ui";
 import { DocxCommentComposer } from "./DocxCommentComposer";
 import { DocxReviewActions } from "./DocxReviewActions";
 import { DocxCommentCard } from "./DocxCommentCard";

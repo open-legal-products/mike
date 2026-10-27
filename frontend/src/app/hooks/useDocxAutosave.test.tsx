@@ -3,7 +3,7 @@ import { act, renderHook } from "@testing-library/react";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { DOCX_AUTOSAVE_DELAY, useDocxAutosave } from "./useDocxAutosave";
 import { listDocumentVersions, replaceDocumentVersionFile } from "@/app/lib/mikeApi";
-import { UploadBatchError } from "@/shared/api/uploadSessionClient";
+import { UploadBatchError } from "@mike/client";
 import { invalidateDocxBytes } from "./useFetchDocxBytes";
 
 vi.mock("@/app/lib/mikeApi", () => ({

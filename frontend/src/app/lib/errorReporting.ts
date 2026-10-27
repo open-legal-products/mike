@@ -1,13 +1,13 @@
 /**
  * Error reporting for the web app: a thin, testable layer over the Sentry
  * SDK. Application code calls these helpers instead of `@sentry/nextjs`
- * directly so the PII policy (see `@/shared/lib/sentryEvent`) and the
+ * directly so the PII policy (see `@mike/client`'s sentryEvent) and the
  * explicit opt-out rule live in one place.
  */
 
 import * as Sentry from "@sentry/nextjs";
-import { privacyBoundaryIntegration } from "@/shared/lib/sentryPrivacy";
 import {
+    privacyBoundaryIntegration,
     MIKE_SENTRY_DSN,
     createEventScrubber,
     installKind,
@@ -15,7 +15,7 @@ import {
     parseSampleRate,
     releaseName,
     resolveDsn,
-} from "@/shared/lib/sentryEvent";
+} from "@mike/client";
 
 export type ReportLevel = "fatal" | "error" | "warning";
 

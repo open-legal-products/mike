@@ -1,11 +1,9 @@
 import React from "react";
 import { Trash2 } from "lucide-react";
-import { ToggleSwitchUI } from "@mike/toggle-switch-ui";
+import { ToggleSwitchUI, PillButtonUI as PillButton, GlassCardUI } from "@mike/ui";
 import { PageTitle } from "../primitives/PageTitle";
-import { PillButtonUI as PillButton } from "@mike/pill-button-ui";
 import type { WordChatStorageMode } from "../../lib/wordChatSettings";
 import { Modal } from "../primitives/Modal";
-import { GlassCardUI } from "@mike/glass-card-ui";
 import { userMessage } from "../../lib/notify";
 
 interface SettingsPageProps {

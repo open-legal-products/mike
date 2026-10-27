@@ -4,17 +4,15 @@ import { useState } from "react";
 import { ChevronDown, type LucideIcon } from "lucide-react";
 import { cn } from "@/app/lib/utils";
 import { FORM_CONTROL_GLASS_CLASS } from "../ui/form-field";
-import { textButtonUIClassName } from "@/shared/ui/TextButtonUI.styles";
 import {
+    textButtonUIClassName,
     Dropdown,
     DropdownContent,
     DropdownItem,
     DropdownTrigger,
-} from "@/shared/ui/dropdown";
-import {
     LIQUID_GLASS_HOVER_CLASS,
     LIQUID_GLASS_SELECTED_CLASS,
-} from "@/shared/ui/LiquidGlassUI";
+} from "@mike/ui";
 
 export type ModalSelectOption =
     | string

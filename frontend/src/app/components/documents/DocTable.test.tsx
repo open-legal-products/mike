@@ -2,7 +2,7 @@ import { useState, type ComponentProps } from "react";
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { ToastViewportUI, clearToasts } from "@/shared/ui/ToastUI";
+import { ToastViewportUI, clearToasts } from "@mike/ui";
 import { SelectionActionsMenu } from "@/app/components/shared/SelectionActionsMenu";
 import type { Document } from "@/app/components/shared/types";
 import {

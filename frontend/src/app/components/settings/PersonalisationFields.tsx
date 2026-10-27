@@ -2,18 +2,18 @@
 
 import { Fragment, useMemo, useState, type ReactNode } from "react";
 import { ChevronDown, X } from "lucide-react";
-import { authInputUIClassName } from "@/shared/ui/AuthStylesUI";
-import { InputUI } from "@/shared/ui/InputUI";
-import { OptionPill } from "@/app/components/ui/option-pill";
-import { FieldLabel } from "@/app/components/ui/form-field";
 import {
+  authInputUIClassName,
+  InputUI,
   Dropdown,
   DropdownCheckboxItem,
   DropdownContent,
   DropdownRadioGroup,
   DropdownRadioItem,
   DropdownTrigger,
-} from "@/shared/ui/dropdown";
+} from "@mike/ui";
+import { OptionPill } from "@/app/components/ui/option-pill";
+import { FieldLabel } from "@/app/components/ui/form-field";
 import { cn } from "@/app/lib/utils";
 import type { PersonalisationDetails } from "@/app/lib/mikeApi";
 import {

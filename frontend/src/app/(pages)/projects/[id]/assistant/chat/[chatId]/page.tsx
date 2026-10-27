@@ -109,7 +109,7 @@ import {
 import { can, roleFromLoaded } from "@/app/lib/permissions";
 import { LIQUID_GLASS_FLAT_CLASS } from "@/app/components/ui/liquid-surface";
 import { cn } from "@/app/lib/utils";
-import type { MessageExcerpt } from "@/shared/lib/messageExcerpts";
+import type { MessageExcerpt } from "@mike/client";
 import { readDocumentDragPayload } from "@/app/lib/docTableSelection";
 import { userFacingApiError } from "@/app/lib/userFacingError";
 import {

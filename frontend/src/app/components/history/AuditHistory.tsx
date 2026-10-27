@@ -81,16 +81,16 @@ import {
   auditPrivateAccess,
 } from "./auditPresentation";
 import { HistorySkeuoIcon } from "@/app/components/shared/HistorySkeuoIcon";
-import { PillButtonUI } from "@/shared/ui/PillButtonUI";
-import { TabPillButtonUI } from "@/shared/ui/TabPillButtonUI";
-import { HeaderButtonUI } from "@/shared/ui/HeaderButtonsUI";
 import {
+  PillButtonUI,
+  TabPillButtonUI,
+  HeaderButtonUI,
   Dropdown,
   DropdownContent,
   DropdownItem,
   DropdownSurface,
   DropdownTrigger,
-} from "@/shared/ui/dropdown";
+} from "@mike/ui";
 
 const STATUS_DOT_STYLES: Record<string, string> = {
   completed: "bg-green-400/80",

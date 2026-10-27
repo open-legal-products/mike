@@ -2,7 +2,7 @@
 
 import { Globe } from "lucide-react";
 import { useRouter } from "next/navigation";
-import { PillButtonUI } from "@/shared/ui/PillButtonUI";
+import { PillButtonUI } from "@mike/ui";
 
 interface SsoAuthButtonProps {
     disabled?: boolean;

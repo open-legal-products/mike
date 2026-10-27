@@ -1,6 +1,6 @@
 # BuildKit per-Dockerfile ignore (context is the repo root — see Dockerfile).
-# The build reads word-addin/, frontend/src/shared, frontend/public/icons and
-# packages/contracts; everything else stays out of the context.
+# The build reads word-addin/, frontend/public/icons, packages/contracts,
+# packages/ui and packages/client; everything else stays out of the context.
 **/node_modules
 **/dist
 **/.next

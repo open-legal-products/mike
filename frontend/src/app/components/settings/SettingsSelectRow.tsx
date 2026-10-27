@@ -1,14 +1,14 @@
 "use client";
 
 import { ChevronDown } from "lucide-react";
-import { authInputUIClassName } from "@/shared/ui/AuthStylesUI";
 import {
+  authInputUIClassName,
   Dropdown,
   DropdownContent,
   DropdownRadioGroup,
   DropdownRadioItem,
   DropdownTrigger,
-} from "@/shared/ui/dropdown";
+} from "@mike/ui";
 import { SettingsRow } from "@/app/components/settings/SettingsRow";
 import {
   SettingsDescription,

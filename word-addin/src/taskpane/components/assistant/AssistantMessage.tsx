@@ -9,9 +9,7 @@ import type {
   WordThinkingEvent,
   WordTextCardEvent,
 } from "../../types";
-import { PillButtonUI as PillButton } from "@mike/pill-button-ui";
-import { TextCardUI } from "@mike/document-event-blocks-ui";
-import { EXCERPT_SOURCE_PROPS } from "@mike/response-selection-menu-ui";
+import { PillButtonUI as PillButton, TextCardUI, EXCERPT_SOURCE_PROPS } from "@mike/ui";
 import { EditCard } from "./EditCard";
 import { PreResponseWrapper } from "./PreResponseWrapper";
 import { EditCardsSection } from "./message/EditCardsSection";

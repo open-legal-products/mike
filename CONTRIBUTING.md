@@ -16,8 +16,9 @@ Thanks for helping improve Mike. Please keep contributions small, focused, and e
 ## Frontend UI Work
 
 Before writing a new component, check whether one already exists. Look first in
-`frontend/src/app/components/ui/` (and `frontend/src/shared/ui/` for anything the
-Word add-in also renders), then in the [shadcn/ui](https://ui.shadcn.com)
+`frontend/src/app/components/ui/` (and `packages/ui/`, imported as `@mike/ui`,
+for anything the Word add-in also renders), then in the
+[shadcn/ui](https://ui.shadcn.com)
 registry — the project is configured for it in `frontend/components.json`, so
 `npx shadcn@latest add <component>` lands a component in the right place with
 the right style and tokens. Write a one-off in the feature directory only when
