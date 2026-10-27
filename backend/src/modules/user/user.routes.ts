@@ -26,6 +26,7 @@ import crypto from "crypto";
 import { Router, type Request, type Response } from "express";
 import { requireAuth, requireMfaIfEnrolled } from "../../middleware/auth";
 import { asyncRoute, routerErrorHandler } from "../../middleware/asyncRoute";
+import { isInstanceAdmin } from "../../lib/instanceAdmin";
 import { createServerSupabase, type Db } from "../../lib/supabase";
 import { INTERNAL_ERROR_CODE, sendInternalError } from "../../lib/httpError";
 import { sendServiceFailure } from "../../lib/serviceResult";
@@ -333,7 +334,12 @@ userRouter.get("/profile", requireAuth, asyncRoute(async (_req, res) => {
     const db = createServerSupabase();
     const result = await getUserProfile(db, userId);
     if (!result.ok) return void sendInternalError(res, result.error);
-    res.json(result.body);
+    // Whether Settings shows the Admin area. Decided by the server's
+    // MIKE_ADMIN_EMAILS against the CONFIRMED address, never stored.
+    res.json({
+        ...result.body,
+        instanceAdmin: isInstanceAdmin(res.locals.userEmail),
+    });
 }));
 
 // PATCH /user/profile
