@@ -471,11 +471,31 @@ approved technical codes and numeric statuses can be extracted from causes.
 - Real-SDK transport tests cover both install modes, including new unregistered
   labels, dependency-provided names/kinds, cause payloads and automatic captures.
 
-The web app and Word add-in briefly hold API 5xx reports that lack an operation.
-A screen's synchronous catch can add its operation through the notice layer;
-the original API event then carries that label without a duplicate. An unclaimed
-report is sent on the next timer turn. Callers that know the operation before
-capture should pass it directly.
+### Client reporting contract
+
+- `describeError`, `userFacingApiError` and the add-in's `userMessage` only
+  classify or format a failure. They never capture an event. For an inline
+  error, call `reportFault(error, { operation, ...descriptionOptions })`;
+  it reports eligible faults and returns the description to render.
+- `notifyError` reports and presents an eligible failure. Partial-failure
+  notices can report their underlying cause, while their user-facing summary
+  stays out of telemetry.
+- Typed API wrappers pass their static operation into `apiRequest` before
+  the request begins. API 5xx reports are captured immediately with that
+  operation; there is no pending-report timer or later screen claim. A
+  delayed screen handler cannot change or lose the operation on the event.
+- Reporting callers and automatic captures consult the same error registry.
+  Reformatting an already-reported failure does not create another event.
+- Terminal stream frames use `reporting_owner: "backend"` when the backend
+  owns reporting. This does not promise delivery to Sentry. Clients preserve
+  that ownership and avoid duplicate reports. A request ID is only for
+  correlation: older frames without an ownership field retain client-side
+  fallback reporting, even when they have a request ID.
+
+Use `withKind` to wrap a failure only when its cause chain has no application
+kind. Domain helpers may build result objects or apply domain-specific policy,
+but delegate kind preservation to that helper. `ConversionError` derives its
+legacy consumer code from its diagnostic kind; callers do not supply both.
 
 Example (no registry update):
 
