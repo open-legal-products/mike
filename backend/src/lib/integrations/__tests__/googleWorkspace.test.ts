@@ -405,6 +405,70 @@ describe("Google connector settings", () => {
     await disconnectWorkspace(s.db, personalConnectorOwner("u1"), "gmail");
     expect((await workspaceStatus(s.db, personalConnectorOwner("u1"), "gmail")).connected).toBe(false);
   });
+  it("offers a service to a user whose flag is on while the deployment default is off", async () => {
+    // The deployment switched Gmail off; an admin turned it on for u1 only.
+    vi.stubEnv("GOOGLE_WORKSPACE_DISABLED_PROVIDERS", "gmail");
+    const store = workspaceDb();
+    store.tables.user_feature_flags.push(
+      { user_id: "u1", flag: "gmail-read", enabled: true },
+      { user_id: "u1", flag: "gmail-write", enabled: true },
+    );
+    expect(await workspaceStatus(store.db, personalConnectorOwner("u1"), "gmail")).toMatchObject({
+      available: true,
+      writeAvailable: true,
+    });
+    expect(await workspaceStatus(store.db, personalConnectorOwner("u2"), "gmail")).toMatchObject({
+      available: false,
+      writeAvailable: false,
+    });
+    await expect(
+      startWorkspaceOAuth(store.db, personalConnectorOwner("u2"), "gmail", "https://mike.test/callback"),
+    ).rejects.toThrow("Gmail is not offered on this Mike server.");
+    expect(store.tables.google_workspace_oauth_states).toEqual([]);
+    const { authorizationUrl } = await startWorkspaceOAuth(
+      store.db,
+      personalConnectorOwner("u1"),
+      "gmail",
+      "https://mike.test/callback",
+    );
+    expect(new URL(authorizationUrl).searchParams.get("scope")?.split(" ")).toEqual(
+      requestedScopes("gmail"),
+    );
+  });
+  it("requests only the read bundle and offers only read tools while the write flag is off", async () => {
+    const s = await connected(true);
+    // Google granted write access earlier; an admin then switched writes off for u1.
+    s.tables.user_feature_flags.push({ user_id: "u1", flag: "gmail-write", enabled: false });
+    const { authorizationUrl } = await startWorkspaceOAuth(
+      s.db,
+      personalConnectorOwner("u1"),
+      "gmail",
+      "https://mike.test/callback",
+    );
+    const scope = new URL(authorizationUrl).searchParams.get("scope")?.split(" ");
+    expect(scope).toEqual(["openid", "email", ...GOOGLE_PROVIDERS.gmail.read]);
+    expect(scope).not.toContain(GOOGLE_PROVIDERS.gmail.write[0]);
+
+    const status = await workspaceConnectorStatus(s.db, personalConnectorOwner("u1"), "gmail");
+    expect(status).toMatchObject({ available: true, writeAvailable: false, writeEnabled: true });
+    expect(status.tools.some((t) => t.write)).toBe(false);
+    expect(status.tools.some((t) => t.name === "gmail_search")).toBe(true);
+
+    const names = JSON.stringify(await buildGoogleWorkspaceTools(personalConnectorOwner("u1"), s.db));
+    expect(names).toContain("gmail_search");
+    expect(names).not.toContain("gmail_send");
+    const refused = await executeGoogleWorkspaceToolCall(personalConnectorOwner("u1"), "gmail_send", email, s.db);
+    expect(refused.event.status).toBe("error");
+    expect(refused.content).toContain("Changes through Gmail are not offered on this Mike server.");
+    expect(
+      (await planGoogleWorkspaceCall(personalConnectorOwner("u1"), "gmail_send", email, s.db)).type,
+    ).toBe("result");
+    expect(fetchMock).not.toHaveBeenCalled();
+    // Reads still work for this user.
+    fetchMock.mockResolvedValueOnce(json({ messages: [] }));
+    const read = await executeGoogleWorkspaceToolCall(personalConnectorOwner("u1"), "gmail_search", { query: "x" }, s.db);
+    expect(read.event.status).toBe("ok");
+  });
   it("hides and refuses a turned-off connection or tool", async () => {
     const s = await connected(true);
     await setWorkspaceToolEnabled(s.db, personalConnectorOwner("u1"), "gmail", "gmail_send", false);

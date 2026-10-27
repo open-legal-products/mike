@@ -24,6 +24,7 @@ import {
 } from "./modules/downloads/downloads.routes";
 import { sourceDocumentsRouter } from "./modules/source-documents/sourceDocuments.routes";
 import { auditRouter } from "./modules/audit/audit.routes";
+import { adminRouter } from "./modules/admin/admin.routes";
 import { authRouter } from "./modules/auth/auth.routes";
 import { uploadSessionsRouter } from "./modules/uploads/uploads.routes";
 import {
@@ -350,6 +351,7 @@ app.use("/user", userRouter);
 app.use("/download", downloadsRouter);
 app.use("/documents", sourceDocumentsRouter);
 app.use("/audit", auditRouter);
+app.use("/admin", adminRouter);
 app.use("/playbooks", playbooksRouter);
 app.use("/upload-sessions", uploadSessionsRouter);
 

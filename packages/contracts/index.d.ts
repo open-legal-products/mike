@@ -552,8 +552,9 @@ export type GoogleWorkspaceProvider = 'gmail' | 'google-calendar';
 export interface GoogleDriveStatus {
     configured: boolean;
     /**
-     * False when the operator switched Drive off for the deployment
-     * (GOOGLE_WORKSPACE_DISABLED_PROVIDERS): Discover does not offer it, new
+     * False when Drive is not offered to the user: the operator switched it
+     * off for the deployment (GOOGLE_WORKSPACE_DISABLED_PROVIDERS) or its
+     * feature flag is off for them. Discover does not offer it, new
      * connections and Picker sessions are refused, and the assistant has none
      * of its tools.
      */
@@ -592,11 +593,18 @@ export interface GoogleDrivePickerSession {
 export interface GoogleWorkspaceStatus {
     configured: boolean;
     /**
-     * False when the operator switched this service off for the deployment
-     * (GOOGLE_WORKSPACE_DISABLED_PROVIDERS): Discover does not offer it, new
-     * connections are refused, and the assistant has none of its tools.
+     * False when this service is not offered to the user: the operator
+     * switched it off for the deployment (GOOGLE_WORKSPACE_DISABLED_PROVIDERS)
+     * or its read feature flag is off for them. Discover does not offer it,
+     * new connections are refused, and the assistant has none of its tools.
      */
     available: boolean;
+    /**
+     * False when the user's write feature flag is off: the write scope is not
+     * requested on connect and no write tool is listed or offered, whatever
+     * an earlier grant carries.
+     */
+    writeAvailable: boolean;
     schemaReady: boolean;
     connected: boolean;
     /** Google granted write access; false when the user or an admin withheld it. */
@@ -611,6 +619,46 @@ export interface GoogleWorkspaceStatus {
     grantId?: string;
     accountEmail?: string;
     redirectUri: string | null;
+}
+/**
+ * Feature flags (Settings → Admin). The list of flags lives in
+ * backend/src/lib/featureFlags.ts; a flag answers "is this on for this user?"
+ * from the user's override, else the deployment default, else the code
+ * default. Each Google scope bundle is its own flag.
+ */
+export type FeatureFlagKey =
+    | 'google-drive'
+    | 'gmail-read'
+    | 'gmail-write'
+    | 'google-calendar-read'
+    | 'google-calendar-write';
+export interface FeatureFlagSummary {
+    key: FeatureFlagKey;
+    label: string;
+    description: string;
+    /** Flags shown together in the admin panel. */
+    group: string;
+    /** What applies when no admin default is set; may read server configuration. */
+    codeDefault: boolean;
+    /** Set by an admin for the whole deployment; null means the code default applies. */
+    deploymentDefault: boolean | null;
+    effectiveDefault: boolean;
+}
+/** GET /admin/feature-flags and the body PUT /admin/feature-flags/:key answers with. */
+export interface AdminFeatureFlagsResponse {
+    flags: FeatureFlagSummary[];
+}
+/** GET /admin/users/feature-flags?email= and the body PUT /admin/users/:userId/feature-flags/:key answers with. */
+export interface AdminUserFeatureFlags {
+    userId: string;
+    email: string;
+    displayName: string | null;
+    flags: Array<{
+        key: FeatureFlagKey;
+        /** Set by an admin for this user; null means the deployment default applies. */
+        override: boolean | null;
+        enabled: boolean;
+    }>;
 }
 /** The CourtListener connector in one workspace (GET /user/integrations/courtlistener). */
 export interface CourtListenerConnectorStatus {

@@ -6,6 +6,9 @@ export function workspaceDb() {
   const tables: Record<string, Row[]> = {
     user_google_workspace_tokens: [],
     google_workspace_oauth_states: [],
+    // Feature flags (lib/featureFlags.ts): empty means every code default applies.
+    feature_flag_defaults: [],
+    user_feature_flags: [],
   };
   const failures = new Map<string, unknown>();
   const db = {

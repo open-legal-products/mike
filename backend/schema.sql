@@ -9287,6 +9287,28 @@ grant execute on function public.list_org_departure_work(uuid,uuid,integer) to s
 -- backend/src/__tests__/migrationLedger.test.ts fails until you do, and a
 -- missing name makes every fresh install re-run that migration on its first
 -- `migrate.sh up`.
+-- Feature flags: deployment defaults and per-user overrides of the flags
+-- listed in backend/src/lib/featureFlags.ts (20261027_01). Service role only;
+-- MIKE_ADMIN_EMAILS decides who may change them.
+create table if not exists public.feature_flag_defaults (
+  flag text primary key,
+  enabled boolean not null,
+  updated_at timestamptz not null default now(),
+  updated_by uuid references auth.users(id) on delete set null
+);
+create table if not exists public.user_feature_flags (
+  user_id uuid not null references auth.users(id) on delete cascade,
+  flag text not null,
+  enabled boolean not null,
+  updated_at timestamptz not null default now(),
+  updated_by uuid references auth.users(id) on delete set null,
+  constraint user_feature_flags_pkey primary key (user_id, flag)
+);
+alter table public.feature_flag_defaults enable row level security;
+alter table public.user_feature_flags enable row level security;
+revoke all on public.feature_flag_defaults, public.user_feature_flags from public, anon, authenticated;
+grant select, insert, update, delete on public.feature_flag_defaults, public.user_feature_flags to service_role;
+
 create table if not exists public.schema_migrations (
   filename text primary key,
   checksum text,
@@ -11100,5 +11122,6 @@ insert into public.schema_migrations (filename) values
   ('20261024_01_org_keys_central_only.sql'),
   ('20261024_02_workspace_scoped_data_deletion.sql'),
   ('20261024_03_backfill_project_child_org_id.sql'),
-  ('20261024_04_org_member_data_policy.sql')
+  ('20261024_04_org_member_data_policy.sql'),
+  ('20261027_01_feature_flags.sql')
 on conflict (filename) do nothing;

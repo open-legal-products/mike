@@ -521,6 +521,32 @@ describe("Google Drive OAuth lifecycle", () => {
         ).rejects.toThrow();
         expect(store.tokens).toHaveLength(0);
     });
+    it("offers Drive per user: an override beats the deployment switch, and vice versa", async () => {
+        const store = await connected();
+        vi.stubEnv("GOOGLE_DRIVE_PICKER_API_KEY", "picker-key");
+        vi.stubEnv("GOOGLE_DRIVE_PICKER_APP_ID", "123456789");
+        // Switched off for the deployment, on for u1 only.
+        vi.stubEnv("GOOGLE_WORKSPACE_DISABLED_PROVIDERS", "google-drive");
+        store.flags.user_feature_flags.push({ user_id: "u1", flag: "google-drive", enabled: true });
+        expect(await buildGoogleDriveTools(personalConnectorOwner("u1"), store.db)).not.toEqual([]);
+        expect(await getGoogleDriveStatus(personalConnectorOwner("u1"), store.db)).toMatchObject({ available: true, connected: true });
+        expect(await getGoogleDriveStatus(personalConnectorOwner("u2"), store.db)).toMatchObject({ available: false, connected: false });
+        await expect(
+            startGoogleDriveOAuth(personalConnectorOwner("u2"), "http://localhost:3000/api/callback", store.db),
+        ).rejects.toMatchObject({ code: "connector_unavailable" });
+        // On for the deployment, off for u1 only: the existing grant yields nothing.
+        vi.stubEnv("GOOGLE_WORKSPACE_DISABLED_PROVIDERS", "");
+        store.flags.user_feature_flags[0].enabled = false;
+        expect(await buildGoogleDriveTools(personalConnectorOwner("u1"), store.db)).toEqual([]);
+        await expect(
+            createGoogleDrivePickerSession(personalConnectorOwner("u1"), store.db),
+        ).rejects.toMatchObject({ code: "connector_unavailable" });
+        expect(await getGoogleDriveStatus(personalConnectorOwner("u1"), store.db)).toMatchObject({ available: false, connected: true });
+        // A deployment default an admin set applies to everyone without an override.
+        store.flags.user_feature_flags.length = 0;
+        store.flags.feature_flag_defaults.push({ flag: "google-drive", enabled: false });
+        expect(await getGoogleDriveStatus(personalConnectorOwner("u2"), store.db)).toMatchObject({ available: false });
+    });
     it("switches Drive off for the deployment but keeps an existing connection deletable", async () => {
         const store = await connected();
         vi.stubEnv("GOOGLE_DRIVE_PICKER_API_KEY", "picker-key");

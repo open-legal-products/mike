@@ -7,6 +7,11 @@
  * requesting the same scopes. Unknown ids are reported and ignored rather
  * than disabling nothing silently or taking every service down.
  *
+ * The variable is the CODE DEFAULT of the Google feature flags
+ * (lib/featureFlags.ts): an instance admin can set a different deployment
+ * default or switch a service on or off for one user without redeploying.
+ * Per-user answers come from googleAccess.ts; nothing here is per user.
+ *
  * Shared by the Drive and Gmail/Calendar integrations, which otherwise keep
  * separate OAuth clients, grants and tools.
  */
@@ -38,4 +43,9 @@ export function isGoogleServiceAvailable(service: GoogleService): boolean {
 /** Repo-authored, safe to show the user as written. */
 export function googleServiceUnavailableMessage(service: GoogleService): string {
   return `${GOOGLE_SERVICES[service]} is not offered on this Mike server.`;
+}
+
+/** The read bundle is on for this user but the write bundle is not (see googleAccess.ts). */
+export function googleWriteUnavailableMessage(service: GoogleService): string {
+  return `Changes through ${GOOGLE_SERVICES[service]} are not offered on this Mike server.`;
 }

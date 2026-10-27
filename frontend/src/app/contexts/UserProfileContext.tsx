@@ -82,6 +82,8 @@ interface UserProfile extends RouterProfileLists {
      * the connector is installed for everyone without a token.
      */
     courtlistenerBulkData: boolean;
+    /** The server lists this account in MIKE_ADMIN_EMAILS: Settings shows Admin. */
+    instanceAdmin: boolean;
     quickActionsVisible: boolean;
     /** Whether responses and subagents show the model, effort and tokens they used. */
     responseDetailsVisible: boolean;
@@ -203,6 +205,7 @@ function toProfile(data: ApiUserProfile): UserProfile {
             profile.lastSelectedReasoningLevel ?? "high",
         mfaOnLogin: profile.mfaOnLogin === true,
         courtlistenerBulkData: profile.courtlistenerBulkData === true,
+        instanceAdmin: profile.instanceAdmin === true,
         responseDetailsVisible: profile.responseDetailsVisible === true,
         projectMemoryDefault: profile.projectMemoryDefault !== false,
         ...routerProfileLists(profile),
@@ -303,6 +306,7 @@ export function UserProfileProvider({ children }: { children: ReactNode }) {
                 lastSelectedReasoningLevel: "high",
                 mfaOnLogin: false,
                 courtlistenerBulkData: false,
+                instanceAdmin: false,
                 quickActionsVisible: true,
                 responseDetailsVisible: false,
                 ...routerProfileLists({}),
