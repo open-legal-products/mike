@@ -18,7 +18,7 @@
 //      explicitly are remembered so the bridge does not double-report them.
 
 import * as Sentry from "@sentry/node";
-import { diagnosticErrorTags, privacyBoundaryIntegration, type Operation, type Stage } from "./sentryPrivacy";
+import { retainExceptionTypes, diagnosticErrorTags, privacyBoundaryIntegration, type Operation, type Stage } from "./sentryPrivacy";
 
 export type SentryRole = "api" | "worker" | "worker-thread" | "job";
 
@@ -438,7 +438,7 @@ export function minimiseForCommunity<T extends CommunityEvent>(event: T): T {
   delete event.user;
   // Breadcrumbs are request history; only our own stage trail stays
   // (category mike.stage, message a stage name), the privacy boundary
-  // checks each one against the stage vocabulary.
+  // checks each one against the diagnostic label format.
   const trail = Array.isArray(event.breadcrumbs)
     ? event.breadcrumbs.filter((crumb) => (crumb as { category?: unknown })?.category === "mike.stage")
     : [];
@@ -761,6 +761,8 @@ export function scrubEvent(
     Object.assign(event.tags, diagnosticErrorTags(nested));
   }
 
+  retainExceptionTypes(event.exception?.values, [original, ...(args ?? [])], event.tags?.warning_name);
+
   // The title and the exception text are free text from libraries that
   // happily quote emails, tokens, and URLs (Postgres "Key (email)=(…)",
   // axios "Request failed … Authorization: Bearer …").
@@ -1055,8 +1057,8 @@ export function bestEffort<T>(
 /**
  * Name the flow this request or job belongs to. Set once at the entry
  * (route handler, job handler) and every event captured until it finishes
- * carries `operation`, which leads the issue title and the fingerprint: one
- * failing operation is one issue, whatever route or stack it fails in.
+ * carries `operation`, which leads the issue title and the fingerprint.
+ * Default stack grouping still distinguishes different failure sites.
  */
 export function setOperation(operation: Operation): void {
   if (!initialized) return;
@@ -1067,8 +1069,8 @@ export function setOperation(operation: Operation): void {
  * Record that the current request or job reached a stage. The stages a
  * failed operation passed through arrive on its event as breadcrumbs, so a
  * failure in `seal-recover` is distinguishable from the same throw reached
- * via `copy-rollback`. Only the stage name travels: it is a vocabulary
- * member, never a message or data.
+ * via `copy-rollback`. Only the static, source-authored stage label travels,
+ * never runtime data or a free-form message.
  */
 export function markStage(stage: Stage): void {
   if (!initialized) return;

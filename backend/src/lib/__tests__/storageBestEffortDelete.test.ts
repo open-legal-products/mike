@@ -144,7 +144,7 @@ describe("deleteFileBestEffort / deleteFilesBestEffort", () => {
     );
     expect(mocks.send).toHaveBeenCalledTimes(2); // both still attempted
     expect(mocks.reports).toHaveLength(1);
-    expect(mocks.reports[0]!.what).toBe("storage-delete:seal-recover");
+    expect(mocks.reports[0]!.what).toBe("seal-recover");
     expect(diagnosticErrorTags(mocks.reports[0]!.error)).toMatchObject({
       storage_operation: "delete",
       failure_code: "InvalidAccessKeyId",

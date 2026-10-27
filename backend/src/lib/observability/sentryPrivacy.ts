@@ -13,76 +13,37 @@ interface Transport {
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const HEX_ID = /^[0-9a-f]{16,32}$/i;
 /**
- * The two literals that make an event name a bug instead of a route.
- *
- * `operation`: the user-level flow a request or job belongs to, set once at
- * its entry (`setOperation`). `error_kind`: what went wrong, from the code
- * that threw (`AppError`). Both are closed vocabularies: a value not listed
- * here never reaches the wire, so a document name or a user's text cannot
- * ride along in either. Add a member here first, then use it.
+ * Application-authored diagnostic labels. New labels need no registration.
+ * Keep them static in source, never derive them from user/dependency data.
+ * The source-contract test checks common violations; this format check is
+ * defense in depth, not a claim that identifier-shaped text cannot be PII.
  */
-export const OPERATIONS = [
-  'documents.upload', 'documents.upload.complete', 'documents.convert', 'documents.extract', 'documents.precompute_text',
-  'documents.open', 'documents.version', 'documents.edit', 'documents.delete', 'documents.directory',
-  'upload_session.control', 'upload_session.storage',
-  'chat.turn', 'chat.title', 'chat.subagent', 'chat.tool', 'chat.web_search', 'chat.mcp', 'project_chat.turn', 'word_chat.turn',
-  'tabular.cell', 'tabular.row', 'tabular.run', 'tabular.chat',
-  'playbooks.import', 'playbooks.review', 'playbooks.save',
-  'workflows.run', 'workflows.sync', 'quick_actions.run', 'audit.write',
-  'google.drive', 'google.gmail', 'google.calendar',
-  'auth.signin', 'auth.signup', 'auth.session', 'auth.mfa', 'auth.handoff',
-  'jobs.dispatch', 'storage.cleanup', 'memory.consolidate', 'memory.read', 'export.build', 'account.delete',
-  'mcp.connect', 'mcp.refresh', 'settings.keys', 'settings.connectors',
-  'word.document_read', 'word.edit_apply', 'word.edit_resolve', 'word.session',
-] as const;
-export type Operation = (typeof OPERATIONS)[number];
+export type Operation = string;
+export type Stage = string;
+export type ErrorKind = string;
 
-/** The named steps of an operation, for `stage` tags and the markStage trail. */
-export const STAGES = [
-  'runtime-config', 'manifest-key', 'listen', 'shutdown-http', 'shutdown-workers', 'shutdown-flush', 'gateway-config', 'gateway-fetch',
-  'gateway-response', 'api-unreachable', 'conversion', 'heartbeat', 'process-file', 'iteration', 'failure-hook', 'claim',
-  'tick', 'retention', 'delivery', 'docx-to-pdf', 'copy-rollback', 'anchor-cleanup', 'resolve-cleanup', 'resolve',
-  'restore', 'reveal', 'locate', 'citation-select', 'release', 'document-read', 'resolve-batch', 'tool-result',
-  'sealed-source-after-process', 'failed-file-sealed', 'session-expiry', 'seal-mismatch', 'seal-recover', 'session-cancel', 'user-prefix-cleanup', 'failed-document-remove',
-  'import.read', 'import.check', 'import.extract', 'import.compile', 'import.validate', 'import.store', 'import.save', 'import.record',
-  'import.cleanup', 'review.model', 'review.apply_edits', 'review.save', 'review.record', 'job.terminal', 'assistant-edit-conflict', 'edit-resolution-conflict',
-  'org-playbook-purge', 'optional-read',
-] as const;
-export type Stage = (typeof STAGES)[number];
+export function isDiagnosticLabel(value: unknown): value is string {
+  return typeof value === 'string' && value.length <= 100
+    && /^[a-z][a-z0-9]*(?:[._-][a-z0-9]+)*$/.test(value);
+}
 
-export const ERROR_KINDS = [
-  'storage.head_failed', 'storage.upload_failed', 'storage.download_failed', 'storage.delete_failed', 'storage.copy_failed',
-  'storage.signed_url_failed',
-  'conversion.unavailable', 'conversion.timeout', 'conversion.failed', 'conversion.no_output',
-  'extraction.pdf_parse_failed', 'extraction.failed',
-  'upload.session_invalid', 'upload.sealed_missing', 'upload.document_deleted', 'upload.document_changed',
-  'chat.stream_failed', 'chat.provider_rejected', 'chat.provider_rate_limited', 'chat.provider_unavailable', 'chat.tool_failed',
-  'chat.subagent_failed', 'chat.message_save_failed', 'chat.message_reserve_failed', 'chat.title_failed', 'chat.context_failed',
-  'web_search.not_configured', 'web_search.rejected', 'web_search.failed', 'web_search.page_unreadable', 'web_search.api_error',
-  'mcp.setup_failed', 'mcp.oauth_required', 'mcp.call_failed', 'mcp.call_rejected', 'mcp.decrypt_failed', 'mcp.blocked_destination',
-  'google.auth_failed', 'google.api_failed', 'google.user_error', 'google.scope_missing',
-  'tabular.generation_failed', 'tabular.prompt_failed', 'tabular.lease_lost', 'tabular.stream_failed',
-  'playbooks.request_invalid', 'playbooks.import_failed', 'playbooks.cleanup_failed',
-  'memory.validation', 'memory.revision_conflict', 'memory.disabled', 'memory.job_superseded', 'memory.epoch_superseded',
-  'memory.conversation_not_quiet', 'memory.consolidation_failed',
-  'dbq.deferred', 'dbq.non_retryable', 'dbq.unknown_job_kind', 'dbq.enqueue_failed', 'dbq.failure_hook_crashed',
-  'queue.enqueue_failed',
-  'auth.session_lookup_failed', 'auth.mfa_assurance_failed', 'auth.handoff_failed', 'auth.supabase_unavailable',
-  'audit.write_failed', 'export.failed', 'account.delete_failed', 'user.api_key_failed',
-  'workflows.sync_failed', 'workflows.addon_failed', 'workflows.default_install_failed', 'word.session_failed',
-  'db.query_failed', 'db.rpc_failed', 'user_facing',
-] as const;
-export type ErrorKind = (typeof ERROR_KINDS)[number];
+const APPLICATION_TAGS = new Set(['operation', 'error_kind', 'component', 'stage', 'job_kind']);
+// Only our error constructor may supply a free-form kind. A dependency's
+// arbitrary `kind` property must not become telemetry just because it fits.
+const APPLICATION_KIND = Symbol.for('mike.diagnostic.errorKind');
 
-/** Every tag value that may leave the process, by tag. Exported for the drift tests that check call-site literals against it. */
+/** Called by AppError, not with an upstream payload. No per-kind registry. */
+export function identifyApplicationError(error: object, kind: ErrorKind): void {
+  if (isDiagnosticLabel(kind)) Object.defineProperty(error, APPLICATION_KIND, { value: kind });
+}
+
+/** Fixed external protocol vocabulary; application labels use the source contract above. */
 export const DIAGNOSTIC_VOCABULARY: Record<string, ReadonlySet<string>> = Object.fromEntries(Object.entries({
   service: 'mike-backend mike-frontend mike-word-addin',
   role: 'api worker worker-thread job',
   runtime: 'browser server edge',
   surface: 'taskpane commands dialog',
   install: 'community official',
-  component: 'http mike-api api-gateway dbq storage upload-worker conversion-worker extraction-worker app-jobs chat-stream chat-title assistant-chat word-chat word-office boot shutdown worker-shutdown worker-thread worker-thread-supervisor stale-sweep mcp-refresh-sweep workflow-sync best-effort route-error-boundary global-error-boundary playbooks runtime-warning notify',
-  stage: STAGES.join(' '),
   http_method: 'GET POST PUT PATCH DELETE HEAD OPTIONS',
   // Every code a server emits (frontend/src/shared/lib/userError.ts CODE_KINDS) plus the client's own two.
   error_code: 'internal_error network_error upstream_unavailable schema_out_of_date rate_limited upload_session_control_rate_limit upload_session_poll_rate_limit upload_session_rate_limit_exceeded request_too_large upload_file_too_large upload_batch_too_large validation_failed invalid_request invalid_json password_too_short password_too_long email_address_invalid upload_incomplete missing_api_key model_unavailable model_required authentication_failed session_expired cookie_session_required mfa_verification_required untrusted_origin review_running review_stale memory_revision_conflict upload_target_busy access_inherited ask_inputs_stale',
@@ -98,11 +59,8 @@ export const DIAGNOSTIC_VOCABULARY: Record<string, ReadonlySet<string>> = Object
   office_code: 'GeneralException InvalidArgument InvalidObjectPath ItemNotFound AccessDenied NotAllowed DocumentNotSaved UnsupportedOperation InvalidOperation InvalidReference',
   office_host: 'Word',
   office_platform: 'PC Mac OfficeOnline Universal iOS Android',
-  job_kind: 'audit.chat_turn account.delete storage.cleanup document.cleanup export.build conversion.convert extraction.extract mcp.refresh_token document.precompute_text document.extract_text memory.consolidate playbook.review playbook.import',
   storage: 'local cloud',
   storage_operation: 'HEAD copy upload download delete',
-  operation: OPERATIONS.join(' '),
-  error_kind: ERROR_KINDS.join(' '),
   // Node's own process warnings (reported by the backend's 'warning' listener).
   warning_name: 'Warning DeprecationWarning ExperimentalWarning MaxListenersExceededWarning TimeoutOverflowWarning TimeoutNegativeWarning UnsupportedWarning',
 }).map(([key, values]) => [key, new Set(values.split(' '))]));
@@ -110,12 +68,15 @@ const ENUMS = DIAGNOSTIC_VOCABULARY;
 const ROUTE_PARTS = new Set(('word-chat orgs single-documents tabular-review quick-actions workflow-addons audit manifest-signing-key api auth login logout refresh session user users projects directory people access memory ids filter-options folder-paths resolve folder documents versions files folders upload uploads upload-sessions parts complete abort content download preview source text conversion chats chat messages stream cancel assistant tabular tabular-reviews reviews rows columns cells run results export workflows playbooks templates library models configured ollama openrouter vercel opencode-go bedrock azure azure-foundry vertex xai custom settings profile organizations members permissions shares keys api-keys health observability sentry-test').split(' '));
 const ID_KEYS = new Set(('request_id requestId document_id documentId file_id fileId job_id jobId review_id reviewId row_id rowId session_id sessionId version_id versionId run_id import_id playbook_id').split(' '));
 const CONFIGURATION_FIELDS = new Set('SUPABASE_URL SUPABASE_PUBLISHABLE_KEY SUPABASE_SECRET_KEY AUTH_HANDOFF_ENCRYPTION_SECRET FRONTEND_URL API_PUBLIC_URL WORD_ADDIN_URL'.split(' '));
-/** An exception class name is a code identifier (ours or a dependency's), never document text: one capitalised word ending in Error/Warning/Exception. */
+/** Static exception identifiers are trusted under the source contract, not because of this syntax check. */
 const ERROR_TYPE = /^[A-Z][A-Za-z0-9]{1,60}(?:Error|Warning|Exception)$|^(?:Error|Warning)$/;
 /** A frame's function name as V8 prints it: dotted identifiers, optionally `async`/`new`, `[as x]`, `<anonymous>`. ASCII identifier characters only; a document name has spaces or an extension-like tail that this still admits, so names are kept only for frames in our own files (see framesFor). */
 const FUNCTION_NAME = /^(?:async |new )?[A-Za-z_$<][\w$<>]{0,60}(?:\.[A-Za-z_$<][\w$<>]{0,60}){0,6}(?: \[as [\w$]{1,60}\]| \(index \d{1,6}\))?$/;
-/** Our source: where a function name is an identifier we wrote, not a dependency's or a runtime's. */
+/** Repository locations subject to the static diagnostic-name source contract. */
 const REPOSITORY_FRAME = /^(?:backend|frontend|word-addin|packages|src|dist)\//;
+function isRepositoryFrame(filename: string): boolean {
+  return REPOSITORY_FRAME.test(filename) && !filename.split('/').includes('node_modules');
+}
 const LEVELS = new Set('fatal error warning info debug'.split(' '));
 /** Caller fingerprints that replace code-location grouping: one condition, one issue. */
 const PINNED_FINGERPRINTS = new Set(['upstream-unavailable', 'api-unreachable', 'runtime-warning']);
@@ -146,15 +107,51 @@ function codePath(value: unknown): string | undefined {
   return /^[\w@./()[\]~!:+ -]+\.[cm]?[jt]sx?$/.test(path) ? path : undefined;
 }
 
+/**
+ * Sentry uses Error.name, which some SDKs populate from upstream responses.
+ * Keep actual constructor identifiers instead of trusting that mutable text.
+ * Static application subclasses need no registration. Causes are inspected
+ * locally; their messages and arbitrary properties are never copied out.
+ */
+export function retainExceptionTypes(
+  values: Array<{ type?: string }> | undefined,
+  originals: unknown[],
+  warningName?: unknown,
+): void {
+  const types = new Set(['Error']);
+  const pending = [...originals];
+  const seen = new Set<object>();
+  for (let n = 0; pending.length && n < 20; n++) {
+    const candidate = pending.shift();
+    if (!candidate || typeof candidate !== 'object' || seen.has(candidate)) continue;
+    seen.add(candidate);
+    try {
+      if (candidate instanceof Error) {
+        const constructor = Object.getPrototypeOf(candidate)?.constructor;
+        if (typeof constructor === 'function' && ERROR_TYPE.test(constructor.name)) types.add(constructor.name);
+      }
+      const item = candidate as RecordValue;
+      if (item.cause) pending.push(item.cause);
+      if (item.lastError) pending.push(item.lastError);
+      if (item.error) pending.push(item.error);
+      if (Array.isArray(item.errors)) pending.push(...item.errors.slice(0, 5));
+    } catch { /* Host errors and proxies must not break reporting. */ }
+  }
+  // Node intentionally puts its fixed warning category in Error.name.
+  if (typeof warningName === 'string' && ENUMS.warning_name!.has(warningName)) types.add(warningName);
+  for (const value of values ?? []) if (!value.type || !types.has(value.type)) value.type = 'Error';
+}
+
 function tagsFor(value: unknown): RecordValue {
   const out: RecordValue = {};
   for (const [key, entry] of Object.entries(record(value))) {
-    if (typeof entry === 'string' && Object.hasOwn(ENUMS, key) && ENUMS[key]!.has(entry)) out[key] = entry;
+    if (APPLICATION_TAGS.has(key) && isDiagnosticLabel(entry)) out[key] = entry;
+    else if (typeof entry === 'string' && Object.hasOwn(ENUMS, key) && ENUMS[key]!.has(entry)) out[key] = entry;
     else if (ID_KEYS.has(key) && typeof entry === 'string' && UUID.test(entry)) out[key] = entry;
     else if (key === 'configuration_fields' && typeof entry === 'string' && entry.length < 250 && entry.split(',').every(field => CONFIGURATION_FIELDS.has(field))) out[key] = entry;
     else if (key === 'office_version' && typeof entry === 'string' && /^\d+(?:\.\d+){1,4}$/.test(entry) && entry.length < 30) out[key] = entry;
     else if (key === 'warning_code' && typeof entry === 'string' && /^DEP\d{4}$/.test(entry)) out[key] = entry;
-    else if (key === 'what' && typeof entry === 'string' && ENUMS.stage!.has(entry)) out.stage = entry;
+    else if (key === 'what' && isDiagnosticLabel(entry)) out.stage = entry;
     else if (key === 'http_route' && typeof entry === 'string') out[key] = diagnosticRoute(entry);
     else if ((key === 'http_status' || key === 'dependency_status') && /^\d{3}$/.test(String(entry)) && Number(entry) >= 100 && Number(entry) <= 599) out[key] = Number(entry);
     else if (key === 'network_failure_count' && Number.isInteger(entry) && Number(entry) >= 1 && Number(entry) <= 100000) out[key] = Number(entry);
@@ -163,7 +160,7 @@ function tagsFor(value: unknown): RecordValue {
   return out;
 }
 
-/** Extract only finite diagnostic vocabulary, including wrapped/AggregateError causes.
+/** Extract application kinds and fixed technical codes from wrapped/AggregateError causes.
  * Never copy error messages, SQL details, storage keys, URLs or SDK metadata.
  */
 export function diagnosticErrorTags(error: unknown): Record<string, string | number> {
@@ -186,10 +183,11 @@ export function diagnosticErrorTags(error: unknown): Record<string, string | num
           : item.name === 'AI_RetryError' ? 'retry_exhausted' : undefined;
       if (providerError && tags.provider_error === undefined) tags.provider_error = providerError;
       if (item.code === 'sentry_test') tags.diagnostic_test = 'true';
-      // AppError.kind: the thrower's own name for what went wrong (closed vocabulary).
+      // AppError identity: the thrower's own static label, never a dependency property.
       // The deepest kind wins: a wrapper names the operation that failed, the
       // cause names why (breadth-first, so a later visit is never shallower).
-      if (typeof item.kind === 'string' && ENUMS.error_kind!.has(item.kind)) tags.error_kind = item.kind;
+      const applicationKind = (candidate as Record<symbol, unknown>)[APPLICATION_KIND];
+      if (isDiagnosticLabel(applicationKind)) tags.error_kind = applicationKind;
       for (const code of [item.code, item.name]) {
         if (typeof code === 'string' && ENUMS.failure_code!.has(code) && tags.failure_code === undefined) tags.failure_code = code;
       }
@@ -227,7 +225,7 @@ function framesFor(value: unknown): RecordValue[] {
     if (typeof frame.in_app === 'boolean') out.in_app = frame.in_app;
     // The function name says which of a file's throws fired; it is an
     // identifier in our source, the same class of data as the path.
-    if (REPOSITORY_FRAME.test(filename) && typeof frame.function === 'string' && FUNCTION_NAME.test(frame.function) && !/\.(?:pdf|docx?|xlsx?|pptx?|txt|csv|rtf|odt|html?)$/i.test(frame.function)) out.function = frame.function;
+    if (isRepositoryFrame(filename) && frame.in_app !== false && typeof frame.function === 'string' && FUNCTION_NAME.test(frame.function) && !/\.(?:pdf|docx?|xlsx?|pptx?|txt|csv|rtf|odt|html?)$/i.test(frame.function)) out.function = frame.function;
     // Omit source snippets, local variables and SDK frame extras.
     return [out];
   });
@@ -309,11 +307,11 @@ export function diagnosticEvent(value: unknown): RecordValue {
   out.fingerprint = pinned === 'runtime-warning' ? [pinned, String(tags.warning_name ?? ''), String(tags.warning_code ?? '')]
     : pinned ? [pinned, String(tags.component ?? 'application'), String(tags.failure_code ?? '')] : ['{{ default }}', String(tags.operation ?? ''), String(tags.error_kind ?? ''), String(tags.job_kind ?? ''), String(tags.component ?? 'application'), String(tags.stage ?? ''), String(tags.http_route ?? ''), String(tags.http_status ?? ''), String(tags.failure_code ?? ''), String(tags.file_type ?? ''), String(tags.provider_error ?? ''), String(tags.dependency_status ?? ''), String(tags.warning_name ?? ''), String(tags.warning_code ?? '')];
   // The path the request took before it failed: stage names only (our
-  // vocabulary, pushed by markStage), newest last, never a message or data.
+  // labels, pushed by markStage), newest last, never a message or data.
   const crumbs = Array.isArray(event.breadcrumbs) ? event.breadcrumbs : [];
   const trail = crumbs.flatMap(raw => {
     const crumb = record(raw);
-    if (crumb.category !== 'mike.stage' || typeof crumb.message !== 'string' || !ENUMS.stage!.has(crumb.message)) return [];
+    if (crumb.category !== 'mike.stage' || !isDiagnosticLabel(crumb.message)) return [];
     const out: RecordValue = { category: 'mike.stage', message: crumb.message };
     if (typeof crumb.timestamp === 'number' && Number.isFinite(crumb.timestamp)) out.timestamp = crumb.timestamp;
     return [out];

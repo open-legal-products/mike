@@ -290,7 +290,7 @@ export function deleteFilesBestEffort(
     },
   );
   return bestEffort(work, {
-    what: `storage-delete:${stage}`,
+    what: stage,
     tags: { component: "storage", stage, storage_operation: "delete" },
   });
 }

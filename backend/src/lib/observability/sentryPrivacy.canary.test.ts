@@ -83,3 +83,37 @@ it('lets no planted client data through a browser or add-in shaped event', () =>
   expect(wire).toContain('"request_id":"11111111-2222-4333-8444-555555555555"');
   expect(wire).toContain('"http_route":"/documents/:id"');
 });
+
+it.each(['community', 'official'] as const)('retains new authored diagnostics but drops an upstream name and kind in %s mode', async install => {
+  const events: Array<Record<string, unknown>> = [];
+  resetSentryForTests(install, { initialized: true });
+  Sentry.init({
+    dsn: 'https://test@sentry.invalid/1', defaultIntegrations: false,
+    integrations: [privacyBoundaryIntegration()], beforeSend: scrubEvent,
+    transport: () => ({
+      send: async envelope => { for (const [header, payload] of envelope[1]) if (header.type === 'event') events.push(payload as Record<string, unknown>); return { statusCode: 200 }; },
+      flush: async () => true,
+    }),
+  });
+  class FreshOperationError extends AppError {}
+  const dependency = Object.assign(new Error('private customer response'), {
+    name: 'JaneDoeClaimError', kind: 'jane_doe.claim', code: 'ECONNRESET',
+    responseBody: 'private customer response',
+  });
+  setOperation('new_feature.run');
+  markStage('new-feature-step');
+  reportError(new FreshOperationError('new_feature.failed', 'Operation failed', { cause: dependency }));
+  // Automatic/unwrapped dependency captures must follow the same rule.
+  Sentry.captureException(dependency);
+  await Sentry.flush(2000);
+  expect(events).toHaveLength(2);
+  const wire = JSON.stringify(events);
+  expect(wire).toContain('FreshOperationError');
+  expect(wire).toContain('new_feature.failed');
+  expect(wire).toContain('new_feature.run');
+  expect(wire).toContain('new-feature-step');
+  expect(wire).toContain('ECONNRESET');
+  expect(wire).not.toContain('JaneDoeClaim');
+  expect(wire).not.toContain('jane_doe');
+  expect(wire).not.toContain('private customer response');
+});

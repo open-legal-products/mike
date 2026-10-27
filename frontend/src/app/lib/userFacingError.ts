@@ -12,9 +12,9 @@ export type { Operation };
  * Names the user-level flow a failure belongs to. Every reporting helper in
  * this file accepts it; when it is set, a server or unknown fault is sent to
  * Sentry tagged with it, so the event is titled "Failure in <operation> /
- * …" and grouped per failing flow instead of per call site. It is a closed
- * vocabulary (`OPERATIONS` in `@/shared/lib/sentryPrivacy`): a value outside
- * it never leaves the browser.
+ * …". Default stack grouping still distinguishes failure sites. Use a static
+ * developer-authored label; no registration is required. Never derive a label
+ * from user input or a dependency response.
  */
 export interface FaultIdentity {
     operation?: Operation;

@@ -36,3 +36,20 @@ describe("withKind", () => {
     expect(withKind(error, "db.query_failed", "Query failed")).toMatchObject({ kind: "db.query_failed", cause: error });
   });
 });
+
+describe("application diagnostic identity", () => {
+  it("accepts a new kind without registration and retains a static subclass name", () => {
+    class NewlyAddedError extends AppError {}
+    const failure = new NewlyAddedError("new_feature.custom_failure", "Failed to run the operation");
+    expect(failure.name).toBe("NewlyAddedError");
+    expect(diagnosticErrorTags(failure).error_kind).toBe("new_feature.custom_failure");
+  });
+
+  it("does not adopt a dependency's kind or later mutation as application identity", () => {
+    const cause = Object.assign(new Error("private dependency response"), { kind: "private.customer_name", code: "ECONNRESET" });
+    const failure = new AppError("new_feature.custom_failure", "Request failed", { cause });
+    Object.assign(failure, { kind: "private.customer_name" });
+    expect(diagnosticErrorTags(failure)).toEqual({ error_kind: "new_feature.custom_failure", failure_code: "ECONNRESET" });
+    expect(diagnosticErrorTags(cause)).toEqual({ failure_code: "ECONNRESET" });
+  });
+});

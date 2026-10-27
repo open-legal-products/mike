@@ -57,6 +57,7 @@
     "zod": "^4.6.7"
   },
   "devDependencies": {
+    "@babel/parser": "^7.29.9",
     "@stryker-mutator/core": "^10.0.0",
     "@stryker-mutator/vitest-runner": "^10.0.0",
     "@types/cors": "^2.8.17",

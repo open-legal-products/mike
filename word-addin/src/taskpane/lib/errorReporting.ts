@@ -23,28 +23,8 @@ import {
 
 export type ReportLevel = "fatal" | "error" | "warning";
 
-/**
- * The user-level flows of the add-in, named the way the privacy boundary
- * (frontend/src/shared/lib/sentryPrivacy.ts, OPERATIONS) knows them. The
- * `operation` tag puts the flow in the event title ("Failure in
- * word.edit_apply / word-office / GeneralException") and in the grouping;
- * a value missing from the boundary's list is dropped there, so add it to
- * the shared vocabulary first, then here.
- */
-export const ADDIN_OPERATIONS = [
-  "word.session",
-  "word.document_read",
-  "word.edit_apply",
-  "word.edit_resolve",
-  "word_chat.turn",
-  "workflows.run",
-  "quick_actions.run",
-  "playbooks.review",
-  "settings.keys",
-  "documents.upload",
-  "documents.directory",
-] as const;
-export type AddinOperation = (typeof ADDIN_OPERATIONS)[number];
+/** Static operation label authored at the call site; no registration required. */
+export type AddinOperation = string;
 
 export type ReportContext = {
   tags?: Record<string, string | number | boolean | null | undefined>;
@@ -218,9 +198,8 @@ export function reportWordFailure(
   error: unknown,
   context: {
     /**
-     * Low-cardinality step name: "resolve", "restore", "reveal", ... Omit
-     * for a step the vocabulary has no name for (applying an edit); the
-     * operation then carries the grouping on its own.
+     * Static step name: "resolve", "restore", "reveal", ... New stages
+     * need no registration; omit when the operation alone is sufficient.
      */
     stage?: string;
     /** The user-level flow: reading the document, applying or resolving an edit. */
@@ -252,6 +231,15 @@ export function reportWordFailure(
   });
 }
 
+type PendingApiReport = {
+  send: (operation?: AddinOperation) => string | null;
+  timer: ReturnType<typeof setTimeout>;
+};
+
+// Match the web client: hold an unnamed API report for one macrotask so
+// the screen's catch can supply its operation without filing a second event.
+const pendingApiReports = new WeakMap<object, PendingApiReport>();
+
 /** A backend 5xx seen from the pane, correlated by the backend's request id. */
 export function reportApiFailure(failure: {
   path: string;
@@ -268,12 +256,12 @@ export function reportApiFailure(failure: {
   if (!Sentry.isEnabled()) return null;
   const route = normalizeApiPath(failure.path);
   const method = failure.method ?? "GET";
-  return Sentry.withScope((scope) => {
+  const send = (operation = failure.operation) => Sentry.withScope((scope) => {
     applyContext(scope, {
       level: "error",
       tags: {
         component: "mike-api",
-        operation: failure.operation,
+        operation,
         http_status: failure.status,
         http_method: method,
         http_route: route,
@@ -288,6 +276,27 @@ export function reportApiFailure(failure: {
       "error",
     );
   });
+  const error = failure.error;
+  if (!failure.operation && error && typeof error === "object") {
+    const timer = setTimeout(() => {
+      pendingApiReports.delete(error);
+      send();
+    }, 0);
+    pendingApiReports.set(error, { send, timer });
+    return null;
+  }
+  return send();
+}
+
+/** Add the screen's operation to its pending API report, sending it once. */
+export function claimApiFailure(error: unknown, operation: AddinOperation): boolean {
+  if (!error || typeof error !== "object") return false;
+  const pending = pendingApiReports.get(error);
+  if (!pending) return false;
+  clearTimeout(pending.timer);
+  pendingApiReports.delete(error);
+  pending.send(operation);
+  return true;
 }
 
 /**

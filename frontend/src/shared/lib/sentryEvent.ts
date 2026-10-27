@@ -1,4 +1,4 @@
-import { diagnosticErrorTags } from "./sentryPrivacy";
+import { retainExceptionTypes, diagnosticErrorTags } from "./sentryPrivacy";
 
 /**
  * Sentry event hygiene shared by the web app (browser + Next server) and the
@@ -405,7 +405,7 @@ export function minimiseForCommunity<T extends CommunityEvent>(event: T): T {
     delete event.user;
     // Breadcrumbs are request history; only our own stage trail stays
     // (category mike.stage, message a stage name), the privacy boundary
-    // checks each one against the stage vocabulary.
+    // checks each one against the diagnostic label format.
     const trail = Array.isArray(event.breadcrumbs)
       ? event.breadcrumbs.filter((crumb) => (crumb as { category?: unknown })?.category === "mike.stage")
       : [];
@@ -731,6 +731,7 @@ export function createEventScrubber(options?: {
             const nested = findNested(arg, c => c instanceof Error || 'code' in c);
             Object.assign(event.tags, diagnosticErrorTags(nested));
         }
+        retainExceptionTypes(event.exception?.values, [original, ...(args ?? [])], event.tags?.warning_name);
 
         // The title and the exception text are free text from libraries
         // that quote emails, tokens, and URLs; key filtering cannot see them.

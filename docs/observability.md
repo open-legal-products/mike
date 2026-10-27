@@ -230,15 +230,18 @@ the backend, Next server/edge, browser, and all Word add-in entries.
   operation, component, stage, error-kind, method, normalized route, status,
   and error-code values. For example:
   `Failure in documents.upload.complete / upload-worker / process-file / conversion.no_output`.
-  Exception class names of the `…Error` / `…Warning` shape, relative
-  source-code file paths with line/column numbers, and the function name on
-  frames in our own files (identifier shape only) remain.
+  Static exception constructor names, relative source-code locations and
+  function names on our own frames remain. Before serialization, the
+  reporter checks exception types against the actual Error constructors in
+  the cause chain; an SDK's mutable `Error.name` is not evidence of a class
+  name. Node's fixed warning categories are also retained. Function names
+  are trusted under the source contract below, with dependency frames
+  excluded even when `node_modules` sits inside an application directory.
 - Request data, headers, cookies, URLs and queries are absent. Routes retain
   only fixed endpoint vocabulary; other segments become `:id`.
 - User objects, machine details, arbitrary contexts, source snippets, frame
   locals, custom tags and free-form extras are absent. Of breadcrumbs only
-  the stage trail survives (`markStage`, category `mike.stage`): stage names
-  from the vocabulary, with timestamps, never a message or data. Correlation/domain IDs are allowed only under named keys and
+  the stage trail survives (`markStage`, category `mike.stage`): static stage labels, with timestamps, never a message or data. Correlation/domain IDs are allowed only under named keys and
   only in UUID format. IDs remain linkable to internal records; this is data
   minimization, not a claim of anonymity.
 - Finite failure codes, dependency HTTP status, storage operation, file type,
@@ -417,23 +420,22 @@ and `office_code` to identify the failing Word operation. Retryable job
 attempts are warnings; exhausted attempts are errors. These fields make an
 issue useful even when its exception title is a generic provider message.
 
-What leaves the process is an allowlist, so an event names a bug only when
-the code that failed named it. Two literals do that, both closed vocabularies
-in `sentryPrivacy.ts` (the drift tests `diagnosticVocabulary.test.ts` in the
-backend and the frontend fail when a call site uses a value that is not
-listed):
+The transport keeps a restricted set of fields. Application labels are
+authored in code and **do not require a central registration list**. Use
+short lowercase labels separated by dots, underscores or hyphens; the syntax
+check is defense in depth, not a test for PII. Two labels identify a failure:
 
 - `operation`: the user-level flow a request or job belongs to
   (`documents.upload.complete`, `chat.turn`, `playbooks.import`). Set it once
   at the entry with `setOperation(...)` in the backend, or pass `operation`
   to the client reporters; every event captured until the request or job
-  finishes carries it, and it leads the title and the fingerprint. One
-  failing operation is one issue, whatever route or stack it fails in.
+  finishes carries it, and it leads the title and the fingerprint. The default stack grouping remains, so different failure sites
+  within one operation can still be separate issues.
 - `error_kind`: what went wrong, from the code that threw. Throw an
   `AppError` (or a subclass: `StorageOperationError`, `AssistantStreamError`,
   `DbJobDeferredError`, `NonRetryableJobError`) with a kind such as
   `conversion.no_output` or `chat.provider_rate_limited`; the boundary reads
-  the deepest kind on the cause chain, so a wrapper's kind never hides the
+  the deepest application-authored kind on the cause chain, so a wrapper's kind never hides the
   cause's. `withKind` in `appError.ts` preserves an Error already carrying a
   named cause. Wrap a dependency's error as the cause
   rather than re-throwing a bare `new Error(...)`: its errno, SQLSTATE,
@@ -443,10 +445,45 @@ listed):
   its breadcrumb trail, so a throw reached via one path is distinguishable
   from the same throw reached via another.
 
-Messages never leave the process in either install mode, so they stay what
-they always were: text for logs, job rows and tests. The kind is the
-identity. Add a vocabulary member first (both mirrored copies of
-`sentryPrivacy.ts`), then use it.
+Raw error messages still do not leave the process in either install mode.
+The kind and operation provide a safe, descriptive identity without requiring
+a second list to be edited. `AppError` stamps its kind with a non-enumerable
+local marker; a dependency's arbitrary `kind` property is never adopted.
+Dependency messages, response bodies and credentials remain local, while
+approved technical codes and numeric statuses can be extracted from causes.
+
+### Source contract for diagnostic identity
+
+- Give errors static class names. Do not derive `Error.name`, class names or
+  function names from a customer, document, request or upstream response.
+- Write operation, kind, stage, component and job labels in code. A fixed map
+  selected by runtime state is fine; interpolating runtime data into a label
+  is not. New labels and application error subclasses need no registration.
+- Wrap upstream failures with `new AppError("feature.step_failed",
+  "Step failed", { cause })`. Preserve the cause for technical classification;
+  never copy its prose into diagnostic labels or extras. The message remains
+  local and is not treated as safe to transmit merely because it is an AppError.
+- `backend/src/__tests__/diagnosticVocabulary.test.ts` parses production
+  TypeScript/TSX across all three applications. It rejects common dynamic-name
+  and label mistakes. This is a coding contract backed by CI and review, not
+  whole-program taint analysis: helper parameters and fixed mappings still
+  need review for their origin.
+- Real-SDK transport tests cover both install modes, including new unregistered
+  labels, dependency-provided names/kinds, cause payloads and automatic captures.
+
+The web app and Word add-in briefly hold API 5xx reports that lack an operation.
+A screen's synchronous catch can add its operation through the notice layer;
+the original API event then carries that label without a duplicate. An unclaimed
+report is sent on the next timer turn. Callers that know the operation before
+capture should pass it directly.
+
+Example (no registry update):
+
+```ts
+setOperation("documents.compare");
+markStage("load-revisions");
+throw new AppError("comparison.source_read_failed", "Could not read revision", { cause });
+```
 
 For each new reporting path:
 
@@ -464,7 +501,7 @@ For each new reporting path:
 
 Sentry detects failures on instrumented paths; it cannot discover every
 incorrect result or silently swallowed exception. Console capture is a
-fallback; its free-form label is omitted, so add approved component/stage context at the call site.
+fallback; its free-form label is omitted, so add static component/stage context at the call site.
 The client 5xx fingerprint groups symptoms by endpoint/status, so investigate
 the correlated backend events before assuming one symptom has one cause.
 Throttling, filters, and delivery failures also mean Sentry's event count is

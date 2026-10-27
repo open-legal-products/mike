@@ -41,18 +41,17 @@ vi.mock("@sentry/react", () => ({
 }));
 
 import * as Sentry from "@sentry/react";
-import { OPERATIONS } from "@/shared/lib/sentryPrivacy";
+import { diagnosticEvent } from "@/shared/lib/sentryPrivacy";
 import { clearToasts } from "@/shared/lib/toastStore";
 import { UserVisibleError } from "@/shared/lib/userError";
 import {
-    ADDIN_OPERATIONS,
     isReported,
     reportApiFailure,
     reportError,
     reportNetworkFailure,
     reportWordFailure,
 } from "../../../word-addin/src/taskpane/lib/errorReporting";
-import { MikeApiError } from "../../../word-addin/src/taskpane/api/client";
+import { configureMikeApiClient, MikeApiError, updateWorkflow } from "../../../word-addin/src/taskpane/api/client";
 import {
     notifyError,
     reportFault,
@@ -82,10 +81,8 @@ afterEach(() => {
 
 describe("the add-in's operations", () => {
     it("are all values the privacy boundary keeps", () => {
-        const known = new Set<string>(OPERATIONS);
-        for (const operation of ADDIN_OPERATIONS) {
-            expect(known.has(operation), operation).toBe(true);
-        }
+        expect(diagnosticEvent({ tags: { operation: "word.new_operation" } }).tags)
+            .toEqual({ operation: "word.new_operation" });
     });
 });
 
@@ -274,4 +271,54 @@ describe("the session refresh", () => {
         expect(Sentry.captureException).not.toHaveBeenCalled();
         expect(Sentry.captureMessage).not.toHaveBeenCalled();
     });
+});
+
+
+describe("workflow API failure identity", () => {
+    it.each([false, true])("keeps the screen's operation on a single API report (wrapped: %s)", async wrapped => {
+        vi.useFakeTimers();
+        try {
+            configureMikeApiClient({
+                baseUrl: "https://api.example.test",
+                getAuthHeaders: async () => ({}),
+                fetchImpl: async () => new Response(JSON.stringify({ code: "internal_error" }), {
+                    status: 500, headers: { "x-request-id": "req-workflow" },
+                }),
+            });
+            const error = await updateWorkflow("11111111-2222-4333-8444-555555555555", { skill_md: "# Workflow" })
+                .catch((error: unknown) => error);
+            expect(error).toBeInstanceOf(MikeApiError);
+            const shown = wrapped ? new UserVisibleError("The outcome is unknown.", { cause: error }) : error;
+            userMessage(shown, { operation: "workflows.run" });
+            notifyError(error, { operation: "workflows.run" });
+            await vi.runAllTimersAsync();
+            expect(Sentry.captureMessage).toHaveBeenCalledTimes(1);
+            expect(Sentry.captureException).not.toHaveBeenCalled();
+            expect(tagsOf(state.scopes[0])).toMatchObject({
+                component: "mike-api", operation: "workflows.run", http_status: 500,
+                http_method: "PATCH", http_route: "/workflows/:id", request_id: "req-workflow",
+                error_code: "internal_error",
+            });
+        } finally {
+            vi.useRealTimers();
+        }
+    });
+});
+
+
+it("sends an unclaimed API failure once and suppresses a later notice", async () => {
+    vi.useFakeTimers();
+    try {
+        const error = new MikeApiError({ status: 500, message: "Failed" });
+        reportApiFailure({ path: "/workflows", status: 500, error });
+        expect(isReported(error)).toBe(true);
+        expect(Sentry.captureMessage).not.toHaveBeenCalled();
+        await vi.runAllTimersAsync();
+        expect(Sentry.captureMessage).toHaveBeenCalledTimes(1);
+        notifyError(error, { operation: "workflows.run" });
+        expect(Sentry.captureException).not.toHaveBeenCalled();
+        expect(Sentry.captureMessage).toHaveBeenCalledTimes(1);
+    } finally {
+        vi.useRealTimers();
+    }
 });

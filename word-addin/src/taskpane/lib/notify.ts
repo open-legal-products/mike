@@ -35,6 +35,7 @@ import {
 } from "./sessionRefresh";
 import { openExternalUrl } from "./openExternalUrl";
 import {
+  claimApiFailure,
   isReported,
   reportError,
   type AddinOperation,
@@ -64,9 +65,8 @@ export interface NotifyErrorOptions extends SharedNotifyErrorOptions {
   /** Short screen name, e.g. "Workflows". Falls back to the pane URL. */
   page?: string;
   /**
-   * The user-level flow the failure belongs to (errorReporting
-   * ADDIN_OPERATIONS). Named in the Sentry title and grouping of a fault
-   * this notice reports; the privacy boundary drops any other value.
+   * Static label for the user-level flow, used in the Sentry title and
+   * grouping of a reported fault. New labels need no registration.
    */
   operation?: AddinOperation;
 }
@@ -92,11 +92,13 @@ function reportRealFault(
   operation: AddinOperation | undefined,
 ): void {
   if (described.kind !== "unknown" && described.kind !== "server") return;
+  if (operation && claimApiFailure(error, operation)) return;
   if (isReported(error)) return;
   const cause =
     error && typeof error === "object"
       ? (error as { cause?: unknown }).cause
       : undefined;
+  if (operation && claimApiFailure(cause, operation)) return;
   if (cause !== undefined && isReported(cause)) return;
   reportError(error, {
     tags: {

@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { diagnosticEnvelope, diagnosticErrorTags, diagnosticEvent, diagnosticRoute, privacyBoundaryIntegration } from './sentryPrivacy';
+import { identifyApplicationError, diagnosticEnvelope, diagnosticErrorTags, diagnosticEvent, diagnosticRoute, privacyBoundaryIntegration } from './sentryPrivacy';
 
 const id = '8f1c2a3e-1234-4bcd-9e0f-1234567890ab';
 const eventId = '1234567890abcdef1234567890abcdef';
@@ -344,7 +344,7 @@ it('keeps a Node process warning diagnosable: name, code and builtin frames, nev
 });
 
 // What makes an event name a bug: the operation the request belonged to and
-// the thrower's own kind, both closed vocabularies; the function that threw;
+// the thrower's own kind, both static source labels; the function that threw;
 // the exception class; and the stages the request passed through.
 describe('operation, error kind and stage trail', () => {
   it('leads the title and the fingerprint with operation and error_kind', () => {
@@ -363,10 +363,12 @@ describe('operation, error kind and stage trail', () => {
     expect(JSON.stringify(out)).not.toContain('PRIVATE');
   });
 
-  it('reads error_kind off an AppError anywhere on the cause chain, vocabulary only', () => {
-    expect(diagnosticErrorTags(new Error('outer', { cause: Object.assign(new Error('inner'), { kind: 'storage.upload_failed', code: 'AccessDenied' }) }))).toEqual({ error_kind: 'storage.upload_failed', failure_code: 'AccessDenied' });
-    expect(diagnosticErrorTags(Object.assign(new Error('x'), { kind: 'Private NDA.pdf' }))).toEqual({});
-    expect(diagnosticEvent({ tags: { operation: 'PRIVATE.pdf', error_kind: 'not.a.kind' } }).tags).toEqual({});
+  it('reads authored AppError identity without trusting a dependency kind property', () => {
+    const inner = Object.assign(new Error('inner'), { code: 'AccessDenied' });
+    identifyApplicationError(inner, 'storage.upload_failed');
+    expect(diagnosticErrorTags(new Error('outer', { cause: inner }))).toEqual({ error_kind: 'storage.upload_failed', failure_code: 'AccessDenied' });
+    expect(diagnosticErrorTags(Object.assign(new Error('x'), { kind: 'private.client_identifier' }))).toEqual({});
+    expect(diagnosticEvent({ tags: { operation: 'PRIVATE.pdf', error_kind: 'PRIVATE kind' } }).tags).toEqual({});
   });
 
   it('keeps function names only on repository frames and only in identifier form', () => {
@@ -404,8 +406,18 @@ describe('operation, error kind and stage trail', () => {
     expect(diagnosticEvent({ breadcrumbs: [{ category: 'http', message: 'x' }] })).not.toHaveProperty('breadcrumbs');
   });
 
-  it("maps bestEffort's `what` onto the stage vocabulary", () => {
+  it("maps bestEffort's static `what` onto the stage tag", () => {
     expect(diagnosticEvent({ tags: { component: 'best-effort', what: 'copy-rollback' } }).tags).toEqual({ component: 'best-effort', stage: 'copy-rollback' });
     expect(diagnosticEvent({ tags: { component: 'best-effort', what: 'Private.pdf' } }).tags).toEqual({ component: 'best-effort' });
   });
+});
+
+// A nested node_modules path is still dependency code, even inside backend/.
+it('does not mistake dependencies under an application directory for our functions', () => {
+  const out = diagnosticEvent({ stacktrace: { frames: [
+    { filename: '/app/backend/node_modules/sdk/index.js', function: 'Object.JaneDoeClaim', in_app: false, lineno: 4 },
+    { filename: '/app/backend/src/job.ts', function: 'runJob', in_app: true, lineno: 9 },
+  ] } });
+  expect(JSON.stringify(out)).not.toContain('JaneDoeClaim');
+  expect(JSON.stringify(out)).toContain('runJob');
 });
