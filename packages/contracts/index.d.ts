@@ -620,6 +620,46 @@ export interface CourtListenerConnectorStatus {
      * Listed under Installed: switched on with a usable token here (the
      * user's or the organization's) or the deployment's bulk index, or the
      * user has saved their own token here. Otherwise it is offered in Discover.
+/**
+ * Feature flags (Settings → Admin). The list of flags lives in
+ * backend/src/lib/featureFlags.ts; a flag answers "is this on for this user?"
+ * from the user's override, else the deployment default, else the code
+ * default. Each Google scope bundle is its own flag.
+ */
+export type FeatureFlagKey =
+    | 'google-drive'
+    | 'gmail-read'
+    | 'gmail-write'
+    | 'google-calendar-read'
+    | 'google-calendar-write';
+export interface FeatureFlagSummary {
+    key: FeatureFlagKey;
+    label: string;
+    description: string;
+    /** Flags shown together in the admin panel. */
+    group: string;
+    /** What applies when no admin default is set; may read server configuration. */
+    codeDefault: boolean;
+    /** Set by an admin for the whole deployment; null means the code default applies. */
+    deploymentDefault: boolean | null;
+    effectiveDefault: boolean;
+}
+/** GET /admin/feature-flags and the body PUT /admin/feature-flags/:key answers with. */
+export interface AdminFeatureFlagsResponse {
+    flags: FeatureFlagSummary[];
+}
+/** GET /admin/users/feature-flags?email= and the body PUT /admin/users/:userId/feature-flags/:key answers with. */
+export interface AdminUserFeatureFlags {
+    userId: string;
+    email: string;
+    displayName: string | null;
+    flags: Array<{
+        key: FeatureFlagKey;
+        /** Set by an admin for this user; null means the deployment default applies. */
+        override: boolean | null;
+        enabled: boolean;
+    }>;
+}
      */
     installed: boolean;
     /** The user saved their own token for this workspace. */
