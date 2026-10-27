@@ -119,8 +119,8 @@ export function diagnosticErrorTags(error: unknown): Record<string, string | num
       // the host or the prose around it (MIKE-BACKEND-M: every claim failure
       // of an install that could not reach its database arrived blank).
       if (tags.failure_code === undefined && typeof item.details === 'string') {
-        for (const match of item.details.matchAll(/ \(([A-Za-z0-9_]{2,40})\)(?=\n|$)/g)) {
-          if (ENUMS.failure_code!.has(match[1]!)) { tags.failure_code = match[1]; break; }
+        for (const [, code] of item.details.matchAll(/ \(([A-Za-z0-9_]{2,40})\)(?=\n|$)/g)) {
+          if (code && ENUMS.failure_code!.has(code)) { tags.failure_code = code; break; }
         }
       }
       // Compare entire fixed runtime messages, with or without supabase-js's
