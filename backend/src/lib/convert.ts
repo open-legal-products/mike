@@ -4,7 +4,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 
-import { AppError, type ErrorKind } from "./appError";
+import { AppError } from "./appError";
 import { uploadConversionTimeoutMs } from "./runtimeConfig";
 
 let _convert:
@@ -23,27 +23,21 @@ const CONVERTER_UNAVAILABLE_MESSAGE =
   "SOFFICE_BINARY_PATH or LIBREOFFICE_BINARY_PATH to the soffice " +
   "executable, then restart the backend and worker.";
 
-/**
- * A LibreOffice failure, named twice: the `kind` is what the Sentry boundary
- * reads off the cause chain into `error_kind`, and the legacy `code` stays
- * because callers and the boundary's `failure_code` tag already read it.
- */
-type ConversionCode =
-  | "conversion_unavailable"
-  | "conversion_timeout"
-  | "conversion_failed";
+/** Keep legacy consumer codes derived from the more precise diagnostic kind. */
+const CONVERSION_CODES = {
+  "conversion.unavailable": "conversion_unavailable",
+  "conversion.timeout": "conversion_timeout",
+  "conversion.failed": "conversion_failed",
+  "conversion.no_output": "conversion_failed",
+} as const;
+type ConversionKind = keyof typeof CONVERSION_CODES;
 
 export class ConversionError extends AppError {
-  readonly code: ConversionCode;
+  readonly code: (typeof CONVERSION_CODES)[ConversionKind];
 
-  constructor(
-    kind: ErrorKind,
-    code: ConversionCode,
-    message: string,
-    options?: { cause?: unknown },
-  ) {
+  constructor(kind: ConversionKind, message: string, options?: { cause?: unknown }) {
     super(kind, message, options);
-    this.code = code;
+    this.code = CONVERSION_CODES[kind];
   }
 }
 
@@ -64,7 +58,6 @@ function converterUnavailable(cause?: unknown): AppError {
   }
   return new ConversionError(
     "conversion.unavailable",
-    "conversion_unavailable",
     CONVERTER_UNAVAILABLE_MESSAGE,
   );
 }
@@ -204,7 +197,6 @@ export async function docxToPdf(buffer: Buffer): Promise<Buffer> {
     if (code === "ENOENT" || code === "EACCES") throw converterUnavailable(error);
     throw new ConversionError(
       "conversion.failed",
-      "conversion_failed",
       "LibreOffice conversion failed",
       { cause: error },
     );
@@ -271,7 +263,6 @@ export async function officeFileToPdf(
           reject(
             new ConversionError(
               "conversion.timeout",
-              "conversion_timeout",
               `LibreOffice conversion timed out after ${timeoutMs}ms`,
             ),
           );
@@ -281,7 +272,6 @@ export async function officeFileToPdf(
           reject(
             new ConversionError(
               "conversion.failed",
-              "conversion_failed",
               `LibreOffice conversion failed with exit code ${code ?? "unknown"}${stderr ? `: ${stderr}` : ""}`,
             ),
           );
@@ -309,7 +299,6 @@ export async function officeFileToPdf(
     // the message for the server log (the boundary keeps only code and kind).
     throw new ConversionError(
       "conversion.no_output",
-      "conversion_failed",
       `LibreOffice exited without producing a PDF${stderr ? `: ${stderr}` : ""}`,
       { cause: error },
     );

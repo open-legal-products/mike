@@ -51,7 +51,7 @@ import {
   PlaybookRequestError,
 } from "../playbooks/playbooks.service";
 import type { WordEditApplyMode } from "../chat/chat.service";
-import { AppError, type ErrorKind } from "../../lib/appError";
+import { withKind, type ErrorKind } from "../../lib/appError";
 import { reportError } from "../../lib/observability/sentry";
 
 /**
@@ -61,23 +61,13 @@ import { reportError } from "../../lib/observability/sentry";
  * route logs the same object once, with the request id.
  */
 type LookupResult<T> =
-  { ok: true; value: T | null } | { ok: false; error: AppError };
-
-/**
- * The failure as Sentry should see it. `word.session_failed` is the Word
- * chat session itself (its document row, the chat row, the user message);
- * `db.query_failed` is any other query behind it. A thrown value that already
- * carries a kind is kept as it is.
- */
-function wordFailure(kind: ErrorKind, message: string, cause: unknown): AppError {
-  return cause instanceof AppError ? cause : new AppError(kind, message, { cause });
-}
+  { ok: true; value: T | null } | { ok: false; error: Error };
 
 /** The route maps `kind: "error"` onto a 500; `error` is what it reports. */
-type ServiceFailure = { ok: false; kind: "error"; error: AppError };
+type ServiceFailure = { ok: false; kind: "error"; error: Error };
 
 function serviceFailure(kind: ErrorKind, message: string, cause: unknown): ServiceFailure {
-  return { ok: false, kind: "error", error: wordFailure(kind, message, cause) };
+  return { ok: false, kind: "error", error: withKind(cause, kind, message) };
 }
 
 /** The canonical payload of a proposed Word edit, as parsed by the route. */
@@ -135,7 +125,7 @@ async function getWordDocumentRowId(
   if (error)
     return {
       ok: false,
-      error: wordFailure("word.session_failed", "Word document lookup failed", error),
+      error: withKind(error, "word.session_failed", "Word document lookup failed"),
     };
   if (!data) return { ok: true, value: null };
   return { ok: true, value: data.id as string };
@@ -145,7 +135,7 @@ async function ensureWordDocumentRow(
   clientDocumentId: string,
   userId: string,
   db: Db,
-): Promise<{ ok: true; id: string } | { ok: false; error: AppError }> {
+): Promise<{ ok: true; id: string } | { ok: false; error: Error }> {
   const { data, error } = await db
     .from("word_documents")
     .upsert(
@@ -161,11 +151,7 @@ async function ensureWordDocumentRow(
   if (error || !data) {
     return {
       ok: false,
-      error: wordFailure(
-        "word.session_failed",
-        "Word document row could not be resolved",
-        error ?? { message: "upsert returned no row" },
-      ),
+      error: withKind(error ?? { message: "upsert returned no row" }, "word.session_failed", "Word document row could not be resolved"),
     };
   }
   return { ok: true, id: data.id as string };
@@ -187,7 +173,7 @@ async function getAccessibleWordChat(
   if (error)
     return {
       ok: false,
-      error: wordFailure("word.session_failed", "Word chat lookup failed", error),
+      error: withKind(error, "word.session_failed", "Word chat lookup failed"),
     };
   if (!data) return { ok: true, value: null };
   return {
@@ -217,7 +203,7 @@ async function getAccessibleWordMessage(args: {
   if (error)
     return {
       ok: false,
-      error: wordFailure("db.query_failed", "Word chat message lookup failed", error),
+      error: withKind(error, "db.query_failed", "Word chat message lookup failed"),
     };
   if (!message || message.role !== "assistant") {
     return { ok: true, value: null };
@@ -655,7 +641,7 @@ export async function prepareWordChatStream(
       ok: false,
       status: 500,
       detail: "Could not check the playbook",
-      error: wordFailure("db.query_failed", "attached playbook check failed", error),
+      error: withKind(error, "db.query_failed", "attached playbook check failed"),
     };
   }
 
@@ -671,7 +657,7 @@ export async function prepareWordChatStream(
       ok: false,
       status: 500,
       detail: "Could not validate Word chat attachments",
-      error: wordFailure("db.query_failed", "Word chat attachment check failed", error),
+      error: withKind(error, "db.query_failed", "Word chat attachment check failed"),
     };
   }
 
@@ -721,7 +707,7 @@ export async function prepareWordChatStream(
         ok: false,
         status: 500,
         detail: "Could not validate Word chat attachments",
-        error: wordFailure("db.query_failed", "Word chat attachment check failed", error),
+        error: withKind(error, "db.query_failed", "Word chat attachment check failed"),
       };
     }
     chatTitle = typeof existing.title === "string" ? existing.title : null;
@@ -761,7 +747,7 @@ export async function prepareWordChatStream(
         ok: false,
         status: 500,
         detail: "Failed to save chat model",
-        error: wordFailure("db.query_failed", "Word chat model save failed", error),
+        error: withKind(error, "db.query_failed", "Word chat model save failed"),
       };
     }
   }
@@ -782,11 +768,7 @@ export async function prepareWordChatStream(
         ok: false,
         status: 500,
         detail: "Failed to create Word chat",
-        error: wordFailure(
-          "word.session_failed",
-          "Word chat row could not be created",
-          error ?? { message: "insert returned no row" },
-        ),
+        error: withKind(error ?? { message: "insert returned no row" }, "word.session_failed", "Word chat row could not be created"),
       };
     }
     chatId = data.id as string;
@@ -814,7 +796,7 @@ export async function prepareWordChatStream(
         ok: false,
         status: 500,
         detail: "Failed to save Word message",
-        error: wordFailure("word.session_failed", "Word user message save failed", error),
+        error: withKind(error, "word.session_failed", "Word user message save failed"),
       };
     }
   }
@@ -953,7 +935,7 @@ export async function prepareWordChatStream(
         // The original failure is rethrown below and reported by the route;
         // a lease that would not release is its own, lesser, event.
         reportError(
-          wordFailure("db.rpc_failed", "Word memory turn release failed", releaseError),
+          withKind(releaseError, "db.rpc_failed", "Word memory turn release failed"),
           { level: "warning", tags: { component: "word-chat" } },
         );
         console.warn("[memory] Word activity release failed", { chatId });
@@ -998,7 +980,7 @@ export async function recordWordChatActivity(
     // Post-stream and best-effort: the turn already succeeded, so the lost
     // title or timestamp is a warning, reported before the same object is
     // logged (the console bridge knows it is already sent).
-    const failure = wordFailure("db.query_failed", "Word chat activity update failed", error);
+    const failure = withKind(error, "db.query_failed", "Word chat activity update failed");
     reportError(failure, { level: "warning", tags: { component: "word-chat" } });
     console.error("[word-chat] failed to update chat activity", failure);
     return null;

@@ -235,16 +235,6 @@ function mcpOAuthPopupHeaders(nonce: string) {
 }
 
 /**
- * A Google integration failure as sendInternalError should report it: a
- * Drive or Workspace error already names its kind; anything else (a query,
- * a crypto failure) is wrapped with the kind that fits where it was caught,
- * the original kept as the cause so its code or status still extracts.
- */
-function googleFailure(error: unknown, kind: ErrorKind, message: string): Error {
-    return withKind(error, kind, message);
-}
-
-/**
  * A Google route that answers 4xx with fixed text for a failure that may
  * still be ours (a query or crypto failure behind "try again"): reported as
  * a warning unless it is one of the integration's own user-facing answers.
@@ -261,7 +251,7 @@ function warnGoogleRoute(
         !(error instanceof GoogleDriveUserError) &&
         !(error instanceof GoogleWorkspaceError)
     ) {
-        reportError(googleFailure(error, kind, label), {
+        reportError(withKind(error, kind, label), {
             level: "warning",
             tags: { component: "http" },
         });
@@ -877,7 +867,7 @@ userRouter.get("/integrations/google-drive", requireAuth, async (req, res) => {
     } catch (err) {
         sendInternalError(
             res,
-            googleFailure(err, "db.query_failed", "Google Drive status could not be loaded"),
+            withKind(err, "db.query_failed", "Google Drive status could not be loaded"),
         );
     }
 });
@@ -1011,7 +1001,7 @@ userRouter.delete(
         } catch (err) {
             sendInternalError(
                 res,
-                googleFailure(err, "db.query_failed", "Google Drive could not be disconnected"),
+                withKind(err, "db.query_failed", "Google Drive could not be disconnected"),
             );
         }
     },
@@ -1057,7 +1047,7 @@ userRouter.post(
             // message.
             sendInternalError(
                 res,
-                googleFailure(err, "google.api_failed", "Google Drive Picker session failed"),
+                withKind(err, "google.api_failed", "Google Drive Picker session failed"),
             );
         }
     }),
@@ -1153,7 +1143,7 @@ userRouter.post(
         } catch (error) {
             sendInternalError(
                 res,
-                googleFailure(error, "db.query_failed", "Google Drive authorization could not be cancelled"),
+                withKind(error, "db.query_failed", "Google Drive authorization could not be cancelled"),
             );
         }
     }),
@@ -1201,7 +1191,7 @@ for (const provider of ["gmail", "google-calendar"] as const) {
             } catch (error) {
                 sendInternalError(
                     res,
-                    googleFailure(error, "db.query_failed", "Google connector status could not be loaded"),
+                    withKind(error, "db.query_failed", "Google connector status could not be loaded"),
                 );
             }
         }),
@@ -1318,7 +1308,7 @@ for (const provider of ["gmail", "google-calendar"] as const) {
             } catch (error) {
                 sendInternalError(
                     res,
-                    googleFailure(error, "db.query_failed", "Google authorization could not be cancelled"),
+                    withKind(error, "db.query_failed", "Google authorization could not be cancelled"),
                 );
             }
         }),
@@ -1405,7 +1395,7 @@ for (const provider of ["gmail", "google-calendar"] as const) {
             } catch (error) {
                 sendInternalError(
                     res,
-                    googleFailure(error, "db.query_failed", "Google connector could not be disconnected"),
+                    withKind(error, "db.query_failed", "Google connector could not be disconnected"),
                 );
             }
         }),
