@@ -35,9 +35,14 @@
       // each dependency a package imports here. Keep the list in step with
       // packages/*/package.json peerDependencies (and the test tooling the
       // packages' colocated tests use).
-      "react": ["./node_modules/@types/react/index.d.ts"],
-      "react/jsx-runtime": ["./node_modules/@types/react/jsx-runtime.d.ts"],
-      "react-dom": ["./node_modules/@types/react-dom/index.d.ts"],
+      //
+      // react, react/jsx-runtime and react-dom are deliberately absent.
+      // Turbopack applies these paths at runtime, not only to types, and
+      // their only type-checkable targets are @types declaration files with
+      // no runtime exports: mapping react/jsx-runtime to one compiled every
+      // JSX call to `(void 0)(...)`. Next's import map supplies the runtime
+      // copies and `typeRoots` above supplies their types, for files under
+      // packages/ too.
       "lucide-react": ["./node_modules/lucide-react"],
       "clsx": ["./node_modules/clsx"],
       "tailwind-merge": ["./node_modules/tailwind-merge"],
