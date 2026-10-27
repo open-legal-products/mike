@@ -502,6 +502,7 @@ describe("apiRequest plumbing (via thin wrappers)", () => {
         });
         expect(reportApiFailure).toHaveBeenCalledWith({
             path: "/user/profile",
+            operation: "settings.profile",
             method: "GET",
             status: 500,
             code: "internal_error",
@@ -628,6 +629,7 @@ describe("apiRequest plumbing (via thin wrappers)", () => {
         expect(reportNetworkFailure).toHaveBeenCalledWith(failure, {
             method: "POST",
             url: "/api/projects",
+            operation: "projects.manage",
         });
         expect(reportApiFailure).not.toHaveBeenCalled();
     });
@@ -1072,6 +1074,7 @@ describe("API transport cancellation", () => {
         expect(reportNetworkFailure).toHaveBeenCalledExactlyOnceWith(error, {
             method: "POST",
             url: "/api/chat",
+            operation: "chat.turn",
         });
     });
 });

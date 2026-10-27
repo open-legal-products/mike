@@ -37,25 +37,10 @@ const scrubber = createEventScrubber({ install });
 /** `beforeSend` for every Sentry client in the web app (browser, server, edge). */
 export const scrubEvent = scrubber.scrubEvent;
 
-/**
- * The scrubber's "already sent" registry is a closure, so it can answer the
- * console bridge but not a caller. This mirror answers callers: a screen
- * that catches an error the API client already reported (every 5xx, every
- * transport failure) must not report it a second time under its own tags.
- */
-const reportedHere = new WeakSet<object>();
+// Reporting callers and automatic-capture deduplication share one registry.
+const markReported = scrubber.markReported;
+export const isReported = scrubber.isReported;
 
-function markReported(error: unknown): void {
-    scrubber.markReported(error);
-    if (error && typeof error === "object") reportedHere.add(error);
-}
-
-/** Has this exact error object already been sent to Sentry with context? */
-export function isReported(error: unknown): boolean {
-    return (
-        error !== null && typeof error === "object" && reportedHere.has(error)
-    );
-}
 
 function applyContext(scope: Sentry.Scope, context: ReportContext): void {
     if (context.level) scope.setLevel(context.level);
@@ -100,84 +85,38 @@ export function markErrorHandled(error: unknown): void {
  * backend attached to its own event, so the two sides of one failure can be
  * matched in Sentry by searching `request_id:<id>`.
  */
-type PendingApiReport = {
-    send: (operation?: Operation) => string | null;
-    timer: ReturnType<typeof setTimeout>;
-};
-
-/**
- * API failures whose error object is about to be thrown to a screen. The
- * screen names the operation it was performing a few microtasks later, in
- * its catch; holding the report for one macrotask lets that name ride on
- * this one event instead of a second, stackless one that dedupe then drops.
- */
-const pendingApiReports = new WeakMap<object, PendingApiReport>();
-
+/** Report an API failure immediately with the operation known by its caller. */
 export function reportApiFailure(failure: {
     path: string;
     status: number;
     code?: string | null;
     requestId?: string | null;
     method?: string;
-    /**
-     * The error object the caller is about to throw. Marking it here means
-     * the `console.error(..., error)` a screen logs when it catches it is
-     * recognised by the console bridge as this same failure and not sent
-     * again, and the screen's `notifyError(error, { operation })` adds the
-     * operation to this report rather than filing its own.
-     */
+    operation?: Operation;
     error?: unknown;
 }): string | null {
+    if (isReported(failure.error)) return null;
     markReported(failure.error);
     if (!Sentry.isEnabled()) return null;
     const route = normalizeApiPath(failure.path);
     const method = failure.method ?? "GET";
-    const send = (operation?: Operation) =>
-        Sentry.withScope((scope) => {
-            applyContext(scope, {
-                level: "error",
-                tags: {
-                    component: "mike-api",
-                    operation,
-                    http_status: failure.status,
-                    http_method: method,
-                    http_route: route,
-                    request_id: failure.requestId,
-                    error_code: failure.code,
-                    ...(route === "/observability/sentry-test" ? { diagnostic_test: "true" } : {}),
-                },
-                fingerprint: ["api-5xx", method, route, String(failure.status)],
-            });
-            return Sentry.captureMessage(
-                `API ${failure.status} on ${method} ${route}`,
-                "error",
-            );
+    return Sentry.withScope(scope => {
+        applyContext(scope, {
+            level: "error",
+            tags: {
+                component: "mike-api",
+                operation: failure.operation,
+                http_status: failure.status,
+                http_method: method,
+                http_route: route,
+                request_id: failure.requestId,
+                error_code: failure.code,
+                ...(route === "/observability/sentry-test" ? { diagnostic_test: "true" } : {}),
+            },
+            fingerprint: ["api-5xx", method, route, String(failure.status)],
         });
-    const error = failure.error;
-    if (error && typeof error === "object") {
-        const timer = setTimeout(() => {
-            pendingApiReports.delete(error);
-            send();
-        }, 0);
-        pendingApiReports.set(error, { send, timer });
-        return null;
-    }
-    return send();
-}
-
-/**
- * The screen that caught an API error names its operation: the held report
- * goes out now with that tag. False when nothing is pending for this error
- * (it was not an API 5xx, or its report already went out).
- */
-export function claimApiFailure(error: unknown, operation: Operation): boolean {
-    if (!error || typeof error !== "object") return false;
-    const pending = pendingApiReports.get(error);
-    if (!pending) return false;
-    clearTimeout(pending.timer);
-    pendingApiReports.delete(error);
-    pending.send(operation);
-    return true;
+        return Sentry.captureMessage(`API ${failure.status} on ${method} ${route}`, "error");
+    });
 }
 
 /**
@@ -287,7 +226,7 @@ export function resetApiUnreachableWindow(): void {
  */
 export function reportNetworkFailure(
     error: unknown,
-    request: { method: string; url: string },
+    request: { method: string; url: string; operation?: Operation },
 ): string | null {
     markReported(error);
     if (!Sentry.isEnabled() || pageIsBeingLeft()) return null;
@@ -324,6 +263,7 @@ export function reportNetworkFailure(
                 level: "warning",
                 tags: {
                     component: "mike-api",
+                    operation: request.operation,
                     stage: "api-unreachable",
                     network: true,
                     network_state: networkState,

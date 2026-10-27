@@ -39,24 +39,10 @@ const scrubber = createEventScrubber({
 
 export const scrubEvent = scrubber.scrubEvent;
 
-/**
- * The scrubber's "already sent" registry is a closure, so it can answer the
- * console bridge but not a caller. This mirror answers callers: a screen
- * that shows an error the API client already reported (every 5xx, every
- * transport failure) or that `reportWordFailure` already filed must not
- * report it a second time under its own tags.
- */
-const reportedHere = new WeakSet<object>();
+// Reporting callers and automatic-capture deduplication share one registry.
+const markReported = scrubber.markReported;
+export const isReported = scrubber.isReported;
 
-function markReported(error: unknown): void {
-  scrubber.markReported(error);
-  if (error && typeof error === "object") reportedHere.add(error);
-}
-
-/** Has this exact error object already been sent to Sentry with context? */
-export function isReported(error: unknown): boolean {
-  return error !== null && typeof error === "object" && reportedHere.has(error);
-}
 
 /** `service`/`surface` distinguish the pane from its ribbon and OAuth pages. */
 export type AddinSurface = "taskpane" | "commands" | "oauth-dialog";
@@ -231,72 +217,38 @@ export function reportWordFailure(
   });
 }
 
-type PendingApiReport = {
-  send: (operation?: AddinOperation) => string | null;
-  timer: ReturnType<typeof setTimeout>;
-};
-
-// Match the web client: hold an unnamed API report for one macrotask so
-// the screen's catch can supply its operation without filing a second event.
-const pendingApiReports = new WeakMap<object, PendingApiReport>();
-
-/** A backend 5xx seen from the pane, correlated by the backend's request id. */
+/** Report an API failure immediately with the operation known by its caller. */
 export function reportApiFailure(failure: {
-  path: string;
-  status: number;
-  code?: string | null;
-  requestId?: string | null;
-  method?: string;
-  /** The user-level flow the request belonged to, when the caller knows it. */
-  operation?: AddinOperation;
-  /** The error about to be thrown; its later console.error copy is dropped. */
-  error?: unknown;
+    path: string;
+    status: number;
+    code?: string | null;
+    requestId?: string | null;
+    method?: string;
+    operation?: AddinOperation;
+    error?: unknown;
 }): string | null {
-  markReported(failure.error);
-  if (!Sentry.isEnabled()) return null;
-  const route = normalizeApiPath(failure.path);
-  const method = failure.method ?? "GET";
-  const send = (operation = failure.operation) => Sentry.withScope((scope) => {
-    applyContext(scope, {
-      level: "error",
-      tags: {
-        component: "mike-api",
-        operation,
-        http_status: failure.status,
-        http_method: method,
-        http_route: route,
-        request_id: failure.requestId,
-        error_code: failure.code,
-      },
-      extra: { path: failure.path },
-      fingerprint: ["api-5xx", method, route, String(failure.status)],
+    if (isReported(failure.error)) return null;
+    markReported(failure.error);
+    if (!Sentry.isEnabled()) return null;
+    const route = normalizeApiPath(failure.path);
+    const method = failure.method ?? "GET";
+    return Sentry.withScope(scope => {
+        applyContext(scope, {
+            level: "error",
+            tags: {
+                component: "mike-api",
+                operation: failure.operation,
+                http_status: failure.status,
+                http_method: method,
+                http_route: route,
+                request_id: failure.requestId,
+                error_code: failure.code,
+                ...(route === "/observability/sentry-test" ? { diagnostic_test: "true" } : {}),
+            },
+            fingerprint: ["api-5xx", method, route, String(failure.status)],
+        });
+        return Sentry.captureMessage(`API ${failure.status} on ${method} ${route}`, "error");
     });
-    return Sentry.captureMessage(
-      `API ${failure.status} on ${method} ${route}`,
-      "error",
-    );
-  });
-  const error = failure.error;
-  if (!failure.operation && error && typeof error === "object") {
-    const timer = setTimeout(() => {
-      pendingApiReports.delete(error);
-      send();
-    }, 0);
-    pendingApiReports.set(error, { send, timer });
-    return null;
-  }
-  return send();
-}
-
-/** Add the screen's operation to its pending API report, sending it once. */
-export function claimApiFailure(error: unknown, operation: AddinOperation): boolean {
-  if (!error || typeof error !== "object") return false;
-  const pending = pendingApiReports.get(error);
-  if (!pending) return false;
-  clearTimeout(pending.timer);
-  pendingApiReports.delete(error);
-  pending.send(operation);
-  return true;
 }
 
 /**

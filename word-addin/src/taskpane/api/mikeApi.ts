@@ -151,7 +151,7 @@ export async function listProjectDocuments(
     },
   );
   if (!res.ok) {
-    throw await responseError(res, `/projects/${projectId}/documents`);
+    throw await responseError(res, `/projects/${projectId}/documents`, "GET", "documents.directory");
   }
   return res.json() as Promise<Document[]>;
 }
@@ -275,7 +275,7 @@ export async function listCloudWordChats(
     signal,
     headers: { Accept: "application/json", ...(await getAuthHeaders()) },
   });
-  if (!res.ok) throw await responseError(res);
+  if (!res.ok) throw await responseError(res, undefined, "GET", "word_chat.turn");
   return res.json() as Promise<Chat[]>;
 }
 
@@ -301,7 +301,7 @@ export async function getCloudWordChat(
       headers: { Accept: "application/json", ...(await getAuthHeaders()) },
     },
   );
-  if (!res.ok) throw await responseError(res);
+  if (!res.ok) throw await responseError(res, undefined, "GET", "word_chat.turn");
   const raw = (await res.json()) as {
     chat: Chat;
     messages: WordChatServerMessage[];
@@ -353,7 +353,7 @@ export async function updateCloudWordChatModel(
       keepalive: true,
     },
   );
-  if (!res.ok) throw await responseError(res);
+  if (!res.ok) throw await responseError(res, undefined, "PATCH", "word_chat.turn");
 }
 
 export async function updateCloudWordChatReasoning(
@@ -374,7 +374,7 @@ export async function updateCloudWordChatReasoning(
       keepalive: true,
     },
   );
-  if (!res.ok) throw await responseError(res);
+  if (!res.ok) throw await responseError(res, undefined, "PATCH", "word_chat.turn");
 }
 
 export async function createCloudWordDocumentEdit(args: {
@@ -409,7 +409,7 @@ export async function createCloudWordDocumentEdit(args: {
       keepalive: true,
     },
   );
-  if (!res.ok) throw await responseError(res);
+  if (!res.ok) throw await responseError(res, undefined, "PUT", "word.edit_apply");
   const edits = normalizeWordDocumentEdits([await res.json()]);
   const edit = edits[0];
   if (!edit) throw new Error("Word edit response was invalid.");
@@ -436,5 +436,5 @@ export async function updateCloudWordDocumentEdit(args: {
       keepalive: true,
     },
   );
-  if (!res.ok) throw await responseError(res);
+  if (!res.ok) throw await responseError(res, undefined, "PATCH", "word.edit_apply");
 }

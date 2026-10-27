@@ -76,7 +76,7 @@ import {
     createErrorNotifier,
     type NotifyErrorOptions as SharedNotifyErrorOptions,
 } from "@/shared/lib/errorNotifier";
-import { isReported, reportError, claimApiFailure } from "@/app/lib/errorReporting";
+import { isReported, reportError } from "@/app/lib/errorReporting";
 
 export {
     SUPPORT_EMAIL,
@@ -157,9 +157,6 @@ function reportRealFault(
     action: string | undefined,
     operation: Operation | undefined,
 ): void {
-    // An API 5xx the client reported is still holding its event for this
-    // screen's operation name; with one, that event goes out carrying it.
-    if (operation && claimApiFailure(error, operation)) return;
     const isFault =
         !isReported(error) &&
         (described.kind === "unknown" || described.kind === "server");

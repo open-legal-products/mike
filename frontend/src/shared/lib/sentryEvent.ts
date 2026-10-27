@@ -793,7 +793,9 @@ export function createEventScrubber(options?: {
         return event;
     };
 
-    return { markReported, scrubEvent };
+    const isReported = (error: unknown): boolean =>
+        error !== null && typeof error === "object" && reported.has(error);
+    return { markReported, isReported, scrubEvent };
 }
 
 /**

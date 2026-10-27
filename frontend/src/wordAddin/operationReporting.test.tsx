@@ -275,7 +275,7 @@ describe("the session refresh", () => {
 
 
 describe("workflow API failure identity", () => {
-    it.each([false, true])("keeps the screen's operation on a single API report (wrapped: %s)", async wrapped => {
+    it.each([false, true])("captures the API operation before a delayed screen handler (wrapped: %s)", async wrapped => {
         vi.useFakeTimers();
         try {
             configureMikeApiClient({
@@ -288,6 +288,9 @@ describe("workflow API failure identity", () => {
             const error = await updateWorkflow("11111111-2222-4333-8444-555555555555", { skill_md: "# Workflow" })
                 .catch((error: unknown) => error);
             expect(error).toBeInstanceOf(MikeApiError);
+            expect(Sentry.captureMessage).toHaveBeenCalledTimes(1);
+            expect(tagsOf(state.scopes[0]).operation).toBe("workflows.run");
+            await vi.advanceTimersByTimeAsync(1000);
             const shown = wrapped ? new UserVisibleError("The outcome is unknown.", { cause: error }) : error;
             reportFault(shown, { operation: "workflows.run" });
             notifyError(error, { operation: "workflows.run" });
@@ -306,13 +309,13 @@ describe("workflow API failure identity", () => {
 });
 
 
-it("sends an unclaimed API failure once and suppresses a later notice", async () => {
+it("sends immediately without a screen and suppresses a later notice", async () => {
     vi.useFakeTimers();
     try {
         const error = new MikeApiError({ status: 500, message: "Failed" });
         reportApiFailure({ path: "/workflows", status: 500, error });
         expect(isReported(error)).toBe(true);
-        expect(Sentry.captureMessage).not.toHaveBeenCalled();
+        expect(Sentry.captureMessage).toHaveBeenCalledTimes(1);
         await vi.runAllTimersAsync();
         expect(Sentry.captureMessage).toHaveBeenCalledTimes(1);
         notifyError(error, { operation: "workflows.run" });
