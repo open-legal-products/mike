@@ -176,6 +176,25 @@ describe('bounded error diagnostics', () => {
     expect(JSON.stringify(diagnosticEvent({ tags }))).not.toContain('private');
   });
 
+  it('reads the network code supabase-js folds into a plain result error, never its host or prose', () => {
+    // supabase-js answers a rejected fetch with { message, details, hint, code: '' }
+    // (details = "<name>: <message>\n\nCaused by: <name>: <message> (<code>)\n<stack>").
+    const result = {
+      message: 'TypeError: fetch failed',
+      details: 'TypeError: fetch failed\n\nCaused by: Error: connect ECONNREFUSED private.host:5432 (ECONNREFUSED)\n    at private (node:net:1)',
+      hint: '',
+      code: '',
+    };
+    const wrapped = new Error('Dependency failure (non-Error value)', { cause: result });
+    expect(diagnosticErrorTags(wrapped)).toEqual({ failure_code: 'ECONNREFUSED' });
+    expect(JSON.stringify(diagnosticEvent({ tags: diagnosticErrorTags(wrapped) }))).not.toContain('private');
+    // No usable cause code: the fixed fetch message alone, with the SDK's prefix.
+    expect(diagnosticErrorTags({ message: 'TypeError: fetch failed', details: 'TypeError: fetch failed\n    at private', code: '' })).toEqual({ failure_code: 'fetch_failed' });
+    expect(diagnosticErrorTags(new Error('wrapper', { cause: { message: 'TypeError: fetch failed', code: '' } }))).toEqual({ failure_code: 'fetch_failed' });
+    // Parenthesised words that are not fixed vocabulary never become a code.
+    expect(diagnosticErrorTags({ message: 'TypeError: private request failed', details: 'Caused by: Error: private (private_code)\n', code: '' })).toEqual({});
+  });
+
   it('keeps storage status and known database codes, drops arbitrary codes and metadata', () => {
     const tags = diagnosticErrorTags({ name: 'AccessDenied', $metadata: { httpStatusCode: 403, requestId: 'private' } });
     expect(diagnosticEvent({ tags }).tags).toEqual({ failure_code: 'AccessDenied', dependency_status: 403 });
