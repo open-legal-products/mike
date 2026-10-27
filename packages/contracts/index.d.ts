@@ -552,8 +552,9 @@ export type GoogleWorkspaceProvider = 'gmail' | 'google-calendar';
 export interface GoogleDriveStatus {
     configured: boolean;
     /**
-     * False when the operator switched Drive off for the deployment
-     * (GOOGLE_WORKSPACE_DISABLED_PROVIDERS): Discover does not offer it, new
+     * False when Drive is not offered to the user: the operator switched it
+     * off for the deployment (GOOGLE_WORKSPACE_DISABLED_PROVIDERS) or its
+     * feature flag is off for them. Discover does not offer it, new
      * connections and Picker sessions are refused, and the assistant has none
      * of its tools.
      */
@@ -592,11 +593,18 @@ export interface GoogleDrivePickerSession {
 export interface GoogleWorkspaceStatus {
     configured: boolean;
     /**
-     * False when the operator switched this service off for the deployment
-     * (GOOGLE_WORKSPACE_DISABLED_PROVIDERS): Discover does not offer it, new
-     * connections are refused, and the assistant has none of its tools.
+     * False when this service is not offered to the user: the operator
+     * switched it off for the deployment (GOOGLE_WORKSPACE_DISABLED_PROVIDERS)
+     * or its read feature flag is off for them. Discover does not offer it,
+     * new connections are refused, and the assistant has none of its tools.
      */
     available: boolean;
+    /**
+     * False when the user's write feature flag is off: the write scope is not
+     * requested on connect and no write tool is listed or offered, whatever
+     * an earlier grant carries.
+     */
+    writeAvailable: boolean;
     schemaReady: boolean;
     connected: boolean;
     /** Google granted write access; false when the user or an admin withheld it. */
@@ -612,14 +620,6 @@ export interface GoogleWorkspaceStatus {
     accountEmail?: string;
     redirectUri: string | null;
 }
-/** The CourtListener connector in one workspace (GET /user/integrations/courtlistener). */
-export interface CourtListenerConnectorStatus {
-    /** The workspace's on/off switch for US case law research. */
-    enabled: boolean;
-    /**
-     * Listed under Installed: switched on with a usable token here (the
-     * user's or the organization's) or the deployment's bulk index, or the
-     * user has saved their own token here. Otherwise it is offered in Discover.
 /**
  * Feature flags (Settings → Admin). The list of flags lives in
  * backend/src/lib/featureFlags.ts; a flag answers "is this on for this user?"
@@ -660,6 +660,14 @@ export interface AdminUserFeatureFlags {
         enabled: boolean;
     }>;
 }
+/** The CourtListener connector in one workspace (GET /user/integrations/courtlistener). */
+export interface CourtListenerConnectorStatus {
+    /** The workspace's on/off switch for US case law research. */
+    enabled: boolean;
+    /**
+     * Listed under Installed: switched on with a usable token here (the
+     * user's or the organization's) or the deployment's bulk index, or the
+     * user has saved their own token here. Otherwise it is offered in Discover.
      */
     installed: boolean;
     /** The user saved their own token for this workspace. */

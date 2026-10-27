@@ -52,7 +52,7 @@ vi.mock("@/app/lib/mikeApi", async (importOriginal) => {
         updateGoogleDriveSettings: vi.fn(),
         setGoogleDriveToolEnabled: vi.fn(),
         getGoogleWorkspaceStatus: vi.fn(async () => ({
-            configured: true, available: true, schemaReady: true, connected: false,
+            configured: true, available: true, writeAvailable: true, schemaReady: true, connected: false,
             writeEnabled: false, enabled: true, requireWriteApproval: false,
             readOnly: false, tools: [], redirectUri: null,
         })),
@@ -1194,6 +1194,7 @@ describe("Connector write approval settings", () => {
     const gmailStatus: GoogleWorkspaceStatus = {
         configured: true,
         available: true,
+        writeAvailable: true,
         schemaReady: true,
         connected: true,
         writeEnabled: true,
@@ -1372,7 +1373,7 @@ describe("Connector read-only mode", () => {
         { name: "delete", title: "Delete record", description: "Delete a record.", write: true, enabled: false },
     ];
     const status = {
-        configured: true, available: true, schemaReady: true, connected: true, enabled: true,
+        configured: true, available: true, writeAvailable: true, schemaReady: true, connected: true, enabled: true,
         writeEnabled: true, readOnly: false, requireWriteApproval: true,
         scope: null, redirectUri: null, pickerAvailable: false, tools,
     };
@@ -1520,6 +1521,7 @@ describe("Google services the operator switched off", () => {
     const status: GoogleWorkspaceStatus = {
         configured: true,
         available: true,
+        writeAvailable: true,
         schemaReady: true,
         connected: false,
         writeEnabled: false,
@@ -1642,7 +1644,7 @@ describe("ConnectorsPage first load", () => {
         vi.clearAllMocks();
         vi.mocked(listMcpConnectors).mockResolvedValue([]);
         vi.mocked(getGoogleWorkspaceStatus).mockResolvedValue({
-            configured: true, available: true, schemaReady: true, connected: false,
+            configured: true, available: true, writeAvailable: true, schemaReady: true, connected: false,
             writeEnabled: false, enabled: true, requireWriteApproval: false,
             readOnly: false, tools: [], redirectUri: null,
         });
@@ -1697,7 +1699,7 @@ describe("ConnectorsPage workspaces", () => {
         vi.mocked(needsMfaVerification).mockResolvedValue(false);
         vi.mocked(listMcpConnectors).mockResolvedValue([]);
         vi.mocked(getGoogleWorkspaceStatus).mockResolvedValue({
-            configured: true, available: true, schemaReady: true, connected: false,
+            configured: true, available: true, writeAvailable: true, schemaReady: true, connected: false,
             writeEnabled: false, enabled: true, requireWriteApproval: false,
             readOnly: false, tools: [], redirectUri: null,
         });

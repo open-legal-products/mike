@@ -1,4 +1,4 @@
-import { GoogleWorkspaceError, GoogleWorkspaceUnavailableError, assertWorkspaceProviderAvailable, startWorkspaceOAuth, completeWorkspaceOAuth, cancelWorkspaceOAuth, disconnectWorkspace, updateWorkspaceSettings, setWorkspaceToolEnabled } from "../../lib/integrations/googleWorkspaceAuth";
+import { GoogleWorkspaceError, GoogleWorkspaceUnavailableError, startWorkspaceOAuth, completeWorkspaceOAuth, cancelWorkspaceOAuth, disconnectWorkspace, updateWorkspaceSettings, setWorkspaceToolEnabled } from "../../lib/integrations/googleWorkspaceAuth";
 import { workspaceConnectorStatus, workspaceToolList } from "../../lib/integrations/googleWorkspace";
 // HTTP layer for the user module. Handlers parse params/query/body, call the
 // service functions behind user.service.ts, and map their typed results onto
@@ -1163,7 +1163,6 @@ for (const provider of ["gmail", "google-calendar"] as const) {
             const owner = await connectorOwner(req, res);
             if (!owner) return;
             try {
-                assertWorkspaceProviderAvailable(provider);
                 res.json(
                     await startWorkspaceOAuth(
                         createServerSupabase(),
