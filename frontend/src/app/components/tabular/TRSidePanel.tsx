@@ -28,6 +28,7 @@ import type {
 import { preprocessCitations, type ParsedCitation } from "./citation-utils";
 import { getPillClass } from "./pillUtils";
 import { PdfView } from "../shared/views/PdfView";
+import { TextView } from "../shared/views/TextView";
 import { SpreadsheetView } from "../shared/views/SpreadsheetView";
 import { DocxView } from "../shared/views/DocxView";
 import { FileTypeIcon } from "../shared/FileTypeIcon";
@@ -407,6 +408,8 @@ export function TRSidePanel({
                                     : undefined
                             }
                         />
+                    ) : documentViewType === "text" ? (
+                        <TextView rounded="top-right" doc={{ document_id: doc.id }} quote={docCitation?.quote} />
                     ) : (
                         <PdfView
                             rounded="top-right"

@@ -7,10 +7,12 @@ export const ALLOWED_DOCUMENT_TYPES = new Set([
   "xls",
   "pptx",
   "ppt",
+  "md",
+  "txt",
 ]);
 
 export const ALLOWED_DOCUMENT_TYPES_LABEL =
-  "pdf, docx, doc, xlsx, xlsm, xls, pptx, ppt";
+  "pdf, docx, doc, xlsx, xlsm, xls, pptx, ppt, md, txt";
 
 // The lowercased extension of a filename, or "" when it has none. Three call
 // sites spelled this out with the same semantics; the other extension readers
@@ -18,6 +20,19 @@ export const ALLOWED_DOCUMENT_TYPES_LABEL =
 // name when there is none) and are left alone.
 export function documentSuffix(filename: string): string {
   return filename.includes(".") ? filename.split(".").pop()!.toLowerCase() : "";
+}
+
+/** UTF-8 formats that can be read directly without document conversion. */
+export function isTextDocumentType(fileType: string | null | undefined) {
+  const type = (fileType ?? "").toLowerCase();
+  return type === "md" || type === "txt";
+}
+
+export function decodeUtf8DocumentText(raw: ArrayBuffer): string {
+  // Reject malformed UTF-8 rather than silently replacing invalid bytes.
+  return new TextDecoder("utf-8", { fatal: true })
+    .decode(raw)
+    .replace(/^\uFEFF/, "");
 }
 
 const WORD_TYPES = new Set(["docx", "doc"]);
@@ -79,6 +94,10 @@ export function contentTypeForDocumentType(fileType: string | null | undefined) 
       return "application/vnd.openxmlformats-officedocument.presentationml.presentation";
     case "ppt":
       return "application/vnd.ms-powerpoint";
+    case "md":
+      return "text/markdown";
+    case "txt":
+      return "text/plain";
     default:
       return "application/octet-stream";
   }

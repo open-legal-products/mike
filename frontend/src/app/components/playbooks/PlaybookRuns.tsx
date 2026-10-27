@@ -15,6 +15,7 @@ import type { EditAnnotation } from "@/app/components/shared/types";
 import { docxRevisionElements } from "@/app/components/shared/views/docxRevisionElements";
 import { DocxView } from "@/app/components/shared/views/DocxView";
 import { PdfView } from "@/app/components/shared/views/PdfView";
+import { TextView } from "@/app/components/shared/views/TextView";
 import { SkeletonLine } from "@/app/components/shared/TablePrimitive";
 import { EmptyState } from "@/app/components/ui/empty-state";
 import {
@@ -328,6 +329,8 @@ export function PlaybookRuns({
               toolbarVisible={false}
               rounded={false}
             />
+          ) : /\.(md|txt)$/i.test(selected.documentName ?? "") ? (
+            <TextView doc={{ document_id: selected.documentId! }} refetchKey={documentRevision} rounded={false} />
           ) : (
             <PdfView
               key={selected.documentId}

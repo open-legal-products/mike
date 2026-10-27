@@ -32,6 +32,8 @@ import {
 } from "../types";
 import {
   contentTypeForDocumentType,
+  decodeUtf8DocumentText,
+  isTextDocumentType,
   isPresentationDocumentType,
   isSpreadsheetDocumentType,
   isWordDocumentType,
@@ -1338,7 +1340,9 @@ export async function readDocumentContent(
     }
     let text: string;
     const fileType = docInfo.file_type?.toLowerCase?.() ?? "";
-    if (fileType === "pdf") {
+    if (isTextDocumentType(fileType)) {
+      text = decodeUtf8DocumentText(raw);
+    } else if (fileType === "pdf") {
       text = await extractPdfTextForModel(raw);
       devLog(
         `[read_document] pdf extracted length=${text.length} for filename="${docInfo.filename}"`,

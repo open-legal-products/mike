@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { PdfView } from "./views/PdfView";
+import { TextView } from "./views/TextView";
 import { DocxView } from "./views/DocxView";
 import type { DocxCloseGuard, DocxSaveState } from "./views/DocxRenderer.types";
 import { SpreadsheetView } from "./views/SpreadsheetView";
@@ -346,6 +347,8 @@ export function DocumentContent({
                             active ? activeHighlightCells : undefined
                         }
                     />
+                ) : viewType === "text" ? (
+                    <TextView doc={{ document_id: documentId, version_id: versionId }} refetchKey={refetchKey} rounded={false} quotes={active ? activeViewerQuotes : undefined} quoteFocusKey={quoteFocusKey} />
                 ) : (
                     <PdfView
                         refetchKey={refetchKey}

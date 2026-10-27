@@ -18,6 +18,7 @@ import { ConfirmPopup } from "@/app/components/popups/ConfirmPopup";
 import { FileTypeIcon } from "@/app/components/shared/FileTypeIcon";
 import { DocumentPaneTitle } from "@/app/components/shared/DocumentPaneTitle";
 import { PdfView } from "@/app/components/shared/views/PdfView";
+import { TextView } from "@/app/components/shared/views/TextView";
 import { DocxView } from "@/app/components/shared/views/DocxView";
 import { SpreadsheetView } from "@/app/components/shared/views/SpreadsheetView";
 import { CloseButton } from "@/shared/ui/CloseButton";
@@ -31,6 +32,7 @@ import {
     notifyError,
 } from "@/app/lib/userFacingError";
 import { resolveDocumentViewType } from "@/app/lib/documentViewType";
+import { SUPPORTED_DOCUMENT_ACCEPT } from "@/app/lib/documentUploadValidation";
 import { textLayerWarning } from "@/app/lib/textLayerWarning";
 import {
     LIQUID_FLOAT_PANEL_SURFACE_CLASS,
@@ -248,7 +250,7 @@ export function DocumentSidePanel({
 
     const activeDoc = doc;
     const documentId = activeDoc.id;
-    const newVersionAccept = ".pdf,.docx,.doc,.xlsx,.xlsm,.xls,.pptx,.ppt";
+    const newVersionAccept = SUPPORTED_DOCUMENT_ACCEPT;
     // Latest first: by version number, then by upload time.
     const orderedVersions = [...versions].sort(
         (a, b) =>
@@ -296,7 +298,13 @@ export function DocumentSidePanel({
         ? fileTypeForVersion(replaceTargetVersion, selectedFileType)
         : selectedFileType;
     const replaceVersionAccept =
-        replaceFileType === "pdf" ? ".pdf" : ".docx,.doc";
+        replaceFileType === "pdf"
+            ? ".pdf"
+            : replaceFileType === "md"
+              ? ".md"
+              : replaceFileType === "txt"
+                ? ".txt"
+                : ".docx,.doc";
     const ownerLabel =
         doc.owner_display_name?.trim() || doc.owner_email?.trim() || "—";
 
@@ -613,6 +621,8 @@ export function DocumentSidePanel({
                                 versionId={selectedVersionId}
                                 displayUrl={displayUrl}
                             />
+                        ) : selectedViewType === "text" ? (
+                            <TextView key={`${selectedVersionId ?? "current"}:${selectedUploadedAt ?? ""}:${selectedSizeBytes ?? ""}`} rounded="top-right" doc={{ document_id: doc.id, version_id: selectedVersionId }} displayUrl={displayUrl} />
                         ) : (
                             <PdfView
                                 rounded="top-right"
@@ -1183,6 +1193,8 @@ function fileTypeForVersion(version: DocumentVersion, fallback: string | null) {
     const name = version.filename?.trim().toLowerCase() ?? "";
     if (name.endsWith(".pdf")) return "pdf";
     if (name.endsWith(".doc") || name.endsWith(".docx")) return "docx";
+    if (name.endsWith(".md")) return "md";
+    if (name.endsWith(".txt")) return "txt";
     return fallback;
 }
 

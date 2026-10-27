@@ -13,6 +13,7 @@ import { TabPillButtonUI } from "@/shared/ui/TabPillButtonUI";
 import { Modal } from "../modals/Modal";
 import { FileTypeIcon } from "../shared/FileTypeIcon";
 import { PdfView } from "../shared/views/PdfView";
+import { TextView } from "../shared/views/TextView";
 import { SpreadsheetView } from "../shared/views/SpreadsheetView";
 import { workflowAddonAssetDisplayUrl } from "@/app/lib/mikeApi";
 import { resolveDocumentViewType } from "@/app/lib/documentViewType";
@@ -221,6 +222,7 @@ function AddonAssetViewer({
       <SpreadsheetView documentId={asset.id} displayUrl={displayUrl} rounded />
     );
   }
+  if (viewType === "text") return <TextView doc={{ document_id: asset.id }} displayUrl={displayUrl} rounded />;
   return (
     <PdfView doc={{ document_id: asset.id }} displayUrl={displayUrl} rounded />
   );

@@ -5,7 +5,7 @@ import { extractPdfTextForIndex } from "../../lib/pdfText";
 import { docxToPdf } from "../../lib/convert";
 import { extractPresentationText } from "../../lib/officeText";
 import { spreadsheetToLLMText } from "../../lib/spreadsheet";
-import { isSpreadsheetDocumentType, requiresLibreOfficeTextExtraction } from "../../lib/documentTypes";
+import { decodeUtf8DocumentText, isSpreadsheetDocumentType, isTextDocumentType, requiresLibreOfficeTextExtraction } from "../../lib/documentTypes";
 import type { Db, DbJob } from "../../lib/dbq/types";
 import { safeError } from "../../lib/safeError";
 import { logError } from "../../lib/log";
@@ -13,6 +13,9 @@ import { logError } from "../../lib/log";
 /** Complete text, using the same accepted DOCX view as the edit matcher. */
 export async function extractDocumentText(raw: ArrayBuffer, fileType: string) {
   const type = fileType.toLowerCase();
+  if (isTextDocumentType(type)) {
+    return { text: decodeUtf8DocumentText(raw), textlessPageCount: null };
+  }
   if (type === "pdf") return extractPdfTextForIndex(raw);
   if (requiresLibreOfficeTextExtraction(type)) {
     const pdf = await docxToPdf(Buffer.from(raw));
