@@ -15,7 +15,6 @@ const reportApiFailure = vi.hoisted(() => vi.fn());
 const reportNetworkFailure = vi.hoisted(() => vi.fn());
 const markErrorHandled = vi.hoisted(() => vi.fn());
 vi.mock("@/app/lib/errorReporting", () => ({
-    claimApiFailure: () => false,
     trackPendingRequest: () => () => {},
     markErrorHandled,
     reportApiFailure,

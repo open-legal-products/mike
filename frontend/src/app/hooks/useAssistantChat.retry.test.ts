@@ -24,7 +24,6 @@ vi.mock("next/navigation", () => ({
     useRouter: () => ({ replace: routerReplaceMock, push: vi.fn() }),
 }));
 vi.mock("@/app/lib/errorReporting", () => ({
-    claimApiFailure: () => false,
     reportError: reportErrorMock,
     trackPendingRequest: () => () => {},
     reportNetworkFailure: vi.fn(),

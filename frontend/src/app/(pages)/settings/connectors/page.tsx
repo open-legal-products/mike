@@ -67,7 +67,7 @@ import {
   startMcpConnectorOAuth,
   updateMcpConnector,
 } from "@/app/lib/mikeApi";
-import { reportFault, describeError } from "@/app/lib/userFacingError";
+import { reportFault } from "@/app/lib/userFacingError";
 import { SettingsDescription } from "@/app/components/settings/SettingsText";
 import { SettingsHeading } from "@/app/components/settings/SettingsHeading";
 import { PillButtonUI } from "@/shared/ui/PillButtonUI";
