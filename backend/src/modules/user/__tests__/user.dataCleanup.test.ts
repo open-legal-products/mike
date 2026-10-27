@@ -23,7 +23,7 @@ import {
     deleteAllUserTabularReviews,
     deleteUserProjects,
     deleteUserAccountData,
-} from "../user.dataCleanup";
+} from "../../../application/accounts/dataCleanup";
 
 const deleteFileMock = vi.mocked(deleteFile);
 const listFilesMock = vi.mocked(listFiles);

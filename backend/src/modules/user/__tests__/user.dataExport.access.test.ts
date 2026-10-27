@@ -3,7 +3,7 @@ import {
     buildUserAccountExport,
     buildUserChatsExport,
     buildUserTabularReviewsExport,
-} from "../user.dataExport";
+} from "../../../application/exports/buildJsonExport";
 import { makeExportDb, type Row } from "./user.dataExport.fixture";
 
 const userId = "departed-user";

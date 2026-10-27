@@ -4,7 +4,7 @@ import { streamChatTurn } from "@/app/lib/mikeApi";
 import { readSseFrames } from "@/app/lib/sse";
 import { isPanelDocument } from "@/app/components/shared/types";
 import type { AssistantEvent, Citation } from "@/app/components/shared/types";
-import type { AssistantTurnHandle } from "@/app/lib/assistantTurns";
+import type { AssistantTurnHandle } from "@/app/lib/assistantTurnTypes";
 import type {
   ConnectorApprovalItem,
   WebSource,

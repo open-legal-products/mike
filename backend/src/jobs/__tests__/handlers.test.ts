@@ -25,7 +25,7 @@ const deleteUserAccountData =
         (db: Db, userId: string, userEmail?: string | null) => Promise<void>
     >(async () => {});
 const listOrgsBlockingAccountDeletion = vi.fn(async () => [] as unknown[]);
-vi.mock("../../modules/user/user.dataCleanup", () => ({
+vi.mock("../../application/accounts/dataCleanup", () => ({
     deleteUserAccountData: (
         db: Db,
         userId: string,
@@ -42,9 +42,9 @@ const buildUserAccountExport =
             userEmail?: string | null,
         ) => Promise<{ hello: string }>
     >(async () => ({ hello: "world" }));
-vi.mock("../../modules/user/user.dataExport", async (importOriginal) => {
+vi.mock("../../application/exports/buildJsonExport", async (importOriginal) => {
     const actual =
-        await importOriginal<typeof import("../../modules/user/user.dataExport")>();
+        await importOriginal<typeof import("../../application/exports/buildJsonExport")>();
     return {
         ...actual,
         buildUserAccountExport: (

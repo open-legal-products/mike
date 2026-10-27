@@ -50,7 +50,7 @@ vi.mock("../../../lib/supabase", () => ({
     })),
 }));
 
-vi.mock("../../user/user.apiKeyStore", () => ({
+vi.mock("../../../lib/providerCredentials/index", () => ({
     getUserApiKeys: (...args: unknown[]) => getUserApiKeys(...args),
     // Personal work runs on the caller's own keys; an organization's on its.
     getEffectiveApiKeys: (userId: string, orgId: unknown, db: unknown) =>

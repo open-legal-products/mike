@@ -1,4 +1,4 @@
-import { createHash } from "node:crypto";
+import { selectAll, loadMemoryExport } from "../../lib/memory/export";
 import {
     checkProjectAccess,
     checkWorkflowAccess,
@@ -8,15 +8,13 @@ import {
     type OrgRole,
 } from "../../lib/access";
 import { mapWithConcurrency } from "../../lib/concurrency";
-import { sealManifest } from "../../lib/manifestSigning";
 import { type Db } from "../../lib/supabase";
 import {
     resolvePlaybookRoles,
     type PlaybookAccessRow,
-} from "../playbooks/playbooks.service";
-import { throwIfError, uniqueStrings } from "./user.shared";
+} from "../../modules/playbooks/playbooks.service";
+import { uniqueStrings } from "../../lib/serviceData";
 
-const PAGE_SIZE = 1000;
 
 function nowStamp() {
     return new Date().toISOString().replace(/[:.]/g, "-");
@@ -29,32 +27,6 @@ export function userExportFilename(
 ) {
     const workspace = orgId ? `-org-${orgId.slice(0, 8)}` : "";
     return `mike-${kind}-export-${userId.slice(0, 8)}${workspace}-${nowStamp()}.json`;
-}
-
-async function selectAll(
-    db: Db,
-    table: string,
-    configure: (query: any) => any,
-    columns = "*",
-): Promise<Record<string, unknown>[]> {
-    const rows: Record<string, unknown>[] = [];
-
-    for (let from = 0; ; from += PAGE_SIZE) {
-        const to = from + PAGE_SIZE - 1;
-        const query = configure(
-            (db as any)
-                .from(table)
-                .select(columns)
-                .range(from, to),
-        );
-        const { data, error } = await query;
-        await throwIfError(error, `Failed to export ${table}`);
-        const batch = (data ?? []) as Record<string, unknown>[];
-        rows.push(...batch);
-        if (batch.length < PAGE_SIZE) break;
-    }
-
-    return rows;
 }
 
 async function selectByIds(
@@ -130,76 +102,6 @@ async function loadUserReviews(
     return readableRows(reviews, (row) =>
         ensureReviewAccess(row, userId, userEmail, db),
     );
-}
-
-/**
- * One memory file: a project's, or a person's for one workspace. A person
- * has one per workspace, so the user scope names which (`orgId`, null for
- * Personal) — read unnarrowed, the first of them would stand in for all.
- */
-async function loadMemoryExport(
-    db: Db,
-    scope: "user" | "project",
-    ownerId: string,
-    orgId: ExportWorkspace = null,
-) {
-    const ownerColumn = scope === "user" ? "user_id" : "project_id";
-    const rows = await selectAll(
-        db,
-        "memory_files",
-        (query) => {
-            const owned = query.eq("scope", scope).eq(ownerColumn, ownerId);
-            return scope === "user" ? inWorkspace(owned, orgId) : owned;
-        },
-        "id, enabled, epoch, revision, content, content_sha256, size_bytes, status, last_source, updated_by, created_at, updated_at",
-    );
-    const file = rows[0];
-    if (!file) {
-        return {
-            // Missing state is legacy/corrupt and must never be reported as an
-            // implicit opt-in. New owners receive an explicit row at creation.
-            enabled: false,
-            epoch: 0,
-            revision: 0,
-            status: "idle",
-            created_at: null,
-            updated_at: null,
-            markdown: "",
-            content_sha256: null,
-            size_bytes: 0,
-            source: null,
-            updated_by: null,
-        };
-    }
-
-    const markdown = typeof file.content === "string" ? file.content : "";
-    const storedHash =
-        typeof file.content_sha256 === "string" ? file.content_sha256 : null;
-    if (storedHash) {
-        const actualHash = createHash("sha256")
-            .update(markdown, "utf8")
-            .digest("hex");
-        if (actualHash !== storedHash) {
-            throw new Error("Memory export content checksum mismatch");
-        }
-    }
-
-    return {
-        enabled: file.enabled === true,
-        epoch: Number(file.epoch),
-        revision: Number(file.revision),
-        status: String(file.status ?? "idle"),
-        created_at:
-            typeof file.created_at === "string" ? file.created_at : null,
-        updated_at:
-            typeof file.updated_at === "string" ? file.updated_at : null,
-        markdown,
-        content_sha256: storedHash,
-        size_bytes: Number(file.size_bytes ?? 0),
-        source: typeof file.last_source === "string" ? file.last_source : null,
-        updated_by:
-            typeof file.updated_by === "string" ? file.updated_by : null,
-    };
 }
 
 async function loadUserChats(
@@ -445,118 +347,6 @@ export async function buildUserTabularReviewsExport(
             messages,
         },
     };
-}
-
-export function projectManifestFilename(projectId: string) {
-    return `mike-project-manifest-${projectId.slice(0, 8)}-${nowStamp()}.json`;
-}
-
-/**
- * Tamper-evident manifest for one project: every document version with its
- * content_sha256, plus the accept/reject trail. To check an exported file
- * against what the workspace held, recompute its SHA-256 and compare.
- *
- * `sealManifest` then hashes the body and signs that digest with the
- * deployment's Ed25519 key, if it has one. Unsigned, the manifest shows the
- * *files* are unmodified but says nothing about itself.
- *
- * Versions written before content hashing shipped carry a null hash rather
- * than a wrong one, so an old file set reads as unverifiable and never as
- * verified.
- */
-export async function buildProjectExportManifest(db: Db, projectId: string) {
-    const { data: project, error: projectError } = await db
-        .from("projects")
-        .select("id, name, cm_number, created_at")
-        .eq("id", projectId)
-        .single();
-    await throwIfError(projectError, "Failed to export project");
-
-    const memory = await loadMemoryExport(db, "project", projectId);
-
-    const documents = await selectAll(
-        db,
-        "documents",
-        (query) =>
-            query
-                .eq("project_id", projectId)
-                .order("created_at", { ascending: true })
-                .order("id", { ascending: true }),
-        "id, project_id, status, current_version_id, created_at",
-    );
-    const documentIds = idsFrom(documents);
-
-    const [versions, edits] = await Promise.all([
-        documentIds.length === 0
-            ? Promise.resolve([])
-            : selectAll(
-                  db,
-                  "document_versions",
-                  (query) =>
-                      query
-                          .in("document_id", documentIds)
-                          .order("created_at", { ascending: true })
-                          .order("id", { ascending: true }),
-                  "id, document_id, version_number, source, filename, file_type, size_bytes, content_sha256, deleted_at, created_at",
-              ),
-        documentIds.length === 0
-            ? Promise.resolve([])
-            : selectAll(
-                  db,
-                  "document_edits",
-                  (query) =>
-                      query
-                          .in("document_id", documentIds)
-                          .order("created_at", { ascending: true })
-                          .order("id", { ascending: true }),
-                  "id, document_id, version_id, change_id, status, created_at, resolved_at",
-              ),
-    ]);
-
-    const groupByDocument = (rows: Record<string, unknown>[]) => {
-        const byDoc = new Map<string, Record<string, unknown>[]>();
-        for (const row of rows) {
-            const docId = row.document_id as string;
-            const list = byDoc.get(docId) ?? [];
-            list.push(row);
-            byDoc.set(docId, list);
-        }
-        return byDoc;
-    };
-    const versionsByDoc = groupByDocument(versions);
-    const editsByDoc = groupByDocument(edits);
-
-    return sealManifest({
-        manifest_version: 1,
-        exported_at: new Date().toISOString(),
-        project,
-        memory,
-        documents: documents.map((doc) => ({
-            id: doc.id,
-            status: doc.status,
-            current_version_id: doc.current_version_id,
-            created_at: doc.created_at,
-            versions: (versionsByDoc.get(doc.id as string) ?? []).map((v) => ({
-                id: v.id,
-                version_number: v.version_number,
-                source: v.source,
-                filename: v.filename,
-                file_type: v.file_type,
-                size_bytes: v.size_bytes,
-                content_sha256: v.content_sha256,
-                deleted_at: v.deleted_at,
-                created_at: v.created_at,
-            })),
-            edits: (editsByDoc.get(doc.id as string) ?? []).map((e) => ({
-                id: e.id,
-                version_id: e.version_id,
-                change_id: e.change_id,
-                status: e.status,
-                created_at: e.created_at,
-                resolved_at: e.resolved_at,
-            })),
-        })),
-    });
 }
 
 /**

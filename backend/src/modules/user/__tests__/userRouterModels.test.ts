@@ -34,13 +34,13 @@ vi.mock("../../../lib/llm", async () => ({
 
 vi.mock("../../../lib/audit", () => ({ recordAudit: vi.fn() }));
 vi.mock("../../../lib/userLookup", () => ({ findProfileUserByEmail: vi.fn() }));
-vi.mock("../user.dataCleanup", () => ({
+vi.mock("../../../application/accounts/dataCleanup", () => ({
     deleteAllUserChats: vi.fn(),
     deleteAllUserTabularReviews: vi.fn(),
     deleteUserAccountData: vi.fn(),
     deleteUserProjects: vi.fn(),
 }));
-vi.mock("../user.dataExport", () => ({
+vi.mock("../../../application/exports/buildJsonExport", () => ({
     buildUserAccountExport: vi.fn(),
     buildUserChatsExport: vi.fn(),
     buildUserTabularReviewsExport: vi.fn(),
@@ -58,7 +58,7 @@ vi.mock("../../../lib/mcpConnectors", () => ({
     startUserMcpConnectorOAuth: vi.fn(),
     updateUserMcpConnector: vi.fn(),
 }));
-vi.mock("../user.apiKeyStore", () => ({
+vi.mock("../../../lib/providerCredentials/index", () => ({
     getUserApiKeyStatus: (...args: unknown[]) => getUserApiKeyStatus(...args),
     hasEnvApiKey: vi.fn(() => false),
     normalizeApiKeyProvider: vi.fn(),
@@ -109,7 +109,7 @@ vi.mock("../../../lib/supabase", () => ({
 }));
 
 import { userRouter } from "../user.routes";
-import { normalizeRouterModels } from "../user.service";
+import { normalizeRouterModels } from "../../../lib/routerModelValidation";
 
 const app = express();
 app.use(express.json());

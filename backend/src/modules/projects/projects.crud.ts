@@ -7,10 +7,7 @@ import {
   attachLatestVersionNumbers,
 } from "../../lib/documentVersions";
 import { isPersonalOrg } from "../../lib/personalOrgs";
-import {
-  buildProjectExportManifest,
-  projectManifestFilename,
-} from "../user/user.service";
+import { buildProjectExportManifest, projectManifestFilename } from "./projects.export";
 import {
   checkProjectAccess,
   getOrgRole,
@@ -35,7 +32,7 @@ import {
   isOrgAccessOverrideRole,
   listOrgAccessPeople,
 } from "../../lib/orgAccessOverrides";
-import { deleteProjectsByIds } from "../user/user.service";
+import { deleteProjectsByIds } from "./projects.lifecycle";
 import { loadCreatorProfiles, loadProfileUsersByEmail } from "../../lib/userLookup";
 import { ensureResourceAccessSummaries } from "../../lib/resourceAccessSummary";
 import {

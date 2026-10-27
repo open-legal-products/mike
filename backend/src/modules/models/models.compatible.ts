@@ -7,8 +7,8 @@ import {
     customEndpointCredentials,
 } from "../../lib/llm/cloudProviders";
 import { guardedFetch } from "../../lib/mcp/client";
-import { getEffectiveApiKeys } from "../user/user.service";
-import type { CatalogModel, CatalogResult } from "./models.service";
+import { getEffectiveApiKeys } from "../../lib/providerCredentials/index";
+import type { CatalogModel, CatalogResult } from "./models.types";
 
 const XAI_BASE_URL = "https://api.x.ai/v1";
 // xAI lists its image, video and voice models next to the chat models.

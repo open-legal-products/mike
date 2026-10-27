@@ -5,7 +5,7 @@ vi.mock("../../../lib/storage", () => ({
 }));
 
 import { deleteFilesBestEffort } from "../../../lib/storage";
-import { deleteOrgPlaybooks } from "../orgs.dataCleanup";
+import { deleteOrgPlaybooks } from "../orgs.service";
 
 type Row = Record<string, unknown>;
 

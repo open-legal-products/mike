@@ -14,7 +14,7 @@ import {
   reportError,
   type ReportLevel,
 } from "../../lib/observability/sentry";
-import type { PlaybookImportStage } from "./playbooks.operations";
+import type { PlaybookImportStage } from "./playbooks.types";
 
 export type PlaybookJobKind = "playbook.review" | "playbook.import";
 

@@ -7,7 +7,7 @@ const { getUserApiKeys, deleteFile, uploadFile } = vi.hoisted(() => ({
   uploadFile: vi.fn(),
 }));
 
-vi.mock("../../user/user.service", () => ({ getUserApiKeys }));
+vi.mock("../../../lib/providerCredentials/index", () => ({ getUserApiKeys }));
 vi.mock("../../../lib/storage", () => ({ deleteFile, uploadFile }));
 
 import {

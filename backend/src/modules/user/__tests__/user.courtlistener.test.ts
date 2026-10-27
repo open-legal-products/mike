@@ -6,7 +6,7 @@ const store = vi.hoisted(() => ({
     loadCourtListenerConnection: vi.fn(),
     saveCourtListenerConnection: vi.fn(),
 }));
-vi.mock("../user.apiKeyStore", () => store);
+vi.mock("../../../lib/providerCredentials/index", () => store);
 
 import {
     courtListenerConnectorStatus,

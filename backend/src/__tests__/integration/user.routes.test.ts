@@ -232,10 +232,10 @@ vi.mock("../../middleware/auth", () => ({
 // (which encrypts) and never echo plaintext — getUserApiKeyStatus returns
 // presence-only booleans. getUserApiKeys must be exported too — lib/userSettings
 // imports it at module load.
-vi.mock("../../modules/user/user.apiKeyStore", async (importOriginal) => {
+vi.mock("../../lib/providerCredentials/store", async (importOriginal) => {
     // The pure validation helpers run for real; every database touch is a spy.
     const actual =
-        await importOriginal<typeof import("../../modules/user/user.apiKeyStore")>();
+        await importOriginal<typeof import("../../lib/providerCredentials/store")>();
     return {
     isSettingsApiKeyProvider: actual.isSettingsApiKeyProvider,
     normalizeProviderSettings: actual.normalizeProviderSettings,
@@ -274,7 +274,7 @@ vi.mock("../../modules/user/user.apiKeyStore", async (importOriginal) => {
     };
 });
 
-vi.mock("../../modules/user/user.dataCleanup", () => ({
+vi.mock("../../application/accounts/dataCleanup", () => ({
     deleteAllUserChats: (...args: unknown[]) => deleteAllUserChats(...args),
     deleteAllUserTabularReviews: (...args: unknown[]) =>
         deleteAllUserTabularReviews(...args),
@@ -290,7 +290,7 @@ vi.mock("../../lib/memory/bulk", () => ({
         deleteUserPrivateMemories(...args),
 }));
 
-vi.mock("../../modules/user/user.dataExport", () => ({
+vi.mock("../../application/exports/buildJsonExport", () => ({
     buildUserAccountExport: (...args: unknown[]) =>
         buildUserAccountExport(...args),
     buildUserChatsExport: (...args: unknown[]) => buildUserChatsExport(...args),

@@ -15,7 +15,7 @@ vi.mock("../../../lib/llm", async (original) => ({
   ...(await original<typeof import("../../../lib/llm")>()),
   completeText,
 }));
-vi.mock("../../user/user.service", () => ({ getUserApiKeys }));
+vi.mock("../../../lib/providerCredentials/index", () => ({ getUserApiKeys }));
 vi.mock("../../../lib/audit", () => ({ recordAudit }));
 vi.mock("../../../lib/storage", async (original) => ({
   ...(await original<typeof import("../../../lib/storage")>()),

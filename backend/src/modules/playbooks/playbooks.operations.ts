@@ -1,3 +1,35 @@
+import {
+    playbookContentShape,
+    playbookContentSchema,
+    editablePlaybookSchema,
+    findingSchema,
+    reviewSchema,
+} from "./playbooks.schemas";
+export { playbookContentSchema, editablePlaybookSchema } from "./playbooks.schemas";
+import type {
+    PlaybookContent,
+    PlaybookFinding,
+    Playbook,
+    PlaybookImportStage,
+    PlaybookImport,
+    PlaybookImportRequest,
+    PlaybookImportWork,
+    PlaybookReviewRequest,
+    PlaybookReviewInput,
+    PlaybookReviewWork,
+} from "./playbooks.types";
+export type {
+    PlaybookContent,
+    PlaybookFinding,
+    Playbook,
+    PlaybookImportStage,
+    PlaybookImport,
+    PlaybookImportRequest,
+    PlaybookImportWork,
+    PlaybookReviewRequest,
+    PlaybookReviewInput,
+    PlaybookReviewWork,
+} from "./playbooks.types";
 import crypto from "node:crypto";
 import { safeError } from "../../lib/safeError";
 const { jsonrepair } = require("jsonrepair") as {
@@ -34,7 +66,7 @@ import {
 } from "../../lib/llm/models";
 import type { Provider } from "../../lib/llm/types";
 import { hasApiKeyForModel } from "../../lib/modelSelection";
-import { getUserApiKeys, getEffectiveApiKeys } from "../user/user.service";
+import { getUserApiKeys, getEffectiveApiKeys } from "../../lib/providerCredentials/index";
 import { deleteFile, uploadFile } from "../../lib/storage";
 import { getFileStreamSource } from "../documents/documents.service";
 import { liveDbJobDedupeKeys } from "../../lib/dbq/enqueue";
@@ -89,172 +121,6 @@ export function runFailureMessage(error: unknown): string {
     return "The model returned a review that did not match the expected format. Try again.";
   return "The review failed. Try again.";
 }
-
-const clauseSchema = z.object({
-  text: z.string().trim().min(1).max(20_000),
-  usage: z
-    .enum(["illustrative", "preferred", "verbatim", "accepted", "unacceptable"])
-    .default("illustrative"),
-  sourceRefs: z.array(z.string().trim().min(1).max(100)).max(30).default([]),
-});
-
-const positionSchema = z.object({
-  name: z.string().trim().min(1).max(200),
-  criteria: z.string().trim().min(1).max(20_000),
-  sampleClauses: z.array(clauseSchema).max(30).default([]),
-});
-
-const ruleSchema = z.object({
-  id: z.string().trim().min(1).max(100).optional(),
-  name: z.string().trim().min(1).max(300),
-  concept: z.string().trim().min(1).max(20_000),
-  scope: z.enum(["clause", "agreement"]).default("clause"),
-  required: z.boolean().default(false),
-  guidance: z.string().trim().max(20_000).default(""),
-  standard: positionSchema.nullable().default(null),
-  fallbacks: z.array(positionSchema).max(20).default([]),
-  unacceptable: z.array(positionSchema).max(20).default([]),
-  conditions: z.array(z.string().trim().min(1).max(2_000)).max(30).default([]),
-  actions: z
-    .array(
-      z.object({
-        scenario: z.string().trim().max(2_000).default(""),
-        instruction: z.string().trim().min(1).max(5_000),
-      }),
-    )
-    .max(20)
-    .default([]),
-  sourceRefs: z.array(z.string().trim().min(1).max(100)).max(50).default([]),
-});
-
-const topicSchema = z.object({
-  id: z.string().trim().min(1).max(100).optional(),
-  name: z.string().trim().min(1).max(300),
-  rules: z.array(ruleSchema).max(200),
-});
-
-const playbookContentShape = z.object({
-  name: z.string().trim().min(1).max(200),
-  description: z.string().trim().max(2_000).default(""),
-  representedParty: z.string().trim().max(300).default(""),
-  documentTypes: z.array(z.string().trim().min(1).max(200)).max(50).default([]),
-  jurisdictions: z.array(z.string().trim().min(1).max(200)).max(50).default([]),
-  rules: z.array(ruleSchema).max(200).default([]),
-  topics: z.array(topicSchema).max(200).default([]),
-});
-
-export const playbookContentSchema = playbookContentShape.refine(
-  (content) =>
-    content.rules.length > 0 ||
-    content.topics.some((topic) => topic.rules.length > 0),
-  {
-    message: "Add at least one rule before running a review.",
-    path: ["rules"],
-  },
-);
-
-// Autosave must accept an unfinished field or an empty topic. Compilation and
-// review still use the strict schema above; structural limits apply to both.
-const editableClauseSchema = clauseSchema.extend({
-  text: z.string().max(20_000),
-});
-const editablePositionSchema = positionSchema.extend({
-  name: z.string().max(200),
-  criteria: z.string().max(20_000),
-  sampleClauses: z.array(editableClauseSchema).max(30).default([]),
-});
-const editableRuleSchema = ruleSchema.extend({
-  name: z.string().max(300),
-  concept: z.string().max(20_000),
-  guidance: z.string().max(20_000).default(""),
-  standard: editablePositionSchema.nullable().default(null),
-  fallbacks: z.array(editablePositionSchema).max(20).default([]),
-  unacceptable: z.array(editablePositionSchema).max(20).default([]),
-});
-export const editablePlaybookSchema = playbookContentShape.extend({
-  name: z.string().max(200),
-  description: z.string().max(2_000).default(""),
-  representedParty: z.string().max(300).default(""),
-  rules: z.array(editableRuleSchema).max(200).default([]),
-  topics: z
-    .array(
-      topicSchema.extend({
-        name: z.string().max(300),
-        rules: z.array(editableRuleSchema).max(200),
-      }),
-    )
-    .max(200)
-    .default([]),
-});
-
-const findingSchema = z.object({
-  topicId: z.string().trim().max(100).nullable().default(null),
-  ruleId: z.string().trim().max(100).nullable().default(null),
-  ruleName: z.string().trim().min(1).max(300),
-  status: z.enum([
-    "not_applicable",
-    "acceptable",
-    "needs_review",
-    "unacceptable",
-    "missing_required",
-    "outside_scope",
-  ]),
-  quote: z.string().trim().max(30_000).default(""),
-  location: z.string().trim().max(500).default(""),
-  analysis: z.string().trim().min(1).max(20_000),
-  suggestedText: z.string().trim().max(30_000).default(""),
-  /** For missing_required: the end of the clause the new one follows. */
-  insertAfter: z.string().trim().max(5_000).default(""),
-});
-
-const reviewSchema = z.object({
-  summary: z.string().trim().min(1).max(10_000),
-  findings: z.array(findingSchema).max(1000),
-});
-
-export type PlaybookContent = z.infer<typeof playbookContentSchema>;
-export type PlaybookFinding = z.infer<typeof findingSchema> & {
-  id: string;
-  /** The tracked change made in the reviewed document, when one was. */
-  edit?: EditAnnotation | null;
-};
-
-export type Playbook = {
-  id: string;
-  userId: string;
-  name: string;
-  description: string;
-  orgId: string | null;
-  visibility: "private" | "organization";
-  /** The caller's role: viewer (view and run), editor, or owner. */
-  role: PlaybookRole;
-  isCreator: boolean;
-  /** Edit rules, details and sources: editor or owner. */
-  canEdit: boolean;
-  /** Share, change visibility and delete: owner. */
-  canManageAccess: boolean;
-  /** Who it is shared with, for its owners only; empty for everyone else. */
-  sharedWith: string[];
-  /** The creator's profile name and photo; null when they have not set one. */
-  creatorName: string | null;
-  creatorPhoto: string | null;
-  content: PlaybookContent;
-  sourceFilename: string | null;
-  importModel: string | null;
-  createdAt: string;
-  updatedAt: string;
-};
-
-export type PlaybookImportStage =
-  | "validating_file"
-  | "checking_model"
-  | "extracting_text"
-  | "compiling"
-  | "validating_output"
-  | "repairing_output"
-  | "storing_source"
-  | "saving_playbook"
-  | "completed";
 
 /**
  * A failure whose message is written for the user. The router forwards these
@@ -1174,20 +1040,6 @@ async function assertPlaybookNotBeingReplaced(
     throw new PlaybookRequestError(PLAYBOOK_BEING_REPLACED_ERROR, 409);
 }
 
-/** An import attempt as the page follows it. */
-export type PlaybookImport = {
-  id: string;
-  status: "running" | "completed" | "failed";
-  stage: string;
-  error: string | null;
-  filename: string;
-  name: string | null;
-  /** The playbook being replaced, or the one created once completed. */
-  playbookId: string | null;
-  startedAt: string;
-  completedAt: string | null;
-};
-
 /**
  * An import's state as readers should see it; `interrupted` holds the ids
  * interruptedPlaybookWork found will never finish.
@@ -1272,49 +1124,6 @@ export async function listRunningPlaybookImports(
     .map((row) => publicImport(row, interrupted))
     .filter((attempt) => attempt.status === "running");
 }
-
-/** What an import is asked to do, before its file is read. */
-export type PlaybookImportRequest = {
-  userId: string;
-  /** Needed to replace a personal playbook shared with the caller. */
-  userEmail?: string | null;
-  filename: string;
-  /** The file's size in bytes, known before it is read. */
-  size: number;
-  name?: string;
-  workspace?: unknown;
-  model: string;
-  /** Replace this playbook's content instead of creating a new playbook. */
-  playbookId?: string;
-  db?: Db;
-};
-
-/**
- * Everything compiling an import needs besides the file's bytes: its row's
- * columns, plus two ids the row cannot hold. The replace target is kept
- * apart because the row's playbook_id is set null if that playbook is
- * deleted, and a new playbook's id is chosen up front so a re-run of the
- * same import saves the same playbook instead of a second one.
- */
-export type PlaybookImportWork = {
-  attemptId: string;
-  userId: string;
-  userEmail: string | null;
-  filename: string;
-  name: string | null;
-  model: string;
-  orgId: string | null;
-  replacePlaybookId: string | null;
-  /**
-   * The replace target's updated_at when the import began. The compiled
-   * content is saved only if the playbook still has it, so an edit made in
-   * between fails the import instead of being overwritten. Absent only on a
-   * job queued before the column existed.
-   */
-  targetUpdatedAt?: string | null;
-  newPlaybookId: string;
-  startedAt: string;
-};
 
 /** An import whose file is already in memory. */
 type PlaybookImportArgs = Omit<PlaybookImportRequest, "size"> & {
@@ -2207,52 +2016,6 @@ export async function reviewWithPlaybook(args: PlaybookReviewRequest) {
   const { done } = await startPlaybookReview(args);
   return done;
 }
-
-export type PlaybookReviewRequest = {
-  userId: string;
-  userEmail?: string | null;
-  playbookId: string;
-  /** Text extracted by the caller; a stored Word document is read instead. */
-  documentText?: string;
-  documentName?: string;
-  /** A stored document to review; a Word document also gets tracked changes. */
-  documentId?: string;
-  instructions?: string;
-  model: string;
-  reviewMode: "strict" | "permissive";
-  /** "issues" reports only what needs attention; the run records which. */
-  reviewScope?: "full" | "issues";
-  db?: Db;
-};
-
-/**
- * What a review needs that its run row does not record. The rules, model,
- * mode, scope, and document reference are all on the row; the text reviewed
- * and the document version the edits are made against are fixed here when the
- * review is requested, so a re-run reviews the same text and its edits are
- * refused, not doubled, if an earlier run already revised the document.
- */
-export type PlaybookReviewInput = {
-  runId: string;
-  /** Also what account erasure purges queued jobs by (payload.userId). */
-  userId: string;
-  documentText: string;
-  instructions: string | null;
-  userEmail: string | null;
-  expectedVersion: { id: string; storagePath: string } | null;
-};
-
-/** A review as runPlaybookReview performs it: its row plus its input. */
-export type PlaybookReviewWork = PlaybookReviewInput & {
-  playbookId: string;
-  content: PlaybookContent;
-  model: string;
-  reviewMode: "strict" | "permissive";
-  reviewScope: "full" | "issues";
-  documentId: string | null;
-  documentName: string | null;
-  startedAt: string;
-};
 
 /** A stored run and its input, as the review that fills it reads them. */
 export function playbookReviewWork(

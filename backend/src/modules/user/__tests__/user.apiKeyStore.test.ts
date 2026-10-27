@@ -5,7 +5,7 @@ import {
     getUserApiKeys,
     getUserApiKeyStatus,
     saveUserApiKey,
-} from "../user.apiKeyStore";
+} from "../../../lib/providerCredentials/store";
 import {
     azureCredentials,
     bedrockCredentials,

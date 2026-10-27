@@ -227,7 +227,7 @@ export function createS3StorageAdapter(): StorageAdapter {
         // that code (the SDK calls it "NotFound") is what a wrong endpoint, a
         // proxy path or a bucket-level 404 produce while the object may well
         // still exist. Treating it as success would let the durable cleanup
-        // jobs (dbq/storageCleanup, documents.cleanupJobs, user.dataCleanup)
+        // jobs (dbq/storageCleanup, documents.cleanupJobs, application/accounts/dataCleanup)
         // record the key as deleted, stop retrying, and leave the bytes
         // behind for good, so anything other than NoSuchKey stays a failure.
         if ((error as { name?: unknown } | null)?.name === "NoSuchKey") return;

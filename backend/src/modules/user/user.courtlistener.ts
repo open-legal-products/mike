@@ -1,5 +1,5 @@
 // CourtListener as a connector, per workspace: the switch and the person's
-// own token live in user_courtlistener_connections (see user.apiKeyStore.ts);
+// own token live in user_courtlistener_connections (see lib/providerCredentials/store.ts);
 // an organization's token comes from org_api_keys and is laid over theirs.
 
 import type { CourtListenerConnectorStatus } from "@mike/contracts";
@@ -10,7 +10,7 @@ import {
     getUserApiKeyStatus,
     loadCourtListenerConnection,
     saveCourtListenerConnection,
-} from "./user.apiKeyStore";
+} from "../../lib/providerCredentials/index";
 import type { Db } from "./user.shared";
 
 export async function courtListenerConnectorStatus(

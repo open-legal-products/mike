@@ -2,7 +2,15 @@
 import { type ExtractionJobData } from "../../lib/queue/extractionQueue";
 import { publishCellUpdate as defaultPublish, type RunProgressUpdate } from "../../lib/queue/runProgress";
 import { assistantStreamErrorPayload } from "../chat/chat.service";
-import { extractRowColumns, finalizeCell, finishGenerationIfIdle, loadReviewRow, renewGeneration, validateSelectedModel, TABULAR_GENERATION_HEARTBEAT_MS, type Column } from "./tabular.service";
+import { extractRowColumns, finalizeCell } from "./tabular.extractRow";
+import { loadReviewRow } from "./tabular.rows";
+import {
+    finishGenerationIfIdle,
+    renewGeneration,
+    validateSelectedModel,
+    TABULAR_GENERATION_HEARTBEAT_MS,
+    type Column,
+} from "./tabular.shared";
 import { createServerSupabase, type Db } from "../../lib/supabase";
 
 export interface ExtractionDeps {

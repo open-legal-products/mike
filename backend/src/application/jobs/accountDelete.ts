@@ -1,12 +1,8 @@
-// accountJobs — implementation behind the module facade.
-import {
-    deleteUserAccountData,
-    listOrgsBlockingAccountDeletion,
-} from "./user.dataCleanup";
+// Account-deletion queue adapter. Recheck blockers and erase the auth identity last.
+import { deleteUserAccountData, listOrgsBlockingAccountDeletion, } from "../accounts/dataCleanup";
 import { NonRetryableJobError } from "../../lib/dbq/runner";
 import { deleteFile } from "../../lib/storage";
 import { type Db, type DbJob } from "../../lib/dbq/types";
-
 export async function handleAccountDelete(db: Db, job: DbJob): Promise<void> {
     const userId = job.payload.userId as string | undefined;
     if (!userId) return;

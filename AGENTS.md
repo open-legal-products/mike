@@ -133,19 +133,27 @@ failure is shown.
   in the routes file.
 - Large modules split the service into topic files (`<name>.<topic>.ts`)
   behind the facade. Import a module from outside (another module, a worker,
-  a job, `app.ts`) only through that facade.
+  a job, `app.ts`) only through that facade. Within a module, import sibling implementations
+  directly, never through its own facade.
+- `backend/src/application/` owns cross-domain account, purge and export
+  workflows. Routes and the job registry may call it; domain implementations
+  and facades must not import or re-export it. Application services call
+  domain facades, accept explicit inputs and never depend on Express.
 - `backend/src/lib/` is the shared kernel: infrastructure and cross-domain
-  primitives. It must not import from `backend/src/modules/`, and neither may
+  primitives. It must not import from `backend/src/modules/` or `application/`, and neither may
   `backend/src/middleware/`. There is no `backend/src/routes/` directory; a
   new HTTP surface is a new module.
 - `backend/src/__tests__/architecture.test.ts` checks these rules on every
   test run. If it fails, fix the layering rather than the test; allowlist
-  entries need a comment explaining why.
+  entries need a comment explaining why. `dependencyCycles.test.ts` also parses
+  imports/re-exports, literal dynamic imports, require calls and type references
+  across all four applications. All source cycles fail CI.
 - Document-version creation, activation, replacement, and deletion belong to
   `backend/src/modules/documents/`. Call its facade instead of writing version
   rows or lifecycle RPCs from another module. Callers authorize destination and
   copy-source scopes independently; the database trigger owns durable cleanup.
-- Domain job bodies live in their modules; `backend/src/jobs/registry.ts`
+- Domain job bodies live in their modules; cross-domain workflow adapters live
+  in `application/jobs/`; `backend/src/jobs/registry.ts`
   composes handlers and failure hooks. Keep queue transport in `lib/dbq/` and
   `workers/`, and the assistant engine in `modules/chat/engine/`.
 - Shared serialized API/event declarations live in `packages/contracts/` and

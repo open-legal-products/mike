@@ -59,7 +59,7 @@ export const INVITATION_TTL_DAYS = 14;
  * ONE list, because two different call sites ask the same question and used
  * to disagree about the answer: `deleteOrg` below (may this org be deleted?)
  * and account deletion (`listOrgsBlockingAccountDeletion` in
- * modules/user/user.dataCleanup.ts). The account-deletion probe omitted
+ * application/accounts/dataCleanup.ts). The account-deletion probe omitted
  * `chats`, so an org whose only remaining content was a chat looked empty and
  * was deleted — while `deleteOrg` refused the very same delete over the API.
  *

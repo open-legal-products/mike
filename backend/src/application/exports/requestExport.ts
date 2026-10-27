@@ -1,31 +1,22 @@
 // Data export: scheduling the durable export jobs, polling their status and
 // loading the finished artifact.
 //
-// Service layer behind user.routes.ts — see user.shared.ts for the module's
-// contract.
-
+// Application service invoked by the user HTTP entrypoint.
 import { AUDIT_EXPORT_LIMIT, canReadOrgAudit, parseQuery, type AuditQuery } from "../../lib/auditExport";
 import { enqueueDbJob } from "../../lib/dbq/enqueue";
-import {
-    EXPORT_TYPES,
-    MAX_ZIP_EXPORT_DOCUMENTS,
-    type ExportType,
-} from "./user.exportContracts";
+import { EXPORT_TYPES, MAX_ZIP_EXPORT_DOCUMENTS, type ExportType, } from "./exportContracts";
 import type { DbJob } from "../../lib/dbq/types";
 import { downloadFile } from "../../lib/storage";
-import { type Db, errorMessage } from "./user.shared";
-
+import { type Db, errorMessage } from "../../lib/serviceData";
 // ---------------------------------------------------------------------------
 // Async exports (durable): POST creates a DB-queue job that builds the
 // export off the request thread; GET polls it; the download endpoint streams
 // the finished artifact, so a large export can neither time out the request
 // nor die with a dropped tab. Artifacts expire after 24 hours (the runner's
 // retention sweep deletes the file and the job row).
-
 export type ValidateExportRequestResult =
     | { ok: true; type: ExportType; payload: Record<string, unknown> }
     | { ok: false; detail: string };
-
 /**
  * Validates a POST /user/exports body and builds the job payload.
  *
@@ -79,11 +70,9 @@ export function validateExportRequest(input: {
 
     return { ok: true, type: type as ExportType, payload };
 }
-
 export type StartUserExportResult =
     | { ok: true; exportId: string }
     | { ok: false; detail: string; forbidden?: boolean };
-
 /** Enqueues the durable build job for an already-validated export request. */
 export async function startUserExport(
     db: Db,
@@ -124,7 +113,6 @@ export async function startUserExport(
         return { ok: false, detail };
     }
 }
-
 // Shared lookup: an export job is only visible to the user whose data it
 // exports. A foreign or unknown id is a 404 either way, so ids are not
 // probeable.
@@ -145,13 +133,11 @@ async function loadOwnExportJob(
     if (orgId && !(await canReadOrgAudit(db, userId, orgId))) return null;
     return job as Pick<DbJob, "id" | "status" | "result">;
 }
-
 export type UserExportStatus =
     | { ok: true; body: { status: "done"; filename: unknown } }
     | { ok: true; body: { status: "failed" } }
     | { ok: true; body: { status: "pending" } }
     | { ok: false; kind: "not_found" };
-
 /** Poll state for GET /user/exports/:exportId. */
 export async function getUserExportStatus(
     db: Db,
@@ -169,12 +155,10 @@ export async function getUserExportStatus(
     if (row.status === "failed") return { ok: true, body: { status: "failed" } };
     return { ok: true, body: { status: "pending" } };
 }
-
 export type UserExportArtifact =
     | { ok: true; contentType: string; filename: string; body: Buffer }
     | { ok: false; kind: "not_found" }
     | { ok: false; kind: "expired" };
-
 /**
  * The finished artifact for GET /user/exports/:exportId/download.
  * Authenticated + ownership-checked on every request (unlike /download/:token,
