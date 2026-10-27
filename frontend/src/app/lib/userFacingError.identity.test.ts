@@ -33,8 +33,8 @@ const tagsOfLastReport = () =>
     (reporting.reportError.mock.calls.at(-1)?.[1] as { tags: Record<string, unknown> }).tags;
 
 describe("operation identity on reports", () => {
-    it("describeError with an operation reports an unknown fault under it, and keeps the message", () => {
-        const described = describeError(new Error("boom"), {
+    it("reportFault reports an unknown fault under it, and keeps the message", () => {
+        const described = reportFault(new Error("boom"), {
             action: "load the runs",
             operation: "playbooks.review",
         });
@@ -53,15 +53,15 @@ describe("operation identity on reports", () => {
     });
 
     it("does not report a 4xx answer, a cancellation or a failure already reported", () => {
-        describeError(
+        reportFault(
             new MikeApiError({ status: 404, message: "gone" }),
             { operation: "documents.open" },
         );
-        describeError(new DOMException("Aborted", "AbortError"), {
+        reportFault(new DOMException("Aborted", "AbortError"), {
             operation: "documents.open",
         });
         reporting.isReported.mockReturnValue(true);
-        describeError(new MikeApiError({ status: 500, message: "x" }), {
+        reportFault(new MikeApiError({ status: 500, message: "x" }), {
             operation: "documents.open",
         });
 
@@ -95,13 +95,11 @@ describe("operation identity on reports", () => {
         expect(tagsOfLastReport()).toMatchObject({ operation: "tabular.run" });
     });
 
-    it("userFacingApiError reports under the operation and still returns the fallback", () => {
-        const message = userFacingApiError(new Error("boom"), "Unable to load assets.", {
-            operation: "workflows.run",
-        });
+    it("userFacingApiError is pure and returns the fallback", () => {
+        const message = userFacingApiError(new Error("boom"), "Unable to load assets.");
 
         expect(message).toBe("Unable to load assets.");
-        expect(tagsOfLastReport()).toMatchObject({ operation: "workflows.run" });
+        expect(reporting.reportError).not.toHaveBeenCalled();
     });
 });
 

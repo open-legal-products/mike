@@ -23,9 +23,7 @@ export interface FaultIdentity {
 export function userFacingApiError(
     error: unknown,
     fallback: string,
-    identity: FaultIdentity = {},
 ): string {
-    if (identity.operation) reportFault(error, identity);
     // The 5xx codes with something to say (a migration to apply, a server
     // to wait for) get their fixed frontend message (mikeApi.ts).
     if (error instanceof MikeApiError && error.code) {
@@ -267,23 +265,14 @@ function withReportedUpstreamMessage<T extends DescribeErrorOptions>(error: unkn
  * an inline message and a notice for the same failure read the same words;
  * calling the shared one directly drops those sentences.
  *
- * With an `operation`, a described server or unknown fault is also reported
- * under that flow (see `reportFault`), so an inline error message is never
- * the only trace a failure leaves.
+ * This classifier is pure. Use reportFault when an inline failure also
+ * needs reporting, or notifyError to report and show a notice.
  */
 export function describeError(
     error: unknown,
-    options: DescribeErrorOptions & FaultIdentity = {},
+    options: DescribeErrorOptions = {},
 ): UserFacingError {
-    const { operation, ...describeOptions } = options;
-    const described = describeSharedError(
-        error,
-        withReportedUpstreamMessage(error, describeOptions),
-    );
-    if (operation) {
-        reportRealFault(error, described, describeOptions.action, operation);
-    }
-    return described;
+    return describeSharedError(error, withReportedUpstreamMessage(error, options));
 }
 
 /**

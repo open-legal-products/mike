@@ -31,7 +31,7 @@ import {
   type ProjectPeople,
 } from "@/app/lib/mikeApi";
 import { can, roleFromLoaded } from "@/app/lib/permissions";
-import {
+import { reportFault,
   userFacingApiError,
   type Operation,
 } from "@/app/lib/userFacingError";
@@ -339,12 +339,9 @@ export function WorkflowDetailPage({ id, workflowType }: Props) {
       await fetchWorkflowShares();
       setShareRefreshError(null);
     } catch (error) {
+      reportFault(error, { operation: workflowOperation });
       setShareRefreshError(
-        userFacingApiError(
-          error,
-          "The change was saved, but this list could not be reloaded. Reopen Access to see the current one.",
-          { operation: workflowOperation },
-        ),
+        userFacingApiError(error, "The change was saved, but this list could not be reloaded. Reopen Access to see the current one."),
       );
     }
   }, [fetchWorkflowShares]);

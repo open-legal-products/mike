@@ -27,7 +27,7 @@ import {
   formatUnsupportedDocumentWarning,
   partitionSupportedDocumentFiles,
 } from "@/app/lib/documentUploadValidation";
-import {
+import { reportFault,
     notifyError,
     notifyPartialFailure,
     uploadBatchFault,
@@ -128,7 +128,8 @@ export const WorkflowAssets = forwardRef<
       setFiles(await listWorkflowAssets(workflowId));
       setError("");
     } catch (caught) {
-      setError(userFacingApiError(caught, "Unable to load assets.", ASSET_FLOW));
+      reportFault(caught, ASSET_FLOW);
+      setError(userFacingApiError(caught, "Unable to load assets."));
     } finally {
       setLoading(false);
     }
@@ -236,7 +237,8 @@ export const WorkflowAssets = forwardRef<
       );
       setFiles((current) => [...current, ...created]);
     } catch (caught) {
-      setError(userFacingApiError(caught, "Unable to add saved files.", ASSET_FLOW));
+      reportFault(caught, ASSET_FLOW);
+      setError(userFacingApiError(caught, "Unable to add saved files."));
     } finally {
       uploadInFlightRef.current = false;
       setBusyId(null);
@@ -257,7 +259,8 @@ export const WorkflowAssets = forwardRef<
         return next;
       });
     } catch (caught) {
-      setError(userFacingApiError(caught, "Unable to load asset versions.", ASSET_FLOW));
+      reportFault(caught, ASSET_FLOW);
+      setError(userFacingApiError(caught, "Unable to load asset versions."));
     } finally {
       setLoadingVersionAssetIds((current) => {
         const next = new Set(current);
@@ -282,7 +285,8 @@ export const WorkflowAssets = forwardRef<
       setViewingVersionId(null);
       await refreshVersionState(target.id);
     } catch (caught) {
-      setError(userFacingApiError(caught, "Version upload failed.", ASSET_FLOW));
+      reportFault(caught, ASSET_FLOW);
+      setError(userFacingApiError(caught, "Version upload failed."));
     } finally {
       setBusyId(null);
     }
@@ -297,7 +301,8 @@ export const WorkflowAssets = forwardRef<
       anchor.download = resolved.filename || file.filename;
       anchor.click();
     } catch (caught) {
-      setError(userFacingApiError(caught, "Download failed.", ASSET_FLOW));
+      reportFault(caught, ASSET_FLOW);
+      setError(userFacingApiError(caught, "Download failed."));
     } finally {
       setBusyId(null);
     }
@@ -327,7 +332,8 @@ export const WorkflowAssets = forwardRef<
     try {
       await deleteAsset(file);
     } catch (caught) {
-      setError(userFacingApiError(caught, "Delete failed.", ASSET_FLOW));
+      reportFault(caught, ASSET_FLOW);
+      setError(userFacingApiError(caught, "Delete failed."));
     } finally {
       setBusyId(null);
       setPendingDeleteFile(null);

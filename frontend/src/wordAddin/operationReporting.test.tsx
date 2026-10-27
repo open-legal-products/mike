@@ -208,18 +208,18 @@ describe("userMessage", () => {
         );
         expect(Sentry.captureException).not.toHaveBeenCalled();
 
-        userMessage(bug, { fallback: "Mike couldn't open this chat.", operation: "word_chat.turn" });
+        reportFault(bug, { fallback: "Mike couldn't open this chat.", operation: "word_chat.turn" });
         expect(Sentry.captureException).toHaveBeenCalledWith(bug);
         expect(tagsOf(state.scopes[0])).toEqual({ component: "notify", operation: "word_chat.turn" });
         // Shown a second time (the card and its persisted copy): one event.
-        userMessage(bug, { fallback: "x", operation: "word_chat.turn" });
+        reportFault(bug, { fallback: "x", operation: "word_chat.turn" });
         expect(Sentry.captureException).toHaveBeenCalledTimes(1);
     });
 
     it("reportFault files a swallowed fault under its flow", () => {
-        reportFault(new Error("unparseable session body"), "word.session");
+        reportFault(new Error("unparseable session body"), { operation: "word.session" });
         expect(tagsOf(state.scopes[0])).toEqual({ component: "notify", operation: "word.session" });
-        reportFault(new MikeApiError({ status: 401, message: "no" }), "word.session");
+        reportFault(new MikeApiError({ status: 401, message: "no" }), { operation: "word.session" });
         expect(Sentry.captureException).toHaveBeenCalledTimes(1);
     });
 });
@@ -289,7 +289,7 @@ describe("workflow API failure identity", () => {
                 .catch((error: unknown) => error);
             expect(error).toBeInstanceOf(MikeApiError);
             const shown = wrapped ? new UserVisibleError("The outcome is unknown.", { cause: error }) : error;
-            userMessage(shown, { operation: "workflows.run" });
+            reportFault(shown, { operation: "workflows.run" });
             notifyError(error, { operation: "workflows.run" });
             await vi.runAllTimersAsync();
             expect(Sentry.captureMessage).toHaveBeenCalledTimes(1);

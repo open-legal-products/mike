@@ -57,7 +57,7 @@ import {
 import { createPlaybookRule } from "@/app/components/playbooks/playbookRules";
 import { HeaderButtonUI } from "@/shared/ui/HeaderButtonsUI";
 import { ConfirmPopup } from "@/app/components/popups/ConfirmPopup";
-import { describeError, notifyError } from "@/app/lib/userFacingError";
+import { reportFault, notifyError } from "@/app/lib/userFacingError";
 import { PageHeader } from "@/app/components/shared/PageHeader";
 import { Modal } from "@/app/components/modals/Modal";
 import { ModalFieldLabel } from "@/app/components/modals/ModalFieldLabel";
@@ -409,12 +409,9 @@ function PlaybooksWorkspace() {
         ),
       );
     } catch (error) {
+      reportFault(error, { operation: "playbooks.save" });
       setSharesError(
-        userFacingApiError(
-          error,
-          "The change was saved, but this list could not be reloaded. Reopen People to see the current one.",
-          { operation: "playbooks.save" },
-        ),
+        userFacingApiError(error, "The change was saved, but this list could not be reloaded. Reopen People to see the current one."),
       );
     }
   }, []);
@@ -469,7 +466,7 @@ function PlaybooksWorkspace() {
       (err) => {
         if (!current) return;
         setAllRunsError(
-          describeError(err, {
+          reportFault(err, {
             action: "load the runs",
             operation: "playbooks.review",
           }).message,
@@ -568,7 +565,7 @@ function PlaybooksWorkspace() {
       );
     } catch (err) {
       setError(
-        describeError(err, {
+        reportFault(err, {
           action: "load playbooks",
           operation: "playbooks.save",
         }).message,
@@ -701,7 +698,7 @@ function PlaybooksWorkspace() {
       setFollowedImportId(started.id);
     } catch (err) {
       setImportError(
-        describeError(err, {
+        reportFault(err, {
           action: "import the playbook",
           operation: "playbooks.import",
         }).message,
@@ -999,7 +996,7 @@ function PlaybooksWorkspace() {
           );
         } catch (err) {
           failed = true;
-          const error = describeError(err, {
+          const error = reportFault(err, {
             action: "review the document",
             operation: "playbooks.review",
           }).message;

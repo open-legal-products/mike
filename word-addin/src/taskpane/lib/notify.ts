@@ -71,10 +71,7 @@ export interface NotifyErrorOptions extends SharedNotifyErrorOptions {
   operation?: AddinOperation;
 }
 
-/** `userMessage` options: what to say, plus the flow a fault is filed under. */
-export interface UserMessageOptions extends DescribeErrorOptions {
-  operation?: AddinOperation;
-}
+export type UserMessageOptions = DescribeErrorOptions;
 
 /**
  * A server or unclassifiable failure shown to the user is a fault worth an
@@ -114,8 +111,14 @@ function reportRealFault(
  * Report a failure that a screen swallows without showing (a session
  * re-check, a background load) under the same fault rules as a notice.
  */
-export function reportFault(error: unknown, operation: AddinOperation): void {
-  reportRealFault(error, describeError(error), operation);
+export function reportFault(
+  error: unknown,
+  options: DescribeErrorOptions & { operation: AddinOperation },
+): UserFacingError {
+  const { operation, ...describeOptions } = options;
+  const described = describeError(error, describeOptions);
+  reportRealFault(error, described, operation);
+  return described;
 }
 
 /** Where a failure was seen: the screen name, else the pane URL. */
@@ -270,20 +273,7 @@ export function notifySessionCheckFailed(
   });
 }
 
-/**
- * The user-facing sentence for a failure, with nothing shown on screen.
- * Use where a screen already has a place to put an inline message. With an
- * `operation`, a real fault is also reported exactly as a notice would
- * report it: an inline message is the only trace most pane failures leave,
- * and Word's own user cannot open the console to find more. Without one
- * (a helper rephrasing a failure its caller already filed) nothing is sent.
- */
-export function userMessage(
-  error: unknown,
-  options: UserMessageOptions = {},
-): string {
-  const { operation, ...describeOptions } = options;
-  const described = describeError(error, describeOptions);
-  if (operation) reportRealFault(error, described, operation);
-  return described.message;
+/** Pure user-facing sentence for an inline failure; use reportFault to report it. */
+export function userMessage(error: unknown, options: UserMessageOptions = {}): string {
+  return describeError(error, options).message;
 }

@@ -16,7 +16,7 @@ import {
     authGlassCardUIClassName,
     authInputUIClassName,
 } from "@/shared/ui/AuthStylesUI";
-import {
+import { reportFault,
     UserVisibleError,
     describeError,
     supportMailtoFor,
@@ -47,7 +47,7 @@ const SIGNUP_ERROR_MESSAGES = authMessages({
 
 /** Classify a signup failure into text a person can act on. */
 function describeSignupError(error: unknown): UserFacingError {
-    const described = describeError(error, {
+    const described = reportFault(error, {
         action: "create your account",
         codeMessages: SIGNUP_ERROR_MESSAGES,
         fallback: "Unable to create your account right now. Try again.",

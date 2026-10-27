@@ -3,7 +3,7 @@ import type { Workflow } from "../../types";
 import { listWorkflows } from "../../api/mikeApi";
 import { Modal } from "../primitives/Modal";
 import { WorkflowList } from "./WorkflowList";
-import { userMessage } from "../../lib/notify";
+import { reportFault } from "../../lib/notify";
 
 interface WorkflowModalProps {
   open: boolean;
@@ -42,10 +42,10 @@ export function WorkflowModal({
         if (cancelled) return;
         setWorkflows([]);
         setError(
-          userMessage(reason, {
+          reportFault(reason, {
             fallback: "Mike couldn't load your workflows. Try again.",
             operation: "workflows.run",
-          })
+          }).message
         );
       })
       .finally(() => {

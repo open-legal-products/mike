@@ -127,7 +127,7 @@ import type {
 import type { WordEditApplyMode } from "../lib/wordChatSettings";
 import { getEditKey, parseEditKey } from "../lib/wordTrackedEditKeys";
 import { listWordEditAnchorIds } from "../lib/wordEditAnchors";
-import { userMessage } from "../lib/notify";
+import { reportFault } from "../lib/notify";
 import {
   ALREADY_APPLIED_MESSAGE,
   UNVERIFIED_APPLY_MESSAGE,
@@ -502,10 +502,10 @@ export function useWordTrackedEdits({
           setEditRuntimeState(cardKey, {
             status: "error",
             busy: false,
-            error: userMessage(error, {
+            error: reportFault(error, {
               fallback: "Word couldn't check whether this change can be applied.",
               operation: "word.edit_apply",
-            }),
+            }).message,
           });
         }
       });
@@ -795,10 +795,10 @@ export function useWordTrackedEdits({
           return;
         }
         reportEscapedWordFailure(error, "word.edit_apply");
-        const message = userMessage(error, {
+        const message = reportFault(error, {
           fallback: "Word couldn't apply this change.",
           operation: "word.edit_apply",
-        });
+        }).message;
         setEditRuntimeState(key, {
           status: "error",
           busy: false,
@@ -896,10 +896,10 @@ export function useWordTrackedEdits({
             return;
           }
           reportEscapedWordFailure(error, "word.edit_apply");
-          const message = userMessage(error, {
+          const message = reportFault(error, {
             fallback: "Word couldn't check whether this change can be applied.",
             operation: "word.edit_apply",
-          });
+          }).message;
           setEditRuntimeState(key, {
             status: "error",
             busy: false,
@@ -1376,10 +1376,10 @@ export function useWordTrackedEdits({
         setEditRuntimeState(key, {
           status: "error",
           busy: false,
-          error: userMessage(error, {
+          error: reportFault(error, {
             fallback: "Word couldn't update the tracked change.",
             operation: "word.edit_resolve",
-          }),
+          }).message,
         });
       } finally {
         resolvingEditKeysRef.current.delete(key);
@@ -1476,10 +1476,10 @@ export function useWordTrackedEdits({
           setEditRuntimeState(entry.key, {
             status: "error",
             busy: false,
-            error: userMessage(error, {
+            error: reportFault(error, {
               fallback: "Word couldn't update the tracked changes.",
               operation: "word.edit_resolve",
-            }),
+            }).message,
           });
         }
       } finally {

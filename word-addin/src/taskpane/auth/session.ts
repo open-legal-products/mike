@@ -2,7 +2,7 @@
 import { networkFailure } from "../lib/networkError";
 import { responseError } from "../api/client";
 import { reportNetworkFailure } from "../lib/errorReporting";
-import { notifyError, reportFault, userMessage } from "../lib/notify";
+import { notifyError, reportFault } from "../lib/notify";
 import { parseGoogleOAuthDialogMessage } from "./oauthProtocol";
 
 const LEGACY_ACCESS_KEY = "mike_token";
@@ -124,7 +124,7 @@ export function refreshSession(): Promise<AddinAuthUser | null> {
         // "unreachable" and shows a connection notice, never the error
         // itself, so a fault behind it (a 5xx is already filed above; this
         // catches an unparseable body or a host error) is filed here.
-        reportFault(error, "word.session");
+        reportFault(error, { operation: "word.session" });
         throw error;
       })
       .finally(() => {
@@ -163,11 +163,11 @@ export function initialize(): void {
     .then(() => refreshSession())
     .catch((error: unknown) => {
       _user = null;
-      _error = userMessage(error, {
+      _error = reportFault(error, {
         action: "sign in",
         fallback: "Mike couldn't sign you in. Try again.",
         operation: "word.session",
-      });
+      }).message;
     })
     .finally(() => {
       _loading = false;
@@ -203,14 +203,14 @@ export async function signIn(email: string, password: string): Promise<void> {
   } catch (error) {
     if (generation !== _sessionGeneration) return;
     _user = null;
-    _error = userMessage(error, {
+    _error = reportFault(error, {
       action: "sign in",
       fallback: "Mike couldn't sign you in. Try again.",
       operation: "word.session",
       codeMessages: {
         invalid_credentials: "That email and password don't match an account.",
       },
-    });
+    }).message;
   } finally {
     if (generation === _sessionGeneration) {
       _loading = false;
@@ -300,11 +300,11 @@ export async function signInWithGoogle(): Promise<void> {
                 })
                 .catch((error: unknown) => {
                   if (generation === _sessionGeneration) {
-                    _error = userMessage(error, {
+                    _error = reportFault(error, {
                       action: "complete Google sign-in",
                       fallback: "Mike couldn't complete Google sign-in.",
                       operation: "word.session",
-                    });
+                    }).message;
                   }
                 })
                 .finally(() => {
@@ -332,10 +332,10 @@ export async function signInWithGoogle(): Promise<void> {
       // Office.js throws host text here ("The dialog box has been directed
       // to a URL..."), which means nothing to a user.
       fail(
-        userMessage(error, {
+        reportFault(error, {
           fallback: "Mike couldn't open Google sign-in. Try again.",
           operation: "word.session",
-        }),
+        }).message,
       );
     }
   }).finally(() => {
