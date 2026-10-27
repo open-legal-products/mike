@@ -51,7 +51,7 @@ import {
 } from "./errorReporting";
 import { MIKE_SENTRY_DSN } from "@/shared/lib/sentryEvent";
 import { diagnosticEvent } from "@/shared/lib/sentryPrivacy";
-import { MikeApiError, updateWorkflow } from "./mikeApi";
+import { MikeApiError, downloadDocumentsZip, updateWorkflow } from "./mikeApi";
 import { notifyError } from "./userFacingError";
 
 afterEach(() => {
@@ -142,6 +142,27 @@ describe("markErrorHandled", () => {
 
 describe("API operation identity before capture", () => {
     afterEach(() => vi.useRealTimers());
+
+    it("does not report a notice wrapper around an already reported cause", () => {
+        state.enabled = true;
+        const cause = new Error("original fault");
+        reportError(cause, { tags: { operation: "chat.turn" } });
+        const wrapper = new Error("delivery uncertain", { cause: new Error("wrapper", { cause }) });
+        notifyError(wrapper, { operation: "chat.turn" });
+        expect(Sentry.captureException).toHaveBeenCalledTimes(1);
+        expect(isReported(wrapper)).toBe(true);
+        expect(scrubEvent({ exception: { values: [{ mechanism: { handled: false } }] } }, { originalException: wrapper })).toBeNull();
+    });
+
+    it("reports ZIP request failures as POST with their operation", async () => {
+        state.enabled = true;
+        vi.stubGlobal("fetch", vi.fn(async () => new Response("{}", { status: 500 })));
+        await expect(downloadDocumentsZip(["document-id"])).rejects.toBeInstanceOf(MikeApiError);
+        expect(Sentry.captureMessage).toHaveBeenCalledTimes(1);
+        expect(state.scopes[0].setTag).toHaveBeenCalledWith("operation", "documents.directory");
+        expect(state.scopes[0].setTag).toHaveBeenCalledWith("http_method", "POST");
+        expect(state.scopes[0].setFingerprint).toHaveBeenCalledWith(["api-5xx", "POST", "/single-documents/download-zip", "500"]);
+    });
 
     it("reports immediately and keeps its operation across a delayed screen handler", async () => {
         vi.useFakeTimers();

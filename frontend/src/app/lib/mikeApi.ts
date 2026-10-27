@@ -2966,7 +2966,7 @@ export async function downloadDocumentsZip(
         }, "documents.directory",
     );
     if (!response.ok) {
-        throw await toApiError(response, "/single-documents/download-zip");
+        throw await toApiError(response, "/single-documents/download-zip", "POST", "documents.directory");
     }
     return response.blob();
 }
