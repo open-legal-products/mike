@@ -7,6 +7,7 @@ import { Router } from "express";
 import { requireAuth } from "../../middleware/auth";
 import { asyncRoute, routerErrorHandler } from "../../middleware/asyncRoute";
 import { createServerSupabase } from "../../lib/supabase";
+import { setVisualResponseHeaders } from "../../lib/documentDisplay";
 import { buildContentDisposition } from "../../lib/storage";
 import { sendServiceFailure } from "../../lib/serviceResult";
 import {
@@ -75,6 +76,7 @@ downloadsRouter.get("/:token", requireAuth, asyncRoute(async (req, res) => {
         });
 
     res.setHeader("Content-Type", result.contentType);
+    if (result.isVisual) setVisualResponseHeaders(res);
     res.setHeader(
         "Content-Disposition",
         buildContentDisposition("attachment", result.filename),

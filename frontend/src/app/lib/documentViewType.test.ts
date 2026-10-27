@@ -51,6 +51,13 @@ describe("resolveDocumentViewType", () => {
     ).toBe("pdf");
   });
 
+  it("opens an html visual in the visual viewer even with a stale pdf file type", () => {
+    expect(
+      resolveDocumentViewType({ filename: "rent-chart.html", fileType: "pdf" }),
+    ).toBe("visual");
+    expect(resolveDocumentViewType({ fileType: "text/html" })).toBe("visual");
+  });
+
   it("keeps spreadsheets in the spreadsheet viewer when a PDF rendition exists", () => {
     expect(
       resolveDocumentViewType({

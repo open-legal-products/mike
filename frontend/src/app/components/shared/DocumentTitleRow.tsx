@@ -11,6 +11,7 @@ import { TextButtonUI } from "@/shared/ui/TextButtonUI";
 import { textButtonUIClassName } from "@/shared/ui/TextButtonUI.styles";
 import { WarningPopup } from "../popups/WarningPopup";
 import { FileTypeIcon } from "./FileTypeIcon";
+import { VisualExportMenu } from "./VisualExportMenu";
 import { DocumentVersionPicker } from "./DocumentVersionPicker";
 import type { DocumentVersion } from "@/app/lib/mikeApi";
 import { VersionChip } from "./VersionChip";
@@ -44,10 +45,12 @@ export function DocumentTitleRow({
     toolbarVisible?: boolean;
     onToggleToolbar?: () => void;
 }) {
+    const isVisual = document.type === "visual";
     const isFile =
         document.type === "docx" ||
         document.type === "pdf" ||
-        document.type === "spreadsheet";
+        document.type === "spreadsheet" ||
+        isVisual;
     const versionNumber = document.version_number;
 
     return (
@@ -126,7 +129,21 @@ export function DocumentTitleRow({
                             <SquarePen aria-hidden="true" className="h-3.5 w-3.5" />
                         </TextButtonUI>
                     )}
-                    {isFile && (
+                    {isVisual ? (
+                        <VisualExportMenu
+                            documentId={document.document_id}
+                            versionId={document.version_id ?? null}
+                            filename={document.title}
+                            onDownloadHtml={() =>
+                                onDownload?.() ??
+                                downloadDocumentFile(
+                                    document.document_id,
+                                    document.version_id ?? null,
+                                    document.title,
+                                )
+                            }
+                        />
+                    ) : isFile && (
                         <DownloadButton
                             documentId={document.document_id}
                             versionId={document.version_id ?? null}

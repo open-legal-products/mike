@@ -17,7 +17,7 @@ import {
     type AssistantSidePanelTab,
     type AssistantTabDropPosition,
 } from "./AssistantSidePanel";
-import type { Document } from "../shared/types";
+import type { Citation, Document } from "../shared/types";
 
 /**
  * How long the panel takes to slide in or out. The app sidebar folds away and
@@ -43,6 +43,10 @@ export type AssistantDocumentPanelPane = {
     addDocument: (document: Document) => void;
     /** Opens a document in the panel, reporting failures in this chat. */
     openDocument: (document: Document) => void;
+    openCitation: (
+        citation: Citation,
+        options?: { showQuotes?: boolean },
+    ) => void;
 };
 
 /**
@@ -392,6 +396,13 @@ export function useAssistantDocumentPanel() {
         [],
     );
 
+    /** A visual's citation opens through the chat the reader last used. */
+    const openCitation = useCallback(
+        (citation: Citation, options?: { showQuotes?: boolean }) =>
+            getTargetPane()?.openCitation(citation, options),
+        [getTargetPane],
+    );
+
     const paneList = Object.values(panes);
 
     return useMemo(
@@ -421,6 +432,7 @@ export function useAssistantDocumentPanel() {
             registerPane,
             setActivePane,
             getTargetPane,
+            openCitation,
             /** Whether any chat on the page lets the reader change documents. */
             canWrite: paneList.some((pane) => pane.canWrite),
             /** Whether any chat on the page can take a document right now. */
@@ -452,6 +464,7 @@ export function useAssistantDocumentPanel() {
             registerPane,
             setActivePane,
             getTargetPane,
+            openCitation,
             panes,
         ],
     );

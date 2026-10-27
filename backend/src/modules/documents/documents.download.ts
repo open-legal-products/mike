@@ -1,7 +1,9 @@
 // Read/serve paths for documents: inline display bytes, zip bundling, signed
 // download URLs, and the raw source bytes of a version.
 
-import { getSignedUrl, headFile } from "../../lib/storage";
+import { downloadFile, getSignedUrl, headFile } from "../../lib/storage";
+import { isVisualDocumentType } from "../../lib/documentTypes";
+import { composeStoredVisual } from "../../lib/visuals/compose";
 import {
     attachActiveVersionPaths,
     loadActiveVersion,
@@ -420,7 +422,9 @@ export async function getDownloadUrl(
  * with `versionIdParam`) so the route can stream it. Unlike the display path
  * this never substitutes a generated PDF rendition. Only the object's
  * metadata is read here: the route opens the read stream itself so `res`
- * applies backpressure to the object-storage read.
+ * applies backpressure to the object-storage read. A visual is the one
+ * exception: its stored fragment is composed into the complete document here,
+ * and the route sends `body` instead of streaming.
  */
 export async function getFileStreamSource(
     documentId: string,
@@ -435,6 +439,7 @@ export async function getFileStreamSource(
           fileType: string | null;
           size: number;
           filename: string;
+          body?: string;
       }
     | { ok: false; detail: string }
 > {
@@ -443,6 +448,24 @@ export async function getFileStreamSource(
 
     const active = await loadActiveVersion(documentId, db, versionIdParam);
     if (!active) return { ok: false, detail: "No file available" };
+    const filename = downloadFilenameForVersion(
+        active.filename,
+        active.version_number,
+        active.source === "assistant_edit",
+    );
+    if (isVisualDocumentType(active.file_type)) {
+        const stored = await downloadFile(active.storage_path);
+        if (!stored) return { ok: false, detail: "Document bytes not available" };
+        const body = await composeStoredVisual(stored);
+        return {
+            ok: true,
+            storagePath: active.storage_path,
+            fileType: active.file_type,
+            size: Buffer.byteLength(body, "utf8"),
+            filename,
+            body,
+        };
+    }
     const metadata = await headFile(active.storage_path);
     if (!metadata) return { ok: false, detail: "Document bytes not available" };
 
@@ -451,10 +474,6 @@ export async function getFileStreamSource(
         storagePath: active.storage_path,
         fileType: active.file_type,
         size: metadata.size,
-        filename: downloadFilenameForVersion(
-            active.filename,
-            active.version_number,
-            active.source === "assistant_edit",
-        ),
+        filename,
     };
 }

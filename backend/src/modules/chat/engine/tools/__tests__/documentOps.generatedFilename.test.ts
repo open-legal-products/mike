@@ -100,7 +100,9 @@ async function generate(extension: "docx" | "xlsx" | "pptx", title: string) {
   const uploadCallStart = uploadFile.mock.calls.length;
   const result =
     extension === "docx"
-      ? await generateDocx(title, SECTIONS, "user-1", db as never)
+      ? await generateDocx(title, SECTIONS, "user-1", db as never, {
+          resolveVisual: async () => ({ error: "no visuals in this test" }),
+        })
       : extension === "xlsx"
         ? await generateExcel(title, SHEETS, "user-1", db as never)
         : await generatePpt(title, SLIDES, "user-1", db as never);

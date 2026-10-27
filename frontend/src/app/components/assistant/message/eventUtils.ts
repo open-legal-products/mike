@@ -53,6 +53,10 @@ export function toolCallLabel(name: string): string {
     if (name === "generate_docx") return "Creating document...";
     if (name === "generate_excel") return "Creating spreadsheet...";
     if (name === "generate_ppt") return "Creating presentation...";
+    if (name === "generate_visual") return "Creating visual...";
+    if (name === "edit_visual") return "Updating visual...";
+    if (name === "save_visual") return "Saving visual...";
+    if (name === "run_python") return "Running code...";
     if (name === "edit_document") return "Editing document...";
     if (name === "read_document") return "Reading document...";
     if (name === "fetch_documents") return "Reading documents...";

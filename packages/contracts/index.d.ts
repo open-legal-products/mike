@@ -10,6 +10,7 @@ export type SourceDocumentType =
   | "docx"
   | "pdf"
   | "spreadsheet"
+  | "visual"
   | "case"
   | "legislation";
 
@@ -351,6 +352,8 @@ export type DelegationEvent = {
   type: "delegation";
   delegation_id: string;
   continued_from?: string;
+  /** The visual builder that generate_visual and edit_visual brief; absent for a delegated task. */
+  kind?: "visual";
   title: string;
   task: string;
   /**
@@ -383,6 +386,35 @@ export type ResponseDetailsEvent = {
   model: string;
   reasoning?: string;
   usage?: { input_tokens: number; output_tokens: number };
+};
+
+export type PythonRunErrorCode =
+  | "python_error"
+  | "timeout"
+  | "memory"
+  | "output_too_large"
+  | "busy"
+  | "unavailable"
+  | "crashed"
+  | "invalid_input";
+
+/**
+ * One sandboxed Python run. The stream sends a `python_run_start` frame
+ * carrying `run_id`, `description` and `code` first; this event has the same
+ * `run_id` and replaces it.
+ */
+export type PythonRunEvent = {
+  type: "python_run";
+  run_id: string;
+  description: string;
+  code: string;
+  status: "completed" | "failed";
+  stdout: string;
+  documents: { document_id?: string; filename: string }[];
+  files: { document_id: string; version_id?: string; filename: string }[];
+  error?: string;
+  error_code?: PythonRunErrorCode;
+  duration_ms: number;
 };
 
 export type DocumentSearchErrorCode =
@@ -489,6 +521,7 @@ export type AssistantEvent =
   | WebToolEvent
   | DelegationEvent
   | ResponseDetailsEvent
+  | PythonRunEvent
   | {
       type: "case_opinions";
       cluster_id: number;

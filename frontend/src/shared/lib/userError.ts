@@ -188,6 +188,8 @@ export const CODE_KINDS: Readonly<Record<string, UserErrorKind>> = {
     missing_api_key: "validation",
     model_unavailable: "validation",
     model_required: "validation",
+    not_a_visual: "validation",
+    render_failed: "validation",
     // Identity
     authentication_failed: "unauthenticated",
     session_expired: "unauthenticated",
@@ -206,6 +208,9 @@ export const CODE_KINDS: Readonly<Record<string, UserErrorKind>> = {
     // Ours, not theirs
     internal_error: "server",
     upstream_unavailable: "unavailable",
+    render_unavailable: "unavailable",
+    render_busy: "unavailable",
+    render_timeout: "timeout",
 };
 
 type ErrorLike = {

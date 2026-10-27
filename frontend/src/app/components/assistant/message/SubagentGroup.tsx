@@ -13,11 +13,19 @@ type RenderSteps = (steps: AssistantEvent[], connectsToNextRow: boolean) => Reac
 
 const subagents = (count: number) => (count === 1 ? "subagent" : "subagents");
 
+/** generate_visual and edit_visual run the builder, which returns a report, not a brief. */
+const isVisualBuild = (event: DelegationEvent) => event.kind === "visual";
+
 /**
  * "Started 2 subagents", "Resumed a subagent", "Started 1 and resumed 1
  * subagents": what Mike did, on its own line above the subagents' pills.
  */
 function startedLabel(delegations: DelegationEvent[]): string {
+    if (delegations.every(isVisualBuild)) {
+        return delegations.length === 1
+            ? "Started a visual build"
+            : `Started ${delegations.length} visual builds`;
+    }
     const resumed = delegations.filter((d) => d.continued_from).length;
     const started = delegations.length - resumed;
     if (started && resumed) {
@@ -50,7 +58,12 @@ function subagentStatus(event: DelegationEvent): { text: string; failed: boolean
             // Worded like the timeline's own "Completed in N steps".
             return line(resumed, steps ? `Completed in ${steps}` : "Completed");
         case "incomplete":
-            return line(resumed, "Stopped at its limit", !!event.brief && "partial brief", steps);
+            return line(
+                resumed,
+                "Stopped at its limit",
+                !!event.brief && (isVisualBuild(event) ? "partial report" : "partial brief"),
+                steps,
+            );
         case "needs_input":
             return line(
                 resumed,
@@ -177,6 +190,7 @@ function SubagentDetails({
     const hasBrief = !streaming && !!event.brief;
     const hasQuestion = !streaming && !!event.question;
     const details = showDetails ? subagentDetailsText(event) : "";
+    const returned = isVisualBuild(event) ? "report" : "brief";
 
     return (
         <div
@@ -217,14 +231,15 @@ function SubagentDetails({
             )}
             {hasBrief && (
                 <DetailDisclosureRow
-                    label={
-                        event.status === "incomplete"
-                            ? "Returned a partial brief to Mike"
-                            : "Returned a brief to Mike"
-                    }
+                    label={`Returned a ${
+                        event.status === "incomplete" ? "partial " : ""
+                    }${returned} to Mike`}
                     showConnector={hasQuestion}
                 >
-                    <ReasoningContent text={event.brief!} label="Brief" />
+                    <ReasoningContent
+                        text={event.brief!}
+                        label={isVisualBuild(event) ? "Report" : "Brief"}
+                    />
                 </DetailDisclosureRow>
             )}
             {hasQuestion && (
@@ -274,6 +289,13 @@ export function SubagentGroup({
     const running = delegations.some((d) => d.isStreaming);
     const allDone = delegations.every((d) => d.status === "completed");
     const count = delegations.length;
+    const finishedLabel = delegations.every(isVisualBuild)
+        ? count === 1
+            ? "Visual build finished"
+            : `${count} visual builds finished`
+        : count === 1
+          ? "Subagent finished"
+          : `${count} subagents finished`;
     return (
         <>
             {/* The pills sit in this step's content column, so Mike's line
@@ -311,9 +333,7 @@ export function SubagentGroup({
                     dotColor={allDone ? "green" : "gray"}
                     showConnector={showConnectorAfter}
                 >
-                    <EventLabel>
-                        {count === 1 ? "Subagent finished" : `${count} subagents finished`}
-                    </EventLabel>
+                    <EventLabel>{finishedLabel}</EventLabel>
                 </EventBlock>
             )}
         </>

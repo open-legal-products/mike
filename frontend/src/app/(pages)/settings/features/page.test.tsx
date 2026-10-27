@@ -21,6 +21,10 @@ vi.mock("@/app/components/settings/WebSearchSection", () => ({
     WebSearchSection: () => null,
 }));
 
+vi.mock("@/app/components/settings/CodeAnalysisSection", () => ({
+    CodeAnalysisSection: () => null,
+}));
+
 describe("FeaturesPage CourtListener", () => {
     it("is managed from Connectors, not here", () => {
         render(<FeaturesPage />);

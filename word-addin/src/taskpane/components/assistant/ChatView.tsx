@@ -11,6 +11,7 @@ import { ChatInput } from "./ChatInput";
 import type { ChatInputHandle } from "./ChatInput";
 import { InitialView } from "./InitialView";
 import { UserMessage } from "./UserMessage";
+import { VisualSheet } from "./VisualSheet";
 import { ResponseSelectionMenuUI } from "@mike/response-selection-menu-ui";
 import type {
     EditDecision,
@@ -22,6 +23,10 @@ import type {
 import type { WordEditApplyMode } from "../../lib/wordChatSettings";
 import { selectDocumentText } from "../../hooks/useWordDoc";
 import { UserVisibleError, notifyError } from "../../lib/notify";
+import {
+    latestVisualInTurn,
+    type WordVisualRef,
+} from "../../lib/visuals";
 
 const CHAT_MESSAGE_TOP_GAP = 12;
 const CHAT_MESSAGES_BOTTOM_GAP = 16;
@@ -266,6 +271,22 @@ export function ChatView({
     );
     // Citation chips: scroll Word to the cited passage and select it. Kept
     // identity-stable so memoized message rows never re-render per chunk.
+    const [openVisual, setOpenVisual] = useState<WordVisualRef | null>(null);
+    const closeVisual = useCallback(() => setOpenVisual(null), []);
+
+    // Only a live turn auto-opens its visual.
+    const autoOpenedTurnRef = useRef<string | null>(null);
+    useEffect(() => {
+        const last = messages[messages.length - 1];
+        if (last?.role !== "assistant" || !last.live) return;
+        const visual = latestVisualInTurn(last.events);
+        if (!visual) return;
+        const key = `${last.id}:${visual.versionId ?? visual.documentId}`;
+        if (autoOpenedTurnRef.current === key) return;
+        autoOpenedTurnRef.current = key;
+        setOpenVisual(visual);
+    }, [messages]);
+
     const handleLocateCitation = useCallback((text: string) => {
         void selectDocumentText(text).then((status) => {
             // Clicking a citation and having nothing move is indistinguishable
@@ -717,7 +738,12 @@ export function ChatView({
     }, []);
 
     return (
-        <div className="relative h-full overflow-hidden">
+        <div
+            className="relative h-full overflow-hidden"
+            style={
+                { "--composer-h": `${composerHeight}px` } as React.CSSProperties
+            }
+        >
             {!hasMessages && !isResponseLoading ? (
                 <div
                     className="flex h-full flex-col items-center justify-center overflow-y-auto px-6 pt-20"
@@ -781,6 +807,7 @@ export function ChatView({
                                 onResolveAll={handleResolveAll}
                                 onAcceptAndApplyEdit={handleAcceptAndApplyEdit}
                                 onLocateCitation={handleLocateCitation}
+                                onOpenVisual={setOpenVisual}
                             />
                         );
                     })}
@@ -816,6 +843,13 @@ export function ChatView({
                     chatInputRef.current?.addExcerpt(excerpt)
                 }
             />
+            {openVisual && (
+                <VisualSheet
+                    visual={openVisual}
+                    onClose={closeVisual}
+                    onLocateCitation={handleLocateCitation}
+                />
+            )}
             <ChatInput
                 ref={chatInputRef}
                 containerRef={composerRef}

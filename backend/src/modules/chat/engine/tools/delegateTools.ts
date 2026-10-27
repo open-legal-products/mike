@@ -34,12 +34,15 @@ export const ASK_PARENT_TOOL_NAME = "ask_parent";
 
 /**
  * A subagent has its answer's tools but these: it never delegates, asks the
- * user, or writes a text card (only its brief reaches the user).
+ * user, writes a text card (only its brief reaches the user), or makes a
+ * visual; the answer does that from the briefs it gets back.
  */
 export const SUBAGENT_EXCLUDED_TOOL_NAMES: ReadonlySet<string> = new Set([
     DELEGATE_TOOL_NAME,
     "ask_inputs",
     "create_text_card",
+    "generate_visual",
+    "edit_visual",
 ]);
 
 export const MAX_SUBAGENTS_PER_ANSWER = 8;
@@ -271,7 +274,7 @@ function minLevel<T>(order: readonly T[], a: T, b: T): T {
     return order.indexOf(b) < order.indexOf(a) ? b : a;
 }
 
-function proseOf(fullText: string): string {
+export function proseOf(fullText: string): string {
     const end = fullText.indexOf(CITATIONS_OPEN_TAG);
     return (end >= 0 ? fullText.slice(0, end) : fullText).trim();
 }
@@ -306,7 +309,7 @@ function sourceLines(citations: unknown[]): string[] {
 }
 
 /** runLLMStream's errors carry the turn so far. */
-function partialRun(error: unknown): SubagentResult {
+export function partialRun(error: unknown): SubagentResult {
     const { fullText, events } = (error ?? {}) as Partial<SubagentResult>;
     return {
         fullText: typeof fullText === "string" ? fullText : "",
@@ -429,7 +432,7 @@ type StopReason = "parent" | "timeout" | "budget";
  * One controller for every way a subagent stops; the reason tells them apart,
  * so a timeout never surfaces as an error of its own.
  */
-function subagentStopper(parentSignal: AbortSignal | undefined, timeoutMs: number) {
+export function subagentStopper(parentSignal: AbortSignal | undefined, timeoutMs: number) {
     const controller = new AbortController();
     let reason: StopReason | null = null;
     const stop = (why: StopReason) => {

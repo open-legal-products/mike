@@ -1,7 +1,8 @@
 import React, { useEffect, useState, type ReactNode } from "react";
 import { useReasoningDisclosure } from "@mike/reasoning-disclosure";
-import { ChevronDown } from "lucide-react";
+import { ChartNetwork, ChevronDown } from "lucide-react";
 import {
+  DocEditBlockUI,
   DocFindBlockUI,
   DocReadBlockUI,
 } from "@mike/document-event-blocks-ui";
@@ -165,6 +166,52 @@ export function DocReadBlock({
       filename={filename}
       isStreaming={isStreaming}
       showConnector={showConnector}
+    />
+  );
+}
+
+const WRITE_LABELS = {
+  created: { streaming: "Creating", done: "Created", failed: "Could not create" },
+  edited: { streaming: "Editing", done: "Edited", failed: "Could not edit" },
+} as const;
+
+export function DocWriteBlock({
+  action,
+  title,
+  isVisual,
+  isStreaming,
+  hasError,
+  showConnector,
+  onClick,
+}: {
+  action: "created" | "edited";
+  title: string;
+  isVisual: boolean;
+  isStreaming?: boolean;
+  hasError?: boolean;
+  showConnector?: boolean;
+  onClick?: () => void;
+}): React.ReactElement {
+  const labels = WRITE_LABELS[action];
+  const label = isStreaming
+    ? labels.streaming
+    : hasError
+      ? labels.failed
+      : labels.done;
+  return (
+    <DocEditBlockUI
+      label={label}
+      filename={title}
+      fileIcon={
+        isVisual ? (
+          <ChartNetwork aria-hidden="true" className="h-3.5 w-3.5 shrink-0" />
+        ) : undefined
+      }
+      isStreaming={isStreaming}
+      showConnector={showConnector}
+      dotColor={hasError ? "red" : "green"}
+      labelTone={hasError ? "error" : "default"}
+      onClick={onClick}
     />
   );
 }

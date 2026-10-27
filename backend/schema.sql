@@ -92,6 +92,9 @@ create table if not exists public.user_profiles (
       jsonb_typeof(web_search) = 'object'
       and octet_length(web_search::text) <= 1000
     ),
+  -- Whether the assistant may run Python over this user's documents
+  -- (Settings > Features). The deployment can still switch the tool off.
+  code_analysis boolean not null default true,
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now()
 );
@@ -11096,6 +11099,7 @@ insert into public.schema_migrations (filename) values
   ('20261021_02_user_subagent_defaults.sql'),
   ('20261021_03_user_response_details.sql'),
   ('20261021_04_word_chat_message_playbook.sql'),
+  ('20261021_05_user_code_analysis.sql'),
   ('20261022_01_workspace_connectors.sql'),
   ('20261024_01_org_keys_central_only.sql'),
   ('20261024_02_workspace_scoped_data_deletion.sql'),

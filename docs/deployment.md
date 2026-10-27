@@ -614,6 +614,30 @@ extra process management is needed. To run them on separate hardware, start
 and set `WORKERS_MODE=none` on the API process. The compose file contains a
 commented `worker` service demonstrating this.
 
+## The sandbox service
+
+Code analysis (the assistant's Python) and PDF and Word export of visuals run in
+the `sandbox` Compose service: the backend image started with
+`node dist/sandbox/server.js`, with `network_mode: none`, no `env_file`, a
+non-root user, a read-only filesystem, a 3 GB memory limit and a process
+limit. The backend reaches it over a unix socket on the `sandbox_socket`
+volume (`SANDBOX_SOCKET=/run/mike-sandbox/sandbox.sock` on both services).
+An upgrade is the usual `docker compose up -d --build`; after it, check the
+service with `docker compose exec sandbox node dist/sandbox/selfTest.js`,
+which must print `ok`.
+
+Allow for the sandbox's memory on top of the backend's: a run may use up to
+1 GB and Chromium a few hundred megabytes more. The backend image grows by
+the headless browser and the Python wheels (about 300 MB uncompressed). The
+per-run budgets (`PYTHON_SANDBOX_*`) are read from the root `.env`, which
+Compose passes to the sandbox service; `backend/.env` does not reach it.
+
+Without Compose there is no sandbox service; see
+[Code analysis](code-analysis.md#the-sandbox) for the in-process fallback and
+its build steps. The variables `CODE_ANALYSIS_ENABLED`, `PYTHON_SANDBOX_*`
+and `RATE_LIMIT_VISUAL_RENDER_MAX` are described in `backend/.env.example`
+and [Code analysis](code-analysis.md).
+
 ### Document lifecycle migration
 
 Apply `20260914_01_document_lifecycle.sql` before deploying the backend that uses

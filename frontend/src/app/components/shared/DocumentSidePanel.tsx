@@ -20,6 +20,7 @@ import { DocumentPaneTitle } from "@/app/components/shared/DocumentPaneTitle";
 import { PdfView } from "@/app/components/shared/views/PdfView";
 import { DocxView } from "@/app/components/shared/views/DocxView";
 import { SpreadsheetView } from "@/app/components/shared/views/SpreadsheetView";
+import { VisualView } from "@/app/components/shared/views/VisualView";
 import { CloseButton } from "@/shared/ui/CloseButton";
 import { PillButtonUI } from "@/shared/ui/PillButtonUI";
 import type { Document } from "@/app/components/shared/types";
@@ -491,12 +492,14 @@ export function DocumentSidePanel({
             document.removeEventListener("mouseup", handleMouseUp);
             document.body.style.cursor = "";
             document.body.style.userSelect = "";
+            delete document.body.dataset.resizing;
         };
 
         document.addEventListener("mousemove", handleMouseMove);
         document.addEventListener("mouseup", handleMouseUp);
         document.body.style.cursor = "col-resize";
         document.body.style.userSelect = "none";
+        document.body.dataset.resizing = "true";
     }
 
     function handlePanelResizeMouseDown(e: React.MouseEvent<HTMLDivElement>) {
@@ -516,12 +519,14 @@ export function DocumentSidePanel({
             document.removeEventListener("mouseup", handleMouseUp);
             document.body.style.cursor = "";
             document.body.style.userSelect = "";
+            delete document.body.dataset.resizing;
         };
 
         document.addEventListener("mousemove", handleMouseMove);
         document.addEventListener("mouseup", handleMouseUp);
         document.body.style.cursor = "col-resize";
         document.body.style.userSelect = "none";
+        document.body.dataset.resizing = "true";
     }
 
     return createPortal(
@@ -601,6 +606,15 @@ export function DocumentSidePanel({
                                 documentId={doc.id}
                                 versionId={selectedVersionId}
                                 displayUrl={displayUrl}
+                            />
+                        ) : selectedViewType === "visual" ? (
+                            <VisualView
+                                rounded="top-right"
+                                key={`${selectedVersionId ?? "current"}:${selectedUploadedAt ?? ""}:${selectedSizeBytes ?? ""}`}
+                                documentId={doc.id}
+                                versionId={selectedVersionId}
+                                filename={selectedFilename}
+                                cacheBytes={false}
                             />
                         ) : selectedViewType === "docx" ? (
                             <DocxView

@@ -1115,6 +1115,28 @@ export async function updateWebSearchSettings(
     });
 }
 
+export type CodeAnalysisSettings = {
+    enabled: boolean;
+    /** False when the operator switched the sandbox off for this server. */
+    available: boolean;
+};
+
+export async function getCodeAnalysisSettings(
+    signal?: AbortSignal,
+): Promise<CodeAnalysisSettings> {
+    return apiRequest<CodeAnalysisSettings>("/user/code-analysis", { signal });
+}
+
+export async function updateCodeAnalysisSettings(
+    enabled: boolean,
+): Promise<CodeAnalysisSettings> {
+    return apiRequest<CodeAnalysisSettings>("/user/code-analysis", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ enabled }),
+    });
+}
+
 export async function completeUserOnboarding(
     payload: PersonalisationDetails = {},
 ): Promise<UserProfile> {
@@ -2879,6 +2901,59 @@ export async function getDocumentFile(
     versionId?: string | null,
 ): Promise<{ blob: Blob; filename: string | null }> {
     return apiBlobRequest(documentFilePath(documentId, versionId));
+}
+
+// ---------------------------------------------------------------------------
+// Visuals
+// ---------------------------------------------------------------------------
+
+export type VisualSnapshot = {
+    created_at: string | null;
+    sources: { document_id: string; filename: string; stale: boolean }[];
+};
+
+export type VisualExportCapabilities = { pdf: boolean; docx: boolean };
+
+function visualPath(documentId: string, suffix: string, versionId?: string | null) {
+    const qs = versionId ? `?version_id=${encodeURIComponent(versionId)}` : "";
+    return `/visuals/${encodeURIComponent(documentId)}/${suffix}${qs}`;
+}
+
+export async function getVisualSnapshot(
+    documentId: string,
+    versionId?: string | null,
+    signal?: AbortSignal,
+): Promise<VisualSnapshot> {
+    return apiRequest<VisualSnapshot>(visualPath(documentId, "snapshot", versionId), { signal });
+}
+
+export async function getVisualExportCapabilities(
+    signal?: AbortSignal,
+): Promise<VisualExportCapabilities> {
+    return apiRequest<VisualExportCapabilities>("/visuals/capabilities", { signal });
+}
+
+export async function exportVisual(
+    documentId: string,
+    versionId?: string | null,
+): Promise<Blob> {
+    const path = visualPath(documentId, "export", versionId);
+    const response = await apiFetch(`${API_BASE}${path}`, { cache: "no-store" });
+    if (!response.ok) {
+        throw await toApiError(response, path);
+    }
+    return response.blob();
+}
+
+export async function createDocxFromVisual(
+    documentId: string,
+    versionId?: string | null,
+): Promise<{ document_id: string; version_id: string; filename: string }> {
+    return apiRequest(`/visuals/${encodeURIComponent(documentId)}/docx`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(versionId ? { version_id: versionId } : {}),
+    });
 }
 
 export async function downloadDocumentsZip(

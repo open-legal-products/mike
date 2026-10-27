@@ -62,6 +62,27 @@ jobs:
           context: ${{ matrix.context }}
           file: ${{ matrix.dockerfile }}
           push: false
+          load: ${{ matrix.image == 'backend' }}
+          tags: mike-${{ matrix.image }}:ci
           build-args: ${{ matrix.build_args }}
           cache-from: type=gha,scope=${{ matrix.image }}
           cache-to: type=gha,mode=max,scope=${{ matrix.image }}
+
+      # The sandbox suite needs the Pyodide wheels and Chromium, which only the
+      # backend image has; it runs there, without network, as the sandbox
+      # service does. Loopback still works, so the test's socket listener does.
+      - name: Sandbox tests in the image
+        if: matrix.image == 'backend'
+        run: >
+          docker run --rm --network none --cap-drop ALL
+          -e REQUIRE_PYODIDE=1 -e NODE_ENV=test
+          mike-backend:ci npx vitest run src/lib/sandbox
+
+      # The self-test under the sandbox service's constraints from
+      # docker-compose.yml: read-only, non-root, no capabilities, tmpfs /tmp.
+      - name: Sandbox self-test in the image
+        if: matrix.image == 'backend'
+        run: >
+          docker run --rm --network none --read-only --tmpfs /tmp
+          --cap-drop ALL --security-opt no-new-privileges --user mikesandbox
+          -e HOME=/tmp mike-backend:ci node dist/sandbox/selfTest.js

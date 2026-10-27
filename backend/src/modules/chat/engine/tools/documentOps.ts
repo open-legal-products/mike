@@ -34,13 +34,17 @@ import {
   contentTypeForDocumentType,
   isPresentationDocumentType,
   isSpreadsheetDocumentType,
+  isVisualDocumentType,
   isWordDocumentType,
   requiresLibreOfficeTextExtraction,
   shouldConvertToPdf,
 } from "../../../../lib/documentTypes";
 import { extractPresentationText } from "../../../../lib/officeText";
 import { spreadsheetToLLMText } from "../../../../lib/spreadsheet";
-
+import { relabelVisualCites } from "../../../../lib/visuals/cites";
+import type { RenderedVisualBlocks } from "../../../../lib/visuals/render";
+import { parseStoredVisual, splitDataBlocks, type VisualSourceRef } from "../../../../lib/visuals/source";
+import type { SandboxDoc, VisualBlock, VisualText } from "../../../../lib/sandbox";
 
 export function citationReminder(
   docLabel: string,
@@ -69,44 +73,331 @@ import {
   extractLegacyOfficeText,
 } from "../../../../lib/pdfText";
 
+// A4 portrait text width and a comfortable page height, in pixels at 96 dpi,
+// and the same text width in twips.
+const DOCX_IMAGE_MAX_WIDTH_PX = 602;
+const DOCX_IMAGE_MAX_HEIGHT_PX = 860;
+const DOCX_TEXT_WIDTH_TWIPS = 9026;
+const FONT = "Times New Roman";
+const SIZE = 22; // 11pt in half-points
+const CAPTION_STYLE = "Caption";
+
+type DocxBuildOptions = {
+  landscape?: boolean;
+  numberSections?: boolean;
+  /** Reads a `visual` section's page as blocks. */
+  resolveVisual: (docId: string) => Promise<RenderedVisualBlocks | { error: string }>;
+};
+
+const loadDocx = () => import("docx");
+type DocxLib = Awaited<ReturnType<typeof loadDocx>>;
+type DocChild = InstanceType<DocxLib["Paragraph"]> | InstanceType<DocxLib["Table"]>;
+
+const plainText = (text: VisualText) =>
+  typeof text === "string" ? text : text.map((run) => run.text).join("");
+
+// Columns share the text width in proportion to their longest line, so a
+// short date or number stops wrapping while prose keeps the room. A header
+// may wrap, so it only claims its longest word. Roughly 110 twips per
+// character at 11pt, plus the cell margins.
+function visualColumnWidths(rows: VisualText[][], header: boolean): number[] {
+  const cols = Math.max(0, ...rows.map((row) => row.length));
+  const weights = Array.from({ length: cols }, (_, c) => {
+    let chars = 0;
+    rows.forEach((row, r) => {
+      for (const line of plainText(row[c] ?? "").split("\n")) {
+        const word = Math.max(0, ...line.split(/\s+/).map((w) => w.length)) + 1;
+        chars = Math.max(
+          chars,
+          header && r === 0 ? word : Math.max(Math.min(line.length, 40), word),
+        );
+      }
+    });
+    return chars * 110 + 300;
+  });
+  const total = weights.reduce((sum, weight) => sum + weight, 0) || 1;
+  return weights.map((weight) => Math.round((DOCX_TEXT_WIDTH_TWIPS * weight) / total));
+}
+
+// What a generated document and an exported visual share: runs, tables, the
+// blocks of a rendered visual, and packing children into a checked file. A
+// fragment for insertion defines no font or styles of its own, so headings
+// become bold paragraphs and Word's outline numbering leaves them alone.
+async function docxParts(forInsert: boolean) {
+  const docx = await loadDocx();
+  const {
+    Document,
+    Paragraph,
+    HeadingLevel,
+    ImageRun,
+    Packer,
+    Table,
+    TableRow,
+    TableCell,
+    WidthType,
+    BorderStyle,
+    TextRun,
+    AlignmentType,
+    PageOrientation,
+    TableLayoutType,
+  } = docx;
+
+  const textRuns = (
+    text: VisualText,
+    extra: { bold?: boolean; italics?: boolean; size?: number; font?: string } = {},
+  ) =>
+    (typeof text === "string" ? [{ text }] : text).flatMap((run) =>
+      run.text.split("\n").map(
+        (part, i) =>
+          new TextRun({
+            text: part,
+            break: i ? 1 : undefined,
+            bold: run.bold || extra.bold || undefined,
+            italics: extra.italics,
+            strike: run.strike,
+            underline: run.underline ? {} : undefined,
+            size: extra.size,
+            font: extra.font,
+          }),
+      ),
+    );
+
+  const cellBorder = {
+    top: { style: BorderStyle.SINGLE, size: 1, color: "CCCCCC" },
+    bottom: { style: BorderStyle.SINGLE, size: 1, color: "CCCCCC" },
+    left: { style: BorderStyle.SINGLE, size: 1, color: "CCCCCC" },
+    right: { style: BorderStyle.SINGLE, size: 1, color: "CCCCCC" },
+  };
+  const buildTable = (
+    rows: VisualText[][],
+    opts: {
+      header: boolean;
+      numeric?: boolean[];
+      run?: { font?: string; size?: number };
+      fit?: boolean;
+    },
+  ) => {
+    const widths = opts.fit ? visualColumnWidths(rows, opts.header) : undefined;
+    return new Table({
+      width: widths
+        ? { size: DOCX_TEXT_WIDTH_TWIPS, type: WidthType.DXA }
+        : { size: 100, type: WidthType.PERCENTAGE },
+      layout: widths ? TableLayoutType.FIXED : undefined,
+      columnWidths: widths,
+      rows: rows.map(
+        (row, r) =>
+          new TableRow({
+            tableHeader: opts.header && r === 0,
+            cantSplit: true,
+            children: row.map(
+              (cell, c) =>
+                new TableCell({
+                  borders: cellBorder,
+                  width: widths ? { size: widths[c], type: WidthType.DXA } : undefined,
+                  shading: opts.header && r === 0 ? { fill: "F2F2F2" } : undefined,
+                  children: [
+                    new Paragraph({
+                      alignment: opts.numeric?.[c] ? AlignmentType.RIGHT : AlignmentType.LEFT,
+                      spacing: { before: 0, after: 0 },
+                      children: textRuns(cell, { bold: opts.header && r === 0, ...opts.run }),
+                    }),
+                  ],
+                }),
+            ),
+          }),
+      ),
+    });
+  };
+
+  const visualChildren = (blocks: VisualBlock[]): DocChild[] =>
+    blocks.flatMap((block, index): DocChild[] => {
+      const next = blocks[index + 1];
+      if (block.type === "heading") {
+        return [
+          new Paragraph({
+            heading: forInsert
+              ? undefined
+              : [HeadingLevel.HEADING_1, HeadingLevel.HEADING_2, HeadingLevel.HEADING_3][
+                  block.level - 1
+                ],
+            keepNext: true,
+            spacing: { before: 240, after: 120 },
+            children: [new TextRun({ text: block.text, bold: forInsert || undefined })],
+          }),
+        ];
+      }
+      if (block.type === "paragraph") {
+        const caption = block.style === "caption";
+        // Word copies a fragment's Caption style into the host with this
+        // file's fonts resolved, so an inserted caption is formatted directly.
+        const styled = caption && !forInsert;
+        return [
+          new Paragraph({
+            style: styled ? CAPTION_STYLE : undefined,
+            bullet: block.bullet === undefined ? undefined : { level: block.bullet },
+            keepNext: caption || next?.type === "image" || next?.type === "table" || undefined,
+            spacing: styled ? undefined : { after: 120 },
+            children: textRuns(block.text, {
+              size: block.style ? 18 : undefined,
+              italics: caption && !styled ? true : undefined,
+            }),
+          }),
+        ];
+      }
+      if (block.type === "table") {
+        return [
+          buildTable(block.rows, { header: block.header, numeric: block.numeric, fit: true }),
+          new Paragraph({ text: "" }),
+        ];
+      }
+      const scale = Math.min(
+        1,
+        DOCX_IMAGE_MAX_WIDTH_PX / block.widthPx,
+        DOCX_IMAGE_MAX_HEIGHT_PX / block.heightPx,
+      );
+      return [
+        new Paragraph({
+          keepNext: (next?.type === "paragraph" && next.style === "small") || undefined,
+          spacing: { after: 120 },
+          children: [
+            new ImageRun({
+              type: "png",
+              data: block.png,
+              transformation: {
+                width: Math.round(block.widthPx * scale),
+                height: Math.round(block.heightPx * scale),
+              },
+              altText: { name: block.alt, title: block.alt, description: block.alt },
+            }),
+          ],
+        }),
+      ];
+    });
+
+  const pack = async (
+    children: DocChild[],
+    page: {
+      landscape?: boolean;
+      numbering?: ConstructorParameters<DocxLib["Document"]>[0]["numbering"];
+    } = {},
+  ): Promise<{ buffer: Buffer } | { error: string }> => {
+    const pageSetup = page.landscape
+      ? { page: { size: { orientation: PageOrientation.LANDSCAPE } } }
+      : {};
+    const paragraphStyles = forInsert
+      ? []
+      : [
+          ...[28, 24, 22].map((size, i) => ({
+            id: `Heading${i + 1}`,
+            name: `Heading ${i + 1}`,
+            basedOn: "Normal",
+            next: "Normal",
+            quickFormat: true,
+            run: { bold: true, color: "000000", size },
+          })),
+          {
+            id: CAPTION_STYLE,
+            name: "caption",
+            basedOn: "Normal",
+            next: "Normal",
+            quickFormat: true,
+            run: { italics: true, size: 18 },
+            paragraph: { spacing: { after: 60 } },
+          },
+        ];
+    const doc = new Document({
+      styles: {
+        default: forInsert ? undefined : { document: { run: { font: FONT, size: SIZE } } },
+        paragraphStyles,
+      },
+      numbering: page.numbering,
+      sections: [{ properties: pageSetup, children }],
+    });
+    const buffer = await Packer.toBuffer(doc);
+    const zip = await import("jszip");
+    const packageZip = await zip.default.loadAsync(buffer);
+    for (const requiredPath of [
+      "[Content_Types].xml",
+      "word/document.xml",
+      "word/_rels/document.xml.rels",
+    ]) {
+      if (!packageZip.file(requiredPath)) {
+        return {
+          error: `Generated DOCX is missing required package part: ${requiredPath}`,
+        };
+      }
+    }
+    return { buffer };
+  };
+
+  return { docx, buildTable, visualChildren, pack };
+}
+
+/** A visual's blocks as a Word file of their own, or as a fragment for an open document. */
+export async function buildVisualDocx(
+  blocks: VisualBlock[],
+  options: { forInsert?: boolean } = {},
+): Promise<{ buffer: Buffer } | { error: string }> {
+  try {
+    const { visualChildren, pack } = await docxParts(!!options.forInsert);
+    return await pack(visualChildren(blocks));
+  } catch (e) {
+    return { error: String(e) };
+  }
+}
+
 export async function generateDocx(
   title: string,
   sections: unknown[],
   userId: string,
   db: Db,
-  options?: {
-    landscape?: boolean;
-    numberSections?: boolean;
+  options: DocxBuildOptions & {
     projectId?: string | null;
     /** The conversation's organization: where a standalone document is filed. */
     orgId?: string | null;
   },
 ) {
   try {
+    const built = await buildDocx(title, sections, options);
+    if ("error" in built) return built;
+    // Shared with generate_xlsx/generate_pptx: upload, render the PDF
+    // rendition, and record the document + first version. Generated docs are
+    // first-class documents — openable in the DocPanel and editable via
+    // edit_document. In project chats we attach to the project so it appears
+    // in the sidebar; in the general chat project_id stays null and the
+    // document is standalone.
+    return persistGeneratedFile({
+      title,
+      extension: "docx",
+      buffer: built.buffer,
+      userId,
+      db,
+      projectId: options.projectId ?? null,
+      orgId: options.orgId ?? null,
+    });
+  } catch (e) {
+    return { error: String(e) };
+  }
+}
+
+async function buildDocx(
+  title: string,
+  sections: unknown[],
+  options: DocxBuildOptions,
+): Promise<{ buffer: Buffer } | { error: string }> {
+  try {
+    const { docx, buildTable, visualChildren, pack } = await docxParts(false);
     const {
-      Document,
       Paragraph,
       HeadingLevel,
-      Packer,
-      Table,
-      TableRow,
-      TableCell,
-      WidthType,
-      BorderStyle,
       TextRun,
       AlignmentType,
       LevelFormat,
       LevelSuffix,
-      PageOrientation,
       PageBreak,
-    } = await import("docx");
+    } = docx;
 
-    const FONT = "Times New Roman";
-    const SIZE = 22; // 11pt in half-points
-
-    type DocChild = InstanceType<typeof Paragraph> | InstanceType<typeof Table>;
-    const children: DocChild[] = [];
-    children.push(
+    const children: DocChild[] = [
       new Paragraph({
         heading: HeadingLevel.TITLE,
         spacing: { after: 200 },
@@ -121,14 +412,7 @@ export async function generateDocx(
           }),
         ],
       }),
-    );
-
-    const cellBorder = {
-      top: { style: BorderStyle.SINGLE, size: 1, color: "CCCCCC" },
-      bottom: { style: BorderStyle.SINGLE, size: 1, color: "CCCCCC" },
-      left: { style: BorderStyle.SINGLE, size: 1, color: "CCCCCC" },
-      right: { style: BorderStyle.SINGLE, size: 1, color: "CCCCCC" },
-    };
+    ];
 
     const headingLevels = [
       HeadingLevel.HEADING_1,
@@ -138,7 +422,7 @@ export async function generateDocx(
     ];
     // `=== true` is intentional: missing, null, or malformed values must
     // produce an unnumbered document.
-    const numberSections = options?.numberSections === true;
+    const numberSections = options.numberSections === true;
     const LEGAL_NUMBERING_REF = "legal-clause-numbering";
     const legalNumbering = (level: number) => ({
       reference: LEGAL_NUMBERING_REF,
@@ -314,10 +598,28 @@ export async function generateDocx(
         level?: number;
         pageBreak?: boolean;
         table?: { headers: string[]; rows: string[][] };
+        visual?: { doc_id?: string; caption?: string };
       }[]
     ).entries()) {
       if (section.pageBreak) {
         children.push(new Paragraph({ children: [new PageBreak()] }));
+      }
+      if (section.visual) {
+        const docId = typeof section.visual.doc_id === "string" ? section.visual.doc_id : "";
+        const rendered = await options.resolveVisual(docId);
+        if ("error" in rendered) return { error: rendered.error };
+        children.push(...visualChildren(rendered.blocks));
+        const caption =
+          typeof section.visual.caption === "string" ? section.visual.caption.trim() : "";
+        if (caption) {
+          children.push(
+            new Paragraph({
+              style: CAPTION_STYLE,
+              spacing: { after: 200 },
+              children: [new TextRun({ text: caption })],
+            }),
+          );
+        }
       }
       if (section.heading) {
         const stripped = numberSections
@@ -366,65 +668,8 @@ export async function generateDocx(
       const normalizedTable = normalizeTable(section.table);
       if (normalizedTable) {
         const { headers, rows } = normalizedTable;
-        const tableRows: InstanceType<typeof TableRow>[] = [];
-        // Header row
-        tableRows.push(
-          new TableRow({
-            tableHeader: true,
-            children: headers.map(
-              (h) =>
-                new TableCell({
-                  borders: cellBorder,
-                  shading: { fill: "F2F2F2" },
-                  children: [
-                    new Paragraph({
-                      children: [
-                        new TextRun({
-                          text: h,
-                          bold: true,
-                          font: FONT,
-                          size: SIZE,
-                        }),
-                      ],
-                      alignment: AlignmentType.LEFT,
-                    }),
-                  ],
-                }),
-            ),
-          }),
-        );
-        // Data rows — normalize each row to exactly colCount cells.
-        // LLMs occasionally emit malformed rows (extra fragments from
-        // stray delimiters, or short rows); padding/truncating here
-        // keeps the rendered table aligned to the headers.
-        for (const normalized of rows) {
-          tableRows.push(
-            new TableRow({
-              children: normalized.map(
-                (cell) =>
-                  new TableCell({
-                    borders: cellBorder,
-                    children: [
-                      new Paragraph({
-                        children: [
-                          new TextRun({
-                            text: cell,
-                            font: FONT,
-                            size: SIZE,
-                          }),
-                        ],
-                      }),
-                    ],
-                  }),
-              ),
-            }),
-          );
-        }
         children.push(
-          new Table({
-            width: { size: 100, type: WidthType.PERCENTAGE },
-            rows: tableRows,
-          }),
+          buildTable([headers, ...rows], { header: true, run: { font: FONT, size: SIZE } }),
         );
         children.push(new Paragraph({ text: "" }));
       }
@@ -482,11 +727,8 @@ export async function generateDocx(
       }
     }
 
-    const pageSetup = options?.landscape
-      ? { page: { size: { orientation: PageOrientation.LANDSCAPE } } }
-      : {};
-
-    const doc = new Document({
+    return await pack(children, {
+      landscape: options.landscape,
       numbering: numberSections
         ? {
             config: [
@@ -497,36 +739,6 @@ export async function generateDocx(
             ],
           }
         : undefined,
-      sections: [{ properties: pageSetup, children }],
-    });
-    const buf = await Packer.toBuffer(doc);
-    const zip = await import("jszip");
-    const packageZip = await zip.default.loadAsync(buf);
-    for (const requiredPath of [
-      "[Content_Types].xml",
-      "word/document.xml",
-      "word/_rels/document.xml.rels",
-    ]) {
-      if (!packageZip.file(requiredPath)) {
-        return {
-          error: `Generated DOCX is missing required package part: ${requiredPath}`,
-        };
-      }
-    }
-    // Shared with generate_xlsx/generate_pptx: upload, render the PDF
-    // rendition, and record the document + first version. Generated docs are
-    // first-class documents — openable in the DocPanel and editable via
-    // edit_document. In project chats we attach to the project so it appears
-    // in the sidebar; in the general chat project_id stays null and the
-    // document is standalone.
-    return persistGeneratedFile({
-      title,
-      extension: "docx",
-      buffer: buf,
-      userId,
-      db,
-      projectId: options?.projectId ?? null,
-      orgId: options?.orgId ?? null,
     });
   } catch (e) {
     return { error: String(e) };
@@ -602,18 +814,29 @@ function normalizeSheetName(value: unknown, fallback: string) {
   return raw.replace(/[:\\/?*[\]]/g, " ").trim().slice(0, 31) || fallback;
 }
 
-function normalizeRows(rows: unknown, colCount: number) {
+type CellValue = string | number | boolean;
+
+function normalizeRows(rows: unknown, colCount: number): CellValue[][] {
   if (!Array.isArray(rows)) return [];
   return rows
     .filter((row): row is unknown[] => Array.isArray(row))
     .map((row) =>
-      Array.from({ length: colCount }, (_, i) =>
-        row[i] == null ? "" : String(row[i]),
-      ),
+      Array.from({ length: colCount }, (_, i) => {
+        const value = row[i];
+        if (value == null) return "";
+        if (typeof value === "boolean" || (typeof value === "number" && Number.isFinite(value))) return value;
+        return String(value);
+      }),
     );
 }
 
-async function buildXlsxWorkbook(title: string, sheetsInput: unknown[]) {
+function cellXml(ref: string, value: CellValue) {
+  if (typeof value === "number") return `<c r="${ref}"><v>${value}</v></c>`;
+  if (typeof value === "boolean") return `<c r="${ref}" t="b"><v>${value ? 1 : 0}</v></c>`;
+  return `<c r="${ref}" t="inlineStr"><is><t>${xmlEscape(value)}</t></is></c>`;
+}
+
+export async function buildXlsxWorkbook(title: string, sheetsInput: unknown[]) {
   const JSZip = (await import("jszip")).default;
   const zip = new JSZip();
   const sheets = sheetsInput.length ? sheetsInput : [{ name: title, columns: [], rows: [] }];
@@ -707,17 +930,14 @@ ${normalizedSheets
   );
 
   for (const [sheetIndex, sheet] of normalizedSheets.entries()) {
-    const allRows = [sheet.columns, ...sheet.rows];
+    const allRows: CellValue[][] = [sheet.columns, ...sheet.rows];
     const rowXml = allRows
       .map((row, rowIndex) => {
         const rowNumber = rowIndex + 1;
-        const cellXml = row
-          .map((value, colIndex) => {
-            const ref = `${excelColumnName(colIndex)}${rowNumber}`;
-            return `<c r="${ref}" t="inlineStr"><is><t>${xmlEscape(value)}</t></is></c>`;
-          })
+        const cells = row
+          .map((value, colIndex) => cellXml(`${excelColumnName(colIndex)}${rowNumber}`, value))
           .join("");
-        return `<row r="${rowNumber}">${cellXml}</row>`;
+        return `<row r="${rowNumber}">${cells}</row>`;
       })
       .join("");
     const lastRef = `${excelColumnName(Math.max(sheet.columns.length - 1, 0))}${Math.max(allRows.length, 1)}`;
@@ -918,9 +1138,9 @@ ${slides
   return zip.generateAsync({ type: "nodebuffer" });
 }
 
-async function persistGeneratedFile(params: {
+export async function persistGeneratedFile(params: {
   title: string;
-  extension: "docx" | "xlsx" | "pptx";
+  extension: "docx" | "xlsx" | "pptx" | "html";
   buffer: Buffer;
   userId: string;
   db: Db;
@@ -942,7 +1162,11 @@ async function persistGeneratedFile(params: {
       buffer.byteOffset,
       buffer.byteOffset + buffer.byteLength,
     ) as ArrayBuffer,
-    contentTypeForDocumentType(extension),
+    // A visual is stored as a generic binary so a leaked object URL cannot
+    // render model-written HTML; the API composes and serves it itself.
+    extension === "html"
+      ? "application/octet-stream"
+      : contentTypeForDocumentType(extension),
   );
 
   // PPTX is the only generated type that pays for LibreOffice here (XLSX is
@@ -1106,6 +1330,262 @@ export async function generatePpt(
 // Tool dispatch
 // ---------------------------------------------------------------------------
 
+type DocumentSource =
+  | { kind: "text"; text: string; notice?: string }
+  | { kind: "bytes"; raw: ArrayBuffer; sourcePath: string };
+
+/**
+ * What read_document and the Python sandbox both read for a chat document:
+ * the Word add-in's request-scoped text as it is, a search handle only while
+ * its revision is still current, otherwise the current version's bytes with
+ * the original upload as the fallback. Null when none of these can be served.
+ */
+async function loadDocumentSource(
+  docInfo: NonNullable<ReturnType<DocStore["get"]>>,
+  indexed: DocIndex[string] | undefined,
+  db: Db | undefined,
+  versionId: string | null,
+): Promise<DocumentSource | null> {
+  if (docInfo.inline_text !== undefined) return { kind: "text", text: docInfo.inline_text };
+  if (docInfo.search_source) {
+    if (!db || !indexed?.document_id || !versionId) return null;
+    const stored = await readStoredDocumentText(db, {
+      userId: docInfo.search_source.userId,
+      userEmail: docInfo.search_source.userEmail,
+      documentId: indexed.document_id,
+      versionId,
+    });
+    if (!stored || stored.revision !== docInfo.search_source.revision || stored.status !== "ready") {
+      return null;
+    }
+    const notice = stored.textless_page_count
+      ? `[${stored.textless_page_count} page(s) have no text layer and need OCR. Search coverage is incomplete.]\n\n`
+      : undefined;
+    return { kind: "text", text: stored.text ?? "", notice };
+  }
+  if (indexed?.document_id && db) {
+    const current = await loadCurrentVersionBytes(indexed.document_id, db, versionId);
+    if (current) {
+      const raw = current.bytes.buffer.slice(
+        current.bytes.byteOffset,
+        current.bytes.byteOffset + current.bytes.byteLength,
+      ) as ArrayBuffer;
+      devLog(
+        `[read_document] using current version path="${current.storage_path}" (bytes=${raw.byteLength})`,
+      );
+      return { kind: "bytes", raw, sourcePath: current.storage_path };
+    }
+    devLog(
+      `[read_document] loadCurrentVersionBytes returned null for documentId="${indexed.document_id}", falling back to original storage_path`,
+    );
+  }
+  const raw = await downloadFile(docInfo.storage_path);
+  if (!raw) return null;
+  devLog(
+    `[read_document] fallback download from storage_path="${docInfo.storage_path}" (bytes=${raw.byteLength})`,
+  );
+  return { kind: "bytes", raw, sourcePath: docInfo.storage_path };
+}
+
+async function textFromDocumentBytes(
+  raw: ArrayBuffer,
+  rawFileType: string | null | undefined,
+  ctx: {
+    filename: string;
+    versionId: string | null;
+    sourcePath: string;
+    db?: Db;
+    docIndex?: DocIndex;
+  },
+): Promise<string> {
+  const { filename, versionId, sourcePath, db } = ctx;
+  let text: string;
+  const fileType = rawFileType?.toLowerCase?.() ?? "";
+  if (isVisualDocumentType(fileType)) {
+    text = await visualSourceForModel(Buffer.from(raw), ctx.docIndex ?? {});
+  } else if (fileType === "pdf") {
+    text = await extractPdfTextForModel(raw);
+    devLog(
+      `[read_document] pdf extracted length=${text.length} for filename="${filename}"`,
+    );
+  } else if (fileType === "docx") {
+    // Use the same flattening as the edit_document matcher so the
+    // LLM sees exactly the characters it can anchor against.
+    text = await extractDocxBodyText(Buffer.from(raw));
+    devLog(
+      `[read_document] docx extractDocxBodyText length=${text.length} for filename="${filename}"`,
+    );
+    if (!text) {
+      devLog(
+        `[read_document] docx accepted-view extractor returned empty, falling back to mammoth for filename="${filename}"`,
+      );
+      const mammoth = await import("mammoth");
+      const result = await mammoth.extractRawText({
+        buffer: Buffer.from(raw),
+      });
+      text = result.value;
+      devLog(
+        `[read_document] docx mammoth fallback length=${text.length} for filename="${filename}"`,
+      );
+    }
+  } else if (isSpreadsheetDocumentType(fileType)) {
+    // SheetJS reads .xlsx/.xlsm/.xls directly (no PDF detour), emitting a
+    // cell-addressed markdown view with Excel-formatted values.
+    text = spreadsheetToLLMText(Buffer.from(raw));
+    devLog(
+      `[read_document] spreadsheet extracted length=${text.length} for filename="${filename}"`,
+    );
+  } else if (fileType === "pptx") {
+    text = await extractPresentationText(Buffer.from(raw));
+    devLog(
+      `[read_document] presentation extracted length=${text.length} for filename="${filename}"`,
+    );
+  } else if (
+    isPresentationDocumentType(fileType) ||
+    isWordDocumentType(fileType)
+  ) {
+    // This branch is the only one that shells out to LibreOffice — every
+    // other type has an in-process reader above — so it is the only one
+    // worth caching. The cached object is written by the
+    // document.precompute_text job, keyed on the immutable version id.
+    const cacheKey =
+      versionId && requiresLibreOfficeTextExtraction(fileType)
+        ? extractedTextKey(versionId)
+        : null;
+    const cached = cacheKey ? await downloadFile(cacheKey) : null;
+    if (cached) {
+      text = Buffer.from(cached).toString("utf8");
+      devLog(
+        `[read_document] legacy Office text served from cache key="${cacheKey}" length=${text.length} for filename="${filename}"`,
+      );
+    } else {
+      devLog(
+        `[read_document] legacy Office file_type="${fileType}" for filename="${filename}", converting to pdf for text extraction`,
+      );
+      text = await extractLegacyOfficeText(raw);
+      devLog(
+        `[read_document] legacy Office PDF extraction length=${text.length} for filename="${filename}"`,
+      );
+      // Warm the cache for the next read of this version. Fire-and-forget
+      // and deduped: several tool calls in one turn queue one job, and a
+      // failure here must never affect the text we just produced.
+      if (cacheKey && db) {
+        void enqueueDbJob(db, {
+          kind: "document.precompute_text",
+          payload: { versionId, storagePath: sourcePath, fileType },
+          dedupeKey: `precompute:${versionId}`,
+          maxAttempts: 3,
+        }).catch((err) =>
+          devLog(`[read_document] precompute enqueue failed`, err),
+        );
+      }
+    }
+  } else {
+    devLog(
+      `[read_document] unknown file_type="${rawFileType}" for filename="${filename}", trying mammoth`,
+    );
+    const mammoth = await import("mammoth");
+    const result = await mammoth.extractRawText({
+      buffer: Buffer.from(raw),
+    });
+    text = result.value;
+    devLog(
+      `[read_document] mammoth length=${text.length} for filename="${filename}"`,
+    );
+  }
+  return text;
+}
+
+/**
+ * A document as the Python sandbox mounts it: spreadsheets as a file (legacy
+ * .xls rewritten to .xlsx) plus their text, everything else as text only.
+ * The same access rules as read_document apply, because the same reads do.
+ */
+export async function loadDocumentForAnalysis(
+  docLabel: string,
+  docStore: DocStore,
+  docIndex: DocIndex,
+  db: Db,
+  opts: { bytesBudget: number },
+): Promise<
+  | { ok: true; doc: SandboxDoc; bytes: number; note?: string; ref: VisualSourceRef }
+  | { ok: false; error: string }
+> {
+  const docInfo = docStore.get(docLabel);
+  if (!docInfo) return { ok: false, error: "is not in this conversation" };
+  const indexed = docIndex[docLabel];
+  const ref: VisualSourceRef = {
+    document_id: indexed?.document_id ?? "",
+    version_id: indexed?.version_id ?? null,
+    filename: docInfo.filename,
+  };
+  const fileType = docInfo.file_type?.toLowerCase?.() ?? "";
+  const tooLarge = {
+    ok: false as const,
+    error: "is too large to mount with the other documents; mount fewer documents",
+  };
+  const textDoc = (text: string, note?: string) => {
+    const bytes = Buffer.byteLength(text, "utf8");
+    if (bytes > opts.bytesBudget) return tooLarge;
+    return {
+      ok: true as const,
+      doc: { doc_id: docLabel, filename: docInfo.filename, file_type: fileType, text },
+      bytes,
+      ...(note ? { note } : {}),
+      ref,
+    };
+  };
+  const source = await loadDocumentSource(docInfo, indexed, db, indexed?.version_id ?? null);
+  if (!source) return { ok: false, error: "could not be read" };
+  if (source.kind === "text") return textDoc(source.text);
+  const { raw, sourcePath } = source;
+  const text = await textFromDocumentBytes(raw, fileType, {
+    filename: docInfo.filename,
+    versionId: indexed?.version_id ?? null,
+    sourcePath,
+    db,
+    docIndex,
+  });
+  if (!isSpreadsheetDocumentType(fileType)) return textDoc(text);
+  let bytes = Buffer.from(raw);
+  if (fileType === "xls") {
+    const XLSX = await import("xlsx");
+    bytes = Buffer.from(XLSX.write(XLSX.read(bytes), { type: "buffer", bookType: "xlsx" }));
+  }
+  const totalBytes = bytes.byteLength + Buffer.byteLength(text, "utf8");
+  if (totalBytes > opts.bytesBudget) {
+    return textDoc(text, "mounted as text only, the file is over the size budget");
+  }
+  const filename = fileType === "xls" ? docInfo.filename.replace(/\.xls$/i, ".xlsx") : docInfo.filename;
+  return {
+    ok: true,
+    doc: { doc_id: docLabel, filename, file_type: "xlsx", bytes: bytes.toString("base64"), text },
+    bytes: totalBytes,
+    ref,
+  };
+}
+
+/**
+ * A visual's fragment as the builder wrote it, with citations back on chat
+ * labels. Its data blocks are named rather than shown: the JSON would only
+ * fill the model's context, and the builder reads the page itself on an edit.
+ */
+async function visualSourceForModel(bytes: Buffer, docIndex: DocIndex): Promise<string> {
+  const stored = await parseStoredVisual(bytes);
+  const labelFor = (documentId: string) =>
+    Object.entries(docIndex).find(([, d]) => d.document_id === documentId)?.[0] ?? null;
+  const { html, blocks } = splitDataBlocks(stored.html);
+  const data = blocks.size
+    ? `\n[Data blocks the page reads with MikeVisual.data(name): ${[...blocks.keys()].join(", ")}]`
+    : "";
+  return [
+    `[Visual "${stored.title}", kind ${stored.kind}. To change it call edit_visual with its doc_id and the changes in words.]${data}`,
+    "<visual-html>",
+    relabelVisualCites(html, labelFor),
+    "</visual-html>",
+  ].join("\n");
+}
+
 export async function getTurnReadIdentity(params: {
   docLabel: string;
   docStore: DocStore;
@@ -1254,76 +1734,20 @@ export async function readDocumentContent(
       })}\n\n`,
     );
   try {
-    // The Word add-in supplies the active document's plain-text snapshot with
-    // the request. Keep it in the same document-tool pipeline as stored files:
-    // availability metadata is visible up front, but the body is returned only
-    // after the model explicitly calls read_document.
-    if (docInfo.inline_text !== undefined) {
-      devLog(
-        `[read_document] using request-scoped inline text (chars=${docInfo.inline_text.length}) for filename="${docInfo.filename}"`,
-      );
-      emitDocRead();
-      return docInfo.inline_text;
-    }
-
-    // Search results are bound to a content revision, not just a mutable
-    // version id. Recheck access before serving persisted text or any bytes.
-    if (docInfo.search_source) {
-      if (!db || !documentId || !versionId) {
-        emitDocRead();
-        return "Document could not be read.";
-      }
-      const stored = await readStoredDocumentText(db, {
-        userId: docInfo.search_source.userId, userEmail: docInfo.search_source.userEmail,
-        documentId, versionId,
-      });
-      if (!stored || stored.revision !== docInfo.search_source.revision || stored.status !== "ready") {
-        emitDocRead();
-        return "Document could not be read.";
-      }
-      emitDocRead();
-      const notice = stored.textless_page_count
-        ? `[${stored.textless_page_count} page(s) have no text layer and need OCR. Search coverage is incomplete.]\n\n`
-        : "";
-      return notice + (stored.text ?? "");
-    }
-
-    // Prefer the current tracked-changes version (if any) so read_document
-    // reflects accepted/pending edits rather than the original upload.
-    let raw: ArrayBuffer | null = null;
-    let sourcePath = docInfo.storage_path;
-    if (documentId && db) {
-      const current = await loadCurrentVersionBytes(documentId, db, versionId);
-      if (current) {
-        raw = current.bytes.buffer.slice(
-          current.bytes.byteOffset,
-          current.bytes.byteOffset + current.bytes.byteLength,
-        ) as ArrayBuffer;
-        sourcePath = current.storage_path;
-        devLog(
-          `[read_document] using current version path="${sourcePath}" (bytes=${raw.byteLength})`,
-        );
-      } else {
-        devLog(
-          `[read_document] loadCurrentVersionBytes returned null for documentId="${documentId}", falling back to original storage_path`,
-        );
-      }
-    }
-    if (!raw) {
-      raw = await downloadFile(docInfo.storage_path);
-      if (raw) {
-        devLog(
-          `[read_document] fallback download from storage_path="${docInfo.storage_path}" (bytes=${raw.byteLength})`,
-        );
-      }
-    }
-    if (!raw) {
-      devLog(
-        `[read_document] FAILED to download any bytes for docLabel="${docLabel}" (tried path="${sourcePath}")`,
-      );
+    const source = await loadDocumentSource(docInfo, docIndex?.[docLabel], db, versionId);
+    if (!source) {
+      devLog(`[read_document] FAILED to load any source for docLabel="${docLabel}"`);
       emitDocRead();
       return "Document could not be read.";
     }
+    if (source.kind === "text") {
+      devLog(
+        `[read_document] using stored text (chars=${source.text.length}) for filename="${docInfo.filename}"`,
+      );
+      emitDocRead();
+      return (source.notice ?? "") + source.text;
+    }
+    const { raw, sourcePath } = source;
     // Log the first 8 bytes so we can identify real file format regardless
     // of the declared file_type. Valid .docx starts with "PK\x03\x04"
     // (zip). Legacy .doc starts with "\xD0\xCF\x11\xE0" (OLE/CFB).
@@ -1336,98 +1760,13 @@ export async function readDocumentContent(
         `[read_document] magic bytes hex=${hex} ascii="${ascii}" for filename="${docInfo.filename}"`,
       );
     }
-    let text: string;
-    const fileType = docInfo.file_type?.toLowerCase?.() ?? "";
-    if (fileType === "pdf") {
-      text = await extractPdfTextForModel(raw);
-      devLog(
-        `[read_document] pdf extracted length=${text.length} for filename="${docInfo.filename}"`,
-      );
-    } else if (fileType === "docx") {
-      // Use the same flattening as the edit_document matcher so the
-      // LLM sees exactly the characters it can anchor against.
-      text = await extractDocxBodyText(Buffer.from(raw));
-      devLog(
-        `[read_document] docx extractDocxBodyText length=${text.length} for filename="${docInfo.filename}"`,
-      );
-      if (!text) {
-        devLog(
-          `[read_document] docx accepted-view extractor returned empty, falling back to mammoth for filename="${docInfo.filename}"`,
-        );
-        const mammoth = await import("mammoth");
-        const result = await mammoth.extractRawText({
-          buffer: Buffer.from(raw),
-        });
-        text = result.value;
-        devLog(
-          `[read_document] docx mammoth fallback length=${text.length} for filename="${docInfo.filename}"`,
-        );
-      }
-    } else if (isSpreadsheetDocumentType(fileType)) {
-      // SheetJS reads .xlsx/.xlsm/.xls directly (no PDF detour), emitting a
-      // cell-addressed markdown view with Excel-formatted values.
-      text = spreadsheetToLLMText(Buffer.from(raw));
-      devLog(
-        `[read_document] spreadsheet extracted length=${text.length} for filename="${docInfo.filename}"`,
-      );
-    } else if (fileType === "pptx") {
-      text = await extractPresentationText(Buffer.from(raw));
-      devLog(
-        `[read_document] presentation extracted length=${text.length} for filename="${docInfo.filename}"`,
-      );
-    } else if (
-      isPresentationDocumentType(fileType) ||
-      isWordDocumentType(fileType)
-    ) {
-      // This branch is the only one that shells out to LibreOffice — every
-      // other type has an in-process reader above — so it is the only one
-      // worth caching. The cached object is written by the
-      // document.precompute_text job, keyed on the immutable version id.
-      const cacheKey =
-        versionId && requiresLibreOfficeTextExtraction(fileType)
-          ? extractedTextKey(versionId)
-          : null;
-      const cached = cacheKey ? await downloadFile(cacheKey) : null;
-      if (cached) {
-        text = Buffer.from(cached).toString("utf8");
-        devLog(
-          `[read_document] legacy Office text served from cache key="${cacheKey}" length=${text.length} for filename="${docInfo.filename}"`,
-        );
-      } else {
-        devLog(
-          `[read_document] legacy Office file_type="${fileType}" for filename="${docInfo.filename}", converting to pdf for text extraction`,
-        );
-        text = await extractLegacyOfficeText(raw);
-        devLog(
-          `[read_document] legacy Office PDF extraction length=${text.length} for filename="${docInfo.filename}"`,
-        );
-        // Warm the cache for the next read of this version. Fire-and-forget
-        // and deduped: several tool calls in one turn queue one job, and a
-        // failure here must never affect the text we just produced.
-        if (cacheKey && db) {
-          void enqueueDbJob(db, {
-            kind: "document.precompute_text",
-            payload: { versionId, storagePath: sourcePath, fileType },
-            dedupeKey: `precompute:${versionId}`,
-            maxAttempts: 3,
-          }).catch((err) =>
-            devLog(`[read_document] precompute enqueue failed`, err),
-          );
-        }
-      }
-    } else {
-      devLog(
-        `[read_document] unknown file_type="${docInfo.file_type}" for filename="${docInfo.filename}", trying mammoth`,
-      );
-      const mammoth = await import("mammoth");
-      const result = await mammoth.extractRawText({
-        buffer: Buffer.from(raw),
-      });
-      text = result.value;
-      devLog(
-        `[read_document] mammoth length=${text.length} for filename="${docInfo.filename}"`,
-      );
-    }
+    const text = await textFromDocumentBytes(raw, docInfo.file_type, {
+      filename: docInfo.filename,
+      versionId,
+      sourcePath,
+      db,
+      docIndex,
+    });
     devLog(
       `[read_document] DONE filename="${docInfo.filename}" finalTextLength=${text.length} firstChars=${JSON.stringify(text.slice(0, 120))}`,
     );

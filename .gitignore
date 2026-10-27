@@ -36,3 +36,7 @@ backend/supabase/*
 
 # Local review artifact; it is a nested repository, not application source.
 /pr-267-analysis-site/
+
+# Built by backend/scripts/build-visual-kit.mjs and fetch-pyodide-packages.mjs
+backend/assets/visuals/generated/
+backend/vendor/

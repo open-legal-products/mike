@@ -86,6 +86,18 @@ export type WordDocumentReadEvent = {
   key?: string;
 };
 
+/** A document the model wrote during the turn; in Word, always a visual. */
+export type WordDocumentWriteEvent = {
+  type: "doc_created" | "doc_edited";
+  filename: string;
+  documentId?: string;
+  versionId?: string;
+  versionNumber?: number | null;
+  error?: string;
+  isStreaming?: boolean;
+  key?: string;
+};
+
 export type WordTextCardEvent = Extract<
   WireAssistantEvent,
   { type: "text_card" }
@@ -141,6 +153,7 @@ export type WordAssistantEvent =
   | WordContentEvent
   | WordTextCardEvent
   | WordDocumentReadEvent
+  | WordDocumentWriteEvent
   | WordErrorEvent
   | WordEditReferenceEvent
   | WordEditBlockEvent

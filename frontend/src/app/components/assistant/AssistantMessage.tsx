@@ -29,6 +29,7 @@ import {
     type DelegationEvent,
 } from "./message/SubagentGroup";
 import { responseDetailsText, subagentUsage } from "./message/responseDetails";
+import { PythonRunBlock } from "./message/PythonRunBlock";
 import {
     connectorToolLabel,
     eventErrorMessage,
@@ -539,6 +540,10 @@ export function AssistantMessage({
         if (event.type === "web_read") {
             return <WebReadBlock key={globalIdx} event={event}
                 isStreaming={event.isStreaming} showConnector={showConnector} />;
+        }
+        if (event.type === "python_run") {
+            return <PythonRunBlock key={globalIdx} event={event}
+                showConnector={showConnector} />;
         }
         if (event.type === "doc_find") {
             return (

@@ -44,6 +44,7 @@ import {
   normalizeLocalWordEditEvents,
   setAssistantError,
   upsertDocumentReadEvent,
+  upsertDocumentWriteEvent,
 } from "../lib/wordChatEvents";
 import { readCurrentDocumentName } from "../lib/wordDocumentIdentity";
 import {
@@ -796,6 +797,14 @@ export function useWordAssistantChat({
                 assistantEvents = [
                   ...completeAssistantEvents(assistantEvents), event,
                 ];
+                publishAssistantEvents();
+              },
+              onDocumentWrite: (event) => {
+                if (!requestIsCurrent()) return;
+                assistantEvents = upsertDocumentWriteEvent(
+                  assistantEvents,
+                  event,
+                );
                 publishAssistantEvents();
               },
           };

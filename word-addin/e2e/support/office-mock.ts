@@ -59,6 +59,12 @@ interface WordCall {
   original?: string;
 }
 
+/** One insertFileFromBase64 call on the paragraph added after the selection. */
+export interface WordInsertedFile {
+  base64: string;
+  location: string;
+}
+
 export interface WordCalls {
   inserts: WordCall[];
   trackedChanges: WordCall[];
@@ -70,6 +76,7 @@ export interface WordCalls {
   insertedBookmarks: string[];
   deletedBookmarks: string[];
   bookmarkLookups: string[];
+  insertedFiles: WordInsertedFile[];
 }
 
 export interface WordBookmarkSnapshot {
@@ -231,6 +238,7 @@ export function installOfficeMock(seed: OfficeSeed): void {
     insertedBookmarks: [],
     deletedBookmarks: [],
     bookmarkLookups: [],
+    insertedFiles: [],
   };
   w.__WORD_CALLS__ = wordCalls;
 
@@ -1121,6 +1129,23 @@ export function installOfficeMock(seed: OfficeSeed): void {
     }
 
     doc.body = body;
+    const insertFileFromBase64 = (base64: string, location: string) => {
+      wordCalls.insertedFiles.push({ base64, location });
+      return { context, load: (_properties?: any) => undefined };
+    };
+    doc.getSelection = () => ({
+      context,
+      load: (_properties?: any) => undefined,
+      paragraphs: {
+        getLast: () => ({
+          insertParagraph: (_text: string, _location: string) => ({
+            context,
+            load: (_properties?: any) => undefined,
+            insertFileFromBase64,
+          }),
+        }),
+      },
+    });
     doc.getBookmarkRangeOrNullObject = (name: string) => {
       wordCalls.bookmarkLookups.push(name);
       const bookmark = documentState.bookmarks[name];

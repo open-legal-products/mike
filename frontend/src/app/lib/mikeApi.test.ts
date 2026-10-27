@@ -102,6 +102,12 @@ import {
     getCustomInstructions,
     getResponseStyle,
     getWebSearchSettings,
+    getCodeAnalysisSettings,
+    updateCodeAnalysisSettings,
+    getVisualSnapshot,
+    getVisualExportCapabilities,
+    exportVisual,
+    createDocxFromVisual,
     getUserMemory,
     getUserProfile,
     getWorkflow,
@@ -2223,6 +2229,29 @@ describe("query and payload defaults", () => {
         expect(await selected.blob.text()).toBe("selected");
     });
 
+    it("exportVisual downloads the rendered pdf", async () => {
+        fetchMock
+            .mockResolvedValueOnce(new Response("pdf", { status: 200 }))
+            .mockResolvedValueOnce(new Response("pdf", { status: 200 }))
+            .mockResolvedValueOnce(
+                jsonResponse({ code: "render_busy" }, { status: 503 }),
+            );
+
+        const pdf = await exportVisual("d 1", "v 1");
+        expect(lastFetchCall().url).toBe(
+            "/api/visuals/d%201/export?version_id=v%201",
+        );
+        expect(await pdf.text()).toBe("pdf");
+
+        await exportVisual("d1");
+        expect(lastFetchCall().url).toBe("/api/visuals/d1/export");
+
+        await expect(exportVisual("d1")).rejects.toMatchObject({
+            status: 503,
+            code: "render_busy",
+        });
+    });
+
     it("getDocumentUrl appends version_id only when a version is requested", async () => {
         fetchMock.mockImplementation(() =>
             Promise.resolve(
@@ -2512,6 +2541,47 @@ describe("thin endpoint wrappers", () => {
             url: "/user/web-search",
             method: "PUT",
             body: { enabled: true },
+        },
+        {
+            name: "getCodeAnalysisSettings",
+            call: () => getCodeAnalysisSettings(),
+            url: "/user/code-analysis",
+        },
+        {
+            name: "updateCodeAnalysisSettings",
+            call: () => updateCodeAnalysisSettings(true),
+            url: "/user/code-analysis",
+            method: "PUT",
+            body: { enabled: true },
+        },
+        {
+            name: "getVisualSnapshot",
+            call: () => getVisualSnapshot("d 1", "v 1"),
+            url: "/visuals/d%201/snapshot?version_id=v%201",
+        },
+        {
+            name: "getVisualSnapshot (current version)",
+            call: () => getVisualSnapshot("d1"),
+            url: "/visuals/d1/snapshot",
+        },
+        {
+            name: "getVisualExportCapabilities",
+            call: () => getVisualExportCapabilities(),
+            url: "/visuals/capabilities",
+        },
+        {
+            name: "createDocxFromVisual",
+            call: () => createDocxFromVisual("d1", "v1"),
+            url: "/visuals/d1/docx",
+            method: "POST",
+            body: { version_id: "v1" },
+        },
+        {
+            name: "createDocxFromVisual (current version)",
+            call: () => createDocxFromVisual("d1"),
+            url: "/visuals/d1/docx",
+            method: "POST",
+            body: {},
         },
         {
             name: "setUserMemoryEnabled",

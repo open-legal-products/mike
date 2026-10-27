@@ -18,6 +18,8 @@ vi.mock("../../../../lib/downloadTokens", () => ({
 
 import { generateDocx } from "../tools/documentOps";
 
+const noVisuals = async () => ({ error: "no visuals in this test" });
+
 function fakeDb() {
   return {
     rpc: vi.fn(async () => ({ data: { id: "version-1", version_number: 1 }, error: null })),
@@ -57,9 +59,7 @@ async function generatedXml(options: {
     options.sections,
     "test-user",
     fakeDb() as never,
-    options.numberSections === undefined
-      ? undefined
-      : { numberSections: options.numberSections },
+    { numberSections: options.numberSections, resolveVisual: noVisuals },
   );
 
   expect(result).not.toHaveProperty("error");
@@ -69,6 +69,49 @@ async function generatedXml(options: {
   const numberingXml = await archive.file("word/numbering.xml")!.async("string");
   return { documentXml, numberingXml };
 }
+
+it("writes a visual section's blocks as headings, text, a table and a picture", async () => {
+  let bytes: ArrayBuffer | undefined;
+  uploadFileMock.mockImplementationOnce(async (_key: string, uploaded: ArrayBuffer) => {
+    bytes = uploaded;
+  });
+  const png = Buffer.from(
+    "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==",
+    "base64",
+  );
+
+  const result = await generateDocx(
+    "With a visual",
+    [{ visual: { doc_id: "doc-3", caption: "Figure 1" } }],
+    "test-user",
+    fakeDb() as never,
+    {
+      resolveVisual: async (docId) =>
+        docId === "doc-3"
+          ? {
+              blocks: [
+                { type: "heading", level: 2, text: "Rent" },
+                { type: "paragraph", text: "Rent is payable quarterly." },
+                { type: "table", header: true, numeric: [false, true], rows: [["Year", "Rent"], ["2026", "120,000"]] },
+                { type: "image", png, widthPx: 1200, heightPx: 300, alt: "Rent by year" },
+              ],
+            }
+          : { error: "missing" },
+    },
+  );
+
+  expect(result).not.toHaveProperty("error");
+  const archive = await JSZip.loadAsync(bytes!);
+  const documentXml = await archive.file("word/document.xml")!.async("string");
+  expect(paragraphContaining(documentXml, "Rent")).toContain('<w:pStyle w:val="Heading2"/>');
+  const cell = documentXml.match(/<w:tc>(?:(?!<\/w:tc>)[\s\S])*120,000[\s\S]*?<\/w:tc>/)![0];
+  expect(cell).toContain('<w:jc w:val="right"/>');
+  expect(documentXml).toContain('descr="Rent by year"');
+  expect(paragraphContaining(documentXml, "Figure 1")).toContain('<w:pStyle w:val="Caption"/>');
+  const [, cx, cy] = documentXml.match(/<wp:extent cx="(\d+)" cy="(\d+)"\/>/)!;
+  expect(Number(cx) / 9525).toBeCloseTo(602, 0);
+  expect(Number(cy) / 9525).toBeCloseTo(151, 0);
+});
 
 function paragraphContaining(xml: string, text: string): string {
   return (

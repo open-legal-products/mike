@@ -7,6 +7,7 @@ import { app } from "./app";
 import { enforceDocumentLifecycleMigration } from "./lib/dbq/lifecycleGuard";
 import { manifestPublicKey } from "./lib/manifestSigning";
 import { validateRuntimeConfiguration } from "./lib/runtimeConfig";
+import { shutdownSandbox } from "./lib/sandbox";
 import { startAllWorkers, stopAllWorkers } from "./workerRuntime";
 import { reportError } from "./lib/observability/sentry";
 import {
@@ -146,6 +147,7 @@ void main();
 // background workers wherever they run, then exit 0. A hard timeout guards
 // against a connection or job that never drains.
 async function stopBackgroundWork(): Promise<void> {
+  await shutdownSandbox();
   if (WORKERS_MODE === "inline") {
     await stopAllWorkers();
     return;

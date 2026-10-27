@@ -920,6 +920,7 @@ const COMPLETES_TEXTLESS_TURN = {
   web_sources: false,
   delegation: false,
   response_details: false,
+  python_run: false,
   case_opinions: false,
   content: false,
   word_edit_block: false,

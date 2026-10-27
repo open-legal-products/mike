@@ -13,7 +13,7 @@ import { asyncRoute, routerErrorHandler } from "../../middleware/asyncRoute";
 import { createServerSupabase } from "../../lib/supabase";
 import { sendInternalError } from "../../lib/httpError";
 import { buildContentDisposition, createFileReadStream } from "../../lib/storage";
-import { sendDocumentDisplay } from "../../lib/documentDisplay";
+import { sendDocumentDisplay, setVisualResponseHeaders } from "../../lib/documentDisplay";
 import { contentTypeForDocumentType } from "../../lib/documentTypes";
 import { uniqueArchiveFilename } from "../../lib/zipExport";
 import {
@@ -125,6 +125,14 @@ documentsRouter.get("/:documentId/file", requireAuth, asyncRoute(async (req, res
 
     res.setHeader("Content-Type", contentTypeForDocumentType(result.fileType));
     res.setHeader("Content-Length", result.size);
+    if (result.body !== undefined) {
+        setVisualResponseHeaders(res);
+        res.setHeader(
+            "Content-Disposition",
+            buildContentDisposition("attachment", result.filename),
+        );
+        return void res.send(result.body);
+    }
     res.setHeader(
         "Content-Disposition",
         buildContentDisposition("inline", result.filename),

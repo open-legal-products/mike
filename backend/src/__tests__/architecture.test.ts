@@ -20,8 +20,8 @@
 //      database. Counted, not banned outright, so the debt that remains is
 //      visible and can only shrink (a ratchet).
 //   5. Facades re-export by name. `export *` hides what a module exposes.
-//   6. `middleware/` is request plumbing; it depends on `lib/`, not on
-//      domain modules.
+//   6. `middleware/` is request plumbing and `sandbox/` is the sidecar
+//      entrypoint; both depend on `lib/`, not on domain modules.
 //   7. `src/routes/` no longer exists. New HTTP surfaces are modules.
 //   8. Document-version writes and lifecycle RPCs belong to documents.
 //   9. Object storage is reached only through the `lib/storage.ts` facade.
@@ -190,9 +190,9 @@ describe("backend architecture", () => {
     expect(offenders).toEqual([]);
   });
 
-  it("rule 6: middleware/ never imports from modules/", () => {
+  it("rule 6: middleware/ and sandbox/ never import from modules/", () => {
     const offenders: string[] = [];
-    for (const file of PRODUCTION_FILES.filter((f) => f.startsWith("middleware/"))) {
+    for (const file of PRODUCTION_FILES.filter((f) => f.startsWith("middleware/") || f.startsWith("sandbox/"))) {
       for (const spec of importsOf(file)) {
         if (spec.startsWith("modules/")) offenders.push(`${file} -> ${spec}`);
       }

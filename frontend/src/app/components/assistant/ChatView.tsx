@@ -59,6 +59,7 @@ import {
     panelDocumentFromCitation,
     panelDocumentType,
 } from "../shared/types";
+import { useAutoOpenTurnVisual } from "./visualAutoOpen";
 import { useChatHistoryContext } from "@/app/contexts/ChatHistoryContext";
 import { usePageChrome } from "@/app/contexts/PageChromeContext";
 import { DocumentWorkspaceScope } from "@/app/contexts/WorkspaceContext";
@@ -507,6 +508,8 @@ export function AssistantChatColumn({
         },
         [openDocument],
     );
+
+    useAutoOpenTurnVisual(messages, isResponseLoading, openDocument);
 
     const messagesContainerRef = useRef<HTMLDivElement>(null);
     const messagesContentRef = useRef<HTMLDivElement>(null);
@@ -1001,9 +1004,11 @@ export function AssistantChatColumn({
     // the latest handler: registering on every new handler would re-render
     // the panel, and with it this column, without end.
     const openAttachedDocumentRef = useRef(handleAttachedDocumentClick);
+    const openCitationRef = useRef(openCitation);
     useEffect(() => {
         openAttachedDocumentRef.current = handleAttachedDocumentClick;
-    }, [handleAttachedDocumentClick]);
+        openCitationRef.current = openCitation;
+    }, [handleAttachedDocumentClick, openCitation]);
     useEffect(
         () =>
             registerPane(paneId, {
@@ -1013,6 +1018,8 @@ export function AssistantChatColumn({
                     chatInputRef.current?.addDoc(document),
                 openDocument: (document) =>
                     openAttachedDocumentRef.current(document),
+                openCitation: (citation, options) =>
+                    void openCitationRef.current(citation, options),
             }),
         [registerPane, paneId, canWrite, chatLoading],
     );

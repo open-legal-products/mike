@@ -251,6 +251,12 @@ module.exports = async (_env, options) => {
         "@mike/composer-send-button-ui": frontendSharedUi(
           "ComposerSendButtonUI.styles.ts",
         ),
+        "@mike/glass-icon-button-ui": frontendSharedUi("GlassIconButtonUI.tsx"),
+        "@mike/visual-view-ui": frontendSharedUi("VisualViewUI.tsx"),
+        "@mike/visual-bridge": frontendShared("lib", "visualBridge.ts"),
+        "@mike/visual-export-menu-ui": frontendSharedUi(
+          "VisualExportMenuUI.tsx",
+        ),
       },
     },
     module: {

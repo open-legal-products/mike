@@ -25,6 +25,8 @@ export const DOCUMENT_MUTATING_TOOL_NAMES: ReadonlySet<string> = new Set([
   "generate_docx",
   "generate_excel",
   "generate_ppt",
+  "generate_visual",
+  "edit_visual",
 ]);
 
 /** Read a tool schema's function name, whatever shape the entry arrived in. */
@@ -436,6 +438,16 @@ export const TOOLS = [
                     },
                   },
                   required: ["headers", "rows"],
+                },
+                visual: {
+                  type: "object",
+                  description:
+                    "Embed a visual from this conversation as Word content: its headings, text and tables, with each chart as a picture, and an optional italic caption.",
+                  properties: {
+                    doc_id: { type: "string", description: "The visual's doc_id." },
+                    caption: { type: "string" },
+                  },
+                  required: ["doc_id"],
                 },
               },
             },

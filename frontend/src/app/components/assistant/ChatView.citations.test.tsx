@@ -2,8 +2,11 @@ import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { Chat, Citation, EditAnnotation, Message } from "@/app/components/shared/types";
 import { MikeApiError } from "@/app/lib/mikeApi";
+import { citationFromVisualCite } from "@/app/lib/visualCitation";
 import { ChatView } from "./ChatView";
 import { PageChromeContext } from "@/app/contexts/PageChromeContext";
+
+const VISUAL_SOURCE_ID = "4f1b7e8a-2c3d-4e5f-8a9b-0c1d2e3f4a5b";
 
 // A chat can be shared without the documents behind it. For a shared
 // STANDALONE chat that is the normal case: the recipient holds no grant on
@@ -45,8 +48,22 @@ vi.mock("./ChatAccessModal", () => ({ ChatAccessModal: () => null }));
 // not this file's.
 vi.mock("./AssistantSidePanel", async (importOriginal) => ({
     ...(await importOriginal<typeof import("./AssistantSidePanel")>()),
-    AssistantSidePanel: ({ tabs }: { tabs: { id: string; kind: string; document: { version_id: string | null } }[] }) => (
-        <div data-testid="panel-tabs" data-kind={tabs[0]?.kind} data-version={tabs[0]?.document.version_id}>{tabs.length}</div>
+    AssistantSidePanel: ({
+        tabs,
+        onOpenCitation,
+    }: {
+        tabs: { id: string; kind: string; document: { version_id: string | null; title: string } }[];
+        onOpenCitation?: (citation: Citation, options?: { showQuotes?: boolean }) => void;
+    }) => (
+        <>
+            <div data-testid="panel-tabs" data-kind={tabs.at(-1)?.kind} data-version={tabs[0]?.document.version_id} data-title={tabs.at(-1)?.document.title}>{tabs.length}</div>
+            <button
+                type="button"
+                onClick={() => onOpenCitation?.(citationFromVisualCite({ cite: VISUAL_SOURCE_ID, quote: "the rent" }, "lease.xlsx")!, { showQuotes: true })}
+            >
+                visual cite
+            </button>
+        </>
     ),
 }));
 
@@ -139,14 +156,17 @@ const messages: Message[] = [
     { id: "m1", role: "assistant", content: "answer", citations: [citation] },
 ];
 
-function renderView(overrides: Partial<Chat> = {}) {
-    render(
+function renderView(
+    overrides: Partial<Chat> = {},
+    turn: { messages?: Message[]; isResponseLoading?: boolean } = {},
+) {
+    return render(
         <PageChromeContext.Provider value={{ mobileActionsContainer: null }}>
             <ChatView
                 chatId="chat-1"
                 chat={{ ...chat, ...overrides }}
-                messages={messages}
-                isResponseLoading={false}
+                messages={turn.messages ?? messages}
+                isResponseLoading={turn.isResponseLoading ?? false}
                 handleChat={vi.fn().mockResolvedValue("chat-1")}
                 cancel={vi.fn()}
                 onNewChat={vi.fn()}
@@ -155,6 +175,19 @@ function renderView(overrides: Partial<Chat> = {}) {
         </PageChromeContext.Provider>,
     );
 }
+
+const resolvedVersions = {
+    current_version_id: "v1",
+    versions: [
+        {
+            id: "v1",
+            version_number: 1,
+            source: "upload",
+            created_at: "2026-08-18T00:00:00Z",
+            filename: "agreement.docx",
+        },
+    ],
+};
 
 beforeEach(() => {
     vi.clearAllMocks();
@@ -301,6 +334,43 @@ describe("ChatView citation on a chat shared without its documents", () => {
     });
 });
 
+
+it("opens a visual's cite as a citation tab and reports a refused one like any citation", async () => {
+    listDocumentVersions.mockResolvedValue(resolvedVersions);
+    renderView();
+    fireEvent.click(screen.getByRole("button", { name: "citation pill" }));
+    expect(await screen.findByTestId("panel-tabs")).toHaveTextContent("1");
+
+    fireEvent.click(screen.getByRole("button", { name: "visual cite" }));
+    await waitFor(() => expect(screen.getByTestId("panel-tabs")).toHaveTextContent("2"));
+    expect(listDocumentVersions).toHaveBeenLastCalledWith(VISUAL_SOURCE_ID);
+    expect(screen.getByTestId("panel-tabs")).toHaveAttribute("data-kind", "citation");
+    expect(screen.getByTestId("panel-tabs")).toHaveAttribute("data-title", "lease.xlsx");
+
+    listDocumentVersions.mockRejectedValueOnce(new MikeApiError({ message: "Not found", status: 404 }));
+    fireEvent.click(screen.getByRole("button", { name: "visual cite" }));
+    expect(await screen.findByText("Document not shared")).toBeInTheDocument();
+});
+
+it("opens a visual created during a live turn and leaves a reloaded one closed", async () => {
+    const created: Message[] = [
+        { id: "m1", role: "user", content: "Chart the rent" },
+        {
+            id: "m2",
+            role: "assistant",
+            content: "",
+            events: [{ type: "doc_created", filename: "rent-chart.html", download_url: "/d", document_id: "visual-1", version_id: "v1", version_number: 1 }],
+        },
+    ];
+    const live = renderView({}, { messages: created, isResponseLoading: true });
+    expect(await screen.findByTestId("panel-tabs")).toHaveAttribute("data-title", "rent-chart.html");
+    expect(listDocumentVersions).not.toHaveBeenCalled();
+    live.unmount();
+
+    renderView({}, { messages: created, isResponseLoading: false });
+    await waitFor(() => expect(screen.getByText("Chat input")).toBeInTheDocument());
+    expect(screen.queryByTestId("panel-tabs")).toBeNull();
+});
 
 it("resolves a legacy edit to its historical version", async () => {
     listDocumentVersions.mockResolvedValue({ current_version_id: "v2", versions: [

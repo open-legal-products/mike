@@ -36,6 +36,11 @@ export function isPresentationDocumentType(fileType: string | null | undefined) 
   return PRESENTATION_TYPES.has((fileType ?? "").toLowerCase());
 }
 
+/** Assistant-made visuals. Never an upload type: user HTML would skip the lint. */
+export function isVisualDocumentType(fileType: string | null | undefined) {
+  return (fileType ?? "").toLowerCase() === "html";
+}
+
 export function shouldConvertToPdf(fileType: string | null | undefined) {
   const normalized = (fileType ?? "").toLowerCase();
   // Spreadsheets are intentionally excluded: they are rendered natively as a
@@ -79,6 +84,8 @@ export function contentTypeForDocumentType(fileType: string | null | undefined) 
       return "application/vnd.openxmlformats-officedocument.presentationml.presentation";
     case "ppt":
       return "application/vnd.ms-powerpoint";
+    case "html":
+      return "text/html; charset=utf-8";
     default:
       return "application/octet-stream";
   }

@@ -13,6 +13,7 @@ import {
     type ResponseStyle,
 } from "./user.responseStyle";
 import { loadWebSearchSettings } from "./user.webSearch";
+import { loadCodeAnalysisSetting } from "./user.codeAnalysis";
 import {
     DEFAULT_WEB_SEARCH_SETTINGS,
     type WebSearchSettings,
@@ -45,6 +46,7 @@ export type UserModelSettings = {
      */
     legal_research_us: boolean;
     web_search: WebSearchSettings;
+    code_analysis: boolean;
     api_keys: UserApiKeys;
     personalisation?: {
         displayName: string | null;
@@ -82,6 +84,7 @@ export async function getUserModelSettings(
         responseStyle,
         webSearch,
         courtListener,
+        codeAnalysis,
     ] = await Promise.all([
         client
             .from("user_profiles")
@@ -125,6 +128,13 @@ export async function getUserModelSettings(
                 safeError(error),
             );
             return { enabled: false, token: null };
+        }),
+        loadCodeAnalysisSetting(client, userId).catch((error: unknown) => {
+            console.error(
+                "[user-settings] code analysis setting load failed",
+                safeError(error),
+            );
+            return true;
         }),
     ]);
     let data = profileResult.data;
@@ -250,6 +260,7 @@ export async function getUserModelSettings(
             courtListener.enabled &&
             (!!api_keys.courtlistener || courtlistenerBulkDataEnabled()),
         web_search: webSearch,
+        code_analysis: codeAnalysis,
         personalisation: {
             displayName:
                 typeof data?.display_name === "string"

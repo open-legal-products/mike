@@ -30,6 +30,7 @@ import { getPillClass } from "./pillUtils";
 import { PdfView } from "../shared/views/PdfView";
 import { SpreadsheetView } from "../shared/views/SpreadsheetView";
 import { DocxView } from "../shared/views/DocxView";
+import { VisualView } from "../shared/views/VisualView";
 import { FileTypeIcon } from "../shared/FileTypeIcon";
 import { DocumentPaneTitle } from "../shared/DocumentPaneTitle";
 import { SubfolderSvgIcon } from "../shared/FolderSvgIcon";
@@ -391,6 +392,12 @@ export function TRSidePanel({
                                       ]
                                     : undefined
                             }
+                        />
+                    ) : documentViewType === "visual" ? (
+                        <VisualView
+                            rounded="top-right"
+                            documentId={doc.id}
+                            filename={doc.filename}
                         />
                     ) : documentViewType === "spreadsheet" ? (
                         <SpreadsheetView

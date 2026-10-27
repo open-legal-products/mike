@@ -1,6 +1,7 @@
 "use client";
 
-import React, { useId, useSyncExternalStore } from "react";
+import React, { useId } from "react";
+import { useDarkTheme } from "../hooks/useDarkTheme";
 
 const DEGREES = [0, 30, 60, 90, 120, 150, 180, 210, 240, 270, 300, 330];
 const STOP_TRANSITION = "stop-color 220ms ease, stop-opacity 220ms ease";
@@ -92,53 +93,6 @@ const WHITE_PALETTE: IconPalette = {
     innerStops: ["#0f172a", "#334155", "#e2e8f0", "#0f172a"],
     innerOpacities: [0, 0.1, 0.06, 0],
 };
-
-// The mark is inline SVG, so the neutral-palette dark remapping in
-// globals.css cannot reach it; it watches the document theme class itself.
-// One observer serves every icon on the page. Targets that never set the
-// class (the Word add-in) always read false and keep the dark mark.
-const themeListeners = new Set<() => void>();
-let themeObserver: MutationObserver | null = null;
-
-function subscribeToTheme(listener: () => void): () => void {
-    themeListeners.add(listener);
-    if (!themeObserver && typeof MutationObserver !== "undefined") {
-        themeObserver = new MutationObserver(() => {
-            themeListeners.forEach((notify) => notify());
-        });
-        themeObserver.observe(document.documentElement, {
-            attributes: true,
-            attributeFilter: ["class"],
-        });
-    }
-
-    return () => {
-        themeListeners.delete(listener);
-        if (themeListeners.size === 0) {
-            themeObserver?.disconnect();
-            themeObserver = null;
-        }
-    };
-}
-
-function readDarkTheme(): boolean {
-    return (
-        typeof document !== "undefined" &&
-        document.documentElement.classList.contains("dark")
-    );
-}
-
-function readDarkThemeOnServer(): boolean {
-    return false;
-}
-
-function useDarkTheme(): boolean {
-    return useSyncExternalStore(
-        subscribeToTheme,
-        readDarkTheme,
-        readDarkThemeOnServer,
-    );
-}
 
 function GlassGradient({
     offsets,

@@ -5,6 +5,7 @@ import type {
   WordContentEvent,
   WordTextCardEvent,
   WordDocumentReadEvent,
+  WordDocumentWriteEvent,
   WordErrorEvent,
   WordEditBlockEvent,
   WordEditReferenceEvent,
@@ -18,6 +19,18 @@ import { isToolEditBlockIndex } from "./wordTrackedEditKeys";
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return !!value && typeof value === "object" && !Array.isArray(value);
+}
+
+function readId(
+  item: Record<string, unknown>,
+  camel: string,
+  snake: string,
+): string | undefined {
+  for (const key of [camel, snake]) {
+    const value = item[key];
+    if (typeof value === "string" && value) return value;
+  }
+  return undefined;
 }
 
 // Stable render identity for live-streamed events. React keys derived from
@@ -83,6 +96,15 @@ export function isWordDocumentReadEvent(
   );
 }
 
+export function isWordDocumentWriteEvent(
+  event: WordAssistantEvent,
+): event is WordDocumentWriteEvent {
+  return (
+    (event.type === "doc_created" || event.type === "doc_edited") &&
+    typeof event.filename === "string"
+  );
+}
+
 function isWordErrorEvent(event: WordAssistantEvent): event is WordErrorEvent {
   return event.type === "error" && typeof event.message === "string";
 }
@@ -137,12 +159,7 @@ export function normalizeStoredAssistantEvents(
       typeof item.filename === "string" &&
       item.filename
     ) {
-      const documentId =
-        typeof item.documentId === "string" && item.documentId
-          ? item.documentId
-          : typeof item.document_id === "string" && item.document_id
-            ? item.document_id
-            : undefined;
+      const documentId = readId(item, "documentId", "document_id");
       const status =
         item.status === "reading" || item.status === "read"
           ? item.status
@@ -158,6 +175,31 @@ export function normalizeStoredAssistantEvents(
           status,
         },
       ];
+    }
+    if (
+      (item.type === "doc_created" || item.type === "doc_edited") &&
+      typeof item.filename === "string" &&
+      item.filename
+    ) {
+      const documentId = readId(item, "documentId", "document_id");
+      const versionId = readId(item, "versionId", "version_id");
+      const versionNumber =
+        typeof item.versionNumber === "number"
+          ? item.versionNumber
+          : typeof item.version_number === "number"
+            ? item.version_number
+            : undefined;
+      const written: WordDocumentWriteEvent = {
+        ...event,
+        type: item.type,
+        filename: item.filename,
+        ...(documentId ? { documentId } : {}),
+        ...(versionId ? { versionId } : {}),
+        ...(versionNumber !== undefined ? { versionNumber } : {}),
+      };
+      // A turn that died mid-write would otherwise replay as still writing.
+      delete written.isStreaming;
+      return [written];
     }
     if (item.type === "error" && typeof item.message === "string") {
       return [{ ...event, type: "error", message: item.message }];
@@ -529,6 +571,38 @@ export function upsertDocumentReadEvent(
   );
 }
 
+/**
+ * A write's start frame adds a streaming entry; its done frame completes
+ * that entry in place. A write that finished without a start, or a second
+ * write of the same file, is its own entry.
+ */
+export function upsertDocumentWriteEvent(
+  events: WordAssistantEvent[],
+  write: Omit<WordDocumentWriteEvent, "key">,
+): WordAssistantEvent[] {
+  const current = finalizeTrailingReasoning(
+    events.filter((event) => !isWordThinkingEvent(event)),
+  );
+  const index = current.findIndex(
+    (event) =>
+      isWordDocumentWriteEvent(event) &&
+      event.type === write.type &&
+      event.filename === write.filename &&
+      !!event.isStreaming,
+  );
+  if (index < 0) return [...current, { ...write, key: nextEventKey() }];
+  if (write.isStreaming) return current;
+  const previous = current[index];
+  return current.map((event, eventIndex) =>
+    eventIndex === index
+      ? {
+          ...write,
+          ...(typeof previous?.key === "string" ? { key: previous.key } : {}),
+        }
+      : event,
+  );
+}
+
 export function setAssistantError(
   events: WordAssistantEvent[],
   message: string,
@@ -547,7 +621,8 @@ export function completeAssistantEvents(
   const completed = events.filter(
     (event) =>
       !isWordThinkingEvent(event) &&
-      !(isWordDocumentReadEvent(event) && event.status === "reading"),
+      !(isWordDocumentReadEvent(event) && event.status === "reading") &&
+      !(isWordDocumentWriteEvent(event) && event.isStreaming),
   );
   return finalizeTrailingReasoning(completed);
 }

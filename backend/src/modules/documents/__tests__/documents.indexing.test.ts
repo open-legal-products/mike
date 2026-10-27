@@ -68,6 +68,12 @@ describe("version text extraction", () => {
     expect((await extractDocumentText(bytes, "pptx")).text).toContain("Words");
     await expect(extractDocumentText(bytes, "exe")).rejects.toThrow("unsupported_format");
   });
+  it("indexes a visual's visible text without its script or style", async () => {
+    const visual = new TextEncoder().encode(`<!doctype html><html data-mike-kind="timeline"><head><title>Key dates</title></head><body><style>.a{color:red}</style><p>Signed 2024</p><script>var hidden = 1;</script></body></html>`).buffer;
+    const { text } = await extractDocumentText(visual, "html");
+    expect(text).toContain("Key dates"); expect(text).toContain("Signed 2024");
+    expect(text).not.toContain("hidden"); expect(text).not.toContain("color");
+  });
   it("schedules a bounded resumable backfill with explicit failure retries", async () => {
     const fake = scriptedDb([{ rpc: "backfill_document_text", data: 3 }]);
     expect(await backfillDocumentText(fake.db, { limit: 25, retryFailed: true })).toBe(3);

@@ -15,11 +15,15 @@ keys the chat runs on.
 
 A subagent works with the user's access and nothing more. It has the same
 tools as the answer that started it: the chat's documents, CourtListener and
-the web when they are on, workflows and playbooks, document generation and
-editing, and the user's connectors (MCP servers, Google Drive and Workspace).
-Where the answer may not write documents, for example a project viewer's
-chat, neither may its subagents. It cannot ask the user questions or start
-subagents of its own; those two tools are refused if it asks for them anyway.
+the web when they are on, [code analysis](code-analysis.md) when it is on,
+workflows and playbooks, document generation and editing, and the user's
+connectors (MCP servers, Google Drive and Workspace). Where the answer may
+not write documents, for example a project viewer's chat, neither may its
+subagents. It cannot ask the user questions, start subagents of its own, or
+make [visuals](visuals.md); those tools are refused if it asks for them
+anyway, and the answer composes any visual from the briefs it gets back.
+Each subagent may run code ten times, and all of an answer's subagents
+together thirty times, on top of the answer's own ten.
 
 The assistant can limit a subagent to some of the chat's documents. A scoped
 subagent's document list shows only those, its document tools refuse any

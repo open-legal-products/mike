@@ -309,6 +309,11 @@ services:
       # container/machine, set WORKERS_MODE=none here and enable the
       # `worker` service below.
       - WORKERS_MODE=${WORKERS_MODE:-thread}
+      # Code analysis and visual export run in the `sandbox` service below,
+      # reached over this socket (docs/code-analysis.md).
+      - SANDBOX_SOCKET=/run/mike-sandbox/sandbox.sock
+    volumes:
+      - sandbox_socket:/run/mike-sandbox
     extra_hosts:
       - "host.docker.internal:host-gateway"
     depends_on:
@@ -320,6 +325,40 @@ services:
         condition: service_started
       redis:
         condition: service_healthy
+      sandbox:
+        condition: service_started
+    restart: unless-stopped
+
+  # --- Sandbox: runs the assistant's Python (Pyodide) and the Chromium that
+  # renders visuals. Same image as the backend, different command, and no way
+  # out: no network, no secrets, a non-root user, a read-only filesystem. The
+  # backend talks to it over the unix socket on the shared volume.
+  sandbox:
+    build:
+      context: .
+      dockerfile: backend/Dockerfile
+    image: mike-backend:local
+    command: ["node", "dist/sandbox/server.js"]
+    user: mikesandbox
+    network_mode: none
+    read_only: true
+    tmpfs:
+      - /tmp
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    mem_limit: 3g
+    pids_limit: 256
+    environment:
+      - SANDBOX_SOCKET=/run/mike-sandbox/sandbox.sock
+      - HOME=/tmp
+      # Per-run budgets from the root .env (backend/.env.example). Unset
+      # leaves each at its built-in default.
+      - PYTHON_SANDBOX_TIMEOUT_MS=${PYTHON_SANDBOX_TIMEOUT_MS:-}
+      - PYTHON_SANDBOX_MEMORY_MB=${PYTHON_SANDBOX_MEMORY_MB:-}
+    volumes:
+      - sandbox_socket:/run/mike-sandbox
     restart: unless-stopped
 
   # --- Optional: dedicated worker process ("async computer" mode).
@@ -391,3 +430,4 @@ volumes:
   db_data:
   storage_data:
   redis_data:
+  sandbox_socket:

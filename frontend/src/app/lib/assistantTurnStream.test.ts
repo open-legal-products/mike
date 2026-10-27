@@ -1864,6 +1864,34 @@ describe("web activity", () => {
   });
 });
 
+describe("python runs", () => {
+  it("replaces the start frame with the finished run by run id", async () => {
+    const events = await eventsOf([
+      { type: "python_run_start", run_id: "run-1", description: "Total the rent schedule", code: "print(1)" },
+      {
+        type: "python_run", run_id: "run-1", description: "Total the rent schedule", code: "print(1)", status: "failed", stdout: "1\n",
+        documents: [{ document_id: "doc-1", filename: "rent.xlsx" }, { filename: "notes.txt" }, { filename: 4 }, null],
+        files: [{ document_id: "doc-2", version_id: "v1", filename: "totals.csv" }, { document_id: "doc-3", filename: "chart.png" }, { filename: "orphan.csv" }],
+        error: "The code raised an error.", error_code: "python_error", duration_ms: 420,
+      },
+    ]);
+    expect(events!.filter((e) => e.type === "python_run")).toEqual([
+      {
+        type: "python_run", run_id: "run-1", description: "Total the rent schedule", code: "print(1)",
+        status: "failed", stdout: "1\n",
+        documents: [{ document_id: "doc-1", filename: "rent.xlsx" }, { filename: "notes.txt" }],
+        files: [{ document_id: "doc-2", version_id: "v1", filename: "totals.csv" }, { document_id: "doc-3", filename: "chart.png" }],
+        error: "The code raised an error.", error_code: "python_error", duration_ms: 420, isStreaming: false,
+      },
+    ]);
+    expect(await eventsOf([{ type: "python_run_start", description: "no id" }])).toEqual([]);
+    expect(await eventsOf([{ type: "python_run", run_id: "run-2" }])).toEqual([
+      { type: "python_run", run_id: "run-2", description: "", code: "", status: "completed", stdout: "", documents: [], files: [], duration_ms: 0, isStreaming: false },
+      thinking,
+    ]);
+  });
+});
+
 describe("delegation", () => {
   const start = (id: string) => ({
     type: "delegation_start", delegation_id: id, title: `Review ${id}`, task: "Summarise the lease.",

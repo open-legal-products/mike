@@ -34,6 +34,7 @@ import { useUserProfile } from "@/app/contexts/UserProfileContext";
 import { UserMessage } from "@/app/components/assistant/UserMessage";
 import { AssistantMessage } from "@/app/components/assistant/AssistantMessage";
 import { withDelegationEvents } from "@/app/components/assistant/message/eventUtils";
+import { useAutoOpenTurnVisual } from "@/app/components/assistant/visualAutoOpen";
 import {
     ChatInput,
     type ChatInputHandle,
@@ -420,6 +421,8 @@ export function ProjectChatPanel({
         reportedMutationSignature.current = projectMutationSignature;
         onProjectMutated();
     }, [projectMutationSignature, onProjectMutated]);
+
+    useAutoOpenTurnVisual(messages, isResponseLoading, onOpenDocument);
 
     useEffect(() => {
         if (!isSideChat) setCurrentChatId(activeChatId || null);

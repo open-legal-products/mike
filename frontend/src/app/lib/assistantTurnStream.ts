@@ -182,6 +182,52 @@ function parseResponseDetails(
   };
 }
 
+type PythonRunResult = Omit<
+  Extract<AssistantEvent, { type: "python_run" }>,
+  "type" | "run_id" | "description" | "code" | "isStreaming"
+>;
+
+function parsePythonRunFiles<T extends { filename: string }>(
+  value: unknown,
+  read: (item: Record<string, unknown>) => T | null,
+): T[] {
+  if (!Array.isArray(value)) return [];
+  return value.flatMap((item) => {
+    if (!item || typeof item !== "object") return [];
+    const parsed = read(item as Record<string, unknown>);
+    return parsed ? [parsed] : [];
+  });
+}
+
+function parsePythonRunResult(data: Record<string, unknown>): PythonRunResult {
+  return {
+    status: data.status === "failed" ? "failed" : "completed",
+    stdout: typeof data.stdout === "string" ? data.stdout : "",
+    documents: parsePythonRunFiles(data.documents, (item) =>
+      typeof item.filename === "string"
+        ? {
+            filename: item.filename,
+            ...(typeof item.document_id === "string" ? { document_id: item.document_id } : {}),
+          }
+        : null,
+    ),
+    files: parsePythonRunFiles(data.files, (item) =>
+      typeof item.filename === "string" && typeof item.document_id === "string"
+        ? {
+            filename: item.filename,
+            document_id: item.document_id,
+            ...(typeof item.version_id === "string" ? { version_id: item.version_id } : {}),
+          }
+        : null,
+    ),
+    ...parseWebToolFailure(data),
+    ...(typeof data.error_code === "string"
+      ? { error_code: data.error_code as PythonRunResult["error_code"] }
+      : {}),
+    duration_ms: typeof data.duration_ms === "number" ? data.duration_ms : 0,
+  };
+}
+
 function delegationWithId(id: unknown) {
   return (e: AssistantEvent) => e.type === "delegation" && e.delegation_id === id;
 }
@@ -1194,6 +1240,26 @@ export async function consumeAssistantTurnStream(
           continue;
         }
 
+        if (data.type === "python_run_start" || data.type === "python_run") {
+          if (typeof data.run_id !== "string") continue;
+          const runId = data.run_id;
+          const isStreaming = data.type === "python_run_start";
+          const event: Extract<AssistantEvent, { type: "python_run" }> = {
+            type: "python_run",
+            run_id: runId,
+            description: typeof data.description === "string" ? data.description : "",
+            code: typeof data.code === "string" ? data.code : "",
+            ...(isStreaming ? {} : parsePythonRunResult(data)),
+            isStreaming,
+          };
+          if (!updateMatchingEvent(
+            (e) => e.type === "python_run" && e.run_id === runId,
+            () => event,
+          )) pushEvent(event);
+          if (!isStreaming) pushThinkingPlaceholder();
+          continue;
+        }
+
         if (data.type === "delegation_start") {
           if (typeof data.delegation_id !== "string") continue;
           pushEvent({
@@ -1202,6 +1268,7 @@ export async function consumeAssistantTurnStream(
             ...(typeof data.continued_from === "string"
               ? { continued_from: data.continued_from }
               : {}),
+            ...(data.kind === "visual" ? { kind: "visual" as const } : {}),
             title: typeof data.title === "string" ? data.title : "",
             task: typeof data.task === "string" ? data.task : "",
             events: [],

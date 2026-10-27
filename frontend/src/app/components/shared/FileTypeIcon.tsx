@@ -1,4 +1,4 @@
-import { File } from "lucide-react";
+import { ChartNetwork, File } from "lucide-react";
 import { SvgAssetIcon } from "@/app/components/ui/svg-asset-icon";
 import pdf from "../../../../public/icons/file-types/pdf.svg";
 import word from "../../../../public/icons/file-types/word.svg";
@@ -7,7 +7,7 @@ import ppt from "../../../../public/icons/file-types/ppt.svg";
 
 const icons = { pdf, word, excel, ppt };
 
-export type FileTypeKind = "pdf" | "word" | "excel" | "ppt" | "other";
+export type FileTypeKind = "pdf" | "word" | "excel" | "ppt" | "visual" | "other";
 
 /**
  * Normalize a file_type value (e.g. "pdf") or a filename (e.g. "deck.pptx")
@@ -22,6 +22,7 @@ export function fileTypeKind(value: string | null | undefined): FileTypeKind {
     if (ext === "docx" || ext === "doc") return "word";
     if (ext === "xlsx" || ext === "xlsm" || ext === "xls") return "excel";
     if (ext === "pptx" || ext === "ppt") return "ppt";
+    if (ext === "html" || ext === "htm") return "visual";
     return "other";
 }
 
@@ -43,6 +44,8 @@ export function FileTypeIcon({
     const kind = fileTypeKind(fileType);
     if (kind === "other")
         return <File className={`${cls} ${muted ? "text-gray-300" : "text-gray-500"}`} />;
+    if (kind === "visual")
+        return <ChartNetwork className={`${cls} ${muted ? "text-gray-300" : "text-blue-600"}`} />;
     return (
         <SvgAssetIcon
             src={icons[kind]}

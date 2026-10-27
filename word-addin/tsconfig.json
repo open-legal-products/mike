@@ -130,6 +130,18 @@
       ],
       "@mike/composer-send-button-ui": [
         "../frontend/src/shared/ui/ComposerSendButtonUI.styles.ts"
+      ],
+      "@mike/glass-icon-button-ui": [
+        "../frontend/src/shared/ui/GlassIconButtonUI.tsx"
+      ],
+      "@mike/visual-view-ui": [
+        "../frontend/src/shared/ui/VisualViewUI.tsx"
+      ],
+      "@mike/visual-bridge": [
+        "../frontend/src/shared/lib/visualBridge.ts"
+      ],
+      "@mike/visual-export-menu-ui": [
+        "../frontend/src/shared/ui/VisualExportMenuUI.tsx"
       ]
     },
     "jsx": "react-jsx",

@@ -168,6 +168,7 @@ export function AssistantDocumentPanelHost({
                         onWarningDismiss={panel.handleWarningDismiss}
                         onCloseAnnotation={panel.handleCloseAnnotation}
                         onScrollChange={panel.handleScrollChange}
+                        onOpenCitation={panel.openCitation}
                         onOpenDocuments={() => setOpenDocumentsModalOpen(true)}
                     />
                     </div>

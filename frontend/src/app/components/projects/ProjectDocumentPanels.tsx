@@ -8,6 +8,7 @@ import { memo, useMemo } from "react";
 import {
     DocumentContent,
     type DocumentContentMode,
+    type DocumentContentProps,
 } from "@/app/components/shared/DocumentContent";
 import { ProjectWorkspaceTips } from "./ProjectWorkspaceTips";
 import {
@@ -50,6 +51,7 @@ interface Props {
     canEdit?: boolean;
     documentPermissions?: (documentId: string) => DocumentPermissions;
     onCloseAnnotation?: (documentId: string) => void;
+    onOpenCitation?: DocumentContentProps["onOpenCitation"];
     onWarningDismiss: (documentId: string) => void;
     onCloseGuardReady?: (documentId: string, guard: DocxCloseGuard | null) => void;
     onDownloadReady?: (
@@ -69,6 +71,7 @@ export const ProjectDocumentPanels = memo(function ProjectDocumentPanels({
     onEditResolved,
     onEditError,
     onCloseAnnotation,
+    onOpenCitation,
     onVersionChange,
     canEdit = false,
     documentPermissions,
@@ -203,6 +206,7 @@ export const ProjectDocumentPanels = memo(function ProjectDocumentPanels({
                             onDownloadReady={(download) =>
                                 onDownloadReady?.(tab.documentId, download)
                             }
+                            onOpenCitation={onOpenCitation}
                         />
                     </div>
                 );

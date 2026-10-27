@@ -163,6 +163,7 @@ vi.mock("../../modules/user/user.settings", () => ({
     getUserModelSettings: vi.fn(async () => ({
         legal_research_us: false,
         web_search: DEFAULT_WEB_SEARCH_SETTINGS,
+        code_analysis: false,
         title_model: "test-model",
         tabular_model: "test-model",
         last_selected_chat_model: null,
@@ -424,6 +425,7 @@ describe("POST /projects/:projectId/chat", () => {
         vi.mocked(userSettings.getUserModelSettings).mockResolvedValueOnce({
             legal_research_us: false,
             web_search: DEFAULT_WEB_SEARCH_SETTINGS,
+            code_analysis: false,
             title_model: null,
             memory_curator_model: null,
             subagent_model: null,

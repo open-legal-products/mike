@@ -5,6 +5,7 @@ import { PdfView } from "./views/PdfView";
 import { DocxView } from "./views/DocxView";
 import type { DocxCloseGuard, DocxSaveState } from "./views/DocxRenderer.types";
 import { SpreadsheetView } from "./views/SpreadsheetView";
+import { VisualView, type OpenVisualCitation } from "./views/VisualView";
 import {
     CitationQuotesSection,
     documentQuoteId,
@@ -90,6 +91,7 @@ export interface DocumentContentProps {
     onVersionChange?: (version: DocumentVersion) => void;
     onCloseGuardReady?: (guard: DocxCloseGuard | null) => void;
     onDownloadReady?: (download: (() => Promise<void>) | null) => void;
+    onOpenCitation?: OpenVisualCitation;
 }
 
 /** Shared viewer content; hosts own tab state, sizing and annotation lifecycle. */
@@ -111,6 +113,7 @@ export function DocumentContent({
     refetchKey,
     cacheBytes = true,
     onVersionChange,
+    onOpenCitation,
 }: DocumentContentProps) {
     const contentRef = useRef<HTMLDivElement>(null);
     const [narrow, setNarrow] = useState(false);
@@ -261,7 +264,7 @@ export function DocumentContent({
                                 <CitationQuotesSection
                                     document={resolvedDocument}
                                     activeQuoteId={activeCitationQuoteId}
-                                    citationRef={mode.citation.ref}
+                                    citationRef={mode.citation.ref || undefined}
                                     onSelect={(quote) => {
                                         if (
                                             quote.verificationState !==
@@ -345,6 +348,18 @@ export function DocumentContent({
                         highlightCells={
                             active ? activeHighlightCells : undefined
                         }
+                    />
+                ) : viewType === "visual" ? (
+                    <VisualView
+                        documentId={documentId}
+                        versionId={versionId}
+                        filename={resolvedDocument.title}
+                        refetchKey={refetchKey}
+                        cacheBytes={cacheBytes}
+                        rounded={false}
+                        active={active}
+                        onOpenCitation={onOpenCitation}
+                        onDownloadReady={handleDownloadReady}
                     />
                 ) : (
                     <PdfView

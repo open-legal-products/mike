@@ -55,10 +55,13 @@ details takes the `e2eAccount` fixture instead of hardcoding an email.
 
 ### Synthetic specs
 
-`e2e/assistant-streaming.spec.ts` and `e2e/tabular-chat-lifecycle.spec.ts` form
-the Playwright **`synthetic`** project. They mock every `/api` call in the
-browser and need no backend, database, account or model-provider key, so CI
-runs them in a separate job that serves only the web app. The streaming tests
+`e2e/assistant-streaming.spec.ts`, `e2e/tabular-chat-lifecycle.spec.ts` and
+`e2e/visual-sandbox.spec.ts` form the Playwright **`synthetic`** project. They
+mock every `/api` call in the browser and need no backend, database, account or
+model-provider key, so CI runs them in a separate job that serves only the web
+app. The visual sandbox spec serves a hostile visual (network calls, a
+self-navigation, a remote link) and checks that nothing leaves the app origin
+and that a cite inside the frame opens a citation tab. The streaming tests
 are slow by design (4x CPU throttling and hundreds of SSE chunks, up to two
 minutes each), and four of them on one 4-vCPU runner slowed each other about
 2.5x, so the job is a matrix of three runners split by chat scope: `assistant`,

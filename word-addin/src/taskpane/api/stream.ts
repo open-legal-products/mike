@@ -20,6 +20,7 @@ import {
   terminalErrorFromFrame,
 } from "../lib/wordChatTerminalError";
 import type { ReasoningLevel } from "../lib/wordChatTypes";
+import type { WordDocumentWriteEvent } from "../types";
 import type { TextCardEvent } from "@mike/contracts";
 
 export interface WordChatDocumentReadEvent {
@@ -76,6 +77,11 @@ export interface WordTurnHandlers {
   onReasoningBlockEnd?: () => void;
   /** Called only when the backend reports a model-triggered document read. */
   onDocumentRead?: (event: WordChatDocumentReadEvent) => void;
+  /**
+   * The model created or edited a document (a visual, in Word): a streaming
+   * event on the start frame, then the finished one.
+   */
+  onDocumentWrite?: (event: Omit<WordDocumentWriteEvent, "key">) => void;
   /**
    * Called when the backend forwards a client-executed tool call. The
    * handler must eventually post a result for `toolCallId` (success or
@@ -185,6 +191,35 @@ async function consumeTurnStream(
           ...(typeof d.document_id === "string" && d.document_id
             ? { documentId: d.document_id }
             : {}),
+        });
+      } else if (
+        (d.type === "doc_created_start" ||
+          d.type === "doc_created" ||
+          d.type === "doc_edited_start" ||
+          d.type === "doc_edited") &&
+        typeof d.filename === "string" &&
+        d.filename
+      ) {
+        const done = d.type === "doc_created" || d.type === "doc_edited";
+        params.onDocumentWrite?.({
+          type:
+            d.type === "doc_created_start" || d.type === "doc_created"
+              ? "doc_created"
+              : "doc_edited",
+          filename: d.filename,
+          ...(typeof d.document_id === "string" && d.document_id
+            ? { documentId: d.document_id }
+            : {}),
+          ...(typeof d.version_id === "string" && d.version_id
+            ? { versionId: d.version_id }
+            : {}),
+          ...(typeof d.version_number === "number"
+            ? { versionNumber: d.version_number }
+            : {}),
+          ...(typeof d.error === "string" && d.error
+            ? { error: d.error }
+            : {}),
+          ...(done ? {} : { isStreaming: true }),
         });
       } else if (d.type === "citations" && Array.isArray(d.citations)) {
         params.onCitations?.(d.citations);

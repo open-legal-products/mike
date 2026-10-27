@@ -1647,6 +1647,12 @@ export default function ProjectAssistantChatPage({ params }: Props) {
                         );
                     })}
                     onCloseAnnotation={handleCloseAnnotation}
+                    onOpenCitation={(citation, options) =>
+                        void handleCitationClick(
+                            citation,
+                            options?.showQuotes ?? true,
+                        )
+                    }
                     isDocumentReloading={(documentId) =>
                         Object.values(resolvingEdits).includes(documentId)
                     }

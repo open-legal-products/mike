@@ -17,6 +17,7 @@ import { SERVER_FAILURE_MESSAGE } from "@mike/user-error";
 import { networkFailure } from "../lib/networkError";
 import { sessionHandledError } from "../lib/sessionRefresh";
 import { reportApiFailure, reportNetworkFailure } from "../lib/errorReporting";
+import { bufferToBase64 } from "../lib/base64";
 import type { ReasoningLevel } from "../lib/wordChatTypes";
 import {
   createControlRequestRetryPolicy,
@@ -743,6 +744,52 @@ export async function getWorkflowAssetUrl(
   return apiRequest<{ url: string; filename: string }>(
     `/single-documents/${assetId}/url`,
   );
+}
+
+function versionQuery(versionId?: string): string {
+  return versionId ? `?version_id=${encodeURIComponent(versionId)}` : "";
+}
+
+/** The stored file itself; for a visual, its complete HTML document. */
+export async function getDocumentFile(
+  documentId: string,
+  versionId?: string,
+): Promise<string> {
+  const path = `/single-documents/${encodeURIComponent(documentId)}/file${versionQuery(versionId)}`;
+  const response = await sendRequest(apiUrl(path), {
+    cache: "no-store",
+    headers: await getAuthHeaders(),
+  });
+  if (!response.ok) throw await responseError(response, path);
+  return response.text();
+}
+
+export interface VisualSnapshot {
+  created_at: string | null;
+  sources: { document_id: string; filename: string; stale: boolean }[];
+}
+
+export async function getVisualSnapshot(
+  documentId: string,
+  versionId?: string,
+): Promise<VisualSnapshot> {
+  return apiRequest<VisualSnapshot>(
+    `/visuals/${encodeURIComponent(documentId)}/snapshot${versionQuery(versionId)}`,
+  );
+}
+
+/** The visual as a Word file, ready for insertFileFromBase64. */
+export async function getVisualDocx(
+  documentId: string,
+  versionId?: string,
+): Promise<string> {
+  const path = `/visuals/${encodeURIComponent(documentId)}/docx${versionQuery(versionId)}`;
+  const response = await sendRequest(apiUrl(path), {
+    cache: "no-store",
+    headers: await getAuthHeaders(),
+  });
+  if (!response.ok) throw await responseError(response, path);
+  return bufferToBase64(await response.arrayBuffer());
 }
 
 export async function deleteWorkflowAsset(

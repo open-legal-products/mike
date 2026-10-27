@@ -5,6 +5,7 @@ import { projectRedlineStream } from "../../lib/redline";
 import type { StreamingRedlineEdit } from "../../lib/redline";
 import type {
   WordDocumentReadEvent,
+  WordDocumentWriteEvent,
   WordReasoningEvent,
   WordThinkingEvent,
   WordTextCardEvent,
@@ -17,6 +18,7 @@ import { PreResponseWrapper } from "./PreResponseWrapper";
 import { EditCardsSection } from "./message/EditCardsSection";
 import {
   DocReadBlock,
+  DocWriteBlock,
   EventBlock,
   ReasoningBlock,
 } from "./message/EventBlocks";
@@ -26,6 +28,7 @@ import {
   assistantError,
   isWordContentEvent,
   isWordDocumentReadEvent,
+  isWordDocumentWriteEvent,
   isWordEditBlockEvent,
   isWordEditReferenceEvent,
   isWordReasoningEvent,
@@ -37,6 +40,11 @@ import {
   decodeCitationHref,
   projectCitationMarkdown,
 } from "../../lib/citations";
+import {
+  isVisualFilename,
+  visualTitle,
+  type WordVisualRef,
+} from "../../lib/visuals";
 import type {
   EditCardStatus,
   EditDecision,
@@ -57,6 +65,7 @@ interface AssistantMessageProps {
   onAcceptAndApplyEdit: (key: string) => void;
   /** Scrolls Word to a cited document passage and selects it. */
   onLocateCitation: (text: string) => void;
+  onOpenVisual: (visual: WordVisualRef) => void;
 }
 
 type EventGroup =
@@ -66,6 +75,7 @@ type EventGroup =
         | WordThinkingEvent
         | WordReasoningEvent
         | WordDocumentReadEvent
+        | WordDocumentWriteEvent
       )[];
       indices: number[];
     }
@@ -121,6 +131,7 @@ function AssistantMessageImpl({
   onResolveAll,
   onAcceptAndApplyEdit,
   onLocateCitation,
+  onOpenVisual,
 }: AssistantMessageProps): React.ReactElement {
   // Citation chips render as reserved-fragment links; one delegated handler
   // on each prose block routes their clicks to Word instead of navigation.
@@ -252,7 +263,8 @@ function AssistantMessageImpl({
       if (
         !isWordThinkingEvent(event) &&
         !isWordReasoningEvent(event) &&
-        !isWordDocumentReadEvent(event)
+        !isWordDocumentReadEvent(event) &&
+        !isWordDocumentWriteEvent(event)
       ) {
         return;
       }
@@ -438,7 +450,8 @@ function AssistantMessageImpl({
             (event) =>
               isWordThinkingEvent(event) ||
               (isWordReasoningEvent(event) && !!event.isStreaming) ||
-              (isWordDocumentReadEvent(event) && event.status === "reading"),
+              (isWordDocumentReadEvent(event) && event.status === "reading") ||
+              (isWordDocumentWriteEvent(event) && !!event.isStreaming),
           );
           return (
             <React.Fragment
@@ -480,6 +493,37 @@ function AssistantMessageImpl({
                         filename={event.filename}
                         isStreaming={event.status === "reading"}
                         showConnector={showConnector}
+                      />
+                    );
+                  }
+                  if (isWordDocumentWriteEvent(event)) {
+                    const isVisual = isVisualFilename(event.filename);
+                    const title = isVisual
+                      ? visualTitle(event.filename)
+                      : event.filename;
+                    const documentId = event.documentId;
+                    return (
+                      <DocWriteBlock
+                        key={event.key ?? group.indices[eventIndex]}
+                        action={
+                          event.type === "doc_created" ? "created" : "edited"
+                        }
+                        title={title}
+                        isVisual={isVisual}
+                        isStreaming={!!event.isStreaming}
+                        hasError={!!event.error}
+                        showConnector={showConnector}
+                        onClick={
+                          isVisual && documentId && !event.error
+                            ? () =>
+                                onOpenVisual({
+                                  documentId,
+                                  versionId: event.versionId,
+                                  versionNumber: event.versionNumber,
+                                  title,
+                                })
+                            : undefined
+                        }
                       />
                     );
                   }

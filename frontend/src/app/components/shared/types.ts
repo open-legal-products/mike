@@ -12,6 +12,7 @@ import type {
   AskInputResponseItem as SharedAskInputResponseItem,
   AskInputsEvent as SharedAskInputsEvent,
 } from "@mike/contracts";
+import { isVisualFilename } from "@/shared/lib/visualBridge";
 
 export interface Folder {
   id: string;
@@ -144,7 +145,7 @@ export function isPanelDocument(value: unknown): value is PanelDocument {
   return (
     typeof document.document_id === "string" &&
     typeof document.title === "string" &&
-    ["docx", "pdf", "spreadsheet", "case", "legislation"].includes(
+    ["docx", "pdf", "spreadsheet", "visual", "case", "legislation"].includes(
       String(document.type),
     ) &&
     Array.isArray(document.metadata) &&
@@ -232,6 +233,18 @@ export type AssistantEvent =
   | (WireActivity<"web_read"> & { isStreaming?: boolean })
   | WireActivity<"web_sources">
   | WireActivity<"response_details">
+  | (Omit<
+      WireActivity<"python_run">,
+      "status" | "stdout" | "documents" | "files" | "duration_ms"
+    > & {
+      /** The rest arrive with the finished run; a start frame has none of them. */
+      status?: WireActivity<"python_run">["status"];
+      stdout?: string;
+      documents?: WireActivity<"python_run">["documents"];
+      files?: WireActivity<"python_run">["files"];
+      duration_ms?: number;
+      isStreaming?: boolean;
+    })
   | (Omit<WireDelegation, "events" | "status" | "model" | "effort"> & {
       events: AssistantEvent[];
       /** The rest arrive when the subagent finishes; a stopped run never gets them. */
@@ -487,6 +500,7 @@ export function panelDocumentType(filename: string): PanelDocumentType {
   if (extension === "xlsx" || extension === "xlsm" || extension === "xls") {
     return "spreadsheet";
   }
+  if (isVisualFilename(filename)) return "visual";
   return "pdf";
 }
 

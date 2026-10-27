@@ -13,3 +13,4 @@
 .git
 .codex
 .claude
+**/vendor/pyodide-packages

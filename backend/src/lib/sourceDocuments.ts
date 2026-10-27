@@ -219,5 +219,6 @@ export function sourceDocumentType(filename: string): SourceDocumentType {
   if (extension === "xlsx" || extension === "xlsm" || extension === "xls") {
     return "spreadsheet";
   }
+  if (extension === "html") return "visual";
   return "pdf";
 }

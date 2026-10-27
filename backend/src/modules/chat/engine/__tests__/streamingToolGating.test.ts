@@ -263,6 +263,18 @@ it("maps raw search errors to the safe search message on the wire", () => {
   expect(chunk).not.toContain("private database details");
 });
 
+it("shows the user's own python traceback but not a sandbox failure detail", () => {
+  const traceback = "NameError: name 'df' is not defined";
+  const shown = JSON.parse(sanitizeAssistantSseChunk(`data: ${JSON.stringify({ type: "python_run", error_code: "python_error", error: traceback })}
+
+`).slice(6));
+  const hidden = JSON.parse(sanitizeAssistantSseChunk(`data: ${JSON.stringify({ type: "python_run", error_code: "crashed", error: "socket hang up" })}
+
+`).slice(6));
+  expect(shown.error).toBe(traceback);
+  expect(hidden.error).toBe("The interpreter stopped unexpectedly.");
+});
+
 it.each([
   ["schema_out_of_date", "database needs an update"],
   ["invalid_search", "needs a valid scope"],

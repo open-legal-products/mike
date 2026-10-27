@@ -18,8 +18,9 @@ rm -rf "$APP"
 mkdir -p "$APP/backend" "$APP/frontend"
 node desktop/scripts/stage-source-notices.mjs "$APP" desktop/local-stack/bin/notices
 
-echo "==> backend (dist + prod deps + schema/migrations)"
+echo "==> backend (dist + assets + prod deps + schema/migrations)"
 cp -R backend/dist "$APP/backend/dist"
+cp -R backend/assets "$APP/backend/assets"
 cp backend/package.json backend/package-lock.json backend/schema.sql "$APP/backend/"
 cp -R backend/migrations "$APP/backend/migrations"
 (cd "$APP/backend" && npm ci --omit=dev --no-audit --no-fund >/dev/null)

@@ -413,6 +413,24 @@ describe("AssistantMessage timeline", () => {
             expect(screen.getByText(label)).toBeVisible();
         });
 
+        it("labels a visual build and its report", () => {
+            render(
+                <AssistantMessage
+                    events={[
+                        delegation({ kind: "visual", title: "Lease dates", brief: "A timeline of the lease dates." }),
+                        { type: "content", text: "Done." },
+                    ]}
+                />,
+            );
+            openTimeline();
+            expect(screen.getByText("Started a visual build")).toBeVisible();
+            expect(screen.getByText("Visual build finished")).toBeVisible();
+            fireEvent.click(pill("Lease dates"));
+            fireEvent.click(screen.getByRole("button", { name: "Returned a report to Mike" }));
+            expect(screen.getByRole("region", { name: "Report" }))
+                .toHaveTextContent("A timeline of the lease dates.");
+        });
+
         it("shows the question a paused subagent asked Mike", () => {
             render(
                 <AssistantMessage

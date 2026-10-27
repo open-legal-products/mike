@@ -15,7 +15,11 @@ import { SvgAssetIcon } from "@/app/components/ui/svg-asset-icon";
 import caseLaw from "../../../../public/icons/legal-sources/case-law.svg";
 import legislation from "../../../../public/icons/legal-sources/legislation.svg";
 import { BookOpenText } from "lucide-react";
-import { DocumentContent, type DocumentContentMode } from "@/app/components/shared/DocumentContent";
+import {
+    DocumentContent,
+    type DocumentContentMode,
+    type DocumentContentProps,
+} from "@/app/components/shared/DocumentContent";
 import { DocumentTabBar } from "../shared/DocumentTabBar";
 import type { Citation, EditAnnotation, PanelDocument } from "../shared/types";
 import { cn } from "@/app/lib/utils";
@@ -176,6 +180,7 @@ interface Props {
      */
     onCloseAnnotation?: (tabId: string) => void;
     onScrollChange?: (tabId: string, scrollTop: number) => void;
+    onOpenCitation?: DocumentContentProps["onOpenCitation"];
     /**
      * Offered when the panel has no tabs. Without it an empty panel renders
      * nothing; with it the panel stays open on an "Open Documents" placeholder.
@@ -240,6 +245,7 @@ export function AssistantSidePanel({
     onWarningDismiss,
     onCloseAnnotation,
     onScrollChange,
+    onOpenCitation,
     onOpenDocuments,
     chatCount = 1,
 }: Props) {
@@ -285,12 +291,14 @@ export function AssistantSidePanel({
                 document.removeEventListener("mouseup", onMouseUp);
                 document.body.style.cursor = "";
                 document.body.style.userSelect = "";
+                delete document.body.dataset.resizing;
             };
 
             document.addEventListener("mousemove", onMouseMove);
             document.addEventListener("mouseup", onMouseUp);
             document.body.style.cursor = "col-resize";
             document.body.style.userSelect = "none";
+            document.body.dataset.resizing = "true";
         },
         [panelWidth, chatCount, split],
     );
@@ -466,6 +474,7 @@ export function AssistantSidePanel({
                                 onScrollChange={(scrollTop) =>
                                     onScrollChange?.(tab.id, scrollTop)
                                 }
+                                onOpenCitation={onOpenCitation}
                             />
                         </div>
                     );

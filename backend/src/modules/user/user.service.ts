@@ -72,6 +72,12 @@ export {
     saveWebSearchSettings,
     validateWebSearchPayload,
 } from "./user.webSearch";
+export {
+    codeAnalysisAvailable,
+    getCodeAnalysisSettings,
+    saveCodeAnalysisSettings,
+    validateCodeAnalysisPayload,
+} from "./user.codeAnalysis";
 
 export {
     getApiKeyStatus,

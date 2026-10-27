@@ -5,7 +5,8 @@ import { extractPdfTextForIndex } from "../../lib/pdfText";
 import { docxToPdf } from "../../lib/convert";
 import { extractPresentationText } from "../../lib/officeText";
 import { spreadsheetToLLMText } from "../../lib/spreadsheet";
-import { isSpreadsheetDocumentType, requiresLibreOfficeTextExtraction } from "../../lib/documentTypes";
+import { isSpreadsheetDocumentType, isVisualDocumentType, requiresLibreOfficeTextExtraction } from "../../lib/documentTypes";
+import { visualVisibleText } from "../../lib/visuals/text";
 import type { Db, DbJob } from "../../lib/dbq/types";
 import { safeError } from "../../lib/safeError";
 import { logError } from "../../lib/log";
@@ -26,6 +27,8 @@ export async function extractDocumentText(raw: ArrayBuffer, fileType: string) {
     text = spreadsheetToLLMText(Buffer.from(raw));
   } else if (type === "pptx") {
     text = await extractPresentationText(Buffer.from(raw));
+  } else if (isVisualDocumentType(type)) {
+    text = await visualVisibleText(raw);
   } else {
     throw new Error("document_text_unsupported_format");
   }

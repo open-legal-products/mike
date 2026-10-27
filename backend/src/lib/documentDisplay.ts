@@ -2,12 +2,25 @@ import type { Response } from "express";
 import { docxToPdf } from "./convert";
 import {
   contentTypeForDocumentType,
+  isVisualDocumentType,
   shouldConvertToPdf,
 } from "./documentTypes";
 import {
   buildContentDisposition,
   downloadFile,
 } from "./storage";
+import { composeStoredVisual } from "./visuals/compose";
+
+/**
+ * Model-written HTML must never render on the API origin, where it would run
+ * with the caller's cookies: it is sent as a download, in a sandbox.
+ */
+const VISUAL_RESPONSE_CSP = "sandbox; default-src 'none'";
+
+export function setVisualResponseHeaders(res: Response): void {
+  res.setHeader("Content-Security-Policy", VISUAL_RESPONSE_CSP);
+  res.setHeader("X-Content-Type-Options", "nosniff");
+}
 
 export interface DocumentDisplaySource {
   filename: string;
@@ -50,6 +63,13 @@ export async function prepareDocumentDisplay(source: {
       bytes: await docxToPdf(toBuffer(source.sourceBytes)),
       contentType: "application/pdf",
       filename: pdfFilename(source.filename),
+    };
+  }
+  if (isVisualDocumentType(fileType)) {
+    return {
+      bytes: Buffer.from(await composeStoredVisual(toBuffer(source.sourceBytes)), "utf8"),
+      contentType: contentTypeForDocumentType(fileType),
+      filename: source.filename,
     };
   }
   return {
@@ -110,9 +130,11 @@ export function sendDocumentDisplay(
   payload: DocumentDisplayPayload,
 ): void {
   res.setHeader("Content-Type", payload.contentType);
+  const isHtml = payload.contentType.startsWith("text/html");
+  if (isHtml) setVisualResponseHeaders(res);
   res.setHeader(
     "Content-Disposition",
-    buildContentDisposition("inline", payload.filename),
+    buildContentDisposition(isHtml ? "attachment" : "inline", payload.filename),
   );
   res.send(payload.bytes);
 }

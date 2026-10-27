@@ -73,6 +73,26 @@ import {
   CITATIONS_OPEN_TAG,
 } from "./citations";
 import { runToolCalls } from "./tools/toolDispatcher";
+import {
+  VISUAL_TOOL_NAMES,
+  createVisualTurnState,
+  visualTools,
+  visualsSystemPrompt,
+} from "./tools/visualTools";
+import {
+  VISUAL_BUILDER_TOOL_NAMES,
+  runVisualBuild,
+  type VisualBuilder,
+} from "./tools/visualBuilder";
+import {
+  CODE_ANALYSIS_SYSTEM_PROMPT,
+  PYTHON_TOOL_NAME,
+  createChildPythonTurnState,
+  createPythonTurnState,
+  pythonRunErrorMessage,
+  pythonToolsFor,
+  type PythonTurnState,
+} from "./tools/pythonTools";
 import { addApprovalItems } from "./tools/connectorApprovals";
 import { createKeyedLock, type KeyedLock } from "./tools/documentLocks";
 import type { SubagentRunStore } from "./tools/delegateRuns";
@@ -90,7 +110,7 @@ import { verifyCitations } from "./verifyCitations";
 import { buildMemoryTurn } from "../../../lib/memory/prompt";
 
 export type { AssistantEvent } from "@mike/contracts";
-import type { AssistantEvent, AssistantErrorCode } from "@mike/contracts";
+import type { AssistantEvent, AssistantErrorCode, DelegationEvent } from "@mike/contracts";
 
 /**
  * Tools the model can call that execute outside this process — in the Word
@@ -169,6 +189,9 @@ function sanitizeAssistantEvent(event: AssistantEvent): AssistantEvent {
     }
     if (event.type === "web_search" || event.type === "web_read") {
       return { ...event, error: webToolErrorMessage(event.error_code) };
+    }
+    if (event.type === "python_run") {
+      return { ...event, error: pythonRunErrorMessage(event.error_code, event.error) };
     }
     return { ...event, error: TOOL_ERROR_MESSAGE };
   }
@@ -256,6 +279,10 @@ export async function runLLMStream(params: {
   webSearch?: WebSearchPlan | null;
   /** Expose ask_inputs only to clients that can render and answer it. */
   includeAskInputs?: boolean;
+  /** Visuals need a panel to show them in; tabular review has none. */
+  includeVisuals?: boolean;
+  /** Offer run_python: the user's setting, the deployment switch and the sandbox all allow it. */
+  codeAnalysis?: boolean;
   /**
    * The surface continues a paused turn from an ask_inputs_response, so a
    * connector write can wait there for the user's approval. Surfaces without
@@ -321,7 +348,10 @@ export async function runLLMStream(params: {
   /** Shares its answer's connector tools, web pages, case cache and document edits. */
   subagentRun?: {
     connectorTools: unknown[];
+    /** Only these of the answer's tools, client tools included; omitted means all but the excluded ones. */
+    tools?: ReadonlySet<string>;
     webTurnState: WebTurnState;
+    pythonTurnState: PythonTurnState;
     courtlistenerTurnState: CourtlistenerTurnState;
     turnEditState: TurnEditState;
     documentLocks: KeyedLock;
@@ -350,6 +380,8 @@ export async function runLLMStream(params: {
     includeResearchTools = true,
     webSearch = null,
     includeAskInputs = true,
+    includeVisuals = true,
+    codeAnalysis = false,
     connectorApprovals = false,
     allowDocumentMutation = true,
     workflowStore,
@@ -404,6 +436,8 @@ export async function runLLMStream(params: {
     ...WORKFLOW_TOOLS,
     ...PLAYBOOK_TOOLS,
     ...webTools,
+    ...(includeVisuals ? visualTools({ codeAnalysis }) : []),
+    ...pythonToolsFor(codeAnalysis),
     ...(subagentRuns && chatModel
       ? [delegateTool(chatModel, sameProviderModels(chatModel, apiKeys ?? {}))]
       : []),
@@ -421,11 +455,13 @@ export async function runLLMStream(params: {
   const permittedTools = allowDocumentMutation
     ? advertisedTools
     : withoutDocumentMutatingTools(advertisedTools);
-  const activeTools = isSubagent
-    ? permittedTools.filter(
-        (tool) => !SUBAGENT_EXCLUDED_TOOL_NAMES.has(toolName(tool) ?? ""),
-      )
-    : permittedTools;
+  const subagentMayCall = (name: string) =>
+    !subagentRun ||
+    (!SUBAGENT_EXCLUDED_TOOL_NAMES.has(name) &&
+      (!subagentRun.tools || subagentRun.tools.has(name)));
+  const activeTools = permittedTools.filter((tool) =>
+    subagentMayCall(toolName(tool) ?? ""),
+  );
 
   // Extract system prompt; pass remaining turns to the adapter as
   // plain user/assistant messages (assistant turns may carry stored
@@ -446,6 +482,8 @@ export async function runLLMStream(params: {
     orgId,
     sharedAudience: memorySharedAudience,
   });
+  const offersVisuals = activeTools.some((tool) => toolName(tool) === VISUAL_TOOL_NAMES.generate);
+  const offersPython = activeTools.some((tool) => toolName(tool) === PYTHON_TOOL_NAME);
   const systemPrompt = [
     memory.systemPrompt,
     ...(webSearch
@@ -457,6 +495,10 @@ export async function runLLMStream(params: {
         ]
       : []),
     ...(subagentRuns ? [delegateSystemPrompt(subagentDefaults)] : []),
+    // Computed from the tools actually offered, so read-only callers and
+    // subagents are never told about a tool they cannot call.
+    ...(offersVisuals ? [visualsSystemPrompt(offersPython)] : []),
+    ...(offersPython ? [CODE_ANALYSIS_SYSTEM_PROMPT] : []),
   ].join("\n\n");
   const chatMessages: LlmMessage[] = rawMsgs
     .filter((m) => m.role !== "system")
@@ -484,6 +526,8 @@ export async function runLLMStream(params: {
   // turn's existing version instead of creating a new one.
   const turnEditState: TurnEditState = subagentRun?.turnEditState ?? new Map();
   const documentLocks = subagentRun?.documentLocks ?? createKeyedLock();
+  const visualTurnState = createVisualTurnState();
+  const pythonTurnState = subagentRun?.pythonTurnState ?? createPythonTurnState();
   // Suppress repeated full-document reads for the same document/version in
   // one assistant response. The guard is invalidated when edit_document
   // changes that document so a post-edit verification read can still happen.
@@ -675,6 +719,7 @@ export async function runLLMStream(params: {
         nonce,
         webSearch,
         includeResearchTools,
+        codeAnalysis,
         onActivity: params.onActivity,
         write: () => {},
         model: spawn.model,
@@ -684,6 +729,7 @@ export async function runLLMStream(params: {
         subagentRun: {
           connectorTools,
           webTurnState: spawn.webTurnState,
+          pythonTurnState: createChildPythonTurnState(pythonTurnState),
           courtlistenerTurnState,
           turnEditState,
           documentLocks,
@@ -698,6 +744,69 @@ export async function runLLMStream(params: {
         emitDone: false,
       }),
   });
+  // The visual builder is a subagent with the document reading tools and
+  // save_visual, which runs the answer's own lint-and-save pipeline. Its
+  // events are recorded after the step; a step the answer stopped or failed
+  // in never gets there, so recordDelegations records them.
+  const unrecordedBuilds: DelegationEvent[] = [];
+  const visualBuilderFor =
+    (selectedModel: string): VisualBuilder =>
+    (run) =>
+      runVisualBuild(run, {
+        model: selectedModel,
+        reasoning: params.reasoning ?? "high",
+        signal: delegationSignal,
+        write,
+        spawn: (spawn) =>
+          runLLMStream({
+            clientTools: {
+              schemas: [spawn.saveTool.schema],
+              owns: (name) => name === spawn.saveTool.schema.function.name,
+              execute: async (call) => ({
+                content: await spawn.saveTool.execute(call),
+                events: [],
+              }),
+            },
+            apiMessages: spawn.apiMessages,
+            docStore: spawn.docStore,
+            docIndex: spawn.docIndex,
+            userId,
+            userEmail,
+            db,
+            extraTools,
+            projectId,
+            orgId,
+            apiKeys,
+            nonce,
+            includeResearchTools: false,
+            includeAskInputs: false,
+            includeVisuals: false,
+            allowDocumentMutation: false,
+            onActivity: params.onActivity,
+            write: () => {},
+            model: selectedModel,
+            reasoning: params.reasoning ?? "high",
+            maxIterations: spawn.maxSteps,
+            signal: spawn.signal,
+            subagentRun: {
+              connectorTools: [],
+              tools: VISUAL_BUILDER_TOOL_NAMES,
+              webTurnState,
+              pythonTurnState,
+              courtlistenerTurnState,
+              turnEditState,
+              documentLocks,
+              documentsScoped: spawn.documentsScoped,
+              onToolStart: spawn.onToolStart,
+              onUsage: spawn.onUsage,
+              onToolBatch: () => {},
+            },
+            emitDone: false,
+          }),
+      }).then((result) => {
+        unrecordedBuilds.push(result.event);
+        return result;
+      });
   // A subagent starts as soon as the model has written its delegate call, not
   // when the model's whole step ends, and reports back when it finishes.
   const delegationRuns = new Map<string, Promise<DelegateResult>>();
@@ -719,6 +828,7 @@ export async function runLLMStream(params: {
     const runs = [...delegationRuns.values()];
     delegationRuns.clear();
     for (const { event } of await Promise.all(runs)) if (event) events.push(event);
+    for (const event of unrecordedBuilds.splice(0)) events.push(event);
   };
 
   try {
@@ -754,6 +864,7 @@ export async function runLLMStream(params: {
     );
     answerModel = selectedModel;
     const delegateContext = subagentRuns && delegateContextFor(subagentRuns, selectedModel);
+    const visualBuilder = isSubagent ? undefined : visualBuilderFor(selectedModel);
     const providerSearches =
       webSearch === "provider" ? providerWebSearch.reserve() : 0;
     await streamChatWithTools({
@@ -852,7 +963,7 @@ export async function runLLMStream(params: {
         const permittedCalls = calls.filter(
           (c) =>
             (allowDocumentMutation || !isDocumentMutatingTool(c.name)) &&
-            (!isSubagent || !SUBAGENT_EXCLUDED_TOOL_NAMES.has(c.name)),
+            subagentMayCall(c.name),
         );
         const webCalls = permittedCalls.filter((c) => webToolNames.has(c.name));
         const delegateCalls = permittedCalls.filter(
@@ -918,6 +1029,7 @@ export async function runLLMStream(params: {
           courtlistenerEvents,
           caseCitationEvents,
           mcpEvents,
+          pythonEvents,
         } = await runToolCalls(
           toolCalls,
           docStore,
@@ -940,6 +1052,12 @@ export async function runLLMStream(params: {
             model: selectedModel,
             documentLocks,
             documentsScoped: subagentRun?.documentsScoped,
+            visualTurnState,
+            visualData: pythonTurnState.results,
+            visualBuilder,
+            pythonTurnState: codeAnalysis ? pythonTurnState : undefined,
+            pythonAllowSave: allowDocumentMutation,
+            signal,
           },
         );
         throwIfAborted(signal);
@@ -965,6 +1083,7 @@ export async function runLLMStream(params: {
         }
         events.push(...(documentSearchEvents ?? []));
         events.push(...(textCardEvents ?? []));
+        events.push(...unrecordedBuilds.splice(0));
         for (const dl of docsCreated) {
           events.push({
             type: "doc_created",
@@ -1010,6 +1129,7 @@ export async function runLLMStream(params: {
         for (const event of caseCitationEvents) {
           events.push(event);
         }
+        events.push(...(pythonEvents ?? []));
 
         const delegated = await delegating;
         // Once the answer has stopped or failed, its catch records these.

@@ -27,7 +27,9 @@ import { ensureDocAccess } from "../../lib/access";
 import {
     contentTypeForDocumentType,
     documentSuffix,
+    isVisualDocumentType,
 } from "../../lib/documentTypes";
+import { composeStoredVisual } from "../../lib/visuals/compose";
 
 function contentTypeFor(filename: string): string {
     return contentTypeForDocumentType(documentSuffix(filename));
@@ -96,7 +98,7 @@ export async function resolveTokenDownload(
     db: Db,
     args: { token: string; userId: string; userEmail: string | undefined },
 ): Promise<
-    | { ok: true; bytes: Buffer; contentType: string; filename: string }
+    | { ok: true; bytes: Buffer; contentType: string; filename: string; isVisual: boolean }
     | { ok: false; kind: "invalid_link" | "not_found" }
 > {
     const info = verifyDownload(args.token);
@@ -104,7 +106,7 @@ export async function resolveTokenDownload(
 
     const { data: version } = await db
         .from("document_versions")
-        .select("id, document_id")
+        .select("id, document_id, file_type")
         .eq("storage_path", info.path)
         .is("deleted_at", null)
         .maybeSingle();
@@ -123,10 +125,12 @@ export async function resolveTokenDownload(
     const raw = await downloadFile(info.path);
     if (!raw) return { ok: false, kind: "not_found" };
 
+    const isVisual = isVisualDocumentType((version as { file_type: string | null }).file_type);
     return {
         ok: true,
-        bytes: Buffer.from(raw),
+        bytes: isVisual ? Buffer.from(await composeStoredVisual(raw), "utf8") : Buffer.from(raw),
         contentType: contentTypeFor(info.filename),
         filename: info.filename,
+        isVisual,
     };
 }

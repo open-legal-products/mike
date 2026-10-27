@@ -5,8 +5,10 @@ import { docxToPdf, normalizeDocxZipPaths } from "../../lib/convert";
 import {
     isPresentationDocumentType,
     isSpreadsheetDocumentType,
+    isVisualDocumentType,
     isWordDocumentType,
 } from "../../lib/documentTypes";
+import { visualVisibleText } from "../../lib/visuals/text";
 import { extractPresentationText } from "../../lib/officeText";
 import { spreadsheetToLLMText } from "../../lib/spreadsheet";
 import {
@@ -245,6 +247,7 @@ export async function extractDocumentMarkdown(
     if (normalizedType === "pptx") {
         return extractPresentationText(Buffer.from(buf));
     }
+    if (isVisualDocumentType(normalizedType)) return visualVisibleText(buf);
     if (
         isPresentationDocumentType(normalizedType) ||
         isWordDocumentType(normalizedType)

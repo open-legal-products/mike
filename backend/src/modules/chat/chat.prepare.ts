@@ -21,7 +21,7 @@ import {
 import { resolveRequestTimeZone } from "../../lib/userTime";
 import { attachPriorReasoning, buildDocContext, buildMessages, buildUserPersonalisationPrompt, devLog, enrichWithPriorEvents, loadUserMessageSentTimes, buildWorkflowStore, appendAskInputsResponseToAssistantMessage, runApprovedConnectorActions, generateSpotlightNonce, type AskInputsResponseRequest, type ChatMessage, type SubagentDefaults } from "./engine/index";
 import type { McpToolEvent } from "@mike/contracts";
-import { getUserModelSettings, resolveUserChatSelection } from "../user/user.service";
+import { codeAnalysisAvailable, getUserModelSettings, resolveUserChatSelection } from "../user/user.service";
 import {
     checkProjectAccess,
     projectHasSharedAudience,
@@ -80,6 +80,7 @@ export type PreparedChatStream = {
     workflowStore: Awaited<ReturnType<typeof buildWorkflowStore>>;
     legalResearchUs: boolean;
     webSearch: WebSearchPlan | null;
+    codeAnalysis: boolean;
     apiKeys: Awaited<ReturnType<typeof getUserModelSettings>>["api_keys"];
     /** The organization the chat belongs to, whose keys and model lists apply. */
     orgId: string | null;
@@ -547,6 +548,7 @@ export async function prepareChatStream(
                     selectedModel,
                     apiKeys,
                 ),
+                codeAnalysis: modelSettings.code_analysis && (await codeAnalysisAvailable()),
                 apiKeys,
                 orgId: contentOrgId,
                 titleModel,

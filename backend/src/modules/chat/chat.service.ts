@@ -82,3 +82,4 @@ export {
   WORD_EDIT_FORMATS,
   type WordEditApplyMode,
 } from "./engine/wordDocumentEdits";
+export { buildVisualDocx, persistGeneratedFile } from "./engine/tools/documentOps";

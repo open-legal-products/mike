@@ -26,6 +26,10 @@
   reading, keys, and safety
 - [Subagents](subagents.md) — delegated tasks, what they may do, approvals,
   and limits
+- [Visuals](visuals.md) — interactive pages the assistant makes, citations,
+  exporting, and safety
+- [Code analysis](code-analysis.md) — Python over chat documents, limits, the
+  sandbox service and the in-process fallback
 - [Microsoft Word add-in](../word-addin/README.md) — concise setup and command
   reference
 - [Word add-in development and deployment](word-addin-development.md) — manual

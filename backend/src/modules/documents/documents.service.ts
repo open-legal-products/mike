@@ -15,6 +15,7 @@
 //   documents.versions.ts  — version lifecycle (list/create/rename/delete)
 //   documents.edits.ts     — tracked-change ids + accept/reject edits
 //   documents.trackedEdits.ts — apply tracked-change edits as a new version
+//   documents.visuals.ts   — save an edited visual as a new version
 //
 // Upload sessions own transport and destination authorization; version metadata
 // creation, activation, replacement, copying, and cleanup use this facade.
@@ -47,6 +48,8 @@ export {
     applyTrackedEditsToDocument,
     loadCurrentVersionBytes,
 } from "./documents.trackedEdits";
+
+export { saveVisualVersion } from "./documents.visuals";
 
 export { renameDocument } from "./documents.rename";
 export { deleteCollectionDocuments } from "./documents.cleanup";

@@ -1,4 +1,4 @@
-export type DocumentViewType = "pdf" | "docx" | "spreadsheet";
+export type DocumentViewType = "pdf" | "docx" | "spreadsheet" | "visual";
 
 type LegacyDocViewType = Extract<DocumentViewType, "pdf" | "docx">;
 
@@ -12,7 +12,7 @@ export interface ResolveDocumentViewTypeOptions {
 }
 
 type DocumentTypeToken =
-  "pdf" | "doc" | "docx" | "spreadsheet" | "presentation" | "other";
+  "pdf" | "doc" | "docx" | "spreadsheet" | "presentation" | "visual" | "other";
 
 function documentTypeToken(
   value: string | null | undefined,
@@ -28,6 +28,7 @@ function documentTypeToken(
   }
   if (normalized.includes("presentation")) return "presentation";
   if (normalized === "application/pdf") return "pdf";
+  if (normalized === "text/html") return "visual";
 
   const withoutQuery = normalized.split(/[?#]/, 1)[0];
   const token = withoutQuery.includes(".")
@@ -41,6 +42,7 @@ function documentTypeToken(
   if (token === "doc") return "doc";
   if (token === "pptx" || token === "ppt") return "presentation";
   if (token === "pdf") return "pdf";
+  if (token === "html" || token === "htm") return "visual";
   return "other";
 }
 
@@ -60,6 +62,9 @@ export function resolveDocumentViewType({
 
   if (fileTypeToken === "spreadsheet" || filenameToken === "spreadsheet") {
     return "spreadsheet";
+  }
+  if (fileTypeToken === "visual" || filenameToken === "visual") {
+    return "visual";
   }
 
   const wordToken =

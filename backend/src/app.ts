@@ -31,6 +31,7 @@ import {
   userMemoryRouter,
 } from "./modules/memory/memory.routes";
 import { playbooksRouter } from "./modules/playbooks/playbooks.routes";
+import { visualsRouter } from "./modules/visuals/visuals.routes";
 import { manifestPublicKey } from "./lib/manifestSigning";
 import {
   handleUnhandledError,
@@ -134,6 +135,13 @@ const chatCreateLimiter = makeLimiter({
 const exportLimiter = makeLimiter({
   windowMs: hours(envInt("RATE_LIMIT_EXPORT_WINDOW_HOURS", 1)),
   max: envInt("RATE_LIMIT_EXPORT_MAX", 10),
+  message: "Too many export requests. Please try again later.",
+});
+
+// Each render holds a Chromium page in the sandbox for up to 20 seconds.
+const visualRenderLimiter = makeLimiter({
+  windowMs: hours(1),
+  max: envInt("RATE_LIMIT_VISUAL_RENDER_MAX", 120),
   message: "Too many export requests. Please try again later.",
 });
 
@@ -315,6 +323,9 @@ app.get("/projects/:projectId/export", exportLimiter);
 // while an export builds and a 10/hour budget would lock the user out of an
 // export they legitimately scheduled.
 app.post("/user/exports", exportLimiter);
+app.get("/visuals/:documentId/export", visualRenderLimiter);
+app.get("/visuals/:documentId/docx", visualRenderLimiter);
+app.post("/visuals/:documentId/docx", visualRenderLimiter);
 app.delete("/user/account", dataDeleteLimiter);
 app.delete("/user/chats", dataDeleteLimiter);
 app.delete("/user/projects", dataDeleteLimiter);
@@ -352,6 +363,7 @@ app.use("/documents", sourceDocumentsRouter);
 app.use("/audit", auditRouter);
 app.use("/playbooks", playbooksRouter);
 app.use("/upload-sessions", uploadSessionsRouter);
+app.use("/visuals", visualsRouter);
 
 app.get("/health", (_req, res) => res.json({ ok: true }));
 

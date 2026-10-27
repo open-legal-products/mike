@@ -44,6 +44,9 @@ infrastructure, and development workflow, including optional local integrations.
 | [KaTeX](https://katex.org/) | Mathematical notation. |
 | [DOMPurify](https://github.com/cure53/DOMPurify) | Sanitizing HTML content. |
 | [Recharts](https://recharts.org/) | Charts and data visualization. |
+| [Apache ECharts](https://echarts.apache.org/) | Charts inside the visuals the assistant makes, bundled from `echarts`, with its Apache-2.0 notice kept at the top of the bundle. |
+| [elkjs](https://github.com/kieler/elkjs) | Layout of entity charts, document maps and flowcharts in visuals. |
+| [Inter](https://rsms.me/inter/) and [EB Garamond](https://github.com/georgd/EB-Garamond) | Typefaces for the app and for visuals, served from the repository under the SIL Open Font License 1.1. |
 
 ## AI, data, and infrastructure
 
@@ -52,6 +55,8 @@ infrastructure, and development workflow, including optional local integrations.
 | [AI SDK](https://github.com/vercel/ai) | Language-model integrations, streaming, and tool calls. |
 | [Model Context Protocol TypeScript SDK](https://github.com/modelcontextprotocol/typescript-sdk) | Connections to MCP tools and servers. |
 | [Ollama](https://github.com/ollama/ollama) | Optional local language-model inference. |
+| [Pyodide](https://pyodide.org/) with [NumPy](https://numpy.org/), [pandas](https://pandas.pydata.org/), [openpyxl](https://openpyxl.readthedocs.io/), [python-dateutil](https://github.com/dateutil/dateutil) and [regex](https://github.com/mrabarnett/mrab-regex) | The Python interpreter and packages behind code analysis, run in the sandbox. |
+| [Playwright](https://playwright.dev/) | Headless Chromium that renders visuals to PNG and PDF in the sandbox, and browser tests. |
 | [Zod](https://github.com/colinhacks/zod) | Runtime schema validation. |
 | [PostgreSQL](https://www.postgresql.org/) | Persistent application data. |
 | [Supabase](https://github.com/supabase/supabase) and [Supabase Auth](https://github.com/supabase/auth) | Database tooling, authentication, and client libraries. |

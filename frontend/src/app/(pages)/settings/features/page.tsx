@@ -10,6 +10,7 @@ import { SettingsHeading } from "@/app/components/settings/SettingsHeading";
 import { SettingsRow } from "@/app/components/settings/SettingsRow";
 import { ToggleSwitchUI } from "@/shared/ui/ToggleSwitchUI";
 import { WebSearchSection } from "@/app/components/settings/WebSearchSection";
+import { CodeAnalysisSection } from "@/app/components/settings/CodeAnalysisSection";
 import { useUserProfile } from "@/app/contexts/UserProfileContext";
 
 export default function FeaturesPage() {
@@ -83,6 +84,7 @@ export default function FeaturesPage() {
       </section>
 
       <WebSearchSection />
+      <CodeAnalysisSection />
     </div>
   );
 }

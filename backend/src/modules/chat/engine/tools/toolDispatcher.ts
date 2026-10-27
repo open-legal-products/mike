@@ -1,4 +1,4 @@
-import type { ConnectorApprovalItem, DocumentSearchEvent, TextCardEvent } from "@mike/contracts";
+import type { ConnectorApprovalItem, DocumentSearchEvent, PythonRunEvent, TextCardEvent } from "@mike/contracts";
 import { textCardEvent } from "./textCard";
 import { internalFailure } from "../../../../lib/serviceResult";
 import { canUseWorkflowInWorkspace } from "../../../../lib/workflowWorkspace";
@@ -101,6 +101,17 @@ import {
   type CourtlistenerTurnState,
 } from "./courtlistenerTurnState";
 import type { Db } from "../../../../lib/supabase";
+import {
+  VISUAL_NEXT_ACTION,
+  VISUAL_TOOL_NAMES,
+  createVisualTurnState,
+  runVisualToolCall,
+  type VisualDataSource,
+  type VisualTurnState,
+} from "./visualTools";
+import type { VisualBuilder } from "./visualBuilder";
+import { PYTHON_TOOL_NAME, runPythonToolCall, type PythonTurnState } from "./pythonTools";
+import { renderVisualBlocksForDocument } from "../../../../lib/visuals/render";
 
 function sourceMaterialNotice(
   sourceKind: "document" | "library_template" | "workflow_asset" | undefined,
@@ -332,6 +343,15 @@ export async function runToolCalls(
     documentLocks?: KeyedLock;
     /** A subagent scoped to its docStore's documents: searches stay inside them. */
     documentsScoped?: boolean;
+    /** Lint rejections so far in this answer; without it every call is a first try. */
+    visualTurnState?: VisualTurnState;
+    visualData?: ReadonlyMap<string, VisualDataSource>;
+    /** Runs the visual builder subagent; without it the visual tools refuse. */
+    visualBuilder?: VisualBuilder;
+    /** Present only when code analysis is on for this turn. */
+    pythonTurnState?: PythonTurnState;
+    pythonAllowSave?: boolean;
+    signal?: AbortSignal;
   } = {},
 ): Promise<{
   toolResults: unknown[];
@@ -359,6 +379,7 @@ export async function runToolCalls(
   courtlistenerEvents: CourtlistenerToolEvent[];
   caseCitationEvents: CaseCitationEvent[];
   mcpEvents: McpToolEvent[];
+  pythonEvents: PythonRunEvent[];
 }> {
   const toolResults: unknown[] = [];
   const docsRead: {
@@ -385,6 +406,7 @@ export async function runToolCalls(
   const courtlistenerEvents: CourtlistenerToolEvent[] = [];
   const caseCitationEvents: CaseCitationEvent[] = [];
   const mcpEvents: McpToolEvent[] = [];
+  const pythonEvents: PythonRunEvent[] = [];
   const approvalItems: ConnectorApprovalItem[] = [];
   const documentLocks = options.documentLocks ?? createKeyedLock();
   const courtState: CourtlistenerTurnState = courtlistenerState ?? {
@@ -413,56 +435,79 @@ export async function runToolCalls(
     { type: "courtlistener_find_in_case" }
   >[] = [];
 
-  const registerGeneratedDocument = (
-    tc: ToolCall,
-    result: Record<string, unknown>,
-    previewFilename: string,
+  // Puts a document the turn created on the chat's label list and tells the
+  // client about it; returns the new doc label when there is one.
+  const recordGeneratedDocument = (
+    result: {
+      filename: string;
+      download_url: string;
+      document_id?: string;
+      version_id?: string;
+      version_number?: number;
+      storage_path?: string;
+    },
     fileType: string,
   ) => {
     let newDocLabel: string | null = null;
-    if ("filename" in result && "download_url" in result) {
-      const dlFilename = result.filename as string;
-      const dlUrl = result.download_url as string;
-      const documentId = (result as { document_id?: string }).document_id;
-      const versionId = (result as { version_id?: string }).version_id;
-      const versionNumber =
-        (result as { version_number?: number }).version_number ?? null;
-      const storagePath = (result as { storage_path?: string }).storage_path;
+    const {
+      filename: dlFilename,
+      download_url: dlUrl,
+      document_id: documentId,
+      version_id: versionId,
+      storage_path: storagePath,
+    } = result;
+    const versionNumber = result.version_number ?? null;
 
-      if (documentId && storagePath && docIndex) {
-        let i = 0;
-        while (`doc-${i}` in docIndex) i++;
-        newDocLabel = `doc-${i}`;
-        docIndex[newDocLabel] = {
-          document_id: documentId,
-          filename: dlFilename,
-          version_id: versionId ?? null,
-          version_number: versionNumber,
-        };
-        docStore.set(newDocLabel, {
-          storage_path: storagePath,
-          file_type: fileType,
-          filename: dlFilename,
-        });
-      }
+    if (documentId && storagePath && docIndex) {
+      let i = 0;
+      while (`doc-${i}` in docIndex) i++;
+      newDocLabel = `doc-${i}`;
+      docIndex[newDocLabel] = {
+        document_id: documentId,
+        filename: dlFilename,
+        version_id: versionId ?? null,
+        version_number: versionNumber,
+      };
+      docStore.set(newDocLabel, {
+        storage_path: storagePath,
+        file_type: fileType,
+        filename: dlFilename,
+      });
+    }
 
-      write(
-        `data: ${JSON.stringify({
-          type: "doc_created",
-          filename: dlFilename,
-          download_url: dlUrl,
-          document_id: documentId,
-          version_id: versionId,
-          version_number: versionNumber,
-        })}\n\n`,
-      );
-      docsCreated.push({
+    write(
+      `data: ${JSON.stringify({
+        type: "doc_created",
         filename: dlFilename,
         download_url: dlUrl,
         document_id: documentId,
         version_id: versionId,
         version_number: versionNumber,
-      });
+      })}\n\n`,
+    );
+    docsCreated.push({
+      filename: dlFilename,
+      download_url: dlUrl,
+      document_id: documentId,
+      version_id: versionId,
+      version_number: versionNumber,
+    });
+    return newDocLabel;
+  };
+
+  const registerGeneratedDocument = (
+    tc: ToolCall,
+    result: Record<string, unknown>,
+    previewFilename: string,
+    fileType: string,
+    nextAction?: string,
+  ) => {
+    let newDocLabel: string | null = null;
+    if ("filename" in result && "download_url" in result) {
+      newDocLabel = recordGeneratedDocument(
+        result as Parameters<typeof recordGeneratedDocument>[0],
+        fileType,
+      );
     } else {
       write(
         `data: ${JSON.stringify({ type: "doc_created", filename: previewFilename, download_url: "" })}\n\n`,
@@ -474,7 +519,7 @@ export async function runToolCalls(
       ? {
           ...safeToolResult,
           doc_id: newDocLabel,
-          next_required_action: [
+          next_required_action: nextAction ?? [
             `Before writing your final response, call read_document with doc_id "${newDocLabel}".`,
             `Base your description on the generated document's actual returned text, not on memory of what you intended to generate.`,
             `Do not include download links, URLs, or markdown links to the document in your prose response; the document card is shown automatically by the UI.`,
@@ -2255,6 +2300,63 @@ export async function runToolCalls(
           fail("replicate_document failed");
         }
       }
+    } else if (
+      (tc.function.name === VISUAL_TOOL_NAMES.generate ||
+        tc.function.name === VISUAL_TOOL_NAMES.edit) &&
+      docIndex
+    ) {
+      const outcome = await runVisualToolCall(tc, {
+        state: options.visualTurnState ?? createVisualTurnState(),
+        docStore,
+        docIndex,
+        db,
+        userId,
+        userEmail: options.userEmail,
+        projectId,
+        orgId: options.orgId,
+        codeAnalysis: options.pythonTurnState !== undefined,
+        dataSources: options.visualData,
+        turnReadState,
+        documentLocks,
+        nonce,
+        build: options.visualBuilder,
+        write,
+      });
+      if (outcome.kind === "generated") {
+        if ("filename" in outcome.result) {
+          write(
+            `data: ${JSON.stringify({ type: "doc_created_start", filename: outcome.previewFilename })}\n\n`,
+          );
+          registerGeneratedDocument(tc, outcome.result, outcome.previewFilename, "html", VISUAL_NEXT_ACTION);
+        } else {
+          // A rejected visual is not a document: no card is shown for it.
+          toolResults.push({ role: "tool", tool_call_id: tc.id, content: JSON.stringify(outcome.result) });
+        }
+      } else {
+        if (outcome.edited) docsEdited.push(outcome.edited);
+        toolResults.push({ role: "tool", tool_call_id: tc.id, content: outcome.content });
+      }
+    } else if (tc.function.name === PYTHON_TOOL_NAME && options.pythonTurnState && docIndex) {
+      const { content, event, created } = await runPythonToolCall(tc, args, {
+        state: options.pythonTurnState,
+        docStore,
+        docIndex,
+        db,
+        userId,
+        projectId,
+        orgId: options.orgId,
+        allowSave: options.pythonAllowSave !== false,
+        nonce,
+        signal: options.signal,
+        write,
+      });
+      for (const file of created) {
+        write(`data: ${JSON.stringify({ type: "doc_created_start", filename: file.filename })}\n\n`);
+        recordGeneratedDocument(file, "xlsx");
+      }
+      write(`data: ${JSON.stringify(event)}\n\n`);
+      pythonEvents.push(event);
+      toolResults.push({ role: "tool", tool_call_id: tc.id, content });
     } else if (tc.function.name === "generate_docx") {
       const title = args.title as string;
       const landscape = !!args.landscape;
@@ -2278,6 +2380,24 @@ export async function runToolCalls(
           numberSections,
           projectId: projectId ?? null,
           orgId: options.orgId ?? null,
+          resolveVisual: async (rawDocId) => {
+            const label = resolveDocLabel(rawDocId, docStore, docIndex);
+            const indexed = label ? docIndex?.[label] : undefined;
+            if (!indexed) return { error: `Visual '${rawDocId}' is not in this conversation.` };
+            const rendered = await renderVisualBlocksForDocument(db, {
+              documentId: indexed.document_id,
+              versionId: indexed.version_id ?? null,
+              userId,
+              userEmail: options.userEmail ?? undefined,
+            });
+            if (rendered.ok) return rendered.data;
+            return {
+              error:
+                rendered.kind === "error"
+                  ? "The visual could not be rendered."
+                  : `The visual could not be embedded: ${rendered.detail}`,
+            };
+          },
         },
       );
       registerGeneratedDocument(
@@ -2364,5 +2484,6 @@ export async function runToolCalls(
     courtlistenerEvents,
     caseCitationEvents,
     mcpEvents,
+    pythonEvents,
   };
 }

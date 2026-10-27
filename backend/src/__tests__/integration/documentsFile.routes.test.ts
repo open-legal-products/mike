@@ -123,6 +123,36 @@ describe("GET /single-documents/:documentId/file", () => {
     expect(mocks.downloadFile).not.toHaveBeenCalled();
   });
 
+  it("sends a visual as a sandboxed download of the composed document, never inline", async () => {
+    mocks.loadActiveVersion.mockResolvedValue({
+      id: "version-3",
+      storage_path: "generated/user-1/document-1/generated.html",
+      pdf_storage_path: null,
+      version_number: 1,
+      filename: "Lease map.html",
+      source: "generated",
+      file_type: "html",
+    });
+    mocks.downloadFile.mockResolvedValue(
+      new TextEncoder().encode(
+        `<!doctype html><html data-mike-kind="document_map"><head><title>Lease map</title></head><body><p>Term: 10 years</p></body></html>`,
+      ).buffer,
+    );
+
+    const response = await request(app)
+      .get("/single-documents/document-1/file")
+      .set("Authorization", "Bearer test");
+
+    expect(response.status).toBe(200);
+    expect(response.headers["content-type"]).toBe("text/html; charset=utf-8");
+    expect(response.headers["content-disposition"]).toContain("attachment");
+    expect(response.headers["content-security-policy"]).toContain("sandbox");
+    expect(response.headers["x-content-type-options"]).toBe("nosniff");
+    expect(response.text).toContain("Term: 10 years");
+    expect(response.text).toContain('<meta http-equiv="Content-Security-Policy"');
+    expect(mocks.createFileReadStream).not.toHaveBeenCalled();
+  });
+
   it("does not read storage when the caller cannot access the document", async () => {
     mocks.ensureDocAccess.mockResolvedValue({ ok: false });
 

@@ -232,4 +232,11 @@ npm run dev --prefix frontend
 
 Open [http://localhost:3000](http://localhost:3000).
 
+Outside Compose there is no `sandbox` service, so the backend runs the
+assistant's Python and the visual renderer in its own process (allowed in
+development without any setting). Code analysis needs the Python wheels once:
+`npm run pyodide:fetch --prefix backend`. PDF and Word export need a Playwright
+Chromium (`npx playwright install chromium` from the repository root installs
+one the backend finds). See [Code analysis](code-analysis.md).
+
 For common setup problems, see [Troubleshooting](troubleshooting.md).

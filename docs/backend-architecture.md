@@ -13,6 +13,7 @@ backend/src/
 ├── modules/<domain>/      one directory per HTTP surface (see "Module anatomy")
 ├── lib/                   shared kernel: infrastructure + cross-domain primitives
 ├── workers/, jobs/        queue consumers and scheduled jobs — reach modules via facades
+├── sandbox/               the sandbox service entrypoint and self-test — imports lib/ only
 └── __tests__/             cross-cutting suites, incl. architecture.test.ts
 ```
 
@@ -219,8 +220,9 @@ new code uses the shared one.
    `db.rpc(...)` belongs to a service function with a name and a typed result.
 5. **Facades re-export by name.** `export *` hides what a module exposes and
    invites accidental coupling.
-6. **`middleware/` depends on `lib/`, not on modules.** Request plumbing must
-   not pull a domain into every request.
+6. **`middleware/` and `sandbox/` depend on `lib/`, not on modules.** Request
+   plumbing must not pull a domain into every request, and the sandbox
+   sidecar runs without the domains at all.
 7. **`src/routes/` does not exist.** A new HTTP surface is a new module.
 8. **Document version writes belong to `modules/documents/`.** Creation, activation, replacement, and deletion go through its facade. The architecture test also rejects direct lifecycle RPC calls from other modules.
 
@@ -244,13 +246,16 @@ remaining inline queries per routes file and only ever goes down.
   `llm/`, `mcp/`, `httpError`, `serviceResult`, `pagination`, `search`,
   `privateIp`, `origins`, `runtimeConfig`, `courtlistener` (an external API
   client), `webSearch/` (Mike's own web search and page reader), `convert`,
-  `pdfjs`, `zipExport`, `concurrency`.
+  `pdfjs`, `zipExport`, `concurrency`, `sandbox/` (the sandbox client and
+  the core the sidecar and the in-process fallback both run).
 - **Cross-domain primitives** that several modules and the job handlers share:
   `access` (project/document authorization), `audit` (audit-row writes),
   `documentTypes`, `documentVersions`, `modelSelection`, `routerModels`,
-  `userLookup`, `workflowCatalog*` (used by the chat tools), `sourceDocuments`
-  and pure shared utilities. Document-version reads can join across domains;
-  mutations have one owner in the documents module.
+  `userLookup`, `workflowCatalog*` (used by the chat tools), `sourceDocuments`,
+  `visuals/` (visual source, lint, compose, and the authorized load and render
+  shared by the chat engine and the visuals module) and pure shared
+  utilities. Document-version reads can join across domains; mutations have
+  one owner in the documents module.
 
 The assistant engine lives in `modules/chat/engine/`. Other chat surfaces use
 named exports from `chat.service.ts`. HTTP framing lives in `lib/assistantSse.ts`;

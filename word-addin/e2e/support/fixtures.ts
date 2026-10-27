@@ -84,6 +84,13 @@ interface ChatStreamOpts {
   }[];
   /** Emit a final `citations` frame (the quotes behind `[n]` markers). */
   citations?: unknown[];
+  /** Emit `doc_created_start` then `doc_created` frames before answer content. */
+  docCreated?: {
+    filename: string;
+    documentId: string;
+    versionId: string;
+    versionNumber?: number;
+  }[];
 }
 
 interface MockJsonOpts {
@@ -685,6 +692,20 @@ export const test = base.extend<{ addin: Addin }>({
             body += `data: ${JSON.stringify({
               type: "doc_read",
               filename,
+            })}\n\n`;
+          }
+          for (const created of opts?.docCreated ?? []) {
+            body += `data: ${JSON.stringify({
+              type: "doc_created_start",
+              filename: created.filename,
+            })}\n\n`;
+            body += `data: ${JSON.stringify({
+              type: "doc_created",
+              filename: created.filename,
+              download_url: `/single-documents/${created.documentId}/file`,
+              document_id: created.documentId,
+              version_id: created.versionId,
+              version_number: created.versionNumber ?? 1,
             })}\n\n`;
           }
           for (const call of opts?.clientToolCalls ?? []) {

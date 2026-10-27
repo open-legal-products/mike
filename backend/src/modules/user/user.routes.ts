@@ -99,6 +99,9 @@ import {
     setCourtListenerEnabled,
     setCourtListenerToken,
     isWorkspaceExportType,
+    getCodeAnalysisSettings,
+    validateCodeAnalysisPayload,
+    saveCodeAnalysisSettings,
 } from "./user.service";
 
 export const userRouter = Router();
@@ -423,6 +426,27 @@ userRouter.put("/web-search", requireAuth, asyncRoute(async (req, res) => {
         userId,
         parsed.update,
     );
+    if (!result.ok) return void sendServiceFailure(res, result);
+    res.setHeader("Cache-Control", "private, no-store");
+    res.json(result.data);
+}));
+
+// GET /user/code-analysis
+userRouter.get("/code-analysis", requireAuth, asyncRoute(async (_req, res) => {
+    const userId = res.locals.userId as string;
+    const result = await getCodeAnalysisSettings(createServerSupabase(), userId);
+    if (!result.ok) return void sendServiceFailure(res, result);
+    res.setHeader("Cache-Control", "private, no-store");
+    res.json(result.data);
+}));
+
+// PUT /user/code-analysis
+userRouter.put("/code-analysis", requireAuth, asyncRoute(async (req, res) => {
+    const parsed = validateCodeAnalysisPayload(req.body);
+    if (!parsed.ok) return void res.status(400).json({ detail: parsed.detail });
+
+    const userId = res.locals.userId as string;
+    const result = await saveCodeAnalysisSettings(createServerSupabase(), userId, parsed.enabled);
     if (!result.ok) return void sendServiceFailure(res, result);
     res.setHeader("Cache-Control", "private, no-store");
     res.json(result.data);

@@ -5,6 +5,7 @@ import {
     contentTypeForDocumentType,
     isPresentationDocumentType,
     isSpreadsheetDocumentType,
+    isVisualDocumentType,
     isWordDocumentType,
     shouldConvertToPdf,
 } from "../documentTypes";
@@ -77,6 +78,15 @@ describe("shouldConvertToPdf", () => {
         expect(shouldConvertToPdf("pdf")).toBe(false);
         expect(shouldConvertToPdf(null)).toBe(false);
         expect(shouldConvertToPdf(undefined)).toBe(false);
+    });
+});
+
+describe("isVisualDocumentType", () => {
+    it("recognizes html but never as an upload type", () => {
+        expect(isVisualDocumentType("html")).toBe(true);
+        expect(isVisualDocumentType("pdf")).toBe(false);
+        expect(contentTypeForDocumentType("html")).toBe("text/html; charset=utf-8");
+        expect(ALLOWED_DOCUMENT_TYPES.has("html")).toBe(false);
     });
 });
 

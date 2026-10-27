@@ -177,6 +177,12 @@
     button {
         cursor: pointer;
     }
+
+    /* A frame swallows mouse events, which would end a panel drag the
+       moment the pointer crossed into a visual. */
+    body[data-resizing] iframe[data-mike-visual-frame] {
+        pointer-events: none;
+    }
 }
 
 @layer utilities {

@@ -9,8 +9,8 @@
 set -euo pipefail
 cd "$(dirname "$0")/../.."
 
-echo "==> backend (tsc)"
-(cd backend && npx tsc)
+echo "==> backend (visual kit + tsc)"
+(cd backend && npm run build)
 
 echo "==> bundled workflow catalog (downloaded at build, installed offline)"
 node desktop/scripts/bundle-workflows.js
