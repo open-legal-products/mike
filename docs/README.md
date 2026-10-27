@@ -46,6 +46,8 @@
 
 ## Testing and CI
 
+- [Workflow evaluations](evals/README.md) — corpus generation, agent architecture,
+  workflow rubrics, offline grading and model/performance comparison protocol
 - [End-to-end tests in CI](e2e-ci.md)
 - [Backend unit-test coverage](testing-coverage.md)
 - [Frontend unit-test coverage](frontend-testing.md)

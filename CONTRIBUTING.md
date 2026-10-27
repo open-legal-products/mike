@@ -121,7 +121,9 @@ npm run test:stack --prefix backend  # gated: real-Supabase auth/access tests (r
   end-to-end only for flows a browser is genuinely needed to prove.
 - CI runs the build and unit/integration tests on every PR
   (`.github/workflows/ci.yml`), and the Playwright suite in a full local stack
-  (`.github/workflows/e2e.yml`). The CI workflow will also run the optional
-  offline eval harness if `evals/run.mjs` is added to the tree.
+  (`.github/workflows/e2e.yml`). `npm run eval:check` validates the offline
+  evaluation contracts and grader failure handling without credentials or
+  model calls. See [the evaluation guide](docs/evals/README.md) before adding
+  cases or interpreting recorded model comparisons.
 - Tests that need a live Supabase or an LLM key are env-gated and skip cleanly
   when the environment is absent — a plain `npm test` should always be green.

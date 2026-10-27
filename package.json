@@ -2,6 +2,10 @@
     "name": "mike",
     "private": true,
     "scripts": {
+        "eval:validate": "node evals/run.mjs validate",
+        "eval:smoke": "node evals/run.mjs smoke",
+        "eval:test": "node --test evals/*.test.mjs",
+        "eval:check": "npm run eval:test && npm run eval:validate && npm run eval:smoke",
         "test:e2e": "playwright test",
         "test:e2e:local": "bash scripts/e2e-local-stack.sh",
         "test:e2e:headed": "playwright test --headed",

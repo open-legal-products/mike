@@ -1,0 +1,420 @@
+{
+  "version": 1,
+  "source_commit": "d4fd89996e638f66ca55331cb787ce38e11975e1",
+  "workflows": [
+    {
+      "id": "assistant_qa",
+      "title": "Source-grounded assistant Q&A",
+      "source_paths": [
+        "backend/src/modules/chat/engine/contextBuilders.ts",
+        "backend/src/modules/chat/engine/verifyCitations.ts"
+      ],
+      "metrics": [
+        "answer factuality",
+        "claim-level citation precision/recall",
+        "abstention accuracy"
+      ],
+      "risks": [
+        "unsupported advice",
+        "source confusion"
+      ]
+    },
+    {
+      "id": "proofreading",
+      "title": "Proofreading and minimal correction",
+      "source_paths": [
+        "backend/src/lib/workflowCatalogSource.ts",
+        "backend/src/modules/chat/engine/tools/documentOps.ts"
+      ],
+      "metrics": [
+        "correction precision",
+        "error recall",
+        "substantive-change rate"
+      ],
+      "risks": [
+        "unrequested legal edits",
+        "overcorrection"
+      ]
+    },
+    {
+      "id": "key_term_extraction",
+      "title": "Key-term extraction",
+      "source_paths": [
+        "backend/src/lib/workflowCatalogSource.ts",
+        "backend/src/modules/chat/engine/tools/toolSchemas.ts"
+      ],
+      "metrics": [
+        "field exactness",
+        "missing-value accuracy",
+        "span support"
+      ],
+      "risks": [
+        "hallucinated terms",
+        "unit or date errors"
+      ]
+    },
+    {
+      "id": "document_comparison",
+      "title": "Document comparison",
+      "source_paths": [
+        "backend/src/lib/workflowCatalogSource.ts",
+        "backend/src/modules/chat/engine/tools/documentOps.ts"
+      ],
+      "metrics": [
+        "change recall",
+        "false-positive rate",
+        "direction and materiality"
+      ],
+      "risks": [
+        "reversed versions",
+        "invented differences"
+      ]
+    },
+    {
+      "id": "template_drafting",
+      "title": "Drafting from templates and missing inputs",
+      "source_paths": [
+        "backend/src/modules/chat/engine/tools/toolSchemas.ts",
+        "backend/src/modules/chat/engine/tools/documentOps.ts"
+      ],
+      "metrics": [
+        "instruction adherence",
+        "template fidelity",
+        "placeholder correctness"
+      ],
+      "risks": [
+        "source template mutation",
+        "fabricated client facts"
+      ]
+    },
+    {
+      "id": "playbook_import",
+      "title": "Playbook import and rule compilation",
+      "source_paths": [
+        "backend/src/modules/playbooks/playbooks.sources.ts",
+        "backend/src/modules/playbooks/playbooks.staging.ts",
+        "docs/playbooks.md"
+      ],
+      "metrics": [
+        "rule coverage",
+        "position fidelity",
+        "source-reference validity"
+      ],
+      "risks": [
+        "lost conditions",
+        "fabricated source paragraphs"
+      ]
+    },
+    {
+      "id": "playbook_review",
+      "title": "Rule-by-rule playbook review",
+      "source_paths": [
+        "backend/src/modules/playbooks/playbooks.operations.ts",
+        "backend/src/modules/playbooks/playbooks.word.ts",
+        "docs/playbooks.md"
+      ],
+      "metrics": [
+        "rule-level precision/recall",
+        "snapshot fidelity",
+        "severity calibration"
+      ],
+      "risks": [
+        "missed required clauses",
+        "noisy risk flags"
+      ]
+    },
+    {
+      "id": "tabular_setup",
+      "title": "Tabular review creation and column generation",
+      "source_paths": [
+        "backend/src/modules/tabular/tabular.prompt.ts",
+        "backend/src/modules/tabular/tabular.generate.ts"
+      ],
+      "metrics": [
+        "schema validity",
+        "column usefulness",
+        "idempotent generation"
+      ],
+      "risks": [
+        "duplicate columns",
+        "format-instruction conflict"
+      ]
+    },
+    {
+      "id": "tabular_extraction",
+      "title": "Tabular extraction, reasoning and follow-up",
+      "source_paths": [
+        "backend/src/modules/tabular/tabular.extractRow.ts",
+        "backend/src/modules/tabular/tabular.chats.ts",
+        "backend/src/modules/tabular/tabular.prompt.ts"
+      ],
+      "metrics": [
+        "cell exactness",
+        "typed-format validity",
+        "citation precision",
+        "row isolation"
+      ],
+      "risks": [
+        "wrong row sources",
+        "missing-as-no"
+      ]
+    },
+    {
+      "id": "document_ingestion",
+      "title": "Upload, extraction and ingestion failure handling",
+      "source_paths": [
+        "backend/src/modules/uploads/uploads.processing.ts",
+        "backend/src/modules/documents/documents.conversion.ts",
+        "docs/document-text-search.md"
+      ],
+      "metrics": [
+        "accepted-input fidelity",
+        "corrupt-file rejection",
+        "readiness accuracy"
+      ],
+      "risks": [
+        "fake ready status",
+        "silent OCR gap"
+      ]
+    },
+    {
+      "id": "document_search",
+      "title": "Stored-text search, versions and coverage",
+      "source_paths": [
+        "backend/src/modules/documents/documents.textSearch.ts",
+        "backend/src/modules/documents/documents.textJobs.ts",
+        "docs/document-text-search.md"
+      ],
+      "metrics": [
+        "retrieval recall at k",
+        "scope correctness",
+        "revision freshness",
+        "coverage honesty"
+      ],
+      "risks": [
+        "obsolete text",
+        "zero-match overclaim"
+      ]
+    },
+    {
+      "id": "document_edits",
+      "title": "Tracked edits and accept/reject lifecycle",
+      "source_paths": [
+        "backend/src/modules/documents/documents.edits.ts",
+        "backend/src/modules/documents/documents.trackedEdits.ts",
+        "backend/src/modules/chat/engine/tools/documentLocks.ts"
+      ],
+      "metrics": [
+        "edit-anchor accuracy",
+        "accept/reject correctness",
+        "unrelated-content preservation"
+      ],
+      "risks": [
+        "unapproved edits",
+        "duplicate or misplaced replacements"
+      ]
+    },
+    {
+      "id": "artifact_export",
+      "title": "Document generation, downloads and exports",
+      "source_paths": [
+        "backend/src/modules/chat/engine/tools/documentOps.ts",
+        "backend/src/modules/documents/documents.download.ts",
+        "frontend/src/app/components/tabular/exportToExcel.ts",
+        "docs/tamper-evident-exports.md"
+      ],
+      "metrics": [
+        "artifact integrity",
+        "download success",
+        "citation preservation",
+        "manifest hash correctness"
+      ],
+      "risks": [
+        "broken download",
+        "lost citations",
+        "unverifiable provenance"
+      ]
+    },
+    {
+      "id": "workflow_catalog",
+      "title": "Default workflows, add-ons and custom workflow execution",
+      "source_paths": [
+        "backend/src/lib/workflowCatalogSource.ts",
+        "backend/src/modules/workflows/workflows.addons.ts",
+        "backend/src/modules/workflows/workflows.crud.ts"
+      ],
+      "metrics": [
+        "catalog integrity",
+        "instruction adherence",
+        "copy independence",
+        "missing-input handling"
+      ],
+      "risks": [
+        "template drift",
+        "shared-source mutation",
+        "wrong workflow"
+      ]
+    },
+    {
+      "id": "project_library_scope",
+      "title": "Projects, Library and workspace authorization",
+      "source_paths": [
+        "backend/src/modules/projects/projects.access.ts",
+        "backend/src/modules/library/library.service.ts",
+        "backend/src/modules/chat/engine/tools/documentScope.ts"
+      ],
+      "metrics": [
+        "scope precision",
+        "permission enforcement",
+        "template-source preservation"
+      ],
+      "risks": [
+        "cross-matter disclosure",
+        "viewer writes"
+      ]
+    },
+    {
+      "id": "web_research",
+      "title": "Web search and page-grounded research",
+      "source_paths": [
+        "backend/src/modules/chat/engine/tools/webSearchTools.ts",
+        "backend/src/lib/webSearch/pageReader.ts",
+        "docs/web-search.md"
+      ],
+      "metrics": [
+        "source relevance",
+        "claim support",
+        "freshness",
+        "unsafe-command resistance"
+      ],
+      "risks": [
+        "snippet hallucination",
+        "page injection"
+      ]
+    },
+    {
+      "id": "legal_research",
+      "title": "CourtListener and legal-authority research",
+      "source_paths": [
+        "backend/src/modules/chat/engine/tools/courtlistenerTools.ts",
+        "backend/src/lib/courtlistener.ts",
+        "docs/courtlistener.md"
+      ],
+      "metrics": [
+        "authority relevance",
+        "pinpoint accuracy",
+        "jurisdiction/date adherence",
+        "unsupported-authority rate"
+      ],
+      "risks": [
+        "fabricated case",
+        "holding distortion"
+      ]
+    },
+    {
+      "id": "connectors",
+      "title": "Google and MCP connector reads, writes and approvals",
+      "source_paths": [
+        "backend/src/modules/chat/engine/tools/connectorApprovals.ts",
+        "backend/src/lib/integrations/googleWorkspace.ts",
+        "backend/src/lib/mcp/client.ts",
+        "docs/google-workspace.md"
+      ],
+      "metrics": [
+        "read-scope correctness",
+        "approval-content binding",
+        "write idempotency",
+        "injection resistance"
+      ],
+      "risks": [
+        "unapproved send",
+        "wrong account/workspace",
+        "stale approval replay"
+      ]
+    },
+    {
+      "id": "word_addin",
+      "title": "Microsoft Word add-in edits and host recovery",
+      "source_paths": [
+        "backend/src/modules/word-chat/wordChat.service.ts",
+        "backend/src/modules/chat/engine/tools/wordClientTools.ts",
+        "word-addin/src/taskpane/lib/wordEditAnchors.ts",
+        "word-addin/src/taskpane/lib/wordTurnRecovery.ts"
+      ],
+      "metrics": [
+        "host edit fidelity",
+        "anchor accuracy",
+        "approval behavior",
+        "recovery idempotency"
+      ],
+      "risks": [
+        "wrong selection",
+        "host-only failure",
+        "duplicate insertion"
+      ]
+    },
+    {
+      "id": "scoped_memory",
+      "title": "Memory use and asynchronous curation",
+      "source_paths": [
+        "backend/src/modules/memory/memory.curator.ts",
+        "backend/src/lib/memory/prompt.ts",
+        "backend/src/lib/memory/schedule.ts",
+        "docs/memory.md"
+      ],
+      "metrics": [
+        "usefulness",
+        "workspace isolation",
+        "instruction precedence",
+        "stale-write prevention"
+      ],
+      "risks": [
+        "private-to-shared leak",
+        "memory-as-authority",
+        "post-wipe resurrection"
+      ]
+    },
+    {
+      "id": "subagents",
+      "title": "Delegation, scoped tools and synthesis",
+      "source_paths": [
+        "backend/src/modules/chat/engine/tools/delegateTools.ts",
+        "backend/src/modules/chat/engine/tools/delegateRuns.ts",
+        "docs/subagents.md"
+      ],
+      "metrics": [
+        "delegation appropriateness",
+        "scope enforcement",
+        "handoff fidelity",
+        "synthesis support",
+        "total-run cost"
+      ],
+      "risks": [
+        "scope expansion",
+        "unverified brief",
+        "overlapping edits",
+        "ignored partial failure"
+      ]
+    },
+    {
+      "id": "continuation",
+      "title": "Durable runs, clarification, cancellation and retry",
+      "source_paths": [
+        "backend/src/modules/chat/engine/routeStreaming.ts",
+        "backend/src/modules/chat/engine/streaming.ts",
+        "backend/src/modules/chat/engine/tools/toolSchemas.ts"
+      ],
+      "metrics": [
+        "completion rate",
+        "reconnect correctness",
+        "side-effect idempotency",
+        "honest terminal state"
+      ],
+      "risks": [
+        "duplicate artifact",
+        "work after cancellation",
+        "lost input"
+      ]
+    }
+  ]
+}

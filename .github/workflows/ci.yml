@@ -27,6 +27,18 @@ concurrency:
   cancel-in-progress: ${{ github.event_name != 'push' }}
 
 jobs:
+  evals:
+    name: Offline evaluation contracts
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7.1.0
+        with:
+          node-version: 22
+      # No dependencies, credentials, services or model calls. This validates
+      # definitions and failure handling; it does not measure legal quality.
+      - run: npm run eval:check
+
   backend:
     name: Backend build and tests
     runs-on: ubuntu-latest
