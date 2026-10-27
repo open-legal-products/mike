@@ -1,46 +1,27 @@
 import { createHash } from "node:crypto";
 import { downloadFile } from "../../lib/storage";
-import { extractDocxBodyText } from "../../lib/docxTrackedChanges";
-import { extractPdfTextForIndex } from "../../lib/pdfText";
-import { docxToPdf } from "../../lib/convert";
-import { extractPresentationText } from "../../lib/officeText";
-import { spreadsheetToLLMText } from "../../lib/spreadsheet";
-import { isSpreadsheetDocumentType, requiresLibreOfficeTextExtraction } from "../../lib/documentTypes";
+import { EXTRACTION_MAX_BYTES, ExtractionLimitError, runIsolatedExtraction } from "../../lib/extraction/isolated";
 import type { Db, DbJob } from "../../lib/dbq/types";
 import { safeError } from "../../lib/safeError";
 import { logError } from "../../lib/log";
 
-/** Complete text, using the same accepted DOCX view as the edit matcher. */
-export async function extractDocumentText(raw: ArrayBuffer, fileType: string) {
-  const type = fileType.toLowerCase();
-  if (type === "pdf") return extractPdfTextForIndex(raw);
-  if (requiresLibreOfficeTextExtraction(type)) {
-    const pdf = await docxToPdf(Buffer.from(raw));
-    return extractPdfTextForIndex(Uint8Array.from(pdf).buffer);
-  }
-  let text: string;
-  if (type === "docx") {
-    text = await extractDocxBodyText(Buffer.from(raw));
-    if (!text) text = (await (await import("mammoth")).extractRawText({ buffer: Buffer.from(raw) })).value;
-  } else if (isSpreadsheetDocumentType(type)) {
-    text = spreadsheetToLLMText(Buffer.from(raw));
-  } else if (type === "pptx") {
-    text = await extractPresentationText(Buffer.from(raw));
-  } else {
-    throw new Error("document_text_unsupported_format");
-  }
-  return { text, textlessPageCount: null };
-}
+export { extractDocumentText } from "../../lib/extraction/documentText";
 
 /** Extract and publish only while the queued version revision still matches. */
 export async function handleDocumentExtractText(db: Db, job: DbJob): Promise<void> {
   const { versionId, revision } = job.payload;
   if (typeof versionId !== "string" || typeof revision !== "string") return;
   const { data: version, error } = await db.from("document_versions")
-    .select("id,storage_path,file_type,filename,content_sha256,text_revision")
+    .select("id,storage_path,file_type,filename,content_sha256,text_revision,size_bytes")
     .eq("id", versionId).eq("text_revision", revision).is("deleted_at", null).maybeSingle();
   if (error) throw error;
   if (!version?.storage_path) return; // superseded/deleted work is a successful no-op
+  const fileType = version.file_type || version.filename?.split(".").pop() || "";
+  // Retrying cannot shrink the file, so too large is final, not a retry.
+  if ((version.size_bytes ?? 0) > EXTRACTION_MAX_BYTES) {
+    await markDocumentTextFailed(db, job, "too_large");
+    return;
+  }
   const { data: claim, error: claimError } = await db.from("document_version_texts")
     .update({ status: "processing", error_code: null, updated_at: new Date().toISOString() })
     .eq("version_id", versionId).eq("source_revision", revision)
@@ -51,8 +32,15 @@ export async function handleDocumentExtractText(db: Db, job: DbJob): Promise<voi
   if (!raw) throw new Error("document_text_source_unavailable");
   const hash = createHash("sha256").update(Buffer.from(raw)).digest("hex");
   if (version.content_sha256 && version.content_sha256 !== hash) throw new Error("document_text_source_changed");
-  const { text, textlessPageCount } = await extractDocumentText(raw,
-    version.file_type || version.filename?.split(".").pop() || "");
+  let extracted: { text: string; textlessPageCount: number | null };
+  try {
+    extracted = await runIsolatedExtraction("documentText", raw, { fileType });
+  } catch (err) {
+    if (!(err instanceof ExtractionLimitError)) throw err;
+    await markDocumentTextFailed(db, job, "too_large");
+    return;
+  }
+  const { text, textlessPageCount } = extracted;
   const { error: publishError } = await db.rpc("publish_document_text", {
     p_version_id: versionId, p_revision: revision,
     // PostgreSQL text cannot contain NUL; do not truncate otherwise.
@@ -62,11 +50,11 @@ export async function handleDocumentExtractText(db: Db, job: DbJob): Promise<voi
 }
 
 /** Mark exhausted work failed without overwriting a newer revision or ready text. */
-export async function markDocumentTextFailed(db: Db, job: DbJob): Promise<void> {
+export async function markDocumentTextFailed(db: Db, job: DbJob, errorCode = "extraction_failed"): Promise<void> {
   const { versionId, revision } = job.payload;
   if (typeof versionId !== "string" || typeof revision !== "string") return;
   const { error } = await db.from("document_version_texts")
-    .update({ status: "failed", text_content: null, error_code: "extraction_failed", updated_at: new Date().toISOString() })
+    .update({ status: "failed", text_content: null, error_code: errorCode, updated_at: new Date().toISOString() })
     .eq("version_id", versionId).eq("source_revision", revision).in("status", ["pending", "processing", "failed"]);
   if (error) throw error;
 }

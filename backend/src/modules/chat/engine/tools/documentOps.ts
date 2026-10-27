@@ -18,7 +18,6 @@ import { convertedPdfKey, docxToPdf } from "../../../../lib/convert";
 import { enqueueConversion } from "../../../../lib/queue/conversionQueue";
 import { enqueueDbJob } from "../../../../lib/dbq/enqueue";
 import type { Db } from "../../../../lib/supabase";
-import { extractDocxBodyText } from "../../../../lib/docxTrackedChanges";
 import { buildDownloadUrl } from "../../../../lib/downloadTokens";
 import {
   contentSha256,
@@ -38,8 +37,10 @@ import {
   requiresLibreOfficeTextExtraction,
   shouldConvertToPdf,
 } from "../../../../lib/documentTypes";
-import { extractPresentationText } from "../../../../lib/officeText";
-import { spreadsheetToLLMText } from "../../../../lib/spreadsheet";
+import {
+  ExtractionLimitError,
+  runIsolatedExtraction,
+} from "../../../../lib/extraction/isolated";
 
 
 export function citationReminder(
@@ -64,10 +65,6 @@ export function citationReminder(
 }
 
 export { extractPdfText, extractLegacyOfficeText } from "../../../../lib/pdfText";
-import {
-  extractPdfTextForModel,
-  extractLegacyOfficeText,
-} from "../../../../lib/pdfText";
 
 export async function generateDocx(
   title: string,
@@ -1338,40 +1335,40 @@ export async function readDocumentContent(
     }
     let text: string;
     const fileType = docInfo.file_type?.toLowerCase?.() ?? "";
+    // Parsers run on their own thread so a huge file cannot stall every
+    // other request; a user is waiting, so this goes ahead of background work.
+    const source = raw;
+    const readIsolated = (
+      op:
+        | "pdfForModel"
+        | "docxText"
+        | "spreadsheet"
+        | "presentation"
+        | "legacyOfficeText"
+        | "rawText",
+    ) => runIsolatedExtraction(op, source, { interactive: true });
     if (fileType === "pdf") {
-      text = await extractPdfTextForModel(raw);
+      text = await readIsolated("pdfForModel");
       devLog(
         `[read_document] pdf extracted length=${text.length} for filename="${docInfo.filename}"`,
       );
     } else if (fileType === "docx") {
       // Use the same flattening as the edit_document matcher so the
       // LLM sees exactly the characters it can anchor against.
-      text = await extractDocxBodyText(Buffer.from(raw));
+      // (falls back to mammoth when the accepted view comes back empty)
+      text = await readIsolated("docxText");
       devLog(
-        `[read_document] docx extractDocxBodyText length=${text.length} for filename="${docInfo.filename}"`,
+        `[read_document] docx extracted length=${text.length} for filename="${docInfo.filename}"`,
       );
-      if (!text) {
-        devLog(
-          `[read_document] docx accepted-view extractor returned empty, falling back to mammoth for filename="${docInfo.filename}"`,
-        );
-        const mammoth = await import("mammoth");
-        const result = await mammoth.extractRawText({
-          buffer: Buffer.from(raw),
-        });
-        text = result.value;
-        devLog(
-          `[read_document] docx mammoth fallback length=${text.length} for filename="${docInfo.filename}"`,
-        );
-      }
     } else if (isSpreadsheetDocumentType(fileType)) {
       // SheetJS reads .xlsx/.xlsm/.xls directly (no PDF detour), emitting a
       // cell-addressed markdown view with Excel-formatted values.
-      text = spreadsheetToLLMText(Buffer.from(raw));
+      text = await readIsolated("spreadsheet");
       devLog(
         `[read_document] spreadsheet extracted length=${text.length} for filename="${docInfo.filename}"`,
       );
     } else if (fileType === "pptx") {
-      text = await extractPresentationText(Buffer.from(raw));
+      text = await readIsolated("presentation");
       devLog(
         `[read_document] presentation extracted length=${text.length} for filename="${docInfo.filename}"`,
       );
@@ -1397,7 +1394,7 @@ export async function readDocumentContent(
         devLog(
           `[read_document] legacy Office file_type="${fileType}" for filename="${docInfo.filename}", converting to pdf for text extraction`,
         );
-        text = await extractLegacyOfficeText(raw);
+        text = await readIsolated("legacyOfficeText");
         devLog(
           `[read_document] legacy Office PDF extraction length=${text.length} for filename="${docInfo.filename}"`,
         );
@@ -1419,11 +1416,7 @@ export async function readDocumentContent(
       devLog(
         `[read_document] unknown file_type="${docInfo.file_type}" for filename="${docInfo.filename}", trying mammoth`,
       );
-      const mammoth = await import("mammoth");
-      const result = await mammoth.extractRawText({
-        buffer: Buffer.from(raw),
-      });
-      text = result.value;
+      text = await readIsolated("rawText");
       devLog(
         `[read_document] mammoth length=${text.length} for filename="${docInfo.filename}"`,
       );
@@ -1448,7 +1441,9 @@ export async function readDocumentContent(
           version_number: versionNumber,
         })}\n\n`,
       );
-    return "Document could not be read.";
+    return err instanceof ExtractionLimitError
+      ? "Document is too large to read."
+      : "Document could not be read.";
   }
 }
 

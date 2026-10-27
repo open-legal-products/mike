@@ -10,6 +10,7 @@ vi.mock("../../../lib/convert", () => ({ docxToPdf: mocks.convert }));
 vi.mock("../../../lib/spreadsheet", () => ({ spreadsheetToLLMText: mocks.sheet }));
 vi.mock("../../../lib/officeText", () => ({ extractPresentationText: mocks.slides }));
 vi.mock("mammoth", () => ({ extractRawText: mocks.mammoth }));
+import { ExtractionLimitError } from "../../../lib/extraction/isolated";
 import { extractDocumentText, handleDocumentExtractText, markDocumentTextFailed, backfillDocumentText, processDocumentTextInline } from "../documents.indexing";
 const job = { id: "job", kind: "document.extract_text", payload: { versionId: "v1", revision: "r1" }, status: "pending", attempts: 0, max_attempts: 3, run_at: "", claimed_at: null, finished_at: null, last_error: null, dedupe_key: null, result: null, created_at: "" } satisfies DbJob;
 const bytes = new TextEncoder().encode("source bytes").buffer;
@@ -49,6 +50,18 @@ describe("version text extraction", () => {
     await markDocumentTextFailed(fake.db, job);
     expect(fake.calls[0].filters).toContainEqual(["eq", "source_revision", "r1"]);
     expect(fake.calls[0].payload).toMatchObject({ status: "failed", error_code: "extraction_failed" }); fake.done();
+  });
+  it("fails a file over the download backstop terminally without downloading it", async () => {
+    const fake = scriptedDb([{ table: "document_versions", data: { ...version, file_type: "xlsx", size_bytes: 200 * 1024 * 1024 } }, { table: "document_version_texts", op: "update" }]);
+    await handleDocumentExtractText(fake.db, job);
+    expect(mocks.download).not.toHaveBeenCalled(); expect(mocks.sheet).not.toHaveBeenCalled();
+    expect(fake.calls[1].payload).toMatchObject({ status: "failed", error_code: "too_large" }); fake.done();
+  });
+  it("fails a file that hits an extraction limit terminally instead of retrying", async () => {
+    mocks.sheet.mockImplementation(() => { throw new ExtractionLimitError("took longer than 180s"); });
+    const fake = scriptedDb([{ table: "document_versions", data: { ...version, file_type: "xlsx", size_bytes: 65 * 1024 * 1024 } }, { table: "document_version_texts", op: "update", data: { version_id: "v1" } }, { table: "document_version_texts", op: "update" }]);
+    await handleDocumentExtractText(fake.db, job);
+    expect(fake.calls[2].payload).toMatchObject({ status: "failed", error_code: "too_large" }); fake.done();
   });
   it("propagates extraction failure for queue retries", async () => {
     mocks.docx.mockRejectedValue(new Error("invalid document"));

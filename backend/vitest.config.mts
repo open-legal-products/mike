@@ -24,6 +24,9 @@ export default defineConfig({
     environment: "node",
     maxWorkers: process.env.CI ? undefined : localMaxWorkers,
     include: ["src/**/*.test.ts"],
+    // Parse documents in-process: module mocks cannot reach into the
+    // extraction worker thread. lib/extraction's own tests turn it back on.
+    env: { EXTRACTION_ISOLATION: "off" },
     exclude: ["dist/**", "node_modules/**"],
     // Generous timeouts so cold-start module transform/import latency
     // can't cause spurious timeout failures on a cold CI runner. Warm
