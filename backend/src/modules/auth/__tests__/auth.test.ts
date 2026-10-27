@@ -523,9 +523,10 @@ describe("auth routes", () => {
     consoleError.mockRestore();
   });
 
-  it("reports a failed password-reset request while keeping the indistinguishable 204", async () => {
+  it.each(["resolved", "rejected"])("reports a %s password-reset failure while keeping the indistinguishable 204", async (mode) => {
     const cause = new Error("mailer unavailable");
-    authClient.auth.resetPasswordForEmail.mockRejectedValue(cause);
+    if (mode === "resolved") authClient.auth.resetPasswordForEmail.mockResolvedValue({ data: {}, error: cause });
+    else authClient.auth.resetPasswordForEmail.mockRejectedValue(cause);
 
     const response = await request(app)
       .post("/auth/password-reset")
@@ -542,6 +543,13 @@ describe("auth routes", () => {
     expect(failure.kind).toBe("auth.supabase_unavailable");
     expect(failure.cause).toBe(cause);
     expect(context.level).toBe("warning");
+  });
+
+  it("does not report a successful password-reset response", async () => {
+    authClient.auth.resetPasswordForEmail.mockResolvedValue({ data: {}, error: null });
+    const response = await request(app).post("/auth/password-reset").set("Origin", origin).send({ email: "unknown@example.test" });
+    expect(response.status).toBe(204);
+    expect(reportError).not.toHaveBeenCalled();
   });
 
   it("keeps the thrown SSO failure as the cause of the one reported event", async () => {

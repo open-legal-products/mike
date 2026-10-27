@@ -336,11 +336,12 @@ authRouter.post("/password-reset", asyncRoute(async (req, res) => {
   if (email.success) {
     try {
       const client = createRequestSupabase(req, res);
-      await sendPasswordReset(
+      const { error } = await sendPasswordReset(
         client,
         email.data,
         callbackUrl(req, "/reset-password", "/reset-password"),
       );
+      if (error) throw error;
     } catch (error) {
       // Deliberately indistinguishable to prevent account enumeration: the
       // response is the same 204 either way. The failure itself is still
