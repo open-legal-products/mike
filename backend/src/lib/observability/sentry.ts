@@ -18,7 +18,7 @@
 //      explicitly are remembered so the bridge does not double-report them.
 
 import * as Sentry from "@sentry/node";
-import { retainExceptionTypes, diagnosticErrorTags, privacyBoundaryIntegration, type Operation, type Stage } from "./sentryPrivacy";
+import { retainExceptionTypes, diagnosticRoute, diagnosticErrorTags, privacyBoundaryIntegration, type Operation, type Stage } from "./sentryPrivacy";
 
 export type SentryRole = "api" | "worker" | "worker-thread" | "job";
 
@@ -1077,10 +1077,23 @@ export function markStage(stage: Stage): void {
   Sentry.addBreadcrumb({ category: "mike.stage", message: stage, level: "info" });
 }
 
-/** Attach the request id to every event captured during this request. */
-export function tagCurrentRequest(requestId: string): void {
+/** Baseline identity for all request captures, including middleware/console errors. */
+export function tagCurrentRequest(
+  requestId: string,
+  request?: { method: string; originalUrl: string },
+): void {
   if (!initialized) return;
-  Sentry.getIsolationScope().setTag("request_id", requestId);
+  const scope = Sentry.getIsolationScope();
+  scope.setTag("request_id", requestId);
+  if (request) {
+    // Never put a concrete URL, query, resource name or id on the scope.
+    // This fallback exists before Express selects a route; setOperation in
+    // a domain handler replaces it with the more specific business flow.
+    scope.setTag("component", "http");
+    scope.setTag("operation", "http.request");
+    scope.setTag("http_method", request.method);
+    scope.setTag("http_route", diagnosticRoute(request.originalUrl));
+  }
 }
 
 /** Attach the authenticated user's id (never the email) to this request. */

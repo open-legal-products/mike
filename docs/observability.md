@@ -177,8 +177,22 @@ however many users hit it.
   raised it, is reported instead. `--no-warnings` silences this too.
 
 Backend events carry `service=mike-backend` and `role` (`api`, `worker`,
-`worker-thread`, or `job`); explicit reporting paths add `component`.
+`worker-thread`, or `job`). Every API request starts its own isolation scope
+before parsing, authentication or routing, with `component=http`, the fallback
+`operation=http.request`, HTTP method, sanitized route and generated request ID.
+Domain `setOperation` calls replace that fallback. Thus a leftover console error
+or an early middleware failure still identifies its request without a log lookup.
+Only fixed route segments survive; resource names, IDs and query strings do not.
 User identity is removed by the final transport in both installation modes.
+
+Error objects retain repository-relative code paths, line and column numbers;
+a nested Error logged through the console keeps its original stack location.
+Plain strings and database error objects have no original stack, so their event
+identifies the reporting line instead. Preserve the original Error as `cause`
+when wrapping a failure; an overwritten or discarded stack cannot be recovered.
+Source locations are code filenames, never uploaded document names. Production
+source mapping still depends on the release/source-map configuration below;
+minified browser frames cannot promise an original TypeScript line without it.
 
 **Web app**
 
