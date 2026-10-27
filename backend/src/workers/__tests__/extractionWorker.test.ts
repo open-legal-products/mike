@@ -853,6 +853,7 @@ describe("generation lease", () => {
         ).rejects.toThrow(/incomplete extraction/);
 
         expect(publish).toHaveBeenCalledWith("rev-1", {
+            reporting_owner: "backend",
             type: "error",
             message: "The Anthropic API key was rejected.",
             safe_to_display: true,
