@@ -286,9 +286,20 @@ function kindForStatus(status: number): UserErrorKind {
     return "unknown";
 }
 
+/**
+ * Drops trailing "." and "!" characters, as `.replace(/[.!]+$/, "")` did. That
+ * regex retries from every punctuation run and is quadratic on a long run
+ * followed by anything else; scanning back from the end is linear.
+ */
+function withoutTrailingPunctuation(text: string): string {
+    let end = text.length;
+    while (end > 0 && (text[end - 1] === "." || text[end - 1] === "!")) end--;
+    return text.slice(0, end);
+}
+
 function titleFor(kind: UserErrorKind, action?: string): string {
     if (action) {
-        const trimmed = action.trim().replace(/[.!]+$/, "");
+        const trimmed = withoutTrailingPunctuation(action.trim());
         if (trimmed) return `Couldn't ${trimmed}`;
     }
     return KIND_TITLES[kind];

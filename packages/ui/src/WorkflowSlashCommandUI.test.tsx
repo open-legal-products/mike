@@ -1,6 +1,6 @@
 import { render, screen } from "@testing-library/react";
 import { describe, expect, it } from "vitest";
-import { WorkflowSlashCommandUI } from "./WorkflowSlashCommandUI";
+import { WorkflowSlashCommandUI, workflowSlashCommandFromTitle } from "./WorkflowSlashCommandUI";
 
 describe("WorkflowSlashCommandUI", () => {
     it("shows the title-derived command and activation caption", () => {
@@ -22,5 +22,15 @@ describe("WorkflowSlashCommandUI", () => {
         expect(caption).toHaveClass("min-h-5", "text-xs", "text-gray-500");
         expect(caption).toHaveTextContent("");
         expect(screen.queryByText(/activate this workflow/)).not.toBeInTheDocument();
+    });
+
+    it("trims edge hyphens from the slug, in linear time", () => {
+        expect(workflowSlashCommandFromTitle("  -- Due -- diligence --  ")).toBe("/due-diligence");
+        expect(workflowSlashCommandFromTitle("---")).toBeNull();
+        // A long run of "-" followed by anything else is the input CodeQL
+        // names for /-+$/ (V8 happens to run the old alternation fast).
+        const started = performance.now();
+        expect(workflowSlashCommandFromTitle(`${"-".repeat(100_000)}x`)).toBe("/x");
+        expect(performance.now() - started).toBeLessThan(1_000);
     });
 });

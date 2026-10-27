@@ -4,9 +4,22 @@ export function workflowSlashCommandFromTitle(title: string): string | null {
         .toLowerCase()
         .replace(/[^\p{L}\p{N}\s-]/gu, "")
         .trim()
-        .replace(/[\s-]+/g, "-")
-        .replace(/^-+|-+$/g, "");
-    return titleSlug ? `/${titleSlug}` : null;
+        .replace(/[\s-]+/g, "-");
+    const slug = withoutEdgeHyphens(titleSlug);
+    return slug ? `/${slug}` : null;
+}
+
+/**
+ * Drops leading and trailing "-", as `.replace(/^-+|-+$/g, "")` did. The
+ * `-+$` branch retries from every hyphen and is quadratic on a long run of
+ * them followed by anything else; scanning in from both ends is linear.
+ */
+function withoutEdgeHyphens(text: string): string {
+    let start = 0;
+    let end = text.length;
+    while (start < end && text[start] === "-") start++;
+    while (end > start && text[end - 1] === "-") end--;
+    return text.slice(start, end);
 }
 
 /**

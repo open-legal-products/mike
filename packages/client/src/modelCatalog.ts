@@ -339,9 +339,17 @@ export function withoutExplicitProtocol(modelId: string): string {
  * on partner models ("meta/llama-4-maverick-maas").
  */
 export function vertexCatalogModel(modelId: string): string {
-  return withoutExplicitProtocol(modelId)
-    .replace(/@[^/]*$/, "")
-    .replace(/-maas$/, "");
+  return withoutVersionPin(withoutExplicitProtocol(modelId)).replace(/-maas$/, "");
+}
+
+/**
+ * Drops everything from the first "@" in the last path segment, as
+ * `.replace(/@[^/]*$/, "")` did. Done by index rather than with that regex,
+ * which retries from every "@" and is quadratic on a long run of them.
+ */
+function withoutVersionPin(modelId: string): string {
+  const pin = modelId.indexOf("@", modelId.lastIndexOf("/") + 1);
+  return pin === -1 ? modelId : modelId.slice(0, pin);
 }
 
 /**
