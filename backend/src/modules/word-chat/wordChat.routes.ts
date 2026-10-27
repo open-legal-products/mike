@@ -886,6 +886,7 @@ wordChatRouter.post("/", requireAuth, asyncRoute(async (req, res) => {
           type: "error",
           message:
             "The response was generated but could not be saved. Keep this document open and review its tracked changes in Word.",
+          reporting_owner: "backend",
           ...(requestId ? { request_id: requestId } : {}),
         })}\n\n`,
       );

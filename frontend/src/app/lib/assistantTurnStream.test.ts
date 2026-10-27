@@ -428,11 +428,11 @@ describe("error frames", () => {
         cursor: createTurnCursor("chat-a"),
         hooks: { onErrorFrame },
       });
-    await run({ type: "error", message: "x", code: "internal_error", request_id: "req-1" });
+    await run({ type: "error", message: "x", code: "internal_error", request_id: "req-1", reporting_owner: "backend" });
     await run({ type: "error", message: "x", request_id: 42 });
-    expect(onErrorFrame.mock.calls.map(([f]) => [f.code, f.requestId])).toEqual([
-      ["internal_error", "req-1"],
-      [null, null],
+    expect(onErrorFrame.mock.calls.map(([f]) => [f.code, f.requestId, f.reportingOwner])).toEqual([
+      ["internal_error", "req-1", "backend"],
+      [null, null, undefined],
     ]);
   });
 

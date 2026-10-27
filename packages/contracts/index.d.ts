@@ -527,6 +527,8 @@ export type AssistantEvent =
        * terminal error frame a route writes; never on a persisted event.
        */
       request_id?: string;
+      /** Reporting responsibility, not confirmation of telemetry delivery. Absent on older servers. */
+      reporting_owner?: "backend";
     };
 
 export type AssistantErrorCode = "invalid_api_key";

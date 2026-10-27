@@ -839,6 +839,7 @@ chatRouter.post("/", requireAuth, asyncRoute(async (req, res) => {
                             type: "error",
                             message:
                                 "The response was generated but could not be saved.",
+                            reporting_owner: "backend",
                             ...(requestId ? { request_id: requestId } : {}),
                         })}\n\n`,
                     );

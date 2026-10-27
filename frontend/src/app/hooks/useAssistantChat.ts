@@ -627,7 +627,7 @@ export function useAssistantChat({
           onRejectedApiKey: () => {
             if (isCurrentRequest()) setRejectedApiKey({ model: model ?? null });
           },
-          onErrorFrame: ({ message: frameMessage, safeToDisplay, code, requestId }) => {
+          onErrorFrame: ({ message: frameMessage, safeToDisplay, code, requestId, reportingOwner }) => {
             // The bubble records that this turn failed; the toast is where
             // the user gets a way back. A server-side failure is one the
             // user cannot fix, so Contact support rides along with Retry.
@@ -636,7 +636,7 @@ export function useAssistantChat({
             // key, a model this deployment disallows): re-sending it would
             // fail identically, so it gets support without a Retry.
             notifyError(
-              errorFrameFailure(frameMessage, safeToDisplay, { code, requestId }),
+              errorFrameFailure(frameMessage, safeToDisplay, { code, requestId, reportingOwner }),
               {
                 action: "get a response",
                 operation: turnOperation,

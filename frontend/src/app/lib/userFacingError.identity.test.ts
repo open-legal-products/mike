@@ -229,9 +229,8 @@ describe("which faults a notice reports", () => {
     });
 
     it("leaves a stream error frame to the server's own event, but files an HTTP 5xx", () => {
-        // A frame: server kind, a request id, no HTTP status. The backend
-        // reported it with the stack; the toast is for the user.
-        notifyError(errorFrameFailure("x", false, { code: "internal_error", requestId: "11111111-2222-4333-8444-555555555555" }), { action: "get a response" });
+        // The explicit protocol field assigns reporting to the backend.
+        notifyError(errorFrameFailure("x", false, { code: "internal_error", requestId: "11111111-2222-4333-8444-555555555555", reportingOwner: "backend" }), { action: "get a response" });
         expect(reporting.reportError).not.toHaveBeenCalled();
         // An HTTP 5xx keeps both halves, joined by the request id.
         notifyError(new MikeApiError({ status: 500, code: "internal_error", message: "x", requestId: "11111111-2222-4333-8444-555555555555" }), { action: "load documents" });
@@ -248,9 +247,24 @@ describe("which faults a notice reports", () => {
         reportFlowFailure({ operation: "tabular.run", status: 500, error: new Error("already sent") });
         expect(reporting.reportError).not.toHaveBeenCalled();
         reporting.isReported.mockReturnValue(false);
-        reportFlowFailure({ operation: "tabular.run", code: "internal_error", requestId: "11111111-2222-4333-8444-555555555555" });
+        reportFlowFailure({ operation: "tabular.run", code: "internal_error", requestId: "11111111-2222-4333-8444-555555555555", reportingOwner: "backend" });
         expect(reporting.reportError).not.toHaveBeenCalled();
         reportFlowFailure({ operation: "tabular.run", code: "internal_error" });
         expect(tagsOfLastReport()).toMatchObject({ operation: "tabular.run", error_code: "internal_error" });
     });
+});
+
+
+it("does not mistake a legacy frame's request id for reporting ownership", () => {
+    const frame = { code: "internal_error", requestId: "request-legacy" };
+    notifyError(errorFrameFailure("x", false, frame), { operation: "chat.turn" });
+    expect(reporting.reportError).toHaveBeenCalledTimes(1);
+    reportFlowFailure({ operation: "tabular.run", ...frame });
+    expect(reporting.reportError).toHaveBeenCalledTimes(2);
+});
+
+it("honors backend ownership even without correlation metadata", () => {
+    notifyError(errorFrameFailure("x", false, { reportingOwner: "backend" }), { operation: "chat.turn" });
+    reportFlowFailure({ operation: "tabular.run", reportingOwner: "backend" });
+    expect(reporting.reportError).not.toHaveBeenCalled();
 });

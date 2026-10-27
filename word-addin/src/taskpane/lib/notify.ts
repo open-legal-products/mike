@@ -89,6 +89,7 @@ function reportRealFault(
 ): void {
   if (described.kind !== "unknown" && described.kind !== "server") return;
   if (isReported(error)) return;
+  if (error && typeof error === "object" && "reportingOwner" in error && error.reportingOwner === "backend") return;
   const cause =
     error && typeof error === "object"
       ? (error as { cause?: unknown }).cause

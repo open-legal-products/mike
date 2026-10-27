@@ -789,6 +789,7 @@ export function TRView({ reviewId, projectId }: Props) {
                     if (data.code !== "invalid_api_key") {
                         reportFlowFailure({
                             operation: "tabular.run",
+                            reportingOwner: data.reporting_owner === "backend" ? "backend" : undefined,
                             code: typeof data.code === "string" ? data.code : null,
                             requestId:
                                 typeof data.request_id === "string"

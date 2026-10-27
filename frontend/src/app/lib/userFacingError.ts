@@ -164,14 +164,12 @@ function reportRealFault(
     // The server's own code and request id are what let this event be
     // matched to the backend's half of the failure; `action` is free text
     // for the toast and is dropped at the privacy boundary.
-    const shaped = error && typeof error === "object" ? (error as { code?: unknown; requestId?: unknown; request_id?: unknown }) : null;
+    const shaped = error && typeof error === "object" ? (error as { code?: unknown; requestId?: unknown; request_id?: unknown; reportingOwner?: unknown }) : null;
     const code = typeof shaped?.code === "string" ? shaped.code : undefined;
     const requestId = typeof shaped?.requestId === "string" ? shaped.requestId : typeof shaped?.request_id === "string" ? shaped.request_id : undefined;
-    // A stream error frame (server kind, a request id, no HTTP status) is a
-    // failure the backend already reported with its stack; the toast is for
-    // the user, not a second report. An HTTP 5xx keeps both halves.
-    const status = typeof (shaped as { status?: unknown } | null)?.status === "number" ? (shaped as { status: number }).status : undefined;
-    if (described.kind === "server" && requestId && status === undefined) return;
+    // A request id only correlates events. Suppress a client report only
+    // when the stream protocol explicitly assigns reporting to the backend.
+    if (shaped?.reportingOwner === "backend") return;
     reportError(error, { tags: { component: "notify", action, error_code: code, request_id: requestId, operation } });
 }
 
@@ -208,6 +206,7 @@ export function reportFlowFailure(args: {
     status?: number | null;
     code?: string | null;
     requestId?: string | null;
+    reportingOwner?: "backend";
     method?: string;
     /** The request path, reduced to a route at the boundary. Never a document name. */
     path?: string;
@@ -217,12 +216,7 @@ export function reportFlowFailure(args: {
     const status = typeof args.status === "number" ? args.status : undefined;
     if (status !== undefined && status < 500) return;
     if (args.error !== undefined && isReported(args.error)) return;
-    // A stream error frame (no HTTP status: the request itself succeeded)
-    // that carries the server's request id is a failure the backend already
-    // reported with the real stack; a second, stackless event from the
-    // browser would only split the issue. An HTTP 5xx keeps both halves,
-    // joined by the request id, as the API client does.
-    if (args.error === undefined && status === undefined && args.requestId) return;
+    if (args.reportingOwner === "backend") return;
     reportError(
         args.error ?? new Error(`Failure in ${args.operation}`),
         {

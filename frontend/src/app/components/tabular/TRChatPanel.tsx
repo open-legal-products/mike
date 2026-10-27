@@ -1875,6 +1875,7 @@ export function TRChatPanel({
                                 {
                                     code: data.code,
                                     requestId: data.request_id,
+                                    reportingOwner: data.reporting_owner,
                                 },
                             );
                             flushDrip();

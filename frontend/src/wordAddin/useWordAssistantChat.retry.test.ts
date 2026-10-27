@@ -2,11 +2,10 @@
 import { act, renderHook, waitFor } from '@testing-library/react';
 import { beforeEach, expect, it, vi } from 'vitest';
 const mocks = vi.hoisted(() => ({ stream: vi.fn(), resume: vi.fn(), notify: vi.fn(), info: vi.fn() }));
-vi.mock('../../../word-addin/src/taskpane/api/stream', () => ({
+vi.mock('../../../word-addin/src/taskpane/api/stream', async () => ({
     streamAssistant: mocks.stream, resumeAssistant: mocks.resume,
     WordChatStreamInterrupted: class extends Error {
-    }, WordChatTerminalError: class extends Error {
-    },
+    }, WordChatTerminalError: (await import('../../../word-addin/src/taskpane/lib/wordChatTerminalError')).WordChatTerminalError,
 }));
 vi.mock('../../../word-addin/src/taskpane/hooks/useWordDoc', () => ({ useWordDoc: () => ({ readDocumentMarkdown: async () => 'document' }) }));
 vi.mock('../../../word-addin/src/taskpane/lib/errorReporting', () => ({ reportError: vi.fn() }));
@@ -78,4 +77,14 @@ it('reports a failed turn under word_chat.turn with the terminal frame\'s backen
     });
     // The notice names the same flow, so a fault it files groups with this one.
     expect(mocks.notify.mock.calls[0][1].operation).toBe('word_chat.turn');
+});
+
+
+it("leaves an explicitly backend-owned terminal failure to the server", async () => {
+    const { reportError } = await import('../../../word-addin/src/taskpane/lib/errorReporting');
+    mocks.stream.mockRejectedValueOnce(new WordChatTerminalError('terminal failure', { reportingOwner: 'backend' }));
+    const { result } = setup();
+    await act(async () => { await result.current.handleChat(submission('insert clause')); });
+    expect(reportError).not.toHaveBeenCalled();
+    expect(mocks.notify).toHaveBeenCalled();
 });

@@ -62,3 +62,11 @@ describe("terminalErrorFromFrame", () => {
         expect(error.retryable).toBe(true);
     });
 });
+
+
+it("preserves explicit reporting ownership, never inferring it from an id", () => {
+    expect(terminalErrorFromFrame({ reporting_owner: "backend", request_id: "request-1" }))
+        .toMatchObject({ reportingOwner: "backend", requestId: "request-1" });
+    expect(terminalErrorFromFrame({ request_id: "request-1" }).reportingOwner).toBeUndefined();
+    expect(terminalErrorFromFrame({ reporting_owner: "unexpected" }).reportingOwner).toBeUndefined();
+});

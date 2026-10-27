@@ -144,10 +144,13 @@ export function assistantStreamErrorPayload(
   safe_to_display?: true;
   code?: AssistantErrorCode;
   request_id?: string;
+  reporting_owner: "backend";
 } {
   // The request id is the one handle a user can quote that finds the Sentry
   // event and the access-log line for this failure; it carries no content.
-  const withRequestId = requestId ? { request_id: requestId } : {};
+  // The server owns reporting for terminal failures, even when telemetry is
+  // disabled. This states ownership; it does not promise event delivery.
+  const reporting = { reporting_owner: "backend" as const, ...(requestId ? { request_id: requestId } : {}) };
   const safe =
     error instanceof AssistantStreamError
       ? [...error.events]
@@ -157,12 +160,12 @@ export function assistantStreamErrorPayload(
               event.type === "error" && event.safe_to_display === true,
           )
       : undefined;
-  if (!safe) return { message: ASSISTANT_ERROR_MESSAGE, ...withRequestId };
+  if (!safe) return { message: ASSISTANT_ERROR_MESSAGE, ...reporting };
   return {
     message: safe.message,
     safe_to_display: true,
     ...(safe.code ? { code: safe.code } : {}),
-    ...withRequestId,
+    ...reporting,
   };
 }
 
