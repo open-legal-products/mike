@@ -110,6 +110,15 @@ describe("extractRowColumns", () => {
         },
     );
 
+    it("passes reporting ownership to the query for queue work", async () => {
+        const cause = new Error("provider unavailable");
+        queryTabularAllColumns.mockRejectedValue(cause);
+        const result = await extractRowColumns({ db: makeDb() as never, reviewId: "rev-1", row: ROW, columns: COLUMNS, existingByColumn: new Map(), model: "m", apiKeys: {}, sink: sinkSpy(), reportFailure: false });
+        expect(queryTabularAllColumns.mock.calls[0]?.[8]).toBe(false);
+        expect(result.error).toBe(cause);
+        expect(result.missing.length).toBeGreaterThan(0);
+    });
+
     it("processes all columns, persists done, and reports none missing", async () => {
         queryTabularAllColumns.mockImplementation(
             async (_m, _f, _t, cols, onResult) => {

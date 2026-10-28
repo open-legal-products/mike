@@ -136,6 +136,8 @@ describe("runExtractionJob", () => {
         expect(thrown).toBeInstanceOf(AppError);
         expect((thrown as AppError).kind).toBe("tabular.generation_failed");
         expect((thrown as AppError).cause).toBe(providerError);
+        expect(service.extractRowColumns).toHaveBeenCalledWith(expect.objectContaining({ reportFailure: false }));
+        expect(reportError).not.toHaveBeenCalled();
         expect((thrown as Error).message).toContain("missing columns 0");
     });
 

@@ -131,6 +131,7 @@ export async function queryTabularAllColumns(
     apiKeys?: UserApiKeys,
     abortSignal?: AbortSignal,
     onActivity?: () => void,
+    reportFailure = true,
 ): Promise<void> {
     const columnsDesc = columns
         .map((col) => {
@@ -217,8 +218,9 @@ Rules:
         });
     } catch (err) {
         streamError = err;
-        if (!abortSignal?.aborted) {
-            // Reported once, here, under the kind that names the failure, with
+        if (!abortSignal?.aborted && reportFailure) {
+            // Inline callers report here; queue callers let the runner own
+            // retries and severity. Reported once, here, under the kind that names the failure, with
             // the provider's error as the cause (provider_error and
             // dependency_status come from it). The raw error is still what is
             // rethrown: the row orchestrator classifies it for the grid, and

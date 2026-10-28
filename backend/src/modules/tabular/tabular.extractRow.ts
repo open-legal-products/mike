@@ -113,6 +113,8 @@ export async function extractRowColumns(args: {
     generationId?: string | null;
     /** Stops the run (client disconnect, or lease lost). */
     abortSignal?: AbortSignal;
+    /** Queue runners report failed attempts; inline streams report here. */
+    reportFailure?: boolean;
 }): Promise<ExtractRowResult> {
     const {
         db,
@@ -223,14 +225,14 @@ export async function extractRowColumns(args: {
             apiKeys,
             abortSignal,
             sink.activity,
+            args.reportFailure,
         );
     } catch (err) {
         error = err;
         // An abort re-thrown by the stream is the caller stopping us, not a
         // failure worth logging; the unreturned columns are reported below.
-        // Not console.error: queryTabularAllColumns reported this failure
-        // under its kind, and the console bridge would file the raw error a
-        // second time, without one.
+        // Not console.error: either the query already reported this failure
+        // or the queue runner will report the failed attempt.
         if (!abortSignal?.aborted) {
             console.warn(
                 `[tabular/extract-row] queryTabularAllColumns error row=${row.id}`,

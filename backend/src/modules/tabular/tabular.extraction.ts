@@ -195,6 +195,7 @@ export async function runExtractionJob(
         //    tailing /generate request sees them live. Every cell write is
         //    stamped with — and, once terminal, guarded by — this generation.
         const { processed, missing, error } = await extractRowColumns({
+            reportFailure: false,
             db,
             reviewId,
             row,

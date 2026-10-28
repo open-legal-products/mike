@@ -119,6 +119,16 @@ describe("queryTabularAllColumns", () => {
         );
     });
 
+    it("leaves reporting to the queue runner when requested", async () => {
+        const cause = providerError();
+        streamChatWithTools.mockRejectedValue(cause);
+        for (let attempt = 0; attempt < 3; attempt++) {
+            await expect(queryTabularAllColumns("m", "Contract.pdf", "text", COLUMNS, async () => {}, undefined, undefined, undefined, false)).rejects.toBe(cause);
+        }
+        expect(reportError).not.toHaveBeenCalled();
+        expect(consoleError).not.toHaveBeenCalled();
+    });
+
     it("treats a stop as the caller's, not a failure: rethrown, never reported", async () => {
         const controller = new AbortController();
         const abort = new Error("aborted");
