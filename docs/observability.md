@@ -185,6 +185,13 @@ or an early middleware failure still identifies its request without a log lookup
 Only fixed route segments survive; resource names, IDs and query strings do not.
 User identity is removed by the final transport in both installation modes.
 
+Row extraction in a queue leaves failure reporting to the runner, once per
+failed attempt with the runner's retry severity. Inline row streams report at
+the query boundary. Optional storage reads retain default stack grouping and
+failure-kind/code tags; the raw `best-effort` fingerprint does not override that
+at the final boundary. Required export reads propagate storage failures rather
+than publishing an apparently successful ZIP with an unreadable file omitted.
+
 Error objects retain repository-relative code paths, line and column numbers;
 a nested Error logged through the console keeps its original stack location.
 Plain strings and database error objects have no original stack, so their event
@@ -498,8 +505,13 @@ approved technical codes and numeric statuses can be extracted from causes.
   the request begins. API 5xx reports are captured immediately with that
   operation; there is no pending-report timer or later screen claim. A
   delayed screen handler cannot change or lose the operation on the event.
-- Reporting callers and automatic captures consult the same error registry.
-  Reformatting an already-reported failure does not create another event.
+- Reporting callers and automatic captures consult the same error registry,
+  including a bounded, cycle-safe walk of wrapped causes. Reformatting an
+  already-reported failure does not create another event.
+- Storage PUT retries report only after the final attempt fails. A recovered
+  5xx or network interruption stays quiet; cancellation is not a failure.
+  Both clients receive only the terminal error/status from the upload core,
+  never the signed URL or file as diagnostic metadata.
 - Terminal stream frames use `reporting_owner: "backend"` when the backend
   owns reporting. This does not promise delivery to Sentry. Clients preserve
   that ownership and avoid duplicate reports. A request ID is only for
