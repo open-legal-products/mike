@@ -206,7 +206,10 @@ describe("storage error logging", () => {
       },
     });
     try {
-      await expect(downloadFile("documents/u1/d1/source.pdf")).resolves.toBeNull();
+      await expect(downloadFile("documents/u1/d1/source.pdf")).rejects.toMatchObject({
+        kind: "storage.download_failed",
+        cause: { name: "TimeoutError" },
+      });
       expect(mocks.send.mock.calls[0][1].abortSignal.aborted).toBe(true);
       expect(destroy).toHaveBeenCalledOnce();
     } finally {

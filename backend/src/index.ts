@@ -76,10 +76,8 @@ function spawnWorkerThread(role: WorkerRole): void {
     __dirname,
     isTs ? "workerThread.ts" : "workerThread.js",
   );
-  // Compiled mode leaves execArgv unset so the thread inherits the parent's
-  // flags (`--enable-source-maps` is what makes its Sentry frames point at
-  // src/*.ts). Passing process.execArgv explicitly would make Node validate
-  // every flag and throw on V8 options such as --max-old-space-size.
+  // Compiled mode inherits the parent's flags, including --enable-source-maps.
+  // Explicit process.execArgv would reject V8 flags such as --max-old-space-size.
   const workerThread = new ThreadWorker(entry, {
     ...(isTs ? { execArgv: ["--require", "tsx/cjs"] } : {}),
     workerData: { role },
