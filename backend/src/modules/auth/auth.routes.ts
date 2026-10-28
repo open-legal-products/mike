@@ -214,7 +214,7 @@ async function startSso(req: Request, res: Response) {
     // (a GoTrue status, a network code) without its message ever leaving.
     return sendInternalError(
       res,
-      new AppError("auth.supabase_unavailable", "SSO sign-in could not be started", {
+      new AppError("auth.sso_failed", "SSO sign-in could not be started", {
         cause: error,
       }),
     );
@@ -348,7 +348,7 @@ authRouter.post("/password-reset", asyncRoute(async (req, res) => {
       // worth seeing (GoTrue down, or its mailer), so it is reported, as a
       // warning, with no trace of the address.
       reportError(
-        new AppError("auth.supabase_unavailable", "password reset request failed", {
+        new AppError("auth.password_reset_failed", "password reset request failed", {
           cause: error,
         }),
         { level: "warning", tags: { component: "http" } },

@@ -9,7 +9,7 @@ import { asyncRoute, routerErrorHandler } from "../../middleware/asyncRoute";
 import { createServerSupabase } from "../../lib/supabase";
 import { sendDocumentDisplay } from "../../lib/documentDisplay";
 import { sendInternalError } from "../../lib/httpError";
-import { reportError } from "../../lib/observability/sentry";
+import { reportError, setOperation } from "../../lib/observability/sentry";
 import { sendServiceFailure } from "../../lib/serviceResult";
 import {
   getWorkflowAddon,
@@ -100,6 +100,7 @@ workflowAddonsRouter.post(
   "/:addonId/import",
   requireAuth,
   asyncRoute(async (req, res) => {
+    setOperation("workflows.import_addon");
     const userId = res.locals.userId as string;
     const db = createServerSupabase();
     const result = await importWorkflowAddon(db, {

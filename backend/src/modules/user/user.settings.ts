@@ -75,7 +75,7 @@ export type UserModelSettings = {
  * the same object is logged once (the console bridge knows it is reported).
  */
 function reportSettingsReadFailure(message: string, error: unknown): void {
-    const failure = new AppError("db.query_failed", message, { cause: error });
+    const failure = new AppError("settings.read_failed", message, { cause: error });
     reportError(failure, { level: "warning" });
     console.error(`[user-settings] ${message}`, failure);
 }
