@@ -915,6 +915,41 @@ describe("upload processing", () => {
     }
   });
 
+  it("keeps claiming jobs when session cleanup fails and retries cleanup independently", async () => {
+    vi.useFakeTimers();
+    const consoleError = vi.spyOn(console, "error").mockImplementation(() => {});
+    const consoleWarn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const consoleLog = vi.spyOn(console, "log").mockImplementation(() => {});
+    const db = scriptedDb([{ error: { code: "57014", message: "synthetic cleanup timeout" } }]);
+    db.rpc.mockResolvedValue({ data: null, error: null });
+    mocks.createServerSupabase.mockReturnValue(db);
+    const stop = startUploadProcessingWorkers({ concurrency: 1, maxRunningPerUser: 1 });
+    try {
+      await vi.advanceTimersByTimeAsync(0);
+      await vi.waitFor(() => expect(db.rpc).toHaveBeenCalledWith(
+        "claim_upload_processing_job", expect.any(Object),
+      ));
+      const cleanupReports = () => mocks.reportError.mock.calls.filter(
+        ([, context]) => (context as { tags?: { stage?: string } })?.tags?.stage === "cleanup",
+      );
+      expect(cleanupReports()).toHaveLength(1);
+      expect(cleanupReports()[0][1]).toMatchObject({ level: "warning" });
+      expect(diagnosticErrorTags(cleanupReports()[0][0])).toMatchObject({ failure_code: "57014" });
+      // The next maintenance attempt succeeds; a failed sweep did not stop
+      // either delivery or future sweeps, and did not become an iteration error.
+      await vi.advanceTimersByTimeAsync(2_000);
+      await vi.waitFor(() => expect(db.rpc.mock.calls.length).toBeGreaterThan(1));
+      expect(db.calls.filter((call) => call.table === "upload_sessions").length).toBeGreaterThan(1);
+      expect(mocks.reportError).toHaveBeenCalledTimes(1);
+    } finally {
+      stop();
+      vi.useRealTimers();
+      consoleError.mockRestore();
+      consoleWarn.mockRestore();
+      consoleLog.mockRestore();
+    }
+  });
+
   it("reports a claim loop that fails every tick once, with its code, and backs off (MIKE-BACKEND-K)", async () => {
     vi.useFakeTimers();
     const consoleError = vi.spyOn(console, "error").mockImplementation(() => {});

@@ -1204,6 +1204,11 @@ function startUploadProcessingWorker(options: {
   let timer: NodeJS.Timeout | null = null;
   let lastCleanupAt = 0;
   const failures = options.failures;
+  const cleanupFailures = createPollFailureGate({
+    label: "[upload-worker] cleanup",
+    baseDelayMs: UPLOAD_WORKER_POLL_MS,
+    maxDelayMs: UPLOAD_WORKER_MAX_BACKOFF_MS,
+  });
 
   const schedule = (delay: number) => {
     if (stopped) return;
@@ -1215,13 +1220,35 @@ function startUploadProcessingWorker(options: {
     if (stopped) return;
     try {
       const db = createServerSupabase();
-      if (options.runCleanup && Date.now() - lastCleanupAt >= 60_000) {
-        // Own scope: the stages cleanup marks must not land on a later job.
-        await Promise.all([
-          runIsolated(() => cleanupUploadSessions(db)),
-          cleanupUploadProcessingTempFiles(),
-        ]);
-        lastCleanupAt = Date.now();
+      if (options.runCleanup && Date.now() - lastCleanupAt >= 60_000 && cleanupFailures.ready()) {
+        // Maintenance cannot prevent a single-worker deployment from claiming
+        // otherwise valid jobs. Retry it independently; claim success must not
+        // reset its failure gate and re-report the same broken sweep each tick.
+        await runIsolated(async () => {
+          setOperation("documents.upload.maintenance");
+          markStage("cleanup");
+          try {
+            // Wait for both tasks even if one fails, so a retry cannot overlap
+            // the previous sweep's filesystem work.
+            const results = await Promise.allSettled([
+              cleanupUploadSessions(db),
+              cleanupUploadProcessingTempFiles(),
+            ]);
+            const failed = results.find((result) => result.status === "rejected");
+            if (failed?.status === "rejected") throw failed.reason;
+            lastCleanupAt = Date.now();
+            cleanupFailures.success();
+          } catch (thrown) {
+            const error = asReportableError(thrown);
+            if (cleanupFailures.failure(error).report) {
+              reportError(error, {
+                level: "warning",
+                tags: { component: "upload-worker", stage: "cleanup" },
+              });
+              console.warn("[upload-worker] cleanup failed", { error });
+            }
+          }
+        });
       }
       const jobId = await claimNextUploadJob(
         db,
