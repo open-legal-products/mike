@@ -32,8 +32,8 @@ beforeEach(() => {
 });
 
 describe("required document export reads", () => {
-  it("fails before publishing a partial ZIP when a selected document cannot be read", async () => {
-    download.mockResolvedValueOnce(new Uint8Array([1]).buffer).mockRejectedValueOnce(Object.assign(new Error("reset"), { code: "ECONNRESET" }));
+  it.each(["ECONNRESET", "AccessDenied"])("fails before publishing a partial ZIP when a selected document read fails with %s", async code => {
+    download.mockResolvedValueOnce(new Uint8Array([1]).buffer).mockRejectedValueOnce(Object.assign(new Error("storage failure"), { code }));
     await expect(handleExportBuild(db as never, job)).rejects.toBeInstanceOf(StorageOperationError);
     expect(upload).not.toHaveBeenCalled();
   });

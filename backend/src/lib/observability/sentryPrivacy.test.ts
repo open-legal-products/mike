@@ -57,6 +57,22 @@ describe('outbound telemetry privacy boundary', () => {
     expect(diagnosticEvent({ tags: { office_host: 'Word', office_platform: 'Mac', office_version: '16.0.123', job_kind: 'extraction.extract' } }).tags).toEqual({ office_host: 'Word', office_platform: 'Mac', office_version: '16.0.123', job_kind: 'extraction.extract' });
   });
 
+  it('groups optional storage reads by code location and failure identity, not the raw best-effort fingerprint', () => {
+    const event = (code: string, file: string) => diagnosticEvent({
+      tags: { component: 'best-effort', what: 'optional-read', error_kind: 'storage.download_failed', failure_code: code },
+      fingerprint: ['best-effort', 'optional-read'],
+      exception: { values: [{ type: 'Error', stacktrace: { frames: [{ filename: file, lineno: 42, colno: 7 }] } }] },
+    });
+    const denied = event('AccessDenied', 'backend/src/modules/projects/projects.documents.ts');
+    const reset = event('ECONNRESET', 'backend/src/modules/documents/documents.trackedEdits.ts');
+    expect(denied.fingerprint).toContain('{{ default }}');
+    expect(denied.fingerprint).toContain('AccessDenied');
+    expect(reset.fingerprint).toContain('ECONNRESET');
+    expect(denied.fingerprint).not.toEqual(reset.fingerprint);
+    expect(denied.exception).not.toEqual(reset.exception);
+    expect(denied.fingerprint).not.toEqual(['best-effort', 'optional-read']);
+  });
+
   it('ignores tag names inherited from Object.prototype', () => {
     expect(diagnosticEvent({ tags: { constructor: 'constructor', toString: 'toString' } }).tags).toEqual({});
   });
