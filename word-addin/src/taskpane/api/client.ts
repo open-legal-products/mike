@@ -18,6 +18,7 @@ import { networkFailure } from "../lib/networkError";
 import { sessionHandledError } from "../lib/sessionRefresh";
 import {
   reportApiFailure,
+  reportError,
   reportNetworkFailure,
   type AddinOperation,
 } from "../lib/errorReporting";
@@ -302,6 +303,14 @@ async function uploadSessionFiles<T>(args: {
     transport: {
       apiRequest: <R>(path: string, init?: RequestInit) => apiRequest<R>("upload_session.control", path, init),
       fetchStorage: (...fetchArgs) => clientConfig.fetchImpl(...fetchArgs),
+      onStorageFailure: ({ error, status, network }) => reportError(error, {
+        ...(network ? { level: "warning" as const } : {}),
+        tags: {
+          component: "mike-api", operation: "upload_session.storage", http_method: "PUT",
+          ...(status !== undefined ? { http_status: status } : {}),
+          ...(network ? { network: true } : {}),
+        },
+      }),
       shouldRetryControlRequest: createControlRequestRetryPolicy((error) =>
         error instanceof MikeApiError
           ? { status: error.status, code: error.code }
