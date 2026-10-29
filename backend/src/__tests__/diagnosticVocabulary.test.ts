@@ -3,12 +3,18 @@
 // whole-program taint analysis: helpers that forward labels still need review.
 import { readFileSync, readdirSync } from "node:fs";
 import { join, relative, resolve } from "node:path";
-import { parse } from "@babel/parser";
-import type { Node } from "@babel/types";
-import { describe, expect, it } from "vitest";
+// Babel 8 ships ESM only, and this suite compiles as CommonJS: load the parser
+// with a dynamic import and take its types in import resolution mode.
+import type { ParserPlugin } from "@babel/parser" with { "resolution-mode": "import" };
+import type { Node } from "@babel/types" with { "resolution-mode": "import" };
+import { beforeAll, describe, expect, it } from "vitest";
 import { isDiagnosticLabel } from "../lib/observability/sentryPrivacy";
 
 const ROOT = resolve(__dirname, "../../..");
+let parse: typeof import("@babel/parser", { with: { "resolution-mode": "import" } }).parse;
+beforeAll(async () => {
+  ({ parse } = await import("@babel/parser"));
+});
 const LABEL_KEYS = new Set(["operation", "component", "stage", "error_kind", "job_kind", "what"]);
 function files(dir: string): string[] {
   return readdirSync(dir, { withFileTypes: true }).flatMap(entry => {
@@ -43,8 +49,11 @@ function unsafeLabel(node: Node): boolean {
       && ["body", "query", "params", "message", "email", "filename", "content", "text", "stack", "name", "title", "url"].includes(name(node.property) ?? "")) return true;
   return children(node).some(child => child.type !== "Identifier" && unsafeLabel(child));
 }
-function violations(source: string): string[] {
-  const tree = parse(source, { sourceType: "unambiguous", plugins: ["typescript", "jsx"] });
+function violations(source: string, path = "inline.ts"): string[] {
+  // Babel 8 reads `<T>(x) => x` as JSX when the jsx plugin is on, so only
+  // .tsx files get it, matching how TypeScript itself parses each extension.
+  const plugins: ParserPlugin[] = path.endsWith(".tsx") ? ["typescript", "jsx"] : ["typescript"];
+  const tree = parse(source, { sourceType: "unambiguous", plugins });
   const errors: string[] = [];
   const errorBindings = new Set<string>();
   const note = (node: Node, reason: string) => errors.push(`${node.loc?.start.line}: ${reason}`);
@@ -116,7 +125,7 @@ describe("diagnostic source contract", () => {
   it("checks production source in the backend, web app and Word add-in", () => {
     const paths = ["backend/src", "frontend/src", "word-addin/src"].flatMap(root => files(join(ROOT, root)));
     expect(paths.length).toBeGreaterThan(500);
-    const failures = paths.flatMap(path => violations(readFileSync(path, "utf8")).map(problem => `${relative(ROOT, path)}:${problem}`));
+    const failures = paths.flatMap(path => violations(readFileSync(path, "utf8"), path).map(problem => `${relative(ROOT, path)}:${problem}`));
     expect(failures).toEqual([]);
   });
 });
