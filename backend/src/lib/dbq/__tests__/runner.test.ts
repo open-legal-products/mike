@@ -241,6 +241,17 @@ describe("processClaimedJob", () => {
         expect(runAt - Date.now()).toBeLessThan(35_000);
     });
 
+    it("retries export.build when a required document read fails", async () => {
+        const db = makeDb();
+        await processClaimedJob(
+            db as never,
+            { "export.build": async () => { throw new Error("Object storage download failed"); } },
+            JOB({ kind: "export.build" }),
+        );
+        expect(db.updates[0].payload).toMatchObject({ status: "pending", last_error: "Object storage download failed" });
+        expect(db.updates[0].payload.finished_at).toBeUndefined();
+    });
+
     it("defers a quiet-period job without consuming its retry attempt", async () => {
         const db = makeDb();
         const runAt = new Date(Date.now() + 120_000).toISOString();

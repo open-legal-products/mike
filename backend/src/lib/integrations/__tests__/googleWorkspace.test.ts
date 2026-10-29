@@ -31,6 +31,8 @@ import {
   WORKSPACE_TOOLS,
 } from "../googleWorkspaceApi";
 import { personalConnectorOwner } from "../../connectorOwner";
+import * as sentry from "../../observability/sentry";
+import { diagnosticErrorTags } from "../../observability/sentryPrivacy";
 
 const json = (v: unknown, status = 200) =>
   new Response(status === 204 ? null : JSON.stringify(v), { status });
@@ -40,6 +42,8 @@ beforeEach(() => {
   vi.stubEnv("GOOGLE_WORKSPACE_OAUTH_CLIENT_SECRET", "test-secret");
   vi.stubEnv("MCP_CONNECTORS_ENCRYPTION_SECRET", "test-encryption-key");
   vi.spyOn(console, "error").mockImplementation(() => {});
+  vi.spyOn(console, "warn").mockImplementation(() => {});
+  vi.spyOn(sentry, "reportError").mockReturnValue(null);
   fetchMock = vi.fn<typeof fetch>();
   vi.stubGlobal("fetch", fetchMock);
 });
@@ -322,6 +326,36 @@ describe("Google Workspace opt-in and OAuth", () => {
   });
 });
 
+describe.each(["gmail", "google-calendar"] as const)("%s OAuth error classification", (provider) => {
+  it.each([401, 503])("classifies token-exchange HTTP %i without losing the status", async (status) => {
+    const store = workspaceDb();
+    const start = await startWorkspaceOAuth(store.db, personalConnectorOwner("u1"), provider, "https://mike.test/callback");
+    fetchMock.mockResolvedValueOnce(json({ error: "provider failure" }, status));
+    await expect(completeWorkspaceOAuth(store.db, "u1", provider, new URL(start.authorizationUrl).searchParams.get("state")!, "code"))
+      .rejects.toMatchObject({ kind: status >= 500 ? "google.api_failed" : "google.auth_failed", cause: { status } });
+    expect(store.tables.user_google_workspace_tokens).toHaveLength(0);
+  });
+
+  it.each([401, 503])("classifies userinfo HTTP %i without losing the status", async (status) => {
+    const store = workspaceDb();
+    const start = await startWorkspaceOAuth(store.db, personalConnectorOwner("u1"), provider, "https://mike.test/callback");
+    fetchMock.mockResolvedValueOnce(json({ access_token: "access", refresh_token: "refresh", expires_in: 3600, scope: grantedScope(provider, false) }))
+      .mockResolvedValueOnce(json({ error: "provider failure" }, status));
+    await expect(completeWorkspaceOAuth(store.db, "u1", provider, new URL(start.authorizationUrl).searchParams.get("state")!, "code"))
+      .rejects.toMatchObject({ kind: status >= 500 ? "google.api_failed" : "google.auth_failed", cause: { status } });
+    expect(store.tables.user_google_workspace_tokens).toHaveLength(0);
+  });
+
+  it.each([401, 503])("classifies refresh HTTP %i and keeps the existing grant", async (status) => {
+    const store = await connected(false, provider);
+    store.tables.user_google_workspace_tokens[0].expires_at = "2000-01-01";
+    fetchMock.mockResolvedValueOnce(json({ error: "provider failure" }, status));
+    await expect(workspaceAccessToken(store.db, personalConnectorOwner("u1"), provider))
+      .rejects.toMatchObject({ kind: status >= 500 ? "google.api_failed" : "google.auth_failed", cause: { status } });
+    expect(store.tables.user_google_workspace_tokens).toHaveLength(1);
+  });
+});
+
 describe("Google connector settings", () => {
   it.each(["gmail", "google-calendar"] as const)("read-only overrides %s writes and restores individual choices", async (provider) => {
     const s = await connected(true, provider);
@@ -573,9 +607,8 @@ describe("Google write access", () => {
   );
   it("reports an uncertain send instead of retrying it or leaking provider text", async () => {
     const s = await connected(true);
-    fetchMock.mockRejectedValueOnce(
-      new Error("provider response lost with secret"),
-    );
+    const cause = new Error("provider response lost with secret");
+    fetchMock.mockRejectedValueOnce(cause);
     const result = await executeGoogleWorkspaceToolCall(
       personalConnectorOwner("u1"),
       "gmail_send",
@@ -586,7 +619,51 @@ describe("Google write access", () => {
     expect(result.event.error).toContain("uncertain");
     expect(result.content).not.toContain("provider response lost");
     expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(sentry.reportError).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({ cause: expect.objectContaining({ cause }) }),
+      { level: "warning" },
+    );
   });
+  it.each([401, 403, 429, 503])(
+    "reports uncertain HTTP %i writes while keeping definite rejections quiet",
+    async (status) => {
+      const s = await connected(true);
+      fetchMock.mockResolvedValueOnce(json({ error: "private upstream details" }, status));
+      const result = await executeGoogleWorkspaceToolCall(
+        personalConnectorOwner("u1"),
+        "gmail_send",
+        email,
+        s.db,
+      );
+      expect(result.event.status).toBe("error");
+      expect(result.content).not.toContain("private upstream details");
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+      if (status === 503) {
+        expect(result.event.error).toContain("outcome is uncertain");
+        expect(sentry.reportError).toHaveBeenCalledExactlyOnceWith(
+          expect.objectContaining({ cause: expect.objectContaining({ status }) }),
+          { level: "warning" },
+        );
+        const [error] = vi.mocked(sentry.reportError).mock.calls[0];
+        expect(diagnosticErrorTags(error)).toMatchObject({
+          error_kind: "google.api_failed",
+          dependency_status: 503,
+        });
+        expect(console.error).toHaveBeenCalledWith(
+          "[google-workspace] tool failed",
+          expect.objectContaining({ error }),
+        );
+      } else {
+        expect(result.event.error).not.toContain("uncertain");
+        expect(sentry.reportError).not.toHaveBeenCalled();
+        expect(console.error).not.toHaveBeenCalled();
+        expect(console.warn).toHaveBeenCalledWith(
+          "[google-workspace] tool failed",
+          expect.objectContaining({ error: expect.any(Error) }),
+        );
+      }
+    },
+  );
 });
 
 describe("Gmail and Calendar API behavior", () => {

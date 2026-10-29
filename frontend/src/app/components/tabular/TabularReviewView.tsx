@@ -89,6 +89,7 @@ import { readSseFrames } from "@/app/lib/sse";
 import {
     UserVisibleError,
     notifyError,
+    reportFlowFailure,
 } from "@/app/lib/userFacingError";
 import { useAssignLatest, useLatestRef } from "@/app/hooks/useLatestRef";
 import { useSidebar } from "@/app/contexts/SidebarContext";
@@ -781,6 +782,21 @@ export function TRView({ reviewId, projectId }: Props) {
                         ),
                     );
                 } else if (data.type === "error") {
+                    // The frame is the run's failure as the server saw it;
+                    // its code and request id match it to the backend's own
+                    // event. A rejected key is the user's configuration, not
+                    // a fault, and is shown as the key warning only.
+                    if (data.code !== "invalid_api_key") {
+                        reportFlowFailure({
+                            operation: "tabular.run",
+                            reportingOwner: data.reporting_owner === "backend" ? "backend" : undefined,
+                            code: typeof data.code === "string" ? data.code : null,
+                            requestId:
+                                typeof data.request_id === "string"
+                                    ? data.request_id
+                                    : null,
+                        });
+                    }
                     if (data.code === "invalid_api_key") {
                         setApiKeyWarning({
                             kind: "rejected",
@@ -929,6 +945,12 @@ export function TRView({ reviewId, projectId }: Props) {
             );
             if (!response.ok) {
                 const payload = await response.json().catch(() => null);
+                const code =
+                    typeof payload?.code === "string" ? payload.code : null;
+                const requestId =
+                    typeof payload?.request_id === "string"
+                        ? payload.request_id
+                        : response.headers.get("x-request-id");
                 if (payload?.code === "review_running") {
                     setReview((current) =>
                         current ? { ...current, is_running: true } : current,
@@ -950,9 +972,28 @@ export function TRView({ reviewId, projectId }: Props) {
                 } else if (payload?.code === "invalid_api_key") {
                     setApiKeyWarning({ kind: "rejected", provider });
                 }
-                throw new Error(
-                    payload?.detail ?? `Generation failed: ${response.status}`,
+                // Status, code and request id ride on the error so the toast
+                // classifies the refusal and the report matches the server's.
+                const failure = Object.assign(
+                    new Error(
+                        payload?.detail ?? `Generation failed: ${response.status}`,
+                    ),
+                    {
+                        status: response.status,
+                        ...(code ? { code } : {}),
+                        ...(requestId ? { requestId } : {}),
+                    },
                 );
+                reportFlowFailure({
+                    operation: "tabular.run",
+                    method: "POST",
+                    path: `/api/tabular-reviews/${reviewId}/run`,
+                    status: response.status,
+                    code,
+                    requestId,
+                    error: failure,
+                });
+                throw failure;
             }
             if (!response.body) throw new Error("No body");
             generationStarted = true;
@@ -1014,6 +1055,7 @@ export function TRView({ reviewId, projectId }: Props) {
                 // and they look identical to a run still in progress.
                 notifyError(err, {
                     action: "run this review",
+                    operation: "tabular.run",
                     dedupeKey: `tr-generate:${reviewId}`,
                     onRetry: () => retryRef.current?.generate(),
                 });

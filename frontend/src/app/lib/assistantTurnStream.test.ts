@@ -66,10 +66,12 @@ describe("consumeAssistantTurnStream", () => {
       frame(1, { type: "response_details", model: "gpt-6-luna", reasoning: "medium", usage: { input_tokens: 1200, output_tokens: 80 } }),
       frame(2, { type: "response_details", reasoning: "high" }),
       frame(3, { type: "response_details", model: "gpt-6-luna", usage: { input_tokens: "lots" } }),
+      frame(4, { type: "response_details", model: "gpt-6-luna" }),
       "data: [DONE]\n\n",
     ]), { turn, sink: createTurnEventSink(turn, []), cursor: createTurnCursor("chat-a") });
     expect(turn.turn.assistant.events).toEqual([
       { type: "response_details", model: "gpt-6-luna", reasoning: "medium", usage: { input_tokens: 1200, output_tokens: 80 } },
+      { type: "response_details", model: "gpt-6-luna" },
       { type: "response_details", model: "gpt-6-luna" },
     ]);
     turn.finish();
@@ -417,6 +419,23 @@ describe("error frames", () => {
     ]);
   });
 
+  it("hands the error frame's code and request id to the hook, and tolerates their absence", async () => {
+    const onErrorFrame = vi.fn();
+    const run = (data: object) =>
+      consumeAssistantTurnStream(sseResponse([frame(1, data), "data: [DONE]\n\n"]), {
+        turn: begin(),
+        sink: createTurnEventSink(begin(), []),
+        cursor: createTurnCursor("chat-a"),
+        hooks: { onErrorFrame },
+      });
+    await run({ type: "error", message: "x", code: "internal_error", request_id: "req-1", reporting_owner: "backend" });
+    await run({ type: "error", message: "x", request_id: 42 });
+    expect(onErrorFrame.mock.calls.map(([f]) => [f.code, f.requestId, f.reportingOwner])).toEqual([
+      ["internal_error", "req-1", "backend"],
+      [null, null, undefined],
+    ]);
+  });
+
   it("raises a rejected key as its own signal and stops the citation spinner", async () => {
     const turn = begin();
     const sink = createTurnEventSink(turn, []);
@@ -442,6 +461,8 @@ describe("error frames", () => {
     expect(onErrorFrame).toHaveBeenCalledWith({
       message: expect.any(String),
       safeToDisplay: expect.any(Boolean),
+      code: "invalid_api_key",
+      requestId: null,
     });
     expect(turn.turn.loadingCitations).toBe(false);
     expect(turn.turn.assistant.events).toEqual([
@@ -652,6 +673,19 @@ describe("MCP tool frames", () => {
       },
       thinking,
     ]);
+  });
+
+  it("keeps a tool's title only when the result names one", async () => {
+    const titled = await eventsOf([
+      { type: "mcp_tool_start", name: "drive__search" },
+      { type: "mcp_tool_result", name: "drive__search", connector_name: "Drive", tool_name: "search", tool_title: "Search Drive", status: "ok" },
+    ]);
+    expect(titled?.[0]).toMatchObject({ type: "mcp_tool_call", tool_title: "Search Drive" });
+    const untitled = await eventsOf([
+      { type: "mcp_tool_start", name: "drive__search" },
+      { type: "mcp_tool_result", name: "drive__search", connector_name: "Drive", tool_name: "search", tool_title: "", status: "ok" },
+    ]);
+    expect((untitled?.[0] as { tool_title?: string } | undefined)?.tool_title).toBeUndefined();
   });
 
   it("keeps the approval id a result names, so the timeline can tie it to its decision", async () => {

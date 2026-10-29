@@ -1,5 +1,9 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { reportWordFailure } from "../lib/errorReporting";
+import {
+  isReported,
+  reportWordFailure,
+  type AddinOperation,
+} from "../lib/errorReporting";
 import {
   releaseTrackedEdits,
   revealProposedEdit,
@@ -15,6 +19,27 @@ import type { TrackedEditHandle } from "./useWordDoc";
 import type { Message as SavedMessage, WordDocumentEdit } from "../types";
 import { projectRedlineStream } from "../lib/redline";
 import type { RedlineEdit, StreamingRedlineEdit } from "../lib/redline";
+
+/**
+ * A failure that escaped a validate/apply batch and is about to become a
+ * card's inline error. The host's failures are reported under word-office
+ * with Word's own code, so a Mac-only or web-only refusal is visible; one
+ * the API client already filed (a 5xx, a dead backend) is not sent again,
+ * and an API answer with a status is left to `userMessage`, which reports a
+ * fault and stays quiet about a 4xx.
+ */
+function reportEscapedWordFailure(
+  error: unknown,
+  operation: AddinOperation,
+): void {
+  if (isReported(error)) return;
+  const status =
+    error && typeof error === "object"
+      ? (error as { status?: unknown }).status
+      : undefined;
+  if (typeof status === "number") return;
+  reportWordFailure(error, { operation });
+}
 
 /**
  * Shape a sealed streamed block for `applyTrackedEdits`. Returns null for a
@@ -102,7 +127,7 @@ import type {
 import type { WordEditApplyMode } from "../lib/wordChatSettings";
 import { getEditKey, parseEditKey } from "../lib/wordTrackedEditKeys";
 import { listWordEditAnchorIds } from "../lib/wordEditAnchors";
-import { userMessage } from "../lib/notify";
+import { reportFault } from "../lib/notify";
 import {
   ALREADY_APPLIED_MESSAGE,
   UNVERIFIED_APPLY_MESSAGE,
@@ -472,13 +497,15 @@ export function useWordTrackedEdits({
         if (!mountedRef.current || generation !== sessionGenerationRef.current) {
           return;
         }
+        reportEscapedWordFailure(error, "word.edit_apply");
         for (const { cardKey } of proposedDescriptors) {
           setEditRuntimeState(cardKey, {
             status: "error",
             busy: false,
-            error: userMessage(error, {
+            error: reportFault(error, {
               fallback: "Word couldn't check whether this change can be applied.",
-            }),
+              operation: "word.edit_apply",
+            }).message,
           });
         }
       });
@@ -767,19 +794,20 @@ export function useWordTrackedEdits({
         ) {
           return;
         }
+        reportEscapedWordFailure(error, "word.edit_apply");
+        const message = reportFault(error, {
+          fallback: "Word couldn't apply this change.",
+          operation: "word.edit_apply",
+        }).message;
         setEditRuntimeState(key, {
           status: "error",
           busy: false,
-          error: userMessage(error, {
-            fallback: "Word couldn't apply this change.",
-          }),
+          error: message,
         });
         void updatePersistedEdit(key, {
           apply_status: "failed",
           error_code: "word-error",
-          error_message: userMessage(error, {
-            fallback: "Word couldn't apply this change.",
-          }),
+          error_message: message,
         });
       });
       editApplyJobsRef.current.set(key, job);
@@ -867,19 +895,20 @@ export function useWordTrackedEdits({
           ) {
             return;
           }
+          reportEscapedWordFailure(error, "word.edit_apply");
+          const message = reportFault(error, {
+            fallback: "Word couldn't check whether this change can be applied.",
+            operation: "word.edit_apply",
+          }).message;
           setEditRuntimeState(key, {
             status: "error",
             busy: false,
-            error: userMessage(error, {
-              fallback: "Word couldn't check whether this change can be applied.",
-            }),
+            error: message,
           });
           void updatePersistedEdit(key, {
             apply_status: "failed",
             error_code: "validation-error",
-            error_message: userMessage(error, {
-              fallback: "Word couldn't check whether this change can be applied.",
-            }),
+            error_message: message,
           });
         });
       editApplyJobsRef.current.set(key, job);
@@ -1334,7 +1363,10 @@ export function useWordTrackedEdits({
           });
         }
       } catch (error) {
-        reportWordFailure(error, { stage: "resolve" });
+        reportWordFailure(error, {
+          stage: "resolve",
+          operation: "word.edit_resolve",
+        });
         if (
           !mountedRef.current ||
           generation !== sessionGenerationRef.current
@@ -1344,9 +1376,10 @@ export function useWordTrackedEdits({
         setEditRuntimeState(key, {
           status: "error",
           busy: false,
-          error: userMessage(error, {
+          error: reportFault(error, {
             fallback: "Word couldn't update the tracked change.",
-          }),
+            operation: "word.edit_resolve",
+          }).message,
         });
       } finally {
         resolvingEditKeysRef.current.delete(key);
@@ -1429,7 +1462,10 @@ export function useWordTrackedEdits({
           }
         }
       } catch (error) {
-        reportWordFailure(error, { stage: "resolve-batch" });
+        reportWordFailure(error, {
+          stage: "resolve-batch",
+          operation: "word.edit_resolve",
+        });
         if (
           !mountedRef.current ||
           generation !== sessionGenerationRef.current
@@ -1440,9 +1476,10 @@ export function useWordTrackedEdits({
           setEditRuntimeState(entry.key, {
             status: "error",
             busy: false,
-            error: userMessage(error, {
+            error: reportFault(error, {
               fallback: "Word couldn't update the tracked changes.",
-            }),
+              operation: "word.edit_resolve",
+            }).message,
           });
         }
       } finally {

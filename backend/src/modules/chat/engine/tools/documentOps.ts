@@ -8,17 +8,11 @@ import {
 // Tracked-change editing lives in the documents module; the tool dispatcher
 // keeps calling it by its tool-facing name.
 export { applyTrackedEditsToDocument as runEditDocument, loadCurrentVersionBytes };
-import {
-  downloadFile,
-  extractedTextKey,
-  generatedDocKey,
-  uploadFile,
-} from "../../../../lib/storage";
+import { downloadFileIfAvailable, extractedTextKey, generatedDocKey, uploadFile } from "../../../../lib/storage";
 import { convertedPdfKey, docxToPdf } from "../../../../lib/convert";
 import { enqueueConversion } from "../../../../lib/queue/conversionQueue";
 import { enqueueDbJob } from "../../../../lib/dbq/enqueue";
 import type { Db } from "../../../../lib/supabase";
-import { extractDocxBodyText } from "../../../../lib/docxTrackedChanges";
 import { buildDownloadUrl } from "../../../../lib/downloadTokens";
 import {
   contentSha256,
@@ -38,8 +32,11 @@ import {
   requiresLibreOfficeTextExtraction,
   shouldConvertToPdf,
 } from "../../../../lib/documentTypes";
-import { extractPresentationText } from "../../../../lib/officeText";
-import { spreadsheetToLLMText } from "../../../../lib/spreadsheet";
+import {
+  ExtractionLimitError,
+  ExtractionBusyError,
+  withExtractionRequest,
+} from "../../../../lib/extraction/isolated";
 
 
 export function citationReminder(
@@ -64,10 +61,6 @@ export function citationReminder(
 }
 
 export { extractPdfText, extractLegacyOfficeText } from "../../../../lib/pdfText";
-import {
-  extractPdfTextForModel,
-  extractLegacyOfficeText,
-} from "../../../../lib/pdfText";
 
 export async function generateDocx(
   title: string,
@@ -1288,151 +1281,148 @@ export async function readDocumentContent(
       return notice + (stored.text ?? "");
     }
 
-    // Prefer the current tracked-changes version (if any) so read_document
-    // reflects accepted/pending edits rather than the original upload.
-    let raw: ArrayBuffer | null = null;
-    let sourcePath = docInfo.storage_path;
-    if (documentId && db) {
-      const current = await loadCurrentVersionBytes(documentId, db, versionId);
-      if (current) {
-        raw = current.bytes.buffer.slice(
-          current.bytes.byteOffset,
-          current.bytes.byteOffset + current.bytes.byteLength,
-        ) as ArrayBuffer;
-        sourcePath = current.storage_path;
-        devLog(
-          `[read_document] using current version path="${sourcePath}" (bytes=${raw.byteLength})`,
-        );
-      } else {
-        devLog(
-          `[read_document] loadCurrentVersionBytes returned null for documentId="${documentId}", falling back to original storage_path`,
-        );
-      }
-    }
-    if (!raw) {
-      raw = await downloadFile(docInfo.storage_path);
-      if (raw) {
-        devLog(
-          `[read_document] fallback download from storage_path="${docInfo.storage_path}" (bytes=${raw.byteLength})`,
-        );
-      }
-    }
-    if (!raw) {
-      devLog(
-        `[read_document] FAILED to download any bytes for docLabel="${docLabel}" (tried path="${sourcePath}")`,
-      );
-      emitDocRead();
-      return "Document could not be read.";
-    }
-    // Log the first 8 bytes so we can identify real file format regardless
-    // of the declared file_type. Valid .docx starts with "PK\x03\x04"
-    // (zip). Legacy .doc starts with "\xD0\xCF\x11\xE0" (OLE/CFB).
-    // %PDF-1 is a PDF even if mislabeled. Truncated uploads show as all-zero.
-    {
-      const head = Buffer.from(raw).subarray(0, 8);
-      const hex = head.toString("hex");
-      const ascii = head.toString("binary").replace(/[^\x20-\x7e]/g, ".");
-      devLog(
-        `[read_document] magic bytes hex=${hex} ascii="${ascii}" for filename="${docInfo.filename}"`,
-      );
-    }
-    let text: string;
-    const fileType = docInfo.file_type?.toLowerCase?.() ?? "";
-    if (fileType === "pdf") {
-      text = await extractPdfTextForModel(raw);
-      devLog(
-        `[read_document] pdf extracted length=${text.length} for filename="${docInfo.filename}"`,
-      );
-    } else if (fileType === "docx") {
-      // Use the same flattening as the edit_document matcher so the
-      // LLM sees exactly the characters it can anchor against.
-      text = await extractDocxBodyText(Buffer.from(raw));
-      devLog(
-        `[read_document] docx extractDocxBodyText length=${text.length} for filename="${docInfo.filename}"`,
-      );
-      if (!text) {
-        devLog(
-          `[read_document] docx accepted-view extractor returned empty, falling back to mammoth for filename="${docInfo.filename}"`,
-        );
-        const mammoth = await import("mammoth");
-        const result = await mammoth.extractRawText({
-          buffer: Buffer.from(raw),
-        });
-        text = result.value;
-        devLog(
-          `[read_document] docx mammoth fallback length=${text.length} for filename="${docInfo.filename}"`,
-        );
-      }
-    } else if (isSpreadsheetDocumentType(fileType)) {
-      // SheetJS reads .xlsx/.xlsm/.xls directly (no PDF detour), emitting a
-      // cell-addressed markdown view with Excel-formatted values.
-      text = spreadsheetToLLMText(Buffer.from(raw));
-      devLog(
-        `[read_document] spreadsheet extracted length=${text.length} for filename="${docInfo.filename}"`,
-      );
-    } else if (fileType === "pptx") {
-      text = await extractPresentationText(Buffer.from(raw));
-      devLog(
-        `[read_document] presentation extracted length=${text.length} for filename="${docInfo.filename}"`,
-      );
-    } else if (
-      isPresentationDocumentType(fileType) ||
-      isWordDocumentType(fileType)
-    ) {
-      // This branch is the only one that shells out to LibreOffice — every
-      // other type has an in-process reader above — so it is the only one
-      // worth caching. The cached object is written by the
-      // document.precompute_text job, keyed on the immutable version id.
-      const cacheKey =
-        versionId && requiresLibreOfficeTextExtraction(fileType)
-          ? extractedTextKey(versionId)
-          : null;
-      const cached = cacheKey ? await downloadFile(cacheKey) : null;
-      if (cached) {
-        text = Buffer.from(cached).toString("utf8");
-        devLog(
-          `[read_document] legacy Office text served from cache key="${cacheKey}" length=${text.length} for filename="${docInfo.filename}"`,
-        );
-      } else {
-        devLog(
-          `[read_document] legacy Office file_type="${fileType}" for filename="${docInfo.filename}", converting to pdf for text extraction`,
-        );
-        text = await extractLegacyOfficeText(raw);
-        devLog(
-          `[read_document] legacy Office PDF extraction length=${text.length} for filename="${docInfo.filename}"`,
-        );
-        // Warm the cache for the next read of this version. Fire-and-forget
-        // and deduped: several tool calls in one turn queue one job, and a
-        // failure here must never affect the text we just produced.
-        if (cacheKey && db) {
-          void enqueueDbJob(db, {
-            kind: "document.precompute_text",
-            payload: { versionId, storagePath: sourcePath, fileType },
-            dedupeKey: `precompute:${versionId}`,
-            maxAttempts: 3,
-          }).catch((err) =>
-            devLog(`[read_document] precompute enqueue failed`, err),
+    return await withExtractionRequest(async (extract) => {
+      // Prefer the current tracked-changes version (if any) so read_document
+      // reflects accepted/pending edits rather than the original upload.
+      let raw: ArrayBuffer | null = null;
+      let sourcePath = docInfo.storage_path;
+      if (documentId && db) {
+        const current = await loadCurrentVersionBytes(documentId, db, versionId);
+        if (current) {
+          raw = current.bytes.buffer.slice(
+            current.bytes.byteOffset,
+            current.bytes.byteOffset + current.bytes.byteLength,
+          ) as ArrayBuffer;
+          sourcePath = current.storage_path;
+          devLog(
+            `[read_document] using current version path="${sourcePath}" (bytes=${raw.byteLength})`,
+          );
+        } else {
+          devLog(
+            `[read_document] loadCurrentVersionBytes returned null for documentId="${documentId}", falling back to original storage_path`,
           );
         }
       }
-    } else {
+      if (!raw) {
+        raw = await downloadFileIfAvailable(docInfo.storage_path);
+        if (raw) {
+          devLog(
+            `[read_document] fallback download from storage_path="${docInfo.storage_path}" (bytes=${raw.byteLength})`,
+          );
+        }
+      }
+      if (!raw) {
+        devLog(
+          `[read_document] FAILED to download any bytes for docLabel="${docLabel}" (tried path="${sourcePath}")`,
+        );
+        emitDocRead();
+        return "Document could not be read.";
+      }
+      // Log the first 8 bytes so we can identify real file format regardless
+      // of the declared file_type. Valid .docx starts with "PK\x03\x04"
+      // (zip). Legacy .doc starts with "\xD0\xCF\x11\xE0" (OLE/CFB).
+      // %PDF-1 is a PDF even if mislabeled. Truncated uploads show as all-zero.
+      {
+        const head = Buffer.from(raw).subarray(0, 8);
+        const hex = head.toString("hex");
+        const ascii = head.toString("binary").replace(/[^\x20-\x7e]/g, ".");
+        devLog(
+          `[read_document] magic bytes hex=${hex} ascii="${ascii}" for filename="${docInfo.filename}"`,
+        );
+      }
+      let text: string;
+      const fileType = docInfo.file_type?.toLowerCase?.() ?? "";
+      // Parsing runs in a bounded process, while downloads may overlap.
+      const source = raw;
+      const readIsolated = (
+        op:
+          | "pdfForModel"
+          | "docxText"
+          | "spreadsheet"
+          | "presentation"
+          | "legacyOfficeText"
+          | "rawText",
+      ) => extract(op, source);
+      if (fileType === "pdf") {
+        text = await readIsolated("pdfForModel");
+        devLog(
+          `[read_document] pdf extracted length=${text.length} for filename="${docInfo.filename}"`,
+        );
+      } else if (fileType === "docx") {
+        // Use the same flattening as the edit_document matcher so the
+        // LLM sees exactly the characters it can anchor against.
+        // (falls back to mammoth when the accepted view comes back empty)
+        text = await readIsolated("docxText");
+        devLog(
+          `[read_document] docx extracted length=${text.length} for filename="${docInfo.filename}"`,
+        );
+      } else if (isSpreadsheetDocumentType(fileType)) {
+        // SheetJS reads .xlsx/.xlsm/.xls directly (no PDF detour), emitting a
+        // cell-addressed markdown view with Excel-formatted values.
+        text = await readIsolated("spreadsheet");
+        devLog(
+          `[read_document] spreadsheet extracted length=${text.length} for filename="${docInfo.filename}"`,
+        );
+      } else if (fileType === "pptx") {
+        text = await readIsolated("presentation");
+        devLog(
+          `[read_document] presentation extracted length=${text.length} for filename="${docInfo.filename}"`,
+        );
+      } else if (
+        isPresentationDocumentType(fileType) ||
+        isWordDocumentType(fileType)
+      ) {
+        // This branch is the only one that shells out to LibreOffice — every
+        // other type has an in-process reader above — so it is the only one
+        // worth caching. The cached object is written by the
+        // document.precompute_text job, keyed on the immutable version id.
+        const cacheKey =
+          versionId && requiresLibreOfficeTextExtraction(fileType)
+            ? extractedTextKey(versionId)
+            : null;
+        const cached = cacheKey ? await downloadFileIfAvailable(cacheKey) : null;
+        if (cached) {
+          text = Buffer.from(cached).toString("utf8");
+          devLog(
+            `[read_document] legacy Office text served from cache key="${cacheKey}" length=${text.length} for filename="${docInfo.filename}"`,
+          );
+        } else {
+          devLog(
+            `[read_document] legacy Office file_type="${fileType}" for filename="${docInfo.filename}", converting to pdf for text extraction`,
+          );
+          text = await readIsolated("legacyOfficeText");
+          devLog(
+            `[read_document] legacy Office PDF extraction length=${text.length} for filename="${docInfo.filename}"`,
+          );
+          // Warm the cache for the next read of this version. Fire-and-forget
+          // and deduped: several tool calls in one turn queue one job, and a
+          // failure here must never affect the text we just produced.
+          if (cacheKey && db) {
+            void enqueueDbJob(db, {
+              kind: "document.precompute_text",
+              payload: { versionId, storagePath: sourcePath, fileType },
+              dedupeKey: `precompute:${versionId}`,
+              maxAttempts: 3,
+            }).catch((err) =>
+              devLog(`[read_document] precompute enqueue failed`, err),
+            );
+          }
+        }
+      } else {
+        devLog(
+          `[read_document] unknown file_type="${docInfo.file_type}" for filename="${docInfo.filename}", trying mammoth`,
+        );
+        text = await readIsolated("rawText");
+        devLog(
+          `[read_document] mammoth length=${text.length} for filename="${docInfo.filename}"`,
+        );
+      }
       devLog(
-        `[read_document] unknown file_type="${docInfo.file_type}" for filename="${docInfo.filename}", trying mammoth`,
+        `[read_document] DONE filename="${docInfo.filename}" finalTextLength=${text.length} firstChars=${JSON.stringify(text.slice(0, 120))}`,
       );
-      const mammoth = await import("mammoth");
-      const result = await mammoth.extractRawText({
-        buffer: Buffer.from(raw),
-      });
-      text = result.value;
-      devLog(
-        `[read_document] mammoth length=${text.length} for filename="${docInfo.filename}"`,
-      );
-    }
-    devLog(
-      `[read_document] DONE filename="${docInfo.filename}" finalTextLength=${text.length} firstChars=${JSON.stringify(text.slice(0, 120))}`,
-    );
-    emitDocRead();
-    return text;
+      emitDocRead();
+      return text;
+    });
   } catch (err) {
     devLog(
       `[read_document] THREW for docLabel="${docLabel}" filename="${docInfo.filename}":`,
@@ -1448,7 +1438,10 @@ export async function readDocumentContent(
           version_number: versionNumber,
         })}\n\n`,
       );
-    return "Document could not be read.";
+    if (err instanceof ExtractionBusyError) return "Document processing is busy. Try again shortly.";
+    return err instanceof ExtractionLimitError
+      ? "Document is too large to read."
+      : "Document could not be read.";
   }
 }
 

@@ -1,6 +1,7 @@
 import express from "express";
 import request from "supertest";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { AppError } from "../../../lib/appError";
 
 const {
   authClient,
@@ -33,6 +34,12 @@ const {
   consumeAuthHandoff: vi.fn(),
 }));
 
+// What each failure path reports: asserted by kind and cause, never by text.
+const reportError = vi.hoisted(() => vi.fn((..._args: unknown[]) => "event-1"));
+vi.mock("../../../lib/observability/sentry", async (importOriginal) => ({
+  ...(await importOriginal<Record<string, unknown>>()),
+  reportError,
+}));
 vi.mock("../../../lib/authSession", () => ({
   createRequestSupabase,
   clearRequestAuthCookies,
@@ -87,6 +94,7 @@ describe("auth routes", () => {
     clearRequestAuthCookies.mockReset();
     issueAuthHandoff.mockReset();
     consumeAuthHandoff.mockReset();
+    reportError.mockClear();
     for (const method of Object.values(authClient.auth)) {
       if (typeof method === "function") method.mockReset();
     }
@@ -484,6 +492,85 @@ describe("auth routes", () => {
 
     expect(response.status).toBe(204);
     expect(clearRequestAuthCookies).toHaveBeenCalledTimes(1);
+  });
+
+  it("reports the failed upstream sign-out as a warning without changing the response", async () => {
+    const cause = new Error("upstream unavailable");
+    authClient.auth.signOut.mockRejectedValue(cause);
+    const consoleError = vi.spyOn(console, "error").mockImplementation(() => {});
+
+    const response = await request(app)
+      .post("/auth/logout")
+      .set("Origin", origin)
+      .send({ scope: "local" });
+
+    expect(response.status).toBe(204);
+    expect(reportError).toHaveBeenCalledOnce();
+    const [failure, context] = reportError.mock.calls[0] as unknown as [
+      AppError,
+      { level?: string },
+    ];
+    expect(failure).toBeInstanceOf(AppError);
+    expect(failure.kind).toBe("auth.supabase_unavailable");
+    expect(failure.cause).toBe(cause);
+    expect(context.level).toBe("warning");
+    // The log line carries the reported object, so the console bridge files
+    // nothing twice.
+    expect(consoleError).toHaveBeenCalledWith(
+      "[auth/logout] upstream sign-out failed",
+      failure,
+    );
+    consoleError.mockRestore();
+  });
+
+  it.each(["resolved", "rejected"])("reports a %s password-reset failure while keeping the indistinguishable 204", async (mode) => {
+    const cause = new Error("mailer unavailable");
+    if (mode === "resolved") authClient.auth.resetPasswordForEmail.mockResolvedValue({ data: {}, error: cause });
+    else authClient.auth.resetPasswordForEmail.mockRejectedValue(cause);
+
+    const response = await request(app)
+      .post("/auth/password-reset")
+      .set("Origin", origin)
+      .send({ email: "unknown@example.test" });
+
+    expect(response.status).toBe(204);
+    expect(response.text).toBe("");
+    expect(reportError).toHaveBeenCalledOnce();
+    const [failure, context] = reportError.mock.calls[0] as unknown as [
+      AppError,
+      { level?: string },
+    ];
+    expect(failure.kind).toBe("auth.password_reset_failed");
+    expect(failure.cause).toBe(cause);
+    expect(context.level).toBe("warning");
+  });
+
+  it("does not report a successful password-reset response", async () => {
+    authClient.auth.resetPasswordForEmail.mockResolvedValue({ data: {}, error: null });
+    const response = await request(app).post("/auth/password-reset").set("Origin", origin).send({ email: "unknown@example.test" });
+    expect(response.status).toBe(204);
+    expect(reportError).not.toHaveBeenCalled();
+  });
+
+  it("keeps the thrown SSO failure as the cause of the one reported event", async () => {
+    process.env.SSO_ENABLED = "true";
+    const cause = new Error("private diagnostics");
+    authClient.auth.signInWithSSO.mockRejectedValueOnce(cause);
+    const consoleError = vi.spyOn(console, "error").mockImplementation(() => {});
+
+    const response = await request(app)
+      .post("/auth/oauth")
+      .set("Origin", origin)
+      .send({ provider: "sso", email: "lawyer@example.com" });
+
+    expect(response.status).toBe(500);
+    expect(response.text).not.toContain("private diagnostics");
+    expect(reportError).toHaveBeenCalledOnce();
+    const [failure] = reportError.mock.calls[0] as unknown as [AppError];
+    expect(failure).toBeInstanceOf(AppError);
+    expect(failure.kind).toBe("auth.sso_failed");
+    expect(failure.cause).toBe(cause);
+    consoleError.mockRestore();
   });
 
   it.each([

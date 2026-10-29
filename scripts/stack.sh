@@ -314,6 +314,13 @@ case "$CMD" in
         docker_ready || die "Docker is not running — start it first (open -a Docker) and retry."
         if [ "${MIKE_GC:-1}" != 0 ]; then gc; log; fi
         log "Starting compose project '$PROJECT'"
+        # The commit becomes the Sentry release of every image compose builds
+        # (GIT_SHA build arg, docs/observability.md); without it an event
+        # cannot be mapped to the code that produced it.
+        if [ -z "${GIT_SHA:-}" ] && command -v git >/dev/null 2>&1; then
+            GIT_SHA="$(git -C "$ROOT" rev-parse HEAD 2>/dev/null || true)"
+            export GIT_SHA
+        fi
         exec docker compose -p "$PROJECT" -f "$COMPOSE_FILE" up ${PASSTHRU[@]+"${PASSTHRU[@]}"}
         ;;
     down)

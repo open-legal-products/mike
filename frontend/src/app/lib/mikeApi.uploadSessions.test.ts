@@ -4,6 +4,17 @@ const { getSessionMock } = vi.hoisted(() => ({ getSessionMock: vi.fn() }));
 vi.mock("@/app/lib/supabase", () => ({
     supabase: { auth: { getSession: getSessionMock } },
 }));
+const reporting = vi.hoisted(() => ({ reportError: vi.fn() }));
+vi.mock("@/app/lib/errorReporting", async (importOriginal) => ({
+    ...(await importOriginal<typeof import("@/app/lib/errorReporting")>()),
+    ...reporting,
+}));
+
+vi.mock("../../../../word-addin/src/taskpane/lib/errorReporting", async (importOriginal) => ({
+    ...(await importOriginal<typeof import("../../../../word-addin/src/taskpane/lib/errorReporting")>()),
+    ...reporting,
+}));
+import { configureMikeApiClient, uploadStandaloneDocuments as uploadWordDocuments } from "../../../../word-addin/src/taskpane/api/client";
 
 import {
     UploadBatchError,
@@ -835,6 +846,7 @@ describe("direct upload sessions", () => {
         }).catch((caught: unknown) => caught);
 
         expect((error as Error).name).toBe("AbortError");
+        expect(reporting.reportError).not.toHaveBeenCalled();
         expect(progress).not.toContain("upload_confirmation_failed");
         expect(server.storageRequests.length).toBeGreaterThan(0);
         expect(
@@ -909,6 +921,93 @@ describe("direct upload sessions", () => {
             },
         ]);
         expect(progress).toHaveBeenCalled();
+    });
+
+    it("reports a failed storage PUT once per part, with the status and no URL or filename", async () => {
+        reporting.reportError.mockClear();
+        const server = installSuccessfulSessionServer({
+            storageUpload: async () => new Response(null, { status: 503 }),
+        });
+
+        const outcomes = await uploadFilesWithSession({
+            purpose: "document_create",
+            destination: { scope: "standalone" },
+            files: [
+                { file: new File(["a"], "secret-deal.pdf") },
+                { file: new File(["b"], "other.pdf") },
+            ],
+        });
+
+        expect(outcomes.map((outcome) => outcome.errorCode)).toEqual([
+            "direct_upload_failed",
+            "direct_upload_failed",
+        ]);
+        // Three attempts per part, two parts: two events, not six.
+        expect(server.storageRequests.length).toBeGreaterThan(2);
+        expect(reporting.reportError).toHaveBeenCalledTimes(2);
+        for (const [, context] of reporting.reportError.mock.calls) {
+            expect(context).toEqual({
+                tags: {
+                    component: "mike-api",
+                    operation: "upload_session.storage",
+                    http_method: "PUT",
+                    http_status: 503,
+                },
+            });
+            expect(JSON.stringify(context)).not.toMatch(/secret-deal|storage\.test/);
+        }
+    });
+
+    it("does not report a transient storage network failure recovered by retry", async () => {
+        reporting.reportError.mockClear();
+        let attempts = 0;
+        installSuccessfulSessionServer({
+            storageUpload: async () => {
+                attempts += 1;
+                if (attempts === 1) throw new TypeError("Failed to fetch");
+                return new Response(null, { status: 200 });
+            },
+        });
+
+        const outcomes = await uploadFilesWithSession({
+            purpose: "document_create",
+            destination: { scope: "standalone" },
+            files: [{ file: new File(["a"], "contract.pdf") }],
+        });
+
+        expect(outcomes).toMatchObject([{ status: "completed" }]);
+        expect(reporting.reportError).not.toHaveBeenCalled();
+    });
+
+    it("does not report a storage 503 recovered by retry", async () => {
+        reporting.reportError.mockClear();
+        let attempts = 0;
+        installSuccessfulSessionServer({ storageUpload: async () => new Response(null, { status: ++attempts === 1 ? 503 : 200 }) });
+        const outcomes = await uploadFilesWithSession({ purpose: "document_create", destination: { scope: "standalone" }, files: [{ file: new File(["a"], "contract.pdf") }] });
+        expect(outcomes).toMatchObject([{ status: "completed" }]);
+        expect(attempts).toBe(2);
+        expect(reporting.reportError).not.toHaveBeenCalled();
+    });
+
+    it("reports one warning after all storage network attempts fail", async () => {
+        reporting.reportError.mockClear();
+        const storageUpload = vi.fn(async () => { throw new TypeError("Failed to fetch"); });
+        installSuccessfulSessionServer({ storageUpload });
+        const outcomes = await uploadFilesWithSession({ purpose: "document_create", destination: { scope: "standalone" }, files: [{ file: new File(["a"], "contract.pdf") }] });
+        expect(outcomes).toMatchObject([{ status: "error", errorCode: "direct_upload_failed" }]);
+        expect(storageUpload).toHaveBeenCalledTimes(3);
+        expect(reporting.reportError).toHaveBeenCalledTimes(1);
+        expect(reporting.reportError.mock.calls[0]![1]).toMatchObject({ level: "warning", tags: { operation: "upload_session.storage", network: true } });
+    });
+
+    it.each([true, false])("Word reports only exhausted storage retries (recovers: %s)", async recovers => {
+        let attempts = 0;
+        installSuccessfulSessionServer({ storageUpload: async () => new Response(null, { status: ++attempts > 1 && recovers ? 200 : 503 }) });
+        configureMikeApiClient({ baseUrl: "https://word-api.test", getAuthHeaders: async () => ({}), fetchImpl: (input, init) => fetchMock(String(input).replace("https://word-api.test", "/api"), init) });
+        const outcomes = await uploadWordDocuments([new File(["a"], "contract.pdf")]);
+        expect(outcomes).toMatchObject([{ status: recovers ? "completed" : "error" }]);
+        expect(attempts).toBe(recovers ? 2 : 3);
+        expect(reporting.reportError).toHaveBeenCalledTimes(recovers ? 0 : 1);
     });
 
     it("throws with the per-file accounting when a single-file upload fails", async () => {

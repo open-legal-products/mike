@@ -3,7 +3,7 @@ FROM node:22-slim
 
 # libreoffice-convert shells out to soffice for doc conversion (see src/lib/convert.ts)
 RUN apt-get update \
-  && apt-get install -y --no-install-recommends libreoffice \
+  && apt-get install -y --no-install-recommends libreoffice util-linux \
   && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app

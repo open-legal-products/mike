@@ -166,3 +166,19 @@ it.each([
   expect(fake.calls.some(c => c.table === "documents" && c.op === "update")).toBe(false);
   fake.done();
 });
+
+ it("returns a typed read failure with its original cause before creating a copy", async () => {
+  mocks.projectAccess.mockResolvedValue({ ok: true, projectRole: "owner", project: { org_id: null } });
+  mocks.docAccess.mockResolvedValue({ ok: true, projectRole: "owner", isCreator: true });
+  const source = { ...firmDoc, project_id: null, org_id: null, workflow_id: "workflow" };
+  const fake = scriptedDb([
+    { table: "documents", data: source },
+    { table: "documents", data: [source] },
+    { table: "document_versions", data: { storage_path: "private-key", filename: "Private.docx" } },
+  ]);
+  const error = new Error("AccessDenied");
+  mocks.downloadFile.mockRejectedValueOnce(error);
+  expect(await assignOrCopyDocument(fake.db, { projectId: "destination", documentId: "doc", userId: "actor" }))
+    .toEqual({ ok: false, kind: "read_failed", error });
+  fake.done();
+});

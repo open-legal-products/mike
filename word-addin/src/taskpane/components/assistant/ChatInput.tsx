@@ -56,7 +56,7 @@ import {
   noModelsReason,
   unavailableModelMessage,
 } from "../../lib/modelCatalog";
-import { notifyError, userMessage } from "../../lib/notify";
+import { reportFault, notifyError } from "../../lib/notify";
 import { loadWithRetry } from "../../lib/composerPreflight";
 import {
   slashCommandQueryFromValue,
@@ -248,6 +248,7 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(
             action: "load your workflows",
             dedupeKey: "slash-workflows",
             page: "Assistant",
+            operation: "word_chat.turn",
             onRetry: () => {
               setSlashWorkflows(null);
             },
@@ -285,6 +286,7 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(
               action: "load your models",
               dedupeKey: "model-preflight",
               page: "Assistant",
+              operation: "word_chat.turn",
               onRetry: () => {
                 setKeyStatusLoading(true);
                 setPreflightAttempt((count) => count + 1);
@@ -424,9 +426,10 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(
           );
         } else {
           setDocumentUploadError(
-            userMessage(reason, {
+            reportFault(reason, {
               fallback: "Documents could not be uploaded. Try again.",
-            }),
+              operation: "documents.upload",
+            }).message,
           );
         }
       } finally {

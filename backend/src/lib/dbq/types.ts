@@ -1,3 +1,4 @@
+import { AppError } from "../appError";
 import type { Db } from "../supabase";
 export type { Db };
 
@@ -19,13 +20,14 @@ export interface DbJob {
 }
 
 /** A domain handler can defer a claimed job without consuming retry budget. */
-export class DbJobDeferredError extends Error {
+export class DbJobDeferredError extends AppError {
     readonly runAt: string;
+    readonly code: string;
 
     constructor(runAt: string, code = "job_deferred") {
-        super(code);
-        this.name = "DbJobDeferredError";
+        super("dbq.deferred", code);
         this.runAt = runAt;
+        this.code = code;
     }
 }
 

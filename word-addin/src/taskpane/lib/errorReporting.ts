@@ -23,6 +23,9 @@ import {
 
 export type ReportLevel = "fatal" | "error" | "warning";
 
+/** Static operation label authored at the call site; no registration required. */
+export type AddinOperation = string;
+
 export type ReportContext = {
   tags?: Record<string, string | number | boolean | null | undefined>;
   extra?: Record<string, unknown>;
@@ -35,6 +38,11 @@ const scrubber = createEventScrubber({
 });
 
 export const scrubEvent = scrubber.scrubEvent;
+
+// Reporting callers and automatic-capture deduplication share one registry.
+const markReported = scrubber.markReported;
+export const isReported = scrubber.isReported;
+
 
 /** `service`/`surface` distinguish the pane from its ribbon and OAuth pages. */
 export type AddinSurface = "taskpane" | "commands" | "oauth-dialog";
@@ -155,7 +163,7 @@ export function reportError(
   error: unknown,
   context: ReportContext = {},
 ): string | null {
-  scrubber.markReported(error);
+  markReported(error);
   if (!Sentry.isEnabled()) return null;
   return Sentry.withScope((scope) => {
     applyContext(scope, context);
@@ -175,8 +183,13 @@ export function reportError(
 export function reportWordFailure(
   error: unknown,
   context: {
-    /** Low-cardinality step name: "resolve", "restore", "reveal", ... */
-    stage: string;
+    /**
+     * Static step name: "resolve", "restore", "reveal", ... New stages
+     * need no registration; omit when the operation alone is sufficient.
+     */
+    stage?: string;
+    /** The user-level flow: reading the document, applying or resolving an edit. */
+    operation?: AddinOperation;
     level?: ReportLevel;
     extra?: Record<string, unknown>;
   },
@@ -189,45 +202,53 @@ export function reportWordFailure(
     error instanceof Error ? error.name : officeCode ?? "UnknownWordError";
   return reportError(error, {
     level: context.level ?? "error",
-    tags: { component: "word-office", stage: context.stage, office_code: officeCode },
+    tags: {
+      component: "word-office",
+      operation: context.operation,
+      stage: context.stage,
+      office_code: officeCode,
+    },
     extra: context.extra,
-    fingerprint: ["word-office", context.stage, officeCode ?? name],
+    fingerprint: [
+      "word-office",
+      context.stage ?? context.operation ?? "",
+      officeCode ?? name,
+    ],
   });
 }
 
-/** A backend 5xx seen from the pane, correlated by the backend's request id. */
+/** Report an API failure immediately with the operation known by its caller. */
 export function reportApiFailure(failure: {
-  path: string;
-  status: number;
-  code?: string | null;
-  requestId?: string | null;
-  method?: string;
-  /** The error about to be thrown; its later console.error copy is dropped. */
-  error?: unknown;
+    path: string;
+    status: number;
+    code?: string | null;
+    requestId?: string | null;
+    method?: string;
+    operation?: AddinOperation;
+    error?: unknown;
 }): string | null {
-  scrubber.markReported(failure.error);
-  if (!Sentry.isEnabled()) return null;
-  const route = normalizeApiPath(failure.path);
-  const method = failure.method ?? "GET";
-  return Sentry.withScope((scope) => {
-    applyContext(scope, {
-      level: "error",
-      tags: {
-        component: "mike-api",
-        http_status: failure.status,
-        http_method: method,
-        http_route: route,
-        request_id: failure.requestId,
-        error_code: failure.code,
-      },
-      extra: { path: failure.path },
-      fingerprint: ["api-5xx", method, route, String(failure.status)],
+    if (isReported(failure.error)) return null;
+    markReported(failure.error);
+    if (!Sentry.isEnabled()) return null;
+    const route = normalizeApiPath(failure.path);
+    const method = failure.method ?? "GET";
+    return Sentry.withScope(scope => {
+        applyContext(scope, {
+            level: "error",
+            tags: {
+                component: "mike-api",
+                operation: failure.operation,
+                http_status: failure.status,
+                http_method: method,
+                http_route: route,
+                request_id: failure.requestId,
+                error_code: failure.code,
+                ...(route === "/observability/sentry-test" ? { diagnostic_test: "true" } : {}),
+            },
+            fingerprint: ["api-5xx", method, route, String(failure.status)],
+        });
+        return Sentry.captureMessage(`API ${failure.status} on ${method} ${route}`, "error");
     });
-    return Sentry.captureMessage(
-      `API ${failure.status} on ${method} ${route}`,
-      "error",
-    );
-  });
 }
 
 /**
@@ -237,15 +258,21 @@ export function reportApiFailure(failure: {
  */
 export function reportNetworkFailure(
   error: unknown,
-  request: { method: string; url: string },
+  request: { method: string; url: string; operation?: AddinOperation },
 ): string | null {
-  scrubber.markReported(error);
+  markReported(error);
   if (!Sentry.isEnabled()) return null;
   const route = normalizeApiPath(request.url);
   return Sentry.withScope((scope) => {
     applyContext(scope, {
       level: "warning",
-      tags: { component: "mike-api", network: true, http_method: request.method, http_route: route },
+      tags: {
+        component: "mike-api",
+        operation: request.operation,
+        network: true,
+        http_method: request.method,
+        http_route: route,
+      },
       extra: { url: route },
       fingerprint: ["api-network", request.method, route],
     });

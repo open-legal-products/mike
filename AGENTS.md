@@ -204,6 +204,17 @@ explicitly requests it and the target has been confirmed. See
 `docs/deployment.md` for deployment procedure and `.github/workflows/schema-drift.yml`
 for the fresh-versus-upgraded schema check.
 
+## Diagnostic identity
+
+Sentry operation, error-kind, component, stage and job labels are static
+source-authored identifiers; adding one needs no central registration. Never
+interpolate user or dependency data into a diagnostic label, error name or
+computed function name. Preserve upstream errors as causes, not as labels.
+Raw messages, request payloads and arbitrary extras remain filtered centrally.
+The backend diagnostic source-contract test scans all three applications;
+review forwarded helper parameters and mappings as well. See
+`docs/observability.md` for the trust model and examples.
+
 ## Verification
 
 Choose the smallest verification that can catch the regression, and expand it

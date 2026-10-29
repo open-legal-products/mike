@@ -13,6 +13,7 @@ import {
 } from "./user.exportContracts";
 import type { DbJob } from "../../lib/dbq/types";
 import { downloadFile } from "../../lib/storage";
+import { AppError } from "../../lib/appError";
 import { type Db, errorMessage } from "./user.shared";
 
 // ---------------------------------------------------------------------------
@@ -82,7 +83,9 @@ export function validateExportRequest(input: {
 
 export type StartUserExportResult =
     | { ok: true; exportId: string }
-    | { ok: false; detail: string; forbidden?: boolean };
+    | { ok: false; detail: string; forbidden: true }
+    /** The enqueue failed; `error` is what the route hands sendInternalError. */
+    | { ok: false; detail: string; forbidden?: undefined; error: AppError };
 
 /** Enqueues the durable build job for an already-validated export request. */
 export async function startUserExport(
@@ -113,15 +116,21 @@ export async function startUserExport(
             dedupeKey,
             maxAttempts: 3,
         });
-        if (!out.id) return { ok: false, detail: "Failed to schedule export" };
+        if (!out.id)
+            return {
+                ok: false,
+                detail: "Failed to schedule export",
+                error: new AppError("export.failed", "export enqueue returned no job id"),
+            };
         return { ok: true, exportId: out.id };
     } catch (err) {
-        const detail = errorMessage(err);
-        console.error("[user/exports] enqueue failed", {
-            userId,
-            error: detail,
-        });
-        return { ok: false, detail };
+        // One event, from the route's sendInternalError: the kind names the
+        // flow, the cause keeps the enqueue error's own code.
+        return {
+            ok: false,
+            detail: errorMessage(err),
+            error: new AppError("export.failed", "export enqueue failed", { cause: err }),
+        };
     }
 }
 

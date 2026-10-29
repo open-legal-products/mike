@@ -1,3 +1,5 @@
+import { AppError } from "../../../lib/appError";
+import { reportError } from "../../../lib/observability/sentry";
 import { responseLanguageName } from "../../../lib/responseLanguages";
 import { deadlineMessage, type StreamStopReason } from "../../../lib/streamRuns";
 import crypto from "crypto";
@@ -1063,9 +1065,18 @@ export async function loadAssistantMessage(
     .maybeSingle();
   if (selectError || !row) {
     if (selectError) {
+      const failure = new AppError(
+        "chat.context_failed",
+        "Failed to load the assistant message",
+        { cause: selectError },
+      );
+      reportError(failure, {
+        level: "warning",
+        tags: { component: "chat-stream" },
+      });
       console.error(
         "[assistant-events] failed to load assistant message",
-        selectError,
+        failure,
       );
     }
     return null;
@@ -1091,9 +1102,17 @@ export async function appendAssistantEventsToMessage(
     p_citations: citations ?? [],
   });
   if (error || data !== "appended") {
+    // The RPC's error (or its unexpected verdict) is the cause; the caller
+    // falls back, so the report is the only record that events were lost.
+    const failure = new AppError(
+      "chat.message_save_failed",
+      "Failed to append assistant events",
+      { cause: error ?? { result: data } },
+    );
+    reportError(failure, { tags: { component: "chat-stream" } });
     console.error(
       "[assistant-events] failed to update assistant message",
-      error ?? { result: data },
+      failure,
     );
     return false;
   }
@@ -1251,9 +1270,15 @@ export async function appendAskInputsResponseToAssistantMessage(
     p_response: storedResponse,
   });
   if (error) {
+    const failure = new AppError(
+      "chat.message_save_failed",
+      "Failed to append the ask-inputs response",
+      { cause: error },
+    );
+    reportError(failure, { tags: { component: "chat-stream" } });
     console.error(
       "[assistant-events] failed to append ask-input response",
-      error,
+      failure,
     );
     return "failed";
   }
@@ -1606,7 +1631,16 @@ export async function buildWorkflowStore(
   try {
     await ensureDefaultWorkflows(userId, db);
   } catch (err) {
-    console.error("[buildWorkflowStore] ensureDefaultWorkflows failed:", err);
+    const failure = new AppError(
+      "workflows.default_install_failed",
+      "Default workflow installation failed",
+      { cause: err },
+    );
+    reportError(failure, {
+      level: "warning",
+      tags: { component: "chat-stream" },
+    });
+    console.error("[buildWorkflowStore] ensureDefaultWorkflows failed:", failure);
   }
 
   // Keep catalog IDs readable for historical chat attachments, but do not
@@ -1619,9 +1653,18 @@ export async function buildWorkflowStore(
     .order("active", { ascending: false })
     .order("updated_at", { ascending: false });
   if (catalogError) {
+    const failure = new AppError(
+      "chat.context_failed",
+      "Workflow catalog lookup failed",
+      { cause: catalogError },
+    );
+    reportError(failure, {
+      level: "warning",
+      tags: { component: "chat-stream" },
+    });
     console.error(
       "[buildWorkflowStore] workflow catalog lookup failed",
-      catalogError,
+      failure,
     );
   } else {
     for (const workflow of catalogWorkflows ?? []) {

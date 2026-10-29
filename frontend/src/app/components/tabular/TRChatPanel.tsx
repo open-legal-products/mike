@@ -1872,6 +1872,11 @@ export function TRChatPanel({
                             const failure = errorFrameFailure(
                                 data.message,
                                 safeToDisplay,
+                                {
+                                    code: data.code,
+                                    requestId: data.request_id,
+                                    reportingOwner: data.reporting_owner,
+                                },
                             );
                             flushDrip();
                             clearStreamingPlaceholders();
@@ -1901,6 +1906,7 @@ export function TRChatPanel({
                             });
                             notifyError(failure, {
                                 action: "get a response",
+                                operation: "tabular.chat",
                                 dedupeKey: `tr-chat-error:${cursor.chatId ?? reviewId}`,
                                 onRetry: retry,
                             });

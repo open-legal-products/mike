@@ -125,6 +125,7 @@ vi.mock("../../lib/storage", () => ({
     deleteFile: (key: string) => deleteFile(key),
     listFiles: (prefix: string) => listFiles(prefix),
     downloadFile: (...a: unknown[]) => downloadFile(...a),
+    downloadFileIfAvailable: (...a: unknown[]) => downloadFile(...a),
 }));
 
 import {

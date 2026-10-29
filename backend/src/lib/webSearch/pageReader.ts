@@ -1,4 +1,6 @@
+import { AppError } from "../appError";
 import { isBlockedDestinationError } from "../blockedDestination";
+import { reportError } from "../observability/sentry";
 import { guardedFetch, validateRemoteMcpUrl } from "../mcp/client";
 import { extractPdfTextForModel } from "../pdfText";
 import { withTimeout } from "./http";
@@ -6,10 +8,9 @@ import { SEARCH_SERVICES } from "./services";
 import type { WebPage, WebSearchAccount } from "./types";
 
 /** A page that could not be read; the message is safe to show the model. */
-export class WebPageUnreadableError extends Error {
+export class WebPageUnreadableError extends AppError {
     constructor(message: string, options?: ErrorOptions) {
-        super(message, options);
-        this.name = "WebPageUnreadableError";
+        super("web_search.page_unreadable", message, { cause: options?.cause });
     }
 }
 
@@ -196,6 +197,23 @@ async function readThroughSearchService(
         return page.text ? page : null;
     } catch (error) {
         if (signal?.aborted) throw error;
+        // The direct fetch below is the fallback, so the turn goes on; the
+        // service failure itself still has to be seen. The kind names it
+        // (SearchApiError carries the status as dependency_status) and the
+        // URL stays in the process.
+        reportError(
+            error instanceof AppError
+                ? error
+                : new AppError(
+                      "web_search.page_unreadable",
+                      "The search service could not read the page",
+                      { cause: error },
+                  ),
+            {
+                level: "warning",
+                tags: { component: "chat-stream", operation: "chat.web_search" },
+            },
+        );
         return null;
     }
 }

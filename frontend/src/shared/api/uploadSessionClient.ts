@@ -165,6 +165,8 @@ type UploadSessionTransport = {
     apiRequest<T>(path: string, init?: RequestInit): Promise<T>;
     fetchStorage: typeof fetch;
     shouldRetryControlRequest(error: unknown): boolean;
+    /** Called once only after storage retries are exhausted; never receives URLs or files. */
+    onStorageFailure?(failure: { error: unknown; status?: number; network?: true }): void;
 };
 
 type ResolvedInput = UploadSessionInput & { clientId: string };
@@ -448,7 +450,9 @@ async function runUploadSession<T>(args: {
                     errorCode: null,
                 });
                 let lastError: unknown;
+                let storageFailure: { error: unknown; status?: number; network?: true } | undefined;
                 for (let attempt = 0; attempt < 3; attempt += 1) {
+                    storageFailure = undefined;
                     if (attempt > 0) {
                         try {
                             await refreshUrls();
@@ -476,6 +480,7 @@ async function runUploadSession<T>(args: {
                         // timeout is just another failed attempt.
                         if (args.signal?.aborted) throw error;
                         lastError = error;
+                        storageFailure = { error, network: true };
                         continue;
                     }
                     if (response.ok) {
@@ -492,6 +497,14 @@ async function runUploadSession<T>(args: {
                     lastError = new Error(
                         `Object storage returned ${response.status}`,
                     );
+                    storageFailure = { error: lastError, status: response.status };
+                }
+                if (storageFailure) {
+                    try {
+                        args.transport.onStorageFailure?.(storageFailure);
+                    } catch {
+                        // Telemetry must not change the per-file failure accounting.
+                    }
                 }
                 const descriptor = descriptors.get(input.clientId);
                 if (descriptor) {

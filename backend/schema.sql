@@ -10797,6 +10797,30 @@ drop trigger if exists document_text_changed on public.document_versions;
 create trigger document_text_changed after insert or update on public.document_versions
   for each row execute function public.document_text_changed();
 
+-- A job that kills its worker is failed by claim_db_jobs' stale sweep, which
+-- runs no TypeScript failure hook. Fail the text row whenever its job fails,
+-- or backfill_document_text queues the same file again forever.
+create or replace function public.document_text_job_failed()
+returns trigger language plpgsql security definer set search_path=public,pg_temp as $$
+declare v uuid; r uuid;
+begin
+  begin
+    v := (new.payload->>'versionId')::uuid;
+    r := (new.payload->>'revision')::uuid;
+  exception when invalid_text_representation then
+    return null;
+  end;
+  update public.document_version_texts
+     set status='failed',text_content=null,error_code='extraction_failed',updated_at=now()
+   where version_id=v and source_revision=r and status in ('pending','processing');
+  return null;
+end;
+$$;
+drop trigger if exists document_text_job_failed on public.db_jobs;
+create trigger document_text_job_failed after update of status on public.db_jobs
+  for each row when (new.kind='document.extract_text' and new.status='failed' and old.status is distinct from 'failed')
+  execute function public.document_text_job_failed();
+
 -- Bounded and resumable: rows/jobs themselves are the checkpoint. Prioritize
 -- active versions, then history. Failed rows require an explicit retry request.
 create or replace function public.backfill_document_text(p_limit integer default 100, p_retry_failed boolean default false)
@@ -10924,6 +10948,7 @@ returns jsonb language sql stable security invoker set search_path=public,pg_tem
 $$;
 
 revoke all on function public.queue_document_text(uuid,boolean),public.document_text_revision_changed(),public.document_text_changed(),
+  public.document_text_job_failed(),
   public.backfill_document_text(integer,boolean),public.publish_document_text(uuid,uuid,text,text,integer),
   public.document_text_access(uuid,text,text),public.find_document_text(text,text,text,text,text,uuid,uuid,uuid,integer,integer),
   public.read_document_text(text,text,uuid,uuid) from public,anon,authenticated;
@@ -11100,5 +11125,6 @@ insert into public.schema_migrations (filename) values
   ('20261024_01_org_keys_central_only.sql'),
   ('20261024_02_workspace_scoped_data_deletion.sql'),
   ('20261024_03_backfill_project_child_org_id.sql'),
-  ('20261024_04_org_member_data_policy.sql')
+  ('20261024_04_org_member_data_policy.sql'),
+  ('20261027_01_document_text_failed_jobs.sql')
 on conflict (filename) do nothing;

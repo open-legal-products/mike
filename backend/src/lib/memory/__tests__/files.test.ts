@@ -1,8 +1,15 @@
 import { createHash } from "node:crypto";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
+import { AppError } from "../../appError";
 import {
   ensureMemoryFile,
+  MemoryConversationNotQuietError,
+  MemoryDisabledError,
+  MemoryEpochSupersededError,
+  MemoryJobSupersededError,
+  MemoryRevisionConflictError,
+  MemoryValidationError,
   normalizeMemoryMarkdown,
   wipeMemoryFile,
   writeMemoryFile,
@@ -54,6 +61,44 @@ function dbFor(
 
 beforeEach(() => {
   vi.clearAllMocks();
+});
+
+describe("memory failure classes", () => {
+  it.each([
+    [MemoryValidationError, "memory.validation"],
+    [MemoryRevisionConflictError, "memory.revision_conflict"],
+    [MemoryDisabledError, "memory.disabled"],
+    [MemoryJobSupersededError, "memory.job_superseded"],
+    [MemoryEpochSupersededError, "memory.epoch_superseded"],
+    [MemoryConversationNotQuietError, "memory.conversation_not_quiet"],
+  ])("%o is an AppError whose kind names the failure", (Failure, kind) => {
+    const cause = new Error("raw database internals");
+    const error = new Failure("fixed text", { cause });
+    expect(error).toBeInstanceOf(AppError);
+    expect(error).toBeInstanceOf(Failure);
+    expect(error.kind).toBe(kind);
+    expect(error.name).toBe(Failure.name);
+    expect(error.message).toBe("fixed text");
+    expect(error.cause).toBe(cause);
+    expect(new Failure("no cause").cause).toBeUndefined();
+  });
+
+  it("raises the row lock's conflict under its kind", async () => {
+    const db = dbFor({ ...file, revision: 5 }, () => ({
+      data: null,
+      error: { message: "error: memory_revision_conflict" },
+    }));
+    const thrown = await writeMemoryFile({
+      db: db as never,
+      file,
+      content: "# Next",
+      expectedRevision: 3,
+      source: "manual",
+      updatedBy: "user-1",
+    }).catch((error: unknown) => error);
+    expect(thrown).toBeInstanceOf(MemoryRevisionConflictError);
+    expect((thrown as AppError).kind).toBe("memory.revision_conflict");
+  });
 });
 
 describe("direct memory file writes", () => {

@@ -59,7 +59,7 @@ function tagsOf(event: Record<string, unknown>): Record<string, unknown> {
   return (event.tags ?? {}) as Record<string, unknown>;
 }
 
-test("a backend 5xx is reported with the route, status, and request id but no body", async ({
+test("a backend 5xx is reported with the operation, route, status, and request id but no body", async ({
   addin,
   page,
 }) => {
@@ -86,12 +86,13 @@ test("a backend 5xx is reported with the route, status, and request id but no bo
   await page.getByRole("menuitem", { name: "Workflows" }).click();
 
   const event = await nextEvent;
-  expect(event.message).toBe("Failure in mike-api / GET / /workflows / 500 / internal_error");
+  expect(event.message).toBe("Failure in workflows.run / mike-api / GET / /workflows / 500 / internal_error");
   expect(event.level).toBe("error");
   expect(tagsOf(event)).toMatchObject({
     service: "mike-word-addin",
     surface: "taskpane",
     component: "mike-api",
+    operation: "workflows.run",
     // Tag values keep their JS type in the envelope; Sentry stringifies on
     // ingest.
     http_status: 500,
@@ -190,7 +191,7 @@ test("a mid-stream chat failure is reported once, tagged as word-chat", async ({
     officeEvents.map((candidate) => [tagsOf(candidate).stage, candidate.level]),
   ).toEqual([["document-read", "warning"]]);
   const exception = (event.exception as { values: { value: string }[] }).values[0]!;
-  expect(exception.value).toBe("Failure in word-chat");
+  expect(exception.value).toBe("Failure in word_chat.turn / word-chat");
   expect(sentry.bodies.join("\n")).not.toContain("Synthetic_Client_Jane_Doe_NDA.pdf");
   expect(sentry.bodies.join("\n")).not.toContain('"type":"session"');
   // The console.error that accompanies the failure is bridged into Sentry
