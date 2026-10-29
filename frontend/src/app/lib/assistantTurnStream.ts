@@ -48,7 +48,15 @@ export type TurnStreamHooks = {
    * goes. `message` is what the bubble shows; `safeToDisplay` marks a
    * configuration refusal that a re-send would repeat.
    */
-  onErrorFrame?: (frame: { message: string; safeToDisplay: boolean }) => void;
+  onErrorFrame?: (frame: {
+    message: string;
+    safeToDisplay: boolean;
+    /** The backend's failure code, when the frame named one. */
+    code: string | null;
+    /** The id of the request that produced the frame, when it carried one. */
+    requestId: string | null;
+    reportingOwner?: "backend";
+  }) => void;
 };
 
 /**
@@ -479,7 +487,16 @@ export async function consumeAssistantTurnStream(
             error: message,
           }));
           turn.setLoadingCitations(false);
-          hooks.onErrorFrame?.({ message, safeToDisplay });
+          // Read defensively: the backend is adding `request_id` to error
+          // frames, and older servers send neither field.
+          hooks.onErrorFrame?.({
+            message,
+            safeToDisplay,
+            ...(data.reporting_owner === "backend" ? { reportingOwner: "backend" as const } : {}),
+            code: typeof data.code === "string" ? data.code : null,
+            requestId:
+              typeof data.request_id === "string" ? data.request_id : null,
+          });
           continue;
         }
 

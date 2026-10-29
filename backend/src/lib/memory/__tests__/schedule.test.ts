@@ -11,7 +11,13 @@ vi.mock("../../queue/appJobsQueue", () => ({
 vi.mock("../../dbq/driver", () => ({
   redisEnabled: () => redisEnabled(),
 }));
+const reportError = vi.hoisted(() => vi.fn());
+vi.mock("../../observability/sentry", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../observability/sentry")>()),
+  reportError,
+}));
 
+import { AppError } from "../../appError";
 import {
   beginMemoryConversationTurn,
   MEMORY_INACTIVITY_MS,
@@ -21,9 +27,21 @@ import {
 
 beforeEach(() => {
   enqueueAppJobDelivery.mockReset();
+  reportError.mockReset();
   redisEnabled.mockReset();
   redisEnabled.mockReturnValue(false);
 });
+
+/** The one warning a skipped curation files: its kind, and the cause. */
+function expectCurationWarning(cause: unknown) {
+  expect(reportError).toHaveBeenCalledTimes(1);
+  const [reported, context] = reportError.mock.calls[0];
+  expect(reported).toBeInstanceOf(AppError);
+  expect((reported as AppError).kind).toBe("memory.consolidation_failed");
+  expect((reported as AppError).cause).toBe(cause);
+  expect(context).toEqual({ level: "warning" });
+  return reported as AppError;
+}
 
 describe("scheduleMemoryConsolidation", () => {
   it("durably records a per-turn lease before generation begins", async () => {
@@ -70,6 +88,12 @@ describe("scheduleMemoryConsolidation", () => {
       expect(JSON.stringify(warn.mock.calls)).not.toContain(
         "raw database internals",
       );
+      // Not silent either: one warning under its kind, with the database's
+      // error as the cause and a fixed message of our own.
+      const reported = expectCurationWarning(
+        (await rpc.mock.results[0]!.value).error,
+      );
+      expect(reported.message).toBe("Memory activity lease could not be taken");
     } finally {
       warn.mockRestore();
     }
@@ -78,9 +102,10 @@ describe("scheduleMemoryConsolidation", () => {
   it("leaves lease release to the caller when scheduling fails", async () => {
     const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
     try {
+      const refused = { message: "raw database internals" };
       const rpc = vi.fn(async (name: string) =>
         name === "schedule_memory_consolidation"
-          ? { data: null, error: { message: "raw database internals" } }
+          ? { data: null, error: refused }
           : { data: null, error: null },
       );
       await expect(
@@ -100,6 +125,7 @@ describe("scheduleMemoryConsolidation", () => {
         "release_memory_conversation_turn",
         expect.anything(),
       );
+      expectCurationWarning(refused);
     } finally {
       warn.mockRestore();
     }
@@ -152,7 +178,8 @@ describe("scheduleMemoryConsolidation", () => {
 
   it("keeps Postgres authoritative and treats Redis delivery as best effort", async () => {
     redisEnabled.mockReturnValue(true);
-    enqueueAppJobDelivery.mockRejectedValue(new Error("redis unavailable"));
+    const redisDown = new Error("redis unavailable");
+    enqueueAppJobDelivery.mockRejectedValue(redisDown);
     const rpc = vi.fn(async () => ({
       data: [{ job_id: "job-1", generation: 1 }],
       error: null,
@@ -170,6 +197,29 @@ describe("scheduleMemoryConsolidation", () => {
     expect(enqueueAppJobDelivery).toHaveBeenCalledWith("job-1", {
       delayMs: expect.any(Number),
     });
+    // The job still runs from the poller, later than it should: one warning.
+    const reported = expectCurationWarning(redisDown);
+    expect(reported.message).toBe(
+      "Memory consolidation delivery could not be enqueued",
+    );
+  });
+
+  it("reports nothing when the turn is scheduled and delivered", async () => {
+    redisEnabled.mockReturnValue(true);
+    enqueueAppJobDelivery.mockResolvedValue(undefined);
+    const rpc = vi.fn(async () => ({
+      data: [{ job_id: "job-1", generation: 1 }],
+      error: null,
+    }));
+    await scheduleMemoryConsolidation({
+      db: { rpc } as never,
+      surface: "chat",
+      conversationId: "chat",
+      actorUserId: "user",
+      turnId: "turn",
+      turn: { activityId: "activity" },
+    });
+    expect(reportError).not.toHaveBeenCalled();
   });
 
   it("does not create stuck scheduled state when DB jobs are disabled", async () => {

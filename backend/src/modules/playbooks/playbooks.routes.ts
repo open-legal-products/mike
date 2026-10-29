@@ -3,11 +3,10 @@ import { pipeline } from "node:stream/promises";
 import { Router, type Response } from "express";
 import { requireAuth, requireMfaIfEnrolled } from "../../middleware/auth";
 import { sendInternalError } from "../../lib/httpError";
-import { safeError } from "../../lib/safeError";
+import { setOperation } from "../../lib/observability/sentry";
 import {
   buildContentDisposition,
   createFileReadStream,
-  deleteFile,
   getSignedUploadUrl,
   headFile,
   storageEnabled,
@@ -28,6 +27,7 @@ import {
   revokePlaybookShare,
   getPlaybookSourceFile,
   addPlaybookSourceFromUpload,
+  removePlaybookObjects,
   addPlaybookSourceFromDocument,
   deletePlaybookSource,
   playbookSourceFileType,
@@ -213,6 +213,7 @@ playbooksRouter.get("/runs", async (req, res) => {
  * buffers the file.
  */
 playbooksRouter.post("/", requireMfaIfEnrolled, async (req, res) => {
+  setOperation("playbooks.save");
   try {
     const body = req.body ?? {};
     res.status(201).json(
@@ -271,12 +272,19 @@ playbooksRouter.post(
         res.locals.userId as string,
       )}${crypto.randomUUID()}.${fileType}`;
       const contentType = PLAYBOOK_IMPORT_CONTENT_TYPES[fileType];
-      const uploadUrl = await getSignedUploadUrl(
-        storageKey,
-        contentType,
-        sizeBytes,
-        UPLOAD_URL_TTL_SECONDS,
-      );
+      let uploadUrl: string | null;
+      try {
+        uploadUrl = await getSignedUploadUrl(
+          storageKey,
+          contentType,
+          sizeBytes,
+          UPLOAD_URL_TTL_SECONDS,
+        );
+      } catch (error) {
+        // Signing failed (credentials, endpoint): reported once with the
+        // store's code, answered as the same 503 as an unconfigured store.
+        return void sendInternalError(res, error, 503);
+      }
       if (!uploadUrl) {
         return void res
           .status(503)
@@ -295,6 +303,7 @@ playbooksRouter.post(
 );
 
 playbooksRouter.post("/import", requireMfaIfEnrolled, async (req, res) => {
+  setOperation("playbooks.import");
   const userId = res.locals.userId as string;
   // A playbookId replaces that playbook's content instead of adding a new
   // playbook. Ownership is checked inside the import.
@@ -368,14 +377,9 @@ playbooksRouter.post("/import", requireMfaIfEnrolled, async (req, res) => {
   } catch (error) {
     sendError(res, error);
   } finally {
-    if (staged) {
-      await deleteFile(storageKey).catch((error) => {
-        console.error("[playbooks] staged upload cleanup failed", {
-          storageKey,
-          error: safeError(error),
-        });
-      });
-    }
+    // Only the staged object no job will read; a reported warning, never a
+    // failed response.
+    if (staged) await removePlaybookObjects([storageKey], { stage: "import.cleanup" });
   }
 });
 
@@ -549,12 +553,19 @@ playbooksRouter.post(
       const storageKey = `${playbookSourceUploadPrefix(
         res.locals.userId as string,
       )}${crypto.randomUUID()}.${fileType}`;
-      const uploadUrl = await getSignedUploadUrl(
-        storageKey,
-        contentType,
-        sizeBytes,
-        UPLOAD_URL_TTL_SECONDS,
-      );
+      let uploadUrl: string | null;
+      try {
+        uploadUrl = await getSignedUploadUrl(
+          storageKey,
+          contentType,
+          sizeBytes,
+          UPLOAD_URL_TTL_SECONDS,
+        );
+      } catch (error) {
+        // Signing failed (credentials, endpoint): reported once with the
+        // store's code, answered as the same 503 as an unconfigured store.
+        return void sendInternalError(res, error, 503);
+      }
       if (!uploadUrl) {
         return void res
           .status(503)
@@ -618,14 +629,10 @@ playbooksRouter.post(
     } finally {
       // The playbook keeps its own copy, so the staged object is redundant
       // whatever happened. Only a key minted for this caller is ever touched.
-      if (isStagedPlaybookSourceKey(userId, storageKey)) {
-        await deleteFile(storageKey).catch((error) => {
-          console.error("[playbooks] staged source cleanup failed", {
-            storageKey,
-            error: safeError(error),
-          });
+      if (isStagedPlaybookSourceKey(userId, storageKey))
+        await removePlaybookObjects([storageKey], {
+          ids: { playbook_id: req.params.playbookId },
         });
-      }
     }
   },
 );
@@ -682,6 +689,7 @@ playbooksRouter.delete(
 );
 
 playbooksRouter.put("/:playbookId", requireMfaIfEnrolled, async (req, res) => {
+  setOperation("playbooks.save");
   try {
     res.json(
       await updatePlaybookContent(
@@ -700,6 +708,7 @@ playbooksRouter.put("/:playbookId", requireMfaIfEnrolled, async (req, res) => {
 });
 
 playbooksRouter.post("/:playbookId/review", async (req, res) => {
+  setOperation("playbooks.review");
   try {
     const text =
       typeof req.body?.documentText === "string" ? req.body.documentText : "";

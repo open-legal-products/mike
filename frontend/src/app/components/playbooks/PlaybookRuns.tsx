@@ -26,7 +26,7 @@ import {
   type PlaybookFinding,
   type PlaybookRun,
 } from "@/app/lib/mikeApi";
-import { describeError } from "@/app/lib/userFacingError";
+import { reportFault } from "@/app/lib/userFacingError";
 import {
   notifyPlaybookRunsChanged,
   setViewedPlaybookRun,
@@ -175,7 +175,12 @@ export function PlaybookRuns({
       },
       (err) => {
         if (!current) return;
-        setError(describeError(err, { action: "load the runs" }).message);
+        setError(
+          reportFault(err, {
+            action: "load the runs",
+            operation: "playbooks.review",
+          }).message,
+        );
         // A failed poll keeps the runs already loaded, so polling goes on.
         setRuns((existing) => existing ?? []);
       },

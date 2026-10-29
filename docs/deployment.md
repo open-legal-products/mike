@@ -182,6 +182,48 @@ job exits. Run this as a release job before directing traffic to the new
 backend; backend startup itself only reads the database. Docker Compose runs
 this sequence automatically for local/self-hosted deployments.
 
+## Document parsing resources
+
+Indexing, chat reads, tabular sources, and legacy text precomputation share one
+parser process per calling thread. It stays warm between files and recycles
+after 200 files or 60 seconds idle, matching #721's worker reuse. Failures and
+timeouts also retire it. On POSIX, retirement kills the process group, including
+LibreOffice descendants, and removes its temporary directory.
+
+Background jobs share one source-loading slot and wait at most 60 seconds total
+for admission and parsing capacity; longer waits defer to Postgres for 30 seconds
+without spending retries. Parsing is capped at five minutes, below the ten-minute
+claim lease. Inline indexing waits for capacity when the queue runner is disabled.
+Interactive requests can download three sources concurrently, matching tabular
+row concurrency, and take priority over queued background parses. Background I/O
+does not occupy the parser or the interactive admission queue (eight waiters).
+Only parsing is serial; its deadline starts when parsing starts, as in #721.
+Source downloads from S3-compatible storage abort after
+`STORAGE_DOWNLOAD_TIMEOUT_MS` (default 120000), so a stalled read releases its
+admission slot instead of holding it indefinitely.
+Generic job concurrency does not create more parser slots.
+
+Linux requires `prlimit` (util-linux), installed by Docker and Nixpacks. Missing
+`prlimit` fails extraction. Defaults:
+
+| Limit | Setting |
+| --- | --- |
+| Parser time | `EXTRACTION_TIMEOUT_MS=180000`, capped at 300000 |
+| Writable data, including native buffers | `EXTRACTION_MAX_MEMORY_MB=1024` MiB |
+| Virtual address space | Data budget + 1024 MiB for runtime reservations |
+| Source / returned text | 150 MiB / 16 MiB |
+
+The JS heap keeps the configured memory budget (1024 MiB by default); glibc uses two malloc arenas to
+avoid excessive virtual reservations. OS limits apply **per process**, including
+conversion children, not to their aggregate usage. Set container/cgroup limits
+for the whole service. macOS/Windows retain heap, input/output and time bounds,
+but lack the Linux OS-memory guarantee. Decompression is covered by parser
+memory/time limits; there is no separate ZIP preflight.
+
+The deadline covers parsing, not storage/database I/O. No new migration is
+needed beyond #721's `20261027_01_document_text_failed_jobs.sql`.
+`EXTRACTION_ISOLATION=off` bypasses subprocess protection for tests/emergencies.
+
 ## Environment
 
 Copy the maintained examples:

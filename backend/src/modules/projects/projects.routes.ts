@@ -534,6 +534,7 @@ projectsRouter.post(
             .status(500)
             .json({ detail: "Failed to update document" });
         case "read_failed":
+          if (result.error) return void sendInternalError(res, result.error);
           return void res
             .status(500)
             .json({ detail: "Failed to read source document bytes" });

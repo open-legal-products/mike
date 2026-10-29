@@ -62,6 +62,10 @@ jobs:
           context: ${{ matrix.context }}
           file: ${{ matrix.dockerfile }}
           push: false
-          build-args: ${{ matrix.build_args }}
+          # GIT_SHA becomes the Sentry release (docs/observability.md); an
+          # image without it reports events nobody can map to a commit.
+          build-args: |
+            GIT_SHA=${{ github.sha }}
+            ${{ matrix.build_args }}
           cache-from: type=gha,scope=${{ matrix.image }}
           cache-to: type=gha,mode=max,scope=${{ matrix.image }}

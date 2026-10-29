@@ -1,3 +1,5 @@
+import { AppError } from "../appError";
+import { reportError } from "../observability/sentry";
 import { deleteFile } from "../storage";
 import { enqueueAppJobDelivery } from "../queue/appJobsQueue";
 import { redisEnabled } from "./driver";
@@ -24,6 +26,30 @@ export type EnqueueDbJobResult =
 
 /** Postgres unique_violation — the dedupe index rejected a second live job. */
 const UNIQUE_VIOLATION = "23505";
+
+/**
+ * A Redis delivery that failed after the durable row was written. The poll
+ * backstop still runs the job, so this is a warning; but a Redis that keeps
+ * refusing deliveries is how "instant" becomes "a minute later" in every
+ * deployment that paid for Redis, so it is reported (with the ioredis code
+ * on the cause chain) and logged as the same object, not swallowed.
+ */
+function reportDeliveryFailure(
+    label: string,
+    jobKind: string,
+    error: unknown,
+): void {
+    const failure = new AppError(
+        "queue.enqueue_failed",
+        `[dbq] ${label}; poll backstop will run the job`,
+        { cause: error },
+    );
+    reportError(failure, {
+        level: "warning",
+        tags: { component: "dbq", stage: "delivery", job_kind: jobKind },
+    });
+    console.error(failure.message, failure);
+}
 
 /**
  * Enqueue one durable background job. Throws on real failures (callers that
@@ -62,7 +88,13 @@ export async function enqueueDbJob(
                 .maybeSingle();
             return { id: (existing?.id as string) ?? null, deduped: true };
         }
-        throw new Error(`[dbq] enqueue ${input.kind} failed: ${error.message}`);
+        // The PostgREST error is the cause: its code (SQLSTATE / PGRST*)
+        // reaches failure_code, and the kind names the failure.
+        throw new AppError(
+            "dbq.enqueue_failed",
+            `[dbq] enqueue ${input.kind} failed: ${error.message}`,
+            { cause: error },
+        );
     }
 
     // Outbox delivery: the row above is the durable record; when Redis is
@@ -76,10 +108,7 @@ export async function enqueueDbJob(
                 : 0;
             await enqueueAppJobDelivery(data.id as string, { delayMs });
         } catch (err) {
-            console.error(
-                "[dbq] redis delivery failed; poll backstop will run the job:",
-                err instanceof Error ? err.message : err,
-            );
+            reportDeliveryFailure("redis delivery failed", input.kind, err);
         }
     }
     return { id: data.id as string, deduped: false };
@@ -149,6 +178,7 @@ export async function requestDocumentCleanupDelivery(
 ): Promise<number> {
     if (process.env.DB_JOBS_ENABLED === "false") return 0;
     if (!redisEnabled()) return 0;
+    let ids: string[];
     try {
         const { data, error } = await db
             .from("db_jobs")
@@ -157,13 +187,29 @@ export async function requestDocumentCleanupDelivery(
             .eq("status", "pending")
             .limit(limit);
         if (error) throw error;
-        const ids = (data ?? []).map((row) => row.id as string);
+        ids = (data ?? []).map((row) => row.id as string);
+    } catch (err) {
+        // The backlog query, not Redis: a database failure with its SQLSTATE.
+        const failure = new AppError(
+            "db.query_failed",
+            "[dbq] document.cleanup backlog query failed; poll backstop will run the jobs",
+            { cause: err },
+        );
+        reportError(failure, {
+            level: "warning",
+            tags: { component: "dbq", job_kind: "document.cleanup" },
+        });
+        console.error(failure.message, failure);
+        return 0;
+    }
+    try {
         await Promise.all(ids.map((id) => enqueueAppJobDelivery(id)));
         return ids.length;
     } catch (err) {
-        console.error(
-            "[dbq] document.cleanup delivery failed; poll backstop will run it:",
-            err instanceof Error ? err.message : err,
+        reportDeliveryFailure(
+            "document.cleanup delivery failed",
+            "document.cleanup",
+            err,
         );
         return 0;
     }
@@ -188,9 +234,26 @@ export async function enqueueStorageCleanup(
             maxAttempts: 8,
         });
     } catch (err) {
+        // The durable record could not be written, so the inline deletes
+        // below are the only attempt these objects will ever get. That is a
+        // real degradation, reported as such; the enqueue error (already a
+        // dbq.enqueue_failed AppError with the PostgREST code) is the cause,
+        // and the same object is logged so the bridge files no duplicate.
+        const failure =
+            err instanceof AppError
+                ? err
+                : new AppError(
+                      "dbq.enqueue_failed",
+                      "[dbq] storage.cleanup enqueue failed",
+                      { cause: err },
+                  );
+        reportError(failure, {
+            tags: { component: "dbq", job_kind: "storage.cleanup" },
+            extra: { keys: keys.length, prefixes: prefixes.length },
+        });
         console.error(
-            "[dbq] storage.cleanup enqueue failed; falling back to inline deletes:",
-            err instanceof Error ? err.message : err,
+            "[dbq] storage.cleanup enqueue failed; falling back to inline deletes",
+            failure,
         );
         for (const key of keys) {
             try {

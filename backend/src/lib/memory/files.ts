@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import { AppError } from "../appError";
 import type { Db } from "../dbq/types";
 
 export const MEMORY_MAX_BYTES = 16 * 1024;
@@ -46,12 +47,38 @@ export type MemoryFileRow = {
   updated_at: string;
 };
 
-export class MemoryValidationError extends Error {}
-export class MemoryRevisionConflictError extends Error {}
-export class MemoryDisabledError extends Error {}
-export class MemoryJobSupersededError extends Error {}
-export class MemoryEpochSupersededError extends Error {}
-export class MemoryConversationNotQuietError extends Error {}
+// Each class names its failure with a closed-vocabulary `kind` (AppError) so
+// a report carries `error_kind` while the message stays in the process.
+export class MemoryValidationError extends AppError {
+  constructor(message: string, options?: { cause?: unknown }) {
+    super("memory.validation", message, options);
+  }
+}
+export class MemoryRevisionConflictError extends AppError {
+  constructor(message: string, options?: { cause?: unknown }) {
+    super("memory.revision_conflict", message, options);
+  }
+}
+export class MemoryDisabledError extends AppError {
+  constructor(message: string, options?: { cause?: unknown }) {
+    super("memory.disabled", message, options);
+  }
+}
+export class MemoryJobSupersededError extends AppError {
+  constructor(message: string, options?: { cause?: unknown }) {
+    super("memory.job_superseded", message, options);
+  }
+}
+export class MemoryEpochSupersededError extends AppError {
+  constructor(message: string, options?: { cause?: unknown }) {
+    super("memory.epoch_superseded", message, options);
+  }
+}
+export class MemoryConversationNotQuietError extends AppError {
+  constructor(message: string, options?: { cause?: unknown }) {
+    super("memory.conversation_not_quiet", message, options);
+  }
+}
 
 function numberValue(value: number | string): number {
   const parsed = Number(value);

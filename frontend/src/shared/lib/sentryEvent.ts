@@ -1,4 +1,4 @@
-import { diagnosticErrorTags } from "./sentryPrivacy";
+import { retainExceptionTypes, diagnosticErrorTags } from "./sentryPrivacy";
 
 /**
  * Sentry event hygiene shared by the web app (browser + Next server) and the
@@ -177,7 +177,6 @@ const EXTRA_KEY_ALLOWLIST = new Set([
     "kind",
     "message",
     "name",
-    "path",
     "playbook_id",
     "request_id",
     "requestId",
@@ -404,7 +403,14 @@ function mapStringLeaves(
 export function minimiseForCommunity<T extends CommunityEvent>(event: T): T {
     delete event.server_name;
     delete event.user;
-    delete event.breadcrumbs;
+    // Breadcrumbs are request history; only our own stage trail stays
+    // (category mike.stage, message a stage name), the privacy boundary
+    // checks each one against the diagnostic label format.
+    const trail = Array.isArray(event.breadcrumbs)
+      ? event.breadcrumbs.filter((crumb) => (crumb as { category?: unknown })?.category === "mike.stage")
+      : [];
+    if (trail.length) event.breadcrumbs = trail;
+    else delete event.breadcrumbs;
     if (event.tags) {
         delete event.tags.server_name;
         delete event.tags.url;
@@ -671,9 +677,7 @@ export function createEventScrubber(options?: {
         const original = hint.originalException;
         if (
             automatic &&
-            original &&
-            typeof original === "object" &&
-            reported.has(original)
+            isReported(original)
         ) {
             return null;
         }
@@ -686,7 +690,7 @@ export function createEventScrubber(options?: {
         const args =
             event.logger === "console" ? consoleArguments(hint) : null;
         if (args) {
-            if (args.some((arg) => findNested(arg, (c) => reported.has(c)))) {
+            if (args.some((arg) => findNested(arg, isReported))) {
                 return null;
             }
             // Only the first argument is the logging label. Other strings
@@ -725,6 +729,7 @@ export function createEventScrubber(options?: {
             const nested = findNested(arg, c => c instanceof Error || 'code' in c);
             Object.assign(event.tags, diagnosticErrorTags(nested));
         }
+        retainExceptionTypes(event.exception?.values, [original, ...(args ?? [])], event.tags?.warning_name);
 
         // The title and the exception text are free text from libraries
         // that quote emails, tokens, and URLs; key filtering cannot see them.
@@ -786,7 +791,22 @@ export function createEventScrubber(options?: {
         return event;
     };
 
-    return { markReported, scrubEvent };
+    const isReported = (error: unknown): boolean => {
+        const seen = new Set<object>();
+        let current = error;
+        for (let depth = 0; depth < 8; depth++) {
+            if (!current || typeof current !== "object" || seen.has(current)) return false;
+            if (reported.has(current)) return true;
+            seen.add(current);
+            try {
+                current = (current as { cause?: unknown }).cause;
+            } catch {
+                return false;
+            }
+        }
+        return false;
+    };
+    return { markReported, isReported, scrubEvent };
 }
 
 /**

@@ -24,7 +24,7 @@ import {
   ModalTextInput,
 } from "../primitives/ModalForm";
 import { PageTitle } from "../primitives/PageTitle";
-import { notifyError, userMessage } from "../../lib/notify";
+import { reportFault, notifyError } from "../../lib/notify";
 
 interface DocumentActionsProps {
   createOpen: boolean;
@@ -64,14 +64,16 @@ export function DocumentActions({
       .catch((reason: unknown) => {
         if (cancelled) return;
         setWorkflowsError(
-          userMessage(reason, {
+          reportFault(reason, {
             fallback: "Mike couldn't load your quick actions. Try again.",
-          }),
+            operation: "quick_actions.run",
+          }).message,
         );
         notifyError(reason, {
           action: "load your quick actions",
           dedupeKey: "quick-actions",
           page: "Quick actions",
+          operation: "quick_actions.run",
           onRetry: () => setWorkflowsAttempt((count) => count + 1),
         });
       });
@@ -137,9 +139,10 @@ export function DocumentActions({
       setSelectedAction(null);
     } catch (reason) {
       setSaveError(
-        userMessage(reason, {
+        reportFault(reason, {
           fallback: "Failed to save quick action",
-        }),
+          operation: "quick_actions.run",
+        }).message,
       );
     } finally {
       setSaving(false);
@@ -164,9 +167,10 @@ export function DocumentActions({
       onCreateClose();
     } catch (reason) {
       setCreateError(
-        userMessage(reason, {
+        reportFault(reason, {
           fallback: "Could not create quick action.",
-        }),
+          operation: "quick_actions.run",
+        }).message,
       );
     } finally {
       setCreating(false);

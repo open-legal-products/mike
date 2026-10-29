@@ -14,8 +14,7 @@ import { InputUI } from "@/shared/ui/InputUI";
 import { PillButtonUI } from "@/shared/ui/PillButtonUI";
 import { useAuth } from "@/app/contexts/AuthContext";
 import { startSso } from "@/app/lib/authApi";
-import {
-    describeError,
+import { reportFault,
     supportMailtoFor,
     type UserFacingError,
 } from "@/app/lib/userFacingError";
@@ -53,10 +52,11 @@ export default function SsoLoginPage() {
             );
             window.location.assign(url);
         } catch (caught) {
-            const described = describeError(caught, {
+            const described = reportFault(caught, {
                 action: "start single sign-on",
                 codeMessages: SSO_ERROR_MESSAGES,
                 fallback: "Unable to start single sign-on. Try again.",
+                operation: "auth.signin",
             });
             setError(
                 described.kind === "rate_limited"

@@ -16,7 +16,7 @@ import {
   WORKFLOW_LANGUAGE_OPTIONS,
   WORKFLOW_PRACTICE_OPTIONS,
 } from "../../lib/workflowMetadata";
-import { userMessage } from "../../lib/notify";
+import { reportFault } from "../../lib/notify";
 
 function valueOrOther(
   value: string,
@@ -147,9 +147,10 @@ export function WorkflowDetailsModal({
       onClose();
     } catch (reason) {
       setError(
-        userMessage(reason, {
+        reportFault(reason, {
           fallback: "Mike couldn't save this workflow. Try again.",
-        }),
+          operation: "workflows.run",
+        }).message,
       );
     } finally {
       setSaving(false);
@@ -167,9 +168,10 @@ export function WorkflowDetailsModal({
       onClose();
     } catch (reason) {
       setDeleteError(
-        userMessage(reason, {
+        reportFault(reason, {
           fallback: "Mike couldn't delete this workflow. Try again.",
-        }),
+          operation: "workflows.run",
+        }).message,
       );
     } finally {
       setDeleting(false);

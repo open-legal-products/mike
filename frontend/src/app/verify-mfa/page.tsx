@@ -13,7 +13,7 @@ import {
     VerificationCodeInput,
 } from "@/app/components/popups/MfaVerificationPopup";
 import { markMfaVerifiedForGate } from "@/app/components/shared/MfaLoginGate";
-import {
+import { reportFault,
     UserVisibleError,
     describeError,
     supportMailtoFor,
@@ -114,11 +114,12 @@ export default function VerifyMfaPage() {
             } catch (caught) {
                 if (cancelled) return;
                 setError(
-                    describeError(caught, {
+                    reportFault(caught, {
                         action: "load your authenticator",
                         codeMessages: MFA_ERROR_MESSAGES,
                         fallback:
                             "Unable to load authenticator verification. Try again.",
+                        operation: "auth.mfa",
                     }),
                 );
             } finally {
@@ -143,10 +144,11 @@ export default function VerifyMfaPage() {
         } catch (caught) {
             setVerifying(false);
             setError(
-                describeError(caught, {
+                reportFault(caught, {
                     action: "verify that code",
                     codeMessages: MFA_ERROR_MESSAGES,
                     fallback: "That code is invalid or expired.",
+                    operation: "auth.mfa",
                 }),
             );
             return;
@@ -165,9 +167,10 @@ export default function VerifyMfaPage() {
             router.replace("/login");
         } catch (caught) {
             setError(
-                describeError(caught, {
+                reportFault(caught, {
                     action: "sign out",
                     fallback: "Unable to sign out. Try again.",
+                    operation: "auth.session",
                 }),
             );
         }

@@ -57,7 +57,7 @@ import {
 import { createPlaybookRule } from "@/app/components/playbooks/playbookRules";
 import { HeaderButtonUI } from "@/shared/ui/HeaderButtonsUI";
 import { ConfirmPopup } from "@/app/components/popups/ConfirmPopup";
-import { describeError, notifyError } from "@/app/lib/userFacingError";
+import { reportFault, notifyError } from "@/app/lib/userFacingError";
 import { PageHeader } from "@/app/components/shared/PageHeader";
 import { Modal } from "@/app/components/modals/Modal";
 import { ModalFieldLabel } from "@/app/components/modals/ModalFieldLabel";
@@ -409,11 +409,9 @@ function PlaybooksWorkspace() {
         ),
       );
     } catch (error) {
+      reportFault(error, { operation: "playbooks.save" });
       setSharesError(
-        userFacingApiError(
-          error,
-          "The change was saved, but this list could not be reloaded. Reopen People to see the current one.",
-        ),
+        userFacingApiError(error, "The change was saved, but this list could not be reloaded. Reopen People to see the current one."),
       );
     }
   }, []);
@@ -468,7 +466,10 @@ function PlaybooksWorkspace() {
       (err) => {
         if (!current) return;
         setAllRunsError(
-          describeError(err, { action: "load the runs" }).message,
+          reportFault(err, {
+            action: "load the runs",
+            operation: "playbooks.review",
+          }).message,
         );
         setAllRuns([]);
       },
@@ -523,7 +524,10 @@ function PlaybooksWorkspace() {
       }
       setRunDeleteTargets(null);
     } catch (err) {
-      notifyError(err, { action: "delete the run" });
+      notifyError(err, {
+        action: "delete the run",
+        operation: "playbooks.review",
+      });
     } finally {
       // History drops what was deleted, including on a partial failure.
       notifyPlaybookRunsChanged();
@@ -560,7 +564,12 @@ function PlaybooksWorkspace() {
         current && items.some((item) => item.id === current) ? current : null,
       );
     } catch (err) {
-      setError(describeError(err, { action: "load playbooks" }).message);
+      setError(
+        reportFault(err, {
+          action: "load playbooks",
+          operation: "playbooks.save",
+        }).message,
+      );
     } finally {
       setLoading(false);
     }
@@ -634,7 +643,10 @@ function PlaybooksWorkspace() {
       openPlaybook(created.id);
       return true;
     } catch (err) {
-      notifyError(err, { action: "create the playbook" });
+      notifyError(err, {
+        action: "create the playbook",
+        operation: "playbooks.save",
+      });
       return false;
     } finally {
       setBusy(null);
@@ -686,7 +698,10 @@ function PlaybooksWorkspace() {
       setFollowedImportId(started.id);
     } catch (err) {
       setImportError(
-        describeError(err, { action: "import the playbook" }).message,
+        reportFault(err, {
+          action: "import the playbook",
+          operation: "playbooks.import",
+        }).message,
       );
     } finally {
       setBusy(null);
@@ -751,7 +766,10 @@ function PlaybooksWorkspace() {
     try {
       saved = await getPlaybook(attempt.playbookId);
     } catch (err) {
-      notifyError(err, { action: "open the imported playbook" });
+      notifyError(err, {
+        action: "open the imported playbook",
+        operation: "playbooks.import",
+      });
       if (followed) closeImport();
       return;
     }
@@ -863,7 +881,10 @@ function PlaybooksWorkspace() {
       setDeleteOpen(false);
       setDeleteTargetId(null);
     } catch (err) {
-      notifyError(err, { action: "delete the playbook" });
+      notifyError(err, {
+        action: "delete the playbook",
+        operation: "playbooks.save",
+      });
     } finally {
       setBusy(null);
     }
@@ -975,8 +996,9 @@ function PlaybooksWorkspace() {
           );
         } catch (err) {
           failed = true;
-          const error = describeError(err, {
+          const error = reportFault(err, {
             action: "review the document",
+            operation: "playbooks.review",
           }).message;
           setReviewDocuments((items) =>
             items.map((document) =>

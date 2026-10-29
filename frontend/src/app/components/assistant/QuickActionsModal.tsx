@@ -13,7 +13,7 @@ import { FieldLabel, FormTextInput } from "../ui/form-field";
 import { ToggleSwitchUI } from "@/shared/ui/ToggleSwitchUI";
 import { SearchBar } from "../ui/search-bar";
 import { listWorkflows } from "@/app/lib/mikeApi";
-import { userFacingApiError } from "@/app/lib/userFacingError";
+import { reportFault, userFacingApiError } from "@/app/lib/userFacingError";
 import { LIQUID_GLASS_MODAL_ROW_HOVER_CLASS } from "@/app/components/ui/liquid-surface";
 
 type Screen = "list" | "details" | "create";
@@ -108,7 +108,12 @@ function QuickActionsModalForWorkspace({
       await onSave(selected);
       resetToList();
     } catch (reason) {
-      setError(userFacingApiError(reason, "Could not save quick action."));
+      reportFault(reason, {
+          operation: "quick_actions.run",
+        });
+      setError(
+        userFacingApiError(reason, "Could not save quick action."),
+      );
     } finally {
       setSaving(false);
     }
@@ -127,7 +132,12 @@ function QuickActionsModalForWorkspace({
       });
       resetToList();
     } catch (reason) {
-      setError(userFacingApiError(reason, "Could not create quick action."));
+      reportFault(reason, {
+          operation: "quick_actions.run",
+        });
+      setError(
+        userFacingApiError(reason, "Could not create quick action."),
+      );
     } finally {
       setSaving(false);
     }

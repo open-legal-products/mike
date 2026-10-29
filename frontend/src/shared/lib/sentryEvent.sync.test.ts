@@ -38,6 +38,28 @@ describe("shared-redaction block", () => {
     });
 });
 
+/**
+ * The default DSNs are the same table in both files, so every runtime of a
+ * community install reports to the same Sentry organisation. Each runtime's
+ * own tests only compare it with its own table; this is the drift check.
+ */
+function dsnTable(file: string): string {
+    const match = readFileSync(file, "utf8").match(
+        /export const MIKE_SENTRY_DSN = \{[\s\S]*?\}(?: as const)?;/,
+    );
+    if (!match) throw new Error(`no MIKE_SENTRY_DSN table in ${file}`);
+    return match[0]
+        .split("\n")
+        .map((line) => line.trim())
+        .filter(Boolean)
+        .join("\n");
+}
+
+it("keeps the default DSN table identical in the backend and the shared scrubber", () => {
+    expect(dsnTable(BACKEND)).toBe(dsnTable(SHARED));
+    expect(dsnTable(SHARED)).toMatch(/backend:\s*"https:\/\/[0-9a-f]+@o\d+\.ingest/);
+});
+
 
 it('retains the fixed vocabulary of every Express mount without parameter names', () => {
     const app = readFileSync(path.resolve(__dirname, '../../../../backend/src/app.ts'), 'utf8');

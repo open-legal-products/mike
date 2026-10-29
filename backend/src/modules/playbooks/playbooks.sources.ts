@@ -4,9 +4,9 @@
 // tool in playbooks.operations.ts).
 
 import crypto from "node:crypto";
-import { safeError } from "../../lib/safeError";
 import { createServerSupabase, type Db } from "../../lib/supabase";
-import { deleteFile, downloadFile, headFile, uploadFile } from "../../lib/storage";
+import { downloadFile, headFile, uploadFile } from "../../lib/storage";
+import { removePlaybookObjects } from "./playbooks.reporting";
 import { extractDocxBodyText } from "../../lib/docxTrackedChanges";
 import { extractPdfTextForModel } from "../../lib/pdfText";
 import { getFileStreamSource } from "../documents/documents.service";
@@ -155,7 +155,9 @@ async function storeSource(
     created_at: createdAt,
   });
   if (error) {
-    await deleteFile(storageKey).catch(() => {});
+    // The row was never written, so the upload is an orphan: removed, and
+    // reported if that fails, without changing what the caller sees.
+    await removePlaybookObjects([storageKey], { ids: { playbook_id: playbook.id } });
     throw error;
   }
   return {
@@ -246,10 +248,7 @@ export async function deletePlaybookSource(
     .maybeSingle();
   if (error) throw error;
   if (!data) throw new PlaybookRequestError("Source document not found.", 404);
-  await deleteFile(String(data.storage_key)).catch((cause) => {
-    console.error("[playbooks] source file cleanup failed", {
-      sourceId,
-      error: safeError(cause),
-    });
+  await removePlaybookObjects([String(data.storage_key)], {
+    ids: { playbook_id: playbookId },
   });
 }

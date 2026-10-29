@@ -31,7 +31,10 @@ import {
   type ProjectPeople,
 } from "@/app/lib/mikeApi";
 import { can, roleFromLoaded } from "@/app/lib/permissions";
-import { userFacingApiError } from "@/app/lib/userFacingError";
+import { reportFault,
+  userFacingApiError,
+  type Operation,
+} from "@/app/lib/userFacingError";
 import { useAssignLatest, useLatestRef } from "@/app/hooks/useLatestRef";
 import { UseWorkflowModal } from "@/app/components/workflows/UseWorkflowModal";
 import { WFEditColumnModal } from "@/app/components/workflows/WFEditColumnModal";
@@ -127,6 +130,8 @@ const ASSISTANT_TABS: readonly AssistantTab[] = ["prompt", "assets"];
 // Page
 // ---------------------------------------------------------------------------
 export function WorkflowDetailPage({ id, workflowType }: Props) {
+  // Every failure on this screen belongs to the workflow it edits.
+  const workflowOperation: Operation = "workflows.run";
   const router = useRouter();
   const { user } = useAuth();
   const { profile } = useUserProfile();
@@ -334,11 +339,9 @@ export function WorkflowDetailPage({ id, workflowType }: Props) {
       await fetchWorkflowShares();
       setShareRefreshError(null);
     } catch (error) {
+      reportFault(error, { operation: workflowOperation });
       setShareRefreshError(
-        userFacingApiError(
-          error,
-          "The change was saved, but this list could not be reloaded. Reopen Access to see the current one.",
-        ),
+        userFacingApiError(error, "The change was saved, but this list could not be reloaded. Reopen Access to see the current one."),
       );
     }
   }, [fetchWorkflowShares]);
@@ -368,6 +371,7 @@ export function WorkflowDetailPage({ id, workflowType }: Props) {
         showSaveStatus("error");
         notifyError(error, {
           action: "save your changes",
+          operation: workflowOperation,
           dedupeKey: `workflow-autosave:${id}`,
           onRetry: () => retryRef.current?.savePrompt(),
         });
@@ -401,6 +405,7 @@ export function WorkflowDetailPage({ id, workflowType }: Props) {
       setDeleteStatus("idle");
       notifyError(error, {
         action: "delete this workflow",
+        operation: workflowOperation,
         dedupeKey: `workflow-delete:${id}`,
         // Retry re-opens the confirmation rather than deleting from the
         // notice: a destructive action is always confirmed.
@@ -448,6 +453,7 @@ export function WorkflowDetailPage({ id, workflowType }: Props) {
       showSaveStatus("error");
       notifyError(error, {
         action: "save the columns",
+        operation: workflowOperation,
         dedupeKey: `workflow-columns:${id}`,
         onRetry: () => retryRef.current?.saveColumns(),
       });

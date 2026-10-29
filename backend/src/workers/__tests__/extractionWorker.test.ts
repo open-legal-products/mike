@@ -33,7 +33,8 @@ import {
     markExtractionFailed,
     isPermanentFailure,
 } from "../extractionWorker";
-import type { Job } from "bullmq";
+import { UnrecoverableError, type Job } from "bullmq";
+import { ExtractionLimitError } from "../../lib/extraction/limits";
 import type { ExtractionJobData } from "../../lib/queue/extractionQueue";
 import { AssistantStreamError } from "../../modules/chat/chat.service";
 
@@ -256,6 +257,17 @@ describe("runExtractionJob", () => {
 
         expect(queryTabularAllColumns).not.toHaveBeenCalled();
         expect(publish).not.toHaveBeenCalled();
+    });
+
+    it("preserves a terminal parser refusal for the queue transport", async () => {
+        const error = new ExtractionLimitError("too large");
+        loadRowDocumentText.mockRejectedValueOnce(error);
+        const db = makeDb({
+            tabular_reviews: { select: { data: { columns_config: COLUMNS, model: "claude-test" } } },
+            tabular_cells: { select: { data: [] } },
+        });
+        await expect(runExtractionJob(DATA, { db: db as never, publish: vi.fn() })).rejects.toBe(error);
+        expect(queryTabularAllColumns).not.toHaveBeenCalled();
     });
 
     it("throws when the model omits a column so BullMQ retries", async () => {
@@ -841,6 +853,7 @@ describe("generation lease", () => {
         ).rejects.toThrow(/incomplete extraction/);
 
         expect(publish).toHaveBeenCalledWith("rev-1", {
+            reporting_owner: "backend",
             type: "error",
             message: "The Anthropic API key was rejected.",
             safe_to_display: true,
@@ -873,6 +886,10 @@ describe("generation lease", () => {
 describe("isPermanentFailure", () => {
     const job = (attemptsMade: number, attempts?: number) =>
         ({ attemptsMade, opts: { attempts } }) as unknown as Job<ExtractionJobData>;
+
+    it("treats unrecoverable errors as terminal on the first attempt", () => {
+        expect(isPermanentFailure(job(1, 3), new UnrecoverableError("document_too_large"))).toBe(true);
+    });
 
     it("is false while retries remain", () => {
         expect(isPermanentFailure(job(1, 3))).toBe(false);

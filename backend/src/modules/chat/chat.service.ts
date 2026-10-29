@@ -68,6 +68,8 @@ export {
   createReservedAssistantMessageUpdater,
   createWordClientToolsAdapter,
   isClientToolCallPending,
+  logAssistantMessageFailure,
+  requestIdOf,
   reserveAssistantMessage,
   submitClientToolResult,
   ACTIVE_WORD_DOCUMENT_ID,

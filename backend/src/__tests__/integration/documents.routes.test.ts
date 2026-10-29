@@ -19,7 +19,31 @@ import request from "supertest";
 // creator-scoped rule as DELETE .../versions/:versionId.
 // ---------------------------------------------------------------------------
 
-const { ensureDocAccess } = vi.hoisted(() => ({ ensureDocAccess: vi.fn() }));
+const { ensureDocAccess, sentry, versionCopy } = vi.hoisted(() => ({
+    ensureDocAccess: vi.fn(),
+    sentry: { reportError: vi.fn(), setOperation: vi.fn() },
+    /** When set, replaces the real createVersionFromDocument for one test. */
+    versionCopy: { override: null as null | (() => Promise<unknown>) },
+}));
+
+vi.mock("../../lib/observability/sentry", async (importOriginal) => {
+    const actual =
+        await importOriginal<typeof import("../../lib/observability/sentry")>();
+    sentry.reportError.mockImplementation(actual.reportError);
+    return { ...actual, reportError: sentry.reportError, setOperation: sentry.setOperation };
+});
+
+vi.mock("../../modules/documents/documents.versions", async (importOriginal) => {
+    const actual =
+        await importOriginal<typeof import("../../modules/documents/documents.versions")>();
+    return {
+        ...actual,
+        createVersionFromDocument: (...args: unknown[]) =>
+            versionCopy.override
+                ? versionCopy.override()
+                : (actual.createVersionFromDocument as (...a: unknown[]) => Promise<unknown>)(...args),
+    };
+});
 
 type Row = Record<string, unknown>;
 
@@ -157,6 +181,8 @@ vi.mock("../../lib/dbq/enqueue", () => ({
 }));
 
 import { app } from "../../app";
+import { AppError } from "../../lib/appError";
+import { diagnosticErrorTags } from "../../lib/observability/sentryPrivacy";
 
 const AUTH = ["Authorization", "Bearer test"] as const;
 const DOC = "11111111-1111-4111-8111-111111111111";
@@ -444,6 +470,8 @@ describe("DELETE /single-documents/:documentId/versions/:versionId", () => {
         expect(rpcCalls.map((call) => call.name)).toEqual([
             "delete_document_version",
         ]);
+        // Every event this request produces is tagged with the version flow.
+        expect(sentry.setOperation).toHaveBeenCalledWith("documents.version");
     });
 });
 
@@ -499,5 +527,46 @@ describe("POST /single-documents/:documentId/versions/from-document", () => {
 
         expect(res.status).toBe(404);
         expect(res.body.detail).toBe("Document not found");
+    });
+
+    // An internal failure used to be console.error'd in the service AND
+    // answered as a bare 500 by the route: two context-free events. The
+    // service now hands the route one AppError with the cause, and the route
+    // reports it once through sendInternalError, kind and SQLSTATE attached.
+    it("reports an internal failure once, with its kind, and answers 500", async () => {
+        sentry.reportError.mockClear();
+        const rpcError = { code: "42501", message: "permission denied for function" };
+        versionCopy.override = async () => ({
+            ok: false,
+            kind: "version_insert",
+            detail: "Failed to record new version.",
+            error: new AppError("db.rpc_failed", "[versions/copy] insert failed", {
+                cause: rpcError,
+            }),
+        });
+        const log = vi.spyOn(console, "error").mockImplementation(() => undefined);
+        try {
+            const res = await request(app)
+                .post(`/single-documents/${DOC}/versions/from-document`)
+                .set(...AUTH)
+                .send({ source_document_id: SOURCE });
+
+            expect(res.status).toBe(500);
+            expect(res.body).toMatchObject({ code: "internal_error" });
+            expect(JSON.stringify(res.body)).not.toContain("permission denied");
+
+            expect(sentry.reportError).toHaveBeenCalledOnce();
+            const [reported, context] = sentry.reportError.mock.calls[0]!;
+            expect(diagnosticErrorTags(reported)).toEqual({
+                error_kind: "db.rpc_failed",
+                failure_code: "42501",
+            });
+            expect(context).toMatchObject({
+                tags: { component: "http", http_status: 500 },
+            });
+        } finally {
+            versionCopy.override = null;
+            log.mockRestore();
+        }
     });
 });

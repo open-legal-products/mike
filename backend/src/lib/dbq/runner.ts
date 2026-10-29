@@ -13,8 +13,10 @@
 // query, and FOR UPDATE SKIP LOCKED in the claim RPC makes any number of
 // backend replicas partition the work safely.
 
+import { AppError } from "../appError";
 import { createServerSupabase } from "../supabase";
 import { jobErrorMessage } from "./jobError";
+import { runIsolated } from "./jobScope";
 import { deleteFile } from "../storage";
 import { enqueueAppJobDelivery } from "../queue/appJobsQueue";
 import { redisEnabled } from "./driver";
@@ -24,7 +26,7 @@ import {
     type DbJob,
     type DbJobHandlers,
 } from "./types";
-import { reportError } from "../observability/sentry";
+import { reportError, setOperation } from "../observability/sentry";
 import {
     createPollFailureGate,
     type PollFailureGate,
@@ -106,10 +108,9 @@ export type DbJobFailureHook = (db: Db, job: DbJob) => Promise<void>;
  * members) buries the real reason under a wall of repeats and leaves the
  * user's request in limbo far longer than it needs to be.
  */
-export class NonRetryableJobError extends Error {
+export class NonRetryableJobError extends AppError {
     constructor(message: string) {
-        super(message);
-        this.name = "NonRetryableJobError";
+        super("dbq.non_retryable", message);
     }
 }
 
@@ -123,6 +124,16 @@ export class NonRetryableJobError extends Error {
  * Exported for unit tests; the poll loop below is just claim + fan-in.
  */
 export async function processClaimedJob(
+    db: Db,
+    handlers: DbJobHandlers,
+    job: DbJob,
+    failureHooks: Readonly<Record<string, DbJobFailureHook>> = {},
+): Promise<void> {
+    // Dispatch failures need the same per-job scope as handler failures.
+    await runIsolated(() => dispatchClaimedJob(db, handlers, job, failureHooks));
+}
+
+async function dispatchClaimedJob(
     db: Db,
     handlers: DbJobHandlers,
     job: DbJob,
@@ -155,6 +166,7 @@ export async function processClaimedJob(
 
     const retryUntilSuccess = RETRY_UNTIL_SUCCESS_KINDS.has(job.kind);
     const handler = handlers[job.kind];
+    if (!handler) setOperation("jobs.dispatch");
     if (!handler && !retryUntilSuccess) {
         await fence(
             db.from("db_jobs").update({
@@ -163,7 +175,7 @@ export async function processClaimedJob(
                 last_error: `unknown job kind: ${job.kind}`,
             }),
         );
-        const unknownKind = new Error(`Unknown db_jobs kind: ${job.kind}`);
+        const unknownKind = new AppError("dbq.unknown_job_kind", `Unknown db_jobs kind: ${job.kind}`);
         reportError(unknownKind, {
             tags: { component: "dbq", job_kind: job.kind },
             extra: { job_id: job.id },
@@ -178,8 +190,19 @@ export async function processClaimedJob(
         return;
     }
 
+    await runClaimedJob(db, handler, job, fence, retryUntilSuccess, failureHooks);
+}
+
+async function runClaimedJob(
+    db: Db,
+    handler: DbJobHandlers[string] | undefined,
+    job: DbJob,
+    fence: <T extends { eq(column: string, value: unknown): T }>(query: T) => T,
+    retryUntilSuccess: boolean,
+    failureHooks: Readonly<Record<string, DbJobFailureHook>>,
+): Promise<void> {
     try {
-        if (!handler) throw new Error(`unknown job kind: ${job.kind}`);
+        if (!handler) throw new AppError("dbq.unknown_job_kind", `unknown job kind: ${job.kind}`);
         const result = await handler(db, job);
         await fence(
             db.from("db_jobs").update({

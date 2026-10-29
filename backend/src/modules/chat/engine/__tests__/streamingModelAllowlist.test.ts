@@ -22,6 +22,7 @@ vi.mock("../../../../lib/mcpConnectors", () => ({
     buildUserMcpTools: vi.fn(async () => []),
 }));
 
+import { AppError } from "../../../../lib/appError";
 import { toProviderStreamError } from "../../../../lib/llm/providerErrors";
 
 import { AssistantStreamError, runLLMStream } from "../streaming";
@@ -133,7 +134,13 @@ describe("runLLMStream router-model allowlist", () => {
         const error = await runStreamWithModel(routerModelsDb([]), "claude-fable-5-1").catch((err: unknown) => err);
         expect(error).toBeInstanceOf(AssistantStreamError);
         if (!(error instanceof AssistantStreamError)) throw error;
-        expect(error.cause).toBe(mapped);
+        // The cause chain names what the provider did (the kind Sentry files
+        // it under) and still ends in the provider's own error, so its status
+        // and class are read from there.
+        expect(error.cause).toBeInstanceOf(AppError);
+        const classified = error.cause as AppError;
+        expect(classified.kind).toBe("chat.provider_rejected");
+        expect(classified.cause).toBe(mapped);
         expect(mapped.cause).toBe(original);
         expect(error.events).toContainEqual(expect.objectContaining({ type: "error", code: "invalid_api_key", safe_to_display: true }));
         expect(JSON.stringify(error.events)).not.toContain("private-provider-response");

@@ -15,6 +15,8 @@ import {
 } from "../../lib/access";
 import { can } from "../../lib/permissions";
 import { failure, internalFailure } from "../../lib/serviceResult";
+import { AppError } from "../../lib/appError";
+import { reportError } from "../../lib/observability/sentry";
 import {
     enqueueExtraction,
     removeQueuedExtractionJobs,
@@ -334,7 +336,16 @@ export async function regenerateTabularCell(
             } catch (err) {
                 // Nothing will ever run this cell, so we still own both the
                 // cell's terminal state and the lease (released in finally).
-                log.error("[tabular/regenerate-cell] enqueue failed", err);
+                // The queue's own error is the cause (its code reaches Sentry
+                // as failure_code); the reported object is what gets logged
+                // so the console bridge files nothing twice.
+                const enqueueFailure = new AppError(
+                    "queue.enqueue_failed",
+                    "Tabular cell extraction could not be enqueued",
+                    { cause: err },
+                );
+                reportError(enqueueFailure);
+                log.error("[tabular/regenerate-cell] enqueue failed", enqueueFailure);
                 await finalizeCell(db, {
                     reviewId,
                     rowId: row.id,
@@ -383,6 +394,8 @@ export async function regenerateTabularCell(
         );
 
         if (!result) {
+            // queryTabularCell reported the provider failure itself; this is
+            // the same failure, so it only becomes the 500.
             await db
                 .from("tabular_cells")
                 .update({ status: "error", generation_id: null })
@@ -415,7 +428,13 @@ export async function regenerateTabularCell(
             .eq("row_id", row.id)
             .eq("column_index", columnIndex)
             .eq("generation_id", generationId);
-        log.error("[tabular/regenerate-cell] generation failed", error);
+        const generationFailure = new AppError(
+            "tabular.generation_failed",
+            "Tabular cell generation failed",
+            { cause: error },
+        );
+        reportError(generationFailure);
+        log.error("[tabular/regenerate-cell] generation failed", generationFailure);
         return GENERATION_FAILED;
     } finally {
         clearInterval(leaseHeartbeat);

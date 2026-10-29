@@ -1,5 +1,10 @@
 import { describe, expect, it, vi } from "vitest";
 
+const { reportError } = vi.hoisted(() => ({ reportError: vi.fn(() => null) }));
+vi.mock("../../../../lib/observability/sentry", async (importOriginal) => ({
+  ...(await importOriginal<Record<string, unknown>>()),
+  reportError,
+}));
 vi.mock("../../../../lib/access", () => ({
   filterAccessibleDocumentIds: vi.fn(async () => ["doc-a"]),
 }));
@@ -148,5 +153,37 @@ describe("subagent run store", () => {
       { document_id: "doc-b", version_id: null },
     ]);
     expect(toolRecord(call(["doc-0", "unknown.pdf"]), "", docStore, docIndex).documents).toEqual([]);
+  });
+});
+
+describe("subagent run store failures", () => {
+  it("reports a failed run save under chat.subagent_failed with the database's error as cause", async () => {
+    reportError.mockClear();
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    const dbError = { code: "23505", message: "duplicate key value" };
+    const client = {
+      from: () => ({ insert: vi.fn(async () => ({ error: dbError })) }),
+    } as never;
+    const store = createSubagentRunStore({
+      db: client,
+      userId: "user-1",
+      chatId: "chat-1",
+      messageId: "message-1",
+    });
+
+    await store.save("delegation-1", "completed", transcript);
+    await expect(store.flush()).resolves.toBeUndefined();
+
+    expect(reportError).toHaveBeenCalledTimes(1);
+    expect(reportError).toHaveBeenCalledWith(
+      expect.objectContaining({ kind: "chat.subagent_failed", cause: dbError }),
+      { tags: { component: "chat-stream", operation: "chat.subagent" } },
+    );
+    // The report is the Sentry event; the log line stays a redacted category.
+    expect(warnSpy).toHaveBeenCalledTimes(1);
+    expect(errorSpy).not.toHaveBeenCalled();
+    warnSpy.mockRestore();
+    errorSpy.mockRestore();
   });
 });

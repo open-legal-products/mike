@@ -7,7 +7,9 @@ const mocks = vi.hoisted(() => ({
 
 vi.mock("../storage", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../storage")>();
-  return { ...actual, downloadFile: mocks.downloadFile };
+  // The rendition is an optional read; both entry points share one fake so
+  // the call order the tests assert covers both.
+  return { ...actual, downloadFile: mocks.downloadFile, downloadFileIfAvailable: mocks.downloadFile };
 });
 
 vi.mock("../convert", async (importOriginal) => {

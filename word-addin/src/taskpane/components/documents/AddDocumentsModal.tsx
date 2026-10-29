@@ -22,7 +22,7 @@ import {
   ProjectSvgIcon,
   SubfolderSvgIcon,
 } from "./DirectoryIcons";
-import { userMessage } from "../../lib/notify";
+import { reportFault } from "../../lib/notify";
 
 type DirectoryTab = "files" | "templates" | "projects";
 
@@ -216,9 +216,10 @@ export function AddDocumentsModal({
       .catch((reason: unknown) => {
         if (cancelled) return;
         setError(
-          userMessage(reason, {
+          reportFault(reason, {
             fallback: "Failed to load documents.",
-          }),
+            operation: "documents.directory",
+          }).message,
         );
       })
       .finally(() => {
@@ -306,9 +307,10 @@ export function AddDocumentsModal({
       }));
     } catch (reason) {
       setError(
-        userMessage(reason, {
+        reportFault(reason, {
           fallback: "Failed to load project documents.",
-        }),
+          operation: "documents.directory",
+        }).message,
       );
     } finally {
       setLoadingProjectLevels((current) => {
@@ -353,9 +355,10 @@ export function AddDocumentsModal({
       setProjectsHasMore(rows.length > DIRECTORY_PAGE_SIZE);
     } catch (reason) {
       setError(
-        userMessage(reason, {
+        reportFault(reason, {
           fallback: "Failed to load projects.",
-        }),
+          operation: "documents.directory",
+        }).message,
       );
     } finally {
       setLoadingMoreProjects(false);
@@ -417,9 +420,10 @@ export function AddDocumentsModal({
       }
     } catch (reason) {
       setError(
-        userMessage(reason, {
+        reportFault(reason, {
           fallback: "Documents could not be uploaded. Please try again.",
-        }),
+          operation: "documents.upload",
+        }).message,
       );
     } finally {
       setUploadingFilenames([]);
@@ -559,9 +563,10 @@ export function AddDocumentsModal({
       await loadLibraryFolderLevel(activeTab, folderId);
     } catch (reason) {
       setError(
-        userMessage(reason, {
+        reportFault(reason, {
           fallback: "Failed to load folder documents.",
-        }),
+          operation: "documents.directory",
+        }).message,
       );
     }
   };
@@ -587,9 +592,10 @@ export function AddDocumentsModal({
       }));
     } catch (reason) {
       setError(
-        userMessage(reason, {
+        reportFault(reason, {
           fallback: "Failed to load documents.",
-        }),
+          operation: "documents.directory",
+        }).message,
       );
     } finally {
       setLoadingMoreLibraryLevels((current) => {

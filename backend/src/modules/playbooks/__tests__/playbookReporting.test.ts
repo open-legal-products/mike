@@ -32,7 +32,9 @@ import type { DbJob } from "../../../lib/dbq/types";
 import type { Db } from "../../../lib/supabase";
 import { scrubEvent } from "../../../lib/observability/sentry";
 import { diagnosticEvent } from "../../../lib/observability/sentryPrivacy";
+import { AppError } from "../../../lib/appError";
 import { blankPlaybookContent } from "../playbooks.operations";
+import { removePlaybookObjects } from "../playbooks.reporting";
 import {
   handlePlaybookImport,
   handlePlaybookReview,
@@ -375,6 +377,84 @@ describe("reporting playbook job failures", () => {
       tags: { component: "playbooks", stage: "import.cleanup" },
       extra: { import_id: IMPORT },
     });
+  });
+});
+
+describe("removing playbook objects", () => {
+  it("attempts every key and reports one warning with the storage error as the cause, never a key", async () => {
+    const cause = Object.assign(new Error("s3 refused"), { name: "AccessDenied" });
+    storage.deleteFile
+      .mockRejectedValueOnce(cause)
+      .mockResolvedValueOnce(undefined);
+
+    await expect(
+      removePlaybookObjects(
+        ["playbooks/owner/Confidential Standards.docx", null, "playbooks/owner/second.pdf"],
+        { stage: "import.cleanup", ids: { import_id: IMPORT, playbook_id: null } },
+      ),
+    ).resolves.toBeUndefined();
+
+    expect(storage.deleteFile).toHaveBeenCalledTimes(2);
+    expect(reportError).toHaveBeenCalledTimes(1);
+    const [reported, context] = reportError.mock.calls[0];
+    expect(reported).toBeInstanceOf(AppError);
+    expect(reported.kind).toBe("playbooks.cleanup_failed");
+    expect(reported.cause).toBe(cause);
+    expect(context).toEqual({
+      level: "warning",
+      tags: { component: "playbooks", stage: "import.cleanup" },
+      extra: { import_id: IMPORT },
+    });
+    // Keys embed the user's filename: not on the event, not in the log.
+    expect(JSON.stringify([reported.message, context])).not.toContain(
+      "Confidential",
+    );
+    expect(JSON.stringify(vi.mocked(console.warn).mock.calls)).not.toContain(
+      "Confidential",
+    );
+  });
+
+  it("reports nothing when every object is removed, and does nothing with no keys", async () => {
+    await removePlaybookObjects(["playbooks/owner/a.docx"], { ids: { playbook_id: "book" } });
+    await removePlaybookObjects([null, undefined]);
+    expect(storage.deleteFile).toHaveBeenCalledTimes(1);
+    expect(reportError).not.toHaveBeenCalled();
+  });
+});
+
+describe("the failure hook of an in-process job", () => {
+  it("reports a hook that could not record the outcome under dbq.failure_hook_crashed", async () => {
+    vi.stubEnv("DB_JOBS_ENABLED", "false");
+    const { db: base } = database([book()]);
+    // Every statement on the run refused: the job cannot read its run back,
+    // and the failure hook cannot mark it failed either.
+    const db = failing(base, (table) => table === "playbook_runs");
+
+    const run = await queuePlaybookReview({
+      userId: "owner",
+      playbookId: "book",
+      documentText: "Contract",
+      model: MODEL,
+      reviewMode: "strict",
+      db,
+    });
+
+    await vi.waitFor(() => expect(reportsAt("failure-hook")).toHaveLength(1));
+    const [reported, context] = reportsAt("failure-hook")[0];
+    expect(reported).toBeInstanceOf(AppError);
+    expect((reported as AppError).kind).toBe("dbq.failure_hook_crashed");
+    // The refused statement is the cause; its SQLSTATE is the failure_code.
+    expect((reported as AppError).cause).toMatchObject({ code: "57014" });
+    expect(context).toEqual({
+      tags: {
+        component: "playbooks",
+        stage: "failure-hook",
+        job_kind: "playbook.review",
+      },
+    });
+    // The job's own failure is still its own report.
+    expect(reportsAt("job.terminal")).toHaveLength(1);
+    expect(run.status).toBe("running");
   });
 });
 

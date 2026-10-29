@@ -8,7 +8,7 @@ import {
 import { WorkflowList } from "./WorkflowList";
 import { PageTitle } from "../primitives/PageTitle";
 import { WorkflowAssets } from "./WorkflowAssets";
-import { notifyError, userMessage } from "../../lib/notify";
+import { reportFault, notifyError } from "../../lib/notify";
 
 const WorkflowPromptEditor = lazy(() =>
   import("./WorkflowPromptEditor").then((module) => ({
@@ -100,6 +100,7 @@ export function WorkflowPicker({
           action: "load your workflows",
           dedupeKey: "workflow-list",
           page: "Workflows",
+          operation: "workflows.run",
           onRetry: () => {
             setFetchLoading(true);
             setFetchFailed(false);
@@ -201,10 +202,11 @@ export function WorkflowPicker({
           if (selectedIdRef.current !== workflowAtChange.id) return;
           setSaveStatus("idle");
           setSaveError(
-            userMessage(reason, {
+            reportFault(reason, {
               fallback:
                 "Mike couldn't save these instructions. Try again.",
-            })
+              operation: "workflows.run",
+            }).message
           );
         });
     }, 800);
