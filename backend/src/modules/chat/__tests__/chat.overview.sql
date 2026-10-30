@@ -270,6 +270,24 @@ begin
 end;
 $$;
 
+-- H1 was already repaired on main by the candidate-based chat RPC. Guard
+-- the nested failure as well: a project verdict or full private catalogue per
+-- child chat would make a shared project's cost grow with its child count.
+-- The expected permission rows above were captured before these tripwires.
+create or replace function public.project_access_role(
+  p_project_id uuid,p_project_user_id uuid,p_org_id uuid,p_user_id text,p_user_email text
+) returns text language plpgsql stable as $$
+begin
+  raise exception 'chat overview must reuse set-based project roles';
+end;
+$$;
+create or replace function public.org_private_content_items(p_org_id uuid)
+returns table(kind text,item_id uuid,title text,user_id uuid) language plpgsql stable as $$
+begin
+  raise exception 'chat overview must not enumerate a private catalogue per item';
+end;
+$$;
+
 -- From here on, the per-row verdict is instrumented: the list must never
 -- reach it, because that call per row is what timed GET /chat out.
 alter function public.chat_access_role(uuid,uuid,uuid,uuid,text,text)
