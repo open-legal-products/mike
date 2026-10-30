@@ -10,11 +10,18 @@
 # resolves to the same path; frontend/src/__tests__/architecture.test.ts
 # checks that the two agree, and .github/workflows/docker-images.yml builds
 # this file in CI so a miss fails the pull request, not the next fresh install.
-FROM node:22-slim
+# Two stages so the publish workflow can rebuild `app` (where the Sentry
+# source-map upload happens inside `next build`) without redoing `npm ci`:
+# BuildKit would otherwise reuse the build layer from a token-less build and
+# silently skip the upload, because secret contents are not part of the cache
+# key (.github/workflows/publish-images.yml, no-cache-filters).
+FROM node:22-slim AS deps
 
 WORKDIR /app
 COPY frontend/package*.json ./
 RUN npm ci
+
+FROM deps AS app
 COPY frontend/ ./
 COPY packages/contracts /packages/contracts
 
@@ -25,15 +32,20 @@ ARG NEXT_PUBLIC_SENTRY_DISABLED=
 ARG NEXT_PUBLIC_SENTRY_INSTALL=
 ARG NEXT_PUBLIC_SENTRY_ENVIRONMENT=
 ARG NEXT_PUBLIC_SENTRY_RELEASE=
-# The commit this image was built from; the release tag when no explicit
-# release is given, for the browser bundle (inlined) and the Next server.
+# Release identity: the product version (VERSION, or VERSION-dev.<run> for a
+# main build) and the commit, both from the publish workflow. Together they
+# make the release `mike@<version>+<sha12>` for the browser bundle (inlined)
+# and the Next server; a local build without them is `mike@0.0.0...`.
+ARG MIKE_VERSION=
 ARG GIT_SHA=
 ENV NEXT_PUBLIC_SENTRY_DSN=$NEXT_PUBLIC_SENTRY_DSN \
     NEXT_PUBLIC_SENTRY_DISABLED=$NEXT_PUBLIC_SENTRY_DISABLED \
     NEXT_PUBLIC_SENTRY_INSTALL=$NEXT_PUBLIC_SENTRY_INSTALL \
     NEXT_PUBLIC_SENTRY_ENVIRONMENT=$NEXT_PUBLIC_SENTRY_ENVIRONMENT \
     NEXT_PUBLIC_SENTRY_RELEASE=$NEXT_PUBLIC_SENTRY_RELEASE \
+    NEXT_PUBLIC_MIKE_VERSION=$MIKE_VERSION \
     NEXT_PUBLIC_GIT_SHA=$GIT_SHA \
+    MIKE_VERSION=$MIKE_VERSION \
     GIT_SHA=$GIT_SHA
 
 # Sentry source-map upload (docs/observability.md). Needs all three; the token

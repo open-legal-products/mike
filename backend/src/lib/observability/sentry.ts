@@ -509,6 +509,34 @@ export function minimiseForCommunity<T extends CommunityEvent>(event: T): T {
 }
 // END shared-redaction
 
+/** Marks a build that did not come from the release workflow. */
+export const UNVERSIONED = "0.0.0";
+const VERSION_PATTERN = /^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/;
+
+/** `MIKE_VERSION` as a semver string, or 0.0.0 when unset or malformed. */
+export function normalizeVersion(raw: string | undefined): string {
+  const trimmed = (raw ?? "").trim().replace(/^v/, "");
+  return VERSION_PATTERN.test(trimmed) ? trimmed : UNVERSIONED;
+}
+
+/**
+ * `mike@<version>+<sha12>`: the release every runtime tags events with. Same
+ * rule as frontend/src/shared/lib/sentryEvent.ts (this module cannot import
+ * it). An explicit SENTRY_RELEASE wins; a build without MIKE_VERSION is
+ * `mike@0.0.0...`, valid and visibly not a release.
+ */
+export function releaseName(
+  explicit: string | undefined,
+  version: string | undefined,
+  gitSha: string | undefined,
+): string {
+  const named = explicit?.trim();
+  if (named) return named;
+  const sha = gitSha?.trim().slice(0, 12);
+  const base = `mike@${normalizeVersion(version)}`;
+  return sha ? `${base}+${sha}` : base;
+}
+
 /** Errors already sent via reportError(); the console bridge skips them. */
 const reportedErrors = new WeakSet<object>();
 
@@ -578,12 +606,10 @@ export function sentryConfiguration(env: NodeJS.ProcessEnv = process.env) {
       dsn.length > 0 &&
       (!isTestProcess || env.SENTRY_ALLOW_IN_TESTS === "true"),
     environment: env.SENTRY_ENVIRONMENT?.trim() || "self-hosted",
-    // An explicit SENTRY_RELEASE wins; otherwise the git commit the image
-    // was built from (GIT_SHA, a Dockerfile build arg) — what lets Sentry
-    // say "regressed in this deploy" and resolve an issue until the next.
-    release:
-      env.SENTRY_RELEASE?.trim() ||
-      (env.GIT_SHA?.trim() ? `mike@${env.GIT_SHA.trim().slice(0, 12)}` : undefined),
+    // An explicit SENTRY_RELEASE wins; otherwise mike@<version>+<sha12> from
+    // the MIKE_VERSION and GIT_SHA build arguments — what lets Sentry say
+    // "regressed in this release" and resolve an issue until the next.
+    release: releaseName(env.SENTRY_RELEASE, env.MIKE_VERSION, env.GIT_SHA),
     // Performance tracing is opt-in: error tracking is the goal of this
     // integration and traces cost quota. 0 keeps the OpenTelemetry request
     // instrumentation (needed for request context on errors) without
@@ -894,20 +920,20 @@ export function initSentry(
   if (config.dsnSource === "default") {
     console.log(
       `[sentry] enabled for ${role} → Mike project Sentry (${config.install} install, ` +
-        `release ${config.release ?? "unset"}). ` +
+        `release ${config.release}). ` +
         "Opt out with SENTRY_DISABLED=true or point SENTRY_DSN at your own project.",
     );
   } else {
     console.log(
       `[sentry] enabled for ${role} (environment ${config.environment}` +
-        `${config.release ? `, release ${config.release}` : ""})`,
+        `, release ${config.release})`,
     );
   }
-  if (!config.release && env.NODE_ENV === "production") {
-    // Without a release an event cannot be mapped to the code that produced
-    // it; the images get it from the GIT_SHA build arg (docs/observability.md).
+  if (config.release.startsWith(`mike@${UNVERSIONED}`) && env.NODE_ENV === "production") {
+    // An unversioned release cannot be told apart from any other local build;
+    // the images get MIKE_VERSION and GIT_SHA as build args (docs/observability.md).
     console.warn(
-      "[sentry] no release: build the images with GIT_SHA=$(git rev-parse HEAD) or set SENTRY_RELEASE",
+      "[sentry] unversioned release: build the images with MIKE_VERSION=$(cat VERSION) GIT_SHA=$(git rev-parse HEAD) or set SENTRY_RELEASE",
     );
   }
   return true;

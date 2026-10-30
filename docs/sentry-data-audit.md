@@ -28,7 +28,10 @@ SDK fields, mixed envelopes, and the 60-event/minute runtime-wide limit.
 These changes intentionally reduce diagnostic prose: a raw provider or
 database error may quote privileged content. Use the retained source location,
 operation, status/code and request ID to investigate. Source-map uploads
-remain a separate opt-in transfer of build artifacts. Operator release and
+remain a separate transfer of build artifacts: CI uploads them for the
+published images (public source code only, from the maintainers' build, never
+anything from a deployment), and a local build uploads nothing unless the
+operator supplies their own token. Operator release and
 environment names must not contain customer information.
 
 See [the outbound policy](observability.md#outbound-privacy-boundary) and

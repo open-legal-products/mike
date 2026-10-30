@@ -7,6 +7,7 @@ import {
     parseSampleRate,
     redactShaped,
     redactUrl,
+    normalizeVersion,
     releaseName,
     redactText,
     MIKE_SENTRY_DSN,
@@ -14,7 +15,9 @@ import {
     redactFilesystemPaths,
     repoRelativePath,
     resolveDsn,
+    UNVERSIONED,
 } from "./sentryEvent";
+import { releaseName as cjsReleaseName } from "./releaseName.cjs";
 
 describe("redactShaped", () => {
     it("filters secret-looking keys at any depth and leaves the rest", () => {
@@ -310,11 +313,41 @@ describe("query parameter forms", () => {
 });
 
 describe("releaseName", () => {
-    it("prefers an explicit release, falls back to the git sha, else undefined", () => {
-        expect(releaseName("mike@1.4.0", "abcdef1234567890")).toBe("mike@1.4.0");
-        expect(releaseName("  ", "abcdef1234567890abcd")).toBe("mike@abcdef123456");
-        expect(releaseName(undefined, undefined)).toBeUndefined();
-        expect(releaseName("", "")).toBeUndefined();
+    it("prefers an explicit release and otherwise builds mike@<version>+<sha12>", () => {
+        expect(releaseName("mike@1.4.0", "2.1.0", "abcdef1234567890")).toBe("mike@1.4.0");
+        expect(releaseName("  ", "2.1.0", "abcdef1234567890abcd")).toBe("mike@2.1.0+abcdef123456");
+        expect(releaseName(undefined, "2.1.0-dev.57", "abcdef1234567890")).toBe(
+            "mike@2.1.0-dev.57+abcdef123456",
+        );
+    });
+
+    it("marks builds that did not come from the release workflow as 0.0.0", () => {
+        expect(releaseName(undefined, undefined, "abcdef1234567890")).toBe("mike@0.0.0+abcdef123456");
+        expect(releaseName(undefined, undefined, undefined)).toBe("mike@0.0.0");
+        expect(releaseName("", "", "")).toBe("mike@0.0.0");
+        expect(releaseName(undefined, "not a version", "abcdef1234567890")).toBe(
+            "mike@0.0.0+abcdef123456",
+        );
+    });
+
+    it("accepts a leading v and rejects build metadata in the version", () => {
+        expect(normalizeVersion("v2.1.0")).toBe("2.1.0");
+        expect(normalizeVersion(" 2.1.0-rc.1 ")).toBe("2.1.0-rc.1");
+        expect(normalizeVersion("2.1.0+abc")).toBe(UNVERSIONED);
+        expect(normalizeVersion(undefined)).toBe(UNVERSIONED);
+    });
+
+    it("agrees with the CommonJS twin the build configs use", () => {
+        const cases: [string | undefined, string | undefined, string | undefined][] = [
+            ["mike@1.4.0", "2.1.0", "abcdef1234567890"],
+            [undefined, "2.1.0", "abcdef1234567890"],
+            [undefined, "v2.1.0-dev.3", "abcdef1234567890"],
+            [undefined, "garbage", "abc"],
+            [undefined, undefined, undefined],
+        ];
+        for (const args of cases) {
+            expect(cjsReleaseName(...args)).toBe(releaseName(...args));
+        }
     });
 });
 

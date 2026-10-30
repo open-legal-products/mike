@@ -1,5 +1,9 @@
 /* eslint-disable @typescript-eslint/no-var-requires */
 const path = require("path");
+// Release identity shared with the web app and its Next build config.
+const { releaseName } = require(
+  path.resolve(__dirname, "..", "frontend", "src", "shared", "lib", "releaseName.cjs"),
+);
 const fs = require("fs");
 const HtmlWebpackPlugin = require("html-webpack-plugin");
 const webpack = require("webpack");
@@ -135,9 +139,15 @@ module.exports = async (_env, options) => {
           org: process.env.SENTRY_ORG,
           project: process.env.SENTRY_PROJECT,
           authToken: process.env.SENTRY_AUTH_TOKEN,
-          release: process.env.REACT_APP_SENTRY_RELEASE
-            ? { name: process.env.REACT_APP_SENTRY_RELEASE }
-            : undefined,
+          // The same string the pane tags events with (errorReporting.ts),
+          // from the same build arguments, so the maps land on that release.
+          release: {
+            name: releaseName(
+              process.env.REACT_APP_SENTRY_RELEASE,
+              process.env.REACT_APP_MIKE_VERSION,
+              process.env.REACT_APP_GIT_SHA,
+            ),
+          },
           telemetry: false,
           sourcemaps: {
             filesToDeleteAfterUpload: ["dist/**/*.map"],
@@ -320,6 +330,7 @@ module.exports = async (_env, options) => {
           process.env.REACT_APP_SENTRY_ENVIRONMENT || "",
         REACT_APP_SENTRY_RELEASE: process.env.REACT_APP_SENTRY_RELEASE || "",
         REACT_APP_GIT_SHA: process.env.REACT_APP_GIT_SHA || "",
+        REACT_APP_MIKE_VERSION: process.env.REACT_APP_MIKE_VERSION || "",
         REACT_APP_SENTRY_TRACES_SAMPLE_RATE:
           process.env.REACT_APP_SENTRY_TRACES_SAMPLE_RATE || "",
       }),

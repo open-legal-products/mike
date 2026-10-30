@@ -10,7 +10,7 @@
 #
 # Each image is built with the same context, Dockerfile, and per-Dockerfile
 # ignore file docker-compose.yml and docs/deployment.md use, and nothing is
-# pushed. Layers are cached in the GitHub Actions cache so the `npm ci` and
+# pushed (publish-images.yml publishes; it never runs on pull requests). Layers are cached in the GitHub Actions cache so the `npm ci` and
 # apt layers are paid once per lockfile change, not once per run.
 name: Docker images
 

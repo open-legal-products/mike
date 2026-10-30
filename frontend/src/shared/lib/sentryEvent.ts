@@ -834,18 +834,34 @@ export function parseSampleRate(
     return Math.min(Math.max(parsed, 0), 1);
 }
 
+/** Marks a build that did not come from the release workflow. */
+export const UNVERSIONED = "0.0.0";
+// Semver core plus optional prerelease; the commit is the build metadata.
+const VERSION_PATTERN = /^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/;
+
+/** `MIKE_VERSION` as a semver string, or 0.0.0 when unset or malformed. */
+export function normalizeVersion(raw: string | undefined): string {
+    const trimmed = (raw ?? "").trim().replace(/^v/, "");
+    return VERSION_PATTERN.test(trimmed) ? trimmed : UNVERSIONED;
+}
+
 /**
- * The release every event is tagged with. An explicit SENTRY_RELEASE wins;
- * otherwise the git commit the build came from (`mike@<sha12>`), which is
- * what lets Sentry say "regressed in this deploy" and resolve an issue
- * until the next release. Undefined when neither is known (a dev checkout).
+ * The release every event is tagged with, and the one the build plugins
+ * upload source maps under (releaseName.cjs is the CommonJS twin for the
+ * build configs). An explicit SENTRY_RELEASE wins; otherwise
+ * `mike@<version>+<sha12>` from the MIKE_VERSION and GIT_SHA build
+ * arguments. Sentry reads `package@version+build` as semver, so releases
+ * order by version while the build metadata keeps the exact commit. A build
+ * without a version is `mike@0.0.0...`: valid, and visibly not a release.
  */
 export function releaseName(
     explicit: string | undefined,
+    version: string | undefined,
     gitSha: string | undefined,
-): string | undefined {
+): string {
     const named = explicit?.trim();
     if (named) return named;
-    const sha = gitSha?.trim();
-    return sha ? `mike@${sha.slice(0, 12)}` : undefined;
+    const sha = gitSha?.trim().slice(0, 12);
+    const base = `mike@${normalizeVersion(version)}`;
+    return sha ? `${base}+${sha}` : base;
 }

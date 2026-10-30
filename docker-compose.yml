@@ -124,8 +124,24 @@ services:
   # --- One-shot: load schema.sql on a new volume, then apply any pending
   # migrations with backend/scripts/migrate.sh, which records each one in
   # public.schema_migrations so the next start skips it; grant service_role.
+  # Runs from the backend image (which carries schema.sql, migrations/ and the
+  # scripts, plus psql) rather than bind-mounting them from the checkout, so a
+  # pulled image can never be paired with another version's migrations.
   db-init:
-    image: supabase/postgres:17.6.1.136
+    # Every backend consumer (db-init, workflow-sync, backend, worker) runs the
+    # same image, so code, schema and migrations always come from one release.
+    # The default tag is the version in /VERSION; `docker compose up --build`
+    # still builds it from source (backend/src/__tests__/releaseVersion.test.ts
+    # keeps the two in step).
+    build: &backend-build
+      context: .
+      dockerfile: backend/Dockerfile
+      args:
+        # Release identity for Sentry (docs/observability.md): build args, not
+        # runtime variables, because the Dockerfile bakes them into the image.
+        MIKE_VERSION: ${MIKE_VERSION:-}
+        GIT_SHA: ${GIT_SHA:-}
+    image: &backend-image ${MIKE_IMAGE_REPO:-ghcr.io/open-legal-products}/mike-backend:${MIKE_IMAGE_TAG:-2.1.0}
     depends_on:
       db:
         condition: service_healthy
@@ -134,12 +150,7 @@ services:
     environment:
       DB: postgres://postgres:postgres@db:5432/postgres
       DATABASE_URL: postgres://postgres:postgres@db:5432/postgres
-      MIGRATIONS_DIR: /migrations
-    volumes:
-      - ./backend/schema.sql:/schema.sql:ro
-      - ./backend/migrations:/migrations:ro
-      - ./backend/scripts/migrate.sh:/migrate.sh:ro
-      - ./docker/db-init/adopt-ledger.sh:/adopt-ledger.sh:ro
+      MIGRATIONS_DIR: /app/migrations
     entrypoint: ["bash", "-c"]
     command:
       - |
@@ -149,13 +160,13 @@ services:
         if ! psql "$$DB" -tAc "select to_regclass('public.user_profiles')" | grep -q user_profiles; then
           # New volume: schema.sql is the complete schema, and it records every
           # migration it already contains in the ledger.
-          psql "$$DB" -v ON_ERROR_STOP=1 -f /schema.sql || exit 1;
+          psql "$$DB" -v ON_ERROR_STOP=1 -f /app/schema.sql || exit 1;
         elif ! psql "$$DB" -tAc "select to_regclass('public.schema_migrations')" | grep -q schema_migrations; then
           # Volume from before the ledger: replay one last time the way
           # db-init used to on every start, then record it.
-          bash /adopt-ledger.sh || exit 1;
+          bash /app/docker/db-init/adopt-ledger.sh || exit 1;
         fi
-        bash /migrate.sh up || exit 1;
+        bash /app/scripts/migrate.sh up || exit 1;
         psql "$$DB" -c "grant usage on schema public to service_role;
           grant all privileges on all tables in schema public to service_role;
           grant all privileges on all sequences in schema public to service_role;
@@ -233,10 +244,8 @@ services:
 
   # --- One-shot: download, validate, and transactionally import mike-workflows.
   workflow-sync:
-    build:
-      context: .
-      dockerfile: backend/Dockerfile
-    image: mike-backend:local
+    build: *backend-build
+    image: *backend-image
     env_file:
       - path: ./backend/.env
         required: false
@@ -259,14 +268,8 @@ services:
         condition: service_healthy
     restart: "no"
   backend:
-    build:
-      context: .
-      dockerfile: backend/Dockerfile
-      args:
-        # Release tag for Sentry (docs/observability.md). A build arg, not a
-        # runtime variable: the Dockerfile bakes it into the image.
-        GIT_SHA: ${GIT_SHA:-}
-    image: mike-backend:local
+    build: *backend-build
+    image: *backend-image
     ports:
       - "${BACKEND_PORT:-3001}:3001"
     # ponytail: both optional — local dev keeps secrets in backend/.env, hosted
@@ -330,9 +333,8 @@ services:
   # BullMQ partitions per connection and the DB queue claims with
   # FOR UPDATE SKIP LOCKED, so replicas divide jobs, never duplicate them.
   # worker:
-  #   build:
-  #     context: .
-  #     dockerfile: backend/Dockerfile
+  #   build: *backend-build
+  #   image: *backend-image
   #   command: ["node", "dist/worker.js"]
   #   env_file:
   #     - path: ./backend/.env
@@ -363,6 +365,8 @@ services:
       context: .
       dockerfile: frontend/Dockerfile
       args:
+        # Release identity (docs/observability.md), as for the backend image.
+        MIKE_VERSION: ${MIKE_VERSION:-}
         # The browser-side Sentry DSN is inlined by `next build`, so it is a
         # build argument, not a runtime variable (docs/observability.md).
         NEXT_PUBLIC_SENTRY_DSN: ${FRONTEND_SENTRY_DSN:-}
@@ -379,6 +383,8 @@ services:
         SENTRY_UPLOAD_ENABLED: ${SENTRY_UPLOAD_ENABLED:-0}
       secrets:
         - SENTRY_AUTH_TOKEN
+    # Same default tag as the backend image; pull both or build both.
+    image: ${MIKE_IMAGE_REPO:-ghcr.io/open-legal-products}/mike-frontend:${MIKE_IMAGE_TAG:-2.1.0}
     environment:
       - API_BASE_URL=${API_BASE_URL:-http://backend:3001}
       # Next server side (the /api gateway); same project as the browser.

@@ -19,6 +19,9 @@ import {
 
 export type ReportLevel = "fatal" | "error" | "warning";
 
+/** Where the browser SDK posts envelopes; served by app/monitoring/route.ts. */
+export const SENTRY_TUNNEL_PATH = "/monitoring";
+
 export type ReportContext = {
     tags?: Record<string, string | number | boolean | null | undefined>;
     extra?: Record<string, unknown>;
@@ -317,6 +320,7 @@ export function browserSentryOptions(env: {
     install?: string;
     environment?: string;
     release?: string;
+    version?: string;
     gitSha?: string;
     tracesSampleRate?: string;
     nodeEnv?: string;
@@ -332,7 +336,12 @@ export function browserSentryOptions(env: {
         dsn: dsn || undefined,
         enabled: dsn.length > 0,
         environment: env.environment?.trim() || "self-hosted",
-        release: releaseName(env.release, env.gitSha),
+        release: releaseName(env.release, env.version, env.gitSha),
+        // Every browser envelope goes through the Next server (see
+        // app/monitoring/route.ts), which applies the deployment's runtime
+        // opt-out and DSN before forwarding. The baked-in DSN above is only
+        // what the SDK needs to be enabled; the server decides where it goes.
+        tunnel: SENTRY_TUNNEL_PATH,
         tracesSampleRate: parseSampleRate(env.tracesSampleRate, 0),
         // Session replay is deliberately NOT enabled: it would record
         // privileged document text on screen.
@@ -379,7 +388,7 @@ export function serverSentryOptions(
         enabled: dsn.length > 0,
         environment: env.SENTRY_ENVIRONMENT?.trim() || "self-hosted",
         integrations: [privacyBoundaryIntegration()],
-        release: releaseName(env.SENTRY_RELEASE, env.GIT_SHA),
+        release: releaseName(env.SENTRY_RELEASE, env.MIKE_VERSION, env.GIT_SHA),
         tracesSampleRate: parseSampleRate(env.SENTRY_TRACES_SAMPLE_RATE, 0),
         dataCollection: {
             userInfo: false,

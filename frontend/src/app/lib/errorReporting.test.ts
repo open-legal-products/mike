@@ -273,7 +273,7 @@ describe("browserSentryOptions", () => {
         expect(options.enabled).toBe(true);
         expect(options.dsn).toBe(MIKE_SENTRY_DSN.frontend);
         expect(options.environment).toBe("self-hosted");
-        expect(options.release).toBeUndefined();
+        expect(options.release).toBe("mike@0.0.0");
         expect(options.dataCollection).toEqual({
             userInfo: false,
             cookies: false,
@@ -290,6 +290,9 @@ describe("browserSentryOptions", () => {
         expect(options.tracesSampleRate).toBe(0);
         expect(options.beforeSend).toBe(scrubEvent);
         expect(options).not.toHaveProperty("replaysOnErrorSampleRate");
+        // Every envelope goes through the Next server, which applies the
+        // deployment's runtime opt-out and DSN (app/monitoring/route.ts).
+        expect(options.tunnel).toBe("/monitoring");
     });
 
     it("reads the DSN, environment, release, and sample rate", () => {
@@ -332,17 +335,25 @@ describe("browserSentryOptions", () => {
 });
 
 describe("release tagging", () => {
-    it("falls back to the git sha for both the browser and the server options", () => {
-        expect(browserSentryOptions({ dsn: "https://k@o.ingest.sentry.io/1", gitSha: "abcdef1234567890" }).release).toBe(
-            "mike@abcdef123456",
-        );
+    it("builds mike@<version>+<sha12> for both the browser and the server options", () => {
+        expect(
+            browserSentryOptions({
+                dsn: "https://k@o.ingest.sentry.io/1",
+                version: "2.1.0",
+                gitSha: "abcdef1234567890",
+            }).release,
+        ).toBe("mike@2.1.0+abcdef123456");
+        expect(
+            browserSentryOptions({ dsn: "https://k@o.ingest.sentry.io/1", gitSha: "abcdef1234567890" }).release,
+        ).toBe("mike@0.0.0+abcdef123456");
         expect(
             serverSentryOptions("server", {
                 NODE_ENV: "test",
                 SENTRY_DSN: "https://k@o.ingest.sentry.io/1",
+                MIKE_VERSION: "2.1.0",
                 GIT_SHA: "abcdef1234567890",
             } as NodeJS.ProcessEnv).release,
-        ).toBe("mike@abcdef123456");
+        ).toBe("mike@2.1.0+abcdef123456");
         expect(
             serverSentryOptions("server", {
                 NODE_ENV: "test",
@@ -378,7 +389,7 @@ describe("serverSentryOptions", () => {
         );
         expect(options.enabled).toBe(true);
         expect(options.dsn).toBe(MIKE_SENTRY_DSN.frontend);
-        expect(options.release).toBeUndefined();
+        expect(options.release).toBe("mike@0.0.0");
         expect(options.environment).toBe("self-hosted");
         const withNodeEnv = serverSentryOptions("server", {
             NODE_ENV: "production",

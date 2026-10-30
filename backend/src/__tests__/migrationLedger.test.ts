@@ -157,19 +157,26 @@ describe("migrate.sh transaction detection", () => {
 
 describe("docker-compose db-init", () => {
     const compose = read("docker-compose.yml");
+    const dockerfile = read("backend/Dockerfile");
 
-    it("mounts the whole migrations directory and the runner", () => {
-        expect(compose).toContain("- ./backend/migrations:/migrations:ro");
-        expect(compose).toContain(
-            "- ./backend/scripts/migrate.sh:/migrate.sh:ro",
-        );
-        expect(compose).toContain("MIGRATIONS_DIR: /migrations");
+    it("runs from the backend image so migrations and code share one release", () => {
+        // The image carries schema.sql, migrations/ and scripts/ (COPY backend/),
+        // the ledger-adoption script, and psql for migrate.sh. No bind mounts:
+        // a pulled image can never be paired with another checkout's migrations.
+        const dbInit = compose.slice(compose.indexOf("\n  db-init:"), compose.indexOf("\n  mailpit:"));
+        expect(dbInit).toContain("build: &backend-build");
+        expect(dbInit).toContain("image: &backend-image");
+        expect(dbInit).not.toContain("volumes:");
+        expect(dbInit).toContain("MIGRATIONS_DIR: /app/migrations");
+        expect(dockerfile).toContain("COPY backend/ ./");
+        expect(dockerfile).toContain("COPY docker/db-init/adopt-ledger.sh ./docker/db-init/adopt-ledger.sh");
+        expect(dockerfile).toMatch(/apt-get install[^\n]*postgresql-client/);
     });
 
     it("fails closed when schema.sql, adoption or a migration fails", () => {
-        expect(compose).toContain("-f /schema.sql || exit 1;");
-        expect(compose).toContain("bash /adopt-ledger.sh || exit 1;");
-        expect(compose).toContain("bash /migrate.sh up || exit 1;");
+        expect(compose).toContain("-f /app/schema.sql || exit 1;");
+        expect(compose).toContain("bash /app/docker/db-init/adopt-ledger.sh || exit 1;");
+        expect(compose).toContain("bash /app/scripts/migrate.sh up || exit 1;");
     });
 
     it("adopts pre-ledger volumes up to a migration that exists", () => {

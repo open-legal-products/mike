@@ -55,6 +55,7 @@ export function addinSentryOptions(
     install?: string;
     environment?: string;
     release?: string;
+    version?: string;
     gitSha?: string;
     tracesSampleRate?: string;
     nodeEnv?: string;
@@ -84,7 +85,7 @@ export function addinSentryOptions(
     dsn: dsn || undefined,
     enabled: dsn.length > 0,
     environment: env.environment?.trim() || "self-hosted",
-    release: releaseName(env.release, env.gitSha),
+    release: releaseName(env.release, env.version, env.gitSha),
     tracesSampleRate: parseSampleRate(env.tracesSampleRate, 0),
     // No session replay: the pane sits next to a privileged document.
     dataCollection,
@@ -111,6 +112,7 @@ export function initAddinErrorReporting(surface: AddinSurface): boolean {
     install: process.env.REACT_APP_SENTRY_INSTALL,
     environment: process.env.REACT_APP_SENTRY_ENVIRONMENT,
     release: process.env.REACT_APP_SENTRY_RELEASE,
+    version: process.env.REACT_APP_MIKE_VERSION,
     gitSha: process.env.REACT_APP_GIT_SHA,
     tracesSampleRate: process.env.REACT_APP_SENTRY_TRACES_SAMPLE_RATE,
     nodeEnv: process.env.NODE_ENV,
