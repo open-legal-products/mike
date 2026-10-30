@@ -77,7 +77,7 @@ function ProfileDetailsForm({
 
     return (
         <OnboardingShell
-            step="Step 1 of 3"
+            step="Step 1 of 4"
             title="Tell us about you"
             description="Add the details we should use across Mike."
         >

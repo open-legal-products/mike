@@ -86,7 +86,7 @@ function PracticeDetailsForm({
 
     return (
         <OnboardingShell
-            step="Step 2 of 3"
+            step="Step 2 of 4"
             title="Your legal practice"
             description="Optionally add your professional setting, primary jurisdiction, and the areas you work in."
         >

@@ -26,6 +26,10 @@ export async function completeOnboardingIfRequired(page: Page): Promise<void> {
             await page.waitForURL(/\/onboarding\/invitations/, {
                 timeout: 15_000,
             });
+            await page.getByRole("button", { name: "Continue" }).click();
+            await page.waitForURL(/\/onboarding\/models/, {
+                timeout: 15_000,
+            });
             await page.getByRole("button", { name: "Finish" }).click();
         }
     }
