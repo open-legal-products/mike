@@ -25,8 +25,8 @@ FROM deps AS app
 COPY frontend/ ./
 COPY packages/contracts /packages/contracts
 
-# Browser-side Sentry DSN (optional). Inlined by next build, so it must be
-# present here rather than at container start. See docs/observability.md.
+# Baked Sentry defaults for the Next server and browser tunnel (optional).
+# Non-empty runtime SENTRY_* values override them. See docs/observability.md.
 ARG NEXT_PUBLIC_SENTRY_DSN=
 ARG NEXT_PUBLIC_SENTRY_DISABLED=
 ARG NEXT_PUBLIC_SENTRY_INSTALL=

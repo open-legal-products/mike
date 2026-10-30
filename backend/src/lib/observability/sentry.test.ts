@@ -139,6 +139,35 @@ describe("sentryConfiguration", () => {
     expect(config.tracesSampleRate).toBe(1);
   });
 
+  it.each([undefined, "", "   "])("preserves a fork's baked DSN with runtime override %s", (runtimeDsn) => {
+    const config = sentryConfiguration({
+      SENTRY_DSN: runtimeDsn,
+      MIKE_BUILD_SENTRY_DSN: " https://fork@self.example/9 ",
+    });
+    expect(config.dsn).toBe("https://fork@self.example/9");
+    expect(config.dsnSource).toBe("env");
+    expect(config.enabled).toBe(true);
+  });
+
+  it("lets explicit runtime settings override the baked reporting defaults", () => {
+    const baked = {
+      MIKE_BUILD_SENTRY_DSN: "https://fork@self.example/9",
+      MIKE_BUILD_SENTRY_DISABLED: "true",
+    };
+    for (const disabled of [undefined, "", "   ", "true"]) {
+      expect(sentryConfiguration({ ...baked, SENTRY_DISABLED: disabled }).enabled).toBe(false);
+    }
+    expect(sentryConfiguration({ ...baked, SENTRY_DISABLED: " false " })).toMatchObject({
+      enabled: true, dsn: baked.MIKE_BUILD_SENTRY_DSN,
+    });
+    expect(sentryConfiguration({
+      ...baked, SENTRY_DISABLED: "false", SENTRY_DSN: " https://runtime@self.example/8 ",
+    })).toMatchObject({ enabled: true, dsn: "https://runtime@self.example/8" });
+    expect(sentryConfiguration({
+      ...baked, MIKE_BUILD_SENTRY_DISABLED: "false", SENTRY_DISABLED: "true",
+    }).enabled).toBe(false);
+  });
+
   it("never enables inside a test process unless explicitly allowed", () => {
     const dsn = "https://key@o1.ingest.sentry.io/1";
     expect(

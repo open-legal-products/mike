@@ -102,6 +102,20 @@ describe("POST /monitoring", () => {
         expect((await GET().json()).reports).toBe("disabled");
     });
 
+    it("forwards browser reports when runtime settings re-enable a baked-off image", async () => {
+        process.env.NEXT_PUBLIC_SENTRY_DISABLED = "true";
+        process.env.SENTRY_DISABLED = "false";
+        process.env.SENTRY_DSN = OWN_DSN;
+        fetchMock.mockResolvedValue(new Response(null, { status: 200 }));
+        const response = await post(envelope([{ dsn: "https://placeholder@localhost/1" }, { type: "event" }, {}]));
+        expect(response.status).toBe(200);
+        expect(fetchMock).toHaveBeenCalledOnce();
+        const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+        expect(url).toBe("https://o777.ingest.us.sentry.io/api/4242/envelope/");
+        expect(parsedLines(new Uint8Array(init.body as ArrayBuffer))[0]).toEqual({ dsn: OWN_DSN });
+        expect((await GET().json()).reports).toBe("runtime");
+    });
+
     it.each([undefined, "1"])("cancels an oversized stream before reading it all (Content-Length: %s)", async (declared) => {
         let reads = 0;
         const cancel = vi.fn();

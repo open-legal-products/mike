@@ -312,11 +312,9 @@ export function setReportingUser(user: { id: string } | null): void {
 /**
  * Browser SDK options. `NEXT_PUBLIC_*` values are inlined at build time, so
  * the caller (instrumentation-client.ts) reads them literally and passes
- * them in; everything policy-shaped is decided here.
+ * them in. Reporting policy and destination belong to the server tunnel.
  */
 export function browserSentryOptions(env: {
-    disabled?: string;
-    dsn?: string;
     install?: string;
     environment?: string;
     release?: string;
@@ -325,21 +323,17 @@ export function browserSentryOptions(env: {
     tracesSampleRate?: string;
     nodeEnv?: string;
 }): Sentry.BrowserOptions {
-    // ON BY DEFAULT: the Mike project's own DSN unless NEXT_PUBLIC_SENTRY_DISABLED
-    // or a DSN of your own is baked in at build time (README, "Telemetry").
-    const { dsn } = resolveDsn({
-        disabled: env.disabled,
-        dsn: env.dsn,
-        fallback: MIKE_SENTRY_DSN.frontend,
-    });
     return {
-        dsn: dsn || undefined,
-        enabled: dsn.length > 0,
+        // The SDK requires a valid DSN even with a tunnel. This placeholder
+        // never chooses the destination: /monitoring rewrites it. Always
+        // initialize so a runtime override can enable a baked-off image.
+        dsn: MIKE_SENTRY_DSN.frontend,
+        enabled: true,
         environment: env.environment?.trim() || "self-hosted",
         release: releaseName(env.release, env.version, env.gitSha),
         // Every browser envelope goes through the Next server (see
         // app/monitoring/route.ts), which applies the deployment's runtime
-        // opt-out and DSN before forwarding. The baked-in DSN above is only
+        // opt-out and DSN before forwarding. The placeholder DSN above is only
         // what the SDK needs to be enabled; the server decides where it goes.
         tunnel: SENTRY_TUNNEL_PATH,
         tracesSampleRate: parseSampleRate(env.tracesSampleRate, 0),

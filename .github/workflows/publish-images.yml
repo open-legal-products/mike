@@ -10,20 +10,20 @@
 #
 # Identity. /VERSION is the version under development. A push to main builds
 # the prerelease `<VERSION>-dev.<run>`; a `v<VERSION>` tag builds the release
-# itself. Each release string comes from exactly one run: the tag build is its
-# own build (not a retag of a main build), and a version that already exists in
-# the registry is refused, so a published version is never rebuilt.
+# itself. Each image is retained under build-<version> with version/commit
+# labels. Reruns reuse that exact digest; conflicting existing versions and
+# registry lookup failures stop the run instead of permitting a rebuild.
 #
-# All or nothing. The build jobs push by digest only. The publish job creates
-# the tags for every image, and the Sentry release, only after every build
-# succeeded, so a failed build leaves no tags and no release behind.
+# Recoverable publication. Version/floating tags and the Sentry release are
+# created only after every build succeeds. Registry writes across repositories
+# are not atomic: retries complete a partial publication from the saved builds.
+# The workflow-wide lock prevents releases on different refs interleaving.
 #
 # Source maps. The Sentry upload runs inside `next build`, behind the
 # Dockerfile's SENTRY_UPLOAD_ENABLED switch (which puts "uploads on" into the
-# cache key). A rerun that must upload again would still hit its own earlier
-# layer, because secret contents are not part of BuildKit's cache key, so the
-# frontend's `app` stage is always rebuilt (no-cache-filters) and the upload
-# is checked against Sentry's API afterwards.
+# cache key). Secret contents are not part of BuildKit's cache key, so the
+# frontend's `app` stage bypasses the cache for new builds (no-cache-filters).
+# Saved builds are reused on retries; their maps are checked via Sentry's API.
 #
 # Forks. The image owner is the repository owner, so a fork publishes to its
 # own namespace with no setup. Where events go is decided together with where
@@ -53,8 +53,9 @@ permissions:
   contents: read
   packages: write
 
+# Shared tags span all refs, and saved build discovery must also be serialized.
 concurrency:
-  group: publish-images-${{ github.ref }}
+  group: publish-images
   cancel-in-progress: false
 
 env:
@@ -105,7 +106,8 @@ jobs:
             [[ "$version" == *-* ]] || tags="$tags latest"
           else
             version="${file_version}-dev.${RUN_NUMBER}"; is_release=false
-            tags="$version main"
+            tags="$version"
+            if [[ "$REF_NAME" == "main" ]]; then tags="$tags main"; fi
           fi
           owner="$(echo "$OWNER" | tr '[:upper:]' '[:lower:]')"
           release="mike@${version}+${SHA:0:12}"
@@ -131,25 +133,17 @@ jobs:
           } >> "$GITHUB_OUTPUT"
           echo "release $release -> tags [$tags] (reporting: $reporting, source maps: $upload_maps)"
 
-      - uses: docker/login-action@v3
+      - uses: actions/setup-node@v7.1.0
         with:
-          registry: ${{ env.REGISTRY }}
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
+          node-version: 22
 
-      - name: Refuse to republish a released version
-        if: steps.identity.outputs.is_release == 'true'
+      - name: Check existing releases and saved builds
         env:
           OWNER: ${{ steps.identity.outputs.owner }}
           VERSION: ${{ steps.identity.outputs.version }}
-        run: |
-          set -euo pipefail
-          for image in mike-backend mike-frontend; do
-            if docker manifest inspect "$REGISTRY/$OWNER/$image:$VERSION" >/dev/null 2>&1; then
-              echo "::error::$REGISTRY/$OWNER/$image:$VERSION already exists; a released version is never rebuilt. Bump VERSION and tag again."
-              exit 1
-            fi
-          done
+          SHA: ${{ github.sha }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: node scripts/publish-images.mjs prepare
 
   build:
     name: ${{ matrix.image }} image
@@ -157,14 +151,14 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 45
     strategy:
-      # A failed build leaves no tags and no release (see publish); let the
+      # A failed build leaves no release tags (see publish); let the
       # other image finish so its log is available.
       fail-fast: false
       matrix:
         include:
           - image: frontend
             dockerfile: frontend/Dockerfile
-            # Always rebuild the stage that runs `next build` and the upload.
+            # New builds must execute `next build` and the upload, even on a cache hit.
             no_cache_filters: app
             sentry_project: ${{ vars.SENTRY_PROJECT_FRONTEND }}
             # Browser settings are inlined at build time (docs/observability.md).
@@ -190,14 +184,34 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
+      - uses: actions/setup-node@v7.1.0
+        with:
+          node-version: 22
+
+      # Re-read here too: a failed-job-only retry does not rerun identity.
+      - name: Reuse an existing build on any retry
+        id: saved
+        env:
+          OWNER: ${{ needs.identity.outputs.owner }}
+          VERSION: ${{ needs.identity.outputs.version }}
+          SHA: ${{ github.sha }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: node scripts/publish-images.mjs prepare
+
       - id: build
+        if: steps.saved.outputs[format('{0}_digest', matrix.image)] == ''
         uses: docker/build-push-action@v7
         with:
           context: .
           file: ${{ matrix.dockerfile }}
           platforms: linux/amd64
-          # Digest only; the publish job attaches the tags once every image exists.
-          outputs: type=image,name=${{ env.REGISTRY }}/${{ needs.identity.outputs.owner }}/mike-${{ matrix.image }},push-by-digest=true,name-canonical=true,push=true
+          # Retain the exact build independently of expiring Actions artifacts.
+          # Never rebuild/overwrite this tag when saved discovery found it.
+          push: true
+          tags: ${{ env.REGISTRY }}/${{ needs.identity.outputs.owner }}/mike-${{ matrix.image }}:build-${{ needs.identity.outputs.version }}
+          labels: |
+            org.opencontainers.image.version=${{ needs.identity.outputs.version }}
+            org.opencontainers.image.revision=${{ github.sha }}
           build-args: |
             MIKE_VERSION=${{ needs.identity.outputs.version }}
             GIT_SHA=${{ github.sha }}
@@ -236,56 +250,26 @@ jobs:
           fi
           echo "source maps present for $RELEASE"
 
-      - name: Record the digest
-        env:
-          DIGEST: ${{ steps.build.outputs.digest }}
-        run: |
-          set -euo pipefail
-          [[ "$DIGEST" == sha256:* ]] || { echo "::error::no digest from the build"; exit 1; }
-          mkdir -p digests
-          echo "$DIGEST" > "digests/${{ matrix.image }}"
-
-      - uses: actions/upload-artifact@v7
-        with:
-          name: digest-${{ matrix.image }}
-          path: digests/${{ matrix.image }}
-          retention-days: 1
-          if-no-files-found: error
-
   publish:
     name: Tag images and record the release
     needs: [identity, build]
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
-      - uses: docker/setup-buildx-action@v4
+      - uses: actions/checkout@v7
 
-      - uses: docker/login-action@v3
+      - uses: actions/setup-node@v7.1.0
         with:
-          registry: ${{ env.REGISTRY }}
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
+          node-version: 22
 
-      - uses: actions/download-artifact@v7
-        with:
-          pattern: digest-*
-          path: digests
-          merge-multiple: true
-
-      - name: Attach the tags to every image
+      - name: Complete publication from the saved digests
         env:
           OWNER: ${{ needs.identity.outputs.owner }}
+          VERSION: ${{ needs.identity.outputs.version }}
+          SHA: ${{ github.sha }}
           TAGS: ${{ needs.identity.outputs.tags }}
-        run: |
-          set -euo pipefail
-          for image in backend frontend; do
-            digest="$(tr -d '[:space:]' < "digests/$image")"
-            name="$REGISTRY/$OWNER/mike-$image"
-            args=()
-            for tag in $TAGS; do args+=(--tag "$name:$tag"); done
-            docker buildx imagetools create "${args[@]}" "$name@$digest"
-            echo "$name@$digest -> $TAGS"
-          done
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: node scripts/publish-images.mjs publish
 
       - name: Create the Sentry release
         if: needs.identity.outputs.upload_maps == 'true'

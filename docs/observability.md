@@ -319,10 +319,10 @@ Backend (`backend/.env`, read at process start):
 
 ```
 SENTRY_DISABLED=false                  # true = send nothing
-SENTRY_DSN=                            # your own Sentry; empty = Mike project Sentry
+SENTRY_DSN=                            # your own Sentry; empty = image default, then Mike project
 SENTRY_INSTALL=                        # "official" only on Mike's own deployment
 SENTRY_ENVIRONMENT=production          # defaults to self-hosted
-SENTRY_RELEASE=mike@1.4.0              # optional; defaults to mike@<git sha>
+SENTRY_RELEASE=mike@1.4.0              # optional; defaults to mike@<MIKE_VERSION>+<sha12>
 SENTRY_TRACES_SAMPLE_RATE=0            # optional, 0..1
 SENTRY_ENABLE_TEST_ROUTE=false         # see "Verifying" below
 ```
@@ -332,9 +332,16 @@ Do not add `SENTRY_DSN` to the `environment:` block of the backend service in
 variable would blank the value from `.env`. Put it in `backend/.env` or the
 compose-root `.env`.
 
+The backend image stores its reporting defaults in `MIKE_BUILD_SENTRY_DSN`
+and `MIKE_BUILD_SENTRY_DISABLED`. A non-empty runtime `SENTRY_DSN` or
+`SENTRY_DISABLED` overrides the corresponding default; empty values preserve
+it. Leave `MIKE_VERSION` and `GIT_SHA` commented in the sample `.env` when
+using published images so their baked release identity survives `env_file`.
+Without a version the release is `mike@0.0.0` (plus `+<sha12>` if available).
+
 Web app. One runtime setting on the Next server decides where every web-app
-report goes, the server's own and the browser's: the browser bundle only
-decides whether its SDK starts, and every envelope it produces goes to the Next
+report goes, the server's own and the browser's: the browser SDK always starts
+with a placeholder DSN, and every envelope it produces goes to the Next
 server's `/monitoring` route, which applies the same rule and forwards. The
 published images therefore need no build-time configuration at all:
 
@@ -346,7 +353,7 @@ SENTRY_ENVIRONMENT=production
 SENTRY_INSTALL=                        # "official" only on Mike's own deployment
 
 # building the frontend yourself (optional): build-time defaults
-NEXT_PUBLIC_SENTRY_DISABLED=true       # browser never starts; server/tunnel default to off too
+NEXT_PUBLIC_SENTRY_DISABLED=true       # server/tunnel default to off; runtime false re-enables both
 NEXT_PUBLIC_SENTRY_DSN=...             # used when SENTRY_DSN is not set at runtime
 ```
 
@@ -388,17 +395,28 @@ Where the parts come from:
 
 `0.0.0` is deliberate: a build that did not come from the release workflow is
 valid but visibly not a release, and the backend warns about it at boot in
-production. `MIKE_VERSION` and `GIT_SHA` are build arguments for all three
-images, never runtime variables, so a running container cannot relabel an old
-executable as a newer release. `SENTRY_RELEASE` overrides the whole string
+production. Set `MIKE_VERSION` and `GIT_SHA` as build arguments for images you
+build yourself; leave them unset at runtime when using published images so
+the baked identity is preserved. `SENTRY_RELEASE` overrides the whole string
 when set; it must not contain customer information.
 
-Each release string comes from exactly one CI run: the tag build is its own
-build, a version that already exists in the registry is refused, and tags are
-attached only after every image built, so a failed run publishes nothing
-(`.github/workflows/publish-images.yml`). The workflow also creates and
-finalizes the Sentry release for the web-app and backend projects. It records
-no deploy: publishing an image is not deploying it.
+Each release uses the original image digests. The workflow retains each build
+in GHCR as `mike-{backend,frontend}:build-<version>`, with the source commit and
+version in its image labels. It builds only after a registry lookup confirms
+the image is absent; authentication, network and unexpected registry errors
+stop the run. An existing version must match its saved build exactly.
+
+All refs share one workflow concurrency group so publications cannot interleave
+their `latest` or `main` updates. Only main-branch builds update `main`. After
+both builds succeed, publication attaches both immutable version tags, then
+the floating tags, then finalizes the Sentry release for both projects. Registry
+writes across repositories are not atomic: an interrupted publication can leave
+some tags attached. Rerun the failed jobs or the full workflow to finish it;
+both paths reuse the saved digests, accept matching existing tags, and complete
+missing writes without rebuilding. Recovery does not depend on expiring Actions
+artifacts. Keep the `build-<version>` registry tags; exclude them from cleanup.
+If a published version loses its saved build, the workflow refuses to rebuild it.
+It records no deploy: publishing an image is not deploying it.
 
 Word add-in (build time, `word-addin/.env` or the Docker build arguments):
 
@@ -439,7 +457,8 @@ and `NODE_OPTIONS` in the Dockerfile), so backend frames already read
 
 The build plugin stamps each bundle with a debug ID and uploads the maps
 under it, so frames resolve regardless of the release name; the release tag on
-events still comes from `GIT_SHA` / `SENTRY_RELEASE` as described above.
+events still comes from `MIKE_VERSION` and `GIT_SHA`, or the explicit
+`SENTRY_RELEASE` override, as described above.
 
 #### Setting it up in Sentry
 
@@ -527,11 +546,12 @@ token. An administrator sets, on the repository:
 - secret `SENTRY_AUTH_TOKEN` (organization token, scope `org:ci`);
 - variables `SENTRY_ORG`, `SENTRY_PROJECT_FRONTEND`, `SENTRY_PROJECT_BACKEND`.
 
-The workflow passes `SENTRY_UPLOAD_ENABLED=1` and still rebuilds the frontend
-`app` stage every run (`no-cache-filters`): the switch separates token-less and
-token builds in the cache, but a rerun that must upload again would otherwise
-hit its own earlier layer and skip the upload, because secret contents are not
-part of the cache key. After the build the workflow asks Sentry's API
+For a new build with uploads enabled, the workflow passes
+`SENTRY_UPLOAD_ENABLED=1` and rebuilds the frontend `app` stage
+(`no-cache-filters`): the switch separates token-less and token builds in the
+cache, and bypassing the stage cache ensures the upload executes because secret
+contents are not part of the cache key. Retries reuse saved images instead of
+rebuilding them. For both new and reused builds the workflow asks Sentry's API
 (`files/artifact-bundles/`) whether a bundle is associated with the release and
 fails the run if not.
 

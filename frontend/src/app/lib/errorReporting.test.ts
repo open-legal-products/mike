@@ -297,15 +297,14 @@ describe("browserSentryOptions", () => {
         expect(options.tunnel).toBe("/monitoring");
     });
 
-    it("reads the DSN, environment, release, and sample rate", () => {
+    it("reads the environment, release, and sample rate while leaving the destination to the tunnel", () => {
         const options = browserSentryOptions({
-            dsn: " https://k@o1.ingest.sentry.io/2 ",
             environment: "staging",
             release: "mike@1.0.0",
             tracesSampleRate: "0.25",
         });
         expect(options.enabled).toBe(true);
-        expect(options.dsn).toBe("https://k@o1.ingest.sentry.io/2");
+        expect(options.dsn).toBe(MIKE_SENTRY_DSN.frontend);
         expect(options.environment).toBe("staging");
         expect(options.release).toBe("mike@1.0.0");
         expect(options.tracesSampleRate).toBe(0.25);
@@ -322,10 +321,7 @@ describe("browserSentryOptions", () => {
         });
     });
 
-    it("is off with the disabled flag, and marks the official deployment", () => {
-        const off = browserSentryOptions({ disabled: "true", dsn: "https://k@o1.ingest.sentry.io/2" });
-        expect(off.enabled).toBe(false);
-        expect(off.dsn).toBeUndefined();
+    it("marks the official deployment", () => {
         const official = browserSentryOptions({ install: "official" });
         expect((official.initialScope as { tags: { install: string } }).tags.install).toBe("official");
     });
@@ -340,13 +336,12 @@ describe("release tagging", () => {
     it("builds mike@<version>+<sha12> for both the browser and the server options", () => {
         expect(
             browserSentryOptions({
-                dsn: "https://k@o.ingest.sentry.io/1",
                 version: "2.1.0",
                 gitSha: "abcdef1234567890",
             }).release,
         ).toBe("mike@2.1.0+abcdef123456");
         expect(
-            browserSentryOptions({ dsn: "https://k@o.ingest.sentry.io/1", gitSha: "abcdef1234567890" }).release,
+            browserSentryOptions({ gitSha: "abcdef1234567890" }).release,
         ).toBe("mike@0.0.0+abcdef123456");
         expect(
             serverSentryOptions("server", {

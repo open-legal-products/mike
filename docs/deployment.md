@@ -363,9 +363,10 @@ and other non-error payloads are blocked. The same boundary applies to
 community and official installations. See the [observability guide](observability.md)
 for the exact policy, source-map behavior, and limitations.
 To opt out, set `SENTRY_DISABLED=true`
-(`NEXT_PUBLIC_SENTRY_DISABLED=true` / `REACT_APP_SENTRY_DISABLED=true` for the
-browser and add-in builds); to use your own Sentry instead, set the matching
-`*_SENTRY_DSN`.
+(`REACT_APP_SENTRY_DISABLED=true` for the add-in build). The web image's
+`NEXT_PUBLIC_SENTRY_DISABLED` is a default for the server and browser tunnel;
+an explicit runtime `SENTRY_DISABLED` overrides it. To use your own Sentry
+instead, set the matching `*_SENTRY_DSN`.
 
 For the compose stack that is `SENTRY_DISABLED=true` in the root `.env`
 (the backend reads it through `env_file`; the Next server receives it from

@@ -28,11 +28,12 @@ ARG MIKE_VERSION=
 ARG GIT_SHA=
 # Reporting defaults a fork's published image can bake in (both stay
 # overridable at runtime): SENTRY_DISABLED=true for a fork without its own
-# Sentry, or the fork's own backend DSN. Empty keeps the upstream behaviour.
+# Sentry, or the fork's own backend DSN. Keep these separate from runtime
+# variables so empty Compose env_file values cannot erase the baked defaults.
 ARG SENTRY_DISABLED=
 ARG SENTRY_DSN=
 ENV NODE_ENV=production NODE_OPTIONS=--enable-source-maps \
     MIKE_VERSION=$MIKE_VERSION GIT_SHA=$GIT_SHA \
-    SENTRY_DISABLED=$SENTRY_DISABLED SENTRY_DSN=$SENTRY_DSN
+    MIKE_BUILD_SENTRY_DISABLED=$SENTRY_DISABLED MIKE_BUILD_SENTRY_DSN=$SENTRY_DSN
 EXPOSE 3001
 CMD ["npm", "start"]

@@ -588,8 +588,8 @@ export function sentryConfiguration(env: NodeJS.ProcessEnv = process.env) {
   // to the Mike project's Sentry as a community install (see the README's
   // Telemetry section). Only Mike's own deployment sets SENTRY_INSTALL.
   const resolved = resolveDsn({
-    disabled: env.SENTRY_DISABLED,
-    dsn: env.SENTRY_DSN,
+    disabled: env.SENTRY_DISABLED?.trim() || env.MIKE_BUILD_SENTRY_DISABLED,
+    dsn: env.SENTRY_DSN?.trim() || env.MIKE_BUILD_SENTRY_DSN,
     fallback: MIKE_SENTRY_DSN.backend,
   });
   const dsn = resolved.dsn;
