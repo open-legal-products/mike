@@ -32,13 +32,18 @@ records the final transport boundary that closes them. Internal source-code
 filenames identify the failing code; client document filenames are excluded.
 
 Resolution order, per runtime: `*_SENTRY_DISABLED=true` → off;
-`*_SENTRY_DSN` set → that DSN; otherwise the built-in Mike project DSN. The web
-app's browser settings are inlined at build time, but every browser envelope is
-posted to the Next server (`/monitoring`, `frontend/src/app/monitoring/route.ts`),
-which applies the server's runtime `SENTRY_DISABLED`, `SENTRY_DSN`
-(`FRONTEND_SENTRY_DSN` in compose), `SENTRY_ENVIRONMENT` and `SENTRY_INSTALL`
-before forwarding: a pulled image honours the operator's opt-out and
-destination without a rebuild. Backend test
+`*_SENTRY_DSN` set → that DSN; otherwise the built-in Mike project DSN. For the
+web app one rule, `reportingDestination` in `frontend/src/app/lib/errorReporting.ts`,
+decides for the Next server's own events and for every browser envelope alike
+(the browser posts to `/monitoring`, `frontend/src/app/monitoring/route.ts`,
+which forwards): `SENTRY_DISABLED=true` → off; `SENTRY_DSN` (`FRONTEND_SENTRY_DSN`
+in compose) → that project; `NEXT_PUBLIC_SENTRY_DSN` baked at image build →
+that project; otherwise the built-in Mike project. `SENTRY_ENVIRONMENT` and
+`SENTRY_INSTALL` at runtime override what the bundle was built with. The rule
+that applied is printed once at boot (`[sentry] web app reports → ...`) and
+answered by `GET /monitoring` (`{"reports":"runtime"}` etc., never the DSN), so
+a pulled image honours the operator's opt-out and destination without a
+rebuild and the operator can see that it did. Backend test
 processes (vitest, `NODE_ENV=test`) never report unless
 `SENTRY_ALLOW_IN_TESTS=true`. Browser tests disable reporting or use intercepted
 transports. Every event carries `install=community` unless
@@ -325,13 +330,11 @@ Do not add `SENTRY_DSN` to the `environment:` block of the backend service in
 variable would blank the value from `.env`. Put it in `backend/.env` or the
 compose-root `.env`.
 
-Web app. The browser bundle's settings are inlined by `next build`, so for a
-Docker image they are build arguments. They only decide whether the browser SDK
-starts: every envelope it produces goes to the Next server's `/monitoring`
-route, which reads the runtime variables below and drops the envelope
-(`SENTRY_DISABLED=true`), forwards it to `SENTRY_DSN`, and stamps
-`SENTRY_ENVIRONMENT` / `SENTRY_INSTALL` onto it. The published images therefore
-need no build-time configuration at all:
+Web app. One runtime setting on the Next server decides where every web-app
+report goes, the server's own and the browser's: the browser bundle only
+decides whether its SDK starts, and every envelope it produces goes to the Next
+server's `/monitoring` route, which applies the same rule and forwards. The
+published images therefore need no build-time configuration at all:
 
 ```
 # root .env (Docker Compose); the Next server reads these at runtime
@@ -340,12 +343,14 @@ FRONTEND_SENTRY_DSN=https://<key>@<org>.ingest.sentry.io/<project>
 SENTRY_ENVIRONMENT=production
 SENTRY_INSTALL=                        # "official" only on Mike's own deployment
 
-# building the frontend yourself: build-time defaults for the browser SDK
-NEXT_PUBLIC_SENTRY_DISABLED=true       # browser never starts (no envelopes at all)
-NEXT_PUBLIC_SENTRY_DSN=...             # must be set for the SDK to start; the
-                                       # server decides where envelopes go
-SENTRY_DSN=...                         # Next server (runtime), as above
+# building the frontend yourself (optional): build-time defaults
+NEXT_PUBLIC_SENTRY_DISABLED=true       # browser SDK never starts (no envelopes at all)
+NEXT_PUBLIC_SENTRY_DSN=...             # used when SENTRY_DSN is not set at runtime
 ```
+
+Check which rule applied on a running deployment: the boot log line
+`[sentry] web app reports → ...`, or `curl -s https://<host>/monitoring`, which
+answers `{"reports":"disabled"|"runtime"|"build"|"default"}` and never the DSN.
 
 The `/monitoring` route is not an open relay: the destination is the server's
 own configuration, the client's envelope header is overwritten with it, and a

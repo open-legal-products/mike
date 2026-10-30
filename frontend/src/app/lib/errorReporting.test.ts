@@ -36,17 +36,19 @@ vi.mock("@sentry/nextjs", () => ({
 
 import * as Sentry from "@sentry/nextjs";
 import {
+    API_UNREACHABLE_WINDOW_MS,
     browserSentryOptions,
+    describeReportingDestination,
     isReported,
+    markErrorHandled,
     reportApiFailure,
     reportError,
+    reportingDestination,
+    reportNetworkFailure,
+    resetApiUnreachableWindow,
     scrubEvent,
     serverSentryOptions,
     setReportingUser,
-    API_UNREACHABLE_WINDOW_MS,
-    markErrorHandled,
-    reportNetworkFailure,
-    resetApiUnreachableWindow,
     trackPendingRequest,
 } from "./errorReporting";
 import { MIKE_SENTRY_DSN } from "@/shared/lib/sentryEvent";
@@ -361,6 +363,55 @@ describe("release tagging", () => {
                 GIT_SHA: "abcdef1234567890",
             } as NodeJS.ProcessEnv).release,
         ).toBe("mike@3.1.0");
+    });
+});
+
+describe("reportingDestination", () => {
+    const own = "https://k@o9.ingest.sentry.io/9";
+    const baked = "https://b@o8.ingest.sentry.io/8";
+
+    it("is one rule for server and browser: disabled, runtime, build, default", () => {
+        expect(reportingDestination({ SENTRY_DISABLED: "true", SENTRY_DSN: own } as unknown as NodeJS.ProcessEnv)).toEqual({
+            dsn: "",
+            source: "disabled",
+        });
+        expect(reportingDestination({ SENTRY_DSN: ` ${own} `, NEXT_PUBLIC_SENTRY_DSN: baked } as unknown as NodeJS.ProcessEnv)).toEqual({
+            dsn: own,
+            source: "runtime",
+        });
+        expect(reportingDestination({ NEXT_PUBLIC_SENTRY_DSN: baked } as unknown as NodeJS.ProcessEnv)).toEqual({
+            dsn: baked,
+            source: "build",
+        });
+        expect(reportingDestination({} as unknown as NodeJS.ProcessEnv)).toEqual({
+            dsn: MIKE_SENTRY_DSN.frontend,
+            source: "default",
+        });
+    });
+
+    it("carries the runtime environment and install overrides", () => {
+        expect(
+            reportingDestination({ SENTRY_ENVIRONMENT: " production ", SENTRY_INSTALL: "official" } as unknown as NodeJS.ProcessEnv),
+        ).toMatchObject({ environment: "production", install: "official" });
+        expect(reportingDestination({ SENTRY_INSTALL: "other" } as unknown as NodeJS.ProcessEnv).install).toBe("community");
+    });
+
+    it("describes the rule for the boot log without leaking the DSN key", () => {
+        const line = describeReportingDestination(reportingDestination({ SENTRY_DSN: own } as unknown as NodeJS.ProcessEnv));
+        expect(line).toContain("SENTRY_DSN project 9 (runtime)");
+        expect(line).not.toContain("k@");
+        expect(describeReportingDestination(reportingDestination({ NEXT_PUBLIC_SENTRY_DSN: baked } as unknown as NodeJS.ProcessEnv))).toContain(
+            "baked at build",
+        );
+        expect(describeReportingDestination(reportingDestination({ SENTRY_DISABLED: "true" } as unknown as NodeJS.ProcessEnv))).toContain("off");
+        expect(describeReportingDestination(reportingDestination({} as unknown as NodeJS.ProcessEnv))).toContain("community default");
+    });
+
+    it("drives the Next server's own SDK, so a baked DSN is honoured there too", () => {
+        expect(serverSentryOptions("server", { NEXT_PUBLIC_SENTRY_DSN: baked } as unknown as NodeJS.ProcessEnv).dsn).toBe(baked);
+        expect(
+            serverSentryOptions("server", { NEXT_PUBLIC_SENTRY_DSN: baked, SENTRY_DSN: own } as unknown as NodeJS.ProcessEnv).dsn,
+        ).toBe(own);
     });
 });
 

@@ -185,6 +185,15 @@ describe("docker-compose db-init", () => {
         expect(migrations).toContain(lastReplayed);
     });
 
+    it("tells the adoption script where migrate.sh lives inside the image", () => {
+        // The script's default was the bind-mount path; a wrong path here
+        // fails every upgrade from a pre-ledger volume at db-init.
+        const adopt = read("docker/db-init/adopt-ledger.sh");
+        expect(compose).toContain("MIGRATE_SH: /app/scripts/migrate.sh");
+        expect(adopt).toContain('"${MIGRATE_SH:-/app/scripts/migrate.sh}"');
+        expect(dockerfile).toContain("COPY backend/ ./");
+    });
+
     // Older history has a duplicate slot (two 20260822_01 files); the
     // convention is enforced from the first migration after it.
     it("uses a unique date and sequence for every dated migration", () => {

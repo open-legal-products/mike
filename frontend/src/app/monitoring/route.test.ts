@@ -64,6 +64,19 @@ describe("tunnelDecision", () => {
         });
     });
 
+    it("falls back to the DSN baked at build before the built-in one", () => {
+        expect(
+            tunnelDecision({ NEXT_PUBLIC_SENTRY_DSN: OWN_DSN } as unknown as NodeJS.ProcessEnv),
+        ).toMatchObject({ kind: "forward", dsn: OWN_DSN });
+        // The runtime variable is the single source of truth and wins.
+        expect(
+            tunnelDecision({
+                NEXT_PUBLIC_SENTRY_DSN: "https://baked@o1.ingest.sentry.io/1",
+                SENTRY_DSN: OWN_DSN,
+            } as unknown as NodeJS.ProcessEnv),
+        ).toMatchObject({ dsn: OWN_DSN });
+    });
+
     it("drops rather than falls back upstream when the operator's DSN is malformed", () => {
         expect(tunnelDecision({ SENTRY_DSN: "not a dsn" } as unknown as NodeJS.ProcessEnv)).toEqual({ kind: "drop" });
         expect(tunnelDecision({ SENTRY_DSN: "https://host.example/no-project" } as unknown as NodeJS.ProcessEnv)).toEqual({
@@ -206,7 +219,15 @@ describe("POST /monitoring", () => {
         warn.mockRestore();
     });
 
-    it("only accepts POST", () => {
-        expect(GET().status).toBe(405);
+    it("answers GET with the rule that decides the destination, never the DSN", async () => {
+        process.env.SENTRY_DSN = OWN_DSN;
+        const response = GET();
+        expect(response.status).toBe(200);
+        expect(response.headers.get("cache-control")).toBe("no-store");
+        const body = (await response.json()) as { reports: string };
+        expect(body.reports).toBe("runtime");
+        expect(JSON.stringify(body)).not.toContain("abc123");
+        process.env.SENTRY_DISABLED = "true";
+        expect(((await GET().json()) as { reports: string }).reports).toBe("disabled");
     });
 });

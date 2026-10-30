@@ -151,6 +151,8 @@ services:
       DB: postgres://postgres:postgres@db:5432/postgres
       DATABASE_URL: postgres://postgres:postgres@db:5432/postgres
       MIGRATIONS_DIR: /app/migrations
+      # adopt-ledger.sh (pre-ledger volumes) runs migrate.sh from here too.
+      MIGRATE_SH: /app/scripts/migrate.sh
     entrypoint: ["bash", "-c"]
     command:
       - |

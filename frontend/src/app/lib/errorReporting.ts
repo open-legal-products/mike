@@ -373,16 +373,72 @@ export function browserSentryOptions(env: {
     };
 }
 
+export type ReportingDestination = {
+    /** Empty when reporting is off. */
+    dsn: string;
+    source: "disabled" | "runtime" | "build" | "default";
+    /** Runtime overrides for every report; absent means "as built". */
+    environment?: string;
+    install?: ReturnType<typeof installKind>;
+};
+
+/**
+ * The ONE place that decides where the web app's error reports go: the Next
+ * server's own events and every browser envelope (tunneled through
+ * app/monitoring/route.ts) use this, so they can never diverge. Read at
+ * runtime on the Next server, in this order:
+ *
+ *   SENTRY_DISABLED=true          off, browser included
+ *   SENTRY_DSN                    the deployment's project (FRONTEND_SENTRY_DSN in compose)
+ *   NEXT_PUBLIC_SENTRY_DSN        the project baked in at image build, for images
+ *                                 built with a DSN and run without the runtime one
+ *   otherwise                     the built-in Mike project (community default)
+ *
+ * The result is printed at boot (sentry.server.config.ts) and answered by
+ * GET /monitoring, so an operator can see which rule applied.
+ */
+export function reportingDestination(env: NodeJS.ProcessEnv): ReportingDestination {
+    const overrides = {
+        ...(env.SENTRY_ENVIRONMENT?.trim() ? { environment: env.SENTRY_ENVIRONMENT.trim() } : {}),
+        ...(env.SENTRY_INSTALL?.trim() ? { install: installKind(env.SENTRY_INSTALL) } : {}),
+    };
+    if (env.SENTRY_DISABLED?.trim().toLowerCase() === "true") {
+        return { dsn: "", source: "disabled", ...overrides };
+    }
+    const runtime = env.SENTRY_DSN?.trim();
+    if (runtime) return { dsn: runtime, source: "runtime", ...overrides };
+    const build = env.NEXT_PUBLIC_SENTRY_DSN?.trim();
+    if (build) return { dsn: build, source: "build", ...overrides };
+    return { dsn: MIKE_SENTRY_DSN.frontend, source: "default", ...overrides };
+}
+
+/** One line for the boot log: which rule applied, never the DSN's key. */
+export function describeReportingDestination(destination: ReportingDestination): string {
+    const project = (() => {
+        try {
+            return new URL(destination.dsn).pathname.replace(/^\/+/, "") || "?";
+        } catch {
+            return "?";
+        }
+    })();
+    switch (destination.source) {
+        case "disabled":
+            return "[sentry] web app reports: off (SENTRY_DISABLED=true), browser included";
+        case "runtime":
+            return `[sentry] web app reports → SENTRY_DSN project ${project} (runtime), browser included`;
+        case "build":
+            return `[sentry] web app reports → NEXT_PUBLIC_SENTRY_DSN project ${project} (baked at build; set SENTRY_DSN to change it at runtime), browser included`;
+        default:
+            return "[sentry] web app reports → Mike project Sentry (community default), browser included. Opt out with SENTRY_DISABLED=true or point SENTRY_DSN at your own project.";
+    }
+}
+
 /** Server / edge SDK options; env is read at runtime on the Next server. */
 export function serverSentryOptions(
     runtime: "server" | "edge",
     env: NodeJS.ProcessEnv,
 ): Sentry.NodeOptions {
-    const { dsn } = resolveDsn({
-        disabled: env.SENTRY_DISABLED,
-        dsn: env.SENTRY_DSN,
-        fallback: MIKE_SENTRY_DSN.frontend,
-    });
+    const { dsn } = reportingDestination(env);
     return {
         dsn: dsn || undefined,
         enabled: dsn.length > 0,

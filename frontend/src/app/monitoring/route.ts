@@ -11,11 +11,7 @@
  * overwritten with that DSN. Nothing in the envelope is logged or stored.
  */
 import { type NextRequest, NextResponse } from "next/server";
-import {
-    MIKE_SENTRY_DSN,
-    installKind,
-    resolveDsn,
-} from "@/shared/lib/sentryEvent";
+import { reportingDestination } from "@/app/lib/errorReporting";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -52,28 +48,23 @@ function parseDsn(dsn: string): ParsedDsn | null {
 }
 
 /**
- * Where a browser envelope goes, from the Next server's runtime environment
- * (the same variables serverSentryOptions reads): off, the operator's own
- * DSN, or the built-in Mike project DSN. A malformed DSN drops the envelope
- * rather than falling back upstream: the operator asked for their own Sentry.
+ * Where a browser envelope goes: the same `reportingDestination` the Next
+ * server's own SDK uses (app/lib/errorReporting.ts), so server and browser
+ * reports can never end up in different projects. A malformed DSN drops the
+ * envelope rather than falling back upstream: the operator asked for their
+ * own Sentry.
  */
 export function tunnelDecision(env: NodeJS.ProcessEnv): TunnelDecision {
-    const { dsn } = resolveDsn({
-        disabled: env.SENTRY_DISABLED,
-        dsn: env.SENTRY_DSN,
-        fallback: MIKE_SENTRY_DSN.frontend,
-    });
-    if (!dsn) return { kind: "drop" };
-    const parsed = parseDsn(dsn);
+    const destination = reportingDestination(env);
+    if (!destination.dsn) return { kind: "drop" };
+    const parsed = parseDsn(destination.dsn);
     if (!parsed) return { kind: "drop" };
-    const install = env.SENTRY_INSTALL?.trim();
-    const environment = env.SENTRY_ENVIRONMENT?.trim();
     return {
         kind: "forward",
         url: `${parsed.protocol}://${parsed.host}/api/${parsed.projectId}/envelope/`,
-        dsn,
-        ...(environment ? { environment } : {}),
-        ...(install ? { install: installKind(install) } : {}),
+        dsn: destination.dsn,
+        ...(destination.environment ? { environment: destination.environment } : {}),
+        ...(destination.install ? { install: destination.install } : {}),
     };
 }
 
@@ -209,6 +200,16 @@ export async function POST(request: NextRequest): Promise<Response> {
     }
 }
 
+/**
+ * Which rule decides where this deployment's reports go, for operators
+ * checking a running container (`curl -s https://<host>/monitoring`). The
+ * rule only, never the DSN; a DSN's key is public anyway, but the point of
+ * this answer is "which configuration won", not the address.
+ */
 export function GET(): Response {
-    return new NextResponse(null, { status: 405, headers: { Allow: "POST" } });
+    const { source } = reportingDestination(process.env);
+    return NextResponse.json(
+        { reports: source, see: "docs/observability.md#configuration" },
+        { headers: { "Cache-Control": "no-store" } },
+    );
 }
