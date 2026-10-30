@@ -171,6 +171,12 @@ jobs:
       - name: Concurrent document lifecycle operations
         run: node backend/scripts/test-document-lifecycle-concurrency.mjs
 
+      - name: Algorithmic performance and authorization regressions
+        run: |
+          for test in backend/src/__tests__/sql/performance.*.sql; do
+            psql "$SUPABASE_TEST_DB_URL" -X --set ON_ERROR_STOP=1 -f "$test"
+          done
+
       - name: Compare fingerprints
         run: |
           if diff -u /tmp/upgraded.txt /tmp/fresh.txt; then

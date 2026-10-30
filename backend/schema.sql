@@ -11039,6 +11039,13 @@ grant execute on function public.queue_document_text(uuid,boolean),public.backfi
 -- Queue only a bounded first batch. The maintenance sweep resumes the rest.
 select public.backfill_document_text(100,false);
 
+-- Migration date: 2026-10-30
+-- Cleanup must locate surviving references by key, not scan every live version.
+create index if not exists document_versions_storage_path_idx
+  on public.document_versions(storage_path) where deleted_at is null and storage_path is not null;
+create index if not exists document_versions_pdf_storage_path_idx
+  on public.document_versions(pdf_storage_path) where deleted_at is null and pdf_storage_path is not null;
+
 insert into public.schema_migrations (filename) values
   ('20260419_tabular_chat_jsonb.sql'),
   ('20260421_01_docx_editing.sql'),
@@ -11206,5 +11213,6 @@ insert into public.schema_migrations (filename) values
   ('20261024_03_backfill_project_child_org_id.sql'),
   ('20261024_04_org_member_data_policy.sql'),
   ('20261027_01_document_text_failed_jobs.sql'),
-  ('20261029_01_chat_overview_candidates.sql')
+  ('20261029_01_chat_overview_candidates.sql'),
+  ('20261030_01_document_cleanup_path_indexes.sql')
 on conflict (filename) do nothing;
