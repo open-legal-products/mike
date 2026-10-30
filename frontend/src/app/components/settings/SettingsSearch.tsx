@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useId, useMemo, useRef, useState } from "react";
-import { useRouter } from "next/navigation";
+import { usePathname, useRouter } from "next/navigation";
 import { CornerDownLeft } from "lucide-react";
 import { SearchBar } from "@/app/components/ui/search-bar";
 import {
@@ -21,33 +21,26 @@ const GROUP_LABEL: Record<SettingsSearchMatchKind, string> = {
     related: "Related",
 };
 
-/** How long to keep looking for a section heading after navigating to it. */
-const SECTION_FOCUS_ATTEMPTS = 30;
-const SECTION_FOCUS_INTERVAL_MS = 100;
-
 /**
- * Brings the section a result points at into view once its page has drawn
- * it. Pages load their data after mounting, so the heading may not exist at
- * navigation time; the browser's own hash scroll then does nothing. Returns
- * the interval so the caller can stop it if it goes away first.
+ * Wait for the chosen section to mount. Route compilation and page data may
+ * take arbitrarily longer than a short timer; DOM arrival is the readiness
+ * signal. The caller cancels observation on another choice or unmount.
  */
-function focusSection(hash: string): number | null {
+function focusSection(hash: string): (() => void) | null {
     const id = hash.replace(/^#/, "");
     if (!id) return null;
-    let attempts = 0;
-    const timer = window.setInterval(() => {
-        attempts += 1;
+    const observer = new MutationObserver(focusWhenReady);
+    function focusWhenReady() {
         const target = document.getElementById(id);
-        if (!target) {
-            if (attempts >= SECTION_FOCUS_ATTEMPTS) window.clearInterval(timer);
-            return;
-        }
-        window.clearInterval(timer);
+        if (!target) return;
+        observer.disconnect();
         target.scrollIntoView({ block: "start", behavior: "smooth" });
         if (!target.hasAttribute("tabindex")) target.setAttribute("tabindex", "-1");
         target.focus({ preventScroll: true });
-    }, SECTION_FOCUS_INTERVAL_MS);
-    return timer;
+    }
+    observer.observe(document.body, { childList: true, subtree: true });
+    focusWhenReady();
+    return () => observer.disconnect();
 }
 
 /**
@@ -61,13 +54,14 @@ export function SettingsSearch({
     entries: readonly SettingsSearchEntry[];
 }) {
     const router = useRouter();
+    const pathname = usePathname();
     const [query, setQuery] = useState("");
     const [open, setOpen] = useState(false);
     const input = useRef<HTMLInputElement>(null);
     const list = useRef<HTMLDivElement>(null);
-    // The poll for a chosen section's heading; stopped if the search box goes
-    // away before the heading appears, so nothing runs against a gone page.
-    const sectionTimer = useRef<number | null>(null);
+    // One pending section observation, scoped to this mounted search box.
+    const cancelSectionFocus = useRef<(() => void) | null>(null);
+    const sectionPath = useRef<string | null>(null);
     const listId = useId();
     const results = useMemo(
         () => searchSettings(query, entries),
@@ -77,20 +71,27 @@ export function SettingsSearch({
 
     useEffect(
         () => () => {
-            if (sectionTimer.current !== null)
-                window.clearInterval(sectionTimer.current);
+            cancelSectionFocus.current?.();
         },
         [],
     );
+
+    useEffect(() => {
+        if (sectionPath.current && pathname !== sectionPath.current) {
+            cancelSectionFocus.current?.();
+            cancelSectionFocus.current = null;
+            sectionPath.current = null;
+        }
+    }, [pathname]);
 
     function choose(result: SettingsSearchResult) {
         setQuery("");
         setOpen(false);
         router.push(result.entry.href);
         const hash = result.entry.href.split("#")[1];
-        if (sectionTimer.current !== null)
-            window.clearInterval(sectionTimer.current);
-        sectionTimer.current = hash ? focusSection(`#${hash}`) : null;
+        cancelSectionFocus.current?.();
+        sectionPath.current = hash ? result.entry.href.split("#")[0] : null;
+        cancelSectionFocus.current = hash ? focusSection(`#${hash}`) : null;
     }
 
     function focusResult(position: "first" | "last") {
