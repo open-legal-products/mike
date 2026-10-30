@@ -41,12 +41,10 @@ describe("assistant workspace boundaries", () => {
     const fake = scriptedDb([
       { table: "organizations", data: { kind: "team" } },
       { table: "mike_workflows", data: [{ workflow_key: "global", title: "Built-in", prompt_md: "Global" }] },
-      { rpc: "get_workflows_overview", data: [{ id: "allowed", title: "Here", prompt_md: "Local" }, { id: "denied", prompt_md: "Secret" }] },
-      { table: "workflows", data: { id: "allowed", org_id: "firm", user_id: "u" } },
-      { table: "org_members", data: { role: "member" } },
-      { table: "organizations", data: { kind: "team" } },
-      { table: "workflows", data: { id: "denied", org_id: "deleted", user_id: "u" } },
-      { table: "org_members", data: null },
+      // The catalog itself applies current authorization. The loader only
+      // normalizes workspace placement; execution still rechecks below.
+      { rpc: "get_workflows_overview", data: [{ id: "allowed", org_id: "firm", title: "Here", prompt_md: "Local" }] },
+      { table: "organizations", data: [{ id: "firm", kind: "team" }] },
       { rpc: "get_workflows_overview", data: [] },
       { table: "documents", data: [] },
     ]);

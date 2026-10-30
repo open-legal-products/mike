@@ -1,5 +1,6 @@
 import { checkWorkflowAccess } from "./access";
-import { teamOrgIdOf } from "./personalOrgs";
+import { teamOrgIdOf, teamOrgIdsAmong } from "./personalOrgs";
+import { chunkArray } from "./arrays";
 import type { Db } from "./supabase";
 import { PERSONAL_WORKSPACE, workspaceMatches } from "./workspace";
 
@@ -19,7 +20,7 @@ export async function canUseWorkflowInWorkspace(
 }
 
 /** Full records for execution and pickers, using the ordinary access-aware RPC. */
-export async function listWorkspaceWorkflows<T extends { id: string }>(
+export async function listWorkspaceWorkflows<T extends { id: string; org_id?: string | null }>(
   db: Db,
   args: {
     userId: string;
@@ -49,13 +50,20 @@ export async function listWorkspaceWorkflows<T extends { id: string }>(
     if (error) throw new Error("Failed to load workspace workflows");
     const page = (data ?? []) as T[];
     if (!page.length) return rows;
-    for (const row of page) {
-      if (await canUseWorkflowInWorkspace(
-        db, row.id, args.userId, args.userEmail, args.workspace,
-      )) {
-        rows.push(row);
-      }
+    // The RPC is the authoritative access verdict. Rechecking every row
+    // serially repeats that verdict (and still cannot prevent revocation
+    // immediately afterwards). Execution endpoints recheck at use time.
+    // Placement remains separate: normalize legacy personal organisations
+    // in bounded batches rather than querying each workflow's organisation.
+    const teamIds = new Set<string>();
+    const orgIds = [...new Set(page.flatMap(row => row.org_id ? [row.org_id] : []))];
+    for (const batch of chunkArray(orgIds, 50)) {
+      for (const id of await teamOrgIdsAmong(db, batch)) teamIds.add(id);
     }
+    rows.push(...page.filter(row => workspaceMatches(
+      args.workspace || PERSONAL_WORKSPACE,
+      row.org_id && teamIds.has(row.org_id) ? row.org_id : null,
+    )));
     offset += page.length;
   }
 }
