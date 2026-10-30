@@ -80,12 +80,21 @@ describe("product version", () => {
         const workflow = parseYaml(read(".github/workflows/publish-images.yml"));
         expect(workflow.concurrency.group).toBe("publish-images");
         expect(workflow.concurrency["cancel-in-progress"]).toBe(false);
+        expect(workflow.concurrency.queue).toBe("max");
         const steps = workflow.jobs.build.steps;
         expect(steps.find((step: { id?: string }) => step.id === "saved").run)
             .toBe("node scripts/publish-images.mjs prepare");
         expect(steps.find((step: { id?: string }) => step.id === "build").if)
             .toBe("steps.saved.outputs[format('{0}_digest', matrix.image)] == ''");
         expect(read(".github/workflows/publish-images.yml")).not.toContain("actions/download-artifact");
+    });
+
+    it("does not persist Git credentials in any publication job", () => {
+        const workflow = parseYaml(read(".github/workflows/publish-images.yml"));
+        for (const name of ["identity", "build", "publish"]) {
+            const checkout = workflow.jobs[name].steps.find((step: { uses?: string }) => step.uses?.startsWith("actions/checkout@"));
+            expect(checkout.with["persist-credentials"], name).toBe(false);
+        }
     });
 
     it.each([

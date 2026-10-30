@@ -1,4 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { readFileSync } from "node:fs";
+import path from "node:path";
+import { parse } from "dotenv";
 
 // A fake scope records what reportError() sets so the assertions can check
 // tags/extra/level land on the event rather than on a global scope.
@@ -91,6 +94,22 @@ afterEach(() => {
 });
 
 describe("sentryConfiguration", () => {
+  it.each([
+    ["upstream", "", "", true, MIKE_SENTRY_DSN.backend],
+    ["fork without Sentry", "true", "", false, ""],
+    ["fork with its own Sentry", "", "https://fork@self.example/9", true, "https://fork@self.example/9"],
+  ])("preserves %s reporting defaults with the stock Compose env_file", (_kind, disabled, dsn, enabled, expectedDsn) => {
+    const sample = parse(readFileSync(path.resolve(__dirname, "../../../../.env.example")));
+    const config = sentryConfiguration({
+      MIKE_BUILD_SENTRY_DISABLED: disabled,
+      MIKE_BUILD_SENTRY_DSN: dsn,
+      ...sample,
+      NODE_ENV: "production",
+    });
+    expect(config.enabled).toBe(enabled);
+    expect(config.dsn).toBe(expectedDsn);
+  });
+
   it("is ON BY DEFAULT: the Mike project DSN, a community install, environment self-hosted", () => {
     const config = sentryConfiguration({ NODE_ENV: "production" } as NodeJS.ProcessEnv);
     expect(config.enabled).toBe(true);

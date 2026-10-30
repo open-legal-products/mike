@@ -1,6 +1,9 @@
 // @vitest-environment node
 // A route handler: plain Node, no DOM. (jsdom's Blob cannot be read by fetch.)
 import { NextRequest } from "next/server";
+import { readFileSync } from "node:fs";
+import path from "node:path";
+import { parseEnv } from "node:util";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { MAX_ENVELOPE_BYTES } from "@/app/lib/sentryTunnel";
 import { GET, POST } from "./route";
@@ -100,6 +103,28 @@ describe("POST /monitoring", () => {
         expect(response.status).toBe(204);
         expect(fetchMock).not.toHaveBeenCalled();
         expect((await GET().json()).reports).toBe("disabled");
+    });
+
+    it.each([
+        ["upstream", "", "", 200, "default"],
+        ["fork without Sentry", "true", "", 204, "disabled"],
+        ["fork with its own Sentry", "", OWN_DSN, 200, "build"],
+    ])("preserves %s defaults with the stock Compose environment", async (_kind, disabled, dsn, status, source) => {
+        const sample = parseEnv(readFileSync(path.resolve(__dirname, "../../../../.env.example"), "utf8"));
+        process.env.NEXT_PUBLIC_SENTRY_DISABLED = disabled;
+        process.env.NEXT_PUBLIC_SENTRY_DSN = dsn;
+        // Mirror Compose's frontend environment mappings from the root .env.
+        process.env.SENTRY_DISABLED = sample.SENTRY_DISABLED ?? "";
+        process.env.SENTRY_DSN = sample.FRONTEND_SENTRY_DSN ?? "";
+        fetchMock.mockResolvedValue(new Response(null, { status: 200 }));
+        const response = await post(envelope([{ dsn: "x" }, { type: "event" }, {}]));
+        expect(response.status).toBe(status);
+        expect((await GET().json()).reports).toBe(source);
+        if (status === 204) expect(fetchMock).not.toHaveBeenCalled();
+        else {
+            expect(fetchMock).toHaveBeenCalledOnce();
+            if (dsn) expect(fetchMock.mock.calls[0][0]).toBe("https://o777.ingest.us.sentry.io/api/4242/envelope/");
+        }
     });
 
     it("forwards browser reports when runtime settings re-enable a baked-off image", async () => {
