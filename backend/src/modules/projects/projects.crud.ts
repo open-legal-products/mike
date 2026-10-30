@@ -61,13 +61,14 @@ export type ProjectsDbFailure = { ok: false; error: unknown };
 // same response. The directory pickers (useDirectoryData) previously fanned
 // out one GET /projects/:id per project to obtain those documents; with N
 // projects that burst — auth check plus several DB queries per request —
-// could overwhelm the Supabase gateway. Batching keeps it at one request
-// and a fixed number of queries regardless of project count.
+// could overwhelm the Supabase gateway. Explicit inclusion now uses project pages
+// while keeping each project page and child/metadata query bounded.
 // Pagination is opt-in (`filters` is only passed when the request carried
 // pagination/search/sort/scope query params). ProjectsOverview.tsx sends
 // them. Legacy tabular-review project pickers call this with no query params
 // and must keep getting the full, unpaginated list, so callers must never
-// default to paginating a request that didn't ask for it.
+// default to paginating a metadata-only request that didn't ask for it.
+// Explicit document inclusion selects project pagination.
 export type ProjectListFilters = {
   scope: ProjectScope;
   pagination: { limit: number; offset: number };
@@ -92,7 +93,8 @@ export async function getProjectsOverview(
   const { userId, userEmail, includeDocuments, filters } = args;
   const normalizedUserEmail = userEmail?.trim().toLowerCase();
 
-  const rpcArgs = filters
+  const paginateAfterParticipation = includeDocuments && args.participatingOnly && filters;
+  const rpcArgs = filters && !paginateAfterParticipation
     ? buildProjectsOverviewRpcArgs({
         userId,
         userEmail: normalizedUserEmail,
@@ -118,6 +120,9 @@ export async function getProjectsOverview(
     const participating = await filterParticipatingProjects(db, visibleProjects, userId, normalizedUserEmail);
     if (!participating.ok) return { ok: false, error: reportableServiceError(participating) };
     visibleProjects = participating.data;
+    if (paginateAfterParticipation) {
+      visibleProjects = visibleProjects.slice(filters!.pagination.offset, filters!.pagination.offset + filters!.pagination.limit);
+    }
   }
   const accessSummary = await ensureResourceAccessSummaries(
     db,
@@ -146,33 +151,19 @@ export async function getProjectsOverview(
   }
 
   const projectIds = projects.map((p) => p.id);
-  const [
-    { data: docs, error: docsError },
-    { data: folders, error: foldersError },
-  ] = await Promise.all([
-    db
-      .from("documents")
-      .select("*")
-      .in("project_id", projectIds)
-      .order("created_at", { ascending: true }),
-    db
-      .from("project_subfolders")
-      .select("*")
-      .in("project_id", projectIds)
-      .order("created_at", { ascending: true }),
+  const [documents, folderRows] = await Promise.all([
+    loadProjectDirectoryChildren(db, "documents", projectIds),
+    loadProjectDirectoryChildren(db, "project_subfolders", projectIds),
   ]);
-  if (docsError) return { ok: false, error: docsError };
-  if (foldersError) return { ok: false, error: foldersError };
-
-  const docsTyped = (docs ?? []) as unknown as {
-    id: string;
-    project_id?: string | null;
-    user_id?: string | null;
-    current_version_id?: string | null;
-  }[];
-  await attachLatestVersionNumbers(db, docsTyped);
-  await attachActiveVersionPaths(db, docsTyped);
-  await attachDocumentOwnerLabels(db, docsTyped);
+  if (documents.error) return { ok: false, error: documents.error };
+  if (folderRows.error) return { ok: false, error: folderRows.error };
+  const docsTyped = documents.data;
+  const folders = folderRows.data;
+  for (const batch of chunkArray(docsTyped, 50)) {
+    await attachLatestVersionNumbers(db, batch);
+    await attachActiveVersionPaths(db, batch);
+    await attachDocumentOwnerLabels(db, batch);
+  }
 
   const docsByProject = new Map<string, typeof docsTyped>();
   for (const doc of docsTyped) {
@@ -196,6 +187,27 @@ export async function getProjectsOverview(
       folders: foldersByProject.get(p.id) ?? [],
     })),
   };
+}
+
+type DirectoryChild = { id: string; project_id?: string | null; user_id?: string | null; current_version_id?: string | null; [key: string]: unknown };
+/** Bound request URLs and use keyset pages so gateway row caps cannot truncate a directory. */
+export async function loadProjectDirectoryChildren(db: Db, table: "documents" | "project_subfolders", projectIds: string[]) {
+  const data: DirectoryChild[] = [];
+  for (const ids of chunkArray(projectIds, 50)) {
+    let after: string | null = null;
+    for (;;) {
+      let query = db.from(table).select("*").in("project_id", ids).order("id", { ascending: true }).limit(100);
+      if (after) query = query.gt("id", after);
+      const result = await query;
+      if (result.error) return { data: [], error: result.error };
+      const page = (result.data ?? []) as DirectoryChild[];
+      if (!page.length) break;
+      data.push(...page);
+      after = page[page.length - 1].id;
+    }
+  }
+  data.sort((a, b) => String(a.created_at ?? "").localeCompare(String(b.created_at ?? "")) || a.id.localeCompare(b.id));
+  return { data, error: null };
 }
 
 // Lightweight per-project summary rows for GET /projects?view=summary.

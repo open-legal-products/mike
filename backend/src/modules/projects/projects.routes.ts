@@ -57,14 +57,15 @@ export const projectsRouter = Router();
 // same response. The directory pickers (useDirectoryData) previously fanned
 // out one GET /projects/:id per project to obtain those documents; with N
 // projects that burst — auth check plus several DB queries per request —
-// could overwhelm the Supabase gateway. Batching keeps it at one request
-// and a fixed number of queries regardless of project count.
+// could overwhelm the Supabase gateway. Explicit inclusion now uses project pages
+// while keeping each project page and child/metadata query bounded.
 //
 // Pagination is opt-in via query params (limit/offset/search/sort_key or
 // key/scope). ProjectsOverview.tsx sends them. Legacy tabular-review project
 // pickers call this with no query params and must keep getting the full,
 // unpaginated list, so the branch below must never default
-// to paginating a request that didn't ask for it.
+// to paginating a metadata-only request that didn't ask for it. Including
+// documents explicitly selects pagination to bound hydration per request.
 const PROJECT_PAGINATION_QUERY_KEYS = [
   "limit",
   "offset",
@@ -128,7 +129,7 @@ projectsRouter.get("/", requireAuth, asyncRoute(async (req, res) => {
   const participatingOnly = req.query.participating === "true";
   // The IDE picker has no pagination UI. Workspace alone must not truncate
   // its list before the participation filter is applied.
-  const hasPaginationParams = PROJECT_PAGINATION_QUERY_KEYS.some(
+  const hasPaginationParams = includeDocuments || PROJECT_PAGINATION_QUERY_KEYS.some(
     (key) => req.query[key] !== undefined && !(participatingOnly && key === "workspace"),
   );
   const workspace = await resolveWorkspaceFilter(

@@ -331,6 +331,23 @@ describe("projects.routes", () => {
         });
 
         it("includes documents and subfolders in the batched directory response", async () => {
+            // Model keyset continuation instead of returning the same fixture
+            // forever after the service asks for rows beyond the last ID.
+            vi.mocked(createServerSupabase).mockImplementation(() => {
+                const db = mockSupabase();
+                const from = db.from;
+                db.from = (table: string) => {
+                    const q = from(table);
+                    if (["documents", "project_subfolders"].includes(table)) {
+                        let after: unknown;
+                        q.gt = vi.fn((_column: string, value: unknown) => { after = value; return q; });
+                        const then = q.then as (resolve: (value: unknown) => unknown) => unknown;
+                        q.then = (resolve: (value: unknown) => unknown) => after ? Promise.resolve({ data: [], error: null }).then(resolve) : then(resolve);
+                    }
+                    return q;
+                };
+                return db as unknown as Db;
+            });
             supabaseState.rpc = {
                 data: [{ id: "p1", name: "Alpha" }],
                 error: null,
