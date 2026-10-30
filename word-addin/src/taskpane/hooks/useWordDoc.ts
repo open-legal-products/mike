@@ -1,6 +1,7 @@
 /// <reference types="office-js" />
 
 import { useCallback, useMemo } from "react";
+import { createRevisionIndex, type RevisionIndex } from "../lib/revisionIndex";
 import { createSerialBatcher } from "../lib/serialBatcher";
 import { reportWordFailure } from "../lib/errorReporting";
 import { toWordText } from "../lib/wordText";
@@ -384,7 +385,16 @@ function buildLocationHint(
 function trackedChangesMatchEdit(
   changes: readonly Word.TrackedChange[],
   edit: RedlineEdit,
+  index?: RevisionIndex<Word.TrackedChange>,
 ): boolean {
+  if (index) {
+    if (!index.size) return false;
+    if (isFormatEdit(edit)) return index.all("formatted").length === index.size &&
+      index.joined("formatted") === normalizeBreaks(edit.original);
+    return index.all("added").length + index.all("deleted").length === index.size &&
+      index.joined("added") === normalizeBreaks(toWordText(edit.replacement)) &&
+      deletedTextMatchesOriginal(index.joined("deleted"), normalizeBreaks(edit.original));
+  }
   if (changes.length === 0) return false;
   if (isFormatEdit(edit)) {
     // A formatting pass generates only "Formatted" revisions whose combined
@@ -433,10 +443,11 @@ function trackedChangesMatchEdit(
 function pickEditRevisionSubset(
   changes: readonly Word.TrackedChange[],
   edit: RedlineEdit,
+  index?: RevisionIndex<Word.TrackedChange>,
 ): Word.TrackedChange[] | null {
-  if (trackedChangesMatchEdit(changes, edit)) return [...changes];
+  if (trackedChangesMatchEdit(changes, edit, index)) return [...changes];
 
-  const matches = matchesForSides(changes, edit);
+  const matches = matchesForSides(changes, edit, index);
   const sides = editRevisionSides(edit);
   if (sides.added && matches.added.length !== 1) return null;
   if (sides.deleted && matches.deleted.length !== 1) return null;
@@ -503,6 +514,7 @@ function editRevisionSides(edit: RedlineEdit): EditRevisionSides {
 function matchesForSides(
   changes: readonly Word.TrackedChange[],
   edit: RedlineEdit,
+  index?: RevisionIndex<Word.TrackedChange>,
 ): {
   added: Word.TrackedChange[];
   deleted: Word.TrackedChange[];
@@ -521,6 +533,13 @@ function matchesForSides(
     styleScoped
       ? text.length === 0 || normalizeBreaks(text).includes(original)
       : normalizeBreaks(text) === original;
+  if (index) return {
+    added: [...index.matching("added", wordReplacement)],
+    deleted: [...index.deleted(original)],
+    formatted: styleScoped
+      ? index.all("formatted").filter(change => formattedTextMatches(change.text))
+      : [...index.matching("formatted", original)],
+  };
   return {
     added: changes.filter(
       (change) =>
@@ -559,6 +578,7 @@ function untrackEntry(entry: PendingTrackedEdit): void {
  */
 async function removePersistentAnchorForEntry(
   entry: PendingTrackedEdit,
+  removeSettings = true,
 ): Promise<string[]> {
   const failures: string[] = [];
   if (entry.bookmarkName) {
@@ -577,7 +597,7 @@ async function removePersistentAnchorForEntry(
       failures.push(BOOKMARK_CLEANUP_FAILURE);
     }
   }
-  if (entry.stableEditId) {
+  if (entry.stableEditId && removeSettings) {
     try {
       await removeWordEditAnchor(entry.stableEditId);
     } catch (error) {
@@ -892,16 +912,17 @@ interface DocumentRevisionView {
 function pickEditDocumentRevisions(
   views: readonly DocumentRevisionView[],
   edit: RedlineEdit,
+  index?: RevisionIndex<DocumentRevisionView>,
 ): DocumentRevisionView[] | null {
   const wordReplacement = normalizeBreaks(toWordText(edit.replacement));
   const original = normalizeBreaks(edit.original);
   const sides = editRevisionSides(edit);
 
-  const added = views.filter(
+  const added = index ? [...index.matching("Insert", wordReplacement)] : views.filter(
     (view) => view.type === "Insert" && view.text === wordReplacement,
   );
-  const allDeletes = views.filter((view) => view.type === "Delete");
-  const deletedExact = allDeletes.filter((view) =>
+  const allDeletes = index ? index.all("Delete") : views.filter((view) => view.type === "Delete");
+  const deletedExact = index ? index.deleted(original) : allDeletes.filter((view) =>
     deletedTextMatchesOriginal(view.text, original),
   );
   const soleDelete = allDeletes.length === 1 ? allDeletes[0] : undefined;
@@ -912,7 +933,8 @@ function pickEditDocumentRevisions(
         ? [soleDelete]
         : [];
   const styleScoped = (edit.format ?? []).some(isParagraphStyleFormat);
-  const formatted = views.filter(
+  const formatViews = !sides.formatted ? [] : index ? [...FORMAT_REVISION_TYPES].flatMap(type => [...index.all(type)]) : views;
+  const formatted = formatViews.filter(
     (view) =>
       FORMAT_REVISION_TYPES.has(view.type) &&
       (styleScoped
@@ -945,19 +967,20 @@ async function pickEditDocumentRevisionsInContext(
   context: Word.RequestContext,
   views: readonly DocumentRevisionView[],
   edit: RedlineEdit,
+  index?: RevisionIndex<DocumentRevisionView>,
 ): Promise<DocumentRevisionView[] | null> {
-  const direct = pickEditDocumentRevisions(views, edit);
+  const direct = pickEditDocumentRevisions(views, edit, index);
   if (direct) return direct;
 
   const sides = editRevisionSides(edit);
   if (!sides.added || !sides.deleted) return null;
   const wordReplacement = normalizeBreaks(toWordText(edit.replacement));
-  const added = views.filter(
+  const added = index ? index.matching("Insert", wordReplacement) : views.filter(
     (view) => view.type === "Insert" && view.text === wordReplacement,
   );
   const addedMatch = added.length === 1 ? added[0] : undefined;
   if (!addedMatch) return null;
-  const emptyDeletes = views.filter(
+  const emptyDeletes = index ? index.matching("Delete", "") : views.filter(
     (view) => view.type === "Delete" && view.text.length === 0,
   );
   if (emptyDeletes.length < 2) return null;
@@ -1623,12 +1646,15 @@ async function restoreTrackedEditsNow(
   let anchors: ReturnType<typeof getWordEditAnchors> = {};
   try { anchors = getWordEditAnchors(); } catch { /* Deterministic bookmark names still recover edits. */ }
 
+  const pendingById = new Map<string, TrackedEditHandle>();
+  for (const [handle, entry] of pendingTrackedEdits) {
+    if (entry.stableEditId && !pendingById.has(entry.stableEditId)) pendingById.set(entry.stableEditId, handle);
+  }
   descriptors.forEach(({ stableEditId, edit }, index) => {
-    for (const [handle, entry] of pendingTrackedEdits) {
-      if (entry.stableEditId === stableEditId) {
-        results.set(index, { stableEditId, status: "restored", handle });
-        return;
-      }
+    const handle = pendingById.get(stableEditId);
+    if (handle) {
+      results.set(index, { stableEditId, status: "restored", handle });
+      return;
     }
 
     let bookmarkName = bookmarkNameForEdit(stableEditId);
@@ -1711,7 +1737,7 @@ async function restoreTrackedEditsNow(
         }
 
         let trackingQueued = false;
-        const bodyFallback: typeof present = [];
+        let bodyFallback: typeof present = [];
         for (const entry of withRevisions) {
           // Manage only the unambiguous subset that reconstructs this edit:
           // the bookmark range can report sibling revisions from the same
@@ -1743,17 +1769,21 @@ async function restoreTrackedEditsNow(
           // re-verifies through the same surface at decision time — and the
           // consumed set keeps two edits from claiming the same revision.
           const views = await loadDocumentRevisionViews(context);
+          const revisionIndex = createRevisionIndex(views, view => view.type, view => view.text);
           const consumedRevisions = new Set<Word.Revision>();
-          for (const entry of [...bodyFallback]) {
+          const remaining: typeof present = [];
+          for (const entry of bodyFallback) {
             const targets = await pickEditDocumentRevisionsInContext(
               context,
               views,
               entry.candidate.edit,
+              revisionIndex,
             );
             if (
               !targets ||
               targets.some((target) => consumedRevisions.has(target.revision))
             ) {
+              remaining.push(entry);
               continue;
             }
             for (const target of targets) {
@@ -1768,8 +1798,8 @@ async function restoreTrackedEditsNow(
               changes: [],
               range: entry.range,
             });
-            bodyFallback.splice(bodyFallback.indexOf(entry), 1);
           }
+          bodyFallback = remaining;
         }
         if (bodyFallback.length > 0) {
           // One shared document-level read verifies the candidates whose
@@ -1783,12 +1813,14 @@ async function restoreTrackedEditsNow(
             change.load(["type", "text"]);
           }
           await context.sync();
+          const revisionIndex = createRevisionIndex(bodyCollection.items, change => String(change.type).toLowerCase(), change => change.text);
           const consumed = new Set<Word.TrackedChange>();
           let bodyCollectionTracked = false;
           for (const entry of bodyFallback) {
             const subset = pickEditRevisionSubset(
               bodyCollection.items,
               entry.candidate.edit,
+              revisionIndex,
             );
             if (!subset || subset.some((change) => consumed.has(change))) {
               byCandidate.set(entry.candidate, { status: "view-only" });
@@ -2191,14 +2223,90 @@ export function resolveTrackedEdit(
   return serializeWordMutation(() => resolveTrackedEditNow(handle, decision));
 }
 
+/**
+ * Resolve unambiguous text edits from one fresh document inventory. Ambiguous,
+ * formatting, and stale-host cases retain the existing anchor-scoped fallback.
+ * The index lives only inside this Word.run: it is never cached across edits.
+ */
+async function resolveUniqueEditBatch(
+  handles: readonly TrackedEditHandle[],
+  decision: TrackedEditDecision,
+): Promise<Map<TrackedEditHandle, TrackedEditResolutionResult>> {
+  const entries = new Map<TrackedEditHandle, PendingTrackedEdit>();
+  for (const handle of handles) {
+    const entry = pendingTrackedEdits.get(handle);
+    if (entry && !isFormatEdit(entry.expectedEdit)) entries.set(handle, entry);
+  }
+  const results = new Map<TrackedEditHandle, TrackedEditResolutionResult>();
+  if (entries.size < 2) return results;
+  let resolved: TrackedEditHandle[];
+  try {
+    resolved = await Word.run(async context => {
+      const planned = new Map<TrackedEditHandle, (Word.Revision | Word.TrackedChange)[]>();
+      const consumed = new Set<Word.Revision | Word.TrackedChange>();
+      if (supportsDesktopRevisions()) {
+        const views = await loadDocumentRevisionViews(context);
+        const index = createRevisionIndex(views, view => view.type, view => view.text);
+        for (const [handle, entry] of entries) {
+          const targets = pickEditDocumentRevisions(views, entry.expectedEdit, index)?.map(view => view.revision);
+          if (!targets || targets.some(target => consumed.has(target))) continue;
+          targets.forEach(target => consumed.add(target));
+          planned.set(handle, targets);
+        }
+      } else {
+        const collection = context.document.body.getTrackedChanges();
+        collection.load("items/type,items/text");
+        await context.sync();
+        const index = createRevisionIndex(collection.items, change => String(change.type).toLowerCase(), change => change.text);
+        for (const [handle, entry] of entries) {
+          const targets = pickEditRevisionSubset(collection.items, entry.expectedEdit, index);
+          if (!targets || targets.some(target => consumed.has(target))) continue;
+          targets.forEach(target => consumed.add(target));
+          planned.set(handle, targets);
+        }
+      }
+      for (const targets of planned.values()) for (const target of targets) {
+        if (decision === "accept") target.accept(); else target.reject();
+      }
+      if (planned.size) await context.sync();
+      return [...planned.keys()];
+    });
+  } catch {
+    // Office can fail partway through a batch. The ordinary resolver re-reads
+    // live revisions and owns the existing honest partial-failure semantics.
+    return results;
+  }
+  const removedIds: string[] = [];
+  for (const handle of resolved) {
+    const entry = entries.get(handle)!;
+    pendingTrackedEdits.delete(handle);
+    rememberTerminalState(handle, decision);
+    if (entry.stableEditId) removedIds.push(entry.stableEditId);
+    const failures = await removePersistentAnchorForEntry(entry, false);
+    try {
+      await Word.run(trackedObjectsFor(entry), async context => {
+        untrackEntry(entry);
+        await context.sync();
+      });
+    } catch { failures.push(PROXY_CLEANUP_FAILURE); }
+    const error = cleanupSentence(failures);
+    results.set(handle, { handle, status: decision === "accept" ? "accepted" : "rejected", resolvedAs: decision, ...(error ? { error } : {}) });
+  }
+  try { await removeWordEditAnchors(removedIds); } catch {
+    for (const result of results.values()) result.error = result.error ?? cleanupSentence([ANCHOR_CLEANUP_FAILURE]);
+  }
+  return results;
+}
+
 export function resolveTrackedEdits(
   handles: readonly TrackedEditHandle[],
   decision: TrackedEditDecision,
 ): Promise<TrackedEditResolutionResult[]> {
   return serializeWordMutation(async () => {
+    const batched = await resolveUniqueEditBatch(handles, decision);
     const results: TrackedEditResolutionResult[] = [];
     for (const handle of handles) {
-      results.push(await resolveTrackedEditNow(handle, decision));
+      results.push(batched.get(handle) ?? await resolveTrackedEditNow(handle, decision));
     }
     return results;
   });

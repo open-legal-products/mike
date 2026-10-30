@@ -64,6 +64,7 @@ export interface WordCalls {
   trackedChanges: WordCall[];
   changeTrackingMode: string;
   searches: number;
+  bodyRevisionReads: number;
   acceptedChanges: WordCall[];
   rejectedChanges: WordCall[];
   revealedChanges: WordCall[];
@@ -225,6 +226,7 @@ export function installOfficeMock(seed: OfficeSeed): void {
     trackedChanges: [],
     changeTrackingMode: "Off",
     searches: 0,
+    bodyRevisionReads: 0,
     acceptedChanges: [],
     rejectedChanges: [],
     revealedChanges: [],
@@ -835,12 +837,14 @@ export function installOfficeMock(seed: OfficeSeed): void {
       load: (_properties?: any) => undefined,
       // Mirrors real Word: the document-level collection reliably reports
       // every pending revision even when range-scoped reads come up short.
-      getTrackedChanges: () =>
-        makeTrackedChangeCollection(
+      getTrackedChanges: () => {
+        wordCalls.bodyRevisionReads++;
+        return makeTrackedChangeCollection(
           Object.values(documentState.revisions)
             .filter((revision) => revision.resolution === null)
             .map((revision) => makeStoredTrackedChange(revision.id)),
-        ),
+        );
+      },
       search: (query: string, options?: any) => {
         wordCalls.searches++;
         const documentText: string = w.__OFFICE_SEED__.documentText || "";

@@ -1439,10 +1439,16 @@ export function useWordTrackedEdits({
               : result.status === "already-resolved" && result.resolvedAs
                 ? result.resolvedAs
                 : null;
+        const resultsByCard = new Map<string, typeof results>();
+        results.forEach((result, index) => {
+          const key = flat[index]?.key;
+          if (!key) return;
+          const bucket = resultsByCard.get(key) ?? [];
+          bucket.push(result);
+          resultsByCard.set(key, bucket);
+        });
         for (const entry of entries) {
-          const cardResults = results.filter(
-            (_result, index) => flat[index]?.key === entry.key,
-          );
+          const cardResults = resultsByCard.get(entry.key) ?? [];
           editHandlesRef.current.delete(entry.key);
           const decisions = cardResults.map(decisionOf);
           if (decisions.every((item) => item === "accept")) {
