@@ -1,3 +1,4 @@
+import { createTextExtractionCache } from "../../lib/textExtractionCache";
 // Async + reconnectable variants of the tabular generate stream.
 //
 // LAYERING EXCEPTION: unlike the other service files, the ASYNC half of this
@@ -617,6 +618,7 @@ export async function streamTabularGenerateSync(args: {
         onError,
     } = args;
 
+    const textCache = createTextExtractionCache();
     let nextRowIndex = 0;
     const cellFrame = (
         rowId: string,
@@ -642,6 +644,7 @@ export async function streamTabularGenerateSync(args: {
         // sink, which here writes SSE frames. It never decides the terminal
         // state of a column the model skipped; it reports those in `missing`.
         const { missing, error } = await extractRowColumns({
+            textCache,
             db,
             reviewId,
             row,

@@ -1,3 +1,5 @@
+import { loadVersionTextState, cachedTextForModel } from "../../lib/documentTextCache";
+import { createTextExtractionCache, type TextExtractionCache } from "../../lib/textExtractionCache";
 // Row loading for the tabular-review module.
 //
 // A review's grid is made of ROWS (tabular_review_rows): a row is either one
@@ -165,6 +167,7 @@ export async function loadReviewRow(
 export async function loadRowDocumentText(
     db: Db,
     row: ReviewRow,
+    textCache: TextExtractionCache = createTextExtractionCache(),
 ): Promise<string> {
     const sourceIds =
         row.source_document_ids ?? (row.document_id ? [row.document_id] : []);
@@ -176,10 +179,17 @@ export async function loadRowDocumentText(
         let markdown = "";
         if (storagePath) {
             try {
-                markdown = await extractDocumentMarkdown(
-                    () => downloadFile(storagePath),
-                    doc.file_type,
-                );
+                const stored = doc.current_version_id
+                    ? await loadVersionTextState(db, doc.id, doc.current_version_id, storagePath) : null;
+                if (stored?.text !== null && stored?.text !== undefined) {
+                    markdown = cachedTextForModel(stored);
+                } else {
+                    const load = () => extractDocumentMarkdown(() => downloadFile(storagePath), doc.file_type);
+                    // Without a revision we cannot safely reuse a mutable path.
+                    markdown = stored
+                        ? await textCache(`${doc.id}:${doc.current_version_id}:${stored.revision}:${storagePath}`, load)
+                        : await load();
+                }
             } catch (error) {
                 // Do not ask the model to fill cells from a source we refused.
                 if (error instanceof ExtractionBusyError || error instanceof ExtractionLimitError) throw error;

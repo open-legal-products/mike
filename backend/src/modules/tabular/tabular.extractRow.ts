@@ -1,3 +1,4 @@
+import type { TextExtractionCache } from "../../lib/textExtractionCache";
 // The single source of truth for extracting one row's cells.
 //
 // A row is the review grid's unit of work: one document, or a folder of source
@@ -115,6 +116,7 @@ export async function extractRowColumns(args: {
     abortSignal?: AbortSignal;
     /** Queue runners report failed attempts; inline streams report here. */
     reportFailure?: boolean;
+    textCache?: TextExtractionCache;
 }): Promise<ExtractRowResult> {
     const {
         db,
@@ -147,7 +149,7 @@ export async function extractRowColumns(args: {
     // download leaves the grid exactly as it found it.
     let markdown: string;
     try {
-        markdown = await loadRowDocumentText(db, row);
+        markdown = await loadRowDocumentText(db, row, args.textCache);
     } catch (error) {
         if (!(error instanceof ExtractionLimitError || error instanceof ExtractionBusyError)) throw error;
         if (abortSignal?.aborted) return untouched();
