@@ -139,7 +139,7 @@ function PersonalisationForm({
   return (
     <div className="space-y-8">
       <section className="space-y-3">
-        <SettingsHeading>Your background</SettingsHeading>
+        <SettingsHeading id="your-background">Your background</SettingsHeading>
         <SettingsDescription>
           Tell Mike about your role and practice so responses can be tailored to
           your professional context.

@@ -42,7 +42,7 @@ export default function FeaturesPage() {
   return (
     <div className="space-y-8">
       <section className="space-y-3">
-        <SettingsHeading>Assistant</SettingsHeading>
+        <SettingsHeading id="assistant-features">Assistant</SettingsHeading>
         <GlassCardUI>
           <SettingsRow>
             <div className="min-w-0 space-y-1">

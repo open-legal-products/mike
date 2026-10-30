@@ -480,7 +480,7 @@ export default function SecurityPage() {
   return (
     <div className="space-y-8">
       <section className="space-y-3">
-        <SettingsHeading>Multi-Factor Authentication</SettingsHeading>
+        <SettingsHeading id="multi-factor-authentication">Multi-Factor Authentication</SettingsHeading>
         <GlassCardUI>
           {loading ? (
             <MfaSettingsSkeleton />

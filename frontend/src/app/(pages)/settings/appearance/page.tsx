@@ -39,7 +39,7 @@ export default function AppearancePage() {
 
   return (
     <section className="space-y-3">
-      <SettingsHeading>Appearance</SettingsHeading>
+      <SettingsHeading id="appearance">Appearance</SettingsHeading>
       <GlassCardUI>
         <SettingsRow>
           <div className="min-w-0 space-y-1">

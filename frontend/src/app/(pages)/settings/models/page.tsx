@@ -95,7 +95,7 @@ export default function ModelPreferencesPage() {
   return (
     <div className="space-y-8">
       <section className="space-y-3">
-        <SettingsHeading>Model Preferences</SettingsHeading>
+        <SettingsHeading id="model-preferences">Model Preferences</SettingsHeading>
         <GlassCardUI>
           <SettingsRow layout="stacked">
             <div className="space-y-1">

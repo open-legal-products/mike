@@ -389,7 +389,7 @@ function PrivacyData({
     <div className="space-y-8">
       {canExport && (
         <section className="space-y-3">
-          <SettingsHeading>Export data</SettingsHeading>
+          <SettingsHeading id="export-data">Export data</SettingsHeading>
           {workspaceName && (
             <SettingsDescription>
               Exports data in {workspaceName} only. To export another workspace,
@@ -484,7 +484,7 @@ function PrivacyData({
 
       {canDelete && (
         <section className="space-y-3">
-          <SettingsHeading>Delete data</SettingsHeading>
+          <SettingsHeading id="delete-data">Delete data</SettingsHeading>
           {workspaceName && (
             <SettingsDescription>
               Deletes data in {workspaceName} only. To delete data in another

@@ -134,7 +134,7 @@ export function PasswordSettingsSection() {
 
   return (
     <section className="space-y-3">
-      <SettingsHeading>Password</SettingsHeading>
+      <SettingsHeading id="password">Password</SettingsHeading>
       <GlassCardUI>
         <SettingsRow>
           <div className="min-w-0 space-y-1">
