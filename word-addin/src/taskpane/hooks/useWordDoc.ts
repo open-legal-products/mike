@@ -1,6 +1,7 @@
 /// <reference types="office-js" />
 
-import { useCallback } from "react";
+import { useCallback, useMemo } from "react";
+import { createSerialBatcher } from "../lib/serialBatcher";
 import { reportWordFailure } from "../lib/errorReporting";
 import { toWordText } from "../lib/wordText";
 import {
@@ -15,7 +16,9 @@ import {
   bookmarkNameForEdit,
   getWordEditAnchor,
   listAppliedWordEditIds,
-  markWordEditApplied,
+  persistWordEditState,
+  getWordEditAnchors,
+  removeWordEditAnchors,
   persistWordEditAnchor,
   removeWordEditAnchor,
 } from "../lib/wordEditAnchors";
@@ -1617,6 +1620,9 @@ async function restoreTrackedEditsNow(
   }
   const candidates: RestoreCandidate[] = [];
 
+  let anchors: ReturnType<typeof getWordEditAnchors> = {};
+  try { anchors = getWordEditAnchors(); } catch { /* Deterministic bookmark names still recover edits. */ }
+
   descriptors.forEach(({ stableEditId, edit }, index) => {
     for (const [handle, entry] of pendingTrackedEdits) {
       if (entry.stableEditId === stableEditId) {
@@ -1628,7 +1634,7 @@ async function restoreTrackedEditsNow(
     let bookmarkName = bookmarkNameForEdit(stableEditId);
     let anchorWasRegistered = false;
     try {
-      const anchor = getWordEditAnchor(stableEditId);
+      const anchor = anchors[stableEditId];
       if (anchor) {
         bookmarkName = anchor.bookmarkName;
         anchorWasRegistered = true;
@@ -1809,17 +1815,15 @@ async function restoreTrackedEditsNow(
         return byCandidate;
       });
 
+      const staleIds: string[] = [];
+      const repairedAnchors: { stableEditId: string; bookmarkName: string }[] = [];
       for (const candidate of candidates) {
         const outcome = outcomes.get(candidate);
         // Every candidate is classified inside the batch; treat a gap as a
         // per-edit failure rather than crashing the other restorations.
         if (!outcome) continue;
         if (outcome.status === "not-found" || outcome.status === "resolved") {
-          try {
-            await removeWordEditAnchor(candidate.stableEditId);
-          } catch {
-            // The stale mapping is harmless and will be pruned on a later load.
-          }
+          staleIds.push(candidate.stableEditId);
           results.set(candidate.index, {
             stableEditId: candidate.stableEditId,
             status: outcome.status,
@@ -1829,19 +1833,7 @@ async function restoreTrackedEditsNow(
         if (!candidate.anchorWasRegistered) {
           // Same as the single-edit path above: the registry is a cache, so
           // a failed repair is not worth a notification.
-          await persistWordEditAnchor(
-            candidate.stableEditId,
-            candidate.bookmarkName,
-          ).catch((error) => {
-            console.error(
-              "[tracked-edit/restore] Failed to repair the document anchor registry.",
-              {
-                stableEditId: candidate.stableEditId,
-                bookmarkName: candidate.bookmarkName,
-                error,
-              },
-            );
-          });
+          repairedAnchors.push({ stableEditId: candidate.stableEditId, bookmarkName: candidate.bookmarkName });
         }
         if (outcome.status === "view-only") {
           results.set(candidate.index, {
@@ -1866,6 +1858,8 @@ async function restoreTrackedEditsNow(
           handle,
         });
       }
+      await removeWordEditAnchors(staleIds).catch(() => undefined);
+      await persistWordEditState(repairedAnchors, []).catch(() => undefined);
     } catch {
       // The shared batch failed as a whole. Fall back to one edit at a time
       // so a single bad object cannot take every other restoration with it.
@@ -2410,7 +2404,7 @@ export function useWordDoc() {
     [],
   );
 
-  const applyTrackedEdits = useCallback(
+  const applyTrackedEditsNow = useCallback(
     (edits: PersistedRedlineEdit[]): Promise<RedlineApplyReport> =>
       serializeWordMutation(() =>
         Word.run(async (context) => {
@@ -2436,9 +2430,9 @@ export function useWordDoc() {
           // carries (a user Retry is a new message with new IDs). Read
           // the durable set once — it cannot change while this batch runs,
           // because every Word mutation is serialized through one queue.
-          let appliedEditIds: ReadonlySet<string>;
+          let appliedEditIds: Set<string>;
           try {
-            appliedEditIds = listAppliedWordEditIds();
+            appliedEditIds = new Set(listAppliedWordEditIds());
           } catch (error) {
             // No registry means no idempotency, not a failed edit.
             console.warn("[tracked-edit/apply] applied-id read failed", error);
@@ -2960,6 +2954,7 @@ export function useWordDoc() {
                 result.handle = handle;
                 if (edit.stableEditId) {
                   newlyAppliedEditIds.push(edit.stableEditId);
+                  appliedEditIds.add(edit.stableEditId);
                 }
                 report.edits.push(result);
               } catch (error) {
@@ -2994,6 +2989,7 @@ export function useWordDoc() {
                     "Applied in Word, but Mike couldn’t retain its review controls. Review it from Word’s Review tab.";
                   if (edit.stableEditId) {
                     newlyAppliedEditIds.push(edit.stableEditId);
+                  appliedEditIds.add(edit.stableEditId);
                   }
                 } else if (outcome.reason === "unverified") {
                   // Word executed part of the batch and then faulted, and the
@@ -3040,35 +3036,15 @@ export function useWordDoc() {
           for (const staged of stagedHandles) {
             pendingTrackedEdits.set(staged.handle, staged.entry);
           }
-          for (const anchor of stagedAnchors) {
-            try {
-              await persistWordEditAnchor(
-                anchor.stableEditId,
-                anchor.bookmarkName,
-              );
-            } catch (error) {
-              reportWordFailure(error, {
-                operation: "word.edit_apply",
-                level: "warning",
-              });
-              anchor.result.error = describeWordFailure(
-                error,
-                "The change is reviewable now, but its View link may not survive reopening the document.",
-              );
-            }
-          }
-          // Record what is now in the document, so a replayed edit frame
-          // does not apply it a second time. Failing to persist the marker
-          // costs idempotency on a later replay, never this edit, so it is
-          // logged rather than reported.
-          for (const stableEditId of newlyAppliedEditIds) {
-            try {
-              await markWordEditApplied(stableEditId);
-            } catch (error) {
-              console.warn(
-                "[tracked-edit/apply] applied-id write failed",
-                logErrorMessage(error),
-              );
+          try {
+            // One durable boundary for this Word batch: anchors and replay
+            // markers must describe the same already-applied mutations.
+            await persistWordEditState(stagedAnchors, newlyAppliedEditIds);
+          } catch (error) {
+            reportWordFailure(error, { operation: "word.edit_apply", level: "warning" });
+            for (const anchor of stagedAnchors) {
+              anchor.result.error = describeWordFailure(error,
+                "The change is reviewable now, but its View link may not survive reopening the document.");
             }
           }
           return report;
@@ -3076,6 +3052,20 @@ export function useWordDoc() {
       ),
     [],
   );
+
+  const applyTrackedEdits = useMemo(() => {
+    const request = createSerialBatcher(async (edits: PersistedRedlineEdit[]) => {
+      const report = await applyTrackedEditsNow(edits);
+      return report.edits.map(edit => ({ edit, warning: report.warning }));
+    });
+    return async (edits: PersistedRedlineEdit[]): Promise<RedlineApplyReport> => {
+      const results = await Promise.all(edits.map(request));
+      return {
+        edits: results.map(({ edit }, index) => ({ ...edit, index })),
+        warning: results.find(result => result.warning)?.warning,
+      };
+    };
+  }, [applyTrackedEditsNow]);
 
   return {
     readDocumentMarkdown,
