@@ -4,6 +4,7 @@ import {
     forwardRef,
     type ReactNode,
     useImperativeHandle,
+    useMemo,
     useRef,
     useState,
 } from "react";
@@ -26,6 +27,7 @@ import {
 import { EmptyState } from "@/app/components/ui/empty-state";
 import { PillButtonUI } from "@/shared/ui/PillButtonUI";
 import { TabularReviewSkeuoIcon } from "@/app/components/shared/AppSidebarSkeuoIcons";
+import { indexReviewCells } from "./reviewCellIndex";
 import { TRFirstColumnCell } from "./TRFirstColumnCell";
 import {
     LIQUID_GLASS_SELECTED_CLASS,
@@ -121,10 +123,11 @@ export const TRTable = forwardRef<TRTableHandle, Props>(function TRTable(
         }
     }
 
-    const sortedColumns = [...columns].sort((a, b) => a.index - b.index);
-    const documentsById = new Map(
-        documents.map((document) => [document.id, document]),
-    );
+    const sortedColumns = useMemo(() => [...columns].sort((a, b) => a.index - b.index), [columns]);
+    const columnPositions = useMemo(() => new Map(sortedColumns.map((column, index) => [column.index, index])), [sortedColumns]);
+    const documentsById = useMemo(() => new Map(documents.map((document) => [document.id, document])), [documents]);
+    const cellsByRow = useMemo(() => indexReviewCells(cells), [cells]);
+    const selectedRows = useMemo(() => new Set(selectedRowIds), [selectedRowIds]);
     const firstColumnLabel =
         documentGrouping === "folder" ? "Folder / Document" : "Document";
     const totalContentWidth =
@@ -158,17 +161,10 @@ export const TRTable = forwardRef<TRTableHandle, Props>(function TRTable(
         },
     }));
 
-    function getCell(row: TabularReviewRow, colIdx: number) {
-        return cells.find(
-            (cell) =>
-                cell.row_id === row.id && cell.column_index === colIdx,
-        );
-    }
-
     const allSelected =
-        rows.length > 0 && rows.every((row) => selectedRowIds.includes(row.id));
+        rows.length > 0 && rows.every((row) => selectedRows.has(row.id));
     const someSelected =
-        !allSelected && rows.some((row) => selectedRowIds.includes(row.id));
+        !allSelected && rows.some((row) => selectedRows.has(row.id));
 
     function toggleAll() {
         if (allSelected) {
@@ -179,7 +175,7 @@ export const TRTable = forwardRef<TRTableHandle, Props>(function TRTable(
     }
 
     function toggleRow(id: string) {
-        if (selectedRowIds.includes(id)) {
+        if (selectedRows.has(id)) {
             onSelectionChange(selectedRowIds.filter((x) => x !== id));
         } else {
             onSelectionChange([...selectedRowIds, id]);
@@ -384,7 +380,7 @@ export const TRTable = forwardRef<TRTableHandle, Props>(function TRTable(
                     </div>
                     ))}
                     {rows.map((row, rowIdx) => {
-                    const isSelected = selectedRowIds.includes(row.id);
+                    const isSelected = selectedRows.has(row.id);
                     const sourceDocuments = row.source_document_ids
                         .map((documentId) => documentsById.get(documentId))
                         .filter(
@@ -417,10 +413,8 @@ export const TRTable = forwardRef<TRTableHandle, Props>(function TRTable(
                                 className={`${TR_STICKY_CELL_CLASS} sticky left-0 z-[60] ${DOC_COL_W} border-b border-r border-gray-200 py-2 pl-3 pr-2 text-xs text-gray-800 flex items-center transition-colors ${stickyRowBg} ${isSelected ? "" : LIQUID_GLASS_GROUP_HOVER_CLASS}`}
                             />
                             {columns.map((col) => {
-                                const cell = getCell(row, col.index);
-                                const colPos = sortedColumns.findIndex(
-                                    (c) => c.index === col.index,
-                                );
+                                const cell = cellsByRow.get(row.id)?.get(col.index);
+                                const colPos = columnPositions.get(col.index);
                                 const isHighlighted =
                                     highlightedCell?.colIdx === colPos &&
                                     highlightedCell?.rowIdx === rowIdx;
