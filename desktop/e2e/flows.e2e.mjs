@@ -223,7 +223,7 @@ try {
     await page.waitForURL((url) => !/\/(login|signup)/.test(url.href), {
       timeout: 30_000,
     });
-    // Signup hands off to the two-step onboarding wizard; the sidebar only
+    // Signup hands off to the four-step onboarding wizard; the sidebar only
     // exists on the other side of it.
     await completeOnboardingIfRequired(page, {
       name: "Desktop Flows E2E",
