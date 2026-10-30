@@ -1,6 +1,7 @@
 "use client";
 
 import { useDocumentConversionPolling } from "@/app/hooks/useDocumentConversionPolling";
+import { indexFolderDirectory } from "../shared/folderDirectoryIndex";
 import {
     type Dispatch,
     type DragEvent,
@@ -2385,10 +2386,9 @@ export function DocTable({
         const byParentId = new Map<string | null, DocTableFolder[]>();
         for (const folder of folders) {
             const parentId = folder.parent_folder_id ?? null;
-            byParentId.set(parentId, [
-                ...(byParentId.get(parentId) ?? []),
-                folder,
-            ]);
+            let children = byParentId.get(parentId);
+            if (!children) byParentId.set(parentId, children = []);
+            children.push(folder);
         }
         return byParentId;
     }, [folders]);
@@ -2428,11 +2428,6 @@ export function DocTable({
             foldersByParentId,
             uploadingFolderNamesByParentId,
         ],
-    );
-
-    const folderTreeIds = useCallback(
-        (folderId: string) => collectFolderTreeIds(folders, [folderId]),
-        [folders],
     );
 
     /**
@@ -2687,9 +2682,7 @@ export function DocTable({
 
     function renderLevel(parentId: string | null, depth: number) {
         const childFolders = childFoldersForLevel(parentId);
-        const allChildDocs = filteredDocs.filter(
-            (d) => (d.folder_id ?? null) === parentId,
-        );
+        const allChildDocs = filteredDocumentIndex.direct.get(parentId) ?? [];
         const levelKey = parentId ?? "root";
         const levelLimit = documentLimitByLevel?.[levelKey];
         const childDocs =
@@ -3024,28 +3017,11 @@ export function DocTable({
                     const isExpanded = expandedFolderIds.has(folder.id);
                     const isRenaming = renamingFolderId === folder.id;
                     const isLoadingChildren = loadingChildFolderIds.has(folder.id);
-                    const folderIds = folderTreeIds(folder.id);
-                    const folderDocumentIds = docs
-                        .filter(
-                            (document) =>
-                                document.folder_id != null &&
-                                folderIds.has(document.folder_id),
-                        )
-                        .map((document) => document.id);
-                    const folderExplicitlySelected = selectedFolderIds.has(
-                        folder.id,
-                    );
-                    const allFolderDocumentsSelected =
-                        folderExplicitlySelected ||
-                        (folderDocumentIds.length > 0 &&
-                            folderDocumentIds.every((id) =>
-                                effectiveSelectedDocIdSet.has(id),
-                            ));
-                    const someFolderDocumentsSelected =
-                        !allFolderDocumentsSelected &&
-                        folderDocumentIds.some((id) =>
-                            effectiveSelectedDocIdSet.has(id),
-                        );
+                    const summary = folderDirectory.summaries.get(folder.id)!;
+                    const folderExplicitlySelected = selectedFolderIds.has(folder.id);
+                    const allFolderDocumentsSelected = folderExplicitlySelected ||
+                        (summary.count > 0 && summary.selected === summary.count);
+                    const someFolderDocumentsSelected = !allFolderDocumentsSelected && summary.selected > 0;
                     return (
                         <div
                             key={`folder-${folder.id}`}
@@ -3177,9 +3153,7 @@ export function DocTable({
                                                 if (allFolderDocumentsSelected) {
                                                     setSelectedDocIds((current) => {
                                                         const next = new Set(current);
-                                                        folderDocumentIds.forEach((id) =>
-                                                            next.delete(id),
-                                                        );
+                                                        folderDirectory.collect(folder.id).forEach(document => next.delete(document.id));
                                                         return [...next];
                                                     });
                                                 }
@@ -3317,6 +3291,10 @@ export function DocTable({
         () => new Set([...selectedDocIds, ...selectedFolderDocumentIdSet]),
         [selectedDocIds, selectedFolderDocumentIdSet],
     );
+
+    const folderDirectory = useMemo(() => indexFolderDirectory(
+        folders, docs, document => document.folder_id ?? null, effectiveSelectedDocIdSet,
+    ), [folders, docs, effectiveSelectedDocIdSet]);
 
     const selectedStandaloneDocIds = useMemo(
         () =>
@@ -3612,11 +3590,7 @@ export function DocTable({
         const failedFolderRootIds = folderResults
             .filter((result) => !result.deleted)
             .map((result) => result.folderId);
-        const failedFolderTreeIds = new Set(
-            failedFolderRootIds.flatMap((folderId) => [
-                ...folderTreeIds(folderId),
-            ]),
-        );
+        const failedFolderTreeIds = collectFolderTreeIds(folders, failedFolderRootIds);
         const failedFolderDocumentIds = documentSnapshot
             .filter(
                 (document) =>
@@ -3701,7 +3675,6 @@ export function DocTable({
     }, [
         deleteDocumentIds,
         docs,
-        folderTreeIds,
         folders,
         operations,
         selectedFolderDocumentIdSet,
@@ -3834,6 +3807,9 @@ export function DocTable({
             return a.filename.localeCompare(b.filename) * multiplier;
         });
     }, [creatorFilter, docs, effectiveSort, enableHeaderFilters, q, serverQueryActive, showCreator, typeFilter]);
+    const filteredDocumentIndex = useMemo(() => indexFolderDirectory(
+        [], filteredDocs, document => document.folder_id ?? null,
+    ), [filteredDocs]);
     const hasVisibleCollectionUpload =
         collectionUploadProgress.some(
             (upload) =>
