@@ -39,7 +39,8 @@ export async function POST(request: NextRequest): Promise<Response> {
             if (done) break;
             length += value.byteLength;
             if (length > MAX_ENVELOPE_BYTES) {
-                await reader.cancel();
+                // The answer is 413 whatever happens to the cancelled stream.
+                void reader.cancel().catch(() => {});
                 return new NextResponse(null, { status: 413 });
             }
             chunks.push(value);
@@ -49,15 +50,8 @@ export async function POST(request: NextRequest): Promise<Response> {
     } finally {
         reader.releaseLock();
     }
-    const raw = new Uint8Array(length);
-    let offset = 0;
-    for (const chunk of chunks) {
-        raw.set(chunk, offset);
-        offset += chunk.byteLength;
-    }
-    if (raw.byteLength === 0 || raw.byteLength > MAX_ENVELOPE_BYTES) {
-        return new NextResponse(null, { status: raw.byteLength === 0 ? 400 : 413 });
-    }
+    const raw = Buffer.concat(chunks, length);
+    if (raw.byteLength === 0) return new NextResponse(null, { status: 400 });
 
     const envelope = rewriteEnvelope(raw, decision);
     if (!envelope) return new NextResponse(null, { status: 400 });
@@ -79,7 +73,9 @@ export async function POST(request: NextRequest): Promise<Response> {
             const value = upstream.headers.get(name);
             if (value) headers.set(name, value);
         }
-        await upstream.body?.cancel();
+        // Sentry's answer has been read as far as it matters; release the
+        // connection without letting a stream error masquerade as a failed send.
+        void upstream.body?.cancel().catch(() => {});
         return new NextResponse(null, { status: upstream.status, headers });
     } catch {
         if (!warnedUnreachable) {
@@ -97,9 +93,13 @@ export async function POST(request: NextRequest): Promise<Response> {
  * this answer is "which configuration won", not the address.
  */
 export function GET(): Response {
-    const { source } = reportingDestination(process.env);
+    const { source, disabledBy } = reportingDestination(process.env);
     return NextResponse.json(
-        { reports: source, see: "docs/observability.md#configuration" },
+        {
+            reports: source,
+            ...(disabledBy ? { disabledBy } : {}),
+            see: "docs/observability.md#configuration",
+        },
         { headers: { "Cache-Control": "no-store" } },
     );
 }

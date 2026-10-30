@@ -18,10 +18,12 @@
 # the tags for every image, and the Sentry release, only after every build
 # succeeded, so a failed build leaves no tags and no release behind.
 #
-# Source maps. The Sentry upload runs inside `next build`, so a cached build
-# layer would silently skip it (secret contents are not part of BuildKit's
-# cache key). The frontend's `app` stage is always rebuilt (no-cache-filters)
-# and the upload is checked against Sentry's API afterwards.
+# Source maps. The Sentry upload runs inside `next build`, behind the
+# Dockerfile's SENTRY_UPLOAD_ENABLED switch (which puts "uploads on" into the
+# cache key). A rerun that must upload again would still hit its own earlier
+# layer, because secret contents are not part of BuildKit's cache key, so the
+# frontend's `app` stage is always rebuilt (no-cache-filters) and the upload
+# is checked against Sentry's API afterwards.
 #
 # Forks. The image owner is the repository owner, so a fork publishes to its
 # own namespace with no setup. Where events go is decided together with where
@@ -199,6 +201,7 @@ jobs:
           build-args: |
             MIKE_VERSION=${{ needs.identity.outputs.version }}
             GIT_SHA=${{ github.sha }}
+            SENTRY_UPLOAD_ENABLED=${{ needs.identity.outputs.upload_maps == 'true' && '1' || '0' }}
             SENTRY_ORG=${{ needs.identity.outputs.upload_maps == 'true' && vars.SENTRY_ORG || '' }}
             SENTRY_PROJECT=${{ needs.identity.outputs.upload_maps == 'true' && matrix.sentry_project || '' }}
             ${{ matrix.reporting_args }}

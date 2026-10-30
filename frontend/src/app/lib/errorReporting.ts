@@ -377,6 +377,8 @@ export type ReportingDestination = {
     /** Empty when reporting is off. */
     dsn: string;
     source: "disabled" | "runtime" | "build" | "default";
+    /** For `source: "disabled"`: which variable switched reporting off. */
+    disabledBy?: "runtime" | "build";
     /** Runtime overrides for every report; absent means "as built". */
     environment?: string;
     install?: ReturnType<typeof installKind>;
@@ -403,15 +405,30 @@ export function reportingDestination(env: NodeJS.ProcessEnv): ReportingDestinati
         ...(env.SENTRY_ENVIRONMENT?.trim() ? { environment: env.SENTRY_ENVIRONMENT.trim() } : {}),
         ...(env.SENTRY_INSTALL?.trim() ? { install: installKind(env.SENTRY_INSTALL) } : {}),
     };
-    const disabled = env.SENTRY_DISABLED?.trim() || env.NEXT_PUBLIC_SENTRY_DISABLED?.trim();
-    if (disabled?.toLowerCase() === "true") {
-        return { dsn: "", source: "disabled", ...overrides };
+    // An explicit runtime value (true or false) wins over the image's baked
+    // default; the shipped .env sets SENTRY_DISABLED=false deliberately.
+    const runtimeDisabled = env.SENTRY_DISABLED?.trim();
+    const runtimeDsn = env.SENTRY_DSN?.trim();
+    const buildDsn = env.NEXT_PUBLIC_SENTRY_DSN?.trim();
+    // Same "what counts as off / which DSN" rule as the browser, backend and
+    // add-in, so the four runtimes cannot drift apart.
+    const resolved = resolveDsn({
+        disabled: runtimeDisabled || env.NEXT_PUBLIC_SENTRY_DISABLED?.trim(),
+        dsn: runtimeDsn || buildDsn,
+        fallback: MIKE_SENTRY_DSN.frontend,
+    });
+    if (resolved.source === "disabled") {
+        return {
+            dsn: "",
+            source: "disabled",
+            disabledBy: runtimeDisabled ? "runtime" : "build",
+            ...overrides,
+        };
     }
-    const runtime = env.SENTRY_DSN?.trim();
-    if (runtime) return { dsn: runtime, source: "runtime", ...overrides };
-    const build = env.NEXT_PUBLIC_SENTRY_DSN?.trim();
-    if (build) return { dsn: build, source: "build", ...overrides };
-    return { dsn: MIKE_SENTRY_DSN.frontend, source: "default", ...overrides };
+    if (resolved.source === "env") {
+        return { dsn: resolved.dsn, source: runtimeDsn ? "runtime" : "build", ...overrides };
+    }
+    return { dsn: resolved.dsn, source: "default", ...overrides };
 }
 
 /** One line for the boot log: which rule applied, never the DSN's key. */
@@ -425,7 +442,9 @@ export function describeReportingDestination(destination: ReportingDestination):
     })();
     switch (destination.source) {
         case "disabled":
-            return "[sentry] web app reports: off (runtime or baked opt-out), browser included";
+            return destination.disabledBy === "runtime"
+                ? "[sentry] web app reports: off (SENTRY_DISABLED=true at runtime), browser included"
+                : "[sentry] web app reports: off (NEXT_PUBLIC_SENTRY_DISABLED=true baked at build; set SENTRY_DISABLED=false to override), browser included";
         case "runtime":
             return `[sentry] web app reports → SENTRY_DSN project ${project} (runtime), browser included`;
         case "build":

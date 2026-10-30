@@ -374,7 +374,7 @@ describe("reportingDestination", () => {
         for (const runtime of ["server", "edge"] as const) {
             for (const disabled of [undefined, ""]) {
                 const env = { NODE_ENV: "test", NEXT_PUBLIC_SENTRY_DISABLED: "true", SENTRY_DISABLED: disabled } as NodeJS.ProcessEnv;
-                expect(reportingDestination(env)).toEqual({ dsn: "", source: "disabled" });
+                expect(reportingDestination(env)).toEqual({ dsn: "", source: "disabled", disabledBy: "build" });
                 expect(serverSentryOptions(runtime, env).enabled).toBe(false);
             }
         }
@@ -387,6 +387,7 @@ describe("reportingDestination", () => {
         expect(reportingDestination({ SENTRY_DISABLED: "true", SENTRY_DSN: own } as unknown as NodeJS.ProcessEnv)).toEqual({
             dsn: "",
             source: "disabled",
+            disabledBy: "runtime",
         });
         expect(reportingDestination({ SENTRY_DSN: ` ${own} `, NEXT_PUBLIC_SENTRY_DSN: baked } as unknown as NodeJS.ProcessEnv)).toEqual({
             dsn: own,
@@ -407,6 +408,27 @@ describe("reportingDestination", () => {
             reportingDestination({ SENTRY_ENVIRONMENT: " production ", SENTRY_INSTALL: "official" } as unknown as NodeJS.ProcessEnv),
         ).toMatchObject({ environment: "production", install: "official" });
         expect(reportingDestination({ SENTRY_INSTALL: "other" } as unknown as NodeJS.ProcessEnv).install).toBe("community");
+    });
+
+    it("says which variable switched reporting off", () => {
+        expect(reportingDestination({ SENTRY_DISABLED: "true" } as unknown as NodeJS.ProcessEnv)).toEqual({
+            dsn: "",
+            source: "disabled",
+            disabledBy: "runtime",
+        });
+        expect(reportingDestination({ NEXT_PUBLIC_SENTRY_DISABLED: "true" } as unknown as NodeJS.ProcessEnv)).toEqual({
+            dsn: "",
+            source: "disabled",
+            disabledBy: "build",
+        });
+        expect(
+            describeReportingDestination(reportingDestination({ SENTRY_DISABLED: "true" } as unknown as NodeJS.ProcessEnv)),
+        ).toContain("SENTRY_DISABLED=true at runtime");
+        expect(
+            describeReportingDestination(
+                reportingDestination({ NEXT_PUBLIC_SENTRY_DISABLED: "true" } as unknown as NodeJS.ProcessEnv),
+            ),
+        ).toContain("set SENTRY_DISABLED=false to override");
     });
 
     it("describes the rule for the boot log without leaking the DSN key", () => {

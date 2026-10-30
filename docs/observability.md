@@ -42,7 +42,8 @@ in compose) → that project; `NEXT_PUBLIC_SENTRY_DSN` baked at image build →
 that project; otherwise the built-in Mike project. `SENTRY_ENVIRONMENT` and
 `SENTRY_INSTALL` at runtime override what the bundle was built with. The rule
 that applied is printed once at boot (`[sentry] web app reports → ...`) and
-answered by `GET /monitoring` (`{"reports":"runtime"}` etc., never the DSN), so
+answered by `GET /monitoring` (`{"reports":"runtime"}` etc., plus
+`"disabledBy":"runtime"|"build"` when off, never the DSN), so
 a pulled image honours the operator's opt-out and destination without a
 rebuild and the operator can see that it did. Backend test
 processes (vitest, `NODE_ENV=test`) never report unless
@@ -351,7 +352,10 @@ NEXT_PUBLIC_SENTRY_DSN=...             # used when SENTRY_DSN is not set at runt
 
 Check which rule applied on a running deployment: the boot log line
 `[sentry] web app reports → ...`, or `curl -s https://<host>/monitoring`, which
-answers `{"reports":"disabled"|"runtime"|"build"|"default"}` and never the DSN.
+answers `{"reports":"disabled"|"runtime"|"build"|"default"}` (with
+`"disabledBy":"runtime"|"build"` when off) and never the DSN. An explicit
+runtime `SENTRY_DISABLED` (`true` or `false`) always wins over the image's baked
+default; the shipped `.env.example` sets `false`.
 
 The `/monitoring` route is not an open relay: the destination is the server's
 own configuration, the client's envelope header is overwritten with it, and a
