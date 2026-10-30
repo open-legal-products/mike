@@ -278,6 +278,16 @@ export const MAX_REPLAYED_REASONING_TOTAL_CHARS = 36_000;
 
 const MAX_REPLAYED_BRIEF_CHARS = 4_000;
 
+/** One lazy history read shared by the context builders for a single turn. */
+export function createAssistantHistoryLoader(db: Db, chatId: string | null | undefined, messageTable = "chat_messages") {
+  let pending: Promise<{ data: { content?: unknown }[] | null; error: unknown }> | undefined;
+  return () => pending ??= chatId ? Promise.resolve(db.from(messageTable)
+    .select("content").eq("chat_id", chatId).eq("role", "assistant")
+    .not("content", "is", null).order("created_at", { ascending: true }))
+    : Promise.resolve({ data: [], error: null });
+}
+type AssistantHistoryLoader = ReturnType<typeof createAssistantHistoryLoader>;
+
 /**
  * Attaches each earlier assistant turn's stored reasoning to the matching
  * message in `messages`, for models that opt into reasoning replay
@@ -293,17 +303,18 @@ export async function attachPriorReasoning(
   chatId: string | null | undefined,
   db: Db,
   messageTable = "chat_messages",
+  history?: AssistantHistoryLoader,
 ): Promise<ChatMessage[]> {
   if (!chatId || !messages.some((m) => m.role === "assistant")) {
     return messages;
   }
-  const { data: rows, error } = await db
+  const { data: rows, error } = await (history ? history() : db
     .from(messageTable)
     .select("content")
     .eq("chat_id", chatId)
     .eq("role", "assistant")
     .not("content", "is", null)
-    .order("created_at", { ascending: true });
+    .order("created_at", { ascending: true }));
   // Replay is an optimisation: a failed read degrades to text-only history.
   if (error || !rows?.length) return messages;
 
@@ -1339,6 +1350,7 @@ export async function buildDocContext(
   chatId?: string | null,
   messageTable = "chat_messages",
   userEmail?: string | null,
+  history?: AssistantHistoryLoader,
 ): Promise<{ docIndex: DocIndex; docStore: DocStore }> {
   const docIndex: DocIndex = {};
   const docStore: DocStore = new Map();
@@ -1357,11 +1369,11 @@ export async function buildDocContext(
   // the model loses access to generated docs after the turn that created
   // them, and can't call edit_document / read_document on them.
   if (chatId) {
-    const { data: rows } = await db
+    const { data: rows } = await (history ? history() : db
       .from(messageTable)
       .select("content")
       .eq("chat_id", chatId)
-      .eq("role", "assistant");
+      .eq("role", "assistant"));
     for (const row of rows ?? []) {
       const content = (row as { content?: unknown }).content;
       if (!Array.isArray(content)) continue;
