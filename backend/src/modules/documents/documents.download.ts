@@ -6,7 +6,7 @@ import {
     attachActiveVersionPaths,
     loadActiveVersion,
 } from "../../lib/documentVersions";
-import { checkProjectAccess, ensureDocAccess } from "../../lib/access";
+import { checkProjectAccess, createDocumentAccessChecker } from "../../lib/access";
 import { mapWithConcurrency } from "../../lib/concurrency";
 import { zipExportLimitDetail } from "../../lib/zipExport";
 import {
@@ -203,8 +203,8 @@ export async function resolveZipExportDocuments(
             ),
         ];
         const accessibleProjectIds = (
-            await Promise.all(
-                projectIds.map(async (projectId) => ({
+            await mapWithConcurrency(
+                projectIds, 5, async (projectId) => ({
                     projectId,
                     access: await checkProjectAccess(
                         projectId,
@@ -212,7 +212,7 @@ export async function resolveZipExportDocuments(
                         userEmail,
                         db,
                     ),
-                })),
+                }),
             )
         )
             .filter((result) => result.access.ok)
@@ -298,11 +298,12 @@ export async function resolveZipExportDocuments(
         return { ok: false, kind: "limit", detail: resolvedCountLimit };
 
     // Filter to docs the user actually has access to (own + shared-project).
-    const accessChecks = await Promise.all(
-        [...rawDocsById.values()].map(async (d) => ({
+    const check = createDocumentAccessChecker(userId, userEmail, db);
+    const accessChecks = await mapWithConcurrency(
+        [...rawDocsById.values()], 5, async (d) => ({
             doc: d,
-            access: await ensureDocAccess(d, userId, userEmail, db),
-        })),
+            access: await check(d),
+        }),
     );
     const docs = accessChecks.filter((x) => x.access.ok).map((x) => x.doc);
     if (docs.length === 0)
