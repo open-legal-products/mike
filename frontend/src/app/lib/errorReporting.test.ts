@@ -370,6 +370,19 @@ describe("reportingDestination", () => {
     const own = "https://k@o9.ingest.sentry.io/9";
     const baked = "https://b@o8.ingest.sentry.io/8";
 
+    it("honours the fork image's baked opt-out for server and edge reporting", () => {
+        for (const runtime of ["server", "edge"] as const) {
+            for (const disabled of [undefined, ""]) {
+                const env = { NODE_ENV: "test", NEXT_PUBLIC_SENTRY_DISABLED: "true", SENTRY_DISABLED: disabled } as NodeJS.ProcessEnv;
+                expect(reportingDestination(env)).toEqual({ dsn: "", source: "disabled" });
+                expect(serverSentryOptions(runtime, env).enabled).toBe(false);
+            }
+        }
+        expect(reportingDestination({
+            NODE_ENV: "test", NEXT_PUBLIC_SENTRY_DISABLED: "true", SENTRY_DISABLED: "false", SENTRY_DSN: own,
+        } as NodeJS.ProcessEnv)).toMatchObject({ source: "runtime", dsn: own });
+    });
+
     it("is one rule for server and browser: disabled, runtime, build, default", () => {
         expect(reportingDestination({ SENTRY_DISABLED: "true", SENTRY_DSN: own } as unknown as NodeJS.ProcessEnv)).toEqual({
             dsn: "",

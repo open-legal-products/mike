@@ -220,14 +220,14 @@ jobs:
           set -euo pipefail
           # Debug-ID bundles uploaded by the build plugin are listed per project
           # with the release they were uploaded under.
-          url="https://sentry.io/api/0/projects/$SENTRY_ORG/$SENTRY_PROJECT/files/source-maps/"
+          url="https://sentry.io/api/0/projects/$SENTRY_ORG/$SENTRY_PROJECT/files/artifact-bundles/"
           body="$(curl -sS --fail-with-body -H "Authorization: Bearer $SENTRY_AUTH_TOKEN" \
             --get --data-urlencode "query=$RELEASE" "$url")" || {
             echo "::error::Sentry did not list this project's source maps: $body"; exit 1; }
           if ! echo "$body" | jq -e 'type == "array"' >/dev/null; then
-            echo "::warning::unexpected response shape from $url; cannot verify the upload"; exit 0
+            echo "::error::unexpected response shape from $url; cannot verify the upload"; exit 1
           fi
-          if ! echo "$body" | jq -e --arg r "$RELEASE" 'map(select(.release == $r)) | length > 0' >/dev/null; then
+          if ! echo "$body" | jq -e --arg r "$RELEASE" 'any(.[]; any(.associations[]?; .release == $r))' >/dev/null; then
             echo "::error::no source-map bundle for $RELEASE in $SENTRY_ORG/$SENTRY_PROJECT; the build did not upload (check the plugin output above)"
             exit 1
           fi

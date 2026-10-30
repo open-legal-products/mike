@@ -36,7 +36,8 @@ Resolution order, per runtime: `*_SENTRY_DISABLED=true` → off;
 web app one rule, `reportingDestination` in `frontend/src/app/lib/errorReporting.ts`,
 decides for the Next server's own events and for every browser envelope alike
 (the browser posts to `/monitoring`, `frontend/src/app/monitoring/route.ts`,
-which forwards): `SENTRY_DISABLED=true` → off; `SENTRY_DSN` (`FRONTEND_SENTRY_DSN`
+which forwards): `SENTRY_DISABLED=true` → off (when unset or empty, the baked
+`NEXT_PUBLIC_SENTRY_DISABLED` supplies this default); `SENTRY_DSN` (`FRONTEND_SENTRY_DSN`
 in compose) → that project; `NEXT_PUBLIC_SENTRY_DSN` baked at image build →
 that project; otherwise the built-in Mike project. `SENTRY_ENVIRONMENT` and
 `SENTRY_INSTALL` at runtime override what the bundle was built with. The rule
@@ -344,7 +345,7 @@ SENTRY_ENVIRONMENT=production
 SENTRY_INSTALL=                        # "official" only on Mike's own deployment
 
 # building the frontend yourself (optional): build-time defaults
-NEXT_PUBLIC_SENTRY_DISABLED=true       # browser SDK never starts (no envelopes at all)
+NEXT_PUBLIC_SENTRY_DISABLED=true       # browser never starts; server/tunnel default to off too
 NEXT_PUBLIC_SENTRY_DSN=...             # used when SENTRY_DSN is not set at runtime
 ```
 

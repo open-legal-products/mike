@@ -389,6 +389,7 @@ export type ReportingDestination = {
  * runtime on the Next server, in this order:
  *
  *   SENTRY_DISABLED=true          off, browser included
+ *   NEXT_PUBLIC_SENTRY_DISABLED   baked default when SENTRY_DISABLED is empty
  *   SENTRY_DSN                    the deployment's project (FRONTEND_SENTRY_DSN in compose)
  *   NEXT_PUBLIC_SENTRY_DSN        the project baked in at image build, for images
  *                                 built with a DSN and run without the runtime one
@@ -402,7 +403,8 @@ export function reportingDestination(env: NodeJS.ProcessEnv): ReportingDestinati
         ...(env.SENTRY_ENVIRONMENT?.trim() ? { environment: env.SENTRY_ENVIRONMENT.trim() } : {}),
         ...(env.SENTRY_INSTALL?.trim() ? { install: installKind(env.SENTRY_INSTALL) } : {}),
     };
-    if (env.SENTRY_DISABLED?.trim().toLowerCase() === "true") {
+    const disabled = env.SENTRY_DISABLED?.trim() || env.NEXT_PUBLIC_SENTRY_DISABLED?.trim();
+    if (disabled?.toLowerCase() === "true") {
         return { dsn: "", source: "disabled", ...overrides };
     }
     const runtime = env.SENTRY_DSN?.trim();
@@ -423,7 +425,7 @@ export function describeReportingDestination(destination: ReportingDestination):
     })();
     switch (destination.source) {
         case "disabled":
-            return "[sentry] web app reports: off (SENTRY_DISABLED=true), browser included";
+            return "[sentry] web app reports: off (runtime or baked opt-out), browser included";
         case "runtime":
             return `[sentry] web app reports → SENTRY_DSN project ${project} (runtime), browser included`;
         case "build":
