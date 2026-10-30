@@ -177,6 +177,9 @@ jobs:
             psql "$SUPABASE_TEST_DB_URL" -X --set ON_ERROR_STOP=1 -f "$test"
           done
 
+      - name: Concurrent organization departure locking
+        run: node backend/scripts/test-org-departure-locks.mjs
+
       - name: Compare fingerprints
         run: |
           if diff -u /tmp/upgraded.txt /tmp/fresh.txt; then
