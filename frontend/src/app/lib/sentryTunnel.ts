@@ -27,7 +27,9 @@ function parseDsn(dsn: string): ParsedDsn | null {
     }
     if (url.protocol !== "https:" && url.protocol !== "http:") return null;
     const segments = url.pathname.replace(/^\/+|\/+$/g, "").split("/");
-    const projectId = segments.pop() ?? "";
+    // split() never yields an empty array, so pop() is a string; "" when the
+    // DSN has no path at all.
+    const projectId = segments.pop() as string;
     if (!url.username || !/^\d+$/.test(projectId)) return null;
     return { protocol: url.protocol.slice(0, -1), host: url.host, path: segments.length ? `/${segments.join("/")}` : "", projectId };
 }

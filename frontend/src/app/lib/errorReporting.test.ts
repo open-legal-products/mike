@@ -431,6 +431,10 @@ describe("reportingDestination", () => {
         ).toContain("set SENTRY_DISABLED=false to override");
     });
 
+    it("shows ? for the project when the DSN has no path", () => {
+        expect(describeReportingDestination({ dsn: "https://k@host.example", source: "runtime" })).toContain("project ? (runtime)");
+    });
+
     it("describes the rule for the boot log without leaking the DSN key", () => {
         const line = describeReportingDestination(reportingDestination({ SENTRY_DSN: own } as unknown as NodeJS.ProcessEnv));
         expect(line).toContain("SENTRY_DSN project 9 (runtime)");

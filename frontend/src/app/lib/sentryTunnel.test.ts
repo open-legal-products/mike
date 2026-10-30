@@ -76,6 +76,18 @@ describe("tunnelDecision", () => {
         ).toMatchObject({ dsn: OWN_DSN });
     });
 
+    it("drops a DSN with a key but no numeric project", () => {
+        expect(tunnelDecision({ SENTRY_DSN: "https://k@host.example/" } as unknown as NodeJS.ProcessEnv)).toEqual({
+            kind: "drop",
+        });
+        expect(tunnelDecision({ SENTRY_DSN: "https://k@host.example" } as unknown as NodeJS.ProcessEnv)).toEqual({
+            kind: "drop",
+        });
+        expect(tunnelDecision({ SENTRY_DSN: "https://k@host.example/not-a-number" } as unknown as NodeJS.ProcessEnv)).toEqual({
+            kind: "drop",
+        });
+    });
+
     it("drops rather than falls back upstream when the operator's DSN is malformed", () => {
         expect(tunnelDecision({ SENTRY_DSN: "not a dsn" } as unknown as NodeJS.ProcessEnv)).toEqual({ kind: "drop" });
         expect(tunnelDecision({ SENTRY_DSN: "https://host.example/no-project" } as unknown as NodeJS.ProcessEnv)).toEqual({
@@ -127,6 +139,46 @@ describe("rewriteEnvelope", () => {
         const lines = parsedLines(out) as [unknown, { length: number }, { environment: string }];
         expect(lines[2]).toEqual({ event_id: "b".repeat(32), environment: "staging" });
         expect(lines[1].length).toBe(JSON.stringify(lines[2]).length);
+    });
+
+    it("handles envelopes without a trailing newline and with blank lines between items", () => {
+        // Header only, no newline at all.
+        expect(parsedLines(rewriteEnvelope(encoder.encode('{"dsn":"x"}'), { dsn: OWN_DSN }))).toEqual([{ dsn: OWN_DSN }]);
+        // Payload is the last line and has no newline after it.
+        expect(
+            parsedLines(rewriteEnvelope(encoder.encode('{"dsn":"x"}\n{"type":"event"}\n{"event_id":"e"}'), { dsn: OWN_DSN })),
+        ).toEqual([{ dsn: OWN_DSN }, { type: "event" }, { event_id: "e" }]);
+        // A blank line between items is skipped, not read as an item header.
+        expect(
+            parsedLines(rewriteEnvelope(encoder.encode('{"dsn":"x"}\n\n{"type":"event"}\n{"event_id":"e"}\n'), { dsn: OWN_DSN })),
+        ).toEqual([{ dsn: OWN_DSN }, { type: "event" }, { event_id: "e" }]);
+    });
+
+    it("applies install alone, creating tags when the event has none or has a non-object", () => {
+        const out = rewriteEnvelope(
+            envelope([
+                { dsn: "x" },
+                { type: "event" },
+                { event_id: "a", environment: "self-hosted" },
+                { type: "event" },
+                { event_id: "b", tags: ["not", "an", "object"] },
+            ]),
+            { dsn: OWN_DSN, install: "official" },
+        );
+        expect(parsedLines(out)).toEqual([
+            { dsn: OWN_DSN },
+            { type: "event" },
+            { event_id: "a", environment: "self-hosted", tags: { install: "official" } },
+            { type: "event" },
+            { event_id: "b", tags: { install: "official" } },
+        ]);
+    });
+
+    it("refuses JSON that is not an object, and an item header with no payload line", () => {
+        expect(rewriteEnvelope(encoder.encode("[1,2]\n"), { dsn: OWN_DSN })).toBeNull();
+        expect(rewriteEnvelope(encoder.encode("null\n"), { dsn: OWN_DSN })).toBeNull();
+        expect(rewriteEnvelope(encoder.encode('"just a string"\n'), { dsn: OWN_DSN })).toBeNull();
+        expect(rewriteEnvelope(encoder.encode('{"dsn":"x"}\n{"type":"event"}'), { dsn: OWN_DSN })).toBeNull();
     });
 
     it("refuses envelopes it cannot parse instead of forwarding them", () => {
