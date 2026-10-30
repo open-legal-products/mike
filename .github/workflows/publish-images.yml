@@ -24,6 +24,8 @@
 # cache key). Secret contents are not part of BuildKit's cache key, so the
 # frontend's `app` stage bypasses the cache for new builds (no-cache-filters).
 # Saved builds are reused on retries; their maps are checked via Sentry's API.
+# Upstream publication requires complete Sentry configuration before any
+# registry lookup or build, so a missing secret cannot create a mapless release.
 #
 # Forks. The image owner is the repository owner, so a fork publishes to its
 # own namespace with no setup. Where events go is decided together with where
@@ -121,9 +123,16 @@ jobs:
             reporting=off
           fi
           upload_maps=false
-          if [[ "$reporting" != "off" && -n "$SENTRY_ORG" && -n "$SENTRY_PROJECT_FRONTEND" \
-                && -n "$SENTRY_PROJECT_BACKEND" && "$HAS_TOKEN" == "true" ]]; then
+          if [[ "$reporting" != "off" && -n "${SENTRY_ORG//[[:space:]]/}" \
+                && -n "${SENTRY_PROJECT_FRONTEND//[[:space:]]/}" \
+                && -n "${SENTRY_PROJECT_BACKEND//[[:space:]]/}" && "$HAS_TOKEN" == "true" ]]; then
             upload_maps=true
+          fi
+          # Saved images are never rebuilt on retry. Refuse an upstream run
+          # before creating one without maps, even for main or manual builds.
+          if [[ "$reporting" == "upstream" && "$upload_maps" != "true" ]]; then
+            echo "::error::Upstream image publication requires secret SENTRY_AUTH_TOKEN and variables SENTRY_ORG, SENTRY_PROJECT_FRONTEND, SENTRY_PROJECT_BACKEND; refusing to publish without source maps"
+            exit 1
           fi
 
           {

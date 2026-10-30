@@ -546,6 +546,12 @@ token. An administrator sets, on the repository:
 - secret `SENTRY_AUTH_TOKEN` (organization token, scope `org:ci`);
 - variables `SENTRY_ORG`, `SENTRY_PROJECT_FRONTEND`, `SENTRY_PROJECT_BACKEND`.
 
+Upstream publication requires all four settings, including for `main` and
+manual builds. Missing credentials or blank project/organization variables
+fail the identity job before any registry lookup or build. This prevents
+retaining a mapless image that a later retry would reuse instead of rebuilding.
+Forks retain the optional-upload behavior described below.
+
 For a new build with uploads enabled, the workflow passes
 `SENTRY_UPLOAD_ENABLED=1` and rebuilds the frontend `app` stage
 (`no-cache-filters`): the switch separates token-less and token builds in the
@@ -561,7 +567,7 @@ fork publishes to `ghcr.io/<owner>/mike-*` with no setup, and:
 
 | Repository | Events | Source maps |
 | --- | --- | --- |
-| `open-legal-products` | built-in Mike DSNs | uploaded when the secret and variables are set |
+| `open-legal-products` | built-in Mike DSNs | required; missing configuration stops publication before building |
 | fork with `FORK_SENTRY_DSN_FRONTEND` and `FORK_SENTRY_DSN_BACKEND` variables | the fork's own projects (baked as defaults, overridable at runtime) | uploaded to the fork's org when its own secret and variables are set |
 | fork without them | reporting disabled in every runtime (`SENTRY_DISABLED=true` baked as the image default; an explicit runtime value wins, and the stock `.env.example` sets `SENTRY_DISABLED=false`, so a fork's operators set it to `true`) | none |
 
