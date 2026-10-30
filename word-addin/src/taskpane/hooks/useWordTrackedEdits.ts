@@ -17,7 +17,7 @@ import {
 } from "./useWordDoc";
 import type { TrackedEditHandle } from "./useWordDoc";
 import type { Message as SavedMessage, WordDocumentEdit } from "../types";
-import { projectRedlineStream } from "../lib/redline";
+import { projectRedlineStream, type RedlineStreamProjection } from "../lib/redline";
 import type { RedlineEdit, StreamingRedlineEdit } from "../lib/redline";
 
 /**
@@ -1060,9 +1060,12 @@ export function useWordTrackedEdits({
     [],
   );
 
+  const lastProcessedProjection = useRef<{ messageId: string; projection: RedlineStreamProjection } | null>(null);
   const processLiveRedlines = useCallback(
-    (messageId: string, content: string, persistent: boolean): void => {
-      const projection = projectRedlineStream(content);
+    (messageId: string, content: string, persistent: boolean, cachedProjection?: RedlineStreamProjection): void => {
+      const projection = cachedProjection ?? projectRedlineStream(content);
+      if (lastProcessedProjection.current?.messageId === messageId && lastProcessedProjection.current.projection === projection) return;
+      lastProcessedProjection.current = { messageId, projection };
       let changed = false;
       const next = { ...editStateRef.current };
       projection.edits.forEach((edit) => {

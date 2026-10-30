@@ -1,3 +1,4 @@
+import { createRedlineStreamProjector } from "../lib/redline";
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import {
   resumeAssistant,
@@ -406,6 +407,7 @@ export function useWordAssistantChat({
         if (!requestIsCurrent()) return;
 
         let streamedContent = "";
+        const redlineProjector = createRedlineStreamProjector();
         let assistantCitations: SavedMessage["citations"];
         // Canonical rows for this turn's tool-proposed edits. A live turn
         // learns an edit exists when the call is forwarded, long before the
@@ -451,6 +453,7 @@ export function useWordAssistantChat({
                 messageId,
                 streamedContent,
                 assistantMessageHasStableId,
+                redlineProjector.projection,
               );
             }
           }
@@ -806,6 +809,7 @@ export function useWordAssistantChat({
           const onStreamText = (chunk: string): void => {
               if (!requestIsCurrent()) return;
               streamedContent += chunk;
+              redlineProjector.append(chunk);
               assistantEvents = appendAssistantContent(assistantEvents, chunk);
               redlineParsePending = true;
               publishAssistantEvents();
@@ -895,6 +899,7 @@ export function useWordAssistantChat({
               assistantMessageId,
               streamedContent,
               assistantMessageHasStableId,
+              redlineProjector.projection,
             );
             // A malformed block (e.g. no usable replacement or format) never
             // seals; settle its card on "incomplete" rather than leaving the
