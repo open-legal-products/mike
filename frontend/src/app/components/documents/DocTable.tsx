@@ -1,5 +1,6 @@
 "use client";
 
+import { useDocumentConversionPolling } from "@/app/hooks/useDocumentConversionPolling";
 import {
     type Dispatch,
     type DragEvent,
@@ -16,7 +17,6 @@ import { Loader2, AlertCircle, ChevronDown, ChevronRight } from "lucide-react";
 import {
     UploadBatchError,
     deleteDocument,
-    getDocument,
     getDocumentUrl,
     downloadDocumentsZip,
     listDocumentVersions,
@@ -1046,40 +1046,7 @@ export function DocTable({
         return () => document.removeEventListener("dragend", handleDragEnd);
     }, []);
 
-    // Poll documents stuck in deferred conversion until the backend marks
-    // them "ready"/"error" (async conversion flips status server-side)
-    useEffect(() => {
-        const converting = documents.filter(
-            (d) => d.status === "pending" || d.status === "processing",
-        );
-        if (converting.length === 0) return;
-
-        let cancelled = false;
-        const interval = window.setInterval(() => {
-            for (const doc of converting) {
-                getDocument(doc.id)
-                    .then((latest) => {
-                        if (cancelled || latest.status === doc.status) return;
-                        setDocuments((prev) =>
-                            prev.map((d) =>
-                                d.id === doc.id ? { ...d, ...latest } : d,
-                            ),
-                        );
-                    })
-                    .catch(() => {
-                        // Deliberately silent: this 3s status poll retries by
-                        // itself on the next tick and the user asked for
-                        // nothing here, so a notice would report a failure that
-                        // has already healed. A conversion that really fails
-                        // arrives as an "error" status on the row.
-                    });
-            }
-        }, 3000);
-        return () => {
-            cancelled = true;
-            window.clearInterval(interval);
-        };
-    }, [documents, setDocuments]);
+    useDocumentConversionPolling(documents, setDocuments);
 
     // Scroll new-folder input into view whenever it appears
     useEffect(() => {

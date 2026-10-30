@@ -2836,6 +2836,15 @@ export async function uploadStandaloneDocuments(
     });
 }
 
+export async function getDocumentStatuses(documentIds: string[], signal?: AbortSignal): Promise<Document[]> {
+    return apiRequest<Document[]>("documents.directory", "/single-documents/status", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ document_ids: documentIds }),
+        signal,
+    });
+}
+
 export async function getDocument(documentId: string): Promise<Document> {
     return apiRequest<Document>("documents.directory", `/single-documents/${documentId}`);
 }
