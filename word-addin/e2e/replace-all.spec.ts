@@ -245,3 +245,24 @@ test("a replace-all card survives a task-pane reload and still resolves all occu
     WRITE,
   ]);
 });
+
+
+test("replace-all keeps reverse host order, saves once per pass, and stops at fifty", async ({ addin, page }) => {
+  const text = Array.from({ length: 51 }, () => "Acme Corp").join(". ");
+  await addin.mockChatStream([REPLACE_ALL_BLOCK]);
+  await addin.gotoTaskpane({ documentText: text });
+  await addin.expectAuthedShell();
+  await page.getByPlaceholder("How can I help?").fill("Rename the company everywhere");
+  await page.getByRole("button", { name: "Send" }).click();
+  await expect(page.getByRole("button", { name: "Apply", exact: true })).toBeVisible();
+  const savesBefore = (await addin.wordCalls()).settingsSaves;
+  await applyReviewProposal(page);
+  await expect(page.getByText(/Applied 50 of 51 occurrences/)).toBeVisible();
+  const calls = await addin.wordCalls();
+  expect(calls.replacementPositions).toEqual(Array.from({ length: 50 }, (_, i) => `Acme Corp#${50 - i}`));
+  expect(calls.trackedChanges).toHaveLength(50);
+  // Document-local durable markers still survive each host call; batching
+  // anchors and replay IDs removes the old second whole-settings save.
+  expect(calls.settingsSaves - savesBefore).toBeLessThanOrEqual(50);
+  expect(calls.acceptedChanges).toEqual([]);
+});
