@@ -89,19 +89,25 @@ export async function getProjectsOverview(
   const { userId, userEmail, includeDocuments, filters } = args;
   const normalizedUserEmail = userEmail?.trim().toLowerCase();
 
-  const paginateAfterParticipation = includeDocuments && args.participatingOnly && filters;
-  const rpcArgs = filters && !paginateAfterParticipation
-    ? buildProjectsOverviewRpcArgs({
-        userId,
-        userEmail: normalizedUserEmail,
-        scope: filters.scope,
-        pagination: filters.pagination,
-        searchTerm: filters.searchTerm,
-        sort: filters.sort,
-        practice: filters.practice,
-        ownerUserId: filters.ownerUserId,
-        workspace: filters.workspace,
-      })
+  // Participation is a selection predicate, so it must run before SQL LIMIT
+  // and OFFSET, alongside search/scope filters. Paging the full list first
+  // creates short pages; using the legacy RPC instead discards those filters.
+  const participationInSql = Boolean(filters && args.participatingOnly);
+  const rpcArgs = filters
+    ? {
+        ...buildProjectsOverviewRpcArgs({
+          userId,
+          userEmail: normalizedUserEmail,
+          scope: filters.scope,
+          pagination: filters.pagination,
+          searchTerm: filters.searchTerm,
+          sort: filters.sort,
+          practice: filters.practice,
+          ownerUserId: filters.ownerUserId,
+          workspace: filters.workspace,
+        }),
+        ...(participationInSql ? { p_participating_only: true } : {}),
+      }
     : { p_user_id: userId, p_user_email: normalizedUserEmail ?? null };
 
   const { data, error } = await db.rpc("get_projects_overview", rpcArgs);
@@ -112,13 +118,10 @@ export async function getProjectsOverview(
   let visibleProjects = ((data ?? []) as ProjectParticipationRow[]).filter(
     project => workspaceMatches(args.workspace ?? filters?.workspace, project.org_id),
   );
-  if (args.participatingOnly) {
+  if (args.participatingOnly && !participationInSql) {
     const participating = await filterParticipatingProjects(db, visibleProjects, userId, normalizedUserEmail);
     if (!participating.ok) return { ok: false, error: reportableServiceError(participating) };
     visibleProjects = participating.data;
-    if (paginateAfterParticipation) {
-      visibleProjects = visibleProjects.slice(filters!.pagination.offset, filters!.pagination.offset + filters!.pagination.limit);
-    }
   }
   const accessSummary = await ensureResourceAccessSummaries(
     db,

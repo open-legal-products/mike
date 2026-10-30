@@ -10215,6 +10215,7 @@ as $$
   order by vp.created_at desc;
 $$;
 
+drop function if exists public.get_projects_overview(text,text,text,integer,integer,text,text,text,text,text,text);
 create or replace function public.get_projects_overview(
   p_user_id text,
   p_user_email text,
@@ -10226,7 +10227,8 @@ create or replace function public.get_projects_overview(
   p_sort_direction text,
   p_practice text,
   p_owner_user_id text,
-  p_workspace text default null
+  p_workspace text default null,
+  p_participating_only boolean default false
 )
 returns table (
   id uuid,
@@ -10255,7 +10257,20 @@ as $$
     select p.*, access.role as list_access_role
     from public.project_list_access(p_user_id,p_user_email,p_workspace) access
     join public.projects p on p.id=access.project_id
-    where true
+    where (
+        p_participating_only is not true
+        or p.user_id = (case when p_user_id ~ '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$' then p_user_id::uuid end)
+        or (p.org_id is null and exists (
+          select 1 from public.project_access_grants participation
+          where participation.project_id=p.id and participation.email=lower(trim(p_user_email))
+        ))
+        or (p.org_id is not null and exists (
+          select 1 from public.project_org_access_overrides participation
+          where participation.project_id=p.id
+            and participation.user_id=(case when p_user_id ~ '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$' then p_user_id::uuid end)
+            and participation.role in ('owner','editor','viewer')
+        ))
+      )
       and public.workspace_matches(p_workspace, p.org_id)
       and (
         coalesce(p_scope, 'all') = 'all'
@@ -10374,6 +10389,9 @@ as $$
   limit greatest(coalesce(p_limit, 20), 1)
   offset greatest(coalesce(p_offset, 0), 0);
 $$;
+revoke all on function public.get_projects_overview(text,text,text,integer,integer,text,text,text,text,text,text,boolean) from public,anon,authenticated;
+grant execute on function public.get_projects_overview(text,text,text,integer,integer,text,text,text,text,text,text,boolean) to service_role;
+
 
 create or replace function public.get_project_ids_overview(
   p_user_id text,
@@ -11938,5 +11956,6 @@ insert into public.schema_migrations (filename) values
   ('20261030_09_search_project_verdict_once.sql'),
   ('20261030_10_audit_distinct_resource_verdicts.sql'),
   ('20261030_11_departure_affected_root_locks.sql'),
-  ('20261030_20_project_directory_page_first.sql')
+  ('20261030_20_project_directory_page_first.sql'),
+  ('20261030_21_project_participation_before_page.sql')
 on conflict (filename) do nothing;

@@ -210,6 +210,42 @@ describe("projects.routes", () => {
 
     // ── GET /projects (overview) ──────────────────────────────────────────
     describe("GET /projects", () => {
+        it.each(["", "&include=documents"])("preserves all filters and the SQL participation page%s", async (include) => {
+            // These are already-authorized, explicitly shared rows from a
+            // later SQL page. Rechecking grants or slicing again would lose
+            // the page; dropping the filters would hydrate unrelated rows.
+            supabaseState.rpc = {
+                data: ["p101", "p102"].map(id => ({
+                    id, user_id: "other", org_id: null,
+                    access_role: "viewer", access_scope: "shared", direct_grant_count: 1,
+                })),
+                error: null,
+            };
+            supabaseState.tables.project_access_grants = {
+                data: null, error: new Error("Participation must be filtered before SQL pagination"),
+            };
+            const res = await request(app)
+                .get(`/projects?participating=true&workspace=personal&scope=shared&search=Matter&practice=Corporate&owner_user_id=other&sort_key=name&sort_direction=asc&limit=2&offset=100${include}`)
+                .set(...AUTH);
+
+            expect(res.status).toBe(200);
+            expect(res.body.map((project: { id: string }) => project.id)).toEqual(["p101", "p102"]);
+            expect(supabaseState.rpcCalls).toEqual([{
+                fn: "get_projects_overview",
+                args: {
+                    p_user_id: "u1", p_user_email: "u1@test.local",
+                    p_scope: "shared", p_limit: 2, p_offset: 100,
+                    p_search_term: "Matter", p_sort_key: "name", p_sort_direction: "asc",
+                    p_practice: "Corporate", p_owner_user_id: "other", p_workspace: "personal",
+                    p_participating_only: true,
+                },
+            }]);
+            expect(supabaseState.operations).not.toContain("from:project_access_grants");
+            expect(supabaseState.operations).not.toContain("from:project_org_access_overrides");
+            if (include) expect(res.body.every((project: { documents: unknown[]; folders: unknown[] }) =>
+                project.documents.length === 0 && project.folders.length === 0)).toBe(true);
+        });
+
         it.each(["owner", "admin"])("keeps an org %s's public and private project participation scoped to its workspace", async (orgRole) => {
             const orgId = "7b1d9d0e-3c5a-4f6e-9a51-0c2f7d3e8a11";
             const inheritedRole = orgRole === "owner" ? "owner" : "editor";
