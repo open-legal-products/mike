@@ -3359,10 +3359,12 @@ export function DocTable({
     ) => {
         if (ids.length === 0) return;
         const snapshot = docs;
+        const snapshotById = new Map(snapshot.map(document => [document.id, document]));
+        const movingIds = new Set(ids);
         const updatedAt = new Date().toISOString();
         setDocuments((prev) =>
             prev.map((document) =>
-                ids.includes(document.id)
+                movingIds.has(document.id)
                     ? {
                           ...document,
                           folder_id: targetFolderId,
@@ -3371,8 +3373,8 @@ export function DocTable({
                     : document,
             ),
         );
-        const results = await Promise.allSettled(
-            ids.map((id) => operations.moveDocument(id, targetFolderId)),
+        const results = await settleWithConcurrency(
+            ids, 5, id => operations.moveDocument(id, targetFolderId),
         );
         // Rows the server did move carry its version of the record. A move
         // that resolves without one (a 204, say) still counts as moved, so
@@ -3387,6 +3389,7 @@ export function DocTable({
         const failedIds = ids.filter(
             (_, index) => results[index].status === "rejected",
         );
+        const failedIdSet = new Set(failedIds);
         // Put the rows that did not move back where they were instead of
         // leaving them where they never arrived.
         setDocuments((prev) =>
@@ -3394,8 +3397,8 @@ export function DocTable({
                 if (updatedById.has(document.id)) {
                     return { ...document, ...updatedById.get(document.id)! };
                 }
-                if (!failedIds.includes(document.id)) return document;
-                const before = snapshot.find((doc) => doc.id === document.id);
+                if (!failedIdSet.has(document.id)) return document;
+                const before = snapshotById.get(document.id);
                 return before
                     ? {
                           ...document,

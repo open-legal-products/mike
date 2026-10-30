@@ -1,5 +1,5 @@
 import { useState, type ComponentProps } from "react";
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { ToastViewportUI, clearToasts } from "@/shared/ui/ToastUI";
@@ -188,6 +188,26 @@ describe("DocTable remove-from-folder failures", () => {
             ),
         ).toBeInTheDocument();
         expect(tableOperations.refreshCollection).toHaveBeenCalledOnce();
+    });
+
+    it("limits a large move to five active requests and eventually completes every row", async () => {
+        let active = 0, peak = 0;
+        const release: (() => void)[] = [];
+        const move = vi.fn((id: string) => new Promise<Document>(resolve => {
+            active++; peak = Math.max(peak, active);
+            release.push(() => { active--; resolve({ ...document(id, `${id}.pdf`), folder_id: null }); });
+        }));
+        const docs = Array.from({length: 12}, (_, i) => document(String(i), `${i}.pdf`));
+        render(<Harness initialDocuments={docs} tableOperations={operations(move)} />);
+        const user = userEvent.setup();
+        for (const doc of docs) await user.click(screen.getByLabelText(`Select ${doc.filename}`));
+        await user.click(screen.getByRole("button", {name:"Actions"}));
+        await user.click(screen.getByRole("menuitem", {name:"Remove from subfolder"}));
+        expect(move).toHaveBeenCalledTimes(5);
+        while (release.length) await act(async () => { release.shift()!(); await Promise.resolve(); });
+        expect(move).toHaveBeenCalledTimes(12);
+        expect(peak).toBe(5);
+        expect(JSON.parse(screen.getByTestId("documents-state").textContent!).every((d: Document) => d.folder_id === null)).toBe(true);
     });
 
     it("warns on partial bulk failure and merges successful server rows", async () => {
