@@ -59,6 +59,8 @@ permissions:
 concurrency:
   group: publish-images
   cancel-in-progress: false
+  # Preserve up to 100 pending runs instead of replacing a queued release.
+  queue: max
 
 env:
   REGISTRY: ghcr.io
@@ -79,6 +81,8 @@ jobs:
       upload_maps: ${{ steps.identity.outputs.upload_maps }}
     steps:
       - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
 
       - id: identity
         env:
@@ -184,6 +188,8 @@ jobs:
               SENTRY_DSN=${{ needs.identity.outputs.reporting == 'fork' && vars.FORK_SENTRY_DSN_BACKEND || '' }}
     steps:
       - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
 
       - uses: docker/setup-buildx-action@v4
 
@@ -266,6 +272,8 @@ jobs:
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
 
       - uses: actions/setup-node@v7.1.0
         with:

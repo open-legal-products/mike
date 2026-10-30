@@ -400,7 +400,7 @@ export function reportingDestination(env: NodeJS.ProcessEnv): ReportingDestinati
         ...(env.SENTRY_INSTALL?.trim() ? { install: installKind(env.SENTRY_INSTALL) } : {}),
     };
     // An explicit runtime value (true or false) wins over the image's baked
-    // default; the shipped .env sets SENTRY_DISABLED=false deliberately.
+    // default; the sample .env leaves it empty to preserve that default.
     const runtimeDisabled = env.SENTRY_DISABLED?.trim();
     const runtimeDsn = env.SENTRY_DSN?.trim();
     const buildDsn = env.NEXT_PUBLIC_SENTRY_DSN?.trim();
