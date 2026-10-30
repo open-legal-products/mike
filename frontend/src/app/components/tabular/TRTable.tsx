@@ -7,6 +7,7 @@ import {
     useMemo,
     useRef,
     useState,
+    useSyncExternalStore,
 } from "react";
 import { Loader2, Plus, Upload } from "lucide-react";
 import type {
@@ -27,6 +28,7 @@ import {
 import { EmptyState } from "@/app/components/ui/empty-state";
 import { PillButtonUI } from "@/shared/ui/PillButtonUI";
 import { TabularReviewSkeuoIcon } from "@/app/components/shared/AppSidebarSkeuoIcons";
+import type { ReviewCellStore } from "./reviewCellStore";
 import { indexReviewCells } from "./reviewCellIndex";
 import { TRFirstColumnCell } from "./TRFirstColumnCell";
 import {
@@ -58,6 +60,7 @@ interface Props {
     rows: TabularReviewRow[];
     documents: Document[];
     cells: TabularCell[];
+    cellStore?: ReviewCellStore;
     savingColumn: boolean;
     savingColumnsConfig: boolean;
     selectedRowIds: string[];
@@ -91,6 +94,7 @@ export const TRTable = forwardRef<TRTableHandle, Props>(function TRTable(
         rows,
         documents,
         cells,
+        cellStore,
         savingColumn,
         savingColumnsConfig,
         selectedRowIds,
@@ -423,32 +427,15 @@ export const TRTable = forwardRef<TRTableHandle, Props>(function TRTable(
                                         key={col.index}
                                         className={`${COL_W} border-b border-r border-gray-200 transition-colors ${isHighlighted ? "bg-blue-200" : ""}`}
                                     >
-                                        {cell && (
-                                            <TabularCellComponent
-                                                cell={cell}
-                                                column={col}
-                                                closeSignal={scrollCloseSignal}
-                                                onExpand={() => onExpand(cell)}
-                                                onCitationClick={(
-                                                    page,
-                                                    quote,
-                                                    citationRef,
-                                                    sheet,
-                                                    citationCell,
-                                                    documentId,
-                                                ) =>
-                                                    onCitationClick(
-                                                        cell,
-                                                        page,
-                                                        quote,
-                                                        citationRef,
-                                                        sheet,
-                                                        citationCell,
-                                                        documentId,
-                                                    )
-                                                }
-                                            />
-                                        )}
+                                        <LiveReviewCell
+                                            cell={cell}
+                                            rowId={row.id}
+                                            column={col}
+                                            store={cellStore}
+                                            closeSignal={scrollCloseSignal}
+                                            onExpand={onExpand}
+                                            onCitationClick={onCitationClick}
+                                        />
                                     </div>
                                 );
                             })}
@@ -460,3 +447,27 @@ export const TRTable = forwardRef<TRTableHandle, Props>(function TRTable(
         </TableScrollArea>
     );
 });
+
+const noopSubscribe = () => () => {};
+function LiveReviewCell({ cell, rowId, column, store, closeSignal, onExpand, onCitationClick }: {
+    cell: TabularCell | undefined;
+    rowId: string;
+    column: ColumnConfig;
+    store?: ReviewCellStore;
+    closeSignal: number;
+    onExpand: Props["onExpand"];
+    onCitationClick: Props["onCitationClick"];
+}) {
+    const current = useSyncExternalStore(
+        store ? listener => store.subscribeCell(rowId, column.index, listener) : noopSubscribe,
+        () => store ? store.get(rowId, column.index) : cell,
+        () => cell,
+    );
+    return current ? <TabularCellComponent
+        cell={current}
+        column={column}
+        closeSignal={closeSignal}
+        onExpand={() => onExpand(current)}
+        onCitationClick={(...args) => onCitationClick(current, ...args)}
+    /> : null;
+}

@@ -4,6 +4,8 @@ import { RowActionMenuItems } from "@/app/components/shared/RowActions";
 import { rowActionSelectionIds } from "@/app/components/shared/TablePrimitive";
 import { SelectionActionsMenu } from "@/app/components/shared/SelectionActionsMenu";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useReviewCells } from "./reviewCellStore";
+import { indexReviewCells } from "./reviewCellIndex";
 import { useRouter, useSearchParams } from "next/navigation";
 import {
     Plus,
@@ -136,7 +138,7 @@ export function TRView({ reviewId, projectId }: Props) {
         review ? (review.org_id ?? null) : undefined,
     );
     const [project, setProject] = useState<Project | null>(null);
-    const [cells, setCells] = useState<TabularCell[]>([]);
+    const [cells, setCells, cellStore] = useReviewCells();
     const [documents, setDocuments] = useState<Document[]>([]);
     const [rows, setRows] = useState<TabularReviewRow[]>([]);
     const [columns, setColumns] = useState<ColumnConfig[]>([]);
@@ -386,7 +388,7 @@ export function TRView({ reviewId, projectId }: Props) {
         return () => {
             cancelled = true;
         };
-    }, [reviewId, projectId]);
+    }, [reviewId, projectId, setCells]);
 
     // A review opened by link may change the active workspace. Its move
     // destinations follow the review itself, including while that switch loads.
@@ -769,18 +771,10 @@ export function TRView({ reviewId, projectId }: Props) {
             try {
                 const data = frame as Record<string, unknown>;
                 if (data.type === "cell_update") {
-                    setCells((prev) =>
-                        prev.map((c) =>
-                            c.row_id === data.row_id &&
-                            c.column_index === data.column_index
-                                ? {
-                                      ...c,
-                                      content: data.content as TabularCell["content"],
-                                      status: data.status as TabularCell["status"],
-                                  }
-                                : c,
-                        ),
-                    );
+                    cellStore.patch(data.row_id as string, data.column_index as number, {
+                        content: data.content as TabularCell["content"],
+                        status: data.status as TabularCell["status"],
+                    });
                 } else if (data.type === "error") {
                     // The frame is the run's failure as the server saw it;
                     // its code and request id match it to the backend's own
@@ -1000,14 +994,11 @@ export function TRView({ reviewId, projectId }: Props) {
             notifyTabularReviewsChanged();
 
             // Optimistically set empty/pending/error cells to generating (skip done cells)
-            setCells((prev) =>
-                rows.flatMap((row) =>
+            setCells((prev) => {
+                const indexed = indexReviewCells(prev);
+                return rows.flatMap((row) =>
                     columns.map((col) => {
-                        const existing = prev.find(
-                            (c) =>
-                                c.row_id === row.id &&
-                                c.column_index === col.index,
-                        );
+                        const existing = indexed.get(row.id)?.get(col.index);
                         if (existing?.status === "done" && existing?.content) {
                             return existing;
                         }
@@ -1028,8 +1019,8 @@ export function TRView({ reviewId, projectId }: Props) {
                                   created_at: new Date().toISOString(),
                               };
                     }),
-                ),
-            );
+                );
+            });
 
             try {
                 await consumeGenerationStream(response);
@@ -1194,41 +1185,21 @@ export function TRView({ reviewId, projectId }: Props) {
             ...current,
             ...normalizedColumns,
         ]);
-        setCells((prev) => [
-            ...prev,
-            ...rows
-                .filter((row) =>
-                    normalizedColumns.some(
-                        (column) =>
-                            !prev.some(
-                                (cell) =>
-                                    cell.row_id === row.id &&
-                                    cell.column_index === column.index,
-                            ),
-                    ),
-                )
-                .flatMap((row) =>
-                    normalizedColumns
-                        .filter(
-                            (column) =>
-                                !prev.some(
-                                    (cell) =>
-                                        cell.row_id === row.id &&
-                                        cell.column_index === column.index,
-                                ),
-                        )
-                        .map((column) => ({
-                            id: `new-${row.id}-${column.index}`,
-                            review_id: reviewId,
-                            row_id: row.id,
-                            document_id: row.document_id,
-                            column_index: column.index,
-                            content: null,
-                            status: "pending" as const,
-                            created_at: new Date().toISOString(),
-                        })),
-                ),
-        ]);
+        setCells((prev) => {
+            const indexed = indexReviewCells(prev);
+            return [...prev, ...rows.flatMap(row => normalizedColumns
+                .filter(column => !indexed.get(row.id)?.has(column.index))
+                .map(column => ({
+                    id: `new-${row.id}-${column.index}`,
+                    review_id: reviewId,
+                    row_id: row.id,
+                    document_id: row.document_id,
+                    column_index: column.index,
+                    content: null,
+                    status: "pending" as const,
+                    created_at: new Date().toISOString(),
+                })))];
+        });
         try {
             await saveColumnsConfig(newCols);
         } catch (err) {
@@ -1339,11 +1310,7 @@ export function TRView({ reviewId, projectId }: Props) {
             (left, right) => left.index - right.index,
         )[0];
         if (!firstColumn) return;
-        const firstCell = cells.find(
-            (cell) =>
-                cell.row_id === row.id &&
-                cell.column_index === firstColumn.index,
-        );
+        const firstCell = cellStore.get(row.id, firstColumn.index);
         if (!firstCell) return;
 
         setExpandedCell(firstCell);
@@ -1364,7 +1331,7 @@ export function TRView({ reviewId, projectId }: Props) {
         );
         const previousDocuments = documents;
         const previousRows = rows;
-        const previousCells = cells;
+        const previousCells = cellStore.values();
         const remaining = documents.filter(
             (document) => !documentIdsToDelete.has(document.id),
         );
@@ -1434,11 +1401,13 @@ export function TRView({ reviewId, projectId }: Props) {
             setGenerationGuard("running");
             return;
         }
-        const previousCells = cells;
+        const previousCells = cellStore.values();
+        const previousById = new Map(previousCells.map(cell => [cell.id, cell]));
+        const targetRows = new Set(rowIds);
         const previousSelectedRowIds = selectedRowIds;
         setCells((prev) =>
             prev.map((c) =>
-                rowIds.includes(c.row_id)
+                targetRows.has(c.row_id)
                     ? { ...c, content: null, status: "pending" }
                     : c,
             ),
@@ -1465,10 +1434,8 @@ export function TRView({ reviewId, projectId }: Props) {
             if (!cellMutationsBlockedRef.current) {
                 setCells((current) =>
                     current.map((cell) =>
-                        rowIds.includes(cell.row_id)
-                            ? (previousCells.find(
-                                  (previous) => previous.id === cell.id,
-                              ) ?? cell)
+                        targetRows.has(cell.row_id)
+                            ? (previousById.get(cell.id) ?? cell)
                             : cell,
                     ),
                 );
@@ -1632,7 +1599,7 @@ export function TRView({ reviewId, projectId }: Props) {
             index,
         }));
         const previousColumns = columnsRef.current;
-        const previousCells = cells;
+        const previousCells = cellStore.values();
         setApplyingWorkflow(true);
         applyColumns(() => nextColumns);
         setCells([]);
@@ -1821,7 +1788,7 @@ export function TRView({ reviewId, projectId }: Props) {
                                                             "Tabular Review",
                                                         columns,
                                                         rows,
-                                                        cells,
+                                                        cells: cellStore.values(),
                                                     }),
                                                 disabled:
                                                     columns.length === 0 ||
@@ -2051,6 +2018,7 @@ export function TRView({ reviewId, projectId }: Props) {
                                 rows={filteredRows}
                                 documents={documents}
                                 cells={cells}
+                                cellStore={cellStore}
                                 highlightedCell={highlightedCell}
                                 savingColumn={savingColumn}
                                 savingColumnsConfig={savingColumnsConfig}
@@ -2146,11 +2114,7 @@ export function TRView({ reviewId, projectId }: Props) {
                                 setExpandedDocumentId(undefined);
                             }}
                             onNavigate={(rowId, columnIndex) => {
-                                const nextCell = cells.find(
-                                    (candidate) =>
-                                        candidate.row_id === rowId &&
-                                        candidate.column_index === columnIndex,
-                                );
+                                const nextCell = cellStore.get(rowId, columnIndex);
                                 if (nextCell) {
                                     setExpandedCell(nextCell);
                                     setExpandedCellCitation(undefined);
