@@ -127,7 +127,7 @@ try {
   await shot(page, "01-login");
 
   // 2. Sign up a fresh user through the product UI (local stack autoconfirms),
-  //    then walk the two-step onboarding wizard signup now hands off to.
+  //    then walk the four-step onboarding wizard signup now hands off to.
   await signUpThroughUi(page, { email: EMAIL, password: PASSWORD });
   // URL change alone can lie (a failed signup can still bounce through "/") —
   // signup succeeded is when we're off the auth pages entirely...
