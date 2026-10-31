@@ -208,11 +208,11 @@ test("keeps the canary's advisory when the workspace really depends on the vulne
     );
 });
 
-test("strips the injected canary when the workspace has only a patched version", async () => {
+test("isolates the canary when the workspace has a patched adm-zip version", async () => {
     requests.length = 0;
-    respond = (url) => {
+    respond = (url, body) => {
         if (url === NPM_BULK_PATH)
-            return { status: 200, body: { "adm-zip": [CANARY_ADVISORY] } };
+            return { body: body["adm-zip"].includes("0.5.12") ? { "adm-zip": [CANARY_ADVISORY] } : {} };
         return { status: 200, body: {} };
     };
 
@@ -224,6 +224,7 @@ test("strips the injected canary when the workspace has only a patched version",
         },
     });
 
+    deepStrictEqual(requests.map((r) => r.body["adm-zip"]), [["0.5.12"], ["0.6.1"]]);
     strictEqual(result.status, 0, `expected a pass\n${result.stderr}`);
     strictEqual(
         result.stdout.includes("audit gate passed (0 high/critical advisories"),
@@ -451,3 +452,58 @@ for (const field of ["optionalDependencies", "peerDependencies"]) {
         strictEqual(result.stderr.includes("outside the approved dependency scope"), true);
     });
 }
+
+for (const versions of [["0.5.16"], ["0.5.12", "0.5.16"], ["0.6.1", "0.5.16"]]) {
+    test(`retains real adm-zip findings independently of the canary: ${versions.join(", ")}`, async () => {
+        requests.length = 0;
+        const realGhsa = "GHSA-1111-2222-4444";
+        respond = (url, body) => {
+            if (url !== NPM_BULK_PATH) return { body: {} };
+            const queriedVersions = body["adm-zip"];
+            // Separate requests are essential: the response has no per-version
+            // keys, so combining these versions would lose their attribution.
+            strictEqual(queriedVersions.length, 1);
+            if (queriedVersions[0] === "0.5.12") return { body: { "adm-zip": [CANARY_ADVISORY] } };
+            if (queriedVersions[0] === "0.5.16") return { body: { "adm-zip": [{
+                url: `https://github.com/advisories/${realGhsa}`, title: "Real installed-version advisory", severity: "high",
+            }] } };
+            return { body: {} };
+        };
+        const packages = Object.fromEntries(versions.map((version, index) => [
+            `node_modules/consumer-${index}/node_modules/adm-zip`, { version },
+        ]));
+        const result = await runGate({ lockfileVersion: 3, packages });
+        notStrictEqual(result.status, 0, result.stdout);
+        strictEqual(result.stderr.includes(realGhsa), true, result.stderr);
+        strictEqual(result.stderr.includes(CANARY_ADVISORY.url.split("/").pop()), versions.includes("0.5.12"));
+        strictEqual(requests.some((r) => r.url === "/querybatch"), false);
+    });
+}
+
+test("a silent isolated canary probe falls back to OSV instead of trusting the real query", async () => {
+    requests.length = 0;
+    respond = (url, body) => {
+        if (url === NPM_BULK_PATH) return { body: {} };
+        if (url === "/querybatch") return { body: { results: body.queries.map(() => ({})) } };
+        return { body: {} };
+    };
+    const result = await runGate({ packages: { "node_modules/adm-zip": { version: "0.6.1" } } });
+    strictEqual(result.status, 0, result.stderr);
+    strictEqual(result.stderr.includes("canary"), true);
+    strictEqual(requests.some((r) => r.url === "/querybatch"), true);
+    // Only the probe was sent to npm. The actual installed version was
+    // independently checked by OSV after npm failed the canary contract.
+    deepStrictEqual(requests.filter((r) => r.url === NPM_BULK_PATH).map((r) => r.body), [{ "adm-zip": ["0.5.12"] }]);
+});
+
+test("a successful isolated probe does not hide a malformed real-package response", async () => {
+    respond = (url, body) => {
+        if (url === NPM_BULK_PATH && body["adm-zip"]?.[0] === "0.5.12") {
+            return { body: { "adm-zip": [CANARY_ADVISORY] } };
+        }
+        return { body: { error: "service unavailable" } };
+    };
+    const result = await runGate({ packages: { "node_modules/adm-zip": { version: "0.6.1" } } });
+    notStrictEqual(result.status, 0);
+    strictEqual(result.stderr.includes("Both advisory services failed"), true);
+});
