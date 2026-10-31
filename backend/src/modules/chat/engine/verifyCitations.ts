@@ -25,6 +25,20 @@ const UNREADABLE_SOURCES = new Set([
 ]);
 
 type QuoteLocation = { start: number; end: number; excerpt: string };
+
+type NormalizeOptions = NonNullable<Parameters<typeof normalizeWithMap>[1]>;
+
+// Progressively more tolerant matchers, tried after an exact substring.
+// Line-end hyphenation comes last: "clause-7.5-" at the end of one line and
+// "transactions" on the next is quoted as "clause-7.5-transactions", and
+// "vorzuneh-" / "men" as "vorzunehmen".
+const TOLERANT_MATCHERS: NormalizeOptions[] = [
+  {},
+  { stripPunctuation: true },
+  { joinLineEndHyphens: "keep" },
+  { joinLineEndHyphens: "drop" },
+  { stripPunctuation: true, joinLineEndHyphens: "keep" },
+];
 type QuoteVerificationResult = QuoteVerification & {
   needs_correction: boolean;
 };
@@ -36,6 +50,7 @@ type QuoteVerificationResult = QuoteVerification & {
  *   1. exact substring
  *   2. whitespace + case normalized
  *   3. whitespace + case + punctuation normalized (tolerant/fuzzy)
+ *   4. as 2 and 3, with words hyphenated at a line end joined
  * Offsets index into the EXTRACTED source text, not the raw file bytes.
  */
 export function locateQuote(
@@ -50,11 +65,11 @@ export function locateQuote(
     return { start: exactIdx, end: exactIdx + quote.length, excerpt: quote };
   }
 
-  // Tier 2: whitespace + case. Tier 3: also punctuation-tolerant.
-  return (
-    locateNormalized(source, quote, {}) ??
-    locateNormalized(source, quote, { stripPunctuation: true })
-  );
+  for (const opts of TOLERANT_MATCHERS) {
+    const location = locateNormalized(source, quote, opts);
+    if (location) return location;
+  }
+  return null;
 }
 
 /** Locate a quote at or after `from`, preserving offsets into `source`. */
@@ -75,12 +90,10 @@ function locateQuoteFrom(
       excerpt: quote,
     });
   }
-  const normalized = locateNormalized(suffix, quote, {});
-  if (normalized) candidates.push(normalized);
-  const punctuationTolerant = locateNormalized(suffix, quote, {
-    stripPunctuation: true,
-  });
-  if (punctuationTolerant) candidates.push(punctuationTolerant);
+  for (const opts of TOLERANT_MATCHERS) {
+    const location = locateNormalized(suffix, quote, opts);
+    if (location) candidates.push(location);
+  }
   const location = candidates.reduce<QuoteLocation | null>(
     (earliest, candidate) =>
       !earliest || candidate.start < earliest.start ? candidate : earliest,
@@ -137,7 +150,7 @@ function locateSegmentsInOrder(
 function locateNormalized(
   source: string,
   quote: string,
-  opts: { stripPunctuation?: boolean },
+  opts: NormalizeOptions,
 ): QuoteLocation | null {
   const { norm, origIdx } = normalizeWithMap(source, opts);
   const needle = normalizeWithMap(quote, opts).norm.trim();
