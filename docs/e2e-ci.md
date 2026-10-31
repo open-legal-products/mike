@@ -26,8 +26,10 @@ matrix:
    production ordering so the default and add-on catalog exists before startup;
 6. serves the production build (`next build` / `next start`) in one job and
    the development renderer (`next dev`) in another. The development job warms
-   static routes, sets `REACT_STRESS=1` for 4x Chromium CPU pressure, and fails
-   on React/observer loop diagnostics. Development overlays remain observable;
+   static and dynamic page routes, then probes `/api/auth/session` through Next
+   and requires an anonymous 401 response to warm the catch-all API gateway and
+   confirm the backend roundtrip. It sets `REACT_STRESS=1` for 4x Chromium CPU
+   pressure and fails on React/observer loop diagnostics. Development overlays remain observable;
    they are not suppressed to make selectors pass. Both jobs use the backend
    API (`:3001`) and web server (`:3000`) with isolated disposable services;
 7. runs `npx playwright test --project=chromium` on three production workers
