@@ -86,7 +86,37 @@ describe("runtime authentication configuration", () => {
         ...validProduction,
         WORD_ADDIN_URL: "https://word.example.test",
       }),
-    ).toThrow(/AUTH_HANDOFF_ENCRYPTION_SECRET is required/);
+    ).toThrow(/AUTH_HANDOFF_ENCRYPTION_SECRET/);
+  });
+
+  it("rejects the .env.example placeholder download and key-encryption secrets", () => {
+    expect(() =>
+      validateRuntimeConfiguration({
+        ...validProduction,
+        DOWNLOAD_SIGNING_SECRET: "replace-with-a-random-32-byte-hex-string",
+        USER_API_KEYS_ENCRYPTION_SECRET: "your-long-random-secret",
+      }),
+    ).toThrow(/DOWNLOAD_SIGNING_SECRET[\s\S]*USER_API_KEYS_ENCRYPTION_SECRET/s);
+  });
+
+  it("rejects real secrets that are too short to be meaningful", () => {
+    expect(() =>
+      validateRuntimeConfiguration({
+        ...validProduction,
+        DOWNLOAD_SIGNING_SECRET: "too-short",
+        USER_API_KEYS_ENCRYPTION_SECRET: "also-short",
+      }),
+    ).toThrow(/DOWNLOAD_SIGNING_SECRET[\s\S]*USER_API_KEYS_ENCRYPTION_SECRET/s);
+  });
+
+  it("does not require the optional secrets when they are unset", () => {
+    expect(() =>
+      validateRuntimeConfiguration({
+        ...validProduction,
+        DOWNLOAD_SIGNING_SECRET: undefined,
+        USER_API_KEYS_ENCRYPTION_SECRET: undefined,
+      }),
+    ).not.toThrow();
   });
 
   it("accepts the legacy anon key name for the user-session client", () => {

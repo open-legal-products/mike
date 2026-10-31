@@ -32,6 +32,10 @@ on:
   schedule:
     - cron: "17 4 * * *"
 
+permissions:
+  contents: read
+
+
 # Don't pile up runs on rapid pushes to the same PR; pushes to main each get
 # their own group (keyed by sha) and are never cancelled.
 concurrency:

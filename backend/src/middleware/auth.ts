@@ -59,6 +59,26 @@ function isLoginMfaBootstrapRoute(req: Request) {
   );
 }
 
+// user_profiles.mfa_on_login missing (42703) means a deployment that has not
+// run the migration yet. Enforcement cannot apply without the preference, so
+// the request proceeds for compatibility — but it must not be silent: report
+// once per process so operators see that login MFA is not active until the
+// migration lands.
+let loginMfaColumnMissingReported = false;
+
+function reportLoginMfaColumnMissing(error: { code?: string }) {
+  if (loginMfaColumnMissingReported) return;
+  loginMfaColumnMissingReported = true;
+  reportError(
+    new AppError(
+      "auth.login_mfa_column_missing",
+      "user_profiles.mfa_on_login is missing; login MFA enforcement is not active until the migration runs",
+      { cause: error },
+    ),
+    { level: "warning", tags: { component: "http" } },
+  );
+}
+
 async function enforceLoginMfaIfEnabled(
   req: Request,
   res: Response,
@@ -81,7 +101,10 @@ async function enforceLoginMfaIfEnabled(
       error: error.message,
       code: error.code,
     });
-    if (error.code === "42703") return true;
+    if (error.code === "42703") {
+      reportLoginMfaColumnMissing(error);
+      return true;
+    }
     sendInternalError(
       res,
       new AppError("db.query_failed", "login MFA preference lookup failed", {

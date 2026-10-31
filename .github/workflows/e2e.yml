@@ -29,6 +29,10 @@ on:
   schedule:
     - cron: "47 3 * * *"
 
+permissions:
+  contents: read
+
+
 # Don't pile up runs on rapid pushes to the same PR.
 concurrency:
   group: e2e-${{ github.event_name }}-${{ github.event_name == 'push' && github.sha || github.ref }}
