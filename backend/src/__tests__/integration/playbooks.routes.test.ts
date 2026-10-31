@@ -77,6 +77,12 @@ vi.mock("../../modules/playbooks/playbooks.service", async (importOriginal) => {
 import { playbooksRouter } from "../../modules/playbooks/playbooks.routes";
 import { PlaybookRequestError } from "../../modules/playbooks/playbooks.service";
 
+// Route handlers reject a non-uuid playbook id before the query. These tests
+// name a real uuid so they still reach the handler.
+const PLAYBOOK_ID = "11111111-1111-4111-8111-111111111111";
+const OTHER_PLAYBOOK_ID = "22222222-2222-4222-8222-222222222222";
+const DOCUMENT_ID = "44444444-4444-4444-8444-444444444444";
+
 // Keys shaped exactly as the upload-URL routes mint them.
 const STAGED_IMPORT_KEY = "playbooks/u1/imports/11111111-2222-4333-8444-555555555555.docx";
 const STAGED_SOURCE_KEY = "playbooks/u1/source-uploads/11111111-2222-4333-8444-555555555555.pdf";
@@ -309,12 +315,12 @@ describe("replacing a playbook from a Word file", () => {
       storageKey: STAGED_IMPORT_KEY,
       filename: "new.docx",
       model: "claude-opus-5",
-      playbookId: "pb-1",
+      playbookId: PLAYBOOK_ID,
     });
 
     expect(response.status).toBe(202);
     expect(queuePlaybookImport).toHaveBeenCalledWith(
-      expect.objectContaining({ playbookId: "pb-1" }),
+      expect.objectContaining({ playbookId: PLAYBOOK_ID }),
     );
   });
 
@@ -352,7 +358,7 @@ describe("playbook input validation", () => {
       queryReturning(table === "playbook_imports" ? [] : playbookRow()),
     );
 
-    const response = await request(app).put("/playbooks/pb-1").send(body);
+    const response = await request(app).put(`/playbooks/${PLAYBOOK_ID}`).send(body);
 
     expect(response.status).toBe(status);
     if (status === 400) expect(response.body.detail).toMatch(/invalid field/i);
@@ -383,7 +389,7 @@ describe("playbook input validation", () => {
     });
     const save = () =>
       request(app)
-        .put("/playbooks/pb-1")
+        .put(`/playbooks/${PLAYBOOK_ID}`)
         .send({ content: playbookRow().content_json });
 
     const refused = await save();
@@ -421,7 +427,7 @@ describe("playbook input validation", () => {
     );
 
     const response = await request(app)
-      .put("/playbooks/pb-1")
+      .put(`/playbooks/${PLAYBOOK_ID}`)
       .send({ content: playbookRow().content_json });
 
     expect(response.status).toBe(200);
@@ -431,7 +437,7 @@ describe("playbook input validation", () => {
     from.mockImplementation(() => queryReturning(playbookRow()));
 
     const response = await request(app)
-      .post("/playbooks/pb-1/review")
+      .post(`/playbooks/${PLAYBOOK_ID}/review`)
       .send({ documentText: "A contract.", model: "bogus/not-a-model" });
 
     expect(response.status).toBe(400);
@@ -482,7 +488,7 @@ describe("playbook deletion", () => {
       table === "playbook_sources" ? queryReturning([]) : playbook,
     );
 
-    const response = await request(app).delete("/playbooks/pb-1");
+    const response = await request(app).delete(`/playbooks/${PLAYBOOK_ID}`);
 
     expect(response.status).toBe(500);
     expect(JSON.stringify(response.body)).not.toMatch(/permission denied/);
@@ -503,7 +509,7 @@ describe("playbook deletion", () => {
     );
     deleteFile.mockResolvedValue(undefined);
 
-    const response = await request(app).delete("/playbooks/pb-1");
+    const response = await request(app).delete(`/playbooks/${PLAYBOOK_ID}`);
 
     expect(response.status).toBe(204);
     expect(deleteFile).toHaveBeenCalledWith("playbooks/u1/source.docx");
@@ -516,7 +522,7 @@ describe("playbook deletion", () => {
         action: "playbook.deleted",
         surface: "playbooks",
         title: "Commercial Playbook",
-        detail: { playbook_id: "pb-1" },
+        detail: { playbook_id: PLAYBOOK_ID },
       }),
     );
   });
@@ -586,7 +592,7 @@ describe("playbook source document", () => {
     createFileReadStream.mockReturnValue(Readable.from([Buffer.from("PK\x03\x04")]));
 
     const response = await request(app)
-      .get("/playbooks/pb-1/source")
+      .get(`/playbooks/${PLAYBOOK_ID}/source`)
       .buffer(true)
       .parse((res, done) => {
         const chunks: Buffer[] = [];
@@ -610,7 +616,7 @@ describe("playbook source document", () => {
       queryReturning(playbookRow({ source_storage_key: null })),
     );
 
-    const response = await request(app).get("/playbooks/pb-1/source");
+    const response = await request(app).get(`/playbooks/${PLAYBOOK_ID}/source`);
 
     expect(response.status).toBe(404);
     expect(response.body.detail).toMatch(/no source document/i);
@@ -621,7 +627,7 @@ describe("playbook source document", () => {
     from.mockImplementation(() => queryReturning(playbookRow()));
     headFile.mockResolvedValue(null);
 
-    const response = await request(app).get("/playbooks/pb-1/source");
+    const response = await request(app).get(`/playbooks/${PLAYBOOK_ID}/source`);
 
     expect(response.status).toBe(404);
     expect(createFileReadStream).not.toHaveBeenCalled();
@@ -632,7 +638,7 @@ describe("playbook source document", () => {
       queryReturning(playbookRow({ user_id: "someone-else" })),
     );
 
-    const response = await request(app).get("/playbooks/pb-1/source");
+    const response = await request(app).get(`/playbooks/${PLAYBOOK_ID}/source`);
 
     expect(response.status).toBe(404);
     expect(response.body.detail).toMatch(/not found/i);
@@ -648,12 +654,12 @@ describe("playbook supplementary documents over HTTP", () => {
     getSignedUploadUrl.mockResolvedValue("https://storage.example/put");
 
     const refused = await request(app)
-      .post("/playbooks/pb-1/sources/upload-url")
+      .post(`/playbooks/${PLAYBOOK_ID}/sources/upload-url`)
       .send({ filename: "notes.txt", sizeBytes: 10 });
     expect(refused.status).toBe(400);
 
     const response = await request(app)
-      .post("/playbooks/pb-1/sources/upload-url")
+      .post(`/playbooks/${PLAYBOOK_ID}/sources/upload-url`)
       .send({ filename: "Policy.pdf", sizeBytes: 2048 });
     expect(response.status).toBe(201);
     expect(response.body.storageKey).toMatch(
@@ -667,7 +673,7 @@ describe("playbook supplementary documents over HTTP", () => {
     deleteFile.mockResolvedValue(undefined);
 
     const response = await request(app)
-      .post("/playbooks/pb-1/sources")
+      .post(`/playbooks/${PLAYBOOK_ID}/sources`)
       .send({ storageKey: STAGED_SOURCE_KEY, filename: "a.pdf" });
 
     expect(response.status).toBe(404);
@@ -678,7 +684,7 @@ describe("playbook supplementary documents over HTTP", () => {
     from.mockImplementation(() => queryReturning(playbookRow()));
 
     const response = await request(app)
-      .post("/playbooks/pb-1/sources")
+      .post(`/playbooks/${PLAYBOOK_ID}/sources`)
       .send({ storageKey: "playbooks/u2/source-uploads/11111111-2222-4333-8444-555555555555.pdf", filename: "a.pdf" });
 
     expect(response.status).toBe(400);
@@ -688,7 +694,7 @@ describe("playbook supplementary documents over HTTP", () => {
   it("refuses a staged key that traverses out of the caller's prefix", async () => {
     from.mockImplementation(() => queryReturning(playbookRow()));
 
-    const response = await request(app).post("/playbooks/pb-1/sources").send({
+    const response = await request(app).post(`/playbooks/${PLAYBOOK_ID}/sources`).send({
       storageKey:
         "playbooks/u1/source-uploads/../../../documents/u2/d1/source.pdf",
       filename: "a.pdf",
@@ -707,7 +713,7 @@ describe("playbook supplementary documents over HTTP", () => {
     headFile.mockResolvedValue({ size: 4, etag: null, contentType: null });
     createFileReadStream.mockReturnValue(Readable.from([Buffer.from("%PDF")]));
 
-    const response = await request(app).get("/playbooks/pb-1/sources/s1/file");
+    const response = await request(app).get(`/playbooks/${PLAYBOOK_ID}/sources/s1/file`);
 
     expect(response.status).toBe(200);
     expect(response.headers["content-type"]).toBe("application/pdf");
@@ -716,7 +722,7 @@ describe("playbook supplementary documents over HTTP", () => {
       "playbooks/u1/pb-1/sources/s1.pdf",
     );
 
-    const missing = await request(app).get("/playbooks/pb-1/sources/nope/file");
+    const missing = await request(app).get(`/playbooks/${PLAYBOOK_ID}/sources/nope/file`);
     expect(missing.status).toBe(404);
   });
 });
@@ -884,7 +890,7 @@ describe("playbook import upload staging", () => {
     queuePlaybookImport.mockResolvedValue(started());
 
     const response = await request(app).post("/playbooks/import").send({
-      documentId: "doc-1",
+      documentId: DOCUMENT_ID,
       model: "gpt-5.4",
       name: "Saved",
     });
@@ -893,7 +899,7 @@ describe("playbook import upload staging", () => {
     expect(queuePlaybookImport).toHaveBeenCalledWith(
       expect.objectContaining({
         userId: "u1",
-        source: { documentId: "doc-1" },
+        source: { documentId: DOCUMENT_ID },
         model: "gpt-5.4",
         name: "Saved",
       }),
@@ -1019,9 +1025,140 @@ describe("playbook error boundary", () => {
   it("returns 404 for a playbook the caller does not own", async () => {
     from.mockImplementation(() => queryReturning(null));
 
-    const response = await request(app).get("/playbooks/pb-someone-else");
+    const response = await request(app).get(`/playbooks/${OTHER_PLAYBOOK_ID}`);
 
     expect(response.status).toBe(404);
     expect(response.body.detail).toMatch(/not found/i);
   });
+});
+
+describe("malformed playbook ids", () => {
+  beforeEach(() => vi.clearAllMocks());
+
+  it.each([
+    ["get", "/playbooks/not-a-uuid"],
+    ["put", "/playbooks/not-a-uuid"],
+    ["delete", "/playbooks/not-a-uuid"],
+    ["get", "/playbooks/not-a-uuid/source"],
+    ["get", "/playbooks/not-a-uuid/people"],
+    ["get", "/playbooks/not-a-uuid/shares"],
+    ["get", "/playbooks/not-a-uuid/sources"],
+    ["get", "/playbooks/not-a-uuid/runs"],
+    ["post", "/playbooks/not-a-uuid/review"],
+  ] as const)(
+    "answers 404 for %s %s before querying",
+    async (method, path) => {
+      const response = await request(app)[method](path).send({});
+
+      expect(response.status).toBe(404);
+      expect(response.body).toEqual({ detail: "Playbook not found." });
+      expect(from).not.toHaveBeenCalled();
+    },
+  );
+
+  it("answers 400 when an import names a playbook id that is not a uuid", async () => {
+    const response = await request(app).post("/playbooks/import").send({
+      storageKey: STAGED_IMPORT_KEY,
+      filename: "new.docx",
+      model: "gpt-5.4",
+      playbookId: "not-a-uuid",
+    });
+
+    expect(response.status).toBe(400);
+    expect(response.body).toEqual({ detail: "playbookId must be a UUID" });
+    expect(queuePlaybookImport).not.toHaveBeenCalled();
+    expect(headFile).not.toHaveBeenCalled();
+    expect(from).not.toHaveBeenCalled();
+  });
+
+  it("answers 400 when an import names a document id that is not a uuid", async () => {
+    const response = await request(app).post("/playbooks/import").send({
+      documentId: "not-a-uuid",
+      model: "gpt-5.4",
+    });
+
+    expect(response.status).toBe(400);
+    expect(response.body).toEqual({ detail: "documentId must be a UUID" });
+    expect(queuePlaybookImport).not.toHaveBeenCalled();
+    expect(from).not.toHaveBeenCalled();
+  });
+
+  it("answers 400 when a review names a document id that is not a uuid", async () => {
+    const response = await request(app)
+      .post(`/playbooks/${PLAYBOOK_ID}/review`)
+      .send({
+        documentText: "A contract.",
+        documentId: "not-a-uuid",
+        model: "gpt-5.4",
+      });
+
+    expect(response.status).toBe(400);
+    expect(response.body).toEqual({ detail: "documentId must be a UUID" });
+    expect(from).not.toHaveBeenCalled();
+  });
+
+  // A present id of the wrong type, null included, must not be read as "not
+  // supplied", or it would skip the uuid check: a playbookId of 123 would
+  // create a new playbook, and a documentId of 123 would fall through to the
+  // staged file.
+  const WRONG_TYPE_IDS = [
+    ["null", null],
+    ["a number", 123],
+    ["a boolean", true],
+    ["an object", { id: PLAYBOOK_ID }],
+    ["an array", [PLAYBOOK_ID]],
+  ] as const;
+
+  it.each(WRONG_TYPE_IDS)(
+    "answers 400 when an import names a playbook id that is %s",
+    async (_label, playbookId) => {
+      const response = await request(app).post("/playbooks/import").send({
+        storageKey: STAGED_IMPORT_KEY,
+        filename: "new.docx",
+        model: "gpt-5.4",
+        playbookId,
+      });
+
+      expect(response.status).toBe(400);
+      expect(response.body).toEqual({ detail: "playbookId must be a UUID" });
+      expect(queuePlaybookImport).not.toHaveBeenCalled();
+      expect(headFile).not.toHaveBeenCalled();
+      expect(from).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each(WRONG_TYPE_IDS)(
+    "answers 400 when an import names a document id that is %s",
+    async (_label, documentId) => {
+      const response = await request(app).post("/playbooks/import").send({
+        documentId,
+        storageKey: STAGED_IMPORT_KEY,
+        filename: "new.docx",
+        model: "gpt-5.4",
+      });
+
+      expect(response.status).toBe(400);
+      expect(response.body).toEqual({ detail: "documentId must be a UUID" });
+      expect(queuePlaybookImport).not.toHaveBeenCalled();
+      expect(headFile).not.toHaveBeenCalled();
+      expect(from).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each(WRONG_TYPE_IDS)(
+    "answers 400 when a review names a document id that is %s",
+    async (_label, documentId) => {
+      const response = await request(app)
+        .post(`/playbooks/${PLAYBOOK_ID}/review`)
+        .send({
+          documentText: "A contract.",
+          documentId,
+          model: "gpt-5.4",
+        });
+
+      expect(response.status).toBe(400);
+      expect(response.body).toEqual({ detail: "documentId must be a UUID" });
+      expect(from).not.toHaveBeenCalled();
+    },
+  );
 });
