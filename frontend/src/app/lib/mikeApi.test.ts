@@ -70,6 +70,7 @@ import {
     getAuditActors,
     getPanelDocument,
     getDocument,
+    getDocumentStatuses,
     getDocumentFile,
     getDocumentFileUrl,
     getDocumentUrl,
@@ -358,15 +359,15 @@ describe("apiRequest plumbing (via thin wrappers)", () => {
 
         await listProjects({ includeDocuments: true });
 
-        expect(lastFetchCall().url).toBe("/api/projects?include=documents");
+        expect(lastFetchCall().url).toBe("/api/projects?include=documents&limit=100&offset=0");
     });
 
-    it("requests actual project participation for the IDE without enabling pagination", async () => {
+    it("paginates document-rich participation requests while preserving metadata-only listing", async () => {
         fetchMock.mockImplementation(async () => jsonResponse([]));
         await listProjects({ participatingOnly: true });
         expect(lastFetchCall().url).toBe("/api/projects?participating=true");
         await listProjects({ includeDocuments: true, participatingOnly: true });
-        expect(lastFetchCall().url).toBe("/api/projects?include=documents&participating=true");
+        expect(lastFetchCall().url).toBe("/api/projects?include=documents&participating=true&limit=100&offset=0");
     });
 
     it("fetches every project-choice page within the requested workspace", async () => {
@@ -380,6 +381,14 @@ describe("apiRequest plumbing (via thin wrappers)", () => {
             "/api/projects?workspace=org-1&limit=100&offset=0",
             "/api/projects?workspace=org-1&limit=100&offset=100",
         ]);
+    });
+
+    it("loads all pages when documents are requested, including participating projects", async () => {
+        const first = Array.from({length:100}, (_, i) => ({id:`p${i}`, documents:[]}));
+        fetchMock.mockResolvedValueOnce(jsonResponse(first)).mockResolvedValueOnce(jsonResponse([{id:"last",documents:[]}])) ;
+        const projects = await listProjects({includeDocuments:true,participatingOnly:true});
+        expect(projects).toHaveLength(101);
+        expect(lastFetchCall().url).toBe("/api/projects?include=documents&participating=true&limit=100&offset=100");
     });
 
     // Regression guard: legacy tabular-review project pickers call
@@ -2919,6 +2928,13 @@ describe("thin endpoint wrappers", () => {
             name: "getDocument",
             call: () => getDocument("d1"),
             url: "/single-documents/d1",
+        },
+        {
+            name: "getDocumentStatuses",
+            call: () => getDocumentStatuses(["d1", "d2"]),
+            url: "/single-documents/status",
+            method: "POST",
+            body: { document_ids: ["d1", "d2"] },
         },
         {
             name: "deleteDocument",

@@ -1,4 +1,4 @@
-import type { RefObject } from "react";
+import { memo, type RefObject, type ComponentProps } from "react";
 import ReactMarkdown, { defaultUrlTransform } from "react-markdown";
 import remarkMath from "remark-math";
 import remarkGfm from "remark-gfm";
@@ -30,7 +30,7 @@ function isSameOrigin(url: string): boolean {
     }
 }
 
-export function MarkdownContent({
+function MarkdownContentImpl({
     text,
     inlineCitationTargets,
     caseCitations,
@@ -348,3 +348,16 @@ export function MarkdownContent({
         </div>
     );
 }
+
+export const MarkdownContent = memo(MarkdownContentImpl, (previous, next) => {
+    for (const key of Object.keys(previous) as (keyof ComponentProps<typeof MarkdownContentImpl>)[]) {
+        if (key === "inlineCitationTargets" || key === "caseCitations" || key === "caseDocuments") continue;
+        if (previous[key] !== next[key]) return false;
+    }
+    if (Object.keys(previous).length !== Object.keys(next).length) return false;
+    if (previous.inlineCitationTargets.length !== next.inlineCitationTargets.length || previous.inlineCitationTargets.some((value, index) => value !== next.inlineCitationTargets[index])) return false;
+    if (previous.caseCitations.size !== next.caseCitations.size || previous.caseDocuments.size !== next.caseDocuments.size) return false;
+    for (const [key, value] of previous.caseCitations) if (next.caseCitations.get(key) !== value) return false;
+    for (const [key, value] of previous.caseDocuments) if (next.caseDocuments.get(key) !== value) return false;
+    return true;
+});

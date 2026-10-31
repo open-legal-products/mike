@@ -422,3 +422,25 @@ describe("verifyCitations (batch)", () => {
     expect(out[0]).toMatchObject({ verified: true });
   });
 });
+
+describe("shared quote normalization", () => {
+  it("normalizes each source at most twice across an entire citation batch", async () => {
+    const operations = await import("./tools/documentOps.js");
+    const normalize = vi.spyOn(operations, "normalizeWithMap");
+    const source = "A long source without the requested phrase. ".repeat(500);
+    try {
+      const annotations = Array.from({ length: 200 }, (_, ref) => ({ ...docAnnotation([{ page: 1, quote: `missing phrase ${ref}` }]), ref }));
+      const result = await verifyCitations(annotations, async () => source, async () => []);
+      expect(result).toHaveLength(200);
+      expect(normalize.mock.calls.filter(([text]) => text === source)).toHaveLength(2);
+    } finally { normalize.mockRestore(); }
+  });
+
+  it("does not reuse stale normalized text between verification batches", async () => {
+    const annotation = docAnnotation([{ page: 1, quote: "new words" }]);
+    const old = await verifyCitations([annotation], async () => "OLD WORDS", async () => []);
+    const current = await verifyCitations([annotation], async () => "NEW WORDS", async () => []);
+    expect(old[0]).toMatchObject({ verified: false });
+    expect(current[0]).toMatchObject({ verified: true, quote: "NEW WORDS" });
+  });
+});

@@ -1,3 +1,4 @@
+import { mapWithConcurrency } from "../../lib/concurrency";
 // Business logic + data-access for the quick-actions module.
 //
 // Service layer behind quickActions.routes.ts. Every function takes an
@@ -118,11 +119,11 @@ async function withWorkflowDetails(
     .in("id", ids);
   if (error) throw error;
 
-  const accessVerdicts = await Promise.all(
-    (workflows ?? []).map(async (workflow) => {
+  const accessVerdicts = await mapWithConcurrency(
+    workflows ?? [], 5, async (workflow) => {
       if (!workspaceMatches(workspace, await teamOrgIdOf(db, workflow.org_id))) return { ok: false };
       return checkWorkflowAccess(workflow.id, userId, userEmail, db);
-    }),
+    },
   );
   const accessibleIds = new Set(
     (workflows ?? [])

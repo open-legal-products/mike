@@ -64,6 +64,9 @@ export interface WordCalls {
   trackedChanges: WordCall[];
   changeTrackingMode: string;
   searches: number;
+  bodyRevisionReads: number;
+  replacementPositions: string[];
+  settingsSaves: number;
   acceptedChanges: WordCall[];
   rejectedChanges: WordCall[];
   revealedChanges: WordCall[];
@@ -225,6 +228,9 @@ export function installOfficeMock(seed: OfficeSeed): void {
     trackedChanges: [],
     changeTrackingMode: "Off",
     searches: 0,
+    bodyRevisionReads: 0,
+    replacementPositions: [],
+    settingsSaves: 0,
     acceptedChanges: [],
     rejectedChanges: [],
     revealedChanges: [],
@@ -334,6 +340,7 @@ export function installOfficeMock(seed: OfficeSeed): void {
       delete settingsWorkingCopy[key];
     },
     saveAsync: (callback?: (result: any) => void) => {
+      wordCalls.settingsSaves++;
       documentState.settings = clone(settingsWorkingCopy);
       persistDocumentState();
       callback?.({ status: AsyncResultStatus.Succeeded, value: undefined });
@@ -835,12 +842,14 @@ export function installOfficeMock(seed: OfficeSeed): void {
       load: (_properties?: any) => undefined,
       // Mirrors real Word: the document-level collection reliably reports
       // every pending revision even when range-scoped reads come up short.
-      getTrackedChanges: () =>
-        makeTrackedChangeCollection(
+      getTrackedChanges: () => {
+        wordCalls.bodyRevisionReads++;
+        return makeTrackedChangeCollection(
           Object.values(documentState.revisions)
             .filter((revision) => revision.resolution === null)
             .map((revision) => makeStoredTrackedChange(revision.id)),
-        ),
+        );
+      },
       search: (query: string, options?: any) => {
         wordCalls.searches++;
         const documentText: string = w.__OFFICE_SEED__.documentText || "";
@@ -952,6 +961,7 @@ export function installOfficeMock(seed: OfficeSeed): void {
 
           const range = makeSearchRange("Select");
           range.insertText = (newText: string, location: string) => {
+            wordCalls.replacementPositions.push(positionKey);
             const entry = recordWrite(newText, location, query);
             lastWrite = entry;
             if (doc.changeTrackingMode === ChangeTrackingMode.trackAll) {

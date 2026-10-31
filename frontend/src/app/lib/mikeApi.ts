@@ -426,7 +426,7 @@ export async function listProjects(options?: {
     if (options?.workspace) params.set("workspace", options.workspace);
     // Workspace filters select the paginated backend overload. Pickers still
     // need the full list, including projects beyond its default first page.
-    if (options?.workspace && !options.participatingOnly) {
+    if (options?.includeDocuments || (options?.workspace && !options.participatingOnly)) {
         const projects: Project[] = [];
         const pageSize = 100;
         params.set("limit", String(pageSize));
@@ -2833,6 +2833,15 @@ export async function uploadStandaloneDocuments(
         files,
         onProgress: options?.onProgress,
         signal: options?.signal,
+    });
+}
+
+export async function getDocumentStatuses(documentIds: string[], signal?: AbortSignal): Promise<Document[]> {
+    return apiRequest<Document[]>("documents.directory", "/single-documents/status", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ document_ids: documentIds }),
+        signal,
     });
 }
 

@@ -1,3 +1,5 @@
+import { loadVersionTextState, cachedTextForModel } from "../../lib/documentTextCache";
+import { createTextExtractionCache, type TextExtractionCache } from "../../lib/textExtractionCache";
 // Row loading for the tabular-review module.
 //
 // A review's grid is made of ROWS (tabular_review_rows): a row is either one
@@ -122,10 +124,9 @@ export async function loadReviewRows(
     if (sourceError) throw new Error(sourceError.message);
     const byRow = new Map<string, string[]>();
     for (const source of sources ?? []) {
-        byRow.set(source.row_id, [
-            ...(byRow.get(source.row_id) ?? []),
-            source.document_id,
-        ]);
+        const ids = byRow.get(source.row_id) ?? [];
+        ids.push(source.document_id);
+        byRow.set(source.row_id, ids);
     }
     return rows.map((row) => ({
         ...row,
@@ -140,13 +141,33 @@ export async function loadReviewRow(
     reviewId: string,
     rowId: string,
 ): Promise<ReviewRow | null> {
-    const rows = await loadReviewRows(db, reviewId);
-    return rows.find((row) => row.id === rowId) ?? null;
+    const { data, error } = await db
+        .from("tabular_review_rows")
+        .select("*")
+        .eq("review_id", reviewId)
+        .eq("id", rowId)
+        .maybeSingle();
+    if (error) throw new Error(error.message);
+    if (!data) return null;
+    const row = data as ReviewRow;
+    const { data: sources, error: sourceError } = await db
+        .from("tabular_review_row_sources")
+        .select("document_id")
+        .eq("row_id", rowId)
+        .order("sort_index", { ascending: true });
+    if (sourceError) throw new Error(sourceError.message);
+    return {
+        ...row,
+        source_document_ids: sources?.length
+            ? sources.map((source) => source.document_id)
+            : row.document_id ? [row.document_id] : [],
+    };
 }
 
 export async function loadRowDocumentText(
     db: Db,
     row: ReviewRow,
+    textCache: TextExtractionCache = createTextExtractionCache(),
 ): Promise<string> {
     const sourceIds =
         row.source_document_ids ?? (row.document_id ? [row.document_id] : []);
@@ -158,10 +179,17 @@ export async function loadRowDocumentText(
         let markdown = "";
         if (storagePath) {
             try {
-                markdown = await extractDocumentMarkdown(
-                    () => downloadFile(storagePath),
-                    doc.file_type,
-                );
+                const stored = doc.current_version_id
+                    ? await loadVersionTextState(db, doc.id, doc.current_version_id, storagePath) : null;
+                if (stored?.text !== null && stored?.text !== undefined) {
+                    markdown = cachedTextForModel(stored);
+                } else {
+                    const load = () => extractDocumentMarkdown(() => downloadFile(storagePath), doc.file_type);
+                    // Without a revision we cannot safely reuse a mutable path.
+                    markdown = stored
+                        ? await textCache(`${doc.id}:${doc.current_version_id}:${stored.revision}:${storagePath}`, load)
+                        : await load();
+                }
             } catch (error) {
                 // Do not ask the model to fill cells from a source we refused.
                 if (error instanceof ExtractionBusyError || error instanceof ExtractionLimitError) throw error;

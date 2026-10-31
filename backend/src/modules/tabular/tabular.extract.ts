@@ -1,6 +1,7 @@
 // Extraction for the tabular-review module: the LLM cell-extraction helpers
 // and document (PDF/DOCX/Office) text extraction.
 
+import { cachedTextForModel } from "../../lib/documentTextCache";
 import { runIsolatedExtraction } from "../../lib/extraction/isolated";
 import {
     completeText,
@@ -250,14 +251,19 @@ export {
 } from "../../lib/extraction/documentMarkdown";
 
 /**
- * Markdown for a source document, parsed in the isolated extraction worker so
- * a huge file times out on its own instead of stalling this thread.
+ * Canonical accepted-view source text, matching the durable search index.
+ * Keep the historical name for callers; Markdown decoration must not depend
+ * on whether indexing finished. Parsing stays in the bounded worker.
  */
-export function extractDocumentMarkdown(
+export async function extractDocumentMarkdown(
     loadSource: () => Promise<ArrayBuffer | null>,
     fileType: string | null | undefined,
 ): Promise<string> {
-    return runIsolatedExtraction("documentMarkdown", loadSource, {
+    const extracted = await runIsolatedExtraction("documentText", loadSource, {
         fileType: fileType ?? "",
+    });
+    return cachedTextForModel({
+        revision: "", text: extracted.text,
+        textlessPageCount: extracted.textlessPageCount ?? 0,
     });
 }

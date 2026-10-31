@@ -14,6 +14,8 @@ import {
     screen,
     waitFor,
 } from "@testing-library/react";
+import { useSyncExternalStore } from "react";
+import type { ReviewCellStore } from "./reviewCellStore";
 import userEvent from "@testing-library/user-event";
 
 import {
@@ -37,6 +39,7 @@ const { tableProps } = vi.hoisted(() => ({
         current: null as null | {
             columns: ColumnConfig[];
             cells: TabularCell[];
+            cellStore: ReviewCellStore;
             rows: TabularReviewRow[];
             onUpdateColumn: (column: ColumnConfig) => void;
             onDeleteColumn: (columnIndex: number) => void;
@@ -79,6 +82,14 @@ vi.mock("./TRWorkflowModal", () => ({
 }));
 vi.mock("./TRChatPanel", () => ({ TRChatPanel: () => <div /> }));
 vi.mock("./TRSidePanel", () => ({ TRSidePanel: () => <div /> }));
+function ObservedTestCell({ cell, store }: { cell: TabularCell; store: ReviewCellStore }) {
+    const current = useSyncExternalStore(
+        listener => store.subscribeCell(cell.row_id, cell.column_index, listener),
+        () => store.get(cell.row_id, cell.column_index),
+    );
+    return <div data-testid={`cell-${cell.id}`}>{current?.content?.summary ?? ""}</div>;
+}
+
 vi.mock("./TRTable", () => ({
     // A stand-in for the grid: it publishes the props the view hands it so a
     // test can drive a column edit, and renders the state it was given so a
@@ -96,9 +107,7 @@ vi.mock("./TRTable", () => ({
                     <div key={row.id} data-testid={`row-${row.id}`} />
                 ))}
                 {props.cells.map((cell) => (
-                    <div key={cell.id} data-testid={`cell-${cell.id}`}>
-                        {cell.content?.summary ?? ""}
-                    </div>
+                    <ObservedTestCell key={cell.id} cell={cell} store={props.cellStore} />
                 ))}
             </div>
         );

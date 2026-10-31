@@ -210,6 +210,42 @@ describe("projects.routes", () => {
 
     // ── GET /projects (overview) ──────────────────────────────────────────
     describe("GET /projects", () => {
+        it.each(["", "&include=documents"])("preserves all filters and the SQL participation page%s", async (include) => {
+            // These are already-authorized, explicitly shared rows from a
+            // later SQL page. Rechecking grants or slicing again would lose
+            // the page; dropping the filters would hydrate unrelated rows.
+            supabaseState.rpc = {
+                data: ["p101", "p102"].map(id => ({
+                    id, user_id: "other", org_id: null,
+                    access_role: "viewer", access_scope: "shared", direct_grant_count: 1,
+                })),
+                error: null,
+            };
+            supabaseState.tables.project_access_grants = {
+                data: null, error: new Error("Participation must be filtered before SQL pagination"),
+            };
+            const res = await request(app)
+                .get(`/projects?participating=true&workspace=personal&scope=shared&search=Matter&practice=Corporate&owner_user_id=other&sort_key=name&sort_direction=asc&limit=2&offset=100${include}`)
+                .set(...AUTH);
+
+            expect(res.status).toBe(200);
+            expect(res.body.map((project: { id: string }) => project.id)).toEqual(["p101", "p102"]);
+            expect(supabaseState.rpcCalls).toEqual([{
+                fn: "get_projects_overview",
+                args: {
+                    p_user_id: "u1", p_user_email: "u1@test.local",
+                    p_scope: "shared", p_limit: 2, p_offset: 100,
+                    p_search_term: "Matter", p_sort_key: "name", p_sort_direction: "asc",
+                    p_practice: "Corporate", p_owner_user_id: "other", p_workspace: "personal",
+                    p_participating_only: true,
+                },
+            }]);
+            expect(supabaseState.operations).not.toContain("from:project_access_grants");
+            expect(supabaseState.operations).not.toContain("from:project_org_access_overrides");
+            if (include) expect(res.body.every((project: { documents: unknown[]; folders: unknown[] }) =>
+                project.documents.length === 0 && project.folders.length === 0)).toBe(true);
+        });
+
         it.each(["owner", "admin"])("keeps an org %s's public and private project participation scoped to its workspace", async (orgRole) => {
             const orgId = "7b1d9d0e-3c5a-4f6e-9a51-0c2f7d3e8a11";
             const inheritedRole = orgRole === "owner" ? "owner" : "editor";
@@ -331,6 +367,23 @@ describe("projects.routes", () => {
         });
 
         it("includes documents and subfolders in the batched directory response", async () => {
+            // Model keyset continuation instead of returning the same fixture
+            // forever after the service asks for rows beyond the last ID.
+            vi.mocked(createServerSupabase).mockImplementation(() => {
+                const db = mockSupabase();
+                const from = db.from;
+                db.from = (table: string) => {
+                    const q = from(table);
+                    if (["documents", "project_subfolders"].includes(table)) {
+                        let after: unknown;
+                        q.gt = vi.fn((_column: string, value: unknown) => { after = value; return q; });
+                        const then = q.then as (resolve: (value: unknown) => unknown) => unknown;
+                        q.then = (resolve: (value: unknown) => unknown) => after ? Promise.resolve({ data: [], error: null }).then(resolve) : then(resolve);
+                    }
+                    return q;
+                };
+                return db as unknown as Db;
+            });
             supabaseState.rpc = {
                 data: [{ id: "p1", name: "Alpha" }],
                 error: null,
@@ -463,277 +516,34 @@ describe("projects.routes", () => {
       expect(res.status).toBe(404);
     });
 
-    // ── directory search vs. the deny override ─────────────────────────
-    // The picker's org branch used to be plain membership: `projects` where
-    // org_id IN (my orgs), with no per-project verdict. Every other path
-    // resolves through checkProjectAccess / project_access_role, which
-    // refuse on a deny — so the picker was handing a walled-off member the
-    // matter's name, cm_number and its document filenames.
-    //
-    // The shared stub answers per TABLE, and this route reads the same
-    // `projects` table three different ways, so these two tests use a
-    // filter-aware db instead.
-    function directorySearchDb(options: {
-      personal?: Record<string, unknown>[];
-      orgProjects?: Record<string, unknown>[];
-      memberships?: { org_id: string; role: string }[];
-      denies?: string[];
-      /** Per-project grants the caller holds: project id -> role. */
-      grants?: Record<string, string>;
-      /** Private projects the database reports as having no Owner left. */
-      ownerless?: string[];
-    }) {
-      const personal = options.personal ?? [];
-      const orgProjects = options.orgProjects ?? [];
-      const memberships = options.memberships ?? [];
-      const overrides: Record<string, string> = {
-        ...options.grants,
-        ...Object.fromEntries(
-          (options.denies ?? []).map((id) => [id, "deny"]),
-        ),
-      };
-
-      const build = (resolve: (f: Record<string, unknown>) => unknown[]) => {
-        const filters: Record<string, unknown> = {};
-        const b: Record<string, unknown> = {};
-        for (const method of ["select", "order", "limit", "range", "ilike"])
-          b[method] = () => b;
-        b.is = () => b;
-        b.eq = (column: string, value: unknown) => {
-          filters[`eq:${column}`] = value;
-          return b;
-        };
-        b.in = (column: string, value: unknown) => {
-          filters[`in:${column}`] = value;
-          return b;
-        };
-        b.single = () =>
-          Promise.resolve({ data: resolve(filters)[0] ?? null, error: null });
-        b.maybeSingle = b.single;
-        b.then = (onResolve: (v: unknown) => unknown) =>
-          Promise.resolve({ data: resolve(filters), error: null }).then(
-            onResolve,
-          );
-        return b;
-      };
-
-      return {
-        from: (table: string) => {
-          if (table === "projects")
-            return build((filters) => {
-              if (filters["in:org_id"]) return orgProjects;
-              if (filters["in:id"]) return [];
-              return personal;
-            });
-          if (table === "project_org_access_overrides")
-            // The override read is scoped by the caller's memberships
-            // (org_id) and their user_id — never by every org project's id.
-            return build((filters) => {
-              const orgIds = (filters["in:org_id"] as string[] | undefined) ?? [];
-              if (filters["in:project_id"]) return [];
-              return orgProjects
-                .filter(
-                  (project) =>
-                    (project.id as string) in overrides &&
-                    orgIds.includes(project.org_id as string),
-                )
-                .map((project) => ({
-                  project_id: project.id,
-                  role: overrides[project.id as string],
-                }));
-            });
-          if (table === "org_members") return build(() => memberships);
-          return build(() => []);
-        },
-        rpc: (name?: string) =>
-          Promise.resolve({
-            data:
-              name === "ownerless_org_item_ids"
-                ? (options.ownerless ?? []).map((item_id) => ({
-                    kind: "project",
-                    item_id,
-                  }))
-                : [],
-            error: null,
-          }),
-        auth: {
-          getUser: () =>
-            Promise.resolve({ data: { user: { id: "u1" } }, error: null }),
-        },
-      };
-    }
-
-    // Open to the whole organization, so it is a denial and nothing else
-    // that walls a member off it.
-    const WALLED = {
-      id: "p-walled",
-      name: "Matter P",
-      cm_number: "2026-0042",
-      org_id: "o1",
-      user_id: "u2",
-      visibility: "organization",
-      updated_at: "2026-09-01T00:00:00Z",
-    };
-    const PRIVATE = { ...WALLED, id: "p-private", visibility: "private" };
-
-    it("hides an org project the caller is denied on", async () => {
-      vi.mocked(createServerSupabase).mockImplementationOnce(
-        () =>
-          directorySearchDb({
-            memberships: [{ org_id: "o1", role: "member" }],
-            orgProjects: [WALLED],
-            denies: ["p-walled"],
-          }) as unknown as ReturnType<typeof createServerSupabase>,
-      );
-
+    // Authorization parity (deny/private/ownerless/departure) is exercised
+    // against real PostgreSQL by the search_project_directory SQL regression.
+    // This boundary must pass the authenticated actor, never query-string roles,
+    // and must not rehydrate projects outside the authoritative returned page.
+    it("uses the authenticated actor and preserves the authorized SQL page", async () => {
+      const page = [{ id: "p-visible", name: "Visible matter", documents: [], folders: [] }];
+      const db = mockSupabase();
+      const rpc = vi.fn().mockResolvedValue({ data: page, error: null });
+      vi.mocked(createServerSupabase).mockReturnValueOnce({ ...db, rpc } as unknown as ReturnType<typeof createServerSupabase>);
       const res = await request(app)
-        .get("/projects?view=directory-search&search=Matter")
+        .get("/projects?view=directory-search&search=Agreement&limit=10&offset=20&user_id=attacker&role=owner")
         .set(...AUTH);
-
       expect(res.status).toBe(200);
-      expect(res.body).toEqual([]);
+      expect(res.body).toEqual(page);
+      expect(rpc).toHaveBeenCalledWith("search_project_directory", expect.objectContaining({
+        p_user_id: "u1", p_user_email: "u1@test.local", p_search_term: "Agreement", p_limit: 10, p_offset: 20,
+      }));
+      expect(checkProjectAccess).not.toHaveBeenCalled();
     });
 
-    it("still returns the org project when no deny override exists", async () => {
-      vi.mocked(createServerSupabase).mockImplementationOnce(
-        () =>
-          directorySearchDb({
-            memberships: [{ org_id: "o1", role: "member" }],
-            orgProjects: [WALLED],
-          }) as unknown as ReturnType<typeof createServerSupabase>,
-      );
-
-      const res = await request(app)
-        .get("/projects?view=directory-search&search=Matter")
-        .set(...AUTH);
-
-      expect(res.status).toBe(200);
-      expect(res.body.map((project: { id: string }) => project.id)).toEqual([
-        "p-walled",
-      ]);
-    });
-
-    it("keeps an org owner's view of a project carrying a stale deny row", async () => {
-      vi.mocked(createServerSupabase).mockImplementationOnce(
-        () =>
-          directorySearchDb({
-            memberships: [{ org_id: "o1", role: "owner" }],
-            orgProjects: [WALLED],
-            denies: ["p-walled"],
-          }) as unknown as ReturnType<typeof createServerSupabase>,
-      );
-
-      const res = await request(app)
-        .get("/projects?view=directory-search&search=Matter")
-        .set(...AUTH);
-
-      expect(res.status).toBe(200);
-      expect(res.body.map((project: { id: string }) => project.id)).toEqual([
-        "p-walled",
-      ]);
-    });
-
-    it("walls an org admin off a project they are denied on, like any member", async () => {
-      vi.mocked(createServerSupabase).mockImplementationOnce(
-        () =>
-          directorySearchDb({
-            memberships: [{ org_id: "o1", role: "admin" }],
-            orgProjects: [WALLED],
-            denies: ["p-walled"],
-          }) as unknown as ReturnType<typeof createServerSupabase>,
-      );
-
-      const res = await request(app)
-        .get("/projects?view=directory-search&search=Matter")
-        .set(...AUTH);
-
-      expect(res.status).toBe(200);
-      expect(res.body).toEqual([]);
-    });
-
-    // Private by default. The picker serves a project's name, matter number
-    // and document filenames, so a private project must not appear in it for
-    // a member it was not shared with.
-    it.each(["member", "admin"])(
-      "keeps a private org project out of an org %s's picker",
-      async (role) => {
-        vi.mocked(createServerSupabase).mockImplementationOnce(
-          () =>
-            directorySearchDb({
-              memberships: [{ org_id: "o1", role }],
-              orgProjects: [PRIVATE],
-            }) as unknown as ReturnType<typeof createServerSupabase>,
-        );
-
-        const res = await request(app)
-          .get("/projects?view=directory-search&search=Matter")
-          .set(...AUTH);
-
-        expect(res.status).toBe(200);
-        expect(res.body).toEqual([]);
-      },
-    );
-
-    it("does not offer an organization owner a member's private project", async () => {
-      // Owning the organization is not a reason to see a colleague's
-      // private matter in a picker, any more than to open it.
-      vi.mocked(createServerSupabase).mockImplementationOnce(
-        () =>
-          directorySearchDb({
-            memberships: [{ org_id: "o1", role: "owner" }],
-            orgProjects: [PRIVATE],
-          }) as unknown as ReturnType<typeof createServerSupabase>,
-      );
-
-      const res = await request(app)
-        .get("/projects?view=directory-search&search=Matter")
-        .set(...AUTH);
-
-      expect(res.status).toBe(200);
-      expect(res.body).toEqual([]);
-    });
-
-    it("does not offer an admin a private project that has no Owner left", async () => {
-      // Only the organization's owners take such a project over.
-      vi.mocked(createServerSupabase).mockImplementationOnce(
-        () =>
-          directorySearchDb({
-            memberships: [{ org_id: "o1", role: "admin" }],
-            orgProjects: [PRIVATE],
-            ownerless: ["p-private"],
-          }) as unknown as ReturnType<typeof createServerSupabase>,
-      );
-
-      const res = await request(app)
-        .get("/projects?view=directory-search&search=Matter")
-        .set(...AUTH);
-
-      expect(res.status).toBe(200);
-      expect(res.body).toEqual([]);
-    });
-
-    it("offers a private org project to a member it was shared with, and to an owner once it has no Owner left", async () => {
-      for (const options of [
-        { memberships: [{ org_id: "o1", role: "member" }], grants: { "p-private": "viewer" } },
-        { memberships: [{ org_id: "o1", role: "owner" }], ownerless: ["p-private"] },
-      ]) {
-        vi.mocked(createServerSupabase).mockImplementationOnce(
-          () =>
-            directorySearchDb({
-              ...options,
-              orgProjects: [PRIVATE],
-            }) as unknown as ReturnType<typeof createServerSupabase>,
-        );
-
-        const res = await request(app)
-          .get("/projects?view=directory-search&search=Matter")
-          .set(...AUTH);
-
-        expect(res.status).toBe(200);
-        expect(res.body.map((project: { id: string }) => project.id)).toEqual([
-          "p-private",
-        ]);
-      }
+    it("fails closed when the directory authorization RPC fails", async () => {
+      const db = mockSupabase();
+      vi.mocked(createServerSupabase).mockReturnValueOnce({ ...db, rpc: vi.fn().mockResolvedValue({
+        data: null, error: new Error("private database detail"),
+      }) } as unknown as ReturnType<typeof createServerSupabase>);
+      const res = await request(app).get("/projects?view=directory-search&search=Matter").set(...AUTH);
+      expect(res.status).toBe(500);
+      expect(JSON.stringify(res.body)).not.toContain("private database detail");
     });
     });
 

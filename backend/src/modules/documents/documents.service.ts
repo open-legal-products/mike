@@ -65,3 +65,5 @@ export { runConversionJob, setDocumentTerminalStatus } from "./documents.convers
 
 export { handleDocumentExtractText, markDocumentTextFailed, backfillDocumentText } from "./documents.indexing";
 export { findDocumentText, readStoredDocumentText } from "./documents.textSearch";
+
+export { getDocumentStatuses } from "./documents.status";

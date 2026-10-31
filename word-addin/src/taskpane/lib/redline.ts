@@ -44,7 +44,7 @@ export type RedlineStreamSegment =
   | { kind: "prose"; text: string }
   | { kind: "edit"; edit: StreamingRedlineEdit };
 
-interface RedlineStreamProjection {
+export interface RedlineStreamProjection {
   visibleProse: string;
   edits: StreamingRedlineEdit[];
   safeEdits: RedlineEdit[];
@@ -61,7 +61,7 @@ function normalizeVisibleProse(value: string): string {
 }
 
 function partialTagStartAtEnd(text: string, tag: string): number {
-  const lower = text.toLowerCase();
+  const lower = text.slice(-(tag.length - 1)).toLowerCase();
   for (let length = tag.length - 1; length >= 1; length -= 1) {
     if (lower.endsWith(tag.slice(0, length))) return text.length - length;
   }
@@ -299,4 +299,102 @@ export function projectRedlineStream(text: string): RedlineStreamProjection {
   lastProjectionText = text;
   lastProjection = projection;
   return projection;
+}
+
+/**
+ * Append-only parser owned by one streamed response. A partially received JSON
+ * string is scanned once; sealed objects are parsed once. Snapshots remain
+ * immutable so React can retain completed edit cards.
+ */
+export function createRedlineStreamProjector() {
+  let text = "";
+  let open = -1;
+  let cursor = 0;
+  let arrayStarted = false, inString = false, escaped = false;
+  let depth = 0, objectStart = -1, objectEnd = -1;
+  let invalidUnsealed = false, closed = false, rawCount = 0;
+  let prefix = "";
+  let suffixStart = -1;
+  let closedSegments: RedlineStreamSegment[] = [];
+  const edits: StreamingRedlineEdit[] = [];
+  const safeEdits: RedlineEdit[] = [];
+  const originals = new Set<string>();
+  let projection = projectPlainStream("");
+  let scannedCharacters = 0;
+
+  function snapshot(incomplete: boolean): RedlineStreamProjection {
+    const visibleEdits = [...edits];
+    if (incomplete) visibleEdits.push({ blockIndex: rawCount, original: "", sealed: false });
+    return {
+      visibleProse: prefix, edits: visibleEdits, safeEdits: [...safeEdits],
+      blockCount: rawCount + (incomplete ? 1 : 0), protocolStarted: true,
+      segments: [
+        ...(prefix ? [{ kind: "prose" as const, text: prefix }] : []),
+        ...visibleEdits.map(edit => ({ kind: "edit" as const, edit })),
+      ],
+    };
+  }
+  return {
+    get projection() { return projection; },
+    get scannedCharacters() { return scannedCharacters; },
+    append(delta: string): RedlineStreamProjection {
+      const previousLength = text.length;
+      text += delta;
+      if (closed) {
+        const suffix = normalizeVisibleProse(text.slice(suffixStart));
+        return projection = { ...projection,
+          visibleProse: normalizeVisibleProse([prefix, suffix].filter(Boolean).join("\n\n")),
+          segments: [...closedSegments, ...(suffix ? [{ kind: "prose" as const, text: suffix }] : [])],
+        };
+      }
+      if (open < 0) {
+        const start = Math.max(0, previousLength - JSON_EDITS_OPEN.length + 1);
+        const found = text.slice(start).toLowerCase().indexOf(JSON_EDITS_OPEN);
+        if (found < 0) return projection = partialTagStartAtEnd(text, JSON_EDITS_OPEN) >= 0
+          ? projectJsonEditsStream(text) : projectPlainStream(text);
+        open = start + found;
+        prefix = normalizeVisibleProse(text.slice(0, open));
+        cursor = open + JSON_EDITS_OPEN.length;
+      }
+      const closeStart = Math.max(open + JSON_EDITS_OPEN.length, previousLength - JSON_EDITS_CLOSE.length + 1);
+      const closeOffset = text.slice(closeStart).toLowerCase().indexOf(JSON_EDITS_CLOSE);
+      if (closeOffset >= 0) {
+        closed = true;
+        suffixStart = closeStart + closeOffset + JSON_EDITS_CLOSE.length;
+        // One final parse preserves validation of the entire array, including
+        // malformed/non-object entries that the streaming scanner won't seal.
+        projection = projectJsonEditsStream(text);
+        const hasSuffix = !!normalizeVisibleProse(text.slice(suffixStart));
+        closedSegments = hasSuffix ? projection.segments.slice(0, -1) : projection.segments;
+        return projection;
+      }
+      const previousCount = rawCount;
+      const wasIncomplete = depth > 0 || objectEnd >= 0 || invalidUnsealed;
+      for (; cursor < text.length; cursor++) {
+        scannedCharacters++;
+        const character = text[cursor]!;
+        if (!arrayStarted) { if (character === "[") arrayStarted = true; continue; }
+        if (objectEnd >= 0 && !/\s/.test(character)) {
+          if (character === "," || character === "]") {
+            const edit = parseJsonStreamingEdit(text.slice(objectStart, objectEnd + 1), rawCount++);
+            if (!edit) edits.push({ blockIndex: rawCount - 1, original: "", sealed: false });
+            else if (!originals.has(edit.original)) {
+              originals.add(edit.original); edits.push(edit);
+              safeEdits.push({ original: edit.original, replacement: edit.replacement ?? "", ...(edit.format ? { format: edit.format } : {}), ...(edit.occurrence ? { occurrence: edit.occurrence } : {}), ...(edit.reason ? { reason: edit.reason } : {}) });
+            }
+          } else invalidUnsealed = true;
+          objectStart = -1; objectEnd = -1;
+        }
+        if (escaped) { escaped = false; continue; }
+        if (character === "\\" && inString) { escaped = true; continue; }
+        if (character === '"') { inString = !inString; continue; }
+        if (inString) continue;
+        if (character === "{") { if (depth === 0) objectStart = cursor; depth++; }
+        else if (character === "}" && depth > 0) { depth--; if (depth === 0 && objectStart >= 0) objectEnd = cursor; }
+      }
+      const incomplete = depth > 0 || objectEnd >= 0 || invalidUnsealed;
+      if (projection.protocolStarted && previousCount === rawCount && wasIncomplete === incomplete) return projection;
+      return projection = snapshot(incomplete);
+    },
+  };
 }

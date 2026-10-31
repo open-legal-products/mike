@@ -8,6 +8,7 @@ import { defineConfig, devices } from "@playwright/test";
 const SYNTHETIC_SPECS = [
     /assistant-streaming\.spec\.ts/,
     /tabular-chat-lifecycle\.spec\.ts/,
+    /settings-search-latency\.spec\.ts/,
 ];
 
 export default defineConfig({

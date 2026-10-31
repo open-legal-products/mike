@@ -29,6 +29,7 @@ import {
   buildWordChatSystemPrompt,
   buildWorkflowStore,
   attachPriorReasoning,
+  createAssistantHistoryLoader,
   enrichWithPriorEvents,
   loadUserMessageSentTimes,
   generateSpotlightNonce,
@@ -820,6 +821,7 @@ export async function prepareWordChatStream(
   // reservation taken above: the route's finally block only runs once this
   // function has returned it. Release on the way out instead.
   try {
+    const history = createAssistantHistoryLoader(db, persistChat ? chatId : null, "word_chat_messages");
     const { docIndex, docStore } = await buildDocContext(
       messages,
       userId,
@@ -827,6 +829,7 @@ export async function prepareWordChatStream(
       persistChat ? chatId : null,
       "word_chat_messages",
       userEmail,
+      history,
     );
     const activeDocumentText = args.documentContext;
     if (activeDocumentText !== undefined) {
@@ -859,6 +862,7 @@ export async function prepareWordChatStream(
           persistChat ? chatId : null,
           db,
           "word_chat_messages",
+          history,
         )
       : messages;
     const timeZone = resolveRequestTimeZone(args.requestedTimeZone);

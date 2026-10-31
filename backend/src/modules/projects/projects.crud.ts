@@ -14,10 +14,7 @@ import {
 import {
   checkProjectAccess,
   getOrgRole,
-  isOrgRole,
-  loadOwnerlessOrgItemIds,
   parseContentVisibility,
-  resolveOrgContentRole,
 } from "../../lib/access";
 import { can } from "../../lib/permissions";
 import { reportableServiceError } from "../../lib/serviceResult";
@@ -32,7 +29,6 @@ import {
   listProjectGrants,
 } from "../../lib/projectAccess";
 import {
-  isOrgAccessOverrideRole,
   listOrgAccessPeople,
 } from "../../lib/orgAccessOverrides";
 import { deleteProjectsByIds } from "../user/user.service";
@@ -61,13 +57,14 @@ export type ProjectsDbFailure = { ok: false; error: unknown };
 // same response. The directory pickers (useDirectoryData) previously fanned
 // out one GET /projects/:id per project to obtain those documents; with N
 // projects that burst — auth check plus several DB queries per request —
-// could overwhelm the Supabase gateway. Batching keeps it at one request
-// and a fixed number of queries regardless of project count.
+// could overwhelm the Supabase gateway. Explicit inclusion now uses project pages
+// while keeping each project page and child/metadata query bounded.
 // Pagination is opt-in (`filters` is only passed when the request carried
 // pagination/search/sort/scope query params). ProjectsOverview.tsx sends
 // them. Legacy tabular-review project pickers call this with no query params
 // and must keep getting the full, unpaginated list, so callers must never
-// default to paginating a request that didn't ask for it.
+// default to paginating a metadata-only request that didn't ask for it.
+// Explicit document inclusion selects project pagination.
 export type ProjectListFilters = {
   scope: ProjectScope;
   pagination: { limit: number; offset: number };
@@ -92,18 +89,25 @@ export async function getProjectsOverview(
   const { userId, userEmail, includeDocuments, filters } = args;
   const normalizedUserEmail = userEmail?.trim().toLowerCase();
 
+  // Participation is a selection predicate, so it must run before SQL LIMIT
+  // and OFFSET, alongside search/scope filters. Paging the full list first
+  // creates short pages; using the legacy RPC instead discards those filters.
+  const participationInSql = Boolean(filters && args.participatingOnly);
   const rpcArgs = filters
-    ? buildProjectsOverviewRpcArgs({
-        userId,
-        userEmail: normalizedUserEmail,
-        scope: filters.scope,
-        pagination: filters.pagination,
-        searchTerm: filters.searchTerm,
-        sort: filters.sort,
-        practice: filters.practice,
-        ownerUserId: filters.ownerUserId,
-        workspace: filters.workspace,
-      })
+    ? {
+        ...buildProjectsOverviewRpcArgs({
+          userId,
+          userEmail: normalizedUserEmail,
+          scope: filters.scope,
+          pagination: filters.pagination,
+          searchTerm: filters.searchTerm,
+          sort: filters.sort,
+          practice: filters.practice,
+          ownerUserId: filters.ownerUserId,
+          workspace: filters.workspace,
+        }),
+        ...(participationInSql ? { p_participating_only: true } : {}),
+      }
     : { p_user_id: userId, p_user_email: normalizedUserEmail ?? null };
 
   const { data, error } = await db.rpc("get_projects_overview", rpcArgs);
@@ -114,7 +118,7 @@ export async function getProjectsOverview(
   let visibleProjects = ((data ?? []) as ProjectParticipationRow[]).filter(
     project => workspaceMatches(args.workspace ?? filters?.workspace, project.org_id),
   );
-  if (args.participatingOnly) {
+  if (args.participatingOnly && !participationInSql) {
     const participating = await filterParticipatingProjects(db, visibleProjects, userId, normalizedUserEmail);
     if (!participating.ok) return { ok: false, error: reportableServiceError(participating) };
     visibleProjects = participating.data;
@@ -146,33 +150,19 @@ export async function getProjectsOverview(
   }
 
   const projectIds = projects.map((p) => p.id);
-  const [
-    { data: docs, error: docsError },
-    { data: folders, error: foldersError },
-  ] = await Promise.all([
-    db
-      .from("documents")
-      .select("*")
-      .in("project_id", projectIds)
-      .order("created_at", { ascending: true }),
-    db
-      .from("project_subfolders")
-      .select("*")
-      .in("project_id", projectIds)
-      .order("created_at", { ascending: true }),
+  const [documents, folderRows] = await Promise.all([
+    loadProjectDirectoryChildren(db, "documents", projectIds),
+    loadProjectDirectoryChildren(db, "project_subfolders", projectIds),
   ]);
-  if (docsError) return { ok: false, error: docsError };
-  if (foldersError) return { ok: false, error: foldersError };
-
-  const docsTyped = (docs ?? []) as unknown as {
-    id: string;
-    project_id?: string | null;
-    user_id?: string | null;
-    current_version_id?: string | null;
-  }[];
-  await attachLatestVersionNumbers(db, docsTyped);
-  await attachActiveVersionPaths(db, docsTyped);
-  await attachDocumentOwnerLabels(db, docsTyped);
+  if (documents.error) return { ok: false, error: documents.error };
+  if (folderRows.error) return { ok: false, error: folderRows.error };
+  const docsTyped = documents.data;
+  const folders = folderRows.data;
+  for (const batch of chunkArray(docsTyped, 50)) {
+    await attachLatestVersionNumbers(db, batch);
+    await attachActiveVersionPaths(db, batch);
+    await attachDocumentOwnerLabels(db, batch);
+  }
 
   const docsByProject = new Map<string, typeof docsTyped>();
   for (const doc of docsTyped) {
@@ -196,6 +186,27 @@ export async function getProjectsOverview(
       folders: foldersByProject.get(p.id) ?? [],
     })),
   };
+}
+
+type DirectoryChild = { id: string; project_id?: string | null; user_id?: string | null; current_version_id?: string | null; [key: string]: unknown };
+/** Bound request URLs and use keyset pages so gateway row caps cannot truncate a directory. */
+export async function loadProjectDirectoryChildren(db: Db, table: "documents" | "project_subfolders", projectIds: string[]) {
+  const data: DirectoryChild[] = [];
+  for (const ids of chunkArray(projectIds, 50)) {
+    let after: string | null = null;
+    for (;;) {
+      let query = db.from(table).select("*").in("project_id", ids).order("id", { ascending: true }).limit(100);
+      if (after) query = query.gt("id", after);
+      const result = await query;
+      if (result.error) return { data: [], error: result.error };
+      const page = (result.data ?? []) as DirectoryChild[];
+      if (!page.length) break;
+      data.push(...page);
+      after = page[page.length - 1].id;
+    }
+  }
+  data.sort((a, b) => String(a.created_at ?? "").localeCompare(String(b.created_at ?? "")) || a.id.localeCompare(b.id));
+  return { data, error: null };
 }
 
 // Lightweight per-project summary rows for GET /projects?view=summary.
@@ -226,11 +237,7 @@ export async function getProjectSummaries(
   return { ok: true, data: withMemory.rows };
 }
 
-/**
- * Find project and current-filename matches for the document picker.
- * Page document matches within accessible project batches rather than searching
- * a capped global version list or returning a partially loaded project tree.
- */
+/** Authorize/filter/page projects in SQL before hydrating matching documents. */
 export async function searchProjectDirectory(
   db: Db,
   args: {
@@ -241,205 +248,25 @@ export async function searchProjectDirectory(
     workspace?: WorkspaceFilter;
   },
 ): Promise<{ ok: true; data: unknown[] } | ProjectsDbFailure> {
-  const { userId, userEmail, searchTerm, pagination, workspace } = args;
-  const normalizedUserEmail = userEmail?.trim().toLowerCase();
-
-  const createdQuery = db.from("projects").select("*").eq("user_id", userId);
-  const projectQueries = [createdQuery];
-  if (normalizedUserEmail) {
-    // Direct access now lives in project_access_grants (one row per
-    // recipient, with a role) rather than the roleless shared_with array, so
-    // the picker resolves ids first and then loads those projects.
-    const { data: grantRows } = await db
-      .from("project_access_grants")
-      .select("project_id")
-      .eq("email", normalizedUserEmail);
-    const grantedProjectIds = [
-      ...new Set(
-        ((grantRows ?? []) as { project_id?: string | null }[])
-          .map((row) => row.project_id)
-          .filter((id): id is string => !!id),
-      ),
-    ];
-    if (grantedProjectIds.length > 0) {
-      projectQueries.push(
-        db.from("projects").select("*").in("id", grantedProjectIds),
-      );
-    }
+  const { data, error } = await db.rpc("search_project_directory", {
+    p_user_id: args.userId,
+    p_user_email: args.userEmail?.trim().toLowerCase() ?? null,
+    p_search_term: args.searchTerm,
+    p_limit: args.pagination.limit,
+    p_offset: args.pagination.offset,
+    ...workspaceRpcArg(args.workspace),
+  });
+  if (error) return { ok: false, error };
+  const projects = (data ?? []) as { documents: DirectoryChild[] }[];
+  // SQL returns limit+1 projects for the existing picker continuation contract.
+  // Enrich only their document matches, never all candidates before pagination.
+  const documents = projects.flatMap(project => project.documents ?? []);
+  for (const batch of chunkArray(documents, 50)) {
+    await attachLatestVersionNumbers(db, batch);
+    await attachActiveVersionPaths(db, batch);
+    await attachDocumentOwnerLabels(db, batch);
   }
-  // Third access branch (multi-tenant): projects in an org the caller belongs
-  // to are searchable, otherwise the document picker would hide org content
-  // the project list shows. Membership alone is not the verdict, though:
-  // every other path resolves the project through checkProjectAccess /
-  // project_access_role, which return "no access" for a per-project deny
-  // override. Without the same filter here the picker hands a walled-off
-  // member the matter's name, cm_number and its document filenames.
-  const { data: membershipRows, error: membershipError } = await db
-    .from("org_members")
-    .select("org_id, role, organizations!inner(id)")
-    .is("organizations.deleted_at", null)
-    .eq("user_id", userId);
-  if (membershipError) return { ok: false, error: membershipError };
-  const orgRoleByOrgId = new Map<string, string>();
-  for (const row of (membershipRows ?? []) as {
-    org_id?: string | null;
-    role?: string | null;
-  }[]) {
-    if (row.org_id) orgRoleByOrgId.set(row.org_id, row.role ?? "");
-  }
-  const orgIds = [...orgRoleByOrgId.keys()];
-  const [projectResults, orgProjectsResult] = await Promise.all([
-    Promise.all(projectQueries),
-    orgIds.length > 0
-      ? db.from("projects").select("*").in("org_id", orgIds)
-      : Promise.resolve({
-          data: [] as Record<string, unknown>[],
-          error: null,
-        }),
-  ]);
-  const projectError =
-    projectResults.find((result) => result.error)?.error ??
-    orgProjectsResult.error;
-  if (projectError) return { ok: false, error: projectError };
-  const projectsById = new Map<string, Record<string, unknown>>();
-  const [createdResult, ...grantResults] = projectResults;
-  // The "I created it" branch is NOT a verdict on its own. A creator who has
-  // since LEFT the organization keeps the projects.user_id row, but
-  // checkProjectAccess — which every other read path uses — answers "no
-  // access" for them, so the picker was the one surface still offering an
-  // org matter that 404s the moment it is opened. An org project is only
-  // theirs to see while they are still in that org; the org branch below
-  // re-admits it (with the deny override applied) when they are.
-  for (const project of createdResult?.data ?? []) {
-    const orgId = project.org_id as string | null | undefined;
-    if (orgId && !orgRoleByOrgId.has(orgId)) continue;
-    projectsById.set(project.id as string, project);
-  }
-  for (const result of grantResults) {
-    for (const project of result.data ?? []) {
-      projectsById.set(project.id as string, project);
-    }
-  }
-  const orgProjects = (orgProjectsResult.data ?? []) as Record<
-    string,
-    unknown
-  >[];
-  if (orgProjects.length > 0) {
-    // One batched read for the whole page, not a verdict per row: this is a
-    // filter over a result set and must not become an N+1. Mirrors
-    // listOrgResources and listAccessibleProjectIds, through the same
-    // resolveOrgContentRole they use.
-    //
-    // Every override the caller holds, not only the denials: an organization
-    // project is private until shared, so a grant is what admits a member as
-    // often as a denial is what excludes one.
-    //
-    // Scoped by ORG, not by an .in() over every candidate project id: that
-    // list grows with the firm's matters and is spliced verbatim into the
-    // PostgREST query string, so a large tenant sent a URL past the server's
-    // request-line limit and the read failed (fail-closed, so the picker went
-    // blank). org_id is bounded by the caller's memberships, which is the
-    // same shape listOrgResources uses.
-    const { data: overrideRows, error: overrideError } = await db
-      .from("project_org_access_overrides")
-      .select("project_id, role")
-      .in("org_id", orgIds)
-      .eq("user_id", userId);
-    // Fail closed: an unreadable override table must hide rows, never reveal
-    // them.
-    if (overrideError) return { ok: false, error: overrideError };
-    const overrideByProjectId = new Map(
-      ((overrideRows ?? []) as { project_id?: string | null; role?: unknown }[])
-        .filter(
-          (row): row is { project_id: string; role: unknown } =>
-            !!row.project_id,
-        )
-        .map((row) => [row.project_id, row.role]),
-    );
-    const ownerless = await loadOwnerlessOrgItemIds(
-      db,
-      orgIds.filter((orgId) => orgRoleByOrgId.get(orgId) === "owner"),
-    );
-    for (const project of orgProjects) {
-      const projectId = project.id as string;
-      const orgId = project.org_id as string | null;
-      const orgRole = orgId ? orgRoleByOrgId.get(orgId) : undefined;
-      if (!isOrgRole(orgRole)) continue;
-      const override = overrideByProjectId.get(projectId);
-      const role = resolveOrgContentRole({
-        isCreator: project.user_id === userId,
-        orgRole,
-        override: isOrgAccessOverrideRole(override) ? override : null,
-        visibility: project.visibility,
-        ownerless: ownerless.projects.has(projectId),
-      });
-      // An org project the caller CREATED was admitted above; it leaves
-      // again here if the verdict says no (it cannot, while they are a
-      // member, but the two branches must not be able to disagree).
-      if (role) projectsById.set(projectId, project);
-      else projectsById.delete(projectId);
-    }
-  }
-  // Narrowed last, over projects the caller may already see: the workspace
-  // never admits anything, it only leaves out what is filed elsewhere.
-  for (const [projectId, project] of projectsById) {
-    if (
-      !workspaceMatches(workspace, project.org_id as string | null | undefined)
-    )
-      projectsById.delete(projectId);
-  }
-  const accessibleProjectIds = [...projectsById.keys()];
-  if (accessibleProjectIds.length === 0) return { ok: true, data: [] };
-
-  const escaped = searchTerm.replace(/[\\%_]/g, (value) => `\\${value}`);
-  const matchedDocuments: Record<string, unknown>[] = [];
-  for (const projectIds of chunkArray(accessibleProjectIds, 50)) {
-    for (let offset = 0; ; offset += 50) {
-      const { data, error } = await db
-        .from("documents")
-        .select("*, active_version:document_versions!documents_current_version_id_fkey!inner(filename, deleted_at)")
-        .in("project_id", projectIds)
-        .ilike("active_version.filename", `%${escaped}%`)
-        .is("active_version.deleted_at", null)
-        .order("id", { ascending: true })
-        .range(offset, offset + 49);
-      if (error) return { ok: false, error };
-      const documents = (data ?? []).map(({ active_version: _version, ...document }) => document);
-      await attachLatestVersionNumbers(db, documents);
-      await attachActiveVersionPaths(db, documents);
-      await attachDocumentOwnerLabels(db, documents);
-      matchedDocuments.push(...documents);
-      if (documents.length < 50) break;
-    }
-  }
-
-  const normalized = searchTerm.toLowerCase();
-  const documentProjectIds = new Set(
-    matchedDocuments.map((document) => document.project_id as string),
-  );
-  const matches = [...projectsById.values()]
-    .filter((project) => {
-      const name = String(project.name ?? "").toLowerCase();
-      const cmNumber = String(project.cm_number ?? "").toLowerCase();
-      return (
-        name.includes(normalized) ||
-        cmNumber.includes(normalized) ||
-        documentProjectIds.has(project.id as string)
-      );
-    })
-    .sort((a, b) =>
-      String(b.updated_at ?? "").localeCompare(String(a.updated_at ?? "")),
-    )
-    .slice(pagination.offset, pagination.offset + pagination.limit + 1)
-    .map((project) => ({
-      ...project,
-      is_owner: project.user_id === userId,
-      documents: matchedDocuments.filter(
-        (document) => document.project_id === project.id,
-      ),
-      folders: [],
-    }));
-  return { ok: true, data: matches };
+  return { ok: true, data: projects };
 }
 
 // GET /projects/filter-options

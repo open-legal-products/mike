@@ -1,3 +1,4 @@
+import type { RedlineStreamProjection } from "./redline";
 import type {
   Message as SavedMessage,
   WordAssistantEvent,
@@ -164,6 +165,7 @@ export interface WordEditStreamController {
     messageId: string,
     content: string,
     persistent: boolean,
+    projection?: RedlineStreamProjection,
   ) => void;
   markIncompleteRedlines: (messageId: string, content: string) => void;
   /**
