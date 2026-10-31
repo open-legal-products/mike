@@ -10,7 +10,10 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Readable } from "node:stream";
 import { createHash } from "node:crypto";
+import JSZip from "jszip";
+import { Document, Packer, Paragraph } from "docx";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { MAX_UPLOAD_SIZE_BYTES } from "../uploads.manifest";
 import { diagnosticErrorTags } from "../../../lib/observability/sentryPrivacy";
 
 const mocks = vi.hoisted(() => ({
@@ -256,6 +259,56 @@ const baseSession = {
   status: "processing",
 };
 
+function withDeclaredZipEntrySize(
+  bytes: Buffer,
+  entryName: string,
+  declaredSize: number,
+): Buffer {
+  const result = Buffer.from(bytes);
+  const nameBytes = Buffer.from(entryName);
+  let nameOffset = 0;
+  while ((nameOffset = result.indexOf(nameBytes, nameOffset)) !== -1) {
+    const centralDirectoryOffset = nameOffset - 46;
+    if (
+      centralDirectoryOffset >= 0 &&
+      result.readUInt32LE(centralDirectoryOffset) === 0x02014b50 &&
+      result.readUInt16LE(centralDirectoryOffset + 28) === nameBytes.length
+    ) {
+      result.writeUInt32LE(declaredSize, centralDirectoryOffset + 24);
+      return result;
+    }
+    nameOffset += nameBytes.length;
+  }
+  throw new Error(`ZIP entry not found: ${entryName}`);
+}
+
+async function minimalDocxBytes(
+  contentTypesXml = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">
+  <Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>
+  <Default Extension="xml" ContentType="application/xml"/>
+  <Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/>
+</Types>`,
+): Promise<Buffer> {
+  const zip = new JSZip();
+  zip.file("[Content_Types].xml", contentTypesXml);
+  zip.file(
+    "_rels/.rels",
+    `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
+  <Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="word/document.xml"/>
+</Relationships>`,
+  );
+  zip.file(
+    "word/document.xml",
+    `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">
+  <w:body><w:p><w:r><w:t>Hello</w:t></w:r></w:p></w:body>
+</w:document>`,
+  );
+  return await zip.generateAsync({ type: "nodebuffer" });
+}
+
 describe("upload processing", () => {
   let processingTempRoot: string;
 
@@ -317,12 +370,17 @@ describe("upload processing", () => {
   });
 
   it("converts Office files from temporary paths and streams the PDF upload", async () => {
+    const officeBytes = await minimalDocxBytes();
+    mocks.createFileReadStream.mockImplementation(() =>
+      Readable.from([officeBytes]),
+    );
     const officeFile = {
       ...baseFile,
       filename: "contract.docx",
       file_type: "docx",
       content_type:
         "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+      expected_size_bytes: officeBytes.length,
     };
     const document = {
       id: officeFile.resource_id,
@@ -334,7 +392,7 @@ describe("upload processing", () => {
     mocks.officeFileToPdf.mockImplementation(
       async (inputPath: string, outputDirectory: string) => {
         expect(inputPath).toBe(join(outputDirectory, "source.docx"));
-        expect(await readFile(inputPath)).toEqual(Buffer.from([1, 2, 3, 4]));
+        expect(await readFile(inputPath)).toEqual(officeBytes);
         return join(outputDirectory, "source.pdf");
       },
     );
@@ -349,14 +407,450 @@ describe("upload processing", () => {
     );
   });
 
+  it("rejects a .docx upload that is a ZIP but not a Word package", async () => {
+    const zip = new JSZip();
+    zip.file("not-word.txt", "hello");
+    const bytes = await zip.generateAsync({ type: "nodebuffer" });
+    mocks.createFileReadStream.mockImplementation(() =>
+      Readable.from([bytes]),
+    );
+
+    const db = fakeDb();
+    await expect(
+      processUploadFile(db as never, baseSession, {
+        ...baseFile,
+        filename: "fake.docx",
+        file_type: "docx",
+        content_type:
+          "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        expected_size_bytes: bytes.length,
+      }),
+    ).rejects.toThrow("invalid_docx_package");
+
+    expect(mocks.copyFile).not.toHaveBeenCalled();
+    expect(db.from).not.toHaveBeenCalled();
+  });
+
+  it("rejects a DOCX whose package relationship points at another part", async () => {
+    const zip = await JSZip.loadAsync(await minimalDocxBytes());
+    const relationships = await zip.file("_rels/.rels")!.async("string");
+    zip.file("_rels/.rels", relationships.replace('Target="word/document.xml"', 'Target="word/other.xml"'));
+    zip.file("word/other.xml", "not a Word document");
+    const bytes = await zip.generateAsync({ type: "nodebuffer" });
+    mocks.createFileReadStream.mockImplementation(() => Readable.from([bytes]));
+    const db = fakeDb({ documents: [{ data: { id: baseFile.resource_id }, error: null }] });
+
+    await expect(processUploadFile(db as never, baseSession, {
+      ...baseFile,
+      filename: "fake.docx",
+      file_type: "docx",
+      expected_size_bytes: bytes.length,
+    })).rejects.toThrow("invalid_docx_package");
+    expect(mocks.copyFile).not.toHaveBeenCalled();
+    expect(mocks.officeFileToPdf).not.toHaveBeenCalled();
+    expect(db.from).not.toHaveBeenCalled();
+  });
+
+  it("rejects a DOCX whose main part is not WordprocessingML", async () => {
+    const zip = await JSZip.loadAsync(await minimalDocxBytes());
+    zip.file("word/document.xml", '<document xmlns="urn:not-word"><body/></document>');
+    const bytes = await zip.generateAsync({ type: "nodebuffer" });
+    mocks.createFileReadStream.mockImplementation(() => Readable.from([bytes]));
+    const db = fakeDb({ documents: [{ data: { id: baseFile.resource_id }, error: null }] });
+
+    await expect(processUploadFile(db as never, baseSession, {
+      ...baseFile,
+      filename: "fake.docx",
+      file_type: "docx",
+      expected_size_bytes: bytes.length,
+    })).rejects.toThrow("invalid_docx_package");
+    expect(mocks.copyFile).not.toHaveBeenCalled();
+    expect(mocks.officeFileToPdf).not.toHaveBeenCalled();
+    expect(db.from).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ["no office-document relationship", (xml: string) => xml.replace(/<Relationship Id[^>]+\/>/, "")],
+    ["wrong relationship type", (xml: string) => xml.replace(/\/officeDocument"/, '/image"')],
+    ["external main relationship", (xml: string) => xml.replace('Target="', 'TargetMode="External" Target="')],
+    ["external URL", (xml: string) => xml.replace('Target="word/', 'Target="https://example.invalid/word/')],
+    ["network-path target", (xml: string) => xml.replace('Target="word/', 'Target="//docx.invalid/word/')],
+    ["whitespace-prefixed network target", (xml: string) => xml.replace('Target="word/', 'Target=" //docx.invalid/word/')],
+    ["backslash target", (xml: string) => xml.replace('word/document.xml"', 'word\\\\document.xml"')],
+    ["unknown target mode", (xml: string) => xml.replace('Target="', 'TargetMode="Other" Target="')],
+    ["missing target", (xml: string) => xml.replace('Target="word/document.xml"', "")],
+    ["fragment target", (xml: string) => xml.replace('word/document.xml"', 'word/document.xml#part"')],
+    ["wrong package namespace", (xml: string) => xml.replace('package/2006/relationships', 'package/2006/not-relationships')],
+    ["extra colon in relationships root QName", (xml: string) => xml.replace(/Relationships/g, 'r:Relationships:extra').replace(/<Relationship /g, '<r:Relationship ').replace('xmlns=', 'xmlns:r=')],
+    ["extra colon in relationship QName", (xml: string) => xml.replace(/Relationships/g, 'r:Relationships').replace(/<Relationship /g, '<r:Relationship:extra ').replace('xmlns=', 'xmlns:r=')],
+    ["duplicate main relationships", (xml: string) => xml.replace(/(<Relationship Id[^>]+\/>)/, '$1$1')],
+    ["malformed relationships XML", (xml: string) => xml.replace('</Relationships>', '')],
+    ["entity declaration", (xml: string) => '<!DOCTYPE Relationships [<!ENTITY target SYSTEM "https://example.invalid/word/document.xml">]>' + xml.replace(/<\?xml[^>]+\?>/, '')],
+  ])("rejects DOCX package XML with %s", async (_name, change) => {
+    const zip = await JSZip.loadAsync(await minimalDocxBytes());
+    zip.file("_rels/.rels", change(await zip.file("_rels/.rels")!.async("string")));
+    const bytes = await zip.generateAsync({ type: "nodebuffer" });
+    mocks.createFileReadStream.mockImplementation(() => Readable.from([bytes]));
+    const db = fakeDb({ documents: [{ data: { id: baseFile.resource_id }, error: null }] });
+
+    await expect(processUploadFile(db as never, baseSession, {
+      ...baseFile, filename: "fake.docx", file_type: "docx", expected_size_bytes: bytes.length,
+    })).rejects.toThrow("invalid_docx_package");
+    expect(mocks.copyFile).not.toHaveBeenCalled();
+    expect(mocks.officeFileToPdf).not.toHaveBeenCalled();
+    expect(db.from).not.toHaveBeenCalled();
+  });
+
+  it.each(["word/document.xml", "_rels/.rels", "[Content_Types].xml"])(
+    "accepts whitespace before a processing instruction in %s",
+    async (part) => {
+      const zip = await JSZip.loadAsync(await minimalDocxBytes());
+      const xml = await zip.file(part)!.async("string");
+      zip.file(part, xml.replace("?>", '?>\n \t<?mso-application progid="Word.Document"?>'));
+      const bytes = await zip.generateAsync({ type: "nodebuffer" });
+      mocks.createFileReadStream.mockImplementation(() => Readable.from([bytes]));
+      const db = fakeDb({ documents: [{ data: { id: baseFile.resource_id }, error: null }] });
+
+      await expect(processUploadFile(db as never, baseSession, {
+        ...baseFile, filename: "valid.docx", file_type: "docx", expected_size_bytes: bytes.length,
+      })).resolves.toMatchObject({ id: baseFile.resource_id });
+      expect(mocks.copyFile).toHaveBeenCalledOnce();
+      expect(mocks.officeFileToPdf).toHaveBeenCalledOnce();
+      expect(db.rpc).toHaveBeenCalledWith("create_document_version", expect.objectContaining({ p_activate: true }));
+      expect(await readdir(processingTempRoot)).toEqual([]);
+    },
+  );
+
+  it.each([
+    ["word/document.xml", "non-whitespace top-level text"],
+    ["_rels/.rels", "non-whitespace top-level text"],
+    ["[Content_Types].xml", "non-whitespace top-level text"],
+    ["word/document.xml", "multiple roots"],
+    ["_rels/.rels", "multiple roots"],
+    ["[Content_Types].xml", "multiple roots"],
+  ])("rejects %s with %s before a processing instruction", async (part, invalid) => {
+    const zip = await JSZip.loadAsync(await minimalDocxBytes());
+    const xml = await zip.file(part)!.async("string");
+    const extra = invalid === "multiple roots" ? "<extra/>" : "not-whitespace";
+    zip.file(part, xml.replace("?>", `?>\n${extra}\n<?mso-application progid="Word.Document"?>`));
+    const bytes = await zip.generateAsync({ type: "nodebuffer" });
+    mocks.createFileReadStream.mockImplementation(() => Readable.from([bytes]));
+    const db = fakeDb();
+
+    await expect(processUploadFile(db as never, baseSession, {
+      ...baseFile, filename: "fake.docx", file_type: "docx", expected_size_bytes: bytes.length,
+    })).rejects.toThrow("invalid_docx_package");
+    expect(mocks.copyFile).not.toHaveBeenCalled();
+    expect(mocks.officeFileToPdf).not.toHaveBeenCalled();
+    expect(db.from).not.toHaveBeenCalled();
+    expect(db.rpc).not.toHaveBeenCalled();
+    expect(await readdir(processingTempRoot)).toEqual([]);
+  });
+
+  it.each([
+    ["word/document.xml", "w:document"],
+    ["word/document.xml", "w:body"],
+    ["_rels/.rels", "Relationships"],
+    ["_rels/.rels", "Relationship"],
+    ["[Content_Types].xml", "Types"],
+    ["[Content_Types].xml", "Override"],
+  ])("rejects whitespace-padded namespace on %s %s", async (part, element) => {
+    const zip = await JSZip.loadAsync(await minimalDocxBytes());
+    const xml = await zip.file(part)!.async("string");
+    const declaration = xml.match(/xmlns(?::w)?="([^"]+)"/)![0];
+    const paddedDeclaration = declaration.replace('="', '=" ').replace(/"$/, ' "');
+    const isRoot = ["w:document", "Relationships", "Types"].includes(element);
+    zip.file(part, isRoot
+      ? xml.replace(declaration, paddedDeclaration)
+      : xml.replace(new RegExp(`<${element}(?=[\\s>])`), `<${element} ${paddedDeclaration}`));
+    const bytes = await zip.generateAsync({ type: "nodebuffer" });
+    mocks.createFileReadStream.mockImplementation(() => Readable.from([bytes]));
+    const db = fakeDb({ documents: [{ data: { id: baseFile.resource_id }, error: null }] });
+
+    await expect(processUploadFile(db as never, baseSession, {
+      ...baseFile, filename: "fake.docx", file_type: "docx", expected_size_bytes: bytes.length,
+    })).rejects.toThrow("invalid_docx_package");
+    expect(mocks.copyFile).not.toHaveBeenCalled();
+    expect(mocks.officeFileToPdf).not.toHaveBeenCalled();
+    expect(db.from).not.toHaveBeenCalled();
+    expect(await readdir(processingTempRoot)).toEqual([]);
+  });
+
+  it.each([
+    ["plain text", "not XML"],
+    ["empty main part", ""],
+    ["malformed main XML", '<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body></w:document>'],
+    ["wrong main root", '<w:styles xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body/></w:styles>'],
+    ["extra colon in document QName", '<w:document:extra xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body/></w:document:extra>'],
+    ["extra colon in body QName", '<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body:extra/></w:document>'],
+    ["missing body", '<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"/>'],
+    ["wrong body namespace", '<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body xmlns:w="urn:not-word"/></w:document>'],
+    ["duplicate document roots", '<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body/></w:document>'.repeat(2)],
+    ["duplicate bodies", '<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body/><w:body/></w:document>'],
+    ["main XML DTD", '<!DOCTYPE document SYSTEM "https://example.invalid/word.dtd"><document xmlns="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><body/></document>'],
+  ])("rejects DOCX main XML with %s", async (_name, xml) => {
+    const zip = await JSZip.loadAsync(await minimalDocxBytes());
+    zip.file("word/document.xml", xml);
+    const bytes = await zip.generateAsync({ type: "nodebuffer" });
+    mocks.createFileReadStream.mockImplementation(() => Readable.from([bytes]));
+    const db = fakeDb({ documents: [{ data: { id: baseFile.resource_id }, error: null }] });
+
+    await expect(processUploadFile(db as never, baseSession, {
+      ...baseFile, filename: "fake.docx", file_type: "docx", expected_size_bytes: bytes.length,
+    })).rejects.toThrow("invalid_docx_package");
+    expect(mocks.copyFile).not.toHaveBeenCalled();
+    expect(mocks.officeFileToPdf).not.toHaveBeenCalled();
+    expect(db.from).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ["default namespace and empty body", '<document xmlns="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><body/></document>'],
+    ["alternate prefixes", '<word:document xmlns:word="http://schemas.openxmlformats.org/wordprocessingml/2006/main" xmlns:b="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><b:body/></word:document>'],
+    ["strict namespace", '<w:document xmlns:w="http://purl.oclc.org/ooxml/wordprocessingml/main"><w:body/></w:document>'],
+    ["main XML larger than metadata ceiling", '<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body><w:p><w:r><w:t>' + 'a'.repeat(256 * 1024 + 1) + '</w:t></w:r></w:p></w:body></w:document>'],
+  ])("accepts valid DOCX with %s", async (_name, xml) => {
+    const zip = await JSZip.loadAsync(await minimalDocxBytes());
+    zip.file("word/document.xml", xml);
+    const relationships = await zip.file("_rels/.rels")!.async("string");
+    zip.file("_rels/.rels", relationships
+      .replace(/Relationships/g, 'r:Relationships')
+      .replace(/<Relationship /g, '<r:Relationship ')
+      .replace('xmlns=', 'xmlns:r=')
+      .replace(
+        'http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument',
+        _name === "strict namespace"
+          ? 'http://purl.oclc.org/ooxml/officeDocument/relationships/officeDocument'
+          : 'http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument',
+      )
+      .replace('Target="word/', 'TargetMode="Internal" Target="/word/'));
+    const bytes = await zip.generateAsync({ type: "nodebuffer" });
+    mocks.createFileReadStream.mockImplementation(() => Readable.from([bytes]));
+    const db = fakeDb({ documents: [{ data: { id: baseFile.resource_id }, error: null }] });
+
+    await expect(processUploadFile(db as never, baseSession, {
+      ...baseFile, filename: "valid.docx", file_type: "docx", expected_size_bytes: bytes.length,
+    })).resolves.toMatchObject({ id: baseFile.resource_id });
+    expect(mocks.copyFile).toHaveBeenCalledOnce();
+    expect(mocks.officeFileToPdf).toHaveBeenCalledOnce();
+  });
+
+  it.each([
+    ["_rels/.rels", 256 * 1024],
+    ["word/document.xml", MAX_UPLOAD_SIZE_BYTES],
+  ])("rejects %s with a declared size above its ceiling", async (part, limit) => {
+    const bytes = withDeclaredZipEntrySize(await minimalDocxBytes(), part, limit + 1);
+    mocks.createFileReadStream.mockImplementation(() => Readable.from([bytes]));
+
+    await expect(processUploadFile(fakeDb() as never, baseSession, {
+      ...baseFile, filename: "fake.docx", file_type: "docx", expected_size_bytes: bytes.length,
+    })).rejects.toThrow("invalid_docx_package");
+    expect(mocks.copyFile).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ["_rels/.rels", 256 * 1024],
+    ["word/document.xml", MAX_UPLOAD_SIZE_BYTES],
+  ])("rejects %s whose actual decompressed bytes exceed its ceiling", async (part, limit) => {
+    const zip = await JSZip.loadAsync(await minimalDocxBytes());
+    zip.file(part, Buffer.alloc(limit + 1, " "));
+    const bytes = withDeclaredZipEntrySize(
+      await zip.generateAsync({ type: "nodebuffer", compression: "DEFLATE" }), part, 1,
+    );
+    expect(bytes.length).toBeLessThan(MAX_UPLOAD_SIZE_BYTES);
+    mocks.createFileReadStream.mockImplementation(() => Readable.from([bytes]));
+
+    await expect(processUploadFile(fakeDb() as never, baseSession, {
+      ...baseFile, filename: "fake.docx", file_type: "docx", expected_size_bytes: bytes.length,
+    })).rejects.toThrow("invalid_docx_package");
+    expect(mocks.copyFile).not.toHaveBeenCalled();
+  }, 20_000);
+
+  it("rejects invalid UTF-8 in the main XML", async () => {
+    const zip = await JSZip.loadAsync(await minimalDocxBytes());
+    const xml = await zip.file("word/document.xml")!.async("string");
+    zip.file("word/document.xml", Buffer.concat([
+      Buffer.from(xml.slice(0, xml.indexOf("Hello"))),
+      Buffer.from([0xff]),
+      Buffer.from(xml.slice(xml.indexOf("Hello") + "Hello".length)),
+    ]));
+    const bytes = await zip.generateAsync({ type: "nodebuffer" });
+    mocks.createFileReadStream.mockImplementation(() => Readable.from([bytes]));
+    const db = fakeDb({ documents: [{ data: { id: baseFile.resource_id }, error: null }] });
+
+    await expect(processUploadFile(db as never, baseSession, {
+      ...baseFile, filename: "fake.docx", file_type: "docx", expected_size_bytes: bytes.length,
+    })).rejects.toThrow("invalid_docx_package");
+    expect(mocks.copyFile).not.toHaveBeenCalled();
+  });
+
+  it.each(["utf16le", "utf16be"])("accepts a UTF-16 main document (%s)", async (encoding) => {
+    const zip = await JSZip.loadAsync(await minimalDocxBytes());
+    const xml = (await zip.file("word/document.xml")!.async("string"))
+      .replace('encoding="UTF-8"', 'encoding="UTF-16"');
+    const encoded = Buffer.from('\uFEFF' + xml, "utf16le");
+    zip.file("word/document.xml", encoding === "utf16be" ? encoded.swap16() : encoded);
+    const bytes = await zip.generateAsync({ type: "nodebuffer" });
+    mocks.createFileReadStream.mockImplementation(() => Readable.from([bytes]));
+    const db = fakeDb({ documents: [{ data: { id: baseFile.resource_id }, error: null }] });
+
+    await expect(processUploadFile(db as never, baseSession, {
+      ...baseFile, filename: "valid.docx", file_type: "docx", expected_size_bytes: bytes.length,
+    })).resolves.toMatchObject({ id: baseFile.resource_id });
+  });
+
+  it("accepts a DOCX generated by the existing document library", async () => {
+    const bytes = await Packer.toBuffer(new Document({
+      sections: [{ children: [new Paragraph("Hello")] }],
+    }));
+    mocks.createFileReadStream.mockImplementation(() => Readable.from([bytes]));
+    const db = fakeDb({ documents: [{ data: { id: baseFile.resource_id }, error: null }] });
+
+    await expect(processUploadFile(db as never, baseSession, {
+      ...baseFile, filename: "generated.docx", file_type: "docx", expected_size_bytes: bytes.length,
+    })).resolves.toMatchObject({ id: baseFile.resource_id });
+    expect(mocks.copyFile).toHaveBeenCalledOnce();
+    expect(mocks.officeFileToPdf).toHaveBeenCalledOnce();
+  });
+
+  it.each(["_rels/.rels", "word/document.xml"])("rejects %s with forged decompressed size metadata", async (part) => {
+    const bytes = withDeclaredZipEntrySize(await minimalDocxBytes(), part, 1);
+    mocks.createFileReadStream.mockImplementation(() => Readable.from([bytes]));
+
+    await expect(processUploadFile(fakeDb() as never, baseSession, {
+      ...baseFile, filename: "fake.docx", file_type: "docx", expected_size_bytes: bytes.length,
+    })).rejects.toThrow("invalid_docx_package");
+    expect(mocks.copyFile).not.toHaveBeenCalled();
+  });
+
+  it("rejects an oversized sealed DOCX before ZIP parsing", async () => {
+    const loadZip = vi.spyOn(JSZip, "loadAsync");
+    const bytes = Buffer.alloc(MAX_UPLOAD_SIZE_BYTES + 1);
+    mocks.createFileReadStream.mockImplementation(() => Readable.from([bytes]));
+    try {
+      await expect(processUploadFile(fakeDb() as never, baseSession, {
+        ...baseFile, filename: "fake.docx", file_type: "docx", expected_size_bytes: bytes.length,
+      })).rejects.toThrow("invalid_docx_package");
+      expect(loadZip).not.toHaveBeenCalled();
+      expect(mocks.copyFile).not.toHaveBeenCalled();
+    } finally {
+      loadZip.mockRestore();
+    }
+  });
+
+  it.each([
+    ["prefixed root and override", '<ct:Types xmlns:ct="http://schemas.openxmlformats.org/package/2006/content-types"><ct:Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/></ct:Types>'],
+    ["different override prefix", '<ct:Types xmlns:ct="http://schemas.openxmlformats.org/package/2006/content-types"><part:Override xmlns:part="http://schemas.openxmlformats.org/package/2006/content-types" PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/></ct:Types>'],
+    ["Unicode prefixes", '<型:Types xmlns:型="http://schemas.openxmlformats.org/package/2006/content-types"><型:Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/></型:Types>'],
+  ])("accepts DOCX content-types with %s", async (_name, xml) => {
+    const bytes = await minimalDocxBytes(xml);
+    mocks.createFileReadStream.mockImplementation(() => Readable.from([bytes]));
+    const db = fakeDb({ documents: [{ data: { id: baseFile.resource_id }, error: null }] });
+
+    await expect(processUploadFile(db as never, baseSession, {
+      ...baseFile, filename: "valid.docx", file_type: "docx", expected_size_bytes: bytes.length,
+    })).resolves.toMatchObject({ id: baseFile.resource_id });
+    expect(mocks.copyFile).toHaveBeenCalledOnce();
+    expect(mocks.officeFileToPdf).toHaveBeenCalledOnce();
+  });
+
+  it("rejects malformed content-types XML", async () => {
+    const zip = await JSZip.loadAsync(await minimalDocxBytes());
+    const contentTypes = await zip.file("[Content_Types].xml")!.async("string");
+    zip.file("[Content_Types].xml", contentTypes.replace('</Types>', ''));
+    const bytes = await zip.generateAsync({ type: "nodebuffer" });
+    mocks.createFileReadStream.mockImplementation(() => Readable.from([bytes]));
+    const db = fakeDb({ documents: [{ data: { id: baseFile.resource_id }, error: null }] });
+
+    await expect(processUploadFile(db as never, baseSession, {
+      ...baseFile, filename: "fake.docx", file_type: "docx", expected_size_bytes: bytes.length,
+    })).rejects.toThrow("invalid_docx_package");
+  });
+
+  it("rejects a .docx upload whose content type is not assigned to word/document.xml", async () => {
+    const bytes = await minimalDocxBytes(
+      `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">
+  <Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>
+  <Default Extension="xml" ContentType="application/xml"/>
+  <!-- application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml -->
+</Types>`,
+    );
+    mocks.createFileReadStream.mockImplementation(() =>
+      Readable.from([bytes]),
+    );
+
+    await expect(
+      processUploadFile(fakeDb() as never, baseSession, {
+        ...baseFile,
+        filename: "fake.docx",
+        file_type: "docx",
+        content_type:
+          "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        expected_size_bytes: bytes.length,
+      }),
+    ).rejects.toThrow("invalid_docx_package");
+
+    expect(mocks.copyFile).not.toHaveBeenCalled();
+  });
+
+  it("rejects a .docx upload with an oversized content-types part", async () => {
+    const bytes = await minimalDocxBytes("x".repeat(256 * 1024 + 1));
+    mocks.createFileReadStream.mockImplementation(() =>
+      Readable.from([bytes]),
+    );
+
+    await expect(
+      processUploadFile(fakeDb() as never, baseSession, {
+        ...baseFile,
+        filename: "fake.docx",
+        file_type: "docx",
+        content_type:
+          "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        expected_size_bytes: bytes.length,
+      }),
+    ).rejects.toThrow("invalid_docx_package");
+
+    expect(mocks.copyFile).not.toHaveBeenCalled();
+  });
+
+  it("rejects an oversized DOCX XML entry when ZIP metadata understates its size", async () => {
+    const generated = await minimalDocxBytes("x".repeat(256 * 1024 + 1));
+    const bytes = withDeclaredZipEntrySize(
+      generated,
+      "[Content_Types].xml",
+      1,
+    );
+    mocks.createFileReadStream.mockImplementation(() =>
+      Readable.from([bytes]),
+    );
+
+    await expect(
+      processUploadFile(fakeDb() as never, baseSession, {
+        ...baseFile,
+        filename: "fake.docx",
+        file_type: "docx",
+        content_type:
+          "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        expected_size_bytes: bytes.length,
+      }),
+    ).rejects.toThrow("invalid_docx_package");
+
+    expect(mocks.copyFile).not.toHaveBeenCalled();
+  });
+
   it("keeps the upload and reports a missing LibreOffice once, as a warning grouped by file type", async () => {
     // MIKE-BACKEND-9: the worker on a host without soffice.
+    const officeBytes = await minimalDocxBytes();
+    mocks.createFileReadStream.mockImplementation(() =>
+      Readable.from([officeBytes]),
+    );
     const officeFile = {
       ...baseFile,
       filename: "PRIVATE_NAME.docx",
       file_type: "docx",
       content_type:
         "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+      expected_size_bytes: officeBytes.length,
     };
     const document = {
       id: officeFile.resource_id,
@@ -508,6 +1002,10 @@ describe("upload processing", () => {
   });
 
   it.each([false, undefined])("replaces DOCX bytes with generate_pdf=%s and invalidates obsolete renditions", async (generatePdf) => {
+    const officeBytes = await minimalDocxBytes();
+    mocks.createFileReadStream.mockImplementation(() =>
+      Readable.from([officeBytes]),
+    );
     const db = scriptedDb([
       { data: { id: "v", storage_path: "old/source.docx", pdf_storage_path: "old/rendition.pdf", content_sha256: "a".repeat(64) } },
       { data: { id: "v" } },
@@ -519,7 +1017,12 @@ describe("upload processing", () => {
         document_id: "doc", version_id: "v", expected_content_sha256: "a".repeat(64),
         ...(generatePdf === undefined ? {} : { generate_pdf: generatePdf }),
       },
-    }, { ...baseFile, filename: "edited.docx", file_type: "docx" })).toEqual({ id: "v" });
+    }, {
+      ...baseFile,
+      filename: "edited.docx",
+      file_type: "docx",
+      expected_size_bytes: officeBytes.length,
+    })).toEqual({ id: "v" });
 
     expect(mocks.copyFile).toHaveBeenCalledOnce();
     expect(mocks.officeFileToPdf).toHaveBeenCalledTimes(generatePdf === false ? 0 : 1);
@@ -529,9 +1032,10 @@ describe("upload processing", () => {
       payload: expect.objectContaining({
         storage_path: expect.stringMatching(/\/versions\/[^/]+\.docx$/),
         filename: "edited.docx",
-        content_sha256: createHash("sha256").update(Buffer.from([1, 2, 3, 4])).digest("hex"),
+        content_sha256: createHash("sha256").update(officeBytes).digest("hex"),
         pdf_storage_path: generatePdf === false ? null : expect.stringContaining("converted-pdfs/"),
         page_count: null,
+        textless_page_count: null,
       }),
     }));
   });
@@ -765,6 +1269,50 @@ describe("upload processing", () => {
       ]),
     );
     expect(db.remaining).toHaveLength(0);
+  });
+
+  it("marks an invalid DOCX package as terminal and does not requeue the job", async () => {
+    const zip = new JSZip();
+    zip.file("not-word.txt", "hello");
+    const bytes = await zip.generateAsync({ type: "nodebuffer" });
+    mocks.createFileReadStream.mockImplementation(() =>
+      Readable.from([bytes]),
+    );
+    const invalidDocxFile = {
+      ...baseFile,
+      filename: "fake.docx",
+      file_type: "docx",
+      content_type:
+        "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+      expected_size_bytes: bytes.length,
+    };
+    const db = scriptedDb([
+      { data: { id: "job-1", session_id: baseSession.id, file_id: baseFile.id, attempts: 1, locked_by: "worker-1" } },
+      { data: baseSession, error: null },
+      { data: invalidDocxFile, error: null },
+      { data: { id: "job-1" }, error: null },
+      { error: null },
+      { data: { id: "job-1" }, error: null },
+      { error: null },
+      { error: null },
+      { data: { id: "job-1" }, error: null },
+      { error: null },
+      { data: [], error: null },
+      { data: { id: "job-1" }, error: null },
+    ]);
+
+    await processUploadJob(db as never, "job-1", "worker-1");
+
+    expect(db.calls).toContainEqual(expect.objectContaining({
+      table: "upload_session_files",
+      operation: "update",
+      payload: expect.objectContaining({
+        status: "error",
+        error_code: "invalid_docx_package",
+      }),
+    }));
+    expect(db.calls.some((call) => call.table === "upload_processing_jobs" && (call.payload as { status?: string })?.status === "queued")).toBe(false);
+    expect(mocks.reportError).not.toHaveBeenCalled();
   });
 
   // The measured resurrection: the job failed on P0002, retried, and the
