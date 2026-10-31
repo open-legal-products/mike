@@ -14,7 +14,7 @@ import {
 
 import { createHash, randomUUID } from "node:crypto";
 import { createWriteStream } from "node:fs";
-import { mkdir, mkdtemp, readdir, readFile, rm, stat } from "node:fs/promises";
+import { mkdir, mkdtemp, open, readdir, readFile, rm, stat } from "node:fs/promises";
 import { hostname, tmpdir } from "node:os";
 import { join } from "node:path";
 import { Transform } from "node:stream";
@@ -108,6 +108,7 @@ const TERMINAL_UPLOAD_ERROR_CODES = new Set([
   "direct_upload_failed",
   "size_mismatch",
   "content_type_mismatch",
+  "invalid_pdf_file",
   // The destination document no longer exists. Retrying cannot make it exist
   // again — it can only put it back, which is the bug this code prevents.
   "document_deleted",
@@ -137,6 +138,28 @@ class DeletedDocumentError extends AppError {
 class ChangedDocumentError extends AppError {
   constructor(readonly orphanedKeys: string[] = []) {
     super("upload.document_changed", "document_changed");
+  }
+}
+
+class InvalidPdfFileError extends Error {
+  constructor() {
+    super("invalid_pdf_file");
+    this.name = "InvalidPdfFileError";
+  }
+}
+
+async function validatePdfHeader(filePath: string): Promise<void> {
+  const handle = await open(filePath, "r");
+  try {
+    // Require the signature within the first KiB; \s also accepts a UTF-8 BOM.
+    // This is a bounded signature check, not a parser.
+    const prefix = Buffer.alloc(1024);
+    const { bytesRead } = await handle.read(prefix, 0, prefix.length, 0);
+    if (!/^\s*%PDF-/.test(prefix.toString("utf8", 0, bytesRead))) {
+      throw new InvalidPdfFileError();
+    }
+  } finally {
+    await handle.close();
   }
 }
 
@@ -710,6 +733,7 @@ export async function processUploadFile(
 ) {
   const artifact = await requireSealedFile(file);
   try {
+    if (file.file_type === "pdf") await validatePdfHeader(artifact.filePath);
     switch (session.purpose) {
       case "document_create":
         return await processCreatedDocument(db, session, file, artifact);
@@ -926,8 +950,14 @@ export async function processUploadJob(
         await heartbeatJob(db, jobId, workerId);
         failed = true;
         // These failures cannot be fixed by retrying the same upload.
-        terminalProcessingFailure = error instanceof DeletedDocumentError || error instanceof ChangedDocumentError;
-        if (!(error instanceof ChangedDocumentError)) {
+        terminalProcessingFailure =
+          error instanceof DeletedDocumentError ||
+          error instanceof ChangedDocumentError ||
+          error instanceof InvalidPdfFileError;
+        if (
+          !(error instanceof ChangedDocumentError) &&
+          !(error instanceof InvalidPdfFileError)
+        ) {
           reportError(error, {
             tags: {
               component: "upload-worker",
@@ -955,6 +985,7 @@ export async function processUploadJob(
             error_code: error instanceof ChangedDocumentError
               ? "document_changed"
               : error instanceof DeletedDocumentError ? "document_deleted"
+              : error instanceof InvalidPdfFileError ? "invalid_pdf_file"
               : "processing_failed",
             updated_at: new Date().toISOString(),
           })
@@ -995,7 +1026,7 @@ export async function processUploadJob(
   }
 
   const now = new Date().toISOString();
-  // Deleted destinations and stale editor saves cannot succeed on retry.
+  // Invalid files, deleted destinations, and stale saves cannot succeed on retry.
   if (
     failed &&
     !terminalProcessingFailure &&
