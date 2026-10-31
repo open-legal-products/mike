@@ -35,6 +35,10 @@ on:
     # tab, they block nothing.
     - cron: "17 6 3 * *"
 
+permissions:
+  contents: read
+
+
 jobs:
   mutation:
     name: Backend mutation testing (security libs)
