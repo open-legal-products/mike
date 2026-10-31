@@ -4,6 +4,8 @@
 // their typed results onto status codes, headers, and JSON.
 
 import { Router } from "express";
+import { pipeline } from "node:stream/promises";
+import { Readable } from "node:stream";
 import { requireAuth } from "../../middleware/auth";
 import { asyncRoute, routerErrorHandler } from "../../middleware/asyncRoute";
 import { createServerSupabase } from "../../lib/supabase";
@@ -28,11 +30,16 @@ downloadsRouter.get("/signed/:token", asyncRoute(async (req, res) => {
     const result = await resolveBlobDownload(req.params.token);
     if (!result.ok) return void sendServiceFailure(res, result);
     res.setHeader("Content-Type", result.data.contentType);
+    if (result.data.contentLength !== null) {
+        res.setHeader("Content-Length", String(result.data.contentLength));
+    }
     res.setHeader(
         "Content-Disposition",
         buildContentDisposition("attachment", result.data.filename),
     );
-    res.send(result.data.bytes);
+    // Stream the object to the client: the response is never buffered in the
+    // process heap, so concurrent downloads of large documents stay bounded.
+    await pipeline(Readable.from(result.data.stream), res);
 }));
 
 /**
@@ -75,11 +82,15 @@ downloadsRouter.get("/:token", requireAuth, asyncRoute(async (req, res) => {
         });
 
     res.setHeader("Content-Type", result.contentType);
+    if (result.contentLength !== null) {
+        res.setHeader("Content-Length", String(result.contentLength));
+    }
     res.setHeader(
         "Content-Disposition",
         buildContentDisposition("attachment", result.filename),
     );
-    res.send(result.bytes);
+    // Stream the object to the client (see the signed-token route above).
+    await pipeline(Readable.from(result.stream), res);
 }));
 
 downloadsRouter.use(routerErrorHandler("[downloads]"));
