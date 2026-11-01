@@ -1515,9 +1515,10 @@ describe("projects.routes", () => {
         const seedChats = () => {
             supabaseState.tables.chats = {
                 data: [
-                    { id: "c-mine", user_id: "u1" },
-                    { id: "c-theirs", user_id: "u2" },
-                    { id: "c-shared", user_id: "u2" },
+                    // Newest activity first is the listing's order.
+                    { id: "c-mine", user_id: "u1", updated_at: "2026-09-03T00:00:00Z" },
+                    { id: "c-theirs", user_id: "u2", updated_at: "2026-09-02T00:00:00Z" },
+                    { id: "c-shared", user_id: "u2", updated_at: "2026-09-01T00:00:00Z" },
                 ],
                 error: null,
             };
