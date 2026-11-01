@@ -1,10 +1,13 @@
 import { test, expect } from "./support/fixtures";
 import { replacementEdit, wordEdits } from "./support/editProtocol";
 
+// A persisted assistant message: applied edits get durable anchors.
+const PERSISTED = { chatId: "chat-algorithmic-work", assistantMessageId: "assistant-algorithmic-work" };
+
 test("bulk acceptance loads one revision inventory for twenty distinct edits", async ({ addin, page }) => {
   addin.seedToken("test-jwt");
   const originals = Array.from({ length: 20 }, (_, i) => `Original clause ${String(i).padStart(2, "0")}`);
-  await addin.mockChatStream([wordEdits(...originals.map((original, i) => replacementEdit(original, `Revised clause ${i}`, "Clarify wording.")))]);
+  await addin.mockChatStream([wordEdits(...originals.map((original, i) => replacementEdit(original, `Revised clause ${i}`, "Clarify wording.")))], PERSISTED);
   await addin.gotoTaskpane({ documentText: originals.join(".\n") });
   await addin.expectAuthedShell();
   await page.getByTestId("edit-apply-toggle").click();
@@ -12,10 +15,40 @@ test("bulk acceptance loads one revision inventory for twenty distinct edits", a
   await page.getByPlaceholder("How can I help?").fill("Clarify every clause");
   await page.getByRole("button", { name: "Send" }).click();
   await expect(page.getByRole("button", { name: "Accept", exact: true })).toHaveCount(20);
-  const before = (await addin.wordCalls()).bodyRevisionReads;
+  await expect.poll(async () => (await addin.wordDocument()).bookmarks.length).toBe(20);
+  const before = await addin.wordCalls();
   await page.getByRole("button", { name: "Accept all", exact: true }).click();
   await expect.poll(async () => (await addin.wordCalls()).acceptedChanges.length).toBe(20);
-  expect((await addin.wordCalls()).bodyRevisionReads - before).toBe(1);
+  await expect(page.getByText("Accepted.", { exact: true })).toHaveCount(20);
+  const after = await addin.wordCalls();
+  expect(after.bodyRevisionReads - before.bodyRevisionReads).toBe(1);
+  expect(after.rejectedChanges).toEqual([]);
+  // The inventory/accept batch, then one cleanup batch (bookmarks + proxies)
+  // per apply batch -- not two per edit -- and one registry save.
+  expect(after.runs - before.runs).toBe(1 + after.trackAllContexts);
+  expect(after.settingsSaves - before.settingsSaves).toBe(1);
+  expect(after.deletedBookmarks.length - before.deletedBookmarks.length).toBe(20);
+});
+
+test("switching chats releases every applied edit in one Word batch", async ({ addin, page }) => {
+  addin.seedToken("test-jwt");
+  const originals = Array.from({ length: 12 }, (_, i) => `Clause ${String(i).padStart(2, "0")} text`);
+  await addin.mockChatStream([wordEdits(...originals.map((original, i) => replacementEdit(original, `Clause ${i} revised`, "Clarify.")))], PERSISTED);
+  await addin.gotoTaskpane({ documentText: originals.join(".\n") });
+  await addin.expectAuthedShell();
+  await page.getByTestId("edit-apply-toggle").click();
+  await page.getByRole("menuitem", { name: /Edit/ }).click();
+  await page.getByPlaceholder("How can I help?").fill("Clarify every clause");
+  await page.getByRole("button", { name: "Send" }).click();
+  await expect(page.getByRole("button", { name: "Accept", exact: true })).toHaveCount(12);
+  const before = (await addin.wordCalls()).runs;
+  await page.getByRole("button", { name: "New chat" }).click();
+  await expect(page.getByRole("button", { name: "Accept", exact: true })).toHaveCount(0);
+  // One untrack batch per apply batch, not one per edit.
+  const { trackAllContexts } = await addin.wordCalls();
+  await expect.poll(async () => (await addin.wordCalls()).runs - before).toBe(trackAllContexts);
+  // Nothing in the document was decided by leaving the chat.
+  expect((await addin.wordCalls()).acceptedChanges).toEqual([]);
   expect((await addin.wordCalls()).rejectedChanges).toEqual([]);
 });
 

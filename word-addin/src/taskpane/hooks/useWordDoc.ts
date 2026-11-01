@@ -613,6 +613,77 @@ async function removePersistentAnchorForEntry(
   return failures;
 }
 
+/**
+ * Untrack (and optionally delete the bookmark of) many entries with one
+ * Word.run + sync per request context, instead of one or two per entry.
+ *
+ * Tracked proxies can only be batched with objects of their own request
+ * context, so entries are grouped by it: everything one apply batch or one
+ * restore pass produced shares a context and is released together. If a
+ * group's batch fails (one stale proxy fails the whole sync), each of its
+ * entries falls back to the original per-entry cleanup, so the failure is
+ * attributed to the entry that left something behind.
+ *
+ * Returns the fixed cleanup sentences per entry (never host text).
+ */
+async function releaseEntryProxies(
+  entries: readonly PendingTrackedEdit[],
+  options: {
+    deleteBookmarks: boolean;
+    onUntrackFailure: (error: unknown) => void;
+  },
+): Promise<Map<PendingTrackedEdit, string[]>> {
+  const failures = new Map<PendingTrackedEdit, string[]>(
+    entries.map((entry) => [entry, []]),
+  );
+  const groups = new Map<unknown, PendingTrackedEdit[]>();
+  const singles: PendingTrackedEdit[] = [];
+  for (const entry of entries) {
+    const objects = trackedObjectsFor(entry);
+    const context = objects[0]?.context;
+    if (!context || objects.some((object) => object.context !== context)) {
+      singles.push(entry);
+      continue;
+    }
+    const group = groups.get(context);
+    if (group) group.push(entry);
+    else groups.set(context, [entry]);
+  }
+  const perEntry = async (entry: PendingTrackedEdit): Promise<void> => {
+    const left = failures.get(entry)!;
+    if (options.deleteBookmarks) {
+      left.push(...(await removePersistentAnchorForEntry(entry, false)));
+    }
+    try {
+      await Word.run(trackedObjectsFor(entry), async (context) => {
+        untrackEntry(entry);
+        await context.sync();
+      });
+    } catch (error) {
+      options.onUntrackFailure(error);
+      left.push(PROXY_CLEANUP_FAILURE);
+    }
+  };
+  for (const group of groups.values()) {
+    try {
+      await Word.run(group.flatMap(trackedObjectsFor), async (context) => {
+        if (options.deleteBookmarks) {
+          for (const entry of group) {
+            if (entry.bookmarkName) context.document.deleteBookmark(entry.bookmarkName);
+          }
+        }
+        for (const entry of group) untrackEntry(entry);
+        await context.sync();
+      });
+    } catch (error) {
+      console.debug("[tracked-edit/cleanup] batched cleanup failed; retrying per edit", error);
+      for (const entry of group) await perEntry(entry);
+    }
+  }
+  for (const entry of singles) await perEntry(entry);
+  return failures;
+}
+
 /** Signals that Word reports no revisions left inside the edited passage. */
 class NoRemainingRevisionsError extends Error {}
 class ChangedRevisionSetError extends Error {}
@@ -2276,20 +2347,19 @@ async function resolveUniqueEditBatch(
     // live revisions and owns the existing honest partial-failure semantics.
     return results;
   }
+  for (const handle of resolved) {
+    pendingTrackedEdits.delete(handle);
+    rememberTerminalState(handle, decision);
+  }
+  // Bookmarks and proxies of every resolved edit: one cleanup batch per
+  // request context instead of two Word.runs per edit.
+  const resolvedEntries = resolved.map(handle => entries.get(handle)!);
+  const failures = await releaseEntryProxies(resolvedEntries, { deleteBookmarks: true, onUntrackFailure: () => undefined });
   const removedIds: string[] = [];
   for (const handle of resolved) {
     const entry = entries.get(handle)!;
-    pendingTrackedEdits.delete(handle);
-    rememberTerminalState(handle, decision);
     if (entry.stableEditId) removedIds.push(entry.stableEditId);
-    const failures = await removePersistentAnchorForEntry(entry, false);
-    try {
-      await Word.run(trackedObjectsFor(entry), async context => {
-        untrackEntry(entry);
-        await context.sync();
-      });
-    } catch { failures.push(PROXY_CLEANUP_FAILURE); }
-    const error = cleanupSentence(failures);
+    const error = cleanupSentence(failures.get(entry) ?? []);
     results.set(handle, { handle, status: decision === "accept" ? "accepted" : "rejected", resolvedAs: decision, ...(error ? { error } : {}) });
   }
   try { await removeWordEditAnchors(removedIds); } catch {
@@ -2321,6 +2391,23 @@ export function releaseTrackedEdits(
 ): Promise<TrackedEditReleaseResult[]> {
   return serializeWordMutation(async () => {
     const results: TrackedEditReleaseResult[] = [];
+    // Release every live entry first: one Word.run per request context
+    // rather than one per handle, which chat switches used to wait on.
+    const live = [...new Set(handles)].flatMap((handle) => {
+      const entry = pendingTrackedEdits.get(handle);
+      return entry ? [entry] : [];
+    });
+    const failures = await releaseEntryProxies(live, {
+      deleteBookmarks: false,
+      onUntrackFailure: (error) => {
+        reportWordFailure(error, {
+          stage: "release",
+          operation: "word.edit_resolve",
+          level: "warning",
+        });
+        console.warn("[tracked-edit/release] untrack failed", error);
+      },
+    });
 
     for (const handle of handles) {
       const entry = pendingTrackedEdits.get(handle);
@@ -2340,33 +2427,17 @@ export function releaseTrackedEdits(
         continue;
       }
 
-      try {
-        await Word.run(trackedObjectsFor(entry), async (context) => {
-          untrackEntry(entry);
-          await context.sync();
-        });
-        pendingTrackedEdits.delete(handle);
-        rememberTerminalState(handle, "released");
-        results.push({ handle, status: "released" });
-      } catch (error) {
-        reportWordFailure(error, {
-          stage: "release",
-          operation: "word.edit_resolve",
-          level: "warning",
-        });
-        // A proxy that failed to untrack is not safe to hand back to a later
-        // tracked-edit controller. Evict it so a reload reconstructs fresh
-        // proxies from the document bookmark instead of shadowing that valid
-        // anchor.
-        console.warn("[tracked-edit/release] untrack failed", error);
-        pendingTrackedEdits.delete(handle);
-        rememberTerminalState(handle, "released");
-        results.push({
-          handle,
-          status: "error",
-          error: PROXY_CLEANUP_FAILURE,
-        });
-      }
+      // A proxy that failed to untrack is not safe to hand back to a later
+      // tracked-edit controller. Evict it either way so a reload reconstructs
+      // fresh proxies from the document bookmark instead of shadowing that
+      // valid anchor.
+      pendingTrackedEdits.delete(handle);
+      rememberTerminalState(handle, "released");
+      results.push(
+        failures.get(entry)?.length
+          ? { handle, status: "error", error: PROXY_CLEANUP_FAILURE }
+          : { handle, status: "released" },
+      );
     }
 
     return results;
