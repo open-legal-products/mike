@@ -140,3 +140,32 @@ test("Accept all shows every outcome without waiting for each record to save", a
   // Records still save one at a time, in card order.
   await expect.poll(() => saved).toEqual(["0", "1", "2", "3", "4"]);
 });
+
+test("reopening a chat validates its proposed edits in one Word batch", async ({ addin, page }) => {
+  addin.seedToken("test-jwt");
+  const originals = Array.from({ length: 10 }, (_, i) => `Notice period ${i}`);
+  const chat = { id: "chat-proposed", project_id: null, user_id: "user-1", title: "Proposed review", created_at: "2026-08-19T00:00:00Z" };
+  await addin.mockApiJson("GET", "**/word-chat?*", [chat]);
+  await addin.mockApiJson("GET", `**/word-chat/${chat.id}?*`, {
+    chat,
+    messages: [{
+      id: "assistant-proposed", chat_id: chat.id, role: "assistant", created_at: "2026-08-19T00:00:01Z",
+      content: originals.map((_, i) => ({ type: "word_edit_ref", edit_id: `proposed-${i}` })),
+      edits: originals.map((original, i) => ({
+        id: `proposed-${i}`, word_chat_message_id: "assistant-proposed", block_index: i, original_text: original,
+        replacement_text: `${original} days`, formats: [], apply_mode: "approval", apply_status: "proposed", resolution_status: null,
+      })),
+    }],
+  });
+  await addin.gotoTaskpane({ documentText: originals.join(".\n") });
+  await addin.expectAuthedShell();
+  await page.getByRole("button", { name: "Chat history" }).click();
+  const before = await addin.wordCalls();
+  await page.getByRole("menu").getByRole("menuitem", { name: /Proposed review/ }).click();
+  await expect(page.getByRole("button", { name: "Apply", exact: true })).toHaveCount(10);
+  const after = await addin.wordCalls();
+  // One batch probes the document for already-applied rows; one validates all
+  // ten: every search in one sync, every revision check in the next.
+  expect(after.runs - before.runs).toBe(2);
+  expect(after.searches - before.searches).toBe(10);
+});

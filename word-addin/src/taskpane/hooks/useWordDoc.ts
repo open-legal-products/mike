@@ -2095,91 +2095,197 @@ export interface TrackedEditValidationResult {
 export function validateTrackedEdit(
   edit: RedlineEdit,
 ): Promise<TrackedEditValidationResult> {
-  return serializeWordMutation(async () => {
-    const original = edit.original;
-    if (!isSearchableOriginal(original)) {
-      return {
-        status: "skipped",
-        matches: 0,
-        reason: "unsearchable",
-      };
-    }
+  return requestTrackedEditValidation(edit);
+}
 
+/**
+ * Review mode validates every proposal of a turn (and every "proposed" row
+ * of a reopened chat) as it arrives. Validation is read-only, so proposals
+ * ready in the same tick share one Word.run: all searches in one sync, all
+ * stripped-marker retries in one, all revision checks in one, instead of
+ * 2-3 syncs and a Word.run each. (Apply keeps one search per edit: that
+ * ordering constraint is about mutations, office-js#2800.)
+ */
+const requestTrackedEditValidation = createSerialBatcher(
+  (edits: RedlineEdit[]) =>
+    serializeWordMutation(() => validateTrackedEditsNow(edits)),
+);
+
+const unsearchableValidation = (): TrackedEditValidationResult => ({
+  status: "skipped",
+  matches: 0,
+  reason: "unsearchable",
+});
+
+function validationSearchOptions(edit: RedlineEdit) {
+  const replaceAll = edit.occurrence === "all";
+  const wholeWordSafe =
+    replaceAll &&
+    /^[A-Za-z0-9_]/.test(edit.original) &&
+    /[A-Za-z0-9_]$/.test(edit.original);
+  return {
+    matchCase: true,
+    ...(wholeWordSafe ? { matchWholeWord: true } : {}),
+  };
+}
+
+/** Classify an edit's located matches and their pending-revision counts. */
+function classifyValidation(
+  edit: RedlineEdit,
+  revisionCounts: readonly number[],
+): TrackedEditValidationResult {
+  const replaceAll = edit.occurrence === "all";
+  const revisionFree = revisionCounts.filter((count) => count === 0).length;
+  if (
+    replaceAll
+      ? revisionFree === 0
+      : revisionFree !== revisionCounts.length
+  ) {
+    return {
+      status: "skipped",
+      matches: revisionCounts.length,
+      reason: "pre-existing-revisions",
+    };
+  }
+  return { status: "ready", matches: revisionCounts.length };
+}
+
+/** Early verdicts that need no revision read, or null to keep checking. */
+function classifyMatchCount(
+  edit: RedlineEdit,
+  count: number,
+): TrackedEditValidationResult | null {
+  if (count === 0) return { status: "not-found", matches: 0 };
+  if (count > 1 && edit.occurrence !== "all") {
+    return { status: "skipped", matches: count, reason: "ambiguous" };
+  }
+  return null;
+}
+
+async function validateTrackedEditsNow(
+  edits: readonly RedlineEdit[],
+): Promise<TrackedEditValidationResult[]> {
+  const results: (TrackedEditValidationResult | undefined)[] = edits.map(
+    (edit) => (isSearchableOriginal(edit.original) ? undefined : unsearchableValidation()),
+  );
+  const searchable = edits.flatMap((_edit, index) => (results[index] ? [] : [index]));
+  if (searchable.length === 1) {
+    results[searchable[0]!] = await validateTrackedEditNow(edits[searchable[0]!]!);
+  } else if (searchable.length > 1) {
     try {
-      return await Word.run(async (context) => {
-        const replaceAll = edit.occurrence === "all";
-        const wholeWordSafe =
-          replaceAll &&
-          /^[A-Za-z0-9_]/.test(original) &&
-          /[A-Za-z0-9_]$/.test(original);
-        const searchOptions = {
-          matchCase: true,
-          ...(wholeWordSafe ? { matchWholeWord: true } : {}),
-        };
-        let matches = context.document.body.search(original, searchOptions);
-        matches.load("items");
+      await Word.run(async (context) => {
+        const body = context.document.body;
+        const plans = searchable.map((index) => {
+          const edit = edits[index]!;
+          const options = validationSearchOptions(edit);
+          const matches = body.search(edit.original, options);
+          matches.load("items");
+          return { index, edit, options, matches };
+        });
         await context.sync();
 
-        if (matches.items.length === 0) {
-          const stripped = stripStructuralMarkers(original);
-          if (stripped) {
-            const retry = context.document.body.search(stripped, searchOptions);
-            retry.load("items");
-            await context.sync();
-            if (retry.items.length > 0) matches = retry;
+        const retries = plans.flatMap((plan) => {
+          if (plan.matches.items.length > 0) return [];
+          const stripped = stripStructuralMarkers(plan.edit.original);
+          if (!stripped) return [];
+          const retry = body.search(stripped, plan.options);
+          retry.load("items");
+          return [{ plan, retry }];
+        });
+        if (retries.length > 0) {
+          await context.sync();
+          for (const { plan, retry } of retries) {
+            if (retry.items.length > 0) plan.matches = retry;
           }
         }
 
-        if (matches.items.length === 0) {
-          return { status: "not-found", matches: 0 } as const;
+        const checks: { index: number; edit: RedlineEdit; collections: Word.TrackedChangeCollection[] }[] = [];
+        for (const plan of plans) {
+          const early = classifyMatchCount(plan.edit, plan.matches.items.length);
+          if (early) {
+            results[plan.index] = early;
+            continue;
+          }
+          checks.push({
+            index: plan.index,
+            edit: plan.edit,
+            collections: plan.matches.items.map((match) => {
+              const collection = match.getTrackedChanges();
+              collection.load("items");
+              return collection;
+            }),
+          });
         }
-        if (matches.items.length > 1 && !replaceAll) {
-          return {
-            status: "skipped",
-            matches: matches.items.length,
-            reason: "ambiguous",
-          } as const;
+        if (checks.length > 0) await context.sync();
+        for (const check of checks) {
+          results[check.index] = classifyValidation(
+            check.edit,
+            check.collections.map((collection) => collection.items.length),
+          );
         }
-
-        const existingCollections = matches.items.map((match) => {
-          const collection = match.getTrackedChanges();
-          collection.load("items");
-          return collection;
-        });
-        await context.sync();
-        const revisionFreeMatches = matches.items.filter(
-          (_match, index) => existingCollections[index]?.items.length === 0,
-        );
-        if (
-          replaceAll
-            ? revisionFreeMatches.length === 0
-            : revisionFreeMatches.length !== matches.items.length
-        ) {
-          return {
-            status: "skipped",
-            matches: matches.items.length,
-            reason: "pre-existing-revisions",
-          } as const;
-        }
-
-        return {
-          status: "ready",
-          matches: matches.items.length,
-        } as const;
       });
     } catch (error) {
-      reportWordFailure(error, { stage: "locate", operation: "word.edit_apply" });
-      return {
-        status: "error",
-        matches: 0,
-        reason: "word-error",
-        error: describeWordFailure(
-          error,
-          "Word couldn’t check whether this change can be applied.",
-        ),
-      };
+      // One failing command fails the whole shared sync. Re-validate each
+      // edit on its own, so a failure stays attributed to its own card.
+      console.debug("[tracked-edit/validate] batched validation failed; retrying per edit", error);
+      for (const index of searchable) {
+        results[index] = await validateTrackedEditNow(edits[index]!);
+      }
     }
-  });
+  }
+  return results.map((result) => result!);
+}
+
+/** One edit, in its own Word.run: the original path and the batch fallback. */
+async function validateTrackedEditNow(
+  edit: RedlineEdit,
+): Promise<TrackedEditValidationResult> {
+  const original = edit.original;
+  if (!isSearchableOriginal(original)) return unsearchableValidation();
+
+  try {
+    return await Word.run(async (context) => {
+      const searchOptions = validationSearchOptions(edit);
+      let matches = context.document.body.search(original, searchOptions);
+      matches.load("items");
+      await context.sync();
+
+      if (matches.items.length === 0) {
+        const stripped = stripStructuralMarkers(original);
+        if (stripped) {
+          const retry = context.document.body.search(stripped, searchOptions);
+          retry.load("items");
+          await context.sync();
+          if (retry.items.length > 0) matches = retry;
+        }
+      }
+
+      const early = classifyMatchCount(edit, matches.items.length);
+      if (early) return early;
+
+      const existingCollections = matches.items.map((match) => {
+        const collection = match.getTrackedChanges();
+        collection.load("items");
+        return collection;
+      });
+      await context.sync();
+      return classifyValidation(
+        edit,
+        existingCollections.map((collection) => collection.items.length),
+      );
+    });
+  } catch (error) {
+    reportWordFailure(error, { stage: "locate", operation: "word.edit_apply" });
+    return {
+      status: "error",
+      matches: 0,
+      reason: "word-error",
+      error: describeWordFailure(
+        error,
+        "Word couldn’t check whether this change can be applied.",
+      ),
+    };
+  }
 }
 
 export type ProposedEditRevealStatus =
