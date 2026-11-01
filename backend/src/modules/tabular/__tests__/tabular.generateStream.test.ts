@@ -24,9 +24,12 @@ vi.mock("ioredis", () => ({
     },
 }));
 
+import { EventEmitter } from "node:events";
 import { AppError } from "../../../lib/appError";
+import { tableDb } from "../../../__tests__/helpers/tableDb";
 import {
     awaitCellTerminal,
+    streamTabularRunView,
     targetPendingCells,
 } from "../tabular.generateStream";
 
@@ -228,5 +231,38 @@ describe("awaitCellTerminal", () => {
 
         // Flag unset above — the DB poll alone resolved it.
         expect(process.env.ASYNC_TABULAR_EXTRACTION).toBeUndefined();
+    });
+});
+
+describe("run-view reconcile poll", () => {
+    it("re-reads only the pending rows' finished cells, not the whole review", async () => {
+        vi.useFakeTimers();
+        try {
+            const rows = Array.from({ length: 40 }, (_, r) => ({ id: `row-${r}` }));
+            const cells = rows.flatMap((row, r) => [0, 1].map((c) => ({
+                id: `cell-${String(r * 2 + c).padStart(3, "0")}`, review_id: "rev", row_id: row.id,
+                column_index: c, status: "done", content: JSON.stringify({ summary: "x" }),
+            })));
+            // The view started while row-39 column 1 was still pending.
+            const cellMap = new Map(cells.map((cell) => [`${cell.row_id}:${cell.column_index}`, { ...cell }]));
+            cellMap.get("row-39:1")!.status = "generating";
+            const fake = tableDb({ tabular_cells: cells });
+            const writes: string[] = [];
+            const res = Object.assign(new EventEmitter(), {
+                setHeader: () => {}, flushHeaders: () => {}, writableEnded: false,
+                write: (chunk: string) => (writes.push(chunk), true),
+                end() { this.writableEnded = true; },
+            });
+            await streamTabularRunView({
+                res: res as never, db: fake.db, reviewId: "rev", columns: COLUMNS,
+                rows: rows as never, cellMap, log: { error: vi.fn() } as never,
+            });
+            await vi.advanceTimersByTimeAsync(3_000);
+            expect(writes.some((w) => w.includes('"row_id":"row-39"'))).toBe(true);
+            expect(writes.at(-1)).toBe("data: [DONE]\n\n");
+            expect(fake.calls.map((c) => c.returned)).toEqual([2]);
+        } finally {
+            vi.useRealTimers();
+        }
     });
 });

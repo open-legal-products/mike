@@ -47,7 +47,7 @@ import { AppError } from "../../lib/appError";
 import { reportError } from "../../lib/observability/sentry";
 import { extractRowColumns, finalizeCell } from "./tabular.extractRow";
 import { type ReviewRow } from "./tabular.rows";
-import { mutateInBatches } from "../../lib/batchedQuery";
+import { mutateInBatches, selectAllPages, selectInBatches } from "../../lib/batchedQuery";
 import {
     finishGeneration,
     parseCellContent,
@@ -294,16 +294,35 @@ async function tailTabularRun(args: {
     poll = setInterval(() => {
         if (finished) return;
         void (async () => {
-            const { data: cells } = await db
-                .from("tabular_cells")
-                .select("row_id, column_index, status, content")
-                .eq("review_id", reviewId);
-            for (const c of (cells ?? []) as {
+            // Only the rows still waiting, and only cells that reached a
+            // terminal state: re-reading every cell's content of the whole
+            // review every 3 s per viewer was both wasteful and, past
+            // max_rows, blind to pending cells beyond the first page.
+            type PolledCell = {
+                id: string;
                 row_id: string;
                 column_index: number;
                 status: string;
                 content: unknown;
-            }[]) {
+            };
+            const cells = await selectInBatches<PolledCell>(
+                "reconcile poll",
+                [...pending].map((key) => key.slice(0, key.lastIndexOf(":"))),
+                (batch) =>
+                    selectAllPages<PolledCell>("reconcile poll", (after, limit) => {
+                        let query = db
+                            .from("tabular_cells")
+                            .select("id, row_id, column_index, status, content")
+                            .eq("review_id", reviewId)
+                            .in("row_id", batch)
+                            .in("status", ["done", "error"])
+                            .order("id", { ascending: true })
+                            .limit(limit);
+                        if (after) query = query.gt("id", after.id);
+                        return query;
+                    }),
+            );
+            for (const c of cells) {
                 const key = cellKey(c.row_id, c.column_index);
                 if (!pending.has(key)) continue;
                 if (c.status === "done" && c.content) {
