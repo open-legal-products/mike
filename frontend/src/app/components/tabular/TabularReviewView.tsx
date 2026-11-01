@@ -82,6 +82,7 @@ import {
     type ModelProvider,
 } from "@/app/lib/modelAvailability";
 import { restoreOptimisticallyDeletedRows } from "@/app/lib/optimisticRows";
+import { missingById } from "@/app/lib/idCollections";
 import { TRSidePanel } from "./TRSidePanel";
 import { TRTable } from "./TRTable";
 import type { TRTableHandle } from "./TRTable";
@@ -553,9 +554,7 @@ export function TRView({ reviewId, projectId }: Props) {
         // Changing the review's document set is a structure edit server-side
         // (PATCH document_ids 403s below member) — same gate as columns.
         if (!requireStructure("edit the document set")) return;
-        const toAdd = newDocs.filter(
-            (d) => !documents.some((existing) => existing.id === d.id),
-        );
+        const toAdd = missingById(documents, newDocs);
         if (!toAdd.length) return;
         const allIds = [
             ...documents.map((d) => d.id),

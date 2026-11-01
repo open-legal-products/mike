@@ -25,6 +25,7 @@ import {
   searchProjectDirectory,
 } from "@/app/lib/mikeApi";
 import { useDocumentWorkspace } from "@/app/contexts/WorkspaceContext";
+import { missingById } from "@/app/lib/idCollections";
 import {
     LIQUID_GLASS_MODAL_ROW_HOVER_CLASS,
     LIQUID_GLASS_MODAL_ROW_SELECTED_CLASS,
@@ -308,12 +309,7 @@ function WorkspaceFileDirectory({
         () =>
             showTabs
                 ? [
-                      ...documents.filter(
-                          (doc) =>
-                              !standaloneDocuments.some(
-                                  (loadedDoc) => loadedDoc.id === doc.id,
-                              ),
-                      ),
+                      ...missingById(standaloneDocuments, documents),
                       ...standaloneDocuments,
                   ]
                 : documents,

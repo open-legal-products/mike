@@ -96,6 +96,7 @@ import {
     type DocumentUploadProgressEntry,
 } from "@/app/lib/documentDirectoryUpload";
 import { settleWithConcurrency } from "@/shared/lib/settleWithConcurrency";
+import { appendMissingById } from "@/app/lib/idCollections";
 import {
     collectionSelectAllState,
     folderSelectionRootIds,
@@ -1289,7 +1290,7 @@ export function DocTable({
     // ── Doc/chat/review handlers ──────────────────────────────────────────────
 
     function handleDocsSelected(newDocs: Document[]) {
-        setDocuments((prev) => [...prev, ...newDocs.filter((d) => !prev.some((e) => e.id === d.id))]);
+        setDocuments((prev) => appendMissingById(prev, newDocs));
     }
 
     function removeDocumentFromLocalState(docId: string) {
