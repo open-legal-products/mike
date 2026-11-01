@@ -1,4 +1,4 @@
-import { useState, type ComponentProps } from "react";
+import { Profiler, useState, type ComponentProps } from "react";
 import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
@@ -208,6 +208,60 @@ describe("DocTable remove-from-folder failures", () => {
         expect(move).toHaveBeenCalledTimes(12);
         expect(peak).toBe(5);
         expect(JSON.parse(screen.getByTestId("documents-state").textContent!).every((d: Document) => d.folder_id === null)).toBe(true);
+    });
+
+    it("applies a burst of per-file upload progress as one table update", async () => {
+        // Frames are stepped by hand; the transfers still finish on real timers.
+        vi.useFakeTimers({ toFake: ["requestAnimationFrame", "cancelAnimationFrame"] });
+        try {
+            const files = Array.from({ length: 20 }, (_, i) =>
+                new File(["%PDF"], `Upload ${i}.pdf`, { type: "application/pdf" }),
+            );
+            let reported = 0;
+            let finishBatch!: () => void;
+            const batchHeld = new Promise<void>((resolve) => { finishBatch = resolve; });
+            const uploadDocuments = vi.fn(async (
+                inputs: Array<{ file: File; clientId: string }>,
+                options?: { onProgress?: (progress: never) => void },
+            ) => {
+                // Each file finishes in its own task, as separate transfers do.
+                const outcomes = await Promise.all(inputs.map(async ({ file, clientId }, i) => {
+                    await new Promise((resolve) => setTimeout(resolve, 0));
+                    const outcome = {
+                        clientId, filename: file.name, status: "completed" as const,
+                        result: document(`up-${i}`, file.name), errorCode: null,
+                    };
+                    options?.onProgress?.(outcome as never);
+                    reported++;
+                    return outcome;
+                }));
+                await batchHeld;
+                return outcomes;
+            });
+            let commits = 0;
+            const { container } = render(
+                <Profiler id="table" onRender={() => { commits++; }}>
+                    <Harness
+                        initialDocuments={[]}
+                        tableOperations={{ ...operations(vi.fn()), uploadDocuments }}
+                    />
+                </Profiler>,
+            );
+            const input = container.querySelectorAll<HTMLInputElement>('input[type="file"]')[1];
+            commits = 0;
+            fireEvent.change(input, { target: { files } });
+            await waitFor(() => expect(reported).toBe(20));
+            act(() => { vi.advanceTimersToNextFrame(); });
+
+            // All twenty completions land in that one frame: the upload's
+            // start plus one frame's update, not two renders of the whole
+            // table per file (41 for these 20 files).
+            expect(JSON.parse(screen.getByTestId("documents-state").textContent!)).toHaveLength(20);
+            expect(commits).toBeLessThanOrEqual(3);
+            await act(async () => { finishBatch(); });
+        } finally {
+            vi.useRealTimers();
+        }
     });
 
     it("warns on partial bulk failure and merges successful server rows", async () => {

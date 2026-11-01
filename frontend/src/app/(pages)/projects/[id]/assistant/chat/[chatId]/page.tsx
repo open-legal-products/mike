@@ -35,6 +35,7 @@ import {
     moveDocumentToFolder,
     moveSubfolderToFolder,
     resolveProjectFolderPath,
+    type UploadProgress,
 } from "@/app/lib/mikeApi";
 import {
     chatActivityAt,
@@ -130,6 +131,7 @@ import {
     partitionSupportedDocumentFiles,
 } from "@/app/lib/documentUploadValidation";
 import { appendMissingById } from "@/app/lib/idCollections";
+import { createFrameBatcher } from "@/app/lib/frameBatcher";
 
 interface Props {
     params: Promise<{ id: string; chatId?: string }>;
@@ -738,6 +740,36 @@ export default function ProjectAssistantChatPage({ params }: Props) {
                 filename,
             })),
         ]);
+        // Each file reports from its own transfer, so React would apply
+        // every event as a separate render of the project tree. Buffer them
+        // and apply each frame's events as one removal and one merge.
+        const progressEvents = createFrameBatcher<UploadProgress<Document>>(
+            (batch) => {
+                const finished = new Set(
+                    batch
+                        .filter(
+                            (progress) =>
+                                progress.status === "completed" ||
+                                progress.status === "error",
+                        )
+                        .map((progress) => progress.clientId),
+                );
+                if (finished.size > 0) {
+                    setUploadingDocuments((current) =>
+                        current.filter(
+                            (upload) => !finished.has(upload.clientId),
+                        ),
+                    );
+                }
+                addUploadedDocuments(
+                    batch.flatMap((progress) =>
+                        progress.status === "completed" && progress.result
+                            ? [progress.result]
+                            : [],
+                    ),
+                );
+            },
+        );
 
         try {
             const folderIdByPath = new Map<string, string>();
@@ -800,28 +832,9 @@ export default function ProjectAssistantChatPage({ params }: Props) {
                                   ) ?? null),
                     };
                 }),
-                {
-                    onProgress: (progress) => {
-                        if (
-                            progress.status === "completed" ||
-                            progress.status === "error"
-                        ) {
-                            setUploadingDocuments((current) =>
-                                current.filter(
-                                    (upload) =>
-                                        upload.clientId !== progress.clientId,
-                                ),
-                            );
-                        }
-                        if (
-                            progress.status === "completed" &&
-                            progress.result
-                        ) {
-                            addUploadedDocuments([progress.result]);
-                        }
-                    },
-                },
+                { onProgress: progressEvents.push },
             );
+            progressEvents.flush();
             const uploaded = outcomes.flatMap((outcome) =>
                 outcome.status === "completed" && outcome.result
                     ? [outcome.result]
@@ -855,6 +868,8 @@ export default function ProjectAssistantChatPage({ params }: Props) {
                 ),
             );
         } finally {
+            // A batch that failed part-way still lands what it completed.
+            progressEvents.flush();
             setUploadingDocuments((current) =>
                 current.filter((upload) => !pendingIds.has(upload.clientId)),
             );

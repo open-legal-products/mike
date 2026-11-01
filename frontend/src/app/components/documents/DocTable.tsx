@@ -97,6 +97,7 @@ import {
 } from "@/app/lib/documentDirectoryUpload";
 import { settleWithConcurrency } from "@/shared/lib/settleWithConcurrency";
 import { appendMissingById, indexById } from "@/app/lib/idCollections";
+import { createFrameBatcher } from "@/app/lib/frameBatcher";
 import {
     collectionRowKeysInVisualOrder,
     collectionSelectAllState,
@@ -1694,6 +1695,37 @@ export function DocTable({
                 .map((progress) => progress.entry);
         };
         const uploadId = crypto.randomUUID();
+        // Each file reports from its own transfer, so React would apply
+        // every event as a separate render of the whole table. Buffer them
+        // and apply each frame's events as one status update and one merge.
+        const progressEvents = createFrameBatcher<UploadProgress<Document>>(
+            (batch) => {
+                const statusByClientId = new Map(
+                    batch.map((progress) => [progress.clientId, progress.status]),
+                );
+                setCollectionUploadProgress((current) =>
+                    current.map((upload) =>
+                        upload.uploadId === uploadId
+                            ? {
+                                  ...upload,
+                                  files: upload.files.map((file) => {
+                                      const status = statusByClientId.get(
+                                          file.clientId,
+                                      );
+                                      return status ? { ...file, status } : file;
+                                  }),
+                              }
+                            : upload,
+                    ),
+                );
+                const completed = batch.flatMap((progress) =>
+                    progress.status === "completed" && progress.result
+                        ? [progress.result]
+                        : [],
+                );
+                if (completed.length > 0) handleDocsSelected(completed);
+            },
+        );
         const clientIdByFile = new Map(
             progressFiles.map((progress) => [
                 progress.entry.file,
@@ -1834,35 +1866,9 @@ export function DocTable({
                         folderId,
                         clientId: clientIdByFile.get(entry.file)!,
                     })),
-                    {
-                        onProgress: (progress) => {
-                            setCollectionUploadProgress((current) =>
-                                current.map((upload) =>
-                                    upload.uploadId === uploadId
-                                        ? {
-                                              ...upload,
-                                              files: upload.files.map((file) =>
-                                                  file.clientId ===
-                                                  progress.clientId
-                                                      ? {
-                                                            ...file,
-                                                            status: progress.status,
-                                                        }
-                                                      : file,
-                                              ),
-                                          }
-                                        : upload,
-                                ),
-                            );
-                            if (
-                                progress.status === "completed" &&
-                                progress.result
-                            ) {
-                                handleDocsSelected([progress.result]);
-                            }
-                        },
-                    },
+                    { onProgress: progressEvents.push },
                 );
+                progressEvents.flush();
                 uploaded = batchOutcomes.flatMap((outcome) =>
                     outcome.status === "completed" && outcome.result
                         ? [outcome.result]
@@ -1943,6 +1949,8 @@ export function DocTable({
                 },
             );
         } finally {
+            // A batch that failed part-way still lands what it completed.
+            progressEvents.flush();
             setCollectionUploadProgress((current) =>
                 current.filter((upload) => upload.uploadId !== uploadId),
             );
