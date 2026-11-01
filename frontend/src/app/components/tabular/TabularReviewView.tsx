@@ -28,6 +28,7 @@ import {
     deleteTabularReview,
     getTabularReviewAccess,
     getTabularReview,
+    getTabularReviewHistoryStatuses,
     getProject,
     getTabularReviewPeople,
     listProjects,
@@ -668,13 +669,12 @@ export function TRView({ reviewId, projectId }: Props) {
             return;
         }
 
-        setCells((prev) =>
-            prev.map((c) =>
-                c.row_id === rowId && c.column_index === colIndex
-                    ? { ...c, status: "generating" as const, content: null }
-                    : c,
-            ),
-        );
+        // One cell changes, so only that cell's subscribers hear about it:
+        // a structural setCells would rewrite and re-index the whole grid.
+        cellStore.patch(rowId, colIndex, {
+            status: "generating",
+            content: null,
+        });
         setExpandedCell((prev) =>
             prev
                 ? { ...prev, status: "generating" as const, content: null }
@@ -700,13 +700,10 @@ export function TRView({ reviewId, projectId }: Props) {
                 );
                 return;
             }
-            setCells((prev) =>
-                prev.map((c) =>
-                    c.row_id === rowId && c.column_index === colIndex
-                        ? { ...c, status: "done" as const, content: result }
-                        : c,
-                ),
-            );
+            cellStore.patch(rowId, colIndex, {
+                status: "done",
+                content: result,
+            });
             setExpandedCell((prev) =>
                 prev
                     ? { ...prev, status: "done" as const, content: result }
@@ -729,13 +726,7 @@ export function TRView({ reviewId, projectId }: Props) {
                     void handleRegenerateCell(rowId, colIndex);
                 },
             });
-            setCells((prev) =>
-                prev.map((c) =>
-                    c.row_id === rowId && c.column_index === colIndex
-                        ? { ...c, status: "error" as const }
-                        : c,
-                ),
-            );
+            cellStore.patch(rowId, colIndex, { status: "error" });
             setExpandedCell((prev) =>
                 prev ? { ...prev, status: "error" as const } : null,
             );
@@ -743,18 +734,22 @@ export function TRView({ reviewId, projectId }: Props) {
     }
 
     async function refreshAfterGeneration() {
-        for (let attempt = 0; attempt < 40; attempt += 1) {
-            const detail = await getTabularReview(reviewId);
-            if (!detail.review.is_running) {
-                setReview(detail.review);
-                setCells(detail.cells);
-                setRows(detail.rows);
-                setDocuments(detail.documents);
-                setColumns(detail.review.columns_config || []);
-                return;
-            }
+        // The full review carries every cell, so it is read once up front
+        // (usually the run has already ended) and once more when it has.
+        // While the run is still going, only its status snapshot is polled.
+        let detail = await getTabularReview(reviewId);
+        for (let attempt = 1; detail.review.is_running; attempt += 1) {
+            if (attempt >= 40) return;
             await new Promise((resolve) => setTimeout(resolve, 250));
+            const [status] = await getTabularReviewHistoryStatuses([reviewId]);
+            if (status?.is_running) continue;
+            detail = await getTabularReview(reviewId);
         }
+        setReview(detail.review);
+        setCells(detail.cells);
+        setRows(detail.rows);
+        setDocuments(detail.documents);
+        setColumns(detail.review.columns_config || []);
     }
 
     // Reads an SSE response and applies cell_update frames until [DONE].
