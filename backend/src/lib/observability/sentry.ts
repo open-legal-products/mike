@@ -642,6 +642,8 @@ const DEFAULT_MAX_EVENTS_PER_ISSUE_PER_MINUTE = 10;
 const THROTTLE_WINDOW_MS = 60_000;
 type ThrottleBucket = { windowStart: number; sent: number; suppressed: number };
 const throttleBuckets = new Map<string, ThrottleBucket>();
+/** Distinct issues tracked at once; past it the oldest bucket is evicted. */
+const MAX_THROTTLE_KEYS = 1_000;
 let maxEventsPerIssuePerMinute = DEFAULT_MAX_EVENTS_PER_ISSUE_PER_MINUTE;
 
 function issueKey(event: Sentry.ErrorEvent): string {
@@ -668,14 +670,24 @@ export function withinIssueBudget(
       );
     }
     bucket = { windowStart: now, sent: 0, suppressed: 0 };
+    // Re-inserting moves the key to the end, so the Map's insertion order is
+    // window-start order and the oldest bucket is always the first entry.
+    throttleBuckets.delete(key);
     throttleBuckets.set(key, bucket);
-    // Keep the map bounded on a long-running process.
-    if (throttleBuckets.size > 1_000) {
-      for (const [otherKey, other] of throttleBuckets) {
-        if (now - other.windowStart >= THROTTLE_WINDOW_MS) {
-          throttleBuckets.delete(otherKey);
-        }
+    // Keep the map bounded on a long-running process: drop expired windows
+    // from the front, and past the cap evict the oldest live bucket too. Each
+    // key is evicted at most once per insert, so this is amortised O(1).
+    // (The old sweep scanned every key on every new key once 1,000 were
+    // live, and evicted nothing while they all stayed inside the window.)
+    for (const [oldestKey, oldest] of throttleBuckets) {
+      const expired = now - oldest.windowStart >= THROTTLE_WINDOW_MS;
+      if (!expired && throttleBuckets.size <= MAX_THROTTLE_KEYS) break;
+      if (oldest.suppressed) {
+        console.warn(
+          `[sentry] suppressed ${oldest.suppressed} further event(s) for: ${oldestKey.slice(0, 120)}`,
+        );
       }
+      throttleBuckets.delete(oldestKey);
     }
   }
   if (bucket.sent < maxEventsPerIssuePerMinute) {
@@ -684,6 +696,11 @@ export function withinIssueBudget(
   }
   bucket.suppressed += 1;
   return false;
+}
+
+/** Number of issue buckets the throttle currently holds (tests only). */
+export function issueThrottleKeyCountForTests(): number {
+  return throttleBuckets.size;
 }
 
 /** True once init() ran with a DSN in this process (or thread). */
