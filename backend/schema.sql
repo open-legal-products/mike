@@ -10040,6 +10040,30 @@ returns table(document_id uuid) language sql stable set search_path=public as $$
   ) d;
 $$;
 
+-- Migration date: 2026-11-01
+-- The reverse of org_item_document_ids: the chats and reviews whose stored
+-- references name one document, each with its project. Same reference
+-- shapes, matched exactly: a chat message files[] object whose document_id
+-- is the document's canonical text; a review document_ids array string,
+-- object key or scalar string; a review row or row source by document_id.
+create or replace function public.document_referencing_items(p_document_id uuid)
+returns table(kind text,item_id uuid,project_id uuid) language sql stable set search_path=public as $$
+  with refs as (
+    select 'chat'::text kind,m.chat_id item_id from public.chat_messages m
+      where m.files @> jsonb_build_array(jsonb_build_object('document_id',p_document_id::text))
+    union select 'tabular_review',r.id from public.tabular_reviews r where r.document_ids ? p_document_id::text
+    union select 'tabular_review',row.review_id from public.tabular_review_rows row where row.document_id=p_document_id
+    union select 'tabular_review',row.review_id from public.tabular_review_row_sources source
+      join public.tabular_review_rows row on row.id=source.row_id where source.document_id=p_document_id
+  )
+  select refs.kind,refs.item_id,case refs.kind when 'chat' then c.project_id else r.project_id end
+  from refs
+  left join public.chats c on refs.kind='chat' and c.id=refs.item_id
+  left join public.tabular_reviews r on refs.kind='tabular_review' and r.id=refs.item_id;
+$$;
+revoke all on function public.document_referencing_items(uuid) from public,anon,authenticated;
+grant execute on function public.document_referencing_items(uuid) to service_role;
+
 create or replace function public.org_members_departure_items(p_org_id uuid,p_user_ids uuid[])
 returns table(kind text,item_id uuid,title text,disposition text)
 language sql stable set search_path = public as $$
@@ -10079,21 +10103,24 @@ select 'tabular_review'::text kind,item.id item_id,
     and (item.user_id=any(p_user_ids) or exists (select 1 from public.tabular_review_access_grants g join public.user_profiles profile on lower(profile.email)=g.email and profile.email is not null and btrim(profile.email)<>'' join public.org_members holder on holder.user_id=profile.user_id and holder.org_id=p_org_id where g.tabular_review_id=item.id and g.role='owner' and holder.user_id = any(p_user_ids)))
     and not exists (select 1 from public.org_members m where m.org_id=p_org_id and m.user_id=item.user_id and not(m.user_id=any(p_user_ids)))
     and not exists (select 1 from public.tabular_review_access_grants g join public.user_profiles profile on lower(profile.email)=g.email and profile.email is not null and btrim(profile.email)<>'' join public.org_members holder on holder.user_id=profile.user_id and holder.org_id=p_org_id where g.tabular_review_id=item.id and g.role='owner' and not (holder.user_id = any(p_user_ids)))
-  ), retained_items as materialized (
-    select 'chat'::text kind,c.id from public.chats c
-    where c.org_id=p_org_id and c.archived_at is null
-      and not exists(select 1 from public.projects p where p.id=c.project_id and p.archived_at is not null)
-      and not exists(select 1 from roots r where r.kind='chat' and r.item_id=c.id and r.disposition='archive')
-      and (c.project_id is null or not exists(select 1 from roots r where r.kind='project' and r.item_id=c.project_id and r.disposition='archive'))
-    union all
-    select 'tabular_review',tr.id from public.tabular_reviews tr
-    where tr.org_id=p_org_id and tr.archived_at is null
-      and not exists(select 1 from public.projects p where p.id=tr.project_id and p.archived_at is not null)
-      and not exists(select 1 from roots r where r.kind='tabular_review' and r.item_id=tr.id and r.disposition='archive')
-      and (tr.project_id is null or not exists(select 1 from roots r where r.kind='project' and r.item_id=tr.project_id and r.disposition='archive'))
   ), retained_documents as materialized (
-    select distinct ref.document_id from retained_items item
-    cross join lateral public.org_item_document_ids(item.kind,item.id) ref
+    -- Start from the departing members' standalone documents (few) and look
+    -- up who references each one, instead of expanding every chat message
+    -- and review row in the organization. A reference counts when its chat
+    -- or review is retained: live in this org, its project not archived, and
+    -- neither it nor its project archived by this departure.
+    select distinct d.id document_id
+    from public.documents d
+    cross join lateral public.document_referencing_items(d.id) ref
+    left join public.chats c on ref.kind='chat' and c.id=ref.item_id
+    left join public.tabular_reviews tr on ref.kind='tabular_review' and tr.id=ref.item_id
+    where d.org_id=p_org_id and d.user_id=any(p_user_ids)
+      and d.project_id is null and d.workflow_id is null and d.archived_at is null
+      and case ref.kind when 'chat' then c.org_id=p_org_id and c.archived_at is null
+        else tr.org_id=p_org_id and tr.archived_at is null end
+      and not exists(select 1 from public.projects p where p.id=ref.project_id and p.archived_at is not null)
+      and not exists(select 1 from roots r where r.kind=ref.kind and r.item_id=ref.item_id and r.disposition='archive')
+      and (ref.project_id is null or not exists(select 1 from roots r where r.kind='project' and r.item_id=ref.project_id and r.disposition='archive'))
   ), documents as (
     select 'document'::text kind,d.id item_id,null::text title,
       case when d.id in (select document_id from retained_documents) then 'transfer' else 'archive' end disposition
@@ -11828,6 +11855,17 @@ create index if not exists projects_org_visibility_idx
 create index if not exists workflows_org_visibility_idx
   on public.workflows(org_id,visibility) where org_id is not null;
 
+-- Migration date: 2026-11-01
+-- Reverse document references: which chat messages and reviews name one
+-- document. jsonb_path_ops serves files @> '[{"document_id":"..."}]';
+-- document_ids needs the default opclass for its ? (key/element) test, and
+-- no partial predicate: the planner cannot prove "document_ids is not null"
+-- from a ? test against a parameter, so a partial index would go unused.
+create index if not exists chat_messages_files_idx
+  on public.chat_messages using gin (files jsonb_path_ops) where files is not null;
+create index if not exists tabular_reviews_document_ids_idx
+  on public.tabular_reviews using gin (document_ids);
+
 insert into public.schema_migrations (filename) values
   ('20260419_tabular_chat_jsonb.sql'),
   ('20260421_01_docx_editing.sql'),
@@ -12014,5 +12052,7 @@ insert into public.schema_migrations (filename) values
   ('20261101_03_member_lookup_by_uuid.sql'),
   ('20261101_04_org_visibility_indexes.sql'),
   ('20261101_05_member_list_candidates.sql'),
-  ('20261101_06_departure_email_index_joins.sql')
+  ('20261101_06_departure_email_index_joins.sql'),
+  ('20261101_07_document_reference_indexes.sql'),
+  ('20261101_08_departure_reverse_references.sql')
 on conflict (filename) do nothing;
