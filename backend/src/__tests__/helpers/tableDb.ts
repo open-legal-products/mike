@@ -1,10 +1,11 @@
+import { randomUUID } from "node:crypto";
 import type { Db } from "../../lib/supabase";
 
 type Row = Record<string, unknown>;
 
 export type TableDbCall = {
   table: string;
-  op: "select" | "update" | "delete" | "insert";
+  op: "select" | "update" | "delete" | "insert" | "upsert";
   /** Length of every `.in()` list the query carried. */
   inSizes: number[];
   /** Rows the response carried (after the max_rows cap). */
@@ -41,9 +42,14 @@ export function tableDb(
       if (tooLong) {
         return Promise.resolve({ data: null, error: { message: "Request-URI Too Large", code: "414" } });
       }
-      if (op === "insert") {
-        const inserted = (Array.isArray(payload) ? payload : [payload]) as Row[];
-        rows.push(...inserted.map((row) => ({ ...row })));
+      if (op === "insert" || op === "upsert") {
+        const inserted = ((Array.isArray(payload) ? payload : [payload]) as Row[])
+          .map((row) => ({ id: randomUUID(), ...row }));
+        for (const row of inserted) {
+          const existing = op === "upsert" ? rows.find((r) => r.id === row.id) : undefined;
+          if (existing) Object.assign(existing, row);
+          else rows.push({ ...row });
+        }
         return Promise.resolve({ data: inserted, error: null });
       }
       let matched = rows.filter((row) => preds.every((pred) => pred(row)));
@@ -53,7 +59,8 @@ export function tableDb(
       }
       if (op === "update") {
         for (const row of matched) Object.assign(row, payload);
-        return Promise.resolve({ data: null, error: null });
+        const copies = matched.map((row) => ({ ...row }));
+        return Promise.resolve({ data: one ? (copies[0] ?? null) : copies, error: null });
       }
       matched = [...matched].sort((a, b) => {
         for (const [column, ascending] of orders) {
@@ -64,7 +71,8 @@ export function tableDb(
         }
         return 0;
       });
-      const data = matched.slice(offset, offset + Math.min(limit, maxRows));
+      // Copies, like rows decoded from a real response.
+      const data = matched.slice(offset, offset + Math.min(limit, maxRows)).map((row) => ({ ...row }));
       call.returned = data.length;
       return Promise.resolve({ data: one ? (data[0] ?? null) : data, error: null });
     };
@@ -91,7 +99,7 @@ export function tableDb(
       then: (resolve: (v: unknown) => unknown, reject: (e: unknown) => unknown) =>
         settle(false).then(resolve, reject),
     };
-    for (const name of ["update", "delete", "insert"] as const) {
+    for (const name of ["update", "delete", "insert", "upsert"] as const) {
       builder[name] = (value?: unknown) => ((op = name), (payload = value), builder);
     }
     return builder;

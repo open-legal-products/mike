@@ -68,3 +68,30 @@ export function collectFolderSubtree(
   }
   return selected;
 }
+
+/**
+ * Breadth-first walk of a folder graph one level per round trip, instead of
+ * loading every folder in a scope to find a few. `loadLevel` receives the
+ * current frontier (callers batch and scope it); `nextIds` names the rows to
+ * visit next — parents for an ancestor walk, the row itself for a
+ * children-by-parent walk. Visited ids are never revisited, so a corrupt
+ * parent cycle ends the walk instead of looping. Returns every loaded row.
+ */
+export async function walkFolderGraph<T extends { id: string }>(
+  startIds: Iterable<string | null | undefined>,
+  loadLevel: (ids: string[]) => Promise<T[]>,
+  nextIds: (row: T) => Array<string | null | undefined>,
+): Promise<T[]> {
+  const seen = new Set<string>();
+  const rows: T[] = [];
+  const unseen = (ids: Iterable<string | null | undefined>) =>
+    [...new Set([...ids].filter((id): id is string => !!id && !seen.has(id)))];
+  let frontier = unseen(startIds);
+  while (frontier.length) {
+    for (const id of frontier) seen.add(id);
+    const level = await loadLevel(frontier);
+    rows.push(...level);
+    frontier = unseen(level.flatMap(nextIds));
+  }
+  return rows;
+}

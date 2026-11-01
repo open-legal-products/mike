@@ -45,14 +45,15 @@ export async function fetchSourceDocuments(
     documentIds: string[],
 ): Promise<SourceDocument[]> {
     if (documentIds.length === 0) return [];
-    const { data, error } = await db
-        .from("documents")
-        .select(
-            "id, current_version_id, project_id, folder_id, library_folder_id",
-        )
-        .in("id", documentIds);
-    if (error) throw new Error(error.message);
-    const docs = (data ?? []) as (Omit<
+    const data = await selectInBatches("source documents", documentIds, (batch) =>
+        db
+            .from("documents")
+            .select(
+                "id, current_version_id, project_id, folder_id, library_folder_id",
+            )
+            .in("id", batch),
+    );
+    const docs = data as (Omit<
         SourceDocument,
         "filename" | "file_type"
     > & {
