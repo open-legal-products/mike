@@ -11,7 +11,8 @@ import {
   parseContentVisibility,
   type OrgRole,
 } from "../../lib/access";
-import { resolveWorkspaceFilter, workspaceMatches } from "../../lib/workspace";
+import { PERSONAL_WORKSPACE, resolveWorkspaceFilter, workspaceMatches, type WorkspaceFilter } from "../../lib/workspace";
+import { selectInBatches } from "../../lib/batchedQuery";
 import type { EditAnnotation } from "@mike/contracts";
 import { extractDocxBodyText, type EditInput } from "../../lib/docxTrackedChanges";
 import { loadActiveVersion } from "../../lib/documentVersions";
@@ -810,12 +811,18 @@ async function creationScope(db: Db, userId: string, raw: unknown) {
     : null;
 }
 
-export async function listPlaybooks(
+/** Who the caller is in each organization, and the workspace a list is narrowed to. */
+type PlaybookListScope = {
+  workspace: WorkspaceFilter;
+  orgRoles: Map<string, OrgRole>;
+};
+
+async function playbookListScope(
   userId: string,
-  db: Db = createServerSupabase(),
-  options: { workspace?: unknown; email?: string | null } = {},
-): Promise<Playbook[]> {
-  const resolved = await resolveWorkspaceFilter(db, userId, options.workspace);
+  db: Db,
+  workspace: unknown,
+): Promise<PlaybookListScope> {
+  const resolved = await resolveWorkspaceFilter(db, userId, workspace);
   if (!resolved.ok)
     throw new PlaybookRequestError(
       "Workspace not found.",
@@ -830,40 +837,92 @@ export async function listPlaybooks(
   const orgRoles = new Map(
     (memberships ?? []).map((row) => [String(row.org_id), row.role as OrgRole]),
   );
-  const orgIds = [...orgRoles.keys()];
-  const granted = await grantedPlaybookIds(db, userId, options.email);
-  const results = await Promise.all([
-    db.from("playbooks").select("*").eq("user_id", userId),
-    orgIds.length
-      ? db
-          .from("playbooks")
-          .select("*")
-          .eq("visibility", "organization")
-          .in("org_id", orgIds)
-      : { data: [], error: null },
-    granted.length
-      ? db.from("playbooks").select("*").in("id", granted)
-      : { data: [], error: null },
-  ]);
-  const rows = new Map<string, Record<string, unknown>>();
-  for (const result of results) {
-    if (result.error) throw result.error;
-    for (const row of result.data ?? []) {
-      // Organization membership remains required, even for the creator.
-      if (row.org_id && !orgRoles.has(row.org_id)) continue;
-      if (workspaceMatches(resolved.workspace, row.org_id))
-        rows.set(row.id, row);
-    }
+  return { workspace: resolved.workspace, orgRoles };
+}
+
+/**
+ * Narrow a playbooks query to the active workspace in SQL, so a list of one
+ * workspace does not download every other workspace's playbooks only to
+ * discard them. authorizePlaybookRows still applies workspaceMatches.
+ */
+function inPlaybookWorkspace<Q>(query: Q, workspace: WorkspaceFilter): Q {
+  if (!workspace) return query;
+  // Typed loosely on purpose: the PostgREST builder's generics are too deep
+  // to thread through a helper, and both filters return the same builder.
+  const narrowable = query as unknown as {
+    is(column: string, value: null): Q;
+    eq(column: string, value: string): Q;
+  };
+  return workspace === PERSONAL_WORKSPACE
+    ? narrowable.is("org_id", null)
+    : narrowable.eq("org_id", workspace);
+}
+
+/** The rows the caller may open in the workspace, with their roles. */
+async function authorizePlaybookRows(
+  db: Db,
+  rows: Record<string, unknown>[],
+  userId: string,
+  email: string | null | undefined,
+  scope: PlaybookListScope,
+): Promise<{ visible: Record<string, unknown>[]; roles: Map<string, PlaybookRole> }> {
+  const candidates = new Map<string, Record<string, unknown>>();
+  for (const row of rows) {
+    const orgId = row.org_id ? String(row.org_id) : null;
+    // Organization membership remains required, even for the creator.
+    if (orgId && !scope.orgRoles.has(orgId)) continue;
+    if (workspaceMatches(scope.workspace, orgId)) candidates.set(String(row.id), row);
   }
-  const candidates = [...rows.values()];
   const roles = await resolvePlaybookRoles(
     db,
-    candidates as PlaybookAccessRow[],
+    [...candidates.values()] as PlaybookAccessRow[],
+    userId,
+    email,
+    scope.orgRoles,
+  );
+  return {
+    visible: [...candidates.values()].filter((row) => roles.has(String(row.id))),
+    roles,
+  };
+}
+
+export async function listPlaybooks(
+  userId: string,
+  db: Db = createServerSupabase(),
+  options: { workspace?: unknown; email?: string | null } = {},
+): Promise<Playbook[]> {
+  const scope = await playbookListScope(userId, db, options.workspace);
+  const { workspace } = scope;
+  // Organization-visible playbooks only from organizations the workspace
+  // can show: none for Personal, just that one for an organization.
+  const orgIds = !workspace
+    ? [...scope.orgRoles.keys()]
+    : workspace !== PERSONAL_WORKSPACE && scope.orgRoles.has(workspace)
+      ? [workspace]
+      : [];
+  const granted = await grantedPlaybookIds(db, userId, options.email);
+  const [own, shared, direct] = await Promise.all([
+    selectInBatches<Record<string, unknown>>("own playbooks", [userId], () =>
+      inPlaybookWorkspace(db.from("playbooks").select("*").eq("user_id", userId), workspace),
+    ),
+    selectInBatches<Record<string, unknown>>("organization playbooks", orgIds, (batch) =>
+      db
+        .from("playbooks")
+        .select("*")
+        .eq("visibility", "organization")
+        .in("org_id", batch),
+    ),
+    selectInBatches<Record<string, unknown>>("granted playbooks", granted, (batch) =>
+      inPlaybookWorkspace(db.from("playbooks").select("*").in("id", batch), workspace),
+    ),
+  ]);
+  const { visible, roles } = await authorizePlaybookRows(
+    db,
+    [...own, ...shared, ...direct],
     userId,
     options.email,
-    orgRoles,
+    scope,
   );
-  const visible = candidates.filter((row) => roles.has(String(row.id)));
   const [creators, recipients] = await Promise.all([
     loadCreatorProfiles(db, visible),
     playbookRecipientEmails(
@@ -2714,25 +2773,76 @@ export async function listAllPlaybookRuns(
   db: Db = createServerSupabase(),
   options: { workspace?: unknown; email?: string | null } = {},
 ) {
-  const playbooks = await listPlaybooks(userId, db, options);
-  if (!playbooks.length) return [];
-  const names = new Map(
-    playbooks.map((playbook) => [playbook.id, playbook.name]),
-  );
-  const { data, error } = await db
-    .from("playbook_runs")
-    .select("*")
-    .eq("user_id", userId)
-    .in("playbook_id", [...names.keys()])
-    .order("started_at", { ascending: false })
-    .limit(100);
-  if (error) throw error;
-  const rows = (data ?? []) as Record<string, unknown>[];
+  const { rows, names } = await readVisibleRuns(userId, db, options, {
+    columns: "*",
+    limit: 100,
+  });
   const interrupted = await interruptedRuns(db, rows);
   return rows.map((row) => ({
     ...publicRun(row, interrupted),
     playbookName: names.get(String(row.playbook_id)) ?? "",
   }));
+}
+
+/**
+ * The caller's newest runs (up to `limit`, before `before`) of playbooks they
+ * can still open in the workspace, with those playbooks' names.
+ *
+ * Reads the caller's runs first and authorizes only the playbooks those runs
+ * name, instead of listing every reachable playbook in full (content and
+ * all) to build a name map and an unbounded `.in("playbook_id", …)`. Runs of
+ * playbooks the caller can no longer open are skipped and the read continues,
+ * so a page is still full when more visible runs exist.
+ */
+async function readVisibleRuns(
+  userId: string,
+  db: Db,
+  options: { workspace?: unknown; email?: string | null; before?: string },
+  read: { columns: string; limit: number },
+): Promise<{ rows: Record<string, unknown>[]; names: Map<string, string> }> {
+  const scope = await playbookListScope(userId, db, options.workspace);
+  const names = new Map<string, string>();
+  const decided = new Set<string>();
+  const rows: Record<string, unknown>[] = [];
+  let before = options.before;
+  // Bounded: each round reads `limit` runs; stop after a fixed number of
+  // rounds of runs the caller can no longer see.
+  for (let round = 0; round < 20 && rows.length < read.limit; round++) {
+    let query = db
+      .from("playbook_runs")
+      .select(read.columns)
+      .eq("user_id", userId);
+    if (before) query = query.lt("started_at", before);
+    const { data, error } = await query
+      .order("started_at", { ascending: false })
+      .limit(read.limit);
+    if (error) throw error;
+    const page = ((data ?? []) as unknown as Record<string, unknown>[]).sort((a, b) =>
+      String(b.started_at).localeCompare(String(a.started_at)),
+    );
+    const unknownIds = [...new Set(page.map((row) => String(row.playbook_id)))]
+      .filter((id) => !decided.has(id));
+    if (unknownIds.length) {
+      const playbooks = await selectInBatches<Record<string, unknown>>(
+        "run playbooks",
+        unknownIds,
+        (batch) =>
+          inPlaybookWorkspace(
+            db.from("playbooks").select("id, name, user_id, org_id, visibility").in("id", batch),
+            scope.workspace,
+          ),
+      );
+      const { visible } = await authorizePlaybookRows(db, playbooks, userId, options.email, scope);
+      for (const playbook of visible) names.set(String(playbook.id), String(playbook.name));
+      for (const id of unknownIds) decided.add(id);
+    }
+    for (const row of page) {
+      if (rows.length < read.limit && names.has(String(row.playbook_id))) rows.push(row);
+    }
+    if (page.length < read.limit) break;
+    before = String(page[page.length - 1].started_at);
+  }
+  return { rows, names };
 }
 
 /**
@@ -2749,24 +2859,11 @@ export async function listPlaybookRunHistory(
     before?: string;
   } = {},
 ) {
-  const playbooks = await listPlaybooks(userId, db, options);
-  if (!playbooks.length) return [];
-  const names = new Map(
-    playbooks.map((playbook) => [playbook.id, playbook.name]),
-  );
-  let query = db
-    .from("playbook_runs")
-    .select(
+  const { rows, names } = await readVisibleRuns(userId, db, options, {
+    columns:
       "id, playbook_id, document_name, status, error, started_at, updated_at, completed_at",
-    )
-    .eq("user_id", userId)
-    .in("playbook_id", [...names.keys()]);
-  if (options.before) query = query.lt("started_at", options.before);
-  const { data, error } = await query
-    .order("started_at", { ascending: false })
-    .limit(Math.min(Math.max(options.limit ?? 25, 1), 100));
-  if (error) throw error;
-  const rows = (data ?? []) as Record<string, unknown>[];
+    limit: Math.min(Math.max(options.limit ?? 25, 1), 100),
+  });
   const interrupted = await interruptedRuns(db, rows);
   return rows.map((row) => ({
     id: String(row.id),
