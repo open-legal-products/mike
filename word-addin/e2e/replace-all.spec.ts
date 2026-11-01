@@ -266,3 +266,30 @@ test("replace-all keeps reverse host order, saves once per pass, and stops at fi
   expect(calls.settingsSaves - savesBefore).toBeLessThanOrEqual(50);
   expect(calls.acceptedChanges).toEqual([]);
 });
+
+test("restoring many replace-all cards reads the anchor registry once", async ({ addin, page }) => {
+  const companies = Array.from({ length: 6 }, (_, i) => `Company ${i}`);
+  await addin.mockApiJson("GET", "**/word-chat?*", [CHAT]);
+  await addin.mockApiJson("GET", `**/word-chat/${CHAT_ID}?*`, {
+    chat: CHAT,
+    messages: [{
+      id: ASSISTANT_MESSAGE_ID, chat_id: CHAT_ID, role: "assistant", created_at: "2026-08-19T00:00:01Z",
+      content: companies.map((_, i) => ({ type: "word_edit_ref", edit_id: `edit-${i}` })),
+      edits: companies.map((company, i) => ({
+        id: `edit-${i}`, word_chat_message_id: ASSISTANT_MESSAGE_ID, block_index: i, original_text: company,
+        replacement_text: `${company} Ltd`, formats: [], occurrence: "all", apply_mode: "approval",
+        apply_status: "applied", resolution_status: null, matched_occurrences: 1, applied_occurrences: 1,
+      })),
+    }],
+  });
+  await addin.gotoTaskpane({ documentText: companies.join(". ") });
+  await addin.expectAuthedShell();
+  await page.getByRole("button", { name: "Chat history" }).click();
+  const before = (await addin.wordCalls()).anchorRegistryReads;
+  await page.getByRole("menu").getByRole("menuitem", { name: /Replace all occurrences/ }).click();
+  await expect(page.locator("[data-edit-status]")).toHaveCount(6);
+  await expect(page.locator('[data-edit-status="restoring"]')).toHaveCount(0);
+  // Pass discovery, the batched restore, and its stale-anchor prune (which
+  // reads the raw and validated registry) -- constant, not one per card.
+  expect((await addin.wordCalls()).anchorRegistryReads - before).toBe(4);
+});

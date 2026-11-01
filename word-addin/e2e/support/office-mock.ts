@@ -67,6 +67,8 @@ export interface WordCalls {
   bodyRevisionReads: number;
   replacementPositions: string[];
   settingsSaves: number;
+  /** Reads of the edit-anchor registry setting (each one re-validates it). */
+  anchorRegistryReads: number;
   acceptedChanges: WordCall[];
   rejectedChanges: WordCall[];
   revealedChanges: WordCall[];
@@ -231,6 +233,7 @@ export function installOfficeMock(seed: OfficeSeed): void {
     bodyRevisionReads: 0,
     replacementPositions: [],
     settingsSaves: 0,
+    anchorRegistryReads: 0,
     acceptedChanges: [],
     rejectedChanges: [],
     revealedChanges: [],
@@ -332,7 +335,10 @@ export function installOfficeMock(seed: OfficeSeed): void {
   // that writes it into the mock Word document.
   let settingsWorkingCopy = clone(documentState.settings);
   const settings = {
-    get: (key: string) => clone(settingsWorkingCopy[key]),
+    get: (key: string) => {
+      if (key === "mike.wordEditAnchors.v1") wordCalls.anchorRegistryReads++;
+      return clone(settingsWorkingCopy[key]);
+    },
     set: (key: string, value: unknown) => {
       settingsWorkingCopy[key] = clone(value);
     },

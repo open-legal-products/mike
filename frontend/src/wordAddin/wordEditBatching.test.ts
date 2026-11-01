@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createSerialBatcher } from "../../../word-addin/src/taskpane/lib/serialBatcher";
-import { bookmarkNameForEdit, getWordEditAnchors, listAppliedWordEditIds, persistWordEditState, removeWordEditAnchors } from "../../../word-addin/src/taskpane/lib/wordEditAnchors";
+import { bookmarkNameForEdit, getWordEditAnchor, getWordEditAnchors, listAppliedWordEditIds, persistWordEditState, removeWordEditAnchors } from "../../../word-addin/src/taskpane/lib/wordEditAnchors";
 
 function settingsFixture() {
   const values = new Map<string, unknown>();
@@ -37,6 +37,20 @@ describe("Word edit persistence batch", () => {
     await persistWordEditState(anchors, ["good"]);
     expect(getWordEditAnchors().good?.bookmarkName).toBe(anchors[0].bookmarkName);
     expect([...listAppliedWordEditIds()]).toEqual(["good"]);
+  });
+});
+
+describe("Word edit anchor lookup", () => {
+  it("validates only the requested anchor, not the whole registry", () => {
+    const { values } = settingsFixture();
+    const entries = Object.fromEntries(Array.from({ length: 500 }, (_, i) => [`edit-${i}`, { bookmarkName: bookmarkNameForEdit(`edit-${i}`), createdAt: "2026-01-01" }]));
+    const touched = new Set<PropertyKey>();
+    const anchors = new Proxy(entries, { get: (target, key) => { touched.add(key); return Reflect.get(target, key); } });
+    // The fixture's get() returns the stored object itself, as Office does for its working copy.
+    values.set("mike.wordEditAnchors.v1", { version: 1, anchors });
+    expect(getWordEditAnchor("edit-7")).toEqual(entries["edit-7"]);
+    expect(getWordEditAnchor("missing")).toBeNull();
+    expect([...touched].filter(key => typeof key === "string" && key.startsWith("edit-"))).toEqual(["edit-7"]);
   });
 });
 

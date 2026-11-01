@@ -181,22 +181,40 @@ export async function persistWordEditState(
   if (changed) await saveSettings(settings);
 }
 
+/**
+ * One anchor, validated on its own. Entries are validated independently, so
+ * this matches readRegistry(...).anchors[id] without hashing every other
+ * entry of a registry that grows with the document's history.
+ */
 export function getWordEditAnchor(stableEditId: string): WordEditAnchor | null {
-  const settings = Office.context.document.settings;
-  const anchor = readRegistry(settings).anchors[stableEditId];
-  return anchor ? { ...anchor } : null;
+  const value = Office.context.document.settings.get(WORD_EDIT_ANCHORS_SETTING) as unknown;
+  if (!isPlainObject(value) || value.version !== 1 || !isPlainObject(value.anchors)) return null;
+  if (!Object.prototype.hasOwnProperty.call(value.anchors, stableEditId)) return null;
+  const candidate = value.anchors[stableEditId];
+  return isPlainObject(candidate) &&
+    candidate.bookmarkName === bookmarkNameForEdit(stableEditId) &&
+    typeof candidate.createdAt === "string"
+    ? { bookmarkName: candidate.bookmarkName, createdAt: candidate.createdAt }
+    : null;
 }
 
 /**
- * Registered stable edit IDs starting with `prefix`. A replace-all edit
+ * Registered replace-all pass IDs grouped by card key. A replace-all edit
  * persists one anchor per applied occurrence under `${cardKey}#${pass}`, and
- * this is how a reloaded pane discovers how many passes were applied.
+ * this is how a reloaded pane discovers how many passes were applied. One
+ * registry read serves a whole restored conversation.
  */
-export function listWordEditAnchorIds(prefix: string): string[] {
-  const settings = Office.context.document.settings;
-  return Object.keys(readRegistry(settings).anchors).filter((id) =>
-    id.startsWith(prefix),
-  );
+export function groupWordEditAnchorPassIds(): Map<string, string[]> {
+  const byCard = new Map<string, string[]>();
+  for (const id of Object.keys(getWordEditAnchors())) {
+    const separator = id.indexOf("#");
+    if (separator < 0) continue;
+    const cardKey = id.slice(0, separator);
+    const ids = byCard.get(cardKey);
+    if (ids) ids.push(id);
+    else byCard.set(cardKey, [id]);
+  }
+  return byCard;
 }
 
 export async function persistWordEditAnchor(stableEditId: string, bookmarkName: string): Promise<void> {

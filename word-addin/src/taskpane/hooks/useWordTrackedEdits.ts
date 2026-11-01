@@ -126,7 +126,7 @@ import type {
 } from "../lib/wordChatTypes";
 import type { WordEditApplyMode } from "../lib/wordChatSettings";
 import { getEditKey, parseEditKey } from "../lib/wordTrackedEditKeys";
-import { listWordEditAnchorIds } from "../lib/wordEditAnchors";
+import { groupWordEditAnchorPassIds } from "../lib/wordEditAnchors";
 import { reportFault } from "../lib/notify";
 import {
   ALREADY_APPLIED_MESSAGE,
@@ -316,6 +316,9 @@ export function useWordTrackedEdits({
     }[] = [];
     const proposedDescriptors: { cardKey: string; edit: RedlineEdit }[] = [];
     const durableStates: Record<string, EditRuntimeState> = {};
+    // Read and validate the anchor registry once, on the first replace-all
+    // card, rather than once per card.
+    let passIdsByCard: Map<string, string[]> | undefined;
     for (const message of initialMessages) {
       if (message.role !== "assistant" || !message.id) continue;
       if (message.edits && message.edits.length > 0) {
@@ -365,14 +368,16 @@ export function useWordTrackedEdits({
             continue;
           }
           if (edit.occurrence === "all") {
-            let passIds: string[] = [];
-            try {
-              passIds = listWordEditAnchorIds(`${cardKey}#`);
-            } catch {
-              // No anchor index yet (a chat restored from history). The
-              // fixed-width scan below covers it; nothing has gone wrong.
-              passIds = [];
+            if (passIdsByCard === undefined) {
+              try {
+                passIdsByCard = groupWordEditAnchorPassIds();
+              } catch {
+                // No anchor index yet (a chat restored from history). The
+                // fixed-width scan below covers it; nothing has gone wrong.
+                passIdsByCard = new Map();
+              }
             }
+            let passIds = passIdsByCard.get(cardKey) ?? [];
             if (passIds.length === 0) {
               passIds = Array.from(
                 { length: 8 },
