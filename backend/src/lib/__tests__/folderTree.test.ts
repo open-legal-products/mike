@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import {
+  folderPathResolver,
   parseFolderPath,
   validateFolderMove,
   walkFolderGraph,
@@ -88,5 +89,34 @@ describe("walkFolderGraph", () => {
     );
     expect(levels).toEqual([["a", "d"], ["b"], ["c"]]);
     expect(rows.map((row) => row.id)).toEqual(["a", "d", "b", "c"]);
+  });
+});
+
+describe("folderPathResolver", () => {
+  it("walks each ancestor once across many lookups and stops at a cycle", () => {
+    const folders = Array.from({ length: 100 }, (_, i) => ({
+      id: `f${i}`,
+      name: `F${i}`,
+      parent_folder_id: i === 0 ? null : `f${i - 1}`,
+    }));
+    const resolve = folderPathResolver(folders);
+    // Every hop up the tree is one Map lookup; re-walking each chain from the
+    // leaf costs ~n²/2 = 5,000 for a 100-deep tree.
+    const lookups = vi.spyOn(Map.prototype, "get");
+    try {
+      for (const folder of folders) resolve(folder.id);
+      expect(lookups.mock.calls.length).toBeLessThan(1_000);
+    } finally {
+      lookups.mockRestore();
+    }
+    expect(resolve("f2")).toBe("F0 / F1 / F2");
+    expect(resolve("missing")).toBe("");
+    expect(resolve(null)).toBe("");
+
+    const cyclic = folderPathResolver([
+      { id: "a", name: "A", parent_folder_id: "b" },
+      { id: "b", name: "B", parent_folder_id: "a" },
+    ]);
+    expect(cyclic("a")).toBe("B / A");
   });
 });

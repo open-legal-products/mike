@@ -73,3 +73,44 @@ export async function walkFolderGraph<T extends { id: string }>(
   }
   return rows;
 }
+
+/**
+ * Resolve folder ids to "Parent / Child" display paths. Each folder's path is
+ * computed once and reused by every descendant, so labelling D documents in a
+ * tree of depth H costs O(folders + D) instead of O(D·H), and a corrupt
+ * parent cycle ends the walk instead of looping forever. A folder missing from
+ * `folders` (outside the caller's scope) ends the path, as the root does.
+ */
+export function folderPathResolver(
+  folders: Iterable<{ id: string; name: string; parent_folder_id: string | null }>,
+): (folderId: string | null) => string {
+  const byId = new Map<string, { name: string; parent_folder_id: string | null }>();
+  for (const folder of folders) byId.set(folder.id, folder);
+  // null = a folder outside the map: contributes no segment.
+  const memo = new Map<string, string>();
+  return (folderId) => {
+    if (!folderId) return "";
+    const chain: string[] = [];
+    const onChain = new Set<string>();
+    let base: string | null = null;
+    let current: string | null = folderId;
+    while (current) {
+      const cached = memo.get(current);
+      if (cached !== undefined) {
+        base = cached;
+        break;
+      }
+      const folder = byId.get(current);
+      if (!folder || onChain.has(current)) break;
+      onChain.add(current);
+      chain.push(current);
+      current = folder.parent_folder_id;
+    }
+    for (let i = chain.length - 1; i >= 0; i--) {
+      const name = byId.get(chain[i])!.name;
+      base = base === null ? name : `${base} / ${name}`;
+      memo.set(chain[i], base);
+    }
+    return base ?? "";
+  };
+}

@@ -1,6 +1,7 @@
 import { AppError } from "../../../lib/appError";
 import { reportError } from "../../../lib/observability/sentry";
 import { responseLanguageName } from "../../../lib/responseLanguages";
+import { folderPathResolver } from "../../../lib/folderTree";
 import { deadlineMessage, type StreamStopReason } from "../../../lib/streamRuns";
 import crypto from "crypto";
 import type { Db } from "../../../lib/supabase";
@@ -1574,29 +1575,7 @@ export async function buildProjectDocContext(
   }[];
   await attachActiveVersionPaths(db, docList);
 
-  // Build folder id → full path map
-  const folderMap = new Map<
-    string,
-    { name: string; parent_folder_id: string | null }
-  >();
-  for (const f of folders)
-    folderMap.set(f.id, {
-      name: f.name,
-      parent_folder_id: f.parent_folder_id,
-    });
-
-  function resolvePath(folderId: string | null): string {
-    if (!folderId) return "";
-    const parts: string[] = [];
-    let cur: string | null = folderId;
-    while (cur) {
-      const f = folderMap.get(cur);
-      if (!f) break;
-      parts.unshift(f.name);
-      cur = f.parent_folder_id;
-    }
-    return parts.join(" / ");
-  }
+  const resolvePath = folderPathResolver(folders);
 
   const folderPaths = new Map<string, string>(); // doc label → folder path
 
