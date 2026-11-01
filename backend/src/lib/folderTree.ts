@@ -47,28 +47,6 @@ export async function validateFolderMove(
   return null;
 }
 
-export function collectFolderSubtree(
-  folderId: string,
-  folders: Array<{ id: string; parent_folder_id: string | null }>,
-): Set<string> {
-  const childrenByParent = new Map<string, string[]>();
-  for (const folder of folders) {
-    if (!folder.parent_folder_id) continue;
-    const children = childrenByParent.get(folder.parent_folder_id) ?? [];
-    children.push(folder.id);
-    childrenByParent.set(folder.parent_folder_id, children);
-  }
-  const selected = new Set<string>();
-  const stack = [folderId];
-  while (stack.length) {
-    const id = stack.pop()!;
-    if (selected.has(id)) continue;
-    selected.add(id);
-    stack.push(...(childrenByParent.get(id) ?? []));
-  }
-  return selected;
-}
-
 /**
  * Breadth-first walk of a folder graph one level per round trip, instead of
  * loading every folder in a scope to find a few. `loadLevel` receives the

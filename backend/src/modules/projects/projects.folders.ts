@@ -1,7 +1,9 @@
 // Project subfolder service functions: create, rename/move (with cycle
 // check), recursive delete, and moving documents between folders.
 
-import { parseFolderPath, validateFolderMove, collectFolderSubtree } from "../../lib/folderTree";
+import { parseFolderPath, validateFolderMove, walkFolderGraph } from "../../lib/folderTree";
+import { chunkArray } from "../../lib/arrays";
+import { ID_FILTER_BATCH_SIZE, selectAllPages, selectInBatches } from "../../lib/batchedQuery";
 import { checkProjectAccess, creatorScopedAllowed } from "../../lib/access";
 import { can, DOCS_ORGANIZE_FORBIDDEN } from "../../lib/permissions";
 import {
@@ -147,26 +149,62 @@ export async function deleteProjectFolder(
   if (!can(access.projectRole, "docs.organize"))
     return { ok: false, kind: "role_forbidden", detail: DOCS_ORGANIZE_FORBIDDEN };
 
-  const { data: allFolders, error: foldersError } = await db
+  const { data: root, error: rootError } = await db
     .from("project_subfolders")
-    .select("id, parent_folder_id")
-    .eq("project_id", projectId);
-  if (foldersError)
-    return { ok: false, kind: "db_error", error: foldersError };
-  if (!(allFolders ?? []).some((f) => f.id === folderId))
-    return { ok: false, kind: "not_found" };
-
-  const folderIds = collectFolderSubtree(folderId, allFolders ?? []);
-
-  const { data: docs, error: docsError } = await db
-    .from("documents")
-    .select("id, user_id")
+    .select("id")
+    .eq("id", folderId)
     .eq("project_id", projectId)
-    .in("folder_id", [...folderIds]);
-  if (docsError) return { ok: false, kind: "db_error", error: docsError };
+    .maybeSingle();
+  if (rootError) return { ok: false, kind: "db_error", error: rootError };
+  if (!root) return { ok: false, kind: "not_found" };
+
+  // Walk down from the folder one level per round trip instead of loading
+  // every folder in the project, then read the subtree's documents in full:
+  // an unpaged read stopped at max_rows, so past 1000 documents the rest
+  // escaped both the permission check below and the delete (documents
+  // .folder_id is ON DELETE SET NULL, so they silently moved to the root).
+  let docs: { id: string; user_id: string | null }[];
+  try {
+    const children = await walkFolderGraph<{ id: string }>(
+      [folderId],
+      (parents) =>
+        selectInBatches("project subfolder walk", parents, (batch) =>
+          selectAllPages<{ id: string }>("project subfolder walk", (after, limit) => {
+            let query = db
+              .from("project_subfolders")
+              .select("id")
+              .eq("project_id", projectId)
+              .in("parent_folder_id", batch)
+              .order("id", { ascending: true })
+              .limit(limit);
+            if (after) query = query.gt("id", after.id);
+            return query;
+          }),
+        ),
+      (child) => [child.id],
+    );
+    docs = await selectInBatches(
+      "folder documents",
+      [folderId, ...children.map((child) => child.id)],
+      (batch) =>
+        selectAllPages<{ id: string; user_id: string | null }>("folder documents", (after, limit) => {
+          let query = db
+            .from("documents")
+            .select("id, user_id")
+            .eq("project_id", projectId)
+            .in("folder_id", batch)
+            .order("id", { ascending: true })
+            .limit(limit);
+          if (after) query = query.gt("id", after.id);
+          return query;
+        }),
+    );
+  } catch (error) {
+    return { ok: false, kind: "db_error", error };
+  }
 
   if (!can(access.projectRole, "container.delete")) {
-    const foreign = (docs ?? []).some((d) => {
+    const foreign = docs.some((d) => {
       const creatorId = (d.user_id as string | null) ?? null;
       return !creatorScopedAllowed(
         { isCreator: !!creatorId && creatorId === userId, projectRole: access.projectRole },
@@ -181,14 +219,15 @@ export async function deleteProjectFolder(
       };
   }
 
-  const docIds = (docs ?? []).map((d) => d.id as string);
-  const deleteDocsError = await deleteProjectDocumentsAndVersionFiles(
-    db,
-    projectId,
-    docIds,
-  );
-  if (deleteDocsError)
-    return { ok: false, kind: "db_error", error: deleteDocsError };
+  for (const batch of chunkArray(docs.map((d) => d.id), ID_FILTER_BATCH_SIZE)) {
+    const deleteDocsError = await deleteProjectDocumentsAndVersionFiles(
+      db,
+      projectId,
+      batch,
+    );
+    if (deleteDocsError)
+      return { ok: false, kind: "db_error", error: deleteDocsError };
+  }
 
   const { error } = await db.from("project_subfolders")
     .delete().eq("id", folderId).eq("project_id", projectId);

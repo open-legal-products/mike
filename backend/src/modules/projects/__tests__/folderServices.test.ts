@@ -22,6 +22,15 @@ beforeEach(() => {
 });
 const actor = { userId: "actor", projectId: "p", folderId: "root" };
 
+/** The folder exists, has one child, and that child has none. */
+function subtreeWalk(table: string) {
+  return [
+    { table, data: { id: "root" } },
+    { table, data: [{ id: "child" }] },
+    { table, data: [] },
+  ];
+}
+
 describe("folder callers retain their scope and failure policies", () => {
   // The gate still runs first; what changed is the ANSWER. A Viewer can see
   // the project, so they are refused by name (403) instead of being told the
@@ -129,14 +138,7 @@ describe("folder callers retain their scope and failure policies", () => {
       const library = kind === "library";
       const table = library ? "library_folders" : "project_subfolders";
       const fake = scriptedDb([
-        {
-          table,
-          data: [
-            { id: "root", parent_folder_id: null },
-            { id: "child", parent_folder_id: "root" },
-            { id: "other", parent_folder_id: null },
-          ],
-        },
+        ...subtreeWalk(table),
         { table: "documents", data: [{ id: "doc", user_id: "actor" }] },
         ...(library ? [{ table: "documents", data: [{ id: "doc" }] }] : []),
         {
@@ -149,7 +151,9 @@ describe("folder callers retain their scope and failure policies", () => {
         ? await deleteLibraryFolder(fake.db, "actor", "file", "root")
         : await deleteProjectFolder(fake.db, actor);
       expect(result.ok).toBe(false);
-      expect(fake.calls[1].filters).toContainEqual([
+      // The walk asked only for children of the folder, level by level.
+      expect(fake.calls[1].filters).toContainEqual(["in", "parent_folder_id", ["root"]]);
+      expect(fake.calls[3].filters).toContainEqual([
         "in",
         library ? "library_folder_id" : "folder_id",
         ["root", "child"],
@@ -161,19 +165,13 @@ describe("folder callers retain their scope and failure policies", () => {
 
   // Deleting a single document is creator-scoped, so cascading a folder must
   // not let an Editor delete colleagues' documents wholesale.
-  const subtree = {
-    table: "project_subfolders",
-    data: [
-      { id: "root", parent_folder_id: null },
-      { id: "child", parent_folder_id: "root" },
-    ],
-  };
+  const subtree = subtreeWalk("project_subfolders");
   it.each([
     ["a colleague's document", "colleague"],
     ["a document whose creator is gone", null],
   ])("refuses an Editor when the subtree holds %s", async (_label, creator) => {
     const fake = scriptedDb([
-      subtree,
+      ...subtree,
       {
         table: "documents",
         data: [
@@ -195,7 +193,7 @@ describe("folder callers retain their scope and failure policies", () => {
   it("lets an Owner clear a subtree holding colleagues' documents", async () => {
     mocks.access.mockResolvedValue({ ok: true, projectRole: "owner" });
     const fake = scriptedDb([
-      subtree,
+      ...subtree,
       { table: "documents", data: [{ id: "theirs", user_id: "colleague" }] },
       {
         table: "documents",

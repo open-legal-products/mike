@@ -1,6 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
 import {
-  collectFolderSubtree,
   parseFolderPath,
   validateFolderMove,
   walkFolderGraph,
@@ -78,18 +77,6 @@ describe("folder move ancestry", () => {
     ).toBeNull();
   });
 });
-it("collects only the selected subtree, retains traversal order, and terminates on cycles", () => {
-  expect([
-    ...collectFolderSubtree("root", [
-      { id: "root", parent_folder_id: "grandchild" },
-      { id: "a", parent_folder_id: "root" },
-      { id: "b", parent_folder_id: "root" },
-      { id: "grandchild", parent_folder_id: "a" },
-      { id: "other", parent_folder_id: null },
-    ]),
-  ]).toEqual(["root", "b", "a", "grandchild"]);
-});
-
 describe("walkFolderGraph", () => {
   it("loads one level per call and stops on a parent cycle", async () => {
     const parent: Record<string, string | null> = { a: "b", b: "c", c: "a", d: null };

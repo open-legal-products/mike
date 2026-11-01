@@ -8,7 +8,9 @@
 // client (`db`) plus request-derived primitives and RETURN typed results;
 // the thin route handlers in library.routes.ts map them onto HTTP responses.
 
-import { parseFolderPath, validateFolderMove, collectFolderSubtree } from "../../lib/folderTree";
+import { parseFolderPath, validateFolderMove, walkFolderGraph } from "../../lib/folderTree";
+import { ID_FILTER_BATCH_SIZE, selectAllPages, selectInBatches } from "../../lib/batchedQuery";
+import { chunkArray } from "../../lib/arrays";
 import { renameDocument, deleteCollectionDocuments } from "../documents/documents.service";
 import type { Db } from "../../lib/supabase";
 import {
@@ -623,44 +625,82 @@ export async function deleteLibraryFolder(
   folderId: string,
   workspace: WorkspaceFilter = null,
 ): Promise<ServiceResult<null>> {
-  const { data: allFolders, error: foldersError } = await inWorkspace(
+  const { data: root, error: rootError } = await inWorkspace(
     db
       .from("library_folders")
-      .select("id, parent_folder_id")
+      .select("id")
+      .eq("id", folderId)
       .eq("user_id", userId)
       .eq("library_kind", kind),
     workspace,
-  );
-  if (foldersError) return internalErr(foldersError);
-  if (!(allFolders ?? []).some((folder) => folder.id === folderId)) {
-    return err(404, "Folder not found");
+  ).maybeSingle();
+  if (rootError) return internalErr(rootError);
+  if (!root) return err(404, "Folder not found");
+
+  // Walk down from the folder (same user, kind and workspace scope as the
+  // old full read of every library folder), then read and delete the
+  // subtree's documents in full, batch by batch: an unpaged read stopped at
+  // max_rows and the remainder silently moved to the library root.
+  let docIds: string[];
+  try {
+    const children = await walkFolderGraph<{ id: string }>(
+      [folderId],
+      (parents) =>
+        selectInBatches("library subfolder walk", parents, (batch) =>
+          selectAllPages<{ id: string }>("library subfolder walk", (after, limit) => {
+            let query = inWorkspace(
+              db
+                .from("library_folders")
+                .select("id")
+                .eq("user_id", userId)
+                .eq("library_kind", kind)
+                .in("parent_folder_id", batch),
+              workspace,
+            )
+              .order("id", { ascending: true })
+              .limit(limit);
+            if (after) query = query.gt("id", after.id);
+            return query;
+          }),
+        ),
+      (child) => [child.id],
+    );
+    const docs = await selectInBatches(
+      "library folder documents",
+      [folderId, ...children.map((child) => child.id)],
+      (batch) =>
+        selectAllPages<{ id: string }>("library folder documents", (after, limit) => {
+          let query = db
+            .from("documents")
+            .select("id")
+            .eq("user_id", userId)
+            .is("project_id", null);
+          query =
+            kind === "file"
+              ? query.or("library_kind.eq.file,library_kind.is.null")
+              : query.eq("library_kind", kind);
+          query = query
+            .in("library_folder_id", batch)
+            .order("id", { ascending: true })
+            .limit(limit);
+          if (after) query = query.gt("id", after.id);
+          return query;
+        }),
+    );
+    docIds = docs.map((doc) => doc.id);
+  } catch (error) {
+    return internalErr(error);
   }
 
-  const folderIds = collectFolderSubtree(folderId, allFolders ?? []);
-
-  let documentsInFolderQuery = db
-    .from("documents")
-    .select("id")
-    .eq("user_id", userId)
-    .is("project_id", null);
-  documentsInFolderQuery =
-    kind === "file"
-      ? documentsInFolderQuery.or("library_kind.eq.file,library_kind.is.null")
-      : documentsInFolderQuery.eq("library_kind", kind);
-  const { data: docs, error: docsError } = await documentsInFolderQuery.in(
-    "library_folder_id",
-    [...folderIds],
-  );
-  if (docsError) return internalErr(docsError);
-
-  const docIds = (docs ?? []).map((doc) => doc.id as string);
-  const deleteDocsResult = await deleteLibraryDocumentsAndVersionFiles(
-    db,
-    userId,
-    kind,
-    docIds,
-  );
-  if (deleteDocsResult.error) return internalErr(deleteDocsResult.error);
+  for (const batch of chunkArray(docIds, ID_FILTER_BATCH_SIZE)) {
+    const deleteDocsResult = await deleteLibraryDocumentsAndVersionFiles(
+      db,
+      userId,
+      kind,
+      batch,
+    );
+    if (deleteDocsResult.error) return internalErr(deleteDocsResult.error);
+  }
 
   const { error } = await db
     .from("library_folders")
