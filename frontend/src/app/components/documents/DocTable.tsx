@@ -142,6 +142,10 @@ import {
     type TableFilterOption,
     type TableSortDirection,
 } from "@/app/components/shared/TablePrimitive";
+import {
+    BULK_REQUEST_CONCURRENCY,
+    settleBulkRequests,
+} from "@/app/lib/bulkRequests";
 
 // Above this many documents the zip is built by a background export job
 // instead of inside the request: a small selection zips in well under a second
@@ -3365,7 +3369,7 @@ export function DocTable({
             ),
         );
         const results = await settleWithConcurrency(
-            ids, 5, id => operations.moveDocument(id, targetFolderId),
+            ids, BULK_REQUEST_CONCURRENCY, id => operations.moveDocument(id, targetFolderId),
         );
         // Rows the server did move carry its version of the record. A move
         // that resolves without one (a 204, say) still counts as moved, so
@@ -3473,23 +3477,10 @@ export function DocTable({
             }
         } else {
             // Keep destructive requests bounded for project tables, which do
-            // not yet expose a collection-specific bulk endpoint.
-            const pending = [...owned];
-            const workers = Array.from({ length: Math.min(8, pending.length) }, async () => {
-                const workerDeleted: string[] = [];
-                while (pending.length > 0) {
-                    const id = pending.shift();
-                    if (!id) break;
-                    try {
-                        await deleteDocument(id);
-                        workerDeleted.push(id);
-                    } catch {
-                        // Report the aggregate failure below.
-                    }
-                }
-                return workerDeleted;
-            });
-            deletedIds = (await Promise.all(workers)).flat();
+            // not yet expose a collection-specific bulk endpoint. Failures
+            // are reported in aggregate below.
+            deletedIds = (await settleBulkRequests(owned, deleteDocument))
+                .succeeded;
         }
         const failedIds = owned.filter((id) => !deletedIds.includes(id));
         const failedCount = failedIds.length;

@@ -70,6 +70,7 @@ import {
   TableStickyCell,
 } from "../shared/TablePrimitive";
 import { AccessScopeLabel } from "../shared/AccessScopeLabel";
+import { settleBulkRequests } from "@/app/lib/bulkRequests";
 
 type WorkflowListTab = "all" | "assistant" | "tabular" | "addons";
 
@@ -349,21 +350,14 @@ export function WorkflowList({
     setBulkImportingAddonIds(targets.map((addon) => addon.id));
     setActionError("");
     try {
-      const results = await Promise.allSettled(
-        targets.map((addon) => importWorkflowAddon(addon.id)),
-      );
-      const imported = results.flatMap((result) =>
-        result.status === "fulfilled" ? [result.value] : [],
+      const { succeeded, values: imported } = await settleBulkRequests(
+        targets,
+        (addon) => importWorkflowAddon(addon.id),
       );
       if (imported.length > 0) {
         setWorkflows((current) => [...imported, ...current]);
         setImportedAddonIds((current) => [
-          ...new Set([
-            ...current,
-            ...targets.flatMap((addon, index) =>
-              results[index]?.status === "fulfilled" ? [addon.id] : [],
-            ),
-          ]),
+          ...new Set([...current, ...succeeded.map((addon) => addon.id)]),
         ]);
       }
       setSelectedAddonIds([]);
