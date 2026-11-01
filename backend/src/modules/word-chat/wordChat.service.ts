@@ -14,6 +14,7 @@ import { wordChatHasWorkspaceAttachments } from "../../lib/wordWorkspace";
 // chat-activity write (`recordWordChatActivity`) live here.
 
 import { randomUUID } from "node:crypto";
+import { BatchedQueryError, selectInBatches } from "../../lib/batchedQuery";
 import type { Db } from "../../lib/supabase";
 import { resolveRequestTimeZone } from "../../lib/userTime";
 import {
@@ -310,14 +311,24 @@ export async function getWordChatWithMessages(
   );
   const editsByMessage = new Map<string, Record<string, unknown>[]>();
   if (assistantMessageIds.length > 0) {
-    const { data: edits, error: editsError } = await db
-      .from("word_document_edits")
-      .select("*")
-      .in("word_chat_message_id", assistantMessageIds)
-      .order("block_index", { ascending: true });
-    if (editsError)
-      return serviceFailure("db.query_failed", "Word document edits load failed", editsError);
-    for (const edit of (edits ?? []) as Record<string, unknown>[]) {
+    let edits: Record<string, unknown>[];
+    try {
+      // Grouped per message below, so per-batch block_index order suffices.
+      edits = await selectInBatches<Record<string, unknown>>(
+        "Word document edits load",
+        assistantMessageIds,
+        (batch) =>
+          db
+            .from("word_document_edits")
+            .select("*")
+            .in("word_chat_message_id", batch)
+            .order("block_index", { ascending: true }),
+      );
+    } catch (editsError) {
+      const cause = editsError instanceof BatchedQueryError ? editsError.cause : editsError;
+      return serviceFailure("db.query_failed", "Word document edits load failed", cause);
+    }
+    for (const edit of edits) {
       const messageId = edit.word_chat_message_id;
       if (typeof messageId !== "string") continue;
       const current = editsByMessage.get(messageId) ?? [];

@@ -31,6 +31,8 @@
 import type { OrgMemberHandover } from "@mike/contracts";
 import { listOrgPrivateContentAccess } from "./orgPrivateContent";
 import type { Db } from "./supabase";
+import { selectInBatches } from "./batchedQuery";
+import { safeError } from "./safeError";
 import { recordAudit } from "./audit";
 import {
     canManageOrgRole,
@@ -437,17 +439,29 @@ async function attachProfiles(
         string,
         { email: string | null; display_name: string | null; profile_photo?: string | null }
     >();
-    const userIds = [...new Set(rows.map((r) => r.user_id).filter(Boolean))];
-    if (userIds.length === 0) return byUser;
-    const { data } = await db
-        .from("user_profiles")
-        .select("user_id, email, display_name, profile_photo")
-        .in("user_id", userIds);
-    for (const p of (data ?? []) as {
+    type ProfileRow = {
         user_id: string;
         email: string | null;
         display_name: string | null; profile_photo?: string | null;
-    }[]) {
+    };
+    let data: ProfileRow[];
+    try {
+        data = await selectInBatches<ProfileRow>(
+            "member profile lookup",
+            rows.map((r) => r.user_id),
+            (batch) =>
+                db
+                    .from("user_profiles")
+                    .select("user_id, email, display_name, profile_photo")
+                    .in("user_id", batch),
+        );
+    } catch (error) {
+        // Decoration only (some callers run after a committed mutation):
+        // degrade to unlabeled rows, as before, but say so.
+        console.warn("[orgs] failed to load member profiles", safeError(error));
+        return byUser;
+    }
+    for (const p of data) {
         byUser.set(p.user_id, {
             email: p.email ?? null,
             display_name: p.display_name ?? null,
