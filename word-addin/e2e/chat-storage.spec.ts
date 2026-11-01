@@ -558,3 +558,43 @@ test("opening a device-only chat reads only that chat's edits", async ({ addin, 
     };
   }))).toEqual([0, 0, 0]);
 });
+
+test("saving into a long device-only chat does not re-read its messages", async ({ addin, page }) => {
+  await countIndexedDbReads(page);
+  await addin.mockChatStream(["Noted."]);
+  await sendLocally(addin, page, "Start the thread", "The Supplier shall deliver the goods.");
+  await expect(page.getByText("Noted.")).toHaveCount(1);
+  // A chat written before the sequence counter existed, with 200 more turns.
+  const { next_sequence: _counter, ...chat } = (await firstLocalChat(page)) as { id: string; owner_id: string; document_id: string; next_sequence?: number };
+  await seedLocalRows(page, {
+    "word-chats": [chat],
+    "word-chat-messages": Array.from({ length: 200 }, (_, i) => ({
+      id: `earlier-${i}`, chat_id: chat.id, role: i % 2 ? "assistant" : "user", content: `Earlier turn ${i}`,
+      created_at: "2020-01-01T00:00:00.000Z", sequence: i + 2,
+    })),
+  });
+  const countMessages = () => page.evaluate(() => new Promise<number>((resolve) => {
+    const open = indexedDB.open("mike-word-addin");
+    open.onsuccess = () => {
+      const request = open.result.transaction("word-chat-messages").objectStore("word-chat-messages").count();
+      request.onsuccess = () => { open.result.close(); resolve(request.result); };
+    };
+  }));
+
+  await addin.reloadTaskpane();
+  await page.getByRole("button", { name: "Chat history" }).click();
+  await page.getByRole("menu").getByRole("menuitem", { name: /Start the thread/ }).click();
+  await expect(page.getByText("Earlier turn 198", { exact: true })).toBeVisible();
+  const before = await idbReads(page, "word-chat-messages");
+  await page.getByPlaceholder("How can I help?").fill("Latest question");
+  await page.getByRole("button", { name: "Send" }).click();
+  await expect(page.getByText("Noted.")).toHaveCount(2);
+  await expect.poll(countMessages).toBe(204);
+  // Two saves (question, answer); each probes its own id, which is new.
+  expect(await idbReads(page, "word-chat-messages") - before).toBe(0);
+
+  await addin.reloadTaskpane();
+  await page.getByRole("button", { name: "Chat history" }).click();
+  await page.getByRole("menu").getByRole("menuitem", { name: /Start the thread/ }).click();
+  await expect(page.getByTestId("user-message-content").last()).toHaveText("Latest question");
+});

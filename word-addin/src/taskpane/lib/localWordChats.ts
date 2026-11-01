@@ -21,6 +21,12 @@ interface LocalChatRow extends Chat {
    * resume.
    */
   active_turn_id?: string | null;
+  /**
+   * The sequence the chat's next new message receives. Absent on chats
+   * written before this field (and on rows an older add-in rewrote), in
+   * which case it is derived once from the message count.
+   */
+  next_sequence?: number;
 }
 
 interface LocalMessageRow extends Message {
@@ -247,15 +253,21 @@ export async function saveLocalWordMessage(args: {
       transaction.abort();
       throw new Error("Local message ID is already used by another chat.");
     }
-    const chatMessages = (await requestResult(
-      messages.index("chat_id").getAll(IDBKeyRange.only(args.chatId)),
-    )) as LocalMessageRow[];
+    // The counter rides on the chat row this transaction reads and writes
+    // anyway. Reading every message body to find the highest sequence made
+    // each save O(chat size), so a chat's lifetime of saves was O(M^2) bytes.
+    //
+    // Legacy rows: messages are only ever appended (one new sequence each,
+    // always highest + 1, with a missing sequence counting as its position)
+    // and only deleted together with their chat, so highest + 1 always
+    // equals the chat's message count. count() walks keys without cloning
+    // any message.
     const nextSequence =
-      chatMessages.reduce(
-        (highest, message, index) =>
-          Math.max(highest, message.sequence ?? index),
-        -1,
-      ) + 1;
+      existing?.next_sequence ??
+      (await requestResult(
+        messages.index("chat_id").count(IDBKeyRange.only(args.chatId)),
+      ));
+    const sequence = existingMessage?.sequence ?? nextSequence;
     chats.put({
       id: args.chatId,
       document_id: args.documentId,
@@ -272,13 +284,14 @@ export async function saveLocalWordMessage(args: {
         args.activeTurnId !== undefined
           ? args.activeTurnId
           : (existing?.active_turn_id ?? null),
+      next_sequence: Math.max(nextSequence, sequence + 1),
     } satisfies LocalChatRow);
     messages.put({
       ...args.message,
       id: messageId,
       chat_id: args.chatId,
       created_at: now,
-      sequence: existingMessage?.sequence ?? nextSequence,
+      sequence,
     } satisfies LocalMessageRow);
     await transactionDone(transaction);
     notifyWordChatHistoryChanged();
