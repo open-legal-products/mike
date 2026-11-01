@@ -1516,6 +1516,23 @@ export function normalizeWithMap(
   return { norm: norm.join(""), origIdx };
 }
 
+type NormalizedText = ReturnType<typeof normalizeWithMap>;
+const normalizedByHolder = new WeakMap<object, { text: string; value: NormalizedText }>();
+
+/**
+ * The search form of `text`, built once per holder object and reused while
+ * the holder still carries the same text. Holders are turn-scoped (a DocStore
+ * entry, a cached case opinion), so nothing outlives the turn or crosses
+ * users; a changed text (an edit mid-turn) rebuilds it.
+ */
+export function normalizedTextFor(holder: object, text: string): NormalizedText {
+  const cached = normalizedByHolder.get(holder);
+  if (cached && cached.text === text) return cached.value;
+  const value = normalizeWithMap(text);
+  normalizedByHolder.set(holder, { text, value });
+  return value;
+}
+
 function normalizeQuery(q: string): string {
   return q.trim().replace(/\s+/g, " ").toLowerCase();
 }
@@ -1532,9 +1549,11 @@ export function findTextMatches(params: {
   maxResults: number;
   contextChars: number;
   startIndex?: number;
+  /** Precomputed `normalizeWithMap(text)`, e.g. from `normalizedTextFor`. */
+  normalized?: NormalizedText;
 }): { hits: TextMatch[]; totalMatches: number } {
   const { text, query, maxResults, contextChars, startIndex = 0 } = params;
-  const { norm, origIdx } = normalizeWithMap(text);
+  const { norm, origIdx } = params.normalized ?? normalizeWithMap(text);
   const needle = normalizeQuery(query);
   const hits: TextMatch[] = [];
   let totalMatches = 0;
@@ -1664,11 +1683,13 @@ export async function findInDocumentContent(params: {
     });
   }
 
+  // Probes are short and many by design; normalize the text once per turn.
   const { hits, totalMatches } = findTextMatches({
     text,
     query,
     maxResults,
     contextChars,
+    normalized: normalizedTextFor(docInfo, text),
   });
 
   write(

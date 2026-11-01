@@ -76,6 +76,7 @@ import {
   readDocumentContent,
   findInDocumentContent,
   findTextMatches,
+  normalizedTextFor,
   runEditDocument,
   safeGeneratedFilename,
   type DocEditedResult,
@@ -1453,6 +1454,7 @@ export async function runToolCalls(
           maxResults: remaining,
           contextChars,
           startIndex: hits.length,
+          normalized: normalizedTextFor(opinion, opinion.text),
         });
         totalMatches += result.totalMatches;
         hits.push(
