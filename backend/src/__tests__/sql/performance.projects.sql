@@ -23,7 +23,14 @@ begin
   perform public.open_org_private_content(org,owner_id,'project',pid);
   insert into public.projects(user_id,org_id,name,archived_at) values(owner_id,org,'Archived',now());
   insert into public.projects(user_id,org_id,name) select outsider,other_org,'Unrelated '||n from generate_series(1,1000) n;
+  -- S3: other members' private work, one of it shared with the member by an
+  -- override, and an ownerless private project only the org Owner inherits.
+  insert into public.projects(user_id,org_id,name,visibility) select owner_id,org,'Owner private '||n,'private' from generate_series(1,200) n;
+  insert into public.projects(user_id,org_id,name,visibility) values(owner_id,org,'Overridden','private') returning id into pid;
+  insert into public.project_org_access_overrides(project_id,org_id,user_id,role) values(pid,org,member_id,'viewer');
+  insert into public.projects(user_id,org_id,name,visibility) values(null,org,'Ownerless','private');
   perform set_config('mike.test_project_actor',owner_id::text,true);
+  perform set_config('mike.test_project_member',member_id::text,true);
 end;
 $$;
 create temporary table project_expected as
@@ -69,6 +76,18 @@ begin
   perform * from public.get_projects_overview(actor,actor||'@example.test');
   select last_value+1 into calls from pg_temp.project_verdict_calls;
   assert calls=candidates,'list must evaluate one verdict per candidate, not per platform row or twice per result';
+end;
+$$;
+-- S3: a plain member is never asked about another member's private project
+-- unless an override, grant or opened private item names it. Candidates the
+-- ladder rejects can only be denials, archived items or inactive orgs.
+do $$
+declare actor text:=current_setting('mike.test_project_member'); calls bigint; visible bigint;
+begin
+  perform setval('pg_temp.project_verdict_calls',1,false);
+  select count(*) into visible from public.get_projects_overview(actor,actor||'@example.test');
+  select case when is_called then last_value else 0 end into calls from pg_temp.project_verdict_calls;
+  assert calls<=visible+3,format('member list evaluated %s verdicts for %s visible projects',calls,visible);
 end;
 $$;
 rollback;

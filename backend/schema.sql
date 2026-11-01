@@ -10115,7 +10115,13 @@ returns table(project_id uuid,role text) language sql stable set search_path=pub
       nullif(lower(p_user_email),'') email
   ), candidates as materialized (
     select p.id from public.projects p where p.user_id=(select id from actor)
-    union select p.id from public.org_members m join public.projects p on p.org_id=m.org_id where m.user_id=(select id from actor)
+    -- Membership alone reaches only what the ladder can grant a member:
+    -- public projects for everyone, every project for an org Owner (private
+    -- and ownerless ones), and per-member overrides. Another member's private
+    -- project is never a candidate unless one of those facts holds.
+    union select p.id from public.org_members m join public.projects p on p.org_id=m.org_id and p.visibility='organization' where m.user_id=(select id from actor)
+    union select p.id from public.org_members m join public.projects p on p.org_id=m.org_id where m.user_id=(select id from actor) and m.role='owner'
+    union select o.project_id from public.project_org_access_overrides o where o.user_id=(select id from actor)
     union select g.project_id from public.project_access_grants g where g.email=(select email from actor)
     union select a.item_id from public.org_private_content_access a where a.user_id=(select id from actor) and a.kind='project'
   ), verdicts as materialized (
@@ -10772,7 +10778,11 @@ returns table(workflow_id uuid,role text) language sql stable set search_path=pu
       nullif(lower(p_user_email),'') email
   ), candidates as materialized (
     select w.id from public.workflows w where w.user_id=(select id from actor)
-    union select w.id from public.org_members m join public.workflows w on w.org_id=m.org_id where m.user_id=(select id from actor)
+    -- As for projects: public workflows, all of them for an org Owner, and
+    -- per-member overrides; never another member's private workflow.
+    union select w.id from public.org_members m join public.workflows w on w.org_id=m.org_id and w.visibility='organization' where m.user_id=(select id from actor)
+    union select w.id from public.org_members m join public.workflows w on w.org_id=m.org_id where m.user_id=(select id from actor) and m.role='owner'
+    union select o.workflow_id from public.workflow_org_access_overrides o where o.user_id=(select id from actor)
     union select g.workflow_id from public.workflow_shares g where lower(g.shared_with_email)=(select email from actor)
     union select a.item_id from public.org_private_content_access a where a.user_id=(select id from actor) and a.kind='workflow'
   ), verdicts as materialized (
@@ -11810,6 +11820,14 @@ create index if not exists project_subfolders_parent_idx
 create index if not exists org_private_content_access_item_idx
   on public.org_private_content_access(kind,item_id);
 
+-- Migration date: 2026-11-01
+-- Membership candidates: an organization's public projects/workflows are
+-- reachable by every member without touching its private ones.
+create index if not exists projects_org_visibility_idx
+  on public.projects(org_id,visibility) where org_id is not null;
+create index if not exists workflows_org_visibility_idx
+  on public.workflows(org_id,visibility) where org_id is not null;
+
 insert into public.schema_migrations (filename) values
   ('20260419_tabular_chat_jsonb.sql'),
   ('20260421_01_docx_editing.sql'),
@@ -11993,5 +12011,7 @@ insert into public.schema_migrations (filename) values
   ('20261030_21_project_participation_before_page.sql'),
   ('20261101_01_list_candidate_indexes_online.sql'),
   ('20261101_02_foreign_key_indexes.sql'),
-  ('20261101_03_member_lookup_by_uuid.sql')
+  ('20261101_03_member_lookup_by_uuid.sql'),
+  ('20261101_04_org_visibility_indexes.sql'),
+  ('20261101_05_member_list_candidates.sql')
 on conflict (filename) do nothing;

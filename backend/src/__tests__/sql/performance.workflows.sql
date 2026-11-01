@@ -20,7 +20,14 @@ begin
   insert into public.workflows(user_id,org_id,title,type) values(other_actor,org,'Opened','assistant') returning id into wid;
   perform public.open_org_private_content(org,actor,'workflow',wid);
   insert into public.workflows(user_id,org_id,title,type) select other_actor,foreign_org,'Unrelated '||n,'assistant' from generate_series(1,1000) n;
+  -- S3: the Owner's private workflows, one shared with the member by an
+  -- override, and an ownerless private workflow the Owner inherits.
+  insert into public.workflows(user_id,org_id,title,type,visibility) select actor,org,'Owner private '||n,'assistant','private' from generate_series(1,200) n;
+  insert into public.workflows(user_id,org_id,title,type,visibility) values(actor,org,'Overridden','assistant','private') returning id into wid;
+  insert into public.workflow_org_access_overrides(workflow_id,org_id,user_id,role) values(wid,org,other_actor,'viewer');
+  insert into public.workflows(user_id,org_id,title,type,visibility) values(null,org,'Ownerless','assistant','private');
   perform set_config('mike.test_workflow_actor',actor::text,true);
+  perform set_config('mike.test_workflow_member',other_actor::text,true);
 end;
 $$;
 do $$
@@ -54,6 +61,18 @@ begin
     or w.id in(select workflow_id from public.workflow_shares where lower(shared_with_email)=actor||'@example.test');
   perform * from public.get_workflows_overview(actor,actor||'@example.test',null);
   assert (select last_value+1=candidates from pg_temp.workflow_calls),'one workflow verdict per candidate, not three per result or one per platform row';
+end;
+$$;
+-- S3: a plain member is never asked about another member's private workflow
+-- unless an override, share or opened private item names it. Candidates the
+-- ladder rejects can only be denials, archived items or inactive orgs.
+do $$
+declare actor text:=current_setting('mike.test_workflow_member'); calls bigint; visible bigint;
+begin
+  perform setval('pg_temp.workflow_calls',1,false);
+  select count(*) into visible from public.get_workflows_overview(actor,actor||'@example.test',null);
+  select case when is_called then last_value else 0 end into calls from pg_temp.workflow_calls;
+  assert calls<=visible+3,format('member list evaluated %s verdicts for %s visible workflows',calls,visible);
 end;
 $$;
 rollback;
