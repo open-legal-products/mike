@@ -1204,10 +1204,21 @@ async function resolveEditThroughDocumentRevisionsOnce(
   return anchor ? Word.run([anchor], batch) : Word.run(batch);
 }
 
-/** Resolve one retained logical edit without touching any other revisions. */
+/** A resolved edit whose bookmark, proxies and registry entry still need cleanup. */
+interface DeferredResolveCleanup {
+  entry: PendingTrackedEdit;
+  result: TrackedEditResolutionResult;
+}
+
+/**
+ * Resolve one retained logical edit without touching any other revisions.
+ * With `deferred`, a successful resolution's best-effort cleanup is queued
+ * for the caller to run once for the whole bulk decision.
+ */
 async function resolveTrackedEditNow(
   handle: TrackedEditHandle,
   decision: TrackedEditDecision,
+  deferred?: DeferredResolveCleanup[],
 ): Promise<TrackedEditResolutionResult> {
   const entry = pendingTrackedEdits.get(handle);
   if (!entry) {
@@ -1400,6 +1411,16 @@ async function resolveTrackedEditNow(
     }
     pendingTrackedEdits.delete(handle);
     rememberTerminalState(handle, decision);
+
+    if (deferred) {
+      const result: TrackedEditResolutionResult = {
+        handle,
+        status: decision === "accept" ? "accepted" : "rejected",
+        resolvedAs: decision,
+      };
+      deferred.push({ entry, result });
+      return result;
+    }
 
     // Resolution is already durable at this point. Bookmark/settings and
     // proxy cleanup are best effort and must never turn a successful document
@@ -2302,6 +2323,7 @@ export function resolveTrackedEdit(
 async function resolveUniqueEditBatch(
   handles: readonly TrackedEditHandle[],
   decision: TrackedEditDecision,
+  deferred: DeferredResolveCleanup[],
 ): Promise<Map<TrackedEditHandle, TrackedEditResolutionResult>> {
   const entries = new Map<TrackedEditHandle, PendingTrackedEdit>();
   for (const handle of handles) {
@@ -2348,24 +2370,57 @@ async function resolveUniqueEditBatch(
     return results;
   }
   for (const handle of resolved) {
+    const entry = entries.get(handle)!;
     pendingTrackedEdits.delete(handle);
     rememberTerminalState(handle, decision);
-  }
-  // Bookmarks and proxies of every resolved edit: one cleanup batch per
-  // request context instead of two Word.runs per edit.
-  const resolvedEntries = resolved.map(handle => entries.get(handle)!);
-  const failures = await releaseEntryProxies(resolvedEntries, { deleteBookmarks: true, onUntrackFailure: () => undefined });
-  const removedIds: string[] = [];
-  for (const handle of resolved) {
-    const entry = entries.get(handle)!;
-    if (entry.stableEditId) removedIds.push(entry.stableEditId);
-    const error = cleanupSentence(failures.get(entry) ?? []);
-    results.set(handle, { handle, status: decision === "accept" ? "accepted" : "rejected", resolvedAs: decision, ...(error ? { error } : {}) });
-  }
-  try { await removeWordEditAnchors(removedIds); } catch {
-    for (const result of results.values()) result.error = result.error ?? cleanupSentence([ANCHOR_CLEANUP_FAILURE]);
+    const result: TrackedEditResolutionResult = { handle, status: decision === "accept" ? "accepted" : "rejected", resolvedAs: decision };
+    deferred.push({ entry, result });
+    results.set(handle, result);
   }
   return results;
+}
+
+/**
+ * Best-effort cleanup after a bulk decision: bookmarks and proxies in one
+ * Word.run per request context, then one settings save for every registry
+ * entry. Failures are reported on the affected results, never as errors.
+ */
+async function finishResolvedCleanup(
+  deferred: readonly DeferredResolveCleanup[],
+): Promise<void> {
+  if (!deferred.length) return;
+  const failures = await releaseEntryProxies(
+    deferred.map(({ entry }) => entry),
+    {
+      deleteBookmarks: true,
+      onUntrackFailure: (error) => {
+        reportWordFailure(error, {
+          stage: "resolve-cleanup",
+          operation: "word.edit_resolve",
+          level: "warning",
+        });
+        console.warn("[tracked-edit/resolve] anchor cleanup failed", error);
+      },
+    },
+  );
+  const removedIds = deferred.flatMap(({ entry }) => entry.stableEditId ? [entry.stableEditId] : []);
+  try {
+    await removeWordEditAnchors(removedIds);
+  } catch (error) {
+    reportWordFailure(error, {
+      stage: "anchor-cleanup",
+      operation: "word.edit_resolve",
+      level: "warning",
+    });
+    console.warn("[tracked-edit/cleanup] anchor removal failed", error);
+    for (const { entry } of deferred) {
+      if (entry.stableEditId) failures.get(entry)!.push(ANCHOR_CLEANUP_FAILURE);
+    }
+  }
+  for (const { entry, result } of deferred) {
+    const error = cleanupSentence(failures.get(entry) ?? []);
+    if (error) result.error = error;
+  }
 }
 
 export function resolveTrackedEdits(
@@ -2373,11 +2428,13 @@ export function resolveTrackedEdits(
   decision: TrackedEditDecision,
 ): Promise<TrackedEditResolutionResult[]> {
   return serializeWordMutation(async () => {
-    const batched = await resolveUniqueEditBatch(handles, decision);
+    const deferred: DeferredResolveCleanup[] = [];
+    const batched = await resolveUniqueEditBatch(handles, decision, deferred);
     const results: TrackedEditResolutionResult[] = [];
     for (const handle of handles) {
-      results.push(batched.get(handle) ?? await resolveTrackedEditNow(handle, decision));
+      results.push(batched.get(handle) ?? await resolveTrackedEditNow(handle, decision, deferred));
     }
+    await finishResolvedCleanup(deferred);
     return results;
   });
 }

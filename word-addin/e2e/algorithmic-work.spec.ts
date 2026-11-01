@@ -1,5 +1,5 @@
 import { test, expect } from "./support/fixtures";
-import { replacementEdit, wordEdits } from "./support/editProtocol";
+import { formatEdit, replacementEdit, wordEdits } from "./support/editProtocol";
 
 // A persisted assistant message: applied edits get durable anchors.
 const PERSISTED = { chatId: "chat-algorithmic-work", assistantMessageId: "assistant-algorithmic-work" };
@@ -28,6 +28,29 @@ test("bulk acceptance loads one revision inventory for twenty distinct edits", a
   expect(after.runs - before.runs).toBe(1 + after.trackAllContexts);
   expect(after.settingsSaves - before.settingsSaves).toBe(1);
   expect(after.deletedBookmarks.length - before.deletedBookmarks.length).toBe(20);
+});
+
+test("bulk acceptance of format edits saves the anchor registry once", async ({ addin, page }) => {
+  addin.seedToken("test-jwt");
+  const phrases = Array.from({ length: 8 }, (_, i) => `Defined term ${i}`);
+  await addin.mockChatStream([wordEdits(...phrases.map((phrase) => formatEdit(phrase, ["bold"], "Emphasize.")))], PERSISTED);
+  await addin.gotoTaskpane({ documentText: phrases.join(".\n") });
+  await addin.expectAuthedShell();
+  await page.getByTestId("edit-apply-toggle").click();
+  await page.getByRole("menuitem", { name: /Edit/ }).click();
+  await page.getByPlaceholder("How can I help?").fill("Bold every term");
+  await page.getByRole("button", { name: "Send" }).click();
+  await expect(page.getByRole("button", { name: "Accept", exact: true })).toHaveCount(8);
+  await expect.poll(async () => (await addin.wordDocument()).bookmarks.length).toBe(8);
+  const before = await addin.wordCalls();
+  await page.getByRole("button", { name: "Accept all", exact: true }).click();
+  await expect(page.getByText("Accepted.", { exact: true })).toHaveCount(8);
+  const after = await addin.wordCalls();
+  expect(after.acceptedChanges).toHaveLength(8);
+  // Format edits resolve one by one (their own children batch each), but the
+  // cleanup is one batch and one save for the whole decision.
+  expect(after.settingsSaves - before.settingsSaves).toBe(1);
+  expect(after.runs - before.runs).toBe(8 + after.trackAllContexts);
 });
 
 test("switching chats releases every applied edit in one Word batch", async ({ addin, page }) => {
