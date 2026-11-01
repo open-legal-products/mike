@@ -10360,23 +10360,36 @@ as $$
       and (p_practice is null or p.practice = p_practice)
       and (p_owner_user_id is null or p.user_id = (case when p_owner_user_id ~ '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$' then p_owner_user_id::uuid end))
   ),
-  document_counts as (
-    select d.project_id, count(*)::integer as document_count
-    from public.documents d
-    where d.project_id in (select vp.id from visible_projects vp)
-    group by d.project_id
-  ),
-  chat_counts as (
-    select c.project_id, count(*)::integer as chat_count
-    from public.chats c
-    where c.project_id in (select vp.id from visible_projects vp)
-    group by c.project_id
-  ),
-  review_counts as (
-    select tr.project_id, count(*)::integer as review_count
-    from public.tabular_reviews tr
-    where tr.project_id in (select vp.id from visible_projects vp)
-    group by tr.project_id
+  -- Page first. Counts are computed for every visible project only when the
+  -- caller sorts by one (it orders the whole list); otherwise only for the
+  -- page's rows. CASE evaluates a count subquery only when its key is chosen.
+  page as materialized (
+    select * from (
+      select vp.*,
+        case when p_sort_key = 'files' then (select count(*)::integer from public.documents d where d.project_id = vp.id) end as sort_document_count,
+        case when p_sort_key = 'chats' then (select count(*)::integer from public.chats c where c.project_id = vp.id) end as sort_chat_count,
+        case when p_sort_key = 'reviews' then (select count(*)::integer from public.tabular_reviews tr where tr.project_id = vp.id) end as sort_review_count
+      from visible_projects vp
+    ) vp
+    order by
+    case when p_sort_key = 'name' and p_sort_direction = 'asc' then lower(coalesce(vp.name, '')) else null end asc,
+    case when p_sort_key = 'name' and p_sort_direction = 'desc' then lower(coalesce(vp.name, '')) else null end desc,
+    case when p_sort_key = 'cm' and p_sort_direction = 'asc' then lower(coalesce(vp.cm_number, '')) else null end asc,
+    case when p_sort_key = 'cm' and p_sort_direction = 'desc' then lower(coalesce(vp.cm_number, '')) else null end desc,
+    case when p_sort_key = 'files' and p_sort_direction = 'asc' then vp.sort_document_count else null end asc,
+    case when p_sort_key = 'files' and p_sort_direction = 'desc' then vp.sort_document_count else null end desc,
+    case when p_sort_key = 'chats' and p_sort_direction = 'asc' then vp.sort_chat_count else null end asc,
+    case when p_sort_key = 'chats' and p_sort_direction = 'desc' then vp.sort_chat_count else null end desc,
+    case when p_sort_key = 'reviews' and p_sort_direction = 'asc' then vp.sort_review_count else null end asc,
+    case when p_sort_key = 'reviews' and p_sort_direction = 'desc' then vp.sort_review_count else null end desc,
+    case when p_sort_key = 'created' and p_sort_direction = 'asc' then vp.created_at else null end asc,
+    case when p_sort_key = 'created' and p_sort_direction = 'desc' then vp.created_at else null end desc,
+    case when p_sort_key = 'updated' and p_sort_direction = 'asc' then vp.updated_at else null end asc,
+    case when p_sort_key = 'updated' and p_sort_direction = 'desc' then vp.updated_at else null end desc,
+    vp.created_at desc,
+    vp.id asc
+    limit greatest(coalesce(p_limit, 20), 1)
+    offset greatest(coalesce(p_offset, 0), 0)
   )
   select
     vp.id,
@@ -10400,37 +10413,29 @@ as $$
     -- to render and silently collapsed to nothing.
     up.email as owner_email,
     vp.list_access_role as access_role,
-    coalesce(dc.document_count, 0) as document_count,
-    coalesce(cc.chat_count, 0) as chat_count,
-    coalesce(rc.review_count, 0) as review_count
-  from visible_projects vp
+    coalesce(vp.sort_document_count, (select count(*)::integer from public.documents d where d.project_id = vp.id)) as document_count,
+    coalesce(vp.sort_chat_count, (select count(*)::integer from public.chats c where c.project_id = vp.id)) as chat_count,
+    coalesce(vp.sort_review_count, (select count(*)::integer from public.tabular_reviews tr where tr.project_id = vp.id)) as review_count
+  from page vp
   left join public.user_profiles up
     on up.user_id = vp.user_id
-  left join document_counts dc
-    on dc.project_id = vp.id
-  left join chat_counts cc
-    on cc.project_id = vp.id
-  left join review_counts rc
-    on rc.project_id = vp.id
   order by
     case when p_sort_key = 'name' and p_sort_direction = 'asc' then lower(coalesce(vp.name, '')) else null end asc,
     case when p_sort_key = 'name' and p_sort_direction = 'desc' then lower(coalesce(vp.name, '')) else null end desc,
     case when p_sort_key = 'cm' and p_sort_direction = 'asc' then lower(coalesce(vp.cm_number, '')) else null end asc,
     case when p_sort_key = 'cm' and p_sort_direction = 'desc' then lower(coalesce(vp.cm_number, '')) else null end desc,
-    case when p_sort_key = 'files' and p_sort_direction = 'asc' then coalesce(dc.document_count, 0) else null end asc,
-    case when p_sort_key = 'files' and p_sort_direction = 'desc' then coalesce(dc.document_count, 0) else null end desc,
-    case when p_sort_key = 'chats' and p_sort_direction = 'asc' then coalesce(cc.chat_count, 0) else null end asc,
-    case when p_sort_key = 'chats' and p_sort_direction = 'desc' then coalesce(cc.chat_count, 0) else null end desc,
-    case when p_sort_key = 'reviews' and p_sort_direction = 'asc' then coalesce(rc.review_count, 0) else null end asc,
-    case when p_sort_key = 'reviews' and p_sort_direction = 'desc' then coalesce(rc.review_count, 0) else null end desc,
+    case when p_sort_key = 'files' and p_sort_direction = 'asc' then vp.sort_document_count else null end asc,
+    case when p_sort_key = 'files' and p_sort_direction = 'desc' then vp.sort_document_count else null end desc,
+    case when p_sort_key = 'chats' and p_sort_direction = 'asc' then vp.sort_chat_count else null end asc,
+    case when p_sort_key = 'chats' and p_sort_direction = 'desc' then vp.sort_chat_count else null end desc,
+    case when p_sort_key = 'reviews' and p_sort_direction = 'asc' then vp.sort_review_count else null end asc,
+    case when p_sort_key = 'reviews' and p_sort_direction = 'desc' then vp.sort_review_count else null end desc,
     case when p_sort_key = 'created' and p_sort_direction = 'asc' then vp.created_at else null end asc,
     case when p_sort_key = 'created' and p_sort_direction = 'desc' then vp.created_at else null end desc,
     case when p_sort_key = 'updated' and p_sort_direction = 'asc' then vp.updated_at else null end asc,
     case when p_sort_key = 'updated' and p_sort_direction = 'desc' then vp.updated_at else null end desc,
     vp.created_at desc,
-    vp.id asc
-  limit greatest(coalesce(p_limit, 20), 1)
-  offset greatest(coalesce(p_offset, 0), 0);
+    vp.id asc;
 $$;
 revoke all on function public.get_projects_overview(text,text,text,integer,integer,text,text,text,text,text,text,boolean) from public,anon,authenticated;
 grant execute on function public.get_projects_overview(text,text,text,integer,integer,text,text,text,text,text,text,boolean) to service_role;
@@ -10694,32 +10699,40 @@ as $$
           escape '\'
       )
   ),
-  cell_document_counts as (
-    select
-      tc.review_id,
-      count(distinct tc.document_id)::integer as document_count
-    from public.tabular_cells tc
-    where tc.review_id in (
-      select vr.id
-      from visible_reviews vr
-      where jsonb_typeof(vr.document_ids) is distinct from 'array'
-    )
-    group by tc.review_id
-  ),
-  review_document_counts as (
-    select
-      vr.id,
-      case
-        when jsonb_typeof(vr.document_ids) = 'array'
-          then (
-            select count(distinct doc_id.value)::integer
-            from jsonb_array_elements_text(vr.document_ids) as doc_id(value)
+  -- Page first. Document counts are computed for every visible review only
+  -- when the caller sorts by them; otherwise only for the page's rows.
+  page as materialized (
+    select * from (
+      select vr.*,
+        case when p_sort_key = 'documents' then case
+          when jsonb_typeof(vr.document_ids) = 'array'
+            then (
+              select count(distinct doc_id.value)::integer
+              from jsonb_array_elements_text(vr.document_ids) as doc_id(value)
+            )
+          else (
+            select count(distinct tc.document_id)::integer
+            from public.tabular_cells tc
+            where tc.review_id = vr.id
           )
-        else coalesce(cdc.document_count, 0)
-      end as document_count
-    from visible_reviews vr
-    left join cell_document_counts cdc
-      on cdc.review_id = vr.id
+        end end as sort_document_count
+      from visible_reviews vr
+    ) vr
+    order by
+    case when p_sort_key = 'name' and p_sort_direction = 'asc' then lower(coalesce(vr.title, '')) else null end asc,
+    case when p_sort_key = 'name' and p_sort_direction = 'desc' then lower(coalesce(vr.title, '')) else null end desc,
+    case when p_sort_key = 'columns' and p_sort_direction = 'asc' then jsonb_array_length(coalesce(vr.columns_config, '[]'::jsonb)) else null end asc,
+    case when p_sort_key = 'columns' and p_sort_direction = 'desc' then jsonb_array_length(coalesce(vr.columns_config, '[]'::jsonb)) else null end desc,
+    case when p_sort_key = 'documents' and p_sort_direction = 'asc' then vr.sort_document_count else null end asc,
+    case when p_sort_key = 'documents' and p_sort_direction = 'desc' then vr.sort_document_count else null end desc,
+    case when p_sort_key = 'updated' and p_sort_direction = 'asc' then coalesce(vr.updated_at, vr.created_at) else null end asc,
+    case when p_sort_key = 'updated' and p_sort_direction = 'desc' then coalesce(vr.updated_at, vr.created_at) else null end desc,
+    case when p_sort_key = 'created' and p_sort_direction = 'asc' then vr.created_at else null end asc,
+    case when p_sort_key = 'created' and p_sort_direction = 'desc' then vr.created_at else null end desc,
+    vr.created_at desc,
+    vr.id asc
+    limit greatest(coalesce(p_limit, 20), 1)
+    offset greatest(coalesce(p_offset, 0), 0)
   )
   select
     vr.id,
@@ -10733,25 +10746,32 @@ as $$
     vr.updated_at,
     coalesce(vr.user_id::text = p_user_id, false) as is_owner,
     vr.list_access_role as access_role,
-    rdc.document_count
-  from visible_reviews vr
-  join review_document_counts rdc
-    on rdc.id = vr.id
+    coalesce(vr.sort_document_count, case
+          when jsonb_typeof(vr.document_ids) = 'array'
+            then (
+              select count(distinct doc_id.value)::integer
+              from jsonb_array_elements_text(vr.document_ids) as doc_id(value)
+            )
+          else (
+            select count(distinct tc.document_id)::integer
+            from public.tabular_cells tc
+            where tc.review_id = vr.id
+          )
+        end) as document_count
+  from page vr
   order by
     case when p_sort_key = 'name' and p_sort_direction = 'asc' then lower(coalesce(vr.title, '')) else null end asc,
     case when p_sort_key = 'name' and p_sort_direction = 'desc' then lower(coalesce(vr.title, '')) else null end desc,
     case when p_sort_key = 'columns' and p_sort_direction = 'asc' then jsonb_array_length(coalesce(vr.columns_config, '[]'::jsonb)) else null end asc,
     case when p_sort_key = 'columns' and p_sort_direction = 'desc' then jsonb_array_length(coalesce(vr.columns_config, '[]'::jsonb)) else null end desc,
-    case when p_sort_key = 'documents' and p_sort_direction = 'asc' then rdc.document_count else null end asc,
-    case when p_sort_key = 'documents' and p_sort_direction = 'desc' then rdc.document_count else null end desc,
+    case when p_sort_key = 'documents' and p_sort_direction = 'asc' then vr.sort_document_count else null end asc,
+    case when p_sort_key = 'documents' and p_sort_direction = 'desc' then vr.sort_document_count else null end desc,
     case when p_sort_key = 'updated' and p_sort_direction = 'asc' then coalesce(vr.updated_at, vr.created_at) else null end asc,
     case when p_sort_key = 'updated' and p_sort_direction = 'desc' then coalesce(vr.updated_at, vr.created_at) else null end desc,
     case when p_sort_key = 'created' and p_sort_direction = 'asc' then vr.created_at else null end asc,
     case when p_sort_key = 'created' and p_sort_direction = 'desc' then vr.created_at else null end desc,
     vr.created_at desc,
-    vr.id asc
-  limit greatest(coalesce(p_limit, 20), 1)
-  offset greatest(coalesce(p_offset, 0), 0);
+    vr.id asc;
 $$;
 
 create or replace function public.get_tabular_review_ids_overview(
@@ -12087,5 +12107,6 @@ insert into public.schema_migrations (filename) values
   ('20261101_08_departure_reverse_references.sql'),
   ('20261101_09_departure_fence_standalone_documents.sql'),
   ('20261101_10_private_document_access_anchored.sql'),
-  ('20261101_11_audit_page_event_lookup.sql')
+  ('20261101_11_audit_page_event_lookup.sql'),
+  ('20261101_12_overview_counts_after_page.sql')
 on conflict (filename) do nothing;
