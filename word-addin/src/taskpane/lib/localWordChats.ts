@@ -441,12 +441,41 @@ export async function getLocalWordChat(
         .index("chat_id")
         .getAll(IDBKeyRange.only(chatId)),
     )) as LocalMessageRow[];
-    const editRows = (await requestResult(
-      transaction
-        .objectStore(EDIT_STORE)
-        .index("owner_document")
-        .getAll(IDBKeyRange.only([ownerId, documentId])),
-    )) as LocalEditRow[];
+    // Read only this chat's edits, through the per-message index, and group
+    // them once. Loading the document's edit rows (every chat) and filtering
+    // them per assistant message made opening a chat cost
+    // messages x all edits ever proposed in the document.
+    const editIndex = transaction.objectStore(EDIT_STORE).index("message_id");
+    const editRowsByMessage = new Map(
+      await Promise.all(
+        rows
+          .filter((row) => row.role === "assistant")
+          .map(
+            async (row) =>
+              [
+                row.id,
+                (
+                  (await requestResult(
+                    editIndex.getAll(IDBKeyRange.only(row.id)),
+                  )) as LocalEditRow[]
+                )
+                  .filter(
+                    (edit) =>
+                      edit.document_id === documentId &&
+                      edit.owner_id === ownerId,
+                  )
+                  .sort((left, right) => left.blockIndex - right.blockIndex)
+                  .map(
+                    ({
+                      document_id: _documentId,
+                      owner_id: _ownerId,
+                      ...edit
+                    }) => edit,
+                  ),
+              ] as const,
+          ),
+      ),
+    );
     await transactionDone(transaction);
     return {
       chat,
@@ -470,23 +499,7 @@ export async function getLocalWordChat(
           }) => ({
             ...message,
             ...(message.role === "assistant"
-              ? {
-                  edits: editRows
-                    .filter(
-                      (edit) =>
-                        edit.messageId === message.id &&
-                        edit.document_id === documentId &&
-                        edit.owner_id === ownerId,
-                    )
-                    .sort((left, right) => left.blockIndex - right.blockIndex)
-                    .map(
-                      ({
-                        document_id: _documentId,
-                        owner_id: _ownerId,
-                        ...edit
-                      }) => edit,
-                    ),
-                }
+              ? { edits: editRowsByMessage.get(message.id) ?? [] }
               : {}),
           }),
         ),
@@ -509,23 +522,30 @@ export async function clearLocalWordChats(ownerId: string): Promise<void> {
     const edits = transaction.objectStore(EDIT_STORE);
     const allChats = (await requestResult(chats.getAll())) as LocalChatRow[];
     const allEdits = (await requestResult(edits.getAll())) as LocalEditRow[];
-
-    for (const chat of allChats) {
-      if (chat.owner_id !== ownerId) continue;
-      const chatMessages = (await requestResult(
-        messages.index("chat_id").getAllKeys(IDBKeyRange.only(chat.id)),
-      )) as IDBValidKey[];
-      for (const messageId of chatMessages) messages.delete(messageId);
-      for (const edit of allEdits) {
-        if (
-          edit.owner_id === ownerId &&
-          chatMessages.some((messageId) => String(messageId) === edit.messageId)
-        ) {
-          edits.delete(edit.id);
-        }
+    const ownedChats = allChats.filter((chat) => chat.owner_id === ownerId);
+    // One key read per chat, issued together, then a single pass over the
+    // edits against a Set (was: per chat, every edit x every message id).
+    const messageKeysByChat = await Promise.all(
+      ownedChats.map(
+        (chat) =>
+          requestResult(
+            messages.index("chat_id").getAllKeys(IDBKeyRange.only(chat.id)),
+          ) as Promise<IDBValidKey[]>,
+      ),
+    );
+    const ownedMessageIds = new Set<string>();
+    for (const keys of messageKeysByChat) {
+      for (const messageId of keys) {
+        messages.delete(messageId);
+        ownedMessageIds.add(String(messageId));
       }
-      chats.delete(chat.id);
     }
+    for (const edit of allEdits) {
+      if (edit.owner_id === ownerId && ownedMessageIds.has(edit.messageId)) {
+        edits.delete(edit.id);
+      }
+    }
+    for (const chat of ownedChats) chats.delete(chat.id);
 
     await transactionDone(transaction);
     notifyWordChatHistoryChanged();

@@ -443,3 +443,118 @@ test("a device-only save failure after a finished answer is reported as a save f
     page.getByText("Mike couldn't finish that answer. Try again."),
   ).toHaveCount(0);
 });
+
+// ---- Device-only storage work ------------------------------------------
+// Rows the pane structured-clones out of IndexedDB, per object store
+// (get/getAll results and cursor steps). Opening a chat or saving a message
+// must cost the rows it needs, not every row the device has accumulated.
+async function countIndexedDbReads(page: import("@playwright/test").Page) {
+  await page.addInitScript(() => {
+    const reads: Record<string, number> = {};
+    (window as unknown as { __IDB_READS__: Record<string, number> }).__IDB_READS__ = reads;
+    for (const proto of [IDBObjectStore.prototype, IDBIndex.prototype] as unknown as Array<Record<string, unknown>>) {
+      for (const method of ["get", "getAll", "openCursor"]) {
+        const original = proto[method] as (...args: unknown[]) => IDBRequest;
+        proto[method] = function (this: IDBObjectStore | IDBIndex, ...args: unknown[]) {
+          const request = original.apply(this, args);
+          const store = this instanceof IDBIndex ? this.objectStore.name : this.name;
+          request.addEventListener("success", () => {
+            const result = request.result as unknown;
+            reads[store] = (reads[store] ?? 0) + (Array.isArray(result) ? result.length : result == null ? 0 : 1);
+          });
+          return request;
+        };
+      }
+    }
+  });
+}
+
+const idbReads = (page: import("@playwright/test").Page, store: string) =>
+  page.evaluate((name) => (window as unknown as { __IDB_READS__: Record<string, number> }).__IDB_READS__[name] ?? 0, store);
+
+/** Put rows straight into the pane's database, as months of use would. */
+async function seedLocalRows(page: import("@playwright/test").Page, rows: Record<string, unknown[]>) {
+  await page.evaluate((stores) => new Promise<void>((resolve, reject) => {
+    const open = indexedDB.open("mike-word-addin");
+    open.onerror = () => reject(open.error);
+    open.onsuccess = () => {
+      const database = open.result;
+      const transaction = database.transaction(Object.keys(stores), "readwrite");
+      for (const [store, values] of Object.entries(stores)) for (const value of values) transaction.objectStore(store).put(value);
+      transaction.oncomplete = () => { database.close(); resolve(); };
+      transaction.onerror = () => reject(transaction.error);
+    };
+  }), rows);
+}
+
+async function firstLocalChat(page: import("@playwright/test").Page) {
+  return page.evaluate(() => new Promise<{ id: string; owner_id: string; document_id: string }>((resolve, reject) => {
+    const open = indexedDB.open("mike-word-addin");
+    open.onerror = () => reject(open.error);
+    open.onsuccess = () => {
+      const request = open.result.transaction("word-chats").objectStore("word-chats").getAll();
+      request.onsuccess = () => { open.result.close(); resolve(request.result[0]); };
+    };
+  }));
+}
+
+async function sendLocally(addin: { gotoTaskpane(opts: object): Promise<void>; expectAuthedShell(): Promise<void> }, page: import("@playwright/test").Page, prompt: string, documentText: string) {
+  await addin.gotoTaskpane({ token: TOKEN, documentText });
+  await addin.expectAuthedShell();
+  await page.getByRole("button", { name: "Open menu" }).click();
+  await page.getByRole("menuitem", { name: "Settings" }).click();
+  await page.getByRole("switch", { name: "Save chats in the cloud" }).click();
+  await page.getByRole("button", { name: "Open menu" }).click();
+  await page.getByRole("menuitem", { name: "Assistant" }).click();
+  await page.getByPlaceholder("How can I help?").fill(prompt);
+  await page.getByRole("button", { name: "Send" }).click();
+  await expect(page.getByRole("button", { name: "Send" })).toBeVisible();
+}
+
+test("opening a device-only chat reads only that chat's edits", async ({ addin, page }) => {
+  await countIndexedDbReads(page);
+  await addin.mockChatStream([wordEdits(replacementEdit("Suplier", "Supplier", "Correct the party name."))], {
+    chatId: LOCAL_CHAT_ID,
+    assistantMessageId: ASSISTANT_MESSAGE_ID,
+  });
+  await sendLocally(addin, page, "Correct the typo", "The Suplier shall deliver the goods.");
+  await expect(page.getByRole("button", { name: "Apply", exact: true })).toBeVisible();
+  const chat = await firstLocalChat(page);
+  // Another chat about the same document with a long edit history.
+  const otherMessageId = "other-assistant-message";
+  await seedLocalRows(page, {
+    "word-chats": [{ ...chat, id: "other-chat", title: "Earlier review", updated_at: "2020-01-01T00:00:00.000Z" }],
+    "word-chat-messages": [{ id: otherMessageId, chat_id: "other-chat", role: "assistant", content: "", created_at: "2020-01-01T00:00:00.000Z", sequence: 0 }],
+    "word-document-edits": Array.from({ length: 300 }, (_, blockIndex) => ({
+      id: `${otherMessageId}:edit-${blockIndex}`, messageId: otherMessageId, blockIndex, originalText: `old ${blockIndex}`,
+      replacementText: `new ${blockIndex}`, formats: [], applyMode: "approval", applyStatus: "proposed",
+      document_id: chat.document_id, owner_id: chat.owner_id,
+    })),
+  });
+
+  await addin.reloadTaskpane();
+  await addin.expectAuthedShell();
+  await page.getByRole("button", { name: "Chat history" }).click();
+  const before = await idbReads(page, "word-document-edits");
+  await page.getByRole("menu").getByRole("menuitem", { name: /Correct the typo/ }).click();
+  await expect(page.getByRole("button", { name: "Apply", exact: true })).toBeVisible();
+  expect(await idbReads(page, "word-document-edits") - before).toBe(1);
+
+  // Deleting device-only chats still removes every chat, message and edit.
+  await page.getByRole("button", { name: "Open menu" }).click();
+  await page.getByRole("menuitem", { name: "Settings" }).click();
+  await page.getByRole("button", { name: "Delete", exact: true }).click();
+  await page.getByRole("button", { name: "Delete chats" }).click();
+  await expect(page.getByRole("button", { name: "Delete chats" })).toHaveCount(0);
+  expect(await page.evaluate(() => new Promise<number[]>((resolve) => {
+    const open = indexedDB.open("mike-word-addin");
+    open.onsuccess = () => {
+      const stores = ["word-chats", "word-chat-messages", "word-document-edits"];
+      const transaction = open.result.transaction(stores);
+      Promise.all(stores.map((store) => new Promise<number>((done) => {
+        const request = transaction.objectStore(store).count();
+        request.onsuccess = () => done(request.result);
+      }))).then((counts) => { open.result.close(); resolve(counts); });
+    };
+  }))).toEqual([0, 0, 0]);
+});
