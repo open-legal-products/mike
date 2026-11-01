@@ -3,11 +3,15 @@ import { describe, it, expect, vi } from "vitest";
 vi.mock("../../supabase", () => ({ createServerSupabase: vi.fn() }));
 vi.mock("../../storage", () => ({ deleteFile: vi.fn() }));
 
+import { createServerSupabase } from "../../supabase";
+
 import {
     NonRetryableJobError,
     processClaimedJob,
     retryDelayMs,
     runDbJobTick,
+    startDbJobRunner,
+    stopDbJobRunner,
     runDbJobRetentionSweep,
 } from "../runner";
 import { DbJobDeferredError, type DbJob } from "../types";
@@ -364,6 +368,36 @@ describe("runDbJobTick", () => {
             },
         });
         expect(seen.sort()).toEqual(["a", "b"]);
+    });
+});
+
+describe("startDbJobRunner", () => {
+    it("starts new work while a slow job still holds its slot", async () => {
+        vi.useFakeTimers();
+        vi.stubEnv("DB_JOBS_POLL_MS", "600000");
+        let releaseSlow!: () => void;
+        const slow = new Promise<void>((resolve) => (releaseSlow = resolve));
+        const queue = [JOB({ id: "slow" }), JOB({ id: "fast-1" }), JOB({ id: "fast-2" })];
+        vi.mocked(createServerSupabase).mockReturnValue(
+            makeDb({ rpc: async () => ({ data: queue.splice(0, 2), error: null }) }) as never,
+        );
+        const started: string[] = [];
+        try {
+            startDbJobRunner({
+                "test.kind": async (_db, job) => {
+                    started.push(job.id);
+                    if (job.id === "slow") await slow;
+                },
+            });
+            await vi.advanceTimersByTimeAsync(1_000);
+            // fast-1 finishing frees its slot; fast-2 must not wait for "slow".
+            expect(started).toEqual(["slow", "fast-1", "fast-2"]);
+        } finally {
+            releaseSlow();
+            await stopDbJobRunner();
+            vi.unstubAllEnvs();
+            vi.useRealTimers();
+        }
     });
 });
 
