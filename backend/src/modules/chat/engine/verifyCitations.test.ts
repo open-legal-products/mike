@@ -436,6 +436,20 @@ describe("shared quote normalization", () => {
     } finally { normalize.mockRestore(); }
   });
 
+  it("loads and joins a cited case's opinions once per verification batch", async () => {
+    const getCaseOpinions = vi.fn(async () => [
+      { opinion_id: 1, text: "Majority text." },
+      { opinion_id: 2, text: "Dissent text." },
+    ]);
+    const annotations = Array.from({ length: 20 }, (_, ref) => ({
+      type: "citation_data", kind: "case", ref, cluster_id: 42,
+      quotes: [{ quote: "Majority text. Dissent text." }],
+    }));
+    const result = await verifyCitations(annotations, async () => "", getCaseOpinions);
+    expect(result.every((value) => (value as { verified: boolean }).verified)).toBe(true);
+    expect(getCaseOpinions).toHaveBeenCalledTimes(1);
+  });
+
   it("does not reuse stale normalized text between verification batches", async () => {
     const annotation = docAnnotation([{ page: 1, quote: "new words" }]);
     const old = await verifyCitations([annotation], async () => "OLD WORDS", async () => []);

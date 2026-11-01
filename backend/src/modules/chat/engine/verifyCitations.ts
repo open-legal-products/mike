@@ -42,6 +42,33 @@ export function createQuoteVerifier(source: string) {
   return (quote: string) => verifyQuoteAgainstSource(source, quote, prepared);
 }
 
+type CaseSource = { opinions: CaseOpinionSource[]; completeCaseText: string };
+
+/**
+ * One fetch and one joined text per cluster for a whole verification pass.
+ * Several annotations citing the same case then share the string object, so
+ * the verifier cache hits by identity instead of rebuilding (and rehashing)
+ * the full opinion text per annotation.
+ */
+function caseSourceCache(
+  getCaseOpinions: (clusterId: number) => Promise<CaseOpinionSource[]>,
+) {
+  const byCluster = new Map<number, Promise<CaseSource>>();
+  return (clusterId: number): Promise<CaseSource> => {
+    let source = byCluster.get(clusterId);
+    if (!source) {
+      source = getCaseOpinions(clusterId)
+        .catch(() => [] as CaseOpinionSource[])
+        .then((opinions) => ({
+          opinions,
+          completeCaseText: opinions.map((opinion) => opinion.text).join("\n"),
+        }));
+      byCluster.set(clusterId, source);
+    }
+    return source;
+  };
+}
+
 function verifierCache() {
   const byText = new Map<string, ReturnType<typeof createQuoteVerifier>>();
   return (source: string) => {
@@ -329,6 +356,7 @@ export async function verifyCaseCitationAnnotation(
   annotation: unknown,
   getCaseOpinions: (clusterId: number) => Promise<CaseOpinionSource[]>,
   verifierFor = verifierCache(),
+  caseSources = caseSourceCache(getCaseOpinions),
 ): Promise<unknown> {
   const a = record(annotation);
   if (!a || a.kind !== "case") return annotation;
@@ -348,14 +376,7 @@ export async function verifyCaseCitationAnnotation(
     : [];
   if (!entries.length) return annotation;
 
-  let opinions: CaseOpinionSource[];
-  try {
-    opinions = await getCaseOpinions(clusterId);
-  } catch {
-    opinions = [];
-  }
-
-  const completeCaseText = opinions.map((opinion) => opinion.text).join("\n");
+  const { opinions, completeCaseText } = await caseSources(clusterId);
   const verifiedQuotes = entries.map((entry) => {
     const opinionId = caseQuoteOpinionId(entry);
     const source =
@@ -458,11 +479,12 @@ export async function verifyCitations(
   getCaseOpinions: (clusterId: number) => Promise<CaseOpinionSource[]>,
 ): Promise<unknown[]> {
   const verifierFor = verifierCache();
+  const caseSources = caseSourceCache(getCaseOpinions);
   return Promise.all(
     annotations.map((annotation) => {
       const value = record(annotation);
       return value?.kind === "case"
-        ? verifyCaseCitationAnnotation(annotation, getCaseOpinions, verifierFor)
+        ? verifyCaseCitationAnnotation(annotation, getCaseOpinions, verifierFor, caseSources)
         : verifyDocumentCitationAnnotation(annotation, getSourceText, verifierFor);
     }),
   );
