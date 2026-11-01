@@ -197,19 +197,26 @@ interface RunSlot {
 
 interface Flattened {
     paraText: string;
-    // For each char index in paraText: which run slot + which textNode + offset within text
-    charRun: Int32Array;      // runIdx
-    charTextNode: Int32Array; // index into slot.textNodes
-    charOffset: Int32Array;   // offset within that textNode.text
     runs: RunSlot[];          // order corresponds to their paragraph position
+    /** Built on first use by charMaps(); only edited paragraphs need it. */
+    maps?: CharMaps;
 }
 
+/** For each char index in paraText: which run slot and which of its w:t nodes. */
+interface CharMaps {
+    charRun: Int32Array;      // runIdx
+    charTextNode: Int32Array; // index into slot.textNodes
+}
+
+/**
+ * Flatten a paragraph to its accepted-view text and run slots. Each w:t
+ * records its [paraStart, paraEnd) span, which is all the per-character maps
+ * are derived from, so those are built lazily by charMaps() for the few
+ * paragraphs an edit actually rewrites — not for every paragraph read.
+ */
 function flattenParagraph(paraChildren: XNode[]): Flattened {
     const runs: RunSlot[] = [];
     let paraText = "";
-    const charRunArr: number[] = [];
-    const charTextNodeArr: number[] = [];
-    const charOffsetArr: number[] = [];
 
     const processRun = (rEl: XNode, topChildIdx: number) => {
         const rKids = elChildren(rEl);
@@ -228,14 +235,7 @@ function flattenParagraph(paraChildren: XNode[]): Flattened {
                     paraStart: start,
                     paraEnd: start + txt.length,
                 });
-                const runIdx = runs.length;
-                const tnIdx = textNodes.length - 1;
                 paraText += txt;
-                for (let i = 0; i < txt.length; i++) {
-                    charRunArr.push(runIdx);
-                    charTextNodeArr.push(tnIdx);
-                    charOffsetArr.push(i);
-                }
             }
             // other run children (w:tab, w:br, w:sym, …) are left alone
         }
@@ -258,13 +258,22 @@ function flattenParagraph(paraChildren: XNode[]): Flattened {
         // w:del: skip entirely — accepted view excludes deleted text.
     }
 
-    return {
-        paraText,
-        charRun: Int32Array.from(charRunArr),
-        charTextNode: Int32Array.from(charTextNodeArr),
-        charOffset: Int32Array.from(charOffsetArr),
-        runs,
-    };
+    return { paraText, runs };
+}
+
+/** Per-character maps for a paragraph, filled span-by-span into typed arrays. */
+function charMaps(flat: Flattened): CharMaps {
+    if (flat.maps) return flat.maps;
+    const charRun = new Int32Array(flat.paraText.length);
+    const charTextNode = new Int32Array(flat.paraText.length);
+    flat.runs.forEach((slot, runIdx) => {
+        slot.textNodes.forEach((tn, tnIdx) => {
+            charRun.fill(runIdx, tn.paraStart, tn.paraEnd);
+            charTextNode.fill(tnIdx, tn.paraStart, tn.paraEnd);
+        });
+    });
+    flat.maps = { charRun, charTextNode };
+    return flat.maps;
 }
 
 // ---------------------------------------------------------------------------
@@ -331,24 +340,25 @@ function reconstructParagraph(
     author: string,
 ): XNode[] {
     if (plan.length === 0) return paraChildren;
+    const { charRun, charTextNode } = charMaps(flat);
 
     // Determine the run-index span that edits touch.
     let firstRunIdx = flat.runs.length;
     let lastRunIdx = -1;
     for (const p of plan) {
         for (let pos = p.deleteStart; pos < p.deleteEnd; pos++) {
-            const r = flat.charRun[pos];
+            const r = charRun[pos];
             if (r < firstRunIdx) firstRunIdx = r;
             if (r > lastRunIdx) lastRunIdx = r;
         }
         // Also include the run to the left/right of a pure insertion so we
         // can inherit its rPr.
         if (p.deleteStart === p.deleteEnd && p.deleteStart < flat.paraText.length) {
-            const r = flat.charRun[p.deleteStart];
+            const r = charRun[p.deleteStart];
             if (r < firstRunIdx) firstRunIdx = r;
             if (r > lastRunIdx) lastRunIdx = r;
         } else if (p.deleteStart === p.deleteEnd && p.deleteStart > 0) {
-            const r = flat.charRun[p.deleteStart - 1];
+            const r = charRun[p.deleteStart - 1];
             if (r < firstRunIdx) firstRunIdx = r;
             if (r > lastRunIdx) lastRunIdx = r;
         }
@@ -382,7 +392,7 @@ function reconstructParagraph(
         if (pos < 0) pos = 0;
         if (pos >= flat.paraText.length) pos = flat.paraText.length - 1;
         if (pos < 0) return firstRun.rPr;
-        return flat.runs[flat.charRun[pos]].rPr;
+        return flat.runs[charRun[pos]].rPr;
     };
 
     // Emit a "normal" run fragment covering [a, b) of paraText, grouping
@@ -391,13 +401,13 @@ function reconstructParagraph(
         if (a >= b) return;
         let i = a;
         while (i < b) {
-            const runIdx = flat.charRun[i];
-            const tnIdx = flat.charTextNode[i];
+            const runIdx = charRun[i];
+            const tnIdx = charTextNode[i];
             let j = i + 1;
             while (
                 j < b &&
-                flat.charRun[j] === runIdx &&
-                flat.charTextNode[j] === tnIdx
+                charRun[j] === runIdx &&
+                charTextNode[j] === tnIdx
             ) {
                 j++;
             }
@@ -415,13 +425,13 @@ function reconstructParagraph(
         const inner: XNode[] = [];
         let i = a;
         while (i < b) {
-            const runIdx = flat.charRun[i];
-            const tnIdx = flat.charTextNode[i];
+            const runIdx = charRun[i];
+            const tnIdx = charTextNode[i];
             let j = i + 1;
             while (
                 j < b &&
-                flat.charRun[j] === runIdx &&
-                flat.charTextNode[j] === tnIdx
+                charRun[j] === runIdx &&
+                charTextNode[j] === tnIdx
             ) {
                 j++;
             }

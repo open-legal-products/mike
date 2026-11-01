@@ -370,3 +370,27 @@ describe("pure-insertion anchoring work", () => {
         expect(unique.changes).toHaveLength(1);
     });
 });
+
+describe("paragraph flattening work", () => {
+    it("reads body text without building per-character run maps", async () => {
+        // extractDocxBodyText (every DOCX read, index and playbook source)
+        // needs only the text. Before, flattening pushed three boxed numbers
+        // per character into maps that only an edited paragraph uses.
+        const text = "x".repeat(40_000);
+        const bytes = await makeDocx(para(text) + para("short"));
+        const original = Array.prototype.push;
+        let pushes = 0;
+        Array.prototype.push = function (this: unknown[], ...items: unknown[]) {
+            pushes++;
+            return original.apply(this, items);
+        };
+        let extracted;
+        try {
+            extracted = await extractDocxBodyText(bytes);
+        } finally {
+            Array.prototype.push = original;
+        }
+        expect(extracted).toBe(`${text}\nshort`);
+        expect(pushes).toBeLessThan(1_000);
+    });
+});
