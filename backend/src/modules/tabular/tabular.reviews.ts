@@ -6,6 +6,7 @@
 
 import { recordAudit } from "../../lib/audit";
 import { chunkArray } from "../../lib/arrays";
+import { mutateInBatches, selectAllPages } from "../../lib/batchedQuery";
 import type { TabularReviewHistoryStatus } from "@mike/contracts";
 import {
     checkProjectAccess,
@@ -46,6 +47,7 @@ import {
 import {
     fetchSourceDocuments,
     filterReadableReviewRows,
+    loadReviewCells,
     loadReviewRows,
     type ReviewRow,
     type SourceDocument,
@@ -290,35 +292,42 @@ export async function syncCellsForReviewRows(
     reviewId: string,
     columns: Column[],
 ): Promise<void> {
-    const { data: rows, error: rowsError } = await db
-        .from("tabular_review_rows")
-        .select("id,document_id")
-        .eq("review_id", reviewId);
-    if (rowsError) throw new Error(rowsError.message);
-    const { data: cells, error: cellsError } = await db
-        .from("tabular_cells")
-        .select("id,row_id,column_index")
-        .eq("review_id", reviewId);
-    if (cellsError) throw new Error(cellsError.message);
+    // Both reads are paged: a truncated cell read made every cell past the
+    // first max_rows look missing, and the insert below then duplicated it.
+    const rows = await selectAllPages<{ id: string; document_id: string | null }>(
+        "review rows",
+        (after, limit) => {
+            let query = db
+                .from("tabular_review_rows")
+                .select("id,document_id")
+                .eq("review_id", reviewId)
+                .order("id", { ascending: true })
+                .limit(limit);
+            if (after) query = query.gt("id", after.id);
+            return query;
+        },
+    );
+    const cells = await loadReviewCells<{ id: string; row_id: string; column_index: number }>(
+        db,
+        reviewId,
+        "id,row_id,column_index",
+    );
 
     const activeColumnIndexes = new Set(columns.map((column) => column.index));
-    const staleCellIds = (cells ?? [])
-        .filter((cell) => !activeColumnIndexes.has(cell.column_index))
-        .map((cell) => cell.id);
-    if (staleCellIds.length) {
-        const { error } = await db
-            .from("tabular_cells")
-            .delete()
-            .in("id", staleCellIds);
-        if (error) throw new Error(error.message);
-    }
+    await mutateInBatches(
+        "stale review cell delete",
+        cells
+            .filter((cell) => !activeColumnIndexes.has(cell.column_index))
+            .map((cell) => cell.id),
+        (batch) => db.from("tabular_cells").delete().in("id", batch),
+    );
 
     const existingKeys = new Set(
-        (cells ?? [])
+        cells
             .filter((cell) => activeColumnIndexes.has(cell.column_index))
             .map((cell) => `${cell.row_id}:${cell.column_index}`),
     );
-    const missingCells = (rows ?? []).flatMap((row) =>
+    const missingCells = rows.flatMap((row) =>
         columns
             .filter((column) => !existingKeys.has(`${row.id}:${column.index}`))
             .map((column) => ({
@@ -704,12 +713,14 @@ export async function getTabularReviewDetail(
     const access = await ensureReviewAccess(review, userId, userEmail, db);
     if (!access.ok) return failure("not_found", "Review not found");
 
-    const { data: cells, error: cellsError } = await db
-        .from("tabular_cells")
-        .select("*")
-        .eq("review_id", reviewId);
-    if (cellsError) return internalFailure(cellsError);
-    const allRows = await loadReviewRows(db, reviewId);
+    let cells: Record<string, unknown>[];
+    let allRows: ReviewRow[];
+    try {
+        cells = await loadReviewCells(db, reviewId);
+        allRows = await loadReviewRows(db, reviewId);
+    } catch (loadError) {
+        return internalFailure(loadError);
+    }
     const allRowDocIds = allRows.flatMap(
         (row) => row.source_document_ids ?? [],
     );
@@ -761,7 +772,7 @@ export async function getTabularReviewDetail(
                 access_role: access.projectRole,
                 is_running: isReviewGenerationRunning(review),
             },
-            cells: (cells ?? [])
+            cells: cells
                 .filter((cell) => visibleRowIds.has(cell.row_id as string))
                 .map((cell) => ({
                     ...cell,

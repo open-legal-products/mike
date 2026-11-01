@@ -23,6 +23,7 @@ import { can } from "../../lib/permissions";
 import { failure, internalFailure } from "../../lib/serviceResult";
 import {
     filterReadableReviewRows,
+    loadReviewCells,
     loadReviewRows,
     type ReviewRow,
 } from "./tabular.rows";
@@ -168,14 +169,14 @@ export async function loadTabularGenerateWork(
 
     let rows = await loadReviewRows(db, reviewId);
 
-    const { data: cells, error: cellsError } = await db
-        .from("tabular_cells")
-        .select("*")
-        .eq("review_id", reviewId);
-    if (cellsError)
+    let cells: Record<string, unknown>[];
+    try {
+        cells = await loadReviewCells(db, reviewId);
+    } catch (cellsError) {
         return { ok: false, kind: "cells_error", error: cellsError };
+    }
     const cellMap = new Map<string, Record<string, unknown>>();
-    for (const cell of cells ?? [])
+    for (const cell of cells)
         cellMap.set(`${cell.row_id}:${cell.column_index}`, cell);
 
     // A row is only extractable if the requester can access every source

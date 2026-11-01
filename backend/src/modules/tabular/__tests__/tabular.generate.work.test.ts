@@ -63,7 +63,7 @@ describe("tabular generation work access failures", () => {
         const error = { message: "Cells unavailable" };
         const { db } = makeFakeDb({ tables: { tabular_cells: { data: null, error } } });
         await expect(loadTabularGenerateWork(db, ARGS)).resolves.toEqual({
-            ok: false, kind: "cells_error", error,
+            ok: false, kind: "cells_error", error: expect.objectContaining({ cause: error }),
         });
     });
 });

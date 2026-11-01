@@ -11,6 +11,7 @@ import { createTextExtractionCache, type TextExtractionCache } from "../../lib/t
 import { ExtractionBusyError, ExtractionLimitError } from "../../lib/extraction/isolated";
 import { downloadFile } from "../../lib/storage";
 import { attachActiveVersionPaths } from "../../lib/documentVersions";
+import { selectAllPages, selectInBatches } from "../../lib/batchedQuery";
 import { filterAccessibleDocumentIds } from "../../lib/access";
 import { extractDocumentMarkdown } from "./tabular.extract";
 import { AppError } from "../../lib/appError";
@@ -104,26 +105,47 @@ export async function filterReadableReviewRows(
     };
 }
 
+/**
+ * Every row of a review, sources resolved. Paged and batched: a review can
+ * hold more rows (and far more row sources) than PostgREST's max_rows, and a
+ * truncated read here would silently drop rows from the grid, the generation
+ * snapshot and the review chat.
+ */
 export async function loadReviewRows(
     db: Db,
     reviewId: string,
 ): Promise<ReviewRow[]> {
-    const { data, error } = await db
-        .from("tabular_review_rows")
-        .select("*")
-        .eq("review_id", reviewId)
-        .order("sort_index", { ascending: true });
-    if (error) throw new Error(error.message);
-    const rows = (data ?? []) as ReviewRow[];
+    const rows = await selectAllPages<ReviewRow>("review rows", (after, limit) => {
+        let query = db
+            .from("tabular_review_rows")
+            .select("*")
+            .eq("review_id", reviewId)
+            .order("id", { ascending: true })
+            .limit(limit);
+        if (after) query = query.gt("id", after.id);
+        return query;
+    });
     if (!rows.length) return rows;
-    const { data: sources, error: sourceError } = await db
-        .from("tabular_review_row_sources")
-        .select("row_id, document_id")
-        .in("row_id", rows.map((row) => row.id))
-        .order("sort_index", { ascending: true });
-    if (sourceError) throw new Error(sourceError.message);
+    rows.sort((a, b) => a.sort_index - b.sort_index || a.id.localeCompare(b.id));
+    type Source = { row_id: string; document_id: string; sort_index: number };
+    // (row_id, document_id) is the primary key: a unique order to page by.
+    const sources = await selectInBatches<Source>(
+        "review row sources",
+        rows.map((row) => row.id),
+        (batch) =>
+            selectAllPages<Source>("review row sources", (_after, limit, offset) =>
+                db
+                    .from("tabular_review_row_sources")
+                    .select("row_id, document_id, sort_index")
+                    .in("row_id", batch)
+                    .order("row_id", { ascending: true })
+                    .order("document_id", { ascending: true })
+                    .range(offset, offset + limit - 1),
+            ),
+    );
+    sources.sort((a, b) => a.sort_index - b.sort_index);
     const byRow = new Map<string, string[]>();
-    for (const source of sources ?? []) {
+    for (const source of sources) {
         const ids = byRow.get(source.row_id) ?? [];
         ids.push(source.document_id);
         byRow.set(source.row_id, ids);
@@ -133,6 +155,28 @@ export async function loadReviewRows(
         source_document_ids:
             byRow.get(row.id) ?? (row.document_id ? [row.document_id] : []),
     }));
+}
+
+/**
+ * Every cell of a review (only `columns`, which must include `id`), paged by
+ * id so a review past max_rows cells is read completely instead of as a
+ * plausible-looking prefix.
+ */
+export async function loadReviewCells<T extends { id: string } = Record<string, unknown> & { id: string }>(
+    db: Db,
+    reviewId: string,
+    columns = "*",
+): Promise<T[]> {
+    return selectAllPages<T>("review cells", (after, limit) => {
+        let query = db
+            .from("tabular_cells")
+            .select(columns)
+            .eq("review_id", reviewId)
+            .order("id", { ascending: true })
+            .limit(limit);
+        if (after) query = query.gt("id", after.id);
+        return query as unknown as PromiseLike<{ data: T[] | null; error: unknown }>;
+    });
 }
 
 /** Load one row of a review (with its source ids resolved), or null. */

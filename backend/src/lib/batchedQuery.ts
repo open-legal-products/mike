@@ -83,19 +83,21 @@ export async function mutateInBatches(
 }
 
 /**
- * Read every row of a keyset-ordered query. `page(after, limit)` must order
- * by a unique key, apply the cursor (rows strictly after `after`, the last
- * row of the previous page; `null` for the first page) and `.limit(limit)`.
+ * Read every row of a query in pages. `page(after, limit, offset)` must order
+ * by a unique key and either apply the keyset cursor (rows strictly after
+ * `after`, the last row of the previous page; `null` for the first page)
+ * with `.limit(limit)` — preferred — or, for a composite key PostgREST
+ * cannot express as one comparison, `.range(offset, offset + limit - 1)`.
  */
 export async function selectAllPages<T>(
   label: string,
-  page: (after: T | null, limit: number) => PromiseLike<RowsResult<T>>,
+  page: (after: T | null, limit: number, offset: number) => PromiseLike<RowsResult<T>>,
   pageSize = ROW_PAGE_SIZE,
 ): Promise<T[]> {
   const rows: T[] = [];
   let after: T | null = null;
   for (let pages = 0; pages < MAX_PAGES; pages++) {
-    const { data, error } = await page(after, pageSize);
+    const { data, error } = await page(after, pageSize, rows.length);
     if (error) throw new BatchedQueryError(label, error);
     const batch = data ?? [];
     rows.push(...batch);
