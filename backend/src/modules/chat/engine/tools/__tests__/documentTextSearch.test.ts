@@ -1,12 +1,13 @@
 import { beforeEach, expect, it, vi } from "vitest";
 import type { DocIndex, DocStore } from "../../types";
 import type { Db } from "../../../../../lib/supabase";
-const mocks = vi.hoisted(() => ({ find: vi.fn(), read: vi.fn(), download: vi.fn(), logError: vi.fn() }));
+const mocks = vi.hoisted(() => ({ find: vi.fn(), read: vi.fn(), current: vi.fn(), download: vi.fn(), logError: vi.fn() }));
 vi.mock("../../../../../lib/log", async (load) => ({
   ...await load<typeof import("../../../../../lib/log")>(), logError: mocks.logError,
 }));
 vi.mock("../../../../documents/documents.service", async (load) => ({
   ...await load<typeof import("../../../../documents/documents.service")>(), findDocumentText: mocks.find, readStoredDocumentText: mocks.read,
+  storedDocumentTextCurrent: mocks.current,
 }));
 vi.mock("../../../../../lib/storage", async (load) => ({
   ...await load<typeof import("../../../../../lib/storage")>(), downloadFile: mocks.download,
@@ -42,6 +43,18 @@ it.each([null, { revision: "new-revision", status: "ready", text: "New text" }, 
   const index: DocIndex = { found: { document_id: "document", version_id: "history", filename: "contract.docx" } };
   expect(await readDocumentContent("found", store, () => {}, index, {} as Db)).toBe("Document could not be read.");
   expect(mocks.download).not.toHaveBeenCalled();
+});
+it("rereads a search result from the turn cache after rechecking access and revision", async () => {
+  mocks.read.mockResolvedValue({ revision: "revision", status: "ready", text: "Stored clause", textless_page_count: 0 });
+  mocks.current.mockResolvedValueOnce(true).mockResolvedValueOnce(false);
+  const store: DocStore = new Map([["found", { filename: "contract.docx", file_type: "docx", storage_path: "obsolete", search_source: { revision: "revision", userId: "actor" } }]]);
+  const index: DocIndex = { found: { document_id: "document", version_id: "history", filename: "contract.docx" } };
+  const read = () => readDocumentContent("found", store, () => {}, index, {} as Db, { emitEvents: false });
+  expect(await read()).toBe("Stored clause");
+  expect(await read()).toBe("Stored clause");
+  expect(mocks.read).toHaveBeenCalledTimes(1);
+  expect(await read()).toBe("Document could not be read.");
+  expect(mocks.current).toHaveBeenCalledWith(expect.anything(), { userId: "actor", userEmail: undefined, documentId: "document", versionId: "history", revision: "revision" });
 });
 
 const coverage = { total_versions: 4, indexed_versions: 2, pending_versions: 1, failed_versions: 1, versions_needing_ocr: 1 };
