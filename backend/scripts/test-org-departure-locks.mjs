@@ -29,13 +29,13 @@ function session() {
     }), done.then(() => { throw new Error(`Session ended before ${text}`); })]) };
 }
 async function query(sql) { const s = session(); s.end(`set statement_timeout='15s';\n${sql}`); return s.done; }
-const owner = randomUUID(), departing = randomUUID(), second = randomUUID(), remaining = randomUUID(), third = randomUUID(), fourth = randomUUID(), fifth = randomUUID(), org = randomUUID();
+const owner = randomUUID(), departing = randomUUID(), second = randomUUID(), remaining = randomUUID(), third = randomUUID(), fourth = randomUUID(), fifth = randomUUID(), sixth = randomUUID(), seventh = randomUUID(), org = randomUUID();
 const affected = randomUUID(), unrelated = randomUUID(), shared = randomUUID(), doc = randomUUID(), chat = randomUUID(), review = randomUUID();
 let held;
 try {
-  await query(`insert into auth.users(id,email) values ${[owner,departing,second,remaining,third,fourth,fifth].map(id => `('${id}','${id}@example.test')`).join(",")};
+  await query(`insert into auth.users(id,email) values ${[owner,departing,second,remaining,third,fourth,fifth,sixth,seventh].map(id => `('${id}','${id}@example.test')`).join(",")};
     insert into organizations(id,name,created_by) values('${org}','Departure locks','${owner}');
-    insert into org_members(org_id,user_id,role) values('${org}','${owner}','owner'),('${org}','${departing}','member'),('${org}','${second}','member'),('${org}','${remaining}','member'),('${org}','${third}','member'),('${org}','${fourth}','member'),('${org}','${fifth}','member');
+    insert into org_members(org_id,user_id,role) values('${org}','${owner}','owner'),('${org}','${departing}','member'),('${org}','${second}','member'),('${org}','${remaining}','member'),('${org}','${third}','member'),('${org}','${fourth}','member'),('${org}','${fifth}','member'),('${org}','${sixth}','member'),('${org}','${seventh}','member');
     insert into projects(id,org_id,user_id,name) values('${affected}','${org}','${departing}','Affected'),('${unrelated}','${org}','${remaining}','Unrelated'),('${shared}','${org}','${second}','Concurrent sharing');
     insert into projects(org_id,user_id,name) select '${org}','${remaining}','Unrelated '||n from generate_series(1,1000) n;
     insert into documents(id,org_id,user_id) values('${doc}','${org}','${departing}');
@@ -97,8 +97,48 @@ try {
     held.end("commit;"); await held.done; held = null; await departure;
     assert.equal(await query(`select archived_at is null and user_id='${owner}' and project_id is null from documents where id='${referenced}';`), "t");
   }
+  // Project documents are never departure items, so uploading one must not
+  // make a departure lock every chat and review in the organization.
+  await query(`insert into documents(org_id,user_id,project_id) values('${org}','${sixth}','${unrelated}');`);
+  held = session();
+  held.write(`begin; select remove_org_member('${org}','${sixth}','${owner}');\n\\echo PROJECT_DOCUMENTS`);
+  await held.marker("PROJECT_DOCUMENTS");
+  await query(`begin; select id from chats where id='${chat}' for update nowait; select id from tabular_reviews where id='${review}' for update nowait; rollback;`);
+  held.end("rollback;"); await held.done; held = null;
+  // A document that becomes standalone while the departure waits for its row
+  // lock must still fence references added by a third transaction meanwhile.
+  {
+    const moving = randomUUID(), application = `mike_late_fence_${randomUUID()}`;
+    const waitingFor = async () => {
+      for (let attempt = 0; attempt < 100; attempt++) {
+        if (await query(`select exists(select 1 from pg_stat_activity where application_name='${application}' and wait_event_type='Lock');`) === "t") return true;
+        await new Promise(resolve => setTimeout(resolve, 20));
+      }
+      return false;
+    };
+    await query(`insert into documents(id,org_id,user_id,project_id) values('${moving}','${org}','${seventh}','${unrelated}');`);
+    held = session();
+    held.write(`begin; update documents set project_id=null where id='${moving}';\n\\echo MOVED`);
+    await held.marker("MOVED");
+    const departure = query(`set application_name='${application}'; select remove_org_member('${org}','${seventh}','${owner}');`);
+    assert.ok(await waitingFor(), "departure waits for the in-flight move");
+    const reference = session();
+    let referenceOpen = true;
+    try {
+      reference.write(`begin; insert into chat_messages(chat_id,role,files) values('${chat}','user','[{"document_id":"${moving}"}]');\n\\echo LATE_REFERENCE`);
+      await reference.marker("LATE_REFERENCE");
+      held.end("commit;"); await held.done; held = null;
+      // Without the late fence the departure classifies (and archives) the
+      // document before this reference commits; with it, it waits here.
+      assert.ok(await waitingFor(), "a document made standalone in flight takes the reference fence after its row lock");
+      reference.end("commit;"); referenceOpen = false; await reference.done; await departure;
+    } finally {
+      if (referenceOpen) { reference.end("rollback;"); await reference.done.catch(() => {}); }
+    }
+    assert.equal(await query(`select archived_at is null and user_id='${owner}' from documents where id='${moving}';`), "t");
+  }
   console.log("Departure locks: unrelated roots stay unlocked; affected roots, grants and concurrent JSON references retain lifecycle protection.");
 } finally {
   if (held) { held.end("rollback;"); await held.done.catch(() => {}); }
-  await query(`delete from documents where org_id='${org}'; delete from tabular_reviews where org_id='${org}'; delete from chats where org_id='${org}'; delete from projects where org_id='${org}'; delete from organizations where id='${org}'; delete from auth.users where id in (${[owner,departing,second,remaining,third,fourth,fifth].map(id => `'${id}'`).join(",")});`);
+  await query(`delete from documents where org_id='${org}'; delete from tabular_reviews where org_id='${org}'; delete from chats where org_id='${org}'; delete from projects where org_id='${org}'; delete from organizations where id='${org}'; delete from auth.users where id in (${[owner,departing,second,remaining,third,fourth,fifth,sixth,seventh].map(id => `'${id}'`).join(",")});`);
 }

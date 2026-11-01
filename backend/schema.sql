@@ -11655,12 +11655,15 @@ begin
     -- also lock that membership. Keep the original table/id lock order.
     -- JSON document references do not acquire a document FK lock. A retained
     -- chat/review can therefore hold an uncommitted reference to departing
-    -- documents. Keep their historical broad fence whenever this actor has
-    -- owned documents; checking only currently active/standalone documents
-    -- would miss an in-flight restore or move. New document inserts
-    -- acquire the organization fence, so cannot appear behind this check.
+    -- documents. Only standalone documents (project_id and workflow_id null,
+    -- archived or not, so an in-flight restore is covered) can be departure
+    -- items, so only they need the broad fence over every chat and review.
+    -- Project/workflow documents follow their root. A document that becomes
+    -- standalone while this runs is caught by the re-check after its row lock
+    -- below. New document inserts acquire the organization fence, so cannot
+    -- appear behind either check.
     select exists(select 1 from public.documents
-      where org_id=old.org_id and user_id=old.user_id)
+      where org_id=old.org_id and user_id=old.user_id and project_id is null and workflow_id is null)
       into needs_reference_fence;
     perform root.id from public.projects root join (
       select id from public.projects where org_id=old.org_id and user_id=old.user_id
@@ -11690,6 +11693,15 @@ begin
       where root.org_id=old.org_id order by root.id for update of root;
     end if;
     perform id from public.documents where org_id=old.org_id and user_id=old.user_id order by id for update;
+    -- A move out of a project/workflow updates the document row, so any such
+    -- move that was in flight at the first check has now committed (or rolled
+    -- back) and no new one can start. If it made a document standalone, take
+    -- the broad fence now: this rare path locks chats/reviews after documents.
+    if not needs_reference_fence and exists(select 1 from public.documents
+      where org_id=old.org_id and user_id=old.user_id and project_id is null and workflow_id is null) then
+      perform id from public.chats where org_id=old.org_id order by id for update;
+      perform id from public.tabular_reviews where org_id=old.org_id order by id for update;
+    end if;
     -- Deleted organizations cannot transfer work. Archive every departure
     -- item so restoring the organization never exposes ownerless private work.
     select coalesce(jsonb_agg(to_jsonb(i) ||
@@ -12054,5 +12066,6 @@ insert into public.schema_migrations (filename) values
   ('20261101_05_member_list_candidates.sql'),
   ('20261101_06_departure_email_index_joins.sql'),
   ('20261101_07_document_reference_indexes.sql'),
-  ('20261101_08_departure_reverse_references.sql')
+  ('20261101_08_departure_reverse_references.sql'),
+  ('20261101_09_departure_fence_standalone_documents.sql')
 on conflict (filename) do nothing;
