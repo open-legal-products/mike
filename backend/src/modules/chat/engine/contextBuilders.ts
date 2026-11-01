@@ -1680,13 +1680,16 @@ export async function buildWorkflowStore(
   }
 
   // Keep catalog IDs readable for historical chat attachments, but do not
-  // expose them through list_workflows. Active versions sort first; inactive
-  // content-addressed versions remain available as a fallback.
+  // expose them through list_workflows. Only active versions are loaded per
+  // turn: replace_mike_workflows retires versions (active = false) without
+  // deleting them, so the full history — every prompt_md ever shipped —
+  // grows with each catalog sync. read_workflow resolves a retired id on
+  // demand (findCatalogWorkflow), the rare case that needs one.
   const { data: catalogWorkflows, error: catalogError } = await db
     .from("mike_workflows")
-    .select("workflow_key, title, prompt_md, active, updated_at")
+    .select("workflow_key, title, prompt_md, updated_at")
     .eq("type", "assistant")
-    .order("active", { ascending: false })
+    .eq("active", true)
     .order("updated_at", { ascending: false });
   if (catalogError) {
     const failure = new AppError(
@@ -1730,11 +1733,29 @@ export async function buildWorkflowStore(
     .filter(([, workflow]) => workflow.listed !== false)
     .map(([id]) => id);
   if (databaseWorkflowIds.length > 0) {
-    const { data: assetDocuments } = await db
-      .from("documents")
-      .select("id, workflow_id, current_version_id")
-      .in("workflow_id", databaseWorkflowIds);
-    const documents = (assetDocuments ?? []) as {
+    type AssetRow = { id: string; workflow_id: string; current_version_id: string | null; created_at?: string | null };
+    const assetDocuments = await selectInBatches<AssetRow>(
+      "workflow asset lookup",
+      databaseWorkflowIds,
+      (batch) =>
+        selectAllPages<AssetRow>("workflow asset lookup", (after, limit) => {
+          let query = db
+            .from("documents")
+            .select("id, workflow_id, current_version_id, created_at")
+            .in("workflow_id", batch)
+            .order("id", { ascending: true })
+            .limit(limit);
+          if (after) query = query.gt("id", after.id);
+          return query;
+        }),
+    );
+    // Asset handles are numbered by position; keep it upload order.
+    assetDocuments.sort(
+      (a, b) =>
+        String(a.created_at ?? "").localeCompare(String(b.created_at ?? "")) ||
+        a.id.localeCompare(b.id),
+    );
+    const documents = assetDocuments as {
       id: string;
       workflow_id: string;
       current_version_id: string | null;

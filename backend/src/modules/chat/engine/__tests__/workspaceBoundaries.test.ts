@@ -55,6 +55,23 @@ describe("assistant workspace boundaries", () => {
     fake.done();
   });
 
+  it("loads only active catalog versions per turn and resolves a retired one on demand", async () => {
+    const fake = scriptedDb([
+      { table: "mike_workflows", data: [] },
+      { rpc: "get_workflows_overview", data: [] },
+      { table: "mike_workflows", data: { workflow_key: "retired", type: "assistant", title: "Old", prompt_md: "Old steps" } },
+    ]);
+    const store = await buildWorkflowStore("u", "u@example.com", fake.db);
+    // Retired versions are never deleted, so an unfiltered read grows with
+    // every catalog sync and ships every historical prompt each turn.
+    expect(fake.calls[0].filters).toContainEqual(["eq", "active", true]);
+    const id = catalogWorkflowId("retired");
+    const result = await runToolCalls([{ id: "call", function: { name: "read_workflow", arguments: JSON.stringify({ workflow_id: id }) } }], new Map(), "u", fake.db, vi.fn(), store);
+    expect(result.workflowsApplied).toEqual([{ workflow_id: id, title: "Old" }]);
+    expect(store.get(id)?.listed).toBe(false);
+    fake.done();
+  });
+
   it("rechecks read_workflow before exposing cached instructions or assets", async () => {
     const workflows: WorkflowStore = new Map([["wf", { title: "Secret", skill_md: "Confidential instructions", assets: [{ asset_id: "doc", filename: "Secret.docx", file_type: "docx", storage_path: "secret" }] }]]);
     const fake = scriptedDb([{ table: "workflows", data: null }]);

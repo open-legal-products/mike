@@ -10,7 +10,7 @@ import {
   PlaybookRequestError,
   reviewWithPlaybook,
 } from "../../../playbooks/playbooks.service";
-import { catalogKeyFromWorkflowId } from "../../../../lib/workflowCatalog";
+import { catalogKeyFromWorkflowId, findCatalogWorkflow } from "../../../../lib/workflowCatalog";
 import { teamOrgIdOf } from "../../../../lib/personalOrgs";
 import type { ConnectorOwner } from "../../../../lib/connectorOwner";
 import {
@@ -1084,6 +1084,14 @@ export async function runToolCalls(
       });
     } else if (tc.function.name === "read_workflow") {
       const wfId = args.workflow_id as string;
+      // Turn setup loads only active catalog versions; a historical chat
+      // can still name a retired one, which is looked up on demand.
+      if (workflowStore && !workflowStore.has(wfId) && catalogKeyFromWorkflowId(wfId)) {
+        const retired = await findCatalogWorkflow(wfId, db).catch(() => null);
+        if (retired?.type === "assistant" && retired.prompt_md) {
+          workflowStore.set(wfId, { title: retired.title, skill_md: retired.prompt_md, listed: false });
+        }
+      }
       const candidate = workflowStore?.get(wfId);
       const allowed = candidate && (
         catalogKeyFromWorkflowId(wfId) !== null ||
