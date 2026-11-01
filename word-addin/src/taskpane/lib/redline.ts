@@ -60,6 +60,41 @@ function normalizeVisibleProse(value: string): string {
   return value.replace(/\n{3,}/g, "\n\n").trim();
 }
 
+/**
+ * normalizeVisibleProse over a growing text, maintained in O(appended).
+ *
+ * Normalization only collapses newline runs and trims the ends, so text up to
+ * the last non-whitespace character can never change once seen: a newline
+ * run cannot cross a non-whitespace character, and trailing whitespace is
+ * always trimmed away. Each character is examined once.
+ */
+function createProseNormalizer(start: number) {
+  let committed = start;
+  let scanned = start;
+  let value = "";
+  let examined = 0;
+  return {
+    get examined() { return examined; },
+    /** normalizeVisibleProse(text.slice(start, end)); text and end only grow. */
+    feed(text: string, end: number): string {
+      // Callers only ever extend `end` (a held-back partial tag start never
+      // moves left); recompute rather than corrupt the cache if one did.
+      if (end < scanned) return normalizeVisibleProse(text.slice(start, end));
+      let lastVisible = -1;
+      for (; scanned < end; scanned++) {
+        examined++;
+        if (!/\s/.test(text[scanned]!)) lastVisible = scanned;
+      }
+      if (lastVisible >= committed) {
+        const piece = text.slice(committed, lastVisible + 1).replace(/\n{3,}/g, "\n\n");
+        value = value ? value + piece : piece.trimStart();
+        committed = lastVisible + 1;
+      }
+      return value;
+    },
+  };
+}
+
 function partialTagStartAtEnd(text: string, tag: string): number {
   const lower = text.slice(-(tag.length - 1)).toLowerCase();
   for (let length = tag.length - 1; length >= 1; length -= 1) {
@@ -321,6 +356,12 @@ export function createRedlineStreamProjector() {
   const originals = new Set<string>();
   let projection = projectPlainStream("");
   let scannedCharacters = 0;
+  // Prose before <edits> (or the whole answer when there is none) and prose
+  // after </edits> are normalized incrementally: re-normalizing the whole
+  // answer per SSE chunk made every prose stream O(n²).
+  const leadingProse = createProseNormalizer(0);
+  let trailingProse: ReturnType<typeof createProseNormalizer> | null = null;
+  let suffixLength = 0;
 
   function snapshot(incomplete: boolean): RedlineStreamProjection {
     const visibleEdits = [...edits];
@@ -336,22 +377,38 @@ export function createRedlineStreamProjector() {
   }
   return {
     get projection() { return projection; },
-    get scannedCharacters() { return scannedCharacters; },
+    get scannedCharacters() { return scannedCharacters + leadingProse.examined + (trailingProse?.examined ?? 0); },
     append(delta: string): RedlineStreamProjection {
       const previousLength = text.length;
       text += delta;
       if (closed) {
-        const suffix = normalizeVisibleProse(text.slice(suffixStart));
+        const suffix = trailingProse!.feed(text, text.length);
+        // Unchanged visible prose keeps the same snapshot, so frame readers
+        // can short-circuit on identity.
+        if (suffix.length === suffixLength) return projection;
+        suffixLength = suffix.length;
+        // Both halves are already normalized (trimmed, no newline runs), so
+        // joining them needs no second normalization pass.
         return projection = { ...projection,
-          visibleProse: normalizeVisibleProse([prefix, suffix].filter(Boolean).join("\n\n")),
+          visibleProse: prefix && suffix ? `${prefix}\n\n${suffix}` : prefix || suffix,
           segments: [...closedSegments, ...(suffix ? [{ kind: "prose" as const, text: suffix }] : [])],
         };
       }
       if (open < 0) {
         const start = Math.max(0, previousLength - JSON_EDITS_OPEN.length + 1);
         const found = text.slice(start).toLowerCase().indexOf(JSON_EDITS_OPEN);
-        if (found < 0) return projection = partialTagStartAtEnd(text, JSON_EDITS_OPEN) >= 0
-          ? projectJsonEditsStream(text) : projectPlainStream(text);
+        if (found < 0) {
+          // A trailing "<", "<ed", ... may become the protocol tag: hold it
+          // back from the visible prose, exactly as projectJsonEditsStream does.
+          const partialStart = partialTagStartAtEnd(text, JSON_EDITS_OPEN);
+          const protocolStarted = partialStart >= 0;
+          const visibleProse = leadingProse.feed(text, protocolStarted ? partialStart : text.length);
+          if (projection.visibleProse.length === visibleProse.length && projection.protocolStarted === protocolStarted) return projection;
+          return projection = {
+            visibleProse, edits: [], safeEdits: [], blockCount: 0, protocolStarted,
+            segments: visibleProse ? [{ kind: "prose", text: visibleProse }] : [],
+          };
+        }
         open = start + found;
         prefix = normalizeVisibleProse(text.slice(0, open));
         cursor = open + JSON_EDITS_OPEN.length;
@@ -364,7 +421,9 @@ export function createRedlineStreamProjector() {
         // One final parse preserves validation of the entire array, including
         // malformed/non-object entries that the streaming scanner won't seal.
         projection = projectJsonEditsStream(text);
-        const hasSuffix = !!normalizeVisibleProse(text.slice(suffixStart));
+        trailingProse = createProseNormalizer(suffixStart);
+        suffixLength = trailingProse.feed(text, text.length).length;
+        const hasSuffix = suffixLength > 0;
         closedSegments = hasSuffix ? projection.segments.slice(0, -1) : projection.segments;
         return projection;
       }

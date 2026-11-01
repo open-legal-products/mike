@@ -9,6 +9,8 @@ describe("incremental Word redline projection", () => {
     `<edits>[${JSON.stringify({ ...edit, inserted_text: 'quote " \\ brace }' })}, ${JSON.stringify({ ...edit, deleted_text: "other" })}]</edits>`,
     `<edits>[${JSON.stringify(edit)}, ${JSON.stringify(edit)}, {"broken":true}]</edits>`,
     `<edits>[1, false, ${JSON.stringify(edit)}]</edits>`,
+    "  Plain answer\n\n\n\nwith a <b> tag, a stray <e and <edit\n\n\n",
+    `Lead\n\n\n<edits>[${JSON.stringify(edit)}]</edits>\n\n\n\nTrailing  prose\n\n\n\nmore\n`,
   ])("matches the complete parser at every byte boundary: %s", text => {
     const parser = createRedlineStreamProjector();
     for (let i = 0; i < text.length; i++) expect(parser.append(text[i])).toEqual(projectRedlineStream(text.slice(0, i + 1)));
@@ -23,6 +25,22 @@ describe("incremental Word redline projection", () => {
       const after = parser.append('"},');
       expect(after.edits[0]?.sealed).toBe(true);
       expect(before.edits[0]?.sealed).toBe(false);
+    }
+  });
+  it("examines streamed prose once and keeps the snapshot while nothing visible changes", () => {
+    for (const [lead, n] of [["", 400], ["", 800], [`Intro <edits>[${JSON.stringify(edit)}]</edits>`, 400], [`Intro <edits>[${JSON.stringify(edit)}]</edits>`, 800]] as const) {
+      const parser = createRedlineStreamProjector();
+      parser.append(lead);
+      const initial = parser.scannedCharacters;
+      let text = lead;
+      for (let i = 0; i < n; i++) {
+        text += "word ";
+        expect(parser.append("word ")).toEqual(projectRedlineStream(text));
+        const visible = parser.projection;
+        expect(parser.append("\n")).toBe(visible);
+        text += "\n";
+      }
+      expect(parser.scannedCharacters - initial).toBe(n * 6);
     }
   });
 });
