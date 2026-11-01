@@ -11957,5 +11957,6 @@ insert into public.schema_migrations (filename) values
   ('20261030_10_audit_distinct_resource_verdicts.sql'),
   ('20261030_11_departure_affected_root_locks.sql'),
   ('20261030_20_project_directory_page_first.sql'),
-  ('20261030_21_project_participation_before_page.sql')
+  ('20261030_21_project_participation_before_page.sql'),
+  ('20261101_01_list_candidate_indexes_online.sql')
 on conflict (filename) do nothing;

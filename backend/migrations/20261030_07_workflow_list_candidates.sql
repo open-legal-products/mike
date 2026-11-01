@@ -1,5 +1,5 @@
 -- Migration date: 2026-10-30
-create index if not exists workflow_shares_lower_email_idx on public.workflow_shares(lower(shared_with_email));
+-- Its supporting index is built by 20261101_01 without a write lock.
 create or replace function public.workflow_list_access(p_user_id text,p_user_email text,p_workspace text default null)
 returns table(workflow_id uuid,role text) language sql stable set search_path=public,pg_temp as $$
   with actor as materialized (
