@@ -3,10 +3,13 @@ import type { PersistedWordEditPatch } from "./wordChatTypes";
 import { notifyWordChatHistoryChanged } from "./wordChatHistoryEvents";
 
 const DATABASE_NAME = "mike-word-addin";
-const DATABASE_VERSION = 4;
+// 5: word-chats gains the recency index history pages walk.
+const DATABASE_VERSION = 5;
 const CHAT_STORE = "word-chats";
 const MESSAGE_STORE = "word-chat-messages";
 const EDIT_STORE = "word-document-edits";
+const CHAT_RECENCY_INDEX = "owner_document_updated";
+const CHAT_RECENCY_KEY = ["owner_id", "document_id", "updated_at"];
 
 interface LocalChatRow extends Chat {
   document_id: string;
@@ -73,10 +76,20 @@ function openDatabase(): Promise<IDBDatabase> {
         chats.createIndex("owner_document", ["owner_id", "document_id"], {
           unique: false,
         });
+        chats.createIndex(CHAT_RECENCY_INDEX, CHAT_RECENCY_KEY, {
+          unique: false,
+        });
       } else {
         const chats = request.transaction?.objectStore(CHAT_STORE);
         if (chats && !chats.indexNames.contains("owner_document")) {
           chats.createIndex("owner_document", ["owner_id", "document_id"], {
+            unique: false,
+          });
+        }
+        // createIndex on an existing store indexes the rows already in it,
+        // inside this upgrade transaction.
+        if (chats && !chats.indexNames.contains(CHAT_RECENCY_INDEX)) {
+          chats.createIndex(CHAT_RECENCY_INDEX, CHAT_RECENCY_KEY, {
             unique: false,
           });
         }
@@ -418,14 +431,40 @@ export async function listLocalWordChats(
   const database = await openDatabase();
   try {
     const transaction = database.transaction(CHAT_STORE, "readonly");
-    const index = transaction.objectStore(CHAT_STORE).index("owner_document");
-    const rows = (await requestResult(
-      index.getAll(IDBKeyRange.only([ownerId, documentId])),
-    )) as LocalChatRow[];
+    const index = transaction.objectStore(CHAT_STORE).index(CHAT_RECENCY_INDEX);
+    // Walk this document's chats newest first and read only the page:
+    // advance() skips earlier pages without cloning them. Loading and
+    // sorting every chat per page made scrolling the history O(C^2 / page).
+    // [owner, document] sorts below every [owner, document, updated_at] and
+    // an array sorts above every string, so this range is exactly the
+    // document's chats.
+    const range = IDBKeyRange.bound(
+      [ownerId, documentId],
+      [ownerId, documentId, []],
+    );
+    const rows: LocalChatRow[] = [];
+    if (limit > 0) {
+      await new Promise<void>((resolve, reject) => {
+        const request = index.openCursor(range, "prev");
+        let skipped = offset === 0;
+        request.onerror = () =>
+          reject(request.error ?? new Error("IndexedDB request failed."));
+        request.onsuccess = () => {
+          const cursor = request.result;
+          if (!cursor) return resolve();
+          if (!skipped) {
+            skipped = true;
+            cursor.advance(offset);
+            return;
+          }
+          rows.push(cursor.value as LocalChatRow);
+          if (rows.length >= limit) return resolve();
+          cursor.continue();
+        };
+      });
+    }
     await transactionDone(transaction);
-    return rows
-      .sort((left, right) => right.updated_at.localeCompare(left.updated_at))
-      .slice(offset, offset + limit);
+    return rows;
   } finally {
     database.close();
   }

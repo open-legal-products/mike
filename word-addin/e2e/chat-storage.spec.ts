@@ -598,3 +598,58 @@ test("saving into a long device-only chat does not re-read its messages", async 
   await page.getByRole("menu").getByRole("menuitem", { name: /Start the thread/ }).click();
   await expect(page.getByTestId("user-message-content").last()).toHaveText("Latest question");
 });
+
+test("device-only history pages read one page from an upgraded database", async ({ addin, page }) => {
+  await countIndexedDbReads(page);
+  await addin.mockChatStream(["Noted."]);
+  await sendLocally(addin, page, "Newest question", "The Supplier shall deliver the goods.");
+  const chat = await firstLocalChat(page);
+  // Recreate the database exactly as schema version 4 left it, with 25 older
+  // chats, so the pane must upgrade it in place on the next load.
+  await page.evaluate(({ current, olderCount }) => new Promise<void>((resolve, reject) => {
+    const deletion = indexedDB.deleteDatabase("mike-word-addin");
+    deletion.onerror = () => reject(deletion.error);
+    deletion.onsuccess = () => {
+      const open = indexedDB.open("mike-word-addin", 4);
+      open.onupgradeneeded = () => {
+        const database = open.result;
+        const chats = database.createObjectStore("word-chats", { keyPath: "id" });
+        chats.createIndex("document_id", "document_id", { unique: false });
+        chats.createIndex("owner_document", ["owner_id", "document_id"], { unique: false });
+        database.createObjectStore("word-chat-messages", { keyPath: "id" }).createIndex("chat_id", "chat_id", { unique: false });
+        const edits = database.createObjectStore("word-document-edits", { keyPath: "id" });
+        edits.createIndex("message_id", "messageId", { unique: false });
+        edits.createIndex("owner_document", ["owner_id", "document_id"], { unique: false });
+      };
+      open.onerror = () => reject(open.error);
+      open.onsuccess = () => {
+        const transaction = open.result.transaction("word-chats", "readwrite");
+        const store = transaction.objectStore("word-chats");
+        store.put(current);
+        for (let i = 0; i < olderCount; i++) {
+          store.put({ ...current, id: `older-${i}`, title: `Older chat ${i}`, updated_at: `2020-01-01T00:00:${String(i).padStart(2, "0")}.000Z` });
+        }
+        transaction.oncomplete = () => { open.result.close(); resolve(); };
+      };
+    };
+  }), { current: chat, olderCount: 25 });
+
+  // The reload resets the read counters; the history list loads on mount.
+  await addin.reloadTaskpane();
+  await page.getByRole("button", { name: "Chat history" }).click();
+  const list = page.getByTestId("chat-history-list-10");
+  const expected = ["Newest question", ...Array.from({ length: 19 }, (_, i) => `Older chat ${24 - i}`)];
+  await expect(list.getByRole("menuitem")).toHaveCount(10);
+  // One page is pageSize + 1 rows (the extra one only answers "has more").
+  expect(await idbReads(page, "word-chats")).toBe(11);
+  await list.evaluate((element) => {
+    element.scrollTop = element.scrollHeight;
+    element.dispatchEvent(new Event("scroll"));
+  });
+  await expect(list.getByRole("menuitem")).toHaveCount(20);
+  expect(await list.getByRole("menuitem").evaluateAll((items) => items.map((item) => item.textContent ?? ""))).toEqual(
+    expected.map((title) => expect.stringContaining(title)),
+  );
+  // Page two: the cursor's first step, then advance() past page one unread.
+  expect(await idbReads(page, "word-chats")).toBe(11 + 1 + 11);
+});
