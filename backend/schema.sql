@@ -11562,13 +11562,23 @@ begin
       count(*) filter(where t.status='failed') failed_versions,
       count(*) filter(where t.status is null or t.status in ('pending','processing')) pending_versions,
       count(*) filter(where t.status='ready' and t.textless_page_count>0) versions_needing_ocr
-    from eligible e left join public.document_version_texts t
-      on t.version_id=e.version_id and t.source_revision=e.text_revision and t.extractor_version=1
+    -- Each eligible version's text is one primary-key probe (OFFSET 0 keeps
+    -- the subquery from being flattened). Joined freely, a reused generic
+    -- plan scanned the text table, or its trigram index, across all tenants.
+    from eligible e left join lateral (
+      select item.status,item.textless_page_count from public.document_version_texts item
+      where item.version_id=e.version_id and item.source_revision=e.text_revision and item.extractor_version=1
+      offset 0
+    ) t on true
   ), hits as (
     select e.*,t.text_content,strpos(lower(t.text_content),lower(p_query)) pos
-    from public.document_version_texts t join eligible e on e.version_id=t.version_id and e.text_revision=t.source_revision
-    where t.status='ready' and t.extractor_version=1 and lower(t.text_content) like
-      '%'||replace(replace(replace(lower(p_query),'\','\\'),'%','\%'),'_','\_')||'%' escape '\'
+    from eligible e cross join lateral (
+      select item.text_content from public.document_version_texts item
+      where item.version_id=e.version_id and item.source_revision=e.text_revision
+        and item.status='ready' and item.extractor_version=1 and lower(item.text_content) like
+          '%'||replace(replace(replace(lower(p_query),'\','\\'),'%','\%'),'_','\_')||'%' escape '\'
+      offset 0
+    ) t
     order by e.document_id,e.version_id limit page_limit+1 offset p_offset
   ), page as (
     select * from hits order by document_id,version_id limit page_limit
@@ -12108,5 +12118,6 @@ insert into public.schema_migrations (filename) values
   ('20261101_09_departure_fence_standalone_documents.sql'),
   ('20261101_10_private_document_access_anchored.sql'),
   ('20261101_11_audit_page_event_lookup.sql'),
-  ('20261101_12_overview_counts_after_page.sql')
+  ('20261101_12_overview_counts_after_page.sql'),
+  ('20261101_13_document_text_search_per_version.sql')
 on conflict (filename) do nothing;
