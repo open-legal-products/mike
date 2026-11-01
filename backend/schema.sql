@@ -8356,7 +8356,7 @@ as $$
     when not public.org_is_active(p_org_id) then null
     when not exists (
       select 1 from public.org_members m
-      where m.org_id = p_org_id and m.user_id::text = p_user_id
+      where m.org_id = p_org_id and m.user_id = (case when p_user_id ~ '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$' then p_user_id::uuid end)
     ) then null
     when p_creator_id::text = p_user_id then 'owner'
     else p_grant_role
@@ -8946,7 +8946,7 @@ as $$
         on o.project_id = p_project_id
        and o.org_id = p_org_id
        and o.user_id = m.user_id
-      where m.org_id = p_org_id and m.user_id::text = p_user_id
+      where m.org_id = p_org_id and m.user_id = (case when p_user_id ~ '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$' then p_user_id::uuid end)
     )
     when p_project_user_id::text = p_user_id then 'owner'
     else (
@@ -9000,7 +9000,7 @@ as $$
         on o.workflow_id = p_workflow_id
        and o.org_id = p_org_id
        and o.user_id = m.user_id
-      where m.org_id = p_org_id and m.user_id::text = p_user_id
+      where m.org_id = p_org_id and m.user_id = (case when p_user_id ~ '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$' then p_user_id::uuid end)
     )
     when p_workflow_user_id::text = p_user_id then 'owner'
     else (
@@ -9812,7 +9812,7 @@ returns boolean language sql stable set search_path=public,pg_temp as $$
         when d.project_id is not null then public.project_access_role(p.id,p.user_id,p.org_id,p_user_id,p_user_email) is not null
         when d.workflow_id is not null then public.workflow_access_role(w.id,w.user_id,w.org_id,p_user_id,p_user_email) is not null
         else (d.user_id::text=p_user_id and (d.org_id is null or exists(
-          select 1 from public.org_members m where m.org_id=d.org_id and m.user_id::text=p_user_id)))
+          select 1 from public.org_members m where m.org_id=d.org_id and m.user_id=(case when p_user_id ~ '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$' then p_user_id::uuid end))))
           or public.org_private_document_access(d.org_id,d.id,p_user_id)
       end);
 $$;
@@ -11992,5 +11992,6 @@ insert into public.schema_migrations (filename) values
   ('20261030_20_project_directory_page_first.sql'),
   ('20261030_21_project_participation_before_page.sql'),
   ('20261101_01_list_candidate_indexes_online.sql'),
-  ('20261101_02_foreign_key_indexes.sql')
+  ('20261101_02_foreign_key_indexes.sql'),
+  ('20261101_03_member_lookup_by_uuid.sql')
 on conflict (filename) do nothing;
