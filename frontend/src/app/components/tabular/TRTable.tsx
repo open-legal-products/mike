@@ -36,6 +36,7 @@ import {
     LIQUID_GLASS_GROUP_HOVER_CLASS,
     LIQUID_GLASS_HOVER_CLASS,
 } from "@/app/components/ui/liquid-surface";
+import { useIdSet } from "@/app/hooks/useIdSet";
 
 const SKELETON_COLS = 4;
 const SKELETON_ROWS = 5;
@@ -131,7 +132,7 @@ export const TRTable = forwardRef<TRTableHandle, Props>(function TRTable(
     const columnPositions = useMemo(() => new Map(sortedColumns.map((column, index) => [column.index, index])), [sortedColumns]);
     const documentsById = useMemo(() => new Map(documents.map((document) => [document.id, document])), [documents]);
     const cellsByRow = useMemo(() => indexReviewCells(cells), [cells]);
-    const selectedRows = useMemo(() => new Set(selectedRowIds), [selectedRowIds]);
+    const selectedRows = useIdSet(selectedRowIds);
     const firstColumnLabel =
         documentGrouping === "folder" ? "Folder / Document" : "Document";
     const totalContentWidth =
