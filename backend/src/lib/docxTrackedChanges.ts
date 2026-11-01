@@ -552,9 +552,15 @@ function normalizeWs(input: string): Normalized {
 /**
  * Locate the unique position in `hayNorm` where `findNorm` appears AND is
  * preceded by `ctxBeforeNorm` AND followed by `ctxAfterNorm`. The context
- * check uses direct string-slice equality rather than concatenation so
- * boundary-whitespace collapsing doesn't matter. Returns the normalized
- * [start, end) range of the `find` portion, or a structured error.
+ * check compares in place (`startsWith` at an offset) rather than against a
+ * concatenation, so boundary-whitespace collapsing doesn't matter, and never
+ * copies a substring. Returns the normalized [start, end) range of the
+ * `find` portion, or a structured error.
+ *
+ * Candidates always come from `indexOf` on a non-empty needle: `findNorm`
+ * itself, or — for a pure insertion, where `findNorm` is empty — whichever
+ * context side is present. Scanning stops at the second candidate because
+ * the verdict is already "ambiguous".
  */
 function findUniqueAnchor(
     hayNorm: string,
@@ -562,43 +568,50 @@ function findUniqueAnchor(
     ctxBeforeNorm: string,
     ctxAfterNorm: string,
 ): { start: number; end: number } | { error: "none" | "ambiguous" } {
-    const candidates: number[] = [];
-
     const checkCtx = (pos: number): boolean => {
         if (ctxBeforeNorm) {
             const start = pos - ctxBeforeNorm.length;
-            if (start < 0) return false;
-            if (hayNorm.slice(start, pos) !== ctxBeforeNorm) return false;
-        }
-        if (ctxAfterNorm) {
-            const end = pos + findNorm.length;
-            if (hayNorm.slice(end, end + ctxAfterNorm.length) !== ctxAfterNorm)
+            if (start < 0 || !hayNorm.startsWith(ctxBeforeNorm, start))
                 return false;
         }
+        if (ctxAfterNorm && !hayNorm.startsWith(ctxAfterNorm, pos + findNorm.length))
+            return false;
         return true;
     };
 
-    if (findNorm.length === 0) {
-        // Pure insertion — scan every position
-        for (let i = 0; i <= hayNorm.length; i++) {
-            if (checkCtx(i)) candidates.push(i);
-        }
-    } else {
-        let from = 0;
-        while (from <= hayNorm.length - findNorm.length) {
-            const idx = hayNorm.indexOf(findNorm, from);
-            if (idx < 0) break;
-            if (checkCtx(idx)) candidates.push(idx);
-            from = idx + 1;
+    // The needle that drives the scan and how far a hit at `idx` sits from
+    // the anchor position it implies.
+    let needle = findNorm;
+    let shift = 0;
+    if (!needle) {
+        if (ctxBeforeNorm) {
+            needle = ctxBeforeNorm;
+            shift = ctxBeforeNorm.length;
+        } else if (ctxAfterNorm) {
+            needle = ctxAfterNorm;
+        } else {
+            // Empty find, no context: every one of the hay.length + 1
+            // positions matches, so only an empty paragraph is unique.
+            return hayNorm.length === 0
+                ? { start: 0, end: 0 }
+                : { error: "ambiguous" };
         }
     }
 
-    if (candidates.length === 0) return { error: "none" };
-    if (candidates.length > 1) return { error: "ambiguous" };
-    return {
-        start: candidates[0],
-        end: candidates[0] + findNorm.length,
-    };
+    let found = -1;
+    for (let from = 0; ; ) {
+        const idx = hayNorm.indexOf(needle, from);
+        if (idx < 0) break;
+        const pos = idx + shift;
+        if (checkCtx(pos)) {
+            if (found >= 0) return { error: "ambiguous" };
+            found = pos;
+        }
+        from = idx + 1;
+    }
+
+    if (found < 0) return { error: "none" };
+    return { start: found, end: found + findNorm.length };
 }
 
 /** Map a normalized [start, end) range back to the original string range. */
