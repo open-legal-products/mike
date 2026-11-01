@@ -25,3 +25,10 @@ export function appendMissingById<T extends Identified>(
     const missing = missingById(existing, incoming);
     return missing.length === 0 ? existing : [...existing, ...missing];
 }
+
+/** One id lookup per list, built once per change instead of a `find` per id. */
+export function indexById<T extends Identified>(
+    items: readonly T[],
+): Map<string, T> {
+    return new Map(items.map((item) => [item.id, item]));
+}

@@ -96,10 +96,11 @@ import {
     type DocumentUploadProgressEntry,
 } from "@/app/lib/documentDirectoryUpload";
 import { settleWithConcurrency } from "@/shared/lib/settleWithConcurrency";
-import { appendMissingById } from "@/app/lib/idCollections";
+import { appendMissingById, indexById } from "@/app/lib/idCollections";
 import {
     collectionRowKeysInVisualOrder,
     collectionSelectAllState,
+    folderAncestorIds,
     folderSelectionRootIds,
     folderTreeIds as collectFolderTreeIds,
     MULTI_DOCUMENT_DRAG_TYPE,
@@ -941,6 +942,8 @@ export function DocTable({
 
     const foldersRef = useRef(folders);
     foldersRef.current = folders;
+    const folderById = useMemo(() => indexById(folders), [folders]);
+    const documentById = useMemo(() => indexById(documents), [documents]);
     const viewedFolderIdRef = useRef(viewedFolderId);
     viewedFolderIdRef.current = viewedFolderId;
     const onFolderViewIdChangeRef = useRef(onFolderViewIdChange);
@@ -994,22 +997,23 @@ export function DocTable({
     const folderPathRef = useRef<DocTableFolder[]>([]);
     const folderPathKey = useMemo(() => {
         const path: DocTableFolder[] = [];
+        const visited = new Set<string>();
         let current = viewedFolderId
-            ? folders.find((folder) => folder.id === viewedFolderId)
+            ? folderById.get(viewedFolderId)
             : undefined;
-        while (current) {
-            path.unshift(current);
+        while (current && !visited.has(current.id)) {
+            visited.add(current.id);
+            path.push(current);
             current = current.parent_folder_id
-                ? folders.find(
-                      (folder) => folder.id === current?.parent_folder_id,
-                )
+                ? folderById.get(current.parent_folder_id)
                 : undefined;
         }
+        path.reverse();
         folderPathRef.current = path;
         return JSON.stringify(
             path.map((folder) => [folder.id, folder.name]),
         );
-    }, [folders, viewedFolderId]);
+    }, [folderById, viewedFolderId]);
 
     useEffect(() => {
         onFolderViewChange?.(
@@ -1554,13 +1558,7 @@ export function DocTable({
 
     function wouldCreateCycle(movingId: string, targetId: string): boolean {
         // Returns true if targetId is movingId or a descendant of it
-        let cur: DocTableFolder | undefined = folders.find((f) => f.id === targetId);
-        while (cur) {
-            if (cur.id === movingId) return true;
-            if (!cur.parent_folder_id) break;
-            cur = folders.find((f) => f.id === cur!.parent_folder_id);
-        }
-        return false;
+        return folderAncestorIds([targetId], folderById).has(movingId);
     }
 
     // A catalog accepts no drops and starts no drags, so every payload check
@@ -2174,7 +2172,7 @@ export function DocTable({
         const subFolderId = dt.getData("application/mike-folder");
         if (docIds.length > 0) {
             const movingIds = docIds.filter((id) => {
-                const doc = documents.find((candidate) => candidate.id === id);
+                const doc = documentById.get(id);
                 return doc && (doc.folder_id ?? null) !== targetFolderId;
             });
             if (movingIds.length === 0) return;
@@ -2189,7 +2187,7 @@ export function DocTable({
             )
                 return;
             if (targetFolderId !== null && wouldCreateCycle(subFolderId, targetFolderId)) return;
-            const folder = folders.find((f) => f.id === subFolderId);
+            const folder = folderById.get(subFolderId);
             if (!folder || (folder.parent_folder_id ?? null) === targetFolderId) return;
             const updatedAt = new Date().toISOString();
             setFolders((prev) =>
@@ -2469,18 +2467,10 @@ export function DocTable({
      * user actually deselected lose their checkmark.
      */
     function clearSelectedFolderAncestors(documentIds: readonly string[]) {
-        const ancestorIds = new Set<string>();
-        for (const documentId of documentIds) {
-            let currentId: string | null =
-                docs.find((candidate) => candidate.id === documentId)
-                    ?.folder_id ?? null;
-            while (currentId && !ancestorIds.has(currentId)) {
-                ancestorIds.add(currentId);
-                currentId =
-                    folders.find((folder) => folder.id === currentId)
-                        ?.parent_folder_id ?? null;
-            }
-        }
+        const ancestorIds = folderAncestorIds(
+            documentIds.map((documentId) => docById.get(documentId)?.folder_id),
+            folderById,
+        );
         if (ancestorIds.size === 0) return;
 
         const nextFolderIds = new Set(selectedFolderIds);
@@ -3247,6 +3237,10 @@ export function DocTable({
     // ── Loading skeleton ──────────────────────────────────────────────────────
 
     const docs = serverDocuments ?? documents;
+    const docById = useMemo(
+        () => (docs === documents ? documentById : indexById(docs)),
+        [docs, documents, documentById],
+    );
     const downloadDoc = useCallback(async (docId: string) => {
         const { url, filename } = catalog
             ? catalog.resolveDocumentUrl(docId)
@@ -3406,7 +3400,7 @@ export function DocTable({
         if (failedIds.length === 0) return;
         await operations.refreshCollection().catch(() => undefined);
         const failedNames = snapshot
-            .filter((doc) => failedIds.includes(doc.id))
+            .filter((doc) => failedIdSet.has(doc.id))
             .map((doc) => doc.filename);
         const one = failedIds.length === 1;
         const where =
@@ -3441,14 +3435,14 @@ export function DocTable({
             return;
         await removeDocsFromFolder(
             selectedStandaloneDocIds.filter(
-                (id) => docs.find((d) => d.id === id)?.folder_id != null,
+                (id) => docById.get(id)?.folder_id != null,
             ),
         );
-    }, [docs, removeDocsFromFolder, requireCapability, selectedStandaloneDocIds]);
+    }, [docById, removeDocsFromFolder, requireCapability, selectedStandaloneDocIds]);
 
     const deleteDocumentIds = useCallback(async (ids: string[]) => {
         const owned = ids.filter((id) => {
-            const doc = documents.find((candidate) => candidate.id === id);
+            const doc = documentById.get(id);
             // A row we can see is judged on its uploader, both halves known.
             // A row we cannot see is left to the server, and deliberately so:
             // unlike project delete — where an admin's sweep really could
@@ -3462,8 +3456,9 @@ export function DocTable({
         });
         const blocked = ids.length - owned.length;
         const snapshot = docs;
+        const ownedIds = new Set(owned);
         setDocuments((current) =>
-            current.filter((doc) => !owned.includes(doc.id)),
+            current.filter((doc) => !ownedIds.has(doc.id)),
         );
         let deletedIds: string[] = [];
         if (operations.bulkDeleteDocuments) {
@@ -3482,7 +3477,8 @@ export function DocTable({
             deletedIds = (await settleBulkRequests(owned, deleteDocument))
                 .succeeded;
         }
-        const failedIds = owned.filter((id) => !deletedIds.includes(id));
+        const deletedIdSet = new Set(deletedIds);
+        const failedIds = owned.filter((id) => !deletedIdSet.has(id));
         const failedCount = failedIds.length;
         if (failedIds.length > 0) {
             setDocuments((current) =>
@@ -3503,8 +3499,9 @@ export function DocTable({
             });
         }
         if (failedCount > 0) {
+            const failedIdSet = new Set(failedIds);
             const failedNames = snapshot
-                .filter((doc) => failedIds.includes(doc.id))
+                .filter((doc) => failedIdSet.has(doc.id))
                 .map((doc) => doc.filename);
             notifyPartialFailure(
                 `${failedCount} ${failedCount === 1 ? "document" : "documents"} could not be deleted${
@@ -3534,7 +3531,7 @@ export function DocTable({
     }, [
         canDeleteDocument,
         docs,
-        documents,
+        documentById,
         operations,
         setDocuments,
         setOwnerOnlyAction,
@@ -4126,7 +4123,7 @@ export function DocTable({
                     onDownload={handleDownloadSelectedDocs}
                     onRemoveFromFolder={
                         selectedStandaloneDocIds.some(
-                            (id) => docs.find((doc) => doc.id === id)?.folder_id,
+                            (id) => docById.get(id)?.folder_id,
                         )
                             ? () => void handleRemoveSelectedFromFolder()
                             : undefined

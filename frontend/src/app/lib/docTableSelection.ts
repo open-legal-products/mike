@@ -129,3 +129,23 @@ export function collectionRowKeysInVisualOrder(
         .map((row) => row.key)
         .filter((key): key is string => !!key);
 }
+
+/**
+ * The given folders and every folder above them. Each step is a Map lookup,
+ * and a folder already collected stops the walk, so shared ancestors are
+ * visited once and a corrupt parent cycle cannot loop forever.
+ */
+export function folderAncestorIds(
+    startIds: Iterable<string | null | undefined>,
+    folderById: ReadonlyMap<string, FolderNode>,
+): Set<string> {
+    const result = new Set<string>();
+    for (const startId of startIds) {
+        let currentId = startId ?? null;
+        while (currentId && !result.has(currentId)) {
+            result.add(currentId);
+            currentId = folderById.get(currentId)?.parent_folder_id ?? null;
+        }
+    }
+    return result;
+}
