@@ -98,6 +98,7 @@ import {
 import { settleWithConcurrency } from "@/shared/lib/settleWithConcurrency";
 import { appendMissingById } from "@/app/lib/idCollections";
 import {
+    collectionRowKeysInVisualOrder,
     collectionSelectAllState,
     folderSelectionRootIds,
     folderTreeIds as collectFolderTreeIds,
@@ -2508,24 +2509,13 @@ export function DocTable({
     }
 
     function visibleCollectionRowKeys(): string[] {
-        const rows = Array.from(
-            tableRootRef.current?.querySelectorAll<HTMLElement>(
-                "[data-collection-row-key]",
-            ) ?? [],
+        return collectionRowKeysInVisualOrder(
+            Array.from(
+                tableRootRef.current?.querySelectorAll<HTMLElement>(
+                    "[data-collection-row-key]",
+                ) ?? [],
+            ),
         );
-        rows.sort((left, right) => {
-            const topDifference =
-                left.getBoundingClientRect().top -
-                right.getBoundingClientRect().top;
-            if (topDifference !== 0) return topDifference;
-            return left.compareDocumentPosition(right) &
-                Node.DOCUMENT_POSITION_PRECEDING
-                ? 1
-                : -1;
-        });
-        return rows
-            .map((row) => row.dataset.collectionRowKey)
-            .filter((key): key is string => !!key);
     }
 
     function updateCollectionRowSelection(

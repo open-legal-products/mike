@@ -109,3 +109,23 @@ export function readDocumentDragPayload(
     const single = dataTransfer.getData(SINGLE_DOCUMENT_DRAG_TYPE);
     return single ? [single] : [];
 }
+
+/**
+ * The rows' `data-collection-row-key`s in on-screen order. Each row's top is
+ * measured once before sorting: measuring inside the comparator forced about
+ * 2·n·log n layout reads per shift-click. `rows` arrive in document order
+ * (querySelectorAll), which breaks ties between rows on the same line.
+ */
+export function collectionRowKeysInVisualOrder(
+    rows: readonly HTMLElement[],
+): string[] {
+    return rows
+        .map((row, index) => ({
+            key: row.dataset.collectionRowKey,
+            top: row.getBoundingClientRect().top,
+            index,
+        }))
+        .sort((left, right) => left.top - right.top || left.index - right.index)
+        .map((row) => row.key)
+        .filter((key): key is string => !!key);
+}

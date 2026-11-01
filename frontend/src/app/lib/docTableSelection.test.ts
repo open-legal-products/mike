@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import {
+    collectionRowKeysInVisualOrder,
     collectionSelectAllState,
     folderSelectionRootIds,
     folderTreeIds,
@@ -175,5 +176,37 @@ describe("DocTable document drag payload", () => {
                     type === SINGLE_DOCUMENT_DRAG_TYPE ? "legacy" : "",
             }),
         ).toEqual(["legacy"]);
+    });
+});
+
+describe("collectionRowKeysInVisualOrder", () => {
+    function rowsAt(tops: number[]) {
+        const measured = { count: 0 };
+        const table = document.createElement("div");
+        const rows = tops.map((top, index) => {
+            const row = table.appendChild(document.createElement("div"));
+            row.dataset.collectionRowKey = `document:${index}`;
+            row.getBoundingClientRect = () => {
+                measured.count++;
+                return { top } as DOMRect;
+            };
+            return row;
+        });
+        return { rows, measured };
+    }
+
+    it("orders by on-screen top, keeping document order on ties", () => {
+        const { rows } = rowsAt([30, 10, 30, 0]);
+        expect(collectionRowKeysInVisualOrder(rows)).toEqual([
+            "document:3", "document:1", "document:0", "document:2",
+        ]);
+    });
+
+    it.each([100, 400])("measures each of %i rows once", (n) => {
+        const { rows, measured } = rowsAt(
+            Array.from({ length: n }, (_, i) => (i * 7919) % n),
+        );
+        expect(collectionRowKeysInVisualOrder(rows)).toHaveLength(n);
+        expect(measured.count).toBe(n);
     });
 });
