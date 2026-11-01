@@ -6,6 +6,7 @@ import { SelectionActionsMenu } from "@/app/components/shared/SelectionActionsMe
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useReviewCells } from "./reviewCellStore";
 import { indexReviewCells } from "./reviewCellIndex";
+import { reviewRowRemoval } from "./reviewRowRemoval";
 import { useRouter, useSearchParams } from "next/navigation";
 import {
     Plus,
@@ -1324,11 +1325,8 @@ export function TRView({ reviewId, projectId }: Props) {
         if (!requireStructure("remove documents from this review")) return;
         const rowIdsToDelete = [...targetIds];
         if (rowIdsToDelete.length === 0) return;
-        const documentIdsToDelete = new Set(
-            rows
-                .filter((row) => rowIdsToDelete.includes(row.id))
-                .flatMap((row) => row.source_document_ids),
-        );
+        const removal = reviewRowRemoval(rowIdsToDelete);
+        const documentIdsToDelete = removal.documentIds(rows);
         const previousDocuments = documents;
         const previousRows = rows;
         const previousCells = cellStore.values();
@@ -1336,12 +1334,8 @@ export function TRView({ reviewId, projectId }: Props) {
             (document) => !documentIdsToDelete.has(document.id),
         );
         setDocuments(remaining);
-        setRows((current) =>
-            current.filter((row) => !rowIdsToDelete.includes(row.id)),
-        );
-        setCells((current) =>
-            current.filter((cell) => !rowIdsToDelete.includes(cell.row_id)),
-        );
+        setRows((current) => current.filter(removal.keepsRow));
+        setCells((current) => current.filter(removal.keepsCell));
         setSelectedRowIds([]);
         setActionsOpen(false);
         try {
@@ -1359,9 +1353,7 @@ export function TRView({ reviewId, projectId }: Props) {
             // on screen now. A run may be filling cells in as this fails
             // (`cellMutationsBlocked`), and another removal may have
             // succeeded: restoring the whole snapshot wiped both.
-            const failedCellIds = previousCells
-                .filter((cell) => rowIdsToDelete.includes(cell.row_id))
-                .map((cell) => cell.id);
+            const failedCellIds = removal.cellIds(previousCells);
             setDocuments((current) =>
                 restoreOptimisticallyDeletedRows(current, previousDocuments, [
                     ...documentIdsToDelete,
