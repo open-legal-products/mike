@@ -67,9 +67,13 @@ returns setof public.audit_events language sql stable set search_path = public, 
   )).* from scoped s;
 $$;
 create temporary sequence audit_project_calls minvalue 0 start 0;
+create function pg_temp.rel_work(rel regclass) returns bigint language sql as $$
+  select sum(pg_stat_get_xact_tuples_returned(c.oid)+pg_stat_get_xact_tuples_fetched(c.oid))::bigint
+  from pg_class c where c.oid=rel or c.oid in (select indexrelid from pg_index where indrelid=rel);
+$$;
 do $$
 declare owner_id uuid:=gen_random_uuid(); member_id uuid:=gen_random_uuid(); admin_id uuid:=gen_random_uuid(); org uuid:=gen_random_uuid(); project uuid:=gen_random_uuid();
-  expected jsonb; actual jsonb; actor_id uuid;
+  expected jsonb; actual jsonb; actor_id uuid; before bigint;
 begin
   insert into auth.users(id,email) values(owner_id,owner_id||'@example.test'),(member_id,member_id||'@example.test'),(admin_id,admin_id||'@example.test');
   insert into public.organizations(id,name,created_by) values(org,'Audit resource grouping',owner_id);
@@ -81,7 +85,19 @@ begin
     select jsonb_agg(to_jsonb(e) order by id) into expected from pg_temp.audit_oracle(org,actor_id,'',null) e;
     select jsonb_agg(to_jsonb(e) order by id) into actual from public.organization_audit_events(org,actor_id,'',null) e;
     assert actual is not distinct from expected,'redacted rows must match original policy exactly';
+    -- S6: a page's ids are the same rows the oracle filters to.
+    select jsonb_agg(to_jsonb(e) order by id) into expected
+      from pg_temp.audit_oracle(org,actor_id,'',array(select id from public.audit_events where org_id=org order by id limit 7)) e;
+    select jsonb_agg(to_jsonb(e) order by id) into actual
+      from public.organization_audit_events(org,actor_id,'',array(select id from public.audit_events where org_id=org order by id limit 7)) e;
+    assert actual is not distinct from expected,'paged rows must match original policy exactly';
   end loop;
+  -- S6: resolving one page of ids reads those events, not the org's history.
+  analyze public.audit_events;
+  before:=pg_temp.rel_work('public.audit_events');
+  perform * from public.organization_audit_events(org,admin_id,'',array(select id from public.audit_events where org_id=org limit 1));
+  assert pg_temp.rel_work('public.audit_events')-before<=10,
+    format('one event id read %s audit rows',pg_temp.rel_work('public.audit_events')-before);
   perform set_config('mike.test_audit_org',org::text,true);perform set_config('mike.test_audit_actor',admin_id::text,true);
 end;
 $$;

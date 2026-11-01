@@ -11573,8 +11573,16 @@ $$;
 create or replace function public.organization_audit_events(p_org_id uuid,p_actor_id uuid,p_actor_email text,p_event_ids uuid[])
 returns setof public.audit_events language sql stable set search_path=public,pg_temp as $$
   with events as materialized (
-    select a.* from public.audit_events a where a.org_id=p_org_id
-      and (p_event_ids is null or a.id=any(p_event_ids)) and exists(
+    -- Two arms instead of "p_event_ids is null or a.id = any(p_event_ids)":
+    -- this body is planned without parameter values, and an OR across a
+    -- parameter test can use neither index. Each arm's parameter test is a
+    -- one-time filter, so exactly one arm runs: a page's ids become
+    -- primary-key lookups, and only the null form reads the organization.
+    select a.* from public.audit_events a where p_event_ids is not null
+      and a.id=any(p_event_ids) and a.org_id=p_org_id and exists(
+        select 1 from public.active_org_members m where m.org_id=p_org_id and m.user_id=p_actor_id and m.role in ('owner','admin'))
+    union all
+    select a.* from public.audit_events a where p_event_ids is null and a.org_id=p_org_id and exists(
         select 1 from public.active_org_members m where m.org_id=p_org_id and m.user_id=p_actor_id and m.role in ('owner','admin'))
   ), actor as materialized (
     select public.can_access_org_private_content(p_org_id,p_actor_id) opens_private
@@ -12078,5 +12086,6 @@ insert into public.schema_migrations (filename) values
   ('20261101_07_document_reference_indexes.sql'),
   ('20261101_08_departure_reverse_references.sql'),
   ('20261101_09_departure_fence_standalone_documents.sql'),
-  ('20261101_10_private_document_access_anchored.sql')
+  ('20261101_10_private_document_access_anchored.sql'),
+  ('20261101_11_audit_page_event_lookup.sql')
 on conflict (filename) do nothing;
