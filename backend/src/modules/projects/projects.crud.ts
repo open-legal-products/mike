@@ -510,11 +510,16 @@ export async function getProjectDetail(
     .single();
   if (error || !project) return { ok: false, kind: "not_found" };
 
-  const [{ data: docs }, { data: folderData }] = await Promise.all([
-    db.from("documents").select("*").eq("project_id", projectId).order("created_at", { ascending: true }),
-    db.from("project_subfolders").select("*").eq("project_id", projectId).order("created_at", { ascending: true }),
+  // Paged: an unpaged read stopped at max_rows, so a project past 1000
+  // documents silently lost the rest from its detail payload.
+  const [docsResult, foldersResult] = await Promise.all([
+    loadProjectDirectoryChildren(db, "documents", [projectId]),
+    loadProjectDirectoryChildren(db, "project_subfolders", [projectId]),
   ]);
-  const docsTyped = (docs ?? []) as unknown as {
+  const childError = docsResult.error ?? foldersResult.error;
+  if (childError) return { ok: false, kind: "db_error", error: childError };
+  const folderData = foldersResult.data;
+  const docsTyped = docsResult.data as unknown as {
     id: string;
     user_id?: string | null;
     current_version_id?: string | null;
@@ -715,11 +720,16 @@ export async function updateProject(
     .single();
   if (error || !data) return { ok: false, kind: "not_found" };
 
-  const [{ data: docs }, { data: folderData }] = await Promise.all([
-    db.from("documents").select("*").eq("project_id", projectId).order("created_at", { ascending: true }),
-    db.from("project_subfolders").select("*").eq("project_id", projectId).order("created_at", { ascending: true }),
+  // Paged: an unpaged read stopped at max_rows, so a project past 1000
+  // documents silently lost the rest from its detail payload.
+  const [docsResult, foldersResult] = await Promise.all([
+    loadProjectDirectoryChildren(db, "documents", [projectId]),
+    loadProjectDirectoryChildren(db, "project_subfolders", [projectId]),
   ]);
-  const docsTyped = (docs ?? []) as unknown as {
+  const childError = docsResult.error ?? foldersResult.error;
+  if (childError) return { ok: false, kind: "db_error", error: childError };
+  const folderData = foldersResult.data;
+  const docsTyped = docsResult.data as unknown as {
     id: string;
     user_id?: string | null;
     current_version_id?: string | null;

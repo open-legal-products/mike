@@ -21,7 +21,12 @@ import { chunkArray } from "./arrays";
  */
 
 export const ID_FILTER_BATCH_SIZE = 50;
-/** Must not exceed the gateway's max_rows, or a full page looks short. */
+/**
+ * Must not exceed the gateway's max_rows (1000 in supabase/config.toml): a
+ * page shorter than this ends the loop, so a deployment that lowers max_rows
+ * below it must lower this too. (loadProjectDirectoryChildren instead reads
+ * until an empty page, trading one extra round trip for cap-independence.)
+ */
 export const ROW_PAGE_SIZE = 1000;
 /** Guards a runaway loop (a cursor that does not advance), not a product limit. */
 const MAX_PAGES = 10_000;

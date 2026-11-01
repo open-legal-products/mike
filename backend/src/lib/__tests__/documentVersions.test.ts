@@ -37,6 +37,12 @@ function makeDb(tables: Record<string, Row[]>) {
                     }
                     return query;
                 },
+                order: () => query,
+                limit: () => query,
+                gt: (column: string, value: string) => {
+                    rows = rows.filter((row) => String(row[column]) > value);
+                    return query;
+                },
                 single: async () => ({ data: rows[0] ?? null, error: null }),
                 then: (
                     resolve: (value: { data: Row[]; error: null }) => unknown,

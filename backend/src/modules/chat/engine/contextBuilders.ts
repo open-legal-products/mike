@@ -8,6 +8,7 @@ import { listWorkspaceWorkflows } from "../../../lib/workflowWorkspace";
 import { teamOrgIdOf } from "../../../lib/personalOrgs";
 import { ensureDocAccess } from "../../../lib/access";
 import { attachActiveVersionPaths } from "../../../lib/documentVersions";
+import { selectAllPages, selectInBatches } from "../../../lib/batchedQuery";
 import {
   type DocStore,
   type DocIndex,
@@ -1408,15 +1409,18 @@ export async function buildDocContext(
     // answered "I can't see that document" about a file the caller has full
     // access to. The verdict is per document, not per chat: being cited in a
     // readable chat never grants access to the cited file.
-    const { data: docs } = await db
-      .from("documents")
-      .select(
-        "id, current_version_id, status, library_kind, user_id, project_id, org_id, workflow_id",
-      )
-      .in("id", ids)
-      .eq("status", "ready");
+    // Batched: ids come from the whole conversation history, unbounded.
+    const docs = await selectInBatches("chat document context", ids, (batch) =>
+      db
+        .from("documents")
+        .select(
+          "id, current_version_id, status, library_kind, user_id, project_id, org_id, workflow_id",
+        )
+        .in("id", batch)
+        .eq("status", "ready"),
+    );
 
-    const candidates = (docs ?? []) as unknown as {
+    const candidates = docs as unknown as {
       id: string;
       filename?: string | null;
       file_type?: string | null;
@@ -1527,19 +1531,39 @@ export async function buildProjectDocContext(
   const docIndex: DocIndex = {};
   const docStore: DocStore = new Map();
 
-  const [{ data: docs }, { data: folders }] = await Promise.all([
-    db
-      .from("documents")
-      .select("id, current_version_id, status, folder_id")
-      .eq("project_id", projectId)
-      .eq("status", "ready")
-      .order("created_at", { ascending: true }),
-    db
-      .from("project_subfolders")
-      .select("id, name, parent_folder_id")
-      .eq("project_id", projectId),
+  // Paged: past max_rows an unpaged read silently hid the rest of the
+  // project from the model. Labels (doc-N) follow created_at order as before.
+  type ProjectDocRow = { id: string; created_at?: string | null };
+  type ProjectFolderRow = { id: string; name: string; parent_folder_id: string | null };
+  const [docs, folders] = await Promise.all([
+    selectAllPages<ProjectDocRow>("project chat documents", (after, limit) => {
+      let query = db
+        .from("documents")
+        .select("id, current_version_id, status, folder_id, created_at")
+        .eq("project_id", projectId)
+        .eq("status", "ready")
+        .order("id", { ascending: true })
+        .limit(limit);
+      if (after) query = query.gt("id", after.id);
+      return query;
+    }),
+    selectAllPages<ProjectFolderRow>("project chat folders", (after, limit) => {
+      let query = db
+        .from("project_subfolders")
+        .select("id, name, parent_folder_id")
+        .eq("project_id", projectId)
+        .order("id", { ascending: true })
+        .limit(limit);
+      if (after) query = query.gt("id", after.id);
+      return query;
+    }),
   ]);
-  const docList = (docs ?? []) as unknown as {
+  docs.sort(
+    (a, b) =>
+      String(a.created_at ?? "").localeCompare(String(b.created_at ?? "")) ||
+      a.id.localeCompare(b.id),
+  );
+  const docList = docs as unknown as {
     id: string;
     filename?: string | null;
     file_type?: string | null;
@@ -1555,7 +1579,7 @@ export async function buildProjectDocContext(
     string,
     { name: string; parent_folder_id: string | null }
   >();
-  for (const f of folders ?? [])
+  for (const f of folders)
     folderMap.set(f.id, {
       name: f.name,
       parent_folder_id: f.parent_folder_id,

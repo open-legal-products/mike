@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { selectInBatches } from "./batchedQuery";
+import { selectAllPages, selectInBatches } from "./batchedQuery";
 import type { Db } from "./supabase";
 
 type Supa = Db;
@@ -241,18 +241,27 @@ export async function attachLatestVersionNumbers<T extends DocRow>(
     docs: T[],
 ): Promise<T[]> {
     if (docs.length === 0) return docs;
-    type EditVersion = { document_id: string; version_number: number | null };
+    // A batch of 50 documents can hold more assistant edits than max_rows;
+    // a truncated read reported a stale maximum, so each batch is paged.
+    // Only (id, document_id, version_number) travel.
+    type EditVersion = { id: string; document_id: string; version_number: number | null };
     const rows = await selectInBatches<EditVersion>(
         "latest version lookup",
         docs.map((d) => d.id),
         (batch) =>
-            db
-                .from("document_versions")
-                .select("document_id, version_number")
-                .in("document_id", batch)
-                .eq("source", "assistant_edit")
-                .is("deleted_at", null)
-                .not("version_number", "is", null),
+            selectAllPages<EditVersion>("latest version lookup", (after, limit) => {
+                let query = db
+                    .from("document_versions")
+                    .select("id, document_id, version_number")
+                    .in("document_id", batch)
+                    .eq("source", "assistant_edit")
+                    .is("deleted_at", null)
+                    .not("version_number", "is", null)
+                    .order("id", { ascending: true })
+                    .limit(limit);
+                if (after) query = query.gt("id", after.id);
+                return query;
+            }),
     );
 
     const latestByDoc = new Map<string, number>();
