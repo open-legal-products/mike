@@ -110,3 +110,33 @@ test("large live prose shows its tail immediately and finishes with canonical Ma
   expect(await page.evaluate(() => (window as typeof window & { __PRIVATE_EXECUTED__?: boolean }).__PRIVATE_EXECUTED__)).toBeUndefined();
   expect((await assistant.textContent())?.match(/Checkpoint complete/g)).toHaveLength(1);
 });
+
+test("Accept all shows every outcome without waiting for each record to save", async ({ addin, page }) => {
+  addin.seedToken("test-jwt");
+  const originals = Array.from({ length: 5 }, (_, i) => `Party name ${i}`);
+  await addin.mockChatStream([wordEdits(...originals.map((original, i) => replacementEdit(original, `Party ${i}`, "Shorten.")))], PERSISTED);
+  // Hold every edit record on the server until the test releases it.
+  const saved: string[] = [];
+  let release!: () => void;
+  const held = new Promise<void>((resolve) => { release = resolve; });
+  await page.route("**/word-chat/messages/*/edits/*?*", async (route, request) => {
+    if (request.method() !== "PATCH") return route.fallback();
+    if ((request.postDataJSON() as { resolution_status?: string }).resolution_status === "accepted") {
+      saved.push(new URL(request.url()).pathname.split("/").pop()!);
+    }
+    await held;
+    return route.fulfill({ status: 200, contentType: "application/json", body: "{}" });
+  });
+  await addin.gotoTaskpane({ documentText: originals.join(".\n") });
+  await addin.expectAuthedShell();
+  await page.getByTestId("edit-apply-toggle").click();
+  await page.getByRole("menuitem", { name: /Edit/ }).click();
+  await page.getByPlaceholder("How can I help?").fill("Shorten the party names");
+  await page.getByRole("button", { name: "Send" }).click();
+  await expect(page.getByRole("button", { name: "Accept", exact: true })).toHaveCount(5);
+  await page.getByRole("button", { name: "Accept all", exact: true }).click();
+  await expect(page.getByText("Accepted.", { exact: true })).toHaveCount(5);
+  release();
+  // Records still save one at a time, in card order.
+  await expect.poll(() => saved).toEqual(["0", "1", "2", "3", "4"]);
+});
