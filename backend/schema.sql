@@ -6538,7 +6538,6 @@ returns table(document_id uuid) language sql stable set search_path = public as 
         where r.review_id=p_item_id and s.document_id=d.id)));
 $$;
 
-
 create or replace function public.org_members_departure_items(p_org_id uuid,p_user_ids uuid[])
 returns table(kind text,item_id uuid,title text,disposition text)
 language sql stable set search_path = public as $$
@@ -9948,6 +9947,30 @@ language sql stable set search_path = public, pg_temp as $$
   offset greatest(0, coalesce(p_offset, 0));
 $$;
 
+-- Migration date: 2026-11-01
+-- The reverse of org_item_document_ids: the chats and reviews whose stored
+-- references name one document, each with its project. Same reference
+-- shapes, matched exactly: a chat message files[] object whose document_id
+-- is the document's canonical text; a review document_ids array string,
+-- object key or scalar string; a review row or row source by document_id.
+create or replace function public.document_referencing_items(p_document_id uuid)
+returns table(kind text,item_id uuid,project_id uuid) language sql stable set search_path=public as $$
+  with refs as (
+    select 'chat'::text kind,m.chat_id item_id from public.chat_messages m
+      where m.files @> jsonb_build_array(jsonb_build_object('document_id',p_document_id::text))
+    union select 'tabular_review',r.id from public.tabular_reviews r where r.document_ids ? p_document_id::text
+    union select 'tabular_review',row.review_id from public.tabular_review_rows row where row.document_id=p_document_id
+    union select 'tabular_review',row.review_id from public.tabular_review_row_sources source
+      join public.tabular_review_rows row on row.id=source.row_id where source.document_id=p_document_id
+  )
+  select refs.kind,refs.item_id,case refs.kind when 'chat' then c.project_id else r.project_id end
+  from refs
+  left join public.chats c on refs.kind='chat' and c.id=refs.item_id
+  left join public.tabular_reviews r on refs.kind='tabular_review' and r.id=refs.item_id;
+$$;
+revoke all on function public.document_referencing_items(uuid) from public,anon,authenticated;
+grant execute on function public.document_referencing_items(uuid) to service_role;
+
 -- Migration date: 2026-10-30
 -- A keyed catalogue lookup. Keep the listing function for actual listings;
 -- permission checks need at most one current item, not an entire organization.
@@ -9981,14 +10004,25 @@ $$;
 
 create or replace function public.org_private_document_access(p_org_id uuid,p_document_id uuid,p_user_id text)
 returns boolean language sql stable set search_path=public,pg_temp as $$
+  -- Anchored on the document: the items that can carry it (its project or
+  -- workflow, the chats/reviews referencing it and their projects) are
+  -- looked up by key, then matched against the caller's opened items by
+  -- primary key. Same answer as testing the document against every opened
+  -- item's full org_item_document_ids list.
   select exists(select 1 from public.documents d where d.id=p_document_id and d.org_id=p_org_id
     and d.archived_at is null and (
       public.org_private_access_role(p_org_id,'document',d.id,p_user_id) is not null
-      or exists(select 1 from public.org_private_content_access a
+      or exists(select 1 from (
+          select 'project'::text kind,d.project_id item_id
+          union all select 'workflow',d.workflow_id
+          union all select ref.kind,ref.item_id from public.document_referencing_items(d.id) ref
+          union all select 'project',ref.project_id from public.document_referencing_items(d.id) ref
+        ) holder
+        join public.org_private_content_access a on a.org_id=p_org_id
+          and a.user_id=(case when p_user_id ~ '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$' then p_user_id::uuid end)
+          and a.kind=holder.kind and a.item_id=holder.item_id
         join public.org_private_content_item(p_org_id,a.kind,a.item_id) item on item.kind=a.kind and item.item_id=a.item_id
-        join public.org_item_document_ids(a.kind,a.item_id) attached on attached.document_id=d.id
-        where a.org_id=p_org_id and a.user_id=(case when p_user_id ~ '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$' then p_user_id::uuid end)
-          and public.can_access_org_private_content(p_org_id,a.user_id))
+        where public.can_access_org_private_content(p_org_id,a.user_id))
     ));
 $$;
 
@@ -10039,30 +10073,6 @@ returns table(document_id uuid) language sql stable set search_path=public as $$
     select existing.id from public.documents existing where existing.id=ref.id offset 0
   ) d;
 $$;
-
--- Migration date: 2026-11-01
--- The reverse of org_item_document_ids: the chats and reviews whose stored
--- references name one document, each with its project. Same reference
--- shapes, matched exactly: a chat message files[] object whose document_id
--- is the document's canonical text; a review document_ids array string,
--- object key or scalar string; a review row or row source by document_id.
-create or replace function public.document_referencing_items(p_document_id uuid)
-returns table(kind text,item_id uuid,project_id uuid) language sql stable set search_path=public as $$
-  with refs as (
-    select 'chat'::text kind,m.chat_id item_id from public.chat_messages m
-      where m.files @> jsonb_build_array(jsonb_build_object('document_id',p_document_id::text))
-    union select 'tabular_review',r.id from public.tabular_reviews r where r.document_ids ? p_document_id::text
-    union select 'tabular_review',row.review_id from public.tabular_review_rows row where row.document_id=p_document_id
-    union select 'tabular_review',row.review_id from public.tabular_review_row_sources source
-      join public.tabular_review_rows row on row.id=source.row_id where source.document_id=p_document_id
-  )
-  select refs.kind,refs.item_id,case refs.kind when 'chat' then c.project_id else r.project_id end
-  from refs
-  left join public.chats c on refs.kind='chat' and c.id=refs.item_id
-  left join public.tabular_reviews r on refs.kind='tabular_review' and r.id=refs.item_id;
-$$;
-revoke all on function public.document_referencing_items(uuid) from public,anon,authenticated;
-grant execute on function public.document_referencing_items(uuid) to service_role;
 
 create or replace function public.org_members_departure_items(p_org_id uuid,p_user_ids uuid[])
 returns table(kind text,item_id uuid,title text,disposition text)
@@ -12067,5 +12077,6 @@ insert into public.schema_migrations (filename) values
   ('20261101_06_departure_email_index_joins.sql'),
   ('20261101_07_document_reference_indexes.sql'),
   ('20261101_08_departure_reverse_references.sql'),
-  ('20261101_09_departure_fence_standalone_documents.sql')
+  ('20261101_09_departure_fence_standalone_documents.sql'),
+  ('20261101_10_private_document_access_anchored.sql')
 on conflict (filename) do nothing;
