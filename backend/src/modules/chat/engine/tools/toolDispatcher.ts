@@ -54,6 +54,7 @@ import {
   type AskInputsEvent,
   devLog,
   resolveDocLabel,
+  createDocLabelResolver,
 } from "../types";
 import { downloadFile, downloadFileIfAvailable, storageKey, uploadFile } from "../../../../lib/storage";
 import { convertedPdfKey, docxToPdf } from "../../../../lib/convert";
@@ -859,9 +860,8 @@ export async function runToolCalls(
       });
     } else if (tc.function.name === "fetch_documents") {
       const rawDocIds = (args.doc_ids as string[]) ?? [];
-      const docIds = rawDocIds.map(
-        (id) => resolveDocLabel(id, docStore, docIndex) ?? id,
-      );
+      const labelFor = createDocLabelResolver(docStore, docIndex);
+      const docIds = rawDocIds.map((id) => labelFor(id) ?? id);
       const parts: string[] = [];
       for (const docId of docIds) {
         const readIdentity = await getTurnReadIdentity({

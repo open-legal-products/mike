@@ -58,7 +58,7 @@ import {
   type WorkflowStore,
   type ToolCall,
   devLog,
-  resolveDocLabel,
+  createDocLabelResolver,
   TOOL_ERROR_MESSAGE,
 } from "./types";
 import {
@@ -1197,10 +1197,11 @@ export async function runLLMStream(params: {
     // already in storage with emitEvents:false. Case citations are matched
     // against the opinion text cached during this turn.
     const sourceTextByDocId = new Map<string, Promise<string>>();
+    const labelFor = createDocLabelResolver(docStore, docIndex);
     const getSourceText = (docId: string): Promise<string> => {
       let pending = sourceTextByDocId.get(docId);
       if (!pending) {
-        const label = resolveDocLabel(docId, docStore, docIndex);
+        const label = labelFor(docId);
         pending = label
           ? readDocumentContent(label, docStore, () => {}, docIndex, db, {
               emitEvents: false,
