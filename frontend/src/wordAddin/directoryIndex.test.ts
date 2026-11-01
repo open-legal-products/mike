@@ -24,6 +24,20 @@ describe("Word directory index", () => {
       expect(index.collect("0")).toHaveLength(n);
     }
   });
+  it("reuses the folder structure when only the selection or loaded state changes", () => {
+    const n = 200;
+    let parents = 0;
+    const folders = Array.from({ length: n }, (_, i) => ({ id: `${i}`, get parent_folder_id() { parents++; return i ? `${i - 1}` : null; } }));
+    const docs = folders.map(folder => ({ id: folder.id, folder_id: folder.id }));
+    const first = buildDirectoryIndex(folders, docs, new Set(), () => true);
+    const toggled = buildDirectoryIndex(folders, docs, new Set(["150"]), id => id !== "199");
+    expect(parents).toBe(n);
+    expect(first.summaries.get("0")).toEqual({ count: n, selected: 0, loaded: true });
+    expect(toggled.summaries.get("0")).toEqual({ count: n, selected: 1, loaded: false });
+    expect(toggled.summaries.get("151")).toEqual({ count: n - 151, selected: 0, loaded: false });
+    expect(buildDirectoryIndex([...folders], docs, new Set(), () => true).summaries.get("0")?.selected).toBe(0);
+    expect(parents).toBe(2 * n);
+  });
   it("does not mark a cyclic imported tree as completely loaded", () => {
     const index = buildDirectoryIndex([{ id: "a", parent_folder_id: "b" }, { id: "b", parent_folder_id: "a" }], [], new Set(), () => true);
     expect(index.summaries.get("a")?.loaded).toBe(false);

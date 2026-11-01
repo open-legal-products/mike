@@ -1,8 +1,31 @@
-/** One adjacency index and one postorder pass, rather than a subtree walk per row. */
-export function buildDirectoryIndex<
+interface FolderNode<D> {
+  id: string;
+  direct: readonly D[];
+  /** Children whose summary existed when this folder finished (all of them, unless the tree is cyclic). */
+  childIds: string[];
+  missingChild: boolean;
+  count: number;
+}
+
+interface DirectoryStructure<F, D> {
+  children: Map<string | null, F[]>;
+  directDocuments: Map<string | null, D[]>;
+  /** Folders in postorder: every summarized child precedes its parent. */
+  order: FolderNode<D>[];
+  collect(folderId: string): D[];
+}
+
+/**
+ * Structure depends only on the folder and document arrays, which the picker
+ * replaces (never mutates) when a level loads. Keyed weakly by both arrays,
+ * so a checkbox toggle reuses it and a dropped project's index is collected.
+ */
+const structures = new WeakMap<readonly object[], WeakMap<readonly object[], DirectoryStructure<never, never>>>();
+
+function buildStructure<
   F extends { id: string; parent_folder_id?: string | null },
   D extends { id: string; folder_id?: string | null; library_folder_id?: string | null },
->(folders: readonly F[], documents: readonly D[], selected: ReadonlySet<string>, levelLoaded: (id: string) => boolean) {
+>(folders: readonly F[], documents: readonly D[]): DirectoryStructure<F, D> {
   const children = new Map<string | null, F[]>();
   const directDocuments = new Map<string | null, D[]>();
   for (const folder of folders) {
@@ -17,14 +40,15 @@ export function buildDirectoryIndex<
     bucket.push(document);
     directDocuments.set(parent, bucket);
   }
-  const summaries = new Map<string, { count: number; selected: number; loaded: boolean }>();
+  const counts = new Map<string, number>();
+  const order: FolderNode<D>[] = [];
   const visiting = new Set<string>();
   // Iterative postorder also handles deep imported trees without call-stack growth.
   for (const folder of folders) {
     const stack: { id: string; finish: boolean }[] = [{ id: folder.id, finish: false }];
     while (stack.length) {
       const entry = stack.pop()!;
-      if (summaries.has(entry.id)) continue;
+      if (counts.has(entry.id)) continue;
       if (!entry.finish) {
         if (visiting.has(entry.id)) continue;
         visiting.add(entry.id);
@@ -34,18 +58,16 @@ export function buildDirectoryIndex<
         }
       } else {
         const direct = directDocuments.get(entry.id) ?? [];
-        let count = direct.length;
-        let selectedCount = 0;
-        for (const document of direct) if (selected.has(document.id)) selectedCount++;
-        let loaded = levelLoaded(entry.id);
+        const node: FolderNode<D> = { id: entry.id, direct, childIds: [], missingChild: false, count: direct.length };
         for (const child of children.get(entry.id) ?? []) {
-          const summary = summaries.get(child.id);
-          if (!summary) { loaded = false; continue; } // Broken/cyclic trees cannot be selected as complete.
-          count += summary.count;
-          selectedCount += summary.selected;
-          loaded = loaded && summary.loaded;
+          const childCount = counts.get(child.id);
+          // Broken/cyclic trees cannot be selected as complete.
+          if (childCount === undefined) { node.missingChild = true; continue; }
+          node.count += childCount;
+          node.childIds.push(child.id);
         }
-        summaries.set(entry.id, { count, selected: selectedCount, loaded });
+        counts.set(entry.id, node.count);
+        order.push(node);
         visiting.delete(entry.id);
       }
     }
@@ -53,7 +75,7 @@ export function buildDirectoryIndex<
   return {
     children,
     directDocuments,
-    summaries,
+    order,
     collect(folderId: string): D[] {
       const result: D[] = [];
       const stack = [folderId];
@@ -68,5 +90,42 @@ export function buildDirectoryIndex<
       }
       return result;
     },
+  };
+}
+
+/**
+ * One adjacency index and one postorder pass, rather than a subtree walk per
+ * row. The structure is built once per folder/document arrays; selection and
+ * loaded state, which change on every checkbox toggle or level load, are a
+ * flat pass over the precomputed postorder.
+ */
+export function buildDirectoryIndex<
+  F extends { id: string; parent_folder_id?: string | null },
+  D extends { id: string; folder_id?: string | null; library_folder_id?: string | null },
+>(folders: readonly F[], documents: readonly D[], selected: ReadonlySet<string>, levelLoaded: (id: string) => boolean) {
+  let byDocuments = structures.get(folders);
+  if (!byDocuments) structures.set(folders, byDocuments = new WeakMap());
+  let structure = byDocuments.get(documents) as DirectoryStructure<F, D> | undefined;
+  if (!structure) {
+    structure = buildStructure(folders, documents);
+    byDocuments.set(documents, structure as DirectoryStructure<never, never>);
+  }
+  const summaries = new Map<string, { count: number; selected: number; loaded: boolean }>();
+  for (const node of structure.order) {
+    let selectedCount = 0;
+    for (const document of node.direct) if (selected.has(document.id)) selectedCount++;
+    let loaded = levelLoaded(node.id) && !node.missingChild;
+    for (const childId of node.childIds) {
+      const summary = summaries.get(childId)!;
+      selectedCount += summary.selected;
+      loaded = loaded && summary.loaded;
+    }
+    summaries.set(node.id, { count: node.count, selected: selectedCount, loaded });
+  }
+  return {
+    children: structure.children,
+    directDocuments: structure.directDocuments,
+    summaries,
+    collect: structure.collect,
   };
 }
