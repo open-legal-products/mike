@@ -7315,24 +7315,43 @@ as $$
        and kind not in ('storage.cleanup', 'document.cleanup')
     returning id
   ), candidates as (
-    select id
-      from public.db_jobs
-     where (p_kind is null or kind = p_kind)
-       and ((status = 'pending' and run_at <= now())
-        -- Cleanup intents are retried forever, but politely: a revived
-        -- `failed` row waits for its own run_at like everything else.
-        or (status = 'failed'
-            and kind in ('storage.cleanup', 'document.cleanup')
-            and run_at <= now())
-        or (status = 'running'
-            and claimed_at < now() - make_interval(secs => p_stale_seconds)
-            and (
-              attempts < max_attempts
-              or kind in ('storage.cleanup', 'document.cleanup')
-            )))
-     order by run_at
-     limit p_limit
-       for update skip locked
+    -- One arm per way a row can be claimable, each read in run_at order
+    -- from its own partial index and stopped after p_limit unlocked rows,
+    -- then merged. A single OR of the three conditions could use no index
+    -- order, so every tick read and sorted every due row. Arms are disjoint
+    -- (by status, and by whether p_kind is given; that test is a one-time
+    -- filter). Each arm may lock up to p_limit rows it then does not claim;
+    -- those stay locked only until this statement's transaction ends.
+    select arms.id from (
+      select * from (select id,run_at from public.db_jobs
+        where p_kind is null and status = 'pending' and run_at <= now()
+        order by run_at limit p_limit for update skip locked) pending_any
+      union all
+      select * from (select id,run_at from public.db_jobs
+        where kind = p_kind and status = 'pending' and run_at <= now()
+        order by run_at limit p_limit for update skip locked) pending_kind
+      -- Cleanup intents are retried forever, but politely: a revived
+      -- `failed` row waits for its own run_at like everything else.
+      union all
+      select * from (select id,run_at from public.db_jobs
+        where status = 'failed'
+          and kind in ('storage.cleanup', 'document.cleanup')
+          and run_at <= now()
+          and (p_kind is null or kind = p_kind)
+        order by run_at limit p_limit for update skip locked) failed_cleanup
+      union all
+      select * from (select id,run_at from public.db_jobs
+        where status = 'running'
+          and claimed_at < now() - make_interval(secs => p_stale_seconds)
+          and (
+            attempts < max_attempts
+            or kind in ('storage.cleanup', 'document.cleanup')
+          )
+          and (p_kind is null or kind = p_kind)
+        order by run_at limit p_limit for update skip locked) stale_running
+    ) arms
+    order by arms.run_at
+    limit p_limit
   )
   update public.db_jobs j
      set status = 'running',
@@ -7366,8 +7385,9 @@ as $$
              then null
            else j.dedupe_key
          end
-    from candidates c
-   where j.id = c.id
+   -- Primary-key probes for the few claimed ids. A join to the CTE is
+   -- planned without knowing p_limit and hash-joined the whole table.
+   where j.id = any (array(select id from candidates))
   returning j.*;
 $$;
 revoke all on function public.claim_db_jobs(integer, integer, text)
@@ -12119,5 +12139,6 @@ insert into public.schema_migrations (filename) values
   ('20261101_10_private_document_access_anchored.sql'),
   ('20261101_11_audit_page_event_lookup.sql'),
   ('20261101_12_overview_counts_after_page.sql'),
-  ('20261101_13_document_text_search_per_version.sql')
+  ('20261101_13_document_text_search_per_version.sql'),
+  ('20261101_14_claim_jobs_index_order.sql')
 on conflict (filename) do nothing;
