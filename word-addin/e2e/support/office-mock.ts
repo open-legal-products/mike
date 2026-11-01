@@ -33,6 +33,12 @@ export interface OfficeSeed {
   /** Let this many tracked-edit syncs succeed before that failure fires. */
   trackedMutationSyncFailureAfter?: number;
   /**
+   * Make Word refuse this many insertBookmark commands when their batch
+   * syncs (the failure surfaces at sync, as on a real host, and fails the
+   * whole batch); no bookmark is created by a refused command.
+   */
+  bookmarkSyncFailures?: number;
+  /**
    * Structured description of the document body for the markdown document
    * context: when present, body.paragraphs/body.tables exist and describe
    * these blocks; when absent (every pre-existing spec), those collections
@@ -539,14 +545,21 @@ export function installOfficeMock(seed: OfficeSeed): void {
     },
   };
 
+  let bookmarkSyncFailures = seed.bookmarkSyncFailures ?? 0;
+
   function makeContext(): any {
     let mutationSyncPending = false;
+    let refusedBookmarkPending = false;
     let documentStateBeforeMutation: StoredDocumentState | null = null;
     let trackedCallsBeforeMutation = 0;
     const context: any = {
       document: null,
       sync: async () => {
         wordCalls.syncs++;
+        if (refusedBookmarkPending) {
+          refusedBookmarkPending = false;
+          throw new Error("GeneralException: bookmark could not be inserted");
+        }
         if (!mutationSyncPending || !trackedMutationSyncFailure) return;
         if (trackedMutationSyncsBeforeFailure > 0) {
           trackedMutationSyncsBeforeFailure -= 1;
@@ -723,6 +736,11 @@ export function installOfficeMock(seed: OfficeSeed): void {
         __locationIds: locationIds,
         insertBookmark: (name: string) => {
           if (args.isNullObject) throw new Error("ItemNotFound");
+          if (bookmarkSyncFailures > 0) {
+            bookmarkSyncFailures--;
+            refusedBookmarkPending = true;
+            return;
+          }
           const entry = args.entry();
           documentState.bookmarks[name] = {
             name,

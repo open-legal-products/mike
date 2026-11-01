@@ -169,3 +169,39 @@ test("reopening a chat validates its proposed edits in one Word batch", async ({
   expect(after.runs - before.runs).toBe(2);
   expect(after.searches - before.searches).toBe(10);
 });
+
+test("applying one tracked edit costs eight host round trips", async ({ addin, page }) => {
+  addin.seedToken("test-jwt");
+  await addin.mockChatStream([wordEdits(replacementEdit("Suplier", "Supplier", "Fix the party name."))], PERSISTED);
+  await addin.gotoTaskpane({ documentText: "The Suplier shall deliver the goods." });
+  await addin.expectAuthedShell();
+  await page.getByPlaceholder("How can I help?").fill("Fix the typo");
+  await page.getByRole("button", { name: "Send" }).click();
+  const apply = page.getByRole("button", { name: "Apply", exact: true });
+  await expect(apply).toBeEnabled();
+  const before = await addin.wordCalls();
+  await apply.click();
+  await expect(page.getByRole("button", { name: "Accept", exact: true })).toBeVisible();
+  const after = await addin.wordCalls();
+  expect(after.insertedBookmarks).toHaveLength(1);
+  // Read mode, TrackAll, search, revision check + paragraph, mutation,
+  // revision types, tracking + bookmark, restore mode.
+  expect(after.syncs - before.syncs).toBe(8);
+});
+
+test("a bookmark Word refuses in the shared tracking batch stays a warning", async ({ addin, page }) => {
+  addin.seedToken("test-jwt");
+  await addin.mockChatStream([wordEdits(replacementEdit("Suplier", "Supplier", "Fix the party name."))], PERSISTED);
+  // Refused in the shared batch and again when retried on its own.
+  await addin.gotoTaskpane({ documentText: "The Suplier shall deliver the goods.", bookmarkSyncFailures: 2 });
+  await addin.expectAuthedShell();
+  await page.getByPlaceholder("How can I help?").fill("Fix the typo");
+  await page.getByRole("button", { name: "Send" }).click();
+  await page.getByRole("button", { name: "Apply", exact: true }).click();
+  // Still applied and reviewable; only the durable View link is missing.
+  await expect(page.getByRole("button", { name: "Accept", exact: true })).toBeVisible();
+  await expect(page.getByText(/View link may not survive/)).toBeVisible();
+  expect((await addin.wordDocument()).bookmarks).toEqual([]);
+  await page.getByRole("button", { name: "Accept", exact: true }).click();
+  await expect(page.getByText("Accepted.", { exact: true })).toBeVisible();
+});

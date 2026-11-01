@@ -2897,6 +2897,28 @@ export function useWordDoc() {
                   collection.load("items");
                   return collection;
                 });
+                // The target's paragraph is loaded for every edit: the
+                // whole-paragraph deletion escalation below needs its text
+                // and table nesting, and every applied card carries a
+                // paragraph snippet so a wrong-location match is catchable
+                // before Accept. A single-occurrence edit's target is its only
+                // match, known already, so its paragraph read rides this
+                // round trip; a replace-all target depends on the revision
+                // check and is loaded after it.
+                // Assigned inside loadTargetParagraph; the assertion keeps
+                // TypeScript from narrowing it to null.
+                let targetParagraph = null as Word.Paragraph | null;
+                const loadTargetParagraph = (range: Word.Range): void => {
+                  try {
+                    targetParagraph = range.paragraphs.getFirst() ?? null;
+                    targetParagraph?.load("text,tableNestingLevel");
+                  } catch {
+                    targetParagraph = null;
+                  }
+                };
+                if (!replaceAll && matches.items[0]) {
+                  loadTargetParagraph(matches.items[0]);
+                }
                 await context.sync();
 
                 const revisionFreeItems = matches.items.filter(
@@ -2933,24 +2955,16 @@ export function useWordDoc() {
                   result.remainingTargets = revisionFreeItems.length - 1;
                 }
 
-                // The target's paragraph is loaded for every edit: the
-                // whole-paragraph deletion escalation below needs its text
-                // and table nesting, and every applied card carries a
-                // paragraph snippet so a wrong-location match is catchable
-                // before Accept. `original` is already the adopted
-                // marker-free text here, so the stripped-marker retry above
-                // cannot desynchronize the comparison.
+                // `original` is already the adopted marker-free text here, so
+                // the stripped-marker retry above cannot desynchronize the
+                // paragraph comparison below.
                 const pureDeletion =
                   !isFormatEdit(edit) &&
                   toWordText(edit.replacement).length === 0;
-                let targetParagraph: Word.Paragraph | null = null;
-                try {
-                  targetParagraph = target.paragraphs.getFirst() ?? null;
-                  targetParagraph?.load("text,tableNestingLevel");
-                } catch {
-                  targetParagraph = null;
+                if (replaceAll) {
+                  loadTargetParagraph(target);
+                  await context.sync();
                 }
-                await context.sync();
 
                 if (targetParagraph) {
                   const hint = buildLocationHint(
@@ -3194,12 +3208,14 @@ export function useWordDoc() {
                 // Word.run completes: the exact children when they were
                 // verified, and always the edited passage itself.
                 trackingQueued = true;
-                if (exactRevisions) {
+                const queueRevisionTracking = (): void => {
+                  if (!exactRevisions) return;
                   for (const collection of managedCollections) {
                     collection.track();
                   }
                   for (const change of managedChanges) change.track();
-                }
+                };
+                queueRevisionTracking();
                 const revisionRanges = exactRevisions
                   ? managedChanges
                       .map((change) => ({
@@ -3230,10 +3246,27 @@ export function useWordDoc() {
                       ...(paragraphRange ? [paragraphRange] : []),
                     ];
                 for (const range of candidateRanges) range.track();
-                await context.sync();
 
+                // The hidden bookmark is queued in the same round trip as the
+                // tracking above. Its failure must stay a warning, never an
+                // apply failure, and a failed sync does not say which command
+                // failed -- so on failure both are re-run apart, exactly as
+                // they ran before they shared a sync: tracking first (fatal),
+                // then the bookmark (a warning).
                 let bookmarkName: string | undefined;
-                if (edit.stableEditId && candidateRanges.length > 0) {
+                const persistentEditId = edit.stableEditId;
+                const reportBookmarkFailure = (error: unknown): void => {
+                  reportWordFailure(error, {
+                    operation: "word.edit_apply",
+                    level: "warning",
+                  });
+                  result.error = describeWordFailure(
+                    error,
+                    "The change is reviewable now, but its View link may not survive reopening the add-in.",
+                  );
+                };
+                const queueBookmark = (): string | null => {
+                  if (!persistentEditId || candidateRanges.length === 0) return null;
                   // Without per-revision ranges, fall back to the paragraph:
                   // the tight ranges span only the inserted text, and a
                   // bookmark that misses the Deleted half restores view-only.
@@ -3245,33 +3278,52 @@ export function useWordDoc() {
                         : [...insertedRanges, ...targetItems];
                   const [firstPersistentRange, ...remainingPersistentRanges] =
                     persistentRanges;
-                  if (firstPersistentRange) {
-                    const candidateBookmarkName = bookmarkNameForEdit(
-                      edit.stableEditId,
+                  if (!firstPersistentRange) return null;
+                  const candidateBookmarkName = bookmarkNameForEdit(persistentEditId);
+                  try {
+                    let bookmarkRange = firstPersistentRange;
+                    for (const range of remainingPersistentRanges) {
+                      bookmarkRange = bookmarkRange.expandTo(range);
+                    }
+                    bookmarkRange.insertBookmark(candidateBookmarkName);
+                    return candidateBookmarkName;
+                  } catch (error) {
+                    reportBookmarkFailure(error);
+                    return null;
+                  }
+                };
+                const commitBookmark = (name: string): void => {
+                  bookmarkName = name;
+                  result.persistentAnchor = true;
+                  stagedAnchors.push({
+                    stableEditId: persistentEditId!,
+                    bookmarkName: name,
+                    result,
+                  });
+                };
+                const queuedBookmark = queueBookmark();
+                if (!queuedBookmark) {
+                  await context.sync();
+                } else {
+                  try {
+                    await context.sync();
+                    commitBookmark(queuedBookmark);
+                  } catch (error) {
+                    console.debug(
+                      "[tracked-edit/apply] tracking + bookmark batch failed; retrying apart",
+                      logErrorMessage(error),
                     );
-                    try {
-                      let bookmarkRange = firstPersistentRange;
-                      for (const range of remainingPersistentRanges) {
-                        bookmarkRange = bookmarkRange.expandTo(range);
+                    queueRevisionTracking();
+                    for (const range of candidateRanges) range.track();
+                    await context.sync();
+                    const retriedBookmark = queueBookmark();
+                    if (retriedBookmark) {
+                      try {
+                        await context.sync();
+                        commitBookmark(retriedBookmark);
+                      } catch (bookmarkError) {
+                        reportBookmarkFailure(bookmarkError);
                       }
-                      bookmarkRange.insertBookmark(candidateBookmarkName);
-                      await context.sync();
-                      bookmarkName = candidateBookmarkName;
-                      result.persistentAnchor = true;
-                      stagedAnchors.push({
-                        stableEditId: edit.stableEditId,
-                        bookmarkName,
-                        result,
-                      });
-                    } catch (error) {
-                      reportWordFailure(error, {
-                        operation: "word.edit_apply",
-                        level: "warning",
-                      });
-                      result.error = describeWordFailure(
-                        error,
-                        "The change is reviewable now, but its View link may not survive reopening the add-in.",
-                      );
                     }
                   }
                 }
