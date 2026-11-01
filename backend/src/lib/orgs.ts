@@ -31,7 +31,7 @@
 import type { OrgMemberHandover } from "@mike/contracts";
 import { listOrgPrivateContentAccess } from "./orgPrivateContent";
 import type { Db } from "./supabase";
-import { selectInBatches } from "./batchedQuery";
+import { selectAllPages, selectInBatches } from "./batchedQuery";
 import { safeError } from "./safeError";
 import { recordAudit } from "./audit";
 import {
@@ -320,41 +320,77 @@ export async function listOrgResources(
     // filter over a page of rows, and it must not become an N+1. Every
     // override the caller holds is read, not only the denials: a grant is
     // what admits a member to a private item.
-    const [projectsResult, workflowsResult, projectOverrides, workflowOverrides] =
-        await Promise.all([
-            db
-                .from("projects")
-                .select("id, user_id, org_id, visibility, name, cm_number, practice, created_at, updated_at")
-                .eq("org_id", params.orgId)
-                .is("archived_at", null)
-                .order("created_at", { ascending: false }),
-            db
-                .from("workflows")
-                .select(
-                    "id, user_id, org_id, visibility, title, type, practice, created_at",
-                )
-                .eq("org_id", params.orgId)
-                .is("archived_at", null)
-                .order("created_at", { ascending: false }),
-            db
-                .from("project_org_access_overrides")
-                .select("project_id, role")
-                .eq("org_id", params.orgId)
-                .eq("user_id", params.userId),
-            db
-                .from("workflow_org_access_overrides")
-                .select("workflow_id, role")
-                .eq("org_id", params.orgId)
-                .eq("user_id", params.userId),
-        ]);
-    const failed = [
-        projectsResult,
-        workflowsResult,
-        projectOverrides,
-        workflowOverrides,
-    ].find((result) => result.error)?.error;
-    if (failed)
-        return { ok: false, kind: "db_error", detail: failed.message };
+    //
+    // Every read is paged: PostgREST cuts an unpaged response at max_rows,
+    // so an organization past 1000 projects or workflows silently lost the
+    // rest (or, for the override tables, the grants that admit a member).
+    type Row = { id?: unknown; user_id?: unknown; visibility?: unknown; created_at?: unknown };
+    const pageBy = <T extends Record<string, unknown>>(
+        label: string,
+        key: string,
+        build: () => {
+            order(column: string, options: { ascending: boolean }): {
+                limit(count: number): PromiseLike<{ data: unknown; error: unknown }> & {
+                    gt(column: string, value: unknown): PromiseLike<{ data: unknown; error: unknown }>;
+                };
+            };
+        },
+    ) =>
+        selectAllPages<T>(label, (after, limit) => {
+            const query = build().order(key, { ascending: true }).limit(limit);
+            return (after ? query.gt(key, after[key]) : query) as PromiseLike<{ data: T[] | null; error: unknown }>;
+        });
+    let projectRows: Row[];
+    let workflowRows: Row[];
+    let projectOverrideRows: Record<string, unknown>[];
+    let workflowOverrideRows: Record<string, unknown>[];
+    try {
+        [projectRows, workflowRows, projectOverrideRows, workflowOverrideRows] =
+            await Promise.all([
+                pageBy<Row & Record<string, unknown>>("org projects", "id", () =>
+                    db
+                        .from("projects")
+                        .select("id, user_id, org_id, visibility, name, cm_number, practice, created_at, updated_at")
+                        .eq("org_id", params.orgId)
+                        .is("archived_at", null),
+                ),
+                pageBy<Row & Record<string, unknown>>("org workflows", "id", () =>
+                    db
+                        .from("workflows")
+                        .select(
+                            "id, user_id, org_id, visibility, title, type, practice, created_at",
+                        )
+                        .eq("org_id", params.orgId)
+                        .is("archived_at", null),
+                ),
+                pageBy("project overrides", "project_id", () =>
+                    db
+                        .from("project_org_access_overrides")
+                        .select("project_id, role")
+                        .eq("org_id", params.orgId)
+                        .eq("user_id", params.userId),
+                ),
+                pageBy("workflow overrides", "workflow_id", () =>
+                    db
+                        .from("workflow_org_access_overrides")
+                        .select("workflow_id, role")
+                        .eq("org_id", params.orgId)
+                        .eq("user_id", params.userId),
+                ),
+            ]);
+    } catch (error) {
+        return {
+            ok: false,
+            kind: "db_error",
+            detail: error instanceof Error ? error.message : "Organization resources lookup failed",
+        };
+    }
+    // Newest first, as the unpaged read was ordered.
+    const newestFirst = (a: Row, b: Row) =>
+        String(b.created_at ?? "").localeCompare(String(a.created_at ?? "")) ||
+        String(a.id).localeCompare(String(b.id));
+    projectRows.sort(newestFirst);
+    workflowRows.sort(newestFirst);
 
     // Fail closed: an unreadable override table is an error above, never an
     // empty map — which would read as "no grants and no denials".
@@ -364,9 +400,9 @@ export async function listOrgResources(
                 .filter((row) => typeof row[key] === "string")
                 .map((row) => [row[key] as string, row.role]),
         );
-    const projectOverrideById = overridesBy(projectOverrides.data, "project_id");
+    const projectOverrideById = overridesBy(projectOverrideRows, "project_id");
     const workflowOverrideById = overridesBy(
-        workflowOverrides.data,
+        workflowOverrideRows,
         "workflow_id",
     );
 
@@ -404,17 +440,16 @@ export async function listOrgResources(
             );
         });
 
-    type Row = { id?: unknown; user_id?: unknown; visibility?: unknown };
     return {
         ok: true,
         projects: visible(
-            (projectsResult.data ?? []) as Row[],
+            projectRows,
             projectOverrideById,
             ownerless.projects,
             privateAccess.get("project"),
         ),
         workflows: visible(
-            (workflowsResult.data ?? []) as Row[],
+            workflowRows,
             workflowOverrideById,
             ownerless.workflows,
             privateAccess.get("workflow"),
