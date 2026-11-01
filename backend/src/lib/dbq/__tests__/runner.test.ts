@@ -23,6 +23,8 @@ type Update = {
 function makeDb(opts?: {
     rpc?: () => Promise<{ data: unknown; error: { message: string } | null }>;
     selectData?: unknown[];
+    /** Rows served by id-keyset pages (`gt id`, `limit`), like PostgREST. */
+    keysetRows?: { id: string }[];
 }) {
     const updates: Update[] = [];
     const deletes: Record<string, unknown>[] = [];
@@ -64,7 +66,15 @@ function makeDb(opts?: {
                 state.filters[`lt:${col}`] = val;
                 return b;
             },
-            limit() {
+            order() {
+                return b;
+            },
+            gt(col: string, val: unknown) {
+                state.filters[`gt:${col}`] = val;
+                return b;
+            },
+            limit(n: number) {
+                state.filters.limit = n;
                 return b;
             },
             then(onF: (v: unknown) => unknown) {
@@ -77,9 +87,13 @@ function makeDb(opts?: {
                     });
                 if (state.op === "delete")
                     deletes.push({ table, ...state.filters });
+                const after = state.filters["gt:id"] as string | undefined;
+                const page = opts?.keysetRows
+                    ?.filter((row) => !after || row.id > after)
+                    .slice(0, state.filters.limit as number);
                 const value =
                     state.op === "select"
-                        ? { data: opts?.selectData ?? [], error: null }
+                        ? { data: page ?? opts?.selectData ?? [], error: null }
                         : { data: null, error: null };
                 return Promise.resolve(value).then(onF);
             },
@@ -406,6 +420,22 @@ describe("runDbJobRetentionSweep", () => {
         );
         expect(donePurge).toBeDefined();
         expect(donePurge?.["neq:kind"]).toBe("export.build");
+    });
+
+    it("drains an export backlog larger than one batch in a single sweep", async () => {
+        const keysetRows = Array.from({ length: 250 }, (_, i) => ({
+            id: `e${String(i).padStart(3, "0")}`,
+            result: { storage_path: `exports/u/${i}.json` },
+        }));
+        const db = makeDb({ keysetRows });
+        const deleted: string[] = [];
+        await runDbJobRetentionSweep(db as never, {
+            deleteStoredFile: async (path) => {
+                deleted.push(path);
+            },
+        });
+        expect(deleted).toHaveLength(250);
+        expect(db.deletes.filter((d) => typeof d.id === "string")).toHaveLength(250);
     });
 
     it("never sweeps failed cleanup rows that own private object pointers", async () => {

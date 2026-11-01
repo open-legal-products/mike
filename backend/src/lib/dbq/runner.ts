@@ -75,6 +75,9 @@ export const STALE_SECONDS = 600;
 const DONE_RETENTION_MS = 7 * 24 * 60 * 60 * 1000;
 const FAILED_RETENTION_MS = 30 * 24 * 60 * 60 * 1000;
 const SWEEP_EVERY_MS = 60 * 60 * 1000;
+/** Expired export rows read per query, and the per-sweep ceiling (50,000 rows). */
+const EXPORT_EXPIRY_BATCH = 100;
+const EXPORT_EXPIRY_MAX_BATCHES = 500;
 const RETRY_UNTIL_SUCCESS_KINDS = new Set(["storage.cleanup", "document.cleanup"]);
 
 /**
@@ -393,28 +396,41 @@ export async function runDbJobRetentionSweep(
     // 1. Expire export artifacts (their download links stop working here —
     //    documented as a 24h availability window).
     const exportCutoff = new Date(Date.now() - exportRetentionMs).toISOString();
-    const { data: expired } = await db
-        .from("db_jobs")
-        .select("id, result")
-        .eq("kind", "export.build")
-        .eq("status", "done")
-        .lt("finished_at", exportCutoff)
-        .limit(100);
-    for (const row of (expired ?? []) as Pick<DbJob, "id" | "result">[]) {
-        const path = row.result?.storage_path;
-        if (typeof path === "string" && path.length > 0) {
-            try {
-                await deleteStoredFile(path);
-            } catch (err) {
-                // Keep the row so the next sweep retries the file delete.
-                console.error("[dbq] export artifact delete failed", {
-                    id: row.id,
-                    err,
-                });
-                continue;
+    //    Drain the backlog in keyset batches: one capped batch per hourly
+    //    sweep fell behind for good once more than 2,400 exports finished
+    //    in a day. Rows kept after a failed file delete sort before the
+    //    cursor, so a retrying row can never pin the loop.
+    let after: string | null = null;
+    for (let batch = 0; batch < EXPORT_EXPIRY_MAX_BATCHES; batch++) {
+        let query = db
+            .from("db_jobs")
+            .select("id, result")
+            .eq("kind", "export.build")
+            .eq("status", "done")
+            .lt("finished_at", exportCutoff)
+            .order("id", { ascending: true })
+            .limit(EXPORT_EXPIRY_BATCH);
+        if (after) query = query.gt("id", after);
+        const { data: expired } = await query;
+        const rows = (expired ?? []) as Pick<DbJob, "id" | "result">[];
+        for (const row of rows) {
+            const path = row.result?.storage_path;
+            if (typeof path === "string" && path.length > 0) {
+                try {
+                    await deleteStoredFile(path);
+                } catch (err) {
+                    // Keep the row so the next sweep retries the file delete.
+                    console.error("[dbq] export artifact delete failed", {
+                        id: row.id,
+                        err,
+                    });
+                    continue;
+                }
             }
+            await db.from("db_jobs").delete().eq("id", row.id);
         }
-        await db.from("db_jobs").delete().eq("id", row.id);
+        if (rows.length < EXPORT_EXPIRY_BATCH) break;
+        after = rows[rows.length - 1].id;
     }
 
     // 2. Drop old finished rows — EXCEPT export.build. Step 1 is the only
