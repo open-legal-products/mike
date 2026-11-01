@@ -55,6 +55,7 @@ import type { Document } from "@/app/components/shared/types";
 import { useDebouncedValue } from "@/app/hooks/useDebouncedValue";
 import { notifyError } from "@/app/lib/userFacingError";
 import { useAssignLatest } from "@/app/hooks/useLatestRef";
+import { documentCountsByFolder } from "./documentCountsByFolder";
 
 type LibraryViewCollection = {
     documents: Document[];
@@ -262,14 +263,7 @@ export function LibraryWorkspaceProvider({
           ...prev,
           [kind]: {
             [ROOT_LEVEL_KEY]: root.documents.length,
-            ...Object.fromEntries(
-              loadedFolderIds.map((folderId) => [
-                folderId,
-                documents.filter(
-                  (document) => (document.folder_id ?? null) === folderId,
-                ).length,
-              ]),
-            ),
+            ...documentCountsByFolder(documents, loadedFolderIds),
           },
         }));
             } catch (error) {
