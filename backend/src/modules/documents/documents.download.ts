@@ -8,6 +8,7 @@ import {
 } from "../../lib/documentVersions";
 import { checkProjectAccess, createDocumentAccessChecker } from "../../lib/access";
 import { mapWithConcurrency } from "../../lib/concurrency";
+import { BatchedQueryError, selectAllPages, selectInBatches } from "../../lib/batchedQuery";
 import { zipExportLimitDetail } from "../../lib/zipExport";
 import {
     loadDocumentDisplay,
@@ -161,134 +162,113 @@ export async function resolveZipExportDocuments(
 
     const rawDocsById = new Map<string, DownloadDocumentRow>();
 
-    if (documentIds.length > 0) {
-        const { data, error } = await db
-            .from("documents")
-            .select("id, current_version_id, user_id, project_id, org_id, workflow_id")
-            .in("id", documentIds);
-        if (error) return { ok: false, kind: "internal", error };
-        for (const doc of data ?? [])
-            rawDocsById.set(doc.id as string, doc as DownloadDocumentRow);
-    }
+    // Every id list is sent in 50-id batches (a 500-document selection in one
+    // `.in()` exceeds the gateway's URL limit) and every read that can grow
+    // with the selection is paged by id (a folder subtree can hold more than
+    // max_rows documents, which used to be dropped without an error).
+    const DOCUMENT_COLUMNS = "id, current_version_id, user_id, project_id, org_id, workflow_id";
+    type FolderRow = { id: string; project_id?: string; library_kind?: string; parent_folder_id: string | null };
+    const documentsWhereIn = (column: "id" | "folder_id" | "library_folder_id", ids: string[]) =>
+        selectInBatches<DownloadDocumentRow>("download documents", ids, (batch) =>
+            selectAllPages<DownloadDocumentRow>("download documents", (after, limit) => {
+                let query = db
+                    .from("documents")
+                    .select(DOCUMENT_COLUMNS)
+                    .in(column, batch)
+                    .order("id", { ascending: true })
+                    .limit(limit);
+                if (after) query = query.gt("id", after.id);
+                return query;
+            }),
+        );
+    try {
+        for (const doc of await documentsWhereIn("id", documentIds))
+            rawDocsById.set(doc.id, doc);
 
-    if (folderIds.length > 0) {
-        const [projectRootsResult, libraryRootsResult] = await Promise.all([
-            db
-                .from("project_subfolders")
-                .select("id, project_id, parent_folder_id")
-                .in("id", folderIds),
-            db
-                .from("library_folders")
-                .select("id, user_id, library_kind, parent_folder_id")
-                .in("id", folderIds)
-                .eq("user_id", userId),
-        ]);
-        if (projectRootsResult.error)
-            return {
-                ok: false,
-                kind: "internal",
-                error: projectRootsResult.error,
-            };
-        if (libraryRootsResult.error)
-            return {
-                ok: false,
-                kind: "internal",
-                error: libraryRootsResult.error,
-            };
+        if (folderIds.length > 0) {
+            const [projectRoots, libraryRoots] = await Promise.all([
+                selectInBatches<FolderRow>("download project folders", folderIds, (batch) =>
+                    db
+                        .from("project_subfolders")
+                        .select("id, project_id, parent_folder_id")
+                        .in("id", batch),
+                ),
+                selectInBatches<FolderRow>("download library folders", folderIds, (batch) =>
+                    db
+                        .from("library_folders")
+                        .select("id, user_id, library_kind, parent_folder_id")
+                        .in("id", batch)
+                        .eq("user_id", userId),
+                ),
+            ]);
 
-        const projectRoots = projectRootsResult.data ?? [];
-        const projectIds = [
-            ...new Set(
-                projectRoots.map((folder) => folder.project_id as string),
-            ),
-        ];
-        const accessibleProjectIds = (
-            await mapWithConcurrency(
-                projectIds, 5, async (projectId) => ({
-                    projectId,
-                    access: await checkProjectAccess(
+            const projectIds = [
+                ...new Set(projectRoots.map((folder) => folder.project_id as string)),
+            ];
+            const accessibleProjectIds = new Set(
+                (
+                    await mapWithConcurrency(projectIds, 5, async (projectId) => ({
                         projectId,
-                        userId,
-                        userEmail,
-                        db,
-                    ),
-                }),
-            )
-        )
-            .filter((result) => result.access.ok)
-            .map((result) => result.projectId);
+                        access: await checkProjectAccess(projectId, userId, userEmail, db),
+                    }))
+                )
+                    .filter((result) => result.access.ok)
+                    .map((result) => result.projectId),
+            );
+            const accessibleProjectRoots = projectRoots.filter((folder) =>
+                accessibleProjectIds.has(folder.project_id as string),
+            );
+            const libraryKinds = [
+                ...new Set(libraryRoots.map((folder) => folder.library_kind as string)),
+            ];
 
-        const accessibleProjectRoots = projectRoots.filter((folder) =>
-            accessibleProjectIds.includes(folder.project_id as string),
-        );
-        const libraryRoots = libraryRootsResult.data ?? [];
-        const libraryKinds = [
-            ...new Set(
-                libraryRoots.map((folder) => folder.library_kind as string),
-            ),
-        ];
+            const [projectFolders, libraryFolders] = await Promise.all([
+                selectInBatches<FolderRow>("download project subtree", accessibleProjectIds, (batch) =>
+                    selectAllPages<FolderRow>("download project subtree", (after, limit) => {
+                        let query = db
+                            .from("project_subfolders")
+                            .select("id, project_id, parent_folder_id")
+                            .in("project_id", batch)
+                            .order("id", { ascending: true })
+                            .limit(limit);
+                        if (after) query = query.gt("id", after.id);
+                        return query;
+                    }),
+                ),
+                libraryKinds.length > 0
+                    ? selectAllPages<FolderRow>("download library subtree", (after, limit) => {
+                          let query = db
+                              .from("library_folders")
+                              .select("id, user_id, library_kind, parent_folder_id")
+                              .eq("user_id", userId)
+                              .in("library_kind", libraryKinds)
+                              .order("id", { ascending: true })
+                              .limit(limit);
+                          if (after) query = query.gt("id", after.id);
+                          return query;
+                      })
+                    : [],
+            ]);
 
-        const [projectFoldersResult, libraryFoldersResult] = await Promise.all([
-            accessibleProjectIds.length > 0
-                ? db
-                      .from("project_subfolders")
-                      .select("id, project_id, parent_folder_id")
-                      .in("project_id", accessibleProjectIds)
-                : Promise.resolve({ data: [], error: null }),
-            libraryKinds.length > 0
-                ? db
-                      .from("library_folders")
-                      .select("id, user_id, library_kind, parent_folder_id")
-                      .eq("user_id", userId)
-                      .in("library_kind", libraryKinds)
-                : Promise.resolve({ data: [], error: null }),
-        ]);
-        if (projectFoldersResult.error)
-            return {
-                ok: false,
-                kind: "internal",
-                error: projectFoldersResult.error,
-            };
-        if (libraryFoldersResult.error)
-            return {
-                ok: false,
-                kind: "internal",
-                error: libraryFoldersResult.error,
-            };
-
-        const projectFolderIds = collectFolderDescendantIds(
-            accessibleProjectRoots,
-            projectFoldersResult.data ?? [],
-        );
-        const libraryFolderIds = collectFolderDescendantIds(
-            libraryRoots,
-            libraryFoldersResult.data ?? [],
-        );
-
-        const folderDocumentResults = await Promise.all([
-            projectFolderIds.length > 0
-                ? db
-                      .from("documents")
-                      .select(
-                          "id, current_version_id, user_id, project_id, org_id, workflow_id",
-                      )
-                      .in("folder_id", projectFolderIds)
-                : Promise.resolve({ data: [], error: null }),
-            libraryFolderIds.length > 0
-                ? db
-                      .from("documents")
-                      .select(
-                          "id, current_version_id, user_id, project_id, org_id, workflow_id",
-                      )
-                      .in("library_folder_id", libraryFolderIds)
-                : Promise.resolve({ data: [], error: null }),
-        ]);
-        for (const result of folderDocumentResults) {
-            if (result.error)
-                return { ok: false, kind: "internal", error: result.error };
-            for (const doc of result.data ?? [])
-                rawDocsById.set(doc.id as string, doc as DownloadDocumentRow);
+            const [projectFolderDocs, libraryFolderDocs] = await Promise.all([
+                documentsWhereIn(
+                    "folder_id",
+                    collectFolderDescendantIds(accessibleProjectRoots, projectFolders),
+                ),
+                documentsWhereIn(
+                    "library_folder_id",
+                    collectFolderDescendantIds(libraryRoots, libraryFolders),
+                ),
+            ]);
+            for (const doc of [...projectFolderDocs, ...libraryFolderDocs])
+                rawDocsById.set(doc.id, doc);
         }
+    } catch (error) {
+        return {
+            ok: false,
+            kind: "internal",
+            error: error instanceof BatchedQueryError ? error.cause : error,
+        };
     }
 
     // Folder expansion can multiply the selection well past the requested
