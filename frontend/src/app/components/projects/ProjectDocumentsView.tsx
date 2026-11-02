@@ -33,6 +33,7 @@ import {
 } from "@/app/components/documents/DocTable";
 import { TabPillButtonUI } from "@/shared/ui/TabPillButtonUI";
 import { ProjectSectionToolbar, useProjectWorkspace } from "./ProjectWorkspace";
+import { ProjectEmailIntake } from "./ProjectEmailIntake";
 
 interface Props {
     projectId: string;
@@ -72,6 +73,7 @@ export function ProjectDocumentsView({ projectId, folderId = null }: Props) {
     const [selectionActions, setSelectionActions] =
         useState<DocTableSelectionActions | null>(null);
     const [actionsOpen, setActionsOpen] = useState(false);
+    const [emailIntakeOpen, setEmailIntakeOpen] = useState(false);
     const [directoryPagination, setDirectoryPagination] = useState<{
         projectId: string;
         limits: Record<string, number>;
@@ -286,6 +288,7 @@ export function ProjectDocumentsView({ projectId, folderId = null }: Props) {
 
     const toolbarActions = (
         <div className="flex items-center gap-1.5">
+            {roleKnown && canDo("docs.organize") && canDo("content.edit") && <TabPillButtonUI onClick={() => setEmailIntakeOpen(true)} disabled={projectLoading}>Refresh from Gmail</TabPillButtonUI>}
             {selectionActions && (
                 <SelectionActionsMenu
                     open={actionsOpen}
@@ -317,6 +320,7 @@ export function ProjectDocumentsView({ projectId, folderId = null }: Props) {
 
     return (
         <>
+            {emailIntakeOpen && project && <ProjectEmailIntake projectId={projectId} folderId={folderId} projectName={project.name} onClose={() => setEmailIntakeOpen(false)} onImported={refreshCollection} />}
             <ProjectSectionToolbar
                 backAction={folderBackAction}
                 actions={toolbarActions}
