@@ -32,6 +32,9 @@ import AxeBuilder from "@axe-core/playwright";
 /** Impact levels that fail the test. Ratchet by adding "serious" here. */
 const BLOCKING_IMPACTS = ["critical"];
 
+// Hydration on the throttled development renderer can exceed ten seconds.
+const PAGE_READY_TIMEOUT = process.env.REACT_STRESS === "1" ? 30_000 : 10_000;
+
 /** Impact levels that are reported in the test output but do not fail. */
 const LOGGED_IMPACTS = ["serious"];
 
@@ -110,7 +113,7 @@ test("assistant page has no critical accessibility violations", async ({
     await expect(page).toHaveURL(/\/assistant/);
     /* The InitialView renders a greeting heading once loaded. */
     await expect(page.locator("h1, h2").first()).toBeVisible({
-        timeout: 10_000,
+        timeout: PAGE_READY_TIMEOUT,
     });
 
     await expectNoBlockingViolations(page, "/assistant");
@@ -123,10 +126,10 @@ test("projects page has no critical accessibility violations", async ({
 }) => {
     await page.goto("/projects");
     await expect(page).toHaveURL(/\/projects/);
-    /* The Plus icon button (aria-label="New project") renders with the list. */
+    /* The loading skeleton also has this button; wait for the loaded list. */
     await expect(
         page.getByRole("button", { name: "New project" }),
-    ).toBeVisible({ timeout: 10_000 });
+    ).toBeEnabled({ timeout: PAGE_READY_TIMEOUT });
 
     await expectNoBlockingViolations(page, "/projects");
 });
