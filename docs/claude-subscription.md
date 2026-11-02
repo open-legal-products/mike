@@ -138,6 +138,14 @@ missing or was not loaded, so recreate the backend container after you edit
   which silence alone cannot catch. Either way the chat shows an error saying
   which bound was reached. Raise the idle value if you see spurious timeouts on
   very slow hardware, and the total value if you run genuinely long reviews.
+- **Subagents:** a chat can hand tasks to [subagents](subagents.md), each one
+  a separate Claude Code process. Light and standard subagents step down to
+  `claude-code/haiku` and `claude-code/sonnet`. The parent turn waits for its
+  subagents, and `CLAUDE_CODE_TIMEOUT_MS` covers that wait, so the default 10
+  minutes ends a turn whose subagents run at standard (30 minutes) or deep
+  (90 minutes) effort. Set it to `5400000` or more if you use them. Claude
+  Code reports no token usage, so subagents stop at their step and time
+  limits only.
 - **Models missing from the picker:** confirm `CLAUDE_CODE_ENABLED=true` is
   set, recreate the backend, and reload the page.
 - **Expired or revoked token:** run `claude setup-token` again and update

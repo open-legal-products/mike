@@ -1,6 +1,7 @@
 import type { DelegationModelTier } from "@mike/contracts";
 import {
     CLAUDE_CODE_LOW_MODELS,
+    CLAUDE_CODE_MID_MODELS,
     builtInModelIds,
     CLAUDE_LOW_MODELS,
     CLAUDE_MID_MODELS,
@@ -308,6 +309,11 @@ function tieredModels(
             return { light: OPENAI_LOW_MODELS, standard: OPENAI_MID_MODELS };
         case "mistral":
             return { light: MISTRAL_LOW_MODELS, standard: MISTRAL_MID_MODELS };
+        case "claude-code":
+            return {
+                light: CLAUDE_CODE_LOW_MODELS,
+                standard: CLAUDE_CODE_MID_MODELS,
+            };
         default:
             return null;
     }
