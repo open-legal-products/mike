@@ -1,3 +1,4 @@
+import { previewProjectEmail, importProjectEmail, getProjectEmailReceipt, latestProjectEmail } from "./mikeApi";
 import { listOrgPrivateContent, setOrgPrivateContentPermission, openOrgPrivateContent, closeOrgPrivateContent } from "./mikeApi";
 import { setUserProfilePhoto, listDeletedOrganizations, restoreOrganization } from "./mikeApi";
 import { listOrgDepartures, reassignOrgDepartureArchives, deleteOrgDepartureArchives } from "./mikeApi";
@@ -3750,5 +3751,60 @@ describe("organization private content", () => {
         expect(lastFetchCall()).toMatchObject({ url: "/api/orgs/org-1/private-content/document/doc-1/open", init: { method: "POST" } });
         await closeOrgPrivateContent("org-1", "document", "doc-1");
         expect(lastFetchCall()).toMatchObject({ url: "/api/orgs/org-1/private-content/document/doc-1", init: { method: "DELETE" } });
+    });
+});
+
+
+describe("project-linked email intake request contracts", () => {
+    const projectId = "project/a b";
+    const previewId = "preview/a b";
+    const receipt = { previewId, query: "subject:PH27", messages: [] };
+
+    it("POSTs the bounded preview query, destination and page token to the encoded project route", async () => {
+        const input = { query: "subject:PH27", folderId: "folder-1", pageToken: "page/2" };
+        const preview = { id: previewId, projectId, accountEmail: "reviewer@example.test", query: input.query, expiresAt: "2026-11-02T20:00:00Z", messages: [] };
+        fetchMock.mockResolvedValueOnce(jsonResponse(preview));
+
+        expect(await previewProjectEmail(projectId, input)).toEqual(preview);
+        const { url, init } = lastFetchCall();
+        expect(url).toBe("/api/project-email/project%2Fa%20b/preview");
+        expect(init.method).toBe("POST");
+        expect(init.headers).toMatchObject({ "Content-Type": "application/json" });
+        expect(JSON.parse(init.body as string)).toEqual(input);
+        expect(init.credentials).toBe("include");
+    });
+
+    it("POSTs only the exact selected message IDs with explicit project-sharing confirmation", async () => {
+        fetchMock.mockResolvedValueOnce(jsonResponse(receipt));
+
+        expect(await importProjectEmail(projectId, previewId, ["message-2", "message-4"])).toEqual(receipt);
+        const { url, init } = lastFetchCall();
+        expect(url).toBe("/api/project-email/project%2Fa%20b/preview%2Fa%20b/import");
+        expect(init.method).toBe("POST");
+        expect(init.headers).toMatchObject({ "Content-Type": "application/json" });
+        expect(JSON.parse(init.body as string)).toEqual({ selectedIds: ["message-2", "message-4"], shareWithProject: true });
+        expect(init.credentials).toBe("include");
+    });
+
+    it("reads the receipt from encoded project and preview routes without a mutation payload", async () => {
+        fetchMock.mockResolvedValueOnce(jsonResponse(receipt));
+
+        expect(await getProjectEmailReceipt(projectId, previewId)).toEqual(receipt);
+        const { url, init } = lastFetchCall();
+        expect(url).toBe("/api/project-email/project%2Fa%20b/preview%2Fa%20b/receipt");
+        expect(init.method ?? "GET").toBe("GET");
+        expect(init.body).toBeUndefined();
+    });
+
+    it("reads the latest confirmed intake and preserves an empty result", async () => {
+        const latest = { id: previewId, query: "subject:PH27", confirmed_at: "2026-11-02T19:00:00Z" };
+        fetchMock.mockResolvedValueOnce(jsonResponse(latest));
+        expect(await latestProjectEmail(projectId)).toEqual(latest);
+        expect(lastFetchCall()).toMatchObject({ url: "/api/project-email/project%2Fa%20b/latest" });
+        expect(lastFetchCall().init.method ?? "GET").toBe("GET");
+        expect(lastFetchCall().init.body).toBeUndefined();
+
+        fetchMock.mockResolvedValueOnce(jsonResponse(null));
+        expect(await latestProjectEmail(projectId)).toBeNull();
     });
 });
