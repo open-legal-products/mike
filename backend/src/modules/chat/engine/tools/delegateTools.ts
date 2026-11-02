@@ -100,7 +100,8 @@ export function delegateTool(chatModel: string, models: string[]): OpenAIToolSch
                 properties: {
                     title: {
                         type: "string",
-                        description: "A few words naming the task, shown to the user.",
+                        description:
+                            "A few words naming the task, shown to the user. If omitted, a continuation keeps its title and a new task uses Subagent.",
                     },
                     task: {
                         type: "string",
@@ -381,8 +382,7 @@ async function resolveDelegation(
           (await ctx.runStore.load(continuedFrom)))
         : null;
     if (continuedFrom && !earlier) return { error: CANNOT_CONTINUE };
-    const title = textInput(call.input.title) || earlier?.title;
-    if (!title) return { error: "A delegate call needs a title." };
+    const title = textInput(call.input.title) || earlier?.title || "Subagent";
     const documents = earlier
         ? earlier.documents && labelsOf(earlier.documents, ctx.docIndex)
         : requestedDocuments(call.input.documents, ctx);
