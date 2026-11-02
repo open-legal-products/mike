@@ -1,6 +1,8 @@
 import { act, renderHook, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { getPanelDocument } from "@/app/lib/mikeApi";
+import type { ReactNode } from "react";
+import { DocumentWorkspaceScope } from "@/app/contexts/WorkspaceContext";
 import { useResolvedPanelDocument } from "./useResolvedPanelDocument";
 
 vi.mock("@/app/lib/mikeApi", () => ({
@@ -50,6 +52,35 @@ describe("useResolvedPanelDocument", () => {
         expect(result.current.document.subdocuments).toHaveLength(1);
     });
 
+    it("updates quotes without refetching the same case when its summary changes", async () => {
+        getPanelDocumentMock.mockResolvedValue({
+            ...summary,
+            subdocuments: [
+                {
+                    document_id: "opinion",
+                    title: "Opinion",
+                    type: "html",
+                    html: "<p>Case content</p>",
+                },
+            ],
+        });
+        const { result, rerender } = renderHook(
+            ({ document }) => useResolvedPanelDocument(document),
+            {
+                initialProps: { document: summary },
+            },
+        );
+        await waitFor(() => expect(result.current.isLoading).toBe(false));
+        const updated = {
+            ...summary,
+            quotes: [{ ...summary.quotes[0], quote: "Another passage" }],
+        };
+        rerender({ document: updated });
+        expect(result.current.document.quotes).toEqual(updated.quotes);
+        expect(result.current.document.subdocuments).toHaveLength(1);
+        expect(getPanelDocumentMock).toHaveBeenCalledOnce();
+    });
+
     it("retries a failed hydration request", async () => {
         getPanelDocumentMock
             .mockRejectedValueOnce(new Error("temporary failure"))
@@ -76,5 +107,15 @@ describe("useResolvedPanelDocument", () => {
         );
         expect(getPanelDocumentMock).toHaveBeenCalledTimes(2);
         expect(result.current.error).toBeNull();
+    });
+    it("reads the case in the workspace of the item it is opened from", async () => {
+        getPanelDocumentMock.mockResolvedValue({ ...summary, subdocuments: [] });
+        const wrapper = ({ children }: { children: ReactNode }) => (
+            <DocumentWorkspaceScope orgId="org-1">{children}</DocumentWorkspaceScope>
+        );
+        renderHook(() => useResolvedPanelDocument(summary), { wrapper });
+        await waitFor(() =>
+            expect(getPanelDocumentMock).toHaveBeenCalledWith("case:123", "org-1"),
+        );
     });
 });

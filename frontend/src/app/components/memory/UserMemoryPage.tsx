@@ -2,8 +2,10 @@
 
 import { useCallback, useState } from "react";
 import { useUserProfile } from "@/app/contexts/UserProfileContext";
+import { useWorkspace } from "@/app/contexts/WorkspaceContext";
+import { useHasMultipleWorkspaces } from "@/app/hooks/useHasMultipleWorkspaces";
 import { ConfirmPopup } from "@/app/components/popups/ConfirmPopup";
-import { SettingsCard } from "@/app/components/settings/SettingsCard";
+import { GlassCardUI } from "@/shared/ui/GlassCardUI";
 import { SettingsHeading } from "@/app/components/settings/SettingsHeading";
 import { SettingsRow } from "@/app/components/settings/SettingsRow";
 import { MarkdownEditor } from "@/app/components/ui/markdown-editor";
@@ -29,7 +31,47 @@ import { userFacingApiError } from "@/app/lib/userFacingError";
 
 type ConfirmAction = "disable";
 
+// A person has one memory per workspace: Personal, and one for each
+// organization they belong to. Each is private to them, and a conversation
+// reads and learns only the one for the workspace it is in. This page shows
+// the memory for the active workspace.
+//
+// Keyed by workspace, so switching starts again from the other file: nothing
+// loaded, drafted or pending for one workspace can be saved into another,
+// and a draft still being saved is flushed to the workspace it was typed in.
 export function UserMemoryPage() {
+  const { workspaceId, activeOrganization } = useWorkspace();
+  const multipleWorkspaces = useHasMultipleWorkspaces();
+  const workspace = workspaceId ?? undefined;
+  return (
+    <WorkspaceMemory
+      key={workspace ?? "personal"}
+      workspace={workspace}
+      organizationName={activeOrganization?.name ?? null}
+      multipleWorkspaces={multipleWorkspaces}
+    />
+  );
+}
+
+function WorkspaceMemory({
+  workspace,
+  organizationName,
+  multipleWorkspaces,
+}: {
+  /** "personal", an organization id, or undefined outside a workspace. */
+  workspace: string | undefined;
+  /** The active organization's name, or null in Personal. */
+  organizationName: string | null;
+  /**
+   * Whether the person has more than one workspace. Only then does the page
+   * say that this memory is the workspace's own.
+   */
+  multipleWorkspaces: boolean;
+}) {
+  // What this memory is called, wherever the page names it.
+  const memoryName = organizationName
+    ? `Memory in ${organizationName}`
+    : "Personal memory";
   const [settingsMutation, setSettingsMutation] = useState<
     "enable" | "disable" | null
   >(null);
@@ -37,12 +79,13 @@ export function UserMemoryPage() {
     null,
   );
   const loadMemory = useCallback(
-    (signal?: AbortSignal) => getUserMemory(signal),
-    [],
+    (signal?: AbortSignal) => getUserMemory(signal, workspace),
+    [workspace],
   );
   const saveMemory = useCallback(
-    (content: string, revision: number) => updateUserMemory(content, revision),
-    [],
+    (content: string, revision: number) =>
+      updateUserMemory(content, revision, workspace),
+    [workspace],
   );
   const {
     memory,
@@ -87,12 +130,12 @@ export function UserMemoryPage() {
     // reads as if the new file were already failing.
     setAutosaveError(null);
     try {
-      syncCurrent(await setUserMemoryEnabled(true));
+      syncCurrent(await setUserMemoryEnabled(true, workspace));
     } catch (cause) {
       setError(
         userFacingApiError(
           cause,
-          "App-wide memory could not be turned on. Please try again.",
+          "Memory could not be turned on. Please try again.",
         ),
       );
     } finally {
@@ -105,14 +148,14 @@ export function UserMemoryPage() {
     setSettingsMutation("disable");
     setError(null);
     try {
-      const current = await setUserMemoryEnabled(false);
+      const current = await setUserMemoryEnabled(false, workspace);
       syncCurrent(current);
       setConfirmAction(null);
     } catch (cause) {
       setError(
         userFacingApiError(
           cause,
-          "App-wide memory could not be turned off. Please try again.",
+          "Memory could not be turned off. Please try again.",
         ),
       );
       setConfirmAction(null);
@@ -131,10 +174,10 @@ export function UserMemoryPage() {
           Memory
         </SettingsHeading>
 
-        <SettingsCard>
+        <GlassCardUI>
           {loading ? (
             <div
-              className="flex items-center justify-between gap-3 px-4 py-5"
+              className="flex items-center justify-between gap-3 p-4"
               aria-label="Loading memory settings"
             >
               <div className="space-y-2">
@@ -158,10 +201,13 @@ export function UserMemoryPage() {
           ) : (
             <SettingsRow>
               <div className="space-y-1">
-                <SettingsLabel>App-wide memory</SettingsLabel>
+                <SettingsLabel>{memoryName}</SettingsLabel>
                 <SettingsDescription>
-                  Let Mike curate useful details after saved conversations and
-                  use them in future answers.
+                  {organizationName
+                    ? `Let Mike curate useful details after your own conversations in ${organizationName} and use them in future answers there. Only you can see it.${multipleWorkspaces ? " You have a separate memory for each workspace." : ""}`
+                    : multipleWorkspaces
+                      ? "Let Mike curate useful details after your saved conversations in Personal and use them in future answers there. You have a separate memory for each workspace."
+                      : "Let Mike curate useful details after your saved conversations and use them in future answers."}
                 </SettingsDescription>
               </div>
               <div className="flex items-center gap-3">
@@ -169,7 +215,7 @@ export function UserMemoryPage() {
                   checked={memory.enabled}
                   disabled={interactionLocked}
                   aria-busy={settingsMutation === "enable"}
-                  aria-label="App-wide memory"
+                  aria-label={memoryName}
                   onCheckedChange={(enabled) => {
                     if (enabled) void enableMemory();
                     else {
@@ -183,7 +229,7 @@ export function UserMemoryPage() {
           )}
 
           <ProjectMemoryDefaultRow />
-        </SettingsCard>
+        </GlassCardUI>
 
         {error ? (
           <p className="text-sm text-red-600" role="alert">
@@ -241,7 +287,7 @@ export function UserMemoryPage() {
               onChange={(value) => {
                 changeDraft(value);
               }}
-              ariaLabel="App-wide memory"
+              ariaLabel={memoryName}
               className="min-h-[24rem]"
               suspended={editorLocked}
               allowTables={false}
@@ -252,8 +298,12 @@ export function UserMemoryPage() {
 
       <ConfirmPopup
         open={confirmAction !== null}
-        title="Turn off and delete app-wide memory?"
-        message={`This will delete the existing app-wide memory.md file${dirty ? " and your unsaved draft" : ""}, cancel pending memory updates, and stop future memory updates until you turn app-wide memory on again.`}
+        title={
+          organizationName
+            ? `Turn off and delete your memory in ${organizationName}?`
+            : "Turn off and delete your Personal memory?"
+        }
+        message={`This will delete the existing memory.md file${multipleWorkspaces ? ` for ${organizationName ?? "Personal"}` : ""}${dirty ? " and your unsaved draft" : ""}, cancel pending memory updates, and stop future memory updates here until you turn it on again.${multipleWorkspaces ? " Your memory in other workspaces is not affected." : ""}`}
         confirmLabel="Disable"
         confirmVariant="danger"
         confirmStatus={settingsMutation ? "loading" : "idle"}
@@ -262,7 +312,12 @@ export function UserMemoryPage() {
           if (!settingsMutation) setConfirmAction(null);
         }}
       />
-      <MemoryUpdateFailedPopup memory={memory} scopeKey="app" />
+      <MemoryUpdateFailedPopup
+        memory={memory}
+        scopeKey={
+          workspace && workspace !== "personal" ? `app:${workspace}` : "app"
+        }
+      />
     </div>
   );
 }

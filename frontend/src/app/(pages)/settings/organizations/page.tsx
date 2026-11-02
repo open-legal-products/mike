@@ -1,5 +1,7 @@
-import { redirect } from "next/navigation";
+"use client";
 
-export default function LegacyOrganizationsPage() {
-  redirect("/organizations");
+import { OrganizationsOverview } from "@/app/components/organizations/OrganizationsOverview";
+
+export default function OrganizationsSettingsPage() {
+  return <OrganizationsOverview />;
 }

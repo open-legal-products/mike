@@ -5,7 +5,7 @@ vi.mock("../user.settings", () => ({ getUserModelSettings: settings }));
 import { resolveUserChatSelection } from "../user.chatSelection";
 
 const profile = {
-  last_selected_chat_model: "gemini-3.7-flash",
+  last_selected_chat_model: "gemini-3.8-flash",
   last_selected_reasoning_level: "low",
   api_keys: { openai: "dummy", claude: "dummy", gemini: "dummy" },
 };
@@ -18,20 +18,33 @@ beforeEach(() => {
 describe("cross-surface chat selection", () => {
   it.each([
     [
-      { requestedModel: "gpt-5.6-luna", chatModel: "claude-fable-5" },
-      "gpt-5.6-luna",
+      { requestedModel: "gpt-6-luna", chatModel: "claude-fable-5-1" },
+      "gpt-6-luna",
     ],
-    [{ chatModel: "claude-fable-5" }, "claude-fable-5"],
-    [{}, "gemini-3.7-flash"],
+    [{ chatModel: "claude-fable-5-1" }, "claude-fable-5-1"],
+    [{}, "gemini-3.8-flash"],
   ])(
     "selects request, then chat, then profile: %j",
     async (args, selectedModel) => {
       expect(
         await resolveUserChatSelection(db, { userId: "actor", ...args }),
       ).toMatchObject({ ok: true, selectedModel, modelSettings: profile });
-      expect(settings).toHaveBeenCalledExactlyOnceWith("actor", db);
+      expect(settings).toHaveBeenCalledExactlyOnceWith("actor", db, {
+        orgId: undefined,
+      });
     },
   );
+
+  it("resolves against the keys of the chat's organization", async () => {
+    await resolveUserChatSelection(db, {
+      userId: "actor",
+      chatModel: "claude-fable-5-1",
+      orgId: "org-1",
+    });
+    expect(settings).toHaveBeenCalledExactlyOnceWith("actor", db, {
+      orgId: "org-1",
+    });
+  });
 
   it.each([
     [{ requestedReasoning: "high", chatReasoningLevel: "medium" }, "high"],
@@ -60,7 +73,7 @@ describe("cross-surface chat selection", () => {
     expect(
       await resolveUserChatSelection(db, {
         userId: "actor",
-        requestedModel: "gpt-5.6-luna",
+        requestedModel: "gpt-6-luna",
       }),
     ).toMatchObject({ ok: false, status: 422, code: "missing_api_key" });
   });

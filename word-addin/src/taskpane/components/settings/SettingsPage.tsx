@@ -6,6 +6,7 @@ import { PillButtonUI as PillButton } from "@mike/pill-button-ui";
 import type { WordChatStorageMode } from "../../lib/wordChatSettings";
 import { Modal } from "../primitives/Modal";
 import { GlassCardUI } from "@mike/glass-card-ui";
+import { reportFault } from "../../lib/notify";
 
 interface SettingsPageProps {
   storageMode: WordChatStorageMode;
@@ -30,9 +31,10 @@ export function SettingsPage({
       await onStorageModeChange(cloud ? "cloud" : "local");
     } catch (reason) {
       setError(
-        reason instanceof Error
-          ? reason.message
-          : "Could not save the chat storage setting.",
+        reportFault(reason, {
+          fallback: "Mike couldn't save that setting. Try again.",
+          operation: "settings.keys",
+        }).message,
       );
     } finally {
       setSaving(false);
@@ -111,9 +113,11 @@ export function SettingsPage({
               .then(() => setClearConfirmOpen(false))
               .catch((reason: unknown) =>
                 setError(
-                  reason instanceof Error
-                    ? reason.message
-                    : "Could not delete device-only chats.",
+                  reportFault(reason, {
+                    fallback:
+                      "Mike couldn't delete the device-only chats. Try again.",
+                    operation: "settings.keys",
+                  }).message,
                 ),
               )
               .finally(() => setClearing(false));

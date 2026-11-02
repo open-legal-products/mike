@@ -4,7 +4,6 @@
 // contract. The userDataCleanup helpers + auth-admin deleteUser call are
 // invoked with identical args and ordering.
 
-import { enqueueDbJob } from "../../lib/dbq/enqueue";
 import { deleteUserPrivateMemories } from "../../lib/memory/bulk";
 import { dbJobsEnabled } from "../../lib/dbq/runner";
 import {
@@ -15,16 +14,21 @@ import {
     listOrgsBlockingAccountDeletion,
     type AccountDeletionOrgBlocker,
 } from "./user.dataCleanup";
-import { type Db, errorMessage } from "./user.shared";
+import { withKind, type ErrorKind } from "../../lib/appError";
+import { reportError } from "../../lib/observability/sentry";
+import { type Db } from "./user.shared";
 
 /**
- * Turn the sole-admin blockers into instructions the user can actually act
- * on. The two reasons need DIFFERENT actions — appointing a successor fixes
- * an org that still has members, and does nothing for an org whose only
- * problem is that it still owns matters — so a single "make another member
- * an admin" sentence sent the second group off to look for members who do
- * not exist. A mixed batch gets both sentences, each naming its own orgs.
+ * The failure as the route's sendInternalError should report it: its kind
+ * names the flow that broke, the thrown value (an Error or a PostgREST
+ * object) stays the cause so its code still extracts. Nothing is logged
+ * here — the route logs the same object once, with the request id.
  */
+function deletionFailure(kind: ErrorKind, message: string, cause: unknown): Error {
+    return withKind(cause, kind, message);
+}
+
+/** Explain which organizations need an owner before account deletion. */
 export function describeAccountDeletionBlockers(
     blockers: AccountDeletionOrgBlocker[],
 ): string {
@@ -37,12 +41,12 @@ export function describeAccountDeletionBlockers(
     const withMembers = named("members");
     if (withMembers)
         sentences.push(
-            `You are the only admin of ${withMembers}. Make another member an admin, or delete the organization, before deleting your account.`,
+            `You are the only owner of ${withMembers}. Make another member an owner, or delete the organization, before deleting your account.`,
         );
     const withContent = named("content");
     if (withContent)
         sentences.push(
-            `You are the only admin of ${withContent}, which still owns content. Delete or move the organization's projects, workflows, documents and reviews, or delete the organization, before deleting your account.`,
+            `You are the only owner of ${withContent}, and must appoint another owner or explicitly delete the organization before deleting your account.`,
         );
     return sentences.join(" ");
 }
@@ -63,152 +67,149 @@ export async function deleteUserAccount(
     | { ok: false; kind?: undefined; error: unknown }
 > {
     try {
-        // ORGANIZATIONS FIRST. An account that is the only admin of an
-        // organization which still has members or content cannot be deleted:
+        // ORGANIZATIONS FIRST. An account that is the only owner of an
+        // team organization cannot be deleted, even when it is empty:
         // promoting an arbitrary successor hands a firm's matters to whoever
         // joined first (and silently clears their `deny` overrides), while
-        // removing the member outright is refused by
-        // org_member_protect_resource_ownership and leaves the organization
-        // memberless, invisible and undeletable. Answer 409 and let the user
+        // removing the member outright is refused by the last-owner guard
+        // (org_members_protect_last_owner), and would otherwise leave the
+        // organization memberless, invisible and undeletable. Answer 409 and let the user
         // choose a successor. This check runs BEFORE the enqueue so nothing
         // is scheduled, revoked, or destroyed.
         const blockers = await listOrgsBlockingAccountDeletion(db, userId);
         if (blockers.length > 0)
             return { ok: false, kind: "org_successor_required", blockers };
 
-        // DATA FIRST, AUTH LAST — main's ordering, kept.
-        //
-        // documents.user_id references auth.users ON DELETE CASCADE (and
-        // document_versions cascades from documents), so deleting the auth
-        // user first destroys every row that records where this account's
-        // files live. The cascade would then find nothing to clean up and
-        // the objects would be orphaned in storage forever. The auth user
-        // is therefore deleted by the job, as its final step, once the
-        // data is actually gone.
-        //
-        // What the user experiences is unchanged: their sessions are
-        // revoked here, immediately, so the account is unusable from the
-        // moment this returns. The auth row lingering for the length of
-        // the job is what makes the job's retries meaningful — a cascade
-        // that permanently fails leaves a recoverable account instead of
-        // an anonymous pile of rows.
-        //
-        // No runner on this process? Then a 202-style "it's queued" would
-        // be a promise nothing can keep, so run the cascade inline —
-        // exactly main's behaviour, which is still correct, just not
-        // crash-durable.
+        // Queue insertion, organization handover, membership removal and the
+        // authentication fence commit together. No accepted request leaves a
+        // usable account waiting for a background worker.
+        const { data: jobId, error: requestError } = await db.rpc("request_account_deletion", {
+            p_user_id: userId,
+            p_user_email: userEmail ?? null,
+        });
+        if (requestError) {
+            if (requestError.code === "23514") {
+                const currentBlockers = await listOrgsBlockingAccountDeletion(db, userId);
+                if (currentBlockers.length) return { ok: false, kind: "org_successor_required", blockers: currentBlockers };
+            }
+            return {
+                ok: false,
+                error: deletionFailure("account.delete_failed", "request_account_deletion failed", requestError),
+            };
+        }
         if (!dbJobsEnabled()) {
-            console.warn(
-                "[user/account] DB job runner disabled; deleting inline",
-                { userId },
-            );
             await deleteUserAccountData(db, userId, userEmail);
             const { error } = await db.auth.admin.deleteUser(userId);
-            if (error) return { ok: false, error };
+            if (error)
+                return {
+                    ok: false,
+                    error: deletionFailure("account.delete_failed", "auth user deletion failed", error),
+                };
+            const completed = await db.from("db_jobs").update({ status: "done", finished_at: new Date().toISOString() }).eq("id", jobId);
+            if (completed.error)
+                return {
+                    ok: false,
+                    error: deletionFailure("account.delete_failed", "deletion job completion failed", completed.error),
+                };
             return { ok: true };
         }
 
-        // Enqueue BEFORE anything is destroyed: if this fails, nothing has
-        // happened and the request is cleanly retriable.
-        await enqueueDbJob(db, {
-            kind: "account.delete",
-            payload: { userId, userEmail: userEmail ?? null },
-            dedupeKey: `account.delete:${userId}`,
-            maxAttempts: 20,
-        });
-
         // Best-effort session revocation. A failure here only means the
-        // user keeps a valid token until the job deletes their auth user;
-        // it must not fail a deletion that is already durably scheduled.
+        // token may remain valid at the auth provider, but requireAuth already
+        // denies this account using its durable deletion flag.
         if (token) {
             try {
                 await db.auth.admin.signOut(token, "global");
             } catch (signOutErr) {
+                // The request succeeded; the revoke that did not is a
+                // warning with its own kind, logged once it is reported.
+                const failure = deletionFailure(
+                    "account.delete_failed",
+                    "session revoke after deletion request failed",
+                    signOutErr,
+                );
+                reportError(failure, { level: "warning" });
                 console.error("[user/account] session revoke failed", {
                     userId,
-                    error: errorMessage(signOutErr),
+                    error: failure,
                 });
             }
         }
         return { ok: true };
     } catch (err) {
-        const detail = errorMessage(err);
-        console.error("[user/account] delete failed", {
-            userId,
-            error: detail,
-        });
-        return { ok: false, error: err };
+        return {
+            ok: false,
+            error: deletionFailure("account.delete_failed", "account deletion failed", err),
+        };
     }
 }
 
 export async function deleteUserChats(
     db: Db,
     userId: string,
+    orgId: string | null,
 ): Promise<{ ok: true } | { ok: false; error: unknown }> {
     try {
-        await deleteAllUserChats(db, userId);
+        await deleteAllUserChats(db, userId, orgId);
         return { ok: true };
     } catch (err) {
-        const detail = errorMessage(err);
-        console.error("[user/chats] delete failed", {
-            userId,
-            error: detail,
-        });
-        return { ok: false, error: err };
+        return {
+            ok: false,
+            error: deletionFailure("db.query_failed", "chat deletion failed", err),
+        };
     }
 }
 
 export async function deleteUserProjectsData(
     db: Db,
     userId: string,
+    orgId: string | null,
 ): Promise<{ ok: true } | { ok: false; error: unknown }> {
     try {
-        await deleteUserProjects(db, userId);
+        await deleteUserProjects(db, userId, orgId);
         return { ok: true };
     } catch (err) {
-        const detail = errorMessage(err);
-        console.error("[user/projects] delete failed", {
-            userId,
-            error: detail,
-        });
-        return { ok: false, error: err };
+        return {
+            ok: false,
+            error: deletionFailure("db.query_failed", "project deletion failed", err),
+        };
     }
 }
 
 export async function deleteUserTabularReviews(
     db: Db,
     userId: string,
+    orgId: string | null,
 ): Promise<{ ok: true } | { ok: false; error: unknown }> {
     try {
-        await deleteAllUserTabularReviews(db, userId);
+        await deleteAllUserTabularReviews(db, userId, orgId);
         return { ok: true };
     } catch (err) {
-        const detail = errorMessage(err);
-        console.error("[user/tabular-reviews] delete failed", {
-            userId,
-            error: detail,
-        });
-        return { ok: false, error: err };
+        return {
+            ok: false,
+            error: deletionFailure("db.query_failed", "tabular review deletion failed", err),
+        };
     }
 }
 
 /**
- * Wipe the user's app memory and the memories of private projects they
- * created. Organization and merely shared projects are intentionally outside
- * this account-level destructive action.
+ * Wipe the user's own memory for one workspace (`orgId` null is Personal)
+ * and, in Personal, the memories of private projects they created.
+ * Organization and merely shared projects are intentionally outside this
+ * destructive action.
  */
 export async function deletePrivateMemories(
     db: Db,
     userId: string,
+    orgId: string | null,
 ): Promise<{ ok: true } | { ok: false; error: unknown }> {
     try {
-        await deleteUserPrivateMemories(db, userId);
+        await deleteUserPrivateMemories(db, userId, orgId);
         return { ok: true };
     } catch (err) {
-        console.error("[user/memories] delete failed", {
-            userId,
-            error: errorMessage(err),
-        });
-        return { ok: false, error: err };
+        return {
+            ok: false,
+            error: deletionFailure("db.query_failed", "private memory deletion failed", err),
+        };
     }
 }

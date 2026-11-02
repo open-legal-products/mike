@@ -13,8 +13,10 @@
 // query, and FOR UPDATE SKIP LOCKED in the claim RPC makes any number of
 // backend replicas partition the work safely.
 
+import { AppError } from "../appError";
 import { createServerSupabase } from "../supabase";
 import { jobErrorMessage } from "./jobError";
+import { runIsolated } from "./jobScope";
 import { deleteFile } from "../storage";
 import { enqueueAppJobDelivery } from "../queue/appJobsQueue";
 import { redisEnabled } from "./driver";
@@ -24,6 +26,12 @@ import {
     type DbJob,
     type DbJobHandlers,
 } from "./types";
+import { reportError, setOperation } from "../observability/sentry";
+import {
+    createPollFailureGate,
+    type PollFailureGate,
+} from "../observability/pollFailureGate";
+import { asReportableError } from "../httpError";
 
 /**
  * Poll cadence depends on the driver: with Redis configured, BullMQ delivers
@@ -36,6 +44,25 @@ function pollMs(): number {
     if (Number.isFinite(raw) && raw >= 250) return raw;
     return redisEnabled() ? 60_000 : 5_000;
 }
+/** Ceiling for the claim interval while every claim keeps failing. */
+const CLAIM_MAX_BACKOFF_MS = 60_000;
+
+/**
+ * The claim fails identically on every tick while its cause lasts (RPC
+ * missing because migrations were not applied, database unreachable). One
+ * report per failure class, quiet repeats with a once-a-minute count, and a
+ * backed-off poll — reporting every tick filed 1,167 events plus 1,227
+ * console duplicates from one worker thread (MIKE-BACKEND-P / -3).
+ */
+export function createDbJobClaimGate(): PollFailureGate {
+    return createPollFailureGate({
+        label: "[dbq] claim",
+        baseDelayMs: pollMs,
+        maxDelayMs: CLAIM_MAX_BACKOFF_MS,
+    });
+}
+const defaultClaimGate = createDbJobClaimGate();
+
 const CLAIM_BATCH = 5;
 /**
  * A "running" job whose claim is older than this is presumed crashed.
@@ -77,14 +104,13 @@ export type DbJobFailureHook = (db: Db, job: DbJob) => Promise<void>;
  *
  * The retry budget is for flaky networks and busy databases. Spending 20
  * attempts over hours on a job the domain will refuse identically every time
- * (account deletion for the only admin of an organization that still has
+ * (account deletion for the only owner of an organization that still has
  * members) buries the real reason under a wall of repeats and leaves the
  * user's request in limbo far longer than it needs to be.
  */
-export class NonRetryableJobError extends Error {
+export class NonRetryableJobError extends AppError {
     constructor(message: string) {
-        super(message);
-        this.name = "NonRetryableJobError";
+        super("dbq.non_retryable", message);
     }
 }
 
@@ -98,6 +124,16 @@ export class NonRetryableJobError extends Error {
  * Exported for unit tests; the poll loop below is just claim + fan-in.
  */
 export async function processClaimedJob(
+    db: Db,
+    handlers: DbJobHandlers,
+    job: DbJob,
+    failureHooks: Readonly<Record<string, DbJobFailureHook>> = {},
+): Promise<void> {
+    // Dispatch failures need the same per-job scope as handler failures.
+    await runIsolated(() => dispatchClaimedJob(db, handlers, job, failureHooks));
+}
+
+async function dispatchClaimedJob(
     db: Db,
     handlers: DbJobHandlers,
     job: DbJob,
@@ -130,6 +166,7 @@ export async function processClaimedJob(
 
     const retryUntilSuccess = RETRY_UNTIL_SUCCESS_KINDS.has(job.kind);
     const handler = handlers[job.kind];
+    if (!handler) setOperation("jobs.dispatch");
     if (!handler && !retryUntilSuccess) {
         await fence(
             db.from("db_jobs").update({
@@ -138,12 +175,34 @@ export async function processClaimedJob(
                 last_error: `unknown job kind: ${job.kind}`,
             }),
         );
-        console.error("[dbq] unknown job kind", { id: job.id, kind: job.kind });
+        const unknownKind = new AppError("dbq.unknown_job_kind", `Unknown db_jobs kind: ${job.kind}`);
+        reportError(unknownKind, {
+            tags: { component: "dbq", job_kind: job.kind },
+            extra: { job_id: job.id },
+            fingerprint: ["dbq-unknown-kind", job.kind],
+        });
+        // Carry the reported object so the console bridge files no duplicate.
+        console.error("[dbq] unknown job kind", {
+            id: job.id,
+            kind: job.kind,
+            error: unknownKind,
+        });
         return;
     }
 
+    await runClaimedJob(db, handler, job, fence, retryUntilSuccess, failureHooks);
+}
+
+async function runClaimedJob(
+    db: Db,
+    handler: DbJobHandlers[string] | undefined,
+    job: DbJob,
+    fence: <T extends { eq(column: string, value: unknown): T }>(query: T) => T,
+    retryUntilSuccess: boolean,
+    failureHooks: Readonly<Record<string, DbJobFailureHook>>,
+): Promise<void> {
     try {
-        if (!handler) throw new Error(`unknown job kind: ${job.kind}`);
+        if (!handler) throw new AppError("dbq.unknown_job_kind", `unknown job kind: ${job.kind}`);
         const result = await handler(db, job);
         await fence(
             db.from("db_jobs").update({
@@ -204,6 +263,10 @@ export async function processClaimedJob(
                 try {
                     await hook(db, job);
                 } catch (hookErr) {
+                    reportError(hookErr, {
+                        tags: { component: "dbq", job_kind: job.kind, stage: "failure-hook" },
+                        extra: { job_id: job.id },
+                    });
                     console.error("[dbq] failure hook crashed", {
                         id: job.id,
                         kind: job.kind,
@@ -229,14 +292,45 @@ export async function processClaimedJob(
                 );
             }
         }
-        console.error(
-            deferred
-                ? "[dbq] job deferred"
-                : spent
-                  ? "[dbq] job permanently failed"
-                  : "[dbq] job failed; will retry",
-            { id: job.id, kind: job.kind, attempts: job.attempts, message },
-        );
+        // Every failed attempt is reported — a bug shows up on attempt one,
+        // not after the backoff ladder has burned an hour. Retryable attempts
+        // are warnings; the terminal failure is the error, and both group per
+        // job kind so one bad handler is one issue with a hit count. A
+        // deferral is the handler asking to run later, not a failure, so it
+        // is logged but never reported.
+        // A handler can reject with a PostgREST plain object: give it a stack
+        // and keep its code on the cause chain (failure_code), as the claim
+        // path does. Errors pass through unchanged.
+        const reportable = asReportableError(err, processClaimedJob);
+        if (!deferred) {
+            reportError(reportable, {
+                level: spent ? "error" : "warning",
+                tags: {
+                    component: "dbq",
+                    job_kind: job.kind,
+                    attempt: job.attempts,
+                    max_attempts: job.max_attempts,
+                    terminal: spent,
+                },
+                extra: { job_id: job.id, dedupe_key: job.dedupe_key ?? null },
+            });
+        }
+        const summary = { id: job.id, kind: job.kind, attempts: job.attempts, message };
+        if (deferred) {
+            // Not a failure, and not reported: console.error would reach
+            // Sentry through the console bridge as an error event.
+            console.log("[dbq] job deferred", summary);
+        } else {
+            // The reported Error rides along so the console bridge recognises
+            // it and files no second, context-free "Failure in application"
+            // issue (MIKE-BACKEND-G mirrored MIKE-BACKEND-F 1:1).
+            console.error(
+                spent
+                    ? "[dbq] job permanently failed"
+                    : "[dbq] job failed; will retry",
+                { ...summary, error: reportable },
+            );
+        }
     }
 }
 
@@ -245,6 +339,7 @@ export async function runDbJobTick(
     db: Db,
     handlers: DbJobHandlers,
     failureHooks: Readonly<Record<string, DbJobFailureHook>> = {},
+    claimGate: PollFailureGate = defaultClaimGate,
 ): Promise<number> {
     const { data, error } = await db.rpc("claim_db_jobs", {
         p_limit: CLAIM_BATCH,
@@ -252,10 +347,24 @@ export async function runDbJobTick(
     });
     if (error) {
         // Table/function missing (migration not applied yet) or transient DB
-        // trouble: log and try again next tick — never crash the server.
-        console.error("[dbq] claim failed", error.message);
+        // trouble: log and try again later — never crash the server.
+        //
+        // asReportableError keeps the PostgREST object as the cause, so its
+        // `code` (PGRST202 = RPC missing) reaches failure_code and the issue
+        // title says why; re-wrapping `error.message` in a new Error lost it.
+        const failure = asReportableError(error, runDbJobTick);
+        if (claimGate.failure(failure).report) {
+            reportError(failure, {
+                tags: { component: "dbq", stage: "claim" },
+                fingerprint: ["dbq-claim-failed"],
+            });
+            // The Error object, not a string: the console bridge dedupes a
+            // reported object, a message string it files as a new event.
+            console.error("[dbq] claim failed", failure);
+        }
         return 0;
     }
+    claimGate.success();
     const jobs = (data ?? []) as DbJob[];
     // allSettled defensively: processClaimedJob handles its own errors, but
     // one job's unexpected rejection must never abandon the rest of a batch.
@@ -364,9 +473,14 @@ export function startDbJobRunner(handlers: DbJobHandlers, failureHooks: Readonly
     const db = createServerSupabase();
 
     const tick = () => {
-        if (inFlight) return;
+        // While claims keep failing, skip ticks until the backed-off retry
+        // time instead of hitting the broken dependency every interval.
+        if (inFlight || !defaultClaimGate.ready()) return;
         inFlight = runDbJobTick(db, handlers, failureHooks)
-            .catch((err) => console.error("[dbq] tick failed", err))
+            .catch((err) => {
+                reportError(err, { tags: { component: "dbq", stage: "tick" } });
+                console.error("[dbq] tick failed", err);
+            })
             .finally(() => {
                 inFlight = null;
             });
@@ -378,9 +492,10 @@ export function startDbJobRunner(handlers: DbJobHandlers, failureHooks: Readonly
     setTimeout(tick, 1_000).unref();
 
     const sweep = () =>
-        void runDbJobRetentionSweep(db).catch((err) =>
-            console.error("[dbq] retention sweep failed", err),
-        );
+        void runDbJobRetentionSweep(db).catch((err) => {
+            reportError(err, { tags: { component: "dbq", stage: "retention" } });
+            console.error("[dbq] retention sweep failed", err);
+        });
     sweepTimer = setInterval(sweep, SWEEP_EVERY_MS);
     sweepTimer.unref();
     setTimeout(sweep, 60_000).unref();

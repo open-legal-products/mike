@@ -238,7 +238,7 @@ describe("FileDirectory", () => {
         );
 
         expect(
-            screen.getByRole("button", { name: "Files" }),
+            screen.getByRole("button", { name: "Documents" }),
         ).toBeInTheDocument();
         expect(
             screen.getByRole("button", { name: "Projects" }),

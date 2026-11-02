@@ -1,6 +1,6 @@
 import React, { useState } from "react";
 import { useAuth } from "./useAuth";
-import { Input } from "../../shared/ui/input";
+import { InputUI } from "@mike/input-ui";
 import { Label } from "../../shared/ui/label";
 import { WordAddinLogo } from "../components/shell/WordAddinLogo";
 import { PillButtonUI as PillButton } from "@mike/pill-button-ui";
@@ -10,23 +10,14 @@ import {
   authGlassCardUIClassName,
   authInputUIClassName,
 } from "@mike/auth-styles-ui";
-
-const WEB_APP_URL = (
-  process.env.REACT_APP_WEB_APP_URL || "https://app.mikeoss.com"
-).replace(/\/+$/, "");
+import { WEB_APP_URL, openExternalUrl } from "../lib/openExternalUrl";
 
 function openWebAuthPage(
   event: React.MouseEvent<HTMLAnchorElement>,
   path: string
 ): void {
   event.preventDefault();
-  const url = `${WEB_APP_URL}${path}`;
-  const ui = typeof Office !== "undefined" ? Office.context?.ui : undefined;
-  if (ui && typeof ui.openBrowserWindow === "function") {
-    ui.openBrowserWindow(url);
-  } else {
-    window.open(url, "_blank", "noopener,noreferrer");
-  }
+  openExternalUrl(`${WEB_APP_URL}${path}`);
 }
 
 export function LoginPage(): React.ReactElement {
@@ -75,7 +66,7 @@ export function LoginPage(): React.ReactElement {
                 >
                   Email
                 </Label>
-                <Input
+                <InputUI
                   id="email"
                   type="email"
                   value={email}
@@ -106,7 +97,7 @@ export function LoginPage(): React.ReactElement {
                     Forgot password?
                   </a>
                 </div>
-                <Input
+                <InputUI
                   id="password"
                   type="password"
                   value={password}

@@ -28,6 +28,8 @@ export type McpOAuthProviderQuirks = {
      * (`<prefix>_CLIENT_ID`, `<prefix>_CLIENT_SECRET`, `<prefix>_SCOPE`).
      */
     envPrefix: string;
+    /** Whether a pre-configured client is incomplete without its secret. */
+    requiresClientSecret?: boolean;
     /**
      * Non-standard authorization-request query parameters the provider
      * requires. The MCP SDK builds a spec-compliant authorization URL and has
@@ -37,11 +39,11 @@ export type McpOAuthProviderQuirks = {
     authorizationParams?: Record<string, string>;
     /**
      * Set for providers that do NOT implement RFC 7591 dynamic client
-     * registration. Returns the operator-facing setup instructions shown when
-     * OAuth is attempted without a pre-configured client — including the
-     * redirect URI so it can be copy-pasted into the provider's console.
+     * registration. Returns a concise operator-facing explanation shown when
+     * OAuth is attempted without a pre-configured client. Detailed,
+     * deployment-specific setup steps live in docs/connectors.md.
      */
-    setupInstructions?: (redirectUri: string) => string;
+    setupInstructions?: () => string;
     /**
      * Optional hint appended to concise connector error messages, for
      * provider-specific traps (e.g. a wrong endpoint path that yields an
@@ -59,6 +61,7 @@ const PROVIDERS: McpOAuthProviderQuirks[] = [
             hostname === "googleapis.com" ||
             hostname.endsWith(".googleapis.com"),
         envPrefix: "GOOGLE_MCP_OAUTH",
+        requiresClientSecret: true,
         // Google only returns a refresh token when the request opts into
         // offline access (`access_type=offline`), and only re-issues one when
         // it is forced to re-prompt for consent (`prompt=consent`). Google
@@ -68,15 +71,9 @@ const PROVIDERS: McpOAuthProviderQuirks[] = [
         // them a Google connector authorizes once and then breaks as soon as
         // the short-lived access token expires.
         authorizationParams: { access_type: "offline", prompt: "consent" },
-        setupInstructions: (redirectUri) =>
-            "Google MCP servers need a pre-configured OAuth client — Google does not " +
-            "support automatic (dynamic) client registration. Create an OAuth client in " +
-            "Google Cloud Console (APIs & Services → Credentials → Create credentials → " +
-            `OAuth client ID → Web application) with authorized redirect URI ${redirectUri}, ` +
-            "then set GOOGLE_MCP_OAUTH_CLIENT_ID and GOOGLE_MCP_OAUTH_CLIENT_SECRET in " +
-            "backend/.env (see .env.example) and restart the backend. The redirect URI " +
-            "is derived from API_PUBLIC_URL, so fix that first if it is not the address " +
-            "browsers use to reach Mike.",
+        setupInstructions: () =>
+            "Google MCP requires administrator setup because Google does not " +
+            "support dynamic client registration.",
         // Google's MCP endpoints are versioned, and their discovery metadata
         // advertises the UNversioned path (`…/mcp`), so hitting the advertised
         // path yields an opaque generic 400. Users who copy the URL from the
@@ -100,22 +97,15 @@ const PROVIDERS: McpOAuthProviderQuirks[] = [
         matches: (hostname) =>
             hostname === "slack.com" || hostname.endsWith(".slack.com"),
         envPrefix: "SLACK_MCP_OAUTH",
+        requiresClientSecret: true,
         // No extra authorization parameters: unlike classic Slack OAuth
         // (which splits bot `scope` from user `user_scope`), the MCP
         // authorization endpoint `slack.com/oauth/v2_user/authorize` takes
         // user scopes in the standard `scope` parameter, which the MCP SDK
         // already fills from the server's protected-resource metadata.
-        setupInstructions: (redirectUri) =>
-            "Slack's MCP server needs a pre-configured OAuth client — Slack does not " +
-            "support automatic (dynamic) client registration. Create a Slack app at " +
-            "https://api.slack.com/apps whose manifest has a bot user and the agent " +
-            "feature (features.assistant_view), turn on the \"Slack MCP Server\" toggle " +
-            "under the app's Agents settings, enable PKCE under OAuth & Permissions, and " +
-            `add ${redirectUri} as a redirect URL (Slack requires HTTPS). Then set ` +
-            "SLACK_MCP_OAUTH_CLIENT_ID and SLACK_MCP_OAUTH_CLIENT_SECRET in backend/.env " +
-            "(see .env.example) and restart the backend. The redirect URI is derived from " +
-            "API_PUBLIC_URL, so fix that first if it is not the HTTPS address browsers " +
-            "use to reach Mike.",
+        setupInstructions: () =>
+            "Slack MCP requires administrator setup because Slack does not " +
+            "support dynamic client registration.",
         // Slack serves exactly one MCP endpoint. Anything else on the
         // slack.com zone answers with a 302 redirect or an HTML page — the
         // SDK then fails with an opaque non-2xx error, so point the user at

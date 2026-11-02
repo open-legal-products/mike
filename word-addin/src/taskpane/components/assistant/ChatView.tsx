@@ -11,6 +11,7 @@ import { ChatInput } from "./ChatInput";
 import type { ChatInputHandle } from "./ChatInput";
 import { InitialView } from "./InitialView";
 import { UserMessage } from "./UserMessage";
+import { ResponseSelectionMenuUI } from "@mike/response-selection-menu-ui";
 import type {
     EditDecision,
     ReasoningLevel,
@@ -20,6 +21,7 @@ import type {
 } from "../../lib/wordChatTypes";
 import type { WordEditApplyMode } from "../../lib/wordChatSettings";
 import { selectDocumentText } from "../../hooks/useWordDoc";
+import { UserVisibleError, notifyError } from "../../lib/notify";
 
 const CHAT_MESSAGE_TOP_GAP = 12;
 const CHAT_MESSAGES_BOTTOM_GAP = 16;
@@ -265,7 +267,25 @@ export function ChatView({
     // Citation chips: scroll Word to the cited passage and select it. Kept
     // identity-stable so memoized message rows never re-render per chunk.
     const handleLocateCitation = useCallback((text: string) => {
-        void selectDocumentText(text);
+        void selectDocumentText(text).then((status) => {
+            // Clicking a citation and having nothing move is indistinguishable
+            // from a frozen pane, so both failure modes say which one it was.
+            if (status === "selected") return;
+            notifyError(
+                new UserVisibleError(
+                    status === "not-found"
+                        ? "Mike couldn't find that passage in this document. It may have changed since the answer was written."
+                        : "Word couldn't scroll to that passage. Try finding it with Word's search.",
+                    { kind: status === "not-found" ? "not_found" : "unknown" },
+                ),
+                {
+                    action: "go to that passage",
+                    dedupeKey: "citation-locate",
+                    page: "Assistant",
+                    operation: "word.document_read",
+                },
+            );
+        });
     }, []);
 
     const updateScrollButton = useCallback(() => {
@@ -737,6 +757,7 @@ export function ChatView({
                                         content={message.content}
                                         files={message.files}
                                         workflow={message.workflow}
+                                        playbook={message.playbook}
                                     />
                                 </div>
                             );
@@ -791,6 +812,11 @@ export function ChatView({
                 </div>
             )}
 
+            <ResponseSelectionMenuUI
+                onAddExcerpt={(excerpt) =>
+                    chatInputRef.current?.addExcerpt(excerpt)
+                }
+            />
             <ChatInput
                 ref={chatInputRef}
                 containerRef={composerRef}

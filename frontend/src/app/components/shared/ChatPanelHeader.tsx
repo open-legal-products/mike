@@ -1,32 +1,107 @@
 "use client";
 
 import { useEffect, useRef, useState, type ReactNode } from "react";
-import { ChevronDown, Plus, Search } from "lucide-react";
+import { ChevronDown, Loader2, Plus, X } from "lucide-react";
 import type { Chat } from "@/app/components/shared/types";
+import { ChatSkeuoIcon } from "@/app/components/shared/AppSidebarSkeuoIcons";
 import { FormTextInput } from "@/app/components/ui/form-field";
 import {
-    LiquidDropdownButton,
-    LiquidDropdownSurface,
-} from "@/app/components/ui/liquid-dropdown";
+    ChatHistoryDropdownUI,
+    type ChatHistoryDropdownItemUI,
+} from "@/shared/ui/ChatHistoryDropdownUI";
 import {
     LIQUID_GLASS_HOVER_CLASS,
     LIQUID_GLASS_SUBTLE_CLASS,
 } from "@/app/components/ui/liquid-surface";
 import { cn } from "@/app/lib/utils";
 import { formatElapsedTime } from "@/app/lib/formatElapsedTime";
+import { chatActivityAt, sortChatsByActivity } from "@/app/lib/chatActivity";
 
 const HEADER_PILL_CLASS = `flex shrink-0 items-center gap-1 rounded-full px-1 py-0.5 ${LIQUID_GLASS_SUBTLE_CLASS} backdrop-blur-xl`;
 const HEADER_PILL_BUTTON_CLASS = `flex h-6 w-6 shrink-0 items-center justify-center rounded-full text-gray-500 transition-colors hover:text-gray-900 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500/40 ${LIQUID_GLASS_HOVER_CLASS}`;
 
+type HistoryChat = Pick<Chat, "id" | "title"> &
+    Partial<Pick<Chat, "created_at" | "updated_at">>;
+
+/**
+ * The rows of a chat history menu: most recently active first, narrowed to
+ * the search text, each with its answering mark and how long ago it was used.
+ */
+export function buildChatHistoryItems({
+    chats,
+    currentChatId,
+    hiddenChatId,
+    query,
+    now,
+    responseStatuses = {},
+}: {
+    chats: HistoryChat[];
+    currentChatId: string;
+    /** Left out of the list: the chat open in the other panel. */
+    hiddenChatId?: string | null;
+    query: string;
+    now: number;
+    responseStatuses?: Record<string, "loading" | "complete">;
+}): ChatHistoryDropdownItemUI[] {
+    return sortChatsByActivity(chats)
+        .filter(
+            (chat) =>
+                chat.id !== hiddenChatId &&
+                (chat.title ?? "New Chat")
+                    .toLowerCase()
+                    .includes(query.trim().toLowerCase()),
+        )
+        .map((chat) => {
+            const title = chat.title ?? "New Chat";
+            const activityAt = chatActivityAt(chat);
+            const elapsed = formatElapsedTime(activityAt, now);
+            const responseStatus = responseStatuses[chat.id];
+            return {
+                id: chat.id,
+                title,
+                current: chat.id === currentChatId,
+                icon:
+                    responseStatus === "loading" ? (
+                        <Loader2
+                            role="status"
+                            aria-label={`${title} response loading`}
+                            className="h-3.5 w-3.5 shrink-0 animate-spin text-blue-600 motion-reduce:animate-none"
+                        />
+                    ) : (
+                        <ChatSkeuoIcon
+                            aria-hidden="true"
+                            tone={
+                                responseStatus === "complete" ? "green" : "blue"
+                            }
+                            className="h-3.5 w-3.5 shrink-0"
+                        />
+                    ),
+                time:
+                    elapsed && activityAt
+                        ? {
+                              label: elapsed,
+                              dateTime: activityAt,
+                              description: `Updated ${new Date(activityAt).toLocaleString()}`,
+                          }
+                        : undefined,
+            };
+        });
+}
+
 interface ChatPanelHeaderProps {
-    chats: (Pick<Chat, "id" | "title"> & Partial<Pick<Chat, "created_at">>)[];
+    chats: HistoryChat[];
     currentChatId: string;
     currentTitle: string | null;
     loading?: boolean;
+    responseStatuses?: Record<string, "loading" | "complete">;
     newChatDisabled?: boolean;
     actions: ReactNode;
     onLoad: (chatId: string) => void;
     onNewChat: () => void;
+    /** Left out of the history list: the chat open in the other panel. */
+    hiddenChatId?: string | null;
+    /** Offers a control that closes this chat panel. */
+    onClose?: () => void;
     titleEdit?: {
         value: string;
         onChange: (title: string) => void;
@@ -40,35 +115,33 @@ export function ChatPanelHeader({
     currentChatId,
     currentTitle,
     loading = false,
+    responseStatuses = {},
     newChatDisabled = false,
     actions,
     onLoad,
     onNewChat,
+    hiddenChatId,
+    onClose,
     titleEdit,
 }: ChatPanelHeaderProps) {
     const [historyOpen, setHistoryOpen] = useState(false);
     const [query, setQuery] = useState("");
     const [now, setNow] = useState(Date.now);
-    const historyRef = useRef<HTMLDivElement>(null);
     const titleInputRef = useRef<HTMLInputElement>(null);
     const editingTitle = !!titleEdit;
-    const [previousEditingTitle, setPreviousEditingTitle] = useState(editingTitle);
+    const [previousEditingTitle, setPreviousEditingTitle] =
+        useState(editingTitle);
     if (previousEditingTitle !== editingTitle) {
         setPreviousEditingTitle(editingTitle);
         if (editingTitle) setHistoryOpen(false);
     }
-    const filteredChats = chats
-        .filter((chat) => chat.id !== currentChatId)
-        .filter((chat) =>
-            (chat.title ?? "New Chat")
-                .toLowerCase()
-                .includes(query.trim().toLowerCase()),
-        );
-
     useEffect(() => {
         if (!editingTitle) return;
         // Wait for the actions menu to release its focus trap before focusing.
-        const timer = window.setTimeout(() => titleInputRef.current?.focus(), 0);
+        const timer = window.setTimeout(
+            () => titleInputRef.current?.focus(),
+            0,
+        );
         return () => window.clearTimeout(timer);
     }, [editingTitle]);
 
@@ -78,33 +151,25 @@ export function ChatPanelHeader({
         return () => window.clearInterval(interval);
     }, [historyOpen]);
 
-    useEffect(() => {
-        if (!historyOpen) return;
-        function handlePointerDown(event: MouseEvent) {
-            if (
-                historyRef.current &&
-                !historyRef.current.contains(event.target as Node)
-            ) {
-                setHistoryOpen(false);
-            }
-        }
-        document.addEventListener("mousedown", handlePointerDown);
-        return () =>
-            document.removeEventListener("mousedown", handlePointerDown);
-    }, [historyOpen]);
+    const historyItems = buildChatHistoryItems({
+        chats,
+        currentChatId,
+        hiddenChatId,
+        query,
+        now,
+        responseStatuses,
+    });
 
     function loadChat(chatId: string) {
         setHistoryOpen(false);
         setQuery("");
+        if (chatId === currentChatId) return;
         onLoad(chatId);
     }
 
     return (
         <div className="pointer-events-none flex h-12 shrink-0 items-center justify-between gap-2 bg-transparent pl-2 pr-3">
-            <div
-                ref={historyRef}
-                className="pointer-events-auto relative min-w-0 shrink"
-            >
+            <div className="pointer-events-auto relative min-w-0 shrink">
                 {titleEdit ? (
                     <div className={cn(HEADER_PILL_CLASS, "min-w-0")}>
                         <FormTextInput
@@ -132,102 +197,52 @@ export function ChatPanelHeader({
                     </div>
                 ) : (
                     <div className={cn(HEADER_PILL_CLASS, "min-w-0")}>
-                        <button
-                            type="button"
-                            onClick={() => {
-                                setNow(Date.now());
-                                setHistoryOpen((open) => !open);
+                        <ChatHistoryDropdownUI
+                            // The header's other buttons stay clickable
+                            // while this is open, so opening another menu
+                            // has to close it. Callers do the same for the
+                            // menu they pass as `actions`.
+                            modal={false}
+                            open={historyOpen}
+                            onOpenChange={(open) => {
+                                if (open) setNow(Date.now());
+                                setHistoryOpen(open);
                             }}
-                            aria-expanded={historyOpen}
-                            aria-haspopup="menu"
-                            className={cn(
-                                "flex h-6 min-w-0 items-center gap-1 rounded-full px-1.5 text-gray-700 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500/40",
-                                LIQUID_GLASS_HOVER_CLASS,
-                            )}
-                        >
-                            <span className="min-w-0 truncate text-xs font-medium">
-                                {currentTitle ?? "New Chat"}
-                            </span>
-                            <ChevronDown
-                                className={cn(
-                                    "h-3 w-3 shrink-0 text-gray-600 transition-transform duration-200",
-                                    historyOpen && "rotate-180",
-                                )}
-                            />
-                        </button>
+                            trigger={
+                                <button
+                                    type="button"
+                                    className={cn(
+                                        "flex h-6 min-w-0 items-center gap-1 rounded-full px-1.5 text-gray-700 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500/40",
+                                        LIQUID_GLASS_HOVER_CLASS,
+                                    )}
+                                >
+                                    <span className="min-w-0 truncate text-xs font-medium">
+                                        {currentTitle ?? "New Chat"}
+                                    </span>
+                                    <ChevronDown
+                                        className={cn(
+                                            "h-3 w-3 shrink-0 text-gray-600 transition-transform duration-200",
+                                            historyOpen && "rotate-180",
+                                        )}
+                                    />
+                                </button>
+                            }
+                            query={query}
+                            onQueryChange={setQuery}
+                            loading={loading}
+                            emptyLabel={
+                                chats.length === 0
+                                    ? "No chats yet."
+                                    : "No matches."
+                            }
+                            items={historyItems}
+                            onSelect={loadChat}
+                        />
                     </div>
-                )}
-
-                {historyOpen && !titleEdit && (
-                    <LiquidDropdownSurface className="absolute left-0 top-full z-50 mt-2 w-64 overflow-hidden">
-                        <div className="flex items-center gap-1.5 border-b border-white/40 px-3 py-2">
-                            <Search className="h-3 w-3 shrink-0 text-gray-400" />
-                            <input
-                                autoFocus
-                                type="search"
-                                aria-label="Search chats"
-                                placeholder="Search chats…"
-                                value={query}
-                                onChange={(event) =>
-                                    setQuery(event.target.value)
-                                }
-                                className="min-w-0 flex-1 bg-transparent text-xs text-gray-700 outline-none placeholder:text-gray-400"
-                            />
-                        </div>
-                        <div
-                            className="max-h-48 overflow-y-auto p-1"
-                            role="menu"
-                        >
-                            {loading ? (
-                                <p className="px-2 py-1.5 text-xs text-gray-400">
-                                    Loading chats…
-                                </p>
-                            ) : filteredChats.length === 0 ? (
-                                <p className="px-2 py-1.5 text-xs text-gray-400">
-                                    {chats.length <= 1
-                                        ? "No previous chats."
-                                        : "No matches."}
-                                </p>
-                            ) : (
-                                filteredChats.map((chat) => {
-                                    const elapsed = formatElapsedTime(
-                                        chat.created_at,
-                                        now,
-                                    );
-                                    const createdLabel =
-                                        elapsed && chat.created_at
-                                            ? `Created ${new Date(chat.created_at).toLocaleString()}`
-                                            : undefined;
-                                    return (
-                                        <LiquidDropdownButton
-                                            key={chat.id}
-                                            role="menuitem"
-                                            onClick={() => loadChat(chat.id)}
-                                            className="flex w-full min-w-0 items-center justify-between gap-2 rounded-lg px-2 py-1.5 text-left"
-                                        >
-                                            <span className="min-w-0 flex-1 truncate">
-                                                {chat.title ?? "New Chat"}
-                                            </span>
-                                            {elapsed && (
-                                                <time
-                                                    dateTime={chat.created_at}
-                                                    title={createdLabel}
-                                                    aria-label={createdLabel}
-                                                    className="shrink-0 text-xs tabular-nums text-muted-foreground"
-                                                >
-                                                    {elapsed}
-                                                </time>
-                                            )}
-                                        </LiquidDropdownButton>
-                                    );
-                                })
-                            )}
-                        </div>
-                    </LiquidDropdownSurface>
                 )}
             </div>
 
-            {(currentChatId || actions) && (
+            {(currentChatId || actions || onClose) && (
                 <div className="pointer-events-auto flex shrink-0 items-center">
                     <div className={cn(HEADER_PILL_CLASS, "px-0.5")}>
                         {currentChatId && (
@@ -248,6 +263,17 @@ export function ChatPanelHeader({
                             </button>
                         )}
                         {actions}
+                        {onClose && (
+                            <button
+                                type="button"
+                                onClick={onClose}
+                                aria-label="Close chat panel"
+                                title="Close chat panel"
+                                className={HEADER_PILL_BUTTON_CLASS}
+                            >
+                                <X aria-hidden="true" className="h-3.5 w-3.5" />
+                            </button>
+                        )}
                     </div>
                 </div>
             )}

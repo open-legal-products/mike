@@ -1,18 +1,12 @@
 import React, { useState } from "react";
 import { Search } from "lucide-react";
-import type { Message } from "../../types";
 import { ChatHistoryList } from "./ChatHistoryList";
 import { PageTitle } from "../primitives/PageTitle";
 import type { WordChatStorageMode } from "../../lib/wordChatSettings";
-import type { ReasoningLevel } from "../../lib/wordChatTypes";
+import type { WordChatOpenHandler } from "../../lib/wordChatTypes";
 
 interface ChatHistoryPageProps {
-  onSelect: (
-    chatId: string,
-    messages: Message[],
-    model: string | null,
-    reasoningLevel: ReasoningLevel | null,
-  ) => void;
+  onSelect: WordChatOpenHandler;
   documentId: string;
   storageMode: WordChatStorageMode;
   ownerId: string;

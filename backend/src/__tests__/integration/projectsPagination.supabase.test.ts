@@ -119,6 +119,7 @@ maybeDescribe("Supabase projects-overview pagination", () => {
             user_id: ownerId,
             org_id: orgId,
             name: "Firm Matter",
+            visibility: "organization",
             practice: "Litigation",
             created_at: tiedCreatedAt,
             updated_at: tiedCreatedAt,

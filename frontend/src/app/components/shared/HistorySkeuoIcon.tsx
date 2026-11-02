@@ -1,20 +1,9 @@
-import Image, { type ImageProps } from "next/image";
+import { SvgAssetIcon, type SvgAssetIconProps } from "@/app/components/ui/svg-asset-icon";
+import history from "../../../../public/icons/features/history.svg";
 
-type IconProps = Omit<ImageProps, "alt" | "src" | "width" | "height" | "unoptimized">;
+type IconProps = Omit<SvgAssetIconProps, "width" | "height">;
 
-/** History nav icon — same asset pattern as AppSidebarSkeuoIcons. */
-export function HistorySkeuoIcon({ className, ...props }: IconProps) {
-    return (
-        <Image
-            src="/icons/features/history.svg?v=2"
-            alt=""
-            width={64}
-            height={64}
-            unoptimized
-            aria-hidden="true"
-            draggable={false}
-            className={`${className ?? ""} object-contain`}
-            {...props}
-        />
-    );
+/** History icon uses the same immediate, cacheable loading as other UI icons. */
+export function HistorySkeuoIcon(props: IconProps) {
+    return <SvgAssetIcon src={history} {...props} />;
 }

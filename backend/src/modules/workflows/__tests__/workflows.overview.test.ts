@@ -115,6 +115,9 @@ describe("parseWorkflowScope", () => {
         expect(parseWorkflowScope("shared")).toBe("shared");
         expect(parseWorkflowScope("private")).toBe("private");
         expect(parseWorkflowScope("collaborative")).toBe("collaborative");
+        // The Access column's Public and Private filter.
+        expect(parseWorkflowScope("public")).toBe("public");
+        expect(parseWorkflowScope("nonpublic")).toBe("nonpublic");
     });
 
     it("falls back to all for missing or unsupported scopes", () => {

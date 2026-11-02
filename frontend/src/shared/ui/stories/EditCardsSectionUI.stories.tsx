@@ -6,6 +6,10 @@ import { PillButtonUI } from "@/shared/ui/PillButtonUI";
 const meta = { title: "Shared UI / EditCardsSection" };
 export default meta;
 
+// Each card keeps its own Accept / Reject / View, as in the app; the section
+// only adds the summary, the bulk actions and the collapse control.
+const noop = () => undefined;
+
 export const GroupedChanges = () => (
     <div className="w-full max-w-[32rem]">
         <GlassCardUI>
@@ -22,16 +26,25 @@ export const GroupedChanges = () => (
                     changeNumber={1}
                     replacementText="thirty days"
                     originalText="fourteen days"
+                    onAccept={noop}
+                    onReject={noop}
+                    onView={noop}
                 />
                 <EditCardUI
                     changeNumber={2}
                     replacementText="Singapore"
                     originalText="England and Wales"
+                    onAccept={noop}
+                    onReject={noop}
+                    onView={noop}
                 />
                 <EditCardUI
                     changeNumber={3}
                     replacementText="written consent"
                     originalText="consent"
+                    onAccept={noop}
+                    onReject={noop}
+                    onView={noop}
                 />
             </EditCardsSectionUI>
         </GlassCardUI>

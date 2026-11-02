@@ -1,4 +1,9 @@
 import type { Db } from "./supabase";
+import { chunkArray } from "./arrays";
+import {
+    hasOrgPrivateContentAccess,
+    listOrgPrivateContentAccess,
+} from "./orgPrivateContent";
 
 /**
  * Project / document access helpers.
@@ -10,20 +15,29 @@ import type { Db } from "./supabase";
  * logic instead of re-implementing the join.
  *
  * The creator is Owner. For personal content, access otherwise comes from one
- * role-aware direct grant. Projects and workflows may instead be organization
- * scoped: Admins inherit Owner, Members inherit Editor, and a per-resource
- * override can assign Owner, Editor, Viewer, or Deny. Chats and reviews only
- * inherit organization access through a parent project.
+ * role-aware direct grant. Projects and workflows may instead belong to an
+ * organization, where they are PRIVATE BY DEFAULT: reachable by the creator,
+ * and by the members they have been shared with
+ * (a per-resource override of Owner, Editor, Viewer — or Deny, which walls a
+ * member off). Making one public gives every member Editor. Sharing never
+ * reaches outside the organization. A chat or review in a project inherits
+ * the project's access. One started on its own in an organization's
+ * workspace belongs to that organization and is private to its author
+ * (`ensureSharedRowAccess`).
  *
- * Personal content is simply `org_id IS NULL` — there is no hidden personal
- * organization. Content without an org is reachable through branches 1 and 2
- * only.
+ * `resolveOrgContentRole` below is that rule; public.project_access_role and
+ * public.workflow_access_role in schema.sql are its SQL twins.
+ *
+ * Personal content is still `org_id IS NULL`: each account has a personal
+ * organization of its own (lib/personalOrgs.ts), but no work has moved into
+ * it. Content without an org is reachable through branches 1 and 2 only.
  */
 
 import {
     getContentGrantRole,
     type ContentGrantKind,
 } from "./contentAccess";
+import { isPersonalOrg, teamOrgIdOf } from "./personalOrgs";
 import {
     can,
     isProjectRole,
@@ -31,40 +45,192 @@ import {
 } from "./permissions";
 import {
     getOrgAccessOverrideRole,
+    isOrgAccessOverrideRole,
+    type OrgAccessOverrideRole,
     type OrgResourceKind,
 } from "./orgAccessOverrides";
 
 export {
     can,
     isProjectRole,
-    strongerRole,
-    type Capability,
     type ProjectRole,
 } from "./permissions";
 
 /**
- * Organizations have exactly two roles. Admins administer the organization
- * (members, invitations, settings) and inherit Owner on organization content;
- * members collaborate and inherit Editor.
+ * Organizations have three roles, strongest first. Owners are accountable for
+ * the organization: they alone delete it and appoint or remove admins and
+ * other owners. Admins run it day to day (members, invitations, settings).
+ * Members collaborate. Owners manage public and ownerless projects/workflows.
+ * For private items still owned by another member, owners and permitted admins
+ * must explicitly open read-only access through the audited private-content path.
  */
-export type OrgRole = "admin" | "member";
+export type OrgRole = "owner" | "admin" | "member";
 
-export const ORG_ROLES: OrgRole[] = ["admin", "member"];
+export const ORG_ROLES: OrgRole[] = ["owner", "admin", "member"];
+
+const ORG_ROLE_RANK: Record<OrgRole, number> = {
+    member: 0,
+    admin: 1,
+    owner: 2,
+};
 
 export function isOrgRole(value: unknown): value is OrgRole {
     return typeof value === "string" && (ORG_ROLES as string[]).includes(value);
 }
 
-/** Only org admins may administer an org (members, invitations, settings). */
-export function isOrgAdmin(role: OrgRole | null | undefined): boolean {
-    return role === "admin";
+/** Only an org owner may delete the org or decide who administers it. */
+export function isOrgOwner(role: OrgRole | null | undefined): boolean {
+    return role === "owner";
 }
 
 /**
- * Map each organization role to its default content role.
+ * Whether the role may administer an org (members, invitations, settings).
+ * An owner can do everything an admin can.
  */
-export function orgRoleToProjectRole(role: OrgRole): ProjectRole {
-    return role === "admin" ? "owner" : "editor";
+export function isOrgAdmin(role: OrgRole | null | undefined): boolean {
+    return role === "owner" || role === "admin";
+}
+
+/** The stronger of two organization roles. */
+export function strongerOrgRole(a: OrgRole, b: OrgRole): OrgRole {
+    return ORG_ROLE_RANK[a] >= ORG_ROLE_RANK[b] ? a : b;
+}
+
+/**
+ * Whether `actor` may give somebody `role`, or act on somebody who holds it:
+ * invite at it, change it, remove its holder.
+ *
+ * Owners are peers and may act at every level, their own included. Everyone
+ * else acts only strictly below themselves, which is what stops an admin
+ * from appointing a second admin, promoting themselves or removing an owner.
+ */
+export function canManageOrgRole(
+    actor: OrgRole | null | undefined,
+    role: OrgRole,
+): boolean {
+    if (!actor) return false;
+    if (actor === "owner") return true;
+    return ORG_ROLE_RANK[actor] > ORG_ROLE_RANK[role];
+}
+
+/** Who may open an organization's project or workflow without being named. */
+export type ContentVisibility = "private" | "organization";
+
+export function isContentVisibility(value: unknown): value is ContentVisibility {
+    return value === "private" || value === "organization";
+}
+
+/**
+ * Read a `visibility` an API caller sent for a project or workflow.
+ *
+ * Absent means "leave it as it is" (private, for a new item). Public is only
+ * meaningful inside an organization: a personal item is shared by naming
+ * people, and has no "everyone" to be opened to.
+ */
+export function parseContentVisibility(
+    value: unknown,
+    orgId: string | null | undefined,
+):
+    | { ok: true; visibility: ContentVisibility | undefined }
+    | { ok: false; detail: string } {
+    if (value === undefined || value === null)
+        return { ok: true, visibility: undefined };
+    if (!isContentVisibility(value))
+        return {
+            ok: false,
+            detail: "visibility must be 'private' or 'organization'",
+        };
+    if (value === "organization" && !orgId)
+        return {
+            ok: false,
+            detail: "Only an organization's item can be shared with the whole organization.",
+        };
+    return { ok: true, visibility: value };
+}
+
+/**
+ * The caller's role on an organization's project or workflow, or null for no
+ * access. The caller is already known to be a CURRENT member of that
+ * organization; a non-member never reaches this.
+ *
+ *   1. the creator                                   -> owner
+ *   2. an organization owner, when the item is
+ *      public or has no Owner left                    -> owner
+ *   3. a member it was shared with                   -> the role they were given
+ *      (`deny` walls a member off, a public item included)
+ *   4. everyone, when it is public                   -> editor
+ *
+ * An organization owner has no standing on a member's private item: private
+ * is private. They take one over only when it is `ownerless` — its creator
+ * has left the organization and nobody else was made an Owner — so the firm
+ * never loses a matter and a departure never waits on a hand-over. The
+ * database decides what is ownerless (isOrgItemOwnerless,
+ * loadOwnerlessOrgItemIds); it is false for everything else.
+ *
+ * One function, because five read paths apply this rule (the single-item
+ * checks, the accessible-project list, the document picker and the
+ * organization's own resource list) and they must never disagree. It mirrors
+ * the SQL project_access_role / workflow_access_role.
+ */
+export function resolveOrgContentRole(input: {
+    isCreator: boolean;
+    orgRole: OrgRole;
+    override: OrgAccessOverrideRole | null | undefined;
+    visibility: unknown;
+    ownerless: boolean;
+}): ProjectRole | null {
+    if (input.isCreator) return "owner";
+    if (
+        isOrgOwner(input.orgRole) &&
+        (input.visibility === "organization" || input.ownerless)
+    )
+        return "owner";
+    if (input.override === "deny") return null;
+    if (input.override) return input.override;
+    return input.visibility === "organization" ? "editor" : null;
+}
+
+/**
+ * Whether an organization's private project or workflow has no Owner left
+ * among its current members, which is when its organization's owners take
+ * it over. Asked of the database so the list RPCs and these checks reach
+ * the same answer. Fails closed: an unanswered question is "no", and an
+ * organization owner then has no more access than any other member.
+ */
+export async function isOrgItemOwnerless(
+    db: Db,
+    kind: "project" | "workflow",
+    itemId: string,
+): Promise<boolean> {
+    const { data, error } = await db.rpc("org_item_is_ownerless", {
+        p_kind: kind,
+        p_item_id: itemId,
+    });
+    return !error && data === true;
+}
+
+/**
+ * The private projects and workflows without an Owner in the given
+ * organizations, for filters over many rows. Pass only the organizations
+ * the caller OWNS: nobody else's verdict depends on it, and with none there
+ * is nothing to ask. Fails closed, like isOrgItemOwnerless.
+ */
+export async function loadOwnerlessOrgItemIds(
+    db: Db,
+    ownedOrgIds: string[],
+): Promise<{ projects: Set<string>; workflows: Set<string> }> {
+    const ownerless = { projects: new Set<string>(), workflows: new Set<string>() };
+    if (ownedOrgIds.length === 0) return ownerless;
+    const { data, error } = await db.rpc("ownerless_org_item_ids", {
+        p_org_ids: ownedOrgIds,
+    });
+    if (error || !Array.isArray(data)) return ownerless;
+    for (const row of data as { kind?: unknown; item_id?: unknown }[]) {
+        if (typeof row.item_id !== "string") continue;
+        if (row.kind === "project") ownerless.projects.add(row.item_id);
+        else if (row.kind === "workflow") ownerless.workflows.add(row.item_id);
+    }
+    return ownerless;
 }
 
 /** Normalize an email the way every grant/invitation row stores it. */
@@ -86,28 +252,13 @@ export async function getOrgRole(
     if (!orgId) return null;
     const { data } = await db
         .from("org_members")
-        .select("role")
+        .select("role, organizations!inner(id)")
+        .is("organizations.deleted_at", null)
         .eq("org_id", orgId)
         .eq("user_id", userId)
         .maybeSingle();
     const role = (data as { role?: string } | null)?.role;
     return isOrgRole(role) ? role : null;
-}
-
-/**
- * Every org id the caller belongs to. Used to scope collection reads and to
- * validate an org_id chosen at create time.
- */
-export async function listUserOrgIds(userId: string, db: Db): Promise<string[]> {
-    const { data } = await db
-        .from("org_members")
-        .select("org_id")
-        .eq("user_id", userId);
-    const ids = new Set<string>();
-    for (const row of (data ?? []) as { org_id?: string | null }[]) {
-        if (row.org_id) ids.add(row.org_id);
-    }
-    return [...ids];
 }
 
 /**
@@ -135,8 +286,8 @@ export async function getProjectGrantRole(
 /**
  * Choose the org_id a newly created resource should carry. Content created
  * inside a project inherits that project's org; everything else is personal
- * (org_id null). There is no personal organization to fall back to — an
- * absent org IS the personal case.
+ * (org_id null). An absent org is still the personal case: the account's
+ * personal organization exists, but nothing is filed under it yet.
  *
  * Result-shaped because "the lookup failed" and "this is personal" must
  * never share a value. `null` is not a safe default here: it is the very
@@ -173,10 +324,37 @@ export async function resolveContentOrgId(
     };
 }
 
+/**
+ * The org_id for a chat or review started on its own, outside any project:
+ * the organization whose workspace its author is working in, named by the
+ * client as `org_id`, or null for Personal.
+ *
+ * The caller must belong to it. A person's own organization is not named
+ * here: Personal is the absence of one.
+ */
+export async function resolveStandaloneOrgId(
+    db: Db,
+    params: { userId: string; orgId: unknown },
+): Promise<{ ok: true; orgId: string | null } | { ok: false; detail: string }> {
+    const { orgId } = params;
+    if (orgId === undefined || orgId === null || orgId === "")
+        return { ok: true, orgId: null };
+    if (typeof orgId !== "string")
+        return { ok: false, detail: "org_id must be a string" };
+    const role = await getOrgRole(params.userId, orgId, db);
+    if (!role || (await isPersonalOrg(db, orgId)))
+        return {
+            ok: false,
+            detail: "You are not a member of that organization.",
+        };
+    return { ok: true, orgId };
+}
+
 type ProjectRow = {
     id: string;
     user_id: string | null;
     org_id?: string | null;
+    visibility?: string | null;
 };
 
 export type ProjectAccess =
@@ -200,22 +378,27 @@ export async function checkProjectAccess(
 ): Promise<ProjectAccess> {
     const { data: project } = await db
         .from("projects")
-        .select("id, user_id, org_id")
+        .select("id, user_id, org_id, visibility, archived_at")
         .eq("id", projectId)
         .maybeSingle();
-    if (!project) return { ok: false };
+    if (!project || project.archived_at) return { ok: false };
     const proj = project as ProjectRow;
 
     const isCreator = !!proj.user_id && proj.user_id === userId;
 
-    // Organization scope is exclusive. Admins always inherit Owner and cannot
-    // be downgraded or denied by a resource override. Members inherit Editor;
-    // the creator remains Owner and an explicit override may promote, reduce,
-    // or deny another Member's inherited access.
+    // Organization scope is exclusive, and only a current member is in it:
+    // somebody who has left the organization has no access, the creator
+    // included. Inside it the project is private until shared or made public
+    // (resolveOrgContentRole).
     if (proj.org_id) {
         const orgRole = await getOrgRole(userId, proj.org_id, db);
         if (!orgRole) return { ok: false };
-        if (isCreator || orgRole === "admin")
+        // The two verdicts that need nothing else read: the creator, and an
+        // organization owner on a public project.
+        if (
+            isCreator ||
+            (isOrgOwner(orgRole) && proj.visibility === "organization")
+        )
             return {
                 ok: true,
                 isCreator,
@@ -230,12 +413,31 @@ export async function checkProjectAccess(
             proj.org_id,
             userId,
         );
-        if (!override.ok || override.role === "deny") return { ok: false };
+        // Fail closed: an unreadable override table must not admit a member
+        // who may have been walled off.
+        if (!override.ok) return { ok: false };
+        let projectRole = resolveOrgContentRole({
+            isCreator: false,
+            orgRole,
+            override: override.role,
+            visibility: proj.visibility,
+            // Only an organization owner's verdict on a private project
+            // turns on this, so only then is it asked.
+            ownerless:
+                isOrgOwner(orgRole) && proj.visibility !== "organization"
+                    ? await isOrgItemOwnerless(db, "project", proj.id)
+                    : false,
+        });
+        if (
+            !projectRole && isOrgAdmin(orgRole) &&
+            await hasOrgPrivateContentAccess(db, proj.org_id, userId, "project", proj.id)
+        ) projectRole = "viewer";
+        if (!projectRole) return { ok: false };
         return {
             ok: true,
             isCreator: false,
             orgRole,
-            projectRole: override.role ?? orgRoleToProjectRole(orgRole),
+            projectRole,
             project: proj,
         };
     }
@@ -303,8 +505,15 @@ function resourceAccessFor(
 }
 
 async function organizationResourceAccess(
-    kind: OrgResourceKind,
-    row: { id: string; user_id: string | null; org_id?: string | null },
+    // Playbooks resolve their own access (modules/playbooks), without the
+    // ownerless take-over and audited admin access below.
+    kind: Exclude<OrgResourceKind, "playbook">,
+    row: {
+        id: string;
+        user_id: string | null;
+        org_id?: string | null;
+        visibility?: string | null;
+    },
     userId: string,
     db: Db,
 ): Promise<ResourceAccess> {
@@ -312,7 +521,10 @@ async function organizationResourceAccess(
     const orgRole = await getOrgRole(userId, row.org_id, db);
     if (!orgRole) return { ok: false };
     const isCreator = !!row.user_id && row.user_id === userId;
-    if (isCreator || orgRole === "admin")
+    if (
+        isCreator ||
+        (isOrgOwner(orgRole) && row.visibility === "organization")
+    )
         return resourceAccessFor("owner", orgRole, isCreator);
     const override = await getOrgAccessOverrideRole(
         db,
@@ -321,18 +533,29 @@ async function organizationResourceAccess(
         row.org_id,
         userId,
     );
-    if (!override.ok || override.role === "deny") return { ok: false };
-    return resourceAccessFor(
-        override.role ?? orgRoleToProjectRole(orgRole),
+    if (!override.ok) return { ok: false };
+    let role = resolveOrgContentRole({
+        isCreator: false,
         orgRole,
-        false,
-    );
+        override: override.role,
+        visibility: row.visibility,
+        ownerless:
+            isOrgOwner(orgRole) && row.visibility !== "organization"
+                ? await isOrgItemOwnerless(db, kind, row.id)
+                : false,
+    });
+    if (
+        !role && isOrgAdmin(orgRole) &&
+        await hasOrgPrivateContentAccess(db, row.org_id, userId, kind, row.id)
+    ) role = "viewer";
+    return role ? resourceAccessFor(role, orgRole, false) : { ok: false };
 }
 
 type WorkflowRow = {
     id: string;
     user_id: string | null;
     org_id?: string | null;
+    visibility?: string | null;
 };
 
 export type WorkflowAccess =
@@ -354,10 +577,10 @@ export async function checkWorkflowAccess(
 ): Promise<WorkflowAccess> {
     const { data } = await db
         .from("workflows")
-        .select("id, user_id, org_id")
+        .select("id, user_id, org_id, visibility, archived_at")
         .eq("id", workflowId)
         .maybeSingle();
-    if (!data) return { ok: false };
+    if (!data || data.archived_at) return { ok: false };
     const workflow = data as WorkflowRow;
     const isCreator = !!workflow.user_id && workflow.user_id === userId;
 
@@ -418,6 +641,7 @@ export async function checkWorkflowAccess(
  */
 export async function ensureDocAccess(
     doc: {
+        id?: string;
         user_id: string | null;
         project_id: string | null;
         org_id?: string | null;
@@ -457,26 +681,38 @@ export async function ensureDocAccess(
               )
             : { ok: false };
     }
-    if (doc.org_id) {
-        const orgRole = await getOrgRole(userId, doc.org_id, db);
-        if (!orgRole) return { ok: false };
-        const isCreator = !!doc.user_id && doc.user_id === userId;
-        return resourceAccessFor(
-            isCreator ? "owner" : orgRoleToProjectRole(orgRole),
-            orgRole,
-            isCreator,
-        );
-    }
+    // A document that sits in no project or workflow has nothing to be
+    // shared through: it is its uploader's alone, in Personal and in an
+    // organization's workspace alike. The organization's owners have no
+    // implicit access. Departure transfers referenced files or archives
+    // unshared files. In a team organization the uploader must still be a member.
     const isCreator = !!doc.user_id && doc.user_id === userId;
-    return isCreator
-        ? resourceAccessFor("owner", null, true)
+    if (!isCreator) {
+        return await hasOrgPrivateContentAccess(db, doc.org_id, userId, "document", doc.id)
+            ? resourceAccessFor("viewer", null, false)
+            : { ok: false };
+    }
+    const teamOrgId = await teamOrgIdOf(db, doc.org_id);
+    if (!teamOrgId) return resourceAccessFor("owner", null, true);
+    const orgRole = await getOrgRole(userId, teamOrgId, db);
+    return orgRole
+        ? resourceAccessFor("owner", orgRole, true)
         : { ok: false };
 }
 
 /**
  * Shared derivation for tabular reviews and assistant chats. Project children
- * inherit the project role exactly. Standalone rows use creator/direct grants;
- * they never establish an organization scope of their own.
+ * inherit the project role exactly.
+ *
+ * A standalone row in a team organization belongs to that organization and
+ * is private to its author: only current members reach it at all (its author
+ * included), its author is its Owner, and a direct grant gives a member its
+ * role. Organization owners have no implicit access. Unshared work is
+ * archived when its final owner leaves and must be recovered before use.
+ * public.standalone_org_access_role is the SQL twin.
+ *
+ * Any other standalone row is personal: its creator, and whoever it is
+ * shared with by email.
  */
 async function ensureSharedRowAccess(
     kind: ContentGrantKind,
@@ -506,6 +742,23 @@ async function ensureSharedRowAccess(
             : { ok: false };
     }
     const isCreator = !!row.user_id && row.user_id === userId;
+    const orgId = await teamOrgIdOf(db, row.org_id);
+    if (orgId) {
+        const orgRole = await getOrgRole(userId, orgId, db);
+        if (!orgRole) return { ok: false };
+        if (isCreator) return resourceAccessFor("owner", orgRole, true);
+        const granted = await getContentGrantRole(
+            db,
+            kind,
+            row.id,
+            userEmail,
+        );
+        const privateAccess = !granted && isOrgAdmin(orgRole)
+            && await hasOrgPrivateContentAccess(db, orgId, userId, kind, row.id);
+        return granted || privateAccess
+            ? resourceAccessFor(granted || "viewer", orgRole, false)
+            : { ok: false };
+    }
     if (isCreator) return resourceAccessFor("owner", null, true);
     const role = await getContentGrantRole(
         db,
@@ -536,8 +789,9 @@ export async function ensureReviewAccess(
 
 /**
  * Same shape as `ensureReviewAccess`, for assistant chats. A project chat
- * inherits the project verdict; a standalone chat can be shared through a
- * direct grant, and is personal (org_id null) until it is.
+ * inherits the project verdict; a standalone chat is its author's, shared
+ * through direct grants, in Personal or in the organization it was started
+ * in.
  *
  * `get_chats_overview` mirrors this predicate branch for branch — keep the
  * two in lockstep, or a chat becomes openable by URL while staying invisible
@@ -571,26 +825,50 @@ export async function filterAccessibleDocumentIds(
     db: Db,
 ): Promise<string[]> {
     if (documentIds.length === 0) return [];
-    const { data: docs } = await db
-        .from("documents")
-        .select("id, user_id, project_id, workflow_id, org_id")
-        .in("id", documentIds);
-    const rows = (docs ?? []) as {
+    type DocumentAccessRow = {
         id: string;
         user_id: string | null;
         project_id: string | null;
         workflow_id?: string | null;
         org_id?: string | null;
-    }[];
-    if (rows.length === 0) return [];
-
-    const verdicts = await Promise.all(
-        rows.map(async (doc) => ({
-            id: doc.id,
-            access: await ensureDocAccess(doc, userId, userEmail, db),
-        })),
-    );
-    return verdicts.filter((entry) => entry.access.ok).map((entry) => entry.id);
+    };
+    const accessibleIds: string[] = [];
+    // Cache only within this lookup, and only container visibility. Standalone
+    // documents can have independent private-access grants.
+    const containerChecks = new Map<string, Promise<boolean>>();
+    /** Reuse container visibility without sharing standalone document grants. */
+    const readable = (doc: DocumentAccessRow): Promise<boolean> => {
+        const key = doc.project_id ? `project:${doc.project_id}`
+            : doc.workflow_id ? `workflow:${doc.workflow_id}` : null;
+        if (!key) return ensureDocAccess(doc, userId, userEmail, db).then((access) => access.ok);
+        let check = containerChecks.get(key);
+        if (!check) {
+            check = ensureDocAccess(doc, userId, userEmail, db).then((access) => access.ok);
+            containerChecks.set(key, check);
+        }
+        return check;
+    };
+    // Keep UUID filters below the gateway's request/header limits, as in the
+    // add-on asset lookup. A failed batch is not an empty permissions verdict.
+    for (const batch of chunkArray([...new Set(documentIds)], 50)) {
+        const { data, error } = await db
+            .from("documents")
+            .select("id, user_id, project_id, workflow_id, org_id")
+            .in("id", batch);
+        if (error) {
+            throw new Error("Document access lookup failed", { cause: error });
+        }
+        const verdicts = await Promise.all(
+            ((data ?? []) as DocumentAccessRow[]).map(async (doc) => ({
+                id: doc.id,
+                readable: await readable(doc),
+            })),
+        );
+        accessibleIds.push(
+            ...verdicts.filter((entry) => entry.readable).map((entry) => entry.id),
+        );
+    }
+    return accessibleIds;
 }
 
 const ACCESSIBLE_PROJECTS_PAGE_SIZE = 1000;
@@ -672,11 +950,11 @@ export async function listAccessibleProjectIds(
 ): Promise<string[]> {
     const normalizedEmail = normalizeEmail(userEmail);
 
-    // Roles, not just ids: an org ADMIN cannot be denied a project, which is
-    // one of the two exemptions the override filter below has to honour.
+    // Roles decide ordinary sharing and eligibility for explicitly logged access.
     const { data: membershipRows, error: membershipError } = await db
         .from("org_members")
-        .select("org_id, role")
+        .select("org_id, role, organizations!inner(id)")
+        .is("organizations.deleted_at", null)
         .eq("user_id", userId);
     if (membershipError)
         throw accessReadFailed("org membership read", membershipError);
@@ -704,7 +982,7 @@ export async function listAccessibleProjectIds(
         ),
     ];
 
-    const [personalOwned, personalGranted, orgProjects, denials] =
+    const [personalOwned, personalGranted, orgProjects, overrides] =
         await Promise.all([
             // Personal projects the caller created. Their ORG projects are
             // resolved by the org branch instead, because a creator who has
@@ -735,11 +1013,13 @@ export async function listAccessibleProjectIds(
                       id: string;
                       user_id: string | null;
                       org_id: string;
+                      visibility: string | null;
                   }>((from, to) =>
                       db
                           .from("projects")
-                          .select("id, user_id, org_id")
+                          .select("id, user_id, org_id, visibility, archived_at")
                           .in("org_id", orgIds)
+                          .is("archived_at", null)
                           .order("id", { ascending: true })
                           .range(from, to),
                   )
@@ -748,39 +1028,58 @@ export async function listAccessibleProjectIds(
                           id: string;
                           user_id: string | null;
                           org_id: string;
+                          visibility: string | null;
                       }[],
                   ),
-            // Page the denials as well as the projects. A capped deny response
-            // otherwise admits walled matters beyond the first 1,000 rows.
+            // Every override the caller holds, not only the denials: in an
+            // organization a project is private until shared, so a grant is
+            // what ADMITS them as often as a denial is what excludes them.
+            // Paged like the projects — a capped response would both drop
+            // grants and admit walled matters beyond the first 1,000 rows.
             orgIds.length
-                ? pageProjectRows<{ project_id: string }>(
+                ? pageProjectRows<{ project_id: string; role: string }>(
                       (from, to) =>
                           db
                               .from("project_org_access_overrides")
-                              .select("project_id")
+                              .select("project_id, role")
                               .in("org_id", orgIds)
                               .eq("user_id", userId)
-                              .eq("role", "deny")
                               .order("project_id", { ascending: true })
                               .range(from, to),
-                      "deny override read",
+                      "access override read",
                   )
-                : Promise.resolve([] as { project_id: string }[]),
+                : Promise.resolve([] as { project_id: string; role: string }[]),
         ]);
 
-    const deniedProjectIds = new Set(denials.map((row) => row.project_id));
+    const overrideByProjectId = new Map(
+        overrides.map((row) => [row.project_id, row.role]),
+    );
+    const ownerless = await loadOwnerlessOrgItemIds(
+        db,
+        orgIds.filter((orgId) => orgRoleByOrgId.get(orgId) === "owner"),
+    );
 
+    const privateAccess = await listOrgPrivateContentAccess(
+        db,
+        orgIds.filter(id => ["owner", "admin"].includes(orgRoleByOrgId.get(id) ?? "")),
+        userId,
+    );
     const ids = new Set<string>();
     for (const project of personalOwned) ids.add(project.id);
     for (const project of personalGranted) ids.add(project.id);
     for (const project of orgProjects) {
-        // The two exemptions checkProjectAccess applies: the creator and an
-        // org admin always keep Owner and cannot be denied.
-        const isCreator = !!project.user_id && project.user_id === userId;
-        const isOrgAdmin = orgRoleByOrgId.get(project.org_id) === "admin";
-        if (!isCreator && !isOrgAdmin && deniedProjectIds.has(project.id))
-            continue;
-        ids.add(project.id);
+        // The same verdict checkProjectAccess reaches, re-derived inline.
+        const orgRole = orgRoleByOrgId.get(project.org_id);
+        if (!isOrgRole(orgRole)) continue;
+        const override = overrideByProjectId.get(project.id);
+        const role = resolveOrgContentRole({
+            isCreator: !!project.user_id && project.user_id === userId,
+            orgRole,
+            override: isOrgAccessOverrideRole(override) ? override : null,
+            visibility: project.visibility,
+            ownerless: ownerless.projects.has(project.id),
+        });
+        if (role || privateAccess.get("project")?.has(project.id)) ids.add(project.id);
     }
     return [...ids];
 }

@@ -7,7 +7,26 @@
  * redline block index. The bookmark itself lives in Word; this setting tells a
  * reloaded task pane which bookmark belongs to which historical edit card.
  */
+import { rememberAppliedEditId } from "./editApplyOutcome";
+
 const WORD_EDIT_ANCHORS_SETTING = "mike.wordEditAnchors.v1";
+
+/**
+ * Stable edit IDs this document has already had applied to it, newest last.
+ *
+ * Applying is not idempotent in Word — applying the same logical edit again
+ * inserts a SECOND revision — and a rejoined turn replays every edit frame of
+ * its assistant message (see lib/editApplyOutcome). This registry is the
+ * document-durable record that lets apply skip a re-delivered edit. It is
+ * deliberately separate from the anchor registry: anchors are deleted when
+ * an edit is accepted or rejected, but "already applied" must outlive that
+ * decision.
+ *
+ * Only opaque IDs are stored (`${assistantMessageId}:edit-${n}`), never edit
+ * text, so the setting adds no document content to the file. The list is
+ * capped at MAX_APPLIED_EDIT_IDS (oldest dropped) by rememberAppliedEditId.
+ */
+const WORD_APPLIED_EDITS_SETTING = "mike.wordAppliedEdits.v1";
 
 interface WordEditAnchor {
   bookmarkName: string;
@@ -94,6 +113,38 @@ export function bookmarkNameForEdit(stableEditId: string): string {
  */
 export function clearWordEditAnchorRegistry(settings: Office.Settings): void {
   settings.remove(WORD_EDIT_ANCHORS_SETTING);
+  // The applied-edit IDs are keyed by the original document's chat history
+  // too, so a fresh identity must start with an empty set.
+  settings.remove(WORD_APPLIED_EDITS_SETTING);
+}
+
+function readAppliedEditIds(settings: Office.Settings): string[] {
+  const value = settings.get(WORD_APPLIED_EDITS_SETTING) as unknown;
+  if (!isPlainObject(value) || value.version !== 1) return [];
+  const ids = (value as { ids?: unknown }).ids;
+  if (!Array.isArray(ids)) return [];
+  return ids.filter((id): id is string => typeof id === "string" && !!id);
+}
+
+/** Every stable edit ID already applied to this document. */
+export function listAppliedWordEditIds(): ReadonlySet<string> {
+  return new Set(readAppliedEditIds(Office.context.document.settings));
+}
+
+/**
+ * Record that `stableEditId` now exists in the document as a real revision.
+ * Best effort: failing to persist the marker only costs idempotency on a
+ * later retry, never the edit itself, so callers do not surface a failure.
+ */
+export async function markWordEditApplied(
+  stableEditId: string,
+): Promise<void> {
+  const settings = Office.context.document.settings;
+  const existing = readAppliedEditIds(settings);
+  if (existing.includes(stableEditId)) return;
+  const ids = rememberAppliedEditId(existing, stableEditId);
+  settings.set(WORD_APPLIED_EDITS_SETTING, { version: 1, ids });
+  await saveSettings(settings);
 }
 
 export function getWordEditAnchor(stableEditId: string): WordEditAnchor | null {

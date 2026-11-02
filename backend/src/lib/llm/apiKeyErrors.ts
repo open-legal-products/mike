@@ -9,12 +9,13 @@ import { UserFacingError } from "../userFacingError";
  * provider text is treated as untrusted and only used to classify.
  */
 export class InvalidApiKeyError extends UserFacingError {
-  constructor(providerLabel: string) {
+  constructor(providerLabel: string, options?: ErrorOptions) {
     // Deliberately not "your key": requiredKey() falls back to the
     // deployment's environment key, so a revoked platform key would otherwise
     // tell every user to fix a key they never set.
     super(
       `The ${providerLabel} API key was rejected. If you added your own key, check it in Settings → Bring Your Own Keys; otherwise contact your administrator.`,
+      options,
     );
     this.name = "InvalidApiKeyError";
   }
@@ -91,6 +92,6 @@ export function asInvalidApiKeyError(
   providerLabel: string,
 ): InvalidApiKeyError | null {
   return isInvalidApiKeyError(error)
-    ? new InvalidApiKeyError(providerLabel)
+    ? new InvalidApiKeyError(providerLabel, { cause: error })
     : null;
 }

@@ -26,6 +26,30 @@ describe("TabPillButtonUI", () => {
         expect(button).not.toHaveClass("liquid-glass-selected");
     });
 
+    it("uses the flat material inside a flat panel, marking the active tab by its text", () => {
+        render(
+            <>
+                <TabPillButtonUI surface="flat" active>
+                    Overview
+                </TabPillButtonUI>
+                <TabPillButtonUI surface="flat" active={false}>
+                    Positions
+                </TabPillButtonUI>
+            </>,
+        );
+        const active = screen.getByRole("button", { name: "Overview" });
+        expect(active).toHaveClass("liquid-glass-flat", "text-gray-900");
+        expect(active).not.toHaveClass(
+            "liquid-glass-subtle",
+            "liquid-glass-selected",
+            "bg-white",
+        );
+        expect(screen.getByRole("button", { name: "Positions" })).toHaveClass(
+            "liquid-glass-flat",
+            "liquid-glass-hover",
+        );
+    });
+
     it("omits aria-pressed when the button is not a toggle", () => {
         render(<TabPillButtonUI>Neutral</TabPillButtonUI>);
         const button = screen.getByRole("button", { name: "Neutral" });

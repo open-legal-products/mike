@@ -1,13 +1,13 @@
-"use client";
+import { redirect } from "next/navigation";
 
-import { use } from "react";
-import { OrganizationWorkspace } from "@/app/components/organizations/OrganizationWorkspace";
-
-export default function OrganizationPage({
+// An organization has no page of its own any more: its work is in the main
+// lists once its workspace is active, and everything about the organization
+// itself is in its settings. Old links land there.
+export default async function OrganizationPage({
   params,
 }: {
   params: Promise<{ id: string }>;
 }) {
-  const { id } = use(params);
-  return <OrganizationWorkspace orgId={id} />;
+  const { id } = await params;
+  redirect(`/organizations/${id}/settings`);
 }

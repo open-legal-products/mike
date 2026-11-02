@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { describeError } from "@/shared/lib/userError";
 import {
     AuthApiError,
     challengeAndVerifyMfa,
@@ -21,6 +22,15 @@ import {
     verifyMfa,
 } from "./authApi";
 
+const reporting = vi.hoisted(() => ({
+    reportApiFailure: vi.fn(),
+    reportNetworkFailure: vi.fn(),
+}));
+vi.mock("@/app/lib/errorReporting", async (importOriginal) => ({
+    ...(await importOriginal<typeof import("@/app/lib/errorReporting")>()),
+    ...reporting,
+}));
+
 const fetchMock = vi.fn();
 const user = {
     id: "user-1",
@@ -39,6 +49,94 @@ describe("cookie auth client", () => {
 
     afterEach(() => {
         vi.unstubAllGlobals();
+        vi.clearAllMocks();
+    });
+
+    describe("reporting", () => {
+        it("reports a 5xx like the API client, with the route, code and request id", async () => {
+            fetchMock.mockResolvedValue(
+                new Response(
+                    JSON.stringify({ code: "internal_error", request_id: "req-1" }),
+                    { status: 500, headers: { "Content-Type": "application/json" } },
+                ),
+            );
+
+            const error = await login(user.email, "nope").catch((e) => e);
+
+            expect(reporting.reportApiFailure).toHaveBeenCalledWith({
+                path: "/api/auth/login",
+                method: "POST",
+                status: 500,
+                code: "internal_error",
+                requestId: "req-1",
+                error,
+            });
+        });
+
+        it("does not report a 4xx: it is the auth server's answer", async () => {
+            fetchMock.mockResolvedValue(
+                new Response(JSON.stringify({ code: "invalid_credentials" }), {
+                    status: 400,
+                    headers: { "Content-Type": "application/json" },
+                }),
+            );
+
+            await login(user.email, "nope").catch(() => undefined);
+
+            expect(reporting.reportApiFailure).not.toHaveBeenCalled();
+            expect(reporting.reportNetworkFailure).not.toHaveBeenCalled();
+        });
+
+        it("reports a request that never got a response as a network failure", async () => {
+            const failure = new TypeError("Failed to fetch");
+            fetchMock.mockRejectedValue(failure);
+
+            await expect(getMfaAssurance()).rejects.toBe(failure);
+
+            expect(reporting.reportNetworkFailure).toHaveBeenCalledWith(failure, {
+                method: "GET",
+                url: "/api/auth/mfa/assurance",
+            });
+        });
+    });
+
+    it("carries the request id off an auth failure, body first", async () => {
+        fetchMock.mockResolvedValue(
+            new Response(
+                JSON.stringify({
+                    code: "invalid_credentials",
+                    detail: "The email or password is incorrect.",
+                    request_id: "req-body",
+                }),
+                {
+                    status: 400,
+                    headers: {
+                        "Content-Type": "application/json",
+                        "x-request-id": "req-header",
+                    },
+                },
+            ),
+        );
+
+        const error = await login(user.email, "nope").catch((e) => e);
+        expect(error).toBeInstanceOf(AuthApiError);
+        expect((error as AuthApiError).requestId).toBe("req-body");
+        // Without this, support has nothing to search the logs for: the
+        // auth screens are the one place the API client is not used.
+        expect(describeError(error).requestId).toBe("req-body");
+    });
+
+    it("falls back to the x-request-id header", async () => {
+        fetchMock.mockResolvedValue(
+            new Response("gateway exploded", {
+                status: 500,
+                headers: { "x-request-id": "req-header" },
+            }),
+        );
+
+        const error = await login(user.email, "nope").catch((e) => e);
+        expect((error as AuthApiError).requestId).toBe("req-header");
+        expect(describeError(error).requestId).toBe("req-header");
     });
 
     it("logs in through the same-origin gateway without an Authorization header", async () => {

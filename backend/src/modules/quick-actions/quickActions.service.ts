@@ -10,6 +10,8 @@
 // route's error middleware turns that into the opaque internal-error body, so
 // the throw is load-bearing and is kept.
 
+import { teamOrgIdOf } from "../../lib/personalOrgs";
+import { workspaceMatches, type WorkspaceFilter } from "../../lib/workspace";
 import type { Db } from "../../lib/supabase";
 import { ensureDefaultWorkflows } from "../../lib/workflowCatalog";
 import { checkWorkflowAccess } from "../../lib/access";
@@ -90,7 +92,7 @@ async function canAccessWorkflow(
 ): Promise<WorkflowLookup> {
   const { data: workflow, error } = await db
     .from("workflows")
-    .select("id, user_id, title, type")
+    .select("id, user_id, title, type, org_id")
     .eq("id", workflowId)
     .maybeSingle();
   if (error) return { ok: false, error };
@@ -106,19 +108,21 @@ async function withWorkflowDetails(
   userId: string,
   userEmail: string | null | undefined,
   db: Db,
+  workspace?: WorkspaceFilter,
 ): Promise<QuickActionWithWorkflow[]> {
   const ids = [...new Set(rows.map((row) => row.workflow_id))];
   if (ids.length === 0) return [];
   const { data: workflows, error } = await db
     .from("workflows")
-    .select("id, user_id, title, type")
+    .select("id, user_id, title, type, org_id")
     .in("id", ids);
   if (error) throw error;
 
   const accessVerdicts = await Promise.all(
-    (workflows ?? []).map((workflow) =>
-      checkWorkflowAccess(workflow.id, userId, userEmail, db),
-    ),
+    (workflows ?? []).map(async (workflow) => {
+      if (!workspaceMatches(workspace, await teamOrgIdOf(db, workflow.org_id))) return { ok: false };
+      return checkWorkflowAccess(workflow.id, userId, userEmail, db);
+    }),
   );
   const accessibleIds = new Set(
     (workflows ?? [])
@@ -150,7 +154,7 @@ async function withWorkflowDetails(
 /** The caller's quick actions for one surface, hydrated with their workflow. */
 export async function listQuickActions(
   db: Db,
-  args: { userId: string; userEmail: string | undefined; surface: unknown },
+  args: { userId: string; userEmail: string | undefined; surface: unknown; workspace?: WorkspaceFilter },
 ): Promise<ServiceResult<QuickActionWithWorkflow[]>> {
   const surface = args.surface ?? "app";
   if (!isQuickActionSurface(surface)) {
@@ -171,6 +175,7 @@ export async function listQuickActions(
       args.userId,
       args.userEmail,
       db,
+      surface === "word" ? "personal" : args.workspace,
     ),
   );
 }

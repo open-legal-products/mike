@@ -35,6 +35,22 @@ export interface Chat {
   model?: string | null;
   reasoning_level?: import("./lib/wordChatTypes").ReasoningLevel | null;
   created_at: string;
+  /**
+   * A turn the server is still generating into this chat, so a pane opening
+   * it attaches instead of showing a transcript whose last answer is
+   * missing. A LOCAL chat carries the id alone (`active_turn_id`), because
+   * nothing about it is stored server-side to report it back.
+   */
+  active_turn_id?: string | null;
+}
+
+/** A turn still generating, as `GET /word-chat/:chatId` reports it. */
+export interface ActiveWordTurn {
+  id: string;
+  /** Frames emitted so far; a pane attaches from the next one it needs. */
+  seq: number;
+  /** The assistant row the answer is (or will be) stored in. */
+  assistant_message_id: string;
 }
 
 /** A document read the model completed during an assistant turn. */
@@ -69,6 +85,11 @@ export type WordDocumentReadEvent = {
   status: DocumentReadActivity["status"];
   key?: string;
 };
+
+export type WordTextCardEvent = Extract<
+  WireAssistantEvent,
+  { type: "text_card" }
+> & { key?: string };
 
 export type WordErrorEvent = Extract<WireAssistantEvent, { type: "error" }> & {
   key?: string;
@@ -118,6 +139,7 @@ export type WordAssistantEvent =
   | WordThinkingEvent
   | WordReasoningEvent
   | WordContentEvent
+  | WordTextCardEvent
   | WordDocumentReadEvent
   | WordErrorEvent
   | WordEditReferenceEvent
@@ -145,6 +167,8 @@ export interface Message {
   content: string;
   files?: { filename: string; document_id?: string }[];
   workflow?: { id: string; title: string };
+  /** The playbook the user attached to this message, shown as a pill. */
+  playbook?: { id: string; title: string };
   /** Assistant turns preserve their content and activity in event order. */
   events?: WordAssistantEvent[];
   /** Canonical normalized edits for this assistant message. */
@@ -169,6 +193,17 @@ export interface Workflow {
   allow_edit?: boolean;
 }
 
+/**
+ * The fields of GET /playbooks the composer's picker reads. The full shape
+ * is frontend/src/app/lib/mikeApi.ts `Playbook`.
+ */
+export interface Playbook {
+  id: string;
+  name: string;
+  description: string;
+  content: { documentTypes: string[] };
+}
+
 export interface QuickAction {
   id: string;
   workflow_id: string;
@@ -180,3 +215,40 @@ export interface QuickAction {
   sort_order: number;
   workflow: { id: string; title: string };
 }
+
+/**
+ * Which model providers have a usable API key for the signed-in user, and
+ * where each key comes from. Lives here (not in api/client.ts) because
+ * frontend/src/wordAddin imports it across packages for parity tests and
+ * must not drag the API client's runtime dependencies into the web app's
+ * type-check.
+ */
+/** Key providers reported by GET /user/api-keys. */
+export type ApiKeyProvider =
+  | "claude"
+  | "gemini"
+  | "openai"
+  | "mistral"
+  | "openrouter"
+  | "vercel"
+  | "opencode-go"
+  | "bedrock"
+  | "azure"
+  | "azure-foundry"
+  | "vertex"
+  | "xai"
+  | "custom"
+  | "courtlistener"
+  | "brave"
+  | "tavily"
+  | "deepseek";
+
+/**
+ * GET /user/api-keys: whether each provider has a usable key (false for a
+ * key that is saved but switched off), where it came from, and whether a
+ * saved key is switched on.
+ */
+export type ApiKeyStatus = Record<ApiKeyProvider, boolean> & {
+  sources?: Partial<Record<ApiKeyProvider, "user" | "env" | null>>;
+  enabled?: Partial<Record<ApiKeyProvider, boolean>>;
+};

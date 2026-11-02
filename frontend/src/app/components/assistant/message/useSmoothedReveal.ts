@@ -14,51 +14,66 @@ import { useEffect, useRef, useState } from "react";
  */
 export function useSmoothedReveal(text: string, active: boolean): string {
     const [revealedInt, setRevealedInt] = useState(text.length);
-    const revealedFloat = useRef<number>(text.length);
+    const animation = useRef({
+        cursor: text.length,
+        published: text.length,
+        target: text.length,
+        frame: null as number | null,
+        lastTick: 0,
+    });
 
     useEffect(() => {
-        if (!active) {
-            revealedFloat.current = text.length;
+        const state = animation.current;
+        state.target = text.length;
+        if (!active || state.cursor > state.target) {
+            state.cursor = state.target;
+            if (state.published !== state.target) {
+                state.published = state.target;
+                setRevealedInt(state.target);
+            }
+        }
+        if (!active || state.cursor >= state.target) {
+            if (state.frame !== null) cancelAnimationFrame(state.frame);
+            state.frame = null;
             return;
         }
-
-        // Defensive clamp in case the text was edited / replaced shorter.
-        if (revealedFloat.current > text.length) {
-            revealedFloat.current = text.length;
-        }
-
-        let lastTick = performance.now();
-        let raf = 0;
-        let cancelled = false;
-
+        // New chunks update the target without cancelling the pending frame
+        // or resetting elapsed time. Otherwise a delta just before each frame
+        // can indefinitely slow the reveal, especially on a busy renderer.
+        if (state.frame !== null) return;
+        state.lastTick = performance.now();
         const step = (now: number) => {
-            if (cancelled) return;
-            const dt = Math.max(0, (now - lastTick) / 1000);
-            lastTick = now;
-            const target = text.length;
-            const prev = revealedFloat.current;
-            if (prev < target) {
-                const backlog = target - prev;
-                const cps = Math.max(40, backlog / 0.4);
-                const next = Math.min(target, prev + cps * dt);
-                revealedFloat.current = next;
-                const nextInt = Math.floor(next);
-                setRevealedInt((cur) => (cur === nextInt ? cur : nextInt));
+            state.frame = null;
+            const dt = Math.max(0, (now - state.lastTick) / 1000);
+            state.lastTick = now;
+            const backlog = state.target - state.cursor;
+            state.cursor = Math.min(
+                state.target,
+                state.cursor + Math.max(40, backlog / 0.4) * dt,
+            );
+            const next = Math.floor(state.cursor);
+            if (next !== state.published) {
+                state.published = next;
+                setRevealedInt(next);
             }
-            raf = requestAnimationFrame(step);
+            // Sleep while caught up. A later delta wakes the scheduler above.
+            if (state.cursor < state.target) {
+                state.frame = requestAnimationFrame(step);
+            }
         };
-
-        raf = requestAnimationFrame(step);
-        return () => {
-            cancelled = true;
-            cancelAnimationFrame(raf);
-        };
+        state.frame = requestAnimationFrame(step);
     }, [text.length, active]);
 
-    // Once the stream ends, render the authoritative text immediately. The
-    // effect above keeps the animation cursor in sync, but updating a ref does
-    // not trigger a render; slicing with the last animated state here could
-    // otherwise leave the final few characters permanently hidden.
+    useEffect(() => {
+        const state = animation.current;
+        return () => {
+            if (state.frame !== null) cancelAnimationFrame(state.frame);
+            state.frame = null;
+        };
+    }, []);
+
+    // Once the stream ends, render the authoritative text immediately, before
+    // the effect synchronizes the animation cursor.
     if (!active) return text;
 
     return text.slice(0, Math.min(revealedInt, text.length));

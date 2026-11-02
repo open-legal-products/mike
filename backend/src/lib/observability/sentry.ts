@@ -1,0 +1,1163 @@
+// Sentry error tracking for every backend runtime: the API process, the
+// in-process worker thread, the standalone worker process, and one-shot jobs.
+//
+// Design rules, in priority order:
+//
+//   1. ON BY DEFAULT for community installs; SENTRY_DISABLED=true opts out.
+//      An explicit DSN overrides Mike's project. Test processes stay disabled
+//      unless SENTRY_ALLOW_IN_TESTS=true is explicitly set.
+//   2. NEVER LEAK DOCUMENT CONTENT OR CREDENTIALS. This is a legal platform:
+//      request bodies carry privileged documents and chat transcripts, and
+//      headers carry session cookies. `beforeSend` strips request bodies,
+//      cookies, and auth headers, and redacts secret-looking keys anywhere
+//      in an event. `dataCollection` disables sensitive data capture.
+//   3. ONE EVENT PER FAILURE. Explicit `reportError` calls at the boundaries
+//      (HTTP 500 path, background jobs, stream failures, worker crashes) carry
+//      structured tags; a console bridge turns every remaining `console.error`
+//      into an event so nothing is silently dropped. Errors already reported
+//      explicitly are remembered so the bridge does not double-report them.
+
+import * as Sentry from "@sentry/node";
+import { retainExceptionTypes, diagnosticRoute, diagnosticErrorTags, privacyBoundaryIntegration, type Operation, type Stage } from "./sentryPrivacy";
+
+export type SentryRole = "api" | "worker" | "worker-thread" | "job";
+
+export type ReportLevel = "fatal" | "error" | "warning";
+
+export type ReportContext = {
+  /** Sentry tags: low-cardinality, indexed, filterable in the UI. */
+  tags?: Record<string, string | number | boolean | null | undefined>;
+  /** Free-form structured context shown on the event; scrubbed before send. */
+  extra?: Record<string, unknown>;
+  level?: ReportLevel;
+  /** Override Sentry's grouping when the message alone would split issues. */
+  fingerprint?: string[];
+};
+
+const CONSOLE_MECHANISM = "auto.core.capture_console";
+const NESTED_SEARCH_DEPTH = 2;
+
+/**
+ * What Node's warning writer hands to console.error: one string shaped
+ * `(node:<pid>) [<code>] <Name>: <text>` (`node:internal/process/warning`).
+ * It arrives through the console bridge from node:* frames only, so the
+ * privacy boundary left "Failure in application" with four SDK frames and no
+ * tag that said what happened (MIKE-BACKEND-2). The process 'warning'
+ * listener reports the warning object instead; this copy is dropped.
+ */
+const NODE_WARNING_TEXT = /^\(node:\d+\) (?:\[[\w-]+\] )?[\w$]+: /;
+
+function isNodeWarningText(args: unknown[]): boolean {
+  return (
+    args.length === 1 &&
+    typeof args[0] === "string" &&
+    NODE_WARNING_TEXT.test(args[0])
+  );
+}
+
+// BEGIN shared-redaction
+// This block is the privacy control for every runtime. It is authored once
+// and mirrored, indentation aside, between backend/src/lib/observability/
+// sentry.ts and frontend/src/shared/lib/sentryEvent.ts (the backend cannot
+// import the frontend tree at build time). sentryEvent.sync.test.ts fails
+// the moment the two copies differ, so edit both or neither.
+const SENSITIVE_HEADERS = new Set([
+  "authorization",
+  "cookie",
+  "set-cookie",
+  "x-api-key",
+  "x-supabase-auth",
+]);
+const SENSITIVE_KEY_PATTERN =
+  /(token|secret|password|passwd|authorization|cookie|api[-_]?key|credential|private[-_]?key)/i;
+const MAX_SCRUB_DEPTH = 6;
+/**
+ * Query parameters whose VALUE is a credential, plus the two OAuth callback
+ * parameters (an authorization code is single-use but still a credential
+ * until it is exchanged) and S3 presigned-URL signature fields.
+ */
+const SENSITIVE_QUERY_PATTERN =
+  /(token|secret|password|passwd|authorization|cookie|api[-_]?key|credential|private[-_]?key|signature|^code$|^state$|^sig$|^x-amz-(signature|credential|security-token)$)/i;
+/** Path segments whose NEXT segment is a token: GET /download/<token>. */
+const TOKEN_PATH_SEGMENTS = new Set(["download"]);
+/** Keys whose string value is a path or URL: redactUrl sees bare paths too. */
+const URL_KEY_PATTERN =
+  /^(url|href|path|http_route|query_string|referer|referrer|location|redirect(_uri)?)$/i;
+
+/**
+ * Strip credentials from a URL or path while keeping it recognisable:
+ * `/download/<token>` → `/download/[Filtered]`, `?code=…&state=…` →
+ * `?code=[Filtered]&state=[Filtered]`.
+ */
+export function redactUrl(value: string): string {
+  const queryStart = value.indexOf("?");
+  const pathPart = queryStart === -1 ? value : value.slice(0, queryStart);
+  const query = queryStart === -1 ? null : value.slice(queryStart + 1);
+  const segments = pathPart.split("/");
+  for (let i = 0; i < segments.length - 1; i += 1) {
+    const segment = segments[i];
+    if (
+      segment !== undefined &&
+      TOKEN_PATH_SEGMENTS.has(segment) &&
+      segments[i + 1]
+    ) {
+      segments[i + 1] = "[Filtered]";
+    }
+  }
+  let out = segments.join("/");
+  if (query !== null) {
+    out += `?${redactQueryString(query)}`;
+  }
+  return out;
+}
+
+function redactQueryString(query: string): string {
+  return query
+    .split("&")
+    .map((pair) => {
+      // Idempotent: text redaction may run over an already scrubbed URL.
+      if (pair.endsWith("=[Filtered]")) return pair;
+      const eq = pair.indexOf("=");
+      const key = eq === -1 ? pair : pair.slice(0, eq);
+      let name = key;
+      try {
+        name = decodeURIComponent(key);
+      } catch {
+        // Keep the raw key; it still gets pattern-matched below.
+      }
+      return SENSITIVE_QUERY_PATTERN.test(name) ? `${key}=[Filtered]` : pair;
+    })
+    .join("&");
+}
+
+/** The SDK may hand query parameters over as a string, a map, or pairs. */
+function redactQueryParams(value: unknown): unknown {
+  if (typeof value === "string") return redactQueryString(value);
+  if (Array.isArray(value)) {
+    return value.map((entry) =>
+      Array.isArray(entry) && typeof entry[0] === "string"
+        ? SENSITIVE_QUERY_PATTERN.test(entry[0])
+          ? [entry[0], "[Filtered]"]
+          : entry
+        : entry,
+    );
+  }
+  if (value && typeof value === "object") {
+    const out: Record<string, unknown> = {};
+    for (const [key, entry] of Object.entries(value as object)) {
+      out[key] = SENSITIVE_QUERY_PATTERN.test(key) ? "[Filtered]" : entry;
+    }
+    return out;
+  }
+  return value;
+}
+
+/**
+ * Secrets and identities that appear INSIDE free text: a Postgres error
+ * quoting the email it collided on, an HTTP client echoing an Authorization
+ * header, a provider key in a stack frame, a presigned URL in a log line.
+ * Key-based filtering cannot see any of these, so every string that lands
+ * on an event — the title, the exception text, extras, breadcrumbs — goes
+ * through here. Order matters: URLs first so their query strings are
+ * handled by redactUrl, then bearer tokens before the bare-JWT pattern.
+ */
+const TEXT_PATTERNS: Array<[RegExp, string | ((match: string) => string)]> = [
+  [/https?:\/\/[^\s"'<>]+/g, (match) => redactUrl(match)],
+  [/\bBearer\s+[A-Za-z0-9._~+/=-]+/gi, "Bearer [Filtered]"],
+  [/\beyJ[A-Za-z0-9_-]{6,}\.[A-Za-z0-9_-]{2,}(?:\.[A-Za-z0-9_-]*)?/g, "[jwt]"],
+  [/\bsk-[A-Za-z0-9_-]{8,}/g, "[api-key]"],
+  [/\bAKIA[0-9A-Z]{16}\b/g, "[aws-key]"],
+  [/\b(?:ghp|gho|ghu|ghs|ghr)_[A-Za-z0-9]{16,}/g, "[github-token]"],
+  [/\bxox[abprs]-[A-Za-z0-9-]{8,}/g, "[slack-token]"],
+  [/[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}/g, "[email]"],
+];
+
+export function redactText(value: string): string {
+  let out = value;
+  for (const [pattern, replacement] of TEXT_PATTERNS) {
+    out =
+      typeof replacement === "string"
+        ? out.replace(pattern, replacement)
+        : out.replace(pattern, replacement);
+  }
+  return out;
+}
+
+/**
+ * Keys allowed under `extra` and breadcrumb data, at any depth. Everything
+ * else is replaced, not only secret-looking keys: an `extra.note` holding a
+ * contract clause has no telltale name. Raw console arguments and bodies
+ * are always excluded, including strings that have no secret-shaped keys.
+ * Attach diagnostic ids explicitly instead of copying logged payloads.
+ */
+const EXTRA_KEY_ALLOWLIST = new Set([
+  "bookmarkName",
+  "code",
+  "dedupe_key",
+  "detail",
+  "document_id",
+  "documentId",
+  "err",
+  "error",
+  "error_stack",
+  "exit_code",
+  "file_id",
+  "fileId",
+  "id",
+  "import_id",
+  "job_id",
+  "jobId",
+  "kind",
+  "message",
+  "name",
+  "playbook_id",
+  "request_id",
+  "requestId",
+  "review_id",
+  "reviewId",
+  "row_id",
+  "rowId",
+  "run_id",
+  "session_id",
+  "sessionId",
+  "stableEditId",
+  "stack",
+  "stage",
+  "status",
+  "statusCode",
+  "tool",
+  "tool_call_id",
+  "unhandledPromiseRejection",
+  "url",
+  "version_id",
+  "versionId",
+  "worker_id",
+  "workerId",
+]);
+
+/** A string leaf: bare paths under URL-shaped keys get redactUrl as well. */
+function redactLeaf(key: string, value: string): string {
+  return redactText(URL_KEY_PATTERN.test(key) ? redactUrl(value) : value);
+}
+
+/** Free-form application data (extra, breadcrumb data): allowlist + text. */
+export function scrubFreeform(value: unknown, depth = 0): unknown {
+  if (depth > MAX_SCRUB_DEPTH) return "[Truncated]";
+  if (typeof value === "string") return redactText(value);
+  if (Array.isArray(value)) {
+    return value.map((item) => scrubFreeform(item, depth + 1));
+  }
+  if (value && typeof value === "object") {
+    const out: Record<string, unknown> = {};
+    for (const [key, entry] of Object.entries(value as object)) {
+      out[key] =
+        EXTRA_KEY_ALLOWLIST.has(key) && !SENSITIVE_KEY_PATTERN.test(key)
+          ? typeof entry === "string"
+            ? redactLeaf(key, entry)
+            : scrubFreeform(entry, depth + 1)
+          : "[Filtered]";
+    }
+    return out;
+  }
+  return value;
+}
+
+/** SDK-shaped data (contexts: os, runtime, device…): denylist + text. */
+export function redactShaped(value: unknown, depth = 0): unknown {
+  if (depth > MAX_SCRUB_DEPTH) return "[Truncated]";
+  if (typeof value === "string") return redactText(value);
+  if (Array.isArray(value)) {
+    return value.map((item) => redactShaped(item, depth + 1));
+  }
+  if (value && typeof value === "object") {
+    const out: Record<string, unknown> = {};
+    for (const [key, entry] of Object.entries(value as object)) {
+      out[key] = SENSITIVE_KEY_PATTERN.test(key)
+        ? "[Filtered]"
+        : typeof entry === "string"
+          ? redactLeaf(key, entry)
+          : redactShaped(entry, depth + 1);
+    }
+    return out;
+  }
+  return value;
+}
+
+/**
+ * The Mike project's own Sentry projects. A DSN is a write-only address:
+ * it lets an SDK post events and nothing else, so it is public by design
+ * (it ships in every browser bundle). Community installs report here by
+ * default so the project learns what forks run into; the opt-out and the
+ * override are one variable each (see resolveDsn).
+ */
+export const MIKE_SENTRY_DSN = {
+  backend:
+    "https://7d685d2a4e6a4bfd5991b320c0043d23@o4512288166510592.ingest.us.sentry.io/4512288204718080",
+  frontend:
+    "https://1d40513ce9978d4fbd4deeeeff23817a@o4512288166510592.ingest.us.sentry.io/4512288207798272",
+  wordAddin:
+    "https://98e6cb43234267619a432a58c0ad71f9@o4512288166510592.ingest.us.sentry.io/4512288210812928",
+} as const;
+
+export type DsnResolution = {
+  dsn: string;
+  /** Where the DSN came from; "default" means the Mike project's Sentry. */
+  source: "disabled" | "env" | "default";
+};
+
+/**
+ * Off if the runtime's *_SENTRY_DISABLED is "true"; the runtime's own DSN
+ * when one is set (a self-hoster's own Sentry); otherwise the built-in Mike
+ * project DSN. Test processes are guarded separately by the caller.
+ */
+export function resolveDsn(input: {
+  disabled?: string;
+  dsn?: string;
+  fallback: string;
+}): DsnResolution {
+  if (input.disabled?.trim().toLowerCase() === "true") {
+    return { dsn: "", source: "disabled" };
+  }
+  const explicit = input.dsn?.trim();
+  if (explicit) return { dsn: explicit, source: "env" };
+  return { dsn: input.fallback, source: "default" };
+}
+
+export type InstallKind = "official" | "community";
+
+/** Only the official deployment sets SENTRY_INSTALL=official; all else is community. */
+export function installKind(raw: string | undefined): InstallKind {
+  return raw?.trim().toLowerCase() === "official" ? "official" : "community";
+}
+
+type CommunityFrame = {
+  filename?: unknown;
+  abs_path?: unknown;
+  in_app?: unknown;
+  vars?: unknown;
+  pre_context?: unknown;
+  context_line?: unknown;
+  post_context?: unknown;
+};
+type CommunityEvent = {
+  server_name?: unknown;
+  user?: unknown;
+  breadcrumbs?: unknown;
+  message?: unknown;
+  fingerprint?: string[];
+  tags?: Record<string, unknown>;
+  extra?: Record<string, unknown>;
+  contexts?: Record<string, unknown>;
+  request?: { url?: unknown; method?: unknown } & Record<string, unknown>;
+  exception?: {
+    values?: { value?: unknown; stacktrace?: { frames?: CommunityFrame[] } }[];
+  };
+};
+
+const REPO_ROOTS = ["/backend/", "/frontend/", "/word-addin/", "/packages/"];
+/** Contexts broad enough not to identify anyone; each reduced to name + version. */
+const COMMUNITY_CONTEXTS = new Set(["os", "runtime", "browser", "trace"]);
+const FILESYSTEM_PATH_PATTERN =
+  /(?:\/(?:Users|home|app|var|tmp|opt|private|srv|mnt|data|root|etc)\/[^\s"'`)\]]*)|(?:[A-Za-z]:\\[^\s"'`)\]]*)/g;
+
+/**
+ * A code location without the machine it was found on: everything before
+ * the repository directory (`/Users/jane/work/mike/backend/src/x.ts` →
+ * `backend/src/x.ts`), the dependency path for node_modules, the URL path
+ * for browser bundles, and "[external]" for anything outside the project.
+ */
+export function repoRelativePath(path: string): string {
+    // SDK integrations can already supply repository-relative locations.
+    if (/^(?:\.\/)?(?:backend|frontend|word-addin|packages|src|dist|node_modules|_next)\//.test(path)) return path;
+  let idx = -1;
+  for (const root of REPO_ROOTS) {
+    const at = path.lastIndexOf(root);
+    if (at > idx) idx = at;
+  }
+  if (idx >= 0) return path.slice(idx + 1);
+  const nm = path.lastIndexOf("/node_modules/");
+  if (nm >= 0) return path.slice(nm + 1);
+  if (/^https?:\/\//.test(path)) return path.replace(/^https?:\/\/[^/]+/, "") || "/";
+  if (/^(webpack|app|node|file):/.test(path)) return path.replace(/^file:\/\/[^/]*/, "");
+  const src = path.lastIndexOf("/src/");
+  if (src >= 0) return path.slice(src + 1);
+  const dist = path.lastIndexOf("/dist/");
+  if (dist >= 0) return path.slice(dist + 1);
+  return "[external]";
+}
+
+/** Absolute filesystem paths inside free text → repo-relative or "[path]". */
+export function redactFilesystemPaths(text: string): string {
+  return text.replace(FILESYSTEM_PATH_PATTERN, (match) => {
+    const relative = repoRelativePath(match);
+    return relative === "[external]" ? "[path]" : relative;
+  });
+}
+
+/** Community reports must not identify a deployment through an embedded URL. */
+function redactCommunityText(text: string): string {
+  return redactFilesystemPaths(
+    redactText(text).replace(/https?:\/\/[^\s"'<>]+/gi, (url) =>
+      url.replace(/^https?:\/\/[^/?#]+/i, "") || "/",
+    ),
+  );
+}
+
+function mapStringLeaves(
+  value: unknown,
+  fn: (text: string) => string,
+  depth = 0,
+): unknown {
+  if (depth > MAX_SCRUB_DEPTH) return value;
+  if (typeof value === "string") return fn(value);
+  if (Array.isArray(value)) {
+    return value.map((item) => mapStringLeaves(item, fn, depth + 1));
+  }
+  if (value && typeof value === "object") {
+    const out: Record<string, unknown> = {};
+    for (const [key, entry] of Object.entries(value as object)) {
+      out[key] = mapStringLeaves(entry, fn, depth + 1);
+    }
+    return out;
+  }
+  return value;
+}
+
+/**
+ * COMMUNITY INSTALLS: a fork or self-hosted Mike reporting to the Mike
+ * project's Sentry sends only what our own code owns and what is too broad
+ * to identify anyone. Removed: the machine name, the user id, request
+ * headers and host, every breadcrumb, device / app / locale contexts, local
+ * variables, and any absolute filesystem path (in frames, messages, extras).
+ * Kept: repo-relative code locations with their source lines, our own tags
+ * and ids, the route pattern, OS / runtime / browser name and version,
+ * environment and release.
+ */
+export function minimiseForCommunity<T extends CommunityEvent>(event: T): T {
+  delete event.server_name;
+  delete event.user;
+  // Breadcrumbs are request history; only our own stage trail stays
+  // (category mike.stage, message a stage name), the privacy boundary
+  // checks each one against the diagnostic label format.
+  const trail = Array.isArray(event.breadcrumbs)
+    ? event.breadcrumbs.filter((crumb) => (crumb as { category?: unknown })?.category === "mike.stage")
+    : [];
+  if (trail.length) event.breadcrumbs = trail;
+  else delete event.breadcrumbs;
+  if (event.tags) {
+    delete event.tags.server_name;
+    delete event.tags.url;
+    event.tags = mapStringLeaves(event.tags, redactCommunityText) as Record<string, unknown>;
+  }
+  if (event.fingerprint) event.fingerprint = event.fingerprint.map(redactCommunityText);
+  if (event.request) {
+    const url =
+      typeof event.request.url === "string"
+        ? redactCommunityText(event.request.url)
+        : undefined;
+    const method = event.request.method;
+    event.request = {
+      ...(typeof method === "string" ? { method } : {}),
+      ...(url ? { url } : {}),
+    };
+  }
+  if (event.contexts) {
+    for (const key of Object.keys(event.contexts)) {
+      if (!COMMUNITY_CONTEXTS.has(key)) {
+        delete event.contexts[key];
+        continue;
+      }
+      const context = event.contexts[key];
+      if (key !== "trace" && context && typeof context === "object") {
+        const { name, version } = context as { name?: unknown; version?: unknown };
+        event.contexts[key] = {
+          ...(name !== undefined ? { name } : {}),
+          ...(version !== undefined ? { version } : {}),
+        };
+      }
+    }
+  }
+  if (typeof event.message === "string") {
+    event.message = redactCommunityText(event.message);
+  }
+  for (const value of event.exception?.values ?? []) {
+    if (typeof value.value === "string") {
+      value.value = redactCommunityText(value.value);
+    }
+    for (const frame of value.stacktrace?.frames ?? []) {
+      if (typeof frame.filename === "string") {
+        frame.filename = repoRelativePath(frame.filename);
+      }
+      if (typeof frame.abs_path === "string") {
+        frame.abs_path = repoRelativePath(frame.abs_path);
+      }
+      delete frame.vars;
+      if (frame.in_app !== true) {
+        delete frame.pre_context;
+        delete frame.context_line;
+        delete frame.post_context;
+      }
+    }
+  }
+  if (event.extra) {
+    event.extra = mapStringLeaves(event.extra, redactCommunityText) as Record<
+      string,
+      unknown
+    >;
+  }
+  return event;
+}
+// END shared-redaction
+
+/** Marks a build that did not come from the release workflow. */
+export const UNVERSIONED = "0.0.0";
+const VERSION_PATTERN = /^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/;
+
+/** `MIKE_VERSION` as a semver string, or 0.0.0 when unset or malformed. */
+export function normalizeVersion(raw: string | undefined): string {
+  const trimmed = (raw ?? "").trim().replace(/^v/, "");
+  return VERSION_PATTERN.test(trimmed) ? trimmed : UNVERSIONED;
+}
+
+/**
+ * `mike@<version>+<sha12>`: the release every runtime tags events with. Same
+ * rule as frontend/src/shared/lib/sentryEvent.ts (this module cannot import
+ * it). An explicit SENTRY_RELEASE wins; a build without MIKE_VERSION is
+ * `mike@0.0.0...`, valid and visibly not a release.
+ */
+export function releaseName(
+  explicit: string | undefined,
+  version: string | undefined,
+  gitSha: string | undefined,
+): string {
+  const named = explicit?.trim();
+  if (named) return named;
+  const sha = gitSha?.trim().slice(0, 12);
+  const base = `mike@${normalizeVersion(version)}`;
+  return sha ? `${base}+${sha}` : base;
+}
+
+/** Errors already sent via reportError(); the console bridge skips them. */
+const reportedErrors = new WeakSet<object>();
+
+/** How far down an Error's `cause` chain isReported() looks. */
+const CAUSE_CHAIN_DEPTH = 8;
+
+/**
+ * True when `value`, or any error in its `cause` chain, was already sent
+ * with reportError(). Wrapping a reported failure for the caller —
+ * `throw new AssistantStreamError(message, …, { cause: err })` — is the
+ * same failure, not a new one; without this walk a route logging the
+ * wrapper filed the failure a second time (MIKE-BACKEND-B). `cause` is a
+ * non-enumerable own property, so the Object.values() search in
+ * findNested() never sees it. Bounded and cycle-safe: `cause` is arbitrary
+ * user-settable data.
+ */
+function isReported(value: unknown): boolean {
+  const seen = new Set<object>();
+  let current = value;
+  for (let depth = 0; depth < CAUSE_CHAIN_DEPTH; depth++) {
+    if (!current || typeof current !== "object" || seen.has(current)) {
+      return false;
+    }
+    if (reportedErrors.has(current)) return true;
+    seen.add(current);
+    try {
+      current = (current as { cause?: unknown }).cause;
+    } catch {
+      // A throwing accessor carries no signal; reporting must not throw.
+      return false;
+    }
+  }
+  return false;
+}
+
+let initialized = false;
+/** What this process is; community installs get the minimised event shape. */
+let currentInstall: InstallKind = "community";
+
+function parseRate(raw: string | undefined, fallback: number): number {
+  if (!raw) return fallback;
+  const parsed = Number(raw);
+  if (!Number.isFinite(parsed)) return fallback;
+  return Math.min(Math.max(parsed, 0), 1);
+}
+
+export function sentryConfiguration(env: NodeJS.ProcessEnv = process.env) {
+  // ON BY DEFAULT: without SENTRY_DISABLED or a DSN of your own, errors go
+  // to the Mike project's Sentry as a community install (see the README's
+  // Telemetry section). Only Mike's own deployment sets SENTRY_INSTALL.
+  const resolved = resolveDsn({
+    disabled: env.SENTRY_DISABLED?.trim() || env.MIKE_BUILD_SENTRY_DISABLED,
+    dsn: env.SENTRY_DSN?.trim() || env.MIKE_BUILD_SENTRY_DSN,
+    fallback: MIKE_SENTRY_DSN.backend,
+  });
+  const dsn = resolved.dsn;
+  // A test process must never report, even when a developer's backend/.env
+  // carries a real DSN: the suite deliberately points workers at dead ports
+  // and would flood the project with fake failures.
+  const isTestProcess =
+    env.NODE_ENV === "test" || env.VITEST === "true" || env.VITEST === "1";
+  return {
+    dsn,
+    dsnSource: resolved.source,
+    install: installKind(env.SENTRY_INSTALL),
+    enabled:
+      dsn.length > 0 &&
+      (!isTestProcess || env.SENTRY_ALLOW_IN_TESTS === "true"),
+    environment: env.SENTRY_ENVIRONMENT?.trim() || "self-hosted",
+    // An explicit SENTRY_RELEASE wins; otherwise mike@<version>+<sha12> from
+    // the MIKE_VERSION and GIT_SHA build arguments — what lets Sentry say
+    // "regressed in this release" and resolve an issue until the next.
+    release: releaseName(env.SENTRY_RELEASE, env.MIKE_VERSION, env.GIT_SHA),
+    // Performance tracing is opt-in: error tracking is the goal of this
+    // integration and traces cost quota. 0 keeps the OpenTelemetry request
+    // instrumentation (needed for request context on errors) without
+    // sending transactions.
+    tracesSampleRate: parseRate(env.SENTRY_TRACES_SAMPLE_RATE, 0),
+    debug: env.SENTRY_DEBUG === "true",
+    maxEventsPerIssuePerMinute: envInt(
+      env.SENTRY_MAX_EVENTS_PER_ISSUE_PER_MINUTE,
+      DEFAULT_MAX_EVENTS_PER_ISSUE_PER_MINUTE,
+    ),
+  };
+}
+
+function envInt(raw: string | undefined, fallback: number): number {
+  if (!raw) return fallback;
+  const parsed = Number.parseInt(raw, 10);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
+}
+
+/**
+ * CLIENT-SIDE FLOOD CONTROL. A background loop that fails on every poll
+ * (Postgres down, 8 upload workers, sub-second retry) produces hundreds of
+ * identical events a minute — one is a signal, five hundred are a quota bill
+ * and a rate-limited SDK that then drops the *next, different* error. Sentry
+ * only deduplicates strictly consecutive identical events, so this keeps a
+ * per-issue budget per minute and drops the excess locally, logging once per
+ * window how many were suppressed.
+ */
+const DEFAULT_MAX_EVENTS_PER_ISSUE_PER_MINUTE = 10;
+const THROTTLE_WINDOW_MS = 60_000;
+type ThrottleBucket = { windowStart: number; sent: number; suppressed: number };
+const throttleBuckets = new Map<string, ThrottleBucket>();
+let maxEventsPerIssuePerMinute = DEFAULT_MAX_EVENTS_PER_ISSUE_PER_MINUTE;
+
+function issueKey(event: Sentry.ErrorEvent): string {
+  if (event.fingerprint?.length) return event.fingerprint.join("|");
+  const exception = event.exception?.values?.[0];
+  const base = exception
+    ? `${exception.type ?? "Error"}: ${exception.value ?? ""}`
+    : (event.message ?? "");
+  const component = event.tags?.component;
+  return `${component == null ? "" : String(component)}::${base.slice(0, 300)}`;
+}
+
+/** True when this event is within its issue's per-minute budget. */
+export function withinIssueBudget(
+  event: Sentry.ErrorEvent,
+  now = Date.now(),
+): boolean {
+  const key = issueKey(event);
+  let bucket = throttleBuckets.get(key);
+  if (!bucket || now - bucket.windowStart >= THROTTLE_WINDOW_MS) {
+    if (bucket?.suppressed) {
+      console.warn(
+        `[sentry] suppressed ${bucket.suppressed} further event(s) for: ${key.slice(0, 120)}`,
+      );
+    }
+    bucket = { windowStart: now, sent: 0, suppressed: 0 };
+    throttleBuckets.set(key, bucket);
+    // Keep the map bounded on a long-running process.
+    if (throttleBuckets.size > 1_000) {
+      for (const [otherKey, other] of throttleBuckets) {
+        if (now - other.windowStart >= THROTTLE_WINDOW_MS) {
+          throttleBuckets.delete(otherKey);
+        }
+      }
+    }
+  }
+  if (bucket.sent < maxEventsPerIssuePerMinute) {
+    bucket.sent += 1;
+    return true;
+  }
+  bucket.suppressed += 1;
+  return false;
+}
+
+/** True once init() ran with a DSN in this process (or thread). */
+export function isSentryEnabled(): boolean {
+  return initialized;
+}
+
+function findNested(
+  value: unknown,
+  predicate: (candidate: object) => boolean,
+  depth = 0,
+): object | null {
+  if (!value || typeof value !== "object") return null;
+  if (predicate(value)) return value;
+  if (depth >= NESTED_SEARCH_DEPTH) return null;
+  for (const entry of Object.values(value)) {
+    const found = findNested(entry, predicate, depth + 1);
+    if (found) return found;
+  }
+  return null;
+}
+
+/**
+ * The console bridge hands its raw `console.error` arguments to beforeSend
+ * through the hint; the copy on the event is already normalised by then, so
+ * this is the only place the original Error objects can be recognised.
+ */
+function consoleArguments(hint: Sentry.EventHint): unknown[] | null {
+  const context = hint.captureContext as
+    | { extra?: { arguments?: unknown } }
+    | undefined;
+  const args = context?.extra?.arguments;
+  return Array.isArray(args) ? args : null;
+}
+
+/**
+ * Strip everything a legal-platform event must never carry, then drop
+ * console-bridge duplicates of errors that were reported explicitly.
+ * Exported for tests; installed as `beforeSend`.
+ */
+export function scrubEvent(
+  event: Sentry.ErrorEvent,
+  hint: Sentry.EventHint,
+): Sentry.ErrorEvent | null {
+  // An error reported explicitly must not be filed a second time by an
+  // automatic path: the console bridge's copy, or the unhandled-rejection /
+  // uncaught-exception handler's copy when the same object then escapes.
+  // Explicit captures arrive with handled: true and are always kept.
+  const mechanismInfo = event.exception?.values?.[0]?.mechanism;
+  const mechanism = mechanismInfo?.type;
+  const automatic =
+    mechanism === CONSOLE_MECHANISM || mechanismInfo?.handled === false;
+  const original = hint.originalException;
+  if (automatic && isReported(original)) {
+    return null;
+  }
+
+  // console.error("[label] failed", { jobId, error }) is the common shape in
+  // this codebase. The bridge only recognises a top-level Error, so it sends
+  // this as a message titled "[label] failed [object Object]". Recover: drop
+  // it when the nested error was already reported explicitly (most of the
+  // boundaries above do exactly that), otherwise give the message the error's
+  // name and text and group by label instead of by the serialised object.
+  const args = event.logger === "console" ? consoleArguments(hint) : null;
+  if (args) {
+    if (args.some((arg) => findNested(arg, isReported))) {
+      return null;
+    }
+    // Node's own warning printer; reportProcessWarning() filed the object.
+    if (isNodeWarningText(args)) return null;
+    // Positional payloads after the label are never titles or grouping keys.
+    const label = typeof args[0] === "string" ? args[0].trim() : "Console error";
+    const nestedError = args
+      .map((arg) =>
+        arg instanceof Error
+          ? null
+          : findNested(arg, (c) => c instanceof Error),
+      )
+      .find((found): found is Error => found instanceof Error);
+    if (nestedError) {
+      event.message = `${label ? `${label}: ` : ""}${nestedError.name}: ${nestedError.message}`;
+      event.fingerprint = ["console", label, nestedError.name];
+      event.extra = { ...(event.extra ?? {}), error_stack: nestedError.stack };
+    } else if (!event.exception?.values?.length || mechanismInfo?.synthetic) {
+      // SDK v11 attaches a synthetic exception to console messages by default.
+      // Its value is the joined arguments, so strip positional payloads there too.
+      event.message = label;
+      for (const value of event.exception?.values ?? []) {
+        if (value.mechanism?.synthetic) value.value = label;
+      }
+    }
+  }
+
+  event.tags = {
+    ...event.tags,
+    ...diagnosticErrorTags(original),
+    capture_source: event.logger === "console" ? "console" : mechanismInfo?.handled === false ? "unhandled" : event.exception?.values?.length ? "exception" : "message",
+  };
+  for (const arg of args ?? []) {
+    const nested = findNested(arg, c => c instanceof Error || 'code' in c);
+    Object.assign(event.tags, diagnosticErrorTags(nested));
+  }
+
+  retainExceptionTypes(event.exception?.values, [original, ...(args ?? [])], event.tags?.warning_name);
+
+  // The title and the exception text are free text from libraries that
+  // happily quote emails, tokens, and URLs (Postgres "Key (email)=(…)",
+  // axios "Request failed … Authorization: Bearer …").
+  if (typeof event.message === "string") {
+    event.message = redactText(event.message);
+  }
+  for (const value of event.exception?.values ?? []) {
+    if (typeof value.value === "string") value.value = redactText(value.value);
+  }
+  if (event.tags) event.tags = redactShaped(event.tags) as typeof event.tags;
+  if (event.fingerprint) event.fingerprint = event.fingerprint.map(redactText);
+  if (event.request) {
+    // Bodies are documents, chat turns, passwords. Never.
+    delete event.request.data;
+    delete event.request.cookies;
+    // The URL stays (it says which endpoint), its credentials do not.
+    if (typeof event.request.url === "string") {
+      event.request.url = redactUrl(event.request.url);
+    }
+    if (event.request.query_string !== undefined) {
+      event.request.query_string = redactQueryParams(
+        event.request.query_string,
+      ) as typeof event.request.query_string;
+    }
+    if (event.request.headers) {
+      for (const name of Object.keys(event.request.headers)) {
+        if (SENSITIVE_HEADERS.has(name.toLowerCase())) {
+          delete event.request.headers[name];
+        }
+      }
+    }
+  }
+  if (event.user) {
+    // Keep the id (needed to answer "how many users hit this?"); drop the
+    // rest — the SDK can attach email/ip from the request otherwise.
+    event.user = event.user.id ? { id: event.user.id } : undefined;
+  }
+  if (event.extra) {
+    event.extra = scrubFreeform(event.extra) as Record<string, unknown>;
+  }
+  if (event.contexts) {
+    event.contexts = redactShaped(event.contexts) as typeof event.contexts;
+  }
+  if (event.breadcrumbs) {
+    event.breadcrumbs = event.breadcrumbs.map((crumb) => ({
+      ...crumb,
+      ...(typeof crumb.message === "string"
+        ? { message: redactText(crumb.message) }
+        : {}),
+      ...(crumb.data
+        ? { data: scrubFreeform(crumb.data) as Record<string, unknown> }
+        : {}),
+    }));
+  }
+  if (currentInstall === "community") {
+    minimiseForCommunity(
+      event as unknown as Parameters<typeof minimiseForCommunity>[0],
+    );
+  }
+  if (!withinIssueBudget(event)) return null;
+  return event;
+}
+
+/**
+ * Initialise Sentry for this process. Safe to call more than once; returns
+ * whether tracking is active. MUST run before Express/HTTP modules load so
+ * the request instrumentation can hook them — see src/instrument.ts.
+ */
+export function initSentry(
+  role: SentryRole,
+  env: NodeJS.ProcessEnv = process.env,
+): boolean {
+  if (initialized) return true;
+  const config = sentryConfiguration(env);
+  if (!config.enabled) {
+    if (env.NODE_ENV !== "test") {
+      console.log(
+        `[sentry] disabled for ${role} (${
+          config.dsnSource === "disabled" ? "SENTRY_DISABLED=true" : "test process"
+        })`,
+      );
+    }
+    return false;
+  }
+
+  maxEventsPerIssuePerMinute = config.maxEventsPerIssuePerMinute;
+  currentInstall = config.install;
+  Sentry.init({
+    dsn: config.dsn,
+    environment: config.environment,
+    release: config.release,
+    debug: config.debug,
+    tracesSampleRate: config.tracesSampleRate,
+    dataCollection: {
+            userInfo: false,
+            cookies: false,
+            httpHeaders: { request: false, response: false },
+            httpBodies: [],
+            urlQueryParams: false,
+            genAI: { inputs: false, outputs: false },
+            databaseQueryData: false,
+            queues: false,
+            graphQL: { document: false, variables: false },
+            stackFrameVariables: false,
+            frameContextLines: 0,
+        },
+    attachStacktrace: true,
+    // Bodies are stripped in beforeSend as well; not collecting them at all
+    // means they never sit in memory on the event either.
+    integrations: [
+      privacyBoundaryIntegration(),
+      Sentry.httpIntegration(),
+      Sentry.captureConsoleIntegration({ levels: ["error"] }),
+      // Node 22 crashes on an unhandled rejection; the SDK's default "warn"
+      // mode registers its own listener, which silently turns that crash
+      // into "log and carry on" the moment a DSN is set. A DSN must not
+      // change how the process behaves: report the rejection, then exit
+      // exactly as an install without Sentry would (the API is restarted by
+      // its supervisor, the worker thread is respawned by index.ts).
+      Sentry.onUnhandledRejectionIntegration({ mode: "strict" }),
+    ],
+    initialScope: {
+      tags: { service: "mike-backend", role, install: config.install, build_mode: env.NODE_ENV, diagnostics_version: "2" },
+    },
+    beforeSend: scrubEvent,
+  });
+  initialized = true;
+  installProcessWarningReporter(env);
+  if (config.dsnSource === "default") {
+    console.log(
+      `[sentry] enabled for ${role} → Mike project Sentry (${config.install} install, ` +
+        `release ${config.release}). ` +
+        "Opt out with SENTRY_DISABLED=true or point SENTRY_DSN at your own project.",
+    );
+  } else {
+    console.log(
+      `[sentry] enabled for ${role} (environment ${config.environment}` +
+        `, release ${config.release})`,
+    );
+  }
+  if (config.release.startsWith(`mike@${UNVERSIONED}`) && env.NODE_ENV === "production") {
+    // An unversioned release cannot be told apart from any other local build;
+    // the images get MIKE_VERSION and GIT_SHA as build args (docs/observability.md).
+    console.warn(
+      "[sentry] unversioned release: build the images with MIKE_VERSION=$(cat VERSION) GIT_SHA=$(git rev-parse HEAD) or set SENTRY_RELEASE",
+    );
+  }
+  return true;
+}
+
+/**
+ * Node process warnings (DeprecationWarning, ExperimentalWarning,
+ * MaxListenersExceededWarning, …) are printed by Node itself through
+ * console.error, which the console bridge captures as free text from node:*
+ * frames; after the privacy boundary nothing identified them. Reported as the
+ * warning object, the name, the code (DEP0040) and the stack of the module
+ * that triggered it survive, so an install's next warning says what it is.
+ * Not an application failure: level "warning", one issue per name and code.
+ */
+export function reportProcessWarning(warning: unknown): string | null {
+  const shaped = warning as { name?: unknown; code?: unknown } | null;
+  const name = typeof shaped?.name === "string" ? shaped.name : "Warning";
+  const code = typeof shaped?.code === "string" ? shaped.code : undefined;
+  if (name === "DeprecationWarning" && process.noDeprecation) return null;
+  return reportError(warning, {
+    level: "warning",
+    tags: { component: "runtime-warning", warning_name: name, warning_code: code },
+    fingerprint: ["runtime-warning", name, code ?? ""],
+  });
+}
+
+/**
+ * `--no-warnings` (or NODE_NO_WARNINGS=1) is the operator saying "do not
+ * tell me about these"; honour it the way Node's own printer does. Registered once per process: a second
+ * initSentry() returns before reaching here.
+ */
+function installProcessWarningReporter(env: NodeJS.ProcessEnv): void {
+  const silenced =
+    env.NODE_NO_WARNINGS === "1" ||
+    process.execArgv.includes("--no-warnings") ||
+    /(?:^|\s)--no-warnings(?:\s|=|$)/.test(env.NODE_OPTIONS ?? "");
+  if (silenced) return;
+  process.on("warning", reportProcessWarning);
+}
+
+/**
+ * Report an error with structured context. Call it BEFORE the accompanying
+ * console.error so the console bridge recognises the error as already sent.
+ * Returns the Sentry event id (useful for correlating with a request id), or
+ * null when tracking is off.
+ */
+export function reportError(
+  error: unknown,
+  context: ReportContext = {},
+): string | null {
+  if (error && typeof error === "object") reportedErrors.add(error);
+  if (!initialized) return null;
+  return Sentry.withScope((scope) => {
+    if (context.level) scope.setLevel(context.level);
+    if (context.fingerprint) scope.setFingerprint(context.fingerprint);
+    for (const [key, value] of Object.entries(context.tags ?? {})) {
+      if (value !== undefined && value !== null) scope.setTag(key, value);
+    }
+    for (const [key, value] of Object.entries(context.extra ?? {})) {
+      scope.setExtra(key, value);
+    }
+    return Sentry.captureException(
+      error instanceof Error ? error : new Error(describe(error), { cause: error }),
+    );
+  });
+}
+
+/** A message-only event (no Error object), for "this should never happen". */
+export function reportMessage(
+  message: string,
+  context: ReportContext = {},
+): string | null {
+  if (!initialized) return null;
+  return Sentry.withScope((scope) => {
+    if (context.fingerprint) scope.setFingerprint(context.fingerprint);
+    for (const [key, value] of Object.entries(context.tags ?? {})) {
+      if (value !== undefined && value !== null) scope.setTag(key, value);
+    }
+    for (const [key, value] of Object.entries(context.extra ?? {})) {
+      scope.setExtra(key, value);
+    }
+    return Sentry.captureMessage(message, context.level ?? "error");
+  });
+}
+
+/**
+ * The Express route PATTERN a request matched, with its mount point:
+ * `/projects/:projectId`, not `/projects/8f1c…`. Used as the grouping tag on
+ * every HTTP event so one bug is one issue however many resources it hits.
+ *
+ * `req.route.path` alone is only the router-relative part — `/:id` for both
+ * GET /projects/:id and GET /documents/:id — so it must be joined with
+ * `req.baseUrl` or unrelated endpoints collapse into one issue. A request
+ * that matched no route (404s, errors thrown in app-level middleware) has no
+ * pattern; the concrete path minus its query string is the best we have.
+ */
+export function requestRoutePattern(
+  req:
+    | {
+        baseUrl?: string;
+        route?: { path?: unknown };
+        originalUrl?: string;
+      }
+    | undefined,
+): string | undefined {
+  if (!req) return undefined;
+  const base = req.baseUrl ?? "";
+  const path = req.route?.path;
+  if (typeof path === "string") {
+    return path === "/" && base ? base : `${base}${path}`;
+  }
+  const concrete = req.originalUrl?.split("?")[0];
+  return concrete ? `${concrete}` : base || undefined;
+}
+
+/**
+ * Run work whose failure must not fail the caller — a rollback, a cleanup,
+ * a cache refresh — but must not vanish either. `promise.catch(() => {})`
+ * is how a storage leak or a half-finished rollback stays invisible for
+ * months; this reports it as a warning, grouped per `what`, and resolves
+ * to undefined so the caller's control flow is unchanged.
+ */
+export function bestEffort<T>(
+  work: Promise<T>,
+  context: {
+    /** Stable, low-cardinality name of the operation: the grouping key. */
+    what: string;
+    tags?: ReportContext["tags"];
+    extra?: ReportContext["extra"];
+  },
+): Promise<T | undefined> {
+  return work.catch((error: unknown) => {
+    reportError(error, {
+      level: "warning",
+      tags: { component: "best-effort", ...context.tags, what: context.what },
+      extra: context.extra,
+      fingerprint: ["best-effort", context.what],
+    });
+    console.warn(`[best-effort] ${context.what} failed`, {
+      ...(context.extra ?? {}),
+      error,
+    });
+    return undefined;
+  });
+}
+
+/**
+ * Name the flow this request or job belongs to. Set once at the entry
+ * (route handler, job handler) and every event captured until it finishes
+ * carries `operation`, which leads the issue title and the fingerprint.
+ * Default stack grouping still distinguishes different failure sites.
+ */
+export function setOperation(operation: Operation): void {
+  if (!initialized) return;
+  Sentry.getIsolationScope().setTag("operation", operation);
+}
+
+/**
+ * Record that the current request or job reached a stage. The stages a
+ * failed operation passed through arrive on its event as breadcrumbs, so a
+ * failure in `seal-recover` is distinguishable from the same throw reached
+ * via `copy-rollback`. Only the static, source-authored stage label travels,
+ * never runtime data or a free-form message.
+ */
+export function markStage(stage: Stage): void {
+  if (!initialized) return;
+  Sentry.addBreadcrumb({ category: "mike.stage", message: stage, level: "info" });
+}
+
+/** Baseline identity for all request captures, including middleware/console errors. */
+export function tagCurrentRequest(
+  requestId: string,
+  request?: { method: string; originalUrl: string },
+): void {
+  if (!initialized) return;
+  const scope = Sentry.getIsolationScope();
+  scope.setTag("request_id", requestId);
+  if (request) {
+    // Never put a concrete URL, query, resource name or id on the scope.
+    // This fallback exists before Express selects a route; setOperation in
+    // a domain handler replaces it with the more specific business flow.
+    scope.setTag("component", "http");
+    scope.setTag("operation", "http.request");
+    scope.setTag("http_method", request.method);
+    scope.setTag("http_route", diagnosticRoute(request.originalUrl));
+  }
+}
+
+/** Attach the authenticated user's id (never the email) to this request. */
+export function setCurrentUser(userId: string | null): void {
+  if (!initialized) return;
+  Sentry.getIsolationScope().setUser(userId ? { id: userId } : null);
+}
+
+/** Flush queued events before a process exits (one-shot jobs, crashes). */
+export async function flushSentry(timeoutMs = 2_000): Promise<void> {
+  if (!initialized) return;
+  try {
+    await Sentry.flush(timeoutMs);
+  } catch {
+    // Exiting anyway; a lost event is better than a hung process.
+  }
+}
+
+function describe(value: unknown): string {
+  if (typeof value === "string") return value;
+  try {
+    return JSON.stringify(value) ?? String(value);
+  } catch {
+    return String(value);
+  }
+}
+
+/** Test seam: forget init and throttle state between unit tests. */
+export function resetSentryForTests(
+  install: InstallKind = "official",
+  options: { initialized?: boolean } = {},
+): void {
+  // A test that calls Sentry.init() itself (real SDK, fake transport) opts in
+  // so reportError() and friends treat that client as ours.
+  initialized = options.initialized ?? false;
+  process.off("warning", reportProcessWarning);
+  // Tests exercise the full event shape unless they opt into community mode.
+  currentInstall = install;
+  throttleBuckets.clear();
+  maxEventsPerIssuePerMinute = DEFAULT_MAX_EVENTS_PER_ISSUE_PER_MINUTE;
+}

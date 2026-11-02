@@ -5,7 +5,6 @@ import {
     copyDocumentsToWorkflowAssets,
     createWorkflow,
     listOrgMembers,
-    listOrgs,
     lookupUserByEmail,
     MikeApiError,
     shareWorkflow,
@@ -23,7 +22,6 @@ vi.mock("@/app/lib/mikeApi", async (importOriginal) => ({
     copyDocumentsToWorkflowAssets: vi.fn(),
     createWorkflow: vi.fn(),
     listOrgMembers: vi.fn(),
-    listOrgs: vi.fn(),
     lookupUserByEmail: vi.fn(),
     shareWorkflow: vi.fn(),
     updateWorkflow: vi.fn(),
@@ -54,6 +52,31 @@ vi.mock("../shared/FileDirectory", () => ({
 vi.mock("@/app/contexts/AuthContext", () => ({
     useAuth: () => ({ user: { id: "me", email: "me@firm.test" } }),
 }));
+
+// `null` is "no workspace provider": the modal behaves as it always has.
+const activeWorkspace = vi.hoisted(() => ({
+    id: null as string | null,
+    name: "Elite Law LLP",
+}));
+vi.mock("@/app/contexts/WorkspaceContext", async (importOriginal) => ({
+    ...(await importOriginal<
+        typeof import("@/app/contexts/WorkspaceContext")
+    >()),
+    useWorkspace: () => ({
+        workspaceId: activeWorkspace.id,
+        organizations: null,
+        activeOrganization:
+            activeWorkspace.id && activeWorkspace.id !== "personal"
+                ? {
+                      id: activeWorkspace.id,
+                      name: activeWorkspace.name,
+                      role: "member",
+                  }
+                : null,
+        setWorkspace: vi.fn(),
+        refreshOrganizations: vi.fn(),
+    }),
+}));
 vi.mock("@/app/contexts/UserProfileContext", () => ({
     useUserProfile,
 }));
@@ -73,7 +96,7 @@ const workflow = {
 describe("NewWorkflowModal editing", () => {
     beforeEach(() => {
         vi.clearAllMocks();
-        vi.mocked(listOrgs).mockResolvedValue([]);
+        activeWorkspace.id = null;
         vi.mocked(listOrgMembers).mockResolvedValue([]);
         vi.mocked(createWorkflow).mockResolvedValue(workflow);
         vi.mocked(copyDocumentsToWorkflowAssets).mockResolvedValue([]);
@@ -125,24 +148,84 @@ describe("NewWorkflowModal editing", () => {
         expect(save).toBeDisabled();
     });
 
-    it("shows the current organisation in workflow details", async () => {
-        vi.mocked(listOrgs).mockResolvedValue([
-            { id: "org-1", name: "Elite Law LLP" } as never,
-        ]);
-
+    it("shows an existing workflow's organisation and its Public setting", async () => {
+        const user = userEvent.setup({ delay: null });
+        const onUpdated = vi.fn();
         render(
             <NewWorkflowModal
                 open
-                editWorkflow={{ ...workflow, org_id: "org-1" }}
+                editWorkflow={{
+                    ...workflow,
+                    org_id: "org-1",
+                    organization_name: "Elite Law LLP",
+                    visibility: "private",
+                }}
+                onClose={vi.fn()}
+                onCreated={vi.fn()}
+                onUpdated={onUpdated}
+            />,
+        );
+
+        // Where it lives is fixed: work is not moved between organisations.
+        expect(
+            document.querySelector('[data-slot="workflow-workspace"]'),
+        ).toHaveTextContent("Elite Law LLP");
+        const publicToggle = screen.getByRole("button", { name: "Public" });
+        expect(publicToggle).toHaveAttribute("aria-pressed", "false");
+
+        await user.click(publicToggle);
+        expect(
+            screen.getByText(
+                "Everyone in Elite Law LLP can open and edit this workflow.",
+            ),
+        ).toBeInTheDocument();
+        await user.click(screen.getByRole("button", { name: "Save" }));
+
+        await waitFor(() =>
+            expect(updateWorkflow).toHaveBeenCalledWith(
+                "workflow-1",
+                expect.objectContaining({ visibility: "organization" }),
+            ),
+        );
+    });
+
+    it("does not send the Public setting when it was not changed", async () => {
+        // Who can open a workflow is its owner's decision. An editor saving
+        // a new title must not be refused for a setting they did not touch.
+        const user = userEvent.setup({ delay: null });
+        render(
+            <NewWorkflowModal
+                open
+                editWorkflow={{
+                    ...workflow,
+                    org_id: "org-1",
+                    organization_name: "Elite Law LLP",
+                    visibility: "organization",
+                    is_owner: false,
+                }}
                 onClose={vi.fn()}
                 onCreated={vi.fn()}
                 onUpdated={vi.fn()}
             />,
         );
 
-        const organisation = await screen.findByLabelText("Organisation");
-        expect(organisation).toBeDisabled();
-        expect(organisation).toHaveTextContent("Elite Law LLP");
+        expect(screen.getByRole("button", { name: "Public" })).toBeDisabled();
+        const title = screen.getByLabelText("Title");
+        await user.clear(title);
+        await user.type(title, "Renamed");
+        await user.click(screen.getByRole("button", { name: "Save" }));
+
+        await waitFor(() => expect(updateWorkflow).toHaveBeenCalled());
+        expect(
+            vi.mocked(updateWorkflow).mock.calls[0][1],
+        ).not.toHaveProperty("visibility");
+    });
+
+    it("offers no Public toggle for a personal workflow", () => {
+        render(<NewWorkflowModal open onClose={vi.fn()} onCreated={vi.fn()} />);
+        expect(
+            screen.queryByRole("group", { name: "Organisational Access" }),
+        ).not.toBeInTheDocument();
     });
 
     it("creates an assistant workflow only after the Assets screen", async () => {
@@ -367,48 +450,80 @@ describe("NewWorkflowModal editing", () => {
         expect(onCreated).not.toHaveBeenCalled();
     });
 
-    it("puts organization sharing last and names its access screen", async () => {
+    it("puts the Public setting last on the details and names the access screen", async () => {
         const user = userEvent.setup({ delay: null });
-        vi.mocked(listOrgs).mockResolvedValue([
-            { id: "org-1", name: "Elite Law LLP" } as never,
-        ]);
+        activeWorkspace.id = "org-1";
         render(<NewWorkflowModal open onClose={vi.fn()} onCreated={vi.fn()} />);
 
-        const jurisdiction = screen.getByLabelText("Jurisdiction");
-        const organization = await screen.findByLabelText(
-            "Share across Organisation",
-        );
+        // No choosing an organisation: it is the workspace being worked in.
         expect(
-            jurisdiction.compareDocumentPosition(organization) &
+            screen.queryByLabelText("Share across Organisation"),
+        ).not.toBeInTheDocument();
+        const jurisdiction = screen.getByLabelText("Jurisdiction");
+        const publicToggle = screen.getByRole("button", { name: "Public" });
+        expect(publicToggle).toHaveAttribute("aria-pressed", "false");
+        expect(
+            jurisdiction.compareDocumentPosition(publicToggle) &
                 Node.DOCUMENT_POSITION_FOLLOWING,
         ).toBeTruthy();
 
-        await user.click(organization);
-        await user.click(
-            await screen.findByRole("menuitem", { name: "Elite Law LLP" }),
-        );
+        // Private: the access screen is for naming individuals.
         await user.type(screen.getByLabelText("Title"), "Firm workflow");
         await user.click(screen.getByRole("button", { name: "Next" }));
-
         expect(
-            screen.getByRole("dialog", { name: "Organisational Access" }),
+            screen.getByRole("dialog", { name: "People" }),
         ).toBeVisible();
         expect(
-            screen.getByText(
-                "Add Elite Law LLP members as owners with rights to manage access, settings and delete the workflow.",
-            ),
-        ).not.toHaveClass("pl-3");
-        const denyToggle = screen.getByRole("button", { name: "Deny list" });
-        expect(denyToggle).toHaveAttribute("aria-expanded", "false");
+            await screen.findByRole("searchbox", { name: "People" }),
+        ).toBeInTheDocument();
         expect(
-            screen.queryByRole("searchbox", { name: "Deny list" }),
+            screen.queryByRole("button", { name: "Deny list" }),
         ).not.toBeInTheDocument();
+
+        // Public: everybody is in; what is left is more owners and the
+        // deny list.
+        await user.click(screen.getByRole("button", { name: "Back" }));
+        await user.click(screen.getByRole("button", { name: "Public" }));
+        await user.click(screen.getByRole("button", { name: "Next" }));
+        expect(
+            screen.queryByRole("searchbox", { name: "People" }),
+        ).not.toBeInTheDocument();
+        expect(
+            await screen.findByRole("searchbox", { name: "Workflow owners" }),
+        ).toBeInTheDocument();
+        const denyToggle = await screen.findByRole("button", {
+            name: "Deny list",
+        });
+        expect(denyToggle).toHaveAttribute("aria-expanded", "false");
         await user.click(denyToggle);
         expect(
             screen.getByText(
-                "Deny Elite Law LLP members from accessing this workflow.",
+                "Deny Elite Law LLP members from accessing this workflow, although it is open to everyone else.",
             ),
-        ).not.toHaveClass("pl-3");
+        ).toBeInTheDocument();
+    });
+
+    it("creates an organisation's workflow with the chosen Public setting", async () => {
+        const user = userEvent.setup({ delay: null });
+        activeWorkspace.id = "org-1";
+        render(<NewWorkflowModal open onClose={vi.fn()} onCreated={vi.fn()} />);
+
+        await user.click(screen.getByRole("button", { name: "Tabular" }));
+        await user.type(screen.getByLabelText("Title"), "Firm workflow");
+        await user.click(screen.getByRole("button", { name: "Public" }));
+        while (!screen.queryByRole("button", { name: /^Create/ })) {
+            await user.click(screen.getByRole("button", { name: "Next" }));
+        }
+        await user.click(screen.getByRole("button", { name: /^Create/ }));
+
+        await waitFor(() =>
+            expect(createWorkflow).toHaveBeenCalledWith(
+                expect.objectContaining({
+                    org_id: "org-1",
+                    visibility: "organization",
+                }),
+            ),
+        );
     });
 
     async function reachCreateWithOneRecipient(
@@ -518,19 +633,5 @@ describe("NewWorkflowModal editing", () => {
         await user.keyboard("{Escape}");
         await user.click(screen.getByRole("button", { name: "Close" }));
         expect(onClose).not.toHaveBeenCalled();
-    });
-
-    it("surfaces a failure to load the organization list", async () => {
-        vi.mocked(listOrgs).mockRejectedValue(
-            new MikeApiError({
-                message: "Organizations are unavailable.",
-                status: 403,
-            }),
-        );
-        render(<NewWorkflowModal open onClose={vi.fn()} onCreated={vi.fn()} />);
-
-        expect(
-            await screen.findByText("Organizations are unavailable."),
-        ).toBeVisible();
     });
 });

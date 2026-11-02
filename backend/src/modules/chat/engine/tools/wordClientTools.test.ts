@@ -8,6 +8,7 @@ import {
   TOOL_EDIT_BLOCK_INDEX_BASE,
   buildApplyResultPayload,
   createWordClientToolsAdapter,
+  isClientToolCallPending,
   isWordClientToolName,
   normalizeEditOutcomes,
   parseWordEditsInput,
@@ -33,6 +34,32 @@ describe("client tool result bridge", () => {
     expect(pendingClientToolCallCount()).toBe(1);
     expect(submitClientToolResult("call-2", "u1", "fine")).toBe(true);
     await expect(pending).resolves.toBe("fine");
+  });
+
+  it("reports whether a forwarded call is still waiting on the pane", async () => {
+    // What decides whether a server-owned Word turn replays its
+    // `client_tool_call` frame to a pane that attaches late: a pending call
+    // must be re-issued (the loop is still waiting for it), a settled one
+    // must not (re-executing it would apply the same edit twice).
+    expect(isClientToolCallPending("call-pending")).toBe(false);
+    const pending = waitForClientToolResult({
+      callId: "call-pending",
+      userId: "u1",
+    });
+    expect(isClientToolCallPending("call-pending")).toBe(true);
+    submitClientToolResult("call-pending", "u1", { ok: true });
+    await pending;
+    expect(isClientToolCallPending("call-pending")).toBe(false);
+  });
+
+  it("stops reporting a timed-out call as pending", async () => {
+    const pending = waitForClientToolResult({
+      callId: "call-timeout",
+      userId: "u1",
+      timeoutMs: 5,
+    });
+    await pending;
+    expect(isClientToolCallPending("call-timeout")).toBe(false);
   });
 
   it("returns false for unknown ids", () => {

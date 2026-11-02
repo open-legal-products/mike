@@ -22,6 +22,17 @@ const profileState = vi.hoisted(() => ({
   updateProjectMemoryDefault: vi.fn(),
 }));
 
+// The page shows the memory for the active workspace: Personal here, unless
+// a test moves to an organization.
+const workspaceState = vi.hoisted(() => ({
+  workspaceId: "personal" as string,
+  activeOrganization: null as { id: string; name: string } | null,
+  organizations: [] as { id: string; name: string }[] | null,
+}));
+vi.mock("@/app/contexts/WorkspaceContext", () => ({
+  useWorkspace: () => workspaceState,
+}));
+
 vi.mock("@/app/contexts/UserProfileContext", () => ({
   useUserProfile: () => ({
     profile: { projectMemoryDefault: profileState.projectMemoryDefault },
@@ -70,6 +81,9 @@ describe("UserMemoryPage", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     window.localStorage.clear();
+    workspaceState.workspaceId = "personal";
+    workspaceState.activeOrganization = null;
+    workspaceState.organizations = [];
     profileState.projectMemoryDefault = true;
     profileState.updateProjectMemoryDefault.mockResolvedValue(undefined);
     vi.mocked(getUserMemory).mockResolvedValue(current());
@@ -89,14 +103,34 @@ describe("UserMemoryPage", () => {
     );
   });
 
+  it("says nothing about other workspaces to someone who has only Personal", async () => {
+    render(<UserMemoryPage />);
+
+    expect(
+      await screen.findByText(
+        "Let Mike curate useful details after your saved conversations and use them in future answers.",
+      ),
+    ).toBeInTheDocument();
+    expect(screen.queryByText(/separate memory for each workspace/)).toBeNull();
+  });
+
+  it("tells someone in an organization that Personal has its own memory", async () => {
+    workspaceState.organizations = [{ id: "org-1", name: "Acme LLP" }];
+    render(<UserMemoryPage />);
+
+    expect(
+      await screen.findByText(/in Personal and use them in future answers there\. You have a separate memory for each workspace\./),
+    ).toBeInTheDocument();
+  });
+
   it("loads the current file independently and autosaves editor changes", async () => {
     const user = userEvent.setup();
     render(<UserMemoryPage />);
 
     const editor = await screen.findByRole("textbox", {
-      name: "App-wide memory",
+      name: "Personal memory",
     });
-    const toggle = screen.getByRole("switch", { name: "App-wide memory" });
+    const toggle = screen.getByRole("switch", { name: "Personal memory" });
     expect(toggle).toHaveAttribute("aria-checked", "true");
     expect(toggle).toHaveClass("focus-visible:ring-2");
     expect(editor).toHaveValue("# Preferences");
@@ -113,7 +147,7 @@ describe("UserMemoryPage", () => {
     expect(screen.getByText("Saving…")).toBeVisible();
 
     await waitFor(
-      () => expect(updateUserMemory).toHaveBeenCalledWith("# Saved", 2),
+      () => expect(updateUserMemory).toHaveBeenCalledWith("# Saved", 2, "personal"),
       { timeout: 2000 },
     );
     expect(await screen.findByText("Saved")).toBeVisible();
@@ -122,7 +156,7 @@ describe("UserMemoryPage", () => {
   it("pauses curator polling while the tab is hidden and backs off while nothing changes", async () => {
     vi.mocked(getUserMemory).mockResolvedValue(current({ status: "processing" }));
     render(<UserMemoryPage />);
-    await screen.findByRole("textbox", { name: "App-wide memory" });
+    await screen.findByRole("textbox", { name: "Personal memory" });
     expect(getUserMemory).toHaveBeenCalledTimes(1);
 
     const visibility = Object.getOwnPropertyDescriptor(
@@ -198,7 +232,7 @@ describe("UserMemoryPage", () => {
     const user = userEvent.setup();
     render(<UserMemoryPage />);
     const editor = await screen.findByRole("textbox", {
-      name: "App-wide memory",
+      name: "Personal memory",
     });
     // The refetch after the refusal reports the file as disabled.
     vi.mocked(getUserMemory).mockResolvedValue(
@@ -216,7 +250,7 @@ describe("UserMemoryPage", () => {
     ).toBeVisible();
     // The toggle stops claiming memory is on, and nothing is retried.
     expect(
-      screen.getByRole("switch", { name: "App-wide memory" }),
+      screen.getByRole("switch", { name: "Personal memory" }),
     ).toHaveAttribute("aria-checked", "false");
     expect(updateUserMemory).toHaveBeenCalledTimes(1);
   });
@@ -235,7 +269,7 @@ describe("UserMemoryPage", () => {
     const user = userEvent.setup();
     render(<UserMemoryPage />);
     const editor = await screen.findByRole("textbox", {
-      name: "App-wide memory",
+      name: "Personal memory",
     });
     vi.mocked(getUserMemory).mockResolvedValue(
       current({ enabled: false, content: "", hash: null, revision: 5 }),
@@ -252,7 +286,7 @@ describe("UserMemoryPage", () => {
     vi.mocked(setUserMemoryEnabled).mockResolvedValue(
       current({ enabled: true, content: "", hash: null, revision: 5 }),
     );
-    await user.click(screen.getByRole("switch", { name: "App-wide memory" }));
+    await user.click(screen.getByRole("switch", { name: "Personal memory" }));
 
     await waitFor(() =>
       expect(
@@ -277,7 +311,7 @@ describe("UserMemoryPage", () => {
     const user = userEvent.setup();
     const { unmount } = render(<UserMemoryPage />);
     const editor = await screen.findByRole("textbox", {
-      name: "App-wide memory",
+      name: "Personal memory",
     });
     vi.mocked(getUserMemory).mockResolvedValue(
       current({ enabled: false, content: "", hash: null, revision: 5 }),
@@ -304,9 +338,9 @@ describe("UserMemoryPage", () => {
     render(<UserMemoryPage />);
 
     const editor = await screen.findByRole("textbox", {
-      name: "App-wide memory",
+      name: "Personal memory",
     });
-    await screen.findByRole("switch", { name: "App-wide memory" });
+    await screen.findByRole("switch", { name: "Personal memory" });
 
     vi.useFakeTimers();
     try {
@@ -338,18 +372,18 @@ describe("UserMemoryPage", () => {
     render(<UserMemoryPage />);
 
     const editor = await screen.findByRole("textbox", {
-      name: "App-wide memory",
+      name: "Personal memory",
     });
     await user.clear(editor);
     await user.type(editor, "# Pending");
 
     await waitFor(
-      () => expect(updateUserMemory).toHaveBeenCalledWith("# Pending", 2),
+      () => expect(updateUserMemory).toHaveBeenCalledWith("# Pending", 2, "personal"),
       { timeout: 2000 },
     );
     expect(editor).not.toHaveAttribute("readonly");
     expect(
-      screen.getByRole("switch", { name: "App-wide memory" }),
+      screen.getByRole("switch", { name: "Personal memory" }),
     ).toBeDisabled();
     expect(screen.queryByRole("button", { name: "Delete" })).toBeNull();
 
@@ -367,6 +401,7 @@ describe("UserMemoryPage", () => {
         expect(updateUserMemory).toHaveBeenLastCalledWith(
           "# Pending and newer",
           3,
+          "personal",
         ),
       { timeout: 2000 },
     );
@@ -396,7 +431,7 @@ describe("UserMemoryPage", () => {
     render(<UserMemoryPage />);
 
     const editor = await screen.findByRole("textbox", {
-      name: "App-wide memory",
+      name: "Personal memory",
     });
     await user.clear(editor);
     await user.type(editor, "# My draft");
@@ -415,7 +450,7 @@ describe("UserMemoryPage", () => {
     await user.click(screen.getByRole("button", { name: "Keep my draft" }));
 
     await waitFor(
-      () => expect(updateUserMemory).toHaveBeenLastCalledWith("# My draft", 3),
+      () => expect(updateUserMemory).toHaveBeenLastCalledWith("# My draft", 3, "personal"),
       { timeout: 2000 },
     );
   });
@@ -426,7 +461,7 @@ describe("UserMemoryPage", () => {
     render(<UserMemoryPage />);
 
     const editor = await screen.findByRole("textbox", {
-      name: "App-wide memory",
+      name: "Personal memory",
     });
     await user.clear(editor);
     await user.type(editor, "# Still here");
@@ -443,7 +478,7 @@ describe("UserMemoryPage", () => {
     await user.click(screen.getByRole("button", { name: "Retry" }));
     await waitFor(
       () =>
-        expect(updateUserMemory).toHaveBeenLastCalledWith("# Still here", 2),
+        expect(updateUserMemory).toHaveBeenLastCalledWith("# Still here", 2, "personal"),
       { timeout: 2000 },
     );
     expect(await screen.findByText("Saved")).toBeVisible();
@@ -454,7 +489,7 @@ describe("UserMemoryPage", () => {
     const { unmount } = render(<UserMemoryPage />);
 
     const editor = await screen.findByRole("textbox", {
-      name: "App-wide memory",
+      name: "Personal memory",
     });
     await user.clear(editor);
     await user.type(editor, "# Save on leave");
@@ -463,7 +498,7 @@ describe("UserMemoryPage", () => {
     unmount();
 
     await waitFor(() =>
-      expect(updateUserMemory).toHaveBeenCalledWith("# Save on leave", 2),
+      expect(updateUserMemory).toHaveBeenCalledWith("# Save on leave", 2, "personal"),
     );
   });
 
@@ -482,20 +517,20 @@ describe("UserMemoryPage", () => {
     render(<UserMemoryPage />);
 
     const toggle = await screen.findByRole("switch", {
-      name: "App-wide memory",
+      name: "Personal memory",
     });
     expect(toggle).toHaveAttribute("aria-checked", "false");
     expect(
-      screen.queryByRole("textbox", { name: "App-wide memory" }),
+      screen.queryByRole("textbox", { name: "Personal memory" }),
     ).not.toBeInTheDocument();
 
     await user.click(toggle);
 
     await waitFor(() =>
-      expect(setUserMemoryEnabled).toHaveBeenCalledWith(true),
+      expect(setUserMemoryEnabled).toHaveBeenCalledWith(true, "personal"),
     );
     expect(
-      await screen.findByRole("textbox", { name: "App-wide memory" }),
+      await screen.findByRole("textbox", { name: "Personal memory" }),
     ).toHaveValue("");
   });
 
@@ -504,18 +539,18 @@ describe("UserMemoryPage", () => {
     render(<UserMemoryPage />);
 
     const editor = await screen.findByRole("textbox", {
-      name: "App-wide memory",
+      name: "Personal memory",
     });
     await user.clear(editor);
     await user.type(editor, "# Unsaved");
-    await user.click(screen.getByRole("switch", { name: "App-wide memory" }));
+    await user.click(screen.getByRole("switch", { name: "Personal memory" }));
 
     expect(setUserMemoryEnabled).not.toHaveBeenCalled();
     expect(
-      screen.getByText("Turn off and delete app-wide memory?"),
+      screen.getByText("Turn off and delete your Personal memory?"),
     ).toBeVisible();
     expect(
-      screen.getByText(/delete the existing app-wide memory\.md file/i),
+      screen.getByText(/delete the existing memory\.md file and your unsaved draft/i),
     ).toBeVisible();
     expect(screen.getByText(/and your unsaved draft/i)).toBeVisible();
     expect(screen.getByText(/cancel pending memory updates/i)).toBeVisible();
@@ -527,10 +562,10 @@ describe("UserMemoryPage", () => {
     await user.click(screen.getByRole("button", { name: "Disable" }));
 
     await waitFor(() =>
-      expect(setUserMemoryEnabled).toHaveBeenCalledWith(false),
+      expect(setUserMemoryEnabled).toHaveBeenCalledWith(false, "personal"),
     );
     expect(
-      screen.queryByRole("textbox", { name: "App-wide memory" }),
+      screen.queryByRole("textbox", { name: "Personal memory" }),
     ).not.toBeInTheDocument();
   });
 
@@ -547,7 +582,7 @@ describe("UserMemoryPage", () => {
 
     render(<UserMemoryPage />);
 
-    await screen.findByRole("textbox", { name: "App-wide memory" });
+    await screen.findByRole("textbox", { name: "Personal memory" });
     expect(
       screen.queryByRole("button", { name: "Download memory.md" }),
     ).toBeNull();
@@ -573,7 +608,7 @@ describe("UserMemoryPage", () => {
 
     unmount();
     render(<UserMemoryPage />);
-    await screen.findByRole("textbox", { name: "App-wide memory" });
+    await screen.findByRole("textbox", { name: "Personal memory" });
     expect(screen.queryByRole("alert")).toBeNull();
   });
 
@@ -623,5 +658,114 @@ describe("UserMemoryPage", () => {
     // only place the pending review is announced.
     expect(await screen.findByText(/Memory review scheduled/)).toBeVisible();
     expect(screen.queryByText(/^On\b/)).toBeNull();
+  });
+});
+
+// A person has one memory per workspace, each private to them. The page
+// shows, and changes, the one for the active workspace.
+describe("UserMemoryPage in an organization's workspace", () => {
+  const ACME = { id: "org-1", name: "Acme LLP" };
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    window.localStorage.clear();
+    workspaceState.workspaceId = ACME.id;
+    workspaceState.activeOrganization = ACME;
+    workspaceState.organizations = [ACME];
+    profileState.projectMemoryDefault = true;
+    vi.mocked(getUserMemory).mockResolvedValue(
+      current({ content: "# Learned at Acme" }),
+    );
+    vi.mocked(updateUserMemory).mockImplementation(async (content) =>
+      current({ content, revision: 3, hash: "hash-3" }),
+    );
+    vi.mocked(setUserMemoryEnabled).mockImplementation(async (enabled) =>
+      current({ enabled, content: "", revision: 3, hash: null }),
+    );
+  });
+
+  it("loads that organization's memory and names it", async () => {
+    render(<UserMemoryPage />);
+
+    const editor = await screen.findByRole("textbox", {
+      name: "Memory in Acme LLP",
+    });
+    expect(editor).toHaveValue("# Learned at Acme");
+    expect(getUserMemory).toHaveBeenCalledWith(expect.anything(), ACME.id);
+    expect(
+      screen.getByRole("switch", { name: "Memory in Acme LLP" }),
+    ).toBeInTheDocument();
+    // It says whose eyes it is for, and that it is this workspace's only.
+    expect(
+      screen.getByText(/Only you can see it\. You have a separate memory for each workspace\./),
+    ).toBeInTheDocument();
+  });
+
+  it("saves edits into that organization's memory", async () => {
+    const user = userEvent.setup();
+    render(<UserMemoryPage />);
+    const editor = await screen.findByRole("textbox", {
+      name: "Memory in Acme LLP",
+    });
+
+    await user.clear(editor);
+    await user.type(editor, "# Saved at Acme");
+    await waitFor(
+      () =>
+        expect(updateUserMemory).toHaveBeenLastCalledWith(
+          "# Saved at Acme",
+          2,
+          ACME.id,
+        ),
+      { timeout: 2000 },
+    );
+  });
+
+  it("turns off that organization's memory only, and says so", async () => {
+    const user = userEvent.setup();
+    render(<UserMemoryPage />);
+    await user.click(
+      await screen.findByRole("switch", { name: "Memory in Acme LLP" }),
+    );
+
+    expect(
+      screen.getByText("Turn off and delete your memory in Acme LLP?"),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByText(/Your memory in other workspaces is not affected\./),
+    ).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Disable" }));
+    await waitFor(() =>
+      expect(setUserMemoryEnabled).toHaveBeenCalledWith(false, ACME.id),
+    );
+  });
+
+  it("starts again from the other file when the workspace changes", async () => {
+    vi.mocked(getUserMemory).mockImplementation(async (_signal, workspace) =>
+      current({
+        content: workspace === ACME.id ? "# Learned at Acme" : "# Personal",
+      }),
+    );
+    const { rerender } = render(<UserMemoryPage />);
+    expect(
+      await screen.findByRole("textbox", { name: "Memory in Acme LLP" }),
+    ).toHaveValue("# Learned at Acme");
+
+    workspaceState.workspaceId = "personal";
+    workspaceState.activeOrganization = null;
+    rerender(<UserMemoryPage />);
+
+    const personal = await screen.findByRole("textbox", {
+      name: "Personal memory",
+    });
+    expect(personal).toHaveValue("# Personal");
+    // Nothing of the organization's is left on screen.
+    expect(
+      screen.queryByRole("textbox", { name: "Memory in Acme LLP" }),
+    ).not.toBeInTheDocument();
+    expect(getUserMemory).toHaveBeenLastCalledWith(
+      expect.anything(),
+      "personal",
+    );
   });
 });

@@ -73,10 +73,3 @@ export function clearDeletedDocumentId(
         ? null
         : documentId;
 }
-
-export function clearDeletedDocumentTarget<T extends { documentId: string }>(
-    target: T | null,
-    deletedDocumentIds: ReadonlySet<string>,
-): T | null {
-    return target && deletedDocumentIds.has(target.documentId) ? null : target;
-}

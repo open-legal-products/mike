@@ -1,14 +1,15 @@
-import { render, screen } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import SignupPage from "./page";
 
-const { signup, startGoogleOAuth, refreshSession, replace, push } = vi.hoisted(() => ({
+const { signup, startGoogleOAuth, refreshSession, replace, push, authState } = vi.hoisted(() => ({
     signup: vi.fn(),
     startGoogleOAuth: vi.fn(),
     refreshSession: vi.fn(),
     replace: vi.fn(),
     push: vi.fn(),
+    authState: { isAuthenticated: false },
 }));
 
 vi.mock("next/navigation", () => ({
@@ -23,7 +24,7 @@ vi.mock("@/app/lib/authApi", () => ({
 
 vi.mock("@/app/contexts/AuthContext", () => ({
     useAuth: () => ({
-        isAuthenticated: false,
+        isAuthenticated: authState.isAuthenticated,
         authLoading: false,
         refreshSession,
     }),
@@ -40,6 +41,50 @@ describe("SignupPage", () => {
         refreshSession.mockReset();
         replace.mockReset();
         push.mockReset();
+        authState.isAuthenticated = false;
+    });
+
+    afterEach(() => {
+        cleanup();
+        vi.useRealTimers();
+    });
+
+    it.each([false, true])("does not restart onboarding after signup (leave page: %s)", async (leavePage) => {
+        vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+        signup.mockResolvedValue({ requiresEmailConfirmation: false });
+        let finishRefresh!: () => void;
+        refreshSession.mockImplementation(() => new Promise<void>((resolve) => {
+            finishRefresh = resolve;
+        }));
+        const view = render(<SignupPage />);
+        fireEvent.change(screen.getByRole("textbox", { name: "Email" }), {
+            target: { value: "alex@example.com" },
+        });
+        fireEvent.change(screen.getByLabelText("Password"), {
+            target: { value: "secret1234" },
+        });
+        fireEvent.change(screen.getByLabelText("Confirm Password"), {
+            target: { value: "secret1234" },
+        });
+        await act(async () => {
+            fireEvent.click(screen.getByRole("button", { name: "Sign up" }));
+        });
+
+        // AuthContext publishes the user before refreshSession resolves.
+        // The existing-session redirect must not race the signup handoff.
+        authState.isAuthenticated = true;
+        view.rerender(<SignupPage />);
+        expect(replace).not.toHaveBeenCalled();
+        await act(async () => finishRefresh());
+        expect(screen.getByText("Account created!")).toBeVisible();
+
+        if (leavePage) view.unmount();
+        await act(async () => vi.advanceTimersByTime(2_000));
+        if (leavePage) {
+            expect(push).not.toHaveBeenCalled();
+        } else {
+            expect(push).toHaveBeenCalledExactlyOnceWith("/onboarding/profile");
+        }
     });
 
     it("creates credentials and waits for email confirmation", async () => {
@@ -72,6 +117,77 @@ describe("SignupPage", () => {
             "/onboarding/profile",
         );
         expect(push).toHaveBeenCalledWith("/signup/check-email");
+    });
+
+    async function fillAndSubmit(password = "secret1234") {
+        const user = userEvent.setup();
+        render(<SignupPage />);
+        await user.type(
+            screen.getByRole("textbox", { name: "Email" }),
+            "alex@example.com",
+        );
+        await user.type(screen.getByLabelText("Password"), password);
+        await user.type(screen.getByLabelText("Confirm Password"), password);
+        await user.click(screen.getByRole("button", { name: "Sign up" }));
+        return user;
+    }
+
+    it.each([
+        [
+            "an address that is already registered",
+            Object.assign(new Error("User already registered"), {
+                status: 422,
+                code: "user_already_exists",
+            }),
+            "An account with this email already exists. Log in instead.",
+        ],
+        [
+            "too many attempts",
+            Object.assign(new Error("Request rate limit reached"), {
+                status: 429,
+            }),
+            "Too many attempts. Wait a moment and try again.",
+        ],
+        [
+            "a dropped connection",
+            new TypeError("Failed to fetch"),
+            "Mike couldn't reach the server. Check your connection and try again.",
+        ],
+        [
+            "a password the server calls weak",
+            Object.assign(new Error("Password is too weak"), {
+                status: 422,
+                code: "weak_password",
+            }),
+            "Choose a stronger password: at least 10 characters, mixing letters, numbers, and symbols.",
+        ],
+    ])("explains %s", async (_label, thrown, shown) => {
+        signup.mockRejectedValue(thrown);
+
+        await fillAndSubmit();
+
+        expect(await screen.findByRole("alert")).toHaveTextContent(shown);
+    });
+
+    it("shows a failure as a popup that can be dismissed", async () => {
+        await fillAndSubmit("x".repeat(73));
+
+        expect(await screen.findByRole("alert")).toHaveTextContent(
+            "Couldn't create your account",
+        );
+        await userEvent.click(
+            screen.getByRole("button", { name: "Dismiss warning" }),
+        );
+        expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+    });
+
+    it("rejects a password longer than bcrypt accepts before calling the API", async () => {
+        await fillAndSubmit("x".repeat(73));
+
+        expect(signup).not.toHaveBeenCalled();
+        expect(await screen.findByRole("alert")).toHaveTextContent(
+            "Password must be at most 72 UTF-8 bytes. Accented characters and emoji can use more than one byte.",
+        );
     });
 
     it("places Google after the primary signup action without offering SSO", () => {

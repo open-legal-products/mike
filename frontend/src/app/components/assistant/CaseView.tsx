@@ -157,9 +157,10 @@ export function CaseView({
         root.querySelectorAll(`.${QUOTE_HIGHLIGHT_CLASS}`).forEach((element) =>
             element.classList.add("case-quote-highlight"),
         );
-        window.setTimeout(() => {
+        const timer = window.setTimeout(() => {
             match.scrollIntoView({ behavior: "smooth", block: "center" });
         }, 50);
+        return () => window.clearTimeout(timer);
     }, [activeQuote, activeSubdocument, quoteFocusKey]);
 
     const surfaceClassName = LIQUID_GLASS_FLAT_CLASS;
@@ -243,6 +244,7 @@ export function CaseView({
                         )}
                     >
                         <div
+                            data-document-scroll-viewport
                             className={cn(
                                 "h-full overflow-y-auto p-5",
                                 surfaceClassName,

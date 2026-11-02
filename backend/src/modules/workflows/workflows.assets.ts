@@ -11,8 +11,9 @@ import { captureInlineDocumentCleanup, completeInlineDocumentCleanup, createDocu
 import { randomUUID } from "node:crypto";
 import { type Db } from "../../lib/supabase";
 import { ensureDocAccess } from "../../lib/access";
+import { findDocumentsOutsideWorkspace } from "../../lib/documentWorkspace";
 import { convertedPdfKey } from "../../lib/convert";
-import { copyFile, storageKey } from "../../lib/storage";
+import { storageKey } from "../../lib/storage";
 import { enqueueStorageCleanup } from "../../lib/dbq/enqueue";
 import { attachActiveVersionPaths, attachLatestVersionNumbers } from "../../lib/documentVersions";
 import { resolveWorkflowAccess, assetsUnsupported } from "./workflows.access";
@@ -32,6 +33,7 @@ export type WorkflowAssetFailure =
   | { ok: false; kind: "tabular_unsupported" }
   | { ok: false; kind: "asset_not_found" }
   | { ok: false; kind: "documents_not_found" }
+  | { ok: false; kind: "documents_workspace_mismatch" }
   | { ok: false; kind: "documents_not_ready" }
   | { ok: false; kind: "db_error"; error: unknown };
 
@@ -136,6 +138,20 @@ export async function copyDocumentsToWorkflowAssets(
     return { ok: false, kind: "documents_not_found" };
   }
 
+  // A workflow's files come from its own workspace.
+  try {
+    const outside = await findDocumentsOutsideWorkspace(
+      db,
+      documentIds,
+      access.workflow.org_id ?? null,
+    );
+    if (outside.length > 0) {
+      return { ok: false, kind: "documents_workspace_mismatch" };
+    }
+  } catch (error) {
+    return { ok: false, kind: "db_error", error };
+  }
+
   const versionIds = sourceDocuments.flatMap((document) =>
     document.current_version_id ? [document.current_version_id] : [],
   );
@@ -145,7 +161,7 @@ export async function copyDocumentsToWorkflowAssets(
   const { data: sourceVersions, error: versionsError } = await db
     .from("document_versions")
     .select(
-      "id, document_id, storage_path, pdf_storage_path, filename, file_type, size_bytes, page_count, content_sha256",
+      "id, document_id, storage_path, pdf_storage_path, filename, file_type, size_bytes, page_count, textless_page_count, content_sha256",
     )
     .in("id", versionIds)
     .is("deleted_at", null);
@@ -234,6 +250,7 @@ export async function copyDocumentsToWorkflowAssets(
           file_type: plan.sourceVersion.file_type,
           size_bytes: plan.sourceVersion.size_bytes,
           page_count: plan.sourceVersion.page_count,
+          textless_page_count: plan.sourceVersion.textless_page_count,
           content_sha256: plan.sourceVersion.content_sha256,
         });
       if (error) throw error;

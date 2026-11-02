@@ -10,26 +10,127 @@ storage instead of the infrastructure bundled with Docker Compose.
 - A Supabase project
 - A Cloudflare R2, MinIO, or other S3-compatible bucket
 - At least one supported model-provider API key, or an accessible Ollama server
-- Optional: a CourtListener API token for case-law tools
+- Optional: CourtListener bulk data for case-law tools without a token (each
+  user can instead add their own CourtListener token in Settings > Connectors)
 - LibreOffice when DOC/DOCX-to-PDF conversion is required
 
 ## Database setup
 
-For a fresh Supabase database, run the contents of `backend/schema.sql` in the
-Supabase SQL editor. The schema file contains the complete current database
-shape.
+Every Mike database records the migrations it has applied in
+`public.schema_migrations`, one row per file in `backend/migrations/`.
+`backend/scripts/migrate.sh` reads that table and applies only the files it
+does not list, in filename order, adding a row after each one succeeds. The
+script needs bash and `psql`, and a `DATABASE_URL` for a role that owns the
+`public` schema: on Supabase, the `postgres` direct or session-pooler
+connection string (not the transaction pooler).
 
-For an existing deployment, do not run the complete schema over production
-data. Back up the database first, identify the last migration already applied,
-then apply each newer file in `backend/migrations/` in filename order.
-Migration filenames follow `YYYYMMDD_NN_<name>.sql`.
+### Fresh install
 
-Keep the last applied migration filename with your deployment records. Do not
-blindly replay the directory against production: migrations are written for an
-expected starting schema, and a successful fresh install from `schema.sql` is
-not evidence that an older database has completed every upgrade step. The
-repository's schema-drift CI separately checks that its pinned historical
-baseline converges with the fresh schema after all later migrations run.
+Run the contents of `backend/schema.sql` in the Supabase SQL editor (or with
+`psql`). It contains the complete current database shape and records every
+migration it already includes, so there is nothing to apply afterwards.
+
+### Upgrading an existing deployment
+
+Do not run the complete schema over production data. Back up the database,
+then check and apply what is pending:
+
+```bash
+export DATABASE_URL='postgresql://postgres:<password>@<host>:5432/postgres'
+backend/scripts/migrate.sh status   # lists pending files; exits 2 if any
+backend/scripts/migrate.sh up
+```
+
+`up` stops at the first migration that fails; that file and everything after
+it stay pending, so fix the cause and run `up` again. Each file runs in a
+transaction with its ledger row, so a failed one leaves nothing behind. The
+exceptions are files that manage their own transaction, use `create index
+concurrently`, or carry a `-- migrate:no-transaction` line (`up` prints "(no
+transaction)" for them): a failure there can leave part of the file applied,
+so restore the backup, or finish that file by hand and record it with `mark`
+(below).
+
+A wrapped file holds its table locks until it commits. On a busy database,
+set a lock timeout so a migration that cannot get its locks fails and rolls
+back instead of queueing application queries behind it, then retry:
+
+```bash
+PGOPTIONS='-c lock_timeout=10s' backend/scripts/migrate.sh up
+```
+
+The runner holds a PostgreSQL advisory lock while it writes, so a second run
+against the same database (Compose's `db-init` and an operator, or two deploy
+jobs) waits for the first, then skips what it applied. A waiting run names the
+session holding the lock (its sessions show as `migrate.sh` in
+`pg_stat_activity`) and gives up after `MIGRATE_LOCK_WAIT` seconds (default
+900). The lock needs a session connection, which is why the transaction pooler
+will not do; the runner refuses a URL on its port, 6543.
+
+`status` and `up` also warn about two kinds of mismatch. A file that "has
+changed since it was applied" was edited after you ran it. A file "recorded as
+applied but not in backend/migrations" was usually renamed after you ran it,
+so its new name now shows as pending: if it is the same migration, record the
+new name with `mark` instead of running it a second time.
+
+To apply a migration some other way, such as in the SQL editor, record it
+afterwards so the runner skips it:
+
+```bash
+backend/scripts/migrate.sh mark <file>.sql
+```
+
+or, in the SQL editor, `insert into public.schema_migrations (filename) values
+('<file>.sql');`. To see what a database has run:
+
+```sql
+select filename, applied_at, checksum is not null as run_by_migrate_sh
+from public.schema_migrations
+order by filename;
+```
+
+### Adopting the ledger on an older deployment
+
+Deployments upgraded before `20261009_03_schema_migrations.sql` have no
+ledger yet, and the runner refuses to guess what they contain. Run `baseline`
+once with the last migration you applied, taken from your deployment records,
+then apply the rest:
+
+```bash
+backend/scripts/migrate.sh baseline <last applied file>.sql
+backend/scripts/migrate.sh up
+```
+
+`baseline` creates the ledger table if needed and records that file and every
+file that sorts before it as applied, without running them. Choose the file
+carefully: a migration recorded but never applied is skipped from then on.
+Migrations are written for an expected starting schema, so do not try to
+reach the same result by replaying the whole directory: a successful fresh
+install from `schema.sql` is not evidence that an older database has
+completed every upgrade step. The repository's schema-drift CI checks that a
+pinned historical baseline, upgraded with `migrate.sh`, converges with a
+fresh install.
+
+Docker Compose needs none of this: its `db-init` service runs
+`migrate.sh up` on every start, and adopts a volume created before the ledger
+automatically on its first start.
+
+If `baseline` was given a file that the database had not actually reached,
+the files in between are recorded but were never run, and nothing reports it
+until a later migration needs what they created. A migration that depends on
+an earlier one in that way checks for it first and stops with the name of
+the missing file, before changing anything:
+
+```text
+ERROR:  This database is missing objects from 20260917_02_memory_followup.sql
+HINT:   Apply that file by hand ..., then run `migrate.sh up` again
+```
+
+Apply the named file with `psql` as the hint shows, then run
+`migrate.sh up` again. To look for other gaps of the same kind, compare the
+output of `backend/scripts/schema-fingerprint.sql` on the deployment with the
+same script run against a database freshly installed from `schema.sql` at the
+same commit; any line that differs is an object the deployment is missing or
+has in an older form.
 
 ### After the organization-access upgrade: `tabular_review_legacy_shares`
 
@@ -81,6 +182,48 @@ job exits. Run this as a release job before directing traffic to the new
 backend; backend startup itself only reads the database. Docker Compose runs
 this sequence automatically for local/self-hosted deployments.
 
+## Document parsing resources
+
+Indexing, chat reads, tabular sources, and legacy text precomputation share one
+parser process per calling thread. It stays warm between files and recycles
+after 200 files or 60 seconds idle, matching #721's worker reuse. Failures and
+timeouts also retire it. On POSIX, retirement kills the process group, including
+LibreOffice descendants, and removes its temporary directory.
+
+Background jobs share one source-loading slot and wait at most 60 seconds total
+for admission and parsing capacity; longer waits defer to Postgres for 30 seconds
+without spending retries. Parsing is capped at five minutes, below the ten-minute
+claim lease. Inline indexing waits for capacity when the queue runner is disabled.
+Interactive requests can download three sources concurrently, matching tabular
+row concurrency, and take priority over queued background parses. Background I/O
+does not occupy the parser or the interactive admission queue (eight waiters).
+Only parsing is serial; its deadline starts when parsing starts, as in #721.
+Source downloads from S3-compatible storage abort after
+`STORAGE_DOWNLOAD_TIMEOUT_MS` (default 120000), so a stalled read releases its
+admission slot instead of holding it indefinitely.
+Generic job concurrency does not create more parser slots.
+
+Linux requires `prlimit` (util-linux), installed by Docker and Nixpacks. Missing
+`prlimit` fails extraction. Defaults:
+
+| Limit | Setting |
+| --- | --- |
+| Parser time | `EXTRACTION_TIMEOUT_MS=180000`, capped at 300000 |
+| Writable data, including native buffers | `EXTRACTION_MAX_MEMORY_MB=1024` MiB |
+| Virtual address space | Data budget + 1024 MiB for runtime reservations |
+| Source / returned text | 150 MiB / 16 MiB |
+
+The JS heap keeps the configured memory budget (1024 MiB by default); glibc uses two malloc arenas to
+avoid excessive virtual reservations. OS limits apply **per process**, including
+conversion children, not to their aggregate usage. Set container/cgroup limits
+for the whole service. macOS/Windows retain heap, input/output and time bounds,
+but lack the Linux OS-memory guarantee. Decompression is covered by parser
+memory/time limits; there is no separate ZIP preflight.
+
+The deadline covers parsing, not storage/database I/O. No new migration is
+needed beyond #721's `20261027_01_document_text_failed_jobs.sql`.
+`EXTRACTION_ISOLATION=off` bypasses subprocess protection for tests/emergencies.
+
 ## Environment
 
 Copy the maintained examples:
@@ -97,7 +240,9 @@ is not needed while building the frontend.
 
 Use:
 
-- `NODE_ENV=production` so startup enforces HTTPS and secure-cookie invariants;
+- `NODE_ENV=production` so startup enforces HTTPS and secure-cookie invariants
+  (the backend Docker image sets this by default; see
+  [Running the backend image](#running-the-backend-image));
 - the Supabase project URL for backend `SUPABASE_URL`;
 - the anon/publishable key for backend `SUPABASE_PUBLISHABLE_KEY`;
 - the service-role key for backend `SUPABASE_SECRET_KEY`; and
@@ -194,10 +339,43 @@ Deployments must therefore run `backend/src/index.ts`
 (the normal `npm start` entry point), rather than importing the Express app
 without starting its worker.
 
-Model-provider keys and the CourtListener token can be configured globally in
-`backend/.env` or per user under **Settings > API Keys**. A personal key takes
-precedence over the matching globally configured key; removing the personal
-key restores the global key as the fallback.
+Model-provider keys can be configured globally in `backend/.env` or per user
+under **Settings > API Keys**. CourtListener tokens are never read from
+`backend/.env`: each user saves their own under **Settings > Connectors**, or an
+organization admin saves one for its members; see
+[CourtListener](courtlistener.md). In a user's Personal workspace, a personal
+key takes precedence over the matching globally configured key; removing the
+personal key restores the global key as the fallback. Work in an organization
+never uses personal keys: it runs on the organization's key for a provider,
+and otherwise on the globally configured key.
+
+### Error tracking
+
+Error reports are sent to the Mike project's own Sentry by default, so the
+maintainers can fix failures encountered by forks and self-hosted installs.
+Before network transmission, every runtime rebuilds reports from an explicit
+allowlist: code locations and line numbers, controlled operation labels,
+HTTP method/status and normalized routes, validated correlation IDs, release,
+and environment. Client document filenames, document text, raw error and
+console messages, request URLs/queries/headers/bodies, user identities, and
+breadcrumbs are excluded. Automatic sessions, replay, attachments, traces,
+and other non-error payloads are blocked. The same boundary applies to
+community and official installations. See the [observability guide](observability.md)
+for the exact policy, source-map behavior, and limitations.
+To opt out, set `SENTRY_DISABLED=true`
+(`REACT_APP_SENTRY_DISABLED=true` for the add-in build). The web image's
+`NEXT_PUBLIC_SENTRY_DISABLED` is a default for the server and browser tunnel;
+an explicit runtime `SENTRY_DISABLED` overrides it. To use your own Sentry
+instead, set the matching `*_SENTRY_DSN`.
+
+For the compose stack that is `SENTRY_DISABLED=true` in the root `.env`
+(the backend reads it through `env_file`; the Next server receives it from
+compose and applies it to the browser's reports as well, which all pass
+through it). It therefore works for the published images without a rebuild.
+To report to your own Sentry instead, set `SENTRY_DSN` (backend) and
+`FRONTEND_SENTRY_DSN` (web app; the Next server forwards browser reports
+there at runtime). What is reported, what is scrubbed, and how to verify are
+in [observability.md](observability.md).
 
 ## Authentication email
 
@@ -384,6 +562,47 @@ and [provider administration](https://github.com/supabase/auth/blob/v2.189.0/int
 
 ## Install and run
 
+### Running the published images
+
+Every push to `main` and every `v*` tag builds the backend and web-app images
+once in CI and publishes them to GitHub Container Registry
+(`.github/workflows/publish-images.yml`):
+
+| Image | Tags |
+| --- | --- |
+| `ghcr.io/open-legal-products/mike-backend` | `<version>`, `latest` (releases); `<version>-dev.<run>`, `main` (every commit on main) |
+| `ghcr.io/open-legal-products/mike-frontend` | same |
+
+Pin a version in the compose-root `.env` and pull instead of building. The
+default tag is the version in `/VERSION` of the checkout you run compose from,
+so images and the database migrations they apply always belong together:
+
+```bash
+MIKE_IMAGE_TAG=2.1.0
+docker compose pull
+docker compose up --no-build -d
+```
+
+What you get that a local build does not: Sentry source maps for exactly
+these bundles, so browser errors are readable, and the release
+`mike@<version>+<sha12>` on every event (see
+[observability.md](observability.md#releases)). `latest` and `main` are
+convenience tags for trying things out; production deployments pin a version,
+and a published version is never rebuilt (a fix is a new patch version).
+`docker compose up --build` still builds from the checkout for development and
+for anyone who patches the code; those images report as `mike@0.0.0...` unless
+you pass `MIKE_VERSION` and `GIT_SHA`. The Word add-in image is not published:
+its production build bakes in the deployment's web-app URL, so build it as
+described under [Building the Word add-in image](#building-the-word-add-in-image).
+
+`db-init` (schema and migrations) runs from the backend image rather than from
+files in the checkout, so pulling a newer image and running `docker compose up`
+applies that image's migrations. Forks publish to their own namespace: set
+`MIKE_IMAGE_REPO=ghcr.io/<owner>` to run a fork's images. Only `linux/amd64`
+is published; other architectures build from source. Disconnected sites can
+`docker pull` by digest on a connected machine, `docker save`/`docker load`,
+and run with `SENTRY_DISABLED=true`.
+
 Install dependencies:
 
 ```bash
@@ -410,15 +629,50 @@ npm run build --prefix backend
 npm run build --prefix frontend
 ```
 
+If port 3001 (or `PORT`) is already taken, for example by the Docker Compose
+backend, the backend reports the bind failure and exits instead of starting
+without a listener.
+
+### Running the backend image
+
+The backend image sets `NODE_ENV=production`, so it refuses to start unless
+`FRONTEND_URL` and `API_PUBLIC_URL` are set to `https` URLs (and
+`WORD_ADDIN_URL`, when set, is too). That default is deliberate: an image
+deployed without `NODE_ENV` must not quietly issue non-`Secure` cookies.
+Docker Compose overrides it with `NODE_ENV=development` and local `http` URLs,
+which is why `docker compose up` works without TLS.
+
+The image contains no `.env` file. Pass the backend environment explicitly:
+
+```bash
+docker build -t mike-backend -f backend/Dockerfile .
+docker run --rm -p 3001:3001 --env-file backend/.env \
+  -e NODE_ENV=production \
+  -e FRONTEND_URL=https://app.example.com \
+  -e API_PUBLIC_URL=https://app.example.com/api \
+  mike-backend
+```
+
+To try the image on your own machine over plain `http`, pass
+`-e NODE_ENV=development` with `http://localhost` URLs instead. When required
+settings are missing, the fatal startup message lists each variable and
+repeats this choice.
+
+### Building the Word add-in image
+
 The repository includes Dockerfiles for the backend, frontend, and Word add-in.
-Build and run the production add-in host with its public URLs baked into the
-static bundle and its private backend origin supplied only at runtime:
+The add-in image is not published (see "Running the published images"): its
+production build bakes the deployment's public URLs into the static bundle, so
+build it yourself, with its private backend origin supplied only at runtime.
+Pass `MIKE_VERSION=$(cat VERSION)` and `GIT_SHA=$(git rev-parse HEAD)` as
+build arguments too so its Sentry events carry the same release as the images
+it runs beside ([observability.md](observability.md#releases)):
 
 ```bash
 docker build -t mike-word-addin \
   --build-arg REACT_APP_WEB_APP_URL=https://app.example.com \
   --build-arg WORD_ADDIN_PUBLIC_URL=https://word.example.com \
-  word-addin
+  -f word-addin/Dockerfile .
 docker run --rm -p 3200:3200 \
   -e WORD_ADDIN_BACKEND_ORIGIN=http://backend:3001 \
   mike-word-addin
@@ -456,8 +710,9 @@ commented `worker` service demonstrating this.
 ### Document lifecycle migration
 
 Apply `20260914_01_document_lifecycle.sql` before deploying the backend that uses
-its version RPCs. Fresh installs include it in `backend/schema.sql`; Compose's
-`db-init` service applies it during upgrades. Do not remove pending
+its version RPCs. Fresh installs include it in `backend/schema.sql`;
+`backend/scripts/migrate.sh up` and Compose's `db-init` service apply it
+during upgrades. Do not remove pending
 `document.cleanup` jobs: they retain the object keys needed to finish erasure.
 The migration makes both queue claim paths recover failed cleanup jobs, including
 ones rejected by an older worker during rollout, and exhausted stale claims.
@@ -467,14 +722,34 @@ Backend and frontend Docker build contexts are now the repository root, so both
 can compile against `packages/contracts`. For a manual backend image build use
 `docker build -f backend/Dockerfile -t mike-backend .` from the root.
 
+Each image reads only what its Dockerfile copies: the frontend image contains
+`frontend/` and `packages/contracts`; the add-in image adds `frontend/src/shared`
+and `frontend/public/icons`, which its bundle includes. In the frontend image
+`next build` type-checks `frontend/tsconfig.build.json`, which excludes test
+files, so test fixtures and sibling applications never become build inputs. CI builds all three
+images on every pull request (`.github/workflows/docker-images.yml`), so a
+source change that reaches outside a build context fails before merge instead
+of on the next fresh install.
+
 ## Deployment safety
 
 - Generate unique, high-entropy signing and encryption secrets.
 - Use production Supabase credentials rather than the local demo values.
 - Keep backend secrets out of `NEXT_PUBLIC_*` variables.
 - Configure spending limits for model-provider keys where supported.
-- Confirm LibreOffice is available on the backend process path if document
-  conversion is enabled.
+- Confirm LibreOffice is available to the backend and worker if document
+  conversion is enabled. The backend Docker image and `backend/nixpacks.toml`
+  install it; elsewhere the backend looks on `PATH`, in the usual Linux
+  locations, and in `/Applications/LibreOffice.app` on macOS. Set
+  `SOFFICE_BINARY_PATH` to the `soffice` executable for any other location.
+  Without it, Word and presentation uploads are kept without a PDF rendition
+  and the worker logs `conversion_unavailable` once per upload.
+- Confirm the backend can reach the object store with the configured `R2_*`
+  credentials before accepting uploads. When it cannot, completing an upload
+  answers 503 and the server log names the failing storage operation and the
+  store's own error (for example `ECONNREFUSED`, `InvalidAccessKeyId`, or
+  `NoSuchBucket`); clean-up deletes of temporary upload objects are reported
+  once per upload as warnings.
 - Review storage, logging, retention, and deletion behavior before processing
   confidential documents.
 

@@ -2,6 +2,7 @@
 
 import {
     forwardRef,
+    type ReactNode,
     useImperativeHandle,
     useRef,
     useState,
@@ -20,6 +21,7 @@ import {
     SkeletonCheckbox,
     SkeletonLine,
     TableScrollArea,
+    TableRow,
 } from "../shared/TablePrimitive";
 import { EmptyState } from "@/app/components/ui/empty-state";
 import { PillButtonUI } from "@/shared/ui/PillButtonUI";
@@ -37,10 +39,6 @@ const SKELETON_ROWS = 5;
 const COL_W = "w-[300px] shrink-0";
 const DOC_COL_W = "w-[332px] shrink-0";
 const TR_STICKY_CELL_CLASS = "table-sticky-cell";
-// The review grid keeps the wider page gutter. Its first column is a fixed
-// 332px cell rather than a checkbox aligned to the page header, so the
-// narrower gutter the other tables use would buy it nothing.
-const TR_GUTTER_CLASS = "md:mx-8";
 
 // Pixel widths matching the CSS constants above
 const DOC_COL_W_PX = 332;
@@ -65,6 +63,7 @@ interface Props {
     dragOverFiles?: boolean;
     highlightedCell?: { colIdx: number; rowIdx: number } | null;
     onSelectionChange: (ids: string[]) => void;
+    rightClickDropdown?: (row: TabularReviewRow, close: () => void) => ReactNode;
     onDocumentOpen: (row: TabularReviewRow, document: Document) => void;
     onExpand: (cell: TabularCell) => void;
     onCitationClick: (
@@ -97,6 +96,7 @@ export const TRTable = forwardRef<TRTableHandle, Props>(function TRTable(
         dragOverFiles = false,
         highlightedCell,
         onSelectionChange,
+        rightClickDropdown,
         onDocumentOpen,
         onExpand,
         onCitationClick,
@@ -190,7 +190,6 @@ export const TRTable = forwardRef<TRTableHandle, Props>(function TRTable(
         return (
             <TableScrollArea
                 preserveGridBorder
-                className={TR_GUTTER_CLASS}
                 header={
                     <div
                         className="flex h-10 shrink-0"
@@ -248,7 +247,6 @@ export const TRTable = forwardRef<TRTableHandle, Props>(function TRTable(
         return (
             <TableScrollArea
                 preserveGridBorder
-                className={TR_GUTTER_CLASS}
                 header={
                     <div className="shrink-0 flex h-10 items-center border-b border-gray-200">
                         <div
@@ -298,7 +296,6 @@ export const TRTable = forwardRef<TRTableHandle, Props>(function TRTable(
     return (
         <TableScrollArea
             preserveGridBorder
-            className={TR_GUTTER_CLASS}
             scrollRef={scrollContainerRef}
             onScroll={handleRowsScroll}
             header={
@@ -400,9 +397,12 @@ export const TRTable = forwardRef<TRTableHandle, Props>(function TRTable(
                         ? LIQUID_GLASS_SELECTED_CLASS
                         : "";
                     return (
-                        <div
+                        <TableRow
                             key={row.id}
-                            className={`group flex transition-colors ${rowBg}`}
+                            interactive={false}
+                            selected={isSelected}
+                            rightClickDropdown={rightClickDropdown ? (close) => rightClickDropdown(row, close) : undefined}
+                            className={`h-auto items-stretch pr-0 ${rowBg}`}
                             style={{ minWidth: totalContentWidth }}
                         >
                             <TRFirstColumnCell
@@ -459,7 +459,7 @@ export const TRTable = forwardRef<TRTableHandle, Props>(function TRTable(
                                 );
                             })}
                             <div className="flex-1 border-b border-gray-200 min-h-8 min-w-8" />
-                        </div>
+                        </TableRow>
                     );
                     })}
                 </div>

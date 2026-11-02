@@ -14,7 +14,7 @@ import { type OrgResult } from "./orgs";
 // one place so every handler reports errors consistently.
 //
 // The split that matters here is between failures the caller CAUSED and
-// failures the caller merely OBSERVED. The first six kinds are the service
+// failures the caller merely OBSERVED. The first seven kinds are the service
 // deliberately saying no, and their text is written for the person reading
 // it. `db_error` is not a verdict at all — it is whatever Postgres said —
 // and it goes out through sendInternalError so the client gets the generic
@@ -30,15 +30,27 @@ export function sendOrgFailure(
             return void res.status(403).json({
                 detail: "Only an organization admin can do that.",
             });
+        case "owner_required":
+            return void res.status(403).json({
+                detail: "Only an organization owner can do that.",
+            });
         case "not_found":
             return void res
                 .status(404)
                 .json({ detail: "Organization not found" });
         case "conflict":
             return void res.status(409).json({ detail: result.detail });
-        case "last_admin":
+        case "last_owner":
             return void res.status(409).json({
-                detail: "An organization must keep at least one admin.",
+                detail: "An organization must keep at least one owner.",
+            });
+        case "handover_required":
+            // The client asks who takes over, and sends the removal again.
+            return void res.status(409).json({
+                code: "handover_required",
+                detail: "Choose a member to take over their projects and workflows first.",
+                projects: result.projects,
+                workflows: result.workflows,
             });
         case "expired":
             // 410 Gone: the invitation existed and is no longer actionable,

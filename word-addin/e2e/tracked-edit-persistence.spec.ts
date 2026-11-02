@@ -103,7 +103,7 @@ async function reloadAndOpenPersistedChat(
   await page.getByRole("button", { name: "Chat history" }).click();
   await page
     .getByRole("menu")
-    .getByRole("button", { name: /Persistent tracked edit/ })
+    .getByRole("menuitem", { name: /Persistent tracked edit/ })
     .click();
 }
 

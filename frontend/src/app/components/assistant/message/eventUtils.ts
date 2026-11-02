@@ -1,5 +1,22 @@
 import type { AssistantEvent } from "../../shared/types";
 
+export function isRenderableEvent(event: AssistantEvent): boolean {
+    return (
+        event.type !== "error" &&
+        event.type !== "ask_inputs_response" &&
+        event.type !== "case_citation" &&
+        event.type !== "case_opinions" &&
+        event.type !== "web_sources" &&
+        event.type !== "response_details"
+    );
+}
+
+export function withDelegationEvents(events: AssistantEvent[]): AssistantEvent[] {
+    return events.flatMap((event) =>
+        event.type === "delegation" ? [event, ...event.events] : [event],
+    );
+}
+
 export function eventErrorMessage(event: AssistantEvent): string | null {
     if (event.type === "error") {
         return event.safe_to_display
@@ -7,12 +24,31 @@ export function eventErrorMessage(event: AssistantEvent): string | null {
             : "Sorry, something went wrong.";
     }
     if ("error" in event && typeof event.error === "string" && event.error) {
-        return "Sorry, something went wrong.";
+        // Web tool errors are written for the user by the server.
+        return event.type === "web_search" || event.type === "web_read"
+            ? event.error
+            : "Sorry, something went wrong.";
     }
     return null;
 }
 
+/**
+ * Label for a connector tool: the connector's own title when it sent one,
+ * otherwise its identifier made readable ("get_workspace_teams" becomes
+ * "Get workspace teams").
+ */
+export function connectorToolLabel(
+    toolName: string,
+    toolTitle?: string | null,
+): string {
+    const title = toolTitle?.trim();
+    if (title) return title;
+    const words = toolName.replace(/[_-]+/g, " ").trim();
+    return words ? words.charAt(0).toUpperCase() + words.slice(1) : toolName;
+}
+
 export function toolCallLabel(name: string): string {
+    if (name === "create_text_card") return "Preparing text...";
     if (name === "ask_inputs") return "Asking for input...";
     if (name === "generate_docx") return "Creating document...";
     if (name === "generate_excel") return "Creating spreadsheet...";
@@ -21,6 +57,7 @@ export function toolCallLabel(name: string): string {
     if (name === "read_document") return "Reading document...";
     if (name === "fetch_documents") return "Reading documents...";
     if (name === "find_in_document") return "Searching document...";
+    if (name === "find_documents") return "Searching documents...";
     if (name === "replicate_document") return "Copying document...";
     if (name === "read_workflow") return "Reading workflow...";
     if (name === "list_workflows") return "Loading workflows...";
@@ -32,6 +69,9 @@ export function toolCallLabel(name: string): string {
     if (name === "courtlistener_read_case") return "Reading case...";
     if (name === "courtlistener_verify_citations")
         return "Verifying citations...";
+    if (name === "web_search") return "Searching the web...";
+    if (name === "read_webpage") return "Reading web page...";
+    if (name === "delegate") return "Starting a subagent...";
     if (name.startsWith("mcp_")) return "Using connector...";
     return name ? `Running ${name}...` : "Working...";
 }

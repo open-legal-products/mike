@@ -8,7 +8,11 @@ import {
     FieldLabel,
     FormTextInput,
 } from "@/app/components/ui/form-field";
-import type { Project } from "@/app/components/shared/types";
+import { AccessVisibilityField } from "@/app/components/modals/AccessVisibilityField";
+import type {
+    ContentVisibility,
+    Project,
+} from "@/app/components/shared/types";
 import { listOrgs, type Org } from "@/app/lib/mikeApi";
 import { userFacingApiError } from "@/app/lib/userFacingError";
 import { ProjectPracticeField } from "./ProjectPracticeField";
@@ -24,6 +28,8 @@ interface ProjectDetailsModalProps {
         name: string;
         cmNumber: string;
         practice: string;
+        /** Sent only for an organization's project, and only when changed. */
+        visibility?: ContentVisibility;
     }) => Promise<void>;
     onShareProject?: () => void;
 }
@@ -39,6 +45,8 @@ export function ProjectDetailsModal({
     const [nameDraft, setNameDraft] = useState("");
     const [cmDraft, setCmDraft] = useState("");
     const [practiceDraft, setPracticeDraft] = useState("");
+    const [visibilityDraft, setVisibilityDraft] =
+        useState<ContentVisibility>("private");
     const [orgs, setOrgs] = useState<Org[]>([]);
     const [saving, setSaving] = useState(false);
     const [saved, setSaved] = useState(false);
@@ -47,12 +55,15 @@ export function ProjectDetailsModal({
     const projectName = project?.name ?? "";
     const projectCmNumber = project?.cm_number ?? "";
     const projectPractice = project?.practice ?? "";
+    const projectVisibility: ContentVisibility =
+        project?.visibility ?? "private";
 
     useEffect(() => {
         if (!open || !projectId) return;
         setNameDraft(projectName);
         setCmDraft(projectCmNumber);
         setPracticeDraft(projectPractice);
+        setVisibilityDraft(projectVisibility);
         setSaved(false);
         setError(null);
     }, [
@@ -61,6 +72,7 @@ export function ProjectDetailsModal({
         projectName,
         projectCmNumber,
         projectPractice,
+        projectVisibility,
     ]);
 
     useEffect(() => {
@@ -86,9 +98,11 @@ export function ProjectDetailsModal({
         return (
             trimmedName !== project.name ||
             trimmedCm !== (project.cm_number ?? "") ||
-            trimmedPractice !== (project.practice ?? "")
+            trimmedPractice !== (project.practice ?? "") ||
+            (!!project.org_id &&
+                visibilityDraft !== (project.visibility ?? "private"))
         );
-    }, [project, trimmedCm, trimmedName, trimmedPractice]);
+    }, [project, trimmedCm, trimmedName, trimmedPractice, visibilityDraft]);
 
     // The select falls back to rendering its raw value when no option matches,
     // so a failed (or still pending) listOrgs used to show the organization's
@@ -125,6 +139,10 @@ export function ProjectDetailsModal({
                     trimmedPractice && trimmedPractice !== "Other"
                         ? trimmedPractice
                         : "",
+                ...(project?.org_id &&
+                visibilityDraft !== (project.visibility ?? "private")
+                    ? { visibility: visibilityDraft }
+                    : {}),
             });
             setSaved(true);
         } catch (err: unknown) {
@@ -236,6 +254,20 @@ export function ProjectDetailsModal({
                         options={orgOptions}
                     />
                 </div>
+
+                {project.org_id ? (
+                    <AccessVisibilityField
+                        visibility={visibilityDraft}
+                        onChange={(next) => {
+                            setVisibilityDraft(next);
+                            setSaved(false);
+                            setError(null);
+                        }}
+                        organizationName={project.organization_name}
+                        resourceNoun="project"
+                        disabled={!canEdit || saving}
+                    />
+                ) : null}
             </div>
         </Modal>
     );

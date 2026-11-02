@@ -17,9 +17,13 @@ export async function resolveUserChatSelection(
     requestedReasoning?: unknown;
     chatModel?: string | null;
     chatReasoningLevel?: unknown;
+    /** The organization the chat belongs to, whose keys it then runs on. */
+    orgId?: string | null;
   },
 ) {
-  const modelSettings = await getUserModelSettings(args.userId, db);
+  const modelSettings = await getUserModelSettings(args.userId, db, {
+    orgId: args.orgId,
+  });
   const resolution = await resolveEffectiveChatModel({
     requested: args.requestedModel,
     chatModel: args.chatModel,
@@ -27,6 +31,7 @@ export async function resolveUserChatSelection(
     apiKeys: modelSettings.api_keys,
     userId: args.userId,
     db,
+    orgId: args.orgId,
   });
   if (!resolution.ok) return resolution;
   const selectedReasoningLevel = resolveEffectiveReasoningLevel({

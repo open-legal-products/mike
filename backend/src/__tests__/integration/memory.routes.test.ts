@@ -9,6 +9,15 @@ const mocks = vi.hoisted(() => ({
   wipeMemoryFile: vi.fn(),
   writeMemoryFile: vi.fn(),
   enableMemoryFile: vi.fn(),
+  resolveWorkspaceFilter: vi.fn(),
+}));
+
+// Which organizations the caller belongs to is the database's to say; the
+// route's part is to ask, and to act on the answer.
+vi.mock("../../lib/workspace", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../lib/workspace")>()),
+  resolveWorkspaceFilter: (...args: unknown[]) =>
+    mocks.resolveWorkspaceFilter(...args),
 }));
 
 vi.mock("../../middleware/auth", () => ({
@@ -86,6 +95,8 @@ function testApp() {
 beforeEach(() => {
   vi.clearAllMocks();
   mocks.ensureMemoryFile.mockResolvedValue(file);
+  // No ?workspace= on the request: Personal.
+  mocks.resolveWorkspaceFilter.mockResolvedValue({ ok: true, workspace: null });
   mocks.getMemoryCurrent.mockResolvedValue({ current, file });
   mocks.writeMemoryFile.mockResolvedValue({ current, applied: true });
   mocks.wipeMemoryFile.mockResolvedValue({
@@ -108,11 +119,109 @@ describe("scoped memory routes", () => {
     const response = await request(testApp()).get("/user/memory").expect(200);
     expect(response.body).toEqual(current);
     expect(response.headers["cache-control"]).toBe("private, no-store");
+    // With no workspace named, the caller's Personal memory.
     expect(mocks.ensureMemoryFile).toHaveBeenCalledWith(
       expect.anything(),
       "user",
       "00000000-0000-4000-8000-000000000001",
+      null,
     );
+  });
+
+  // A person has one memory per workspace, each private to them.
+  describe("a person's memory for one workspace", () => {
+    const USER = "00000000-0000-4000-8000-000000000001";
+    const ORG = "7b1d9d0e-3c5a-4f6e-9a51-0c2f7d3e8a11";
+
+    it("reads the memory for the organization named, not Personal", async () => {
+      mocks.resolveWorkspaceFilter.mockResolvedValue({
+        ok: true,
+        workspace: ORG,
+      });
+      await request(testApp()).get(`/user/memory?workspace=${ORG}`).expect(200);
+
+      expect(mocks.resolveWorkspaceFilter).toHaveBeenCalledWith(
+        { marker: "db" },
+        USER,
+        ORG,
+      );
+      expect(mocks.ensureMemoryFile).toHaveBeenCalledWith(
+        { marker: "db" },
+        "user",
+        USER,
+        ORG,
+      );
+      expect(mocks.getMemoryCurrent).toHaveBeenCalledWith(
+        { marker: "db" },
+        "user",
+        USER,
+        ORG,
+      );
+    });
+
+    it("treats ?workspace=personal as Personal", async () => {
+      mocks.resolveWorkspaceFilter.mockResolvedValue({
+        ok: true,
+        workspace: "personal",
+      });
+      await request(testApp()).get("/user/memory?workspace=personal").expect(200);
+      expect(mocks.ensureMemoryFile).toHaveBeenCalledWith(
+        { marker: "db" },
+        "user",
+        USER,
+        null,
+      );
+    });
+
+    it.each([
+      ["put", "/user/memory", { content: "next", expected_revision: 3 }],
+      ["patch", "/user/memory/settings", { enabled: false }],
+      ["delete", "/user/memory", undefined],
+    ] as const)(
+      "%s %s changes that organization's memory and no other",
+      async (method, path, body) => {
+        mocks.resolveWorkspaceFilter.mockResolvedValue({
+          ok: true,
+          workspace: ORG,
+        });
+        const pending = request(testApp())[method](`${path}?workspace=${ORG}`);
+        await (body ? pending.send(body) : pending).expect(200);
+        expect(mocks.ensureMemoryFile).toHaveBeenCalledTimes(1);
+        expect(mocks.ensureMemoryFile).toHaveBeenCalledWith(
+          { marker: "db" },
+          "user",
+          USER,
+          ORG,
+        );
+      },
+    );
+
+    it("404s an organization the caller is not in, and opens no memory", async () => {
+      mocks.resolveWorkspaceFilter.mockResolvedValue({
+        ok: false,
+        kind: "not_found",
+      });
+      const response = await request(testApp())
+        .get(`/user/memory?workspace=${ORG}`)
+        .expect(404);
+      expect(response.body).toEqual({
+        detail: "Workspace not found",
+        code: "workspace_not_found",
+      });
+      expect(mocks.ensureMemoryFile).not.toHaveBeenCalled();
+    });
+
+    it("400s a workspace that is neither 'personal' nor an organization id", async () => {
+      mocks.resolveWorkspaceFilter.mockResolvedValue({
+        ok: false,
+        kind: "validation",
+      });
+      await request(testApp())
+        .put("/user/memory?workspace=everything")
+        .send({ content: "next", expected_revision: 3 })
+        .expect(400);
+      expect(mocks.writeMemoryFile).not.toHaveBeenCalled();
+    });
   });
 
   it("uses expected_revision CAS and returns the current value on conflict", async () => {

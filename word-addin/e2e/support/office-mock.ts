@@ -30,6 +30,8 @@ export interface OfficeSeed {
    * simulating a lost/failed response from Word.
    */
   trackedMutationSyncFailure?: "before-apply" | "after-apply";
+  /** Let this many tracked-edit syncs succeed before that failure fires. */
+  trackedMutationSyncFailureAfter?: number;
   /**
    * Structured description of the document body for the markdown document
    * context: when present, body.paragraphs/body.tables exist and describe
@@ -173,6 +175,8 @@ export function installOfficeMock(seed: OfficeSeed): void {
   };
   if (!sessionStorage.getItem(documentStateKey)) persistDocumentState();
   let trackedMutationSyncFailure = seed.trackedMutationSyncFailure;
+  let trackedMutationSyncsBeforeFailure =
+    seed.trackedMutationSyncFailureAfter ?? 0;
 
   const markParagraphDeleted = (paragraphIndex: number): void => {
     const deleted = documentState.deletedParagraphIndexes ?? [];
@@ -518,6 +522,11 @@ export function installOfficeMock(seed: OfficeSeed): void {
       document: null,
       sync: async () => {
         if (!mutationSyncPending || !trackedMutationSyncFailure) return;
+        if (trackedMutationSyncsBeforeFailure > 0) {
+          trackedMutationSyncsBeforeFailure -= 1;
+          mutationSyncPending = false;
+          return;
+        }
         const failureMode = trackedMutationSyncFailure;
         trackedMutationSyncFailure = undefined;
         mutationSyncPending = false;

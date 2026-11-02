@@ -1,10 +1,12 @@
 // Project CRUD service functions: overview, create, detail, people, update,
 // delete, and the tamper-evident export manifest.
 
+import { chunkArray } from "../../lib/arrays";
 import {
   attachActiveVersionPaths,
   attachLatestVersionNumbers,
 } from "../../lib/documentVersions";
+import { isPersonalOrg } from "../../lib/personalOrgs";
 import {
   buildProjectExportManifest,
   projectManifestFilename,
@@ -12,15 +14,29 @@ import {
 import {
   checkProjectAccess,
   getOrgRole,
+  isOrgRole,
+  loadOwnerlessOrgItemIds,
+  parseContentVisibility,
+  resolveOrgContentRole,
 } from "../../lib/access";
 import { can } from "../../lib/permissions";
+import { reportableServiceError } from "../../lib/serviceResult";
+import { filterParticipatingProjects, type ProjectParticipationRow } from "./projects.participation";
+import {
+  workspaceMatches,
+  workspaceRpcArg,
+  type WorkspaceFilter,
+} from "../../lib/workspace";
 import {
   listProjectAdminContacts,
   listProjectGrants,
 } from "../../lib/projectAccess";
-import { listOrgAccessPeople } from "../../lib/orgAccessOverrides";
+import {
+  isOrgAccessOverrideRole,
+  listOrgAccessPeople,
+} from "../../lib/orgAccessOverrides";
 import { deleteProjectsByIds } from "../user/user.service";
-import { loadProfileUsersByEmail } from "../../lib/userLookup";
+import { loadCreatorProfiles, loadProfileUsersByEmail } from "../../lib/userLookup";
 import { ensureResourceAccessSummaries } from "../../lib/resourceAccessSummary";
 import {
   buildProjectIdsOverviewRpcArgs,
@@ -29,6 +45,7 @@ import {
 } from "./projects.overview";
 import {
   type Db,
+  attachDirectoryCreatorLabels,
   attachDocumentOwnerLabels,
   attachProjectMemoryEnabled,
   normalizeOptionalString,
@@ -58,6 +75,7 @@ export type ProjectListFilters = {
   sort: { key: string; direction: string };
   practice: string | null;
   ownerUserId: string | null;
+  workspace?: WorkspaceFilter;
 };
 
 export async function getProjectsOverview(
@@ -66,6 +84,8 @@ export async function getProjectsOverview(
     userId: string;
     userEmail?: string;
     includeDocuments: boolean;
+    participatingOnly?: boolean;
+    workspace?: WorkspaceFilter;
     filters?: ProjectListFilters;
   },
 ): Promise<{ ok: true; data: unknown } | ProjectsDbFailure> {
@@ -82,21 +102,45 @@ export async function getProjectsOverview(
         sort: filters.sort,
         practice: filters.practice,
         ownerUserId: filters.ownerUserId,
+        workspace: filters.workspace,
       })
     : { p_user_id: userId, p_user_email: normalizedUserEmail ?? null };
 
   const { data, error } = await db.rpc("get_projects_overview", rpcArgs);
   if (error) return { ok: false, error };
 
+  // The unpaginated RPC has no workspace argument. Narrow its authorized
+  // rows here, before membership checks and document/metadata enrichment.
+  let visibleProjects = ((data ?? []) as ProjectParticipationRow[]).filter(
+    project => workspaceMatches(args.workspace ?? filters?.workspace, project.org_id),
+  );
+  if (args.participatingOnly) {
+    const participating = await filterParticipatingProjects(db, visibleProjects, userId, normalizedUserEmail);
+    if (!participating.ok) return { ok: false, error: reportableServiceError(participating) };
+    visibleProjects = participating.data;
+  }
   const accessSummary = await ensureResourceAccessSummaries(
     db,
     "project",
-    (data ?? []) as { id: string }[],
+    visibleProjects,
   );
   if (accessSummary.error) return { ok: false, error: accessSummary.error };
   const withMemory = await attachProjectMemoryEnabled(db, accessSummary.rows);
   if (withMemory.error) return { ok: false, error: withMemory.error };
   const projects = withMemory.rows;
+  // Only the paginated overview table renders creator avatars; the sidebar
+  // and pickers keep the smaller payload.
+  if (filters) {
+    const profileByUserId = await loadCreatorProfiles(db, projects);
+    for (const project of projects as {
+      user_id?: string | null;
+      owner_profile_photo?: string | null;
+    }[]) {
+      project.owner_profile_photo = project.user_id
+        ? profileByUserId.get(project.user_id)?.profile_photo ?? null
+        : null;
+    }
+  }
   if (!includeDocuments || projects.length === 0) {
     return { ok: true, data: projects };
   }
@@ -161,15 +205,17 @@ export async function getProjectSummaries(
     userId: string;
     userEmail?: string;
     pagination: { limit: number; offset: number };
+    workspace?: WorkspaceFilter;
   },
 ): Promise<{ ok: true; data: unknown } | ProjectsDbFailure> {
-  const { userId, userEmail, pagination } = args;
+  const { userId, userEmail, pagination, workspace } = args;
   const normalizedUserEmail = userEmail?.trim().toLowerCase();
   const { data, error } = await db.rpc("get_project_summaries", {
     p_user_id: userId,
     p_user_email: normalizedUserEmail ?? null,
     p_limit: pagination.limit,
     p_offset: pagination.offset,
+    ...workspaceRpcArg(workspace),
   });
   if (error) return { ok: false, error };
   const withMemory = await attachProjectMemoryEnabled(
@@ -180,9 +226,11 @@ export async function getProjectSummaries(
   return { ok: true, data: withMemory.rows };
 }
 
-// GET /projects?view=directory-search
-// Flat filename/project matches for the document picker. Search results do
-// not pretend that a partially loaded project tree is a complete result set.
+/**
+ * Find project and current-filename matches for the document picker.
+ * Page document matches within accessible project batches rather than searching
+ * a capped global version list or returning a partially loaded project tree.
+ */
 export async function searchProjectDirectory(
   db: Db,
   args: {
@@ -190,9 +238,10 @@ export async function searchProjectDirectory(
     userEmail?: string;
     searchTerm: string;
     pagination: { limit: number; offset: number };
+    workspace?: WorkspaceFilter;
   },
 ): Promise<{ ok: true; data: unknown[] } | ProjectsDbFailure> {
-  const { userId, userEmail, searchTerm, pagination } = args;
+  const { userId, userEmail, searchTerm, pagination, workspace } = args;
   const normalizedUserEmail = userEmail?.trim().toLowerCase();
 
   const createdQuery = db.from("projects").select("*").eq("user_id", userId);
@@ -227,7 +276,8 @@ export async function searchProjectDirectory(
   // member the matter's name, cm_number and its document filenames.
   const { data: membershipRows, error: membershipError } = await db
     .from("org_members")
-    .select("org_id, role")
+    .select("org_id, role, organizations!inner(id)")
+    .is("organizations.deleted_at", null)
     .eq("user_id", userId);
   if (membershipError) return { ok: false, error: membershipError };
   const orgRoleByOrgId = new Map<string, string>();
@@ -277,71 +327,90 @@ export async function searchProjectDirectory(
   if (orgProjects.length > 0) {
     // One batched read for the whole page, not a verdict per row: this is a
     // filter over a result set and must not become an N+1. Mirrors
-    // listOrgResources, including its exemptions — the creator and org
-    // admins keep Owner and cannot be denied.
+    // listOrgResources and listAccessibleProjectIds, through the same
+    // resolveOrgContentRole they use.
+    //
+    // Every override the caller holds, not only the denials: an organization
+    // project is private until shared, so a grant is what admits a member as
+    // often as a denial is what excludes one.
+    //
     // Scoped by ORG, not by an .in() over every candidate project id: that
     // list grows with the firm's matters and is spliced verbatim into the
     // PostgREST query string, so a large tenant sent a URL past the server's
     // request-line limit and the read failed (fail-closed, so the picker went
     // blank). org_id is bounded by the caller's memberships, which is the
     // same shape listOrgResources uses.
-    const { data: denialRows, error: denialError } = await db
+    const { data: overrideRows, error: overrideError } = await db
       .from("project_org_access_overrides")
-      .select("project_id")
+      .select("project_id, role")
       .in("org_id", orgIds)
-      .eq("user_id", userId)
-      .eq("role", "deny");
+      .eq("user_id", userId);
     // Fail closed: an unreadable override table must hide rows, never reveal
     // them.
-    if (denialError) return { ok: false, error: denialError };
-    const deniedProjectIds = new Set(
-      ((denialRows ?? []) as { project_id?: string | null }[])
-        .map((row) => row.project_id)
-        .filter((id): id is string => !!id),
+    if (overrideError) return { ok: false, error: overrideError };
+    const overrideByProjectId = new Map(
+      ((overrideRows ?? []) as { project_id?: string | null; role?: unknown }[])
+        .filter(
+          (row): row is { project_id: string; role: unknown } =>
+            !!row.project_id,
+        )
+        .map((row) => [row.project_id, row.role]),
+    );
+    const ownerless = await loadOwnerlessOrgItemIds(
+      db,
+      orgIds.filter((orgId) => orgRoleByOrgId.get(orgId) === "owner"),
     );
     for (const project of orgProjects) {
       const projectId = project.id as string;
       const orgId = project.org_id as string | null;
-      const isCreator = project.user_id === userId;
-      const isOrgAdmin = !!orgId && orgRoleByOrgId.get(orgId) === "admin";
-      if (!isCreator && !isOrgAdmin && deniedProjectIds.has(projectId))
-        continue;
-      projectsById.set(projectId, project);
+      const orgRole = orgId ? orgRoleByOrgId.get(orgId) : undefined;
+      if (!isOrgRole(orgRole)) continue;
+      const override = overrideByProjectId.get(projectId);
+      const role = resolveOrgContentRole({
+        isCreator: project.user_id === userId,
+        orgRole,
+        override: isOrgAccessOverrideRole(override) ? override : null,
+        visibility: project.visibility,
+        ownerless: ownerless.projects.has(projectId),
+      });
+      // An org project the caller CREATED was admitted above; it leaves
+      // again here if the verdict says no (it cannot, while they are a
+      // member, but the two branches must not be able to disagree).
+      if (role) projectsById.set(projectId, project);
+      else projectsById.delete(projectId);
     }
+  }
+  // Narrowed last, over projects the caller may already see: the workspace
+  // never admits anything, it only leaves out what is filed elsewhere.
+  for (const [projectId, project] of projectsById) {
+    if (
+      !workspaceMatches(workspace, project.org_id as string | null | undefined)
+    )
+      projectsById.delete(projectId);
   }
   const accessibleProjectIds = [...projectsById.keys()];
   if (accessibleProjectIds.length === 0) return { ok: true, data: [] };
 
-  const escaped = searchTerm.replace(/[%_]/g, (value) => `\\${value}`);
-  const { data: versions, error: versionsError } = await db
-    .from("document_versions")
-    .select("id")
-    .ilike("filename", `%${escaped}%`)
-    .is("deleted_at", null);
-  if (versionsError) return { ok: false, error: versionsError };
-
-  const versionIds = (versions ?? []).map((version) => version.id as string);
-  let matchedDocuments: Record<string, unknown>[] = [];
-  if (versionIds.length > 0) {
-    const { data, error } = await db
-      .from("documents")
-      .select("*")
-      .in("project_id", accessibleProjectIds)
-      .in("current_version_id", versionIds);
-    if (error) return { ok: false, error };
-    matchedDocuments = (data ?? []) as Record<string, unknown>[];
-    await attachLatestVersionNumbers(
-      db,
-      matchedDocuments as { id: string; current_version_id?: string | null }[],
-    );
-    await attachActiveVersionPaths(
-      db,
-      matchedDocuments as { id: string; current_version_id?: string | null }[],
-    );
-    await attachDocumentOwnerLabels(
-      db,
-      matchedDocuments as { user_id?: string | null }[],
-    );
+  const escaped = searchTerm.replace(/[\\%_]/g, (value) => `\\${value}`);
+  const matchedDocuments: Record<string, unknown>[] = [];
+  for (const projectIds of chunkArray(accessibleProjectIds, 50)) {
+    for (let offset = 0; ; offset += 50) {
+      const { data, error } = await db
+        .from("documents")
+        .select("*, active_version:document_versions!documents_current_version_id_fkey!inner(filename, deleted_at)")
+        .in("project_id", projectIds)
+        .ilike("active_version.filename", `%${escaped}%`)
+        .is("active_version.deleted_at", null)
+        .order("id", { ascending: true })
+        .range(offset, offset + 49);
+      if (error) return { ok: false, error };
+      const documents = (data ?? []).map(({ active_version: _version, ...document }) => document);
+      await attachLatestVersionNumbers(db, documents);
+      await attachActiveVersionPaths(db, documents);
+      await attachDocumentOwnerLabels(db, documents);
+      matchedDocuments.push(...documents);
+      if (documents.length < 50) break;
+    }
   }
 
   const normalized = searchTerm.toLowerCase();
@@ -376,22 +445,29 @@ export async function searchProjectDirectory(
 // GET /projects/filter-options
 export async function getProjectFilterOptions(
   db: Db,
-  args: { userId: string; userEmail?: string },
+  args: { userId: string; userEmail?: string; workspace?: WorkspaceFilter },
 ): Promise<
   | {
       ok: true;
       body: {
         practices: string[];
-        owners: { value: string; label: string }[];
+        owners: {
+          value: string;
+          label: string;
+          display_name: string | null;
+          email: string | null;
+          profile_photo: string | null;
+        }[];
       };
     }
   | ProjectsDbFailure
 > {
-  const { userId, userEmail } = args;
+  const { userId, userEmail, workspace } = args;
   const normalizedUserEmail = userEmail?.trim().toLowerCase();
   const { data, error } = await db.rpc("get_project_filter_options", {
     p_user_id: userId,
     p_user_email: normalizedUserEmail ?? null,
+    ...workspaceRpcArg(workspace),
   });
   if (error) return { ok: false, error };
 
@@ -404,7 +480,7 @@ export async function getProjectFilterOptions(
         (value): value is string => typeof value === "string",
       )
     : [];
-  const owners = Array.isArray(row.owners)
+  const options = Array.isArray(row.owners)
     ? row.owners.flatMap((value) => {
         if (!value || typeof value !== "object") return [];
         const option = value as { value?: unknown; label?: unknown };
@@ -414,6 +490,21 @@ export async function getProjectFilterOptions(
           : [];
       })
     : [];
+  // The Creator filter shows each person as the overview rows do: name,
+  // email (the overview already returns owner_email) and photo.
+  const profileByUserId = await loadCreatorProfiles(
+    db,
+    options.map((option) => ({ user_id: option.value })),
+  );
+  const owners = options.map((option) => {
+    const profile = profileByUserId.get(option.value);
+    return {
+      ...option,
+      display_name: profile?.display_name ?? null,
+      email: profile?.email ?? null,
+      profile_photo: profile?.profile_photo ?? null,
+    };
+  });
   return { ok: true, body: { practices, owners } };
 }
 
@@ -439,12 +530,14 @@ export async function listProjectIds(
     searchTerm: string | null;
     practice: string | null;
     ownerUserId: string | null;
+    workspace?: WorkspaceFilter;
   },
 ): Promise<
   | { ok: true; ids: { id: string; user_id: string }[] }
   | ProjectsDbFailure
 > {
-  const { userId, userEmail, scope, searchTerm, practice, ownerUserId } = args;
+  const { userId, userEmail, scope, searchTerm, practice, ownerUserId, workspace } =
+    args;
 
   const ids: { id: string; user_id: string }[] = [];
   let offset = 0;
@@ -456,6 +549,7 @@ export async function listProjectIds(
       searchTerm,
       practice,
       ownerUserId,
+      workspace,
       pagination: { limit: PROJECT_IDS_PAGE_SIZE, offset },
     });
     const { data, error } = await db.rpc("get_project_ids_overview", rpcArgs);
@@ -475,19 +569,21 @@ export type CreateProjectResult =
   | { ok: false; kind: "validation"; detail: string }
   | { ok: false; kind: "db_error"; error: unknown };
 
+/** Create a project with a non-blank name in a workspace the caller may use. */
 export async function createProject(
   db: Db,
   args: {
     userId: string;
-    name: string;
+    name: unknown;
     cm_number?: string;
     practice?: string;
     org_id?: string | null;
+    visibility?: unknown;
     memory_enabled?: boolean;
   },
 ): Promise<CreateProjectResult> {
   const { userId, name, cm_number, practice, org_id, memory_enabled } = args;
-  if (!name?.trim())
+  if (typeof name !== "string" || !name.trim())
     return { ok: false, kind: "validation", detail: "name is required" };
   if (memory_enabled !== undefined && typeof memory_enabled !== "boolean") {
     return {
@@ -498,12 +594,13 @@ export async function createProject(
   }
 
   // Tenant assignment: an explicit org_id must be one the caller belongs to.
-  // No org_id means a personal project — org_id stays NULL, which is the
-  // whole representation of "personal" now that hidden personal orgs are gone.
+  // No org_id means a personal project — org_id stays NULL, which is still
+  // the representation of "personal". A person's own organization is not
+  // named here: it answers as one they do not belong to.
   let resolvedOrgId: string | null = null;
   if (org_id) {
     const role = await getOrgRole(userId, org_id, db);
-    if (!role)
+    if (!role || (await isPersonalOrg(db, org_id)))
       return {
         ok: false,
         kind: "validation",
@@ -511,6 +608,19 @@ export async function createProject(
       };
     resolvedOrgId = org_id;
   }
+  // An organization's project is private unless its creator opens it to the
+  // whole organization here; a personal project never can be.
+  const requestedVisibility = parseContentVisibility(
+    args.visibility,
+    resolvedOrgId,
+  );
+  if (!requestedVisibility.ok)
+    return {
+      ok: false,
+      kind: "validation",
+      detail: requestedVisibility.detail,
+    };
+  const visibility = requestedVisibility.visibility ?? "private";
 
   const resolvedMemoryEnabled =
     memory_enabled ?? (await projectMemoryDefaultFor(db, userId));
@@ -526,15 +636,27 @@ export async function createProject(
   });
   const data = Array.isArray(created) ? created[0] : created;
   if (error || !data) return { ok: false, kind: "db_error", error };
+  // The row is created private and opened afterwards. If this second write
+  // fails the project exists but nobody else can see it, which is the safe
+  // way round; the caller is told, and can open it from the Access panel.
+  if (visibility === "organization") {
+    const { error: visibilityError } = await db
+      .from("projects")
+      .update({ visibility })
+      .eq("id", (data as { id: string }).id);
+    if (visibilityError)
+      return { ok: false, kind: "db_error", error: visibilityError };
+  }
   return {
     ok: true,
     project: {
       ...data,
+      visibility,
       memory_enabled: resolvedMemoryEnabled,
       documents: [],
       is_owner: true,
       access_role: "owner",
-      access_scope: resolvedOrgId ? "organization" : "private",
+      access_scope: visibility === "organization" ? "organization" : "private",
       organization_name: null,
     },
   };
@@ -572,7 +694,7 @@ export async function getProjectDetail(
   }[];
   await attachLatestVersionNumbers(db, docsTyped);
   await attachActiveVersionPaths(db, docsTyped);
-  await attachDocumentOwnerLabels(db, docsTyped);
+  await attachDirectoryCreatorLabels(db, docsTyped, folderData ?? []);
   // Contact details for the "you can't do that" popups. Without them the UI
   // can tell a viewer they were refused but never who to ask.
   const adminContacts = await listProjectAdminContacts(db, access.project);
@@ -603,6 +725,10 @@ export type ProjectPeopleResult =
   | { ok: false; kind: "not_found" }
   | { ok: false; kind: "db_error"; error: unknown };
 
+/**
+ * Authorizes project visibility before returning its creator, member photos, and admin contacts.
+ * Reading this roster does not grant permission to manage access.
+ */
 export async function getProjectPeople(
   db: Db,
   args: { projectId: string; userId: string; userEmail?: string },
@@ -630,6 +756,7 @@ export async function getProjectPeople(
       resourceId: projectId,
       orgId: project.org_id,
       creatorId: project.user_id,
+      visibility: project.visibility,
     });
     if (!listed.ok) return { ok: false, kind: "db_error", error: listed.detail };
     const creator = listed.people.find(
@@ -644,6 +771,7 @@ export async function getProjectPeople(
               user_id: creator.user_id,
               email: creator.email,
               display_name: creator.display_name,
+              profile_photo: creator.profile_photo ?? null,
               role: "owner" as const,
             }
           : null,
@@ -656,7 +784,12 @@ export async function getProjectPeople(
   }
 
   // Personal projects keep email-addressed direct grants.
-  const { userByEmail, userById } = await loadProfileUsersByEmail(db);
+  const listed = await listProjectGrants(db, projectId);
+  if (!listed.ok) return { ok: false, kind: "db_error", error: listed.detail };
+  const { userByEmail, userById } = await loadProfileUsersByEmail(db, {
+    userIds: project.user_id ? [project.user_id] : [],
+    emails: listed.grants.map((grant) => grant.email),
+  });
 
   const ownerInfo = project.user_id
     ? userById.get(project.user_id)
@@ -669,13 +802,14 @@ export async function getProjectPeople(
         user_id: project.user_id,
         email: ownerInfo?.email ?? null,
         display_name: ownerInfo?.display_name ?? null,
+        profile_photo: ownerInfo?.profile_photo ?? null,
         role: "owner" as const,
       }
     : null;
-  const listed = await listProjectGrants(db, projectId);
-  if (!listed.ok) return { ok: false, kind: "db_error", error: listed.detail };
   const members = listed.grants.map((grant) => ({
     email: grant.email,
+    user_id: userByEmail.get(grant.email)?.id ?? null,
+    profile_photo: userByEmail.get(grant.email)?.profile_photo ?? null,
     display_name: userByEmail.get(grant.email)?.display_name ?? null,
     role: grant.role,
   }));
@@ -695,8 +829,10 @@ export type UpdateProjectResult =
   | { ok: true; body: Record<string, unknown> }
   | { ok: false; kind: "not_found" }
   | { ok: false; kind: "forbidden"; detail: string }
+  | { ok: false; kind: "validation"; detail: string }
   | { ok: false; kind: "db_error"; error: unknown };
 
+/** Validate project metadata and apply only changes allowed by the caller's role. */
 export async function updateProject(
   db: Db,
   args: {
@@ -708,7 +844,11 @@ export async function updateProject(
 ): Promise<UpdateProjectResult> {
   const { projectId, userId, userEmail, body } = args;
   const updates: Record<string, unknown> = {};
-  if (body.name != null) updates.name = body.name;
+  if ("name" in body) {
+    if (typeof body.name !== "string" || !body.name.trim())
+      return { ok: false, kind: "validation", detail: "name must be a non-empty string" };
+    updates.name = body.name.trim();
+  }
   if (body.cm_number != null) updates.cm_number = body.cm_number;
   if ("practice" in body) {
     updates.practice = normalizeOptionalString(body.practice);
@@ -725,6 +865,20 @@ export async function updateProject(
       kind: "forbidden",
       detail: "Only a project owner can change project settings.",
     };
+  // Opening a project to the whole organization, or closing it again, is an
+  // access decision like any other: the same Owner gate, checked above.
+  const requestedVisibility = parseContentVisibility(
+    body.visibility,
+    access.project.org_id,
+  );
+  if (!requestedVisibility.ok)
+    return {
+      ok: false,
+      kind: "validation",
+      detail: requestedVisibility.detail,
+    };
+  if (requestedVisibility.visibility)
+    updates.visibility = requestedVisibility.visibility;
 
   const { data, error } = await db
     .from("projects")
@@ -744,7 +898,7 @@ export async function updateProject(
     current_version_id?: string | null;
   }[];
   await attachActiveVersionPaths(db, docsTyped);
-  await attachDocumentOwnerLabels(db, docsTyped);
+  await attachDirectoryCreatorLabels(db, docsTyped, folderData ?? []);
   const withMemory = await attachProjectMemoryEnabled(db, [
     data as { id: string; memory_enabled?: boolean },
   ]);

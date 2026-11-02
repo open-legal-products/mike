@@ -178,7 +178,7 @@ describe("processClaimedJob fencing", () => {
 
     it("fails a NonRetryableJobError immediately, with attempts left", async () => {
         // A job the domain REFUSES is not a job the network flaked on.
-        // Account deletion for the only admin of a live organization will be
+        // Account deletion for the only owner of a live organization will be
         // refused identically on every one of its 20 attempts; retrying it
         // for hours buries the reason and leaves the user's request in limbo.
         const db = makeDb();
@@ -239,6 +239,17 @@ describe("processClaimedJob", () => {
         // First retry waits ~30s.
         expect(runAt - Date.now()).toBeGreaterThan(25_000);
         expect(runAt - Date.now()).toBeLessThan(35_000);
+    });
+
+    it("retries export.build when a required document read fails", async () => {
+        const db = makeDb();
+        await processClaimedJob(
+            db as never,
+            { "export.build": async () => { throw new Error("Object storage download failed"); } },
+            JOB({ kind: "export.build" }),
+        );
+        expect(db.updates[0].payload).toMatchObject({ status: "pending", last_error: "Object storage download failed" });
+        expect(db.updates[0].payload.finished_at).toBeUndefined();
     });
 
     it("defers a quiet-period job without consuming its retry attempt", async () => {

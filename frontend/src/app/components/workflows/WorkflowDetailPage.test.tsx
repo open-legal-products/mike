@@ -1,4 +1,4 @@
-import { render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
@@ -8,9 +8,13 @@ import {
     listWorkflowShares,
     MikeApiError,
     shareWorkflow,
+    updateWorkflow,
 } from "@/app/lib/mikeApi";
 import type { Workflow } from "../shared/types";
 import { WorkflowDetailPage } from "./WorkflowDetailPage";
+
+const useItemWorkspace = vi.hoisted(() => vi.fn());
+vi.mock("@/app/hooks/useItemWorkspace", () => ({ useItemWorkspace }));
 
 // `importOriginal` keeps the real `MikeApiError`: `userFacingApiError`
 // decides with `instanceof`, so a stand-in class would make every 4xx look
@@ -41,8 +45,8 @@ vi.mock("@/app/hooks/useQueryParamTab", () => ({
     useQueryParamTab: () => ["prompt", vi.fn()],
 }));
 
-vi.mock("@/app/components/workflows/WorkflowPromptEditor", () => ({
-    WorkflowPromptEditor: () => null,
+vi.mock("@/app/components/ui/markdown-editor", () => ({
+    MarkdownEditor: () => null,
 }));
 vi.mock("./WorkflowAssets", () => ({
     WorkflowAssets: () => null,
@@ -106,6 +110,28 @@ describe("WorkflowDetailPage access mutations", () => {
                 removeEventListener: vi.fn(),
             }),
         );
+    });
+
+    it.each([1, 2])("matches toolbar and right-click actions for %i selected columns", async (count) => {
+        const user = userEvent.setup();
+        const tabular = { ...workflow, metadata: { ...workflow.metadata, type: "tabular" as const },
+            columns_config: [0, 1].map((index) => ({ index, name: `Column ${index + 1}`, prompt: "Extract text", format: "text" as const })),
+        };
+        vi.mocked(getWorkflow).mockResolvedValue(tabular);
+        vi.mocked(updateWorkflow).mockResolvedValue(tabular);
+        render(<WorkflowDetailPage id="workflow-1" workflowType="tabular" />);
+        await user.click(await screen.findByRole("checkbox", { name: "Select Column 1" }));
+        if (count === 2) await user.click(screen.getByRole("checkbox", { name: "Select Column 2" }));
+        await user.click(screen.getByRole("button", { name: "Actions" }));
+        const items = screen.getAllByRole("menuitem").map((item) => item.textContent);
+        expect(items).toEqual(count === 1 ? ["View", "Delete"] : ["Delete 2 columns"]);
+        await user.keyboard("{Escape}");
+        fireEvent.contextMenu(screen.getByText("Column 1"), { clientX: 40, clientY: 40 });
+        expect(screen.getAllByRole("menuitem").map((item) => item.textContent)).toEqual(items);
+        if (count === 2) {
+            await user.click(screen.getByRole("menuitem", { name: "Delete 2 columns" }));
+            expect(updateWorkflow).toHaveBeenCalledWith("workflow-1", { columns_config: [] });
+        }
     });
 
     async function openAccess(user: ReturnType<typeof userEvent.setup>) {
@@ -203,5 +229,38 @@ describe("WorkflowDetailPage access mutations", () => {
         expect(
             await screen.findByText("Only owners can share this workflow."),
         ).toBeVisible();
+    });
+});
+
+describe("the workspace a workflow opens", () => {
+    beforeEach(() => {
+        vi.clearAllMocks();
+        vi.mocked(getWorkflowPeople).mockImplementation(people);
+        vi.mocked(listWorkflowShares).mockResolvedValue([]);
+        vi.stubGlobal(
+            "matchMedia",
+            vi.fn().mockReturnValue({
+                matches: true,
+                addEventListener: vi.fn(),
+                removeEventListener: vi.fn(),
+            }),
+        );
+    });
+
+    it.each([
+        ["an organization's workflow", { org_id: "org-1" }, "org-1"],
+        ["a personal workflow", { org_id: null }, null],
+        // Built in: it belongs to no workspace, so it moves nobody.
+        ["a built-in workflow", { org_id: null, is_system: true }, undefined],
+    ])("is its own for %s", async (_name, over, expected) => {
+        vi.mocked(getWorkflow).mockResolvedValue({ ...workflow, ...over });
+        render(<WorkflowDetailPage id="workflow-1" workflowType="assistant" />);
+
+        await waitFor(() =>
+            expect(useItemWorkspace).toHaveBeenLastCalledWith(
+                "workflow-1",
+                expected,
+            ),
+        );
     });
 });

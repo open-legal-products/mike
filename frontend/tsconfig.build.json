@@ -1,0 +1,27 @@
+{
+  // The program `next build` type-checks (next.config.ts -> typescript.tsconfigPath).
+  //
+  // It is tsconfig.json minus test-only files. Tests may import shared fixtures
+  // (packages/pdf-text-order) and add-in sources (word-addin/src) from outside
+  // frontend/, and the production image is built from an allowlisted Docker
+  // context that does not contain them. Type-checking tests as part of the
+  // production build made the image depend on those files, which broke
+  // `docker compose up --build` three times (24dc0f97, #457, #501) while the
+  // host-side CI build stayed green. Tests are type-checked by
+  // `npm run typecheck` (tsc over tsconfig.json) instead.
+  //
+  // frontend/src/__tests__/architecture.test.ts asserts that nothing this
+  // program includes reaches outside frontend/, and that the exclusions below
+  // drop test-only files and nothing else.
+  "extends": "./tsconfig.json",
+  "exclude": [
+    "node_modules",
+    "**/*.test.ts",
+    "**/*.test.tsx",
+    "**/*.spec.ts",
+    "**/*.spec.tsx",
+    "**/__tests__/**",
+    "vitest.config.mts",
+    "vitest.setup.ts"
+  ]
+}

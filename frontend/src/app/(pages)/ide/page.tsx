@@ -1,9 +1,9 @@
 "use client";
 
 import { useState } from "react";
-import Image from "next/image";
+import { SvgAssetIcon } from "@/app/components/ui/svg-asset-icon";
+import ide from "../../../../public/icons/features/ide-new.svg";
 import { useRouter } from "next/navigation";
-import { FolderOpen, Plus } from "lucide-react";
 import { EmptyState } from "@/app/components/ui/empty-state";
 import { PillButtonUI } from "@/shared/ui/PillButtonUI";
 import { ProjectPickerModal } from "@/app/components/modals/ProjectPickerModal";
@@ -38,12 +38,10 @@ export default function IdePage() {
                 <EmptyState
                     className="w-full max-w-md"
                     icon={
-                        <Image
-                            src="/icons/features/ide.svg"
-                            alt=""
+                        <SvgAssetIcon
+                            src={ide}
                             width={32}
                             height={32}
-                            unoptimized
                         />
                     }
                     title="Integrated Drafting Environment"
@@ -60,7 +58,6 @@ export default function IdePage() {
                                 onClick={() => void projectPicker.openPicker()}
                                 loading={projectPicker.loading}
                             >
-                                <FolderOpen className="h-3.5 w-3.5" />
                                 Open project
                             </PillButtonUI>
                             <PillButtonUI
@@ -68,7 +65,6 @@ export default function IdePage() {
                                 size="sm"
                                 onClick={() => setNewProjectOpen(true)}
                             >
-                                <Plus className="h-3.5 w-3.5" />
                                 New project
                             </PillButtonUI>
                         </div>
@@ -85,7 +81,8 @@ export default function IdePage() {
                 onSelect={projectPicker.setSelectedId}
                 breadcrumbs={["IDE", "Open project"]}
                 primaryAction={{
-                    label: "Open project",
+                    label: "Open",
+                    variant: "blue",
                     type: "button",
                     onClick: openSelectedProject,
                     disabled: !projectPicker.selectedId,

@@ -1,21 +1,18 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { ApiKeyStatus } from "../api/client";
 import {
-  ROUTER_SLUGS,
   canonicalModelId,
   isAllowedModelId,
-  isModelAvailable,
-} from "../lib/modelCatalog";
+  isRouterModelSelected,
+  type RouterSelections,
+} from "@mike/model-catalog";
+import { isModelAvailable } from "../lib/modelCatalog";
 
 interface SelectedModelSources {
   sessionKey: number;
   chatModel?: string | null;
   lastSelectedModel?: string | null;
-  routerSelections?: {
-    openRouterModels: string[];
-    vercelModels: string[];
-    openCodeGoModels: string[];
-  } | null;
+  routerSelections?: RouterSelections | null;
   /** Null means the key-status request failed and availability fails open. */
   apiKeyStatus: ApiKeyStatus | null;
 }
@@ -27,16 +24,11 @@ function usableStoredModel(
   if (!value) return null;
   const model = canonicalModelId(value);
   if (!isAllowedModelId(model)) return null;
-  const router = ROUTER_SLUGS.find((slug) => model.startsWith(`${slug}/`));
-  if (router && sources.routerSelections) {
-    const selections = {
-      openrouter: sources.routerSelections.openRouterModels,
-      vercel: sources.routerSelections.vercelModels,
-      "opencode-go": sources.routerSelections.openCodeGoModels,
-    };
-    if (!selections[router].includes(model.slice(router.length + 1))) {
-      return null;
-    }
+  if (
+    sources.routerSelections &&
+    !isRouterModelSelected(model, sources.routerSelections)
+  ) {
+    return null;
   }
   return isModelAvailable(model, sources.apiKeyStatus) ? model : null;
 }
@@ -51,9 +43,7 @@ export function useSelectedModel(
   );
   const manualSelection = useRef(false);
   const previousSessionKey = useRef(sources.sessionKey);
-  const openRouterModels = sources.routerSelections?.openRouterModels;
-  const vercelModels = sources.routerSelections?.vercelModels;
-  const openCodeGoModels = sources.routerSelections?.openCodeGoModels;
+  const routerSelections = sources.routerSelections;
 
   useEffect(() => {
     if (previousSessionKey.current !== sources.sessionKey) {
@@ -79,9 +69,7 @@ export function useSelectedModel(
     sources.chatModel,
     sources.lastSelectedModel,
     sources.apiKeyStatus,
-    openRouterModels,
-    vercelModels,
-    openCodeGoModels,
+    routerSelections,
   ]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const setModel = useCallback((raw: string): void => {

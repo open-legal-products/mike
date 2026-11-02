@@ -5,9 +5,9 @@
 // unfixable without breaking changes, and tracked" — the job either fails or
 // gets demoted to report-only, which hides *new* advisories too. This gate
 // keeps the audit blocking: high/critical advisories fail the build unless
-// their GHSA id is listed in scripts/audit-allowlist.json, where each entry
-// must carry a reason. Allowlisted advisories are printed on every run so
-// they stay visible until they can be removed.
+// every affected installation matches a documented scope in
+// scripts/audit-allowlist.json. Allowlisted advisories are printed on every
+// run so they stay visible until they can be removed.
 //
 // npm's legacy quick-audit endpoint is being retired and now rejects valid
 // lockfiles after npm CLI's preferred bulk request fails. Read the lockfile and
@@ -18,16 +18,34 @@
 // Usage: node ../scripts/audit-gate.mjs   (cwd = the workspace to audit)
 
 import { execFileSync } from "node:child_process";
-import { readFileSync } from "node:fs";
-import { dirname, join } from "node:path";
+import { readFileSync, realpathSync } from "node:fs";
+import { dirname, join, relative, posix } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const allowlistPath = join(dirname(fileURLToPath(import.meta.url)), "audit-allowlist.json");
 const allowlist = JSON.parse(readFileSync(allowlistPath, "utf8"));
-const allowed = new Map(allowlist.map((e) => [e.ghsa, e.reason]));
+// Exceptions are checked against the actual audited directory, not a package
+// name or an environment variable supplied by the caller.
+// Scope fields are exact matches. `dev` is npm's lockfile classification;
+// the reason must separately assess exposure in the shipped image/bundle.
+const workspace = relative(
+  realpathSync(join(dirname(allowlistPath), "..")), realpathSync("."),
+).replaceAll("\\", "/") || ".";
+for (const entry of allowlist) {
+  if (!entry.ghsa || !entry.reason?.trim() || !entry.scopes?.length ||
+      !entry.scopes.every((scope) =>
+        typeof scope.workspace === "string" && typeof scope.package === "string" &&
+        typeof scope.version === "string" && typeof scope.path === "string" &&
+        scope.dev === true && Array.isArray(scope.dependents) && scope.dependents.length > 0 &&
+        scope.dependents.every((parent) => typeof parent === "string"))) {
+    throw new Error(`Invalid scoped audit exception: ${entry.ghsa ?? "unknown"}`);
+  }
+}
+const allowed = new Map(allowlist.map((e) => [e.ghsa, e]));
 
 const lock = JSON.parse(readFileSync("package-lock.json", "utf8"));
 const packages = {};
+const installations = [];
 for (const [packagePath, entry] of Object.entries(lock.packages ?? {})) {
   if (!packagePath || !entry.version) continue;
   const normalizedPath = packagePath.replaceAll("\\", "/");
@@ -41,6 +59,7 @@ for (const [packagePath, entry] of Object.entries(lock.packages ?? {})) {
       : pathParts[0]
   );
   if (!packageName) continue;
+  installations.push({ name: packageName, version: entry.version, path: normalizedPath, dev: entry.dev === true });
   packages[packageName] ??= [];
   if (!packages[packageName].includes(entry.version)) {
     packages[packageName].push(entry.version);
@@ -48,6 +67,46 @@ for (const [packagePath, entry] of Object.entries(lock.packages ?? {})) {
 }
 
 const packageEntries = Object.entries(packages);
+
+// Resolve hoisted dependencies using the lockfile, without requiring an
+// installed node_modules tree. Check every incoming edge: a new consumer of
+// the same hoisted package must not inherit an unrelated tooling exception.
+function resolveDependency(parent, name) {
+  let base = parent;
+  for (;;) {
+    const candidate = posix.join(base, "node_modules", name);
+    if (Object.hasOwn(lock.packages, candidate)) return candidate;
+    if (!base) return undefined;
+    base = posix.dirname(base);
+    if (base === ".") base = "";
+  }
+}
+const dependents = new Map();
+for (const [parent, entry] of Object.entries(lock.packages ?? {})) {
+  const names = new Set(Object.keys({
+    ...entry.dependencies,
+    ...entry.optionalDependencies,
+    ...entry.peerDependencies,
+    ...(parent === "" ? entry.devDependencies : {}),
+  }));
+  for (const name of names) {
+    const target = resolveDependency(parent, name);
+    if (!target) continue;
+    if (!dependents.has(target)) dependents.set(target, new Set());
+    dependents.get(target).add(parent);
+  }
+}
+function isAllowed(exception, matches) {
+  return Boolean(exception && matches.length > 0 && matches.every((match) => {
+    const copies = installations.filter((copy) => copy.name === match.name && copy.version === match.version);
+    return copies.length > 0 && copies.every((copy) => exception.scopes.some((scope) => {
+      const parents = [...(dependents.get(copy.path) ?? [])];
+      return scope.workspace === workspace && scope.package === copy.name &&
+        scope.version === copy.version && scope.path === copy.path && copy.dev &&
+        parents.length > 0 && parents.every((parent) => scope.dependents.includes(parent));
+    }));
+  }));
+}
 
 // FAIL CLOSED ON AN EMPTY LOCKFILE. A lockfile with no `packages` map (an
 // npm 6 lockfile, a truncated write, a wrong cwd) produces zero queries, so
@@ -79,10 +138,8 @@ const osvBaseUrl = process.env.OSV_API_BASE_URL ?? "https://api.osv.dev/v1";
  * advisory questions and we fall through to OSV. The canary is stripped
  * before the report is evaluated, so it never appears as a finding.
  *
- * adm-zip 0.5.12 is the choice because it is already a real, allowlisted
- * dependency of the word-addin workspace: whatever retires it from the
- * advisory database will also break that allowlist entry, so the two cannot
- * drift apart unnoticed.
+ * adm-zip 0.5.12 is a known vulnerable version. If the advisory service stops
+ * reporting it, the gate falls back to OSV instead of trusting silence.
  */
 const CANARY_PACKAGE = "adm-zip";
 const CANARY_VERSION = "0.5.12";
@@ -124,8 +181,20 @@ async function loadNpmReport() {
   const report = {};
   // Use one bounded attempt before the OSV fallback. Retrying a retired npm
   // fallback was the source of the previous five-minute CI failures.
-  for (let offset = 0; offset < packageEntries.length; offset += 500) {
-    const batch = Object.fromEntries(packageEntries.slice(offset, offset + 500));
+  // One version per package in each request retains exact affected versions
+  // without guessing at registry semver ranges. Different copies of a package
+  // cannot be collapsed into a single advisory-wide exemption.
+  const batches = [];
+  const versionCount = Math.max(...packageEntries.map(([, versions]) => versions.length));
+  for (let index = 0; index < versionCount; index += 1) {
+    const lane = packageEntries.filter(([, versions]) => versions[index] !== undefined)
+      .map(([name, versions]) => [name, [versions[index]]]);
+    for (let offset = 0; offset < lane.length; offset += 500) {
+      batches.push(Object.fromEntries(lane.slice(offset, offset + 500)));
+    }
+  }
+  for (const batch of batches) {
+    const queried = structuredClone(batch);
     // Only strip the canary back out if it was not already part of this
     // workspace's tree. When it IS a real dependency its advisories are a
     // real finding and must survive.
@@ -187,7 +256,10 @@ async function loadNpmReport() {
     for (const [packageName, packageAdvisories] of Object.entries(batchReport)) {
       report[packageName] = [
         ...(report[packageName] ?? []),
-        ...packageAdvisories,
+        ...packageAdvisories.map((advisory) => ({
+          ...advisory,
+          matches: (queried[packageName] ?? []).map((version) => ({ name: packageName, version })),
+        })),
       ];
     }
   }
@@ -259,22 +331,22 @@ async function loadOsvReport() {
       // in last_known_affected_version_range; honor that bound so a patched
       // vendor release such as xlsx 0.20.3 is not treated as vulnerable.
       const matches = vulnerabilityMatches.get(detail.id) ?? [];
-      const allMatchesKnownSafe = matches.length > 0 && matches.every((match) => {
+      const affectedMatches = matches.filter((match) => {
         const affected = detail.affected?.find(
           (entry) => entry.package?.ecosystem === "npm" && entry.package?.name === match.name,
         );
         const lastKnownRange = affected?.database_specific?.last_known_affected_version_range;
         const rangeMatch = /^<\s*(=?)\s*(\d+(?:\.\d+){1,2})$/.exec(lastKnownRange ?? "");
-        if (!rangeMatch || !/^\d+(?:\.\d+){1,2}$/.test(match.version)) return false;
+        if (!rangeMatch || !/^\d+(?:\.\d+){1,2}$/.test(match.version)) return true;
         const left = match.version.split(".").map((part) => Number.parseInt(part, 10));
         const right = rangeMatch[2].split(".").map((part) => Number.parseInt(part, 10));
-        if ([...left, ...right].some(Number.isNaN)) return false;
+        if ([...left, ...right].some(Number.isNaN)) return true;
         const comparison = [0, 1, 2]
           .map((index) => (left[index] ?? 0) - (right[index] ?? 0))
           .find((difference) => difference !== 0) ?? 0;
-        return rangeMatch[1] === "=" ? comparison > 0 : comparison >= 0;
+        return rangeMatch[1] === "=" ? comparison <= 0 : comparison < 0;
       });
-      if (allMatchesKnownSafe) return [];
+      if (matches.length > 0 && affectedMatches.length === 0) return [];
 
       const severity = detail?.database_specific?.severity?.toLowerCase();
       if (!severity) {
@@ -287,6 +359,7 @@ async function loadOsvReport() {
           : `https://osv.dev/vulnerability/${id}`,
         title: detail.summary ?? id,
         severity,
+        matches: affectedMatches,
       }];
     }),
   };
@@ -311,7 +384,7 @@ try {
   }
 }
 
-const advisories = new Map(); // ghsa -> { severity, title, url }
+const advisories = new Map(); // ghsa -> report metadata and every affected package/version
 for (const packageAdvisories of Object.values(report)) {
   if (!Array.isArray(packageAdvisories)) continue;
   for (const advisory of packageAdvisories) {
@@ -322,17 +395,19 @@ for (const packageAdvisories of Object.values(report)) {
       severity: advisory.severity,
       title: advisory.title,
       url: advisory.url,
+      matches: [...(advisories.get(ghsa)?.matches ?? []), ...(advisory.matches ?? [])],
+      unmatched: advisories.get(ghsa)?.unmatched || !advisory.matches?.length,
     });
   }
 }
 
 const blocking = [];
 for (const [ghsa, adv] of advisories) {
-  if (allowed.has(ghsa)) {
+  if (!adv.unmatched && isAllowed(allowed.get(ghsa), adv.matches)) {
     console.log(`ALLOWLISTED ${adv.severity}: ${ghsa} — ${adv.title}`);
-    console.log(`  reason: ${allowed.get(ghsa)}`);
+    console.log(`  reason: ${allowed.get(ghsa).reason}`);
   } else {
-    blocking.push(`${adv.severity}: ${ghsa} — ${adv.title} (${adv.url})`);
+    blocking.push(`${adv.severity}: ${ghsa} — ${adv.title} (${adv.url})${allowed.has(ghsa) ? " — outside the approved dependency scope" : ""}`);
   }
 }
 

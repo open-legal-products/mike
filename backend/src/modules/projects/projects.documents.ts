@@ -9,19 +9,22 @@ import {
   contentSha256,
 } from "../../lib/documentVersions";
 import {
-  deleteFile,
+  deleteFileBestEffort,
   downloadFile,
-  uploadFile,
   storageKey,
 } from "../../lib/storage";
 import { convertedPdfKey } from "../../lib/convert";
-import { checkProjectAccess, resolveContentOrgId } from "../../lib/access";
+import {
+  checkProjectAccess,
+  ensureDocAccess,
+  resolveContentOrgId,
+} from "../../lib/access";
+import { findDocumentsOutsideWorkspace } from "../../lib/documentWorkspace";
 import { can, DOCS_ORGANIZE_FORBIDDEN } from "../../lib/permissions";
-import { contentTypeForDocumentType } from "../../lib/documentTypes";
 import {
   type Db,
   type RoleForbidden,
-  attachDocumentOwnerLabels,
+  attachDirectoryCreatorLabels,
 } from "./projects.shared";
 
 export async function listProjectDocuments(
@@ -113,7 +116,7 @@ export async function getProjectDirectoryLevel(
   }[];
   await attachLatestVersionNumbers(db, page);
   await attachActiveVersionPaths(db, page);
-  await attachDocumentOwnerLabels(db, page);
+  await attachDirectoryCreatorLabels(db, page, folders ?? []);
   return {
     ok: true,
     body: {
@@ -129,12 +132,18 @@ export type AssignOrCopyResult =
   | { ok: false; kind: "forbidden" }
   | RoleForbidden
   | { ok: false; kind: "doc_not_found" }
+  | { ok: false; kind: "workspace_mismatch" }
   | { ok: false; kind: "update_failed" }
   | { ok: false; kind: "no_active_version" }
-  | { ok: false; kind: "read_failed" }
+  | { ok: false; kind: "read_failed"; error?: unknown }
   | { ok: false; kind: "copy_failed" }
   | { ok: false; kind: "db_error"; error: unknown };
 
+/**
+ * Add an owned, readable document to an authorized destination project.
+ * Assign standalone uploads; copy project, workflow and template sources so
+ * their existing containers retain the original document.
+ */
 export async function assignOrCopyDocument(
   db: Db,
   args: {
@@ -161,6 +170,23 @@ export async function assignOrCopyDocument(
     .eq("user_id", userId)
     .single();
   if (!doc) return { ok: false, kind: "doc_not_found" };
+  // Authorship is provenance, not access. A document created inside an
+  // organization matter stays the firm's: once its author leaves the org, is
+  // denied the project, or loses their grant, `user_id = me` alone would
+  // still let them copy the bytes into a personal project. Require the
+  // caller's CURRENT access to wherever the document lives now.
+  const sourceAccess = await ensureDocAccess(
+    doc as {
+      user_id: string | null;
+      project_id: string | null;
+      org_id?: string | null;
+      workflow_id?: string | null;
+    },
+    userId,
+    userEmail,
+    db,
+  );
+  if (!sourceAccess.ok) return { ok: false, kind: "doc_not_found" };
   await attachActiveVersionPaths(
     db,
     [doc as { id: string; current_version_id?: string | null }],
@@ -169,7 +195,21 @@ export async function assignOrCopyDocument(
   // Already in this project — idempotent
   if (doc.project_id === projectId) return { ok: true, status: 200, doc };
 
-  if (doc.project_id === null) {
+  // A project takes documents from its own workspace: a personal file does
+  // not go into an organization's project by id, nor an organization's into
+  // a personal one.
+  try {
+    const outside = await findDocumentsOutsideWorkspace(
+      db,
+      [documentId],
+      access.project.org_id ?? null,
+    );
+    if (outside.length > 0) return { ok: false, kind: "workspace_mismatch" };
+  } catch (error) {
+    return { ok: false, kind: "db_error", error };
+  }
+
+  if (doc.project_id === null && !doc.workflow_id && doc.library_kind !== "template") {
     // Standalone → assign project_id (and inherit the project's org).
     const targetOrg = await resolveContentOrgId(db, { projectId });
     if (!targetOrg.ok) return { ok: false, kind: "db_error", error: targetOrg.detail };
@@ -202,7 +242,7 @@ export async function assignOrCopyDocument(
     const { data: srcV } = await db
       .from("document_versions")
       .select(
-        "storage_path, pdf_storage_path, version_number, filename, source, file_type, size_bytes, page_count",
+        "storage_path, pdf_storage_path, version_number, filename, source, file_type, size_bytes, page_count, textless_page_count",
       )
       .eq("id", doc.current_version_id)
       .single();
@@ -212,7 +252,12 @@ export async function assignOrCopyDocument(
 
     const activeVersionFilename =
       (srcV.filename as string | null)?.trim() || "Untitled document";
-    const srcBytes = await downloadFile(srcV.storage_path);
+    let srcBytes: ArrayBuffer | null;
+    try {
+      srcBytes = await downloadFile(srcV.storage_path);
+    } catch (error) {
+      return { ok: false, kind: "read_failed", error };
+    }
     if (!srcBytes) {
       return { ok: false, kind: "read_failed" };
     }
@@ -258,6 +303,8 @@ export async function assignOrCopyDocument(
             (srcV.size_bytes as number | null) ?? doc.size_bytes ?? null,
           page_count:
             (srcV.page_count as number | null) ?? doc.page_count ?? null,
+          textless_page_count:
+            (srcV.textless_page_count as number | null) ?? null,
           content_sha256: contentSha256(srcBytes),
         });
       const copyVersionRowId = (newV?.id as string | null) ?? null;
@@ -286,9 +333,9 @@ export async function assignOrCopyDocument(
     } catch (err) {
       console.error("[projects/documents/copy] failed", err);
       await Promise.all([
-        deleteFile(newKey).catch(() => {}),
+        deleteFileBestEffort(newKey, "copy-rollback"),
         newPdfPath && newPdfPath !== newKey
-          ? deleteFile(newPdfPath).catch(() => {})
+          ? deleteFileBestEffort(newPdfPath, "copy-rollback")
           : Promise.resolve(),
         db.from("documents").delete().eq("id", copy.id),
       ]);

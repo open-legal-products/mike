@@ -5,7 +5,9 @@ import {
     render,
     screen,
     waitFor,
+    within,
 } from "@testing-library/react";
+import { ToastViewportUI, clearToasts } from "@/shared/ui/ToastUI";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type {
     Document,
@@ -55,10 +57,10 @@ describe("ProjectExplorer actions", () => {
         const onDocClick = vi.fn();
         render(<ProjectExplorer documents={[document]} onDocClick={onDocClick} onDownloadDoc={onDownloadDoc} />);
         fireEvent.contextMenu(screen.getByText("Draft.docx"));
-        fireEvent.click(screen.getByRole("button", { name: "Download" }));
+        fireEvent.click(screen.getByRole("menuitem", { name: "Download" }));
         expect(onDownloadDoc).toHaveBeenCalledWith(document);
         expect(onDocClick).not.toHaveBeenCalled();
-        expect(screen.queryByRole("button", { name: "Download" })).toBeNull();
+        expect(screen.queryByRole("menuitem", { name: "Download" })).toBeNull();
     });
 
     it("offers a folder download and disables it while another download starts", () => {
@@ -66,9 +68,9 @@ describe("ProjectExplorer actions", () => {
         const onDownloadFolder = vi.fn().mockResolvedValue(undefined);
         const { rerender } = render(<ProjectExplorer documents={[]} folders={[folder]} onDocClick={vi.fn()} onDownloadFolder={onDownloadFolder} downloading />);
         fireEvent.contextMenu(screen.getByText("Drafts"));
-        expect(screen.getByRole("button", { name: "Download" })).toBeDisabled();
+        expect(screen.getByRole("menuitem", { name: "Download" })).toHaveAttribute("aria-disabled", "true");
         rerender(<ProjectExplorer documents={[]} folders={[folder]} onDocClick={vi.fn()} onDownloadFolder={onDownloadFolder} />);
-        fireEvent.click(screen.getByRole("button", { name: "Download" }));
+        fireEvent.click(screen.getByRole("menuitem", { name: "Download" }));
         expect(onDownloadFolder).toHaveBeenCalledWith(folder);
     });
 
@@ -161,8 +163,8 @@ describe("ProjectExplorer actions", () => {
 
         fireEvent.contextMenu(screen.getByText("Drafts"));
 
-        expect(screen.getByRole("button", { name: "Rename" })).toBeVisible();
-        fireEvent.click(screen.getByRole("button", { name: "New subfolder" }));
+        expect(screen.getByRole("menuitem", { name: "Rename" })).toBeVisible();
+        fireEvent.click(screen.getByRole("menuitem", { name: "New subfolder" }));
         const input = screen.getByPlaceholderText("Folder name");
         fireEvent.change(input, { target: { value: "Revisions" } });
         fireEvent.keyDown(input, { key: "Enter" });
@@ -192,12 +194,12 @@ describe("ProjectExplorer actions", () => {
         );
 
         fireEvent.contextMenu(screen.getByText("Draft.docx"));
-        fireEvent.click(screen.getByRole("button", { name: "Open" }));
+        fireEvent.click(screen.getByRole("menuitem", { name: "Open" }));
         expect(onDocClick).toHaveBeenCalledWith(document);
-        expect(screen.queryByRole("button", { name: "Open" })).toBeNull();
+        expect(screen.queryByRole("menuitem", { name: "Open" })).toBeNull();
 
         fireEvent.contextMenu(screen.getByText("Draft.docx"));
-        fireEvent.click(screen.getByRole("button", { name: "Add to chat" }));
+        fireEvent.click(screen.getByRole("menuitem", { name: "Add to chat" }));
         expect(onAddToChat).toHaveBeenCalledWith(document);
     });
 
@@ -219,8 +221,8 @@ describe("ProjectExplorer actions", () => {
         );
         fireEvent.contextMenu(screen.getByText("Draft.docx"));
         expect(
-            screen.getByRole("button", { name: "Add to chat" }),
-        ).toBeDisabled();
+            screen.getByRole("menuitem", { name: "Add to chat" }),
+        ).toHaveAttribute("aria-disabled", "true");
     });
 
     it("renames a file without offering new subfolder", async () => {
@@ -243,9 +245,9 @@ describe("ProjectExplorer actions", () => {
 
         fireEvent.contextMenu(screen.getByText("Draft.docx"));
         expect(
-            screen.queryByRole("button", { name: "New subfolder" }),
+            screen.queryByRole("menuitem", { name: "New subfolder" }),
         ).toBeNull();
-        fireEvent.click(screen.getByRole("button", { name: "Rename" }));
+        fireEvent.click(screen.getByRole("menuitem", { name: "Rename" }));
 
         const input = screen.getByDisplayValue("Draft.docx");
         fireEvent.change(input, { target: { value: "Final.docx" } });
@@ -253,6 +255,61 @@ describe("ProjectExplorer actions", () => {
 
         await waitFor(() =>
             expect(onRenameDoc).toHaveBeenCalledWith("doc-1", "Final.docx"),
+        );
+    });
+});
+
+describe("ProjectExplorer moves", () => {
+    afterEach(() => {
+        clearToasts();
+    });
+
+    it("says a dropped document did not move and offers a Retry", async () => {
+        // The drop is fired as `void handleDropOnTarget(...)`: an unhandled
+        // rejection used to be the only trace of a move that never happened.
+        const onMoveDoc = vi.fn().mockRejectedValue(new Error("boom"));
+        render(
+            <>
+                <ProjectExplorer
+                    documents={[
+                        {
+                            id: "doc-1",
+                            filename: "Draft.docx",
+                            folder_id: null,
+                        } as Document,
+                    ]}
+                    folders={[
+                        {
+                            id: "folder-1",
+                            name: "Drafts",
+                            parent_folder_id: null,
+                        } as ProjectFolder,
+                    ]}
+                    onDocClick={vi.fn()}
+                    onMoveDoc={onMoveDoc}
+                />
+                <ToastViewportUI />
+            </>,
+        );
+
+        const dataTransfer = {
+            types: ["application/mike-doc"],
+            getData: (type: string) =>
+                type === "application/mike-doc" ? "doc-1" : "",
+        };
+        fireEvent.drop(screen.getByText("Drafts").closest("div[draggable]")!, {
+            dataTransfer,
+        });
+
+        const alert = await screen.findByRole("alert");
+        expect(alert).toHaveTextContent("Couldn't move this document");
+        expect(onMoveDoc).toHaveBeenCalledWith("doc-1", "folder-1");
+
+        onMoveDoc.mockClear();
+        onMoveDoc.mockResolvedValue(undefined);
+        fireEvent.click(within(alert).getByRole("button", { name: "Retry" }));
+        await waitFor(() =>
+            expect(onMoveDoc).toHaveBeenCalledWith("doc-1", "folder-1"),
         );
     });
 });

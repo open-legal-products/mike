@@ -39,6 +39,14 @@ describe("CORS allowlist", () => {
             "https://admin.example.com",
         ]);
     });
+    it("exposes the request id to cross-origin scripts", async () => {
+        const res = await request(app)
+            .get("/health")
+            .set("Origin", ALLOWED_ORIGIN);
+        expect(res.headers["access-control-expose-headers"]).toBe("X-Request-ID");
+        expect(res.headers["x-request-id"]).toBeTruthy();
+    });
+
     it("reflects an allowlisted origin with credentials", async () => {
         const res = await request(app)
             .options("/chat")

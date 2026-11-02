@@ -51,8 +51,8 @@ describe("OnboardingGate", () => {
         );
     });
 
-    it("allows incomplete users to use onboarding", () => {
-        state.pathname = "/onboarding/profile";
+    it.each(["/onboarding/profile", "/onboarding/practice", "/onboarding/invitations", "/onboarding/models"])("allows incomplete users to use %s", (path) => {
+        state.pathname = path;
         render(
             <OnboardingGate>
                 <div>Profile step</div>
@@ -99,8 +99,8 @@ describe("OnboardingGate", () => {
         },
     );
 
-    it("redirects completed users away from onboarding", async () => {
-        state.pathname = "/onboarding/practice";
+    it.each(["/onboarding/practice", "/onboarding/invitations"])("redirects completed users away from %s", async (path) => {
+        state.pathname = path;
         state.profile = {
             displayName: "Alex",
             onboardingComplete: true,

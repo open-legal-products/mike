@@ -1,7 +1,9 @@
 // workflows listing — implementation behind the module facade.
+import { listWorkspaceWorkflows } from "../../lib/workflowWorkspace";
 import { type Db } from "../../lib/supabase";
 import { type PaginationParams } from "../../lib/pagination";
 import { type WorkflowSort } from "../../lib/sort";
+import { workspaceRpcArg, type WorkspaceFilter } from "../../lib/workspace";
 import { buildWorkflowIdsOverviewRpcArgs, buildWorkflowsOverviewRpcArgs, type WorkflowScope } from "./workflows.overview";
 import { ensureResourceAccessSummaries } from "../../lib/resourceAccessSummary";
 import { ServiceFailure, WorkflowRecord, WorkflowType } from "./workflows.types";
@@ -15,10 +17,13 @@ export async function listWorkflows(
     userId: string;
     userEmail: string | undefined;
     type: string | null;
+    workspace?: WorkspaceFilter;
   },
 ): Promise<{ ok: true; data: unknown } | ServiceFailure> {
   const { userId, userEmail, type: workflowType } = params;
-  const { data, error } = await db.rpc("get_workflows_overview", {
+  const { data, error } = params.workspace
+    ? { data: await listWorkspaceWorkflows<WorkflowRecord>(db, { ...params, workspace: params.workspace }), error: null }
+    : await db.rpc("get_workflows_overview", {
     p_user_id: userId,
     p_user_email: userEmail ?? null,
     p_type: workflowType,
@@ -53,6 +58,7 @@ export async function listWorkflowsPage(
     practice: string | null;
     language: string | null;
     jurisdiction: string | null;
+    workspace?: WorkspaceFilter;
   },
 ): Promise<{ ok: true; data: unknown } | ServiceFailure> {
   const rpcArgs = buildWorkflowsOverviewRpcArgs(params);
@@ -78,6 +84,7 @@ export async function getWorkflowFilterOptions(
     userEmail: string | undefined;
     type: WorkflowType | null;
     scope: WorkflowScope;
+    workspace?: WorkspaceFilter;
   },
 ): Promise<
   | {
@@ -95,6 +102,7 @@ export async function getWorkflowFilterOptions(
     p_user_email: params.userEmail ?? null,
     p_type: params.type,
     p_scope: params.scope,
+    ...workspaceRpcArg(params.workspace),
   });
   if (error) return { ok: false, error };
 
@@ -128,6 +136,7 @@ export async function listWorkflowIds(
     practice: string | null;
     language: string | null;
     jurisdiction: string | null;
+    workspace?: WorkspaceFilter;
   },
 ): Promise<
   | { ok: true; ids: { id: string; user_id: string }[] }

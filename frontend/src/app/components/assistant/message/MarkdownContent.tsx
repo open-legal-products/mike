@@ -17,6 +17,18 @@ import {
     citationVerificationPillClassName,
 } from "./citationVerification";
 import { internalCaseHref } from "./citationUtils";
+import { EXCERPT_SOURCE_PROPS } from "@/shared/ui/ResponseSelectionMenuUI";
+
+function isSameOrigin(url: string): boolean {
+    if (typeof window === "undefined") return false;
+    try {
+        return (
+            new URL(url, window.location.href).origin === window.location.origin
+        );
+    } catch {
+        return false;
+    }
+}
 
 export function MarkdownContent({
     text,
@@ -27,7 +39,10 @@ export function MarkdownContent({
     onCitationClick,
     onCaseClick,
     divRef,
+    excerptSource = false,
 }: {
+    /** Lets a reader highlight this text to quote it in the composer. */
+    excerptSource?: boolean;
     text: string;
     inlineCitationTargets: Citation[];
     caseCitations: Map<
@@ -49,6 +64,7 @@ export function MarkdownContent({
     return (
         <div
             ref={divRef}
+            {...(excerptSource ? EXCERPT_SOURCE_PROPS : {})}
             className="text-gray-900 mb-4 text-base prose prose-sm max-w-none font-serif"
         >
             <ReactMarkdown
@@ -61,6 +77,12 @@ export function MarkdownContent({
                     /^us-case-\d+$/.test(url) ? url : defaultUrlTransform(url)
                 }
                 components={{
+                    pre: (props) => (
+                        <pre
+                            className="max-w-full overflow-x-auto"
+                            {...withoutMarkdownNode(props)}
+                        />
+                    ),
                     table: (props) => (
                         <div className="overflow-x-auto my-4 rounded-lg">
                             <table
@@ -288,6 +310,29 @@ export function MarkdownContent({
                             >
                                 {children}
                             </a>
+                        );
+                    },
+                    img: (props) => {
+                        const { src, alt, ...imageProps } =
+                            withoutMarkdownNode(props);
+                        if (typeof src !== "string" || !src) return null;
+                        // Another site's image would load with no click, so
+                        // injected text could leak data in its URL.
+                        if (!isSameOrigin(src)) {
+                            return (
+                                <a
+                                    href={src}
+                                    className="text-blue-600 hover:text-blue-700 underline [overflow-wrap:anywhere] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500/40"
+                                    target="_blank"
+                                    rel="noopener noreferrer"
+                                >
+                                    {alt?.trim() || src}
+                                </a>
+                            );
+                        }
+                        return (
+                            // eslint-disable-next-line @next/next/no-img-element -- markdown content, not an optimizable page asset
+                            <img src={src} alt={alt ?? ""} {...imageProps} />
                         );
                     },
                     hr: (props) => (

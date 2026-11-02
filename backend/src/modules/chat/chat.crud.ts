@@ -13,8 +13,10 @@
 // DB preparation live here. `prepareChatStream` returns the prepared data the
 // route needs to run the stream; it does not stream.
 import { type Db } from "../../lib/supabase";
-import { resolveContentOrgId } from "../../lib/access";
+import { resolveContentOrgId, resolveStandaloneOrgId } from "../../lib/access";
+import { workspaceRpcArg, type WorkspaceFilter } from "../../lib/workspace";
 import { validateAccessibleProjectId } from "./chat.access";
+import { withChatLeaveAccess } from "./chat.sharing";
 
 // ---------------------------------------------------------------------------
 // Non-streaming endpoints
@@ -33,6 +35,9 @@ export async function listChats(
         userEmail: string | undefined;
         limit: number | null;
         offset: number;
+        beforeUpdatedAt: string | null;
+        beforeId: string | null;
+        workspace?: WorkspaceFilter;
     },
 ): Promise<{ ok: true; data: unknown[] } | { ok: false; error: unknown }> {
     const { data, error } = await db.rpc("get_chats_overview", {
@@ -40,9 +45,15 @@ export async function listChats(
         p_user_email: args.userEmail?.trim().toLowerCase() ?? null,
         p_limit: args.limit,
         p_offset: args.offset,
+        p_before_updated_at: args.beforeUpdatedAt,
+        p_before_id: args.beforeId,
+        ...workspaceRpcArg(args.workspace),
     });
     if (error) return { ok: false, error };
-    return { ok: true, data: data ?? [] };
+    const result = await withChatLeaveAccess(db, data ?? [], args.userEmail);
+    if (!result.ok)
+        return { ok: false, error: result.kind === "error" ? result.error : result.detail };
+    return { ok: true, data: result.data };
 }
 
 // POST /chat/create
@@ -52,6 +63,8 @@ export async function createChat(
         userId: string;
         userEmail: string | undefined;
         projectId: string | null;
+        /** The organization whose workspace a standalone chat is started in. */
+        orgId?: unknown;
     },
 ): Promise<
     | { ok: true; id: string }
@@ -72,13 +85,31 @@ export async function createChat(
         };
 
     // Tenant stamping, like every other content create: a project chat
-    // inherits the project's org; a standalone chat is personal (org_id
-    // null) and stays private until it receives a direct grant.
-    const resolvedOrg = await resolveContentOrgId(db, {
-        projectId: args.projectId,
-    });
-    if (!resolvedOrg.ok)
-        return { ok: false, kind: "error", error: resolvedOrg.detail };
+    // inherits the project's org. A standalone chat belongs to the workspace
+    // it is started in — the organization the client names, or Personal
+    // (org_id null) — and stays private until it receives a direct grant.
+    let resolvedOrg: { ok: true; orgId: string | null };
+    if (args.projectId) {
+        const projectOrg = await resolveContentOrgId(db, {
+            projectId: args.projectId,
+        });
+        if (!projectOrg.ok)
+            return { ok: false, kind: "error", error: projectOrg.detail };
+        resolvedOrg = projectOrg;
+    } else {
+        const standalone = await resolveStandaloneOrgId(db, {
+            userId: args.userId,
+            orgId: args.orgId,
+        });
+        if (!standalone.ok)
+            return {
+                ok: false,
+                kind: "access",
+                status: 400,
+                detail: standalone.detail,
+            };
+        resolvedOrg = standalone;
+    }
     const { data, error } = await db
         .from("chats")
         .insert({
@@ -109,3 +140,14 @@ export async function deleteChat(
 // surrounding `.catch` logs it) but ignores it for the truncated-content
 // fallback, which must never break a stream that already succeeded.
 export type ChatWriteResult = { ok: true } | { ok: false; error: unknown };
+
+/** Remove only the rejected request's newly inserted input after a run race. */
+export async function discardRejectedChatInput(
+    db: Db,
+    args: { chatId: string; inputMessageId: string; userId: string },
+): Promise<ChatWriteResult> {
+    const { error } = await db.from("chat_messages").delete()
+        .eq("id", args.inputMessageId).eq("chat_id", args.chatId)
+        .eq("role", "user").eq("author_user_id", args.userId);
+    return error ? { ok: false, error } : { ok: true };
+}

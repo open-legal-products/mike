@@ -9,9 +9,17 @@ import { asyncRoute, routerErrorHandler } from "../../middleware/asyncRoute";
 import { createServerSupabase } from "../../lib/supabase";
 import { parsePaginationQuery } from "../../lib/pagination";
 import { normalizeSearchTerm } from "../../lib/search";
+import {
+  resolveWorkspaceFilter,
+  sendWorkspaceFailure,
+} from "../../lib/workspace";
 import { parseWorkflowSort } from "../../lib/sort";
 import { parseWorkflowScope } from "./workflows.overview";
 import { sendInternalError } from "../../lib/httpError";
+import {
+  DOCUMENT_WORKSPACE_MISMATCH_CODE,
+  DOCUMENT_WORKSPACE_MISMATCH_DETAIL,
+} from "../../lib/documentWorkspace";
 import {
   listWorkflows,
   listWorkflowsPage,
@@ -27,9 +35,6 @@ import {
   withSystemWorkflowAccess,
   submitOpenSourceWorkflow,
   WORKFLOW_CONTRIBUTIONS_ENABLED,
-  listHiddenWorkflows,
-  hideWorkflow,
-  unhideWorkflow,
   parseAssetDocumentIds,
   listWorkflowAssets,
   copyDocumentsToWorkflowAssets,
@@ -79,6 +84,11 @@ function sendWorkflowAssetFailure(res: Response, failure: WorkflowAssetFailure) 
       return void res
         .status(404)
         .json({ detail: "One or more files could not be found" });
+    case "documents_workspace_mismatch":
+      return void res.status(400).json({
+        code: DOCUMENT_WORKSPACE_MISMATCH_CODE,
+        detail: DOCUMENT_WORKSPACE_MISMATCH_DETAIL,
+      });
     case "documents_not_ready":
       return void res
         .status(409)
@@ -115,6 +125,12 @@ workflowsRouter.get("/", requireAuth, asyncRoute(async (req, res) => {
   const hasPaginationParams = WORKFLOW_PAGINATION_QUERY_KEYS.some(
     (key) => req.query[key] !== undefined,
   );
+  const workspace = await resolveWorkspaceFilter(
+    db,
+    userId,
+    req.query.workspace,
+  );
+  if (!workspace.ok) return void sendWorkspaceFailure(res, workspace);
   const result = hasPaginationParams
     ? await listWorkflowsPage(db, {
         userId,
@@ -127,8 +143,9 @@ workflowsRouter.get("/", requireAuth, asyncRoute(async (req, res) => {
         practice: normalizeSearchTerm(req.query.practice),
         language: normalizeSearchTerm(req.query.language),
         jurisdiction: normalizeSearchTerm(req.query.jurisdiction),
+        workspace: workspace.workspace,
       })
-    : await listWorkflows(db, { userId, userEmail, type: workflowType });
+    : await listWorkflows(db, { userId, userEmail, type: workflowType, workspace: workspace.workspace });
   if (!result.ok) {
     return void sendInternalError(res, result.error);
   }
@@ -161,11 +178,19 @@ workflowsRouter.get("/filter-options", requireAuth, asyncRoute(async (req, res) 
   const db = createServerSupabase();
   if (!(await ensureDefaultsForRequest(db, userId, res))) return;
 
+  const workspace = await resolveWorkspaceFilter(
+    db,
+    userId,
+    req.query.workspace,
+  );
+  if (!workspace.ok) return void sendWorkspaceFailure(res, workspace);
+
   const result = await getWorkflowFilterOptions(db, {
     userId,
     userEmail,
     type,
     scope,
+    workspace: workspace.workspace,
   });
   if (!result.ok) return void sendInternalError(res, result.error);
   res.json(result.options);
@@ -182,6 +207,13 @@ workflowsRouter.get("/ids", requireAuth, asyncRoute(async (req, res) => {
     typeof req.query.type === "string" && req.query.type
       ? req.query.type
       : null;
+  const workspace = await resolveWorkspaceFilter(
+    db,
+    userId,
+    req.query.workspace,
+  );
+  if (!workspace.ok) return void sendWorkspaceFailure(res, workspace);
+
   const result = await listWorkflowIds(db, {
     userId,
     userEmail,
@@ -191,6 +223,7 @@ workflowsRouter.get("/ids", requireAuth, asyncRoute(async (req, res) => {
     practice: normalizeSearchTerm(req.query.practice),
     language: normalizeSearchTerm(req.query.language),
     jurisdiction: normalizeSearchTerm(req.query.jurisdiction),
+    workspace: workspace.workspace,
   });
   if (!result.ok) return void sendInternalError(res, result.error);
   res.json(result.ids);
@@ -204,11 +237,13 @@ workflowsRouter.post("/", requireAuth, asyncRoute(async (req, res) => {
     skill_md,
     columns_config,
     org_id,
+    visibility,
   } = req.body as {
     metadata?: Partial<WorkflowMetadata>;
     skill_md?: string;
     columns_config?: unknown;
     org_id?: unknown;
+    visibility?: unknown;
   };
   const title = metadata?.title;
   const type = metadata?.type;
@@ -228,6 +263,7 @@ workflowsRouter.post("/", requireAuth, asyncRoute(async (req, res) => {
     columns_config,
     metadata,
     org_id,
+    visibility,
   });
   if (!result.ok) {
     if (result.kind === "validation")
@@ -253,15 +289,16 @@ async function handleWorkflowUpdate(
     body: req.body,
   });
   if (!result.ok) {
+    if (result.kind === "validation")
+      return void res.status(400).json({ detail: result.detail });
+    if (result.kind === "forbidden")
+      return void res.status(403).json({ detail: result.detail });
     return void res
       .status(404)
       .json({ detail: "Workflow not found or not editable" });
   }
   res.json(result.body);
 }
-
-// PUT /workflows/:workflowId
-workflowsRouter.put("/:workflowId", requireAuth, asyncRoute(handleWorkflowUpdate));
 
 // PATCH /workflows/:workflowId
 workflowsRouter.patch("/:workflowId", requireAuth, asyncRoute(handleWorkflowUpdate));
@@ -283,37 +320,6 @@ workflowsRouter.delete("/:workflowId", requireAuth, asyncRoute(async (req, res) 
       return void res.status(404).json({ detail: "Workflow not found" });
     return void sendInternalError(res, result.error);
   }
-  res.status(204).send();
-}));
-
-// GET /workflows/hidden
-workflowsRouter.get("/hidden", requireAuth, asyncRoute(async (req, res) => {
-  const userId = res.locals.userId as string;
-  const db = createServerSupabase();
-  const result = await listHiddenWorkflows(db, userId);
-  if (!result.ok) return void sendInternalError(res, result.error);
-  res.json(result.ids);
-}));
-
-// POST /workflows/hidden
-workflowsRouter.post("/hidden", requireAuth, asyncRoute(async (req, res) => {
-  const userId = res.locals.userId as string;
-  const { workflow_id } = req.body as { workflow_id: string };
-  if (!workflow_id?.trim())
-    return void res.status(400).json({ detail: "workflow_id is required" });
-  const db = createServerSupabase();
-  const result = await hideWorkflow(db, userId, workflow_id);
-  if (!result.ok) return void sendInternalError(res, result.error);
-  res.status(204).send();
-}));
-
-// DELETE /workflows/hidden/:workflowId
-workflowsRouter.delete("/hidden/:workflowId", requireAuth, asyncRoute(async (req, res) => {
-  const userId = res.locals.userId as string;
-  const { workflowId } = req.params;
-  const db = createServerSupabase();
-  const result = await unhideWorkflow(db, userId, workflowId);
-  if (!result.ok) return void sendInternalError(res, result.error);
   res.status(204).send();
 }));
 

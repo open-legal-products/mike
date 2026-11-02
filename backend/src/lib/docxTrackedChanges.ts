@@ -658,16 +658,6 @@ function findBody(doc: XNode[]): XNode[] | null {
     return null;
 }
 
-function replaceBody(doc: XNode[], bodyChildren: XNode[]): void {
-    for (const top of doc) {
-        if (elName(top) !== "w:document") continue;
-        const docKids = elChildren(top);
-        for (const c of docKids) {
-            if (elName(c) === "w:body") setChildren(c, bodyChildren);
-        }
-    }
-}
-
 /**
  * Walk a tree and collect all max w:id values in w:ins/w:del so new changes
  * can start their numbering safely above it.
@@ -732,10 +722,10 @@ export async function extractDocxBodyText(bytes: Buffer): Promise<string> {
 }
 
 /**
- * Walk document.xml in render order and collect the w:id for every
- * w:ins / w:del wrapper. The order here matches what docx-preview emits
- * as <ins>/<del> in the DOM, so the frontend can tag each rendered
- * element by index to recover the w:id attribute that docx-preview drops.
+ * Walk document.xml in document order and collect the w:id for every
+ * w:ins / w:del wrapper. No production caller remains; the tests use it to
+ * check which tracked changes applyTrackedEdits and resolveTrackedChange
+ * leave behind.
  */
 export async function extractTrackedChangeIds(
     bytes: Buffer,

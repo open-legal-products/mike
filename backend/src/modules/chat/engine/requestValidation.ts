@@ -1,5 +1,6 @@
 import { parseAskInputsResponsePayload } from "./contextBuilders";
 import {
+  MAX_ASK_INPUT_CHOICE_LENGTH,
   MAX_ASK_INPUT_TEXT_LENGTH,
   type AskInputsResponseRequest,
   type ChatMessage,
@@ -148,24 +149,26 @@ function parseMessageFiles(
   return { ok: true, value: files };
 }
 
+/** A picked workflow or playbook: `{ id, title }`. */
 function parseMessageWorkflow(
   value: unknown,
   messageIndex: number,
+  field: "workflow" | "playbook" = "workflow",
 ): ValidationResult<NonNullable<ChatMessage["workflow"]>> {
   if (!isRecord(value)) {
     return {
       ok: false,
-      detail: `messages[${messageIndex}].workflow must be an object`,
+      detail: `messages[${messageIndex}].${field} must be an object`,
     };
   }
   const id = parseNonEmptyString(
     value.id,
-    `messages[${messageIndex}].workflow.id must be a non-empty string`,
+    `messages[${messageIndex}].${field}.id must be a non-empty string`,
   );
   if (!id.ok) return id;
   const title = parseNonEmptyString(
     value.title,
-    `messages[${messageIndex}].workflow.title must be a non-empty string`,
+    `messages[${messageIndex}].${field}.title must be a non-empty string`,
   );
   if (!title.ok) return title;
   return { ok: true, value: { id: id.value, title: title.value } };
@@ -215,11 +218,23 @@ export function parseChatMessages(
       workflow = parsedWorkflow.value;
     }
 
+    let playbook: ChatMessage["playbook"];
+    if (message.playbook !== undefined) {
+      const parsedPlaybook = parseMessageWorkflow(
+        message.playbook,
+        index,
+        "playbook",
+      );
+      if (!parsedPlaybook.ok) return parsedPlaybook;
+      playbook = parsedPlaybook.value;
+    }
+
     messages.push({
       role,
       content: message.content,
       ...(files ? { files } : {}),
       ...(workflow ? { workflow } : {}),
+      ...(playbook ? { playbook } : {}),
     });
   }
 
@@ -326,11 +341,12 @@ export function parseOptionalAskInputsResponse(
       response.kind !== "choice" &&
       response.kind !== "multi_choice" &&
       response.kind !== "text" &&
-      response.kind !== "documents"
+      response.kind !== "documents" &&
+      response.kind !== "approval"
     ) {
       return {
         ok: false,
-        detail: `${field}.kind must be "choice", "multi_choice", "text", or "documents"`,
+        detail: `${field}.kind must be "choice", "multi_choice", "text", "documents", or "approval"`,
       };
     }
     if (
@@ -338,6 +354,16 @@ export function parseOptionalAskInputsResponse(
       typeof response.skipped !== "boolean"
     ) {
       return { ok: false, detail: `${field}.skipped must be a boolean` };
+    }
+
+    if (response.kind === "approval") {
+      if (response.decision !== "approve" && response.decision !== "reject") {
+        return {
+          ok: false,
+          detail: `${field}.decision must be "approve" or "reject"`,
+        };
+      }
+      continue;
     }
 
     if (
@@ -369,7 +395,7 @@ export function parseOptionalAskInputsResponse(
             `${field}.answers[${answerIndex}] must be a non-empty string`,
           );
           if (!parsedAnswer.ok) return parsedAnswer;
-          if (answer.length > 1_000) {
+          if (parsedAnswer.value.length > MAX_ASK_INPUT_CHOICE_LENGTH) {
             return {
               ok: false,
               detail: `${field}.answers[${answerIndex}] must be at most 1000 characters`,
@@ -399,14 +425,16 @@ export function parseOptionalAskInputsResponse(
           detail: `${field}.answer must be a non-empty string unless skipped`,
         };
       }
+      const maxAnswerLength = response.kind === "text"
+        ? MAX_ASK_INPUT_TEXT_LENGTH
+        : MAX_ASK_INPUT_CHOICE_LENGTH;
       if (
-        response.kind === "text" &&
         typeof response.answer === "string" &&
-        response.answer.length > MAX_ASK_INPUT_TEXT_LENGTH
+        response.answer.trim().length > maxAnswerLength
       ) {
         return {
           ok: false,
-          detail: `${field}.answer must be at most ${MAX_ASK_INPUT_TEXT_LENGTH} characters`,
+          detail: `${field}.answer must be at most ${maxAnswerLength} characters`,
         };
       }
       continue;

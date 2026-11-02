@@ -3,36 +3,41 @@
 import { useEffect, useRef, useState } from "react";
 import { Check, ChevronDown, Loader2 } from "lucide-react";
 import {
-  DropdownMenu,
-  DropdownMenuLabel,
-  DropdownMenuSeparator,
-  DropdownMenuTrigger,
-} from "@/app/components/ui/dropdown-menu";
+  DROPDOWN_ROWS_CLASS,
+  Dropdown,
+  DropdownContent,
+  DropdownItem,
+  DropdownLabel,
+  DropdownSeparator,
+  DropdownTrigger,
+} from "@/shared/ui/dropdown";
 import {
-  LiquidDropdownContent,
-  LiquidDropdownItem,
-} from "@/app/components/ui/liquid-dropdown";
-import { useUserProfile } from "@/app/contexts/UserProfileContext";
+  useUserProfile,
+  type PreferenceField,
+} from "@/app/contexts/UserProfileContext";
 import { type ApiKeyState } from "@/app/lib/mikeApi";
+import { mergeConfiguredModelOptions } from "@/app/components/assistant/ModelToggle";
 import {
   MODELS,
   SETTINGS_MODELS,
+  allRouterModelOptions,
   canonicalModelId,
   claudeCodeModelOptions,
   isKeylessModelGroup,
-  mergeConfiguredModelOptions,
-  openCodeGoModelOptions,
-  openRouterModelOptions,
-  vercelModelOptions,
+  routerSelections,
   type ModelOption,
-} from "@/app/components/assistant/ModelToggle";
-import { orderedModelGroups } from "@/shared/ui/ModelToggleUI";
+} from "@/shared/lib/modelCatalog";
+import {
+  REASONING_LEVELS,
+  REASONING_LEVEL_LABELS,
+  orderedModelGroups,
+} from "@/shared/ui/ModelToggleUI";
 import { isModelAvailable } from "@/app/lib/modelAvailability";
 import {
   SettingsDescription,
   SettingsLabel,
 } from "@/app/components/settings/SettingsText";
-import { SettingsCard } from "@/app/components/settings/SettingsCard";
+import { GlassCardUI } from "@/shared/ui/GlassCardUI";
 import { SettingsHeading } from "@/app/components/settings/SettingsHeading";
 import { SettingsRow } from "@/app/components/settings/SettingsRow";
 import { SETTINGS_CONTROL_CLASS } from "@/app/components/settings/SettingsTextInput";
@@ -40,32 +45,25 @@ import { useOllamaModels } from "@/app/hooks/useOllamaModels";
 import { useClaudeCodeModels } from "@/app/hooks/useClaudeCodeModels";
 import { useConfiguredModels } from "@/app/hooks/useConfiguredModels";
 
-type ModelPreferenceField =
-  | "titleModel"
-  | "tabularModel"
-  | "memoryCuratorModel";
-
 export default function ModelPreferencesPage() {
   const { profile, updateModelPreference } = useUserProfile();
   const ollamaModels = useOllamaModels();
   const claudeCodeOptions = claudeCodeModelOptions(useClaudeCodeModels());
   const configuredModels = useConfiguredModels();
-  const [savingField, setSavingField] = useState<ModelPreferenceField | null>(
+  const preferenceModelId = (id: string) =>
+    configuredModels.some((model) => model.id === id) ? id : canonicalModelId(id);
+  const [savingField, setSavingField] = useState<PreferenceField | null>(
     null,
   );
-  const [savedField, setSavedField] = useState<ModelPreferenceField | null>(
+  const [savedField, setSavedField] = useState<PreferenceField | null>(
     null,
   );
   const [optimisticValues, setOptimisticValues] = useState<
-    Partial<Record<ModelPreferenceField, string>>
+    Partial<Record<PreferenceField, string>>
   >({});
   const savedTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const openRouterSelection = profile?.openRouterModels ?? [];
-  const vercelSelection = profile?.vercelModels ?? [];
-  const selectedOpenRouterOptions = openRouterModelOptions(openRouterSelection);
-  const selectedVercelOptions = vercelModelOptions(vercelSelection);
-  const selectedOpenCodeGoOptions = openCodeGoModelOptions(
-    profile?.openCodeGoModels ?? [],
+  const selectedRouterOptions = allRouterModelOptions(
+    profile ? routerSelections(profile) : {},
   );
 
   useEffect(() => {
@@ -74,7 +72,7 @@ export default function ModelPreferencesPage() {
     };
   }, []);
 
-  const handleModelChange = async (field: ModelPreferenceField, id: string) => {
+  const handlePreferenceChange = async (field: PreferenceField, id: string) => {
     setOptimisticValues((current) => ({ ...current, [field]: id }));
     setSavedField(null);
     setSavingField(field);
@@ -87,6 +85,9 @@ export default function ModelPreferencesPage() {
         setSavedField((current) => (current === field ? null : current));
       }, 1600);
     } else {
+      // The profile context classified the failure and raised the notice with
+      // a Retry; here the dropdown only snaps back to the saved value, so the
+      // page never shows a preference the server did not accept.
       setOptimisticValues((current) => {
         const next = { ...current };
         delete next[field];
@@ -98,8 +99,8 @@ export default function ModelPreferencesPage() {
   return (
     <div className="space-y-8">
       <section className="space-y-3">
-        <SettingsHeading>Model Preferences</SettingsHeading>
-        <SettingsCard>
+        <SettingsHeading id="model-preferences">Model Preferences</SettingsHeading>
+        <GlassCardUI>
           <SettingsRow layout="stacked">
             <div className="space-y-1">
               <SettingsLabel>Chat title generation</SettingsLabel>
@@ -109,14 +110,12 @@ export default function ModelPreferencesPage() {
               </SettingsDescription>
             </div>
             <ModelPreferenceDropdown
-              value={canonicalModelId(
+              value={preferenceModelId(
                 optimisticValues.titleModel ?? profile?.titleModel ?? "",
               )}
               options={mergeConfiguredModelOptions(configuredModels, [
                 ...SETTINGS_MODELS,
-                ...selectedOpenRouterOptions,
-                ...selectedVercelOptions,
-                ...selectedOpenCodeGoOptions,
+                ...selectedRouterOptions,
                 ...ollamaModels,
                 ...claudeCodeOptions,
               ])}
@@ -124,7 +123,7 @@ export default function ModelPreferencesPage() {
               isSaving={savingField === "titleModel"}
               isSaved={savedField === "titleModel"}
               emptyOptionLabel="Automatic — same provider as chat"
-              onChange={(id) => handleModelChange("titleModel", id)}
+              onChange={(id) => handlePreferenceChange("titleModel", id)}
             />
           </SettingsRow>
           <SettingsRow layout="stacked">
@@ -136,14 +135,12 @@ export default function ModelPreferencesPage() {
               </SettingsDescription>
             </div>
             <ModelPreferenceDropdown
-              value={canonicalModelId(
+              value={preferenceModelId(
                 optimisticValues.tabularModel ?? profile?.tabularModel ?? "",
               )}
               options={mergeConfiguredModelOptions(configuredModels, [
                 ...MODELS,
-                ...selectedOpenRouterOptions,
-                ...selectedVercelOptions,
-                ...selectedOpenCodeGoOptions,
+                ...selectedRouterOptions,
                 ...ollamaModels,
                 ...claudeCodeOptions,
               ])}
@@ -151,7 +148,7 @@ export default function ModelPreferencesPage() {
               isSaving={savingField === "tabularModel"}
               isSaved={savedField === "tabularModel"}
               emptyOptionLabel="No default model"
-              onChange={(id) => handleModelChange("tabularModel", id)}
+              onChange={(id) => handlePreferenceChange("tabularModel", id)}
             />
           </SettingsRow>
           <SettingsRow layout="stacked">
@@ -164,16 +161,14 @@ export default function ModelPreferencesPage() {
               </SettingsDescription>
             </div>
             <ModelPreferenceDropdown
-              value={canonicalModelId(
+              value={preferenceModelId(
                 optimisticValues.memoryCuratorModel ??
                   profile?.memoryCuratorModel ??
                   "",
               )}
               options={mergeConfiguredModelOptions(configuredModels, [
                 ...SETTINGS_MODELS,
-                ...selectedOpenRouterOptions,
-                ...selectedVercelOptions,
-                ...selectedOpenCodeGoOptions,
+                ...selectedRouterOptions,
                 ...ollamaModels,
                 ...claudeCodeOptions,
               ])}
@@ -181,10 +176,68 @@ export default function ModelPreferencesPage() {
               isSaving={savingField === "memoryCuratorModel"}
               isSaved={savedField === "memoryCuratorModel"}
               emptyOptionLabel="Automatic — use chat model"
-              onChange={(id) => handleModelChange("memoryCuratorModel", id)}
+              onChange={(id) =>
+                handlePreferenceChange("memoryCuratorModel", id)
+              }
             />
           </SettingsRow>
-        </SettingsCard>
+        </GlassCardUI>
+      </section>
+
+      <section className="space-y-3" aria-labelledby="subagents-heading">
+        <SettingsHeading id="subagents-heading">Subagents</SettingsHeading>
+        <SettingsDescription>
+          Mike can hand parts of a task to subagents that work on them
+          separately and report back. These are the defaults it follows unless
+          you ask for something else in the chat.
+        </SettingsDescription>
+        <GlassCardUI>
+          <SettingsRow layout="stacked">
+            <div className="space-y-1">
+              <SettingsLabel>Model</SettingsLabel>
+              <SettingsDescription>
+                The model each subagent runs on. Chosen per task lets Mike
+                match the model to the work.
+              </SettingsDescription>
+            </div>
+            <ModelPreferenceDropdown
+              value={preferenceModelId(
+                optimisticValues.subagentModel ?? profile?.subagentModel ?? "",
+              )}
+              options={mergeConfiguredModelOptions(configuredModels, [
+                ...MODELS,
+                ...selectedRouterOptions,
+                ...ollamaModels,
+              ])}
+              apiKeys={profile?.apiKeys}
+              isSaving={savingField === "subagentModel"}
+              isSaved={savedField === "subagentModel"}
+              emptyOptionLabel="Chosen per task"
+              onChange={(id) => handlePreferenceChange("subagentModel", id)}
+            />
+          </SettingsRow>
+          <SettingsRow layout="stacked">
+            <div className="space-y-1">
+              <SettingsLabel>Reasoning</SettingsLabel>
+              <SettingsDescription>
+                How much each subagent thinks before it answers.
+              </SettingsDescription>
+            </div>
+            <ReasoningPreferenceDropdown
+              value={
+                optimisticValues.subagentReasoning ??
+                profile?.subagentReasoning ??
+                ""
+              }
+              isSaving={savingField === "subagentReasoning"}
+              isSaved={savedField === "subagentReasoning"}
+              emptyOptionLabel="Chosen per task"
+              onChange={(level) =>
+                handlePreferenceChange("subagentReasoning", level)
+              }
+            />
+          </SettingsRow>
+        </GlassCardUI>
       </section>
     </div>
   );
@@ -228,54 +281,37 @@ function ModelPreferenceDropdown({
   }, new Map<string, number>());
 
   return (
-    <DropdownMenu onOpenChange={setIsOpen}>
-      <DropdownMenuTrigger asChild>
-        <button
-          type="button"
-          disabled={isSaving}
-          className={`flex h-9 items-center justify-between gap-2 hover:bg-gray-200/70 ${SETTINGS_CONTROL_CLASS}`}
-        >
-          <span className="flex items-center gap-2 min-w-0">
-            <span className="truncate text-gray-900">
-              {!value
-                ? emptyOptionLabel
-                : (selected?.label ?? "Select a model")}
-            </span>
-          </span>
-          {isSaving ? (
-            <Loader2 className="h-3.5 w-3.5 shrink-0 animate-spin text-gray-500" />
-          ) : isSaved ? (
-            <Check className="h-3.5 w-3.5 shrink-0 text-green-600" />
-          ) : (
-            <ChevronDown
-              className={`h-3.5 w-3.5 shrink-0 text-gray-500 transition-transform duration-200 ${isOpen ? "rotate-180" : ""}`}
-            />
-          )}
-        </button>
-      </DropdownMenuTrigger>
-      <LiquidDropdownContent
-        className="z-50"
+    <Dropdown onOpenChange={setIsOpen}>
+      <PreferenceTrigger
+        label={
+          !value ? emptyOptionLabel : (selected?.label ?? "Select a model")
+        }
+        isOpen={isOpen}
+        isSaving={isSaving}
+        isSaved={isSaved}
+      />
+      <DropdownContent
         style={{ width: "var(--radix-dropdown-menu-trigger-width)" }}
         align="start"
       >
-        <LiquidDropdownItem
+        <DropdownItem
           className="cursor-pointer"
           onSelect={() => onChange("")}
         >
           <span className="flex-1">{emptyOptionLabel}</span>
           {!value && <Check className="h-3.5 w-3.5 text-gray-600 ml-1" />}
-        </LiquidDropdownItem>
-        {availableGroups.length > 0 && <DropdownMenuSeparator />}
+        </DropdownItem>
+        {availableGroups.length > 0 && <DropdownSeparator />}
         {availableGroups.map(({ group, items }, groupIndex) => {
           return (
-            <div key={group}>
-              {groupIndex > 0 && <DropdownMenuSeparator />}
-              <DropdownMenuLabel className="text-[10px] uppercase tracking-wider text-gray-400">
+            <div key={group} className={DROPDOWN_ROWS_CLASS}>
+              {groupIndex > 0 && <DropdownSeparator />}
+              <DropdownLabel>
                 {group}
-              </DropdownMenuLabel>
+              </DropdownLabel>
               {items.map((m) => {
                 return (
-                  <LiquidDropdownItem
+                  <DropdownItem
                     key={m.id}
                     className="cursor-pointer"
                     onSelect={() => onChange(m.id)}
@@ -292,13 +328,101 @@ function ModelPreferenceDropdown({
                     {m.id === value && (
                       <Check className="h-3.5 w-3.5 text-gray-600 ml-1" />
                     )}
-                  </LiquidDropdownItem>
+                  </DropdownItem>
                 );
               })}
             </div>
           );
         })}
-      </LiquidDropdownContent>
-    </DropdownMenu>
+      </DropdownContent>
+    </Dropdown>
+  );
+}
+
+function PreferenceTrigger({
+  label,
+  isOpen,
+  isSaving,
+  isSaved,
+}: {
+  label: string;
+  isOpen: boolean;
+  isSaving?: boolean;
+  isSaved?: boolean;
+}) {
+  return (
+    <DropdownTrigger asChild>
+      <button
+        type="button"
+        disabled={isSaving}
+        className={`flex h-9 items-center justify-between gap-2 hover:bg-gray-200/70 ${SETTINGS_CONTROL_CLASS}`}
+      >
+        <span className="flex items-center gap-2 min-w-0">
+          <span className="truncate text-gray-900">{label}</span>
+        </span>
+        {isSaving ? (
+          <Loader2 className="h-3.5 w-3.5 shrink-0 animate-spin text-gray-500" />
+        ) : isSaved ? (
+          <Check className="h-3.5 w-3.5 shrink-0 text-green-600" />
+        ) : (
+          <ChevronDown
+            className={`h-3.5 w-3.5 shrink-0 text-gray-500 transition-transform duration-200 ${isOpen ? "rotate-180" : ""}`}
+          />
+        )}
+      </button>
+    </DropdownTrigger>
+  );
+}
+
+function ReasoningPreferenceDropdown({
+  value,
+  onChange,
+  isSaving,
+  isSaved,
+  emptyOptionLabel,
+}: {
+  value: string;
+  onChange: (level: string) => void;
+  isSaving?: boolean;
+  isSaved?: boolean;
+  emptyOptionLabel: string;
+}) {
+  const [isOpen, setIsOpen] = useState(false);
+  const selected = REASONING_LEVELS.find((level) => level === value);
+
+  return (
+    <Dropdown onOpenChange={setIsOpen}>
+      <PreferenceTrigger
+        label={selected ? REASONING_LEVEL_LABELS[selected] : emptyOptionLabel}
+        isOpen={isOpen}
+        isSaving={isSaving}
+        isSaved={isSaved}
+      />
+      <DropdownContent
+        style={{ width: "var(--radix-dropdown-menu-trigger-width)" }}
+        align="start"
+      >
+        <DropdownItem
+          className="cursor-pointer"
+          onSelect={() => onChange("")}
+        >
+          <span className="flex-1">{emptyOptionLabel}</span>
+          {!selected && <Check className="h-3.5 w-3.5 text-gray-600 ml-1" />}
+        </DropdownItem>
+        <DropdownSeparator />
+        {REASONING_LEVELS.map((level) => (
+          <DropdownItem
+            key={level}
+            className="cursor-pointer"
+            onSelect={() => onChange(level)}
+          >
+            <span className="flex-1">{REASONING_LEVEL_LABELS[level]}</span>
+            {level === selected && (
+              <Check className="h-3.5 w-3.5 text-gray-600 ml-1" />
+            )}
+          </DropdownItem>
+        ))}
+      </DropdownContent>
+    </Dropdown>
   );
 }

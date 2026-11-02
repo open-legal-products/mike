@@ -2,10 +2,23 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { scriptedDb } from "../../../../../__tests__/helpers/scriptedDb";
 import type { Db } from "../../../../../lib/supabase";
 const mocks = vi.hoisted(() => ({
+  reportError: vi.fn(),
   active: vi.fn(),
   downloadFile: vi.fn(),
   uploadFile: vi.fn(),
+  deleteFileBestEffort: vi.fn(),
   apply: vi.fn(),
+  docAccess: vi.fn(),
+}));
+// Only the verdict is stubbed; `can` stays real so the role policy under test
+// is the production one.
+vi.mock("../../../../../lib/observability/sentry", async original => ({
+  ...(await original<typeof import("../../../../../lib/observability/sentry")>()),
+  reportError: mocks.reportError,
+}));
+vi.mock("../../../../../lib/access", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../../../../lib/access")>()),
+  ensureDocAccess: mocks.docAccess,
 }));
 vi.mock("../../../../../lib/documentVersions", () => ({
   loadActiveVersion: mocks.active,
@@ -14,6 +27,7 @@ vi.mock("../../../../../lib/documentVersions", () => ({
 vi.mock("../../../../../lib/storage", () => ({
   downloadFile: mocks.downloadFile,
   uploadFile: mocks.uploadFile,
+  deleteFileBestEffort: mocks.deleteFileBestEffort,
 }));
 vi.mock("../../../../../lib/docxTrackedChanges", () => ({
   applyTrackedEdits: mocks.apply,
@@ -23,6 +37,7 @@ vi.mock("../../../../../lib/downloadTokens", () => ({
     `download:${filename}:${path}`,
 }));
 import { runEditDocument } from "../documentOps";
+import { applyTrackedEditsToDocument } from "../../../../documents/documents.service";
 const change = {
   id: "change",
   delId: "del",
@@ -43,6 +58,12 @@ const editRow = {
 };
 beforeEach(() => {
   vi.resetAllMocks();
+  mocks.docAccess.mockResolvedValue({
+    ok: true,
+    isCreator: false,
+    orgRole: null,
+    projectRole: "editor",
+  });
   mocks.active.mockResolvedValue({
     id: "active",
     filename: "Renamed.docx",
@@ -109,10 +130,102 @@ const run = (
     db,
     documentId: "doc",
     userId: "actor",
+    userEmail: "actor@example.com",
     edits: [],
     reuseVersion,
   });
+describe("assistant document-edit authorization", () => {
+  // The turn-level `allowDocumentMutation` gate is decided from the chat's
+  // container; an attachment can come from anywhere the caller can READ. The
+  // write itself must be authorized against the specific document.
+  const docRow = {
+    id: "doc",
+    user_id: "owner",
+    project_id: "project",
+    org_id: null,
+    workflow_id: null,
+  };
+
+  it("refuses a caller who can only read the document, before touching bytes", async () => {
+    mocks.docAccess.mockResolvedValue({
+      ok: true,
+      isCreator: false,
+      orgRole: null,
+      projectRole: "viewer",
+    });
+    const fake = scriptedDb([{ table: "documents", data: docRow }]);
+    const result = await run(fake.db);
+    expect(result).toMatchObject({ ok: false });
+    if (!result.ok) expect(result.error).toMatch(/permission to edit/);
+    expect(mocks.docAccess).toHaveBeenCalledWith(
+      docRow,
+      "actor",
+      "actor@example.com",
+      fake.db,
+    );
+    expect(mocks.downloadFile).not.toHaveBeenCalled();
+    expect(mocks.uploadFile).not.toHaveBeenCalled();
+    expect(mocks.apply).not.toHaveBeenCalled();
+    fake.done();
+  });
+
+  it("treats a document the caller cannot reach as missing", async () => {
+    mocks.docAccess.mockResolvedValue({ ok: false });
+    const fake = scriptedDb([{ table: "documents", data: docRow }]);
+    expect(await run(fake.db)).toEqual({
+      ok: false,
+      error: "Document not found.",
+    });
+    expect(mocks.downloadFile).not.toHaveBeenCalled();
+    fake.done();
+  });
+
+  it("re-checks on a reused same-turn version too", async () => {
+    mocks.docAccess.mockResolvedValue({
+      ok: true,
+      isCreator: true,
+      orgRole: null,
+      projectRole: "viewer",
+    });
+    const fake = scriptedDb([{ table: "documents", data: docRow }]);
+    const result = await run(fake.db, {
+      versionId: "reused",
+      versionNumber: 7,
+      storagePath: "same-turn",
+    });
+    expect(result).toMatchObject({ ok: false });
+    expect(mocks.uploadFile).not.toHaveBeenCalled();
+    fake.done();
+  });
+});
+
 describe("assistant document-edit lifecycle", () => {
+  it.each([
+    { id: "older", storagePath: "current" },
+    { id: "active", storagePath: "replaced-path" },
+  ])("refuses a review of stale bytes before editing or uploading (%j)", async (expectedVersion) => {
+    const fake = scriptedDb([{ table: "documents", data: { id: "doc" } }]);
+    const result = await applyTrackedEditsToDocument({
+      db: fake.db, documentId: "doc", userId: "actor", edits: [], expectedVersion,
+    });
+    expect(result).toMatchObject({ ok: false, error: expect.stringMatching(/document changed/i) });
+    expect(mocks.downloadFile).not.toHaveBeenCalled();
+    expect(mocks.apply).not.toHaveBeenCalled();
+    expect(mocks.uploadFile).not.toHaveBeenCalled();
+    fake.done();
+  });
+
+  it("reports a failed storage read and returns the existing edit failure without writing", async () => {
+    const fake = scriptedDb([{ table: "documents", data: { id: "doc", user_id: "u", project_id: null } }]);
+    const cause = new Error("private storage details");
+    mocks.downloadFile.mockRejectedValueOnce(cause);
+    await expect(run(fake.db)).resolves.toEqual({ ok: false, error: "Could not load document bytes." });
+    expect(mocks.reportError).toHaveBeenCalledWith(cause, { tags: { component: "documents", operation: "documents.edit" } });
+    expect(mocks.apply).not.toHaveBeenCalled();
+    expect(mocks.uploadFile).not.toHaveBeenCalled();
+    fake.done();
+  });
+
   it("saves edit rows before activation and returns annotations with the allocated version and inherited filename", async () => {
     const fake = newVersionDb();
     const result = await run(fake.db);
@@ -180,16 +293,17 @@ describe("assistant document-edit lifecycle", () => {
     });
     fake.done();
   });
-  it("reuses the same turn's version and appends edits without allocating another version", async () => {
+  it("reuses the same turn's version with immutable bytes and appends edits without allocating another version", async () => {
+    mocks.active.mockResolvedValue({ id: "reused", filename: "Renamed.docx", storage_path: "same-turn" });
     const fake = scriptedDb([
       ...initial(),
-      { table: "document_versions", op: "update", data: { id: "reused" } },
       { table: "document_versions", op: "update", data: { id: "reused" } },
       { table: "document_edits", op: "insert", data: [editRow] },
     ]);
     const rpc = vi.fn().mockResolvedValue({ data: true, error: null });
-    mocks.uploadFile.mockImplementation(async () => {
-      expect(fake.calls.at(-1)?.payload).toEqual({ content_sha256: null });
+    mocks.uploadFile.mockImplementation(async (path) => {
+      expect(path).not.toBe("same-turn");
+      expect(fake.calls.some((call) => call.op === "update")).toBe(false);
     });
     const result = await run({ ...fake.db, rpc } as unknown as Db, {
       versionId: "reused",
@@ -200,32 +314,50 @@ describe("assistant document-edit lifecycle", () => {
       ok: true,
       version_id: "reused",
       version_number: 7,
-      storage_path: "same-turn",
+      storage_path: expect.stringMatching(/^documents\/actor\/doc\/edits\/.*\.docx$/),
       annotations: [{ version_id: "reused", version_number: 7 }],
     });
     expect(rpc).toHaveBeenCalledExactlyOnceWith("activate_document_version", {
       p_document_id: "doc",
       p_version_id: "reused",
     });
-    expect(fake.calls[3].payload).toMatchObject({
+    expect(fake.calls[2].filters).toContainEqual(["eq", "storage_path", "same-turn"]);
+    expect(fake.calls[2].payload).toMatchObject({
+      storage_path: mocks.uploadFile.mock.calls[0][0],
       content_sha256: "hash",
       pdf_storage_path: null,
     });
     fake.done();
   });
-  it("does not overwrite a deleted same-turn version", async () => {
-    const fake = scriptedDb([
-      ...initial(),
-      { table: "document_versions", op: "update", data: null },
-    ]);
+  it("does not overwrite a superseded same-turn version", async () => {
+    const fake = scriptedDb(initial());
     expect(
       await run(fake.db, {
         versionId: "gone",
         versionNumber: 7,
         storagePath: "same-turn",
       }),
-    ).toEqual({ ok: false, error: "Document version is unavailable." });
+    ).toEqual({ ok: false, error: "This document changed. Read the latest version and try again." });
     expect(mocks.uploadFile).not.toHaveBeenCalled();
     fake.done();
   });
+  it("retires only the new object when a concurrent edit wins publication", async () => {
+    mocks.active.mockResolvedValue({ id: "reused", filename: "Renamed.docx", storage_path: "same-turn" });
+    const fake = scriptedDb([...initial(), { table: "document_versions", op: "update", data: null }]);
+    expect(await run(fake.db, { versionId: "reused", versionNumber: 7, storagePath: "same-turn" })).toMatchObject({ ok: false });
+    const uploadedPath = mocks.uploadFile.mock.calls[0][0];
+    expect(uploadedPath).not.toBe("same-turn");
+    expect(mocks.deleteFileBestEffort).toHaveBeenCalledWith(uploadedPath, "assistant-edit-conflict");
+    fake.done();
+  });
+
+  it("preserves the uploaded object when an update error leaves commit success unknown", async () => {
+    mocks.active.mockResolvedValue({ id: "reused", filename: "Renamed.docx", storage_path: "same-turn" });
+    const fake = scriptedDb([...initial(), { table: "document_versions", op: "update", data: null, error: { message: "connection lost after commit" } }]);
+    expect(await run(fake.db, { versionId: "reused", versionNumber: 7, storagePath: "same-turn" })).toMatchObject({ ok: false });
+    expect(mocks.uploadFile).toHaveBeenCalledOnce();
+    expect(mocks.deleteFileBestEffort).not.toHaveBeenCalled();
+    fake.done();
+  });
+
 });

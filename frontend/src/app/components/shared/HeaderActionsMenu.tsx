@@ -2,13 +2,11 @@
 
 import { MoreHorizontal, type LucideIcon } from "lucide-react";
 import {
-    DropdownMenu,
-    DropdownMenuTrigger,
-} from "@/app/components/ui/dropdown-menu";
-import {
-    LiquidDropdownContent,
-    LiquidDropdownItem,
-} from "@/app/components/ui/liquid-dropdown";
+    Dropdown,
+    DropdownContent,
+    DropdownItem,
+    DropdownTrigger,
+} from "@/shared/ui/dropdown";
 import { cn } from "@/app/lib/utils";
 import { LIQUID_GLASS_HOVER_CLASS } from "@/app/components/ui/liquid-surface";
 
@@ -25,21 +23,30 @@ export function HeaderActionsMenu({
     title = "Actions",
     triggerClassName,
     onCloseAutoFocus,
+    modal = true,
 }: {
     items: HeaderActionsMenuItem[];
     title?: string;
     triggerClassName?: string;
     onCloseAutoFocus?: (event: Event) => void;
+    /**
+     * False lets a press outside reach what is pressed, closing this menu on
+     * the way. Use it for a menu that sits beside other menus' buttons which
+     * stay clickable while it is open (a floating header's `pointer-events`
+     * do that): a modal menu ignores a press that opens a newer menu, so
+     * both would stay open.
+     */
+    modal?: boolean;
 }) {
     return (
-        <DropdownMenu>
-            <DropdownMenuTrigger asChild>
+        <Dropdown modal={modal}>
+            <DropdownTrigger asChild>
                 <button
                     type="button"
                     className={cn(
                         "inline-flex h-7 w-7 items-center justify-center rounded-full text-gray-600 transition-all",
                         LIQUID_GLASS_HOVER_CLASS,
-                        "hover:text-gray-950 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-gray-300",
+                        "hover:text-gray-950 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500/40",
                         triggerClassName,
                     )}
                     aria-label={title}
@@ -47,16 +54,16 @@ export function HeaderActionsMenu({
                 >
                     <MoreHorizontal className="h-4 w-4" />
                 </button>
-            </DropdownMenuTrigger>
-            <LiquidDropdownContent
+            </DropdownTrigger>
+            <DropdownContent
                 align="end"
-                className="z-[160] w-48"
+                className="w-48"
                 onCloseAutoFocus={onCloseAutoFocus}
             >
                 {items.map((item) => {
                     const Icon = item.icon;
                     return (
-                        <LiquidDropdownItem
+                        <DropdownItem
                             key={item.label}
                             disabled={item.disabled}
                             variant={
@@ -73,10 +80,10 @@ export function HeaderActionsMenu({
                         >
                             {Icon && <Icon className="h-3.5 w-3.5" />}
                             {item.label}
-                        </LiquidDropdownItem>
+                        </DropdownItem>
                     );
                 })}
-            </LiquidDropdownContent>
-        </DropdownMenu>
+            </DropdownContent>
+        </Dropdown>
     );
 }

@@ -22,6 +22,7 @@ import {
   ProjectSvgIcon,
   SubfolderSvgIcon,
 } from "./DirectoryIcons";
+import { reportFault } from "../../lib/notify";
 
 type DirectoryTab = "files" | "templates" | "projects";
 
@@ -215,9 +216,10 @@ export function AddDocumentsModal({
       .catch((reason: unknown) => {
         if (cancelled) return;
         setError(
-          reason instanceof Error
-            ? reason.message
-            : "Failed to load documents.",
+          reportFault(reason, {
+            fallback: "Failed to load documents.",
+            operation: "documents.directory",
+          }).message,
         );
       })
       .finally(() => {
@@ -305,9 +307,10 @@ export function AddDocumentsModal({
       }));
     } catch (reason) {
       setError(
-        reason instanceof Error
-          ? reason.message
-          : "Failed to load project documents.",
+        reportFault(reason, {
+          fallback: "Failed to load project documents.",
+          operation: "documents.directory",
+        }).message,
       );
     } finally {
       setLoadingProjectLevels((current) => {
@@ -352,7 +355,10 @@ export function AddDocumentsModal({
       setProjectsHasMore(rows.length > DIRECTORY_PAGE_SIZE);
     } catch (reason) {
       setError(
-        reason instanceof Error ? reason.message : "Failed to load projects.",
+        reportFault(reason, {
+          fallback: "Failed to load projects.",
+          operation: "documents.directory",
+        }).message,
       );
     } finally {
       setLoadingMoreProjects(false);
@@ -414,9 +420,10 @@ export function AddDocumentsModal({
       }
     } catch (reason) {
       setError(
-        reason instanceof Error
-          ? reason.message
-          : "Documents could not be uploaded. Please try again.",
+        reportFault(reason, {
+          fallback: "Documents could not be uploaded. Please try again.",
+          operation: "documents.upload",
+        }).message,
       );
     } finally {
       setUploadingFilenames([]);
@@ -556,9 +563,10 @@ export function AddDocumentsModal({
       await loadLibraryFolderLevel(activeTab, folderId);
     } catch (reason) {
       setError(
-        reason instanceof Error
-          ? reason.message
-          : "Failed to load folder documents.",
+        reportFault(reason, {
+          fallback: "Failed to load folder documents.",
+          operation: "documents.directory",
+        }).message,
       );
     }
   };
@@ -584,7 +592,10 @@ export function AddDocumentsModal({
       }));
     } catch (reason) {
       setError(
-        reason instanceof Error ? reason.message : "Failed to load documents.",
+        reportFault(reason, {
+          fallback: "Failed to load documents.",
+          operation: "documents.directory",
+        }).message,
       );
     } finally {
       setLoadingMoreLibraryLevels((current) => {
@@ -879,7 +890,8 @@ export function AddDocumentsModal({
       <div className="my-3 flex items-center justify-between gap-2">
         <div
           data-testid="document-tabs-scroll"
-          className="-mx-2 -my-2 flex min-w-0 items-center gap-1 overflow-x-auto px-2 py-2"
+          data-modal-scroll="horizontal"
+          className="flex min-w-0 items-center gap-1 overflow-x-auto"
         >
           {TABS.map((tab) => (
             <TabPillButtonUI
@@ -900,7 +912,7 @@ export function AddDocumentsModal({
       </div>
 
       <div className="flex min-h-0 flex-1 flex-col">
-        <div className="min-h-0 flex-1 overflow-y-auto pb-3">
+        <div data-modal-scroll="vertical" className="min-h-0 flex-1 overflow-y-auto pb-3">
           {loading ? (
             <div className="flex h-full items-center justify-center">
               <Spinner label="Loading documents…" />

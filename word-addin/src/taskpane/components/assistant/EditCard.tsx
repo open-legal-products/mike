@@ -3,6 +3,10 @@ import { EditCardUI } from "@mike/edit-card-ui";
 import type { RedlineEdit } from "../../lib/redline";
 import { EDIT_CARD_SURFACE } from "./message/messageStyles";
 import type { EditBusyAction, EditCardStatus } from "../../lib/wordChatTypes";
+import {
+  ALREADY_APPLIED_MESSAGE,
+  UNVERIFIED_APPLY_MESSAGE,
+} from "../../lib/editApplyOutcome";
 
 interface EditCardProps {
   /** Fields can arrive independently while a streamed edit is being parsed. */
@@ -63,6 +67,16 @@ const STATUS_COPY: Record<
   conflicted: {
     copy: "Skipped — the target text already has tracked changes. Accept & apply resolves them, then applies this change.",
     className: "text-gray-500",
+  },
+  "already-applied": {
+    copy: ALREADY_APPLIED_MESSAGE,
+    className: "text-gray-500",
+  },
+  // No action is offered here on purpose: retrying an edit that DID land
+  // would put a second revision over the first.
+  unverified: {
+    copy: UNVERIFIED_APPLY_MESSAGE,
+    className: "text-amber-700",
   },
   incomplete: {
     copy: "Incomplete change — not applied.",
@@ -143,6 +157,8 @@ export function EditCard({
     status === "ready" ||
     status === "view-only" ||
     status === "skipped" ||
+    status === "already-applied" ||
+    status === "unverified" ||
     status === "error" ||
     status === "historical"
       ? (error ?? statusCopy?.copy)

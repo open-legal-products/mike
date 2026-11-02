@@ -9,8 +9,9 @@ import {
 import type { TabularReview } from "@/app/components/shared/types";
 import { listTabularReviewIds, listTabularReviews } from "@/app/lib/mikeApi";
 import { appendUniqueRows, paginationError, splitOverfetchedPage } from "@/app/lib/paginatedRows";
+import { useWorkspaceParam } from "@/app/contexts/WorkspaceContext";
 
-export type TabularReviewSortKey = "name" | "columns" | "documents" | "created";
+export type TabularReviewSortKey = "name" | "columns" | "documents" | "created" | "updated";
 export type TabularReviewSortDirection = "asc" | "desc";
 export type TabularReviewScope = "all" | "in-project" | "standalone";
 
@@ -18,9 +19,16 @@ const PAGE_SIZE = 30;
 
 export function usePaginatedTabularReviews(options: {
     projectId?: string;
+    /** Overview project filters must still stay within the active workspace. */
+    scopeToWorkspace?: boolean;
     search?: string;
     selectionKey?: string;
     scope?: TabularReviewScope;
+    includeStatus?: boolean;
+    /** Keep loaded pages visible when refreshing the same query. */
+    retainOnRefresh?: boolean;
+    /** Only reviews this user created. */
+    ownerUserId?: string | null;
     sort?: {
         key: TabularReviewSortKey;
         direction: TabularReviewSortDirection;
@@ -42,8 +50,17 @@ export function usePaginatedTabularReviews(options: {
     const selectAllRequestRef = useRef(0);
     const loadingMoreRef = useRef(false);
     const loadMoreControllerRef = useRef<AbortController | null>(null);
+    const loadedQueryRef = useRef<string | null>(null);
+    const loadedPagesRef = useRef(1);
+    const refreshingRef = useRef(false);
 
-    const { projectId, search, selectionKey, scope = "all", sort } = options;
+    const { projectId, search, selectionKey, scope = "all", sort, includeStatus, retainOnRefresh = false } = options;
+    const ownerUserId = options.ownerUserId ?? undefined;
+    // A project's own review list is already scoped by the project, which may
+    // sit in a different workspace from the active one when it is opened by
+    // link. Only the cross-project list follows the active workspace.
+    const activeWorkspace = useWorkspaceParam();
+    const workspace = (options.scopeToWorkspace ?? !projectId) ? activeWorkspace : undefined;
     const sortKey = sort?.key;
     const sortDirection = sort?.direction;
     const selectionQueryPending =
@@ -52,9 +69,11 @@ export function usePaginatedTabularReviews(options: {
         projectId ?? null,
         selectionKey ?? null,
         search ?? null,
+        workspace ?? null,
         scope,
         sortKey ?? null,
         sortDirection ?? null,
+        ownerUserId ?? null,
     ]);
     const [selection, setSelection] = useState<{
         queryKey: string;
@@ -91,32 +110,59 @@ export function usePaginatedTabularReviews(options: {
     );
 
     useEffect(() => {
+        const requestKey = JSON.stringify([
+            projectId, search, workspace, scope, ownerUserId, sortKey, sortDirection, includeStatus,
+        ]);
+        const retainRows = retainOnRefresh && loadedQueryRef.current === requestKey;
+        const pageCount = retainRows ? loadedPagesRef.current : 1;
         const requestVersion = ++requestVersionRef.current;
+        refreshingRef.current = true;
         const controller = new AbortController();
         loadMoreControllerRef.current?.abort();
         loadMoreControllerRef.current = null;
         loadingMoreRef.current = false;
-        setReviews([]);
-        setHasMore(true);
+        if (!retainRows) {
+            loadedQueryRef.current = null;
+            loadedPagesRef.current = 1;
+            setReviews([]);
+            setHasMore(true);
+        }
         setLoadingMore(false);
         setError(null);
         setLoadMoreError(null);
-        setLoading(true);
+        setLoading(!retainRows);
 
-        void listTabularReviews(projectId, {
-            limit: PAGE_SIZE + 1,
-            search: search || undefined,
-            scope,
-            sortKey,
-            sortDirection,
-            signal: controller.signal,
-        })
-            .then((rows) => {
-                if (requestVersion !== requestVersionRef.current) return;
-        const firstPage = splitOverfetchedPage(rows, PAGE_SIZE);
-                setReviews(firstPage.rows);
-                setHasMore(firstPage.hasMore);
-            })
+        // Status/activity refreshes replace the loaded range atomically. Keep
+        // every loaded page so a completion cannot reset History's scroll range.
+        void (async () => {
+            let refreshed: TabularReview[] = [];
+            let more = false;
+            let pages = 0;
+            for (; pages < pageCount;) {
+                const rows = await listTabularReviews(projectId, {
+                    includeStatus,
+                    limit: PAGE_SIZE + 1,
+                    offset: pages ? pages * PAGE_SIZE : undefined,
+                    search: search || undefined,
+                    workspace,
+                    scope,
+                    ownerUserId,
+                    sortKey,
+                    sortDirection,
+                    signal: controller.signal,
+                });
+                if (controller.signal.aborted || requestVersion !== requestVersionRef.current) return;
+                const page = splitOverfetchedPage(rows, PAGE_SIZE);
+                refreshed = appendUniqueRows(refreshed, page.rows);
+                more = page.hasMore;
+                pages += 1;
+                if (!more) break;
+            }
+            loadedQueryRef.current = requestKey;
+            loadedPagesRef.current = pages;
+            setReviews(refreshed);
+            setHasMore(more);
+        })()
             .catch((error) => {
                 if (
                     controller.signal.aborted ||
@@ -125,23 +171,36 @@ export function usePaginatedTabularReviews(options: {
                     return;
                 console.error("[tabular reviews] failed to load", error);
         setError(paginationError(error, "Unable to load tabular reviews"));
-                setHasMore(false);
+                if (!retainRows) setHasMore(false);
             })
             .finally(() => {
                 if (
                     !controller.signal.aborted &&
                     requestVersion === requestVersionRef.current
-                )
+                ) {
+                    refreshingRef.current = false;
                     setLoading(false);
+                }
             });
         return () => {
             controller.abort();
             loadMoreControllerRef.current?.abort();
         };
-    }, [projectId, retryVersion, scope, search, sortDirection, sortKey]);
+    }, [
+        projectId,
+        retryVersion,
+        retainOnRefresh,
+        includeStatus,
+        ownerUserId,
+        scope,
+        search,
+        sortDirection,
+        sortKey,
+        workspace,
+    ]);
 
     const loadMore = useCallback(async () => {
-        if (loading || loadingMoreRef.current || !hasMore) return;
+        if (loading || refreshingRef.current || loadingMoreRef.current || !hasMore) return;
 
         const requestVersion = requestVersionRef.current;
         const offset = reviews.length;
@@ -154,10 +213,13 @@ export function usePaginatedTabularReviews(options: {
 
         try {
             const rows = await listTabularReviews(projectId, {
+                includeStatus,
                 limit: PAGE_SIZE + 1,
                 offset,
                 search: search || undefined,
+                workspace,
                 scope,
+                ownerUserId,
                 sortKey,
                 sortDirection,
                 signal: controller.signal,
@@ -165,6 +227,7 @@ export function usePaginatedTabularReviews(options: {
             if (requestVersion !== requestVersionRef.current) return;
 
       const nextPage = splitOverfetchedPage(rows, PAGE_SIZE);
+      loadedPagesRef.current += 1;
       setReviews((current) => appendUniqueRows(current, nextPage.rows));
             setHasMore(nextPage.hasMore);
         } catch (error) {
@@ -189,11 +252,14 @@ export function usePaginatedTabularReviews(options: {
         }
     }, [
         hasMore,
+        includeStatus,
         loading,
+        ownerUserId,
         projectId,
         reviews.length,
         scope,
         search,
+        workspace,
         sortDirection,
         sortKey,
     ]);
@@ -219,7 +285,9 @@ export function usePaginatedTabularReviews(options: {
         try {
             const rows = await listTabularReviewIds(projectId, {
                 search: search || undefined,
+                workspace,
                 scope,
+                ownerUserId,
             });
             if (requestVersion !== requestVersionRef.current) return;
 
@@ -254,11 +322,13 @@ export function usePaginatedTabularReviews(options: {
         }
     }, [
         hasMore,
+        ownerUserId,
         projectId,
         queryKey,
         reviews,
         scope,
         search,
+        workspace,
         selectionQueryPending,
         setSelectedReviewIds,
     ]);

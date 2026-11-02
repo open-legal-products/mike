@@ -6,10 +6,10 @@
  *   4. All protected routes redirect unauthenticated users to /login
  *
  * Tests 1, 2, and 4 run in a fresh browser context (no stored session).
- * Test 3 inherits the authenticated storageState from the Playwright project
- * config (e2e/.auth/user.json), so auth.setup.ts must run first.
+ * Test 3 logs in as the dedicated logout user that auth.setup.ts creates, so
+ * the setup project must run first.
  */
-import { test, expect } from "@playwright/test";
+import { test, expect } from "./fixtures";
 import { completeOnboardingIfRequired } from "./onboarding";
 
 /* ─── Unauthenticated tests ───────────────────────────────────────────────── */
@@ -37,33 +37,36 @@ test.describe("unauthenticated", () => {
            element we actually care about, so a hang fails pointing at the
            missing banner instead of at an inscrutable load state. */
 
-        /* The login page conditionally renders:
-               <div className="text-red-600 text-sm bg-red-50 p-3 rounded">
-                   {error}
-               </div>
-           when the `error` state is non-null after a failed signInWithPassword.
-           REGRESSION: fails if the error <div className="bg-red-50"> is removed
-           from the login form or if the catch block stops setting `error`. */
-        await expect(page.locator("div.bg-red-50.text-red-600")).toBeVisible({
-            timeout: 10_000,
-        });
+        /* The login page opens a WarningPopup (role="alert", with a "Dismiss
+           warning" button) when the `error` state is non-null after a failed
+           signInWithPassword. The filter keeps Next's own route announcer,
+           also an alert, out of the match.
+           REGRESSION: fails if the popup is removed from the login page or
+           if the catch block stops setting `error`. */
+        await expect(
+            page.getByRole("alert").filter({
+                has: page.getByRole("button", { name: "Dismiss warning" }),
+            }),
+        ).toBeVisible({ timeout: 10_000 });
     });
 
     /* ── Test 2: valid credentials redirect to /assistant ─────────────────── */
 
     test("login with valid credentials redirects to /assistant", async ({
         page,
+        e2eAccount,
+        workerStorageState,
     }) => {
-        /* Use the SAME credentials auth.setup.ts bootstrapped the shared user
-           with. Both read process.env.E2E_EMAIL / E2E_PASSWORD (falling back to
-           the local defaults). CI overrides E2E_PASSWORD to a value DIFFERENT
-           from the old hardcoded "E2eTestPass1!", so hardcoding it here typed a
-           password the user was never created with → signInWithPassword failed,
-           the error banner rendered, and the /assistant redirect never fired.
-           Reading the env keeps the typed password in lock-step with the
-           bootstrapped one in every environment. */
-        const email = process.env.E2E_EMAIL ?? "e2e@mike.local";
-        const password = process.env.E2E_PASSWORD ?? "E2eTestPass1!";
+        /* Sign in as THIS worker's account (e2eAccount; e2e@mike.local on
+           worker 0). Depending on `workerStorageState` makes Playwright run the
+           worker fixture first, which creates the account and finishes its
+           onboarding; this test's own page stays signed out because the
+           describe overrides `storageState`. Without that dependency, a run
+           on worker 1+ could log in as a user another worker has not
+           onboarded yet and land on /onboarding/profile instead of
+           /assistant. */
+        void workerStorageState;
+        const { email, password } = e2eAccount;
 
         await page.goto("/login");
         await expect(page).toHaveURL(/\/login/);
@@ -139,28 +142,26 @@ test.describe("logout (isolated user)", () => {
            retries on the element this test goes on to click. networkidle
            never fires against an app with SSE and polling in flight. */
 
-    /* The AppSidebar renders a user-profile toggle button at the very bottom
-       of the sidebar. The button wraps a circular div that shows the user's
-       initial:
-           <div className="h-7 w-7 ... rounded-full bg-gray-700 ...">
-               {getUserInitials(user.email)}
-           </div>
-       Locate the button by the presence of that inner div. */
-    const userMenuButton = page.locator("button").filter({
-        has: page.locator("div.rounded-full.bg-gray-700"),
+    // The account menu has the same accessible name with a photo or monogram.
+    const userMenuButton = page.getByRole("button", {
+        name: "Account menu",
+        exact: true,
     });
     await expect(userMenuButton).toBeVisible({ timeout: 10_000 });
     await userMenuButton.click();
 
-    /* The dropdown that appears contains a "Settings" button which
+    /* The dropdown that appears contains a "Settings" menu item which
        navigates to /settings via router.push("/settings"). */
-    const accountSettingsItem = page.getByRole("button", {
+    const accountSettingsItem = page.getByRole("menuitem", {
         name: "Settings",
     });
     await expect(accountSettingsItem).toBeVisible({ timeout: 5_000 });
     await accountSettingsItem.click();
 
     await expect(page).toHaveURL(/\/settings/, { timeout: 10_000 });
+    // Wait for Radix to finish closing the selected menu before reopening it.
+    await expect(page.getByRole("menu")).toHaveCount(0);
+    await expect(userMenuButton).toHaveAttribute("aria-expanded", "false");
 
     /* Sign out now lives in the account dropdown rather than the Settings
        page. Reopen the same sidebar menu after navigation and exercise the
@@ -169,7 +170,7 @@ test.describe("logout (isolated user)", () => {
        for (badly: it can't tell a settled page from a stalled one). */
     await expect(userMenuButton).toBeVisible({ timeout: 10_000 });
     await userMenuButton.click();
-    const signOutButton = page.getByRole("button", {
+    const signOutButton = page.getByRole("menuitem", {
         name: "Sign out",
         exact: true,
     });

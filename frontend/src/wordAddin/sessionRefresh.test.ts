@@ -1,0 +1,346 @@
+/**
+ * The Word add-in's 401 handling, exercised from the frontend test runner.
+ *
+ * Fail-without-fix: `fetchWithRefresh` used to do
+ * `refreshSession().catch(() => null)` and then `notifySessionExpired()` for
+ * every falsy result, so a dropped Wi-Fi link told the user their session had
+ * expired (it had not), left the pane signed in with no login gate to click,
+ * and never re-ran the request that a SUCCESSFUL refresh had just fixed.
+ */
+import { afterEach, describe, expect, it, vi } from "vitest";
+import {
+    announceSessionRecovered,
+    classifySessionRefresh,
+    createRefreshingFetch,
+    forgetSessionRecoveryRetries,
+    isSessionHandledError,
+    SESSION_CHECK_FAILED_MESSAGE,
+    SESSION_EXPIRED_MESSAGE,
+} from "../../../word-addin/src/taskpane/lib/sessionRefresh";
+import { responseError } from "../../../word-addin/src/taskpane/api/client";
+import { notifyError, userMessage } from "../../../word-addin/src/taskpane/lib/notify";
+import { clearToasts, getSnapshot } from "@/shared/lib/toastStore";
+
+class StatusError extends Error {
+    constructor(readonly status: number) {
+        super(`HTTP ${status}`);
+    }
+}
+
+function setOnline(online: boolean): void {
+    Object.defineProperty(navigator, "onLine", {
+        value: online,
+        configurable: true,
+    });
+}
+
+afterEach(() => {
+    setOnline(true);
+    vi.restoreAllMocks();
+});
+
+describe("classifySessionRefresh", () => {
+    it("treats a returned user as a live session", () => {
+        expect(classifySessionRefresh({ ok: true, user: { id: "u1" } })).toEqual(
+            { kind: "refreshed" },
+        );
+    });
+
+    it("treats a null user as the backend saying the session is gone", () => {
+        // requestSession() returns null specifically on a 401 from
+        // /auth/session — that is a verdict, not a guess.
+        expect(classifySessionRefresh({ ok: true, user: null })).toEqual({
+            kind: "expired",
+        });
+    });
+
+    it("treats a transport failure as unknown, NOT as an expired session", () => {
+        const error = new TypeError("Load failed");
+        expect(classifySessionRefresh({ ok: false, error })).toEqual({
+            kind: "unreachable",
+        });
+    });
+
+    it("treats an offline device as unknown", () => {
+        setOnline(false);
+        expect(
+            classifySessionRefresh({ ok: false, error: new Error("nope") }),
+        ).toEqual({ kind: "unreachable" });
+    });
+
+    it("treats a timeout as unknown", () => {
+        const timeout = new Error("timed out");
+        timeout.name = "TimeoutError";
+        expect(classifySessionRefresh({ ok: false, error: timeout })).toEqual({
+            kind: "unreachable",
+        });
+    });
+
+    it("treats a thrown 401 or 403 as a real expiry", () => {
+        expect(
+            classifySessionRefresh({ ok: false, error: new StatusError(401) }),
+        ).toEqual({ kind: "expired" });
+        expect(
+            classifySessionRefresh({ ok: false, error: new StatusError(403) }),
+        ).toEqual({ kind: "expired" });
+    });
+
+    it("does not call a 5xx on the refresh endpoint an expired session", () => {
+        // The server failed to answer the question; it did not answer "no".
+        expect(
+            classifySessionRefresh({ ok: false, error: new StatusError(500) }),
+        ).toEqual({ kind: "unreachable" });
+    });
+});
+
+describe("createRefreshingFetch", () => {
+    const ok = (): Response => new Response("{}", { status: 200 });
+    const unauthorized = (): Response => new Response("", { status: 401 });
+
+    it("passes a non-401 straight through without refreshing", async () => {
+        const refreshSession = vi.fn();
+        const fetchImpl = vi.fn().mockResolvedValue(ok());
+        const fetchWithRefresh = createRefreshingFetch({
+            fetchImpl: fetchImpl as unknown as typeof fetch,
+            refreshSession,
+            onExpired: vi.fn(),
+            onUnreachable: vi.fn(),
+        });
+
+        const response = await fetchWithRefresh("/api/workflows");
+
+        expect(response.status).toBe(200);
+        expect(refreshSession).not.toHaveBeenCalled();
+        expect(fetchImpl).toHaveBeenCalledTimes(1);
+    });
+
+    it("re-runs the original request once after a successful refresh", async () => {
+        const fetchImpl = vi
+            .fn()
+            .mockResolvedValueOnce(unauthorized())
+            .mockResolvedValueOnce(ok());
+        const onExpired = vi.fn();
+        const onUnreachable = vi.fn();
+        const fetchWithRefresh = createRefreshingFetch({
+            fetchImpl: fetchImpl as unknown as typeof fetch,
+            refreshSession: vi.fn().mockResolvedValue({ id: "u1" }),
+            onExpired,
+            onUnreachable,
+        });
+
+        const response = await fetchWithRefresh("/api/workflows", {
+            method: "POST",
+            body: JSON.stringify({ a: 1 }),
+        });
+
+        // Without the retry the caller was handed the stale 401 and showed a
+        // permission error for a session that had just been renewed.
+        expect(response.status).toBe(200);
+        expect(fetchImpl).toHaveBeenCalledTimes(2);
+        expect(fetchImpl.mock.calls[1]?.[0]).toBe("/api/workflows");
+        expect(fetchImpl.mock.calls[1]?.[1]).toMatchObject({
+            method: "POST",
+            credentials: "include",
+            body: JSON.stringify({ a: 1 }),
+        });
+        expect(onExpired).not.toHaveBeenCalled();
+        expect(onUnreachable).not.toHaveBeenCalled();
+    });
+
+    it("retries exactly once, never looping on a backend that 401s everything", async () => {
+        const fetchImpl = vi.fn().mockResolvedValue(unauthorized());
+        const fetchWithRefresh = createRefreshingFetch({
+            fetchImpl: fetchImpl as unknown as typeof fetch,
+            refreshSession: vi.fn().mockResolvedValue({ id: "u1" }),
+            onExpired: vi.fn(),
+            onUnreachable: vi.fn(),
+        });
+
+        const response = await fetchWithRefresh("/api/workflows");
+
+        expect(response.status).toBe(401);
+        expect(fetchImpl).toHaveBeenCalledTimes(2);
+    });
+
+    it("does not replay a streamed body the first attempt consumed", async () => {
+        const fetchImpl = vi.fn().mockResolvedValue(unauthorized());
+        const refreshSession = vi.fn().mockResolvedValue({ id: "u1" });
+        const fetchWithRefresh = createRefreshingFetch({
+            fetchImpl: fetchImpl as unknown as typeof fetch,
+            refreshSession,
+            onExpired: vi.fn(),
+            onUnreachable: vi.fn(),
+        });
+
+        const response = await fetchWithRefresh("/api/upload", {
+            method: "POST",
+            body: new ReadableStream(),
+        });
+
+        // The session is refreshed (the caller's own retry will work), but a
+        // second request with an already-read body is never sent.
+        expect(refreshSession).toHaveBeenCalledTimes(1);
+        expect(fetchImpl).toHaveBeenCalledTimes(1);
+        expect(response.status).toBe(401);
+    });
+
+    it("replays a Blob body, which is re-readable", async () => {
+        const fetchImpl = vi
+            .fn()
+            .mockResolvedValueOnce(unauthorized())
+            .mockResolvedValueOnce(ok());
+        const fetchWithRefresh = createRefreshingFetch({
+            fetchImpl: fetchImpl as unknown as typeof fetch,
+            refreshSession: vi.fn().mockResolvedValue({ id: "u1" }),
+            onExpired: vi.fn(),
+            onUnreachable: vi.fn(),
+        });
+
+        const response = await fetchWithRefresh("/storage/put", {
+            method: "PUT",
+            body: new Blob(["file bytes"]),
+        });
+
+        expect(response.status).toBe(200);
+        expect(fetchImpl).toHaveBeenCalledTimes(2);
+    });
+
+    it("signs the pane out when the refresh says the session is gone", async () => {
+        const onExpired = vi.fn();
+        const onUnreachable = vi.fn();
+        const fetchImpl = vi.fn().mockResolvedValue(unauthorized());
+        const fetchWithRefresh = createRefreshingFetch({
+            fetchImpl: fetchImpl as unknown as typeof fetch,
+            refreshSession: vi.fn().mockResolvedValue(null),
+            onExpired,
+            onUnreachable,
+        });
+
+        const response = await fetchWithRefresh("/api/workflows");
+
+        expect(response.status).toBe(401);
+        expect(onExpired).toHaveBeenCalledTimes(1);
+        expect(onUnreachable).not.toHaveBeenCalled();
+        expect(fetchImpl).toHaveBeenCalledTimes(1);
+    });
+
+    it("reports a network failure as an unchecked session, not an expired one", async () => {
+        const onExpired = vi.fn();
+        const onUnreachable = vi.fn();
+        const fetchImpl = vi.fn().mockResolvedValue(unauthorized());
+        const fetchWithRefresh = createRefreshingFetch({
+            fetchImpl: fetchImpl as unknown as typeof fetch,
+            refreshSession: vi
+                .fn()
+                .mockRejectedValue(new TypeError("Load failed")),
+            onExpired,
+            onUnreachable,
+        });
+
+        const response = await fetchWithRefresh("/api/workflows");
+
+        expect(response.status).toBe(401);
+        // The bug this replaces: onExpired fired here, telling the user to
+        // sign in while the pane stayed signed in.
+        expect(onExpired).not.toHaveBeenCalled();
+        expect(onUnreachable).toHaveBeenCalledTimes(1);
+    });
+});
+
+/*
+ * Fail-without-fix: when the session check could not reach the backend, the
+ * request's own 401 body still went to the screen. A second toast said "Not
+ * authenticated" right under "Couldn't check your session", the page kept
+ * that text, and after the session Retry succeeded nothing reloaded it.
+ */
+describe("a 401 the session layer handled", () => {
+    afterEach(() => clearToasts());
+
+    async function failedWorkflowLoad(refreshError: unknown) {
+        const onExpired = vi.fn();
+        const onUnreachable = vi.fn();
+        const fetchWithRefresh = createRefreshingFetch({
+            fetchImpl: vi.fn(async () =>
+                new Response(JSON.stringify({ detail: "Not authenticated" }), {
+                    status: 401,
+                    headers: { "Content-Type": "application/json" },
+                }),
+            ),
+            refreshSession: () => Promise.reject(refreshError),
+            onExpired,
+            onUnreachable,
+        });
+        const response = await fetchWithRefresh("/api/workflows");
+        return { error: await responseError(response, "/workflows"), onExpired, onUnreachable };
+    }
+
+    it("never shows the raw 401 detail as screen text or as a second toast", async () => {
+        const { error, onUnreachable } = await failedWorkflowLoad(
+            new TypeError("Failed to fetch"),
+        );
+        expect(onUnreachable).toHaveBeenCalledTimes(1);
+
+        expect(userMessage(error)).toBe(SESSION_CHECK_FAILED_MESSAGE);
+        notifyError(error, { action: "load your workflows", onRetry: vi.fn() });
+        expect(getSnapshot()).toHaveLength(0);
+    });
+
+    it("re-runs the screen's own retry once the session check succeeds", async () => {
+        const { error } = await failedWorkflowLoad(new TypeError("Failed to fetch"));
+        const reload = vi.fn();
+        notifyError(error, { action: "load your workflows", onRetry: reload });
+        expect(reload).not.toHaveBeenCalled();
+
+        announceSessionRecovered();
+        await vi.waitFor(() => expect(reload).toHaveBeenCalledTimes(1));
+        // One-shot: a later recovery does not reload a screen twice.
+        announceSessionRecovered();
+        await Promise.resolve();
+        expect(reload).toHaveBeenCalledTimes(1);
+    });
+
+    it("drops pending reloads when the session turns out to be gone", async () => {
+        const { error } = await failedWorkflowLoad(new TypeError("Failed to fetch"));
+        const reload = vi.fn();
+        notifyError(error, { onRetry: reload });
+        forgetSessionRecoveryRetries();
+        announceSessionRecovered();
+        await Promise.resolve();
+        expect(reload).not.toHaveBeenCalled();
+    });
+
+    it("does not queue a reload for a screen that failed on an expired session", async () => {
+        // In the pane the expiry handler clears the queue BEFORE the screen's
+        // catch reports its error, so anything queued here would outlive it.
+        const { error } = await failedWorkflowLoad(
+            Object.assign(new Error("HTTP 401"), { status: 401 }),
+        );
+        const reload = vi.fn();
+        notifyError(error, { onRetry: reload });
+        // A later sign-in must not run a retry from the old session.
+        announceSessionRecovered();
+        await Promise.resolve();
+        expect(reload).not.toHaveBeenCalled();
+    });
+
+    it("words an expired session the same way the expiry toast does", async () => {
+        const { error, onExpired } = await failedWorkflowLoad(
+            Object.assign(new Error("HTTP 401"), { status: 401 }),
+        );
+        expect(onExpired).toHaveBeenCalledTimes(1);
+        expect(userMessage(error)).toBe(SESSION_EXPIRED_MESSAGE);
+        notifyError(error);
+        expect(getSnapshot()).toHaveLength(0);
+    });
+
+    it("leaves an ordinary 401 (one the layer did not handle) untouched", async () => {
+        const error = await responseError(
+            new Response(JSON.stringify({ detail: "Not authenticated" }), { status: 401 }),
+        );
+        expect(isSessionHandledError(error)).toBe(false);
+        expect(userMessage(error)).toBe("Not authenticated");
+        // Same store notifyError writes to, so the zero counts above are real.
+        notifyError(error);
+        expect(getSnapshot()).toHaveLength(1);
+    });
+});

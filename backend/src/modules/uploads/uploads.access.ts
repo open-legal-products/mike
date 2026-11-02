@@ -15,6 +15,7 @@ import {
   checkWorkflowAccess,
   creatorScopedAllowed,
   ensureDocAccess,
+  resolveStandaloneOrgId,
 } from "../../lib/access";
 import type { Db } from "../../lib/supabase";
 import type { ParsedUploadSessionRequest } from "./uploads.manifest";
@@ -40,6 +41,17 @@ export async function validateDestinationAccess(
   const destination = manifest.destination as Record<string, unknown>;
 
   if (manifest.purpose === "document_create") {
+    // Uploaded on its own, a document belongs to the workspace the manifest
+    // names: an organization the caller belongs to, or Personal.
+    let workspaceOrgId: string | null = null;
+    if (destination.scope === "standalone" || destination.scope === "library") {
+      const workspace = await resolveStandaloneOrgId(db, {
+        userId,
+        orgId: destination.org_id,
+      });
+      if (!workspace.ok) return failure(400, { detail: workspace.detail });
+      workspaceOrgId = workspace.orgId;
+    }
     if (destination.scope === "standalone") return { ok: true };
     if (destination.scope === "workflow") {
       const workflowId = destination.workflow_id as string;
@@ -109,12 +121,18 @@ export async function validateDestinationAccess(
       ),
     );
     if (!folderIds.length) return { ok: true };
-    const { data, error } = await db
+    // A folder is in one workspace: a document filed under an organization
+    // cannot land in a Personal folder, nor the other way round.
+    const folders = db
       .from("library_folders")
       .select("id")
       .eq("user_id", userId)
-      .eq("library_kind", destination.library_kind as string)
-      .in("id", folderIds);
+      .eq("library_kind", destination.library_kind as string);
+    const { data, error } = await (
+      workspaceOrgId
+        ? folders.eq("org_id", workspaceOrgId)
+        : folders.is("org_id", null)
+    ).in("id", folderIds);
     if (error) return internalFailure(error);
     if ((data ?? []).length !== folderIds.length) {
       return failure(404, { detail: "Folder not found" });

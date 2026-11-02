@@ -10,6 +10,7 @@ export type WorkflowRecord = {
   id: string;
   user_id: string | null;
   org_id?: string | null;
+  visibility?: string | null;
   access_scope?: "private" | "shared" | "organization";
   organization_name?: string | null;
   direct_grant_count?: number;

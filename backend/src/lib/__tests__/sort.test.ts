@@ -2,6 +2,11 @@ import { describe, expect, it } from "vitest";
 import { parseProjectSort, parseTabularReviewSort, parseWorkflowSort } from "../sort";
 
 describe("parseTabularReviewSort", () => {
+    it("supports history ordered by update time", () => {
+        expect(parseTabularReviewSort({ sort_key: "updated", sort_direction: "desc" })).toEqual({
+            key: "updated", direction: "desc",
+        });
+    });
     it("accepts a supported sort key and direction", () => {
         expect(parseTabularReviewSort({ key: "documents", direction: "asc" })).toEqual({
             key: "documents",

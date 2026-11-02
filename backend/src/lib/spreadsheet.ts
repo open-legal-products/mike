@@ -97,7 +97,12 @@ function renderSheet(sheetName: string, ws: XLSX.WorkSheet): string | null {
  * longer need the LibreOffice→PDF→text detour for spreadsheets.
  */
 export function spreadsheetToLLMText(buffer: Buffer): string {
-  const wb = XLSX.read(buffer, { type: "buffer" });
+  // Formulas and HTML renderings are never shown, so skip building them.
+  const wb = XLSX.read(buffer, {
+    type: "buffer",
+    cellFormula: false,
+    cellHTML: false,
+  });
   const sheets: string[] = [];
   for (const sheetName of wb.SheetNames) {
     const ws = wb.Sheets[sheetName];

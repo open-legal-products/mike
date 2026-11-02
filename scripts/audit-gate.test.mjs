@@ -10,7 +10,7 @@
 import { deepStrictEqual, notStrictEqual, strictEqual } from "node:assert";
 import { spawn } from "node:child_process";
 import { createServer } from "node:http";
-import { mkdtempSync, writeFileSync } from "node:fs";
+import { copyFileSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { after, test } from "node:test";
@@ -61,10 +61,18 @@ after(() => stub.close());
 // spawn, never spawnSync: the stub registry runs on THIS process's event
 // loop, and a synchronous child would block it — the child's requests would
 // go unanswered until they timed out, turning a 0.2s test into a 100s one.
-function runGate(lockfile) {
-    const dir = mkdtempSync(join(tmpdir(), "audit-gate-"));
+function runGate(lockfile, { workspace = "fixture", allowlist } = {}) {
+    const repo = mkdtempSync(join(tmpdir(), "audit-gate-"));
+    const scripts = join(repo, "scripts");
+    const dir = join(repo, workspace);
+    mkdirSync(scripts);
+    mkdirSync(dir, { recursive: true });
+    for (const name of ["audit-gate.mjs", "audit-allowlist.json"]) {
+        copyFileSync(join(dirname(gatePath), name), join(scripts, name));
+    }
+    if (allowlist) writeFileSync(join(scripts, "audit-allowlist.json"), JSON.stringify(allowlist));
     writeFileSync(join(dir, "package-lock.json"), JSON.stringify(lockfile));
-    const child = spawn(process.execPath, [gatePath], {
+    const child = spawn(process.execPath, [join(scripts, "audit-gate.mjs")], {
         cwd: dir,
         env: {
             ...process.env,
@@ -78,7 +86,10 @@ function runGate(lockfile) {
     child.stderr.setEncoding("utf8").on("data", (c) => (stderr += c));
     return new Promise((resolve, reject) => {
         child.on("error", reject);
-        child.on("close", (status) => resolve({ status, stdout, stderr }));
+        child.on("close", (status) => {
+            rmSync(repo, { recursive: true, force: true });
+            resolve({ status, stdout, stderr });
+        });
     });
 }
 
@@ -313,3 +324,130 @@ test("treats a real package named 'error' as a package, not an error envelope", 
         false,
     );
 });
+
+const MSAL_GHSA = "GHSA-xcx6-jx8p-x3h5";
+const MSAL_NAME = "@azure/msal-node";
+const MSAL_PATH = `node_modules/${MSAL_NAME}`;
+const MSAL_PARENT = "node_modules/@azure/identity";
+const SCOPED_LOCK = {
+    lockfileVersion: 3,
+    packages: {
+        "": { name: "word-addin", version: "1.0.0" },
+        [MSAL_PARENT]: { version: "4.14.0", dev: true, dependencies: { [MSAL_NAME]: "^6.0.0" } },
+        [MSAL_PATH]: { version: "6.0.1", dev: true },
+    },
+};
+
+function respondWithMsalAdvisory(source) {
+    const advisory = { url: `https://github.com/advisories/${MSAL_GHSA}`, title: "MSAL test advisory", severity: "high" };
+    respond = (url, body) => {
+        if (url === NPM_BULK_PATH) {
+            if (source === "OSV") return { body: {} };
+            const report = { "adm-zip": [CANARY_ADVISORY] };
+            if ((body[MSAL_NAME] ?? []).some((version) => version.startsWith("6."))) report[MSAL_NAME] = [advisory];
+            return { body: report };
+        }
+        if (url === "/querybatch") return { body: { results: body.queries.map((q) =>
+            q.package.name === MSAL_NAME && q.version.startsWith("6.") ? { vulns: [{ id: MSAL_GHSA }] } : {}) } };
+        if (url === `/vulns/${MSAL_GHSA}`) return { body: {
+            id: MSAL_GHSA, summary: advisory.title, database_specific: { severity: "HIGH" },
+        } };
+        return { body: {} };
+    };
+}
+
+for (const source of ["npm", "OSV"]) {
+    test(`${source}: allows only the approved development dependency scope`, async () => {
+        respondWithMsalAdvisory(source);
+        const result = await runGate(SCOPED_LOCK, { workspace: "word-addin" });
+        strictEqual(result.status, 0, result.stderr);
+        strictEqual(result.stdout.includes(`ALLOWLISTED high: ${MSAL_GHSA}`), true);
+    });
+
+    const outsideScopes = [
+        ["another workspace with the same package name", () => {}, "backend"],
+        ["a production dependency", (lock) => { delete lock.packages[MSAL_PATH].dev; }],
+        ["another vulnerable version", (lock) => { lock.packages[MSAL_PATH].version = "6.0.2"; }],
+        ["an unapproved installed path", (lock) => {
+            lock.packages[`${MSAL_PARENT}/node_modules/${MSAL_NAME}`] = lock.packages[MSAL_PATH];
+            delete lock.packages[MSAL_PATH];
+        }],
+        ["an additional consumer of the hoisted package", (lock) => {
+            lock.packages["node_modules/new-consumer"] = { version: "1.0.0", dev: true, dependencies: { [MSAL_NAME]: "^6.0.0" } };
+        }],
+        ["an additional vulnerable production copy", (lock) => {
+            lock.packages[`node_modules/runtime/node_modules/${MSAL_NAME}`] = { version: "6.0.1" };
+        }],
+        ["another vulnerable version alongside the approved one", (lock) => {
+            lock.packages[`node_modules/runtime/node_modules/${MSAL_NAME}`] = { version: "6.0.2" };
+        }],
+        ["a direct dependency even if its dev flag is wrong", (lock) => {
+            lock.packages[""].dependencies = { [MSAL_NAME]: "6.0.1" };
+        }],
+        ["a package with no verifiable incoming dependency", (lock) => {
+            delete lock.packages[MSAL_PARENT].dependencies;
+        }],
+    ];
+    for (const [description, mutate, workspace = "word-addin"] of outsideScopes) {
+        test(`${source}: blocks ${description}`, async () => {
+            respondWithMsalAdvisory(source);
+            const lock = structuredClone(SCOPED_LOCK);
+            mutate(lock);
+            const result = await runGate(lock, { workspace });
+            notStrictEqual(result.status, 0, result.stdout);
+            strictEqual(result.stderr.includes("outside the approved dependency scope"), true, result.stderr);
+        });
+    }
+
+    test(`${source}: does not mistake a patched production copy for an affected copy`, async () => {
+        respondWithMsalAdvisory(source);
+        const lock = structuredClone(SCOPED_LOCK);
+        lock.packages[`node_modules/runtime/node_modules/${MSAL_NAME}`] = { version: "7.1.0" };
+        const result = await runGate(lock, { workspace: "word-addin" });
+        strictEqual(result.status, 0, result.stderr);
+    });
+}
+
+test("rejects an advisory-only exception before consulting any service", async () => {
+    requests.length = 0;
+    const result = await runGate(SCOPED_LOCK, {
+        workspace: "word-addin",
+        allowlist: [{ ghsa: MSAL_GHSA, reason: "Only developer tools" }],
+    });
+    notStrictEqual(result.status, 0);
+    strictEqual(result.stderr.includes("Invalid scoped audit exception"), true);
+    deepStrictEqual(requests, []);
+});
+
+test("the removed Undici exception cannot suppress a production finding", async () => {
+    const ghsa = "GHSA-xjj6-f33q-929c";
+    respond = () => ({ body: {
+        "adm-zip": [CANARY_ADVISORY],
+        undici: [{ url: `https://github.com/advisories/${ghsa}`, title: "Undici test advisory", severity: "high" }],
+    } });
+    const result = await runGate({ packages: { "node_modules/undici": { version: "7.29.1" } } }, { workspace: "frontend" });
+    notStrictEqual(result.status, 0);
+    strictEqual(result.stderr.includes(ghsa), true);
+});
+
+test("does not lose an unmatchable finding when merging the same advisory ID", async () => {
+    respond = () => ({ body: {
+        "adm-zip": [CANARY_ADVISORY],
+        [MSAL_NAME]: [{ url: `https://github.com/advisories/${MSAL_GHSA}`, title: "Scoped finding", severity: "high" }],
+        unknown: [{ url: `https://github.com/advisories/${MSAL_GHSA}`, title: "Unmatchable finding", severity: "high" }],
+    } });
+    const result = await runGate(SCOPED_LOCK, { workspace: "word-addin" });
+    notStrictEqual(result.status, 0);
+    strictEqual(result.stderr.includes("outside the approved dependency scope"), true);
+});
+
+for (const field of ["optionalDependencies", "peerDependencies"]) {
+    test(`checks additional consumers through ${field}`, async () => {
+        respondWithMsalAdvisory("npm");
+        const lock = structuredClone(SCOPED_LOCK);
+        lock.packages["node_modules/new-consumer"] = { version: "1.0.0", dev: true, [field]: { [MSAL_NAME]: "^6.0.0" } };
+        const result = await runGate(lock, { workspace: "word-addin" });
+        notStrictEqual(result.status, 0);
+        strictEqual(result.stderr.includes("outside the approved dependency scope"), true);
+    });
+}

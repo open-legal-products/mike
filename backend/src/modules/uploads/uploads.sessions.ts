@@ -16,10 +16,14 @@
 //     UPLOAD_VERIFICATION_LEASE_SECONDS; a fresh one means another request is
 //     still sealing that file.
 
+import { AppError } from "../../lib/appError";
 import { mapWithConcurrency } from "../../lib/concurrency";
+import { markStage } from "../../lib/observability/sentry";
 import {
   copyFile,
   deleteFile,
+  deleteFileBestEffort,
+  deleteFilesBestEffort,
   getSignedUploadUrl,
   headFile,
   StorageOperationError,
@@ -97,7 +101,13 @@ async function signPendingFiles(
         file.expected_size_bytes,
         ttl,
       );
-      if (!url) throw new Error("Failed to create signed upload URL");
+      // A signing failure throws from storage.ts with its cause; null only
+      // means the store is not configured.
+      if (!url)
+        throw new AppError(
+          "storage.signed_url_failed",
+          "Failed to create signed upload URL",
+        );
       return {
         ...publicFile(file),
         upload: {
@@ -167,7 +177,8 @@ async function verifyAndSealSessionFiles(
         staged.size !== file.expected_size_bytes
           ? "size_mismatch"
           : "content_type_mismatch";
-      await deleteFile(file.staging_storage_path).catch(() => {});
+      markStage("seal-mismatch");
+      await deleteFileBestEffort(file.staging_storage_path, "seal-mismatch");
       await writeSealResult(file, {
         status: "error",
         observed_size_bytes: staged.size,
@@ -268,10 +279,12 @@ async function completeSessionFile(
       if (!recovered) return "in_progress";
     }
     if (file.status === "pending_upload" || file.status === "verifying") {
-      await Promise.all([
-        deleteFile(file.staging_storage_path).catch(() => {}),
-        deleteFile(file.sealed_storage_path).catch(() => {}),
-      ]);
+      // One operation, one warning if storage is down (not one per copy).
+      markStage("seal-recover");
+      await deleteFilesBestEffort(
+        [file.staging_storage_path, file.sealed_storage_path],
+        "seal-recover",
+      );
       const { error } = await db
         .from("upload_session_files")
         .update({
@@ -618,11 +631,12 @@ export async function cancelUploadSession(
     });
   }
 
+  markStage("session-cancel");
   await mapWithConcurrency(files, 5, async (file) => {
-    await Promise.all([
-      deleteFile(file.staging_storage_path).catch(() => {}),
-      deleteFile(file.sealed_storage_path).catch(() => {}),
-    ]);
+    await deleteFilesBestEffort(
+      [file.staging_storage_path, file.sealed_storage_path],
+      "session-cancel",
+    );
   });
   const { error: cleanupError } = await db
     .from("upload_sessions")

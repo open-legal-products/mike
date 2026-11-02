@@ -59,7 +59,7 @@ describe("project assistant message layout", () => {
     containerRef.current = container;
     userMessageRef.current = userMessage;
     rerender({ ready: true });
-    expect(result.current.minHeight).toBe("380px");
+    expect(result.current.minHeight).toBe("412px");
   });
 
   it("remeasures when switching between threads with equal message counts", () => {
@@ -77,10 +77,10 @@ describe("project assistant message layout", () => {
         }),
       { initialProps: { chatKey: "chat-1" } },
     );
-    expect(result.current.minHeight).toBe("380px");
+    expect(result.current.minHeight).toBe("412px");
     Object.defineProperty(userMessage, "offsetHeight", { value: 120 });
     rerender({ chatKey: "chat-2" });
-    expect(result.current.minHeight).toBe("320px");
+    expect(result.current.minHeight).toBe("352px");
   });
 
   it("positions loaded and new user messages at the same top offset after layout", () => {

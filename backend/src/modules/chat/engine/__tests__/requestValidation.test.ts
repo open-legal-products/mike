@@ -16,6 +16,32 @@ const ASK_RESPONSE_IDS = {
 };
 
 describe("chat request validation", () => {
+  it("keeps the playbook a user picked, and refuses a malformed one", () => {
+    expect(
+      parseChatMessages([
+        {
+          role: "user",
+          content: "Review this",
+          playbook: { id: " pb-1 ", title: " NDA playbook " },
+        },
+      ]),
+    ).toEqual({
+      ok: true,
+      value: [
+        {
+          role: "user",
+          content: "Review this",
+          playbook: { id: "pb-1", title: "NDA playbook" },
+        },
+      ],
+    });
+    expect(
+      parseChatMessages([{ role: "user", content: "x", playbook: { id: "pb-1" } }]),
+    ).toEqual({
+      ok: false,
+      detail: "messages[0].playbook.title must be a non-empty string",
+    });
+  });
   it("normalizes valid messages and their nested metadata", () => {
     expect(
             parseChatMessages([
@@ -286,6 +312,45 @@ describe("chat request validation", () => {
         });
     });
 
+  it.each(["approve", "reject"])(
+    "accepts an explicit connector %s decision without question fields",
+    (decision) => {
+      expect(
+        parseOptionalAskInputsResponse({
+          ...ASK_RESPONSE_IDS,
+          responses: [{
+            id: "approval-1",
+            kind: "approval",
+            decision,
+            arguments: { summary: "Client must not replace reviewed arguments" },
+            binding: { type: "google", grant_id: "client-grant" },
+          }],
+        }),
+      ).toEqual({
+        ok: true,
+        value: {
+          ...ASK_RESPONSE_IDS,
+          responses: [{ id: "approval-1", kind: "approval", decision }],
+        },
+      });
+    },
+  );
+
+  it.each([undefined, null, "maybe", "", true, { decision: "approve" }])(
+    "rejects an invalid connector decision: %j",
+    (decision) => {
+      expect(
+        parseOptionalAskInputsResponse({
+          ...ASK_RESPONSE_IDS,
+          responses: [{ id: "approval-1", kind: "approval", decision }],
+        }),
+      ).toEqual({
+        ok: false,
+        detail: 'ask_inputs_response.responses[0].decision must be "approve" or "reject"',
+      });
+    },
+  );
+
   it.each([
     ["answer", "ask_inputs_response must be an object"],
     [
@@ -297,7 +362,7 @@ describe("chat request validation", () => {
         ...ASK_RESPONSE_IDS,
         responses: [{ id: "choice-1", kind: "other" }],
       },
-      'ask_inputs_response.responses[0].kind must be "choice", "multi_choice", "text", or "documents"',
+      'ask_inputs_response.responses[0].kind must be "choice", "multi_choice", "text", "documents", or "approval"',
     ],
     [
       {
@@ -359,5 +424,21 @@ describe("chat request validation", () => {
             ok: false,
             detail,
         });
+    });
+});
+
+
+describe("recovered ask-input limits", () => {
+    it.each(["choice", "multi_choice", "text"] as const)("caps trimmed %s answers at the persistence boundary", (kind) => {
+        const limit = kind === "text" ? 5000 : 1000;
+        const payload = (answer: string) => ({
+            assistant_message_id: "assistant-1",
+            ask_event_id: "ask-1",
+            responses: [{ id: "a", kind, question: "Question?", ...(kind === "multi_choice" ? { answers: [answer] } : { answer }) }],
+        });
+        expect(parseOptionalAskInputsResponse(payload("x".repeat(limit + 1))).ok).toBe(false);
+        const accepted = parseOptionalAskInputsResponse(payload(`  ${"x".repeat(limit)}\n`));
+        expect(accepted.ok).toBe(true);
+        if (accepted.ok) expect(JSON.stringify(accepted.value)).toContain("x".repeat(limit));
     });
 });

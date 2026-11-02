@@ -1,0 +1,10 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24">
+  <defs>
+    <!-- Match the document gradient in file-types/excel.svg. -->
+    <linearGradient id="completionGradient" x1="4" y1="6" x2="20" y2="17" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#34D399" stop-opacity="0.97" />
+      <stop offset="1" stop-color="#087F5B" stop-opacity="0.97" />
+    </linearGradient>
+  </defs>
+  <path d="m20 6-11 11-5-5" fill="none" stroke="url(#completionGradient)" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" />
+</svg>

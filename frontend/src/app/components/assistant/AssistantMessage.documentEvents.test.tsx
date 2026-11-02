@@ -203,4 +203,82 @@ describe("AssistantMessage document events", () => {
             1,
         );
     });
+
+    it("offers the edits and documents a subagent made", () => {
+        render(
+            <AssistantMessage
+                events={[
+                    {
+                        type: "delegation",
+                        delegation_id: "d1",
+                        title: "Tidy the lease",
+                        task: "Fix the defined terms in lease.docx.",
+                        status: "completed",
+                        model: "claude-haiku-4-5",
+                        effort: "standard",
+                        events: [
+                            {
+                                type: "doc_edited",
+                                filename: "lease.docx",
+                                document_id: "document-1",
+                                version_id: "version-2",
+                                version_number: 2,
+                                download_url: "/documents/document-1/download",
+                                annotations: [
+                                    {
+                                        edit_id: "edit-1",
+                                        document_id: "document-1",
+                                        version_id: "version-2",
+                                        version_number: 2,
+                                        change_id: "change-1",
+                                        deleted_text: "Lessee",
+                                        inserted_text: "Tenant",
+                                        status: "pending",
+                                    },
+                                ],
+                            },
+                            {
+                                type: "doc_created",
+                                filename: "summary.docx",
+                                document_id: "document-2",
+                                download_url: "/documents/document-2/download",
+                            },
+                        ],
+                    },
+                    { type: "content", text: "Done." },
+                ]}
+            />,
+        );
+
+        expect(screen.getByText("Tenant")).toBeInTheDocument();
+        expect(
+            screen.getByRole("button", { name: "Download lease.docx" }),
+        ).toBeInTheDocument();
+        expect(
+            screen.getByRole("button", { name: "Download summary.docx" }),
+        ).toBeInTheDocument();
+    });
+});
+
+it("renders a saved document search in the pre-response timeline", () => {
+    render(<AssistantMessage events={[
+        { type: "doc_search", search_id: "search-1", scope: "templates", query: "assignment", offset: 0, match_count: 3, next_offset: null },
+        { type: "content", text: "I found three relevant templates." },
+    ]} />);
+    fireEvent.click(screen.getByRole("button", { name: "Completed in 1 step" }));
+    expect(screen.getByText(/the template library for/)).toBeVisible();
+    fireEvent.click(screen.getByRole("button", { name: /Searched the template library/ }));
+    expect(screen.getByText("3 matches")).toBeVisible();
+});
+
+it("shows the specific failure reason from saved search history", () => {
+    const error = "Document search is unavailable because the server's database needs an update. Please contact your administrator.";
+    render(<AssistantMessage events={[
+        { type: "doc_search", search_id: "search-1", scope: "library", query: "assignment", offset: 0, error_code: "schema_out_of_date", error },
+        { type: "content", text: "I could not search your documents." },
+    ]} />);
+    fireEvent.click(screen.getByRole("button", { name: "Completed in 1 step" }));
+    fireEvent.click(screen.getByRole("button", { name: /Search failed in/ }));
+    expect(screen.getByText(error)).toBeVisible();
+    expect(screen.queryByText("0 matches")).not.toBeInTheDocument();
 });

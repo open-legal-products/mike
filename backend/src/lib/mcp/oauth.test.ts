@@ -262,8 +262,11 @@ describe("startUserMcpConnectorOAuth", () => {
     // way for the same reason.
     const ENV_KEYS = [
         "GOOGLE_MCP_OAUTH_CLIENT_ID",
+        "GOOGLE_MCP_OAUTH_CLIENT_SECRET",
         "SLACK_MCP_OAUTH_CLIENT_ID",
+        "SLACK_MCP_OAUTH_CLIENT_SECRET",
         "MCP_OAUTH_CLIENT_ID",
+        "MCP_OAUTH_CLIENT_SECRET",
     ] as const;
     const PRIOR_ENV = Object.fromEntries(
         ENV_KEYS.map((key) => [key, process.env[key]]),
@@ -272,6 +275,7 @@ describe("startUserMcpConnectorOAuth", () => {
         vi.clearAllMocks();
         process.env.GOOGLE_MCP_OAUTH_CLIENT_ID =
             "test-client.apps.googleusercontent.com";
+        process.env.GOOGLE_MCP_OAUTH_CLIENT_SECRET = "google-client-secret";
     });
     afterEach(() => {
         for (const key of ENV_KEYS) {
@@ -321,9 +325,7 @@ describe("startUserMcpConnectorOAuth", () => {
                 "https://app.test/callback",
                 db,
             ),
-        ).rejects.toThrow(/GOOGLE_MCP_OAUTH_CLIENT_ID/);
-        // The message must carry the deployment's actual redirect URI so the
-        // operator can paste it straight into the Google Cloud Console form.
+        ).rejects.toThrow(/administrator setup/i);
         await expect(
             startUserMcpConnectorOAuth(
                 "user-1",
@@ -331,7 +333,7 @@ describe("startUserMcpConnectorOAuth", () => {
                 "https://app.test/callback",
                 db,
             ),
-        ).rejects.toThrow(/https:\/\/app\.test\/callback/);
+        ).rejects.not.toThrow(/https:\/\/app\.test\/callback/);
         expect(authMock).not.toHaveBeenCalled();
     });
 
@@ -371,10 +373,10 @@ describe("startUserMcpConnectorOAuth", () => {
                 "https://app.test/callback",
                 db,
             ),
-        ).rejects.toThrow(/SLACK_MCP_OAUTH_CLIENT_ID/);
-        // Typed so the route can allowlist it: this is repo-authored text
-        // with our own redirect URI in it, not SDK output, so it may reach
-        // the browser verbatim while every other failure stays sanitized.
+        ).rejects.toThrow(/administrator setup/i);
+        // Typed so the route can allowlist it: this is repo-authored text,
+        // not SDK output, so it may reach the browser verbatim while every
+        // other failure stays sanitized.
         await expect(
             startUserMcpConnectorOAuth(
                 "user-1",
@@ -385,8 +387,82 @@ describe("startUserMcpConnectorOAuth", () => {
         ).rejects.toMatchObject({
             name: "ConnectorSetupError",
             code: "connector_setup_required",
-            message: expect.stringContaining("https://app.test/callback"),
+            message: expect.not.stringContaining("https://app.test/callback"),
         });
+        expect(authMock).not.toHaveBeenCalled();
+    });
+
+    it("does not use generic OAuth client credentials as a provider fallback", async () => {
+        process.env.SLACK_MCP_OAUTH_CLIENT_ID = "   ";
+        process.env.SLACK_MCP_OAUTH_CLIENT_SECRET = "slack-client-secret";
+        process.env.MCP_OAUTH_CLIENT_ID = "generic-client-id";
+        process.env.MCP_OAUTH_CLIENT_SECRET = "generic-client-secret";
+        const connector = makeConnector("https://mcp.slack.com/mcp");
+        loadConnectorMock.mockResolvedValue(connector);
+        const db = {
+            from() {
+                return {
+                    select() {
+                        return {
+                            eq() {
+                                return {
+                                    maybeSingle: () =>
+                                        Promise.resolve({
+                                            data: null,
+                                            error: null,
+                                        }),
+                                };
+                            },
+                        };
+                    },
+                };
+            },
+        } as unknown as Db;
+
+        await expect(
+            startUserMcpConnectorOAuth(
+                "user-1",
+                connector.id,
+                "https://app.test/callback",
+                db,
+            ),
+        ).rejects.toMatchObject({ code: "connector_setup_required" });
+        expect(authMock).not.toHaveBeenCalled();
+    });
+
+    it("requires a provider client secret when the provider needs one", async () => {
+        process.env.SLACK_MCP_OAUTH_CLIENT_ID = "slack-client-id";
+        process.env.SLACK_MCP_OAUTH_CLIENT_SECRET = "   ";
+        const connector = makeConnector("https://mcp.slack.com/mcp");
+        loadConnectorMock.mockResolvedValue(connector);
+        const db = {
+            from() {
+                return {
+                    select() {
+                        return {
+                            eq() {
+                                return {
+                                    maybeSingle: () =>
+                                        Promise.resolve({
+                                            data: null,
+                                            error: null,
+                                        }),
+                                };
+                            },
+                        };
+                    },
+                };
+            },
+        } as unknown as Db;
+
+        await expect(
+            startUserMcpConnectorOAuth(
+                "user-1",
+                connector.id,
+                "https://app.test/callback",
+                db,
+            ),
+        ).rejects.toMatchObject({ code: "connector_setup_required" });
         expect(authMock).not.toHaveBeenCalled();
     });
 
@@ -398,6 +474,7 @@ describe("startUserMcpConnectorOAuth", () => {
         // rejects ("No scopes requested"). The server's 401 challenge names
         // the real metadata URL; assert we hand it to the SDK.
         process.env.SLACK_MCP_OAUTH_CLIENT_ID = "slack-client-id";
+        process.env.SLACK_MCP_OAUTH_CLIENT_SECRET = "slack-client-secret";
         const metadataUrl =
             "https://mcp.slack.com/.well-known/oauth-protected-resource";
         guardedFetchMock.mockImplementation(
@@ -572,4 +649,50 @@ describe("startUserMcpConnectorOAuth", () => {
         expect(deletes).toHaveLength(0);
         expect(updates).toHaveLength(0);
     });
+});
+
+describe("OAuth approval grant identity", () => {
+    afterEach(() => vi.unstubAllEnvs());
+
+    it.each(["initiate", "use"] as const)(
+        "%s mode preserves or replaces the grant appropriately",
+        async (mode) => {
+            vi.stubEnv(
+                "MCP_CONNECTORS_ENCRYPTION_SECRET",
+                "test-only-oauth-grant-secret",
+            );
+            const token: Record<string, unknown> = {
+                grant_id: "original-grant",
+                client_id: "client-1",
+            };
+            const chain = {
+                select: () => chain,
+                eq: () => chain,
+                maybeSingle: async () => ({ data: { ...token }, error: null }),
+                upsert: async (patch: Record<string, unknown>) => {
+                    Object.assign(token, patch);
+                    return { error: null };
+                },
+                update: () => chain,
+                then: (resolve: (result: { error: null }) => unknown) =>
+                    Promise.resolve({ error: null }).then(resolve),
+            };
+            const db = { from: () => chain } as unknown as Db;
+            const provider = new DbMcpOAuthProvider(
+                db,
+                makeConnector("https://mcp.example.com/mcp"),
+                "user-1",
+                mode,
+                "https://app.test/callback",
+            );
+            await provider.saveTokens({
+                access_token: "replacement-access",
+                token_type: "Bearer",
+                refresh_token: "refresh",
+                expires_in: 3600,
+            });
+            if (mode === "use") expect(token.grant_id).toBe("original-grant");
+            else expect(token.grant_id).toMatch(/^[0-9a-f-]{36}$/);
+        },
+    );
 });

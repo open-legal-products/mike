@@ -59,8 +59,8 @@ steps manually:
 
    When the backend uses local object storage, also set
    `R2_PUBLIC_ENDPOINT_URL=https://localhost:3200` in `backend/.env`. Signed
-   upload URLs then stay HTTPS in the Word task pane and webpack forwards the
-   the configured bucket path to `OBJECT_STORAGE_PROXY_TARGET` without changing
+   upload and download URLs then stay HTTPS in the Word task pane and webpack
+   forwards the configured bucket path to `OBJECT_STORAGE_PROXY_TARGET` without changing
    the signed host header.
 
 3. Install the trusted development certificate:
@@ -173,6 +173,12 @@ The add-in sends the active Word document to `POST /word-chat` as document
 context. The backend adds Word-specific instructions and streams the response.
 Suggested edits are rendered as cards and applied as tracked changes for review.
 
+The composer's **+** menu attaches a workflow or a playbook to the next message,
+as the web composer does. The playbook travels on the user message as
+`playbook: { id, title }`, is stored with it (`word_chat_messages.playbook`,
+migration `20261021_04`), and shows as a pill on that message. See
+[Playbooks](playbooks.md#in-the-assistant).
+
 Cloud chat storage uses the backend `word_*` tables. Existing deployments need
 the `20260809_01_word_addin_chats.sql` migration; fresh databases already
 contain those tables.
@@ -186,6 +192,23 @@ Cloud history is associated with an identifier in the Word document's Office
 settings. That identifier travels with copied files, although server access is
 still scoped to the signed-in Mike account. A same-account **Save As** copy can
 therefore initially share the source document's chat history.
+
+## Errors and support
+
+The task pane never renders a raw `error.message`. `describeError` (shared
+with the web app, `frontend/src/shared/lib/userError.ts`) classifies a thrown
+value once, and `word-addin/src/taskpane/lib/notify.ts` shows the result as a
+toast with an honest "Retry", built on the toast core it shares with the web
+app (`frontend/src/shared/lib/errorNotifier.ts`). Transport failures go through
+`word-addin/src/taskpane/lib/networkError.ts`, which calls the shared
+`networkMessage(origin)` so both clients say the same sentence; the add-in
+passes the API origin, because a self-hoster whose own container is down is
+not helped by "check your connection". Failures a user cannot fix offer a
+support hand-off carrying the request id, code, status, page and time —
+enough for support to find the request in the logs without the user quoting
+anything from a document. `frontend/src/wordAddin/errorReporting.test.tsx`
+exercises these add-in modules through the same `@mike/*` aliases webpack
+resolves, so a change on either side of the contract fails that suite.
 
 ## Automated tests
 
@@ -221,14 +244,20 @@ at the top of `e2e-live/anthropic-stub.mjs`.
 The task pane is independently bundled. When the web design system changes,
 compare:
 
-- `src/shared/styles/tokens.css` with `frontend/src/app/globals.css`;
-- `src/taskpane/lib/modelCatalog.ts` with the web model catalog; and
+- `src/shared/styles/tokens.css` with `frontend/src/app/globals.css`; and
 - `src/shared/chat/ChatInput.tsx` and the vendored UI primitives with their web
   counterparts, retaining narrow-pane adaptations.
 
+Design tokens are not compared by hand: both targets import
+`frontend/src/shared/ui/DesignTokensUI.css`, and `src/shared/styles/tokens.css`
+holds only the add-in's base layer.
+
 Files with no add-in-specific behavior are not vendored at all: they are
 aliased straight at the web source (`@mike/*` in `webpack.config.js` and
-`tsconfig.json`), so there is nothing to keep in sync.
+`tsconfig.json`), so there is nothing to keep in sync. The model catalog is one
+of them: `@mike/model-catalog` is `frontend/src/shared/lib/modelCatalog.ts`,
+and `src/taskpane/lib/modelCatalog.ts` only adapts the add-in's key-status
+shape to it.
 
 ## Troubleshooting
 

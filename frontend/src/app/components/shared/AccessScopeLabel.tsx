@@ -6,38 +6,41 @@ interface AccessScopeLabelProps {
   directGrantCount?: number;
 }
 
-const ACCESS_SCOPE_DETAILS = {
-  private: { label: "Private" },
-  shared: { label: "Shared" },
-  organization: { label: "Organisation" },
-} as const;
+// The Access column says one of three things, and the first word answers the
+// question people scan it for: is this open to everyone, or not?
+//
+//   Public            every member of its organization can open it
+//   Private           its creator only (and, in an organization, its owners)
+//   Private (Shared)  not public, but shared with at least one other person
+const ACCESS_SCOPE_LABELS: Record<ResourceAccessScope, string> = {
+  organization: "Public",
+  private: "Private",
+  shared: "Private (Shared)",
+};
 
 export function AccessScopeLabel({
   scope = "private",
   organizationName,
   directGrantCount,
 }: AccessScopeLabelProps) {
-  const detail = ACCESS_SCOPE_DETAILS[scope];
   const hasDirectGrantCount =
     scope === "shared" &&
     typeof directGrantCount === "number" &&
     Number.isInteger(directGrantCount) &&
     directGrantCount >= 0;
   const accessUserCount = hasDirectGrantCount ? directGrantCount + 1 : null;
-  const label =
-    scope === "organization" && organizationName
-      ? organizationName
-      : hasDirectGrantCount
-        ? `${accessUserCount} ${accessUserCount === 1 ? "user" : "users"}`
-        : detail.label;
+  // The detail the label leaves out, for anyone who hovers: who "everyone"
+  // is, or how many people a private item is shared with.
   const description =
     scope === "organization"
       ? organizationName
-        ? `Shared with ${organizationName}`
-        : "Shared with an organisation"
+        ? `Shared with everyone in ${organizationName}`
+        : "Shared with everyone in the organisation"
       : hasDirectGrantCount
         ? `Shared with ${accessUserCount} ${accessUserCount === 1 ? "user" : "users"}`
-        : detail.label;
+        : scope === "shared"
+          ? "Shared with individuals"
+          : "Private";
 
   return (
     <span
@@ -45,7 +48,7 @@ export function AccessScopeLabel({
       className="inline-flex min-w-0 items-center text-xs text-gray-600"
       title={description}
     >
-      <span className="truncate">{label}</span>
+      <span className="truncate">{ACCESS_SCOPE_LABELS[scope]}</span>
     </span>
   );
 }

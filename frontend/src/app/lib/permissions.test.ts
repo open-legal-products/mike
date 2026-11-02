@@ -7,8 +7,12 @@ import {
     PROJECT_ROLES,
     PROJECT_ROLE_DESCRIPTIONS,
     PROJECT_ROLE_LABELS,
+    INVITABLE_ORG_ROLES,
     can,
+    canManageOrgRole,
     creatorScopedAllowed,
+    isOrgAdmin,
+    isOrgOwner,
     isOrgRole,
     isProjectRole,
     roleFrom,
@@ -61,9 +65,35 @@ describe("permissions matrix (client mirror)", () => {
         expect(can(undefined, "container.delete")).toBe(false);
     });
 
-    it("has exactly three project roles and two organization roles", () => {
+    it("has exactly three project roles and three organization roles", () => {
         expect(PROJECT_ROLES).toEqual(["owner", "editor", "viewer"]);
-        expect(ORG_ROLES).toEqual(["admin", "member"]);
+        expect(ORG_ROLES).toEqual(["owner", "admin", "member"]);
+    });
+
+    it("never offers ownership by invitation", () => {
+        expect(INVITABLE_ORG_ROLES).toEqual(["admin", "member"]);
+    });
+
+    it("treats an organization owner as able to do everything an admin can", () => {
+        expect(isOrgAdmin("owner")).toBe(true);
+        expect(isOrgAdmin("admin")).toBe(true);
+        expect(isOrgAdmin("member")).toBe(false);
+        expect(isOrgAdmin(null)).toBe(false);
+        expect(isOrgOwner("owner")).toBe(true);
+        expect(isOrgOwner("admin")).toBe(false);
+        expect(isOrgOwner(undefined)).toBe(false);
+    });
+
+    // Mirror of the server rule (backend/src/lib/access.ts): owners act at
+    // every level, everyone else only strictly below themselves.
+    it("lets owners manage every role and everyone else only those below", () => {
+        const manageable = (actor: (typeof ORG_ROLES)[number] | null) =>
+            ORG_ROLES.filter((role) => canManageOrgRole(actor, role));
+        expect(manageable("owner")).toEqual(["owner", "admin", "member"]);
+        expect(manageable("admin")).toEqual(["member"]);
+        expect(manageable("member")).toEqual([]);
+        // Unknown while the organization is loading: nothing is offered.
+        expect(manageable(null)).toEqual([]);
     });
 });
 
@@ -87,6 +117,7 @@ describe("role vocabulary", () => {
             "Viewer",
         ]);
         expect(ORG_ROLES.map((r) => ORG_ROLE_LABELS[r])).toEqual([
+            "Owner",
             "Admin",
             "Member",
         ]);
@@ -247,11 +278,11 @@ describe("roleFrom", () => {
     it("guards organization roles the same way", () => {
         // Same exposure as isProjectRole: this reads `<select>` values in the
         // organizations settings page before they are sent as an invitation's
-        // role, so it has to refuse everything that is not one of the two.
+        // role, so it has to refuse everything that is not one of the three.
         for (const role of ORG_ROLES) expect(isOrgRole(role)).toBe(true);
         for (const value of [
             "viewer",
-            "owner",
+            "editor",
             "toString",
             "constructor",
             null,

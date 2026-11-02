@@ -1,32 +1,58 @@
 "use client";
 
-import { useCallback, useEffect, useRef, useState } from "react";
 import {
-  ChevronDown,
-  Eye,
-  EyeOff,
-  Loader2,
-  Plus,
-  RefreshCw,
-} from "lucide-react";
-import { FieldLabel } from "@/app/components/ui/form-field";
+  useCallback,
+  useEffect,
+  useRef,
+  useState,
+  type ReactNode,
+} from "react";
+import Image from "next/image";
+import { FolderPlus, Plus } from "lucide-react";
+import { ConnectorSetupGuideLink } from "@/app/components/settings/ConnectorSetupGuideLink";
+import { NewCustomMcpModal } from "@/app/components/settings/NewCustomMcpModal";
 import {
-  LIQUID_GLASS_HOVER_CLASS,
-  LIQUID_GLASS_PRESSED_CLASS,
-} from "@/app/components/ui/liquid-surface";
+  ConnectorCard,
+  ConnectorCardSkeleton,
+} from "@/app/components/settings/ConnectorCard";
 import {
-  SETTINGS_CONTROL_CLASS,
-  SettingsTextInput,
-} from "@/app/components/settings/SettingsTextInput";
-import { Modal } from "@/app/components/modals/Modal";
+  COURTLISTENER_NAME,
+  CourtListenerIcon,
+  CourtListenerTokenModal,
+  useCourtListenerConnector,
+} from "@/app/components/settings/CourtListenerConnector";
 import {
-  ConnectorSetupNotice,
-  NewMcpModal,
-} from "@/app/components/settings/NewMcpModal";
+  McpConnectorForm,
+  type McpConnectorFormDraft,
+} from "@/app/components/settings/McpConnectorForm";
+import {
+  CONNECTOR_PRESETS,
+  findConnectorPreset,
+  normalizedServerUrl,
+} from "@/app/components/settings/connectorPresets";
+import {
+  ConnectorDetailsModal,
+  type ConnectorDetailsView,
+} from "@/app/components/settings/ConnectorDetailsModal";
+import {
+  GoogleAuthorizationCancelledError,
+  GoogleConnectorFlowError,
+  useGoogleConnector,
+  type GoogleConnector,
+  type GoogleConnectorProvider,
+} from "@/app/components/settings/useGoogleConnector";
+import { useGoogleDrivePicker } from "@/app/components/settings/useGoogleDrivePicker";
 import {
   MfaVerificationPopup,
   needsMfaVerification,
 } from "@/app/components/popups/MfaVerificationPopup";
+import { WarningPopup } from "@/app/components/popups/WarningPopup";
+import {
+  PERSONAL_WORKSPACE,
+  PERSONAL_WORKSPACE_LABEL,
+  useWorkspace,
+} from "@/app/contexts/WorkspaceContext";
+import { useHasMultipleWorkspaces } from "@/app/hooks/useHasMultipleWorkspaces";
 import {
   type McpConnectorSummary,
   MikeApiError,
@@ -41,18 +67,51 @@ import {
   startMcpConnectorOAuth,
   updateMcpConnector,
 } from "@/app/lib/mikeApi";
-import { userFacingApiError } from "@/app/lib/userFacingError";
-import {
-  SettingsDescription,
-  SettingsLabel,
-} from "@/app/components/settings/SettingsText";
-import { SettingsCard } from "@/app/components/settings/SettingsCard";
+import { reportFault } from "@/app/lib/userFacingError";
+import { SettingsDescription } from "@/app/components/settings/SettingsText";
 import { SettingsHeading } from "@/app/components/settings/SettingsHeading";
+import { PillButtonUI } from "@/shared/ui/PillButtonUI";
+import { LIQUID_GLASS_SUBTLE_CLASS } from "@/shared/ui/LiquidGlassUI";
 import { ToggleSwitchUI } from "@/shared/ui/ToggleSwitchUI";
-import { settingsGlassIconButtonClassName } from "../settingsStyles";
+
+/** What the user was doing, for "Couldn't ..." and honest retry text. */
+const CONNECTOR_ACTION_LABELS = {
+  create: "add this connector",
+  save: "save this connector",
+  "clear-token": "clear the stored token",
+  delete: "delete this connector",
+  refresh: "refresh this connector",
+  "connector-enabled": "change this connector",
+  "tool-enabled": "change this tool",
+  "google-add": "add this connector",
+  "native-update": "update this connector",
+  "write-approval": "change write approval for this connector",
+  "read-only": "change this connector's read-only setting",
+} as const;
+
+/**
+ * The one place connector failures become words. Never echoes a raw error.
+ * No per-code table: a connector 4xx `detail` (setup steps, "needs to be
+ * authorized again") is written for users by the backend and passes through
+ * `describeError` untouched, and `oauth_required` from Refresh is handled
+ * by re-running the authorization, never shown.
+ */
+function connectorMessage(error: unknown, action: string): string {
+  return reportFault(error, {
+    action,
+    fallback: `Mike couldn't ${action}. Try again.`,
+    operation: "settings.connectors",
+  }).message;
+}
 
 type PendingMfaAction =
-  | { type: "create" }
+  | { type: "create"; draft: AddDraft; surface: CreateSurface }
+  | { type: "google-add"; provider: GoogleConnectorProvider }
+  // A Google or CourtListener settings change or delete; replayed as-is
+  // after verification.
+  | { type: "native-update"; retry: () => Promise<void> }
+  | { type: "write-approval"; connectorId: string; enabled: boolean }
+  | { type: "read-only"; connectorId: string; enabled: boolean }
   | { type: "save"; connectorId: string }
   | { type: "clear-token"; connectorId: string }
   | { type: "delete"; connectorId: string }
@@ -65,18 +124,21 @@ type PendingMfaAction =
       enabled: boolean;
     };
 
-type AddDraft = {
-  name: string;
-  serverUrl: string;
-  bearerToken: string;
-  customHeaders: string;
-};
-
-type DetailDraft = AddDraft & {
-  clearBearerToken: boolean;
-};
+type AddDraft = McpConnectorFormDraft;
+type DetailDraft = McpConnectorFormDraft;
 
 type AddStep = "form" | "working" | "auth" | "success";
+type CreateSurface = "modal" | "page";
+
+/**
+ * How long the details modal waits after the last keystroke before committing
+ * an edit. Long enough that typing a URL or a token is one request, not one
+ * per character.
+ */
+const AUTOSAVE_DELAY_MS = 1200;
+
+const CONNECTOR_SETUP_GUIDE_URL =
+  "https://github.com/open-legal-products/mike/blob/main/docs/connectors.md";
 
 const emptyAddDraft: AddDraft = {
   name: "",
@@ -129,11 +191,252 @@ function isGoogleMcpConnector(connector: McpConnectorSummary) {
       hostname === "googleapis.com" || hostname.endsWith(".googleapis.com")
     );
   } catch {
+    // A URL we cannot parse is simply not Google's. Nothing the user asked
+    // for fails here, so there is nothing to report.
     return false;
   }
 }
 
+function connectorSetupGuideUrl(serverUrl: string) {
+  try {
+    const hostname = new URL(serverUrl).hostname.toLowerCase();
+    if (hostname === "slack.com" || hostname.endsWith(".slack.com")) {
+      return `${CONNECTOR_SETUP_GUIDE_URL}#slack`;
+    }
+    if (hostname === "googleapis.com" || hostname.endsWith(".googleapis.com")) {
+      return `${CONNECTOR_SETUP_GUIDE_URL}#google-hosted-mcp-servers`;
+    }
+  } catch {
+    // A setup-required response is only produced for a parsed, known provider
+    // URL, but retain a useful general guide if that invariant ever changes.
+  }
+  return CONNECTOR_SETUP_GUIDE_URL;
+}
+
+const CONNECTOR_PLACEHOLDER_COLORS = [
+  "bg-violet-400",
+  "bg-sky-400",
+  "bg-emerald-400",
+  "bg-amber-400",
+  "bg-rose-400",
+] as const;
+
+const CONNECTOR_PLACEHOLDER_SHAPES = [
+  "h-5 w-5 rounded-full",
+  "h-5 w-5 rounded-md",
+  "h-4 w-6 rounded-full",
+  "h-4 w-4 rotate-45 rounded",
+] as const;
+
+function connectorPlaceholderClassName(connector: McpConnectorSummary) {
+  // Keep the random-looking mark stable across reloads and connector edits.
+  const hash = Array.from(connector.id).reduce(
+    (value, character) => (value * 31 + character.charCodeAt(0)) >>> 0,
+    0,
+  );
+  const color = CONNECTOR_PLACEHOLDER_COLORS[
+    hash % CONNECTOR_PLACEHOLDER_COLORS.length
+  ];
+  const shape = CONNECTOR_PLACEHOLDER_SHAPES[
+    Math.floor(hash / CONNECTOR_PLACEHOLDER_COLORS.length) %
+      CONNECTOR_PLACEHOLDER_SHAPES.length
+  ];
+  return `${color} ${shape}`;
+}
+
+function ConnectorBrandIcon({ name }: { name: string }) {
+  if (name === "Slack") {
+    return (
+      <svg viewBox="0 0 24 24" className="h-5 w-5" aria-hidden="true">
+        <path
+          fill="#E01E5A"
+          d="M5.042 15.165a2.528 2.528 0 0 1-2.52 2.523A2.528 2.528 0 0 1 0 15.165a2.527 2.527 0 0 1 2.522-2.52h2.52v2.52zm1.271 0a2.527 2.527 0 0 1 2.521-2.52 2.527 2.527 0 0 1 2.521 2.52v6.313A2.528 2.528 0 0 1 8.834 24a2.528 2.528 0 0 1-2.521-2.522v-6.313z"
+        />
+        <path
+          fill="#36C5F0"
+          d="M8.834 5.042a2.528 2.528 0 0 1-2.521-2.52A2.528 2.528 0 0 1 8.834 0a2.528 2.528 0 0 1 2.521 2.522v2.52H8.834zm0 1.271a2.528 2.528 0 0 1 2.521 2.521 2.528 2.528 0 0 1-2.521 2.521H2.522A2.528 2.528 0 0 1 0 8.834a2.528 2.528 0 0 1 2.522-2.521h6.312z"
+        />
+        <path
+          fill="#2EB67D"
+          d="M18.956 8.834a2.528 2.528 0 0 1 2.522-2.521A2.528 2.528 0 0 1 24 8.834a2.528 2.528 0 0 1-2.522 2.521h-2.522V8.834zm-1.268 0a2.528 2.528 0 0 1-2.523 2.521 2.527 2.527 0 0 1-2.52-2.521V2.522A2.527 2.527 0 0 1 15.165 0a2.528 2.528 0 0 1 2.523 2.522v6.312z"
+        />
+        <path
+          fill="#ECB22E"
+          d="M15.165 18.956a2.528 2.528 0 0 1 2.523 2.522A2.528 2.528 0 0 1 15.165 24a2.527 2.527 0 0 1-2.52-2.522v-2.522h2.52zm0-1.268a2.527 2.527 0 0 1-2.52-2.523 2.526 2.526 0 0 1 2.52-2.52h6.313A2.527 2.527 0 0 1 24 15.165a2.528 2.528 0 0 1-2.522 2.523h-6.313z"
+        />
+      </svg>
+    );
+  }
+
+  if (name === "Airtable") {
+    return (
+      <svg viewBox="0 0 24 24" className="h-5 w-5" aria-hidden="true">
+        <path
+          fill="#FCB400"
+          d="M11.992 1.966c-.434 0-.87.086-1.28.257L1.779 5.917c-.503.208-.49.908.012 1.116l8.982 3.558a3.266 3.266 0 0 0 2.454 0l8.982-3.558c.503-.196.503-.908.012-1.116l-8.957-3.694a3.255 3.255 0 0 0-1.272-.257z"
+        />
+        <path
+          fill="#18BFFF"
+          d="M23.4 8.056a.589.589 0 0 0-.222.045l-10.012 3.877a.612.612 0 0 0-.38.564v8.896a.6.6 0 0 0 .821.552L23.62 18.1a.583.583 0 0 0 .38-.551V8.653a.6.6 0 0 0-.6-.596z"
+        />
+        <path
+          fill="#F82B60"
+          d="M.676 8.095a.644.644 0 0 0-.48.19C.086 8.396 0 8.53 0 8.69v8.355c0 .442.515.737.908.54l6.27-3.006.307-.147 2.969-1.436c.466-.22.43-.908-.061-1.092L.883 8.138a.57.57 0 0 0-.207-.044z"
+        />
+      </svg>
+    );
+  }
+
+  if (name === "Linear") {
+    return (
+      <svg
+        viewBox="0 0 24 24"
+        className="h-5 w-5 fill-[#5E6AD2]"
+        aria-hidden="true"
+      >
+        <path d="M2.886 4.18A11.982 11.982 0 0 1 11.99 0C18.624 0 24 5.376 24 12.009c0 3.64-1.62 6.903-4.18 9.105L2.887 4.18ZM1.817 5.626l16.556 16.556c-.524.33-1.075.62-1.65.866L.951 7.277c.247-.575.537-1.126.866-1.65ZM.322 9.163l14.515 14.515c-.71.172-1.443.282-2.195.322L0 11.358a12 12 0 0 1 .322-2.195Zm-.17 4.862 9.823 9.824a12.02 12.02 0 0 1-9.824-9.824Z" />
+      </svg>
+    );
+  }
+
+  if (name === "Lawve") {
+    return (
+      <svg viewBox="0 0 178 178" className="h-5 w-5" aria-hidden="true">
+        <path fill="#EB523A" d="M89.5 92.9 3 42v68.1l86.5 50.9V92.9Z" />
+        <path fill="#EB3A3A" d="M89.5 92.9 176 42v68.1l-86.5 50.9V92.9Z" />
+        <path fill="#EB663A" d="M45.87 18 3 42.93l86.47 50.76 43.28-25.17L45.87 18Z" />
+        <path fill="#EB663A" d="M133.13 18 176 42.93 89.53 93.69 46.25 68.52 133.13 18Z" />
+        <ellipse fill="#EB3A3A" cx="89.5" cy="68.46" rx="19.22" ry="9.61" />
+        <rect fill="#EB3A3A" x="70.28" y="54.04" width="38.44" height="14.42" />
+        <ellipse fill="#EB6F3A" cx="89.5" cy="53.44" rx="19.22" ry="9.01" />
+        <ellipse fill="#EB3A3A" cx="134.55" cy="42.63" rx="18.62" ry="9.01" />
+        <rect fill="#EB3A3A" x="115.93" y="27.61" width="37.24" height="14.42" />
+        <ellipse fill="#EB6F3A" cx="134.55" cy="27.61" rx="18.62" ry="9.61" />
+        <ellipse fill="#EB3A3A" cx="46.25" cy="42.63" rx="19.22" ry="9.01" />
+        <rect fill="#EB3A3A" x="27.03" y="27.61" width="38.44" height="15.62" />
+        <ellipse fill="#EB6F3A" cx="46.25" cy="27.61" rx="19.22" ry="9.61" />
+      </svg>
+    );
+  }
+
+  return (
+    <svg viewBox="0 0 24 24" className="h-5 w-5 fill-black dark:fill-white" aria-hidden="true">
+      <path d="M4.459 4.208c.746.606 1.026.56 2.428.466l13.215-.793c.28 0 .047-.28-.046-.326L17.86 1.968c-.42-.326-.981-.7-2.055-.607L3.01 2.295c-.466.046-.56.28-.374.466zm.793 3.08v13.904c0 .747.373 1.027 1.214.98l14.523-.84c.841-.046.935-.56.935-1.167V6.354c0-.606-.233-.933-.748-.887l-15.177.887c-.56.047-.747.327-.747.933zm14.337.745c.093.42 0 .84-.42.888l-.7.14v10.264c-.608.327-1.168.514-1.635.514-.748 0-.935-.234-1.495-.933l-4.577-7.186v6.952L12.21 19s0 .84-1.168.84l-3.222.186c-.093-.186 0-.653.327-.746l.84-.233V9.854L7.822 9.76c-.094-.42.14-1.026.793-1.073l3.456-.233 4.764 7.279v-6.44l-1.215-.139c-.093-.514.28-.887.747-.933zM1.936 1.035l13.31-.98c1.634-.14 2.055-.047 3.082.7l4.249 2.986c.7.513.934.653.934 1.213v16.378c0 1.026-.373 1.634-1.68 1.726l-15.458.934c-.98.047-1.448-.093-1.962-.747l-3.129-4.06c-.56-.747-.793-1.306-.793-1.96V2.667c0-.839.374-1.54 1.447-1.632z" />
+    </svg>
+  );
+}
+
+function googleSetupGuideUrl(provider: GoogleConnectorProvider) {
+  return `https://github.com/open-legal-products/mike/blob/main/docs/google-workspace.md#${
+    provider === "google-drive" ? "google-drive" : "gmail-and-google-calendar"
+  }`;
+}
+
+function GoogleConnectorIcon({
+  provider,
+}: {
+  provider: GoogleConnectorProvider;
+}) {
+  return (
+    <Image
+      src={`/icons/integrations/${provider}.png`}
+      alt=""
+      aria-hidden="true"
+      width={20}
+      height={20}
+      unoptimized
+      className="h-5 w-5 object-contain"
+    />
+  );
+}
+
+function googleDetailsView(
+  connector: GoogleConnector,
+): ConnectorDetailsView | null {
+  const status = connector.status;
+  if (!status?.connected) return null;
+  return {
+    id: connector.provider,
+    name: connector.name,
+    tools: status.tools.map((tool) => ({
+      id: tool.name,
+      title: tool.title,
+      description: tool.description,
+      enabled: tool.enabled,
+      write: tool.write,
+    })),
+    toolCount: status.tools.length,
+    requireWriteApproval: status.requireWriteApproval,
+    readOnly: status.readOnly === true,
+    accountEmail: status.accountEmail,
+  };
+}
+
+function mcpDetailsView(connector: McpConnectorSummary): ConnectorDetailsView {
+  return {
+    id: connector.id,
+    name: connector.name,
+    tools: connector.tools.map((tool) => ({
+      id: tool.id,
+      title: tool.title || tool.toolName,
+      description: tool.description,
+      enabled: tool.enabled,
+      write: tool.write,
+    })),
+    toolCount: connector.toolCount,
+    requireWriteApproval: connector.requireWriteApproval,
+    readOnly: connector.readOnly === true,
+  };
+}
+
+/**
+ * Connections belong to a workspace: a person keeps a separate set for
+ * Personal and for each organization they belong to, and a chat uses only
+ * those of the workspace it is in. This page manages the active workspace's.
+ *
+ * Keyed by workspace, so switching starts again from the other workspace's
+ * connections: nothing loaded, selected or pending for one workspace can be
+ * shown or saved in another, and an authorization still waiting is abandoned
+ * (and cancelled in the workspace it was started in).
+ */
 export default function ConnectorsPage() {
+  const { workspaceId, activeOrganization } = useWorkspace();
+  const multipleWorkspaces = useHasMultipleWorkspaces();
+  const workspace = workspaceId ?? undefined;
+  const organizationName =
+    workspace && workspace !== PERSONAL_WORKSPACE
+      ? (activeOrganization?.name ?? null)
+      : null;
+  return (
+    <WorkspaceConnectors
+      key={workspace ?? PERSONAL_WORKSPACE}
+      workspace={workspace}
+      organizationName={organizationName}
+      multipleWorkspaces={multipleWorkspaces}
+    />
+  );
+}
+
+function WorkspaceConnectors({
+  workspace,
+  organizationName,
+  multipleWorkspaces,
+}: {
+  /** "personal", an organization id, or undefined outside a workspace. */
+  workspace: string | undefined;
+  /** The active organization's name, or null in Personal (or still loading). */
+  organizationName: string | null;
+  /** Whether the person has more than one workspace to tell apart. */
+  multipleWorkspaces: boolean;
+}) {
+  // Which workspace these connectors are saved for, said only to someone
+  // with more than one, and only once that workspace has a name to show.
+  const savedFor = !multipleWorkspaces
+    ? null
+    : (organizationName ??
+      (workspace && workspace !== PERSONAL_WORKSPACE
+        ? null
+        : PERSONAL_WORKSPACE_LABEL));
   const [connectors, setConnectors] = useState<McpConnectorSummary[]>([]);
   const [loading, setLoading] = useState(true);
   const [busyKey, setBusyKey] = useState<string | null>(null);
@@ -145,9 +448,15 @@ export default function ConnectorsPage() {
   const [addStep, setAddStep] = useState<AddStep>("form");
   const [addResult, setAddResult] = useState<McpConnectorSummary | null>(null);
   const [addError, setAddError] = useState<string | null>(null);
+  const [addErrorGuideUrl, setAddErrorGuideUrl] = useState<string | null>(null);
   const [addAuthMessage, setAddAuthMessage] = useState<string | null>(null);
+  const [installingPresetUrl, setInstallingPresetUrl] = useState<string | null>(
+    null,
+  );
+  const [authorizingPresetUrl, setAuthorizingPresetUrl] = useState<
+    string | null
+  >(null);
   const [showAddToken, setShowAddToken] = useState(false);
-  const [showAddAdvanced, setShowAddAdvanced] = useState(false);
   const [selectedConnectorId, setSelectedConnectorId] = useState<string | null>(
     null,
   );
@@ -155,7 +464,6 @@ export default function ConnectorsPage() {
     useState<McpConnectorSummary | null>(null);
   const [detailDraft, setDetailDraft] = useState<DetailDraft>({
     ...emptyAddDraft,
-    clearBearerToken: false,
   });
   const [detailError, setDetailError] = useState<string | null>(null);
   // Setup steps from a Refresh on an unconfigured provider, shown inside
@@ -169,7 +477,6 @@ export default function ConnectorsPage() {
   const [clearedBearerTokenConnectorId, setClearedBearerTokenConnectorId] =
     useState<string | null>(null);
   const [showDetailToken, setShowDetailToken] = useState(false);
-  const [showDetailAdvanced, setShowDetailAdvanced] = useState(false);
   // Which connector currently has a reconnect OAuth wait in flight (the
   // details modal's Refresh flow). Drives the Cancel affordance next to the
   // Refresh button, mirroring the escape hatch the add modal already has.
@@ -178,18 +485,44 @@ export default function ConnectorsPage() {
   >(null);
 
   const selectedConnector = selectedConnectorDetails;
+  const initializedDetailConnectorIdRef = useRef<string | null>(null);
+  // Hooks in a fixed order: Discover lists Google in this order too.
+  const googleDrive = useGoogleConnector(
+    "google-drive",
+    "Google Drive",
+    workspace,
+  );
+  const gmail = useGoogleConnector("gmail", "Gmail", workspace);
+  const googleCalendar = useGoogleConnector(
+    "google-calendar",
+    "Google Calendar",
+    workspace,
+  );
+  const googleConnectors = [googleDrive, gmail, googleCalendar];
+  const courtListener = useCourtListenerConnector(workspace);
+  const [courtListenerOpen, setCourtListenerOpen] = useState(false);
+  const drivePicker = useGoogleDrivePicker(workspace);
+  const [selectedGoogleProvider, setSelectedGoogleProvider] =
+    useState<GoogleConnectorProvider | null>(null);
+  const selectedGoogle =
+    googleConnectors.find(
+      (connector) => connector.provider === selectedGoogleProvider,
+    ) ?? null;
 
+  // Only the first load shows placeholders; a reload keeps the lists.
+  const [connectorsLoaded, setConnectorsLoaded] = useState(false);
   const loadConnectors = useCallback(async () => {
     setLoading(true);
     setError(null);
     try {
-      setConnectors(await listMcpConnectors());
+      setConnectors(await listMcpConnectors(workspace));
     } catch (err) {
-      setError(userFacingApiError(err, "Failed to load connectors."));
+      setError(connectorMessage(err, "load your connectors"));
     } finally {
       setLoading(false);
+      setConnectorsLoaded(true);
     }
-  }, []);
+  }, [workspace]);
 
   useEffect(() => {
     void loadConnectors();
@@ -213,13 +546,18 @@ export default function ConnectorsPage() {
   }, []);
 
   useEffect(() => {
-    if (!selectedConnector) return;
+    if (!selectedConnector) {
+      initializedDetailConnectorIdRef.current = null;
+      return;
+    }
+    if (initializedDetailConnectorIdRef.current === selectedConnector.id)
+      return;
+    initializedDetailConnectorIdRef.current = selectedConnector.id;
     setDetailDraft({
       name: selectedConnector.name,
       serverUrl: selectedConnector.serverUrl,
       bearerToken: "",
       customHeaders: "",
-      clearBearerToken: false,
     });
     setDetailError(null);
     // detailSetupNotice is deliberately NOT reset here: the Add flow sets
@@ -228,12 +566,7 @@ export default function ConnectorsPage() {
     // and before every sensitive action instead.
     setClearedBearerTokenConnectorId(null);
     setShowDetailToken(false);
-    setShowDetailAdvanced(false);
-  }, [
-    selectedConnector?.id,
-    selectedConnector?.name,
-    selectedConnector?.serverUrl,
-  ]);
+  }, [selectedConnector]);
 
   const replaceConnector = (
     connector: McpConnectorSummary,
@@ -284,9 +617,7 @@ export default function ConnectorsPage() {
         current && current.id !== connectorId ? current : fresh,
       );
     } catch (err) {
-      setDetailError(
-        userFacingApiError(err, "Failed to load connector details."),
-      );
+      setDetailError(connectorMessage(err, "load this connector"));
     } finally {
       setLoadingConnectorId((current) =>
         current === connectorId ? null : current,
@@ -319,16 +650,95 @@ export default function ConnectorsPage() {
       ) {
         // Refresh from the details modal on a Slack/Google connector
         // whose OAuth client is not configured on this server: show
-        // the operator steps where the user is looking.
-        setDetailSetupNotice(err.message);
+        // the operator guidance where the user is looking.
+        setDetailSetupNotice(connectorMessage(err, CONNECTOR_ACTION_LABELS[action.type]));
         return;
       }
-      const message = userFacingApiError(err, "Action failed.");
-      if (action.type === "create") setAddError(message);
-      else if (action.type === "save") setDetailError(message);
+      const message = connectorMessage(err, CONNECTOR_ACTION_LABELS[action.type]);
+      if (action.type === "google-add") {
+        setAddErrorGuideUrl(
+          isConnectorSetupError(err)
+            ? googleSetupGuideUrl(action.provider)
+            : null,
+        );
+        setAddError(message);
+      } else if (action.type === "create") {
+        setAddErrorGuideUrl(
+          isConnectorSetupError(err)
+            ? connectorSetupGuideUrl(action.draft.serverUrl)
+            : null,
+        );
+        setAddError(message);
+      } else if (
+        action.type === "save" ||
+        action.type === "native-update" ||
+        action.type === "write-approval" ||
+        action.type === "read-only"
+      )
+        setDetailError(message);
       else setError(message);
     }
   };
+
+  // Adding a Google connector behaves like adding Slack: setup problems and
+  // failures appear in the same "Could not add connector" warning.
+  const handleAddGoogle = async (provider: GoogleConnectorProvider) => {
+    const connector = googleConnectors.find(
+      (candidate) => candidate.provider === provider,
+    );
+    if (!connector) return;
+    if (connector.loadFailed) {
+      setAddErrorGuideUrl(null);
+      setAddError(
+        `Could not load ${connector.name}. Reload this page and try again.`,
+      );
+      return;
+    }
+    if (connector.status?.schemaReady === false) {
+      setAddErrorGuideUrl(googleSetupGuideUrl(provider));
+      setAddError(
+        `An administrator needs to apply the ${
+          provider === "google-drive" ? "Google Drive" : "Gmail and Calendar"
+        } database migration and restart the server before you can add ${connector.name}.`,
+      );
+      return;
+    }
+    await runSensitiveAction({ type: "google-add", provider }, async () => {
+      try {
+        await connector.connect();
+      } catch (err) {
+        if (err instanceof GoogleAuthorizationCancelledError) return;
+        if (err instanceof GoogleConnectorFlowError) {
+          setAddErrorGuideUrl(null);
+          setAddError(err.message);
+          return;
+        }
+        throw err;
+      }
+    });
+  };
+
+  /**
+   * A change to a Google or CourtListener connector, under the usual MFA
+   * gate.
+   */
+  const runNativeUpdate = async (busy: string, change: () => Promise<void>) => {
+    const run = async () => {
+      setBusyKey(busy);
+      try {
+        await change();
+      } finally {
+        setBusyKey(null);
+      }
+    };
+    await runSensitiveAction({ type: "native-update", retry: run }, run);
+  };
+
+  const handleDeleteGoogle = (connector: GoogleConnector) =>
+    runNativeUpdate(`delete:${connector.provider}`, async () => {
+      await connector.disconnect();
+      setSelectedGoogleProvider(null);
+    });
 
   const closeAddModal = () => {
     // "working" is a brief synchronous create with nothing to cancel, so we
@@ -347,9 +757,9 @@ export default function ConnectorsPage() {
     setAddStep("form");
     setAddResult(null);
     setAddError(null);
+    setAddErrorGuideUrl(null);
     setAddAuthMessage(null);
     setShowAddToken(false);
-    setShowAddAdvanced(false);
   };
 
   const connectConnectorOAuth = async (
@@ -506,92 +916,130 @@ export default function ConnectorsPage() {
     return refreshed;
   };
 
-  const handleCreate = async () => {
-    await runSensitiveAction({ type: "create" }, async () => {
-      setBusyKey("create");
-      setAddStep("working");
-      setAddError(null);
-      setAddAuthMessage(null);
-      // Kept outside the try so the setup-required branch below can
-      // hand the already-created connector to the details modal.
-      let createdConnector: McpConnectorSummary | null = null;
-      try {
-        const headers = parseCustomHeaders(addDraft.customHeaders);
-        const connector = await createMcpConnector({
-          name: addDraft.name,
-          serverUrl: addDraft.serverUrl,
-          bearerToken: addDraft.bearerToken.trim() || null,
-          ...(headers ? { headers } : {}),
-        });
-        createdConnector = connector;
-        let refreshed: McpConnectorSummary;
+  const handleCreate = async (
+    draft: AddDraft = addDraft,
+    surface: CreateSurface = "modal",
+  ) => {
+    await runSensitiveAction({ type: "create", draft, surface }, async () => {
+      const authorizeConnector = async (connectorId: string) => {
+        if (surface === "page") setAuthorizingPresetUrl(draft.serverUrl);
         try {
-          refreshed = await refreshMcpConnectorTools(connector.id);
-        } catch (err) {
-          if (err instanceof MikeApiError && err.code === "oauth_required") {
-            replaceConnector(connector);
+          return await connectConnectorOAuth(connectorId);
+        } finally {
+          if (surface === "page") setAuthorizingPresetUrl(null);
+        }
+      };
+
+      setBusyKey("create");
+      if (surface === "page") setInstallingPresetUrl(draft.serverUrl);
+      if (surface === "modal") {
+        setAddStep("working");
+        setAddError(null);
+      }
+      setAddErrorGuideUrl(null);
+      setAddAuthMessage(null);
+      // Kept outside the try so every failed or cancelled registration can
+      // remove the just-created row before surfacing the error.
+      let createdConnector: McpConnectorSummary | null = null;
+      const discardCreatedConnector = async () => {
+        if (!createdConnector) return true;
+        const connectorId = createdConnector.id;
+        try {
+          await deleteMcpConnector(connectorId);
+          setConnectors((current) =>
+            current.filter((connector) => connector.id !== connectorId),
+          );
+          createdConnector = null;
+          return true;
+        } catch {
+          return false;
+        }
+      };
+      try {
+        const headers = parseCustomHeaders(draft.customHeaders);
+        const created = await createMcpConnector(
+          {
+            name: draft.name,
+            serverUrl: draft.serverUrl,
+            bearerToken: draft.bearerToken.trim() || null,
+            ...(headers ? { headers } : {}),
+          },
+          workspace,
+        );
+        const connector = created.connector;
+        createdConnector = connector;
+        replaceConnector(connector);
+        const needsAuthorization =
+          created.oauthRequired ||
+          (!connector.oauthConnected &&
+            (surface === "page" || isGoogleMcpConnector(connector)));
+        if (needsAuthorization) {
+          if (surface === "modal") {
             setAddAuthMessage(
               "Complete authorization in the popup to finish connecting this MCP server.",
             );
             setAddStep("auth");
-            const authorized = await connectConnectorOAuth(connector.id);
-            if (authorized) {
-              setAddAuthMessage(null);
-              setAddResult(authorized);
-              setAddStep("success");
-            }
-            return;
           }
-          throw err;
-        }
-        replaceConnector(refreshed);
-        if (isGoogleMcpConnector(refreshed) && !refreshed.oauthConnected) {
-          setAddAuthMessage(
-            "Authorize Google in the popup to finish connecting this MCP server.",
-          );
-          setAddStep("auth");
-          const authorized = await connectConnectorOAuth(refreshed.id);
-          if (authorized) {
+          const authorized = await authorizeConnector(connector.id);
+          if (authorized && surface === "modal") {
             setAddAuthMessage(null);
             setAddResult(authorized);
             setAddStep("success");
           }
           return;
         }
-        setAddResult(refreshed);
-        setAddStep("success");
+        if (surface === "modal") {
+          setAddResult(connector);
+          setAddStep("success");
+        }
       } catch (err) {
         // A user-initiated cancel (or navigation away) is not a failure:
         // closeAddModal has already reset the modal, so surfacing an
         // error would be noise. Just release the busy lock via `finally`.
         if (err instanceof McpOAuthCancelledError) {
+          const discarded = await discardCreatedConnector();
+          if (!discarded) {
+            setAddError(
+              "Authorization was cancelled, but the incomplete connector could not be removed. Remove it from Installed before trying again.",
+            );
+          }
           return;
         }
-        setAddStep("form");
-        setAddAuthMessage(null);
-        if (isConnectorSetupError(err) && createdConnector) {
-          // The connector row exists; only the OAuth start was
-          // refused because this deployment lacks the provider's
-          // OAuth client. Leaving the Add form open would invite a
-          // second Connect click — and a duplicate connector — so
-          // hand over to the new connector's details modal and show
-          // the operator steps there. Refresh re-runs the flow
-          // once the operator has configured the backend.
-          const message = err.message;
-          closeAddModal();
-          await openConnectorDetails(createdConnector.id);
-          setDetailSetupNotice(message);
-          return;
+        if (surface === "modal") {
+          setAddStep("form");
+          setAddAuthMessage(null);
         }
-        setAddError(userFacingApiError(err, "Failed to add connector."));
+        if (
+          err instanceof MikeApiError &&
+          err.code === "connector_cleanup_failed"
+        ) {
+          // Creation failed after the backend inserted the row and its own
+          // cleanup also failed. Reload so the warning's instruction to remove
+          // the incomplete connector from Installed is immediately actionable.
+          await loadConnectors();
+        }
+        const message = connectorMessage(err, "add this connector");
+        const discarded = await discardCreatedConnector();
+        setAddErrorGuideUrl(
+          isConnectorSetupError(err)
+            ? connectorSetupGuideUrl(draft.serverUrl)
+            : null,
+        );
+        setAddError(
+          discarded
+            ? message
+            : `${message} The incomplete connector could not be removed; remove it from Installed before trying again.`,
+        );
       } finally {
         setBusyKey(null);
+        if (surface === "page") setInstallingPresetUrl(null);
       }
     });
   };
 
   const handleSaveSelectedConnector = async () => {
     if (!selectedConnector) return;
+    const submittedDraft = detailDraft;
     await runSensitiveAction(
       { type: "save", connectorId: selectedConnector.id },
       async () => {
@@ -599,18 +1047,18 @@ export default function ConnectorsPage() {
         setDetailError(null);
         setDetailSetupNotice(null);
         try {
-          const headers = parseCustomHeaders(detailDraft.customHeaders);
+          const headers = parseCustomHeaders(submittedDraft.customHeaders);
           const saved = await updateMcpConnector(selectedConnector.id, {
-            name: detailDraft.name,
-            serverUrl: detailDraft.serverUrl,
-            ...(detailDraft.bearerToken.trim()
-              ? { bearerToken: detailDraft.bearerToken.trim() }
+            name: submittedDraft.name,
+            serverUrl: submittedDraft.serverUrl,
+            ...(submittedDraft.bearerToken.trim()
+              ? { bearerToken: submittedDraft.bearerToken.trim() }
               : {}),
             ...(headers ? { headers } : {}),
           });
           const shouldRefreshTools =
             saved.serverUrl !== selectedConnector.serverUrl ||
-            !!detailDraft.bearerToken.trim() ||
+            !!submittedDraft.bearerToken.trim() ||
             !!headers;
           const refreshed = shouldRefreshTools
             ? await refreshMcpConnectorTools(saved.id)
@@ -618,19 +1066,76 @@ export default function ConnectorsPage() {
           replaceConnector(refreshed, {
             preserveToolsOnEmpty: !shouldRefreshTools,
           });
-          setDetailDraft({
-            name: refreshed.name,
-            serverUrl: refreshed.serverUrl,
-            bearerToken: "",
-            customHeaders: "",
-            clearBearerToken: false,
-          });
+          setDetailDraft((current) =>
+            current.name === submittedDraft.name &&
+            current.serverUrl === submittedDraft.serverUrl &&
+            current.bearerToken === submittedDraft.bearerToken &&
+            current.customHeaders === submittedDraft.customHeaders
+              ? {
+                  name: refreshed.name,
+                  serverUrl: refreshed.serverUrl,
+                  bearerToken: "",
+                  customHeaders: "",
+                }
+              : current,
+          );
         } finally {
           setBusyKey(null);
         }
       },
     );
   };
+
+  // The details modal has no Save button: a settled edit commits itself.
+  // Held in a ref so the debounce effect below depends only on the draft and
+  // the gates, not on this handler's identity.
+  const saveSelectedConnectorRef = useRef(handleSaveSelectedConnector);
+  saveSelectedConnectorRef.current = handleSaveSelectedConnector;
+  // The exact draft each autosave was attempted for, so the same payload is
+  // never sent twice. A failed save and a dismissed MFA prompt both leave the
+  // draft dirty; without this, either could re-enter the debounce window on a
+  // timer the user never asked for. Only a further edit re-arms it.
+  const autosaveAttemptRef = useRef<string | null>(null);
+
+  useEffect(() => {
+    if (!selectedConnector) return;
+    // Never autosave over an in-flight request, and never let the timer be
+    // what raises the MFA prompt again while one is already pending.
+    if (busyKey || pendingMfaAction) return;
+    const name = detailDraft.name.trim();
+    const serverUrl = detailDraft.serverUrl.trim();
+    // The same validity the Save button used to enforce.
+    if (!name || !serverUrl) return;
+    const dirty =
+      name !== selectedConnector.name ||
+      serverUrl !== selectedConnector.serverUrl ||
+      detailDraft.bearerToken.trim().length > 0 ||
+      detailDraft.customHeaders.trim().length > 0;
+    if (!dirty) return;
+    // Headers are edited as free-form JSON. A pause while the object is only
+    // partially typed is not a failed save; wait until it parses before
+    // starting the debounce timer.
+    if (detailDraft.customHeaders.trim()) {
+      try {
+        parseCustomHeaders(detailDraft.customHeaders);
+      } catch {
+        return;
+      }
+    }
+    const attempt = JSON.stringify([
+      selectedConnector.id,
+      name,
+      serverUrl,
+      detailDraft.bearerToken,
+      detailDraft.customHeaders,
+    ]);
+    if (autosaveAttemptRef.current === attempt) return;
+    const timer = setTimeout(() => {
+      autosaveAttemptRef.current = attempt;
+      void saveSelectedConnectorRef.current();
+    }, AUTOSAVE_DELAY_MS);
+    return () => clearTimeout(timer);
+  }, [busyKey, detailDraft, pendingMfaAction, selectedConnector]);
 
   const handleClearBearerToken = async (connectorId: string) => {
     await runSensitiveAction({ type: "clear-token", connectorId }, async () => {
@@ -646,7 +1151,6 @@ export default function ConnectorsPage() {
         setDetailDraft((prev) => ({
           ...prev,
           bearerToken: "",
-          clearBearerToken: false,
         }));
         setClearedBearerTokenConnectorId(connectorId);
       } finally {
@@ -720,6 +1224,44 @@ export default function ConnectorsPage() {
     );
   };
 
+  const handleRequireWriteApproval = async (
+    connectorId: string,
+    enabled: boolean,
+  ) => {
+    await runSensitiveAction(
+      { type: "write-approval", connectorId, enabled },
+      async () => {
+        setBusyKey(`approval:${connectorId}`);
+        try {
+          replaceConnector(
+            await updateMcpConnector(connectorId, {
+              requireWriteApproval: enabled,
+            }),
+            { preserveToolsOnEmpty: true },
+          );
+        } finally {
+          setBusyKey(null);
+        }
+      },
+    );
+  };
+
+  const handleReadOnly = async (connectorId: string, enabled: boolean) => {
+    await runSensitiveAction(
+      { type: "read-only", connectorId, enabled },
+      async () => {
+        setBusyKey(`read-only:${connectorId}`);
+        try {
+          replaceConnector(await updateMcpConnector(connectorId, { readOnly: enabled }), {
+            preserveToolsOnEmpty: true,
+          });
+        } finally {
+          setBusyKey(null);
+        }
+      },
+    );
+  };
+
   const handleToolEnabled = async (
     connectorId: string,
     toolId: string,
@@ -756,11 +1298,35 @@ export default function ConnectorsPage() {
     });
   };
 
+  const handleAddPreset = async (
+    preset: (typeof CONNECTOR_PRESETS)[number],
+  ) => {
+    const draft = {
+      ...emptyAddDraft,
+      name: preset.name,
+      serverUrl: preset.serverUrl,
+    };
+    setInstallingPresetUrl(draft.serverUrl);
+    try {
+      await handleCreate(draft, "page");
+    } finally {
+      setInstallingPresetUrl(null);
+    }
+  };
+
   const handleMfaVerified = async () => {
     const action = pendingMfaAction;
     setPendingMfaAction(null);
     if (!action) return;
-    if (action.type === "create") await handleCreate();
+    if (action.type === "create") {
+      await handleCreate(action.draft, action.surface);
+    }
+    if (action.type === "google-add") await handleAddGoogle(action.provider);
+    if (action.type === "native-update") await action.retry();
+    if (action.type === "read-only") await handleReadOnly(action.connectorId, action.enabled);
+    if (action.type === "write-approval") {
+      await handleRequireWriteApproval(action.connectorId, action.enabled);
+    }
     if (action.type === "save") await handleSaveSelectedConnector();
     if (action.type === "clear-token") {
       await handleClearBearerToken(action.connectorId);
@@ -779,106 +1345,399 @@ export default function ConnectorsPage() {
     }
   };
 
+  const installedGoogle = googleConnectors.filter(
+    (connector) => connector.status?.connected,
+  );
+  // Discover only offers what is not installed yet: an added connector is
+  // managed from Installed. A service the operator switched off is not
+  // offered either; one connected before the switch stays under Installed
+  // so the user can still delete it.
+  const discoverGoogle = googleConnectors.filter(
+    (connector) =>
+      !connector.status?.connected && connector.status?.available !== false,
+  );
+  const discoverPresets = CONNECTOR_PRESETS.filter(
+    (preset) =>
+      !connectors.some(
+        (connector) =>
+          normalizedServerUrl(connector.serverUrl) ===
+          normalizedServerUrl(preset.serverUrl),
+      ),
+  );
+  const googleLoading = googleConnectors.some((connector) => connector.loading);
+  // Which list a connector belongs in is only known once every source has
+  // answered. Until then both lists show placeholders, so no card appears in
+  // Discover only to move to Installed or vanish (a service the operator
+  // switched off) a moment later.
+  const initialLoading =
+    !connectorsLoaded || googleLoading || courtListener.loading;
+  const discoverCourtListener = !courtListener.installed;
+  const googleAdding = googleConnectors.some(
+    (connector) => connector.phase !== "idle",
+  );
+  const selectedMcpView = selectedConnector
+    ? mcpDetailsView(selectedConnector)
+    : null;
+  const selectedGoogleView = selectedGoogle
+    ? googleDetailsView(selectedGoogle)
+    : null;
+  const selectedIsCustom =
+    !!selectedConnector && !findConnectorPreset(selectedConnector.serverUrl);
+
   return (
-    <div>
-      <div className="mb-4">
-        <div className="flex items-center justify-between gap-3">
-          <SettingsHeading>Connectors</SettingsHeading>
-          <div className="flex shrink-0 items-center rounded-full border border-white/70 bg-app-surface p-0.5 shadow-[0_8px_24px_rgba(15,23,42,0.06)] backdrop-blur-2xl">
-            <button
-              type="button"
-              onClick={() => setAddOpen(true)}
-              className={`flex h-6 items-center justify-center gap-1 rounded-full px-2.5 text-xs font-medium text-gray-500 transition-colors hover:text-gray-900 ${LIQUID_GLASS_HOVER_CLASS} ${LIQUID_GLASS_PRESSED_CLASS}`}
-            >
-              <Plus className="h-3.5 w-3.5" />
-              Add
-            </button>
+    <div className="@container">
+      <section aria-labelledby="installed-connectors-heading">
+        <div
+          className={`${savedFor ? "mb-1" : "mb-4"} flex items-center justify-between gap-3`}
+        >
+          <SettingsHeading id="installed-connectors-heading">
+            Installed
+          </SettingsHeading>
+          <PillButtonUI
+            tone="white"
+            size="xs"
+            onClick={() => setAddOpen(true)}
+            aria-label="Add custom connector"
+            className={`h-7 ${LIQUID_GLASS_SUBTLE_CLASS}`}
+          >
+            <Plus className="h-3.5 w-3.5" aria-hidden="true" />
+            Custom
+          </PillButtonUI>
+        </div>
+        {savedFor && (
+          <div className="mb-4">
+            <SettingsDescription>
+              Saved for {savedFor}. Each workspace has its own connectors.
+            </SettingsDescription>
           </div>
-        </div>
-      </div>
-
-      {error && (
-        <div className="mb-4 rounded-lg bg-red-50 px-3 py-2 text-sm text-red-700">
-          {error}
-        </div>
-      )}
-
-      <div className="space-y-3">
-        {!loading &&
-          (connectors.length === 0 ? (
-            <SettingsCard>
-              <div className="p-4">
+        )}
+        {error && (
+          <div className="mb-4 rounded-lg bg-red-50 px-3 py-2 text-sm text-red-700">
+            {error}
+          </div>
+        )}
+        <div
+          className="grid grid-cols-1 gap-3 @min-[32rem]:grid-cols-2"
+          aria-busy={initialLoading || undefined}
+        >
+          {initialLoading && <ConnectorListSkeleton />}
+          {!initialLoading && installedGoogle.map((connector) => (
+            <ConnectorRow
+              key={connector.provider}
+              name={connector.name}
+              icon={<GoogleConnectorIcon provider={connector.provider} />}
+              enabled={connector.status?.enabled !== false}
+              busy={busyKey === `connector:${connector.provider}`}
+              onOpen={() => {
+                setSelectedGoogleProvider(connector.provider);
+                void connector.refresh().catch(() => undefined);
+              }}
+              onEnabledChange={(enabled) =>
+                void runNativeUpdate(`connector:${connector.provider}`, () =>
+                  connector.updateSettings({ enabled }),
+                )
+              }
+            />
+          ))}
+          {!initialLoading && courtListener.installed && (
+            <ConnectorRow
+              name={COURTLISTENER_NAME}
+              icon={<CourtListenerIcon />}
+              enabled={courtListener.enabled}
+              busy={
+                courtListener.busy ||
+                busyKey === "connector:courtlistener"
+              }
+              onOpen={() => setCourtListenerOpen(true)}
+              onEnabledChange={(enabled) =>
+                void runNativeUpdate("connector:courtlistener", () =>
+                  courtListener.setEnabled(enabled),
+                )
+              }
+            />
+          )}
+          {!initialLoading &&
+            !loading &&
+            connectors.map((connector) => {
+              const preset = findConnectorPreset(connector.serverUrl);
+              return (
+                <ConnectorRow
+                  key={connector.id}
+                  name={connector.name}
+                  icon={
+                    preset ? (
+                      <ConnectorBrandIcon name={preset.name} />
+                    ) : undefined
+                  }
+                  placeholderClassName={connectorPlaceholderClassName(connector)}
+                  enabled={connector.enabled}
+                  busy={busyKey === `connector:${connector.id}`}
+                  onOpen={() => void openConnectorDetails(connector.id)}
+                  onEnabledChange={(enabled) =>
+                    void handleConnectorEnabled(connector.id, enabled)
+                  }
+                />
+              );
+            })}
+          {!initialLoading &&
+            !loading &&
+            connectors.length === 0 &&
+            installedGoogle.length === 0 &&
+            !courtListener.installed && (
+              <div className="@min-[32rem]:col-span-2">
                 <SettingsDescription>No connectors yet.</SettingsDescription>
               </div>
-            </SettingsCard>
-          ) : (
-            connectors.map((connector) => (
-              <ConnectorRow
-                key={connector.id}
-                connector={connector}
-                busyKey={busyKey}
-                onOpen={() => void openConnectorDetails(connector.id)}
-                onConnectorEnabled={handleConnectorEnabled}
-              />
-            ))
+            )}
+        </div>
+      </section>
+      <section className="mt-6" aria-labelledby="discover-connectors-heading">
+        <div className="mb-4">
+          <SettingsHeading id="discover-connectors-heading">
+            Discover
+          </SettingsHeading>
+        </div>
+        {!initialLoading &&
+          discoverGoogle.length === 0 &&
+          !discoverCourtListener &&
+          discoverPresets.length === 0 && (
+            <SettingsDescription>
+              Every available connector is installed.
+            </SettingsDescription>
+          )}
+        <div
+          className="grid grid-cols-1 gap-3 @min-[32rem]:grid-cols-2"
+          aria-busy={initialLoading || undefined}
+        >
+          {initialLoading && <ConnectorListSkeleton />}
+          {!initialLoading && discoverGoogle.map((connector) => (
+            <DiscoverCard
+              key={connector.provider}
+              name={connector.name}
+              icon={<GoogleConnectorIcon provider={connector.provider} />}
+              adding={connector.phase === "adding"}
+              authorizing={connector.phase === "authorizing"}
+              loading={connector.loading}
+              disabled={
+                busyKey === "create" ||
+                (googleAdding && connector.phase === "idle")
+              }
+              onAdd={() => void handleAddGoogle(connector.provider)}
+              onCancel={connector.cancel}
+            />
           ))}
-      </div>
+          {!initialLoading && discoverCourtListener && (
+            <DiscoverCard
+              name={COURTLISTENER_NAME}
+              icon={<CourtListenerIcon />}
+              adding={busyKey === "connector:courtlistener"}
+              authorizing={false}
+              loading={false}
+              disabled={busyKey !== null || googleAdding}
+              onAdd={() => {
+                if (courtListener.loadFailed) {
+                  setAddErrorGuideUrl(null);
+                  setAddError(
+                    `Could not load ${COURTLISTENER_NAME}. Reload this page and try again.`,
+                  );
+                  return;
+                }
+                // With the organization's token or the bulk index there is
+                // nothing to enter: adding it switches it back on.
+                const status = courtListener.status;
+                if (status && (status.tokenSource !== null || status.bulkData)) {
+                  void runNativeUpdate("connector:courtlistener", () =>
+                    courtListener.setEnabled(true),
+                  );
+                  return;
+                }
+                setCourtListenerOpen(true);
+              }}
+              onCancel={() => setCourtListenerOpen(false)}
+            />
+          )}
+          {!initialLoading && discoverPresets.map((preset) => {
+            const isAdding =
+              busyKey === "create" &&
+              installingPresetUrl !== null &&
+              normalizedServerUrl(installingPresetUrl) ===
+                normalizedServerUrl(preset.serverUrl);
+            const isAuthorizing =
+              isAdding &&
+              authorizingPresetUrl !== null &&
+              normalizedServerUrl(authorizingPresetUrl) ===
+                normalizedServerUrl(preset.serverUrl);
+            return (
+              <DiscoverCard
+                key={preset.serverUrl}
+                name={preset.name}
+                icon={<ConnectorBrandIcon name={preset.name} />}
+                adding={isAdding && !isAuthorizing}
+                authorizing={isAuthorizing}
+                loading={loading}
+                disabled={(busyKey !== null && !isAdding) || googleAdding}
+                onAdd={() => void handleAddPreset(preset)}
+                onCancel={cancelReconnectOAuth}
+              />
+            );
+          })}
+        </div>
+      </section>
 
-      <NewMcpModal
+      <CourtListenerTokenModal
+        open={courtListenerOpen}
+        onClose={() => setCourtListenerOpen(false)}
+        connector={courtListener}
+        organizationName={organizationName}
+      />
+
+      <NewCustomMcpModal
         open={addOpen}
         draft={addDraft}
         step={addStep}
         result={addResult}
-        error={addError}
         authMessage={addAuthMessage}
         showToken={showAddToken}
-        showAdvanced={showAddAdvanced}
         onDraftChange={setAddDraft}
         onShowTokenChange={setShowAddToken}
-        onShowAdvancedChange={setShowAddAdvanced}
         onClose={closeAddModal}
-        onSubmit={handleCreate}
+        onSubmit={() => handleCreate()}
         onOpenConnector={(connectorId) => {
           void openConnectorDetails(connectorId);
           closeAddModal();
         }}
       />
 
-      <McpConnectorDetailsModal
-        connector={selectedConnector}
-        draft={detailDraft}
-        error={detailError}
-        setupNotice={detailSetupNotice}
+      <ConnectorDetailsModal
+        connector={selectedMcpView}
         busyKey={busyKey}
         toolsLoading={loadingConnectorId === selectedConnectorId}
-        clearTokenStatus={
-          selectedConnectorId &&
-          busyKey === `clear-token:${selectedConnectorId}`
-            ? "clearing"
-            : selectedConnectorId === clearedBearerTokenConnectorId
-              ? "cleared"
-              : "idle"
+        details={
+          selectedConnector && selectedIsCustom ? (
+            <McpConnectorForm
+              idPrefix="connector-config"
+              draft={detailDraft}
+              showToken={showDetailToken}
+              tokenPlaceholder={
+                selectedConnector.hasAuthConfig
+                  ? "Saved token encrypted"
+                  : "Bearer token"
+              }
+              tokenAction={
+                selectedConnector.hasAuthConfig ||
+                clearedBearerTokenConnectorId === selectedConnector.id
+                  ? {
+                      label:
+                        clearedBearerTokenConnectorId === selectedConnector.id
+                          ? "Cleared"
+                          : "Clear",
+                      loading:
+                        busyKey === `clear-token:${selectedConnector.id}`,
+                      cleared:
+                        clearedBearerTokenConnectorId === selectedConnector.id,
+                      onClick: () =>
+                        void handleClearBearerToken(selectedConnector.id),
+                    }
+                  : undefined
+              }
+              onDraftChange={(next) =>
+                setDetailDraft({
+                  ...detailDraft,
+                  name: next.name,
+                  serverUrl: next.serverUrl,
+                  bearerToken: next.bearerToken,
+                  customHeaders: next.customHeaders,
+                })
+              }
+              onShowTokenChange={setShowDetailToken}
+            />
+          ) : undefined
         }
-        showToken={showDetailToken}
-        showAdvanced={showDetailAdvanced}
-        onDraftChange={setDetailDraft}
-        onShowTokenChange={setShowDetailToken}
-        onShowAdvancedChange={setShowDetailAdvanced}
-        onClose={() => {
-          setSelectedConnectorId(null);
-          setSelectedConnectorDetails(null);
-        }}
-        onSave={handleSaveSelectedConnector}
-        onClearBearerToken={handleClearBearerToken}
-        onRefresh={handleRefresh}
-        reconnectingOAuth={
+        reconnecting={
           !!selectedConnectorId &&
           reconnectingConnectorId === selectedConnectorId
         }
-        onCancelReconnectOAuth={cancelReconnectOAuth}
-        onDelete={handleDelete}
-        onConnectorEnabled={handleConnectorEnabled}
-        onToolEnabled={handleToolEnabled}
+        onClose={() => {
+          initializedDetailConnectorIdRef.current = null;
+          setSelectedConnectorId(null);
+          setSelectedConnectorDetails(null);
+        }}
+        onRefresh={() =>
+          selectedConnector && void handleRefresh(selectedConnector.id)
+        }
+        onCancelReconnect={cancelReconnectOAuth}
+        onDelete={() =>
+          selectedConnector && void handleDelete(selectedConnector.id)
+        }
+        onToolEnabled={(toolId, enabled) =>
+          selectedConnector &&
+          void handleToolEnabled(selectedConnector.id, toolId, enabled)
+        }
+        onReadOnly={(enabled) =>
+          selectedConnector && void handleReadOnly(selectedConnector.id, enabled)
+        }
+        onRequireWriteApproval={(enabled) =>
+          selectedConnector &&
+          void handleRequireWriteApproval(selectedConnector.id, enabled)
+        }
+      />
+
+      <ConnectorDetailsModal
+        connector={selectedGoogleView}
+        busyKey={busyKey}
+        toolsLoading={false}
+        actions={
+          selectedGoogle?.provider === "google-drive" &&
+          selectedGoogle.status?.connected &&
+          selectedGoogle.status.pickerAvailable ? (
+            <div className="flex flex-col items-start gap-1.5">
+              <PillButtonUI
+                tone="white"
+                disabled={busyKey !== null}
+                loading={busyKey === "picker:google-drive"}
+                onClick={() =>
+                  void runNativeUpdate(
+                    "picker:google-drive",
+                    drivePicker.addFiles,
+                  )
+                }
+              >
+                <FolderPlus className="h-3.5 w-3.5" aria-hidden="true" />
+                Add files from Google Drive
+              </PillButtonUI>
+              <p role="status" className="text-xs text-gray-500">
+                {drivePicker.message}
+              </p>
+            </div>
+          ) : undefined
+        }
+        onClose={() => setSelectedGoogleProvider(null)}
+        onRefresh={() =>
+          selectedGoogle &&
+          void runNativeUpdate(`refresh:${selectedGoogle.provider}`, () =>
+            selectedGoogle.refresh().then(() => undefined),
+          )
+        }
+        onDelete={() =>
+          selectedGoogle && void handleDeleteGoogle(selectedGoogle)
+        }
+        onToolEnabled={(toolName, enabled) =>
+          selectedGoogle &&
+          void runNativeUpdate(`tool:${toolName}`, () =>
+            selectedGoogle.setToolEnabled(toolName, enabled),
+          )
+        }
+        onReadOnly={(readOnly) =>
+          selectedGoogle &&
+          void runNativeUpdate(`read-only:${selectedGoogle.provider}`, () =>
+            selectedGoogle.updateSettings({ readOnly }),
+          )
+        }
+        onRequireWriteApproval={(requireWriteApproval) =>
+          selectedGoogle &&
+          void runNativeUpdate(`approval:${selectedGoogle.provider}`, () =>
+            selectedGoogle.updateSettings({ requireWriteApproval }),
+          )
+        }
       />
 
       <MfaVerificationPopup
@@ -886,581 +1745,126 @@ export default function ConnectorsPage() {
         onCancel={() => setPendingMfaAction(null)}
         onVerified={() => void handleMfaVerified()}
       />
+      <WarningPopup
+        open={!!addError}
+        title="Could not add connector"
+        message={addError}
+        onClose={() => {
+          setAddError(null);
+          setAddErrorGuideUrl(null);
+        }}
+      >
+        {addErrorGuideUrl && (
+          <ConnectorSetupGuideLink href={addErrorGuideUrl} />
+        )}
+      </WarningPopup>
+      <WarningPopup
+        open={!!detailError}
+        title="Connector update failed"
+        message={detailError}
+        onClose={() => setDetailError(null)}
+      />
+      <WarningPopup
+        open={!!detailSetupNotice}
+        title="Administrator setup required"
+        message={detailSetupNotice}
+        onClose={() => setDetailSetupNotice(null)}
+      >
+        {selectedConnector && (
+          <ConnectorSetupGuideLink
+            href={connectorSetupGuideUrl(selectedConnector.serverUrl)}
+          />
+        )}
+      </WarningPopup>
     </div>
   );
 }
 
 function ConnectorRow({
-  connector,
-  busyKey,
+  name,
+  icon,
+  placeholderClassName,
+  enabled,
+  busy,
   onOpen,
-  onConnectorEnabled,
+  onEnabledChange,
 }: {
-  connector: McpConnectorSummary;
-  busyKey: string | null;
+  name: string;
+  icon?: ReactNode;
+  placeholderClassName?: string;
+  enabled: boolean;
+  busy: boolean;
   onOpen: () => void;
-  onConnectorEnabled: (connectorId: string, enabled: boolean) => Promise<void>;
+  onEnabledChange: (enabled: boolean) => void;
 }) {
-  const toolCount = connector.toolCount ?? connector.tools.length;
-
   return (
-    <SettingsCard>
-      <div
-        className="cursor-pointer rounded-xl px-4 py-3 transition-colors hover:bg-white/70"
-        role="button"
-        tabIndex={0}
-        onClick={onOpen}
-        onKeyDown={(event) => {
-          if (event.key === "Enter" || event.key === " ") {
-            event.preventDefault();
-            onOpen();
-          }
-        }}
-      >
-        <div className="grid grid-cols-[minmax(0,1fr)_auto] gap-x-3 gap-y-3">
-          <div className="min-w-0 text-left">
-            <div className="flex min-w-0 items-center gap-2">
-              <SettingsLabel>{connector.name}</SettingsLabel>
-              <span className="h-1 w-1 rounded-full bg-gray-300" />
-              <span className="shrink-0 text-xs font-medium text-gray-500">
-                {toolCount} {toolCount === 1 ? "tool" : "tools"}
-              </span>
-            </div>
-          </div>
-          <div
-            className="shrink-0 justify-self-end"
-            onClick={(event) => event.stopPropagation()}
-          >
-            <ToggleSwitchUI
-              checked={connector.enabled}
-              disabled={busyKey === `connector:${connector.id}`}
-              aria-busy={busyKey === `connector:${connector.id}`}
-              onCheckedChange={(enabled) =>
-                void onConnectorEnabled(connector.id, enabled)
-              }
-            >
-              {connector.enabled ? "Enabled" : "Disabled"}
-            </ToggleSwitchUI>
-          </div>
-          <div className="min-w-0 truncate">
-            <SettingsDescription>{connector.serverUrl}</SettingsDescription>
-          </div>
-          <button
-            type="button"
-            onClick={(event) => {
-              event.stopPropagation();
-              onOpen();
-            }}
-            className="shrink-0 justify-self-end text-xs font-medium text-gray-500 transition-colors hover:text-gray-950"
-          >
-            Details
-          </button>
-        </div>
-      </div>
-    </SettingsCard>
+    <ConnectorCard
+      name={name}
+      icon={icon}
+      placeholderClassName={placeholderClassName}
+      onOpen={onOpen}
+      action={
+        <ToggleSwitchUI
+          checked={enabled}
+          disabled={busy}
+          aria-busy={busy}
+          aria-label={`${name} connector`}
+          onCheckedChange={onEnabledChange}
+        />
+      }
+    />
   );
 }
 
-function McpConnectorDetailsModal({
-  connector,
-  draft,
-  error,
-  setupNotice,
-  busyKey,
-  toolsLoading,
-  clearTokenStatus,
-  showToken,
-  showAdvanced,
-  onDraftChange,
-  onShowTokenChange,
-  onShowAdvancedChange,
-  onClose,
-  onSave,
-  onClearBearerToken,
-  onRefresh,
-  reconnectingOAuth,
-  onCancelReconnectOAuth,
-  onDelete,
-  onConnectorEnabled,
-  onToolEnabled,
-}: {
-  connector: McpConnectorSummary | null;
-  draft: DetailDraft;
-  error: string | null;
-  setupNotice: string | null;
-  busyKey: string | null;
-  toolsLoading: boolean;
-  clearTokenStatus: "idle" | "clearing" | "cleared";
-  showToken: boolean;
-  showAdvanced: boolean;
-  onDraftChange: (draft: DetailDraft) => void;
-  onShowTokenChange: (show: boolean) => void;
-  onShowAdvancedChange: (show: boolean) => void;
-  onClose: () => void;
-  onSave: () => Promise<void>;
-  onClearBearerToken: (connectorId: string) => Promise<void>;
-  onRefresh: (connectorId: string) => Promise<void>;
-  reconnectingOAuth: boolean;
-  onCancelReconnectOAuth: () => void;
-  onDelete: (connectorId: string) => Promise<void>;
-  onConnectorEnabled: (connectorId: string, enabled: boolean) => Promise<void>;
-  onToolEnabled: (
-    connectorId: string,
-    toolId: string,
-    enabled: boolean,
-  ) => Promise<void>;
-}) {
-  const hasChanges =
-    !!connector &&
-    (draft.name.trim() !== connector.name ||
-      draft.serverUrl.trim() !== connector.serverUrl ||
-      draft.bearerToken.trim().length > 0 ||
-      draft.customHeaders.trim().length > 0);
-  const isSaving = !!connector && busyKey === `save:${connector.id}`;
-
+/** Two placeholder cards: one row on a wide page, two on a narrow one. */
+function ConnectorListSkeleton() {
   return (
-    <Modal
-      open={!!connector}
-      onClose={onClose}
-      breadcrumbs={["Connectors", connector?.name ?? "MCP connector"]}
-      headerAction={
-        connector ? (
-          <ToggleSwitchUI
-            checked={connector.enabled}
-            disabled={busyKey === `connector:${connector.id}`}
-            aria-busy={busyKey === `connector:${connector.id}`}
-            onCheckedChange={(enabled) =>
-              void onConnectorEnabled(connector.id, enabled)
-            }
-          >
-            {connector.enabled ? "Enabled" : "Disabled"}
-          </ToggleSwitchUI>
-        ) : null
-      }
-      size="md"
-      secondaryAction={
-        connector
-          ? {
-              label: "Delete connector",
-              variant: "danger",
-              onClick: () => void onDelete(connector.id),
-              disabled: busyKey === `delete:${connector.id}`,
-            }
-          : undefined
-      }
-      primaryAction={{
-        label: isSaving ? "Saving..." : "Save",
-        icon: isSaving ? (
-          <Loader2 className="h-4 w-4 animate-spin" />
-        ) : undefined,
-        onClick: () => void onSave(),
-        disabled:
-          !connector ||
-          !hasChanges ||
-          isSaving ||
-          !draft.name.trim() ||
-          !draft.serverUrl.trim(),
-      }}
-      cancelAction={{ label: "Close", onClick: onClose }}
-      footerStatus={
-        error ? <span className="text-sm text-red-600">{error}</span> : null
-      }
-    >
-      {connector && (
-        <div className="flex min-h-0 flex-1 flex-col gap-5 overflow-y-auto pb-4">
-          {setupNotice && <ConnectorSetupNotice text={setupNotice} />}
-          <ConnectorForm
-            draft={draft}
-            showToken={showToken}
-            showAdvanced={showAdvanced}
-            tokenPlaceholder={
-              connector.hasAuthConfig ? "Saved token encrypted" : "Bearer token"
-            }
-            tokenAction={
-              connector.hasAuthConfig || clearTokenStatus === "cleared"
-                ? {
-                    label: clearTokenStatus === "cleared" ? "Cleared" : "Clear",
-                    loading: clearTokenStatus === "clearing",
-                    cleared: clearTokenStatus === "cleared",
-                    onClick: () => void onClearBearerToken(connector.id),
-                  }
-                : undefined
-            }
-            onDraftChange={(next) =>
-              onDraftChange({
-                ...draft,
-                name: next.name,
-                serverUrl: next.serverUrl,
-                bearerToken: next.bearerToken,
-                customHeaders: next.customHeaders,
-              })
-            }
-            onShowTokenChange={onShowTokenChange}
-            onShowAdvancedChange={onShowAdvancedChange}
-          />
-          <div className="flex min-h-0 flex-1 flex-col">
-            <div className="mb-2 flex items-center justify-between">
-              <h3 className="text-xs font-medium text-gray-500">
-                {toolsLoading ? connector.toolCount : connector.tools.length}{" "}
-                {(toolsLoading
-                  ? connector.toolCount
-                  : connector.tools.length) === 1
-                  ? "Tool"
-                  : "Tools"}
-              </h3>
-              <div className="flex items-center gap-3">
-                {reconnectingOAuth && (
-                  <button
-                    type="button"
-                    onClick={onCancelReconnectOAuth}
-                    className="text-xs font-medium text-gray-500 transition-colors hover:text-gray-900"
-                  >
-                    Cancel
-                  </button>
-                )}
-                <button
-                  type="button"
-                  onClick={() => void onRefresh(connector.id)}
-                  disabled={busyKey === `refresh:${connector.id}`}
-                  className="inline-flex items-center gap-1 text-xs font-medium text-gray-500 transition-colors hover:text-gray-900 disabled:cursor-not-allowed disabled:text-gray-300"
-                >
-                  {busyKey === `refresh:${connector.id}` ? (
-                    <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                  ) : (
-                    <RefreshCw className="h-3.5 w-3.5" />
-                  )}
-                  Refresh
-                </button>
-              </div>
-            </div>
-            {toolsLoading ? (
-              <ToolListSkeleton count={connector.toolCount} fill />
-            ) : (
-              <ScrollableToolList
-                connector={connector}
-                busyKey={busyKey}
-                onToolEnabled={onToolEnabled}
-                fill
-              />
-            )}
-          </div>
-        </div>
-      )}
-    </Modal>
+    <>
+      <ConnectorCardSkeleton />
+      <ConnectorCardSkeleton />
+    </>
   );
 }
 
-function ConnectorForm({
-  draft,
-  showToken,
-  showAdvanced,
-  showTokenNote = false,
-  tokenPlaceholder,
-  tokenAction,
-  disabled = false,
-  onDraftChange,
-  onShowTokenChange,
-  onShowAdvancedChange,
+function DiscoverCard({
+  name,
+  icon,
+  adding,
+  authorizing,
+  loading,
+  disabled,
+  onAdd,
+  onCancel,
 }: {
-  draft: AddDraft;
-  showToken: boolean;
-  showAdvanced: boolean;
-  showTokenNote?: boolean;
-  tokenPlaceholder: string;
-  tokenAction?: {
-    label: string;
-    active?: boolean;
-    loading?: boolean;
-    cleared?: boolean;
-    onClick: () => void;
-  };
-  disabled?: boolean;
-  onDraftChange: (draft: AddDraft) => void;
-  onShowTokenChange: (show: boolean) => void;
-  onShowAdvancedChange: (show: boolean) => void;
+  name: string;
+  icon: ReactNode;
+  adding: boolean;
+  authorizing: boolean;
+  loading: boolean;
+  disabled: boolean;
+  onAdd: () => void;
+  onCancel: () => void;
 }) {
   return (
-    <div className="grid gap-3 pt-1">
-      <div className="grid gap-2 sm:grid-cols-[96px_minmax(0,1fr)] sm:items-center">
-        <FieldLabel htmlFor="connector-config-label">Label</FieldLabel>
-        <SettingsTextInput
-          id="connector-config-label"
-          value={draft.name}
-          onChange={(event) =>
-            onDraftChange({ ...draft, name: event.target.value })
+    <ConnectorCard
+      name={name}
+      icon={icon}
+      action={
+        <PillButtonUI
+          tone="blue"
+          size="sm"
+          onClick={authorizing ? onCancel : onAdd}
+          disabled={loading || (!authorizing && (adding || disabled))}
+          loading={adding}
+          aria-label={
+            authorizing
+              ? `Cancel ${name} authorization`
+              : `Add ${name} connector`
           }
-          placeholder="Connector label"
-          className="h-8"
-          disabled={disabled}
-        />
-      </div>
-      <div className="grid gap-2 sm:grid-cols-[96px_minmax(0,1fr)] sm:items-center">
-        <FieldLabel htmlFor="connector-config-url">URL endpoint</FieldLabel>
-        <SettingsTextInput
-          id="connector-config-url"
-          value={draft.serverUrl}
-          onChange={(event) =>
-            onDraftChange({
-              ...draft,
-              serverUrl: event.target.value,
-            })
-          }
-          placeholder="https://mcp.example.com/mcp"
-          className="h-8"
-          disabled={disabled}
-        />
-      </div>
-      <div className="grid gap-2 sm:grid-cols-[96px_minmax(0,1fr)] sm:items-start">
-        <FieldLabel htmlFor="connector-config-token">Bearer token</FieldLabel>
-        <div className="min-w-0">
-          <div className="relative">
-            <SettingsTextInput
-              id="connector-config-token"
-              value={draft.bearerToken}
-              onChange={(event) =>
-                onDraftChange({
-                  ...draft,
-                  bearerToken: event.target.value,
-                })
-              }
-              type={showToken ? "text" : "password"}
-              placeholder={tokenPlaceholder}
-              className={`h-8 ${
-                tokenAction
-                  ? draft.bearerToken
-                    ? "pr-[6.5rem]"
-                    : "pr-16"
-                  : "pr-10"
-              }`}
-              autoComplete="off"
-              spellCheck={false}
-              disabled={disabled}
-            />
-            {draft.bearerToken && (
-              <button
-                type="button"
-                className={`absolute inset-y-1 ${
-                  tokenAction ? "right-[3.75rem]" : "right-1.5"
-                } flex items-center ${settingsGlassIconButtonClassName}`}
-                onClick={() => onShowTokenChange(!showToken)}
-                aria-label={showToken ? "Hide token" : "Show token"}
-                disabled={disabled}
-              >
-                {showToken ? (
-                  <EyeOff className="h-4 w-4" />
-                ) : (
-                  <Eye className="h-4 w-4" />
-                )}
-              </button>
-            )}
-            {tokenAction && (
-              <button
-                type="button"
-                onClick={tokenAction.onClick}
-                disabled={
-                  disabled || tokenAction.loading || tokenAction.cleared
-                }
-                className={`absolute inset-y-1 right-1.5 px-1 text-xs font-medium transition-colors disabled:cursor-not-allowed disabled:text-gray-300 ${
-                  tokenAction.active || tokenAction.cleared
-                    ? "text-red-600 hover:text-red-700"
-                    : "text-gray-500 hover:text-gray-900"
-                }`}
-              >
-                <span className="inline-flex items-center gap-1">
-                  {tokenAction.label}
-                  {tokenAction.loading && (
-                    <Loader2 className="h-3 w-3 animate-spin" />
-                  )}
-                </span>
-              </button>
-            )}
-          </div>
-          {showTokenNote && (
-            <p className="mt-1 text-right text-xs text-gray-500">
-              Tokens are stored encrypted.
-            </p>
-          )}
-        </div>
-      </div>
-      <div className="grid gap-2">
-        <button
-          type="button"
-          onClick={() => onShowAdvancedChange(!showAdvanced)}
-          className="inline-flex items-center gap-1 justify-self-start text-xs font-medium text-gray-500 transition-colors hover:text-gray-900"
-          disabled={disabled}
         >
-          Advanced
-          <ChevronDown
-            className={`h-3.5 w-3.5 transition-transform ${
-              showAdvanced ? "" : "-rotate-90"
-            }`}
-          />
-        </button>
-        {showAdvanced && (
-          <div className="grid gap-2 sm:grid-cols-[96px_minmax(0,1fr)] sm:items-start">
-            <FieldLabel htmlFor="connector-config-headers">
-              Custom headers
-            </FieldLabel>
-            <div className="min-w-0">
-              <textarea
-                id="connector-config-headers"
-                value={draft.customHeaders}
-                onChange={(event) =>
-                  onDraftChange({
-                    ...draft,
-                    customHeaders: event.target.value,
-                  })
-                }
-                placeholder='{"X-API-Key":"secret"}'
-                className={`min-h-20 resize-y py-2 ${SETTINGS_CONTROL_CLASS}`}
-                autoComplete="off"
-                spellCheck={false}
-                disabled={disabled}
-              />
-              <p className="mt-1 text-right text-xs text-gray-500">
-                Secrets are stored encrypted.
-              </p>
-            </div>
-          </div>
-        )}
-      </div>
-    </div>
-  );
-}
-
-function ToolListSkeleton({
-  count,
-  fill = false,
-}: {
-  count: number;
-  fill?: boolean;
-}) {
-  const rowCount = Math.min(Math.max(count || 3, 3), 8);
-  return (
-    <div
-      className={`overflow-hidden rounded-lg border border-gray-100 bg-white/60 ${
-        fill ? "min-h-0 flex-1" : "max-h-72"
-      }`}
-    >
-      <div>
-        {Array.from({ length: rowCount }).map((_, index) => (
-          <div key={index} className="px-3 py-2">
-            <div className="grid grid-cols-[auto_minmax(0,1fr)_auto] items-center gap-2">
-              <div className="h-5 w-5" />
-              <div className="h-3.5 w-full max-w-[220px] animate-pulse rounded bg-gray-100" />
-              <div className="h-4 w-7 animate-pulse rounded-full bg-gray-100" />
-            </div>
-          </div>
-        ))}
-      </div>
-    </div>
-  );
-}
-
-function ScrollableToolList({
-  connector,
-  busyKey,
-  onToolEnabled,
-  fill = false,
-}: {
-  connector: McpConnectorSummary;
-  busyKey?: string | null;
-  onToolEnabled?: (
-    connectorId: string,
-    toolId: string,
-    enabled: boolean,
-  ) => Promise<void>;
-  fill?: boolean;
-}) {
-  const [expandedToolId, setExpandedToolId] = useState<string | null>(null);
-
-  if (connector.tools.length === 0) {
-    return (
-      <div
-        className={`rounded-lg bg-gray-50 px-3 py-3 text-sm text-gray-500 ${
-          fill ? "min-h-0 flex-1" : ""
-        }`}
-      >
-        No tools discovered yet.
-      </div>
-    );
-  }
-
-  return (
-    <div
-      className={`overflow-y-auto rounded-lg border border-gray-100 bg-white/60 ${
-        fill ? "min-h-0 flex-1" : "max-h-72"
-      }`}
-    >
-      <div>
-        {connector.tools.map((tool) => {
-          const disabled =
-            !onToolEnabled ||
-            busyKey === `tool:${tool.id}` ||
-            tool.requiresConfirmation;
-          const isExpanded = expandedToolId === tool.id;
-          const toolLabel = tool.title || tool.toolName;
-          return (
-            <div key={tool.id} className="px-3 py-2">
-              <div className="grid grid-cols-[auto_minmax(0,1fr)_auto] items-center gap-2">
-                <button
-                  type="button"
-                  onClick={() => setExpandedToolId(isExpanded ? null : tool.id)}
-                  className="inline-flex h-5 w-5 items-center justify-center text-gray-400 transition-colors hover:text-gray-800"
-                  aria-label={`${
-                    isExpanded ? "Collapse" : "Expand"
-                  } ${toolLabel}`}
-                >
-                  <ChevronDown
-                    className={`h-3.5 w-3.5 transition-transform ${
-                      isExpanded ? "" : "-rotate-90"
-                    }`}
-                  />
-                </button>
-                <p className="min-w-0 truncate text-sm font-medium text-gray-700">
-                  {toolLabel}
-                </p>
-                {onToolEnabled ? (
-                  <ToggleSwitchUI
-                    checked={tool.enabled}
-                    disabled={disabled || busyKey === `tool:${tool.id}`}
-                    aria-busy={busyKey === `tool:${tool.id}`}
-                    aria-label={`${toolLabel} enabled`}
-                    onCheckedChange={(enabled) =>
-                      void onToolEnabled(connector.id, tool.id, enabled)
-                    }
-                  />
-                ) : (
-                  <span
-                    className={`text-xs font-medium ${
-                      tool.enabled ? "text-green-600" : "text-gray-500"
-                    }`}
-                  >
-                    {tool.enabled ? "Enabled" : "Disabled"}
-                  </span>
-                )}
-              </div>
-              {isExpanded && (
-                <div className="ml-7 mt-2 min-w-0">
-                  {tool.requiresConfirmation && (
-                    <p className="text-xs font-medium text-amber-700">
-                      Confirmation required
-                    </p>
-                  )}
-                  {tool.description && (
-                    <p className="mt-1 text-xs text-gray-500">
-                      {tool.description}
-                    </p>
-                  )}
-                  <p className="mt-1 break-all font-mono text-[11px] text-gray-400">
-                    {tool.openaiToolName}
-                  </p>
-                </div>
-              )}
-            </div>
-          );
-        })}
-      </div>
-    </div>
+          {authorizing ? "Cancel" : adding ? "Adding..." : "Add"}
+        </PillButtonUI>
+      }
+    />
   );
 }

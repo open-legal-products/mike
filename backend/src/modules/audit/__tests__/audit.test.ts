@@ -1,7 +1,6 @@
 import { describe, it, expect } from "vitest";
 import {
     csvCell,
-    escapeLikePattern,
     parseQuery,
     queryEvents,
 } from "../audit.service";
@@ -127,10 +126,8 @@ describe("parseQuery", () => {
  * supplies the third branch: the caller's memberships, that org's projects,
  * and any per-project deny override.
  *
- * The audit scope now delegates to lib/access.listAccessibleProjectIds, which
- * composes .eq/.in/.is chains over four tables and re-checks every org
- * project — so the stub answers on the FILTERS applied, not just the table
- * named.
+ * The project-access helper tests below compose .eq/.in/.is chains across
+ * these tables. Personal activity no longer consults that helper.
  */
 type Filters = {
     eq: Record<string, unknown>;
@@ -145,7 +142,7 @@ function makeDb(
     profiles: Record<string, unknown>[] = [],
     org: {
         memberships?: { org_id: string; role: string }[];
-        projects?: { id: string; user_id: string | null; org_id: string }[];
+        projects?: { id: string; user_id: string | null; org_id: string; visibility?: "private" | "organization" }[];
         denies?: string[];
     } = {},
 ) {
@@ -315,24 +312,15 @@ describe("queryEvents visibility scoping", () => {
         sortDirection: "desc",
     } as const;
 
-    it("scopes to own events OR accessible project events (owned + shared)", async () => {
+    it("scopes only to the caller even when projects are owned or shared", async () => {
         const { db, calls } = makeDb(["p-own"], ["p-shared"]);
         await queryEvents(db, "u1", "u1@example.com", query);
-        // Two disjoint reads: the caller's own rows, and rows written by
-        // OTHER people inside projects the caller can reach. Disjoint is what
-        // makes the exact counts summable and keeps the project-id filter out
-        // of the URL's `or=` clause, which overflowed past a few hundred ids.
         expect(calls.eq).toContainEqual(["user_id", "u1"]);
-        const projectFilter = calls.in.find(([col]) => col === "project_id");
-        expect(projectFilter).toBeDefined();
-        expect([...(projectFilter![1] as string[])].sort()).toEqual([
-            "p-own",
-            "p-shared",
-        ]);
-        expect(calls.or).toBe("user_id.is.null,user_id.neq.u1");
+        expect(calls.in.find(([column]) => column === "project_id")).toBeUndefined();
+        expect(calls.or).toBeUndefined();
     });
 
-    it("falls back to own-events-only when no projects are accessible", async () => {
+    it("scopes to own events when no projects are accessible", async () => {
         const { db, calls } = makeDb([], []);
         await queryEvents(db, "u1", "u1@example.com", query);
         expect(calls.or).toBeUndefined();
@@ -364,16 +352,13 @@ describe("queryEvents visibility scoping", () => {
         expect(visible).toContain("p-granted");
     });
 
-    // Organization projects carry no access grants by construction, so the
-    // old owner-or-grant query left an org admin's audit history empty for
-    // their own firm's matters — including every project detached by an
-    // account deletion (projects.user_id → NULL).
+    // Project access also covers organization membership and detached owners.
     it("admits an organization project the caller does not own", async () => {
         const { db } = makeDb([], [], [], [], {
             memberships: [{ org_id: "o1", role: "member" }],
             projects: [
-                { id: "p-colleague", user_id: "u2", org_id: "o1" },
-                { id: "p-detached", user_id: null, org_id: "o1" },
+                { id: "p-colleague", user_id: "u2", org_id: "o1", visibility: "organization" },
+                { id: "p-detached", user_id: null, org_id: "o1", visibility: "organization" },
             ],
         });
 
@@ -384,14 +369,13 @@ describe("queryEvents visibility scoping", () => {
         );
     });
 
-    // The audit trail is a read path like any other: an ethical wall has to
-    // hold here too, or the wall leaks the walled matter's history.
+    // Project-access consumers must respect explicit deny overrides.
     it("excludes an organization project the caller is denied on", async () => {
         const { db } = makeDb([], [], [], [], {
             memberships: [{ org_id: "o1", role: "member" }],
             projects: [
-                { id: "p-open", user_id: "u2", org_id: "o1" },
-                { id: "p-walled", user_id: "u2", org_id: "o1" },
+                { id: "p-open", user_id: "u2", org_id: "o1", visibility: "organization" },
+                { id: "p-walled", user_id: "u2", org_id: "o1", visibility: "organization" },
             ],
             denies: ["p-walled"],
         });
@@ -492,34 +476,17 @@ describe("queryEvents visibility scoping", () => {
     });
 });
 
-describe("queryEvents when the access scope cannot be read", () => {
-    it("answers with an error result instead of an unscoped page", async () => {
-        // listAccessibleProjectIds now THROWS when one of its access reads
-        // fails, so that an unreadable deny-override table cannot widen the
-        // audit trail to a walled matter. GET /audit has no try/catch of its
-        // own, so queryEvents must turn that throw into the `{ error }` shape
-        // the route already maps to a generic 500.
-        const failing: any = {};
-        for (const method of ["select", "eq", "in", "is", "order", "range"])
-            failing[method] = () => failing;
-        failing.then = (resolve: (v: unknown) => unknown) =>
-            Promise.resolve({
-                data: null,
-                error: { message: "permission denied for table org_members" },
-            }).then(resolve);
-        const db: any = { from: () => failing };
-
-        const result = await queryEvents(db, "u1", "u1@example.com", {
-            sortBy: "created_at",
-            sortDirection: "desc",
-            page: 1,
-            limit: 50,
-        });
-
-        expect(result.data).toBeNull();
-        // The PostgREST error itself comes back, so the route logs its code.
-        expect(result.error?.message).toBe(
-            "permission denied for table org_members",
-        );
+describe("queryEvents independent of project access", () => {
+    it("does not query project access tables for personal activity", async () => {
+        const builder: any = {};
+        for (const method of ["select", "eq", "order"]) builder[method] = () => builder;
+        builder.range = async () => ({ data: [], count: 0, error: null });
+        const db: any = { from: (table: string) => {
+            if (table !== "audit_events") throw new Error("Project access unavailable");
+            return builder;
+        } };
+        expect(await queryEvents(db, "u1", "u1@example.com", {
+            sortBy: "created_at", sortDirection: "desc", page: 1, limit: 50,
+        })).toMatchObject({ data: [], count: 0, error: null });
     });
 });

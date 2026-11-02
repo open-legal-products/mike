@@ -40,21 +40,23 @@ function PracticeDetailsForm({
     initial: ReturnType<typeof personalisationInitialValues>;
 }) {
     const router = useRouter();
-    const { completeOnboarding } = useUserProfile();
+    const { updatePersonalisation } = useUserProfile();
     const form = usePersonalisationFields(initial);
     const [submitting, setSubmitting] = useState(false);
     const [error, setError] = useState<string | null>(null);
 
-    const finishOnboarding = async (
-        details: Parameters<typeof completeOnboarding>[0],
+    const savePracticeDetails = async (
+        details: Parameters<typeof updatePersonalisation>[0],
     ) => {
+        if (submitting) return;
         setSubmitting(true);
         setError(null);
-        const saved = await completeOnboarding(details);
+        const saved = await updatePersonalisation(details);
         if (saved) {
-            router.replace("/assistant");
+            router.push("/onboarding/invitations");
         } else {
-            setError("Unable to save your practice details");
+            // `updatePersonalisation` already raised the notice with the
+            // sentence, Retry and support; an inline line would repeat it.
             setSubmitting(false);
         }
     };
@@ -66,7 +68,7 @@ function PracticeDetailsForm({
             return;
         }
 
-        await finishOnboarding({
+        await savePracticeDetails({
             ...(form.details.jurisdiction
                 ? { jurisdiction: form.details.jurisdiction }
                 : {}),
@@ -84,7 +86,7 @@ function PracticeDetailsForm({
 
     return (
         <OnboardingShell
-            step="Step 2 of 2"
+            step="Step 2 of 4"
             title="Your legal practice"
             description="Optionally add your professional setting, primary jurisdiction, and the areas you work in."
         >
@@ -123,7 +125,7 @@ function PracticeDetailsForm({
                         <button
                             type="button"
                             disabled={submitting}
-                            onClick={() => void finishOnboarding({})}
+                            onClick={() => router.push("/onboarding/invitations")}
                             className="text-sm font-medium text-gray-500 transition-colors hover:text-gray-950 disabled:cursor-not-allowed disabled:text-gray-300"
                         >
                             Skip
@@ -134,7 +136,7 @@ function PracticeDetailsForm({
                             size="normal"
                             disabled={submitting}
                         >
-                            {submitting ? "Finishing..." : "Finish"}
+                            {submitting ? "Saving..." : "Continue"}
                         </PillButtonUI>
                     </div>
                 </div>

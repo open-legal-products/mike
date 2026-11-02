@@ -31,9 +31,8 @@ export function useAssistantMessageLayout({
     const messageGap = window.innerWidth < 768 ? 24 : 32;
     // Measure after the loading skeleton gives way to the messages, even
     // when selecting a thread with the same number of messages.
-    // eslint-disable-next-line react-hooks/set-state-in-effect -- the response spacer depends on rendered message geometry
     setMinHeight(
-      `${Math.max(0, container.clientHeight - messageGap * 3 - userMessage.offsetHeight - bottomPadding - headerHeight)}px`,
+      `${Math.max(0, container.clientHeight - messageGap * 2 - userMessage.offsetHeight - bottomPadding - headerHeight)}px`,
     );
   }, [
     ready,

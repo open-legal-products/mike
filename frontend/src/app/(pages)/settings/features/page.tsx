@@ -1,76 +1,55 @@
 "use client";
 
 import { useState } from "react";
-import { ApiKeyField } from "@/app/components/settings/ApiKeyField";
 import {
   SettingsDescription,
   SettingsLabel,
 } from "@/app/components/settings/SettingsText";
-import { SettingsCard } from "@/app/components/settings/SettingsCard";
+import { GlassCardUI } from "@/shared/ui/GlassCardUI";
 import { SettingsHeading } from "@/app/components/settings/SettingsHeading";
 import { SettingsRow } from "@/app/components/settings/SettingsRow";
 import { ToggleSwitchUI } from "@/shared/ui/ToggleSwitchUI";
+import { WebSearchSection } from "@/app/components/settings/WebSearchSection";
 import { useUserProfile } from "@/app/contexts/UserProfileContext";
 
 export default function FeaturesPage() {
   const {
     profile,
-    updateApiKey,
-    updateLegalResearchUs,
     updateQuickActionsVisible,
+    updateResponseDetailsVisible,
   } = useUserProfile();
-  const [quickActionsError, setQuickActionsError] = useState<string | null>(
-    null,
-  );
-  const [saving, setSaving] = useState(false);
   const [savingQuickActions, setSavingQuickActions] = useState(false);
-  const [saveError, setSaveError] = useState<string | null>(null);
-  const [optimisticLegalResearchUs, setOptimisticLegalResearchUs] = useState<
-    boolean | null
-  >(null);
-
-  const persistedLegalResearchUs = profile?.legalResearchUs ?? true;
-  const courtListenerEnabled =
-    optimisticLegalResearchUs ?? persistedLegalResearchUs;
+  const [savingResponseDetails, setSavingResponseDetails] = useState(false);
   const quickActionsVisible = profile?.quickActionsVisible ?? true;
+  const responseDetailsVisible = profile?.responseDetailsVisible ?? false;
 
   const setQuickActionsVisible = async (visible: boolean) => {
-    setQuickActionsError(null);
     setSavingQuickActions(true);
-    const ok = await updateQuickActionsVisible(visible);
+    // A failure is reported by the profile context's notice (with Retry);
+    // the toggle reads the profile, so it is already back where it was.
+    await updateQuickActionsVisible(visible);
     setSavingQuickActions(false);
-    if (!ok) setQuickActionsError("Could not update. Try again.");
   };
 
-  const handleCourtListenerChange = async (enabled: boolean) => {
-    if (saving) return;
-    setSaveError(null);
-    setOptimisticLegalResearchUs(enabled);
-    setSaving(true);
-    const ok = await updateLegalResearchUs(enabled);
-    setSaving(false);
-    setOptimisticLegalResearchUs(null);
-    if (!ok) {
-      setSaveError("Could not update. Try again.");
-    }
+  const setResponseDetailsVisible = async (visible: boolean) => {
+    setSavingResponseDetails(true);
+    // As with quick actions, the profile context reports a failure and the
+    // toggle, which reads the profile, stays where it was.
+    await updateResponseDetailsVisible(visible);
+    setSavingResponseDetails(false);
   };
 
   return (
     <div className="space-y-8">
       <section className="space-y-3">
-        <SettingsHeading>Assistant</SettingsHeading>
-        <SettingsCard>
+        <SettingsHeading id="assistant-features">Assistant</SettingsHeading>
+        <GlassCardUI>
           <SettingsRow>
             <div className="min-w-0 space-y-1">
               <SettingsLabel>Quick actions</SettingsLabel>
               <SettingsDescription>
                 Show the quick actions row on the assistant start screen.
               </SettingsDescription>
-              {quickActionsError && (
-                <p className="text-sm text-red-600" role="alert">
-                  {quickActionsError}
-                </p>
-              )}
             </div>
             <ToggleSwitchUI
               checked={quickActionsVisible}
@@ -82,47 +61,28 @@ export default function FeaturesPage() {
               }}
             />
           </SettingsRow>
-        </SettingsCard>
-      </section>
-
-      <section className="space-y-3">
-        <SettingsHeading>Legal Research</SettingsHeading>
-        <SettingsCard>
           <SettingsRow>
             <div className="min-w-0 space-y-1">
-              <SettingsLabel>Enable CourtListener</SettingsLabel>
+              <SettingsLabel>Response details</SettingsLabel>
               <SettingsDescription>
-                CourtListener provides access to US case law.
+                Show the model, reasoning effort and token count under each
+                response and subagent.
               </SettingsDescription>
-              {saveError && (
-                <p className="text-sm text-red-600" role="alert">
-                  {saveError}
-                </p>
-              )}
             </div>
             <ToggleSwitchUI
-              checked={courtListenerEnabled}
-              disabled={saving}
-              aria-busy={saving}
-              aria-label="Enable CourtListener"
-              onCheckedChange={(enabled) =>
-                void handleCourtListenerChange(enabled)
-              }
+              checked={responseDetailsVisible}
+              disabled={savingResponseDetails}
+              aria-busy={savingResponseDetails}
+              aria-label="Response details"
+              onCheckedChange={(checked) => {
+                void setResponseDetailsVisible(checked);
+              }}
             />
           </SettingsRow>
-          {courtListenerEnabled && (
-            <ApiKeyField
-              label="CourtListener API Key"
-              placeholder="Token..."
-              hasSavedKey={profile?.apiKeys.courtlistener.source === "user"}
-              onSave={(value) =>
-                updateApiKey("courtlistener", value.trim() || null)
-              }
-              onRemove={() => updateApiKey("courtlistener", null)}
-            />
-          )}
-        </SettingsCard>
+        </GlassCardUI>
       </section>
+
+      <WebSearchSection />
     </div>
   );
 }

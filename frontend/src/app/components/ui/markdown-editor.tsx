@@ -19,13 +19,11 @@ import {
 } from "lucide-react";
 import { EDITOR_SURFACE_CLASS } from "@/app/components/ui/liquid-surface";
 import {
-  DropdownMenu,
-  DropdownMenuTrigger,
-} from "@/app/components/ui/dropdown-menu";
-import {
-  LiquidDropdownContent,
-  LiquidDropdownItem,
-} from "@/app/components/ui/liquid-dropdown";
+  Dropdown,
+  DropdownContent,
+  DropdownItem,
+  DropdownTrigger,
+} from "@/shared/ui/dropdown";
 import { cn } from "@/app/lib/utils";
 
 export interface MarkdownEditorProps {
@@ -458,7 +456,7 @@ export function MarkdownEditor({
     >
       {!readOnly && editor && (
         <div
-          className="flex shrink-0 items-center gap-0.5 overflow-x-auto bg-app-surface px-2 py-1.5 backdrop-blur-xl"
+          className="flex shrink-0 items-center gap-0.5 overflow-x-auto bg-app-surface px-2 py-1.5"
           role="toolbar"
           aria-label="Markdown formatting"
         >
@@ -551,14 +549,14 @@ export function MarkdownEditor({
           {allowTables ? (
             <>
               <div aria-hidden="true" className="mx-1 h-4 w-px shrink-0 bg-gray-200" />
-              <DropdownMenu
+              <Dropdown
                 open={tablePickerOpen}
                 onOpenChange={(open) => {
                   setTablePickerOpen(open);
                   if (!open) setTablePickerSize(null);
                 }}
               >
-                <DropdownMenuTrigger asChild>
+                <DropdownTrigger asChild>
                   <button
                     type="button"
                     disabled={suspended}
@@ -574,11 +572,11 @@ export function MarkdownEditor({
                   >
                     <Table2 className="h-4 w-4" />
                   </button>
-                </DropdownMenuTrigger>
-                <LiquidDropdownContent
+                </DropdownTrigger>
+                <DropdownContent
                   align="start"
                   aria-label="Insert table"
-                  className="z-[250] w-max p-2"
+                  className="w-max p-2"
                   onCloseAutoFocus={(event) => event.preventDefault()}
                 >
                   <div className="space-y-2">
@@ -604,7 +602,7 @@ export function MarkdownEditor({
                                 cols <= tablePickerSize.cols;
 
                               return (
-                                <LiquidDropdownItem
+                                <DropdownItem
                                   key={`${rows}-${cols}`}
                                   aria-label={`Insert ${rows} by ${cols} table`}
                                   selected={selected}
@@ -638,8 +636,8 @@ export function MarkdownEditor({
                         : "Select table size"}
                     </div>
                   </div>
-                </LiquidDropdownContent>
-              </DropdownMenu>
+                </DropdownContent>
+              </Dropdown>
             </>
           ) : null}
           <div className="ml-auto" />
@@ -659,7 +657,7 @@ export function MarkdownEditor({
         </div>
       )}
       {readOnly && (
-        <div className="flex h-9 shrink-0 items-center justify-between bg-app-surface px-5 backdrop-blur-xl">
+        <div className="flex h-9 shrink-0 items-center justify-between bg-app-surface px-5">
           <span className="text-xs font-medium text-gray-500">Read-only</span>
           {editor && (
             <AppToolbarButton

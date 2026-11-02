@@ -3,9 +3,10 @@
 // exists so the UI can hide or disable affordances the server would reject,
 // instead of offering actions that fail.
 //
-// Content uses Owner, Editor and Viewer. Organizations separately use Admin
-// and Member; Admins inherit Owner and Members inherit Editor on organization
-// content unless a resource-specific override replaces that default.
+// Content uses Owner, Editor and Viewer. Organizations separately use Owner,
+// Admin and Member; organization Owners and Admins inherit Owner on
+// organization content, and Members inherit Editor unless a resource-specific
+// override replaces that default.
 
 export type ProjectRole = "owner" | "editor" | "viewer";
 export type OrganizationAccessOverride = ProjectRole | "deny";
@@ -13,10 +14,15 @@ export type OrganizationAccessOverride = ProjectRole | "deny";
 /** Every resource role, strongest first — the order role pickers render in. */
 export const PROJECT_ROLES: ProjectRole[] = ["owner", "editor", "viewer"];
 
-export type OrgRole = "admin" | "member";
+export type OrgRole = "owner" | "admin" | "member";
 
 /** Every organization role, strongest first. */
-export const ORG_ROLES: OrgRole[] = ["admin", "member"];
+export const ORG_ROLES: OrgRole[] = ["owner", "admin", "member"];
+
+/** The roles an invitation may carry. Ownership is granted after joining. */
+export type InvitableOrgRole = Exclude<OrgRole, "owner">;
+
+export const INVITABLE_ORG_ROLES: InvitableOrgRole[] = ["admin", "member"];
 
 export type Capability =
     | "project.view"
@@ -81,7 +87,41 @@ export function strongerRole(
 }
 
 export function isOrgRole(value: unknown): value is OrgRole {
-    return value === "admin" || value === "member";
+    return value === "owner" || value === "admin" || value === "member";
+}
+
+const ORG_ROLE_RANK: Record<OrgRole, number> = {
+    member: 0,
+    admin: 1,
+    owner: 2,
+};
+
+/** Only an organization owner may delete it or decide who administers it. */
+export function isOrgOwner(role: OrgRole | null | undefined): boolean {
+    return role === "owner";
+}
+
+/**
+ * Whether the role may administer an organization: people, invitations and
+ * settings. An owner can do everything an admin can.
+ */
+export function isOrgAdmin(role: OrgRole | null | undefined): boolean {
+    return role === "owner" || role === "admin";
+}
+
+/**
+ * Mirror of the server's `canManageOrgRole` (backend/src/lib/access.ts):
+ * whether `actor` may give somebody `role`, or act on somebody who holds it.
+ * Owners act at every level; everyone else only strictly below themselves,
+ * so an admin can remove a member but not appoint or remove another admin.
+ */
+export function canManageOrgRole(
+    actor: OrgRole | null | undefined,
+    role: OrgRole,
+): boolean {
+    if (!actor) return false;
+    if (actor === "owner") return true;
+    return ORG_ROLE_RANK[actor] > ORG_ROLE_RANK[role];
 }
 
 /**
@@ -194,11 +234,13 @@ export const PROJECT_ROLE_DESCRIPTIONS: Record<ProjectRole, string> = {
 };
 
 export const ORG_ROLE_LABELS: Record<OrgRole, string> = {
+    owner: "Owner",
     admin: "Admin",
     member: "Member",
 };
 
 export const ORG_ROLE_DESCRIPTIONS: Record<OrgRole, string> = {
-    admin: "Manages the organization's people and settings and is an Owner of organization content by default.",
+    owner: "Everything an admin can do, plus deleting the organization and appointing or removing admins and other owners.",
+    admin: "Manages the organization's members, invitations and settings and is an Owner of organization content by default.",
     member: "Can edit organization content by default.",
 };

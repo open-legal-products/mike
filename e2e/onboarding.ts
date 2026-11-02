@@ -23,6 +23,14 @@ export async function completeOnboardingIfRequired(page: Page): Promise<void> {
                 timeout: 15_000,
             });
             await page.getByRole("button", { name: "Skip" }).click();
+            await page.waitForURL(/\/onboarding\/invitations/, {
+                timeout: 15_000,
+            });
+            await page.getByRole("button", { name: "Continue" }).click();
+            await page.waitForURL(/\/onboarding\/models/, {
+                timeout: 15_000,
+            });
+            await page.getByRole("button", { name: "Finish" }).click();
         }
     }
     await page.waitForURL(/\/assistant/, { timeout: 15_000 });

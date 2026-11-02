@@ -3,6 +3,7 @@ import { enqueueDbJob } from "../../lib/dbq/enqueue";
 import { type ConversionJobData } from "../../lib/queue/conversionQueue";
 import { downloadFile, uploadFile } from "../../lib/storage";
 import { docxToPdf, convertedPdfKey } from "../../lib/convert";
+import { markStage, reportError, setOperation } from "../../lib/observability/sentry";
 import { createServerSupabase, type Db } from "../../lib/supabase";
 
 /**
@@ -27,6 +28,7 @@ export async function runConversionJob(
     data: ConversionJobData,
     db: Db = createServerSupabase(),
 ): Promise<void> {
+    setOperation("documents.convert");
     const { documentId, versionId, userId, storagePath } = data;
     const finalize = data.finalizeDocumentStatus !== false;
 
@@ -40,11 +42,18 @@ export async function runConversionJob(
 
     let pdfBuf: Buffer | null = null;
     try {
+        markStage("docx-to-pdf");
         pdfBuf = await docxToPdf(Buffer.from(original));
     } catch (err) {
         // Conversion failure is non-fatal (mirrors the sync path): the version
         // stays usable without a PDF rendition. Retrying LibreOffice on the
         // same bytes just fails the same way.
+        reportError(err, {
+            level: "warning",
+            tags: { component: "conversion-worker", stage: "docx-to-pdf" },
+            extra: { document_id: documentId, version_id: versionId },
+            fingerprint: ["conversion-worker-docx-to-pdf"],
+        });
         console.error(
             "[conversion-worker] DOCX→PDF failed; finalizing without a PDF rendition",
             { err, documentId, versionId },

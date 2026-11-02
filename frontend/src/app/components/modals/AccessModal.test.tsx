@@ -1,7 +1,12 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { getOrg, lookupUserByEmail, MikeApiError } from "@/app/lib/mikeApi";
+import {
+    getOrg,
+    listOrgMembers,
+    lookupUserByEmail,
+    MikeApiError,
+} from "@/app/lib/mikeApi";
 import { AccessModal } from "./AccessModal";
 import { OrganizationAccessEditor } from "./AccessEditor";
 
@@ -11,6 +16,7 @@ import { OrganizationAccessEditor } from "./AccessEditor";
 vi.mock("@/app/lib/mikeApi", async (importOriginal) => ({
     ...(await importOriginal<typeof import("@/app/lib/mikeApi")>()),
     getOrg: vi.fn(),
+    listOrgMembers: vi.fn(),
     lookupUserByEmail: vi.fn().mockResolvedValue({
         exists: true,
         email: "known@firm.example",
@@ -30,6 +36,7 @@ function accessResponse() {
             user_id: "u1",
             email: "creator@firm.example",
             display_name: "Creator",
+            profile_photo: "data:image/png;base64,iVBORw0KGgo=",
             role: "owner" as const,
         },
         members: [
@@ -81,6 +88,22 @@ describe("AccessModal — per-recipient roles", () => {
             created_by: "u1",
             role: "admin",
         });
+        vi.mocked(listOrgMembers).mockResolvedValue([
+            {
+                id: "m-boss",
+                user_id: "boss",
+                role: "owner",
+                email: "boss@firm.example",
+                display_name: "Org Owner",
+            },
+            {
+                id: "m-jane",
+                user_id: "jane",
+                role: "member",
+                email: "jane@firm.example",
+                display_name: "Jane Lee",
+            },
+        ]);
         vi.mocked(lookupUserByEmail).mockImplementation(async (email) => ({
             exists: true,
             email,
@@ -124,14 +147,14 @@ describe("AccessModal — per-recipient roles", () => {
         );
         expect(screen.queryByText("People with Access")).not.toBeInTheDocument();
 
-        const creatorRow = screen
-            .getByText("Creator")
+        const creatorRow = (await screen.findByText("Creator"))
             .closest<HTMLElement>('[role="listitem"]');
         expect(creatorRow).not.toBeNull();
+        expect(creatorRow?.querySelector("img")).toHaveAttribute("src", "data:image/png;base64,iVBORw0KGgo=");
         expect(creatorRow?.tagName).toBe("DIV");
         expect(creatorRow?.parentElement?.tagName).toBe("DIV");
         expect(creatorRow).toHaveClass(
-            "grid-cols-[minmax(0,1fr)_minmax(8rem,12rem)_5rem_1.5rem]",
+            "sm:grid-cols-[minmax(0,1fr)_minmax(0,1fr)_5rem_1.5rem]",
         );
         expect(creatorRow).not.toHaveClass(
             "grid-cols-[minmax(0,1fr)_minmax(10rem,16rem)_5rem_1.5rem]",
@@ -176,7 +199,7 @@ describe("AccessModal — per-recipient roles", () => {
             roleToggle.compareDocumentPosition(addButton) &
                 Node.DOCUMENT_POSITION_FOLLOWING,
         ).toBeTruthy();
-        expect(roleToggle).toHaveAttribute("data-slot", "dropdown-menu-trigger");
+        expect(roleToggle).toHaveAttribute("aria-haspopup", "menu");
         expect(roleToggle).not.toHaveClass("border-l");
         expect(roleToggle).toHaveClass("bg-transparent", "text-violet-700");
         expect(roleToggle).not.toHaveClass("bg-violet-100");
@@ -204,7 +227,7 @@ describe("AccessModal — per-recipient roles", () => {
         expect(screen.getByRole("menu")).toHaveClass(
             "z-[250]",
             "w-32",
-            "space-y-1",
+            "gap-1",
         );
         expect(screen.getByRole("menu")).not.toHaveClass("w-36");
         const editorOption = screen.getByRole("menuitem", { name: "Editor" });
@@ -256,7 +279,7 @@ describe("AccessModal — per-recipient roles", () => {
         expect(screen.getByRole("menu")).toHaveClass(
             "z-[250]",
             "w-32",
-            "space-y-1",
+            "gap-1",
         );
         const viewerOption = screen.getByRole("menuitem", { name: "Viewer" });
         expect(viewerOption).toHaveAttribute("data-selected", "true");
@@ -447,89 +470,116 @@ describe("AccessModal — per-recipient roles", () => {
         ).not.toBeInTheDocument();
     });
 
-    it("keeps the organization Deny list collapsed below the Owner field", async () => {
+    it("shows an organization's private item, shared only with its members", async () => {
         const user = userEvent.setup();
         renderRoleAware({ orgId: "org-1" });
         expect(
-            screen.getByRole("dialog", { name: "Organisational Access" }),
+            screen.getByRole("dialog", { name: "People" }),
         ).toBeVisible();
-        const ownerPicker = await screen.findByRole("searchbox", {
-            name: "Project owners",
+
+        // Public or private is set with the item's details, not here.
+        const peoplePicker = await screen.findByRole("searchbox", {
+            name: "People",
         });
-        const ownerLabel = screen.getByText("Project owners", {
-            selector: "label",
-        });
-        const ownerDescription = await screen.findByText(
-            "Add Elite Law LLP members as owners with rights to manage access, settings and delete the project.",
+        expect(screen.queryByRole("switch")).not.toBeInTheDocument();
+        const peopleDescription = screen.getByText(
+            "Share this project with members of Elite Law LLP. They are added as Editors; change a person's role in the list below. It cannot be shared outside the organisation.",
         );
         expect(
-            screen.getByRole("button", { name: "About Project owners" }),
-        ).toHaveAttribute("aria-describedby", "organization-owner-picker-description");
-        expect(ownerDescription.closest('[role="tooltip"]')).toHaveClass(
+            screen.getByRole("button", { name: "About People" }),
+        ).toHaveAttribute(
+            "aria-describedby",
+            "organization-people-picker-description",
+        );
+        expect(peopleDescription.closest('[role="tooltip"]')).toHaveClass(
             "peer-hover:visible",
             "peer-focus-visible:visible",
         );
-        expect(ownerDescription).not.toHaveClass("pl-3");
         expect(
-            ownerLabel.compareDocumentPosition(ownerDescription) &
+            peopleDescription.compareDocumentPosition(peoplePicker) &
                 Node.DOCUMENT_POSITION_FOLLOWING,
         ).toBeTruthy();
+
+        // Only the organization's members are offered — its owner among
+        // them: a private item is not theirs unless it is shared with them.
+        await user.click(peoplePicker);
+        await user.type(peoplePicker, "firm.example");
+        const matches = await screen.findByRole("listbox", {
+            name: "People matches",
+        });
+        expect(within(matches).getByText("Jane Lee")).toBeInTheDocument();
+        expect(within(matches).getByText("Org Owner")).toBeInTheDocument();
+
+        // No wall to build on an item nobody was let into.
         expect(
-            ownerDescription.compareDocumentPosition(ownerPicker) &
-                Node.DOCUMENT_POSITION_FOLLOWING,
-        ).toBeTruthy();
+            screen.queryByRole("button", { name: /^Deny list/ }),
+        ).not.toBeInTheDocument();
+
+        const people = screen.getByRole("list", { name: "People with access" });
+        expect(within(people).getByText("Creator")).toBeInTheDocument();
+        expect(
+            within(people).queryByRole("button", {
+                name: "Actions for creator@firm.example",
+            }),
+        ).not.toBeInTheDocument();
+    });
+
+    it("offers an organization's public item more owners and the deny list", async () => {
+        const user = userEvent.setup();
+        render(
+            <AccessModal
+                open
+                onClose={vi.fn()}
+                resource={PROJECT}
+                fetchAccess={accessResponse}
+                currentUserEmail="me@firm.example"
+                breadcrumb={["Projects", "Matter", "Access"]}
+                access={{
+                    grants: [],
+                    orgId: "org-1",
+                    canManage: true,
+                    visibility: "organization",
+                    onGrant: vi.fn() as never,
+                    onRevoke: vi.fn(),
+                }}
+            />,
+        );
+
+        // Everybody can already open and edit it, so what is offered is
+        // adding owners — not a general people picker.
+        const owners = await screen.findByRole("searchbox", {
+            name: "Project owners",
+        });
+        expect(
+            screen.queryByRole("searchbox", { name: "People" }),
+        ).not.toBeInTheDocument();
+        expect(
+            await screen.findByText(
+                "Add Elite Law LLP members as owners with rights to manage access, settings and delete the project. Everyone in Elite Law LLP can already open and edit it.",
+            ),
+        ).toBeInTheDocument();
+        await user.type(owners, "jane");
+        expect(
+            within(
+                await screen.findByRole("listbox", {
+                    name: "Project owners matches",
+                }),
+            ).getByText("Jane Lee"),
+        ).toBeInTheDocument();
+        await user.clear(owners);
+
         const denyToggle = screen.getByRole("button", { name: "Deny list" });
         expect(denyToggle).toHaveAttribute("aria-expanded", "false");
         expect(denyToggle.closest("section")).toHaveClass("mt-auto");
-        expect(denyToggle).not.toHaveClass("px-2", "py-2");
-        expect(denyToggle).not.toHaveClass("liquid-glass-hover");
-        expect(
-            screen.queryByRole("searchbox", { name: "Deny list" }),
-        ).not.toBeInTheDocument();
-        expect(screen.queryByText(/Firewall deny list/)).not.toBeInTheDocument();
         await user.click(denyToggle);
-        expect(denyToggle).toHaveAttribute("aria-expanded", "true");
         expect(
             screen.getByRole("searchbox", { name: "Deny list" }),
         ).toBeInTheDocument();
-        const denyDescription = screen.getByText(
-            "Deny Elite Law LLP members from accessing this project.",
-        );
         expect(
-            screen.getByRole("button", { name: "About the Deny list" }),
-        ).toHaveAttribute("aria-describedby", "organization-deny-description");
-        expect(denyDescription.closest('[role="tooltip"]')).toHaveClass(
-            "peer-hover:visible",
-            "peer-focus-visible:visible",
-        );
-        const denyPicker = screen.getByRole("searchbox", {
-            name: "Deny list",
-        });
-        expect(denyDescription).not.toHaveClass("pl-3");
-        expect(
-            denyToggle.compareDocumentPosition(denyDescription) &
-                Node.DOCUMENT_POSITION_FOLLOWING,
-        ).toBeTruthy();
-        expect(
-            denyDescription.compareDocumentPosition(denyPicker) &
-                Node.DOCUMENT_POSITION_FOLLOWING,
-        ).toBeTruthy();
-        expect(
-            screen.queryByText(/You can assign additional Owners/),
-        ).not.toBeInTheDocument();
-        expect(screen.queryByText(/Organization Admins are Owners/)).not.toBeInTheDocument();
-        expect(
-            screen.queryByText("counsel@outside.example"),
-        ).not.toBeInTheDocument();
-        const ownerList = screen.getByRole("list", {
-            name: "Project owners list",
-        });
-        expect(within(ownerList).getByText("Creator")).toBeInTheDocument();
-        expect(
-            within(ownerList).queryByRole("button", {
-                name: "Remove creator@firm.example",
-            }),
-        ).not.toBeInTheDocument();
+            screen.getByText(
+                "Deny Elite Law LLP members from accessing this project, although it is open to everyone else.",
+            ),
+        ).toBeInTheDocument();
     });
 
     it("labels the creator Owner", async () => {
@@ -646,7 +696,7 @@ describe("OrganizationAccessEditor — row actions", () => {
         );
 
         const ownerList = screen.getByRole("list", {
-            name: "Project owners list",
+            name: "People with access",
         });
         await user.click(
             within(ownerList).getByRole("button", {

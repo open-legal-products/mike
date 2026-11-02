@@ -3,11 +3,13 @@ import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import OnboardingProfilePage from "./page";
 
-const { push, replace, reloadProfile, updateUserProfile } = vi.hoisted(() => ({
+const { push, replace, reloadProfile, updateUserProfile, listMyOrgInvitations, acceptOrgInvitation } = vi.hoisted(() => ({
     push: vi.fn(),
     replace: vi.fn(),
     reloadProfile: vi.fn(),
     updateUserProfile: vi.fn(),
+    listMyOrgInvitations: vi.fn(),
+    acceptOrgInvitation: vi.fn(),
 }));
 
 vi.mock("next/navigation", () => ({
@@ -32,7 +34,7 @@ vi.mock("@/app/contexts/UserProfileContext", () => ({
     }),
 }));
 
-vi.mock("@/app/lib/mikeApi", () => ({ updateUserProfile }));
+vi.mock("@/app/lib/mikeApi", () => ({ updateUserProfile, listMyOrgInvitations, acceptOrgInvitation }));
 vi.mock("@/app/components/site-logo", () => ({
     SiteLogo: () => <div>Mike</div>,
 }));
@@ -45,6 +47,8 @@ describe("OnboardingProfilePage", () => {
         reloadProfile.mockResolvedValue(undefined);
         updateUserProfile.mockReset();
         updateUserProfile.mockResolvedValue({});
+        listMyOrgInvitations.mockReset().mockResolvedValue([]);
+        acceptOrgInvitation.mockReset();
     });
 
     it("allows an empty name and saves profile details before continuing", async () => {
@@ -67,5 +71,12 @@ describe("OnboardingProfilePage", () => {
         );
         expect(reloadProfile).toHaveBeenCalled();
         expect(push).toHaveBeenCalledWith("/onboarding/practice");
+    });
+
+    it("keeps invitations off the profile step", () => {
+        render(<OnboardingProfilePage />);
+        expect(screen.getByText("Step 1 of 4")).toBeVisible();
+        expect(screen.queryByText("Organization invitations")).not.toBeInTheDocument();
+        expect(listMyOrgInvitations).not.toHaveBeenCalled();
     });
 });

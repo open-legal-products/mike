@@ -1,10 +1,12 @@
 "use client";
 
+import { useDocumentViewers } from "@/app/hooks/useDocumentViewers";
+import { useDocumentPermissions } from "@/app/hooks/useDocumentPermissions";
+
 import {
     use,
     useCallback,
     useEffect,
-    useLayoutEffect,
     useMemo,
     useReducer,
     useRef,
@@ -13,17 +15,15 @@ import {
 import { useRouter } from "next/navigation";
 import {
     ArrowUpRight,
-    Brain,
     ChevronLeft,
     ChevronRight,
     FolderOpen,
     FolderPlus,
-    Pencil,
-    Trash2,
 } from "lucide-react";
 import {
-    deleteChat,
+    UploadBatchError,
     deleteDocument,
+    failedUploadMessage,
     getDocument,
     getProject,
     listProjectChats,
@@ -36,33 +36,45 @@ import {
     moveSubfolderToFolder,
     resolveProjectFolderPath,
 } from "@/app/lib/mikeApi";
-import { loadAssistantChat } from "@/app/lib/assistantTurns";
-import { useAssistantChat } from "@/app/hooks/useAssistantChat";
-import { useAssistantMessageLayout } from "@/app/hooks/useAssistantMessageLayout";
+import {
+    chatActivityAt,
+    sortChatsByActivity,
+    touchChatActivity,
+} from "@/app/lib/chatActivity";
+import { useAssistantHistoryStatuses } from "@/app/hooks/useAssistantHistoryStatuses";
+import { useChatRoute } from "@/app/hooks/useChatRoute";
+import {
+    CHAT_DEFAULT,
+    DOCUMENT_MIN,
+    EXPLORER_DEFAULT,
+    fitPanelWidths,
+    fitsWithExplorer,
+    resizeChatSplit,
+    resizePanel,
+    type WorkspacePanelWidths,
+} from "@/app/lib/workspacePanelWidths";
+import {
+    ProjectChatPanel,
+    type ProjectChatPanelHandle,
+} from "@/app/components/projects/ProjectChatPanel";
 import { useProjectPicker } from "@/app/hooks/useProjectPicker";
 import {
-    isChatAttachmentDrag,
     isExternalFileDrag,
     isDocumentViewerDrag,
     isProjectItemDrag,
 } from "@/app/lib/projectDragTypes";
 import { useExplorerDownload } from "@/app/hooks/useExplorerDownload";
 import { useChatHistoryContext } from "@/app/contexts/ChatHistoryContext";
-import { UserMessage } from "@/app/components/assistant/UserMessage";
-import { AssistantMessage } from "@/app/components/assistant/AssistantMessage";
-import { ChatInput } from "@/app/components/assistant/ChatInput";
-import { ChatInputPrompt } from "@/app/components/assistant/ChatInputPrompt";
-import type { ChatInputHandle } from "@/app/components/assistant/ChatInput";
 import {
     ProjectExplorer,
     type ProjectExplorerHandle,
 } from "@/app/components/projects/ProjectExplorer";
 import { ProjectMemoryModal } from "@/app/components/projects/ProjectMemoryModal";
-import { ChatPanelHeader } from "@/app/components/shared/ChatPanelHeader";
 import { ProjectDocumentTabs } from "@/app/components/projects/ProjectDocumentTabs";
 import {
     ProjectDocumentPanels,
     type ProjectDocumentTab,
+    type ProjectDocumentAnnotation,
 } from "@/app/components/projects/ProjectDocumentPanels";
 import { useProjectDocumentRefresh } from "@/app/hooks/useProjectDocumentRefresh";
 import { invalidateDocxBytes } from "@/app/hooks/useFetchDocxBytes";
@@ -72,157 +84,54 @@ import { ProjectPickerModal } from "@/app/components/modals/ProjectPickerModal";
 import { DocumentUploadMenu } from "@/app/components/shared/DocumentUploadMenu";
 import { ConfirmPopup } from "@/app/components/popups/ConfirmPopup";
 import { WarningPopup } from "@/app/components/popups/WarningPopup";
-import { ApiKeyMissingPopup } from "@/app/components/popups/ApiKeyMissingPopup";
-import {
-    getModelProvider,
-    providerLabel,
-} from "@/app/lib/modelAvailability";
 import { PermissionDeniedPopup } from "@/app/components/popups/PermissionDeniedPopup";
-import { MikeIcon } from "@/app/components/chat/mike-icon";
-import { useAuth } from "@/app/contexts/AuthContext";
-import { useUserProfile } from "@/app/contexts/UserProfileContext";
 import { useSidebar } from "@/app/contexts/SidebarContext";
 import { HeaderActionsMenu } from "@/app/components/shared/HeaderActionsMenu";
 import type {
     Chat,
-    CitationQuote,
+    AssistantEvent,
+    PanelDocument,
     Citation,
     Document,
     EditAnnotation,
-    Message,
     Project,
 } from "@/app/components/shared/types";
-import { expandCitationToEntries } from "@/app/components/shared/types";
+import { panelDocumentFromCitation, panelDocumentFromCaseEvent, panelDocumentType } from "@/app/components/shared/types";
+import { panelDocumentAtVersion } from "@/app/lib/panelDocumentAtVersion";
+import { resolvePanelDocumentVersionResult } from "@/app/components/assistant/panelDocumentVersion";
+import type { DocumentContentMode } from "@/app/components/shared/DocumentContent";
 import {
     INITIAL_FOLDER_DELETE_DIALOG_STATE,
     clearDeletedDocumentId,
-    clearDeletedDocumentTarget,
     folderDeleteDialogReducer,
     removeDeletedDocumentTabs,
 } from "@/app/lib/folderDeleteState";
 import { can, roleFromLoaded } from "@/app/lib/permissions";
 import { LIQUID_GLASS_FLAT_CLASS } from "@/app/components/ui/liquid-surface";
 import { cn } from "@/app/lib/utils";
+import type { MessageExcerpt } from "@/shared/lib/messageExcerpts";
 import { readDocumentDragPayload } from "@/app/lib/docTableSelection";
 import { userFacingApiError } from "@/app/lib/userFacingError";
+import {
+    moveProjectItemOptimistically,
+    notifyMoveFailure,
+    type ProjectTreeItemKind,
+} from "@/app/lib/projectTreeMoves";
 import {
     collectDroppedDocumentUploadEntries,
     documentUploadEntriesFromFiles,
     documentUploadFolderSegments,
     type DocumentUploadEntry,
 } from "@/app/lib/documentDirectoryUpload";
-import { SUPPORTED_DOCUMENT_ACCEPT } from "@/app/lib/documentUploadValidation";
+import {
+    SUPPORTED_DOCUMENT_ACCEPT,
+    combineUploadWarnings,
+    formatUnsupportedDocumentWarning,
+    partitionSupportedDocumentFiles,
+} from "@/app/lib/documentUploadValidation";
 
 interface Props {
     params: Promise<{ id: string; chatId?: string }>;
-}
-
-type EditScrollTarget = {
-    key: string;
-    documentId: string;
-    inserted_text?: string;
-    deleted_text?: string;
-    ins_w_id?: string | null;
-    del_w_id?: string | null;
-};
-
-const ICON_SIZE = 28;
-const GAP = 14;
-const EXPLORER_MIN = 160;
-const EXPLORER_DEFAULT = 280;
-const DOCUMENT_MIN = 320;
-const CHAT_MIN = 320;
-const CHAT_DEFAULT = 420;
-const PANEL_DIVIDERS_WIDTH = 12;
-const COLLAPSED_EXPLORER_FOOTPRINT = 42;
-const DEFAULT_ASSISTANT_BOTTOM_PADDING = 116;
-const ASSISTANT_HEADER_HEIGHT = 48;
-
-type WorkspacePanelWidths = {
-    explorer: number;
-    chat: number;
-};
-
-function fitExpandedPanelWidths(
-    widths: WorkspacePanelWidths,
-    workspaceWidth: number,
-): WorkspacePanelWidths {
-    const availableWidth = workspaceWidth - DOCUMENT_MIN - PANEL_DIVIDERS_WIDTH;
-    const currentTotal = widths.explorer + widths.chat;
-    if (currentTotal <= availableWidth) return widths;
-
-    const minimumTotal = EXPLORER_MIN + CHAT_MIN;
-    if (availableWidth <= minimumTotal) {
-        return { explorer: EXPLORER_MIN, chat: CHAT_MIN };
-    }
-
-    const availableExtra = availableWidth - minimumTotal;
-    const explorerExtra = widths.explorer - EXPLORER_MIN;
-    const chatExtra = widths.chat - CHAT_MIN;
-    const currentExtra = explorerExtra + chatExtra;
-    if (currentExtra <= 0) return widths;
-
-    const scale = availableExtra / currentExtra;
-    return {
-        explorer: EXPLORER_MIN + explorerExtra * scale,
-        chat: CHAT_MIN + chatExtra * scale,
-    };
-}
-
-function AssistantGreeting({ username }: { username: string }) {
-    const { profile } = useUserProfile();
-    const [loaded, setLoaded] = useState(false);
-    const [iconOffset, setIconOffset] = useState(0);
-    const [textOffset, setTextOffset] = useState(0);
-    const textRef = useRef<HTMLHeadingElement>(null);
-
-    useLayoutEffect(() => {
-        if (!profile || !textRef.current) return;
-        const h1Width = textRef.current.offsetWidth;
-        setIconOffset((h1Width + GAP) / 2);
-        setTextOffset((ICON_SIZE + GAP) / 2);
-    }, [profile]);
-
-    useEffect(() => {
-        if (!iconOffset) return;
-        const t = setTimeout(() => setLoaded(true), 100);
-        return () => clearTimeout(t);
-    }, [iconOffset]);
-
-    return (
-        <div className="flex-1 flex items-center justify-center">
-            <div className="relative flex items-center justify-center h-[28px]">
-                <div
-                    className="absolute h-[30px]"
-                    style={{
-                        left: "50%",
-                        transform: loaded
-                            ? `translateX(calc(-50% - ${iconOffset}px))`
-                            : "translateX(-50%)",
-                        transition:
-                            "transform 900ms cubic-bezier(0.25, 0.46, 0.45, 0.94)",
-                    }}
-                >
-                    <MikeIcon size={ICON_SIZE} />
-                </div>
-                <h1
-                    ref={textRef}
-                    className="absolute text-3xl font-serif font-light text-gray-900 whitespace-nowrap"
-                    style={{
-                        left: "50%",
-                        transform: loaded
-                            ? `translateX(calc(-50% + ${textOffset}px))`
-                            : "translateX(-50%)",
-                        opacity: loaded ? 1 : 0,
-                        transition:
-                            "transform 900ms cubic-bezier(0.25, 0.46, 0.45, 0.94), opacity 800ms ease-in-out 300ms",
-                    }}
-                >
-                    Hi, {username}
-                </h1>
-            </div>
-        </div>
-    );
 }
 
 /** Drag-handle divider for resizing panels */
@@ -267,7 +176,7 @@ function Divider({ onDrag }: { onDrag: (dx: number) => void }) {
                 className="absolute inset-y-0 -left-1 -right-1 flex cursor-col-resize items-stretch justify-center"
             >
                 {isDragging && (
-                    <div className="w-1 bg-blue-500 transition-colors" />
+                    <div className="w-1 bg-blue-600 transition-colors" />
                 )}
             </div>
         </div>
@@ -275,31 +184,25 @@ function Divider({ onDrag }: { onDrag: (dx: number) => void }) {
 }
 
 export default function ProjectAssistantChatPage({ params }: Props) {
-    const { id: projectId, chatId: routeChatId = "" } = use(params);
+    const { id: projectId } = use(params);
     const router = useRouter();
 
     const { setSidebarOpen } = useSidebar();
-    const { user, authLoading } = useAuth();
-    const { profile } = useUserProfile();
-    const username =
-        profile?.displayName?.trim() || user?.email?.split("@")[0] || "there";
     const explorerDownload = useExplorerDownload();
 
     const [project, setProject] = useState<Project | null>(null);
     const [projectLoaded, setProjectLoaded] = useState(false);
-    const [activeChatId, setActiveChatId] = useState(routeChatId);
-    const activeChatIdRef = useRef(activeChatId);
-    useLayoutEffect(() => {
-        activeChatIdRef.current = activeChatId;
-    }, [activeChatId]);
+    const {
+        chatId: activeChatId,
+        openChat,
+        adoptChat,
+        claimCreated,
+        sideChatId,
+        openSideChat,
+        adoptSideChat,
+        closeSideChat,
+    } = useChatRoute(`/projects/${projectId}/assistant/chat`);
     const [projectChats, setProjectChats] = useState<Chat[] | null>(null);
-    const [chatTitle, setChatTitle] = useState<string | null>(null);
-    const [chatTitleEdit, setChatTitleEdit] = useState<{
-        chatId: string;
-        title: string;
-    } | null>(null);
-    const editingChatTitle =
-        chatTitleEdit?.chatId === activeChatId ? chatTitleEdit : null;
     const [ownerOnlyAction, setOwnerOnlyAction] = useState<string | null>(null);
     const [editorGateAction, setEditorGateAction] = useState<string | null>(
         null,
@@ -308,9 +211,6 @@ export default function ProjectAssistantChatPage({ params }: Props) {
         title: string;
         message: string;
     } | null>(null);
-    const [chatLoaded, setChatLoaded] = useState(false);
-    const [deletingChat, setDeletingChat] = useState(false);
-    const [composerResetKey, setComposerResetKey] = useState(0);
     const [projectMemoryOpen, setProjectMemoryOpen] = useState(false);
     const [folderDeleteDialog, dispatchFolderDeleteDialog] = useReducer(
         folderDeleteDialogReducer,
@@ -324,15 +224,39 @@ export default function ProjectAssistantChatPage({ params }: Props) {
     const [panelWidths, setPanelWidths] = useState<WorkspacePanelWidths>({
         explorer: EXPLORER_DEFAULT,
         chat: CHAT_DEFAULT,
+        sideChat: CHAT_DEFAULT,
     });
     const explorerWidth = panelWidths.explorer;
-    const chatWidth = panelWidths.chat;
+    const sideChatOpen = sideChatId !== null;
+    // "Add to chat" from the explorer or a document tab goes to the chat the
+    // reader last used.
+    const primaryChatPanelRef = useRef<ProjectChatPanelHandle>(null);
+    const sideChatPanelRef = useRef<ProjectChatPanelHandle>(null);
+    // A ref, not state: it is set as a press begins, and a render between the
+    // press and its click would replace the control being clicked (a citation
+    // pill) and lose the click.
+    const activeChatPaneRef = useRef<"primary" | "side">("primary");
+    const addDocToChat = (document: Document) =>
+        (
+            (activeChatPaneRef.current === "side"
+                ? sideChatPanelRef.current
+                : null) ?? primaryChatPanelRef.current
+        )?.addDoc(document);
+    const activatePrimaryChat = useCallback(() => {
+        activeChatPaneRef.current = "primary";
+    }, []);
+    const activateSideChat = useCallback(() => {
+        activeChatPaneRef.current = "side";
+    }, []);
     const [explorerCollapsed, setExplorerCollapsed] = useState(false);
     const workspaceRef = useRef<HTMLDivElement>(null);
 
     // Upload state
     const fileInputRef = useRef<HTMLInputElement>(null);
     const folderInputRef = useRef<HTMLInputElement>(null);
+    const documentViewers = useDocumentViewers();
+    const [deleteTarget, setDeleteTarget] = useState<{ id: string; filename: string } | null>(null);
+    const [deletingDocument, setDeletingDocument] = useState(false);
     const projectExplorerRef = useRef<ProjectExplorerHandle>(null);
     const [addDocumentsOpen, setAddDocumentsOpen] = useState(false);
     const projectPicker = useProjectPicker();
@@ -340,148 +264,79 @@ export default function ProjectAssistantChatPage({ params }: Props) {
         Array<{ clientId: string; filename: string }>
     >([]);
     const [explorerDragOver, setExplorerDragOver] = useState(false);
-    const [chatDragOver, setChatDragOver] = useState(false);
     const [documentDragOver, setDocumentDragOver] = useState(false);
     const [documentDropError, setDocumentDropError] = useState<string | null>(
         null,
     );
+    const [uploadWarning, setUploadWarning] = useState<string | null>(null);
 
     // Tabs
     const [tabs, setTabs] = useState<ProjectDocumentTab[]>([]);
     const [activeTabId, setActiveTabId] = useState<string | null>(null);
-    const [activeQuotes, setActiveQuotes] = useState<CitationQuote[] | null>(
-        null,
-    );
     const [selectedDocId, setSelectedDocId] = useState<string | null>(null);
-    const [editScrollTarget, setEditScrollTarget] =
-        useState<EditScrollTarget | null>(null);
-
+    const [resolvingEdits, setResolvingEdits] = useState<
+        Record<string, string>
+    >({});
+    const [resolvedEditStatuses, setResolvedEditStatuses] = useState<
+        Record<string, "accepted" | "rejected">
+    >({});
+    const openRequest = useRef(0);
     const activeTab = tabs.find((t) => t.documentId === activeTabId) ?? null;
-    const chatInputRef = useRef<ChatInputHandle | null>(null);
-    const messagesContainerRef = useRef<HTMLDivElement>(null);
-    const latestUserMessageRef = useRef<HTMLDivElement>(null);
-
-    const {
-        setCurrentChatId,
-        newChatMessages,
-        setNewChatMessages,
-        chats,
-        renameChat: renameChatInHistory,
-    } = useChatHistoryContext();
-    const [initialMessages] = useState<Message[]>(newChatMessages ?? []);
-    const [chatModel, setChatModel] = useState<string | null | undefined>(
-        initialMessages.length > 0
-            ? (initialMessages[0]?.model ?? null)
-            : undefined,
-    );
-    const [chatReasoningLevel, setChatReasoningLevel] = useState<
-        NonNullable<Message["reasoning"]> | null | undefined
-    >(
-        initialMessages.length > 0
-            ? (initialMessages[0]?.reasoning ?? null)
-            : undefined,
-    );
-    const createdChatIdRef = useRef<string | null>(null);
-    const adoptCreatedChat = useCallback(
-        (chatId: string) => {
-            createdChatIdRef.current = chatId;
-            setActiveChatId(chatId);
-            window.history.pushState(
-                null,
-                "",
-                `/projects/${projectId}/assistant/chat/${chatId}`,
-            );
-        },
-        [projectId],
-    );
-    const {
-        messages,
-        rejectedApiKey,
-        dismissInvalidApiKey,
-        isResponseLoading,
-        handleChat,
-        setMessages,
-        cancel,
-        detach,
-        resetChat,
-    } = useAssistantChat({
-        initialMessages,
-        onChatCreated: adoptCreatedChat,
-        chatId: activeChatId || undefined,
-        projectId,
-    });
-    // The model is what we asked for, so it identifies whose key was rejected.
-    const rejectedKeyProvider = rejectedApiKey?.model
-        ? getModelProvider(rejectedApiKey.model)
-        : null;
+    const activeCitation =
+        activeTab?.annotation?.kind === "citation"
+            ? activeTab.annotation.citation
+            : null;
+    const { chats, setSideChatId } = useChatHistoryContext();
+    // The sidebar treats a chat on screen as read, in either panel.
+    useEffect(() => {
+        setSideChatId(sideChatId || null);
+        return () => setSideChatId(null);
+    }, [sideChatId, setSideChatId]);
     const availableProjectChats = useMemo(() => {
         const byId = new Map<string, Chat>();
-        for (const chat of chats ?? []) {
-            if (chat.project_id === projectId) byId.set(chat.id, chat);
-        }
         for (const chat of projectChats ?? []) byId.set(chat.id, chat);
-        return Array.from(byId.values()).sort(
-            (a, b) =>
-                (Date.parse(b.created_at ?? "") || 0) -
-                (Date.parse(a.created_at ?? "") || 0),
-        );
+        for (const chat of chats ?? []) {
+            if (chat.project_id !== projectId) continue;
+            const existing = byId.get(chat.id);
+            if (
+                !existing ||
+                Date.parse(chatActivityAt(chat) ?? "") >=
+                    Date.parse(chatActivityAt(existing) ?? "")
+            ) {
+                byId.set(chat.id, chat);
+            }
+        }
+        return sortChatsByActivity(Array.from(byId.values()));
     }, [chats, projectChats, projectId]);
+    const projectChatIds = useMemo(
+        () => availableProjectChats.map((chat) => chat.id),
+        [availableProjectChats],
+    );
+    const touchProjectChat = useCallback((chatId: string) => {
+        setProjectChats((current) =>
+            current ? touchChatActivity(current, chatId) : current,
+        );
+    }, []);
+    const {
+        statuses: projectHistoryStatuses,
+        clearStatus: clearProjectHistoryStatus,
+    } = useAssistantHistoryStatuses({
+        activeChatId: activeChatId || null,
+        sideChatId: sideChatId || null,
+        chatIds: projectChatIds,
+        onActivity: touchProjectChat,
+    });
 
-    // Server ladder: writing to a project chat needs content.edit on the
-    // project.
-    //
-    // While the project, chat owner, or session is loading, access is unknown,
-    // and unknown is neither a licence nor a refusal. Treating it as a licence
-    // left a viewer typing into a live composer for the whole load window;
-    // treating it as a refusal flashed the read-only placeholder at people who
-    // do have edit access. So the composer is not rendered at all until all
-    // three inputs resolve — the message shimmer stands in for the whole
-    // surface, and what appears afterwards is already correct.
     const projectRole = roleFromLoaded(project);
     const canEditContent = can(projectRole, "content.edit");
-    const canManageProject = can(projectRole, "access.manage");
-    // There is no creator exception on a PROJECT chat. The server derives the
-    // caller's whole standing here from the project role
-    // (ensureSharedRowAccess): content.edit to write or rename, and
-    // container.delete to delete. Adding "…or I started this thread" to the
-    // client made all three gates disagree with the server in both
-    // directions — an editor who created the chat was offered a Delete that
-    // came back 403, and a viewer demoted after starting a thread kept a live
-    // composer on it. The ladder is the only answer this page asks for.
-    //
-    // Three answers, not two — the same tri-state the standalone chat page
-    // adopted. `can(null, …)` is false, and false here is a SENTENCE: the
-    // composer reads "Viewing only — sending needs edit access". A project
-    // owner opening their own chat cold saw that accusation for the length of
-    // GET /projects/:id. `null` keeps the composer closed while we wait
-    // without asserting anything about who the reader is.
-    const canSendChat = projectRole === null ? null : canEditContent;
-    const canDeleteChat = can(projectRole, "container.delete");
-    const composerReady = chatLoaded && projectLoaded && !authLoading;
-    // Rename and Delete are offered by the header menu, whose handlers return
-    // in silence while the role is unknown — deliberately, since accusing
-    // somebody before the payload lands is a guess, but a menu item that
-    // quietly does nothing when clicked is indistinguishable from a broken
-    // one. Disable them for that window, the way the upload button already
-    // does with `!canEditContent`.
-    const roleKnown = projectRole !== null;
-    const pendingInitialUserMessageRef = useRef<Message | null>(
-        initialMessages.length === 1 && initialMessages[0].role === "user"
-            ? initialMessages[0]
-            : null,
+    const documentPermissions = useDocumentPermissions(
+        tabs.filter((tab) => !["case", "legislation"].includes(tab.sourceDocument?.type ?? ""))
+            .map((tab) => tab.documentId),
+        canEditContent,
     );
-
-    const hasAutoSent = useRef(false);
-    const hasInitialScrolled = useRef(false);
-    const { minHeight, scrollLatestUserToTop } = useAssistantMessageLayout({
-        containerRef: messagesContainerRef,
-        userMessageRef: latestUserMessageRef,
-        ready: chatLoaded,
-        messageCount: messages.length,
-        chatKey: activeChatId,
-        bottomPadding: DEFAULT_ASSISTANT_BOTTOM_PADDING,
-        headerHeight: ASSISTANT_HEADER_HEIGHT,
-    });
+    const canManageProject = can(projectRole, "access.manage");
+    // "Add to chat" follows the composer: closed until the role is known.
+    const canSendChat = projectRole === null ? null : canEditContent;
 
     const clearFolderDeleteDismissTimer = useCallback(() => {
         if (folderDeleteDismissTimerRef.current === null) return;
@@ -494,46 +349,42 @@ export default function ProjectAssistantChatPage({ params }: Props) {
     }, [clearFolderDeleteDismissTimer]);
 
     useEffect(() => {
-        setChatTitleEdit(null);
-    }, [activeChatId]);
-
-    useEffect(() => {
-        if (activeTabId) return;
-        setActiveQuotes(null);
-        setEditScrollTarget(null);
-    }, [activeTabId]);
-
-    useEffect(() => {
         setSidebarOpen(false);
     }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
     const projectRequestGeneration = useRef(0);
-    const refreshProject = useCallback(async (documentIdToRefresh?: string) => {
-        const generation = ++projectRequestGeneration.current;
-        try {
-            const loaded = await getProject(projectId);
-            if (generation === projectRequestGeneration.current) {
-                setProject(loaded);
+    const refreshProject = useCallback(
+        async (documentIdToRefresh?: string) => {
+            const generation = ++projectRequestGeneration.current;
+            try {
+                const loaded = await getProject(projectId);
+                if (generation === projectRequestGeneration.current) {
+                    setProject(loaded);
+                }
+            } catch {
+                // Keep the current workspace usable when a background check fails.
+            } finally {
+                // Settled either way: a failed fetch leaves the role unknown, and
+                // the composer should come back read-only rather than stay hidden.
+                if (generation === projectRequestGeneration.current) {
+                    setProjectLoaded(true);
+                }
+                if (documentIdToRefresh) {
+                    setTabs((current) =>
+                        current.map((tab) =>
+                            tab.documentId === documentIdToRefresh
+                                ? {
+                                      ...tab,
+                                      refetchKey: (tab.refetchKey ?? 0) + 1,
+                                  }
+                                : tab,
+                        ),
+                    );
+                }
             }
-        } catch {
-            // Keep the current workspace usable when a background check fails.
-        } finally {
-            // Settled either way: a failed fetch leaves the role unknown, and
-            // the composer should come back read-only rather than stay hidden.
-            if (generation === projectRequestGeneration.current) {
-                setProjectLoaded(true);
-            }
-            if (documentIdToRefresh) {
-                setTabs((current) =>
-                    current.map((tab) =>
-                        tab.documentId === documentIdToRefresh
-                            ? { ...tab, refetchKey: (tab.refetchKey ?? 0) + 1 }
-                            : tab,
-                    ),
-                );
-            }
-        }
-    }, [projectId]);
+        },
+        [projectId],
+    );
     useEffect(() => {
         return () => {
             projectRequestGeneration.current += 1;
@@ -555,240 +406,141 @@ export default function ProjectAssistantChatPage({ params }: Props) {
         };
     }, [projectId]);
 
-    // Whenever the assistant mutates project documents — creating a new
-    // doc, creating a new version via edit_document, or replicating a doc —
-    // refresh the project so the explorer picks up the new/changed files
-    // without a manual reload. Keyed by completed mutation events only, so
-    // we refetch once the backend has finished persisting the change.
-    const projectMutationSignature = useMemo(() => {
-        const created: string[] = [];
-        const replicated: string[] = [];
-        const edited = new Set<string>();
-        for (const msg of messages) {
-            for (const ev of msg.events ?? []) {
-                if ("isStreaming" in ev && ev.isStreaming) continue;
-                if (ev.type === "doc_created" && ev.document_id) {
-                    created.push(
-                        `${ev.document_id}:${ev.version_id ?? ""}:${ev.filename}`,
-                    );
-                    continue;
-                }
-                if (ev.type === "doc_replicated") {
-                    for (const c of ev.copies ?? []) {
-                        replicated.push(
-                            `${c.document_id}:${c.version_id}:${c.new_filename}`,
-                        );
-                    }
-                    continue;
-                }
-                if (ev.type === "doc_edited") {
-                    edited.add(
-                        `${ev.document_id}:${ev.version_id ?? ""}:${ev.version_number ?? ""}`,
-                    );
-                }
-            }
-        }
-        return [
-            `created=${created.sort().join(",")}`,
-            `replicated=${replicated.sort().join(",")}`,
-            `edited=${Array.from(edited).sort().join(",")}`,
-        ].join("|");
-    }, [messages]);
-
-
     useEffect(() => {
         void refreshProject();
-    }, [projectMutationSignature, refreshProject]);
-
-    useEffect(() => {
-        setActiveChatId(routeChatId);
-    }, [routeChatId]);
-
-    useEffect(() => {
-        setCurrentChatId(activeChatId || null);
-    }, [activeChatId, setCurrentChatId]);
-
-    useEffect(() => {
-        if (activeChatId && createdChatIdRef.current === activeChatId) {
-            createdChatIdRef.current = null;
-            const firstUserMessage = messages.find(
-                (message) => message.role === "user",
-            );
-            setChatModel(firstUserMessage?.model ?? null);
-            setChatReasoningLevel(firstUserMessage?.reasoning ?? null);
-            return;
-        }
-        let cancelled = false;
-        setChatLoaded(false);
-        setChatTitle(null);
-        setChatModel(undefined);
-        setChatReasoningLevel(undefined);
-        setMessages([]);
-        hasInitialScrolled.current = false;
-
-        if (!activeChatId) {
-            setChatLoaded(true);
-            return () => {
-                cancelled = true;
-            };
-        }
-
-        loadAssistantChat(activeChatId)
-            .then(({ chat, messages: loaded }) => {
-                if (cancelled) return;
-                setChatTitle(chat.title);
-                setChatModel(chat.model ?? null);
-                setChatReasoningLevel(chat.reasoning_level ?? null);
-                setMessages(loaded);
-                setProjectChats((current) => {
-                    if (!current) return current;
-                    const nextChat = { ...chat, project_id: projectId };
-                    return current.some((entry) => entry.id === chat.id)
-                        ? current.map((entry) =>
-                              entry.id === chat.id ? nextChat : entry,
-                          )
-                        : [nextChat, ...current];
-                });
-            })
-            .catch(() => {
-                if (!cancelled)
-                    router.replace(`/projects/${projectId}/assistant`);
-            })
-            .finally(() => {
-                if (!cancelled) setChatLoaded(true);
-            });
-
-        return () => {
-            cancelled = true;
-        };
-    }, [activeChatId]); // eslint-disable-line react-hooks/exhaustive-deps
-
-    useEffect(() => {
-        const match = availableProjectChats.find(
-            (chat) => chat.id === activeChatId,
-        );
-        if (match?.title) setChatTitle(match.title);
-    }, [activeChatId, availableProjectChats]);
-
-    useEffect(() => {
-        const pendingMessage = pendingInitialUserMessageRef.current;
-        if (
-            pendingMessage &&
-            !hasAutoSent.current &&
-            !isResponseLoading &&
-            messages.length === 1
-        ) {
-            hasAutoSent.current = true;
-            pendingInitialUserMessageRef.current = null;
-            setNewChatMessages(null);
-            void handleChat(pendingMessage);
-        }
-    }, [messages.length, isResponseLoading, handleChat, setNewChatMessages]);
-
-    useEffect(() => {
-        const last = messages[messages.length - 1];
-        if (last?.role === "user") return scrollLatestUserToTop();
-    }, [messages, scrollLatestUserToTop]);
-
-    useEffect(() => {
-        if (!chatLoaded || hasInitialScrolled.current || messages.length === 0)
-            return;
-        const container = messagesContainerRef.current;
-        const el = latestUserMessageRef.current;
-        if (!container || !el) return;
-        return scrollLatestUserToTop("auto", () => {
-            hasInitialScrolled.current = true;
-        });
-    }, [activeChatId, chatLoaded, messages.length, scrollLatestUserToTop]);
-
-    useEffect(() => {
-        if (chatLoaded && isResponseLoading) return scrollLatestUserToTop();
-    }, [chatLoaded, isResponseLoading, scrollLatestUserToTop]);
+    }, [refreshProject]);
 
     // ── Tabs ──────────────────────────────────────────────────────────────────
     function openTab(
         docId: string,
         filename: string,
-        quotes?: CitationQuote[],
+        annotation?: ProjectDocumentAnnotation,
         versionId?: string | null,
         fileType?: string | null,
+        sourceDocument?: PanelDocument,
     ) {
+        openRequest.current += 1;
         setTabs((prev) => {
             const existing = prev.find((t) => t.documentId === docId);
             if (existing) {
-                if (
-                    (versionId !== undefined &&
-                        existing.versionId !== versionId) ||
-                    (fileType !== undefined && existing.fileType !== fileType)
-                ) {
-                    return prev.map((t) =>
-                        t.documentId === docId
-                            ? {
-                                  ...t,
-                                  versionId:
-                                      versionId === undefined
-                                          ? t.versionId
-                                          : versionId,
-                                  fileType: fileType ?? t.fileType,
-                              }
-                            : t,
-                    );
-                }
-                return prev;
+                const versionChanged =
+                    versionId !== undefined && existing.versionId !== versionId;
+                return prev.map((tab) =>
+                    tab.documentId === docId
+                        ? {
+                              ...tab,
+                              filename,
+                              versionId:
+                                  versionId === undefined
+                                      ? tab.versionId
+                                      : versionId,
+                              fileType: fileType ?? tab.fileType,
+                              sourceDocument:
+                                  sourceDocument ??
+                                  (versionChanged
+                                      ? undefined
+                                      : tab.sourceDocument),
+                              annotation,
+                              warning: versionChanged ? null : tab.warning,
+                          }
+                        : tab,
+                );
             }
             return [
                 ...prev,
-                { documentId: docId, filename, versionId, fileType },
+                {
+                    documentId: docId,
+                    filename,
+                    versionId,
+                    fileType,
+                    sourceDocument,
+                    annotation,
+                },
             ];
         });
         setActiveTabId(docId);
-        setActiveQuotes(quotes && quotes.length ? quotes : null);
         setSelectedDocId(docId);
     }
 
     function closeTab(docId: string) {
+        openRequest.current += 1;
         if (activeTabId === docId) {
             const idx = tabs.findIndex((tab) => tab.documentId === docId);
-            const fallback = idx < 0 ? null : tabs[idx + 1] ?? tabs[idx - 1] ?? null;
+            const fallback =
+                idx < 0 ? null : (tabs[idx + 1] ?? tabs[idx - 1] ?? null);
             setActiveTabId(fallback?.documentId ?? null);
-            setActiveQuotes(null);
             setSelectedDocId(fallback?.documentId ?? null);
         }
         setTabs((prev) => prev.filter((tab) => tab.documentId !== docId));
     }
 
     function switchTab(docId: string) {
+        openRequest.current += 1;
         setActiveTabId(docId);
-        setActiveQuotes(null);
         setSelectedDocId(docId);
     }
 
     // ── Handlers ──────────────────────────────────────────────────────────────
-    const handleSubmit = useCallback(
-        (message: Message, options?: Parameters<typeof handleChat>[1]) => {
-            if (!activeTab) return handleChat(message, options);
-            return handleChat(message, {
-                ...options,
-                displayedDoc: {
-                    filename: activeTab.filename,
-                    documentId: activeTab.documentId,
-                },
-            });
-        },
-        [activeTab, handleChat],
-    );
-
     const handleDocClick = (doc: Document) => {
         openTab(doc.id, doc.filename, undefined, null, doc.file_type);
     };
 
-    const handleCitationClick = (citation: Citation) => {
-        if (citation.kind === "case") return;
-        openTab(
-            citation.document_id,
-            citation.filename,
-            expandCitationToEntries(citation),
+    const handleCloseAnnotation = (documentId: string) => {
+        openRequest.current += 1;
+        setTabs((current) =>
+            current.map((tab) =>
+                tab.documentId === documentId
+                    ? { ...tab, annotation: undefined }
+                    : tab,
+            ),
         );
+    };
+
+    const handleCitationClick = async (
+        citation: Citation,
+        showQuotes = true,
+    ) => {
+        if (showQuotes && activeCitation === citation && activeTab) {
+            handleCloseAnnotation(activeTab.documentId);
+            return;
+        }
+        const request = ++openRequest.current;
+        const result = await resolvePanelDocumentVersionResult(
+            panelDocumentFromCitation(citation, showQuotes),
+        );
+        if (request !== openRequest.current) return;
+        if (result.status !== "resolved") {
+            setDocumentDropError(
+                result.status === "denied"
+                    ? "This document is no longer available."
+                    : "This document could not be opened. Please try again.",
+            );
+            return;
+        }
+        const document = result.document;
+        openTab(
+            document.document_id,
+            document.title,
+            showQuotes ? { kind: "citation", citation } : undefined,
+            document.version_id,
+            document.type,
+            document,
+        );
+    };
+
+    const handleCaseClick = (
+        event: Extract<AssistantEvent, { type: "case_citation" }>,
+    ) => {
+        const document = panelDocumentFromCaseEvent(event);
+        if (document)
+            openTab(
+                document.document_id,
+                document.title,
+                undefined,
+                null,
+                document.type,
+                document,
+            );
     };
 
     const handleOpenDocument = (args: {
@@ -797,19 +549,49 @@ export default function ProjectAssistantChatPage({ params }: Props) {
         versionId: string | null;
         versionNumber: number | null;
     }) => {
-        openTab(args.documentId, args.filename, undefined, args.versionId);
+        openTab(
+            args.documentId,
+            args.filename,
+            undefined,
+            args.versionId,
+            undefined,
+            {
+                document_id: args.documentId,
+                title: args.filename,
+                type: panelDocumentType(args.filename),
+                version_id: args.versionId,
+                version_number: args.versionNumber,
+                quotes: [],
+                metadata: [],
+            },
+        );
     };
 
-    const handleEditViewClick = (ann: EditAnnotation, filename: string) => {
-        openTab(ann.document_id, filename, undefined, ann.version_id ?? null);
-        setEditScrollTarget({
-            key: `${ann.edit_id}-${Date.now()}`,
-            documentId: ann.document_id,
-            inserted_text: ann.inserted_text,
-            deleted_text: ann.deleted_text,
-            ins_w_id: ann.ins_w_id ?? null,
-            del_w_id: ann.del_w_id ?? null,
-        });
+    const handleEditViewClick = (
+        ann: EditAnnotation,
+        filename: string,
+        changeNumber?: number,
+    ) => {
+        const edit = {
+            ...ann,
+            status: resolvedEditStatuses[ann.edit_id] ?? ann.status,
+        };
+        openTab(
+            ann.document_id,
+            filename,
+            { kind: "edit", edit, changeNumber },
+            ann.version_id ?? null,
+            undefined,
+            {
+                document_id: ann.document_id,
+                title: filename,
+                type: panelDocumentType(filename),
+                version_id: ann.version_id,
+                version_number: ann.version_number,
+                metadata: [],
+                quotes: [],
+            },
+        );
     };
 
     const patchTab = useCallback(
@@ -823,7 +605,27 @@ export default function ProjectAssistantChatPage({ params }: Props) {
         [],
     );
 
-    const handleEditError = (args: { documentId: string; message: string }) => {
+    const finishResolvingEdit = (editId: string) =>
+        setResolvingEdits((current) => {
+            const next = { ...current };
+            delete next[editId];
+            return next;
+        });
+    const handleEditResolveStart = (args: {
+        editId: string;
+        documentId: string;
+    }) => {
+        setResolvingEdits((current) => ({
+            ...current,
+            [args.editId]: args.documentId,
+        }));
+    };
+    const handleEditError = (args: {
+        editId: string;
+        documentId: string;
+        message: string;
+    }) => {
+        finishResolvingEdit(args.editId);
         patchTab(args.documentId, { warning: args.message });
     };
 
@@ -834,136 +636,35 @@ export default function ProjectAssistantChatPage({ params }: Props) {
         [patchTab],
     );
 
-    const handleEditResolved = (args: { documentId: string }) => {
+    const handleEditResolved: NonNullable<
+        Extract<DocumentContentMode, { kind: "edit" }>["onResolved"]
+    > = (args) => {
+        finishResolvingEdit(args.editId);
+        setResolvedEditStatuses((current) => ({
+            ...current,
+            [args.editId]: args.status,
+        }));
+        setTabs((current) =>
+            current.map((tab) =>
+                tab.annotation?.kind === "edit" &&
+                tab.annotation.edit.edit_id === args.editId
+                    ? {
+                          ...tab,
+                          annotation: {
+                              ...tab.annotation,
+                              edit: {
+                                  ...tab.annotation.edit,
+                                  status: args.status,
+                              },
+                          },
+                      }
+                    : tab,
+            ),
+        );
         invalidateDocxBytes(args.documentId);
         // Apply metadata and the forced refresh together to avoid downloading twice.
         void refreshProject(args.documentId);
     };
-
-    const handleChatDrop = (event: React.DragEvent) => {
-        if (!isChatAttachmentDrag(event.dataTransfer)) return;
-        event.preventDefault();
-        event.stopPropagation();
-        setChatDragOver(false);
-        const docId = event.dataTransfer.getData("application/mike-doc");
-        if (!docId) {
-            const files = Array.from(event.dataTransfer.files);
-            if (files.length > 0) chatInputRef.current?.addFiles(files);
-            return;
-        }
-        const doc = project?.documents?.find((d) => d.id === docId);
-        if (doc) chatInputRef.current?.addDoc(doc);
-    };
-
-    // ── Chat actions ──────────────────────────────────────────────────────────
-    function navigateToChat(nextChatId: string) {
-        if (nextChatId === activeChatId) return;
-        // Leaving a thread is not Stop: detach so the answer still finishes
-        // and is persisted server-side, instead of being cut to
-        // "Cancelled by user." in the chat the user just left.
-        detach();
-        setActiveChatId(nextChatId);
-        window.history.pushState(
-            null,
-            "",
-            `/projects/${projectId}/assistant/chat/${nextChatId}`,
-        );
-    }
-
-    function handleNewChat() {
-        if (!canEditContent) {
-            if (project) setEditorGateAction("create a chat");
-            return;
-        }
-        resetChat();
-        setActiveChatId("");
-        setComposerResetKey((current) => current + 1);
-        window.history.pushState(
-            null,
-            "",
-            `/projects/${projectId}/assistant/chat`,
-        );
-    }
-
-    async function handleDeleteChat() {
-        if (!activeChatId) return;
-        if (!canDeleteChat) {
-            // Only accuse somebody of lacking a role once we know they do:
-            // `projectRole` is null for the whole load window, and a refusal
-            // popup raised then is a guess.
-            if (projectRole) setOwnerOnlyAction("delete this chat");
-            return;
-        }
-        setDeletingChat(true);
-        try {
-            await deleteChat(activeChatId);
-            router.push(`/projects/${projectId}/assistant`);
-        } catch (error) {
-            // Without this the refusal was an unhandled rejection and the
-            // page just sat there, indistinguishable from a slow delete.
-            setChatActionError({
-                title: "Chat not deleted",
-                message: userFacingApiError(
-                    error,
-                    "The chat could not be deleted. Please try again.",
-                ),
-            });
-        } finally {
-            setDeletingChat(false);
-        }
-    }
-
-    async function handleRenameChat(nextTitle?: string) {
-        if (!activeChatId) return;
-        if (!canEditContent) {
-            if (projectRole) setEditorGateAction("rename this chat");
-            return;
-        }
-        if (nextTitle === undefined) {
-            setChatTitleEdit({
-                chatId: activeChatId,
-                title: chatTitle ?? "New Chat",
-            });
-            return;
-        }
-        setChatTitleEdit(null);
-        const trimmed = nextTitle.trim();
-        if (!trimmed || trimmed === chatTitle) return;
-        const previousTitle = chatTitle;
-        setChatTitle(trimmed);
-        setProjectChats((current) =>
-            (current ?? []).map((chat) =>
-                chat.id === activeChatId ? { ...chat, title: trimmed } : chat,
-            ),
-        );
-        try {
-            await renameChatInHistory(activeChatId, trimmed);
-        } catch (error) {
-            // ChatHistoryContext rethrows so the calling surface can speak.
-            // Unhandled, the header title stayed changed while the switcher
-            // row snapped back — the user saw two different titles and no
-            // reason for either.
-            if (activeChatIdRef.current === activeChatId) {
-                setChatTitle((current) =>
-                    current === trimmed ? previousTitle : current,
-                );
-            }
-            setProjectChats((current) =>
-                (current ?? []).map((chat) =>
-                    chat.id === activeChatId && chat.title === trimmed
-                        ? { ...chat, title: previousTitle }
-                        : chat,
-                ),
-            );
-            setChatActionError({
-                title: "Chat not renamed",
-                message: userFacingApiError(
-                    error,
-                    "The chat could not be renamed. Please try again.",
-                ),
-            });
-        }
-    }
 
     // ── Upload ────────────────────────────────────────────────────────────────
     function addUploadedDocuments(documents: Document[]) {
@@ -999,10 +700,10 @@ export default function ProjectAssistantChatPage({ params }: Props) {
     }
 
     async function uploadEntries(
-        entries: DocumentUploadEntry[],
+        selectedEntries: DocumentUploadEntry[],
         openInViewer = false,
     ) {
-        if (!entries.length) return;
+        if (!selectedEntries.length) return;
         if (!canEditContent) {
             // Only accuse somebody of lacking a role once we know they do.
             if (projectRole) {
@@ -1010,6 +711,21 @@ export default function ProjectAssistantChatPage({ params }: Props) {
             }
             return;
         }
+
+        // A drop or a folder selection carries whatever was on disk, and
+        // `accept` cannot constrain either. Filter to the types the converter
+        // can read before spending an upload session (or creating folders) on
+        // files the server is guaranteed to refuse.
+        const { supported, unsupported } = partitionSupportedDocumentFiles(
+            selectedEntries.map((entry) => entry.file),
+        );
+        const supportedFiles = new Set(supported);
+        const entries = selectedEntries.filter((entry) =>
+            supportedFiles.has(entry.file),
+        );
+        const unsupportedWarning = formatUnsupportedDocumentWarning(unsupported);
+        setUploadWarning(unsupportedWarning);
+        if (!entries.length) return;
 
         const pendingUploads = entries.map((entry) => ({
             clientId: crypto.randomUUID(),
@@ -1116,24 +832,32 @@ export default function ProjectAssistantChatPage({ params }: Props) {
                     : [],
             );
             addUploadedDocuments(uploaded);
-            if (openInViewer) {
-                uploaded.forEach(handleDocClick);
-                if (outcomes.some((outcome) => outcome.status === "error")) {
-                    setDocumentDropError(
-                        "Some files could not be uploaded. Please try again.",
-                    );
-                }
-            }
-        } catch (err) {
-            console.error("Upload failed:", err);
-            if (openInViewer) {
-                setDocumentDropError(
-                    userFacingApiError(
-                        err,
-                        "Files could not be uploaded. Please try again.",
+            if (openInViewer) uploaded.forEach(handleDocClick);
+            // Per-file outcomes, not an all-or-nothing batch: the files that
+            // landed stay in the tree and the ones that did not are named.
+            // Dropping the failures silently is what made a partly-failed bulk
+            // upload look like it simply did nothing (#8).
+            if (uploaded.length < outcomes.length) {
+                setUploadWarning(
+                    combineUploadWarnings(
+                        unsupportedWarning,
+                        failedUploadMessage(outcomes),
                     ),
                 );
             }
+        } catch (err) {
+            console.error("Upload failed:", err);
+            setUploadWarning(
+                combineUploadWarnings(
+                    unsupportedWarning,
+                    err instanceof UploadBatchError
+                        ? failedUploadMessage(err.outcomes)
+                        : userFacingApiError(
+                              err,
+                              "Files could not be uploaded. Please try again.",
+                          ),
+                ),
+            );
         } finally {
             setUploadingDocuments((current) =>
                 current.filter((upload) => !pendingIds.has(upload.clientId)),
@@ -1344,9 +1068,6 @@ export default function ProjectAssistantChatPage({ params }: Props) {
             setSelectedDocId((currentId) =>
                 clearDeletedDocumentId(currentId, deletedDocumentIds),
             );
-            setEditScrollTarget((currentTarget) =>
-                clearDeletedDocumentTarget(currentTarget, deletedDocumentIds),
-            );
             dispatchFolderDeleteDialog({
                 type: "complete",
                 folderId: pending.folder.id,
@@ -1369,51 +1090,66 @@ export default function ProjectAssistantChatPage({ params }: Props) {
         }
     };
 
-    const handleMoveDoc = async (
-        docId: string,
-        targetFolderId: string | null,
-    ) => {
-        setProject((prev) =>
-            prev
-                ? {
-                      ...prev,
-                      documents: (prev.documents ?? []).map((d) =>
-                          d.id === docId
-                              ? { ...d, folder_id: targetFolderId }
-                              : d,
-                      ),
-                  }
-                : prev,
-        );
-        await moveDocumentToFolder(projectId, docId, targetFolderId);
-    };
+    // Optimistic: the tree moves at once, and a failed request puts only
+    // that item back and rethrows so the drop target can report it.
+    const handleMoveDoc = (docId: string, targetFolderId: string | null) =>
+        moveProjectItemOptimistically({
+            project,
+            setProject,
+            kind: "doc",
+            id: docId,
+            targetFolderId,
+            request: () =>
+                moveDocumentToFolder(projectId, docId, targetFolderId),
+        });
 
-    const handleMoveFolder = async (
+    const handleMoveFolder = (
         folderId: string,
         targetFolderId: string | null,
-    ) => {
-        setProject((prev) =>
-            prev
-                ? {
-                      ...prev,
-                      folders: (prev.folders ?? []).map((f) =>
-                          f.id === folderId
-                              ? { ...f, parent_folder_id: targetFolderId }
-                              : f,
-                      ),
-                  }
-                : prev,
-        );
-        await moveSubfolderToFolder(projectId, folderId, targetFolderId);
+    ) =>
+        moveProjectItemOptimistically({
+            project,
+            setProject,
+            kind: "folder",
+            id: folderId,
+            targetFolderId,
+            request: () =>
+                moveSubfolderToFolder(projectId, folderId, targetFolderId),
+        });
+
+    // The explorer reports failures on its own drop targets; this is the
+    // panel's root drop target, outside it.
+    const moveToRoot = async (kind: ProjectTreeItemKind, id: string) => {
+        const move = kind === "doc" ? handleMoveDoc : handleMoveFolder;
+        try {
+            await move(id, null);
+        } catch (error) {
+            notifyMoveFailure(kind, id, error, () => moveToRoot(kind, id));
+        }
+    };
+
+    const requestDeleteDoc = async (docId: string) => {
+        if (!canEditContent) return;
+        setDeleteTarget({
+            id: docId,
+            filename: tabs.find((tab) => tab.documentId === docId)?.filename
+                ?? project?.documents?.find((document) => document.id === docId)?.filename
+                ?? "this file",
+        });
     };
 
     const handleDeleteDoc = async (docId: string) => {
+        if (!canEditContent || deletingDocument) return;
+        setDeletingDocument(true);
         try {
+            const document = await getDocument(docId);
+            if (document.can_delete !== true) {
+                setDocumentDropError("You do not have permission to delete this file.");
+                return;
+            }
             await deleteDocument(docId);
         } catch (err) {
-            // The explorer fires this as `void onDeleteDoc(...)`, so a
-            // rejection here would be an unhandled promise and a silent
-            // no-op for the user. Say what happened, keep the row.
+            // Keep the file and its live draft intact if deletion fails.
             console.error("Delete failed:", err);
             setDocumentDropError(
                 userFacingApiError(
@@ -1422,7 +1158,11 @@ export default function ProjectAssistantChatPage({ params }: Props) {
                 ),
             );
             return;
+        } finally {
+            setDeletingDocument(false);
         }
+        documentViewers.discardDeleted([docId]);
+        setDeleteTarget(null);
         setProject((prev) =>
             prev
                 ? {
@@ -1436,86 +1176,61 @@ export default function ProjectAssistantChatPage({ params }: Props) {
         setTabs((prev) => prev.filter((t) => t.documentId !== docId));
         if (activeTabId === docId) {
             setActiveTabId(null);
-            setActiveQuotes(null);
             setSelectedDocId(null);
-            setEditScrollTarget(null);
         }
     };
 
     // ── Resize handlers ───────────────────────────────────────────────────────
-    const onExplorerDividerDrag = useCallback((dx: number) => {
-        setPanelWidths((current) => {
-            const requestedWidth = Math.max(
-                EXPLORER_MIN,
-                current.explorer + dx,
-            );
-            const workspaceWidth = workspaceRef.current?.clientWidth;
-            if (!workspaceWidth) {
-                return { ...current, explorer: requestedWidth };
-            }
+    const panelLayout = useMemo(
+        () => ({ explorerCollapsed, sideChatOpen }),
+        [explorerCollapsed, sideChatOpen],
+    );
 
-            const maximumWidth = Math.max(
-                EXPLORER_MIN,
-                workspaceWidth -
-                    DOCUMENT_MIN -
-                    PANEL_DIVIDERS_WIDTH -
-                    current.chat,
+    const onExplorerDividerDrag = useCallback(
+        (dx: number) => {
+            setPanelWidths((current) =>
+                resizePanel(
+                    current,
+                    "explorer",
+                    current.explorer + dx,
+                    workspaceRef.current?.clientWidth,
+                    panelLayout,
+                ),
             );
-            return {
-                ...current,
-                explorer: Math.min(requestedWidth, maximumWidth),
-            };
-        });
-    }, []);
+        },
+        [panelLayout],
+    );
 
     const onChatDividerDrag = useCallback(
         (dx: number) => {
-            setPanelWidths((current) => {
-                const requestedWidth = Math.max(CHAT_MIN, current.chat - dx);
-                const workspaceWidth = workspaceRef.current?.clientWidth;
-                if (!workspaceWidth) {
-                    return { ...current, chat: requestedWidth };
-                }
-
-                const occupiedWidth = explorerCollapsed
-                    ? COLLAPSED_EXPLORER_FOOTPRINT
-                    : current.explorer + PANEL_DIVIDERS_WIDTH;
-                const maximumWidth = Math.max(
-                    CHAT_MIN,
-                    workspaceWidth - DOCUMENT_MIN - occupiedWidth,
-                );
-                return {
-                    ...current,
-                    chat: Math.min(requestedWidth, maximumWidth),
-                };
-            });
+            setPanelWidths((current) =>
+                resizePanel(
+                    current,
+                    "chat",
+                    current.chat - dx,
+                    workspaceRef.current?.clientWidth,
+                    panelLayout,
+                ),
+            );
         },
-        [explorerCollapsed],
+        [panelLayout],
     );
 
+    const onChatSplitDividerDrag = useCallback((dx: number) => {
+        setPanelWidths((current) => resizeChatSplit(current, dx));
+    }, []);
+
+    // The document view gives up width as panels open or the window narrows,
+    // but never its minimum: the explorer and chats shrink to make room.
     useEffect(() => {
         const workspace = workspaceRef.current;
         if (!workspace) return;
 
         const fitPanels = () => {
             if (workspace.clientWidth <= 0) return;
-            setPanelWidths((current) => {
-                if (!explorerCollapsed) {
-                    return fitExpandedPanelWidths(
-                        current,
-                        workspace.clientWidth,
-                    );
-                }
-
-                const maximumChatWidth = Math.max(
-                    CHAT_MIN,
-                    workspace.clientWidth -
-                        DOCUMENT_MIN -
-                        COLLAPSED_EXPLORER_FOOTPRINT,
-                );
-                if (current.chat <= maximumChatWidth) return current;
-                return { ...current, chat: maximumChatWidth };
-            });
+            setPanelWidths((current) =>
+                fitPanelWidths(current, workspace.clientWidth, panelLayout),
+            );
         };
 
         fitPanels();
@@ -1527,7 +1242,87 @@ export default function ProjectAssistantChatPage({ params }: Props) {
         const observer = new ResizeObserver(fitPanels);
         observer.observe(workspace);
         return () => observer.disconnect();
-    }, [explorerCollapsed]);
+    }, [panelLayout]);
+
+    // A passage the reader asked about in the side chat, held until that
+    // chat's composer is on the page (opening the side chat if need be).
+    const [sideChatExcerpt, setSideChatExcerpt] = useState<{
+        id: number;
+        excerpt: MessageExcerpt;
+    } | null>(null);
+    const clearSideChatExcerpt = useCallback(
+        () => setSideChatExcerpt(null),
+        [],
+    );
+    // Counted apart from the held passage: that is cleared once the side
+    // chat takes it, and an id that started over would look to that chat
+    // like the passage it already has.
+    const sideChatExcerptCount = useRef(0);
+    function askInSideChat(excerpt: MessageExcerpt) {
+        if (sideChatId === null) handleOpenSideChat();
+        sideChatExcerptCount.current += 1;
+        setSideChatExcerpt({ id: sideChatExcerptCount.current, excerpt });
+    }
+
+    function handleOpenSideChat() {
+        // Two chats, the explorer and a readable document do not fit a
+        // narrow workspace; the explorer is the one that folds away.
+        const workspaceWidth = workspaceRef.current?.clientWidth;
+        if (workspaceWidth && !fitsWithExplorer(workspaceWidth, true)) {
+            setExplorerCollapsed(true);
+        }
+        openSideChat("");
+    }
+
+    function handleCloseSideChat() {
+        activatePrimaryChat();
+        closeSideChat();
+    }
+
+    // The document on screen rides along with a message as context.
+    const displayedDoc = useMemo(
+        () =>
+            !activeTab || activeTab.sourceDocument?.type === "case"
+                ? null
+                : {
+                      filename: activeTab.filename,
+                      documentId: activeTab.documentId,
+                  },
+        [activeTab],
+    );
+    const reportChatActionError = useCallback(
+        (error: { title: string; message: string }) =>
+            setChatActionError(error),
+        [],
+    );
+    const chatPanelProps = {
+        projectId,
+        project,
+        projectLoaded,
+        claimCreated,
+        chats: availableProjectChats,
+        chatsLoading: projectChats === null,
+        setProjectChats,
+        responseStatuses: projectHistoryStatuses,
+        onClearResponseStatus: clearProjectHistoryStatus,
+        displayedDoc,
+        activeCitation,
+        resolvingEdits,
+        resolvedEditStatuses,
+        onDocClick: handleDocClick,
+        onCitationClick: handleCitationClick,
+        onCaseClick: handleCaseClick,
+        onOpenDocument: handleOpenDocument,
+        onEditViewClick: handleEditViewClick,
+        onEditResolveStart: handleEditResolveStart,
+        onEditResolved: handleEditResolved,
+        onEditError: handleEditError,
+        onProjectMutated: refreshProject,
+        onOpenMemory: () => setProjectMemoryOpen(true),
+        onEditorGate: setEditorGateAction,
+        onOwnerGate: setOwnerOnlyAction,
+        onActionError: reportChatActionError,
+    };
 
     return (
         <div
@@ -1680,10 +1475,10 @@ export default function ProjectAssistantChatPage({ params }: Props) {
                                 );
                                 if (docId) {
                                     e.stopPropagation();
-                                    await handleMoveDoc(docId, null);
+                                    await moveToRoot("doc", docId);
                                 } else if (folderId) {
                                     e.stopPropagation();
-                                    await handleMoveFolder(folderId, null);
+                                    await moveToRoot("folder", folderId);
                                 }
                                 // External file drops are not stopped — they bubble to handleExplorerFileDrop
                             }}
@@ -1702,11 +1497,15 @@ export default function ProjectAssistantChatPage({ params }: Props) {
                                 folders={project?.folders ?? []}
                                 selectedDocId={selectedDocId}
                                 onDocClick={handleDocClick}
-                                onDownloadDoc={explorerDownload.downloadDocument}
-                                onDownloadFolder={explorerDownload.downloadFolder}
+                                onDownloadDoc={
+                                    explorerDownload.downloadDocument
+                                }
+                                onDownloadFolder={
+                                    explorerDownload.downloadFolder
+                                }
                                 downloading={explorerDownload.downloading}
                                 onAddToChat={(document) =>
-                                    chatInputRef.current?.addDoc(document)
+                                    addDocToChat(document)
                                 }
                                 addToChatDisabled={!canSendChat}
                                 onCreateFolder={
@@ -1717,7 +1516,7 @@ export default function ProjectAssistantChatPage({ params }: Props) {
                                 onRenameFolder={handleRenameFolder}
                                 onRenameDoc={handleRenameDoc}
                                 onDeleteFolder={requestDeleteFolder}
-                                onDeleteDoc={handleDeleteDoc}
+                                onDeleteDoc={canEditContent ? requestDeleteDoc : undefined}
                                 onMoveDoc={handleMoveDoc}
                                 onMoveFolder={handleMoveFolder}
                                 uploadingDocuments={uploadingDocuments}
@@ -1786,11 +1585,20 @@ export default function ProjectAssistantChatPage({ params }: Props) {
                     </div>
                 )}
                 <ProjectDocumentTabs
+                    onAddToChat={(document) =>
+                        addDocToChat(document)
+                    }
+                    addToChatDisabled={!canSendChat}
+                    onDownloadDoc={(document) => documentViewers.download(document.id, document.id, tabs.find((tab) => tab.documentId === document.id)?.versionId, document.filename)}
+                    downloading={explorerDownload.downloading}
+                    onRenameDoc={handleRenameDoc}
+                    onDeleteDoc={requestDeleteDoc}
+                    documentPermissions={documentPermissions}
                     tabs={tabs}
                     documents={project?.documents ?? []}
                     activeTabId={activeTabId}
                     onActivate={switchTab}
-                    onClose={closeTab}
+                    onClose={(id) => documentViewers.requestClose([id], () => closeTab(id))}
                     onReorder={(draggedId, targetId, position) =>
                         setTabs((current) =>
                             reorderTabs(
@@ -1804,267 +1612,103 @@ export default function ProjectAssistantChatPage({ params }: Props) {
                     }
                 />
                 <ProjectDocumentPanels
+                    canEdit={canEditContent}
+                    documentPermissions={documentPermissions}
+                    onDownloadReady={documentViewers.registerDownload}
+                    onCloseGuardReady={documentViewers.registerCloseGuard}
                     tabs={tabs}
                     documents={project?.documents ?? []}
                     activeTabId={activeTabId}
-                    quotes={activeQuotes ?? undefined}
-                    highlightEdit={editScrollTarget}
+                    onVersionChange={(documentId, version) => documentViewers.requestClose([documentId], () => {
+                        openRequest.current += 1;
+                        setTabs((current) =>
+                            current.map((tab) => {
+                                if (tab.documentId !== documentId) return tab;
+                                const document = panelDocumentAtVersion(
+                                    tab.sourceDocument ?? {
+                                        document_id: documentId,
+                                        title: tab.filename,
+                                        type: panelDocumentType(tab.filename),
+                                        metadata: [],
+                                        quotes: [],
+                                    },
+                                    version,
+                                );
+                                return {
+                                    ...tab,
+                                    filename: document.title,
+                                    fileType: document.type,
+                                    versionId: version.id,
+                                    sourceDocument: document,
+                                    annotation: undefined,
+                                    warning: null,
+                                };
+                            }),
+                        );
+                    })}
+                    onCloseAnnotation={handleCloseAnnotation}
+                    isDocumentReloading={(documentId) =>
+                        Object.values(resolvingEdits).includes(documentId)
+                    }
+                    isEditReloading={(editId) => !!resolvingEdits[editId]}
+                    onEditResolveStart={handleEditResolveStart}
+                    onEditResolved={handleEditResolved}
+                    onEditError={handleEditError}
                     onWarningDismiss={dismissTabWarning}
                 />
             </div>
 
+            {documentViewers.confirmation}
+            <ConfirmPopup
+                open={!!deleteTarget}
+                title="Delete file?"
+                message={`Delete “${deleteTarget?.filename ?? "this file"}” and its versions, including any unsaved edits? This cannot be undone.`}
+                confirmLabel="Delete file"
+                confirmVariant="danger"
+                confirmStatus={deletingDocument ? "loading" : "idle"}
+                confirmDisabled={!canEditContent}
+                onCancel={() => { if (!deletingDocument) setDeleteTarget(null); }}
+                onConfirm={() => { if (deleteTarget) void handleDeleteDoc(deleteTarget.id); }}
+            />
             <Divider onDrag={onChatDividerDrag} />
 
-            {/* RIGHT: Assistant Panel */}
-            <div
-                style={{ width: chatWidth }}
-                className={cn(
-                    "relative flex shrink-0 flex-col overflow-hidden rounded-l-lg rounded-r-2xl",
-                    LIQUID_GLASS_FLAT_CLASS,
-                )}
-                onDragEnter={(event) => {
-                    if (!isChatAttachmentDrag(event.dataTransfer)) return;
-                    event.preventDefault();
-                    if (isExternalFileDrag(event.dataTransfer)) {
-                        setChatDragOver(true);
-                    }
-                }}
-                onDragOver={(event) => {
-                    if (!isChatAttachmentDrag(event.dataTransfer)) return;
-                    event.preventDefault();
-                    event.dataTransfer.dropEffect = "copy";
-                    if (isExternalFileDrag(event.dataTransfer)) {
-                        setChatDragOver(true);
-                    }
-                }}
-                onDragLeave={(event) => {
-                    if (
-                        !event.currentTarget.contains(
-                            event.relatedTarget as Node,
-                        )
-                    ) {
-                        setChatDragOver(false);
-                    }
-                }}
-                onDrop={handleChatDrop}
-            >
-                {chatDragOver && (
-                    <div className="pointer-events-none absolute inset-0 z-50 flex items-center justify-center rounded-l-lg rounded-r-2xl bg-white/50 backdrop-blur-md">
-                        <p className="font-serif text-xl text-gray-900">
-                            Drop files here to add to chat
-                        </p>
-                    </div>
-                )}
-                <div className="absolute inset-x-0 top-0 z-40">
-                    <ChatPanelHeader
-                        chats={availableProjectChats}
-                        currentChatId={activeChatId}
-                        currentTitle={chatTitle}
-                        loading={projectChats === null}
-                        newChatDisabled={!canEditContent}
-                        onLoad={navigateToChat}
-                        onNewChat={handleNewChat}
-                        titleEdit={
-                            editingChatTitle
-                                ? {
-                                      value: editingChatTitle.title,
-                                      onChange: (title) =>
-                                          setChatTitleEdit({
-                                              ...editingChatTitle,
-                                              title,
-                                          }),
-                                      onSave: () =>
-                                          void handleRenameChat(
-                                              editingChatTitle.title,
-                                          ),
-                                      onCancel: () => setChatTitleEdit(null),
-                                  }
-                                : undefined
-                        }
-                        actions={
-                            <HeaderActionsMenu
-                                triggerClassName="h-6 w-6"
-                                onCloseAutoFocus={(event) => {
-                                    if (editingChatTitle) event.preventDefault();
-                                }}
-                                items={[
-                                    {
-                                        label: "Rename",
-                                        icon: Pencil,
-                                        onSelect: () => void handleRenameChat(),
-                                        disabled:
-                                            !chatLoaded ||
-                                            !activeChatId ||
-                                            !roleKnown,
-                                    },
-                                    {
-                                        label: "Memory",
-                                        icon: Brain,
-                                        onSelect: () =>
-                                            setProjectMemoryOpen(true),
-                                        disabled: !project,
-                                    },
-                                    {
-                                        label: deletingChat
-                                            ? "Deleting..."
-                                            : "Delete",
-                                        icon: Trash2,
-                                        onSelect: () => void handleDeleteChat(),
-                                        disabled:
-                                            deletingChat ||
-                                            !chatLoaded ||
-                                            !activeChatId ||
-                                            !roleKnown,
-                                        variant: "danger" as const,
-                                    },
-                                ].filter((item) =>
-                                    activeChatId ? true : item.label === "Memory",
-                                )}
-                            />
-                        }
+            {/* RIGHT: Assistant panel, and a second chat beside it */}
+            <ProjectChatPanel
+                {...chatPanelProps}
+                ref={primaryChatPanelRef}
+                chatId={activeChatId}
+                openChat={openChat}
+                adoptChat={adoptChat}
+                hiddenChatId={sideChatId}
+                width={panelWidths.chat}
+                roundedClassName={
+                    sideChatOpen ? "rounded-lg" : "rounded-l-lg rounded-r-2xl"
+                }
+                onActivate={activatePrimaryChat}
+                onOpenSideChat={sideChatOpen ? undefined : handleOpenSideChat}
+                onCloseSideChat={sideChatOpen ? handleCloseSideChat : undefined}
+                onAskInSideChat={askInSideChat}
+            />
+            {sideChatId !== null && (
+                <>
+                    <Divider onDrag={onChatSplitDividerDrag} />
+                    <ProjectChatPanel
+                        {...chatPanelProps}
+                        ref={sideChatPanelRef}
+                        isSideChat
+                        incomingExcerpt={sideChatExcerpt}
+                        onIncomingExcerptAdded={clearSideChatExcerpt}
+                        chatId={sideChatId}
+                        openChat={openSideChat}
+                        adoptChat={adoptSideChat}
+                        hiddenChatId={activeChatId || null}
+                        width={panelWidths.sideChat}
+                        roundedClassName="rounded-l-lg rounded-r-2xl"
+                        onActivate={activateSideChat}
+                        onClose={handleCloseSideChat}
                     />
-                </div>
-                <div
-                    aria-hidden="true"
-                    className="pointer-events-none absolute left-0 right-3 top-0 z-30 h-16 bg-gradient-to-b from-app-surface/85 via-app-surface/60 via-50% to-transparent"
-                />
-                <div
-                    aria-hidden="true"
-                    className="pointer-events-none absolute bottom-0 left-0 right-3 z-20 h-28 bg-gradient-to-t from-app-surface to-transparent"
-                />
-
-                {/* Messages / greeting / shimmer */}
-                {!chatLoaded ? (
-                    <div className="flex-1 space-y-4 px-4 pb-4 pt-16">
-                        <div className="flex justify-end">
-                            <div className="bg-gray-100 rounded-2xl p-4 w-3/4">
-                                <div className="theme-shimmer h-3 bg-[length:200%_100%] animate-[shimmer_2s_ease-in-out_infinite] rounded w-full" />
-                            </div>
-                        </div>
-                        <div className="space-y-2">
-                            {[1, 2, 3].map((i) => (
-                                <div
-                                    key={i}
-                                    className={`theme-shimmer h-3 bg-[length:200%_100%] animate-[shimmer_2s_ease-in-out_infinite] rounded ${i === 3 ? "w-4/6" : "w-full"}`}
-                                />
-                            ))}
-                        </div>
-                    </div>
-                ) : messages.length === 0 ? (
-                    <div className="flex-1 flex flex-col min-h-0">
-                        <AssistantGreeting username={username} />
-                    </div>
-                ) : (
-                    <div
-                        ref={messagesContainerRef}
-                        className="min-h-0 flex-1 space-y-6 overflow-y-auto px-4 pt-[72px] md:space-y-8 md:pt-20"
-                        style={{
-                            paddingBottom: DEFAULT_ASSISTANT_BOTTOM_PADDING,
-                            scrollbarGutter: "stable",
-                        }}
-                    >
-                        {(() => {
-                            const lastUserIdx = messages
-                                .map((m) => m.role)
-                                .lastIndexOf("user");
-                            const lastAssistantIdx = messages
-                                .map((m) => m.role)
-                                .lastIndexOf("assistant");
-                            return messages.map((msg, i) =>
-                                msg.role === "user" ? (
-                                    <div
-                                        key={i}
-                                        ref={
-                                            i === lastUserIdx
-                                                ? latestUserMessageRef
-                                                : null
-                                        }
-                                    >
-                                        <UserMessage
-                                            content={msg.content ?? ""}
-                                            files={msg.files}
-                                            workflow={msg.workflow}
-                                            onFileClick={(file) => {
-                                                if (!file.document_id) return;
-                                                handleOpenDocument({
-                                                    documentId:
-                                                        file.document_id,
-                                                    filename: file.filename,
-                                                    versionId: null,
-                                                    versionNumber: null,
-                                                });
-                                            }}
-                                        />
-                                    </div>
-                                ) : (
-                                    <AssistantMessage
-                                        key={i}
-                                        events={msg.events}
-                                        isStreaming={
-                                            i === messages.length - 1 &&
-                                            isResponseLoading
-                                        }
-                                        isError={!!msg.error}
-                                        citations={msg.citations}
-                                        citationStatus={msg.citationStatus}
-                                        onCitationClick={handleCitationClick}
-                                        minHeight={
-                                            i === lastAssistantIdx
-                                                ? minHeight
-                                                : "0px"
-                                        }
-                                        onEditViewClick={handleEditViewClick}
-                                        onOpenDocument={handleOpenDocument}
-                                        onEditError={handleEditError}
-                                        onEditResolved={handleEditResolved}
-                                    />
-                                ),
-                            );
-                        })()}
-                    </div>
-                )}
-
-                {/* ChatInput */}
-                {composerReady && (
-                    <div className="absolute bottom-3 left-3 right-3 z-30">
-                        <div className="pointer-events-none absolute -bottom-3 inset-x-0 z-0 h-7 bg-app-surface" />
-                        <div className="relative z-20 w-full">
-                            <ChatInputPrompt
-                                messages={messages}
-                                chatKey={activeChatId}
-                                canSend={canSendChat}
-                                chatLoading={!chatLoaded}
-                                onSubmit={(response, content, files) => {
-                                    void handleSubmit(
-                                        { role: "user", content, files },
-                                        { askInputsResponse: response },
-                                    );
-                                }}
-                                onCancel={cancel}
-                            >
-                                <ChatInput
-                                    key={`${activeChatId || "new"}:${composerResetKey}`}
-                                    ref={chatInputRef}
-                                    onSubmit={handleSubmit}
-                                    onCancel={cancel}
-                                    isLoading={isResponseLoading}
-                                    chatKey={activeChatId}
-                                    chatModel={chatModel}
-                                    chatReasoningLevel={chatReasoningLevel}
-                                    canSend={canSendChat}
-                                    chatLoading={!chatLoaded}
-                                    enableGlobalFileDrop={false}
-                                    dropUploadsToProject={false}
-                                    projectId={projectId}
-                                    onDocumentClick={handleDocClick}
-                                    projectName={project?.name}
-                                    projectCmNumber={project?.cm_number}
-                                />
-                            </ChatInputPrompt>
-                        </div>
-                    </div>
-                )}
-            </div>
+                </>
+            )}
             {project && (
                 <AddDocumentsModal
                     open={addDocumentsOpen}
@@ -2082,21 +1726,17 @@ export default function ProjectAssistantChatPage({ params }: Props) {
                     uploadStateId={`project-chat:${projectId}`}
                 />
             )}
-            <ApiKeyMissingPopup
-                open={rejectedApiKey !== null}
-                title="API key rejected"
-                message={`${
-                    rejectedKeyProvider
-                        ? `The ${providerLabel(rejectedKeyProvider)} API key`
-                        : "That API key"
-                } was rejected. If it is your own key, check it in Settings; otherwise contact your administrator.`}
-                onClose={dismissInvalidApiKey}
-            />
             <WarningPopup
                 open={!!projectPicker.error}
                 onClose={projectPicker.clearError}
                 title="Projects could not be loaded"
                 message={projectPicker.error ?? ""}
+            />
+            <WarningPopup
+                open={!!uploadWarning}
+                onClose={() => setUploadWarning(null)}
+                title="Some files were not uploaded"
+                message={uploadWarning ?? ""}
             />
             <WarningPopup
                 open={!!documentDropError}

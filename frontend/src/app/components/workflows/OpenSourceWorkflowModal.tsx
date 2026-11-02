@@ -158,7 +158,7 @@ export function OpenSourceWorkflowModal({
         >
             {submitted ? (
                 <div className="flex min-h-0 flex-1 flex-col items-center justify-center pb-10 text-center">
-                    <div className="mb-5 flex h-12 w-12 items-center justify-center rounded-full border border-emerald-200/70 bg-emerald-50/55 text-emerald-700 shadow-[0_10px_28px_rgba(16,185,129,0.16),inset_0_1px_0_rgba(255,255,255,0.9),inset_0_-1px_0_rgba(16,185,129,0.12)] ring-1 ring-white/70 backdrop-blur-xl">
+                    <div className="mb-5 flex h-12 w-12 items-center justify-center rounded-full border border-emerald-200/70 bg-emerald-50/55 text-emerald-700 shadow-[0_10px_28px_rgba(16,185,129,0.16),inset_0_1px_0_rgba(255,255,255,0.9),inset_0_-1px_0_rgba(16,185,129,0.12)] ring-1 ring-white/70">
                         <Check className="h-6 w-6" />
                     </div>
                     <h3 className="text-2xl font-serif text-gray-950">

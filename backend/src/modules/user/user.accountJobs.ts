@@ -13,18 +13,18 @@ export async function handleAccountDelete(db: Db, job: DbJob): Promise<void> {
     const userEmail = (job.payload.userEmail as string | undefined) ?? null;
 
     // REFUSAL BEFORE DESTRUCTION. The route already answered 409 for an
-    // account that is the sole admin of an organization with members or
+    // account that is the sole owner of an organization with members or
     // content, but the org can change between the request and this job, and
     // this handler is also reachable by requeueing an old row. Ask first,
     // while nothing has been touched.
     //
     // Non-retryable on purpose: an organization does not acquire a second
-    // admin because we asked twenty more times over the next few hours. The
+    // owner because we asked twenty more times over the next few hours. The
     // row lands in `failed` with the reason legible on the first attempt.
     const blockers = await listOrgsBlockingAccountDeletion(db, userId);
     if (blockers.length > 0) {
         throw new NonRetryableJobError(
-            `Account is the only admin of ${blockers.length} organization(s) that still hold members or content: ${blockers
+            `Account is the only owner of ${blockers.length} organization(s) that still hold members or content: ${blockers
                 .map((b) => `${b.org_id} (${b.reason})`)
                 .join(", ")}`,
         );

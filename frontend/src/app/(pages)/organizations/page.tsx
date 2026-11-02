@@ -1,7 +1,6 @@
-"use client";
+import { redirect } from "next/navigation";
 
-import { OrganizationsOverview } from "@/app/components/organizations/OrganizationsOverview";
-
+// The organizations a person belongs to are listed in their own settings.
 export default function OrganizationsPage() {
-  return <OrganizationsOverview />;
+  redirect("/settings/organizations");
 }

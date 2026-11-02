@@ -11,7 +11,7 @@ import {
     type ContentAccess,
 } from "@/app/lib/mikeApi";
 import { can, roleFrom } from "@/app/lib/permissions";
-import { userFacingApiError } from "@/app/lib/userFacingError";
+import { notifyError, userFacingApiError } from "@/app/lib/userFacingError";
 import type { Chat } from "@/app/components/shared/types";
 
 interface Props {
@@ -35,6 +35,31 @@ export function ChatAccessModal({ open, chat, onClose }: Props) {
         const nextAccess = await getChatAccess(chat.id);
         setAccessState({ chatId: chat.id, value: nextAccess });
     }, [chat.id]);
+
+    /**
+     * The grant list could not be read: say so beside the people that did
+     * load (management is off until it is), and raise the notice whose
+     * Retry re-reads it.
+     */
+    const reportAccessFailure = useCallback(
+        (error: unknown, action: string, chatId: string) => {
+            setAccessError(
+                userFacingApiError(
+                    error,
+                    "Sharing details could not be loaded, so access cannot be changed here.",
+                ),
+            );
+            notifyError(error, {
+                action,
+                dedupeKey: `chat-access:${chatId}`,
+                onRetry: async () => {
+                    await refreshAccess();
+                    setAccessError(null);
+                },
+            });
+        },
+        [refreshAccess],
+    );
 
     /**
      * Load the roster, and for a manager the grants as well.
@@ -67,16 +92,15 @@ export function ChatAccessModal({ open, chat, onClose }: Props) {
                 setAccessState({ chatId, value: nextAccess });
                 setAccessError(null);
             } catch (cause) {
-                setAccessError(
-                    userFacingApiError(
-                        cause,
-                        "Sharing details could not be loaded, so access cannot be changed here.",
-                    ),
+                reportAccessFailure(
+                    cause,
+                    "load who this chat is shared with",
+                    chatId,
                 );
             }
             return people;
         },
-        [canManage],
+        [canManage, reportAccessFailure],
     );
 
     return (
@@ -107,6 +131,7 @@ export function ChatAccessModal({ open, chat, onClose }: Props) {
                     chat.project_id ??
                     null,
                 ownerLabel: "Owners",
+                resourceNoun: "chat",
                 // Role-derived, so the Share Access label and input are there
                 // the moment the modal opens: the roster below carries its own
                 // loading state, and waiting for the access payload blanked
@@ -118,11 +143,25 @@ export function ChatAccessModal({ open, chat, onClose }: Props) {
                 error: accessError,
                 onGrant: async (email, role) => {
                     await grantChatAccess(chat.id, email, role);
-                    await refreshAccess();
+                    // The grant itself succeeded; a failed re-read is its own
+                    // problem and must not be reported as a failed share.
+                    await refreshAccess().catch((error) =>
+                        reportAccessFailure(
+                            error,
+                            "refresh who this chat is shared with",
+                            chat.id,
+                        ),
+                    );
                 },
                 onRevoke: async (email) => {
                     await revokeChatAccess(chat.id, email);
-                    await refreshAccess();
+                    await refreshAccess().catch((error) =>
+                        reportAccessFailure(
+                            error,
+                            "refresh who this chat is shared with",
+                            chat.id,
+                        ),
+                    );
                 },
             }}
         />

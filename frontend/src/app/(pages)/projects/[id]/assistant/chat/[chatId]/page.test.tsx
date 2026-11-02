@@ -1,19 +1,23 @@
-import { StrictMode, Suspense, type ReactNode } from "react";
+import { StrictMode, Suspense, useEffect, type ReactNode } from "react";
 import {
     act,
     fireEvent,
     render,
     screen,
     waitFor,
+    within,
 } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type {
     AssistantEvent,
+    Citation,
     Document,
     Message,
 } from "@/app/components/shared/types";
 import ProjectAssistantChatPage from "./page";
 import { getProject } from "@/app/lib/mikeApi";
+import { ToastViewportUI, clearToasts } from "@/shared/ui/ToastUI";
+import type { DocxCloseGuard } from "@/app/components/shared/views/DocxRenderer.types";
 
 const state = vi.hoisted(() => ({
     attachmentFilename: "Budget.xlsx",
@@ -21,7 +25,10 @@ const state = vi.hoisted(() => ({
     push: vi.fn(),
     getChat: vi.fn(),
     getDocument: vi.fn(),
+    deleteDocument: vi.fn(),
+    discardDraft: vi.fn(),
     uploadProjectDocuments: vi.fn(),
+    moveDocumentToFolder: vi.fn(),
     loadChats: vi.fn().mockResolvedValue(undefined),
     setCurrentChatId: vi.fn(),
     setNewChatMessages: vi.fn(),
@@ -31,16 +38,19 @@ const state = vi.hoisted(() => ({
         project_id: string;
         title: string;
         created_at: string;
+        updated_at?: string;
     }>,
     chats: [] as Array<{
         id: string;
         project_id: string;
         title: string;
         created_at: string;
+        updated_at?: string;
     }>,
 }));
 vi.mock("next/navigation", () => ({
     useRouter: () => ({ replace: state.replace, push: state.push }),
+    usePathname: () => window.location.pathname,
 }));
 vi.mock("@/app/lib/mikeApi", async (importOriginal) => ({
     ...(await importOriginal<typeof import("@/app/lib/mikeApi")>()),
@@ -51,9 +61,15 @@ vi.mock("@/app/lib/mikeApi", async (importOriginal) => ({
         documents: [{ id: "doc1", filename: "Draft.docx" }],
         folders: [],
     }),
+    listDocumentVersions: vi.fn().mockResolvedValue({
+        current_version_id: "v1",
+        versions: [{ id: "v1", version_number: 1, filename: "Draft.docx" }],
+    }),
     getChat: state.getChat,
     getDocument: state.getDocument,
+    deleteDocument: state.deleteDocument,
     uploadProjectDocuments: state.uploadProjectDocuments,
+    moveDocumentToFolder: state.moveDocumentToFolder,
     listProjectChats: vi
         .fn()
         .mockImplementation(async () => state.projectChats),
@@ -61,6 +77,7 @@ vi.mock("@/app/lib/mikeApi", async (importOriginal) => ({
 }));
 vi.mock("@/app/contexts/ChatHistoryContext", () => ({
     useChatHistoryContext: () => ({
+        setSideChatId: () => {},
         setCurrentChatId: state.setCurrentChatId,
         setNewChatMessages: state.setNewChatMessages,
         newChatMessages: null,
@@ -94,7 +111,14 @@ vi.mock("@/app/components/projects/ProjectExplorer", () => ({
     }: {
         documents: Document[];
         onDocClick: (doc: Document) => void;
-    }) => <button onClick={() => onDocClick(documents[0])}>Open draft</button>,
+    }) => (
+        <button
+            data-folder={documents[0]?.folder_id ?? "root"}
+            onClick={() => onDocClick(documents[0])}
+        >
+            Open draft
+        </button>
+    ),
 }));
 vi.mock("@/app/components/assistant/ChatInput", () => ({
     ChatInput: ({
@@ -131,7 +155,12 @@ vi.mock("@/app/components/assistant/ChatInput", () => ({
             <button
                 disabled={!canSend || !!chatLoading || isLoading}
                 onClick={() =>
-                    onSubmit({ role: "user", content: "First question", model: "gpt-5.6-sol", reasoning: "xhigh" })
+                    onSubmit({
+                        role: "user",
+                        content: "First question",
+                        model: "gpt-5.6-sol",
+                        reasoning: "xhigh",
+                    })
                 }
                 data-can-send={String(canSend)}
                 data-chat-loading={String(!!chatLoading)}
@@ -151,16 +180,41 @@ vi.mock("@/app/components/assistant/UserMessage", () => ({
     UserMessage: ({ content }: { content: string }) => <p>{content}</p>,
 }));
 vi.mock("@/app/components/assistant/AssistantMessage", () => ({
-    AssistantMessage: ({ events }: { events: AssistantEvent[] }) => (
-        <p>
+    AssistantMessage: ({
+        events,
+        citations,
+        activeCitation,
+        onCitationClick,
+    }: {
+        events: AssistantEvent[];
+        citations?: Citation[];
+        activeCitation?: Citation | null;
+        onCitationClick?: (citation: Citation) => void;
+    }) => (
+        <div>
             {events
                 ?.map((event) => ("text" in event ? event.text : ""))
                 .join("")}
-        </p>
+            {citations?.[0] && (
+                <button
+                    type="button"
+                    data-active={String(activeCitation === citations[0])}
+                    onClick={() => onCitationClick?.(citations[0])}
+                >
+                    Citation pill {citations[0].ref}
+                </button>
+            )}
+        </div>
     ),
 }));
 vi.mock("@/app/components/shared/views/DocxView", () => ({
-    DocxView: () => <div>Draft viewer</div>,
+    DocxView: ({ quotes, onCloseGuardReady }: { quotes?: { quote: string }[]; onCloseGuardReady?: (guard: DocxCloseGuard | null) => void }) => {
+        useEffect(() => {
+            onCloseGuardReady?.({ hasUnsavedChanges: () => false, prepareClose: async () => true, discard: state.discardDraft });
+            return () => onCloseGuardReady?.(null);
+        }, [onCloseGuardReady]);
+        return <div data-testid="draft-viewer" data-quotes={JSON.stringify(quotes ?? [])}>Draft viewer</div>;
+    },
 }));
 vi.mock("@/app/components/shared/views/PdfView", () => ({
     PdfView: () => null,
@@ -186,6 +240,7 @@ vi.mock("@/app/components/projects/ProjectWorkspaceTips", () => ({
 beforeEach(() => {
     vi.clearAllMocks();
     state.getDocument.mockReset();
+    state.deleteDocument.mockReset().mockResolvedValue(undefined);
     state.uploadProjectDocuments.mockReset();
     state.chats = [];
     state.attachmentFilename = "Budget.xlsx";
@@ -211,6 +266,99 @@ async function renderWorkspace(canSend = true, strict = false) {
     });
 }
 
+describe("project side chat menu", () => {
+    it("closes the side chat from the main chat and offers opening it again", async () => {
+        await renderWorkspace();
+        const primary = screen
+            .getByRole("button", { name: "Send question" })
+            .closest<HTMLElement>('[data-chat-pane="primary"]')!;
+        const openActions = () => {
+            const trigger = within(primary).getByRole("button", { name: "Actions" });
+            fireEvent.pointerDown(
+                trigger,
+                new MouseEvent("pointerdown", { bubbles: true, cancelable: true }),
+            );
+            fireEvent.click(trigger);
+        };
+
+        openActions();
+        fireEvent.click(await screen.findByRole("menuitem", { name: "Open side chat" }));
+        expect(await screen.findAllByRole("button", { name: "Send question" })).toHaveLength(2);
+        expect(window.location.search).toBe("?side=new");
+
+        openActions();
+        expect(screen.queryByRole("menuitem", { name: "Open side chat" })).toBeNull();
+        fireEvent.click(await screen.findByRole("menuitem", { name: "Close side chat" }));
+        expect(screen.getAllByRole("button", { name: "Send question" })).toHaveLength(1);
+        expect(window.location.search).toBe("");
+        expect(window.location.pathname).toBe("/projects/p1/assistant/chat");
+
+        openActions();
+        expect(await screen.findByRole("menuitem", { name: "Open side chat" })).toBeInTheDocument();
+    });
+});
+
+describe("project document deletion", () => {
+    async function openMenu() {
+        fireEvent.click(screen.getByRole("button", { name: "Open draft" }));
+        await act(async () => {});
+        fireEvent.contextMenu(screen.getByRole("tab", { name: /Draft.docx/ }));
+    }
+
+    it("confirms deletion, retains the draft on cancellation, and discards only after success", async () => {
+        state.getDocument.mockResolvedValue({ id: "doc1", filename: "Draft.docx", can_edit: true, can_delete: true });
+        await renderWorkspace();
+        await openMenu();
+        fireEvent.click(await screen.findByRole("menuitem", { name: "Delete file" }));
+        expect(state.deleteDocument).not.toHaveBeenCalled();
+        expect(state.discardDraft).not.toHaveBeenCalled();
+        fireEvent.click(within(screen.getByRole("dialog", { name: "Delete file?" })).getByRole("button", { name: "Cancel" }));
+        expect(screen.getByTestId("draft-viewer")).toBeVisible();
+        expect(state.discardDraft).not.toHaveBeenCalled();
+        fireEvent.contextMenu(screen.getByRole("tab", { name: /Draft.docx/ }));
+        fireEvent.click(await screen.findByRole("menuitem", { name: "Delete file" }));
+        fireEvent.click(within(screen.getByRole("dialog", { name: "Delete file?" })).getByRole("button", { name: "Delete file" }));
+        await waitFor(() => expect(state.deleteDocument).toHaveBeenCalledWith("doc1"));
+        await waitFor(() => expect(screen.queryByTestId("draft-viewer")).toBeNull());
+        expect(state.discardDraft).toHaveBeenCalledOnce();
+        expect(state.getDocument).toHaveBeenCalledTimes(2);
+    });
+
+    it("rechecks document rights and keeps the viewer if permission was revoked", async () => {
+        state.getDocument.mockResolvedValueOnce({ can_edit: true, can_delete: true }).mockResolvedValue({ can_edit: false, can_delete: false });
+        await renderWorkspace();
+        await openMenu();
+        fireEvent.click(await screen.findByRole("menuitem", { name: "Delete file" }));
+        fireEvent.click(within(screen.getByRole("dialog", { name: "Delete file?" })).getByRole("button", { name: "Delete file" }));
+        await screen.findByText("You do not have permission to delete this file.");
+        expect(state.deleteDocument).not.toHaveBeenCalled();
+        expect(state.discardDraft).not.toHaveBeenCalled();
+        expect(screen.getByTestId("draft-viewer")).toBeVisible();
+    });
+
+    it("keeps the draft and reports a safe message after deletion fails", async () => {
+        state.getDocument.mockResolvedValue({ can_edit: true, can_delete: true });
+        state.deleteDocument.mockRejectedValue(new Error("internal database stack"));
+        await renderWorkspace();
+        await openMenu();
+        fireEvent.click(await screen.findByRole("menuitem", { name: "Delete file" }));
+        fireEvent.click(within(screen.getByRole("dialog", { name: "Delete file?" })).getByRole("button", { name: "Delete file" }));
+        await screen.findByText("This file could not be deleted. Please try again.");
+        expect(screen.queryByText("internal database stack")).toBeNull();
+        expect(screen.getByTestId("draft-viewer")).toBeVisible();
+        expect(state.discardDraft).not.toHaveBeenCalled();
+    });
+
+    it.each(["viewer", "document-reader"])("hides mutation actions for %s", async (role) => {
+        if (role === "viewer") vi.mocked(getProject).mockResolvedValueOnce({ id: "p1", name: "Matter", access_role: "viewer", documents: [{ id: "doc1", filename: "Draft.docx" }], folders: [] } as unknown as Awaited<ReturnType<typeof getProject>>);
+        state.getDocument.mockResolvedValue({ can_edit: false, can_delete: false });
+        await renderWorkspace(role !== "viewer");
+        await openMenu();
+        expect(screen.queryByRole("menuitem", { name: "Rename" })).toBeNull();
+        expect(screen.queryByRole("menuitem", { name: "Delete file" })).toBeNull();
+    });
+});
+
 describe("closing document tabs", () => {
     it("selects the next tab, then the previous tab, then clears the viewer in StrictMode", async () => {
         await renderWorkspace(true, true);
@@ -223,23 +371,34 @@ describe("closing document tabs", () => {
             filename: "Notes.docx",
             file_type: "docx",
         });
-        fireEvent.drop(screen.getByRole("region", { name: "Document viewer" }), {
-            dataTransfer: {
-                types: ["application/mike-doc"],
-                getData: () => "notes",
+        fireEvent.drop(
+            screen.getByRole("region", { name: "Document viewer" }),
+            {
+                dataTransfer: {
+                    types: ["application/mike-doc"],
+                    getData: () => "notes",
+                },
             },
-        });
+        );
         await screen.findByRole("tab", { name: /Notes.docx/ });
         fireEvent.click(screen.getByRole("tab", { name: /Budget.xlsx/ }));
-        fireEvent.click(screen.getByRole("button", { name: "Close Budget.xlsx" }));
+        fireEvent.click(
+            screen.getByRole("button", { name: "Close Budget.xlsx" }),
+        );
         expect(screen.getByRole("tab", { name: /Notes.docx/ })).toHaveAttribute(
-            "aria-selected", "true",
+            "aria-selected",
+            "true",
         );
-        fireEvent.click(screen.getByRole("button", { name: "Close Notes.docx" }));
+        fireEvent.click(
+            screen.getByRole("button", { name: "Close Notes.docx" }),
+        );
         expect(screen.getByRole("tab", { name: /Draft.docx/ })).toHaveAttribute(
-            "aria-selected", "true",
+            "aria-selected",
+            "true",
         );
-        fireEvent.click(screen.getByRole("button", { name: "Close Draft.docx" }));
+        fireEvent.click(
+            screen.getByRole("button", { name: "Close Draft.docx" }),
+        );
         expect(screen.queryAllByRole("tab")).toHaveLength(0);
         expect(screen.queryByText("Draft viewer")).toBeNull();
     });
@@ -250,10 +409,12 @@ describe("closing document tabs", () => {
         fireEvent.click(
             screen.getByRole("button", { name: "Open attached Excel" }),
         );
-        fireEvent.click(screen.getByRole("button", { name: "Close Draft.docx" }));
-        expect(screen.getByRole("tab", { name: /Budget.xlsx/ })).toHaveAttribute(
-            "aria-selected", "true",
+        fireEvent.click(
+            screen.getByRole("button", { name: "Close Draft.docx" }),
         );
+        expect(
+            screen.getByRole("tab", { name: /Budget.xlsx/ }),
+        ).toHaveAttribute("aria-selected", "true");
         expect(screen.getByTestId("excel-viewer")).toBeVisible();
     });
 });
@@ -278,7 +439,8 @@ describe("document viewer drops", () => {
         );
         expect(screen.getByText("Draft viewer")).toBe(original);
         expect(screen.queryByText("Drop files here to open")).toBeNull();
-        expect(state.getDocument).not.toHaveBeenCalled();
+        // The mounted viewer resolves its document-specific editing rights.
+        expect(state.getDocument).toHaveBeenCalledWith("doc1");
         expect(state.uploadProjectDocuments).not.toHaveBeenCalled();
     });
 
@@ -416,7 +578,288 @@ describe("document viewer drops", () => {
     });
 });
 
+describe("explorer uploads", () => {
+    const completed = (id: string, filename: string) => ({
+        clientId: id,
+        filename,
+        status: "completed" as const,
+        result: { id, filename, file_type: "pdf", status: "ready" },
+        error: null,
+        errorCode: null,
+    });
+    const failed = (filename: string, errorCode: string | null = null) => ({
+        clientId: filename,
+        filename,
+        status: "error" as const,
+        result: null,
+        error: "refused",
+        errorCode,
+    });
+
+    // External files dropped on the tree bubble up to the Explorer pane's
+    // own drop handler; the mocked tree is the drop target.
+    function dropOnExplorer(files: File[]) {
+        fireEvent.drop(screen.getByRole("button", { name: "Open draft" }), {
+            dataTransfer: { types: ["Files"], files, items: [], getData: () => "" },
+        });
+    }
+
+    async function findUploadWarning() {
+        const title = await screen.findByText("Some files were not uploaded");
+        return title.closest<HTMLElement>('[role="alert"]')!;
+    }
+
+    it("names the files that did not upload instead of dropping them silently", async () => {
+        state.uploadProjectDocuments.mockResolvedValueOnce([
+            completed("a", "Alpha.pdf"),
+            failed("Broken.pdf"),
+        ]);
+        await renderWorkspace();
+        dropOnExplorer([
+            new File(["a"], "Alpha.pdf"),
+            new File(["b"], "Broken.pdf"),
+        ]);
+        const dialog = await findUploadWarning();
+        expect(dialog).toHaveTextContent(
+            "Broken.pdf could not be uploaded. Please try again.",
+        );
+        expect(dialog).not.toHaveTextContent("Alpha.pdf");
+    });
+
+    it("reports the limit a batch broke from the file picker", async () => {
+        state.uploadProjectDocuments.mockResolvedValueOnce([
+            completed("a", "Alpha.pdf"),
+            failed("Huge.pdf", "upload_file_too_large"),
+        ]);
+        const { container } = await act(async () =>
+            render(
+                <Suspense fallback="Loading">
+                    <ProjectAssistantChatPage
+                        params={Promise.resolve({ id: "p1" })}
+                    />
+                </Suspense>,
+            ),
+        );
+        await screen.findByRole("button", { name: "Send question" });
+        const picker = container.querySelector(
+            'input[type="file"]:not([webkitdirectory])',
+        )!;
+        fireEvent.change(picker, {
+            target: {
+                files: [
+                    new File(["a"], "Alpha.pdf"),
+                    new File(["b"], "Huge.pdf"),
+                ],
+            },
+        });
+        expect(
+            await screen.findByText(
+                "Each uploaded file must be 100 MB or smaller.",
+            ),
+        ).toBeVisible();
+    });
+
+    it("filters unsupported types out of a drop and reports both failures together", async () => {
+        state.uploadProjectDocuments.mockResolvedValueOnce([
+            failed("Broken.pdf"),
+        ]);
+        await renderWorkspace();
+        const pdf = new File(["b"], "Broken.pdf");
+        dropOnExplorer([pdf, new File(["png"], "Photo.png")]);
+        const dialog = await findUploadWarning();
+        expect(dialog).toHaveTextContent("Unsupported file type.");
+        expect(dialog).toHaveTextContent("Broken.pdf could not be uploaded.");
+        expect(state.uploadProjectDocuments).toHaveBeenCalledWith(
+            "p1",
+            [expect.objectContaining({ file: pdf })],
+            expect.any(Object),
+        );
+    });
+
+    it("never opens an upload session for a drop of only unsupported files", async () => {
+        await renderWorkspace();
+        dropOnExplorer([new File(["png"], "Photo.png")]);
+        expect(
+            await screen.findByText(/Unsupported file type\./),
+        ).toBeVisible();
+        expect(state.uploadProjectDocuments).not.toHaveBeenCalled();
+    });
+
+    it("does not leak a transport error and can be dismissed", async () => {
+        state.uploadProjectDocuments.mockRejectedValueOnce(
+            new Error("connect ECONNREFUSED 10.0.0.3:5432"),
+        );
+        await renderWorkspace();
+        dropOnExplorer([new File(["a"], "Alpha.pdf")]);
+        const dialog = await findUploadWarning();
+        expect(dialog).toHaveTextContent(
+            "Files could not be uploaded. Please try again.",
+        );
+        expect(dialog).not.toHaveTextContent("ECONNREFUSED");
+        fireEvent.click(
+            within(dialog).getByRole("button", { name: "Dismiss warning" }),
+        );
+        await waitFor(() =>
+            expect(screen.queryByText("Some files were not uploaded")).toBeNull(),
+        );
+    });
+
+    it("names every file when the whole batch fails", async () => {
+        state.uploadProjectDocuments.mockResolvedValueOnce([
+            failed("Alpha.pdf"),
+            failed("Beta.docx"),
+        ]);
+        await renderWorkspace();
+        dropOnExplorer([
+            new File(["a"], "Alpha.pdf"),
+            new File(["b"], "Beta.docx"),
+        ]);
+        const dialog = await findUploadWarning();
+        expect(dialog).toHaveTextContent(
+            "Alpha.pdf, Beta.docx could not be uploaded. Please try again.",
+        );
+    });
+
+    it("does nothing for an empty selection", async () => {
+        await renderWorkspace();
+        dropOnExplorer([]);
+        // Give any stray async work a turn before asserting nothing happened.
+        await act(async () => {});
+        expect(state.uploadProjectDocuments).not.toHaveBeenCalled();
+        expect(screen.queryByText("Some files were not uploaded")).toBeNull();
+    });
+
+    it("sends both copies of a duplicate filename instead of collapsing them", async () => {
+        // The type filter keys on File identity, not on the name, so two
+        // different files that happen to share a name both reach the session.
+        state.uploadProjectDocuments.mockResolvedValueOnce([
+            completed("a", "Same.pdf"),
+            completed("b", "Same.pdf"),
+        ]);
+        await renderWorkspace();
+        const first = new File(["one"], "Same.pdf");
+        const second = new File(["two"], "Same.pdf");
+        dropOnExplorer([first, second]);
+        await waitFor(() =>
+            expect(state.uploadProjectDocuments).toHaveBeenCalledWith(
+                "p1",
+                [
+                    expect.objectContaining({ file: first }),
+                    expect.objectContaining({ file: second }),
+                ],
+                expect.any(Object),
+            ),
+        );
+        expect(screen.queryByText("Some files were not uploaded")).toBeNull();
+    });
+
+    // Counterexample for the type guard: the filter ends the flow for a
+    // file, so supported files with an upper-case extension or a non-ASCII
+    // name must still go through untouched and raise no warning.
+    it("keeps upper-case extensions and unicode names on the upload path", async () => {
+        state.uploadProjectDocuments.mockResolvedValueOnce([
+            completed("a", "SCAN.PDF"),
+            completed("b", "Vertrag-Übersicht.docx"),
+        ]);
+        await renderWorkspace();
+        const scan = new File(["a"], "SCAN.PDF");
+        const contract = new File(["b"], "Vertrag-Übersicht.docx");
+        dropOnExplorer([scan, contract]);
+        await waitFor(() =>
+            expect(state.uploadProjectDocuments).toHaveBeenCalledWith(
+                "p1",
+                [
+                    expect.objectContaining({ file: scan }),
+                    expect.objectContaining({ file: contract }),
+                ],
+                expect.any(Object),
+            ),
+        );
+        expect(screen.queryByText(/Unsupported file type/)).toBeNull();
+    });
+
+    // Counterexample for the failure path: reporting a failure must not
+    // block the next attempt, and a successful retry clears the old warning.
+    it("lets the user retry after a failed upload and clears the stale warning", async () => {
+        state.uploadProjectDocuments
+            .mockRejectedValueOnce(new Error("network down"))
+            .mockResolvedValueOnce([completed("a", "Alpha.pdf")]);
+        await renderWorkspace();
+        dropOnExplorer([new File(["a"], "Alpha.pdf")]);
+        await findUploadWarning();
+
+        dropOnExplorer([new File(["a"], "Alpha.pdf")]);
+        await waitFor(() =>
+            expect(state.uploadProjectDocuments).toHaveBeenCalledTimes(2),
+        );
+        await waitFor(() =>
+            expect(screen.queryByText("Some files were not uploaded")).toBeNull(),
+        );
+    });
+});
+
 describe("project chat workspace lifecycle", () => {
+    it("marks the selected citation pill active until a regular document view opens", async () => {
+        const citation: Citation = {
+            type: "citation_data",
+            ref: 1,
+            doc_id: "doc1",
+            document_id: "doc1",
+            filename: "Draft.docx",
+            page: 1,
+            quote: "Relevant language",
+        };
+        state.getChat.mockResolvedValueOnce({
+            chat: {
+                id: "c1",
+                project_id: "p1",
+                title: "Existing chat",
+                user_id: "u1",
+                created_at: "2026-09-15T00:00:00Z",
+            },
+            messages: [
+                {
+                    role: "assistant",
+                    content: "Answer",
+                    events: [{ type: "content", text: "Answer" }],
+                    citations: [citation],
+                },
+            ],
+        });
+
+        window.history.replaceState(null, "", "/projects/p1/assistant/chat/c1");
+
+        await act(async () => {
+            render(
+                <Suspense fallback="Loading">
+                    <ProjectAssistantChatPage
+                        params={Promise.resolve({ id: "p1", chatId: "c1" })}
+                    />
+                </Suspense>,
+            );
+        });
+
+        const pill = await screen.findByRole("button", {
+            name: "Citation pill 1",
+        });
+        expect(pill).toHaveAttribute("data-active", "false");
+        fireEvent.click(pill);
+        await waitFor(() => expect(pill).toHaveAttribute("data-active", "true"));
+        await waitFor(() => expect(screen.getByTestId("draft-viewer")).toHaveAttribute("data-quotes", expect.stringContaining("Relevant language")));
+
+        fireEvent.click(pill);
+        expect(pill).toHaveAttribute("data-active", "false");
+        expect(screen.getByTestId("draft-viewer")).toHaveAttribute("data-quotes", "[]");
+        expect(screen.getByTestId("draft-viewer")).toBeVisible();
+
+        fireEvent.click(pill);
+        await waitFor(() => expect(pill).toHaveAttribute("data-active", "true"));
+        await waitFor(() => expect(screen.getByTestId("draft-viewer")).toHaveAttribute("data-quotes", expect.stringContaining("Relevant language")));
+
+        fireEvent.click(screen.getByRole("button", { name: "Open draft" }));
+        expect(pill).toHaveAttribute("data-active", "false");
+    });
+
     it("hides the composer until the chat and project access both resolve", async () => {
         let resolveChat!: (loaded: {
             chat: Record<string, unknown>;
@@ -437,6 +880,8 @@ describe("project chat workspace lifecycle", () => {
                     resolveProject = resolve;
                 }),
         );
+
+        window.history.replaceState(null, "", "/projects/p1/assistant/chat/c1");
 
         await act(async () => {
             render(
@@ -498,11 +943,13 @@ describe("project chat workspace lifecycle", () => {
         let stream!: ReadableStreamDefaultController<Uint8Array>;
         const encoder = new TextEncoder();
         state.streamProjectChat.mockResolvedValue(
-            new Response(new ReadableStream<Uint8Array>({
-                start(controller) {
-                    stream = controller;
-                },
-            })),
+            new Response(
+                new ReadableStream<Uint8Array>({
+                    start(controller) {
+                        stream = controller;
+                    },
+                }),
+            ),
         );
         await renderWorkspace();
         fireEvent.click(screen.getByRole("button", { name: "Open draft" }));
@@ -512,7 +959,11 @@ describe("project chat workspace lifecycle", () => {
         fireEvent.click(screen.getByRole("button", { name: "Send question" }));
         await waitFor(() => expect(state.streamProjectChat).toHaveBeenCalled());
         act(() => {
-            stream.enqueue(encoder.encode('data: {"type":"chat_id","chatId":"created-chat"}\n\n'));
+            stream.enqueue(
+                encoder.encode(
+                    'data: {"type":"chat_id","chatId":"created-chat"}\n\n',
+                ),
+            );
         });
         await waitFor(() =>
             expect(
@@ -520,9 +971,17 @@ describe("project chat workspace lifecycle", () => {
             ).toHaveAttribute("data-chat-key", "created-chat"),
         );
         expect(screen.queryByText("First answer")).not.toBeInTheDocument();
-        await waitFor(() => expect(screen.getByRole("button", { name: "Send question" })).toHaveAttribute("data-chat-model", "gpt-5.6-sol"));
-        expect(screen.getByRole("button", { name: "Send question" })).toHaveAttribute("data-chat-reasoning", "xhigh");
-        expect(screen.getByRole("button", { name: "Send question" })).toBeDisabled();
+        await waitFor(() =>
+            expect(
+                screen.getByRole("button", { name: "Send question" }),
+            ).toHaveAttribute("data-chat-model", "gpt-5.6-sol"),
+        );
+        expect(
+            screen.getByRole("button", { name: "Send question" }),
+        ).toHaveAttribute("data-chat-reasoning", "xhigh");
+        expect(
+            screen.getByRole("button", { name: "Send question" }),
+        ).toBeDisabled();
         expect(screen.getByText("First question")).toBeVisible();
         expect(screen.getByRole("tabpanel", { name: "Draft.docx" })).toBe(
             panel,
@@ -535,29 +994,52 @@ describe("project chat workspace lifecycle", () => {
             "/projects/p1/assistant/chat/created-chat",
         );
         act(() => {
-            stream.enqueue(encoder.encode('data: {"type":"content_delta","text":"First answer"}\n\n'));
+            stream.enqueue(
+                encoder.encode(
+                    'data: {"type":"content_delta","text":"First answer"}\n\n',
+                ),
+            );
         });
-        await waitFor(() => expect(screen.getByText("First answer")).toBeVisible());
-        expect(screen.getByRole("button", { name: "Send question" })).toBeDisabled();
+        await waitFor(() =>
+            expect(screen.getByText("First answer")).toBeVisible(),
+        );
+        expect(
+            screen.getByRole("button", { name: "Send question" }),
+        ).toBeDisabled();
         act(() => stream.close());
-        await waitFor(() => expect(screen.getByRole("button", { name: "Send question" })).not.toBeDisabled());
-        expect(screen.getByRole("tabpanel", { name: "Draft.docx" })).toBe(panel);
+        await waitFor(() =>
+            expect(
+                screen.getByRole("button", { name: "Send question" }),
+            ).not.toBeDisabled(),
+        );
+        expect(screen.getByRole("tabpanel", { name: "Draft.docx" })).toBe(
+            panel,
+        );
         expect(state.getChat).not.toHaveBeenCalled();
     });
 
-    it("lists project chats newest first after merging both history sources", async () => {
+    it("lists project chats by latest activity after merging both history sources", async () => {
         state.chats = [
             {
                 id: "older",
                 project_id: "p1",
                 title: "Older",
                 created_at: "2026-09-10T00:00:00Z",
+                updated_at: "2026-09-20T00:00:00Z",
             },
             {
                 id: "newer",
                 project_id: "p1",
                 title: "Newer",
                 created_at: "2026-09-14T00:00:00Z",
+                updated_at: "2026-09-14T00:00:00Z",
+            },
+            {
+                id: "latest",
+                project_id: "p1",
+                title: "Stale latest",
+                created_at: "2026-09-15T00:00:00Z",
+                updated_at: "2026-09-13T00:00:00Z",
             },
         ];
         state.projectChats = [
@@ -566,16 +1048,22 @@ describe("project chat workspace lifecycle", () => {
                 project_id: "p1",
                 title: "Latest",
                 created_at: "2026-09-15T00:00:00Z",
+                updated_at: "2026-09-15T00:00:00Z",
             },
         ];
         await renderWorkspace();
-        fireEvent.click(screen.getByRole("button", { name: "New Chat" }));
+        // Radix opens on pointerdown, not click.
+        fireEvent.pointerDown(
+            screen.getByRole("button", { name: "New Chat" }),
+            new MouseEvent("pointerdown", { bubbles: true, cancelable: true }),
+        );
         const rows = await screen.findAllByRole("menuitem");
         expect(rows.map((row) => row.textContent)).toEqual([
+            expect.stringContaining("Older"),
             expect.stringContaining("Latest"),
             expect.stringContaining("Newer"),
-            expect.stringContaining("Older"),
         ]);
+        expect(screen.queryByText("Stale latest")).not.toBeInTheDocument();
     });
 });
 
@@ -665,10 +1153,25 @@ describe("leaving a project chat mid-stream", () => {
         fireEvent.click(screen.getByRole("button", { name: "Send question" }));
         await waitFor(() => expect(state.streamProjectChat).toHaveBeenCalled());
         await body.send('data: {"type":"chat_id","chatId":"created-chat"}\n\n');
-        await body.send('data: {"type":"content_delta","text":"First answer"}\n\n');
-        await waitFor(() => expect(screen.getByText("First answer")).toBeVisible());
+        await body.send(
+            'data: {"type":"content_delta","text":"First answer"}\n\n',
+        );
+        await waitFor(() =>
+            expect(screen.getByText("First answer")).toBeVisible(),
+        );
+        state.chats.push({
+            id: "created-chat",
+            project_id: "p1",
+            title: "Original thread",
+            created_at: "2026-09-14T00:00:00Z",
+            updated_at: "2026-09-14T00:00:00Z",
+        });
 
-        fireEvent.click(screen.getByRole("button", { name: "New Chat" }));
+        // Radix opens on pointerdown, not click.
+        fireEvent.pointerDown(
+            screen.getByRole("button", { name: "New Chat" }),
+            new MouseEvent("pointerdown", { bubbles: true, cancelable: true }),
+        );
         fireEvent.click(
             (await screen.findAllByRole("menuitem")).find((row) =>
                 row.textContent?.includes("Other thread"),
@@ -684,14 +1187,31 @@ describe("leaving a project chat mid-stream", () => {
         // cancelled, so the server finishes and persists the whole answer.
         expect(requestSignal().aborted).toBe(false);
         expect(body.state.cancelled).toBe(false);
-        await body.send('data: {"type":"content_delta","text":" and the rest"}\n\n');
+        await body.send(
+            'data: {"type":"content_delta","text":" and the rest"}\n\n',
+        );
         await body.close();
         expect(body.state.cancelled).toBe(false);
+        // Radix opens on pointerdown, not click.
+        fireEvent.pointerDown(
+            screen.getByRole("button", { name: "Other thread" }),
+            new MouseEvent("pointerdown", { bubbles: true, cancelable: true }),
+        );
+        const completedRow = (await screen.findAllByRole("menuitem")).find(
+            (row) => row.textContent?.includes("Original thread"),
+        )!;
+        await waitFor(() =>
+            expect(
+                completedRow.querySelector("img[aria-hidden='true']"),
+            ).toHaveAttribute(
+                "src",
+                expect.stringContaining("features/chat-complete"),
+            ),
+        );
         // ...and nothing from it lands in the thread now on screen.
         expect(screen.queryByText(/and the rest/)).not.toBeInTheDocument();
         expect(screen.queryByText(/Cancelled by user/)).not.toBeInTheDocument();
     });
-
 
     it("shows the answer streaming when returning before a detached turn finishes", async () => {
         const body = controllableStream();
@@ -699,17 +1219,38 @@ describe("leaving a project chat mid-stream", () => {
         await renderWorkspace();
         fireEvent.click(screen.getByRole("button", { name: "Send question" }));
         await waitFor(() => expect(state.streamProjectChat).toHaveBeenCalled());
-        await body.send('data: {"type":"chat_id","chatId":"created-chat","assistantMessageId":"answer-1"}\n\n');
-        await body.send('data: {"type":"content_delta","text":"First answer"}\n\n');
+        await body.send(
+            'data: {"type":"chat_id","chatId":"created-chat","assistantMessageId":"answer-1"}\n\n',
+        );
+        await body.send(
+            'data: {"type":"content_delta","text":"First answer"}\n\n',
+        );
         await screen.findByText("First answer");
-        state.chats.push({ id: "created-chat", project_id: "p1", title: "Original thread", created_at: "2026-09-14T00:00:00Z" });
-        fireEvent.click(screen.getByRole("button", { name: "New Chat" }));
-        fireEvent.click((await screen.findAllByRole("menuitem")).find((row) => row.textContent?.includes("Other thread"))!);
-        await waitFor(() => expect(state.getChat).toHaveBeenCalledWith("other"));
+        state.chats.push({
+            id: "created-chat",
+            project_id: "p1",
+            title: "Original thread",
+            created_at: "2026-09-14T00:00:00Z",
+        });
+        // Radix opens on pointerdown, not click.
+        fireEvent.pointerDown(
+            screen.getByRole("button", { name: "New Chat" }),
+            new MouseEvent("pointerdown", { bubbles: true, cancelable: true }),
+        );
+        fireEvent.click(
+            (await screen.findAllByRole("menuitem")).find((row) =>
+                row.textContent?.includes("Other thread"),
+            )!,
+        );
+        await waitFor(() =>
+            expect(state.getChat).toHaveBeenCalledWith("other"),
+        );
         await screen.findByRole("button", { name: "Send question" });
         expect(screen.queryByText(/First answer/)).not.toBeInTheDocument();
         // The answer keeps arriving while nobody is looking at its thread.
-        await body.send('data: {"type":"content_delta","text":" continues"}\n\n');
+        await body.send(
+            'data: {"type":"content_delta","text":" continues"}\n\n',
+        );
 
         // What the server holds for that thread right now: the question is
         // stored, the assistant row is hidden until it has content.
@@ -717,18 +1258,42 @@ describe("leaving a project chat mid-stream", () => {
         let finishHistory!: (value: unknown) => void;
         state.getChat.mockImplementation((id: string) =>
             id === "created-chat"
-                ? new Promise((resolve) => { finishHistory = resolve; })
+                ? new Promise((resolve) => {
+                      finishHistory = resolve;
+                  })
                 : Promise.resolve(otherHistory),
         );
-        fireEvent.click(screen.getByRole("button", { name: "Other thread" }));
-        fireEvent.click((await screen.findAllByRole("menuitem")).find((row) => row.textContent?.includes("Original thread"))!);
-        await waitFor(() => expect(window.location.pathname).toBe("/projects/p1/assistant/chat/created-chat"));
+        // Radix opens on pointerdown, not click.
+        fireEvent.pointerDown(
+            screen.getByRole("button", { name: "Other thread" }),
+            new MouseEvent("pointerdown", { bubbles: true, cancelable: true }),
+        );
+        fireEvent.click(
+            (await screen.findAllByRole("menuitem")).find((row) =>
+                row.textContent?.includes("Original thread"),
+            )!,
+        );
+        await waitFor(() =>
+            expect(window.location.pathname).toBe(
+                "/projects/p1/assistant/chat/created-chat",
+            ),
+        );
         // The history is requested at once instead of after the stream ends.
-        await waitFor(() => expect(state.getChat).toHaveBeenCalledWith("created-chat"));
+        await waitFor(() =>
+            expect(state.getChat).toHaveBeenCalledWith("created-chat"),
+        );
         await act(async () =>
             finishHistory({
-                chat: { id: "created-chat", title: "New Chat", user_id: "u1", model: null, reasoning_level: null },
-                messages: [{ id: "u1", role: "user", content: "First question" }],
+                chat: {
+                    id: "created-chat",
+                    title: "New Chat",
+                    user_id: "u1",
+                    model: null,
+                    reasoning_level: null,
+                },
+                messages: [
+                    { id: "u1", role: "user", content: "First question" },
+                ],
             }),
         );
         // The transcript shows the stored question once and the answer as far
@@ -741,11 +1306,21 @@ describe("leaving a project chat mid-stream", () => {
         expect(send).toHaveAttribute("data-chat-loading", "false");
         expect(send).toHaveAttribute("data-can-send", "true");
         // ...and the rest of the answer streams into the returned thread.
-        await body.send('data: {"type":"content_delta","text":" and the rest"}\n\n');
-        expect(await screen.findByText("First answer continues and the rest")).toBeVisible();
+        await body.send(
+            'data: {"type":"content_delta","text":" and the rest"}\n\n',
+        );
+        expect(
+            await screen.findByText("First answer continues and the rest"),
+        ).toBeVisible();
         await body.close();
-        await waitFor(() => expect(screen.getByRole("button", { name: "Send question" })).toBeEnabled());
-        expect(screen.getByText("First answer continues and the rest")).toBeVisible();
+        await waitFor(() =>
+            expect(
+                screen.getByRole("button", { name: "Send question" }),
+            ).toBeEnabled(),
+        );
+        expect(
+            screen.getByText("First answer continues and the rest"),
+        ).toBeVisible();
         expect(screen.getAllByText("First question")).toHaveLength(1);
         expect(requestSignal().aborted).toBe(false);
         expect(body.state.cancelled).toBe(false);
@@ -757,20 +1332,73 @@ describe("leaving a project chat mid-stream", () => {
         fireEvent.click(screen.getByRole("button", { name: "Send question" }));
         await waitFor(() => expect(state.streamProjectChat).toHaveBeenCalled());
         await body.send('data: {"type":"chat_id","chatId":"created-chat"}\n\n');
-        await body.send('data: {"type":"content_delta","text":"First answer"}\n\n');
-        await waitFor(() => expect(screen.getByText("First answer")).toBeVisible());
+        await body.send(
+            'data: {"type":"content_delta","text":"First answer"}\n\n',
+        );
+        await waitFor(() =>
+            expect(screen.getByText("First answer")).toBeVisible(),
+        );
 
         fireEvent.click(screen.getByRole("button", { name: "New chat" }));
         await waitFor(() =>
-            expect(window.location.pathname).toBe("/projects/p1/assistant/chat"),
+            expect(window.location.pathname).toBe(
+                "/projects/p1/assistant/chat",
+            ),
         );
 
         expect(requestSignal().aborted).toBe(false);
         expect(body.state.cancelled).toBe(false);
-        await body.send('data: {"type":"content_delta","text":" and the rest"}\n\n');
+        await body.send(
+            'data: {"type":"content_delta","text":" and the rest"}\n\n',
+        );
         await body.close();
         expect(body.state.cancelled).toBe(false);
         expect(screen.queryByText(/First answer/)).not.toBeInTheDocument();
         expect(screen.queryByText(/and the rest/)).not.toBeInTheDocument();
+    });
+});
+
+describe("project explorer root drop", () => {
+    // Dropping a document on the panel outside the tree moved it to the root
+    // optimistically; a failed request left it shown at the root with no
+    // word to the user.
+    it("puts a document back and says so when the move to the root fails", async () => {
+        clearToasts();
+        vi.mocked(getProject).mockResolvedValueOnce({
+            id: "p1",
+            name: "Matter",
+            access_role: "owner",
+            documents: [{ id: "doc1", filename: "Draft.docx", folder_id: "f1" }],
+            folders: [{ id: "f1", name: "Drafts", parent_folder_id: null }],
+        } as unknown as Awaited<ReturnType<typeof getProject>>);
+        state.moveDocumentToFolder.mockRejectedValue(
+            new TypeError("Failed to fetch"),
+        );
+        await renderWorkspace();
+        render(<ToastViewportUI />);
+        const explorer = screen.getByRole("button", { name: "Open draft" });
+        expect(explorer).toHaveAttribute("data-folder", "f1");
+
+        await act(async () => {
+            fireEvent.drop(explorer.parentElement!, {
+                dataTransfer: {
+                    getData: (type: string) =>
+                        type === "application/mike-doc" ? "doc1" : "",
+                    files: [],
+                    types: ["application/mike-doc"],
+                },
+            });
+        });
+
+        expect(state.moveDocumentToFolder).toHaveBeenCalledWith(
+            "p1",
+            "doc1",
+            null,
+        );
+        expect(await screen.findByRole("alert")).toHaveTextContent(
+            "Couldn't move this document",
+        );
+        expect(explorer).toHaveAttribute("data-folder", "f1");
+        clearToasts();
     });
 });

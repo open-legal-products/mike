@@ -6,7 +6,6 @@ import {
     encodeRFC5987,
     buildContentDisposition,
     storageKey,
-    pdfStorageKey,
     generatedDocKey,
     versionStorageKey,
 } from "../storage";
@@ -114,13 +113,6 @@ describe("storageKey", () => {
     it("falls back to .bin when no extension", () => {
         const key = storageKey("user1", "doc1", "noextension");
         expect(key).toBe("documents/user1/doc1/source.bin");
-    });
-});
-
-describe("pdfStorageKey", () => {
-    it("places PDF in the correct path with stem", () => {
-        const key = pdfStorageKey("user1", "doc1", "contract");
-        expect(key).toBe("documents/user1/doc1/contract.pdf");
     });
 });
 

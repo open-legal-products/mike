@@ -1,5 +1,9 @@
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import request from "supertest";
+import { readFileSync } from "node:fs";
+import { resolve } from "node:path";
+import { ownerlessRpcResult } from "../helpers/ownerlessRpc";
+import { handoverRpcResult } from "../helpers/handoverRpc";
 
 // ---------------------------------------------------------------------------
 // Organizations, invitations and project organization overrides, over HTTP.
@@ -25,15 +29,15 @@ let writeErrors: Record<string, { message: string; code?: string }>;
 function resetState() {
     idCounter = 1;
     writeErrors = {};
-    currentUser = { id: "admin-1", email: "admin@firm.example" };
+    currentUser = { id: "owner-1", email: "owner@firm.example" };
     tables = {
-        organizations: [{ id: "org-1", name: "Acme LLP", created_by: "admin-1" }],
+        organizations: [{ id: "org-1", name: "Acme LLP", created_by: "owner-1" }],
         org_members: [
             {
                 id: "m-1",
                 org_id: "org-1",
-                user_id: "admin-1",
-                role: "admin",
+                user_id: "owner-1",
+                role: "owner",
                 created_at: "t1",
             },
             {
@@ -47,8 +51,8 @@ function resetState() {
         org_invitations: [],
         user_profiles: [
             {
-                user_id: "admin-1",
-                email: "admin@firm.example",
+                user_id: "owner-1",
+                email: "owner@firm.example",
                 display_name: "Ada",
             },
             {
@@ -60,8 +64,11 @@ function resetState() {
         projects: [
             {
                 id: "proj-1",
-                user_id: "admin-1",
+                user_id: "owner-1",
                 org_id: "org-1",
+                // Open to the whole organization: the cases below are about
+                // roles and overrides, not about privacy.
+                visibility: "organization",
                 name: "Matter Alpha",
                 created_at: "t1",
             },
@@ -79,7 +86,7 @@ function resetState() {
         tabular_reviews: [
             {
                 id: "review-1",
-                user_id: "admin-1",
+                user_id: "owner-1",
                 project_id: "proj-1",
                 org_id: "org-1",
                 title: "Disclosure review",
@@ -89,11 +96,24 @@ function resetState() {
         workflows: [
             {
                 id: "workflow-1",
-                user_id: "admin-1",
+                user_id: "owner-1",
                 org_id: "org-1",
+                visibility: "organization",
                 title: "Disclosure workflow",
                 type: "tabular",
                 created_at: "t4",
+            },
+        ],
+        playbooks: [
+            {
+                id: "playbook-1",
+                user_id: "member-1",
+                org_id: "org-1",
+                // Private on purpose: a purge reaches every member's work,
+                // not only what the organization's owners already own.
+                visibility: "private",
+                name: "Supplier terms",
+                created_at: "t5",
             },
         ],
         project_access_grants: [],
@@ -174,7 +194,20 @@ function query(table: string) {
         select: () => builder,
         order: () => builder,
         limit: () => builder,
+        range: () => builder,
         eq: (col: string, val: unknown) => {
+            filters.push({ type: "eq", col, val });
+            return builder;
+        },
+        is: (col: string, val: unknown) => {
+            // Existing fixtures omit nullable columns.
+            for (const row of tables[table] ?? []) if (!(col in row)) row[col] = null;
+            filters.push({ type: "eq", col, val });
+            return builder;
+        },
+        // `.filter(col, "eq" | "is", val)` — the connector workspace filter.
+        filter: (col: string, _operator: string, val: unknown) => {
+            for (const row of tables[table] ?? []) if (!(col in row)) row[col] = null;
             filters.push({ type: "eq", col, val });
             return builder;
         },
@@ -238,7 +271,46 @@ function query(table: string) {
 vi.mock("../../lib/supabase", () => ({
     createServerSupabase: vi.fn(() => ({
         from: (t: string) => query(t),
-        rpc: vi.fn(() => Promise.resolve({ data: [], error: null })),
+        rpc: vi.fn((name?: string, args?: Record<string, unknown>) => {
+            if (name === "soft_delete_organization") {
+                if (writeErrors.organizations) return Promise.resolve({ data: null, error: writeErrors.organizations });
+                const org = tables.organizations.find((row) => row.id === args?.p_org_id);
+                if (org) org.deleted_at = new Date().toISOString();
+                return Promise.resolve({ data: null, error: null });
+            }
+            // Whether an item has an Owner left is the database's to say.
+            const ownerless = ownerlessRpcResult(tables, name ?? "", args);
+            if (ownerless) return Promise.resolve(ownerless);
+            // ... and so is what a departing member alone owns.
+            const handover = handoverRpcResult(tables, name ?? "", args);
+            if (handover) return Promise.resolve(handover);
+            // The one function these routes rely on for its effect: replace
+            // an organization's model list for one provider.
+            if (name === "replace_org_router_models" && args) {
+                if (writeErrors.org_router_models)
+                    return Promise.resolve({
+                        data: null,
+                        error: writeErrors.org_router_models,
+                    });
+                const kept = (tables.org_router_models ?? []).filter(
+                    (row) =>
+                        row.org_id !== args.target_org_id ||
+                        row.router !== args.target_router,
+                );
+                tables.org_router_models = [
+                    ...kept,
+                    ...(args.target_model_ids as string[]).map(
+                        (model_id, sort_order) => ({
+                            org_id: args.target_org_id,
+                            router: args.target_router,
+                            model_id,
+                            sort_order,
+                        }),
+                    ),
+                ];
+            }
+            return Promise.resolve({ data: [], error: null });
+        }),
         auth: {
             getUser: () =>
                 Promise.resolve({
@@ -301,7 +373,7 @@ describe("GET /orgs", () => {
         ]);
     });
 
-    it("is empty for someone in no organization — there is no personal org", async () => {
+    it("is empty for someone in no organization", async () => {
         as("loner", "loner@example.com");
         const res = await request(app).get("/orgs").set(...AUTH);
         expect(res.status).toBe(200);
@@ -309,18 +381,103 @@ describe("GET /orgs", () => {
     });
 });
 
+// Every account has an organization of its own, behind the scenes. Over HTTP
+// it is not an organization at all: not listed, and every route that names
+// one answers for it as for an id that names nothing — to its owner too.
+describe("a personal organization", () => {
+    beforeEach(() => {
+        tables.organizations.push({
+            id: "mine",
+            name: "Personal",
+            kind: "personal",
+            personal_user_id: "owner-1",
+            created_by: "owner-1",
+        });
+        tables.org_members.push({
+            id: "m-mine",
+            org_id: "mine",
+            user_id: "owner-1",
+            role: "owner",
+            created_at: "t0",
+        });
+    });
+
+    it("is not among the caller's organizations", async () => {
+        const res = await request(app).get("/orgs").set(...AUTH);
+        expect(res.status).toBe(200);
+        expect(res.body.map((org: { id: string }) => org.id)).toEqual([
+            "org-1",
+        ]);
+    });
+
+    it.each([
+        ["get", "/orgs/mine", undefined],
+        ["patch", "/orgs/mine", { name: "Mine, renamed" }],
+        ["delete", "/orgs/mine", undefined],
+        ["get", "/orgs/mine/logo", undefined],
+        ["put", "/orgs/mine/logo", { data_url: "data:image/png;base64,AAAA" }],
+        ["delete", "/orgs/mine/logo", undefined],
+        ["get", "/orgs/mine/resources", undefined],
+        ["get", "/orgs/mine/members", undefined],
+        ["patch", "/orgs/mine/members/owner-1", { role: "member" }],
+        ["delete", "/orgs/mine/members/owner-1", undefined],
+        ["get", "/orgs/mine/members/owner-1/handover", undefined],
+        ["post", "/orgs/mine/invitations", { email: "friend@example.com" }],
+        ["get", "/orgs/mine/invitations", undefined],
+        ["delete", "/orgs/mine/invitations/inv-1", undefined],
+        ["post", "/orgs/mine/invitations/inv-1/resend", undefined],
+        ["get", "/orgs/mine/api-keys", undefined],
+        ["put", "/orgs/mine/api-keys/openrouter/models", { models: [] }],
+        ["put", "/orgs/mine/api-keys/openai", { api_key: "sk-test" }],
+        ["patch", "/orgs/mine/api-keys/openai", { enabled: false }],
+    ] as const)("%s %s answers 404, to its owner too", async (method, path, body) => {
+        const before = JSON.stringify(tables);
+        const pending = request(app)[method](path).set(...AUTH);
+        const res = await (body ? pending.send(body) : pending);
+        expect(res.status).toBe(404);
+        expect(res.body).toEqual({ detail: "Organization not found" });
+        // Nothing was renamed, removed, invited or saved on the way.
+        expect(JSON.stringify(tables)).toBe(before);
+    });
+
+    it("is refused by every route that names an organization, including ones added later", () => {
+        // The cases above are the routes that exist today. This reads the
+        // router itself, so a new /:orgId route cannot be added without the
+        // guard: each must use requireOrgAuth, never requireAuth alone.
+        const source = readFileSync(
+            resolve(__dirname, "../../modules/orgs/orgs.routes.ts"),
+            "utf8",
+        );
+        const routes = [
+            ...source.matchAll(
+                /orgsRouter\.(?:get|post|put|patch|delete)\(\s*"(\/:orgId[^"]*)",\s*(\w+),/g,
+            ),
+        ].map(([, path, guard]) => ({ path, guard }));
+        expect(routes.length).toBeGreaterThanOrEqual(21);
+        expect(routes.filter((route) => route.guard !== "requireOrgAuth")).toEqual(
+            [],
+        );
+    });
+
+    it("leaves a team organization's routes as they were", async () => {
+        const res = await request(app).get("/orgs/org-1").set(...AUTH);
+        expect(res.status).toBe(200);
+        expect(res.body).toMatchObject({ id: "org-1", role: "owner" });
+    });
+});
+
 describe("POST /orgs", () => {
-    it("creates the org and makes the caller its first admin", async () => {
+    it("creates the org and makes the caller its first owner", async () => {
         as("founder", "founder@new.example");
         const res = await request(app)
             .post("/orgs")
             .set(...AUTH)
             .send({ name: "  New Firm  " });
         expect(res.status).toBe(201);
-        expect(res.body).toMatchObject({ name: "New Firm", role: "admin" });
+        expect(res.body).toMatchObject({ name: "New Firm", role: "owner" });
         expect(
             tables.org_members.filter((m) => m.user_id === "founder"),
-        ).toEqual([expect.objectContaining({ role: "admin" })]);
+        ).toEqual([expect.objectContaining({ role: "owner" })]);
     });
 
     it("400s a blank name", async () => {
@@ -344,9 +501,9 @@ describe("org membership", () => {
         expect(res.status).toBe(200);
         expect(res.body).toEqual([
             expect.objectContaining({
-                user_id: "admin-1",
-                role: "admin",
-                email: "admin@firm.example",
+                user_id: "owner-1",
+                role: "owner",
+                email: "owner@firm.example",
                 display_name: "Ada",
             }),
             expect.objectContaining({
@@ -357,25 +514,57 @@ describe("org membership", () => {
         ]);
     });
 
-    it("409s an attempt to demote the last admin", async () => {
+    it("409s an attempt to demote the last owner", async () => {
         const res = await request(app)
-            .patch("/orgs/org-1/members/admin-1")
+            .patch("/orgs/org-1/members/owner-1")
             .set(...AUTH)
             .send({ role: "member" });
         expect(res.status).toBe(409);
         expect(res.body.detail).toBe(
-            "An organization must keep at least one admin.",
+            "An organization must keep at least one owner.",
         );
     });
 
     it("403s a plain member trying to re-role somebody", async () => {
         as("member-1", "member@firm.example");
         const res = await request(app)
-            .patch("/orgs/org-1/members/admin-1")
+            .patch("/orgs/org-1/members/owner-1")
             .set(...AUTH)
             .send({ role: "member" });
         expect(res.status).toBe(403);
         expect(res.body.detail).toBe("Only an organization admin can do that.");
+    });
+
+    it("403s an admin trying to appoint another admin, naming the owner role", async () => {
+        // A separate refusal from the member's: "only an admin can do that"
+        // would be untrue for somebody who is one.
+        tables.org_members[1].role = "admin";
+        tables.org_members.push({
+            id: "m-3",
+            org_id: "org-1",
+            user_id: "member-2",
+            role: "member",
+            created_at: "t3",
+        });
+        as("member-1", "member@firm.example");
+        const res = await request(app)
+            .patch("/orgs/org-1/members/member-2")
+            .set(...AUTH)
+            .send({ role: "admin" });
+        expect(res.status).toBe(403);
+        expect(res.body.detail).toBe("Only an organization owner can do that.");
+        expect(tables.org_members[2].role).toBe("member");
+    });
+
+    it("403s an admin trying to remove an owner", async () => {
+        tables.org_members[1].role = "admin";
+        as("member-1", "member@firm.example");
+        const res = await request(app)
+            .delete("/orgs/org-1/members/owner-1")
+            .set(...AUTH);
+        expect(res.status).toBe(403);
+        expect(res.body.detail).toBe("Only an organization owner can do that.");
+        expect(tables.org_members).toHaveLength(2);
     });
 
     it("lets a member leave on their own (204)", async () => {
@@ -384,7 +573,94 @@ describe("org membership", () => {
             .delete("/orgs/org-1/members/member-1")
             .set(...AUTH);
         expect(res.status).toBe(204);
-        expect(tables.org_members.map((m) => m.user_id)).toEqual(["admin-1"]);
+        expect(tables.org_members.map((m) => m.user_id)).toEqual(["owner-1"]);
+    });
+
+    // A member's public projects and workflows that nobody else owns are
+    // handed to a named successor before they can go.
+    describe("with work only they own", () => {
+        beforeEach(() => {
+            tables.projects.push({
+                id: "proj-public",
+                user_id: "member-1",
+                org_id: "org-1",
+                visibility: "organization",
+                name: "Public matter",
+            });
+            tables.chats.push({
+                id: "chat-own",
+                user_id: "member-1",
+                project_id: null,
+                org_id: "org-1",
+            });
+        });
+
+        it("tells an admin what removing them would hand over and delete", async () => {
+            const res = await request(app)
+                .get("/orgs/org-1/members/member-1/handover")
+                .set(...AUTH);
+            expect(res.status).toBe(200);
+            expect(res.body).toEqual({
+                projects: [{ id: "proj-public", title: "Public matter" }],
+                workflows: [],
+                chats: 1,
+                reviews: 0,
+                documents: 0,
+                sharedChats: 0,
+                sharedReviews: 0,
+                sharedDocuments: 0,
+                privateProjects: 0,
+                privateWorkflows: 0,
+            });
+        });
+
+        it("tells the member the same about leaving, and nobody else", async () => {
+            as("member-1", "member@firm.example");
+            const own = await request(app)
+                .get("/orgs/org-1/members/member-1/handover")
+                .set(...AUTH);
+            expect(own.status).toBe(200);
+            // A plain member asking about somebody else.
+            const other = await request(app)
+                .get("/orgs/org-1/members/owner-1/handover")
+                .set(...AUTH);
+            expect(other.status).toBe(403);
+        });
+
+        it("defaults the bulk handover to a remaining organization owner", async () => {
+            const res = await request(app).delete("/orgs/org-1/members/member-1").set(...AUTH);
+            expect(res.status).toBe(204);
+            expect(tables.org_members.map((m) => m.user_id)).toEqual(["owner-1"]);
+            expect(tables.projects.find((p) => p.id === "proj-public")).toBeDefined();
+        });
+
+        it("400s a successor who is not another member", async () => {
+            const res = await request(app)
+                .delete("/orgs/org-1/members/member-1?assign_to=member-1")
+                .set(...AUTH);
+            expect(res.status).toBe(400);
+            expect(tables.org_members).toHaveLength(2);
+        });
+
+        it("hands the work to the named successor and removes the member (204)", async () => {
+            const res = await request(app)
+                .delete("/orgs/org-1/members/member-1?assign_to=owner-1")
+                .set(...AUTH);
+            expect(res.status).toBe(204);
+            expect(tables.org_members.map((m) => m.user_id)).toEqual([
+                "owner-1",
+            ]);
+            // Org owners already own public items; their grant is implicit.
+            expect(tables.project_org_access_overrides).toEqual([]);
+        });
+
+        it("lets a member who is leaving name their own successor", async () => {
+            as("member-1", "member@firm.example");
+            const res = await request(app)
+                .delete("/orgs/org-1/members/member-1?assign_to=owner-1")
+                .set(...AUTH);
+            expect(res.status).toBe(204);
+        });
     });
 
     it("has no endpoint that adds a member directly", async () => {
@@ -422,23 +698,70 @@ describe("organization workspace", () => {
         expect(res.status).toBe(404);
     });
 
-    it("requires an admin to empty an organization before deleting it", async () => {
-        const res = await request(app)
-            .delete("/orgs/org-1")
-            .set(...AUTH);
-        expect(res.status).toBe(409);
-        expect(res.body.detail).toContain("still contains");
-        expect(tables.organizations).toHaveLength(1);
+    it("soft-deletes a nonempty organization without purging its content", async () => {
+        const before = JSON.stringify(tables.projects);
+        const res = await request(app).delete("/orgs/org-1").set(...AUTH);
+        expect(res.status).toBe(204);
+        expect(tables.organizations[0].deleted_at).toBeTruthy();
+        expect(JSON.stringify(tables.projects)).toBe(before);
+    });
 
-        tables.projects = [];
-        tables.chats = [];
-        tables.tabular_reviews = [];
-        tables.workflows = [];
-        const emptied = await request(app)
-            .delete("/orgs/org-1")
+    it("reports a failed lifecycle transaction as an error", async () => {
+        writeErrors.organizations = { message: "boom" };
+        const res = await request(app).delete("/orgs/org-1").set(...AUTH);
+        expect(res.status).toBe(500);
+        expect(JSON.stringify(res.body)).not.toContain("boom");
+        expect(tables.organizations[0].deleted_at).toBeUndefined();
+    });
+
+    it.each([
+        ["chats", "chats"],
+        ["tabular-reviews", "tabular_reviews"],
+        ["projects", "projects"],
+        ["playbooks", "playbooks"],
+    ])("lets an owner delete all organization %s", async (kind, table) => {
+        expect(
+            tables[table].filter((row) => row.org_id === "org-1").length,
+        ).toBeGreaterThan(0);
+        const res = await request(app)
+            .delete(`/orgs/org-1/data/${kind}`)
             .set(...AUTH);
-        expect(emptied.status).toBe(204);
-        expect(tables.organizations).toEqual([]);
+        expect(res.status).toBe(204);
+        expect(tables[table].filter((row) => row.org_id === "org-1")).toEqual([]);
+        expect(tables.organizations).toHaveLength(1);
+        expect(tables.audit_events.at(-1)).toMatchObject({
+            action: "org.data.deleted",
+        });
+    });
+
+    it("refuses organization data deletion to anyone but an owner", async () => {
+        tables.org_members[1].role = "admin";
+        as("member-1", "member@firm.example");
+        const res = await request(app)
+            .delete("/orgs/org-1/data/projects")
+            .set(...AUTH);
+        expect(res.status).toBe(403);
+        expect(res.body.detail).toBe("Only an organization owner can do that.");
+        expect(
+            tables.projects.filter((row) => row.org_id === "org-1").length,
+        ).toBeGreaterThan(0);
+    });
+
+    it("refuses organization playbook deletion to an admin", async () => {
+        tables.org_members[1].role = "admin";
+        as("member-1", "member@firm.example");
+        const res = await request(app)
+            .delete("/orgs/org-1/data/playbooks")
+            .set(...AUTH);
+        expect(res.status).toBe(403);
+        expect(tables.playbooks.map((row) => row.id)).toEqual(["playbook-1"]);
+    });
+
+    it("answers 404 for a kind of organization data that does not exist", async () => {
+        const res = await request(app)
+            .delete("/orgs/org-1/data/everything")
+            .set(...AUTH);
+        expect(res.status).toBe(404);
     });
 
     it("refuses organization deletion to a plain member", async () => {
@@ -447,6 +770,21 @@ describe("organization workspace", () => {
             .delete("/orgs/org-1")
             .set(...AUTH);
         expect(res.status).toBe(403);
+        expect(tables.organizations).toHaveLength(1);
+    });
+
+    it("refuses organization deletion to an admin, even an empty one", async () => {
+        tables.org_members[1].role = "admin";
+        tables.projects = [];
+        tables.chats = [];
+        tables.tabular_reviews = [];
+        tables.workflows = [];
+        as("member-1", "member@firm.example");
+        const res = await request(app)
+            .delete("/orgs/org-1")
+            .set(...AUTH);
+        expect(res.status).toBe(403);
+        expect(res.body.detail).toBe("Only an organization owner can do that.");
         expect(tables.organizations).toHaveLength(1);
     });
 });
@@ -463,7 +801,7 @@ async function invite(email: string, role = "member") {
 }
 
 describe("organization invitations", () => {
-    it("an admin invites an email, and no membership appears", async () => {
+    it("an owner invites an email, and no membership appears", async () => {
         const res = await invite("New@Hire.example", "admin");
         expect(res.status).toBe(201);
         expect(res.body).toMatchObject({
@@ -525,7 +863,7 @@ describe("organization invitations", () => {
             expect.objectContaining({
                 email: "new@hire.example",
                 status: "pending",
-                invited_by_email: "admin@firm.example",
+                invited_by_email: "owner@firm.example",
             }),
         ]);
 
@@ -685,16 +1023,16 @@ describe("project organization overrides over HTTP", () => {
         const self = await request(app)
             .post("/projects/proj-1/access")
             .set(...AUTH)
-            .send({ email: "Admin@Firm.example", role: "editor" });
+            .send({ email: "Owner@Firm.example", role: "editor" });
         expect(self.status).toBe(400);
     });
 
-    it("does not allow an organization Admin to be overridden", async () => {
+    const addColleague = (role: "owner" | "admin") => {
         tables.org_members.push({
             id: "m-3",
             org_id: "org-1",
             user_id: "admin-2",
-            role: "admin",
+            role,
             created_at: "t3",
         });
         tables.user_profiles.push({
@@ -702,6 +1040,12 @@ describe("project organization overrides over HTTP", () => {
             email: "partner@firm.example",
             display_name: "Pat",
         });
+    };
+
+    it("does not allow an organization owner to be overridden on a public project", async () => {
+        // An organization owner owns every public project, so there is
+        // nothing to give them there and nothing that can be taken away.
+        addColleague("owner");
 
         const res = await request(app)
             .post("/projects/proj-1/access")
@@ -710,9 +1054,49 @@ describe("project organization overrides over HTTP", () => {
 
         expect(res.status).toBe(400);
         expect(res.body.detail).toBe(
-            "Organization admins always have owner access",
+            "Organization owners always own a public item",
         );
         expect(tables.project_org_access_overrides).toEqual([]);
+    });
+
+    it("shares a private project with an organization owner like any other member", async () => {
+        // A private project is not an organization owner's by office, so
+        // its creator gives them a role the way they would anyone.
+        addColleague("owner");
+        tables.projects[0].visibility = "private";
+
+        const res = await request(app)
+            .post("/projects/proj-1/access")
+            .set(...AUTH)
+            .send({ email: "partner@firm.example", role: "viewer" });
+
+        expect(res.status).toBe(201);
+        expect(tables.project_org_access_overrides).toEqual([
+            expect.objectContaining({
+                project_id: "proj-1",
+                user_id: "admin-2",
+                role: "viewer",
+            }),
+        ]);
+    });
+
+    it("walls an organization admin off a project like any other member", async () => {
+        // Administering the organization gives no standing on its content.
+        addColleague("admin");
+
+        const res = await request(app)
+            .post("/projects/proj-1/access")
+            .set(...AUTH)
+            .send({ email: "partner@firm.example", role: "deny" });
+
+        expect(res.status).toBe(201);
+        expect(tables.project_org_access_overrides).toEqual([
+            expect.objectContaining({
+                project_id: "proj-1",
+                user_id: "admin-2",
+                role: "deny",
+            }),
+        ]);
     });
 
     it("403s a member trying to change who has access", async () => {
@@ -828,11 +1212,11 @@ describe("GET /projects/:projectId admin contacts", () => {
         expect(res.status).toBe(200);
         // owner_email was declared on this shape for a long time and always
         // came back null, so the UI's "ask …" line could never render.
-        expect(res.body.owner_email).toBe("admin@firm.example");
+        expect(res.body.owner_email).toBe("owner@firm.example");
         expect(res.body.owner_display_name).toBe("Ada");
         expect(res.body.admin_contacts).toEqual([
             expect.objectContaining({
-                email: "admin@firm.example",
+                email: "owner@firm.example",
                 source: "creator",
             }),
         ]);
@@ -841,15 +1225,648 @@ describe("GET /projects/:projectId admin contacts", () => {
 });
 
 // ---------------------------------------------------------------------------
+// Private by default, and the setting that opens a project to everyone
+// ---------------------------------------------------------------------------
+//
+// proj-1 is seeded public. owner-1 created it and owns the organization;
+// member-1 is a plain member with no override.
+
+describe("project visibility over HTTP", () => {
+    const setVisibility = (visibility: unknown) =>
+        request(app)
+            .patch("/projects/proj-1")
+            .set(...AUTH)
+            .send({ visibility });
+    const peopleEmails = async () => {
+        const res = await request(app)
+            .get("/projects/proj-1/people")
+            .set(...AUTH);
+        expect(res.status).toBe(200);
+        return [
+            res.body.owner?.email,
+            ...res.body.members.map((member: { email: string }) => member.email),
+        ];
+    };
+
+    it("lets every member open a public project, and lists them on its roster", async () => {
+        expect(await peopleEmails()).toEqual([
+            "owner@firm.example",
+            "member@firm.example",
+        ]);
+        as("member-1", "member@firm.example");
+        const res = await request(app).get("/projects/proj-1").set(...AUTH);
+        expect(res.status).toBe(200);
+        expect(res.body.access_role).toBe("editor");
+    });
+
+    it("closes the project to members it was not shared with when made private", async () => {
+        const res = await setVisibility("private");
+        expect(res.status).toBe(200);
+        expect(res.body.visibility).toBe("private");
+        expect(tables.projects[0].visibility).toBe("private");
+
+        // The roster stops claiming the member can read it...
+        expect(await peopleEmails()).toEqual(["owner@firm.example"]);
+        // ...because they cannot: missing, not forbidden, so its existence
+        // is not confirmed either.
+        as("member-1", "member@firm.example");
+        const detail = await request(app).get("/projects/proj-1").set(...AUTH);
+        expect(detail.status).toBe(404);
+        const people = await request(app)
+            .get("/projects/proj-1/people")
+            .set(...AUTH);
+        expect(people.status).toBe(404);
+        // Nor does it appear among the organization's projects for them.
+        const resources = await request(app)
+            .get("/orgs/org-1/resources")
+            .set(...AUTH);
+        expect(resources.body.projects).toEqual([]);
+    });
+
+    it("admits a member to a private project at the role it was shared with them", async () => {
+        await setVisibility("private");
+        const grant = await request(app)
+            .post("/projects/proj-1/access")
+            .set(...AUTH)
+            .send({ email: "member@firm.example", role: "viewer" });
+        expect(grant.status).toBe(201);
+        expect(await peopleEmails()).toEqual([
+            "owner@firm.example",
+            "member@firm.example",
+        ]);
+
+        as("member-1", "member@firm.example");
+        const res = await request(app).get("/projects/proj-1").set(...AUTH);
+        expect(res.status).toBe(200);
+        expect(res.body.access_role).toBe("viewer");
+    });
+
+    it("cannot be shared with somebody outside the organization", async () => {
+        tables.user_profiles.push({
+            user_id: "outsider-1",
+            email: "counsel@elsewhere.example",
+            display_name: "Out",
+        });
+        const res = await request(app)
+            .post("/projects/proj-1/access")
+            .set(...AUTH)
+            .send({ email: "counsel@elsewhere.example", role: "viewer" });
+        expect(res.status).toBe(400);
+        expect(res.body.detail).toBe(
+            "Only current organization members can be assigned a role",
+        );
+        expect(tables.project_org_access_overrides).toEqual([]);
+    });
+
+    it("leaves who can open a project to its owners", async () => {
+        as("member-1", "member@firm.example");
+        const res = await setVisibility("private");
+        expect(res.status).toBe(403);
+        expect(tables.projects[0].visibility).toBe("organization");
+    });
+
+    it("400s a visibility that is not one of the two", async () => {
+        const res = await setVisibility("everyone");
+        expect(res.status).toBe(400);
+        expect(tables.projects[0].visibility).toBe("organization");
+    });
+
+    it("refuses to open a personal project to an organization", async () => {
+        tables.projects[0].org_id = null;
+        tables.projects[0].visibility = "private";
+        const res = await setVisibility("organization");
+        expect(res.status).toBe(400);
+        expect(tables.projects[0].visibility).toBe("private");
+    });
+
+    describe("a second organization owner, who did not create the project and was never shared it", () => {
+        beforeEach(() => {
+            tables.org_members.push({
+                id: "m-3",
+                org_id: "org-1",
+                user_id: "owner-2",
+                role: "owner",
+                created_at: "t3",
+            });
+            tables.user_profiles.push({
+                user_id: "owner-2",
+                email: "partner@firm.example",
+                display_name: "Pat",
+            });
+        });
+        const openAsSecondOwner = async () => {
+            as("owner-2", "partner@firm.example");
+            const res = await request(app).get("/projects/proj-1").set(...AUTH);
+            as("owner-1", "owner@firm.example");
+            return res;
+        };
+
+        it("is an Owner of it while it is public", async () => {
+            const res = await openAsSecondOwner();
+            expect(res.status).toBe(200);
+            expect(res.body.access_role).toBe("owner");
+        });
+
+        it("cannot open it once it is private", async () => {
+            // Private is private: owning the organization is not a key to a
+            // colleague's matter.
+            await setVisibility("private");
+            expect((await openAsSecondOwner()).status).toBe(404);
+        });
+
+        it("takes it over when its creator leaves and no Owner is left", async () => {
+            await setVisibility("private");
+            tables.org_members = tables.org_members.filter(
+                (membership) => membership.user_id !== "owner-1",
+            );
+
+            const res = await openAsSecondOwner();
+            expect(res.status).toBe(200);
+            expect(res.body.access_role).toBe("owner");
+        });
+
+        it("does not take it over while another member is still an Owner of it", async () => {
+            await setVisibility("private");
+            tables.project_org_access_overrides.push({
+                project_id: "proj-1",
+                org_id: "org-1",
+                user_id: "member-1",
+                role: "owner",
+            });
+            tables.org_members = tables.org_members.filter(
+                (membership) => membership.user_id !== "owner-1",
+            );
+
+            expect((await openAsSecondOwner()).status).toBe(404);
+        });
+    });
+});
+
+// ---------------------------------------------------------------------------
 // Internal failures do not narrate the database to the caller
 // ---------------------------------------------------------------------------
+
+// ---------------------------------------------------------------------------
+// Organization provider keys
+// ---------------------------------------------------------------------------
+
+describe("organization provider keys", () => {
+    const SECRET = "sk-org-secret-value";
+    // Keys exported in the developer's shell (or CI) sit under every owner;
+    // these cases are about the organization's and the member's.
+    const ENV_KEYS = ["OPENAI_API_KEY", "MISTRAL_API_KEY"];
+    const savedEnv: Record<string, string | undefined> = {};
+
+    afterEach(() => {
+        for (const name of ENV_KEYS) {
+            if (savedEnv[name] === undefined) delete process.env[name];
+            else process.env[name] = savedEnv[name];
+        }
+    });
+
+    beforeEach(() => {
+        process.env.USER_API_KEYS_ENCRYPTION_SECRET = "test-secret";
+        for (const name of ENV_KEYS) {
+            savedEnv[name] = process.env[name];
+            delete process.env[name];
+        }
+        tables.org_api_keys = [];
+        tables.user_api_keys = [];
+        tables.org_router_models = [];
+        tables.user_router_models = [];
+        tables.org_members.push({
+            id: "m-3",
+            org_id: "org-1",
+            user_id: "admin-1",
+            role: "admin",
+            created_at: "t3",
+        });
+    });
+
+    const saveKey = (provider = "openai", body: object = { api_key: SECRET }) =>
+        request(app)
+            .put(`/orgs/org-1/api-keys/${provider}`)
+            .set(...AUTH)
+            .send(body);
+
+    it("lets an owner save a key and never sends it back", async () => {
+        const res = await saveKey();
+
+        expect(res.status).toBe(200);
+        expect(res.body).toMatchObject({
+            keys: { openai: true, sources: { openai: "org" } },
+            effective: { openai: true, sources: { openai: "org" } },
+            can_manage: true,
+        });
+        expect(JSON.stringify(res.body)).not.toContain(SECRET);
+        expect(tables.org_api_keys).toHaveLength(1);
+        expect(tables.org_api_keys[0]).toMatchObject({
+            org_id: "org-1",
+            provider: "openai",
+            updated_by: "owner-1",
+        });
+        // Encrypted at rest, and absent from the audit trail.
+        expect(JSON.stringify(tables.org_api_keys)).not.toContain(SECRET);
+        expect(JSON.stringify(tables.audit_events)).not.toContain(SECRET);
+        expect(tables.audit_events).toEqual([
+            expect.objectContaining({ action: "org.api_key.saved" }),
+        ]);
+    });
+
+    it("lets an admin manage keys too", async () => {
+        as("admin-1", "admin@firm.example");
+        expect((await saveKey()).status).toBe(200);
+    });
+
+    it("refuses a plain member, on every write", async () => {
+        as("member-1", "member@firm.example");
+
+        expect((await saveKey()).status).toBe(403);
+        expect(
+            (
+                await request(app)
+                    .patch("/orgs/org-1/api-keys/openai")
+                    .set(...AUTH)
+                    .send({ enabled: false })
+            ).status,
+        ).toBe(403);
+        expect(tables.org_api_keys).toEqual([]);
+        expect(tables.audit_events).toEqual([]);
+    });
+
+    it("shows a member what is set up, without the right to change it", async () => {
+        await saveKey();
+        as("member-1", "member@firm.example");
+
+        const res = await request(app).get("/orgs/org-1/api-keys").set(...AUTH);
+
+        expect(res.status).toBe(200);
+        expect(res.body).toMatchObject({
+            keys: { openai: true },
+            effective: { openai: true, sources: { openai: "org" } },
+            can_manage: false,
+        });
+        expect(JSON.stringify(res.body)).not.toContain(SECRET);
+    });
+
+    it("hides the organization from somebody outside it", async () => {
+        await saveKey();
+        as("stranger-1", "stranger@elsewhere.example");
+
+        expect(
+            (await request(app).get("/orgs/org-1/api-keys").set(...AUTH)).status,
+        ).toBe(404);
+        expect((await saveKey("claude")).status).toBe(404);
+        expect(tables.org_api_keys).toHaveLength(1);
+    });
+
+    it("removes the key when saved empty", async () => {
+        await saveKey();
+
+        const res = await saveKey("openai", { api_key: null });
+
+        expect(res.status).toBe(200);
+        expect(res.body.keys.openai).toBe(false);
+        expect(tables.org_api_keys).toEqual([]);
+        expect(tables.audit_events.map((event) => event.action)).toEqual([
+            "org.api_key.saved",
+            "org.api_key.removed",
+        ]);
+    });
+
+    it("turns a provider off and on without losing the key", async () => {
+        await saveKey();
+
+        const off = await request(app)
+            .patch("/orgs/org-1/api-keys/openai")
+            .set(...AUTH)
+            .send({ enabled: false });
+        expect(off.status).toBe(200);
+        expect(off.body).toMatchObject({
+            keys: { openai: false, enabled: { openai: false } },
+            effective: { openai: false },
+        });
+        expect(tables.org_api_keys).toHaveLength(1);
+
+        const on = await request(app)
+            .patch("/orgs/org-1/api-keys/openai")
+            .set(...AUTH)
+            .send({ enabled: true });
+        expect(on.body).toMatchObject({ keys: { openai: true } });
+        expect(tables.audit_events.map((event) => event.action)).toEqual([
+            "org.api_key.saved",
+            "org.api_key.disabled",
+            "org.api_key.enabled",
+        ]);
+    });
+
+    it("cannot switch a provider the organization has no key for", async () => {
+        const res = await request(app)
+            .patch("/orgs/org-1/api-keys/openai")
+            .set(...AUTH)
+            .send({ enabled: false });
+        expect(res.status).toBe(409);
+    });
+
+    it("rejects an unknown provider and a malformed body", async () => {
+        expect((await saveKey("not-a-provider")).status).toBe(400);
+        expect(
+            (
+                await request(app)
+                    .patch("/orgs/org-1/api-keys/openai")
+                    .set(...AUTH)
+                    .send({ enabled: "no" })
+            ).status,
+        ).toBe(400);
+    });
+
+    it("offers no setting to let members' own keys in", async () => {
+        const res = await request(app)
+            .put("/orgs/org-1/api-keys/policy")
+            .set(...AUTH)
+            .send({ allow_personal_api_keys: true });
+
+        expect(res.status).toBe(400);
+        expect(tables.audit_events).toEqual([]);
+    });
+
+    it("never offers a member's own key for the organization's work", async () => {
+        // The member has saved a key of their own for a provider the
+        // organization has none for.
+        tables.user_api_keys.push({
+            user_id: "member-1",
+            provider: "mistral",
+            enabled: true,
+            settings: {},
+        });
+        as("member-1", "member@firm.example");
+
+        const res = await request(app).get("/orgs/org-1/api-keys").set(...AUTH);
+
+        expect(res.status).toBe(200);
+        expect(res.body.effective).toMatchObject({
+            mistral: false,
+            sources: { mistral: null },
+        });
+        expect(res.body).not.toHaveProperty("allow_personal_api_keys");
+    });
+
+    // -- The models an organization's key may run ---------------------------
+
+    const saveModels = (provider: string, model_ids: unknown) =>
+        request(app)
+            .put(`/orgs/org-1/api-keys/${provider}/models`)
+            .set(...AUTH)
+            .send({ model_ids });
+
+    it("lets an admin choose the models the organization's key may run", async () => {
+        await saveKey("openrouter");
+        as("admin-1", "admin@firm.example");
+
+        const res = await saveModels("openrouter", [
+            "anthropic/claude-sonnet-5",
+            "openai/gpt-6",
+        ]);
+
+        expect(res.status).toBe(200);
+        expect(res.body.router_models.openrouter).toEqual([
+            "anthropic/claude-sonnet-5",
+            "openai/gpt-6",
+        ]);
+        expect(tables.org_router_models).toHaveLength(2);
+        expect(tables.audit_events.at(-1)).toMatchObject({
+            action: "org.router_models.updated",
+        });
+    });
+
+    it("gives every member the organization's list for a provider whose key it holds", async () => {
+        await saveKey("openrouter");
+        await saveModels("openrouter", ["firm/approved"]);
+        // The member saved their own lists long ago.
+        tables.user_router_models.push(
+            { user_id: "member-1", router: "openrouter", model_id: "mine/own" },
+            { user_id: "member-1", router: "vercel", model_id: "mine/vercel" },
+        );
+        as("member-1", "member@firm.example");
+
+        const res = await request(app).get("/orgs/org-1/api-keys").set(...AUTH);
+
+        expect(res.body.effective_router_models.openrouter).toEqual([
+            "firm/approved",
+        ]);
+        // The organization has no Vercel key, so the member's list stands.
+        expect(res.body.effective_router_models.vercel).toEqual(["mine/vercel"]);
+    });
+
+    it("replaces the whole list, and clears it when sent empty", async () => {
+        await saveModels("bedrock", ["us.anthropic.claude-opus-5-5"]);
+        await saveModels("bedrock", ["us.anthropic.claude-sonnet-5-5"]);
+        expect(
+            tables.org_router_models.map((row) => row.model_id),
+        ).toEqual(["us.anthropic.claude-sonnet-5-5"]);
+
+        const res = await saveModels("bedrock", []);
+        expect(res.status).toBe(200);
+        expect(tables.org_router_models).toEqual([]);
+    });
+
+    it("refuses a plain member and an outsider", async () => {
+        as("member-1", "member@firm.example");
+        expect((await saveModels("openrouter", ["a/b"])).status).toBe(403);
+        as("stranger-1", "stranger@elsewhere.example");
+        expect((await saveModels("openrouter", ["a/b"])).status).toBe(404);
+        expect(tables.org_router_models).toEqual([]);
+    });
+
+    it("rejects a bad list as a whole rather than saving part of it", async () => {
+        expect((await saveModels("openrouter", "a/b")).status).toBe(400);
+        expect(
+            (await saveModels("openrouter", ["a/b", "has space/model"])).status,
+        ).toBe(400);
+        expect((await saveModels("openrouter", ["a/b", "a/b"])).status).toBe(400);
+        expect(
+            (
+                await saveModels(
+                    "openrouter",
+                    Array.from({ length: 51 }, (_, index) => `vendor/m${index}`),
+                )
+            ).status,
+        ).toBe(400);
+        // A provider that keeps no model list.
+        expect((await saveModels("claude", ["a/b"])).status).toBe(400);
+        expect(tables.org_router_models).toEqual([]);
+        expect(tables.audit_events).toEqual([]);
+    });
+
+    it("reports a failed save without leaking the database's message", async () => {
+        writeErrors.org_router_models = { message: "relation exploded" };
+
+        const res = await saveModels("openrouter", ["a/b"]);
+
+        expect(res.status).toBe(500);
+        expect(JSON.stringify(res.body)).not.toContain("exploded");
+        expect(tables.audit_events).toEqual([]);
+    });
+});
+
+// ---------------------------------------------------------------------------
+// Organization logo
+// ---------------------------------------------------------------------------
+
+describe("organization logo", () => {
+    // The smallest things that are really each format: the signature a file
+    // of that type begins with, and a little after it.
+    const dataUrl = (type: string, bytes: number[]) =>
+        `data:${type};base64,${Buffer.from(bytes).toString("base64")}`;
+    const PNG = dataUrl(
+        "image/png",
+        [0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 1, 2, 3, 4],
+    );
+    const JPEG = dataUrl("image/jpeg", [0xff, 0xd8, 0xff, 0xe0, 1, 2, 3]);
+    const WEBP = dataUrl(
+        "image/webp",
+        [...Buffer.from("RIFF"), 0, 0, 0, 0, ...Buffer.from("WEBP"), 1, 2],
+    );
+
+    beforeEach(() => {
+        tables.org_logos = [];
+        tables.org_members.push({
+            id: "m-3",
+            org_id: "org-1",
+            user_id: "admin-1",
+            role: "admin",
+            created_at: "t3",
+        });
+    });
+
+    const putLogo = (data_url: unknown) =>
+        request(app).put("/orgs/org-1/logo").set(...AUTH).send({ data_url });
+    const getLogo = () => request(app).get("/orgs/org-1/logo").set(...AUTH);
+
+    it("has none until one is set", async () => {
+        expect((await getLogo()).status).toBe(404);
+    });
+
+    it.each([
+        ["PNG", PNG, "image/png"],
+        ["JPEG", JPEG, "image/jpeg"],
+        ["WebP", WEBP, "image/webp"],
+    ])("lets an owner set a %s logo, and every member read it back", async (_name, image, type) => {
+        const saved = await putLogo(image);
+
+        expect(saved.status).toBe(200);
+        expect(typeof saved.body.logo_updated_at).toBe("string");
+        expect(tables.org_logos).toEqual([
+            expect.objectContaining({
+                org_id: "org-1",
+                content_type: type,
+                updated_by: "owner-1",
+            }),
+        ]);
+        expect(tables.audit_events).toEqual([
+            expect.objectContaining({ action: "org.logo.updated" }),
+        ]);
+        // The image is not written into the audit trail.
+        expect(JSON.stringify(tables.audit_events)).not.toContain(
+            image.split(",")[1],
+        );
+
+        as("member-1", "member@firm.example");
+        const read = await getLogo();
+        expect(read.status).toBe(200);
+        expect(read.body.data_url).toBe(image);
+    });
+
+    it("lets an admin set it too, and replaces rather than adds", async () => {
+        await putLogo(PNG);
+        as("admin-1", "admin@firm.example");
+
+        expect((await putLogo(JPEG)).status).toBe(200);
+
+        expect(tables.org_logos).toHaveLength(1);
+        expect(tables.org_logos[0]).toMatchObject({
+            content_type: "image/jpeg",
+            updated_by: "admin-1",
+        });
+    });
+
+    it("refuses a plain member and hides the organization from an outsider", async () => {
+        as("member-1", "member@firm.example");
+        expect((await putLogo(PNG)).status).toBe(403);
+        expect(
+            (await request(app).delete("/orgs/org-1/logo").set(...AUTH)).status,
+        ).toBe(403);
+
+        as("stranger-1", "stranger@elsewhere.example");
+        expect((await putLogo(PNG)).status).toBe(404);
+        expect((await getLogo()).status).toBe(404);
+        expect(tables.org_logos).toEqual([]);
+    });
+
+    it("accepts only a real PNG, JPEG or WebP", async () => {
+        const svg = `data:image/svg+xml;base64,${Buffer.from(
+            "<svg xmlns='http://www.w3.org/2000/svg'><script>alert(1)</script></svg>",
+        ).toString("base64")}`;
+        // Says PNG; is not one.
+        const disguised = dataUrl("image/png", [...Buffer.from("<svg onload=alert(1)>")]);
+
+        for (const image of [
+            svg,
+            disguised,
+            "data:image/png;base64,",
+            "https://example.com/logo.png",
+            "not a data url",
+            undefined,
+            42,
+        ]) {
+            const res = await putLogo(image);
+            expect([image, res.status]).toEqual([image, 400]);
+        }
+        expect(tables.org_logos).toEqual([]);
+        expect(tables.audit_events).toEqual([]);
+    });
+
+    it("refuses an image over the size an organization may store", async () => {
+        const big = dataUrl("image/png", [
+            0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a,
+            ...new Array(512 * 1024).fill(7),
+        ]);
+
+        const res = await putLogo(big);
+
+        expect(res.status).toBe(400);
+        expect(res.body.detail).toMatch(/too large/);
+        expect(tables.org_logos).toEqual([]);
+    });
+
+    it("removes the logo, and says nothing in the audit trail when there was none", async () => {
+        await putLogo(PNG);
+
+        const removed = await request(app)
+            .delete("/orgs/org-1/logo")
+            .set(...AUTH);
+        expect(removed.status).toBe(200);
+        expect(removed.body).toEqual({ logo_updated_at: null });
+        expect(tables.org_logos).toEqual([]);
+        expect((await getLogo()).status).toBe(404);
+
+        const again = await request(app)
+            .delete("/orgs/org-1/logo")
+            .set(...AUTH);
+        expect(again.status).toBe(200);
+        expect(tables.audit_events.map((event) => event.action)).toEqual([
+            "org.logo.updated",
+            "org.logo.removed",
+        ]);
+    });
+});
 
 describe("sendOrgFailure db_error", () => {
     it("answers a generic 500 instead of forwarding the Postgres message", async () => {
         const consoleError = vi
             .spyOn(console, "error")
             .mockImplementation(() => {});
-        as("admin-1", "admin@firm.example");
+        as("owner-1", "owner@firm.example");
         // A realistic Postgres error: it names the schema, the table, the
         // constraint, and quotes the offending row — which in the org tables
         // is somebody's email address.
@@ -888,15 +1905,15 @@ describe("sendOrgFailure db_error", () => {
     });
 
     it("still answers intentional 4xx verdicts with their own copy", async () => {
-        as("admin-1", "admin@firm.example");
-        // The last-admin invariant is a decision, not an incident: the caller
+        as("owner-1", "owner@firm.example");
+        // The last-owner invariant is a decision, not an incident: the caller
         // caused it and needs to be told what it was.
         const res = await request(app)
-            .delete("/orgs/org-1/members/admin-1")
+            .delete("/orgs/org-1/members/owner-1")
             .set(...AUTH);
         expect(res.status).toBe(409);
         expect(res.body.detail).toBe(
-            "An organization must keep at least one admin.",
+            "An organization must keep at least one owner.",
         );
     });
 });

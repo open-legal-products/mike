@@ -82,6 +82,25 @@ describe("readSseFrames", () => {
     // Cancelling a body that already delivered [DONE] makes Chromium record
     // the completed request as net::ERR_ABORTED — every chat turn looked
     // aborted in DevTools. Read it to EOF instead.
+    it("reports the id line that precedes each record, including [DONE]", async () => {
+        const ids: string[] = [];
+        const frames: unknown[] = [];
+        const response = sseResponse([
+            'id: 7\ndata: {"a":1}\n\n',
+            'data: {"b":2}\n\nid: 9\r\ndata: {"c":3}\r\n\r\n',
+            "id: 10\ndata: [DONE]\n\n",
+        ]);
+        for await (const frame of readSseFrames(response, {
+            onEventId: (id) => ids.push(id),
+        })) {
+            frames.push(frame);
+        }
+        expect(frames).toEqual([{ a: 1 }, { b: 2 }, { c: 3 }]);
+        // A record without an id line reports nothing: the id belongs to
+        // the record it precedes, never to a later one.
+        expect(ids).toEqual(["7", "9", "10"]);
+    });
+
     it("drains to EOF, not cancel, when the stream ends with [DONE]", async () => {
         const response = sseResponse(['data: {"n":1}\n\n', "data: [DONE]\n\n"]);
         const reader = response.body!.getReader();

@@ -31,14 +31,6 @@ export {
   updateProject,
   deleteProject,
   exportProjectManifest,
-  type CreateProjectResult,
-  type ProjectListFilters,
-  type ProjectsDbFailure,
-  type ProjectDetailResult,
-  type ProjectPeopleResult,
-  type UpdateProjectResult,
-  type DeleteProjectResult,
-  type ExportProjectResult,
 } from "./projects.crud";
 
 export {
@@ -53,8 +45,6 @@ export {
   getProjectDirectoryLevel,
   assignOrCopyDocument,
   renameProjectDocument,
-  type AssignOrCopyResult,
-  type RenameDocumentResult,
 } from "./projects.documents";
 
 export {
@@ -63,11 +53,6 @@ export {
   deleteProjectFolder,
   moveProjectDocument,
   resolveProjectFolderPath,
-  type CreateFolderResult,
-  type UpdateFolderResult,
-  type DeleteFolderResult,
-  type MoveDocumentResult,
-  type ResolveFolderPathResult,
 } from "./projects.folders";
 
 export { listProjectChats } from "./projects.chats";

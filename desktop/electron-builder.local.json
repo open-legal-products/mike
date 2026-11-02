@@ -1,0 +1,26 @@
+{
+  "appId": "com.openlegalproducts.mike",
+  "productName": "Mike",
+  "directories": {
+    "output": "dist"
+  },
+  "files": [
+    "src/**/*",
+    "package.json"
+  ],
+  "extraResources": [
+    {
+      "from": "local-stack",
+      "to": "local-stack",
+      "filter": ["**/*"]
+    }
+  ],
+  "mac": {
+    "category": "public.app-category.productivity",
+    "target": [
+      "dir"
+    ],
+    "identity": null,
+    "icon": "assets/icon.icns"
+  }
+}

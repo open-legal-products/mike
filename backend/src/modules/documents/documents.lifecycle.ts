@@ -1,3 +1,6 @@
+import { processDocumentTextInline } from "./documents.indexing";
+import { safeError } from "../../lib/safeError";
+import { logError } from "../../lib/log";
 import {
   captureInlineVersionUpdateCleanup,
   completeInlineDocumentCleanup,
@@ -15,6 +18,7 @@ export type NewDocumentVersion = {
   file_type?: string | null;
   size_bytes?: number | null;
   page_count?: number | null;
+  textless_page_count?: number | null;
   content_sha256?: string | null;
 };
 
@@ -43,6 +47,7 @@ export async function createDocumentVersion(
     p_version: metadata,
     p_activate: options.activate !== false,
   });
+  if (!error && data?.id) await processDocumentTextInline(db, [data.id]).catch((err) => logError("document-text", safeError(err)));
   return { data: data as DocumentVersionRecord | null, error };
 }
 
@@ -54,6 +59,7 @@ export async function createDocumentVersions(
   const { data, error } = await db.rpc("create_document_versions", {
     p_versions: versions,
   });
+  if (!error && data?.length) await processDocumentTextInline(db, data.map((row: DocumentVersionRecord) => row.id)).catch((err) => logError("document-text", safeError(err)));
   return { data: data as DocumentVersionRecord[] | null, error };
 }
 
@@ -83,6 +89,7 @@ export async function updateDocumentVersion(
   documentId: string,
   versionId: string,
   patch: DocumentVersionPatch,
+  options: { expectedStoragePath?: string; expectedContentSha256?: string | null } = {},
 ) {
   const keys = await captureInlineVersionUpdateCleanup(
     db,
@@ -90,17 +97,25 @@ export async function updateDocumentVersion(
     versionId,
     patch,
   );
-  const result = await db
+  let query = db
     .from("document_versions")
     .update(patch)
     .eq("id", versionId)
     .eq("document_id", documentId)
-    .is("deleted_at", null)
+    .is("deleted_at", null);
+  if (options.expectedStoragePath !== undefined)
+    query = query.eq("storage_path", options.expectedStoragePath);
+  if (options.expectedContentSha256 !== undefined)
+    query = options.expectedContentSha256 === null
+      ? query.is("content_sha256", null)
+      : query.eq("content_sha256", options.expectedContentSha256);
+  const result = await query
     .select(
-      "id, version_number, source, created_at, filename, file_type, size_bytes, page_count",
+      "id, version_number, source, created_at, filename, file_type, size_bytes, page_count, textless_page_count",
     )
     .maybeSingle();
   if (!result.error && result.data)
     await completeInlineDocumentCleanup(db, keys);
+  if (!result.error && result.data && ("storage_path" in patch || "content_sha256" in patch || "file_type" in patch)) await processDocumentTextInline(db, [versionId]).catch((err) => logError("document-text", safeError(err)));
   return result;
 }

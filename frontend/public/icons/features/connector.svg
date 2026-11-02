@@ -1,0 +1,52 @@
+<svg viewBox="0 0 64 64" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <linearGradient id="nBlue" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#93C5FD" stop-opacity="0.96"/>
+      <stop offset="0.5" stop-color="#3B82F6" stop-opacity="0.95"/>
+      <stop offset="1" stop-color="#1D4ED8" stop-opacity="0.97"/>
+    </linearGradient>
+    <linearGradient id="nPurple" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#C4B5FD" stop-opacity="0.96"/>
+      <stop offset="0.5" stop-color="#8B5CF6" stop-opacity="0.95"/>
+      <stop offset="1" stop-color="#6D28D9" stop-opacity="0.97"/>
+    </linearGradient>
+    <linearGradient id="rim" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#FFFFFF" stop-opacity="0.85"/>
+      <stop offset="0.5" stop-color="#FFFFFF" stop-opacity="0.15"/>
+      <stop offset="1" stop-color="#1F2937" stop-opacity="0.45"/>
+    </linearGradient>
+    <linearGradient id="cord" x1="8" y1="8" x2="56" y2="56" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#94A3B8"/>
+      <stop offset="0.5" stop-color="#64748B"/>
+      <stop offset="1" stop-color="#475569"/>
+    </linearGradient>
+    <radialGradient id="sheen">
+      <stop offset="0" stop-color="#FFFFFF"/>
+      <stop offset="0.6" stop-color="#FFFFFF" stop-opacity="0.7"/>
+      <stop offset="1" stop-color="#FFFFFF" stop-opacity="0"/>
+    </radialGradient>
+  </defs>
+
+  <!-- rubber cord -->
+  <g fill="none" stroke-linecap="round">
+    <path d="M49.5 48V18.25a8.75 8.75 0 0 0-17.5 0v27.5a8.75 8.75 0 0 1-17.5 0V16"
+          stroke="#1E293B" stroke-opacity="0.45" stroke-width="6.6"/>
+    <path d="M49.5 48V18.25a8.75 8.75 0 0 0-17.5 0v27.5a8.75 8.75 0 0 1-17.5 0V16"
+          stroke="url(#cord)" stroke-width="5.2"/>
+    <path d="M48.3 35V18.25a7.55 7.55 0 0 0-15.1 0"
+          stroke="#FFFFFF" stroke-opacity="0.5" stroke-width="1.2"/>
+    <path d="M30.8 20v25.75a7.55 7.55 0 0 1-15.1 0"
+          stroke="#FFFFFF" stroke-opacity="0.32" stroke-width="1.2"/>
+  </g>
+
+  <!-- upper end: blue -->
+  <g>
+    <circle cx="14.5" cy="16" r="9.1" fill="url(#nBlue)" stroke="url(#rim)" stroke-width="1.4"/>
+    <ellipse cx="12.9" cy="12.6" rx="4.7" ry="2.4" fill="url(#sheen)" opacity="0.7"/>
+  </g>
+  <!-- lower end: purple -->
+  <g>
+    <circle cx="49.5" cy="48" r="9.1" fill="url(#nPurple)" stroke="url(#rim)" stroke-width="1.4"/>
+    <ellipse cx="47.9" cy="44.6" rx="4.7" ry="2.4" fill="url(#sheen)" opacity="0.7"/>
+  </g>
+</svg>

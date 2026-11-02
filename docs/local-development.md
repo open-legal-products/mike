@@ -38,6 +38,63 @@ docker compose up --build
 
 Open [http://localhost:3000](http://localhost:3000) and sign up.
 
+`npm run stack:up -- --build` does the same thing but first sweeps stacks left
+behind by earlier checkouts, worktrees, and reviews (see "Stop and clean up").
+
+## Stop and clean up
+
+Ctrl-C, `docker compose stop`, and `docker stop` leave containers in `Exited`
+state, pinning their images and volumes. Manually stopped containers using
+`restart: unless-stopped` stay stopped across Docker restarts, but their disk
+resources remain allocated. Every checkout directory (or `-p` project name)
+creates its own set. Use the lifecycle script to remove containers when done:
+
+```bash
+npm run stack:down              # remove containers + network, keep data volumes
+npm run stack:down -- --purge   # also delete the data volumes and local images
+npm run stack:status            # what this repo has running or left behind
+npm run stack:gc                # sweep leftovers (runs automatically before
+                                # stack:up and the e2e setup script)
+```
+
+The sweep removes containers and networks from fully stopped Compose projects
+identified by this repository's Compose marker (or a missing checkout with a
+`mike` project prefix), and Supabase CLI stacks for this checkout's `project_id`
+plus ids in `MIKE_GC_SUPABASE_PROJECTS`. Only `created`, `exited`, and `dead`
+containers qualify. Running, paused, restarting, and other active states are
+protected; removal is never forced if a container starts during the sweep.
+
+Data volumes require verified ownership and at least `MIKE_GC_VOLUME_AGE_DAYS`
+(default 7) of recorded idle time. A shared cleanup record preserves ownership
+and observed activity after containers are removed, so repeated sweeps keep
+recently used data. Volume creation age is never treated as last use. Known
+foreign projects and volumes still referenced by other containers are kept.
+Unknown named volumes are kept even if their project name starts with `mike`;
+remove these explicitly after inspecting them. Allowed Supabase and anonymous
+orphans without history start a fresh grace period when first observed.
+
+Records live under `${XDG_STATE_HOME:-$HOME/.local/state}/mike/stack-gc`, shared
+across checkouts but isolated by Docker daemon and volume creation timestamp.
+`MIKE_GC_STATE_DIR` overrides that directory. Keep the same directory across
+runs. Missing history causes conservative retention; malformed records or a
+write failure stop cleanup before containers are removed. A lock prevents
+concurrent sweeps; after an interrupted process, remove its reported `.lock`
+directory only once no sweep is running. Activity is observed during sweeps;
+reuse followed by removal entirely between sweeps cannot be detected. Use
+`MIKE_GC=0` to disable automatic cleanup when managing volumes outside this
+workflow.
+
+`npm run stack:gc -- --dry-run` previews the same container and volume plan as
+execution, including volumes that become unreferenced after teardown, without
+changing cleanup records. Docker still refuses removal if a new container
+references a volume after planning. Dangling images and old build cache are
+also pruned; `-- --deep` removes all unused images and build cache. Set
+`MIKE_GC=0` to skip the automatic sweep in `stack:up` and the e2e setup script.
+
+For the Supabase CLI stack used by `npm run test:e2e:local` and
+`npm run test:stack`, `supabase stop` removes the containers and keeps the
+data; `supabase stop --no-backup` removes both.
+
 ## Local service endpoints
 
 | Service | Address | Notes |
@@ -54,22 +111,25 @@ localhost but must be regenerated before exposing an instance anywhere.
 
 ## Local registration and email
 
-By default, a local email-and-password registration is automatically confirmed
-and the new user is signed in. Supabase Auth sends authentication email; the
-Mike backend does not send it directly.
+A new email-and-password registration must confirm its address before it can
+sign in. Supabase Auth sends authentication email; the Mike backend does not
+send it directly. Open [Mailpit](http://localhost:8025) to read the
+confirmation message. Mailpit also captures local email-change and
+password-reset messages, and no email leaves your machine. These links pass
+through `/auth/callback` and return to the relevant app screen.
 
-To exercise the confirmation-email flow, set
-`GOTRUE_MAILER_AUTOCONFIRM=false` in the root `.env`, then recreate Auth:
+Confirmation is on by default because project, chat, review, and workflow
+shares and organization invitations are addressed by email: with autoconfirm
+on, anyone who registers an address first inherits whatever was shared with
+it. The backend also ignores an unconfirmed address when it matches grants and
+invitations. For a throwaway single-user stack you may set
+`GOTRUE_MAILER_AUTOCONFIRM=true` in the root `.env`, then recreate Auth:
 
 ```bash
 docker compose up -d --force-recreate auth
 ```
 
-Open [Mailpit](http://localhost:8025) to read the confirmation message. Mailpit
-also captures local email-change and password-reset messages, and no email
-leaves your machine. These links pass through `/auth/callback` and return to the
-relevant app screen. Local signup autoconfirm remains enabled by default; turn
-it off only when you specifically want to test the confirmation flow.
+Never enable autoconfirm on an instance other people can reach.
 
 ## Local Google authentication
 
@@ -139,12 +199,21 @@ review where the model may run across many cells.
 1. Sign up in the app.
 2. If no provider key is configured in `backend/.env`, open
    **Settings > API Keys** and add one.
-3. To use live US case-law tools, add a CourtListener token in `backend/.env`
-   or under **Settings > API Keys**.
+3. To use live US case-law tools, add CourtListener with your token under
+   **Settings > Connectors**.
 4. Create or open a project and start chatting with documents.
 
 Use synthetic or public documents until you have reviewed the deployment and
 data flows. See [Safe local testing](safe-local-testing.md) for guidance.
+
+## Error tracking locally
+
+Error reporting is enabled by default using Mike's community Sentry project.
+Set `SENTRY_DISABLED=true` to opt out on the backend, and use
+`NEXT_PUBLIC_SENTRY_DISABLED=true` or `REACT_APP_SENTRY_DISABLED=true` for the
+web app or Word add-in. To watch events locally instead, run
+`node scripts/sentry-sink.mjs` and point each runtime's DSN at it; see
+[observability.md](observability.md).
 
 ## Running application code without Docker
 

@@ -58,16 +58,12 @@ export async function resolvePanelDocumentVersionResult(
             : { status: "unavailable" };
     }
 
-    const version =
-        (document.version_number != null
-            ? result.versions.find(
-                  (candidate) =>
-                      candidate.version_number === document.version_number,
-              )
-            : undefined) ??
-        result.versions.find(
-            (candidate) => candidate.id === result.current_version_id,
-        );
+    // Historical links must never silently open today's bytes, and deleted
+    // versions remain in the history API solely for the history UI.
+    const versions = result.versions.filter((candidate) => candidate.deleted_at == null);
+    const version = document.version_number != null
+        ? versions.find((candidate) => candidate.version_number === document.version_number)
+        : versions.find((candidate) => candidate.id === result.current_version_id);
     if (!version) return { status: "unavailable" };
     return {
         status: "resolved",

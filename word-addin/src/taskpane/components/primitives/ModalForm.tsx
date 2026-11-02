@@ -33,7 +33,7 @@ export const ModalTextInput = forwardRef<
       className={cn(
         variant === "minimal"
           ? "w-full bg-transparent font-serif text-2xl text-gray-800 outline-none placeholder:text-gray-300 disabled:cursor-not-allowed disabled:text-gray-400"
-          : "h-10 w-full rounded-xl border border-white/70 bg-white px-3 text-sm text-gray-700 shadow-[0_3px_9px_rgba(15,23,42,0.052),inset_0_1px_0_rgba(255,255,255,0.86),inset_0_-1px_0_rgba(255,255,255,0.58)] outline-none placeholder:text-gray-400 backdrop-blur-xl transition-colors disabled:cursor-not-allowed disabled:opacity-60",
+          : "h-10 w-full rounded-xl border border-white/70 bg-white px-3 text-sm text-gray-700 shadow-[0_3px_9px_rgba(15,23,42,0.052),inset_0_1px_0_rgba(255,255,255,0.86),inset_0_-1px_0_rgba(255,255,255,0.58)] outline-none placeholder:text-gray-400 transition-colors disabled:cursor-not-allowed disabled:opacity-60",
         className
       )}
       {...props}
@@ -49,7 +49,7 @@ export const ModalTextArea = forwardRef<
     <textarea
       ref={ref}
       className={cn(
-        "min-h-24 w-full resize-none rounded-xl border border-white/70 bg-white px-3 py-2.5 text-sm leading-relaxed text-gray-700 shadow-[0_3px_9px_rgba(15,23,42,0.052),inset_0_1px_0_rgba(255,255,255,0.86),inset_0_-1px_0_rgba(255,255,255,0.58)] outline-none placeholder:text-gray-400 backdrop-blur-xl disabled:cursor-not-allowed disabled:opacity-60",
+        "min-h-24 w-full resize-none rounded-xl border border-white/70 bg-white px-3 py-2.5 text-sm leading-relaxed text-gray-700 shadow-[0_3px_9px_rgba(15,23,42,0.052),inset_0_1px_0_rgba(255,255,255,0.86),inset_0_-1px_0_rgba(255,255,255,0.58)] outline-none placeholder:text-gray-400 disabled:cursor-not-allowed disabled:opacity-60",
         className
       )}
       {...props}
@@ -89,7 +89,7 @@ export function ModalSelect({
           type="button"
           disabled={disabled}
           className={cn(
-            "flex h-10 w-full items-center justify-between rounded-xl border border-white/70 bg-white/55 px-3 text-sm text-gray-700 shadow-[0_3px_9px_rgba(15,23,42,0.052),inset_0_1px_0_rgba(255,255,255,0.86),inset_0_-1px_0_rgba(255,255,255,0.58)] backdrop-blur-xl transition-colors hover:bg-white/70 focus:bg-white/70 focus:outline-none disabled:cursor-not-allowed disabled:opacity-60",
+            "flex h-10 w-full items-center justify-between rounded-xl border border-white/70 bg-white/55 px-3 text-sm text-gray-700 shadow-[0_3px_9px_rgba(15,23,42,0.052),inset_0_1px_0_rgba(255,255,255,0.86),inset_0_-1px_0_rgba(255,255,255,0.58)] transition-colors hover:bg-white/70 focus:bg-white/70 focus:outline-none disabled:cursor-not-allowed disabled:opacity-60",
             className
           )}
         >

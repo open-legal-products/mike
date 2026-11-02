@@ -23,10 +23,11 @@ function hasCompleteAccessScope(row: AccessSummaryRow) {
       row.organization_name.trim().length > 0
     );
   }
-  return (
-    (row.access_scope === "private" || row.access_scope === "shared") &&
-    row.org_id == null
-  );
+  // Personal or an organization's: an organization's item is private until
+  // it is opened to everyone, so these two say nothing about org_id. (They
+  // once did — an organization's item could only be 'organization' — and a
+  // private one was then "repaired" below into a public one.)
+  return row.access_scope === "private" || row.access_scope === "shared";
 }
 
 function hasCompleteDirectGrantCount(row: AccessSummaryRow) {
@@ -60,17 +61,33 @@ export async function ensureResourceAccessSummaries<T extends AccessSummaryRow>(
   const resourceTable = kind === "project" ? "projects" : "workflows";
   const grantTable =
     kind === "project" ? "project_access_grants" : "workflow_shares";
+  // Inside an organization an item is shared through per-member roles, not
+  // direct grants. A 'deny' is not sharing.
+  const overrideTable =
+    kind === "project"
+      ? "project_org_access_overrides"
+      : "workflow_org_access_overrides";
   const grantResourceKey = kind === "project" ? "project_id" : "workflow_id";
+  const sharedInAnOrganization = rows.some(
+    (row) => row.access_scope === "shared" && typeof row.org_id === "string",
+  );
 
   const accessScopesComplete = rows.every(hasCompleteAccessScope);
-  const [resourceResult, grantResult] = await Promise.all([
+  const [resourceResult, grantResult, overrideResult] = await Promise.all([
     accessScopesComplete
       ? Promise.resolve({ data: [], error: null })
       : db.from(resourceTable).select("id, org_id").in("id", ids),
     db.from(grantTable).select(grantResourceKey).in(grantResourceKey, ids),
+    sharedInAnOrganization
+      ? db
+          .from(overrideTable)
+          .select(`${grantResourceKey}, role`)
+          .in(grantResourceKey, ids)
+      : Promise.resolve({ data: [], error: null }),
   ]);
   if (resourceResult.error) return { rows, error: resourceResult.error };
   if (grantResult.error) return { rows, error: grantResult.error };
+  if (overrideResult.error) return { rows, error: overrideResult.error };
 
   const resources = Array.isArray(resourceResult.data)
     ? (resourceResult.data as { id: string; org_id?: string | null }[])
@@ -85,6 +102,13 @@ export async function ensureResourceAccessSummaries<T extends AccessSummaryRow>(
     directGrantCountById.set(id, (directGrantCountById.get(id) ?? 0) + 1);
   }
   const grantedIds = new Set(directGrantCountById.keys());
+  for (const override of Array.isArray(overrideResult.data)
+    ? overrideResult.data
+    : []) {
+    const { role, [grantResourceKey]: id } = override as Record<string, unknown>;
+    if (typeof id !== "string" || role === "deny") continue;
+    directGrantCountById.set(id, (directGrantCountById.get(id) ?? 0) + 1);
+  }
 
   if (accessScopesComplete) {
     return {

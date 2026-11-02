@@ -1,28 +1,15 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { Check } from "lucide-react";
 import { useRouter } from "next/navigation";
-import { PageHeader } from "@/app/components/shared/PageHeader";
-import { TableToolbar } from "@/app/components/shared/TableToolbar";
-import {
-  SkeletonLine,
-  TableBody,
-  TableCell,
-  TableEmptyState,
-  TableFilters,
-  TableHeaderCell,
-  TableHeaderRow,
-  TableRow,
-  TableScrollArea,
-  TableStickyCell,
-  type TableFilterOption,
-  type TableSortDirection,
-} from "@/app/components/shared/TablePrimitive";
-import { EmptyState } from "@/app/components/ui/empty-state";
-import { PillButtonUI } from "@/shared/ui/PillButtonUI";
+import { Plus } from "lucide-react";
 import { WarningPopup } from "@/app/components/popups/WarningPopup";
+import { ConnectorCard } from "@/app/components/settings/ConnectorCard";
+import { SettingsHeading } from "@/app/components/settings/SettingsHeading";
+import { SettingsDescription } from "@/app/components/settings/SettingsText";
 import { OrganizationSkeuoIcon } from "@/app/components/shared/AppSidebarSkeuoIcons";
+import { useWorkspace } from "@/app/contexts/WorkspaceContext";
+import { notifyOrganizationInvitationsChanged } from "@/app/hooks/useOrganizationInvitationCount";
 import {
   acceptOrgInvitation,
   declineOrgInvitation,
@@ -33,41 +20,37 @@ import {
 } from "@/app/lib/mikeApi";
 import { ORG_ROLE_LABELS } from "@/app/lib/permissions";
 import { userFacingApiError } from "@/app/lib/userFacingError";
-import { LIQUID_SUBTLE_PANEL_SURFACE_CLASS } from "@/app/components/ui/liquid-surface";
+import { GlassCardUI } from "@/shared/ui/GlassCardUI";
+import { LIQUID_GLASS_SUBTLE_CLASS } from "@/shared/ui/LiquidGlassUI";
+import { PillButtonUI } from "@/shared/ui/PillButtonUI";
+import { DeletedOrganizations } from "./DeletedOrganizations";
 import { CreateOrganizationModal } from "./OrganizationModals";
+import { organizationSettingsHref } from "./OrganizationSettingsShell";
 
-type OrganizationFilter = "managed" | "joined" | "invites";
-type OrganizationSortKey = "name" | "members" | "created";
+/** Organizations follow the two-column settings card layout. */
+const CARD_GRID_CLASS = "grid grid-cols-1 gap-3 @min-[32rem]:grid-cols-2";
 
-const SORT_OPTIONS: TableFilterOption<TableSortDirection>[] = [
-  { value: "asc", label: "Ascending" },
-  { value: "desc", label: "Descending" },
-];
-
-function formatDate(value?: string) {
-  if (!value) return "—";
-  const date = new Date(value);
-  if (Number.isNaN(date.getTime())) return "—";
-  return date.toLocaleDateString(undefined, {
-    day: "numeric",
-    month: "short",
-    year: "numeric",
-  });
-}
-
+/**
+ * The Organizations section of a person's settings: the organizations they
+ * belong to, the invitations waiting for them, and a way to start a new
+ * one. Set as settings cards, like Connectors and Bring Your Own Keys.
+ *
+ * An organization's settings belong to its workspace, so only the card of the
+ * workspace the person is in has a Manage button. Every other organization
+ * offers a switch to its workspace instead, from where its settings open.
+ */
 export function OrganizationsOverview() {
   const router = useRouter();
+  const { workspaceId, setWorkspace, refreshOrganizations } = useWorkspace();
+  // `null` is "no workspace to compare with" (outside a WorkspaceProvider),
+  // where nothing is narrowed.
+  const isCurrentWorkspace = (org: Org) =>
+    workspaceId === null || workspaceId === org.id;
   const [orgs, setOrgs] = useState<Org[] | null>(null);
   const [invitations, setInvitations] = useState<OrgInvitation[]>([]);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [invitationsError, setInvitationsError] = useState<string | null>(null);
   const [createOpen, setCreateOpen] = useState(false);
-  const [activeFilter, setActiveFilter] =
-    useState<OrganizationFilter>("managed");
-  const [sort, setSort] = useState<{
-    key: OrganizationSortKey;
-    direction: TableSortDirection;
-  } | null>(null);
   const [answeringId, setAnsweringId] = useState<string | null>(null);
   const [invitationError, setInvitationError] = useState<string | null>(null);
 
@@ -134,295 +117,190 @@ export function OrganizationsOverview() {
     // to the organizations list, and a refusal is often a refusal because
     // somebody answered it somewhere else already.
     await load();
+    notifyOrganizationInvitationsChanged();
+    // An accepted invitation is a new workspace to switch to.
+    void refreshOrganizations();
   }
 
   const loading = orgs === null;
-  const organizationFilters = useMemo<
-    { id: OrganizationFilter; label: string }[]
-  >(
-    () => [
-      { id: "managed", label: "Managing" },
-      { id: "joined", label: "Joined" },
-      {
-        id: "invites",
-        // A failed fetch and an empty inbox both left this reading plain
-        // "Invites", so the one state worth opening the tab for looked
-        // exactly like the one that is not. Plain text in the label, not a
-        // badge: this is a status, not a control.
-        label: invitationsError
-          ? "Invites (unavailable)"
-          : invitations.length > 0
-            ? `Invites (${invitations.length})`
-            : "Invites",
-      },
-    ],
-    [invitations.length, invitationsError],
+  // The workspace the person is in comes first; the rest follow by name.
+  const listedOrgs = useMemo(
+    () =>
+      [...(orgs ?? [])].sort(
+        (a, b) =>
+          Number(isCurrentWorkspace(b)) - Number(isCurrentWorkspace(a)) ||
+          a.name.localeCompare(b.name),
+      ),
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- isCurrentWorkspace reads only workspaceId
+    [orgs, workspaceId],
   );
-  const visibleOrgs = useMemo(() => {
-    if (activeFilter === "invites") return [];
-    const filtered = (orgs ?? []).filter((org) =>
-      activeFilter === "managed" ? org.role === "admin" : org.role !== "admin",
-    );
-    if (!sort) return filtered;
-    const multiplier = sort.direction === "asc" ? 1 : -1;
-    return [...filtered].sort((a, b) => {
-      if (sort.key === "name") return a.name.localeCompare(b.name) * multiplier;
-      if (sort.key === "members")
-        return ((a.member_count ?? 0) - (b.member_count ?? 0)) * multiplier;
-      return (
-        (new Date(a.created_at ?? 0).getTime() -
-          new Date(b.created_at ?? 0).getTime()) *
-        multiplier
-      );
-    });
-  }, [activeFilter, orgs, sort]);
-  function setSortFor(
-    key: OrganizationSortKey,
-    direction: TableSortDirection | null,
-  ) {
-    setSort(direction ? { key, direction } : null);
-  }
+
   return (
-    <div className="flex h-full min-h-0 flex-1 flex-col overflow-hidden">
-      <PageHeader
-        loading={loading}
-        actions={[
-          {
-            type: "new",
-            title: "New organization",
-            onClick: () => setCreateOpen(true),
-          },
-        ]}
-      >
-        <h1 className="font-serif text-2xl font-medium text-gray-900">
-          Organizations
-        </h1>
-      </PageHeader>
-
-      <TableToolbar
-        items={organizationFilters}
-        active={activeFilter}
-        onChange={setActiveFilter}
-      />
-
-      {activeFilter === "invites" ? (
-        loading ? (
-          <div
-            className={`mx-4 mb-3 space-y-4 rounded-2xl px-4 py-4 md:mx-8 ${LIQUID_SUBTLE_PANEL_SURFACE_CLASS}`}
+    <div className="@container space-y-6">
+      <section aria-labelledby="my-organizations-heading">
+        <div className="mb-4 flex items-center justify-between gap-3">
+          <SettingsHeading id="my-organizations-heading">
+            Organizations
+          </SettingsHeading>
+          <PillButtonUI
+            tone="white"
+            size="xs"
+            onClick={() => setCreateOpen(true)}
+            aria-label="New organization"
+            aria-haspopup="dialog"
+            className={`h-7 ${LIQUID_GLASS_SUBTLE_CLASS}`}
           >
-            {[1, 2, 3].map((row) => (
-              <SkeletonLine key={row} className="h-7 w-full" />
-            ))}
-          </div>
-        ) : invitationsError ? (
-          <div className="mx-4 mb-3 flex min-h-0 flex-1 items-center justify-center md:mx-8">
-            <EmptyState
-              icon={<OrganizationSkeuoIcon />}
-              title="Invitations"
-              description={invitationsError}
-              tone="error"
-              action={
-                <PillButtonUI tone="black" size="sm" onClick={() => void load()}>
-                  Try again
-                </PillButtonUI>
-              }
-            />
-          </div>
-        ) : invitations.length === 0 ? (
-          <div className="mx-4 mb-3 flex min-h-0 flex-1 items-center justify-center md:mx-8">
-            <EmptyState
-              title="Invitations"
-              description="You have no active organization invitations."
-            />
-          </div>
-        ) : (
-          <div
-            className={`mx-4 mb-3 rounded-2xl px-4 py-3 md:mx-8 ${LIQUID_SUBTLE_PANEL_SURFACE_CLASS}`}
-          >
-            <div className="min-w-0 space-y-3">
-              {invitations.map((invitation) => (
-                <div
-                  key={invitation.id}
-                  className="flex flex-col gap-2 sm:flex-row sm:items-center"
-                >
-                  <p className="min-w-0 flex-1 text-xs text-gray-600">
-                    <span className="font-medium text-gray-800">
-                      {invitation.org_name ?? "An organization"}
-                    </span>{" "}
-                    invited you as {ORG_ROLE_LABELS[invitation.role]}.
-                  </p>
-                  <div className="flex gap-2">
-                    <PillButtonUI
-                      tone="black"
-                      size="sm"
-                      disabled={answeringId === invitation.id}
-                      loading={answeringId === invitation.id}
-                      onClick={() => void answer(invitation, true)}
-                    >
-                      <Check className="h-3.5 w-3.5" />
-                      Accept
-                    </PillButtonUI>
-                    <PillButtonUI
-                      tone="white"
-                      size="sm"
-                      disabled={answeringId === invitation.id}
-                      onClick={() => void answer(invitation, false)}
-                    >
-                      Decline
-                    </PillButtonUI>
+            <Plus className="h-3.5 w-3.5" aria-hidden="true" />
+            New
+          </PillButtonUI>
+        </div>
+        {loading ? (
+          <div className={CARD_GRID_CLASS} aria-busy="true">
+            {[1, 2].map((placeholder) => (
+              <GlassCardUI key={placeholder}>
+                <div className="flex items-center gap-3 px-4 py-3">
+                  <span className="h-9 w-9 shrink-0 animate-pulse rounded-lg bg-gray-200" />
+                  <div className="min-w-0 flex-1 space-y-1.5">
+                    <span className="block h-4 w-32 max-w-full animate-pulse rounded bg-gray-200" />
+                    <span className="block h-3 w-24 max-w-full animate-pulse rounded bg-gray-200" />
                   </div>
                 </div>
-              ))}
-            </div>
+              </GlassCardUI>
+            ))}
           </div>
-        )
-      ) : (
-        <TableScrollArea
-          header={
-            <TableHeaderRow>
-              <TableStickyCell header>
-                <span className="mr-1">Name</span>
-                {!loading ? (
-                  <TableFilters
-                    label="Sort by organization name"
-                    value={sort?.key === "name" ? sort.direction : null}
-                    allLabel="Default order"
-                    options={SORT_OPTIONS}
-                    align="right"
-                    widthClassName="w-40"
-                    onChange={(direction) => setSortFor("name", direction)}
-                  />
-                ) : null}
-              </TableStickyCell>
-              <TableHeaderCell className="ml-auto w-32">
-                <span className="mr-1">Members</span>
-                {!loading ? (
-                  <TableFilters
-                    label="Sort by member count"
-                    value={sort?.key === "members" ? sort.direction : null}
-                    allLabel="Default order"
-                    options={SORT_OPTIONS}
-                    widthClassName="w-40"
-                    onChange={(direction) => setSortFor("members", direction)}
-                  />
-                ) : null}
-              </TableHeaderCell>
-              <TableHeaderCell className="w-36">
-                <span className="mr-1">Created</span>
-                {!loading ? (
-                  <TableFilters
-                    label="Sort by creation date"
-                    value={sort?.key === "created" ? sort.direction : null}
-                    allLabel="Default order"
-                    options={SORT_OPTIONS}
-                    widthClassName="w-40"
-                    onChange={(direction) => setSortFor("created", direction)}
-                  />
-                ) : null}
-              </TableHeaderCell>
-            </TableHeaderRow>
-          }
-        >
-          {loading ? (
-            <TableBody>
-              {[1, 2, 3].map((row) => (
-                <TableRow key={row} interactive={false}>
-                  <TableStickyCell
-                    hover={false}
-                    bgClassName="bg-transparent"
-                    className="items-center"
-                  >
-                    <SkeletonLine className="w-44" />
-                  </TableStickyCell>
-                  <TableCell className="ml-auto w-32">
-                    <SkeletonLine className="w-12" />
-                  </TableCell>
-                  <TableCell className="w-36">
-                    <SkeletonLine className="w-20" />
-                  </TableCell>
-                </TableRow>
-              ))}
-            </TableBody>
-          ) : loadError ? (
-            <TableEmptyState>
-              <EmptyState
-                icon={<OrganizationSkeuoIcon />}
-                title="Organizations"
-                description={loadError}
-                tone="error"
-                action={
-                  <PillButtonUI
-                    tone="black"
-                    size="sm"
-                    onClick={() => void load()}
-                  >
-                    Try again
-                  </PillButtonUI>
-                }
-              />
-            </TableEmptyState>
-          ) : orgs.length === 0 ? (
-            <TableEmptyState>
-              <EmptyState
-                icon={<OrganizationSkeuoIcon />}
-                title="Organizations"
-                description="Create an organization to share projects, chats and reviews with your team."
-                action={
-                  <PillButtonUI
-                    tone="black"
-                    size="sm"
-                    onClick={() => setCreateOpen(true)}
-                  >
-                    Create
-                  </PillButtonUI>
-                }
-              />
-            </TableEmptyState>
-          ) : visibleOrgs.length === 0 ? (
-            <TableEmptyState>
-              <p className="text-sm text-gray-400">
-                {activeFilter === "managed"
-                  ? "No managed organizations"
-                  : "No joined organizations"}
-              </p>
-            </TableEmptyState>
-          ) : (
-            <TableBody>
-              {visibleOrgs.map((org) => (
-                <TableRow
+        ) : loadError ? (
+          <GlassCardUI>
+            <div className="flex flex-wrap items-center gap-3 p-4" role="alert">
+              <div className="min-w-0 flex-1">
+                <SettingsDescription>{loadError}</SettingsDescription>
+              </div>
+              <PillButtonUI tone="white" size="sm" onClick={() => void load()}>
+                Try again
+              </PillButtonUI>
+            </div>
+          </GlassCardUI>
+        ) : listedOrgs.length === 0 ? (
+          <SettingsDescription>
+            No organizations yet. Create one to share projects and
+            workflows with your team.
+          </SettingsDescription>
+        ) : (
+          <div className={CARD_GRID_CLASS}>
+            {listedOrgs.map((org) => {
+              const current = isCurrentWorkspace(org);
+              const members = org.member_count ?? 0;
+              return (
+                <ConnectorCard
                   key={org.id}
-                  role="link"
-                  tabIndex={0}
-                  aria-label={`Open ${org.name}`}
-                  onClick={() => router.push(`/organizations/${org.id}`)}
-                  onKeyDown={(event) => {
-                    if (event.target !== event.currentTarget) return;
-                    if (event.key === "Enter" || event.key === " ") {
-                      event.preventDefault();
-                      router.push(`/organizations/${org.id}`);
-                    }
-                  }}
-                  className="focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-blue-500/40"
-                >
-                  <TableStickyCell className="items-center">
-                    <span className="min-w-0 flex-1 truncate text-xs text-gray-800">
-                      {org.name}
-                    </span>
-                  </TableStickyCell>
-                  <TableCell className="ml-auto w-32">
-                    {org.member_count ?? 0}{" "}
-                    {org.member_count === 1 ? "member" : "members"}
-                  </TableCell>
-                  <TableCell className="w-36">
-                    {formatDate(org.created_at)}
-                  </TableCell>
-                </TableRow>
-              ))}
-            </TableBody>
-          )}
-        </TableScrollArea>
-      )}
+                  kind="organization"
+                  name={org.name}
+                  detail={`${ORG_ROLE_LABELS[org.role]} · ${members} ${
+                    members === 1 ? "member" : "members"
+                  }`}
+                  icon={<OrganizationSkeuoIcon className="h-6 w-6" />}
+                  // Only the workspace the person is in opens its settings;
+                  // every other organization is switched to first.
+                  action={
+                    current ? (
+                      <PillButtonUI
+                        tone="blue"
+                        size="sm"
+                        aria-label={`Manage ${org.name}`}
+                        onClick={() =>
+                          router.push(organizationSettingsHref(org.id))
+                        }
+                      >
+                        Manage
+                      </PillButtonUI>
+                    ) : (
+                      <PillButtonUI
+                        tone="black"
+                        size="sm"
+                        aria-label={`Switch to ${org.name}`}
+                        onClick={() => setWorkspace(org.id)}
+                      >
+                        Switch
+                      </PillButtonUI>
+                    )
+                  }
+                />
+              );
+            })}
+          </div>
+        )}
+      </section>
 
+      {/* Shown only when there is something to answer, or the list of
+          invitations could not be read: an empty inbox needs no section. */}
+      {invitationsError || invitations.length > 0 ? (
+        <section aria-labelledby="my-invitations-heading">
+          <div className="mb-4">
+            <SettingsHeading id="my-invitations-heading">
+              Invitations
+            </SettingsHeading>
+          </div>
+          {invitationsError ? (
+            <GlassCardUI>
+              <div
+                className="flex flex-wrap items-center gap-3 p-4"
+                role="alert"
+              >
+                <div className="min-w-0 flex-1">
+                  <SettingsDescription>{invitationsError}</SettingsDescription>
+                </div>
+                <PillButtonUI
+                  tone="white"
+                  size="sm"
+                  onClick={() => void load()}
+                >
+                  Try again
+                </PillButtonUI>
+              </div>
+            </GlassCardUI>
+          ) : (
+            <div className="grid grid-cols-1 gap-3">
+              {invitations.map((invitation) => {
+                const name = invitation.org_name ?? "An organization";
+                const answering = answeringId === invitation.id;
+                return (
+                  <ConnectorCard
+                    key={invitation.id}
+                    kind="invitation"
+                    name={name}
+                    detail={`Invited you as ${ORG_ROLE_LABELS[invitation.role]}`}
+                    icon={<OrganizationSkeuoIcon className="h-6 w-6" />}
+                    action={
+                      <span className="flex items-center gap-2">
+                        <PillButtonUI
+                          tone="white"
+                          size="sm"
+                          disabled={answering}
+                          aria-label={`Decline ${name}`}
+                          onClick={() => void answer(invitation, false)}
+                        >
+                          Decline
+                        </PillButtonUI>
+                        <PillButtonUI
+                          tone="blue"
+                          size="sm"
+                          disabled={answering}
+                          loading={answering}
+                          aria-label={`Accept ${name}`}
+                          onClick={() => void answer(invitation, true)}
+                        >
+                          Accept
+                        </PillButtonUI>
+                      </span>
+                    }
+                  />
+                );
+              })}
+            </div>
+          )}
+        </section>
+      ) : null}
+
+      <DeletedOrganizations onRestored={load} />
       <CreateOrganizationModal
         open={createOpen}
         // A partly failed creation ("created, but some invitations could not
@@ -433,9 +311,12 @@ export function OrganizationsOverview() {
           setCreateOpen(false);
           void load();
         }}
-        onCreated={(org) => {
+        onCreated={() => {
           setCreateOpen(false);
-          router.push(`/organizations/${org.id}`);
+          // A new workspace to switch to; its settings open from there. It
+          // appears in this list, and in the account menu's switcher.
+          void load();
+          void refreshOrganizations();
         }}
       />
       <WarningPopup

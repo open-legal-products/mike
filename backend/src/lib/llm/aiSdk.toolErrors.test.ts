@@ -3,7 +3,7 @@
  * errors end the turn, with which identity, and what happens to the SDK's
  * step loop afterwards. No network, no keys.
  */
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import { stopNotice, streamAiSdk } from "./aiSdk";
 import { UserFacingError } from "../userFacingError";
@@ -69,6 +69,41 @@ describe("success path is untouched", () => {
     expect(res.fullText).toBe(stopNotice(2, 2, "tool-calls"));
     await tick();
     expect(model.doStreamCalls.length).toBe(2);
+  });
+
+  it("reports each step's tokens and finish reason to onUsage", async () => {
+    const model = await makeModel([
+      callStep("c1", "read_document", { doc_id: "doc-0" }),
+      textStep("done"),
+    ]);
+    const onUsage = vi.fn();
+    await streamAiSdk(
+      { ...base, runTools: okRunTools, callbacks: { onUsage } },
+      config(model),
+    );
+    expect(onUsage.mock.calls).toEqual([
+      [{ inputTokens: 10, outputTokens: 5 }, "tool-calls"],
+      [{ inputTokens: 10, outputTokens: 5 }, "stop"],
+    ]);
+  });
+
+  it("forbids tool calls on the last step when asked to finish without them", async () => {
+    const model = await makeModel([
+      callStep("c1", "read_document", { doc_id: "doc-0" }),
+      textStep("brief"),
+    ]);
+    const res = await streamAiSdk(
+      {
+        ...base,
+        runTools: okRunTools,
+        maxIterations: 2,
+        finishWithoutToolsOnLastStep: true,
+      },
+      config(model),
+    );
+    expect(res.fullText).toBe("brief");
+    expect(model.doStreamCalls[1].tools?.length).toBe(1);
+    expect(model.doStreamCalls[1].toolChoice).toEqual({ type: "none" });
   });
 
   it("retains the upstream default of 16 rounds and streams its stop notice", async () => {
@@ -501,4 +536,69 @@ describe("abort-shaped exceptions are not user cancels", () => {
     // doStream call before it observes the abort.
     expect(model.doStreamCalls.length).toBeLessThanOrEqual(1);
   });
+});
+
+describe("provider stall (chunk timeouts)", () => {
+  it("a model that goes silent mid-stream ends the turn with an error that does not read as a user cancel", async () => {
+    vi.stubEnv("STREAM_CHUNK_TIMEOUT_MS", "5000");
+    vi.stubEnv("STREAM_FIRST_CHUNK_TIMEOUT_MS", "10000");
+    const { MockLanguageModelV3 } = await import("ai/test");
+    const model = new MockLanguageModelV3({
+      doStream: async ({ abortSignal }) => ({
+        stream: new ReadableStream({
+          start(controller) {
+            controller.enqueue({ type: "stream-start", warnings: [] });
+            controller.enqueue({ type: "text-start", id: "t0" });
+            controller.enqueue({ type: "text-delta", id: "t0", delta: "hi" });
+            // ...and then nothing, until the SDK gives up.
+            abortSignal?.addEventListener("abort", () =>
+              controller.error(abortSignal.reason),
+            );
+          },
+        }),
+      }),
+    });
+    const outcome = await streamAiSdk(
+      { ...base, runTools: okRunTools },
+      config(model as never),
+    ).then(
+      (r) => ({ ok: true as const, r }),
+      (e: unknown) => ({ ok: false as const, e }),
+    );
+    vi.unstubAllEnvs();
+    expect(outcome.ok).toBe(false);
+    if (outcome.ok) return;
+    expect(outcome.e).toBeInstanceOf(UserFacingError);
+    expect((outcome.e as Error).message).toMatch(/stopped responding/);
+    expect(readsAsCancel(outcome.e)).toBe(false);
+  }, 30_000);
+
+  it("a user Stop during a silent stream is still a cancel, not a stall", async () => {
+    const { MockLanguageModelV3 } = await import("ai/test");
+    const model = new MockLanguageModelV3({
+      doStream: async ({ abortSignal }) => ({
+        stream: new ReadableStream({
+          start(controller) {
+            controller.enqueue({ type: "stream-start", warnings: [] });
+            abortSignal?.addEventListener("abort", () =>
+              controller.error(abortSignal.reason),
+            );
+          },
+        }),
+      }),
+    });
+    const user = new AbortController();
+    const pending = streamAiSdk(
+      { ...base, runTools: okRunTools, abortSignal: user.signal },
+      config(model as never),
+    ).then(
+      () => null,
+      (e: unknown) => e,
+    );
+    await tick();
+    user.abort();
+    const error = await pending;
+    expect(error).not.toBeInstanceOf(UserFacingError);
+    expect(readsAsCancel(error)).toBe(true);
+  }, 30_000);
 });

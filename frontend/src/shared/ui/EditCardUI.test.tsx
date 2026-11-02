@@ -118,10 +118,14 @@ describe("EditCardUI", () => {
         const user = userEvent.setup();
         const onClose = vi.fn();
 
-        render(<EditCardUI reason="Use the defined term." onClose={onClose} />);
+        render(<EditCardUI reason="Use the defined term." onClose={onClose} onView={vi.fn()} />);
+        const close = screen.getByRole("button", { name: "Close" });
+        expect(close.nextElementSibling).toBe(screen.getByRole("button", { name: "View" }));
+        expect(close).toHaveClass("bg-transparent", "shadow-none");
+        expect(close.querySelector("svg")).toBeNull();
 
         await user.click(
-            screen.getByRole("button", { name: "Close tracked change" }),
+            screen.getByRole("button", { name: "Close" }),
         );
         expect(onClose).toHaveBeenCalledTimes(1);
     });
@@ -132,7 +136,7 @@ describe("EditCardUI", () => {
         render(<EditCardUI originalText="old" onClose={onClose} />);
 
         expect(
-            screen.getByRole("button", { name: "Close tracked change" }),
+            screen.getByRole("button", { name: "Close" }),
         ).toBeInTheDocument();
     });
 
@@ -140,7 +144,7 @@ describe("EditCardUI", () => {
         render(<EditCardUI reason="Use the defined term." changeNumber={2} />);
 
         expect(
-            screen.queryByRole("button", { name: "Close tracked change" }),
+            screen.queryByRole("button", { name: "Close" }),
         ).not.toBeInTheDocument();
     });
 });

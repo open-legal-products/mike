@@ -35,13 +35,25 @@ vi.mock("../../../../lib/llm", async () => ({
 vi.mock("../../../../lib/mcpConnectors", () => ({
   buildUserMcpTools: vi.fn(async () => []),
 }));
+vi.mock("../../../../lib/integrations/googleDrive", async importOriginal => ({
+  ...await importOriginal<typeof import("../../../../lib/integrations/googleDrive")>(),
+  buildGoogleDriveTools: vi.fn(async () => []),
+}));
+vi.mock("../../../../lib/integrations/googleWorkspace", async importOriginal => ({
+  ...await importOriginal<typeof import("../../../../lib/integrations/googleWorkspace")>(),
+  buildGoogleWorkspaceTools: vi.fn(async () => []),
+}));
 
 vi.mock("../tools/toolDispatcher", () => ({
   runToolCalls: (calls: { function: { name: string } }[]) =>
     runToolCalls(calls),
 }));
 
-import { runLLMStream } from "../streaming";
+import { scriptedDb } from "../../../../__tests__/helpers/scriptedDb";
+import { buildUserMcpTools } from "../../../../lib/mcpConnectors";
+import { buildGoogleDriveTools } from "../../../../lib/integrations/googleDrive";
+import { buildGoogleWorkspaceTools } from "../../../../lib/integrations/googleWorkspace";
+import { runLLMStream, sanitizeAssistantSseChunk } from "../streaming";
 import { PROJECT_EXTRA_TOOLS } from "../tools/toolSchemas";
 
 type RunToolsFn = (
@@ -140,7 +152,10 @@ describe("runLLMStream document-mutation gating", () => {
 
     const result = await runLLMStream(baseParams());
 
-    expect(result.events).toEqual([askInputsEvent]);
+    expect(result.events).toEqual([
+      askInputsEvent,
+      { type: "response_details", model: "gemini-3.8-flash", reasoning: "high" },
+    ]);
     expect(result.events).not.toContainEqual(
       expect.objectContaining({ type: "error" }),
     );
@@ -220,4 +235,59 @@ describe("runLLMStream document-mutation gating", () => {
     );
     expect(dispatched).toEqual(["edit_document"]);
   });
+});
+
+it.each([
+  { match_count: 2, next_offset: null },
+  { error_code: "internal_error", error: "Document search could not be completed. Try again." },
+  { error_code: "schema_out_of_date", error: "Document search is unavailable because the server's database needs an update. Please contact your administrator." },
+])("retains scoped search events and sanitizes raw errors in the saved assistant response: %j", async (details) => {
+  const search = { type: "doc_search" as const, search_id: "search", scope: "library", query: "assignment", offset: 0, ...details };
+  runToolCalls.mockResolvedValueOnce({
+    toolResults: [], docsRead: [], docsFound: [], docsCreated: [], docsReplicated: [],
+    workflowsApplied: [], docsEdited: [], askInputsEvents: [], courtlistenerEvents: [],
+    caseCitationEvents: [], mcpEvents: [],
+    documentSearchEvents: [details.error ? { ...search, error: "private database details" } : search],
+  } as never);
+  streamChatWithTools.mockImplementationOnce(async (params) => {
+    await params.runTools?.([{ id: "search", name: "find_documents", input: { scope: "library", query: "assignment" } }]);
+    return { fullText: "Found two agreements." };
+  });
+  const result = await runLLMStream(baseParams());
+  expect(result.events).toContainEqual(search);
+});
+
+it("maps raw search errors to the safe search message on the wire", () => {
+  const chunk = sanitizeAssistantSseChunk(`data: ${JSON.stringify({ type: "doc_search", error: "private database details" })}\n\n`);
+  expect(chunk).toContain("Document search could not be completed. Try again.");
+  expect(chunk).not.toContain("private database details");
+});
+
+it.each([
+  ["schema_out_of_date", "database needs an update"],
+  ["invalid_search", "needs a valid scope"],
+  ["search_timeout", "took too long"],
+  ["search_unavailable", "temporarily unavailable"],
+  ["unknown-private-code", "could not be completed"],
+  ["__proto__", "could not be completed"],
+])("rebuilds a safe search error from code %s on the wire", (error_code, message) => {
+  const chunk = sanitizeAssistantSseChunk(`data: ${JSON.stringify({ type: "doc_search", error_code, error: "private database details" })}\n\n`);
+  const event = JSON.parse(chunk.slice(6));
+  expect(event.error).toContain(message);
+  expect(event.error_code).toBe(["unknown-private-code", "__proto__"].includes(error_code) ? "internal_error" : error_code);
+  expect(chunk).not.toContain("private");
+});
+
+it("assembles the person's connectors for the organization a conversation is in", async () => {
+  vi.mocked(buildUserMcpTools).mockResolvedValueOnce([
+    { type: "function", function: { name: "mcp_firm_search", description: "", parameters: { type: "object", properties: {} } } },
+  ]);
+  const fake = scriptedDb([{ table: "organizations", data: { kind: "team" } }]);
+  await runLLMStream({ ...baseParams(), db: fake.db, orgId: "firm" });
+  const owner = { userId: baseParams().userId, orgId: "firm" };
+  expect(buildUserMcpTools).toHaveBeenCalledWith(owner, fake.db);
+  expect(buildGoogleDriveTools).toHaveBeenCalledWith(owner, fake.db);
+  expect(buildGoogleWorkspaceTools).toHaveBeenCalledWith(owner, fake.db);
+  expect(advertisedToolNames()).toContain("mcp_firm_search");
+  fake.done();
 });

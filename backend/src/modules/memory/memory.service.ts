@@ -32,6 +32,8 @@ export {
 export type MemoryContext = {
     scope: MemoryScope;
     ownerId: string;
+    /** For a person's own memory: the workspace it is for (null: Personal). */
+    orgId?: string | null;
     file: MemoryFileRow;
 };
 
@@ -39,13 +41,23 @@ export type MemoryContextResult =
     | { ok: true; context: MemoryContext }
     | { ok: false; status: 404 | 403; detail: string };
 
-/** The caller's own app-memory file, created on first touch. */
+/**
+ * The caller's own memory file for one workspace, created on first touch:
+ * `orgId` names a team organization they belong to, null is Personal. Each
+ * is private to them, and a conversation reads and learns only the one for
+ * the workspace it is in.
+ *
+ * The caller has already been checked to belong to `orgId` (the route
+ * resolves it through resolveWorkspaceFilter); the database refuses a file
+ * for a non-member regardless.
+ */
 export async function resolveUserMemoryContext(
     db: Db,
     userId: string,
+    orgId: string | null = null,
 ): Promise<MemoryContext> {
-    const file = await ensureMemoryFile(db, "user", userId);
-    return { scope: "user", ownerId: userId, file };
+    const file = await ensureMemoryFile(db, "user", userId, orgId);
+    return { scope: "user", ownerId: userId, orgId, file };
 }
 
 /**
@@ -84,7 +96,11 @@ export async function resolveProjectMemoryContext(
 }
 
 export async function currentMemory(db: Db, ctx: MemoryContext) {
-    return (await getMemoryCurrent(db, ctx.scope, ctx.ownerId)).current;
+    return (
+        ctx.scope === "user"
+            ? await getMemoryCurrent(db, "user", ctx.ownerId, ctx.orgId ?? null)
+            : await getMemoryCurrent(db, ctx.scope, ctx.ownerId)
+    ).current;
 }
 
 export async function saveMemory(

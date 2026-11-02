@@ -24,6 +24,10 @@
 //      domain modules.
 //   7. `src/routes/` no longer exists. New HTTP surfaces are modules.
 //   8. Document-version writes and lifecycle RPCs belong to documents.
+//   9. Object storage is reached only through the `lib/storage.ts` facade.
+//      Transports live in `lib/storage/` and are imported by nothing else,
+//      and only the S3 adapter talks to the AWS SDK, so a fork can swap the
+//      backend with `setStorageAdapter()` without any call site bypassing it.
 //
 // Each rule has an explicit allowlist. Adding to an allowlist is a reviewable
 // decision with a comment explaining why; silently widening one is not.
@@ -207,6 +211,26 @@ describe("backend architecture", () => {
       !file.startsWith("modules/documents/") &&
       (directWrite.test(read(file)) || lifecycleRpc.test(read(file))),
     );
+    expect(offenders).toEqual([]);
+  });
+
+  it("rule 9: object storage is reached only through lib/storage.ts", () => {
+    const offenders: string[] = [];
+    for (const file of PRODUCTION_FILES) {
+      const inTransport = file.startsWith("lib/storage/");
+      for (const spec of importsOf(file)) {
+        if (spec.startsWith("@aws-sdk/") && file !== "lib/storage/s3.ts") {
+          offenders.push(`${file} -> ${spec}`);
+        }
+        if (
+          spec.startsWith("lib/storage/") &&
+          file !== "lib/storage.ts" &&
+          !inTransport
+        ) {
+          offenders.push(`${file} -> ${spec}`);
+        }
+      }
+    }
     expect(offenders).toEqual([]);
   });
 });

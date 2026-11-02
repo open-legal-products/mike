@@ -3,33 +3,35 @@
 import { useEffect, useRef, useState } from "react";
 import { Upload } from "lucide-react";
 import {
-    type Org,
     UploadBatchError,
     addDocumentToProject,
     createProject,
     failedUploadMessage,
     grantProjectAccess,
-    listOrgs,
     setProjectMemoryEnabled,
+    updateProject,
     uploadProjectDocuments,
 } from "@/app/lib/mikeApi";
 import { FileDirectory } from "../shared/FileDirectory";
-import type { Document, Project } from "../shared/types";
+import type { ContentVisibility, Document, Project } from "../shared/types";
 import { useAuth } from "@/app/contexts/AuthContext";
 import { useUserProfile } from "@/app/contexts/UserProfileContext";
 import { Modal } from "../modals/Modal";
 import { FieldLabel, FormTextInput } from "../ui/form-field";
-import { ModalSelect } from "../modals/ModalSelect";
 import { ToggleSwitchUI } from "@/shared/ui/ToggleSwitchUI";
 import { ProjectPracticeField } from "./ProjectPracticeField";
 import { userFacingApiError } from "@/app/lib/userFacingError";
+import {
+    PERSONAL_WORKSPACE as ACTIVE_PERSONAL_WORKSPACE,
+    useWorkspace,
+} from "@/app/contexts/WorkspaceContext";
 import { createSecureUuid } from "@/shared/lib/secureUuid";
 import {
     CreateAccessStep,
     type PendingDirectGrant,
     type PendingOrgOverride,
 } from "../modals/CreateAccessStep";
-import { WarningPopup } from "../popups/WarningPopup";
+import { AccessVisibilityField } from "../modals/AccessVisibilityField";
 
 const PERSONAL_WORKSPACE = "__personal__";
 
@@ -44,6 +46,7 @@ interface Props {
     onCreated: (project: Project) => void;
 }
 
+/** Collects project details, pending access choices, and documents before creating the project. */
 export function NewProjectModal({ open, onClose, onCreated }: Props) {
     const [step, setStep] = useState<"details" | "access" | "documents">(
         "details",
@@ -53,16 +56,26 @@ export function NewProjectModal({ open, onClose, onCreated }: Props) {
     const [practice, setPractice] = useState("");
     const [sharedUsers, setSharedUsers] = useState<PendingDirectGrant[]>([]);
     const [orgOverrides, setOrgOverrides] = useState<PendingOrgOverride[]>([]);
-    const [orgs, setOrgs] = useState<Org[]>([]);
-    const [orgId, setOrgId] = useState<string>(PERSONAL_WORKSPACE);
+    // A new project is created in the workspace the person is working in:
+    // an organization's, or their own. There is no choosing another one here,
+    // because a project made elsewhere would not appear in the list this
+    // modal was opened from, and work cannot be shared across organizations.
+    const { workspaceId: activeWorkspaceId, activeOrganization } =
+        useWorkspace();
+    const orgId =
+        activeWorkspaceId && activeWorkspaceId !== ACTIVE_PERSONAL_WORKSPACE
+            ? activeWorkspaceId
+            : PERSONAL_WORKSPACE;
+    const organizationName = activeOrganization?.name ?? null;
+    // Inside an organization a project is private — shared with individuals
+    // — unless its creator makes it public on the details step.
+    const [visibility, setVisibility] = useState<ContentVisibility>("private");
     const [memoryEnabled, setMemoryEnabled] = useState(true);
     const memoryEditedRef = useRef(false);
     const [selectedDocuments, setSelectedDocuments] = useState<Document[]>([]);
     const [pendingFiles, setPendingFiles] = useState<File[]>([]);
     const [loading, setLoading] = useState(false);
     const [error, setError] = useState("");
-    const [organizationLoadWarning, setOrganizationLoadWarning] =
-        useState(false);
     // A project created with only some of its files attached. The modal holds
     // it until the user has read which files are missing.
     const [pendingProject, setPendingProject] = useState<Project | null>(null);
@@ -102,28 +115,6 @@ export function NewProjectModal({ open, onClose, onCreated }: Props) {
     const projectMemoryDefault = profile?.projectMemoryDefault !== false;
     const ownEmail = user?.email?.trim().toLowerCase() ?? null;
     const formId = "new-project-modal-form";
-
-    // Load the caller's organizations so a project can be created inside a
-    // firm instead of the caller's private workspace. Every row is a real
-    // organization now — there is no hidden personal one to filter out.
-    // The selector remains visible even when the caller has no organizations.
-    useEffect(() => {
-        if (!open) return;
-        let cancelled = false;
-        setOrganizationLoadWarning(false);
-        listOrgs()
-            .then((rows) => {
-                if (!cancelled) setOrgs(rows);
-            })
-            .catch(() => {
-                // Silently showing only "No organization" would look like the
-                // caller belongs to no firm, so say the list failed instead.
-                if (!cancelled) setOrganizationLoadWarning(true);
-            });
-        return () => {
-            cancelled = true;
-        };
-    }, [open]);
 
     useEffect(() => {
         if (!open) {
@@ -205,16 +196,31 @@ export function NewProjectModal({ open, onClose, onCreated }: Props) {
             // Create, then grant each recipient through the role-aware access
             // endpoint, which also supports recipients without an account.
             let project = createdProjectRef.current;
+            const retrying = !!project;
             if (!project) {
-                project = await createProject(
-                    name.trim(),
-                    cmNumber.trim() || undefined,
+                const trimmedPractice =
                     practice.trim() && practice.trim() !== "Other"
                         ? practice.trim()
-                        : undefined,
-                    orgId !== PERSONAL_WORKSPACE ? orgId : undefined,
-                    memoryEnabled,
-                );
+                        : undefined;
+                // Visibility is an organization's setting; a personal
+                // project is sent without one, as it always was.
+                project =
+                    orgId !== PERSONAL_WORKSPACE
+                        ? await createProject(
+                              name.trim(),
+                              cmNumber.trim() || undefined,
+                              trimmedPractice,
+                              orgId,
+                              memoryEnabled,
+                              visibility,
+                          )
+                        : await createProject(
+                              name.trim(),
+                              cmNumber.trim() || undefined,
+                              trimmedPractice,
+                              undefined,
+                              memoryEnabled,
+                          );
             } else if (project.memory_enabled !== memoryEnabled) {
                 // A failed grant or attachment leaves the newly created
                 // project available for retry. If the user goes Back and
@@ -223,6 +229,18 @@ export function NewProjectModal({ open, onClose, onCreated }: Props) {
                 // would violate an explicit opt-out.
                 await setProjectMemoryEnabled(project.id, memoryEnabled);
                 project = { ...project, memory_enabled: memoryEnabled };
+            }
+            // Same for who can open it: a retry after going Back must
+            // apply the choice now on screen, not the one the project was
+            // first created with. A project created just above already has
+            // it, and is only stamped so a later retry can compare.
+            if (orgId !== PERSONAL_WORKSPACE) {
+                if (
+                    retrying &&
+                    (project.visibility ?? "private") !== visibility
+                )
+                    await updateProject(project.id, { visibility });
+                project = { ...project, visibility };
             }
             createdProjectRef.current = project;
             setProjectExists(true);
@@ -387,14 +405,15 @@ export function NewProjectModal({ open, onClose, onCreated }: Props) {
                 ...project,
                 is_owner: true,
                 access_role: "owner" as const,
+                // Belonging to an organization is not being shared with it:
+                // the label follows what was actually chosen.
                 access_scope:
-                    orgId !== PERSONAL_WORKSPACE
+                    orgId !== PERSONAL_WORKSPACE && visibility === "organization"
                         ? ("organization" as const)
-                        : recipients.length > 0
+                        : recipients.some((entry) => entry.role !== "deny")
                           ? ("shared" as const)
                           : ("private" as const),
-                organization_name:
-                    orgs.find((org) => org.id === orgId)?.name ?? null,
+                organization_name: organizationName,
                 memory_enabled: memoryEnabled,
                 ...(orgId === PERSONAL_WORKSPACE && recipients.length > 0
                     ? { direct_grant_count: recipients.length }
@@ -440,10 +459,9 @@ export function NewProjectModal({ open, onClose, onCreated }: Props) {
         setOrgOverrides([]);
         setSelectedDocuments([]);
         setPendingFiles([]);
-        setOrgId(PERSONAL_WORKSPACE);
+        setVisibility("private");
         setMemoryEnabled(projectMemoryDefault);
         setError("");
-        setOrganizationLoadWarning(false);
     }
 
     function handleClose() {
@@ -470,7 +488,7 @@ export function NewProjectModal({ open, onClose, onCreated }: Props) {
                     : step === "access"
                       ? orgId === PERSONAL_WORKSPACE
                           ? "Access"
-                          : "Organisational Access"
+                          : "People"
                       : "Add Documents",
             ]}
             secondaryAction={
@@ -610,46 +628,30 @@ export function NewProjectModal({ open, onClose, onCreated }: Props) {
                             />
                         </div>
 
-                        <div>
-                            <FieldLabel htmlFor="new-project-org">
-                                Share across Organisation
-                            </FieldLabel>
-                            <ModalSelect
-                                id="new-project-org"
-                                value={orgId}
-                                // Once the project EXISTS the retry reuses
-                                // `createdProjectRef`, so a switch from
-                                // Personal to an organization on the second
-                                // attempt left the project where it was first
-                                // created and applied the new organization's
-                                // overrides to it. The workspace is the one
-                                // choice a retry cannot honour.
-                                disabled={projectExists}
-                                onChange={(value) => {
-                                    setOrgId(value);
-                                    setSharedUsers([]);
+                        {orgId !== PERSONAL_WORKSPACE ? (
+                            <AccessVisibilityField
+                                visibility={visibility}
+                                onChange={(next) => {
+                                    setVisibility(next);
+                                    // What was lined up for the other
+                                    // setting does not carry over: named
+                                    // people belong to a private project,
+                                    // and denials to a public one.
                                     setOrgOverrides([]);
                                 }}
-                                options={[
-                                    {
-                                        value: PERSONAL_WORKSPACE,
-                                        label: "No organization",
-                                    },
-                                    ...orgs.map((org) => ({
-                                        value: org.id,
-                                        label: org.name,
-                                    })),
-                                ]}
+                                organizationName={organizationName}
+                                resourceNoun="project"
+                                disabled={loading}
                             />
-                            {projectExists && (
-                                <p className="mt-2 text-sm text-gray-500">
-                                    The project has been created, so its name,
-                                    CM number, practice and workspace can no
-                                    longer be changed here. Edit them from the
-                                    project once this finishes.
-                                </p>
-                            )}
-                        </div>
+                        ) : null}
+                        {projectExists && (
+                            <p className="text-sm text-gray-500">
+                                The project has been created, so its name, CM
+                                number and practice can no longer be changed
+                                here. Edit them from the project once this
+                                finishes.
+                            </p>
+                        )}
 
                         <div>
                             <FieldLabel as="p">Project memory</FieldLabel>
@@ -661,23 +663,23 @@ export function NewProjectModal({ open, onClose, onCreated }: Props) {
                                 }}
                                 aria-label="Enable project memory"
                             >
-                                Let Mike remember shared project context
+                                {memoryEnabled ? "On" : "Off"}
                             </ToggleSwitchUI>
                         </div>
                     </div>
                 ) : step === "access" ? (
                     <CreateAccessStep
                         orgId={orgId === PERSONAL_WORKSPACE ? null : orgId}
-                        organizationName={
-                            orgs.find((org) => org.id === orgId)?.name ?? null
-                        }
+                        organizationName={organizationName}
                         currentUserEmail={user?.email ?? null}
+                        currentUserProfile={profile}
                         currentUserId={user?.id ?? null}
                         directGrants={sharedUsers}
                         onDirectGrantsChange={setSharedUsers}
                         orgOverrides={orgOverrides}
                         onOrgOverridesChange={setOrgOverrides}
                         ownerLabel="Project owners"
+                        visibility={visibility}
                     />
                 ) : (
                     <div className="flex min-h-0 flex-1 flex-col">
@@ -689,14 +691,14 @@ export function NewProjectModal({ open, onClose, onCreated }: Props) {
                     </div>
                 )}
 
-                {error && <p className="mt-3 text-sm text-red-500">{error}</p>}
+                {error && (
+                    // role="alert" so the failure is announced, not just
+                    // painted red under a form the user may not be looking at.
+                    <p role="alert" className="mt-3 text-sm text-red-500">
+                        {error}
+                    </p>
+                )}
             </form>
-            <WarningPopup
-                open={organizationLoadWarning}
-                title="Organizations unavailable"
-                message="Your organizations could not be loaded. Close this message and try opening the project form again."
-                onClose={() => setOrganizationLoadWarning(false)}
-            />
         </Modal>
     );
 }

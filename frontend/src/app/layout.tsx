@@ -1,22 +1,12 @@
 import type { Metadata } from "next";
-import { Inter, EB_Garamond } from "next/font/google";
+// Self-hosted Inter and EB Garamond; sets --font-inter and --font-eb-garamond.
+import "./fonts/fonts.css";
 import "./globals.css";
 import { Providers } from "@/app/components/providers";
 
-const inter = Inter({
-    variable: "--font-inter",
-    subsets: ["latin"],
-});
-
-const ebGaramond = EB_Garamond({
-    variable: "--font-eb-garamond",
-    subsets: ["latin"],
-    weight: ["400", "500", "600", "700"],
-});
-
 export const metadata: Metadata = {
     metadataBase: new URL("https://app.mikeoss.com"),
-    title: "Mike - AI Legal Platform",
+    title: "Mike - Legal AI Platform",
     description:
         "AI-powered legal document analysis and contract review platform.",
     icons: {
@@ -30,7 +20,7 @@ export const metadata: Metadata = {
         type: "website",
         url: "https://app.mikeoss.com",
         siteName: "Mike",
-        title: "Mike - AI Legal Platform",
+        title: "Mike - Legal AI Platform",
         description:
             "AI-powered legal document analysis and contract review platform.",
         images: [
@@ -44,7 +34,7 @@ export const metadata: Metadata = {
     },
     twitter: {
         card: "summary_large_image",
-        title: "Mike - AI Legal Platform",
+        title: "Mike - Legal AI Platform",
         description:
             "AI-powered legal document analysis and contract review platform.",
         images: ["/link-image.jpg"],
@@ -59,7 +49,7 @@ export default function RootLayout({
     return (
         <html lang="en">
             <body
-                className={`${inter.variable} ${ebGaramond.variable} font-sans antialiased`}
+                className="font-sans antialiased"
             >
                 <Providers>{children}</Providers>
             </body>

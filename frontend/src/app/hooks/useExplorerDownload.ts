@@ -14,6 +14,7 @@ export function useExplorerDownload() {
         kind: "document" | "folder";
         id: string;
         filename: string;
+        versionId?: string | null;
     }) {
         if (busyRef.current) return;
         busyRef.current = true;
@@ -24,7 +25,9 @@ export function useExplorerDownload() {
             let url: string;
             let filename = target.filename;
             if (target.kind === "document") {
-                const file = await getDocumentUrl(target.id);
+                const file = await (target.versionId
+                    ? getDocumentUrl(target.id, target.versionId)
+                    : getDocumentUrl(target.id));
                 url = file.url;
                 filename = file.filename || filename;
             } else {
@@ -57,11 +60,12 @@ export function useExplorerDownload() {
         downloading,
         error,
         clearError: () => setError(null),
-        downloadDocument: (document: Document) =>
+        downloadDocument: (document: Document, versionId?: string | null) =>
             download({
                 kind: "document",
                 id: document.id,
                 filename: document.filename,
+                versionId,
             }),
         downloadFolder: (folder: Folder) =>
             download({

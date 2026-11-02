@@ -620,7 +620,7 @@ test("restores tool-applied cards and anchors from the persisted edit rows", asy
   await page.getByRole("button", { name: "Chat history" }).click();
   await page
     .getByRole("menu")
-    .getByRole("button", { name: /Client tool edits/ })
+    .getByRole("menuitem", { name: /Client tool edits/ })
     .click();
 
   // The card restores through the ordinary message.edits path: reviewable
@@ -699,7 +699,7 @@ test("a reloaded failed tool edit still explains itself", async ({
   await page.getByRole("button", { name: "Chat history" }).click();
   await page
     .getByRole("menu")
-    .getByRole("button", { name: /Ambiguous edit chat/ })
+    .getByRole("menuitem", { name: /Ambiguous edit chat/ })
     .click();
 
   await expect(
@@ -801,7 +801,7 @@ test("a proposed row whose change is already in the document restores as applied
   await page.getByRole("button", { name: "Chat history" }).click();
   await page
     .getByRole("menu")
-    .getByRole("button", { name: /Interrupted tool turn/ })
+    .getByRole("menuitem", { name: /Interrupted tool turn/ })
     .click();
 
   // The document is the authority. Re-validating instead would find the

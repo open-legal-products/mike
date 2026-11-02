@@ -1,9 +1,12 @@
+import { chunkArray } from "./arrays";
 import type { Db } from "./supabase";
+import { safeError } from "./safeError";
 
 export type ProfileUserInfo = {
     id: string;
     email: string;
     display_name: string | null;
+    profile_photo?: string | null;
 };
 
 export function normalizeEmail(value: unknown) {
@@ -25,12 +28,26 @@ export function profileAttributionName(
     );
 }
 
-export async function loadProfileUsersByEmail(db: Db) {
-    const { data, error } = await db
-        .from("user_profiles")
-        .select("user_id, email, display_name")
-        .not("email", "is", null);
-    if (error) throw error;
+/**
+ * Indexes normalized profile identities by email and user ID.
+ * Reads only explicit, caller-authorized roster identities, in bounded batches.
+ */
+export async function loadProfileUsersByEmail(
+    db: Db,
+    people: { userIds: string[]; emails: string[] },
+) {
+    const data: { user_id: string; email: string | null; display_name: string | null; profile_photo?: string | null }[] = [];
+    for (const [column, values] of [
+        ["user_id", people.userIds],
+        ["email", people.emails.map(normalizeEmail).filter(Boolean)],
+    ] as const) {
+        for (const batch of chunkArray([...new Set(values)], 50)) {
+            const result = await db.from("user_profiles")
+                .select("user_id, email, display_name, profile_photo").in(column, batch);
+            if (result.error) throw result.error;
+            data.push(...(result.data ?? []));
+        }
+    }
 
     const userByEmail = new Map<string, ProfileUserInfo>();
     const userById = new Map<string, ProfileUserInfo>();
@@ -41,6 +58,7 @@ export async function loadProfileUsersByEmail(db: Db) {
             id: row.user_id as string,
             email,
             display_name: normalizeDisplayName(row.display_name),
+            profile_photo: row.profile_photo ?? null,
         };
         userByEmail.set(email, info);
         userById.set(info.id, info);
@@ -49,6 +67,50 @@ export async function loadProfileUsersByEmail(db: Db) {
     return { userByEmail, userById };
 }
 
+export type CreatorProfile = {
+    display_name: string | null;
+    /** Only lists that already expose creator emails may pass this on. */
+    email: string | null;
+    profile_photo: string | null;
+};
+
+/**
+ * Loads the name and photo of each creator of rows the caller is already
+ * authorized to list, keyed by user ID. A failed lookup only warns: a missing
+ * avatar must never fail the listing that wanted it.
+ */
+export async function loadCreatorProfiles(
+    db: Db,
+    rows: { user_id?: string | null }[],
+): Promise<Map<string, CreatorProfile>> {
+    const byUserId = new Map<string, CreatorProfile>();
+    const userIds = [
+        ...new Set(
+            rows
+                .map((row) => row.user_id)
+                .filter((id): id is string => typeof id === "string" && id.length > 0),
+        ),
+    ];
+    if (userIds.length === 0) return byUserId;
+    const { data, error } = await db
+        .from("user_profiles")
+        .select("user_id, display_name, email, profile_photo")
+        .in("user_id", userIds);
+    if (error) {
+        console.warn("[userLookup] failed to load creator profiles", safeError(error));
+        return byUserId;
+    }
+    for (const row of data ?? []) {
+        byUserId.set(row.user_id as string, {
+            display_name: normalizeDisplayName(row.display_name),
+            email: normalizeEmail(row.email) || null,
+            profile_photo: (row as { profile_photo?: string | null }).profile_photo ?? null,
+        });
+    }
+    return byUserId;
+}
+
+/** Finds public sharing identity fields without exposing an unscoped photo. */
 export async function findProfileUserByEmail(db: Db, email: string) {
     const normalized = normalizeEmail(email);
     if (!normalized) return null;

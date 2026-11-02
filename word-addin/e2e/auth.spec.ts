@@ -99,7 +99,7 @@ test.describe("auth flow", () => {
     await expect(loginCard).toHaveClass(/rounded-2xl/);
     await expect(loginCard).toHaveClass(/liquid-glass-flat/);
     await expect(loginCard).toHaveClass(/p-8/);
-    await expect(loginCard).toHaveClass(/backdrop-blur-2xl/);
+    await expect(loginCard).toHaveCSS("backdrop-filter", "none");
     const button = await loginButton.boundingBox();
     expect(button).not.toBeNull();
     expect(Math.abs((button?.width ?? 0) - (form?.width ?? 0))).toBeLessThan(2);
@@ -123,12 +123,14 @@ test.describe("auth flow", () => {
     await page.getByRole("textbox", { name: "Password" }).fill("badpassword");
     await page.getByRole("button", { name: "Log in" }).click();
 
-    // LoginPage renders what the server said, plus the status and endpoint so
-    // an opaque host failure is never all the user gets.
+    // LoginPage no longer echoes the server. The failure is recognised by its
+    // `invalid_credentials` CODE and stated in Mike's own words, so neither
+    // GoTrue's wording nor an "(HTTP 400)" suffix reaches the screen.
     const alert = page.getByRole("alert");
     await expect(alert).toBeVisible();
-    await expect(alert).toContainText("Invalid login credentials");
-    await expect(alert).toContainText("HTTP 400");
+    await expect(alert).toContainText("That email and password don't match an account.");
+    await expect(alert).not.toContainText("Invalid login credentials");
+    await expect(alert).not.toContainText("HTTP 400");
 
     // Failed login leaves the user on the login page with no token exposed.
     await expect(page.getByRole("button", { name: "Log in" })).toBeVisible();
@@ -351,12 +353,16 @@ test.describe("auth flow", () => {
     page,
   }) => {
     addin.seedToken("seeded-jwt");
-    await page.route("**/auth/logout", (route) =>
-      route.fulfill({
-        status: 503,
-        contentType: "application/json",
-        body: JSON.stringify({ detail: "Sign out is temporarily unavailable" }),
-      }),
+    // Fails once; the fixture's working logout answers the Retry.
+    await page.route(
+      "**/auth/logout",
+      (route) =>
+        route.fulfill({
+          status: 503,
+          contentType: "application/json",
+          body: JSON.stringify({ detail: "Sign out is temporarily unavailable" }),
+        }),
+      { times: 1 },
     );
     await addin.gotoTaskpane();
     await addin.expectAuthedShell();
@@ -364,10 +370,16 @@ test.describe("auth flow", () => {
     await page.getByRole("button", { name: "Open menu" }).click();
     await page.getByRole("menuitem", { name: "Sign out" }).click();
 
+    // A 5xx body is never echoed, however friendly it looks: 503 reads as a
+    // temporary outage.
     await expect(page.getByRole("alert")).toContainText(
-      "Sign out is temporarily unavailable",
+      "Mike is temporarily unavailable",
     );
     await addin.expectAuthedShell();
+
+    // The toast's Retry signs out again.
+    await page.getByRole("button", { name: "Retry" }).click();
+    await expect(page.getByRole("button", { name: "Log in" })).toBeVisible();
   });
 
   test("a pre-seeded cookie session survives a task-pane reload", async ({

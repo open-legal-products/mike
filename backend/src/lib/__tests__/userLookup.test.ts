@@ -165,17 +165,19 @@ describe("loadProfileUsersByEmail", () => {
             { user_id: "u2", email: "bob@example.com", display_name: null },
         ]);
         const { userByEmail, userById } = await loadProfileUsersByEmail(
-            db as any,
+            db as any, { userIds: ["u1", "u2"], emails: [] },
         );
         expect(userByEmail.get("alice@example.com")).toEqual({
             id: "u1",
             email: "alice@example.com",
             display_name: "Alice",
+            profile_photo: null,
         });
         expect(userById.get("u2")).toEqual({
             id: "u2",
             email: "bob@example.com",
             display_name: null,
+            profile_photo: null,
         });
         expect(userByEmail.size).toBe(2);
     });
@@ -185,7 +187,7 @@ describe("loadProfileUsersByEmail", () => {
             { user_id: "u1", email: "   ", display_name: null },
             { user_id: "u2", email: "ok@example.com", display_name: null },
         ]);
-        const { userByEmail } = await loadProfileUsersByEmail(db as any);
+        const { userByEmail } = await loadProfileUsersByEmail(db as any, { userIds: ["u1", "u2"], emails: [] });
         expect(userByEmail.size).toBe(1);
         expect(userByEmail.has("ok@example.com")).toBe(true);
     });
@@ -197,10 +199,15 @@ describe("loadProfileUsersByEmail", () => {
 
 describe("findProfileUserByEmail", () => {
     const rows = [
-        { user_id: "u1", email: "alice@example.com", display_name: "Alice" },
+        {
+            user_id: "u1",
+            email: "alice@example.com",
+            display_name: "Alice",
+            profile_photo: "data:image/png;base64,iVBORw0KGgo=",
+        },
     ];
 
-    it("finds a profile by normalized email", async () => {
+    it("finds a profile by normalized email without exposing its photo", async () => {
         const db = makeDb(rows);
         await expect(
             findProfileUserByEmail(db as any, "  ALICE@example.com "),
@@ -298,4 +305,28 @@ describe("syncProfileEmail", () => {
         await expect(syncProfileEmail(db as any, "u1", "   ")).resolves.toBeNull();
         expect(db.tables.user_profiles).toEqual([]);
     });
+});
+
+
+describe("scoped photo lookup", () => {
+    it("loads photos only for requested IDs and normalized emails", async () => {
+        const db = makeDb([
+            { user_id: "owner", email: "owner@example.com", display_name: "Owner", profile_photo: "owner-photo" },
+            { user_id: "member", email: "member@example.com", display_name: "Member", profile_photo: "member-photo" },
+            { user_id: "unrelated", email: "unrelated@example.com", display_name: "Unrelated", profile_photo: "private-photo" },
+        ]);
+        const result = await loadProfileUsersByEmail(db as never, { userIds: ["owner"], emails: [" MEMBER@example.com "] });
+        expect(result.userById.size).toBe(2);
+        expect(result.userById.get("owner")?.profile_photo).toBe("owner-photo");
+        expect(result.userByEmail.get("member@example.com")?.profile_photo).toBe("member-photo");
+        expect(result.userById.has("unrelated")).toBe(false);
+        const empty = await loadProfileUsersByEmail(db as never, { userIds: [], emails: [] });
+        expect(empty.userById.size).toBe(0);
+    });
+});
+
+it("finds requested profiles beyond the first thousand without reading unrelated profiles", async () => {
+    const db = makeDb(Array.from({ length: 1200 }, (_, i) => ({ user_id: `u${i}`, email: `u${i}@example.com` })));
+    const result = await loadProfileUsersByEmail(db as any, { userIds: ["u1199"], emails: ["u1150@example.com"] });
+    expect([...result.userById.keys()]).toEqual(["u1199", "u1150"]);
 });

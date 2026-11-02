@@ -3,14 +3,15 @@
 import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import { OnboardingShell } from "@/app/components/auth/OnboardingShell";
-import { authInputClassName } from "@/app/components/auth/authStyles";
-import { Input } from "@/app/components/ui/input";
+import { authInputUIClassName } from "@/shared/ui/AuthStylesUI";
+import { InputUI } from "@/shared/ui/InputUI";
 import { PillButtonUI } from "@/shared/ui/PillButtonUI";
 import { FullScreenLoader } from "@/app/components/shared/FullScreenLoader";
 import { useAuth } from "@/app/contexts/AuthContext";
 import { useUserProfile } from "@/app/contexts/UserProfileContext";
 import { updateUserProfile } from "@/app/lib/mikeApi";
 import { FieldLabel } from "@/app/components/ui/form-field";
+import { describeError } from "@/app/lib/userFacingError";
 
 export default function OnboardingProfilePage() {
     const router = useRouter();
@@ -50,6 +51,7 @@ function ProfileDetailsForm({
 
     const handleSubmit = async (event: React.FormEvent) => {
         event.preventDefault();
+        if (submitting) return;
         const displayName = name.trim();
 
         setSubmitting(true);
@@ -63,9 +65,10 @@ function ProfileDetailsForm({
             router.push("/onboarding/practice");
         } catch (submitError) {
             setError(
-                submitError instanceof Error
-                    ? submitError.message
-                    : "Unable to save your details",
+                describeError(submitError, {
+                    action: "save your details",
+                    fallback: "Unable to save your details. Try again.",
+                }).message,
             );
         } finally {
             setSubmitting(false);
@@ -74,7 +77,7 @@ function ProfileDetailsForm({
 
     return (
         <OnboardingShell
-            step="Step 1 of 2"
+            step="Step 1 of 4"
             title="Tell us about you"
             description="Add the details we should use across Mike."
         >
@@ -83,13 +86,13 @@ function ProfileDetailsForm({
                     <FieldLabel htmlFor="name">
                         Name
                     </FieldLabel>
-                    <Input
+                    <InputUI
                         id="name"
                         value={name}
                         onChange={(event) => setName(event.target.value)}
                         maxLength={200}
                         autoComplete="name"
-                        className={`w-full ${authInputClassName}`}
+                        className={`w-full ${authInputUIClassName}`}
                     />
                 </div>
 
@@ -97,7 +100,7 @@ function ProfileDetailsForm({
                     <FieldLabel htmlFor="organisation">
                         Organisation
                     </FieldLabel>
-                    <Input
+                    <InputUI
                         id="organisation"
                         value={organisation}
                         onChange={(event) =>
@@ -105,7 +108,7 @@ function ProfileDetailsForm({
                         }
                         maxLength={200}
                         autoComplete="organization"
-                        className={`w-full ${authInputClassName}`}
+                        className={`w-full ${authInputUIClassName}`}
                     />
                 </div>
 

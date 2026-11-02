@@ -12,7 +12,7 @@ export function SettingsRow({
     <div
       data-slot="settings-row"
       className={cn(
-        "flex min-w-0 flex-col gap-3 border-t border-gray-100 px-4 py-5 first:border-t-0",
+        "flex min-w-0 flex-col gap-3 border-t border-gray-100 p-4 first:border-t-0",
         layout === "split" && "sm:flex-row sm:items-center sm:justify-between",
       )}
     >

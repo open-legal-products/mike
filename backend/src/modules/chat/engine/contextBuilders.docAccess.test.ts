@@ -236,4 +236,42 @@ describe("buildDocContext access scoping", () => {
     ]);
     expect(ensureDocAccess).toHaveBeenCalledTimes(2);
   });
+
+  it("does not reuse one person's verdict for a colleague's file in the same organization", async () => {
+    // A file filed on its own under an organization is its uploader's alone.
+    // The organization is not a container that admits or refuses everyone in
+    // it together: keyed by organization only, whichever file was asked
+    // first answered for both — the caller's own opened a colleague's, or a
+    // colleague's closed the caller's own.
+    ensureDocAccess.mockImplementation(async (doc: unknown) => ({
+      ok: (doc as { user_id: string | null }).user_id === "u1",
+    }));
+    const db = makeDb([
+      { id: "mine", user_id: "u1", project_id: null, org_id: "org-1", status: "ready" },
+      { id: "theirs", user_id: "u2", project_id: null, org_id: "org-1", status: "ready" },
+      { id: "mine-too", user_id: "u1", project_id: null, org_id: "org-1", status: "ready" },
+    ]);
+
+    for (const order of [
+      ["mine", "theirs", "mine-too"],
+      ["theirs", "mine", "mine-too"],
+    ]) {
+      ensureDocAccess.mockClear();
+      const { docIndex } = await buildDocContext(
+        message(order),
+        "u1",
+        db,
+        null,
+        "chat_messages",
+        "u1@test.local",
+      );
+      expect(
+        Object.values(docIndex)
+          .map((entry) => entry.document_id)
+          .sort(),
+      ).toEqual(["mine", "mine-too"]);
+      // One verdict per uploader, still not one per document.
+      expect(ensureDocAccess).toHaveBeenCalledTimes(2);
+    }
+  });
 });

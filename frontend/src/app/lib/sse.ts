@@ -56,7 +56,15 @@ async function drainToEnd(
 }
 export async function* readSseFrames(
     response: Response,
-    opts?: { signal?: AbortSignal },
+    opts?: {
+        signal?: AbortSignal;
+        /**
+         * Called with the `id:` of each yielded frame, before it is yielded.
+         * The chat stream numbers its frames so a client that reconnects
+         * can ask for the ones it has not seen (`from=<last id + 1>`).
+         */
+        onEventId?: (id: string) => void;
+    },
 ): AsyncGenerator<unknown> {
     const reader = response.body?.getReader();
     if (!reader) throw new Error("No response body");
@@ -64,6 +72,8 @@ export async function* readSseFrames(
     const decoder = new TextDecoder();
     let buffer = "";
     let finished = false;
+    // An `id:` line applies to the record it precedes.
+    let pendingId: string | null = null;
 
     try {
         while (true) {
@@ -85,11 +95,18 @@ export async function* readSseFrames(
             for (const line of lines) {
                 // trim() also strips the \r of CRLF-delimited streams.
                 const trimmed = line.trim();
+                if (trimmed.startsWith("id:")) {
+                    pendingId = trimmed.slice(3).trim() || null;
+                    continue;
+                }
                 if (!trimmed.startsWith("data:")) continue;
 
                 const payload = trimmed.slice(5).trim();
                 if (!payload) continue;
+                const id = pendingId;
+                pendingId = null;
                 if (payload === "[DONE]") {
+                    if (id !== null) opts?.onEventId?.(id);
                     finished = true;
                     return;
                 }
@@ -104,6 +121,7 @@ export async function* readSseFrames(
                     });
                     continue;
                 }
+                if (id !== null) opts?.onEventId?.(id);
                 yield parsed;
             }
 

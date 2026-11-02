@@ -8,6 +8,7 @@ const PROJECT_BATCH_SIZE = 200;
 type ProjectLabel = {
   id: string;
   name: string | null;
+  org_id: string | null;
 };
 
 function archiveSegment(value: string): string {
@@ -31,7 +32,7 @@ async function loadProjectLabels(
   for (const batch of chunkArray(projectIds, PROJECT_BATCH_SIZE)) {
     const { data, error } = await db
       .from("projects")
-      .select("id, name")
+      .select("id, name, org_id")
       .in("id", batch);
     if (error) throw new Error("Failed to load projects for memory export");
     projects.push(...((data ?? []) as ProjectLabel[]));
@@ -43,20 +44,45 @@ async function loadProjectLabels(
   );
 }
 
-/** Build a ZIP containing the caller's app memory and every project memory
- * they can still view when the background export actually runs. */
+/** The caller's organization name, for the archive's folder. */
+async function organizationName(db: Db, orgId: string): Promise<string | null> {
+  const { data, error } = await db
+    .from("organizations")
+    .select("name")
+    .eq("id", orgId)
+    .is("deleted_at", null)
+    .maybeSingle();
+  if (error) throw new Error("Failed to load organization for memory export");
+  return (data as { name?: string | null } | null)?.name ?? null;
+}
+
+/**
+ * Build a ZIP of one workspace's memory: the caller's own memory there, and
+ * every project memory in it they can still view when the background export
+ * actually runs. `orgId` names the organization; null is Personal.
+ */
 export async function buildMemoryArchive(
   db: Db,
   userId: string,
   userEmail: string | null,
+  orgId: string | null = null,
 ): Promise<Buffer> {
   const JSZip = (await import("jszip")).default;
   const zip = new JSZip();
-  const appMemory = await getMemoryCurrent(db, "user", userId);
-  zip.file("app/memory.md", appMemory.current.content);
+  const ownMemory = await getMemoryCurrent(db, "user", userId, orgId);
+  if (orgId) {
+    const safeId = orgId.replace(/[^a-zA-Z0-9-]/g, "") || "organization";
+    const name = await organizationName(db, orgId);
+    const directory = `${archiveSegment(name ?? "organization")}--${safeId}`;
+    zip.file(`organizations/${directory}/memory.md`, ownMemory.current.content);
+  } else {
+    zip.file("app/memory.md", ownMemory.current.content);
+  }
 
   const projectIds = await listAccessibleProjectIds(userId, userEmail, db);
-  const projects = await loadProjectLabels(db, projectIds);
+  const projects = (await loadProjectLabels(db, projectIds)).filter(
+    (project) => (project.org_id ?? null) === orgId,
+  );
   for (const project of projects) {
     // Access can change while an export waits in the durable queue. Re-check
     // immediately before reading each shared file and omit revoked projects.

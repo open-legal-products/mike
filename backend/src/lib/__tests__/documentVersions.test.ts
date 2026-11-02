@@ -66,6 +66,7 @@ const FULL_VERSION = {
     file_type: "application/pdf",
     size_bytes: 1024,
     page_count: 12,
+    textless_page_count: 2,
     deleted_at: null,
     content_sha256: "a".repeat(64),
 };
@@ -90,6 +91,7 @@ describe("loadActiveVersion", () => {
             file_type: "application/pdf",
             size_bytes: 1024,
             page_count: 12,
+            textless_page_count: 2,
         });
     });
 
@@ -168,6 +170,7 @@ describe("loadActiveVersion", () => {
             file_type: null,
             size_bytes: null,
             page_count: null,
+            textless_page_count: null,
         });
     });
 });
@@ -196,6 +199,7 @@ describe("attachActiveVersionPaths", () => {
             file_type: null,
             size_bytes: null,
             page_count: null,
+            textless_page_count: null,
         });
     });
 
@@ -227,6 +231,7 @@ describe("attachActiveVersionPaths", () => {
             file_type: "application/pdf",
             size_bytes: 1024,
             page_count: 12,
+            textless_page_count: 2,
         });
         expect(docs[1]).toMatchObject({
             storage_path: "documents/u/doc-2/source.docx",

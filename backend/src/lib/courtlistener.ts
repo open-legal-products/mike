@@ -1,4 +1,4 @@
-import { downloadFile, listFiles } from "./storage";
+import { downloadFileIfAvailable, listFiles } from "./storage";
 import { devLog } from "./log";
 import type { Db } from "./supabase";
 
@@ -10,17 +10,23 @@ const COURTLISTENER_R2_OPINIONS_PREFIX = "courtlistener/opinions/by-cluster";
 type JsonRecord = Record<string, unknown>;
 type ServerSupabase = Db;
 
-function courtlistenerBulkDataEnabled() {
+/**
+ * The deployment serves citation lookups and opinion text from its own bulk
+ * index, so CourtListener works without an API token.
+ */
+export function courtlistenerBulkDataEnabled() {
     return process.env.COURTLISTENER_BULK_DATA_ENABLED === "true";
 }
 
+/** Repo-authored, safe to show the user as written. */
+export const COURTLISTENER_TOKEN_REQUIRED_MESSAGE =
+    "Add a CourtListener API token in Settings → Connectors to use this CourtListener tool.";
+
+/** The token is the user's or their organization's saved key, never the environment's. */
 function courtlistenerHeaders(apiToken?: string | null): HeadersInit {
-    const token =
-        apiToken?.trim() || process.env.COURTLISTENER_API_TOKEN?.trim();
+    const token = apiToken?.trim();
     if (!token) {
-        throw new Error(
-            "COURTLISTENER_API_TOKEN must be set to use CourtListener tools.",
-        );
+        throw new Error(COURTLISTENER_TOKEN_REQUIRED_MESSAGE);
     }
     return {
         Accept: "application/json",
@@ -542,7 +548,7 @@ function citationMatchKey(value: string | null | undefined): string | null {
 }
 
 function courtlistenerApiTokenAvailable(apiToken?: string | null) {
-    return !!(apiToken?.trim() || process.env.COURTLISTENER_API_TOKEN?.trim());
+    return !!apiToken?.trim();
 }
 
 async function getBulkCitationLookup(args: {
@@ -822,7 +828,7 @@ async function getBulkCourtlistenerCaseOpinions(args: {
                     clusterId: args.clusterId,
                     key,
                 });
-                const bytes = await downloadFile(key);
+                const bytes = await downloadFileIfAvailable(key);
                 if (!bytes) {
                     devLog("[courtlistener/r2-opinions] download missing", {
                         clusterId: args.clusterId,

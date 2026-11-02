@@ -33,6 +33,12 @@ describe("signDownload", () => {
 });
 
 describe("verifyDownload", () => {
+    it("round-trips Unicode filenames and long runs of padding-like characters", () => {
+        const path = `documents/user/${"=".repeat(20_000)}/source.docx`;
+        const filename = "审阅 — café.docx";
+        expect(verifyDownload(signDownload(path, filename))).toEqual({ path, filename });
+    });
+
     it("round-trips a valid token", () => {
         const path = "documents/user123/doc456/source.pdf";
         const filename = "Contract Final v2.pdf";

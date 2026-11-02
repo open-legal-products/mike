@@ -1,0 +1,195 @@
+<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <title>Mike</title>
+    <style>
+      :root {
+        color-scheme: light dark;
+        --fg: #1c1c1e;
+        --muted: #6e6e73;
+        --card: #ffffff;
+        --bg: #f2f2f4;
+        --accent: #1a56db;
+        --border: rgba(0, 0, 0, 0.12);
+      }
+      @media (prefers-color-scheme: dark) {
+        :root {
+          --fg: #f2f2f4;
+          --muted: #98989e;
+          --card: #1f1f23;
+          --bg: #141417;
+          --accent: #6ea8ff;
+          --border: rgba(255, 255, 255, 0.14);
+        }
+      }
+      * {
+        box-sizing: border-box;
+      }
+      html,
+      body {
+        height: 100%;
+        margin: 0;
+      }
+      body {
+        display: grid;
+        place-items: center;
+        background: var(--bg);
+        color: var(--fg);
+        font:
+          14px/1.5 -apple-system,
+          BlinkMacSystemFont,
+          "SF Pro Text",
+          sans-serif;
+        /* The whole page is draggable chrome except the interactive card. */
+        -webkit-app-region: drag;
+        user-select: none;
+      }
+      main {
+        -webkit-app-region: no-drag;
+        width: min(420px, calc(100vw - 48px));
+        background: var(--card);
+        border: 1px solid var(--border);
+        border-radius: 14px;
+        padding: 28px;
+        box-shadow: 0 12px 40px rgba(0, 0, 0, 0.18);
+      }
+      h1 {
+        margin: 0 0 6px;
+        font-size: 18px;
+        font-weight: 600;
+      }
+      p {
+        margin: 0 0 18px;
+        color: var(--muted);
+      }
+      label {
+        display: block;
+        font-size: 12px;
+        color: var(--muted);
+        margin-bottom: 6px;
+      }
+      input {
+        width: 100%;
+        padding: 9px 11px;
+        border-radius: 8px;
+        border: 1px solid var(--border);
+        background: transparent;
+        color: var(--fg);
+        font: inherit;
+        outline: none;
+      }
+      input:focus {
+        border-color: var(--accent);
+      }
+      .row {
+        display: flex;
+        gap: 10px;
+        margin-top: 16px;
+        justify-content: flex-end;
+      }
+      button {
+        font: inherit;
+        padding: 8px 16px;
+        border-radius: 8px;
+        border: 1px solid var(--border);
+        background: transparent;
+        color: var(--fg);
+        cursor: pointer;
+      }
+      button.primary {
+        background: var(--accent);
+        border-color: var(--accent);
+        color: #fff;
+      }
+      .status {
+        min-height: 20px;
+        margin-top: 12px;
+        font-size: 12px;
+        color: var(--muted);
+      }
+      .divider {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        margin: 20px 0 16px;
+        color: var(--muted);
+        font-size: 11px;
+        text-transform: uppercase;
+        letter-spacing: 0.06em;
+      }
+      .divider::before,
+      .divider::after {
+        content: "";
+        flex: 1;
+        border-top: 1px solid var(--border);
+      }
+      #local {
+        display: none;
+      }
+      #local p {
+        margin: 0 0 12px;
+        font-size: 12px;
+      }
+      #local .row {
+        margin-top: 0;
+        justify-content: flex-start;
+      }
+    </style>
+  </head>
+  <body>
+    <main>
+      <h1>Connect to Mike</h1>
+      <p>
+        The Mike server isn't reachable. Check your internet connection, or
+        point the app at a self-hosted deployment.
+      </p>
+      <label for="url">Server URL</label>
+      <input id="url" type="url" spellcheck="false" autofocus />
+      <div class="row">
+        <button id="retry">Retry</button>
+        <button id="save" class="primary">Save &amp; Connect</button>
+      </div>
+      <div class="status" id="status"></div>
+      <div id="local">
+        <div class="divider">or</div>
+        <p>
+          Run everything on this Mac instead — your documents and data never
+          leave this computer. No account on any server; password reset by
+          email is unavailable in this mode.
+        </p>
+        <div class="row">
+          <button id="run-local">Run locally on this Mac</button>
+        </div>
+      </div>
+    </main>
+    <script>
+      const input = document.getElementById("url");
+      const status = document.getElementById("status");
+      window.mikeDesktop.getServerUrl().then((url) => (input.value = url));
+      const bootError = new URLSearchParams(location.search).get("error");
+      if (bootError) status.textContent = bootError;
+      if (window.mikeDesktop.localAvailable) {
+        window.mikeDesktop.localAvailable().then((ok) => {
+          if (ok) document.getElementById("local").style.display = "block";
+        });
+        document.getElementById("run-local").addEventListener("click", () => {
+          status.textContent = "Starting local mode…";
+          window.mikeDesktop.startLocal();
+        });
+      }
+      const connect = async (save) => {
+        status.textContent = "Connecting…";
+        if (save) await window.mikeDesktop.setServerUrl(input.value);
+        await window.mikeDesktop.retry();
+        // Still here after a beat → the server is still unreachable.
+        setTimeout(() => (status.textContent = "Still unreachable."), 3500);
+      };
+      document.getElementById("save").addEventListener("click", () => connect(true));
+      document.getElementById("retry").addEventListener("click", () => connect(false));
+      input.addEventListener("keydown", (e) => {
+        if (e.key === "Enter") connect(true);
+      });
+    </script>
+  </body>
+</html>

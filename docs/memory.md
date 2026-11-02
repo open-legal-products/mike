@@ -1,8 +1,9 @@
 # Scoped memory
 
-Mike can maintain one private Markdown file named `memory.md` for a user and
-one shared Markdown file for each project. Memory is optional, inspectable, and
-editable. It is reference context for later conversations; it is not a source
+Mike can maintain a private Markdown file named `memory.md` for a user in each
+workspace they use — one for Personal, and one for each organization they
+belong to — and one shared Markdown file for each project. Memory is optional,
+inspectable, and editable. It is reference context for later conversations; it is not a source
 of authorization, instructions, or citations.
 
 Memory has two separate paths:
@@ -23,8 +24,9 @@ the answer being shown to the user.
    live model runs. This prevents a curator for an older turn from committing
    while someone is still talking in the same conversation.
 2. **Relevant memory is loaded.** Private conversations may receive the active
-   user's app memory. Project conversations may also receive project memory.
-   Shared-audience conversations never receive private app memory.
+   user's app memory for the workspace the conversation is in. Project
+   conversations may also receive project memory. Shared-audience
+   conversations never receive private app memory.
 3. **Memory is fenced as data.** The files are placed in the earliest synthetic
    user message, inside delimiters the body cannot forge, and accompanied by a
    system policy that says memory is untrusted reference material. The
@@ -62,6 +64,19 @@ the answer being shown to the user.
 
 - App memory belongs to one user. Only that user can read, edit, enable,
   disable, or wipe it.
+- A user has one app memory per workspace: Personal, and one for each team
+  organization they belong to. Each is private to that user — an
+  organization's owners and admins cannot read a member's memory for it. A
+  conversation reads and learns only the memory of the workspace it is in, so
+  nothing learned in one organization can surface in another, or in
+  Personal. The database enforces this under the file's row lock
+  (`memory_source_org_id`, checked in `write_memory_file`); it is not left to
+  the prompt.
+- A workspace memory exists only while its user is a member of that
+  organization. It is tied to the membership row and is deleted with it:
+  leaving, being removed, and the organization being deleted all take it
+  away. A new one starts enabled or disabled as the user left their Personal
+  memory.
 - Project memory belongs to the project. Members with `project.view` can read
   it, members with `content.edit` can edit it, and members with
   `access.manage` can enable or destructively disable it.
@@ -70,11 +85,14 @@ the answer being shown to the user.
   its creator clears the toggle. Turning either off is destructive — see
   "Disable, wipe, and deletion".
 - A user's own standalone main chats and durable Word add-in chats may update
-  app memory. Chats and tabular reviews in a private personal project may
-  update both app and project memory. A conversation is private only while it
-  belongs to the actor, has no organization, and has no direct access grants;
-  a project is private only while it has no organization and no project
-  access grants. The same three tests gate whether app memory is shown to the
+  app memory. A standalone chat started in an organization's workspace updates
+  the user's memory for that organization; every other eligible conversation
+  updates their Personal memory. Chats and tabular reviews in a private
+  personal project may update both app and project memory. A conversation is
+  private only while it belongs to the actor and has no direct access grants,
+  and is either personal or a standalone chat in an organization the actor
+  still belongs to; a project is private only while it has no organization
+  and no project access grants. The same three tests gate whether app memory is shown to the
   model, so a conversation that cannot see private memory can never write it.
 - Organization projects and personal projects with any access grant may update
   project memory only. Their conversations never update a participant's app
@@ -94,7 +112,8 @@ permissions, change policy, or trigger tools by itself.
 ## User experience and controls
 
 - **Settings > Memory** contains the app-memory toggle and its `memory.md`
-  editor. The file saves automatically after the user stops typing; there are
+  editor for the active workspace. Switching workspace shows that workspace's
+  memory; turning one off does not affect the others. The file saves automatically after the user stops typing; there are
   no Save or Cancel buttons. Turning memory off requires confirmation and
   deletes the existing file while cancelling pending and future updates.
 - The same settings page contains the default applied when that user creates a
@@ -109,8 +128,10 @@ permissions, change policy, or trigger tools by itself.
   Automatic mode uses the effective model selected for the conversation. A
   deployment-wide `MEMORY_CURATOR_MODEL` override takes precedence.
 - **Settings > Privacy & Data** can export the app file plus every project file
-  the user can still view as a ZIP. Its Delete Memory action clears app memory
-  and memories for private projects created by that user, while leaving memory
+  the user can still view as a ZIP, with the user's memory for each
+  organization under `organizations/`. Its Delete Memory action clears the
+  user's app memory in every workspace and memories for private projects
+  created by that user, while leaving memory
   enabled so future eligible conversations can rebuild it. It does not erase
   organization or otherwise shared project memory.
 

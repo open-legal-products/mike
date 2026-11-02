@@ -63,9 +63,11 @@ services:
       # GOTRUE_SAML_ENABLED: "true"
       # GOTRUE_SAML_PRIVATE_KEY: ${GOTRUE_SAML_PRIVATE_KEY:-}
       # GOTRUE_SAML_EXTERNAL_URL: ${SUPABASE_PUBLIC_URL:-http://localhost:54321}/auth/v1
-      # Keep local signup frictionless by default. Set this to false to exercise
-      # the confirmation-email flow; the message will be caught by Mailpit.
-      GOTRUE_MAILER_AUTOCONFIRM: ${GOTRUE_MAILER_AUTOCONFIRM:-true}
+      # Off by default: shares and organization invitations are addressed by
+      # email, so an unconfirmed signup must not be able to claim an address
+      # it does not own. Confirmation mail is caught by Mailpit locally. Set
+      # this to true only for a throwaway local stack.
+      GOTRUE_MAILER_AUTOCONFIRM: ${GOTRUE_MAILER_AUTOCONFIRM:-false}
       GOTRUE_SMTP_HOST: mailpit
       GOTRUE_SMTP_PORT: "1025"
       # No SMTP_USER/PASS: Mailpit needs no auth, and GoTrue refuses to send
@@ -119,9 +121,27 @@ services:
       retries: 20
     restart: unless-stopped
 
-  # --- One-shot: load schema.sql once auth.users exists; grant service_role.
+  # --- One-shot: load schema.sql on a new volume, then apply any pending
+  # migrations with backend/scripts/migrate.sh, which records each one in
+  # public.schema_migrations so the next start skips it; grant service_role.
+  # Runs from the backend image (which carries schema.sql, migrations/ and the
+  # scripts, plus psql) rather than bind-mounting them from the checkout, so a
+  # pulled image can never be paired with another version's migrations.
   db-init:
-    image: supabase/postgres:17.6.1.136
+    # Every backend consumer (db-init, workflow-sync, backend, worker) runs the
+    # same image, so code, schema and migrations always come from one release.
+    # The default tag is the version in /VERSION; `docker compose up --build`
+    # still builds it from source (backend/src/__tests__/releaseVersion.test.ts
+    # keeps the two in step).
+    build: &backend-build
+      context: .
+      dockerfile: backend/Dockerfile
+      args:
+        # Release identity for Sentry (docs/observability.md): build args, not
+        # runtime variables, because the Dockerfile bakes them into the image.
+        MIKE_VERSION: ${MIKE_VERSION:-}
+        GIT_SHA: ${GIT_SHA:-}
+    image: &backend-image ${MIKE_IMAGE_REPO:-ghcr.io/open-legal-products}/mike-backend:${MIKE_IMAGE_TAG:-2.1.0}
     depends_on:
       db:
         condition: service_healthy
@@ -129,69 +149,26 @@ services:
         condition: service_started
     environment:
       DB: postgres://postgres:postgres@db:5432/postgres
-    volumes:
-      - ./backend/schema.sql:/schema.sql:ro
-      - ./backend/migrations/20260823_01_unified_workflow_catalog.sql:/workflow-catalog-migration.sql:ro
-      - ./backend/migrations/20260825_01_auth_handoff_tickets.sql:/auth-handoff-migration.sql:ro
-      - ./backend/migrations/20260826_01_task_model_selection.sql:/model-selection-migration.sql:ro
-      - ./backend/migrations/20260826_02_rename_last_selected_chat_model.sql:/last-selected-model-migration.sql:ro
-      - ./backend/migrations/20260826_03_chat_reasoning_selection.sql:/reasoning-selection-migration.sql:ro
-      - ./backend/migrations/20260827_01_tabular_chat_model_reasoning.sql:/tabular-chat-settings-migration.sql:ro
-      - ./backend/migrations/20260827_02_reasoning_max.sql:/reasoning-max-migration.sql:ro
-      - ./backend/migrations/20260827_03_remove_minimal_reasoning.sql:/remove-minimal-reasoning-migration.sql:ro
-      - ./backend/migrations/20260828_02_upload_sessions.sql:/upload-sessions-migration.sql:ro
-      - ./backend/migrations/20260829_01_db_jobs.sql:/db-jobs-migration.sql:ro
-      - ./backend/migrations/20260901_01_transparent_tables.sql:/transparent-tables-migration.sql:ro
-      - ./backend/migrations/20260901_02_project_visibility_scopes.sql:/project-visibility-migration.sql:ro
-      - ./backend/migrations/20260901_03_workflow_assets_as_documents.sql:/workflow-assets-migration.sql:ro
-      - ./backend/migrations/20260904_01_organization_access.sql:/organization-access-migration.sql:ro
-      - ./backend/migrations/20260904_02_migrate_legacy_sharing.sql:/legacy-sharing-migration.sql:ro
-      - ./backend/migrations/20260905_01_scoped_memory_files.sql:/scoped-memory-migration.sql:ro
-      - ./backend/migrations/20260908_01_remove_transparent_tables.sql:/remove-transparent-tables-migration.sql:ro
-      - ./backend/migrations/20260909_01_memory_safety_boundaries.sql:/memory-safety-migration.sql:ro
-      - ./backend/migrations/20260914_01_document_lifecycle.sql:/document-lifecycle-migration.sql:ro
-      - ./backend/migrations/20260915_01_cleanup_drain_and_rollout.sql:/cleanup-drain-migration.sql:ro
-      - ./backend/migrations/20260916_01_upload_document_row_created.sql:/upload-document-row-created-migration.sql:ro
-      - ./backend/migrations/20260917_01_organization_access_followup.sql:/org-access-followup-migration.sql:ro
-      - ./backend/migrations/20260917_02_memory_followup.sql:/memory-followup-migration.sql:ro
+      DATABASE_URL: postgres://postgres:postgres@db:5432/postgres
+      MIGRATIONS_DIR: /app/migrations
+      # adopt-ledger.sh (pre-ledger volumes) runs migrate.sh from here too.
+      MIGRATE_SH: /app/scripts/migrate.sh
     entrypoint: ["bash", "-c"]
     command:
       - |
         until psql "$$DB" -tAc "select to_regclass('auth.users')" | grep -q auth; do
           echo "waiting for auth schema..."; sleep 2;
         done
-        if psql "$$DB" -tAc "select to_regclass('public.user_profiles')" | grep -q user_profiles; then
-          echo "schema already applied, skipping";
-        else
-          psql "$$DB" -v ON_ERROR_STOP=1 -f /schema.sql;
+        if ! psql "$$DB" -tAc "select to_regclass('public.user_profiles')" | grep -q user_profiles; then
+          # New volume: schema.sql is the complete schema, and it records every
+          # migration it already contains in the ledger.
+          psql "$$DB" -v ON_ERROR_STOP=1 -f /app/schema.sql || exit 1;
+        elif ! psql "$$DB" -tAc "select to_regclass('public.schema_migrations')" | grep -q schema_migrations; then
+          # Volume from before the ledger: replay one last time the way
+          # db-init used to on every start, then record it.
+          bash /app/docker/db-init/adopt-ledger.sh || exit 1;
         fi
-        # Existing Compose volumes skipped schema.sql above, so replay all
-        # idempotent forward migrations before application jobs start.
-        psql "$$DB" -v ON_ERROR_STOP=1 -f /workflow-catalog-migration.sql;
-        psql "$$DB" -v ON_ERROR_STOP=1 -f /auth-handoff-migration.sql;
-        psql "$$DB" -v ON_ERROR_STOP=1 -f /model-selection-migration.sql;
-        psql "$$DB" -v ON_ERROR_STOP=1 -f /last-selected-model-migration.sql;
-        psql "$$DB" -v ON_ERROR_STOP=1 -f /reasoning-selection-migration.sql;
-        psql "$$DB" -v ON_ERROR_STOP=1 -f /tabular-chat-settings-migration.sql;
-        psql "$$DB" -v ON_ERROR_STOP=1 -f /reasoning-max-migration.sql;
-        psql "$$DB" -v ON_ERROR_STOP=1 -f /remove-minimal-reasoning-migration.sql;
-        psql "$$DB" -v ON_ERROR_STOP=1 -f /upload-sessions-migration.sql;
-        psql "$$DB" -v ON_ERROR_STOP=1 -f /db-jobs-migration.sql;
-        psql "$$DB" -v ON_ERROR_STOP=1 -f /transparent-tables-migration.sql;
-        psql "$$DB" -v ON_ERROR_STOP=1 -f /project-visibility-migration.sql;
-        psql "$$DB" -v ON_ERROR_STOP=1 -f /workflow-assets-migration.sql;
-        psql "$$DB" -v ON_ERROR_STOP=1 -f /organization-access-migration.sql;
-        psql "$$DB" -v ON_ERROR_STOP=1 -f /legacy-sharing-migration.sql;
-        if ! psql "$$DB" -tAc "select to_regclass('public.memory_files')" | grep -q memory_files; then
-          psql "$$DB" -v ON_ERROR_STOP=1 -f /scoped-memory-migration.sql;
-        fi
-        psql "$$DB" -v ON_ERROR_STOP=1 -f /remove-transparent-tables-migration.sql;
-        psql "$$DB" -v ON_ERROR_STOP=1 -f /memory-safety-migration.sql;
-        psql "$$DB" -v ON_ERROR_STOP=1 -f /document-lifecycle-migration.sql;
-        psql "$$DB" -v ON_ERROR_STOP=1 -f /cleanup-drain-migration.sql;
-        psql "$$DB" -v ON_ERROR_STOP=1 -f /upload-document-row-created-migration.sql;
-        psql "$$DB" -v ON_ERROR_STOP=1 -f /org-access-followup-migration.sql;
-        psql "$$DB" -v ON_ERROR_STOP=1 -f /memory-followup-migration.sql;
+        bash /app/scripts/migrate.sh up || exit 1;
         psql "$$DB" -c "grant usage on schema public to service_role;
           grant all privileges on all tables in schema public to service_role;
           grant all privileges on all sequences in schema public to service_role;
@@ -269,10 +246,8 @@ services:
 
   # --- One-shot: download, validate, and transactionally import mike-workflows.
   workflow-sync:
-    build:
-      context: .
-      dockerfile: backend/Dockerfile
-    image: mike-backend:local
+    build: *backend-build
+    image: *backend-image
     env_file:
       - path: ./backend/.env
         required: false
@@ -295,10 +270,8 @@ services:
         condition: service_healthy
     restart: "no"
   backend:
-    build:
-      context: .
-      dockerfile: backend/Dockerfile
-    image: mike-backend:local
+    build: *backend-build
+    image: *backend-image
     ports:
       - "${BACKEND_PORT:-3001}:3001"
     # ponytail: both optional — local dev keeps secrets in backend/.env, hosted
@@ -362,9 +335,8 @@ services:
   # BullMQ partitions per connection and the DB queue claims with
   # FOR UPDATE SKIP LOCKED, so replicas divide jobs, never duplicate them.
   # worker:
-  #   build:
-  #     context: .
-  #     dockerfile: backend/Dockerfile
+  #   build: *backend-build
+  #   image: *backend-image
   #   command: ["node", "dist/worker.js"]
   #   env_file:
   #     - path: ./backend/.env
@@ -394,8 +366,35 @@ services:
       # definitions from backend/src (see frontend/Dockerfile).
       context: .
       dockerfile: frontend/Dockerfile
+      args:
+        # Release identity (docs/observability.md), as for the backend image.
+        MIKE_VERSION: ${MIKE_VERSION:-}
+        # The browser-side Sentry DSN is inlined by `next build`, so it is a
+        # build argument, not a runtime variable (docs/observability.md).
+        NEXT_PUBLIC_SENTRY_DSN: ${FRONTEND_SENTRY_DSN:-}
+        NEXT_PUBLIC_SENTRY_ENVIRONMENT: ${SENTRY_ENVIRONMENT:-}
+        NEXT_PUBLIC_SENTRY_RELEASE: ${SENTRY_RELEASE:-}
+        # Opt-out and install kind reach the browser bundle at build time.
+        NEXT_PUBLIC_SENTRY_DISABLED: ${SENTRY_DISABLED:-}
+        NEXT_PUBLIC_SENTRY_INSTALL: ${SENTRY_INSTALL:-}
+        GIT_SHA: ${GIT_SHA:-}
+        # Sentry source-map upload (docs/observability.md); the token is the
+        # build secret below.
+        SENTRY_ORG: ${SENTRY_ORG:-}
+        SENTRY_PROJECT: ${SENTRY_PROJECT:-}
+        SENTRY_UPLOAD_ENABLED: ${SENTRY_UPLOAD_ENABLED:-0}
+      secrets:
+        - SENTRY_AUTH_TOKEN
+    # Same default tag as the backend image; pull both or build both.
+    image: ${MIKE_IMAGE_REPO:-ghcr.io/open-legal-products}/mike-frontend:${MIKE_IMAGE_TAG:-2.1.0}
     environment:
       - API_BASE_URL=${API_BASE_URL:-http://backend:3001}
+      # Next server side (the /api gateway); same project as the browser.
+      - SENTRY_DISABLED=${SENTRY_DISABLED:-}
+      - SENTRY_INSTALL=${SENTRY_INSTALL:-}
+      - SENTRY_DSN=${FRONTEND_SENTRY_DSN:-}
+      - SENTRY_ENVIRONMENT=${SENTRY_ENVIRONMENT:-}
+      - SENTRY_RELEASE=${SENTRY_RELEASE:-}
     ports:
       # Dokploy's own dashboard occupies 3000 — set FRONTEND_PORT there.
       - "${FRONTEND_PORT:-3000}:3000"
@@ -407,3 +406,8 @@ volumes:
   db_data:
   storage_data:
   redis_data:
+
+secrets:
+  SENTRY_AUTH_TOKEN:
+    # Must be exported/injected into the Compose process, not only in .env.
+    environment: SENTRY_AUTH_TOKEN

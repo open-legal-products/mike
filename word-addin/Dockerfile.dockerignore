@@ -1,0 +1,22 @@
+# BuildKit per-Dockerfile ignore (context is the repo root — see Dockerfile).
+# The build reads word-addin/, frontend/src/shared, frontend/public/icons and
+# packages/contracts; everything else stays out of the context.
+**/node_modules
+**/dist
+**/.next
+**/.open-next
+**/out
+**/build
+**/coverage
+**/test-results
+**/playwright-report
+.git
+backend
+desktop
+docs
+e2e
+word-addin/e2e
+word-addin/e2e-live
+**/.env
+**/.env.*
+**/*.log

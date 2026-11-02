@@ -1,10 +1,10 @@
-// Data export (the route owns the Content-Type / Content-Disposition headers
-// and filenames; these functions just build the payloads).
+// Data export: scheduling the durable export jobs, polling their status and
+// loading the finished artifact.
 //
 // Service layer behind user.routes.ts — see user.shared.ts for the module's
 // contract.
 
-import { AUDIT_EXPORT_LIMIT, parseQuery } from "../../lib/auditExport";
+import { AUDIT_EXPORT_LIMIT, canReadOrgAudit, parseQuery, type AuditQuery } from "../../lib/auditExport";
 import { enqueueDbJob } from "../../lib/dbq/enqueue";
 import {
     EXPORT_TYPES,
@@ -13,72 +13,15 @@ import {
 } from "./user.exportContracts";
 import type { DbJob } from "../../lib/dbq/types";
 import { downloadFile } from "../../lib/storage";
-import {
-    buildUserAccountExport,
-    buildUserChatsExport,
-    buildUserTabularReviewsExport,
-} from "./user.dataExport";
+import { AppError } from "../../lib/appError";
 import { type Db, errorMessage } from "./user.shared";
-
-export async function exportUserAccount(
-    db: Db,
-    userId: string,
-    userEmail: string | undefined,
-): Promise<{ ok: true; data: unknown } | { ok: false; error: unknown }> {
-    try {
-        const data = await buildUserAccountExport(db, userId, userEmail);
-        return { ok: true, data };
-    } catch (err) {
-        const detail = errorMessage(err);
-        console.error("[user/export] failed", { userId, error: detail });
-        return { ok: false, error: err };
-    }
-}
-
-export async function exportUserChats(
-    db: Db,
-    userId: string,
-    userEmail: string | undefined,
-): Promise<{ ok: true; data: unknown } | { ok: false; error: unknown }> {
-    try {
-        const data = await buildUserChatsExport(db, userId, userEmail);
-        return { ok: true, data };
-    } catch (err) {
-        const detail = errorMessage(err);
-        console.error("[user/chats/export] failed", {
-            userId,
-            error: detail,
-        });
-        return { ok: false, error: err };
-    }
-}
-
-export async function exportUserTabularReviews(
-    db: Db,
-    userId: string,
-    userEmail: string | undefined,
-): Promise<{ ok: true; data: unknown } | { ok: false; error: unknown }> {
-    try {
-        const data = await buildUserTabularReviewsExport(db, userId, userEmail);
-        return { ok: true, data };
-    } catch (err) {
-        const detail = errorMessage(err);
-        console.error("[user/tabular-reviews/export] failed", {
-            userId,
-            error: detail,
-        });
-        return { ok: false, error: err };
-    }
-}
 
 // ---------------------------------------------------------------------------
 // Async exports (durable): POST creates a DB-queue job that builds the
 // export off the request thread; GET polls it; the download endpoint streams
-// the finished artifact. The synchronous exports above still work (curl
-// users, older clients) — the frontend uses this flow so a large export can
-// neither time out the request nor die with a dropped tab. Artifacts expire
-// after 24 hours (the runner's retention sweep deletes the file and the job
-// row).
+// the finished artifact, so a large export can neither time out the request
+// nor die with a dropped tab. Artifacts expire after 24 hours (the runner's
+// retention sweep deletes the file and the job row).
 
 export type ValidateExportRequestResult =
     | { ok: true; type: ExportType; payload: Record<string, unknown> }
@@ -112,7 +55,7 @@ export function validateExportRequest(input: {
         type,
     };
     if (type === "audit-csv") {
-        // Same validation the sync GET /audit/export route applies.
+        // Same filter validation GET /audit applies, capped at one CSV page.
         const parsed = parseQuery(params, AUDIT_EXPORT_LIMIT);
         if (!parsed.ok) return { ok: false, detail: parsed.error };
         payload.query = parsed.query;
@@ -140,7 +83,9 @@ export function validateExportRequest(input: {
 
 export type StartUserExportResult =
     | { ok: true; exportId: string }
-    | { ok: false; detail: string };
+    | { ok: false; detail: string; forbidden: true }
+    /** The enqueue failed; `error` is what the route hands sendInternalError. */
+    | { ok: false; detail: string; forbidden?: undefined; error: AppError };
 
 /** Enqueues the durable build job for an already-validated export request. */
 export async function startUserExport(
@@ -152,30 +97,40 @@ export async function startUserExport(
     },
 ): Promise<StartUserExportResult> {
     const { userId, type, payload } = input;
+    const orgId = (payload.query as AuditQuery | undefined)?.orgId;
+    if (orgId && !(await canReadOrgAudit(db, userId, orgId)))
+        return { ok: false, forbidden: true, detail: "Only organization owners and admins can export its audit log." };
     try {
-        // Deduped per (user, type) for the whole-account exports: double
+        // Deduped per (user, type, workspace) for the Settings exports: double
         // clicks and impatient retries collapse into the already-running
         // build. The filtered exports opt out — two requests differing
         // only in their filters or selection are different artifacts.
+        // Each workspace's export is its own artifact.
         const dedupeKey =
             type === "audit-csv" || type === "documents-zip"
                 ? undefined
-                : `export:${userId}:${type}`;
+                : `export:${userId}:${type}:${typeof payload.orgId === "string" ? payload.orgId : "personal"}`;
         const out = await enqueueDbJob(db, {
             kind: "export.build",
             payload,
             dedupeKey,
             maxAttempts: 3,
         });
-        if (!out.id) return { ok: false, detail: "Failed to schedule export" };
+        if (!out.id)
+            return {
+                ok: false,
+                detail: "Failed to schedule export",
+                error: new AppError("export.failed", "export enqueue returned no job id"),
+            };
         return { ok: true, exportId: out.id };
     } catch (err) {
-        const detail = errorMessage(err);
-        console.error("[user/exports] enqueue failed", {
-            userId,
-            error: detail,
-        });
-        return { ok: false, detail };
+        // One event, from the route's sendInternalError: the kind names the
+        // flow, the cause keeps the enqueue error's own code.
+        return {
+            ok: false,
+            detail: errorMessage(err),
+            error: new AppError("export.failed", "export enqueue failed", { cause: err }),
+        };
     }
 }
 
@@ -195,6 +150,8 @@ async function loadOwnExportJob(
         .maybeSingle();
     if (!job || (job.payload as { userId?: string })?.userId !== userId)
         return null;
+    const orgId = (job.payload as { query?: AuditQuery })?.query?.orgId;
+    if (orgId && !(await canReadOrgAudit(db, userId, orgId))) return null;
     return job as Pick<DbJob, "id" | "status" | "result">;
 }
 

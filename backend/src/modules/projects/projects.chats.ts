@@ -21,7 +21,7 @@ export async function listProjectChats(
     .from("chats")
     .select("*")
     .eq("project_id", projectId)
-    .order("created_at", { ascending: false });
+        .order("updated_at", { ascending: false });
   if (error) return { ok: false, kind: "db_error", error };
   const chats = data ?? [];
   await attachChatCreatorLabels(db, chats);

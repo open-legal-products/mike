@@ -5,7 +5,23 @@ import type {
 } from "../types";
 import type { RedlineEdit } from "./redline";
 
+export type WordChatStorageMode = "cloud" | "local";
 export type WorkflowAttachment = { id: string; title: string };
+export type PlaybookAttachment = { id: string; title: string };
+
+/**
+ * Opening a stored chat in the pane. `activeTurnId` is set when the server is
+ * still generating an answer into it — a pane that was closed mid-answer, or
+ * a chat opened from history while its answer runs — and the pane reattaches
+ * to that turn instead of showing a transcript with the answer missing.
+ */
+export type WordChatOpenHandler = (
+  chatId: string,
+  messages: SavedMessage[],
+  model: string | null,
+  reasoningLevel: ReasoningLevel | null,
+  activeTurnId?: string | null,
+) => void;
 export type ReasoningLevel =
   | "none"
   | "low"
@@ -37,6 +53,10 @@ export type EditCardStatus =
   | "ambiguous"
   | "unsearchable"
   | "conflicted"
+  /** Skipped because the document already carries this exact edit. */
+  | "already-applied"
+  /** Word faulted mid-apply and nothing could prove whether it landed. */
+  | "unverified"
   | "incomplete"
   | "unmanaged"
   | "error"
@@ -61,6 +81,7 @@ interface RuntimeMessageBase {
   id: string;
   files?: SavedMessage["files"];
   workflow?: SavedMessage["workflow"];
+  playbook?: SavedMessage["playbook"];
   /** Only the current streamed turn may mutate the live Word document. */
   live?: boolean;
 }
@@ -86,6 +107,8 @@ export interface WordChatSubmission {
   content: string;
   files?: { filename: string; document_id?: string }[];
   workflow?: WorkflowAttachment;
+  /** A playbook to run, sent as `{ id, title }` like a workflow. */
+  playbook?: PlaybookAttachment;
   model: string;
   reasoning: ReasoningLevel;
 }
@@ -211,6 +234,11 @@ export interface WordAssistantChatController {
     submission: WordChatSubmission,
     options?: WordChatSubmitOptions,
   ) => Promise<void>;
+  /**
+   * Attach to a turn the server is already generating into `chatId`. Used
+   * when a pane reopens on a chat whose answer is still running.
+   */
+  resumeTurn: (args: { chatId: string; turnId: string }) => Promise<void>;
   cancel: () => void;
   dismissRequestError: () => void;
 }

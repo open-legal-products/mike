@@ -1,5 +1,11 @@
 // Authored wire contracts. No server, browser, UI or storage dependencies.
 
+export type TabularReviewHistoryStatus = {
+  id: string;
+  is_running: boolean;
+  is_complete: boolean;
+};
+
 export type SourceDocumentType =
   | "docx"
   | "pdf"
@@ -106,6 +112,48 @@ export type AskInputItem =
       kind: "documents";
       document_types: string[];
       response_prefix?: string;
+    }
+  | ConnectorApprovalItem;
+
+/**
+ * A connector write the server paused for the user's approval. The server
+ * creates these items, never the model's ask_inputs tool, and on approval it
+ * runs the stored `action` from the persisted event — the client supplies
+ * only the decision.
+ */
+export type ConnectorApprovalItem = {
+  id: string;
+  kind: "approval";
+  connector_name: string;
+  /** Tool name as the model called it. */
+  tool_name: string;
+  /** Human-readable action label, e.g. "Send email". */
+  title: string;
+  /** Arguments that run on approval, shown for review. */
+  arguments: Record<string, unknown>;
+  /** Current state the action changes, when the connector can read it. */
+  before?: unknown;
+  /** Account the action runs as, when known. */
+  account?: string;
+  /** Title of the delegated task that asked for this action, if a subagent did. */
+  requested_by?: string;
+  /** Server-side binding to the connection that was reviewed. */
+  binding: ConnectorApprovalBinding;
+};
+
+export type ConnectorApprovalBinding =
+  | {
+      type: "mcp";
+      connector_id: string;
+      tool_id: string;
+      /** Absent on legacy approvals, which must be reviewed again. */
+      connection_fingerprint?: string;
+    }
+  | {
+      type: "google";
+      provider: GoogleWorkspaceProvider | "google-drive";
+      grant_id: string;
+      etag?: string;
     };
 
 export type AskInputsEvent = {
@@ -142,6 +190,11 @@ export type AskInputResponseItem =
       kind: "documents";
       filenames: string[];
       skipped?: boolean;
+    }
+  | {
+      id: string;
+      kind: "approval";
+      decision: "approve" | "reject";
     };
 
 export type AskInputsResponseRequest = {
@@ -238,12 +291,139 @@ export type McpToolEvent = {
   connector_id: string;
   connector_name: string;
   tool_name: string;
+  /** Human-readable tool label from the connector, when it provides one. */
+  tool_title?: string;
   openai_tool_name: string;
   status: "ok" | "error";
   error?: string;
+  /** The approval item this call ran for, when it needed the user's approval. */
+  approval_id?: string;
+  /** Bounded tool output replayed to the model after an approved call. */
+  result?: string;
+};
+
+export type WebSource = { url: string; title?: string };
+
+export type WebToolErrorCode =
+  /** Mike's search has no key for the chosen search service. */
+  | "not_configured"
+  /** The search API refused the key: invalid, or its plan does not cover the request. */
+  | "rejected"
+  /** No search backend could run, or the model provider refused its own search. */
+  | "unavailable"
+  /** The page could not be read: a blocked address, an unsupported type, a failed fetch. */
+  | "unreadable"
+  | "failed";
+
+/**
+ * Web activity in a turn. A search done by the model provider and one done
+ * by Mike's own search look the same.
+ */
+export type WebToolEvent =
+  | {
+      type: "web_search";
+      search_id: string;
+      query: string;
+      results: WebSource[];
+      error?: string;
+      error_code?: WebToolErrorCode;
+    }
+  | {
+      type: "web_read";
+      read_id: string;
+      url: string;
+      title?: string;
+      error?: string;
+      error_code?: WebToolErrorCode;
+    }
+  /** Pages the answer cites, as reported by the model provider. */
+  | { type: "web_sources"; sources: WebSource[] };
+
+export type DelegationEffort = "quick" | "standard" | "deep";
+export type DelegationModelTier = "light" | "standard" | "same";
+
+/**
+ * One delegated task: a subagent's own steps and the brief it returned to the
+ * assistant. The brief keeps the subagent's citation markers; the assistant
+ * re-cites anything it relies on.
+ */
+export type DelegationEvent = {
+  type: "delegation";
+  delegation_id: string;
+  continued_from?: string;
+  title: string;
+  task: string;
+  /**
+   * `incomplete`: stopped by its time or token budget; the brief is partial.
+   * `needs_input`: paused to ask `question` or for `approval_ids`.
+   */
+  status: "completed" | "incomplete" | "needs_input" | "failed" | "cancelled";
+  brief?: string;
+  question?: string;
+  /** Approval items, held by the answer, that this paused subagent waits on. */
+  approval_ids?: string[];
+  events: AssistantEvent[];
+  model: string;
+  effort: DelegationEffort;
+  /** The reasoning level the subagent ran at. Older runs did not record it. */
+  reasoning?: string;
+  /** The tokens its effort allowed. Older runs did not record it. */
+  token_budget?: number;
+  usage?: { input_tokens: number; output_tokens: number };
+};
+
+/**
+ * What an answer ran on, sent once at its end: the model, the reasoning level
+ * it was asked for, and the tokens the assistant itself used (each subagent
+ * reports its own on its delegation event). Shown only when the user turns on
+ * Settings > Features > Response details.
+ */
+export type ResponseDetailsEvent = {
+  type: "response_details";
+  model: string;
+  reasoning?: string;
+  usage?: { input_tokens: number; output_tokens: number };
+};
+
+export type DocumentSearchErrorCode =
+  | "schema_out_of_date"
+  | "invalid_search"
+  | "search_timeout"
+  | "search_unavailable"
+  | "internal_error";
+
+/** One scoped text search; counts describe this page, not every matching document. */
+export type DocumentSearchEvent = {
+  type: "doc_search";
+  search_id: string;
+  scope: string;
+  query: string;
+  offset: number;
+  match_count?: number;
+  next_offset?: number | null;
+  coverage?: {
+    total_versions: number;
+    indexed_versions: number;
+    pending_versions: number;
+    failed_versions: number;
+    versions_needing_ocr: number;
+  };
+  /** Safe, user-facing failure message. No result count is supplied on failure. */
+  error?: string;
+  error_code?: DocumentSearchErrorCode;
+};
+
+export type TextCardEvent = {
+  type: "text_card";
+  card_id: string;
+  title: string;
+  /** Literal, copy-ready text. Whitespace and line breaks are significant. */
+  text: string;
 };
 
 export type AssistantEvent =
+  | TextCardEvent
+  | DocumentSearchEvent
   | { type: "reasoning"; text: string }
   | AskInputsEvent
   | {
@@ -306,6 +486,9 @@ export type AssistantEvent =
   | CaseCitationEvent
   | CourtlistenerToolEvent
   | McpToolEvent
+  | WebToolEvent
+  | DelegationEvent
+  | ResponseDetailsEvent
   | {
       type: "case_opinions";
       cluster_id: number;
@@ -338,6 +521,14 @@ export type AssistantEvent =
        * "invalid_api_key": the provider rejected the caller's key.
        */
       code?: AssistantErrorCode;
+      /**
+       * The server's request id for the turn that failed (also the
+       * X-Request-ID header), so a user can quote it to support. Only on the
+       * terminal error frame a route writes; never on a persisted event.
+       */
+      request_id?: string;
+      /** Reporting responsibility, not confirmation of telemetry delivery. Absent on older servers. */
+      reporting_owner?: "backend";
     };
 
 export type AssistantErrorCode = "invalid_api_key";
@@ -363,3 +554,188 @@ export interface WordDocumentEdit {
 }
 
 export type WordEditResolutionStatus = "accepted" | "rejected";
+
+/** Explicit Google service connections are independent of Mike sign-in. */
+export type GoogleWorkspaceProvider = 'gmail' | 'google-calendar';
+export interface GoogleDriveStatus {
+    configured: boolean;
+    /**
+     * False when the operator switched Drive off for the deployment
+     * (GOOGLE_WORKSPACE_DISABLED_PROVIDERS): Discover does not offer it, new
+     * connections and Picker sessions are refused, and the assistant has none
+     * of its tools.
+     */
+    available: boolean;
+    schemaReady?: boolean;
+    connected: boolean;
+    scope: string | null;
+    enabled: boolean;
+    /** A Drive write scope (drive.file or legacy full drive) was granted and connection binding is available. */
+    writeEnabled: boolean;
+    requireWriteApproval: boolean;
+    /** Disables write tools while preserving individual tool choices. */
+    readOnly?: boolean;
+    grantId?: string;
+    /** Absent for connections made before the account was recorded. */
+    accountEmail?: string;
+    /**
+     * Add files from Google Drive can be offered: the server has the Picker's
+     * browser key and app id, and the connection (if any) holds the per-file
+     * drive.file scope rather than a legacy whole-Drive one.
+     */
+    pickerAvailable: boolean;
+    tools: NativeConnectorTool[];
+    redirectUri?: string | null;
+}
+/** What the browser needs to open the Google Picker; never a refresh token. */
+export interface GoogleDrivePickerSession {
+    /** Short-lived drive.file access token. */
+    accessToken: string;
+    expiresAt: string;
+    /** Google Cloud project number; picked files are granted to this app. */
+    appId: string;
+    /** Browser API key restricted to the Google Picker and Google Drive APIs. */
+    developerKey: string;
+}
+export interface GoogleWorkspaceStatus {
+    configured: boolean;
+    /**
+     * False when the operator switched this service off for the deployment
+     * (GOOGLE_WORKSPACE_DISABLED_PROVIDERS): Discover does not offer it, new
+     * connections are refused, and the assistant has none of its tools.
+     */
+    available: boolean;
+    schemaReady: boolean;
+    connected: boolean;
+    /** Google granted write access; false when the user or an admin withheld it. */
+    writeEnabled: boolean;
+    /** Whether the assistant may use this connection at all. */
+    enabled: boolean;
+    /** Whether each write action waits for the user's approval in the conversation. */
+    requireWriteApproval: boolean;
+    /** Disables write tools while preserving individual tool choices. */
+    readOnly?: boolean;
+    tools: NativeConnectorTool[];
+    grantId?: string;
+    accountEmail?: string;
+    redirectUri: string | null;
+}
+/** The CourtListener connector in one workspace (GET /user/integrations/courtlistener). */
+export interface CourtListenerConnectorStatus {
+    /** The workspace's on/off switch for US case law research. */
+    enabled: boolean;
+    /**
+     * Listed under Installed: switched on with a usable token here (the
+     * user's or the organization's) or the deployment's bulk index, or the
+     * user has saved their own token here. Otherwise it is offered in Discover.
+     */
+    installed: boolean;
+    /** The user saved their own token for this workspace. */
+    ownToken: boolean;
+    /** Whose token lookups run on: the user's own or their organization's. */
+    tokenSource: "user" | "org" | null;
+    /** The deployment answers lookups from its bulk index. */
+    bulkData: boolean;
+}
+/** A built-in connector tool and whether the user has switched it on. */
+export interface NativeConnectorTool {
+    name: string;
+    title: string;
+    description: string;
+    write: boolean;
+    enabled: boolean;
+}
+
+/** Organization departure preview: only public transfer items expose titles. */
+export interface OrgMemberHandover {
+    sharedChats: number;
+    sharedReviews: number;
+    sharedDocuments: number;
+    projects: { id: string; title: string }[];
+    workflows: { id: string; title: string }[];
+    privateProjects: number;
+    privateWorkflows: number;
+    chats: number;
+    reviews: number;
+    documents: number;
+}
+
+export type OrgPrivateContentKind = "project" | "workflow" | "chat" | "tabular_review" | "document";
+export interface OrgPrivateContentItem {
+    kind: OrgPrivateContentKind;
+    item_id: string;
+    title: string | null;
+    user_id: string | null;
+    display_name: string | null;
+    email: string | null;
+    has_access: boolean;
+}
+export interface OrgPrivateContentPage {
+    items: OrgPrivateContentItem[];
+    nextOffset: number | null;
+}
+
+/** Owner-only recovery list; these items are excluded from normal access. */
+export interface OrgDepartureArchive {
+    id: string;
+    kind: "project" | "workflow" | "chat" | "tabular_review" | "document";
+    item_id: string;
+    title: string;
+    archived_at: string;
+    expires_at: string;
+}
+export interface OrgDepartureArchivePage {
+    items: OrgDepartureArchive[];
+    nextOffset: number | null;
+}
+/** An archived item as the Departed members view lists it. */
+export interface OrgDepartureItem extends OrgDepartureArchive {
+    /** What a project or workflow holds; absent for the other kinds. */
+    contents?: { documents: number; chats: number; tabular_reviews: number };
+}
+/** The archived work one member left behind when they departed. */
+export interface OrgDeparture {
+    /** Identifies the departure for as long as any of its work is archived. */
+    key: string;
+    /** Null once the departed account has been deleted. */
+    member: {
+        user_id: string;
+        display_name: string | null;
+        email: string | null;
+    } | null;
+    departed_at: string;
+    /** When the earliest of its items is permanently deleted. */
+    expires_at: string;
+    items: OrgDepartureItem[];
+}
+/** Soonest deletion first. `truncated` when there was more than is listed. */
+export interface OrgDepartureList {
+    departures: OrgDeparture[];
+    truncated: boolean;
+}
+/** `unresolved` items could not be reassigned or deleted and are still archived. */
+export interface OrgDepartureResolution {
+    resolved: number;
+    unresolved: number;
+}
+
+/** A team organization still inside its owner-only recovery period. */
+export interface DeletedOrganization {
+    id: string;
+    name: string;
+    deleted_at: string;
+    purge_after: string;
+}
+
+/** An identity visible in an authorized organization's audit history. */
+export interface AuditActor {
+  user_id: string;
+  email: string | null;
+  display_name: string | null;
+  profile_photo: string | null;
+}
+
+export interface AuditActorPage {
+  users: AuditActor[];
+  nextOffset: number | null;
+}

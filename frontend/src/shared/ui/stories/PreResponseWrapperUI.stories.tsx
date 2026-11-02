@@ -50,3 +50,18 @@ export const Minimized = () => (
         </PreResponseWrapperUI>
     </div>
 );
+
+export const LongActivity = () => (
+    <div className="w-full max-w-[30rem]">
+        <PreResponseWrapperUI stepCount={24} shouldMinimize={false} isStreaming={false}>
+            {Array.from({ length: 24 }, (_, index) => (
+                <DocReadBlockUI
+                    key={index}
+                    filename={`Services Agreement ${index + 1}.docx`}
+                    showConnector={index < 23}
+                    fileIcon={<FileText aria-hidden="true" className="h-3.5 w-3.5" />}
+                />
+            ))}
+        </PreResponseWrapperUI>
+    </div>
+);

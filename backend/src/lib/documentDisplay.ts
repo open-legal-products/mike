@@ -4,10 +4,7 @@ import {
   contentTypeForDocumentType,
   shouldConvertToPdf,
 } from "./documentTypes";
-import {
-  buildContentDisposition,
-  downloadFile,
-} from "./storage";
+import { buildContentDisposition, downloadFile, downloadFileIfAvailable } from "./storage";
 
 export interface DocumentDisplaySource {
   filename: string;
@@ -78,7 +75,7 @@ export async function loadDocumentDisplay(
 
   if (convertToPdf) {
     if (source.pdfStoragePath) {
-      const pdfBytes = await downloadFile(source.pdfStoragePath);
+      const pdfBytes = await downloadFileIfAvailable(source.pdfStoragePath);
       if (pdfBytes) {
         return {
           bytes: Buffer.from(pdfBytes),

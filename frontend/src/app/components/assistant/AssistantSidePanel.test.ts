@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vitest";
 import {
     assistantSidePanelTabId,
+    defaultAssistantSidePanelWidth,
+    maxAssistantSidePanelWidth,
     mergeAssistantSidePanelTab,
     reorderAssistantSidePanelTabs,
     upsertAssistantSidePanelTab,
@@ -32,9 +34,9 @@ describe("mergeAssistantSidePanelTab", () => {
         expect(mergeAssistantSidePanelTab(existing, incoming)).toBe(existing);
     });
 
-    it("does not merge a different version of the same document", () => {
+    it("replaces the displayed version in the same document tab", () => {
         const existing = documentTab();
-        const incoming = documentTab("document-1::id:version-2");
+        const incoming = documentTab();
         incoming.document.version_id = "version-2";
         incoming.document.version_number = 2;
 
@@ -43,7 +45,7 @@ describe("mergeAssistantSidePanelTab", () => {
 
     it("changes citation context while preserving state for the same version", () => {
         const existing: AssistantSidePanelTab = {
-            ...documentTab("document-1::id:citation-version"),
+            ...documentTab(),
             document: {
                 ...documentTab().document,
                 version_id: "citation-version",
@@ -53,7 +55,7 @@ describe("mergeAssistantSidePanelTab", () => {
             initialScrollTop: 240,
         };
         const incoming: AssistantSidePanelTab = {
-            ...documentTab("document-1::id:citation-version"),
+            ...documentTab(),
             kind: "citation",
             document: {
                 ...documentTab().document,
@@ -76,7 +78,7 @@ describe("mergeAssistantSidePanelTab", () => {
 
         expect(mergeAssistantSidePanelTab(existing, incoming)).toMatchObject({
             kind: "citation",
-            id: "document-1::id:citation-version",
+            id: "document-1",
             document: {
                 document_id: "document-1",
                 version_id: "citation-version",
@@ -89,35 +91,28 @@ describe("mergeAssistantSidePanelTab", () => {
 });
 
 describe("versioned panel tab identity", () => {
-    it("uses different ids for different versions of one document", () => {
+    it("uses one id for every version of a document", () => {
         const versionOne = documentTab().document;
         versionOne.version_id = "version-1";
         const versionTwo = { ...versionOne, version_id: "version-2" };
 
-        expect(assistantSidePanelTabId(versionOne)).not.toBe(
+        expect(assistantSidePanelTabId(versionOne)).toBe(
             assistantSidePanelTabId(versionTwo),
         );
     });
 
-    it("opens a second tab when another version is already open", () => {
-        const first = documentTab("document-1::id:version-1");
+    it("reuses the tab when another version is opened", () => {
+        const first = documentTab();
         first.document.version_id = "version-1";
-        const second = documentTab("document-1::id:version-2");
+        const second = documentTab();
         second.document.version_id = "version-2";
 
-        expect(upsertAssistantSidePanelTab([first], second)).toEqual([
-            first,
-            second,
-        ]);
+        expect(upsertAssistantSidePanelTab([first], second)).toEqual([second]);
     });
 });
 
 describe("reorderAssistantSidePanelTabs", () => {
-    const tabs = [
-        documentTab("a"),
-        documentTab("b"),
-        documentTab("c"),
-    ];
+    const tabs = [documentTab("a"), documentTab("b"), documentTab("c")];
 
     it("moves a tab before the drop target", () => {
         expect(
@@ -144,8 +139,27 @@ describe("reorderAssistantSidePanelTabs", () => {
     });
 
     it("keeps the existing array when the drop does not change order", () => {
-        expect(
-            reorderAssistantSidePanelTabs(tabs, "a", "b", "before"),
-        ).toBe(tabs);
+        expect(reorderAssistantSidePanelTabs(tabs, "a", "b", "before")).toBe(
+            tabs,
+        );
+    });
+});
+
+describe("side panel width", () => {
+    it("opens at half the page beside one chat", () => {
+        expect(defaultAssistantSidePanelWidth(1456, 1)).toBe(700);
+    });
+
+    it("opens at two fifths of the page beside two chats", () => {
+        expect(defaultAssistantSidePanelWidth(1456, 2)).toBe(560);
+        expect(defaultAssistantSidePanelWidth(2056, 2)).toBe(800);
+    });
+
+    it("leaves every chat its minimum width", () => {
+        expect(maxAssistantSidePanelWidth(1456, 1)).toBe(1000);
+        expect(maxAssistantSidePanelWidth(1456, 2)).toBe(600);
+        // Never below the panel's own minimum, however narrow the page.
+        expect(maxAssistantSidePanelWidth(900, 2)).toBe(300);
+        expect(defaultAssistantSidePanelWidth(1100, 2)).toBe(300);
     });
 });

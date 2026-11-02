@@ -4,6 +4,7 @@ import { createPortal } from "react-dom";
 import { useEffect, useId, type ReactNode } from "react";
 import { Trash2 } from "lucide-react";
 import { PillButtonUI } from "@/shared/ui/PillButtonUI";
+import { CloseButton } from "@/shared/ui/CloseButton";
 import { cn } from "@/app/lib/utils";
 import { LIQUID_GLASS_FLOAT_CLASS } from "@/shared/ui/LiquidGlassUI";
 
@@ -90,17 +91,23 @@ export function ConfirmPopup({
         aria-labelledby={title ? titleId : undefined}
         aria-label={title ? undefined : "Confirm action"}
         className={cn(
-          `pointer-events-auto w-[min(92vw,520px)] rounded-2xl px-4 py-3 text-sm ${LIQUID_GLASS_FLOAT_CLASS} backdrop-blur-2xl`,
+          `pointer-events-auto relative w-[min(92vw,520px)] rounded-2xl p-2.5 pl-3 text-sm ${LIQUID_GLASS_FLOAT_CLASS}`,
           className,
         )}
       >
+        <CloseButton
+          onClick={onCancel}
+          label="Close confirmation"
+          size="sm"
+          className="absolute right-2.5 top-2.5"
+        />
         {title && (
-          <div id={titleId} className="text-sm font-medium text-gray-950 mb-3">
+          <div id={titleId} className="pr-4 text-sm font-medium text-gray-950 mb-3">
             {title}
           </div>
         )}
         {message && (
-          <div className={cn("text-xs text-gray-700", title && "mt-1")}>
+          <div className={cn("pr-4 text-xs text-gray-700", title && "mt-1")}>
             {message}
           </div>
         )}

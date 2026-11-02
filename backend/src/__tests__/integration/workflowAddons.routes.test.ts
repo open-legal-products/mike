@@ -2,7 +2,7 @@ import express from "express";
 import request from "supertest";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-const { from, eq, downloadFile, uploadFile, deleteFile, docxToPdf } =
+const { from, eq, downloadFile, uploadFile, deleteFile, docxToPdf, reportError } =
   vi.hoisted(() => ({
     from: vi.fn(),
     eq: vi.fn(),
@@ -10,7 +10,13 @@ const { from, eq, downloadFile, uploadFile, deleteFile, docxToPdf } =
     uploadFile: vi.fn(),
     deleteFile: vi.fn(),
     docxToPdf: vi.fn(),
+    reportError: vi.fn(),
   }));
+
+vi.mock("../../lib/observability/sentry", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../lib/observability/sentry")>()),
+  reportError,
+}));
 
 vi.mock("../../lib/supabase", () => ({
   createServerSupabase: () => ({ from, rpc: async (name: string, args: { p_document_id: string; p_version: Record<string, unknown> }) => {
@@ -45,6 +51,7 @@ vi.mock("../../lib/convert", async (importOriginal) => {
   return { ...actual, docxToPdf };
 });
 
+import { AppError } from "../../lib/appError";
 import { workflowAddonsRouter } from "../../modules/workflows/workflowAddons.routes";
 
 function queryReturning(data: unknown[]) {
@@ -237,6 +244,65 @@ describe("workflow add-on catalog routes", () => {
       }),
     ]);
     expect(docxToPdf).toHaveBeenCalledOnce();
+  });
+
+  it("answers a fixed 500 for a failed asset copy and reports it once, with the cause", async () => {
+    const consoleError = vi
+      .spyOn(console, "error")
+      .mockImplementation(() => undefined);
+    const cause = Object.assign(new Error("bucket gone"), { name: "NoSuchKey" });
+    downloadFile.mockRejectedValue(cause);
+    from.mockImplementation((table: string) => {
+      if (table === "mike_workflows") {
+        return singleQueryReturning({
+          id: "c0a7a1e1-0000-4000-8000-000000000001",
+          title: "Design Partner Draft",
+          type: "assistant",
+          prompt_md: "Draft from the precedent.",
+          columns_config: null,
+          language: "English",
+          practice: "General Transactions",
+          jurisdictions: ["General"],
+        });
+      }
+      if (table === "workflows") {
+        return singleQueryReturning({ id: "workflow-1", user_id: "u1" });
+      }
+      if (table === "mike_workflow_assets") {
+        return queryReturning([
+          {
+            filename: "Precedent.docx",
+            file_type: "docx",
+            storage_path: "mike-workflows/c0a7a1e1-0000-4000-8000-000000000001/precedent.docx",
+            size_bytes: 9,
+          },
+        ]);
+      }
+      throw new Error(`Unexpected table ${table}`);
+    });
+
+    try {
+      const response = await request(app).post(
+        "/workflow-addons/c0a7a1e1-0000-4000-8000-000000000001/import",
+      );
+
+      expect(response.status).toBe(500);
+      expect(response.body).toEqual({ detail: "Failed to copy add-on assets" });
+      // What failed travels under its kind with the storage error as the
+      // cause; the response never learns more than the fixed detail.
+      expect(reportError).toHaveBeenCalledTimes(1);
+      const [reported] = reportError.mock.calls[0];
+      expect(reported).toBeInstanceOf(AppError);
+      expect(reported.kind).toBe("workflows.addon_failed");
+      expect(reported.cause).toBe(cause);
+      // Logged as the reported object, so the console bridge files it once.
+      expect(consoleError).toHaveBeenCalledWith(
+        "[workflow-addons] import failed",
+        reported,
+      );
+    } finally {
+      consoleError.mockRestore();
+    }
   });
 
   it("streams an add-on asset and converts presentations for PdfView", async () => {

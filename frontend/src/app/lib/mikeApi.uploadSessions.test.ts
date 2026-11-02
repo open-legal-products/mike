@@ -4,6 +4,17 @@ const { getSessionMock } = vi.hoisted(() => ({ getSessionMock: vi.fn() }));
 vi.mock("@/app/lib/supabase", () => ({
     supabase: { auth: { getSession: getSessionMock } },
 }));
+const reporting = vi.hoisted(() => ({ reportError: vi.fn() }));
+vi.mock("@/app/lib/errorReporting", async (importOriginal) => ({
+    ...(await importOriginal<typeof import("@/app/lib/errorReporting")>()),
+    ...reporting,
+}));
+
+vi.mock("../../../../word-addin/src/taskpane/lib/errorReporting", async (importOriginal) => ({
+    ...(await importOriginal<typeof import("../../../../word-addin/src/taskpane/lib/errorReporting")>()),
+    ...reporting,
+}));
+import { configureMikeApiClient, uploadStandaloneDocuments as uploadWordDocuments } from "../../../../word-addin/src/taskpane/api/client";
 
 import {
     UploadBatchError,
@@ -17,7 +28,7 @@ import {
     uploadReviewDocument,
     uploadStandaloneDocument,
     uploadStandaloneDocuments,
-    uploadWorkflowAsset,
+    uploadWorkflowAssets,
 } from "./mikeApi";
 import { uploadProcessingPollDelayMs } from "@/shared/api/uploadSessionClient";
 
@@ -345,6 +356,63 @@ describe("direct upload sessions", () => {
         expect(
             outcomes.every((outcome) => outcome.status === "completed"),
         ).toBe(true);
+    });
+
+    // A document uploaded on its own belongs to the workspace it is uploaded
+    // in: the manifest names that organization, and names none in Personal.
+    describe("the workspace a document is uploaded in", () => {
+        const pdf = () => ({
+            file: new File(["contract"], "contract.pdf", {
+                type: "application/pdf",
+            }),
+        });
+        const ORG = "7b1d9d0e-3c5a-4f6e-9a51-0c2f7d3e8a11";
+
+        it("names the organization for a document attached to a chat there", async () => {
+            const server = installSuccessfulSessionServer();
+            await uploadStandaloneDocuments([pdf()], undefined, ORG);
+            expect(server.manifests[0].destination).toEqual({
+                scope: "standalone",
+                org_id: ORG,
+            });
+        });
+
+        it.each([undefined, "personal"])(
+            "names none for a document attached in Personal (%s)",
+            async (workspace) => {
+                const server = installSuccessfulSessionServer();
+                await uploadStandaloneDocuments([pdf()], undefined, workspace);
+                expect(server.manifests[0].destination).toEqual({
+                    scope: "standalone",
+                });
+            },
+        );
+
+        it("names the organization for a document added to its library", async () => {
+            const server = installSuccessfulSessionServer();
+            await uploadLibraryDocuments(
+                { kind: "templates", workspace: ORG },
+                [pdf()],
+            );
+            expect(server.manifests[0].destination).toEqual({
+                scope: "library",
+                library_kind: "template",
+                org_id: ORG,
+            });
+        });
+
+        it("names none for the library of a bare kind, or of Personal", async () => {
+            const server = installSuccessfulSessionServer();
+            await uploadLibraryDocuments("files", [pdf()]);
+            await uploadLibraryDocuments(
+                { kind: "files", workspace: "personal" },
+                [pdf()],
+            );
+            expect(server.manifests.map((m) => m.destination)).toEqual([
+                { scope: "library", library_kind: "file" },
+                { scope: "library", library_kind: "file" },
+            ]);
+        });
     });
 
     it("reports each file as it uploads and completes", async () => {
@@ -778,6 +846,7 @@ describe("direct upload sessions", () => {
         }).catch((caught: unknown) => caught);
 
         expect((error as Error).name).toBe("AbortError");
+        expect(reporting.reportError).not.toHaveBeenCalled();
         expect(progress).not.toContain("upload_confirmation_failed");
         expect(server.storageRequests.length).toBeGreaterThan(0);
         expect(
@@ -852,6 +921,93 @@ describe("direct upload sessions", () => {
             },
         ]);
         expect(progress).toHaveBeenCalled();
+    });
+
+    it("reports a failed storage PUT once per part, with the status and no URL or filename", async () => {
+        reporting.reportError.mockClear();
+        const server = installSuccessfulSessionServer({
+            storageUpload: async () => new Response(null, { status: 503 }),
+        });
+
+        const outcomes = await uploadFilesWithSession({
+            purpose: "document_create",
+            destination: { scope: "standalone" },
+            files: [
+                { file: new File(["a"], "secret-deal.pdf") },
+                { file: new File(["b"], "other.pdf") },
+            ],
+        });
+
+        expect(outcomes.map((outcome) => outcome.errorCode)).toEqual([
+            "direct_upload_failed",
+            "direct_upload_failed",
+        ]);
+        // Three attempts per part, two parts: two events, not six.
+        expect(server.storageRequests.length).toBeGreaterThan(2);
+        expect(reporting.reportError).toHaveBeenCalledTimes(2);
+        for (const [, context] of reporting.reportError.mock.calls) {
+            expect(context).toEqual({
+                tags: {
+                    component: "mike-api",
+                    operation: "upload_session.storage",
+                    http_method: "PUT",
+                    http_status: 503,
+                },
+            });
+            expect(JSON.stringify(context)).not.toMatch(/secret-deal|storage\.test/);
+        }
+    });
+
+    it("does not report a transient storage network failure recovered by retry", async () => {
+        reporting.reportError.mockClear();
+        let attempts = 0;
+        installSuccessfulSessionServer({
+            storageUpload: async () => {
+                attempts += 1;
+                if (attempts === 1) throw new TypeError("Failed to fetch");
+                return new Response(null, { status: 200 });
+            },
+        });
+
+        const outcomes = await uploadFilesWithSession({
+            purpose: "document_create",
+            destination: { scope: "standalone" },
+            files: [{ file: new File(["a"], "contract.pdf") }],
+        });
+
+        expect(outcomes).toMatchObject([{ status: "completed" }]);
+        expect(reporting.reportError).not.toHaveBeenCalled();
+    });
+
+    it("does not report a storage 503 recovered by retry", async () => {
+        reporting.reportError.mockClear();
+        let attempts = 0;
+        installSuccessfulSessionServer({ storageUpload: async () => new Response(null, { status: ++attempts === 1 ? 503 : 200 }) });
+        const outcomes = await uploadFilesWithSession({ purpose: "document_create", destination: { scope: "standalone" }, files: [{ file: new File(["a"], "contract.pdf") }] });
+        expect(outcomes).toMatchObject([{ status: "completed" }]);
+        expect(attempts).toBe(2);
+        expect(reporting.reportError).not.toHaveBeenCalled();
+    });
+
+    it("reports one warning after all storage network attempts fail", async () => {
+        reporting.reportError.mockClear();
+        const storageUpload = vi.fn(async () => { throw new TypeError("Failed to fetch"); });
+        installSuccessfulSessionServer({ storageUpload });
+        const outcomes = await uploadFilesWithSession({ purpose: "document_create", destination: { scope: "standalone" }, files: [{ file: new File(["a"], "contract.pdf") }] });
+        expect(outcomes).toMatchObject([{ status: "error", errorCode: "direct_upload_failed" }]);
+        expect(storageUpload).toHaveBeenCalledTimes(3);
+        expect(reporting.reportError).toHaveBeenCalledTimes(1);
+        expect(reporting.reportError.mock.calls[0]![1]).toMatchObject({ level: "warning", tags: { operation: "upload_session.storage", network: true } });
+    });
+
+    it.each([true, false])("Word reports only exhausted storage retries (recovers: %s)", async recovers => {
+        let attempts = 0;
+        installSuccessfulSessionServer({ storageUpload: async () => new Response(null, { status: ++attempts > 1 && recovers ? 200 : 503 }) });
+        configureMikeApiClient({ baseUrl: "https://word-api.test", getAuthHeaders: async () => ({}), fetchImpl: (input, init) => fetchMock(String(input).replace("https://word-api.test", "/api"), init) });
+        const outcomes = await uploadWordDocuments([new File(["a"], "contract.pdf")]);
+        expect(outcomes).toMatchObject([{ status: recovers ? "completed" : "error" }]);
+        expect(attempts).toBe(recovers ? 2 : 3);
+        expect(reporting.reportError).toHaveBeenCalledTimes(recovers ? 0 : 1);
     });
 
     it("throws with the per-file accounting when a single-file upload fails", async () => {
@@ -941,9 +1097,15 @@ describe("direct upload sessions", () => {
         },
         {
             name: "workflow asset",
-            run: (file: File) => uploadWorkflowAsset("workflow-1", file),
+            run: (file: File) => uploadWorkflowAssets("workflow-1", [{ file }]),
             purpose: "document_create",
             destination: { scope: "workflow", workflow_id: "workflow-1" },
+        },
+        {
+            name: "editor save with a content precondition and no PDF generation",
+            run: (file: File) => replaceDocumentVersionFile("document-1", "version-1", file, undefined, { expectedContentSha256: "a".repeat(64), generatePdf: false }),
+            purpose: "document_version_replace",
+            destination: { document_id: "document-1", version_id: "version-1", expected_content_sha256: "a".repeat(64), generate_pdf: false },
         },
     ])(
         "uses an upload session for $name",

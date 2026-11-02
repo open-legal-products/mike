@@ -25,6 +25,13 @@ decorative pill badges unless a pill is specifically requested. This does not
 apply to established interactive pill controls such as `PillButton`,
 `TabPillButton`, and `OptionPill`.
 
+Keep ordinary account identifiers and their permission/status text fully visible.
+Do not truncate a normal-length email or hide its status to make a compact card
+fit. Put independent information on separate lines, allow long unbroken values
+to wrap, and let controls or cards reflow based on available container width.
+Verify both realistic and unusually long content at narrow widths; match loading
+states to the same layout. See the content-fitting rules in `docs/design-system.md`.
+
 Before creating UI markup, search these locations in order:
 
 1. `frontend/src/app/components/ui/` contains reusable web primitives such as
@@ -90,10 +97,21 @@ Preserve the accessibility baseline:
 - Reusable client behavior belongs in `frontend/src/app/hooks/` or
   `frontend/src/app/lib/`, with a colocated `*.test.ts` or `*.test.tsx` file.
 - Use the `@/` alias for imports rooted at `frontend/src/`.
+- Production frontend code must not import anything outside `frontend/`
+  except through a `paths` alias in `frontend/tsconfig.json` whose target
+  `frontend/Dockerfile` copies into the image. Test files may import shared
+  fixtures and add-in sources because `frontend/tsconfig.build.json` keeps
+  them out of `next build`; `frontend/src/__tests__/architecture.test.ts`
+  enforces both rules.
 
-Do not expose raw backend, database, provider, or stack errors in the UI. Map
-known 4xx responses to intentional messages and use the generic fallback
-helpers in `frontend/src/app/lib/userFacingError.ts` for unexpected failures.
+Do not expose raw backend, database, provider, or stack errors in the UI.
+Classify a thrown value once with `describeError` and show it with
+`notifyError` (both from `frontend/src/app/lib/userFacingError.ts`), which
+draws a `WarningPopup` that offers "Retry" only when a retry is honest and
+"Contact support" only for failures the user cannot fix. Auth sentences come
+from the single table in `frontend/src/app/lib/authMessages.ts`. See
+"Reporting failures" in `docs/design-system.md` for where each kind of
+failure is shown.
 
 ## Backend Structure
 
@@ -146,7 +164,9 @@ and ownership/project-sharing boundaries on every new query or mutation. Never
 send internal exception messages to clients: use the helpers in
 `backend/src/lib/httpError.ts`; logging must use the redaction helpers in
 `backend/src/lib/safeError.ts`. Intentional validation and permission failures
-should remain explicit 4xx responses.
+should remain explicit 4xx responses, and a `code` a client is expected to act
+on must be listed in `CODE_KINDS` in `frontend/src/shared/lib/userError.ts` (a
+drift test keeps that table to codes some server really emits).
 
 ## Database Migrations
 
@@ -164,16 +184,36 @@ For every new migration:
    not exists`, `create or replace` for functions, drop-before-create for
    policies and constraints, and guarded data backfills or type changes.
 4. Update `backend/schema.sql` with the migration's final database shape in the
-   same change.
+   same change, and add the migration's filename to the `schema_migrations`
+   list at the end of that file (`backend/src/__tests__/migrationLedger.test.ts`
+   checks the list matches the directory).
 5. Preserve RLS, grants, ownership, security-definer settings, and explicit
    `search_path` hardening when changing database objects.
 
-Existing deployments apply only files newer than their recorded version, in
-filename order. Do not assume every historical migration is safely replayable,
+Each database records the migrations it has applied in
+`public.schema_migrations`; `backend/scripts/migrate.sh` (also run by Compose's
+`db-init`) applies the files it does not list, in filename order, exactly
+once, each inside a transaction with its ledger row. Do not write `begin` /
+`commit` in a new migration; if it cannot run in a transaction (for example
+`create index concurrently`), add a line reading `-- migrate:no-transaction`.
+Never edit or rename a migration that has shipped: deployments that ran it
+would not run the new version. Do not assume every historical migration is
+safely replayable,
 and do not apply migrations to a remote or production database unless the user
 explicitly requests it and the target has been confirmed. See
 `docs/deployment.md` for deployment procedure and `.github/workflows/schema-drift.yml`
 for the fresh-versus-upgraded schema check.
+
+## Diagnostic identity
+
+Sentry operation, error-kind, component, stage and job labels are static
+source-authored identifiers; adding one needs no central registration. Never
+interpolate user or dependency data into a diagnostic label, error name or
+computed function name. Preserve upstream errors as causes, not as labels.
+Raw messages, request payloads and arbitrary extras remain filtered centrally.
+The backend diagnostic source-contract test scans all three applications;
+review forwarded helper parameters and mappings as well. See
+`docs/observability.md` for the trust model and examples.
 
 ## Verification
 
@@ -191,6 +231,7 @@ npm run build --prefix backend
 npm test --prefix frontend
 npm run test:coverage --prefix frontend
 npm run lint --prefix frontend
+npm run typecheck --prefix frontend
 npm run build --prefix frontend
 
 npm run typecheck --prefix word-addin
@@ -201,6 +242,14 @@ npm run test:e2e
 npm run test:e2e:local
 npm run test:stack --prefix backend
 ```
+
+A change to a Dockerfile, a `.dockerignore`, a tsconfig, or an import that
+crosses an application boundary must be verified by building the affected
+image from the repository root, for example
+`docker build -f frontend/Dockerfile .`. The host-side build cannot catch a
+missing build-context file because every sibling directory exists on the
+host; `.github/workflows/docker-images.yml` builds all three images on every
+pull request for the same reason.
 
 Use targeted Vitest files while iterating, for example:
 
@@ -218,6 +267,12 @@ only when a real browser flow is necessary.
 When changing dependencies, update the `package-lock.json` belonging to the
 affected package. Before handing off work, run `git diff --check`, inspect the
 diff for unrelated changes, and report which verification commands were run.
+
+## Branch Names
+
+Name branches after the change they contain, using a descriptive prefix such as
+`docs/`, `fix/`, `feat/`, `refactor/`, `test/`, or `chore/` (for example,
+`docs/shorten-readme-telemetry`). Never use `claude/` as a prefix.
 
 ## Pull Requests
 

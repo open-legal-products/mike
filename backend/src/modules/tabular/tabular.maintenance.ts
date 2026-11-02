@@ -40,6 +40,20 @@ import { withRedisTimeout } from "../../lib/queue/connection";
 import { finalizeCell, finishGenerationIfIdle } from "./tabular.service";
 import { redisEnabled } from "../../lib/dbq/driver";
 import { liveDbJobExists } from "../../lib/dbq/enqueue";
+import { AppError } from "../../lib/appError";
+import { reportError } from "../../lib/observability/sentry";
+
+/**
+ * A sweep query the database refused. supabase-js resolves these as plain
+ * objects, which the console bridge files with no stack and no code; wrapped,
+ * the SQLSTATE rides along as failure_code under one kind. Returns the
+ * reported object so the caller logs that and the bridge files nothing twice.
+ */
+function reportSweepQueryFailure(message: string, cause: unknown): AppError {
+    const failure = new AppError("db.query_failed", message, { cause });
+    reportError(failure, { tags: { component: "stale-sweep" } });
+    return failure;
+}
 
 // Cap one sweep's working set: the query is unbounded otherwise, and each cell
 // costs a Redis lookup. Anything left over is picked up by the next sweep.
@@ -66,7 +80,10 @@ async function hasActiveGenerationLease(
     if (error) {
         console.error("[stale-sweep] review lease lookup failed", {
             reviewId,
-            error,
+            error: reportSweepQueryFailure(
+                "Stale-sweep review lease lookup failed",
+                error,
+            ),
         });
         return true;
     }
@@ -97,7 +114,10 @@ export async function sweepStaleGeneratingCells(
         .eq("status", "generating")
         .limit(MAX_GENERATING_CELLS_PER_SWEEP);
     if (error) {
-        console.error("[stale-sweep] cells query failed", error);
+        console.error(
+            "[stale-sweep] cells query failed",
+            reportSweepQueryFailure("Stale-sweep cells query failed", error),
+        );
         return 0;
     }
 

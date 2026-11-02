@@ -8,6 +8,7 @@ import type {
     OAuthClientMetadata,
     OAuthTokens,
 } from "@modelcontextprotocol/sdk/shared/auth.js";
+import { AppError } from "../appError";
 import { createServerSupabase } from "../supabase";
 import {
     authConfigPatch,
@@ -32,7 +33,7 @@ import {
     type OAuthTokenRow,
 } from "./types";
 
-export class McpOAuthRequiredError extends Error {
+export class McpOAuthRequiredError extends AppError {
     code = "oauth_required";
     /**
      * Whether re-running the same refresh could ever succeed. False only when
@@ -52,8 +53,7 @@ export class McpOAuthRequiredError extends Error {
         message = "OAuth authorization is required for this MCP server.",
         options: { permanent?: boolean; oauthErrorCode?: string | null } = {},
     ) {
-        super(message);
-        this.name = "McpOAuthRequiredError";
+        super("mcp.oauth_required", message);
         this.permanent = options.permanent ?? true;
         this.oauthErrorCode = options.oauthErrorCode ?? null;
     }
@@ -236,58 +236,43 @@ export function providerAuthorizationParams(
 }
 
 function oauthClientEnvFor(serverUrl: string) {
-    const prefix = mcpOAuthProviderFor(serverUrl)?.envPrefix ?? "MCP_OAUTH";
+    const provider = mcpOAuthProviderFor(serverUrl);
+    const prefix = provider?.envPrefix;
     return {
-        clientId:
-            process.env[`${prefix}_CLIENT_ID`] ||
-            process.env.MCP_OAUTH_CLIENT_ID,
-        clientSecret:
-            process.env[`${prefix}_CLIENT_SECRET`] ||
-            process.env.MCP_OAUTH_CLIENT_SECRET,
+        clientId: prefix ? process.env[`${prefix}_CLIENT_ID`] : undefined,
+        clientSecret: prefix
+            ? process.env[`${prefix}_CLIENT_SECRET`]
+            : undefined,
         scope:
-            process.env[`${prefix}_SCOPE`] ||
+            (prefix ? process.env[`${prefix}_SCOPE`] : undefined) ||
             process.env.MCP_OAUTH_DEFAULT_SCOPE,
     };
 }
 
-async function registerOAuthClient(
-    metadata: OAuthMetadata,
-    redirectUri: string,
-) {
-    if (!metadata.registrationEndpoint) return null;
-    const response = await guardedFetch(metadata.registrationEndpoint, {
-        method: "POST",
-        headers: {
-            Accept: "application/json",
-            "Content-Type": "application/json",
-        },
-        body: JSON.stringify({
-            client_name: "Mike",
-            redirect_uris: [redirectUri],
-            grant_types: ["authorization_code", "refresh_token"],
-            response_types: ["code"],
-            token_endpoint_auth_method: "client_secret_post",
-        }),
-    });
-    if (!response.ok) return null;
-    const parsed = (await response.json()) as Record<string, unknown>;
-    return typeof parsed.client_id === "string"
-        ? {
-              clientId: parsed.client_id,
-              clientSecret:
-                  typeof parsed.client_secret === "string"
-                      ? parsed.client_secret
-                      : undefined,
-          }
-        : null;
+function hasConfiguredCredential(value: string | undefined): value is string {
+    return typeof value === "string" && value.trim().length > 0;
 }
 
-function scopeForOAuth(serverUrl: string, metadata: OAuthMetadata) {
-    const configured = oauthClientEnvFor(serverUrl).scope;
-    if (configured) return configured;
-    return metadata.scopesSupported?.length
-        ? metadata.scopesSupported.join(" ")
-        : undefined;
+/**
+ * Returns operator setup guidance when a known provider cannot use dynamic
+ * client registration and this deployment has no OAuth client configured.
+ * Creation calls this before inserting a connector; OAuth start repeats the
+ * check in case configuration changes between those requests.
+ */
+export function mcpConnectorSetupInstructions(
+    serverUrl: string,
+): string | null {
+    const provider = mcpOAuthProviderFor(serverUrl);
+    if (!provider?.setupInstructions) return null;
+    const env = oauthClientEnvFor(serverUrl);
+    if (
+        hasConfiguredCredential(env.clientId) &&
+        (!provider.requiresClientSecret ||
+            hasConfiguredCredential(env.clientSecret))
+    ) {
+        return null;
+    }
+    return provider.setupInstructions();
 }
 
 export async function loadOAuthToken(connectorId: string, db: Db) {
@@ -465,24 +450,6 @@ export async function refreshOAuthAccessToken(row: OAuthTokenRow, db: Db) {
     return updated;
 }
 
-async function oauthBearerToken(connector: ConnectorRow, db: Db) {
-    let token = await loadOAuthToken(connector.id, db);
-    if (!token?.encrypted_access_token) {
-        throw new McpOAuthRequiredError();
-    }
-    const expiresAt = token.expires_at ? Date.parse(token.expires_at) : null;
-    if (expiresAt && expiresAt < Date.now() + 60_000) {
-        token = await refreshOAuthAccessToken(token, db);
-    }
-    const accessToken = decryptString(
-        token.encrypted_access_token,
-        token.access_token_iv,
-        token.access_token_tag,
-    );
-    if (!accessToken) throw new McpOAuthRequiredError();
-    return accessToken;
-}
-
 export class DbMcpOAuthProvider implements OAuthClientProvider {
     public lastAuthorizeUrl: URL | null = null;
 
@@ -597,6 +564,7 @@ export class DbMcpOAuthProvider implements OAuthClientProvider {
             typeof tokens.expires_in === "number" ? tokens.expires_in : null;
         const row = {
             connector_id: this.connector.id,
+            ...(this.mode === "initiate" ? { grant_id: crypto.randomUUID() } : {}),
             ...tokenSecretPatch("access_token", tokens.access_token),
             ...tokenSecretPatch(
                 "refresh_token",
@@ -761,15 +729,20 @@ export async function startUserMcpConnectorOAuth(
     // registration, so without a pre-configured OAuth client the SDK's normal
     // "no client? register one" fallback dead-ends deep inside the flow with a
     // message no operator can act on. Fail here instead, with the provider's
-    // exact setup instructions — including the redirect URI this deployment
-    // needs, so it can be copy-pasted into the provider's console form.
-    const providerQuirks = mcpOAuthProviderFor(connector.server_url);
-    if (!env.clientId && providerQuirks?.setupInstructions) {
+    // concise setup guidance. Deployment-specific steps live in the connector
+    // guide linked by the frontend warning.
+    const setupInstructions = mcpConnectorSetupInstructions(
+        connector.server_url,
+    );
+    if (setupInstructions) {
         const stored = await loadOAuthToken(connector.id, db);
-        if (!stored?.client_id) {
-            throw new ConnectorSetupError(
-                providerQuirks.setupInstructions(redirectUri),
-            );
+        const provider = mcpOAuthProviderFor(connector.server_url);
+        if (
+            !stored?.client_id ||
+            (provider?.requiresClientSecret &&
+                !stored.encrypted_client_secret)
+        ) {
+            throw new ConnectorSetupError(setupInstructions);
         }
     }
     // Scope is intentionally left to the SDK when not explicitly configured: it

@@ -103,29 +103,6 @@ export async function getContentGrantRole(
         : null;
 }
 
-export async function getContentGrantRoles(
-    db: Db,
-    kind: ContentGrantKind,
-    resourceIds: string[],
-    userEmail: string | null | undefined,
-): Promise<Map<string, ProjectRole>> {
-    const email = normalizeEmail(userEmail);
-    if (!email || resourceIds.length === 0) return new Map();
-    const config = GRANT_CONFIG[kind];
-    const { data } = await db
-        .from(config.table)
-        .select(`${config.resourceColumn}, role`)
-        .in(config.resourceColumn, resourceIds)
-        .eq("email", email);
-    const result = new Map<string, ProjectRole>();
-    for (const row of (data ?? []) as Record<string, unknown>[]) {
-        const id = row[config.resourceColumn];
-        if (typeof id === "string" && isProjectRole(row.role))
-            result.set(id, row.role);
-    }
-    return result;
-}
-
 export type ContentGrantWriteResult =
     | { ok: true; grant: ContentAccessGrant }
     | { ok: false; kind: "validation"; detail: string }
@@ -140,6 +117,12 @@ export async function upsertContentGrant(
         role: unknown;
         createdBy: string;
         creatorEmail?: string | null;
+        /**
+         * The team organization the resource belongs to, when it belongs to
+         * one. Its content is never shared outside it, so the recipient must
+         * be one of its members.
+         */
+        orgId?: string | null;
     },
 ): Promise<ContentGrantWriteResult> {
     const email =
@@ -173,6 +156,21 @@ export async function upsertContentGrant(
                 kind: "validation",
                 detail: `${email} does not belong to a Mike user.`,
             };
+        if (params.orgId) {
+            const { data: membership, error: membershipError } = await db
+                .from("org_members")
+                .select("role")
+                .eq("org_id", params.orgId)
+                .eq("user_id", recipient.id)
+                .maybeSingle();
+            if (membershipError) throw membershipError;
+            if (!membership)
+                return {
+                    ok: false,
+                    kind: "validation",
+                    detail: `${email} is not a member of this organization.`,
+                };
+        }
     } catch (error) {
         return {
             ok: false,

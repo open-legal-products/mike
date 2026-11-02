@@ -6,9 +6,13 @@
 // text a row's extraction runs over. The synchronous SSE route and the async
 // extraction worker share this one copy.
 
+import { ExtractionBusyError, ExtractionLimitError } from "../../lib/extraction/isolated";
 import { downloadFile } from "../../lib/storage";
 import { attachActiveVersionPaths } from "../../lib/documentVersions";
+import { filterAccessibleDocumentIds } from "../../lib/access";
 import { extractDocumentMarkdown } from "./tabular.extract";
+import { AppError } from "../../lib/appError";
+import { reportError } from "../../lib/observability/sentry";
 import { type Db } from "./tabular.shared";
 
 export type ReviewRow = {
@@ -61,6 +65,41 @@ export async function fetchSourceDocuments(
             file_type: doc.file_type ?? null,
         }))
         .sort((a, b) => (position.get(a.id) ?? 0) - (position.get(b.id) ?? 0));
+}
+
+/**
+ * Narrow a review's rows to those the CALLER may read. Review access is not
+ * document access: a review in project Y can be built from project X's
+ * documents, and a Y member without X access must not read X's filenames
+ * (row labels) or the text extracted from them (cells). A row is visible only
+ * when the caller can read every source document feeding it — the same rule
+ * generation applies before extracting. Also returns the readable document
+ * ids so callers can filter document metadata with the same verdict.
+ */
+export async function filterReadableReviewRows(
+    db: Db,
+    rows: ReviewRow[],
+    extraDocumentIds: string[],
+    userId: string,
+    userEmail: string | null | undefined,
+): Promise<{ rows: ReviewRow[]; readableDocumentIds: Set<string> }> {
+    const ids = [
+        ...new Set([
+            ...rows.flatMap((row) => row.source_document_ids ?? []),
+            ...extraDocumentIds,
+        ]),
+    ];
+    const readableDocumentIds = new Set(
+        await filterAccessibleDocumentIds(ids, userId, userEmail, db),
+    );
+    return {
+        rows: rows.filter((row) =>
+            (row.source_document_ids ?? []).every((id) =>
+                readableDocumentIds.has(id),
+            ),
+        ),
+        readableDocumentIds,
+    };
 }
 
 export async function loadReviewRows(
@@ -118,19 +157,28 @@ export async function loadRowDocumentText(
             .storage_path;
         let markdown = "";
         if (storagePath) {
-            const buf = await downloadFile(storagePath);
-            if (buf) {
-                try {
-                    markdown = await extractDocumentMarkdown(
-                        buf,
-                        doc.file_type,
-                    );
-                } catch (error) {
-                    console.error(
-                        `[tabular] extraction error doc=${doc.id}`,
-                        error,
-                    );
-                }
+            try {
+                markdown = await extractDocumentMarkdown(
+                    () => downloadFile(storagePath),
+                    doc.file_type,
+                );
+            } catch (error) {
+                // Do not ask the model to fill cells from a source we refused.
+                if (error instanceof ExtractionBusyError || error instanceof ExtractionLimitError) throw error;
+                // The row goes on with an empty source section; the
+                // parser's or converter's error is the cause, so its
+                // class and code say what failed. Logging the reported
+                // object keeps the console bridge from filing it twice.
+                const failure = new AppError(
+                    "extraction.failed",
+                    "Tabular source document text extraction failed",
+                    { cause: error },
+                );
+                reportError(failure, { extra: { document_id: doc.id } });
+                console.error(
+                    `[tabular] extraction error doc=${doc.id}`,
+                    failure,
+                );
             }
         }
         sections.push(

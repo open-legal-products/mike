@@ -1,8 +1,31 @@
+import { listOrgPrivateContent, setOrgPrivateContentPermission, openOrgPrivateContent, closeOrgPrivateContent } from "./mikeApi";
+import { setUserProfilePhoto, listDeletedOrganizations, restoreOrganization } from "./mikeApi";
+import { listOrgDepartures, reassignOrgDepartureArchives, deleteOrgDepartureArchives } from "./mikeApi";
+import { getGoogleWorkspaceStatus, startGoogleWorkspaceOAuth, cancelGoogleWorkspaceOAuth, disconnectGoogleWorkspace, updateGoogleWorkspaceSettings, setGoogleWorkspaceToolEnabled, updateGoogleDriveSettings, setGoogleDriveToolEnabled, createGoogleDrivePickerSession } from "./mikeApi";
+import { getCourtListenerConnector, setCourtListenerConnectorEnabled, saveCourtListenerConnectorToken, deleteCourtListenerConnectorToken } from "./mikeApi";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { AssistantEvent, Chat } from "@/app/components/shared/types";
+import { subscribeTabularReviewChanges } from "./tabularReviewChanges";
+import { getTabularReviewHistoryStatuses } from "./mikeApi";
 
+// Backend 5xx responses are reported to Sentry from the client with the
+// request id; the reporter is mocked so these tests assert the call, and
+// the reporter's own suite covers what it does with it.
+const reportApiFailure = vi.hoisted(() => vi.fn());
+const reportNetworkFailure = vi.hoisted(() => vi.fn());
+const markErrorHandled = vi.hoisted(() => vi.fn());
+vi.mock("@/app/lib/errorReporting", () => ({
+    trackPendingRequest: () => () => {},
+    markErrorHandled,
+    reportApiFailure,
+    reportNetworkFailure,
+}));
+
+import { userFacingApiError } from "./userFacingError";
 import {
     MikeApiError,
+    SCHEMA_OUT_OF_DATE_MESSAGE,
+    UPSTREAM_UNAVAILABLE_MESSAGE,
     addDocumentToProject,
     clearTabularCells,
     completeUserOnboarding,
@@ -19,9 +42,11 @@ import {
     deleteAccount,
     deleteAllChats,
     deleteAllMemories,
+    setOrgMemberDataPolicy,
     deleteAllProjects,
     deleteAllTabularReviews,
     deleteChat,
+    leaveChat,
     deleteDocument,
     deleteDocumentVersion,
     deleteLibraryFolder,
@@ -33,19 +58,16 @@ import {
     deleteWorkflow,
     deleteWorkflowAsset,
     deleteWorkflowShare,
+    cancelGoogleDriveOAuth,
+    disconnectGoogleDrive,
     downloadDocumentsZip,
     downloadUserExport,
-    exportAccountData,
-    exportAuditHistory,
-    exportChatData,
-    exportTabularReviewsData,
-    generateChatTitle,
     generateTabularColumnPrompt,
-    getApiKeyStatus,
     getChatAccess,
     getChat,
     getChatPeople,
     getAuditHistory,
+    getAuditActors,
     getPanelDocument,
     getDocument,
     getDocumentFile,
@@ -57,10 +79,14 @@ import {
     getLibraryFilterOptions,
     getLibraryFolderChildren,
     getLibraryFolderPath,
+    getGoogleDriveStatus,
     getMcpConnector,
     getOllamaModels,
     getClaudeCodeModels,
     getOpenCodeGoModels,
+    getXaiModels,
+    getCustomEndpointModels,
+    getBedrockModels,
     getOpenRouterModels,
     getVercelModels,
     getProject,
@@ -74,6 +100,9 @@ import {
     getTabularReviewAccess,
     getTabularReviewPeople,
     getUserExportStatus,
+    getCustomInstructions,
+    getResponseStyle,
+    getWebSearchSettings,
     getUserMemory,
     getUserProfile,
     getWorkflow,
@@ -86,6 +115,15 @@ import {
     createOrg,
     createOrgInvitation,
     deleteOrg,
+    deleteOrgData,
+    getOrgLogo,
+    saveOrgLogo,
+    deleteOrgLogo,
+    getOrgApiKeys,
+    saveOrgApiKey,
+    saveOrgRouterModels,
+    setOrgApiKeyEnabled,
+    getOrgMemberHandover,
     declineOrgInvitation,
     getOrg,
     getProjectAccess,
@@ -96,7 +134,6 @@ import {
     listMyOrgInvitations,
     listOrgInvitations,
     listOrgMembers,
-    listOrgResources,
     listOrgs,
     removeOrgMember,
     resendOrgInvitation,
@@ -113,10 +150,10 @@ import {
     listProjectSummaries,
     listProjects,
     listProjectsPage,
-    listStandaloneDocuments,
     listSystemWorkflows,
     listTabularReviewIds,
     listTabularReviews,
+    listProjectReviewCreators,
     listWorkflowIds,
     listWorkflowAddons,
     listWorkflowAssets,
@@ -144,6 +181,7 @@ import {
     resolveProjectFolderPath,
     resolveDocumentEdit,
     saveApiKey,
+    setApiKeyEnabled,
     bulkDeleteLibraryDocuments,
     searchProjectDirectory,
     searchLibraryDocuments,
@@ -151,11 +189,17 @@ import {
     setProjectMemoryEnabled,
     setUserMemoryEnabled,
     shareWorkflow,
+    startGoogleDriveOAuth,
     startMcpConnectorOAuth,
     startUserExport,
     streamChat,
+    streamChatTurn,
+    stopChatTurn,
     streamProjectChat,
     streamTabularChat,
+    streamTabularChatTurn,
+    stopTabularChatTurn,
+    stopTabularGeneration,
     streamTabularGeneration,
     streamTabularGenerationResume,
     syncUserPasswordSet,
@@ -174,6 +218,9 @@ import {
     updateUserProfile,
     updateWorkflow,
     updateQuickAction,
+    updateCustomInstructions,
+    updateResponseStyle,
+    updateWebSearchSettings,
     updateUserMemory,
     importWorkflowAddon,
     listQuickActions,
@@ -231,6 +278,10 @@ afterEach(() => {
     vi.unstubAllGlobals();
     vi.clearAllMocks();
 });
+
+
+// Chat requests carry the browser's IANA time zone for the assistant.
+const BROWSER_TIME_ZONE = Intl.DateTimeFormat().resolvedOptions().timeZone;
 
 describe("MikeApiError / isMfaRequiredError", () => {
     it("carries status and code, defaulting code to null", () => {
@@ -309,6 +360,27 @@ describe("apiRequest plumbing (via thin wrappers)", () => {
         await listProjects({ includeDocuments: true });
 
         expect(lastFetchCall().url).toBe("/api/projects?include=documents");
+    });
+
+    it("requests actual project participation for the IDE without enabling pagination", async () => {
+        fetchMock.mockImplementation(async () => jsonResponse([]));
+        await listProjects({ participatingOnly: true });
+        expect(lastFetchCall().url).toBe("/api/projects?participating=true");
+        await listProjects({ includeDocuments: true, participatingOnly: true });
+        expect(lastFetchCall().url).toBe("/api/projects?include=documents&participating=true");
+    });
+
+    it("fetches every project-choice page within the requested workspace", async () => {
+        const first = Array.from({ length: 100 }, (_, i) => ({ id: `project-${i}` }));
+        fetchMock.mockResolvedValueOnce(jsonResponse(first));
+        fetchMock.mockResolvedValueOnce(jsonResponse([{ id: "last-project" }]));
+        const projects = await listProjects({ workspace: "org-1" });
+        expect(projects).toHaveLength(101);
+        expect(projects.at(-1)?.id).toBe("last-project");
+        expect(fetchMock.mock.calls.map(([url]) => url)).toEqual([
+            "/api/projects?workspace=org-1&limit=100&offset=0",
+            "/api/projects?workspace=org-1&limit=100&offset=100",
+        ]);
     });
 
     // Regression guard: legacy tabular-review project pickers call
@@ -428,6 +500,63 @@ describe("apiRequest plumbing (via thin wrappers)", () => {
             requestId: "req-public-123",
             message: "Something went wrong. Please try again.",
         });
+        expect(reportApiFailure).toHaveBeenCalledWith({
+            path: "/user/profile",
+            operation: "settings.profile",
+            method: "GET",
+            status: 500,
+            code: "internal_error",
+            requestId: "req-public-123",
+            // The thrown error itself travels along so a later
+            // console.error(..., error) is not reported twice.
+            error: expect.any(MikeApiError),
+        });
+    });
+
+    // MIKE-BACKEND-H / MIKE-FRONTEND-F: a missing migration used to reach
+    // the screen as "Something went wrong" and be filed twice (backend and
+    // browser). An unreachable backend made the gateway answer 502 and the
+    // browser file one issue PER ENDPOINT. The server side now answers 503
+    // with a code and reports it once itself; the browser shows the
+    // intentional message and only marks the error.
+    it.each([
+        ["schema_out_of_date", SCHEMA_OUT_OF_DATE_MESSAGE, "The server's database needs an update before this can load. Please contact your administrator."],
+        ["upstream_unavailable", UPSTREAM_UNAVAILABLE_MESSAGE, "The server is temporarily unreachable. Please try again shortly."],
+    ])("shows the %s message and leaves the report to the server side", async (code, message, sentence) => {
+        markErrorHandled.mockClear();
+        fetchMock.mockResolvedValue(
+            jsonResponse(
+                {
+                    code,
+                    detail: "raw server text that must not be trusted",
+                    request_id: "req-503-1",
+                },
+                { status: 503 },
+            ),
+        );
+
+        const error = await getUserProfile().catch((caught: unknown) => caught);
+        expect(error).toMatchObject({ status: 503, code, requestId: "req-503-1", message });
+        expect(userFacingApiError(error, "Fallback")).toBe(sentence);
+        expect(reportApiFailure).not.toHaveBeenCalled();
+        expect(markErrorHandled).toHaveBeenCalledExactlyOnceWith(error);
+    });
+
+    it("reports a 5xx without a code and never reports a 4xx", async () => {
+        fetchMock.mockResolvedValueOnce(
+            jsonResponse({ detail: { nested: true } }, { status: 500 }),
+        );
+        await expect(getUserProfile()).rejects.toMatchObject({ status: 500 });
+        expect(reportApiFailure).toHaveBeenCalledWith(
+            expect.objectContaining({ status: 500, code: null }),
+        );
+
+        reportApiFailure.mockClear();
+        fetchMock.mockResolvedValueOnce(
+            jsonResponse({ detail: "nope" }, { status: 403 }),
+        );
+        await expect(getUserProfile()).rejects.toMatchObject({ status: 403 });
+        expect(reportApiFailure).not.toHaveBeenCalled();
     });
 
     it("does not expose non-JSON server error responses", async () => {
@@ -439,6 +568,76 @@ describe("apiRequest plumbing (via thin wrappers)", () => {
             status: 502,
             message: "Something went wrong. Please try again.",
         });
+        expect(reportApiFailure).toHaveBeenCalledWith({
+            path: "/user/profile",
+            method: "GET",
+            status: 502,
+            requestId: null,
+            error: expect.any(MikeApiError),
+        });
+    });
+
+    // MIKE-FRONTEND-5/8: the browser-side "API 502" event must carry the id
+    // the Next gateway generated for its own api-gateway event, so the two
+    // halves of one outage can be joined with `request_id:<id>`.
+    it("correlates a gateway 502 with the gateway's own event by request id", async () => {
+        const gatewayId = "0b7c6a52-3a4e-4f59-9d0c-6f1e2a3b4c5d";
+        fetchMock.mockResolvedValue(
+            new Response(
+                JSON.stringify({
+                    detail: "The API is temporarily unavailable.",
+                    request_id: gatewayId,
+                }),
+                {
+                    status: 502,
+                    headers: {
+                        "content-type": "application/json",
+                        "x-request-id": gatewayId,
+                    },
+                },
+            ),
+        );
+
+        await expect(getUserProfile()).rejects.toMatchObject({
+            status: 502,
+            requestId: gatewayId,
+            message: "Something went wrong. Please try again.",
+        });
+        expect(reportApiFailure).toHaveBeenCalledExactlyOnceWith(
+            expect.objectContaining({ status: 502, requestId: gatewayId }),
+        );
+        expect(reportNetworkFailure).not.toHaveBeenCalled();
+    });
+
+    it("reports the real HTTP method of a failed mutation", async () => {
+        fetchMock.mockResolvedValueOnce(
+            jsonResponse({ code: "internal_error", detail: "x" }, { status: 500 }),
+        );
+        await expect(createProject("Acme")).rejects.toMatchObject({ status: 500 });
+        expect(reportApiFailure).toHaveBeenCalledWith(
+            expect.objectContaining({ method: "POST", status: 500 }),
+        );
+    });
+
+    it("reports a transport failure once with the endpoint, then rethrows it unchanged", async () => {
+        const failure = new TypeError("Failed to fetch");
+        fetchMock.mockRejectedValueOnce(failure);
+
+        await expect(createProject("Acme")).rejects.toBe(failure);
+
+        expect(reportNetworkFailure).toHaveBeenCalledOnce();
+        expect(reportNetworkFailure).toHaveBeenCalledWith(failure, {
+            method: "POST",
+            url: "/api/projects",
+            operation: "projects.manage",
+        });
+        expect(reportApiFailure).not.toHaveBeenCalled();
+    });
+
+    it("does not report a non-JSON 4xx", async () => {
+        fetchMock.mockResolvedValue(new Response("nope", { status: 404 }));
+        await expect(getUserProfile()).rejects.toMatchObject({ status: 404 });
+        expect(reportApiFailure).not.toHaveBeenCalled();
     });
 
     it("synthesizes a message when the error body is empty", async () => {
@@ -458,12 +657,19 @@ describe("apiRequest plumbing (via thin wrappers)", () => {
         );
 
         fetchMock.mockResolvedValue(jsonResponse([]));
-        await listChats({ limit: 5, offset: 10 });
-        expect(lastFetchCall().url).toBe("/api/chat?limit=5&offset=10");
+        await listChats({
+            limit: 5,
+            offset: 10,
+            beforeUpdatedAt: "2026-09-21T12:00:00.000Z",
+            beforeId: "chat-5",
+        });
+        expect(lastFetchCall().url).toBe(
+            "/api/chat?limit=5&offset=10&before_updated_at=2026-09-21T12%3A00%3A00.000Z&before_id=chat-5",
+        );
     });
 });
 
-describe("blob requests (exportAccountData)", () => {
+describe("blob requests (downloadUserExport)", () => {
     it("returns the blob and the filename from content-disposition", async () => {
         fetchMock.mockResolvedValue(
             new Response("zip-bytes", {
@@ -474,7 +680,7 @@ describe("blob requests (exportAccountData)", () => {
             }),
         );
 
-        const { blob, filename } = await exportAccountData();
+        const { blob, filename } = await downloadUserExport("e1");
 
         expect(filename).toBe("export.zip");
         expect(await blob.text()).toBe("zip-bytes");
@@ -489,10 +695,10 @@ describe("blob requests (exportAccountData)", () => {
                 },
             }),
         );
-        expect((await exportAccountData()).filename).toBe("data.zip");
+        expect((await downloadUserExport("e1")).filename).toBe("data.zip");
 
         fetchMock.mockResolvedValue(new Response("x", { status: 200 }));
-        expect((await exportAccountData()).filename).toBeNull();
+        expect((await downloadUserExport("e1")).filename).toBeNull();
     });
 
     it("throws a MikeApiError on failure", async () => {
@@ -500,7 +706,7 @@ describe("blob requests (exportAccountData)", () => {
             jsonResponse({ detail: "not allowed" }, { status: 403 }),
         );
 
-        await expect(exportAccountData()).rejects.toMatchObject({
+        await expect(downloadUserExport("e1")).rejects.toMatchObject({
             status: 403,
             message: "not allowed",
         });
@@ -508,6 +714,29 @@ describe("blob requests (exportAccountData)", () => {
 });
 
 describe("audit history", () => {
+    it("encodes audit actor search, pagination and exact person filters", async () => {
+        const result = { users: [], nextOffset: null };
+        fetchMock.mockResolvedValueOnce(jsonResponse(result));
+        expect(await getAuditActors({ orgId: "org-1", search: "Alex & Pat", offset: 20 })).toEqual(result);
+        expect(lastFetchCall().url).toBe("/api/audit/actors?org_id=org-1&q=Alex+%26+Pat&offset=20");
+        fetchMock.mockResolvedValueOnce(jsonResponse(result));
+        expect(await getAuditActors({ orgId: "org-1" })).toEqual(result);
+        expect(lastFetchCall().url).toBe("/api/audit/actors?org_id=org-1");
+        fetchMock.mockResolvedValueOnce(jsonResponse({ events: [], total: 0, page: 1, pageSize: 50 }));
+        await getAuditHistory({ orgId: "org-1", actorUserId: "actor-1" });
+        expect(lastFetchCall().url).toBe("/api/audit?org_id=org-1&actor_user_id=actor-1");
+    });
+
+    it("encodes the organization username filter", async () => {
+        fetchMock.mockResolvedValueOnce(jsonResponse({ events: [], total: 0, page: 1, pageSize: 50 }));
+        await getAuditHistory({ orgId: "org-1", username: "Alex & Pat" });
+        expect(lastFetchCall().url).toBe("/api/audit?org_id=org-1&username=Alex+%26+Pat");
+    });
+    it("includes the organization scope in audit requests", async () => {
+        fetchMock.mockResolvedValueOnce(jsonResponse({ events: [], total: 0, page: 1, pageSize: 50 }));
+        await getAuditHistory({ orgId: "org-1" });
+        expect(lastFetchCall().url).toBe("/api/audit?org_id=org-1");
+    });
     it("serializes server-side filters, sorting, pagination, and the abort signal", async () => {
         fetchMock.mockResolvedValue(
             jsonResponse({ events: [], total: 0, page: 3, pageSize: 50 }),
@@ -536,34 +765,6 @@ describe("audit history", () => {
         expect(init.signal).toBe(controller.signal);
     });
 
-    it("exports with the same active filters and server-side sort", async () => {
-        fetchMock.mockResolvedValue(
-            new Response("history", {
-                status: 200,
-                headers: {
-                    "content-disposition": 'attachment; filename="history.csv"',
-                },
-            }),
-        );
-
-        const result = await exportAuditHistory({
-            q: "agreement",
-            action: "document.edited",
-            status: "failed",
-            surface: "assistant",
-            from: "2026-07-01",
-            to: "2026-07-31",
-            sortBy: "created_at",
-            sortDirection: "desc",
-        });
-
-        expect(lastFetchCall().url).toBe(
-            "/api/audit/export?q=agreement&action=document.edited&status=failed&surface=assistant&from=2026-07-01&to=2026-07-31&sort_by=created_at&sort_dir=desc",
-        );
-        expect(result.filename).toBe("history.csv");
-        expect(await result.blob.text()).toBe("history");
-    });
-
     it("omits every optional audit parameter when no filters are active", async () => {
         fetchMock.mockResolvedValueOnce(
             jsonResponse({ events: [], total: 0, page: 1, pageSize: 50 }),
@@ -571,13 +772,6 @@ describe("audit history", () => {
 
         await getAuditHistory({});
         expect(lastFetchCall().url).toBe("/api/audit?");
-
-        fetchMock.mockResolvedValueOnce(
-            new Response("history", { status: 200 }),
-        );
-
-        await exportAuditHistory({});
-        expect(lastFetchCall().url).toBe("/api/audit/export?");
     });
 });
 
@@ -730,6 +924,35 @@ describe("getChat message mapping", () => {
     });
 });
 
+describe("getChat active turn", () => {
+    const chat: Chat = {
+        id: "c1",
+        project_id: null,
+        user_id: "u1",
+        title: "T",
+        created_at: "2026-01-01",
+    };
+
+    it("passes through the turn the server is still generating", async () => {
+        fetchMock.mockResolvedValue(
+            jsonResponse({
+                chat,
+                messages: [],
+                active_turn: { id: "t1", seq: 4, assistant_message_id: "m9" },
+            }),
+        );
+        const detail = await getChat("c1");
+        expect(detail.active_turn).toEqual({ id: "t1", seq: 4, assistant_message_id: "m9" });
+    });
+
+    it("is null when the server reports none, or predates the field", async () => {
+        fetchMock.mockResolvedValue(jsonResponse({ chat, messages: [] }));
+        expect((await getChat("c1")).active_turn).toBeNull();
+        fetchMock.mockResolvedValue(jsonResponse({ chat, messages: [], active_turn: null }));
+        expect((await getChat("c1")).active_turn).toBeNull();
+    });
+});
+
 describe("mapTRMessages", () => {
     it("maps user and assistant rows including annotations", () => {
         const events: AssistantEvent[] = [{ type: "content", text: "Answer" }];
@@ -810,7 +1033,72 @@ describe("mapTRMessages", () => {
 // src/app/hooks/useAssistantChat.sse.test.ts.
 // ---------------------------------------------------------------------------
 
+describe("API transport cancellation", () => {
+    it("preserves AbortError without reporting a network failure", async () => {
+        const error = new DOMException("The operation was aborted", "AbortError");
+        fetchMock.mockRejectedValueOnce(error);
+
+        await expect(streamChat({ messages: [] })).rejects.toBe(error);
+
+        expect(reportNetworkFailure).not.toHaveBeenCalled();
+    });
+
+    it.each([new Error("User stopped the response"), "navigation", null])(
+        "preserves a custom signal cancellation reason: %s",
+        async (reason) => {
+            const controller = new AbortController();
+            fetchMock.mockImplementationOnce(async () => {
+                controller.abort(reason);
+                throw controller.signal.reason;
+            });
+
+            await expect(streamChat({
+                messages: [],
+                signal: controller.signal,
+            })).rejects.toBe(reason);
+
+            expect(reportNetworkFailure).not.toHaveBeenCalled();
+        },
+    );
+
+    it("still reports a network failure when the signal is active", async () => {
+        const controller = new AbortController();
+        const error = new TypeError("Failed to fetch");
+        fetchMock.mockRejectedValueOnce(error);
+
+        await expect(streamChat({
+            messages: [],
+            signal: controller.signal,
+        })).rejects.toBe(error);
+
+        expect(reportNetworkFailure).toHaveBeenCalledExactlyOnceWith(error, {
+            method: "POST",
+            url: "/api/chat",
+            operation: "chat.turn",
+        });
+    });
+});
+
 describe("streamChat", () => {
+    it.each(["unavailable", "empty"])("still sends the chat when the browser time zone is %s", async (mode) => {
+        fetchMock.mockResolvedValue(streamResponse([]));
+        const formatter = Intl.DateTimeFormat();
+        const options = formatter.resolvedOptions();
+        const spy = vi.spyOn(Intl, "DateTimeFormat");
+        if (mode === "unavailable") {
+            spy.mockImplementation(() => { throw new Error("Intl unavailable"); });
+        } else {
+            vi.spyOn(formatter, "resolvedOptions").mockReturnValue({ ...options, timeZone: "" });
+            spy.mockReturnValue(formatter);
+        }
+        try {
+            await streamChat({ messages: [{ role: "user", content: "Hello" }] });
+            expect(JSON.parse(lastFetchCall().init.body as string)).not.toHaveProperty("time_zone");
+            expect(JSON.parse(lastFetchCall().init.body as string).messages).toEqual([{ role: "user", content: "Hello" }]);
+        } finally {
+            vi.restoreAllMocks();
+        }
+    });
     it("POSTs with the SSE accept header and forwards the signal outside the body", async () => {
         fetchMock.mockResolvedValue(streamResponse([]));
         const controller = new AbortController();
@@ -835,6 +1123,7 @@ describe("streamChat", () => {
             messages: [{ role: "user", content: "hi" }],
             chat_id: "c1",
             model: "gemini-3-flash-preview",
+            time_zone: BROWSER_TIME_ZONE,
         });
     });
 
@@ -851,6 +1140,43 @@ describe("streamChat", () => {
 
         expect(response.bodyUsed).toBe(false);
         expect(await readAll(response)).toBe(chunks.join(""));
+    });
+});
+
+describe("streamChatTurn / stopChatTurn (server-owned turns)", () => {
+    it("GETs the turn's stream from a sequence number with the SSE accept header", async () => {
+        fetchMock.mockResolvedValue(streamResponse([]));
+        const controller = new AbortController();
+        await streamChatTurn({
+            chatId: "c1",
+            turnId: "t1",
+            from: 7,
+            signal: controller.signal,
+        });
+        const { url, init } = lastFetchCall();
+        expect(url).toBe("/api/chat/c1/turn/t1/stream?from=7");
+        expect(init.method ?? "GET").toBe("GET");
+        expect(init.headers).toMatchObject({ Accept: "text/event-stream" });
+        expect(init.signal).toBe(controller.signal);
+    });
+
+    it("defaults to replaying the whole turn", async () => {
+        fetchMock.mockResolvedValue(streamResponse([]));
+        await streamChatTurn({ chatId: "c1", turnId: "t1" });
+        expect(lastFetchCall().url).toBe("/api/chat/c1/turn/t1/stream?from=1");
+    });
+
+    it("POSTs the stop and returns the server's verdict", async () => {
+        fetchMock.mockResolvedValue(
+            jsonResponse({ stopped: true, finished: false }),
+        );
+        await expect(stopChatTurn("c1", "t1")).resolves.toEqual({
+            stopped: true,
+            finished: false,
+        });
+        const { url, init } = lastFetchCall();
+        expect(url).toBe("/api/chat/c1/turn/t1/stop");
+        expect(init.method).toBe("POST");
     });
 });
 
@@ -872,6 +1198,7 @@ describe("streamProjectChat", () => {
         expect(JSON.parse(init.body as string)).toEqual({
             messages: [{ role: "user", content: "hi" }],
             displayed_doc: { filename: "a.pdf", document_id: "d1" },
+            time_zone: BROWSER_TIME_ZONE,
         });
     });
 });
@@ -897,6 +1224,7 @@ describe("streamTabularChat", () => {
             review_title: "Leases",
             model: "openai-gpt-5.2",
             reasoning: "low",
+            time_zone: BROWSER_TIME_ZONE,
         });
     });
 });
@@ -947,6 +1275,83 @@ describe("streamTabularGenerationResume", () => {
         await streamTabularGenerationResume("r1");
 
         expect(lastFetchCall().init.signal).toBeUndefined();
+    });
+
+    it("resumes from a sequence number when the client has already seen frames", async () => {
+        fetchMock.mockResolvedValue(streamResponse([]));
+
+        await streamTabularGenerationResume("r1", undefined, 12);
+
+        expect(lastFetchCall().url).toBe(
+            "/api/tabular-review/r1/generate/stream?from=12",
+        );
+    });
+});
+
+describe("streamTabularChatTurn / stopTabularChatTurn (server-owned review chat)", () => {
+    it("GETs the turn's stream from a sequence number with the SSE accept header", async () => {
+        fetchMock.mockResolvedValue(streamResponse([]));
+        const controller = new AbortController();
+
+        await streamTabularChatTurn({
+            reviewId: "r1",
+            chatId: "c1",
+            turnId: "t1",
+            from: 7,
+            signal: controller.signal,
+        });
+
+        const { url, init } = lastFetchCall();
+        expect(url).toBe(
+            "/api/tabular-review/r1/chats/c1/turn/t1/stream?from=7",
+        );
+        expect(init.method ?? "GET").toBe("GET");
+        expect(init.headers).toMatchObject({ Accept: "text/event-stream" });
+        expect(init.signal).toBe(controller.signal);
+    });
+
+    it("defaults to replaying the whole turn", async () => {
+        fetchMock.mockResolvedValue(streamResponse([]));
+
+        await streamTabularChatTurn({
+            reviewId: "r1",
+            chatId: "c1",
+            turnId: "t1",
+        });
+
+        expect(lastFetchCall().url).toBe(
+            "/api/tabular-review/r1/chats/c1/turn/t1/stream?from=1",
+        );
+    });
+
+    it("POSTs the stop and returns the server's verdict", async () => {
+        fetchMock.mockResolvedValue(
+            jsonResponse({ stopped: true, finished: false }),
+        );
+
+        await expect(stopTabularChatTurn("r1", "c1", "t1")).resolves.toEqual({
+            stopped: true,
+            finished: false,
+        });
+        const { url, init } = lastFetchCall();
+        expect(url).toBe("/api/tabular-review/r1/chats/c1/turn/t1/stop");
+        expect(init.method).toBe("POST");
+    });
+});
+
+describe("stopTabularGeneration", () => {
+    it("POSTs the stop and returns the server's verdict", async () => {
+        fetchMock.mockResolvedValue(
+            jsonResponse({ stopped: true, finished: false }),
+        );
+
+        await expect(stopTabularGeneration("r1")).resolves.toEqual({
+            stopped: true,
+            finished: false,
+        });
+        const { url, init } = lastFetchCall();
+        expect(url).toBe("/api/tabular-review/r1/generate/stop");
+        expect(init.method).toBe("POST");
     });
 });
 
@@ -1001,6 +1406,23 @@ describe("listTabularReviews", () => {
         await listTabularReviews(undefined, { scope: "all", limit: 10 });
 
         expect(lastFetchCall().url).toBe("/api/tabular-review?limit=10");
+    });
+
+    it("filters a list and its select-all ids by creator", async () => {
+        fetchMock.mockImplementation(async () => jsonResponse([]));
+
+        await listTabularReviews("p1", { ownerUserId: "u2" });
+        expect(lastFetchCall().url).toBe(
+            "/api/tabular-review?project_id=p1&owner_user_id=u2",
+        );
+        await listTabularReviewIds("p1", { ownerUserId: "u2" });
+        expect(lastFetchCall().url).toBe(
+            "/api/tabular-review/ids?project_id=p1&owner_user_id=u2",
+        );
+        await listProjectReviewCreators("p1");
+        expect(lastFetchCall().url).toBe(
+            "/api/tabular-review/creators?project_id=p1",
+        );
     });
 });
 
@@ -1508,9 +1930,75 @@ describe("Library search", () => {
 
         expect(lastFetchCall().url).toBe("/api/library/files/filter-options");
     });
+
+    // The library is per workspace: a call that names one carries it on the
+    // query string, after whatever else the call asks for.
+    it("names the workspace on every library call that is given one", async () => {
+        const scope = { kind: "files" as const, workspace: "org-1" };
+        fetchMock.mockImplementation(async () =>
+            jsonResponse({ fileTypes: [], documents: [], folders: [] }),
+        );
+
+        await getLibraryFilterOptions(scope);
+        expect(lastFetchCall().url).toBe(
+            "/api/library/files/filter-options?workspace=org-1",
+        );
+        await getLibrary(scope, { limit: 50 });
+        expect(lastFetchCall().url).toBe(
+            "/api/library/files?limit=50&workspace=org-1",
+        );
+        await searchLibraryDocuments(scope, { search: "nda" });
+        expect(lastFetchCall().url).toBe(
+            "/api/library/files?view=search&search=nda&workspace=org-1",
+        );
+        await getLibrary({ kind: "templates", workspace: "personal" });
+        expect(lastFetchCall().url).toBe(
+            "/api/library/templates?workspace=personal",
+        );
+    });
+
+    it("names no workspace for a bare kind, or a scope without one", async () => {
+        fetchMock.mockImplementation(async () =>
+            jsonResponse({ documents: [], folders: [] }),
+        );
+        await getLibrary("files");
+        expect(lastFetchCall().url).toBe("/api/library/files");
+        await getLibrary({ kind: "files" });
+        expect(lastFetchCall().url).toBe("/api/library/files");
+    });
 });
 
 describe("tabular review CRUD", () => {
+    it("requests the sidebar's status fields and polls only the named reviews", async () => {
+        fetchMock.mockImplementation(async () => jsonResponse([]));
+        await listTabularReviews(undefined, { workspace: "personal", sortKey: "updated", sortDirection: "desc", includeStatus: true });
+        const url = new URL(lastFetchCall().url, "http://localhost");
+        expect(url.searchParams.get("include")).toBe("status");
+        expect(url.searchParams.get("workspace")).toBe("personal");
+        expect(url.searchParams.get("sort_key")).toBe("updated");
+        const controller = new AbortController();
+        await getTabularReviewHistoryStatuses(["r1", "r2"], controller.signal);
+        expect(lastFetchCall().url).toBe("/api/tabular-review/history-status?ids=r1%2Cr2");
+        expect(lastFetchCall().init.signal).toBe(controller.signal);
+    });
+
+    it("refreshes review history after successful writes, but not a refused write", async () => {
+        const listener = vi.fn();
+        const unsubscribe = subscribeTabularReviewChanges(listener);
+        try {
+            fetchMock.mockImplementation(async () => jsonResponse({ id: "r1" }));
+            await createTabularReview({ document_ids: [], columns_config: [], model: "test-model" });
+            await updateTabularReview("r1", { title: "Renamed" });
+            await deleteTabularReview("r1");
+            await clearTabularCells("r1", ["row-1"]);
+            await regenerateTabularCell("r1", "row-1", 0);
+            expect(listener).toHaveBeenCalledTimes(5);
+            fetchMock.mockResolvedValueOnce(jsonResponse({ detail: "Forbidden" }, { status: 403 }));
+            await expect(updateTabularReview("r1", { title: "Refused" })).rejects.toThrow();
+            expect(listener).toHaveBeenCalledTimes(5);
+        } finally { unsubscribe(); }
+    });
+
     it("createTabularReview posts the folder grouping mode through unchanged", async () => {
         fetchMock.mockResolvedValue(jsonResponse({ id: "r1" }));
 
@@ -1671,6 +2159,7 @@ describe("tabular review chats", () => {
         expect(JSON.parse(lastFetchCall().init.body as string)).toEqual({
             messages: [{ role: "user", content: "q" }],
             chat_id: "c9",
+            time_zone: BROWSER_TIME_ZONE,
         });
     });
 });
@@ -1949,6 +2438,41 @@ describe("thin endpoint wrappers", () => {
             method: "DELETE",
         },
         {
+            name: "deleteAllChats in an organization workspace",
+            call: () => deleteAllChats("org-1"),
+            url: "/user/chats?workspace=org-1",
+            method: "DELETE",
+        },
+        {
+            name: "deleteAllProjects in Personal",
+            call: () => deleteAllProjects("personal"),
+            url: "/user/projects?workspace=personal",
+            method: "DELETE",
+        },
+        {
+            name: "deleteAllTabularReviews in an organization workspace",
+            call: () => deleteAllTabularReviews("org-1"),
+            url: "/user/tabular-reviews?workspace=org-1",
+            method: "DELETE",
+        },
+        {
+            name: "deleteAllMemories in an organization workspace",
+            call: () => deleteAllMemories("org-1"),
+            url: "/user/memories?workspace=org-1",
+            method: "DELETE",
+        },
+        {
+            name: "setOrgMemberDataPolicy",
+            call: () =>
+                setOrgMemberDataPolicy("org-1", {
+                    allow_member_exports: true,
+                    allow_member_deletes: false,
+                }),
+            url: "/orgs/org-1/member-data-policy",
+            method: "PUT",
+            body: { allow_member_exports: true, allow_member_deletes: false },
+        },
+        {
             name: "getUserMemory",
             call: () => getUserMemory(),
             url: "/user/memory",
@@ -1959,6 +2483,42 @@ describe("thin endpoint wrappers", () => {
             url: "/user/memory",
             method: "PUT",
             body: { content: "# Preferences", expected_revision: 3 },
+        },
+        {
+            name: "getCustomInstructions",
+            call: () => getCustomInstructions(),
+            url: "/user/custom-instructions",
+        },
+        {
+            name: "updateCustomInstructions",
+            call: () => updateCustomInstructions("Use British spelling."),
+            url: "/user/custom-instructions",
+            method: "PUT",
+            body: { content: "Use British spelling." },
+        },
+        {
+            name: "getResponseStyle",
+            call: () => getResponseStyle(),
+            url: "/user/response-style",
+        },
+        {
+            name: "updateResponseStyle",
+            call: () => updateResponseStyle({ verbosity: "concise" }),
+            url: "/user/response-style",
+            method: "PUT",
+            body: { verbosity: "concise" },
+        },
+        {
+            name: "getWebSearchSettings",
+            call: () => getWebSearchSettings(),
+            url: "/user/web-search",
+        },
+        {
+            name: "updateWebSearchSettings",
+            call: () => updateWebSearchSettings({ enabled: true }),
+            url: "/user/web-search",
+            method: "PUT",
+            body: { enabled: true },
         },
         {
             name: "setUserMemoryEnabled",
@@ -2029,11 +2589,6 @@ describe("thin endpoint wrappers", () => {
             body: { enabled: true },
         },
         {
-            name: "getApiKeyStatus",
-            call: () => getApiKeyStatus(),
-            url: "/user/api-keys",
-        },
-        {
             name: "saveApiKey",
             call: () => saveApiKey("claude", "sk-ant-1"),
             url: "/user/api-keys/claude",
@@ -2048,6 +2603,29 @@ describe("thin endpoint wrappers", () => {
             url: "/user/api-keys/openai",
             method: "PUT",
             body: { api_key: null },
+        },
+        {
+            // A cloud key travels with its region/endpoint in one request.
+            name: "saveApiKey (with settings)",
+            call: () =>
+                saveApiKey("bedrock", "bedrock-key", { region: "us-east-1" }),
+            url: "/user/api-keys/bedrock",
+            method: "PUT",
+            body: { api_key: "bedrock-key", settings: { region: "us-east-1" } },
+        },
+        {
+            name: "setApiKeyEnabled (off)",
+            call: () => setApiKeyEnabled("openai", false),
+            url: "/user/api-keys/openai",
+            method: "PATCH",
+            body: { enabled: false },
+        },
+        {
+            name: "setApiKeyEnabled (on)",
+            call: () => setApiKeyEnabled("bedrock", true),
+            url: "/user/api-keys/bedrock",
+            method: "PATCH",
+            body: { enabled: true },
         },
         // MCP connectors
         {
@@ -2108,6 +2686,71 @@ describe("thin endpoint wrappers", () => {
             method: "PATCH",
             body: { enabled: true },
         },
+        // Native Google Drive. Unlike the MCP connectors above these are
+        // first-party endpoints under /user/integrations, and the three verbs
+        // share one path — so the route/method pairing is what keeps
+        // "check status" from accidentally becoming "revoke my tokens".
+        {
+            name: "getGoogleDriveStatus",
+            call: () => getGoogleDriveStatus(),
+            url: "/user/integrations/google-drive",
+        },
+        {
+            name: "startGoogleDriveOAuth",
+            call: () => startGoogleDriveOAuth(),
+            url: "/user/integrations/google-drive/oauth/start",
+            method: "POST",
+        },
+        {
+            name: "cancelGoogleDriveOAuth",
+            call: () => cancelGoogleDriveOAuth("state-token"),
+            url: "/user/integrations/google-drive/oauth/cancel",
+            method: "POST",
+            body: { state: "state-token" },
+        },
+        {
+            name: "disconnectGoogleDrive",
+            call: () => disconnectGoogleDrive(),
+            url: "/user/integrations/google-drive",
+            method: "DELETE",
+        },
+        { name: "getGoogleWorkspaceStatus", call: () => getGoogleWorkspaceStatus("gmail"), url: "/user/integrations/gmail" },
+        { name: "startGoogleWorkspaceOAuth", call: () => startGoogleWorkspaceOAuth("gmail"), url: "/user/integrations/gmail/oauth/start", method: "POST" },
+        { name: "cancelGoogleWorkspaceOAuth", call: () => cancelGoogleWorkspaceOAuth("gmail", "state"), url: "/user/integrations/gmail/oauth/cancel", method: "POST", body: { state: "state" } },
+        { name: "disconnectGoogleWorkspace", call: () => disconnectGoogleWorkspace("gmail"), url: "/user/integrations/gmail", method: "DELETE" },
+        { name: "updateGoogleWorkspaceSettings", call: () => updateGoogleWorkspaceSettings("gmail", { requireWriteApproval: true }), url: "/user/integrations/gmail", method: "PATCH", body: { requireWriteApproval: true } },
+        { name: "setGoogleWorkspaceToolEnabled", call: () => setGoogleWorkspaceToolEnabled("google-calendar", "google_calendar_create_event", false), url: "/user/integrations/google-calendar/tools/google_calendar_create_event", method: "PATCH", body: { enabled: false } },
+        { name: "updateGoogleDriveSettings", call: () => updateGoogleDriveSettings({ enabled: false }), url: "/user/integrations/google-drive", method: "PATCH", body: { enabled: false } },
+        { name: "setGoogleDriveToolEnabled", call: () => setGoogleDriveToolEnabled("google_drive_read_file", true), url: "/user/integrations/google-drive/tools/google_drive_read_file", method: "PATCH", body: { enabled: true } },
+        { name: "createGoogleDrivePickerSession", call: () => createGoogleDrivePickerSession(), url: "/user/integrations/google-drive/picker-session", method: "POST" },
+        // Connections are per workspace: each call names the one it is in.
+        { name: "listMcpConnectors (workspace)", call: () => listMcpConnectors("org-1"), url: "/user/mcp-connectors?workspace=org-1" },
+        {
+            name: "createMcpConnector (workspace)",
+            call: () => createMcpConnector({ name: "Slack", serverUrl: "https://mcp.slack.com/mcp" }, "org-1"),
+            url: "/user/mcp-connectors?workspace=org-1",
+            method: "POST",
+            body: { name: "Slack", serverUrl: "https://mcp.slack.com/mcp" },
+        },
+        { name: "getGoogleDriveStatus (workspace)", call: () => getGoogleDriveStatus("org-1"), url: "/user/integrations/google-drive?workspace=org-1" },
+        { name: "startGoogleDriveOAuth (workspace)", call: () => startGoogleDriveOAuth("personal"), url: "/user/integrations/google-drive/oauth/start?workspace=personal", method: "POST" },
+        { name: "cancelGoogleDriveOAuth (workspace)", call: () => cancelGoogleDriveOAuth("state", "org-1"), url: "/user/integrations/google-drive/oauth/cancel?workspace=org-1", method: "POST", body: { state: "state" } },
+        { name: "disconnectGoogleDrive (workspace)", call: () => disconnectGoogleDrive("org-1"), url: "/user/integrations/google-drive?workspace=org-1", method: "DELETE" },
+        { name: "updateGoogleDriveSettings (workspace)", call: () => updateGoogleDriveSettings({ readOnly: true }, "org-1"), url: "/user/integrations/google-drive?workspace=org-1", method: "PATCH", body: { readOnly: true } },
+        { name: "setGoogleDriveToolEnabled (workspace)", call: () => setGoogleDriveToolEnabled("google_drive_read_file", false, "org-1"), url: "/user/integrations/google-drive/tools/google_drive_read_file?workspace=org-1", method: "PATCH", body: { enabled: false } },
+        { name: "createGoogleDrivePickerSession (workspace)", call: () => createGoogleDrivePickerSession("org-1"), url: "/user/integrations/google-drive/picker-session?workspace=org-1", method: "POST" },
+        { name: "getGoogleWorkspaceStatus (workspace)", call: () => getGoogleWorkspaceStatus("gmail", "org-1"), url: "/user/integrations/gmail?workspace=org-1" },
+        { name: "startGoogleWorkspaceOAuth (workspace)", call: () => startGoogleWorkspaceOAuth("google-calendar", "org-1"), url: "/user/integrations/google-calendar/oauth/start?workspace=org-1", method: "POST" },
+        { name: "cancelGoogleWorkspaceOAuth (workspace)", call: () => cancelGoogleWorkspaceOAuth("gmail", "state", "org-1"), url: "/user/integrations/gmail/oauth/cancel?workspace=org-1", method: "POST", body: { state: "state" } },
+        { name: "disconnectGoogleWorkspace (workspace)", call: () => disconnectGoogleWorkspace("gmail", "org-1"), url: "/user/integrations/gmail?workspace=org-1", method: "DELETE" },
+        { name: "updateGoogleWorkspaceSettings (workspace)", call: () => updateGoogleWorkspaceSettings("gmail", { enabled: false }, "org-1"), url: "/user/integrations/gmail?workspace=org-1", method: "PATCH", body: { enabled: false } },
+        { name: "setGoogleWorkspaceToolEnabled (workspace)", call: () => setGoogleWorkspaceToolEnabled("gmail", "gmail_send", true, "org-1"), url: "/user/integrations/gmail/tools/gmail_send?workspace=org-1", method: "PATCH", body: { enabled: true } },
+        // CourtListener: a per-workspace switch and own token.
+        { name: "getCourtListenerConnector", call: () => getCourtListenerConnector(), url: "/user/integrations/courtlistener" },
+        { name: "getCourtListenerConnector (workspace)", call: () => getCourtListenerConnector("org-1"), url: "/user/integrations/courtlistener?workspace=org-1" },
+        { name: "setCourtListenerConnectorEnabled", call: () => setCourtListenerConnectorEnabled(false, "org-1"), url: "/user/integrations/courtlistener?workspace=org-1", method: "PATCH", body: { enabled: false } },
+        { name: "saveCourtListenerConnectorToken", call: () => saveCourtListenerConnectorToken("tok", "personal"), url: "/user/integrations/courtlistener/token?workspace=personal", method: "PUT", body: { token: "tok" } },
+        { name: "deleteCourtListenerConnectorToken", call: () => deleteCourtListenerConnectorToken("org-1"), url: "/user/integrations/courtlistener/token?workspace=org-1", method: "DELETE" },
         // Projects
         {
             name: "getProject",
@@ -2274,11 +2917,6 @@ describe("thin endpoint wrappers", () => {
         },
         // Standalone documents & versions
         {
-            name: "listStandaloneDocuments",
-            call: () => listStandaloneDocuments(),
-            url: "/single-documents",
-        },
-        {
             name: "getDocument",
             call: () => getDocument("d1"),
             url: "/single-documents/d1",
@@ -2359,18 +2997,16 @@ describe("thin endpoint wrappers", () => {
             },
         },
         {
+            name: "leaveChat",
+            call: () => leaveChat("c1"),
+            url: "/chat/c1/leave",
+            method: "POST",
+        },
+        {
             name: "deleteChat",
             call: () => deleteChat("c1"),
             url: "/chat/c1",
             method: "DELETE",
-        },
-        {
-            name: "generateChatTitle",
-            call: () =>
-                generateChatTitle("c1", "first message", "gpt-5.6-terra"),
-            url: "/chat/c1/generate-title",
-            method: "POST",
-            body: { message: "first message", model: "gpt-5.6-terra" },
         },
         {
             name: "getChatPeople",
@@ -2604,6 +3240,8 @@ describe("thin endpoint wrappers", () => {
             method: "POST",
             body: { name: "Firm matter", org_id: "org-1" },
         },
+        { name: "listDeletedOrganizations", call: () => listDeletedOrganizations(), url: "/orgs/deleted" },
+        { name: "restoreOrganization", call: () => restoreOrganization("org-1"), url: "/orgs/org-1/restore", method: "POST" },
         {
             name: "listOrgs",
             call: () => listOrgs(),
@@ -2633,11 +3271,6 @@ describe("thin endpoint wrappers", () => {
             call: () => deleteOrg("org-1"),
             url: "/orgs/org-1",
             method: "DELETE",
-        },
-        {
-            name: "listOrgResources",
-            call: () => listOrgResources("org-1"),
-            url: "/orgs/org-1/resources",
         },
         {
             name: "listOrgMembers",
@@ -2702,6 +3335,65 @@ describe("thin endpoint wrappers", () => {
             call: () => declineOrgInvitation("inv-1"),
             url: "/user/invitations/inv-1/decline",
             method: "POST",
+        },
+        {
+            name: "deleteOrgData", call: () => deleteOrgData("org-1", "projects"),
+            url: "/orgs/org-1/data/projects", method: "DELETE",
+        },
+        {
+            name: "saveOrgLogo", call: () => saveOrgLogo("org-1", "data:image/png;base64,test"),
+            url: "/orgs/org-1/logo", method: "PUT", body: { data_url: "data:image/png;base64,test" },
+        },
+        {
+            name: "deleteOrgLogo", call: () => deleteOrgLogo("org-1"),
+            url: "/orgs/org-1/logo", method: "DELETE",
+        },
+        {
+            name: "getOrgApiKeys", call: () => getOrgApiKeys("org-1"), url: "/orgs/org-1/api-keys",
+        },
+        {
+            name: "saveOrgApiKey (clear)", call: () => saveOrgApiKey("org-1", "openai", null),
+            url: "/orgs/org-1/api-keys/openai", method: "PUT", body: { api_key: null },
+        },
+        {
+            name: "saveOrgApiKey (provider settings)", call: () => saveOrgApiKey("org-1", "bedrock", "synthetic-key", { region: "us-east-1" }),
+            url: "/orgs/org-1/api-keys/bedrock", method: "PUT", body: { api_key: "synthetic-key", settings: { region: "us-east-1" } },
+        },
+        {
+            name: "saveOrgRouterModels", call: () => saveOrgRouterModels("org-1", "openrouter", ["provider/model"]),
+            url: "/orgs/org-1/api-keys/openrouter/models", method: "PUT", body: { model_ids: ["provider/model"] },
+        },
+        {
+            name: "setOrgApiKeyEnabled", call: () => setOrgApiKeyEnabled("org-1", "openai", false),
+            url: "/orgs/org-1/api-keys/openai", method: "PATCH", body: { enabled: false },
+        },
+        {
+            name: "getOrgMemberHandover", call: () => getOrgMemberHandover("org-1", "user-2"),
+            url: "/orgs/org-1/members/user-2/handover",
+        },
+        {
+            name: "getOrgMemberHandover (bulk)", call: () => getOrgMemberHandover("org-1", "user-2", ["user-2", "user-3"]),
+            url: "/orgs/org-1/members/user-2/handover?departing_user_ids=user-2%2Cuser-3",
+        },
+        {
+            name: "removeOrgMember (successor)", call: () => removeOrgMember("org-1", "user-2", "user-3"),
+            url: "/orgs/org-1/members/user-2?assign_to=user-3", method: "DELETE",
+        },
+        {
+            name: "getUserMemory (workspace)", call: () => getUserMemory(undefined, "org-1"),
+            url: "/user/memory?workspace=org-1",
+        },
+        {
+            name: "updateUserMemory (workspace)", call: () => updateUserMemory("# Preferences", 3, "org-1"),
+            url: "/user/memory?workspace=org-1", method: "PUT", body: { content: "# Preferences", expected_revision: 3 },
+        },
+        {
+            name: "setUserMemoryEnabled (workspace)", call: () => setUserMemoryEnabled(false, "org-1"),
+            url: "/user/memory/settings?workspace=org-1", method: "PATCH", body: { enabled: false },
+        },
+        {
+            name: "getOpenRouterModels (workspace)", call: () => getOpenRouterModels("org-1"),
+            url: "/models/openrouter?workspace=org-1",
         },
         // Per-recipient project access grants.
         {
@@ -2805,6 +3497,9 @@ describe("unwrapping and blob wrappers", () => {
         ["OpenRouter", getOpenRouterModels, "/models/openrouter"],
         ["Vercel AI Gateway", getVercelModels, "/models/vercel"],
         ["OpenCode Go", getOpenCodeGoModels, "/models/opencode-go"],
+        ["Amazon Bedrock", getBedrockModels, "/models/bedrock"],
+        ["xAI", getXaiModels, "/models/xai"],
+        ["custom endpoint", getCustomEndpointModels, "/models/custom"],
     ])("loads the %s model catalog", async (_label, load, path) => {
         const models = [{ id: "openai/gpt-5.4", label: "GPT-5.4" }];
         fetchMock.mockResolvedValue(jsonResponse({ models }));
@@ -2856,6 +3551,27 @@ describe("unwrapping and blob wrappers", () => {
         ]);
     });
 
+    it("reads a panel document in the workspace it is given, and never shares the request with another", async () => {
+        const document = {
+            document_id: "case:789",
+            title: "Workspace case",
+            type: "case",
+            metadata: [],
+            quotes: [],
+        };
+        fetchMock.mockImplementation(async () => jsonResponse(document));
+
+        await Promise.all([
+            getPanelDocument("case:789", "org-1"),
+            getPanelDocument("case:789", "personal"),
+        ]);
+        const urls = fetchMock.mock.calls.map((call) => call[0]);
+        expect(urls).toEqual([
+            "/api/documents/case%3A789?workspace=org-1",
+            "/api/documents/case%3A789?workspace=personal",
+        ]);
+    });
+
     it("rejects invalid panel documents and permits a later retry", async () => {
         fetchMock
             .mockResolvedValueOnce(
@@ -2880,27 +3596,6 @@ describe("unwrapping and blob wrappers", () => {
         expect(fetchMock).toHaveBeenCalledTimes(2);
     });
 
-    it("exportChatData and exportTabularReviewsData hit their export routes", async () => {
-        fetchMock.mockImplementation(() =>
-            Promise.resolve(
-                new Response("bytes", {
-                    status: 200,
-                    headers: {
-                        "content-disposition": 'attachment; filename="x.zip"',
-                    },
-                }),
-            ),
-        );
-
-        const chats = await exportChatData();
-        expect(lastFetchCall().url).toBe("/api/user/chats/export");
-        expect(chats.filename).toBe("x.zip");
-        expect(await chats.blob.text()).toBe("bytes");
-
-        await exportTabularReviewsData();
-        expect(lastFetchCall().url).toBe("/api/user/tabular-reviews/export");
-    });
-
     it("downloadUserExport streams the finished artifact by encoded id", async () => {
         fetchMock.mockResolvedValue(
             new Response("csv-bytes", {
@@ -2917,5 +3612,158 @@ describe("unwrapping and blob wrappers", () => {
         expect(lastFetchCall().url).toBe("/api/user/exports/exp%2F1/download");
         expect(filename).toBe("history.csv");
         expect(await blob.text()).toBe("csv-bytes");
+    });
+});
+
+// ---------------------------------------------------------------------------
+// Active workspace: every scoped list can be narrowed, and none is narrowed
+// unless a workspace is named — the route treats the parameter's absence as
+// "every workspace", which is what callers outside the app shell rely on.
+// ---------------------------------------------------------------------------
+describe("workspace parameter on list requests", () => {
+    const ORG = "7b1d9d0e-3c5a-4f6e-9a51-0c2f7d3e8a11";
+    const requests: [string, (workspace?: string) => Promise<unknown>, string][] = [
+        ["searchProjectDirectory", (workspace) => searchProjectDirectory({ search: "matter", workspace }), "/api/projects"],
+        ["listProjects (IDE)", (workspace) => listProjects({ participatingOnly: true, workspace }), "/api/projects"],
+        ["listProjectsPage", (workspace) => listProjectsPage({ workspace }), "/api/projects"],
+        [
+            "listProjectSummaries",
+            (workspace) => listProjectSummaries({ workspace }),
+            "/api/projects",
+        ],
+        ["listProjectIds", (workspace) => listProjectIds({ workspace }), "/api/projects/ids"],
+        [
+            "getProjectFilterOptions",
+            (workspace) => getProjectFilterOptions(undefined, workspace),
+            "/api/projects/filter-options",
+        ],
+        ["listChats", (workspace) => listChats({ workspace }), "/api/chat"],
+        [
+            "listTabularReviews",
+            (workspace) => listTabularReviews(undefined, { workspace }),
+            "/api/tabular-review",
+        ],
+        [
+            "listTabularReviewIds",
+            (workspace) => listTabularReviewIds(undefined, { workspace }),
+            "/api/tabular-review/ids",
+        ],
+        ["listWorkflows", (workspace) => listWorkflows("assistant", workspace), "/api/workflows"],
+        ["listQuickActions", (workspace) => listQuickActions("app", workspace), "/api/quick-actions"],
+        ["listWorkflowsPage", (workspace) => listWorkflowsPage({ workspace }), "/api/workflows"],
+        ["listWorkflowIds", (workspace) => listWorkflowIds({ workspace }), "/api/workflows/ids"],
+        [
+            "getWorkflowFilterOptions",
+            (workspace) => getWorkflowFilterOptions({ workspace }),
+            "/api/workflows/filter-options",
+        ],
+    ];
+
+    const workspaceOf = (url: string) =>
+        new URL(url, "http://localhost").searchParams.get("workspace");
+    const pathOf = (url: string) => new URL(url, "http://localhost").pathname;
+
+    it.each(requests)("%s sends the workspace it is given", async (_name, request, path) => {
+        // A fresh response per call: a Response body can only be read once.
+        fetchMock.mockImplementation(async () => jsonResponse([]));
+
+        await request(ORG);
+        expect(pathOf(lastFetchCall().url)).toBe(path);
+        expect(workspaceOf(lastFetchCall().url)).toBe(ORG);
+
+        await request("personal");
+        expect(workspaceOf(lastFetchCall().url)).toBe("personal");
+    });
+
+    it.each(requests)("%s sends no workspace when none is given", async (_name, request, path) => {
+        // A fresh response per call: a Response body can only be read once.
+        fetchMock.mockImplementation(async () => jsonResponse([]));
+
+        await request();
+        expect(pathOf(lastFetchCall().url)).toBe(path);
+        expect(workspaceOf(lastFetchCall().url)).toBeNull();
+    });
+});
+
+
+describe("organization archives", () => {
+    it("lists the archive by departure", async () => {
+        fetchMock.mockResolvedValue(jsonResponse({ departures: [], truncated: false }));
+        expect(await listOrgDepartures("org")).toEqual({ departures: [], truncated: false });
+        expect(lastFetchCall().url).toBe("/api/orgs/org/departures");
+    });
+    it("sends the new owner and permanent deletion for several items at once", async () => {
+        fetchMock.mockImplementation(async () => jsonResponse({ resolved: 2, unresolved: 0 }));
+        expect(await reassignOrgDepartureArchives("org", ["a", "b"], "member")).toEqual({ resolved: 2, unresolved: 0 });
+        expect(lastFetchCall()).toMatchObject({ url: "/api/orgs/org/archives/recover", init: { method: "POST", body: JSON.stringify({ archive_ids: ["a", "b"], assign_to: "member" }) } });
+        await deleteOrgDepartureArchives("org", ["a", "b"]);
+        expect(lastFetchCall()).toMatchObject({ url: "/api/orgs/org/archives/delete", init: { method: "POST", body: JSON.stringify({ archive_ids: ["a", "b"] }) } });
+    });
+});
+
+
+describe("organization logos", () => {
+    it.each(["data:image/png;base64,test", ""])("reads the saved logo or an empty logo (%s)", async (dataUrl) => {
+        fetchMock.mockResolvedValue(jsonResponse({ data_url: dataUrl }));
+        expect(await getOrgLogo("org-1")).toBe(dataUrl || null);
+        expect(lastFetchCall().url).toBe("/api/orgs/org-1/logo");
+    });
+
+    it("treats a missing logo as empty without hiding server or network errors", async () => {
+        fetchMock.mockResolvedValueOnce(jsonResponse({ detail: "Not found" }, { status: 404 }));
+        expect(await getOrgLogo("org-1")).toBeNull();
+        fetchMock.mockResolvedValueOnce(jsonResponse({ detail: "Unavailable" }, { status: 503 }));
+        await expect(getOrgLogo("org-1")).rejects.toMatchObject({ status: 503 });
+        const error = new TypeError("Network unavailable");
+        fetchMock.mockRejectedValueOnce(error);
+        await expect(getOrgLogo("org-1")).rejects.toBe(error);
+    });
+});
+
+
+describe("profile photos", () => {
+    it("saves a raster data URL through the authenticated gateway", async () => {
+        const photo = "data:image/png;base64,iVBORw0KGgo=";
+        fetchMock.mockResolvedValue(jsonResponse({ profilePhoto: photo }));
+        expect(await setUserProfilePhoto(photo)).toEqual({ profilePhoto: photo });
+        const { url, init } = lastFetchCall();
+        expect(url).toContain("/user/profile/photo");
+        expect(init.method).toBe("PUT");
+        expect(new Headers(init.headers).get("Content-Type")).toBe("application/json");
+        expect(JSON.parse(init.body as string)).toEqual({ data_url: photo });
+    });
+    it("removes a photo without sending image data", async () => {
+        fetchMock.mockResolvedValue(jsonResponse({ profilePhoto: null }));
+        await setUserProfilePhoto(null);
+        const { url, init } = lastFetchCall();
+        expect(url).toContain("/user/profile/photo");
+        expect(init.method).toBe("DELETE");
+        expect(init.body).toBeUndefined();
+    });
+});
+
+
+describe("organization private content", () => {
+    it("paginates and encodes private-content search", async () => {
+        const page = { items: [], total: 0 };
+        fetchMock.mockImplementation(async () => jsonResponse(page));
+        expect(await listOrgPrivateContent("org-1")).toEqual(page);
+        expect(lastFetchCall().url).toBe("/api/orgs/org-1/private-content?limit=50&offset=0&search=");
+        await listOrgPrivateContent("org-1", 50, "Alex & Pat");
+        expect(lastFetchCall().url).toBe("/api/orgs/org-1/private-content?limit=50&offset=50&search=Alex+%26+Pat");
+    });
+    it.each([true, false])("sets private-content permission to %s", async (enabled) => {
+        fetchMock.mockResolvedValue(jsonResponse({}));
+        await setOrgPrivateContentPermission("org-1", "member-1", enabled);
+        expect(lastFetchCall()).toMatchObject({ url: "/api/orgs/org-1/members/member-1/private-content-permission", init: {
+            method: "PUT", body: JSON.stringify({ enabled }),
+        } });
+    });
+    it("opens and closes explicit read access to the requested item", async () => {
+        fetchMock.mockImplementation(async () => jsonResponse({}));
+        await openOrgPrivateContent("org-1", "document", "doc-1");
+        expect(lastFetchCall()).toMatchObject({ url: "/api/orgs/org-1/private-content/document/doc-1/open", init: { method: "POST" } });
+        await closeOrgPrivateContent("org-1", "document", "doc-1");
+        expect(lastFetchCall()).toMatchObject({ url: "/api/orgs/org-1/private-content/document/doc-1", init: { method: "DELETE" } });
     });
 });

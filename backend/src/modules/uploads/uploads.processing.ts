@@ -14,7 +14,7 @@ import {
 
 import { createHash, randomUUID } from "node:crypto";
 import { createWriteStream } from "node:fs";
-import { mkdir, mkdtemp, readdir, rm, stat } from "node:fs/promises";
+import { mkdir, mkdtemp, readdir, readFile, rm, stat } from "node:fs/promises";
 import { hostname, tmpdir } from "node:os";
 import { join } from "node:path";
 import { Transform } from "node:stream";
@@ -22,15 +22,29 @@ import { pipeline } from "node:stream/promises";
 import { pathToFileURL } from "node:url";
 
 import { resolveContentOrgId } from "../../lib/access";
+import { AppError } from "../../lib/appError";
 import { recordAudit } from "../../lib/audit";
 import { enqueueStorageCleanup } from "../../lib/dbq/enqueue";
+import { runIsolated } from "../../lib/dbq/jobScope";
 import { convertedPdfKey, officeFileToPdf } from "../../lib/convert";
+import {
+  markStage,
+  reportError,
+  setOperation,
+} from "../../lib/observability/sentry";
+import {
+  createPollFailureGate,
+  type PollFailureGate,
+} from "../../lib/observability/pollFailureGate";
+import { asReportableError } from "../../lib/httpError";
 import { shouldConvertToPdf } from "../../lib/documentTypes";
+import { countPagesWithoutText } from "../../lib/pdfText";
 import { uploadJobWallClockMs } from "../../lib/runtimeConfig";
 import {
   copyFile,
   createFileReadStream,
-  deleteFile,
+  deleteFileBestEffort,
+  deleteFilesBestEffort,
   StorageOperationError,
   storageKey,
   uploadFileFromPath,
@@ -85,6 +99,8 @@ type UploadJobRow = {
 export const UPLOAD_JOB_MAX_ATTEMPTS = 3;
 export const UPLOAD_JOB_LEASE_SECONDS = 30 * 60;
 const UPLOAD_WORKER_POLL_MS = 1_000;
+/** Ceiling for the idle poll interval while every iteration keeps failing. */
+const UPLOAD_WORKER_MAX_BACKOFF_MS = 30_000;
 const UPLOAD_WORKER_HEARTBEAT_MS = 60_000;
 const UPLOAD_SESSION_RETENTION_MS = 7 * 24 * 60 * 60 * 1000;
 const UPLOAD_TEMP_RETENTION_MS = 2 * UPLOAD_JOB_LEASE_SECONDS * 1000;
@@ -95,6 +111,7 @@ const TERMINAL_UPLOAD_ERROR_CODES = new Set([
   // The destination document no longer exists. Retrying cannot make it exist
   // again — it can only put it back, which is the bug this code prevents.
   "document_deleted",
+  "document_changed",
 ]);
 
 /**
@@ -105,16 +122,21 @@ const TERMINAL_UPLOAD_ERROR_CODES = new Set([
  * stop, mark the file failed, and clean up whatever bytes this job wrote —
  * never to recreate the row.
  */
-class DeletedDocumentError extends Error {
+class DeletedDocumentError extends AppError {
   /** Objects this job uploaded that nothing will reference now. */
   readonly orphanedKeys: string[];
 
   constructor(documentId: string, orphanedKeys: (string | null)[] = []) {
-    super(`document_deleted:${documentId}`);
-    this.name = "DeletedDocumentError";
+    super("upload.document_deleted", `document_deleted:${documentId}`);
     this.orphanedKeys = orphanedKeys.filter(
       (key): key is string => typeof key === "string" && key.length > 0,
     );
+  }
+}
+
+class ChangedDocumentError extends AppError {
+  constructor(readonly orphanedKeys: string[] = []) {
+    super("upload.document_changed", "document_changed");
   }
 }
 
@@ -166,6 +188,22 @@ async function countPdfPages(filePath: string): Promise<number | null> {
   }
 }
 
+// Measured once at upload so the document list can flag scanned PDFs without
+// re-reading them. Null when the PDF cannot be parsed.
+async function countTextlessPdfPages(filePath: string): Promise<number | null> {
+  try {
+    const bytes = await readFile(filePath);
+    return await countPagesWithoutText(
+      bytes.buffer.slice(
+        bytes.byteOffset,
+        bytes.byteOffset + bytes.byteLength,
+      ) as ArrayBuffer,
+    );
+  } catch {
+    return null;
+  }
+}
+
 async function buildPdfRendition(args: {
   sourceFilePath: string;
   workingDirectory: string;
@@ -178,16 +216,33 @@ async function buildPdfRendition(args: {
   if (args.fileType === "pdf") return args.sourceStoragePath;
   if (!shouldConvertToPdf(args.fileType)) return null;
   try {
+    markStage("conversion");
     const pdfPath = await officeFileToPdf(
       args.sourceFilePath,
       args.workingDirectory,
     );
-    const key = args.versionSlug
-      ? `converted-pdfs/${args.userId}/${args.documentId}/${args.versionSlug}.pdf`
-      : convertedPdfKey(args.userId, args.documentId);
+    const key = convertedPdfKey(
+      args.userId,
+      args.documentId,
+      args.versionSlug,
+    );
     await uploadFileFromPath(key, pdfPath, "application/pdf");
     return key;
   } catch (error) {
+    // Non-fatal for the upload (the original stays usable) but a conversion
+    // that fails is either a LibreOffice regression or a malformed file we
+    // should know about — grouped by file type so a format-wide break is one
+    // issue with a count, not noise.
+    reportError(error, {
+      level: "warning",
+      tags: {
+        component: "upload-worker",
+        stage: "conversion",
+        file_type: args.fileType,
+      },
+      extra: { document_id: args.documentId },
+      fingerprint: ["upload-conversion-failed", args.fileType],
+    });
     console.error("[upload-worker] document conversion failed", {
       documentId: args.documentId,
       fileType: args.fileType,
@@ -270,7 +325,9 @@ async function requireSealedFile(
   } catch (error) {
     await removeTemporaryArtifact(directory);
     if (error instanceof StorageOperationError) {
-      throw new Error("sealed_upload_not_found", { cause: error });
+      throw new AppError("upload.sealed_missing", "sealed_upload_not_found", {
+        cause: error,
+      });
     }
     throw error;
   }
@@ -330,6 +387,11 @@ async function processCreatedDocument(
       .maybeSingle();
     if (workflowError) throw new Error(workflowError.message);
     orgId = (workflowRow as { org_id?: string | null } | null)?.org_id ?? null;
+  }
+  if (!orgId && (scope === "standalone" || scope === "library")) {
+    // Uploaded on its own: the workspace the session named, which was
+    // checked against the uploader's memberships when it was opened.
+    orgId = (destination.org_id as string | null | undefined) ?? null;
   }
 
   // The upsert below is what makes a retry idempotent — and, on a retry, what
@@ -395,6 +457,10 @@ async function processCreatedDocument(
   });
   const pageCount =
     file.file_type === "pdf" ? await countPdfPages(artifact.filePath) : null;
+  const textlessPageCount =
+    file.file_type === "pdf"
+      ? await countTextlessPdfPages(artifact.filePath)
+      : null;
 
   const { error: versionError } = await createDocumentVersion(db, {
     id: versionId,
@@ -407,6 +473,7 @@ async function processCreatedDocument(
     file_type: file.file_type,
     size_bytes: artifact.size,
     page_count: pageCount,
+    textless_page_count: textlessPageCount,
     content_sha256: artifact.sha256,
   });
   // The document went while we were converting: stop, and hand the bytes we
@@ -433,6 +500,7 @@ async function processCreatedDocument(
     userId: session.user_id,
     userEmail: session.user_email,
     action: "document.uploaded",
+    orgId: document.org_id ?? null,
     title: file.filename,
     surface: projectId ? "project" : "assistant",
     projectId,
@@ -451,6 +519,7 @@ async function processCreatedDocument(
     file_type: file.file_type,
     size_bytes: artifact.size,
     page_count: pageCount,
+    textless_page_count: textlessPageCount,
     active_version_number: 1,
   };
 }
@@ -485,6 +554,10 @@ async function processNewDocumentVersion(
   });
   const pageCount =
     file.file_type === "pdf" ? await countPdfPages(artifact.filePath) : null;
+  const textlessPageCount =
+    file.file_type === "pdf"
+      ? await countTextlessPdfPages(artifact.filePath)
+      : null;
 
   const { data: version, error } = await createDocumentVersion(db, {
     id: versionId,
@@ -497,6 +570,7 @@ async function processNewDocumentVersion(
     file_type: file.file_type,
     size_bytes: artifact.size,
     page_count: pageCount,
+    textless_page_count: textlessPageCount,
     content_sha256: artifact.sha256,
   });
   // Adding a version to a document that has been deleted is the same race as
@@ -515,6 +589,7 @@ async function processNewDocumentVersion(
     file_type,
     size_bytes,
     page_count,
+    textless_page_count,
   } = version;
   return {
     id,
@@ -525,6 +600,7 @@ async function processNewDocumentVersion(
     file_type,
     size_bytes,
     page_count,
+    textless_page_count,
   };
 }
 
@@ -539,7 +615,7 @@ async function processReplacementDocumentVersion(
   const { data: current, error: currentError } = await db
     .from("document_versions")
     .select(
-      "id, storage_path, pdf_storage_path, version_number, source, created_at",
+      "id, storage_path, pdf_storage_path, version_number, source, created_at, filename, file_type, size_bytes, page_count, content_sha256",
     )
     .eq("id", versionId)
     .eq("document_id", documentId)
@@ -547,6 +623,28 @@ async function processReplacementDocumentVersion(
     .single();
   if (currentError || !current) {
     throw currentError ?? new Error("version_not_found");
+  }
+
+  const expectedHash = session.destination.expected_content_sha256 as string | undefined;
+  if (expectedHash) {
+    // A worker retry after committing the replacement must be idempotent.
+    if (current.content_sha256 === artifact.sha256) return {
+      id: current.id,
+      version_number: current.version_number,
+      source: current.source,
+      created_at: current.created_at,
+      filename: current.filename,
+      file_type: current.file_type,
+      size_bytes: current.size_bytes,
+      page_count: current.page_count,
+    };
+    let currentHash = current.content_sha256 as string | null;
+    if (!currentHash) {
+      const hash = createHash("sha256");
+      for await (const chunk of await createFileReadStream(current.storage_path)) hash.update(chunk);
+      currentHash = hash.digest("hex");
+    }
+    if (currentHash !== expectedHash) throw new ChangedDocumentError();
   }
 
   const versionSlug = file.resource_id.replace(/-/g, "");
@@ -557,17 +655,26 @@ async function processReplacementDocumentVersion(
     file.filename,
   );
   await copyFile(file.sealed_storage_path, sourcePath);
-  const pdfPath = await buildPdfRendition({
-    sourceFilePath: artifact.filePath,
-    workingDirectory: artifact.directory,
-    fileType: file.file_type,
-    userId: session.user_id,
-    documentId,
-    versionSlug,
-    sourceStoragePath: sourcePath,
-  });
+  // Editor saves only persist the source. Clearing the previous rendition in
+  // the same update prevents serving stale PDF content; lifecycle cleanup
+  // retires that object. An uploaded PDF is already its own rendition.
+  const pdfPath = session.destination.generate_pdf === false && file.file_type !== "pdf"
+    ? null
+    : await buildPdfRendition({
+        sourceFilePath: artifact.filePath,
+        workingDirectory: artifact.directory,
+        fileType: file.file_type,
+        userId: session.user_id,
+        documentId,
+        versionSlug,
+        sourceStoragePath: sourcePath,
+      });
   const pageCount =
     file.file_type === "pdf" ? await countPdfPages(artifact.filePath) : null;
+  const textlessPageCount =
+    file.file_type === "pdf"
+      ? await countTextlessPdfPages(artifact.filePath)
+      : null;
   const { data: updated, error } = await updateDocumentVersion(
     db,
     documentId,
@@ -579,10 +686,17 @@ async function processReplacementDocumentVersion(
       file_type: file.file_type,
       size_bytes: artifact.size,
       page_count: pageCount,
+      textless_page_count: textlessPageCount,
       content_sha256: artifact.sha256,
       created_at: new Date().toISOString(),
     },
+    expectedHash ? {
+      expectedStoragePath: current.storage_path,
+      expectedContentSha256: current.content_sha256 ?? null,
+    } : undefined,
   );
+  if (!error && !updated && expectedHash)
+    throw new ChangedDocumentError([sourcePath, ...(pdfPath ? [pdfPath] : [])]);
   if (error || !updated)
     throw error ?? new Error("version_update_returned_no_data");
 
@@ -658,7 +772,17 @@ async function heartbeatJob(db: Db, jobId: string, workerId: string) {
     .eq("locked_by", workerId)
     .select("id")
     .maybeSingle();
-  if (error || !data) throw error ?? new Error("upload_job_lease_lost");
+  if (error || !data) throw error ?? leaseLost();
+}
+
+/**
+ * The job row no longer says this worker holds it: another worker claimed
+ * it after the lease aged out, or a sweep retired it. Named, so Sentry files
+ * it under its own kind (MIKE-BACKEND-M grouped every code-less iteration
+ * failure as one anonymous "Failure in upload-worker / iteration").
+ */
+function leaseLost(): AppError {
+  return new AppError("upload.lease_lost", "upload_job_lease_lost");
 }
 
 async function refreshUploadSessionStatus(
@@ -692,14 +816,14 @@ async function removeFailedCreatedDocument(
   file: UploadFileRow,
 ): Promise<void> {
   if (session.purpose !== "document_create") return;
-  await Promise.all([
-    deleteFile(
+  markStage("failed-document-remove");
+  await deleteFilesBestEffort(
+    [
       storageKey(session.user_id, file.resource_id, file.filename),
-    ).catch(() => {}),
-    deleteFile(convertedPdfKey(session.user_id, file.resource_id)).catch(
-      () => {},
-    ),
-  ]);
+      convertedPdfKey(session.user_id, file.resource_id),
+    ],
+    "failed-document-remove",
+  );
   const { error } = await db
     .from("documents")
     .delete()
@@ -715,22 +839,28 @@ export async function processUploadJob(
   jobId: string,
   workerId: string,
 ): Promise<void> {
+  setOperation("documents.upload.complete");
+  markStage("claim");
+  // maybeSingle(): zero rows is a missing row, named below, not a PostgREST
+  // PGRST116 error. Database failures still arrive on the error path.
   const { data: job, error: jobError } = await db
     .from("upload_processing_jobs")
     .select("id, session_id, file_id, attempts, locked_by")
     .eq("id", jobId)
     .eq("status", "running")
     .eq("locked_by", workerId)
-    .single();
-  if (jobError || !job) throw jobError ?? new Error("upload_job_not_found");
+    .maybeSingle();
+  if (jobError || !job)
+    throw jobError ?? new AppError("upload.job_missing", "upload_job_not_found");
   const typedJob = job as UploadJobRow;
   const { data: session, error: sessionError } = await db
     .from("upload_sessions")
     .select("id, user_id, user_email, purpose, destination, status")
     .eq("id", typedJob.session_id)
-    .single();
+    .maybeSingle();
   if (sessionError || !session) {
-    throw sessionError ?? new Error("upload_session_not_found");
+    throw sessionError
+      ?? new AppError("upload.session_missing", "upload_session_not_found");
   }
   const typedSession = session as UploadSessionRow;
   const { data: fileRow, error: filesError } = await db
@@ -738,9 +868,10 @@ export async function processUploadJob(
     .select("*")
     .eq("session_id", typedSession.id)
     .eq("id", typedJob.file_id)
-    .single();
+    .maybeSingle();
   if (filesError || !fileRow) {
-    throw filesError ?? new Error("upload_session_file_not_found");
+    throw filesError
+      ?? new AppError("upload.file_missing", "upload_session_file_not_found");
   }
   const file = fileRow as UploadFileRow;
   const terminalUploadFailure =
@@ -759,13 +890,18 @@ export async function processUploadJob(
       return;
     }
     void heartbeatJob(db, jobId, workerId).catch((error) => {
+      reportError(error, {
+        level: "warning",
+        tags: { component: "upload-worker", stage: "heartbeat" },
+        extra: { job_id: jobId, worker_id: workerId },
+      });
       console.error("[upload-worker] heartbeat failed", { jobId, error });
     });
   }, UPLOAD_WORKER_HEARTBEAT_MS);
   heartbeat.unref();
 
   let failed = false;
-  let documentDeleted = false;
+  let terminalProcessingFailure = false;
   try {
     if (file.status !== "completed" && !terminalUploadFailure) {
       await heartbeatJob(db, jobId, workerId);
@@ -782,34 +918,50 @@ export async function processUploadJob(
 
       let result: unknown;
       try {
+        markStage("process-file");
         result = await processUploadFile(db, typedSession, file);
       } catch (error) {
         // A failed timer heartbeat makes ownership uncertain. Re-prove the
         // lease before recording even a failure result.
         await heartbeatJob(db, jobId, workerId);
         failed = true;
-        // A deleted destination is the one failure a retry makes WORSE.
-        documentDeleted = error instanceof DeletedDocumentError;
-        console.error("[upload-worker] file processing failed", {
-          jobId,
-          sessionId: typedSession.id,
-          fileId: file.id,
-          purpose: typedSession.purpose,
-          error,
-        });
+        // These failures cannot be fixed by retrying the same upload.
+        terminalProcessingFailure = error instanceof DeletedDocumentError || error instanceof ChangedDocumentError;
+        if (!(error instanceof ChangedDocumentError)) {
+          reportError(error, {
+            tags: {
+              component: "upload-worker",
+              stage: "process-file",
+              purpose: typedSession.purpose,
+            },
+            extra: {
+              job_id: jobId,
+              session_id: typedSession.id,
+              file_id: file.id,
+            },
+          });
+          console.error("[upload-worker] file processing failed", {
+            jobId,
+            sessionId: typedSession.id,
+            fileId: file.id,
+            purpose: typedSession.purpose,
+            error,
+          });
+        }
         const { error: updateError } = await db
           .from("upload_session_files")
           .update({
             status: "error",
-            error_code: documentDeleted
-              ? "document_deleted"
+            error_code: error instanceof ChangedDocumentError
+              ? "document_changed"
+              : error instanceof DeletedDocumentError ? "document_deleted"
               : "processing_failed",
             updated_at: new Date().toISOString(),
           })
           .eq("id", file.id)
           .eq("session_id", typedSession.id);
         if (updateError) throw updateError;
-        if (error instanceof DeletedDocumentError) {
+        if (error instanceof DeletedDocumentError || error instanceof ChangedDocumentError) {
           // Durable, best-effort: these objects have no row pointing at them
           // any more, so this job is the last place that knows their keys.
           await enqueueStorageCleanup(db, error.orphanedKeys);
@@ -833,7 +985,8 @@ export async function processUploadJob(
           .eq("id", file.id)
           .eq("session_id", typedSession.id);
         if (error) throw error;
-        await deleteFile(file.sealed_storage_path).catch(() => {});
+        markStage("sealed-source-after-process");
+        await deleteFileBestEffort(file.sealed_storage_path, "sealed-source-after-process");
         await heartbeatJob(db, jobId, workerId);
       }
     }
@@ -842,12 +995,10 @@ export async function processUploadJob(
   }
 
   const now = new Date().toISOString();
-  // `documentDeleted` sits outside the attempt budget on purpose: retrying a
-  // vanished destination cannot succeed, and the retry is exactly what put
-  // the deleted document back.
+  // Deleted destinations and stale editor saves cannot succeed on retry.
   if (
     failed &&
-    !documentDeleted &&
+    !terminalProcessingFailure &&
     typedJob.attempts < UPLOAD_JOB_MAX_ATTEMPTS
   ) {
     const retryAt = new Date(
@@ -868,7 +1019,7 @@ export async function processUploadJob(
       .select("id")
       .maybeSingle();
     if (retryError || !retried) {
-      throw retryError ?? new Error("upload_job_lease_lost");
+      throw retryError ?? leaseLost();
     }
     const { error: fileRetryError } = await db
       .from("upload_session_files")
@@ -894,9 +1045,10 @@ export async function processUploadJob(
       .select("sealed_storage_path")
       .eq("session_id", typedSession.id)
       .eq("status", "error");
+    markStage("failed-file-sealed");
     for (const failedFile of failedFiles ?? []) {
       if (failedFile.sealed_storage_path) {
-        await deleteFile(failedFile.sealed_storage_path).catch(() => {});
+        await deleteFileBestEffort(failedFile.sealed_storage_path, "failed-file-sealed");
       }
     }
   }
@@ -914,7 +1066,7 @@ export async function processUploadJob(
     .select("id")
     .maybeSingle();
   if (finishError || !finished) {
-    throw finishError ?? new Error("upload_job_lease_lost");
+    throw finishError ?? leaseLost();
   }
   await refreshUploadSessionStatus(db, typedSession.id);
 }
@@ -1004,14 +1156,12 @@ export async function cleanupUploadSessions(db: Db): Promise<void> {
       if (["uploaded", "processing", "completed"].includes(file.status)) {
         continue;
       }
-      await Promise.all([
-        file.staging_storage_path
-          ? deleteFile(file.staging_storage_path).catch(() => {})
-          : Promise.resolve(),
-        file.sealed_storage_path
-          ? deleteFile(file.sealed_storage_path).catch(() => {})
-          : Promise.resolve(),
-      ]);
+      // Null/empty paths are skipped inside; one warning per file at most.
+      markStage("session-expiry");
+      await deleteFilesBestEffort(
+        [file.staging_storage_path, file.sealed_storage_path],
+        "session-expiry",
+      );
     }
     const { error } = await db
       .from("upload_sessions")
@@ -1052,18 +1202,23 @@ async function claimNextUploadJob(
     target_lease_seconds: UPLOAD_JOB_LEASE_SECONDS,
     target_max_running_per_user: maxRunningPerUser,
   });
-  if (error) throw error;
+  // A PostgREST error is a plain object: give it a stack here and keep its
+  // `code` (PGRST202 = RPC missing, i.e. migrations not applied) on the
+  // cause chain, where the Sentry boundary reads it into failure_code.
+  if (error) throw asReportableError(error, claimNextUploadJob);
   return typeof data === "string" && data ? data : null;
 }
 
 function startUploadProcessingWorker(options: {
   maxRunningPerUser: number;
   runCleanup: boolean;
+  failures: PollFailureGate;
 }) {
   const workerId = `${hostname()}:${process.pid}:${randomUUID()}`;
   let stopped = false;
   let timer: NodeJS.Timeout | null = null;
   let lastCleanupAt = 0;
+  const failures = options.failures;
 
   const schedule = (delay: number) => {
     if (stopped) return;
@@ -1076,8 +1231,9 @@ function startUploadProcessingWorker(options: {
     try {
       const db = createServerSupabase();
       if (options.runCleanup && Date.now() - lastCleanupAt >= 60_000) {
+        // Own scope: the stages cleanup marks must not land on a later job.
         await Promise.all([
-          cleanupUploadSessions(db),
+          runIsolated(() => cleanupUploadSessions(db)),
           cleanupUploadProcessingTempFiles(),
         ]);
         lastCleanupAt = Date.now();
@@ -1088,14 +1244,31 @@ function startUploadProcessingWorker(options: {
         options.maxRunningPerUser,
       );
       if (!jobId) {
+        failures.success();
         schedule(UPLOAD_WORKER_POLL_MS);
         return;
       }
-      await processUploadJob(db, jobId, workerId);
+      // Each job in its own Sentry isolation scope: several of these loops
+      // share the process, and the operation/stages one job records must not
+      // land on another's failure.
+      await runIsolated(() => processUploadJob(db, jobId, workerId));
+      failures.success();
       schedule(0);
-    } catch (error) {
-      console.error("[upload-worker] iteration failed", { workerId, error });
-      schedule(UPLOAD_WORKER_POLL_MS);
+    } catch (thrown) {
+      // Nothing above this loop: an error here means claiming or the job
+      // wrapper itself broke, and without a report the worker just polls on.
+      const error = asReportableError(thrown);
+      const verdict = failures.failure(error);
+      if (verdict.report) {
+        reportError(error, {
+          tags: { component: "upload-worker", stage: "iteration" },
+          extra: { worker_id: workerId },
+        });
+        // The Error object itself, not its message: the console bridge
+        // recognises an already-reported object and files no duplicate.
+        console.error("[upload-worker] iteration failed", { workerId, error });
+      }
+      schedule(verdict.delayMs);
     }
   };
 
@@ -1115,10 +1288,21 @@ export function startUploadProcessingWorkers(options: {
     1,
     Math.min(concurrency, Math.floor(options.maxRunningPerUser)),
   );
+  // One report per failure class per PROCESS, quiet repeats, backed-off
+  // polling. Every loop hits the same database, so one broken RPC fails all
+  // of them on every tick; a gate per loop would still file `concurrency`
+  // reports, and none at all meant one per tick for hours (MIKE-BACKEND-K:
+  // 2,451 events from one worker thread).
+  const failures = createPollFailureGate({
+    label: "[upload-worker] iteration",
+    baseDelayMs: UPLOAD_WORKER_POLL_MS,
+    maxDelayMs: UPLOAD_WORKER_MAX_BACKOFF_MS,
+  });
   const stopWorkers = Array.from({ length: concurrency }, (_, index) =>
     startUploadProcessingWorker({
       maxRunningPerUser,
       runCleanup: index === 0,
+      failures,
     }),
   );
 

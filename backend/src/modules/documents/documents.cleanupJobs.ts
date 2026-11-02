@@ -3,6 +3,7 @@ import { jobErrorMessage } from "../../lib/dbq/jobError";
 import { retryDelayMs, STALE_SECONDS } from "../../lib/dbq/runner";
 import { requestDocumentCleanupDelivery } from "../../lib/dbq/enqueue";
 import { logError } from "../../lib/log";
+import { setOperation } from "../../lib/observability/sentry";
 
 import {
   assertStorageConfigured,
@@ -113,6 +114,9 @@ export async function handleDocumentCleanup(
   db: Db,
   job: Pick<DbJob, "payload"> & Partial<Pick<DbJob, "id">>,
 ): Promise<void> {
+  // A claimed row is the documents.delete job; the inline fallback runs on a
+  // request thread that already named its own operation, so leave that alone.
+  if (job.id) setOperation("documents.delete");
   // Only a genuinely claimed row may claim siblings: the inline fallback
   // below passes a synthetic job and owns nothing in db_jobs.
   const siblings = job.id ? await claimSiblingCleanupJobs(db, job.id) : [];

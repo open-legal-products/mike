@@ -1,3 +1,9 @@
+import {
+    reportApiFailure,
+    reportNetworkFailure,
+} from "@/app/lib/errorReporting";
+import { isAbortError } from "@/shared/lib/userError";
+
 export interface AuthUser {
     id: string;
     email: string;
@@ -15,37 +21,86 @@ export interface MfaFactor {
 export class AuthApiError extends Error {
     status: number;
     code: string | null;
+    /**
+     * The id the API stamped on this request. Support cannot find an auth
+     * failure in the logs without it, and `describeError` reads it straight
+     * off the error, so it has to be carried here the way `MikeApiError`
+     * carries it.
+     */
+    requestId: string | null;
 
-    constructor(status: number, code: string | null, message: string) {
+    constructor(
+        status: number,
+        code: string | null,
+        message: string,
+        requestId: string | null = null,
+    ) {
         super(message);
         this.name = "AuthApiError";
         this.status = status;
         this.code = code;
+        this.requestId = requestId;
     }
 }
 
 async function authRequest<T>(path: string, init?: RequestInit): Promise<T> {
-    const response = await fetch(`/api/auth${path}`, {
-        ...init,
-        credentials: "include",
-        cache: "no-store",
-        headers: {
-            ...(init?.body ? { "Content-Type": "application/json" } : {}),
-            ...(init?.headers as Record<string, string> | undefined),
-        },
-    });
+    const url = `/api/auth${path}`;
+    const method = init?.method ?? "GET";
+    let response: Response;
+    try {
+        response = await fetch(url, {
+            ...init,
+            credentials: "include",
+            cache: "no-store",
+            headers: {
+                ...(init?.body ? { "Content-Type": "application/json" } : {}),
+                ...(init?.headers as Record<string, string> | undefined),
+            },
+        });
+    } catch (error) {
+        // Same rule as mikeApi: a request that never got a response is one
+        // "API unreachable" event per outage, never one per auth screen. An
+        // abort is the caller's doing, not an outage.
+        if (!isAbortError(error)) {
+            reportNetworkFailure(error, { method, url });
+        }
+        throw error;
+    }
     if (!response.ok) {
         const body = (await response.json().catch(() => ({}))) as {
             code?: unknown;
             detail?: unknown;
+            request_id?: unknown;
         };
-        throw new AuthApiError(
+        const code = typeof body.code === "string" ? body.code : null;
+        // Mirrors mikeApi.toApiError: the body wins, the header is the
+        // fallback for a response that carried no JSON id.
+        const requestId =
+            typeof body.request_id === "string" && body.request_id
+                ? body.request_id
+                : response.headers.get("x-request-id");
+        const error = new AuthApiError(
             response.status,
-            typeof body.code === "string" ? body.code : null,
+            code,
             typeof body.detail === "string"
                 ? body.detail
                 : "Authentication could not be completed.",
+            requestId,
         );
+        // A 4xx is the auth server's intentional answer (wrong password, a
+        // spent link); a 5xx is a fault, reported under the same request id
+        // the backend attached to its own event.
+        if (response.status >= 500) {
+            reportApiFailure({
+                path: url,
+                status: response.status,
+                code,
+                requestId,
+                method,
+                error,
+            });
+        }
+        throw error;
     }
     if (response.status === 204) return undefined as T;
     return response.json() as Promise<T>;

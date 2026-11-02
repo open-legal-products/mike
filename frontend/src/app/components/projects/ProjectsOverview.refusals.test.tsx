@@ -70,8 +70,12 @@ function mockHook(rows: Project[], selected: string[], ownerIds: Record<string, 
 }
 
 async function bulkDelete() {
-    fireEvent.click(screen.getByText("Actions"));
-    fireEvent.click(screen.getByText("Delete"));
+    // Radix opens on pointerdown, not click.
+    fireEvent.pointerDown(
+        screen.getByText("Actions"),
+        new MouseEvent("pointerdown", { bubbles: true, cancelable: true }),
+    );
+    fireEvent.click(screen.getByRole("menuitem", { name: /^Delete/ }));
 }
 
 describe("ProjectsOverview bulk delete", () => {
@@ -130,7 +134,7 @@ describe("ProjectsOverview bulk delete", () => {
                     admin_contacts: [DANA],
                 }),
             ],
-            ["theirs"],
+            ["theirs", "unknown-row"],
         );
         render(<ProjectsOverview />);
 

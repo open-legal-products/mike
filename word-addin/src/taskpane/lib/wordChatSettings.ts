@@ -1,6 +1,11 @@
 import { useCallback, useEffect, useState } from "react";
 
-export type WordChatStorageMode = "cloud" | "local";
+import type { WordChatStorageMode } from "./wordChatTypes";
+
+// Re-exported so existing consumers keep their import path. The definition
+// lives in wordChatTypes.ts (Office-free) so pure helpers can be typechecked
+// from the web app's test program, which has no Office runtime types.
+export type { WordChatStorageMode };
 
 /**
  * How model-proposed edits reach the document.

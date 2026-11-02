@@ -133,7 +133,11 @@ describe("CitationQuotesSection", () => {
             />,
         );
 
-        fireEvent.click(screen.getByRole("button", { name: "Close citation" }));
+        const close = screen.getByRole("button", { name: "Close" });
+        expect(close.nextElementSibling).toBe(screen.getByRole("button", { name: "View" }));
+        expect(close).toHaveClass("bg-transparent", "shadow-none");
+        expect(close.querySelector("svg")).toBeNull();
+        fireEvent.click(close);
         expect(onClose).toHaveBeenCalledTimes(1);
     });
 
@@ -141,7 +145,7 @@ describe("CitationQuotesSection", () => {
         render(<CitationQuotesSection document={singleQuoteDocument} />);
 
         expect(
-            screen.queryByRole("button", { name: "Close citation" }),
+            screen.queryByRole("button", { name: "Close" }),
         ).not.toBeInTheDocument();
     });
 

@@ -4,10 +4,10 @@ import {
     apiKeyForConfiguredModel,
     configuredEndpointSummaries,
     configuredModelRequiresApiKey,
-    configuredModelIds,
     configuredModelSummaries,
     getConfiguredModel,
     loadModelRegistry,
+    replaysReasoning,
     resetModelRegistryCache,
     tolerateTextToolCalls,
 } from "../llm/registry";
@@ -93,7 +93,9 @@ describe("loadModelRegistry", () => {
                 },
             ],
         });
-        expect(configuredModelIds()).toEqual(["local-qwen"]);
+        expect(configuredModelSummaries().map((summary) => summary.id)).toEqual([
+            "local-qwen",
+        ]);
     });
 
     it("normalizes strings and trailing URL slashes", () => {
@@ -131,6 +133,31 @@ describe("loadModelRegistry", () => {
         expect(getConfiguredModel("cloud-deepseek")?.maxTokensField).toBe(
             "max_completion_tokens",
         );
+    });
+});
+
+describe("replaysReasoning", () => {
+    it("is opt-in per configured model", () => {
+        configure({
+            models: [{ ...LOCAL_QWEN, replayReasoning: true }, CLOUD_DEEPSEEK],
+        });
+        expect(getConfiguredModel("local-qwen")?.replayReasoning).toBe(true);
+        expect(replaysReasoning("local-qwen")).toBe(true);
+        expect(replaysReasoning("cloud-deepseek")).toBe(false);
+        expect(getConfiguredModel("cloud-deepseek")).not.toHaveProperty(
+            "replayReasoning",
+        );
+        // Catalog and router models are never configured, so never replay.
+        expect(replaysReasoning("claude-sonnet-5")).toBe(false);
+    });
+
+    it("drops an entry whose replayReasoning is not a boolean", () => {
+        configure({
+            models: [{ ...LOCAL_QWEN, replayReasoning: "yes" }, CLOUD_DEEPSEEK],
+        });
+        expect(configuredModelSummaries().map((summary) => summary.id)).toEqual([
+            "cloud-deepseek",
+        ]);
     });
 });
 

@@ -46,20 +46,21 @@ test("header dropdown loads 10 chats and fetches 10 more at the bottom", async (
   await expect.poll(() => requests).toEqual([{ limit: 11, offset: 0 }]);
   await page.getByRole("button", { name: "Chat history" }).click();
   const dropdown = page.getByRole("menu");
-  await expect(dropdown).toHaveCSS("height", "360px");
+  // The same menu as the web app's chat header: one fixed width.
+  await expect(dropdown).toHaveCSS("width", "256px");
   await expect(dropdown.getByText("Chat History", { exact: true })).toHaveCount(
     0,
   );
-  const search = dropdown.getByPlaceholder("Search recent chats...");
+  const search = dropdown.getByPlaceholder("Search chats…");
   await expect(search).toBeVisible();
   const list = page.getByTestId("chat-history-list-10");
-  await expect(list.getByRole("button")).toHaveCount(10);
-  await expect(list.getByRole("button", { name: /Chat 1.*10m/ })).toBeVisible();
+  await expect(list.getByRole("menuitem")).toHaveCount(10);
+  await expect(list.getByRole("menuitem", { name: /Chat 1.*10m/ })).toBeVisible();
   expect(requests).toEqual([{ limit: 11, offset: 0 }]);
 
   await search.fill("Chat 3");
-  await expect(list.getByRole("button", { name: /Chat 3/ })).toBeVisible();
-  await expect(list.getByRole("button")).toHaveCount(1);
+  await expect(list.getByRole("menuitem", { name: /Chat 3/ })).toBeVisible();
+  await expect(list.getByRole("menuitem")).toHaveCount(1);
   await search.clear();
 
   await list.evaluate((element) => {
@@ -68,7 +69,7 @@ test("header dropdown loads 10 chats and fetches 10 more at the bottom", async (
   });
 
   await expect.poll(() => requests).toContainEqual({ limit: 11, offset: 10 });
-  await expect(list.getByRole("button")).toHaveCount(20);
+  await expect(list.getByRole("menuitem")).toHaveCount(20);
 });
 
 test("Chat History page searches and loads 20 more chats at the bottom", async ({
@@ -161,11 +162,12 @@ test("history reports a failed request and retries it", async ({
   await page.getByRole("button", { name: "Chat history" }).click();
 
   const dropdown = page.getByRole("menu");
+  // The 503 body is not echoed; the classified outage sentence is shown.
   await expect(dropdown.getByRole("alert")).toContainText(
-    "History temporarily unavailable",
+    "Mike is temporarily unavailable",
   );
   await dropdown.getByRole("button", { name: "Retry" }).click();
-  await expect(dropdown.getByRole("button", { name: /Chat 1/ })).toBeVisible();
+  await expect(dropdown.getByRole("menuitem", { name: /Chat 1/ })).toBeVisible();
   expect(attempts).toBe(2);
 });
 
@@ -226,7 +228,7 @@ test("a dismissed history load cannot replace a newer chat selection", async ({
   await page.getByRole("button", { name: "Chat history" }).click();
   await page
     .getByRole("menu")
-    .getByRole("button", { name: /Chat 1/ })
+    .getByRole("menuitem", { name: /Chat 1/ })
     .click();
   await expect.poll(() => firstDetailRequested).toBe(true);
 
@@ -238,7 +240,7 @@ test("a dismissed history load cannot replace a newer chat selection", async ({
   await page.getByRole("button", { name: "Chat history" }).click();
   await page
     .getByRole("menu")
-    .getByRole("button", { name: /Chat 2/ })
+    .getByRole("menuitem", { name: /Chat 2/ })
     .click();
   await expect(page.getByText("Current stored question")).toBeVisible();
 
@@ -341,8 +343,11 @@ test("persisted cloud failures and cancellations both refresh history", async ({
   const composer = page.getByPlaceholder("How can I help?");
   await composer.fill("Fail after persistence");
   await page.getByRole("button", { name: "Send" }).click();
-  await expect(page.getByRole("alert")).toHaveText(
-    "Error: Persisted stream failure",
+  // The backend's terminal error frame is written for the user, so it shows
+  // verbatim — without the old "Error: " prefix. `.first()` because the toast
+  // that carries the Retry is an alert too.
+  await expect(page.getByRole("alert").first()).toHaveText(
+    "Persisted stream failure",
   );
   await expect
     .poll(() =>

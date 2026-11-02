@@ -51,7 +51,11 @@ export function asyncRoute(handler: AsyncRoute) {
 export function routerErrorHandler(tag: string) {
   return (err: unknown, req: Request, res: Response, next: NextFunction) => {
     if (res.headersSent) return next(err);
-    console.error(`${tag} unhandled route error`, err);
+    // Report first, log second: the app-level boundary reports the error to
+    // Sentry (sendInternalError), which marks it as already sent, so the
+    // console bridge recognises the log line below and does not file a
+    // second event. Logging first produced two issues per router failure.
     handleUnhandledError(err, req, res, next);
+    console.error(`${tag} unhandled route error`, err);
   };
 }

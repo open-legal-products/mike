@@ -9,6 +9,7 @@ export const STANDARD_FONT_DATA_URL = (() => {
   }
 })();
 
+import { AppError } from "./appError";
 import { docxToPdf } from "./convert";
 import { orderTextItemLines } from "./pdfTextOrder";
 
@@ -118,7 +119,7 @@ function extractFormFields(
 
 function positionedFormItem(field: ExtractedFormField): PdfTextItem | null {
   if (!field.rect) return null;
-  const [x1, y1, x2, y2] = field.rect;
+  const [x1, y1, , y2] = field.rect;
   const height = Math.max(8, Math.min(16, (y2 - y1) * 0.7));
   const text = `[${field.text}]`;
   return {
@@ -215,28 +216,83 @@ function layoutPageText(items: PdfTextItem[]): string {
   return out.join("\n");
 }
 
-export async function extractPdfText(buf: ArrayBuffer): Promise<string> {
+type PdfLoadingTask = {
+  promise: Promise<{
+    numPages: number;
+    getPage: (n: number) => Promise<{
+      getTextContent: () => Promise<{
+        items: PdfTextItem[];
+      }>;
+      getAnnotations: () => Promise<PdfFormAnnotation[]>;
+    }>;
+  }>;
+  destroy?: () => Promise<void>;
+};
+
+type PdfPageText = {
+  /** The page's section of extractPdfText output, "[Page N]" marker included. */
+  text: string;
+  /** No text layer and no form field values: nothing the model could read. */
+  empty: boolean;
+};
+
+type PdfReadResult =
+  | { pages: PdfPageText[] }
+  /** pdf.js rejected the bytes; `cause` is its error, for the one report. */
+  | { pages: null; cause: unknown };
+
+/**
+ * The warning for a PDF pdf.js could not open, filed by the callers that
+ * swallow the failure (an empty string or a null count is their contract).
+ * Without it a corrupt or encrypted PDF was indistinguishable from a blank
+ * one: readPdfPages returned null and nothing anywhere recorded why. The
+ * strict index path throws instead, so its job runner reports it.
+ */
+function reportUnreadablePdf(cause: unknown): void {
+  // Logged, not reported: an unreadable PDF is the user's file (encrypted,
+  // truncated), and the strict index path throws once per document with
+  // the kind, which its job reports. Reporting here filed the same file on
+  // every lenient read, upload count, row and regenerate.
+  console.warn("[pdf-text] pdf.js could not read the document", {
+    error: new AppError("extraction.pdf_parse_failed", "pdf.js could not read the document", { cause }),
+  });
+}
+
+/**
+ * Read every page of a PDF, or the failure when pdfjs cannot open it. Whether
+ * a page is empty is decided here, from the extracted items, rather than by
+ * parsing the joined text afterwards: a PDF line that happens to read
+ * "[Page 2]" is content, not a page boundary.
+ */
+async function readPdfPages(buf: ArrayBuffer): Promise<PdfReadResult> {
+  let opened = false;
+  let loadingTask: PdfLoadingTask | undefined;
+  // A pdf.js that cannot be loaded is a broken install, not an unreadable
+  // document: it carries its own kind so the two never share an issue.
+  let pdfjsLib: unknown;
   try {
-    const pdfjsLib = await import("pdfjs-dist/legacy/build/pdf.mjs" as string);
-    const pdf = await (
+    pdfjsLib = await import("pdfjs-dist/legacy/build/pdf.mjs" as string);
+  } catch (cause) {
+    return {
+      pages: null,
+      cause: new AppError("extraction.failed", "pdf.js could not be loaded", { cause }),
+    };
+  }
+  try {
+    loadingTask = (
       pdfjsLib as unknown as {
-        getDocument: (opts: unknown) => {
-          promise: Promise<{
-            numPages: number;
-            getPage: (n: number) => Promise<{
-              getTextContent: () => Promise<{
-                items: PdfTextItem[];
-              }>;
-              getAnnotations: () => Promise<PdfFormAnnotation[]>;
-            }>;
-          }>;
-        };
+        getDocument: (opts: unknown) => PdfLoadingTask;
       }
     ).getDocument({
-      data: new Uint8Array(buf),
+      // A copy: pdf.js takes the bytes it is given for its worker, which
+      // detaches the buffer. Callers keep using theirs, for example to store
+      // the file once its text has been read.
+      data: new Uint8Array(buf).slice(),
       standardFontDataUrl: STANDARD_FONT_DATA_URL,
-    }).promise;
-    const parts: string[] = [];
+    });
+    const pdf = await loadingTask.promise;
+    opened = true;
+    const pages: PdfPageText[] = [];
     for (let i = 1; i <= pdf.numPages; i++) {
       const page = await pdf.getPage(i);
       const textContent = await page.getTextContent();
@@ -249,22 +305,124 @@ export async function extractPdfText(buf: ArrayBuffer): Promise<string> {
       const positionedFields = fields
         .map(positionedFormItem)
         .filter((item): item is PdfTextItem => item !== null);
-      let pageText = `[Page ${i}]\n${layoutPageText([
+      const layout = layoutPageText([
         ...textContent.items,
         ...positionedFields,
-      ])}`;
+      ]);
+      let pageText = `[Page ${i}]\n${layout}`;
       const unpositionedFields = fields.filter((field) => !field.rect);
       if (unpositionedFields.length) {
         pageText += `\n[Page ${i} form fields]\n${unpositionedFields
           .map((field) => field.text)
           .join("\n")}`;
       }
-      parts.push(pageText);
+      pages.push({
+        text: pageText,
+        empty: !layout.trim() && unpositionedFields.length === 0,
+      });
     }
-    return parts.join("\n\n");
-  } catch {
+    return { pages };
+  } catch (cause) {
+    // A document that opened successfully but failed during page/text
+    // processing is an extraction failure, not an invalid-input verdict.
+    return {
+      pages: null,
+      cause: opened
+        ? new AppError("extraction.failed", "PDF text processing failed", { cause })
+        : cause,
+    };
+  } finally {
+    // Releases the pdfjs worker-side document; resolving the promise does not.
+    await loadingTask?.destroy?.().catch(() => {});
+  }
+}
+
+/** Strict extraction for persisted search: unreadable is not a successful blank. */
+export async function extractPdfTextForIndex(buf: ArrayBuffer): Promise<{ text: string; textlessPageCount: number }> {
+  const read = await readPdfPages(buf);
+  if (!read.pages) {
+    throw new AppError("extraction.pdf_parse_failed", "document_text_pdf_unreadable", {
+      cause: read.cause,
+    });
+  }
+  const { pages } = read;
+  const textlessPageCount = pages.filter((page) => page.empty).length;
+  return {
+    text: textlessPageCount === pages.length ? "" : pages.map((page) => page.text).join("\n\n"),
+    textlessPageCount,
+  };
+}
+
+export async function extractPdfText(buf: ArrayBuffer): Promise<string> {
+  const read = await readPdfPages(buf);
+  if (!read.pages) {
+    reportUnreadablePdf(read.cause);
     return "";
   }
+  return read.pages.map((page) => page.text).join("\n\n");
+}
+
+/**
+ * How many pages of a PDF have no text layer, or null when the PDF cannot be
+ * read (so "unreadable" is never reported as "fully readable").
+ */
+export async function countPagesWithoutText(
+  buf: ArrayBuffer,
+): Promise<number | null> {
+  const read = await readPdfPages(buf);
+  if (!read.pages) {
+    reportUnreadablePdf(read.cause);
+    return null;
+  }
+  return read.pages.filter((page) => page.empty).length;
+}
+
+function formatPageRanges(pages: number[]): string {
+  const ranges: string[] = [];
+  for (let i = 0; i < pages.length; i++) {
+    const first = pages[i];
+    while (i + 1 < pages.length && pages[i + 1] === pages[i] + 1) i++;
+    ranges.push(first === pages[i] ? `${first}` : `${first}–${pages[i]}`);
+  }
+  return ranges.join(", ");
+}
+
+/**
+ * The notice for a PDF whose listed pages (1-based) have no text layer, or
+ * null when every page has text.
+ */
+export function textLayerNotice(
+  emptyPages: number[],
+  pageCount: number,
+): string | null {
+  if (!emptyPages.length) return null;
+  if (emptyPages.length === pageCount) {
+    return "[This PDF has no text layer, so its content cannot be read. It is most likely a scanned document that needs OCR.]";
+  }
+  return emptyPages.length === 1
+    ? `[Page ${emptyPages[0]} of this PDF has no text layer, so its content cannot be read. It is most likely scanned and needs OCR.]`
+    : `[Pages ${formatPageRanges(emptyPages)} of this PDF have no text layer, so their content cannot be read. They are most likely scanned and need OCR.]`;
+}
+
+/**
+ * The text read_document returns for a PDF. Without a notice, a scanned PDF
+ * reaches the model as empty page markers and nothing that says why, so the
+ * model may report the document as blank or guess at its content. A fully
+ * scanned PDF is replaced by the notice; a partly scanned one keeps its text
+ * with the notice in front.
+ */
+export async function extractPdfTextForModel(buf: ArrayBuffer): Promise<string> {
+  const read = await readPdfPages(buf);
+  if (!read.pages) {
+    reportUnreadablePdf(read.cause);
+    return "";
+  }
+  const { pages } = read;
+  const text = pages.map((page) => page.text).join("\n\n");
+  const emptyPages = pages.flatMap((page, i) => (page.empty ? [i + 1] : []));
+  const notice = textLayerNotice(emptyPages, pages.length);
+  if (!notice) return text;
+  return emptyPages.length === pages.length ? notice : `${notice}\n\n${text}`;
 }
 
 /**

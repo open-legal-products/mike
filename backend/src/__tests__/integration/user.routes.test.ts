@@ -1,5 +1,18 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
+
+// The data-deletion limiter counts every DELETE in this file, and the
+// per-workspace cases alone make more requests than its default allows.
+vi.hoisted(() => { process.env.RATE_LIMIT_DATA_DELETE_MAX = "1000"; });
 import request from "supertest";
+import { AppError } from "../../lib/appError";
+
+// Every unexpected 5xx these routes answer is ONE Sentry event, reported by
+// sendInternalError with the route's identity: asserted by kind and cause.
+const reportError = vi.hoisted(() => vi.fn((..._args: unknown[]) => "event-1"));
+vi.mock("../../lib/observability/sentry", async (importOriginal) => ({
+    ...(await importOriginal<Record<string, unknown>>()),
+    reportError,
+}));
 
 // ---------------------------------------------------------------------------
 // Hoisted mock fns we reconfigure per-test. These cover the three security
@@ -14,6 +27,7 @@ const {
     requireMfaIfEnrolled,
     getUserApiKeyStatus,
     saveUserApiKey,
+    updateUserApiKeySettings,
     hasEnvApiKey,
     normalizeApiKeyProvider,
     deleteAllUserChats,
@@ -33,6 +47,7 @@ const {
     requireMfaIfEnrolled: vi.fn(),
     getUserApiKeyStatus: vi.fn(),
     saveUserApiKey: vi.fn(),
+    updateUserApiKeySettings: vi.fn(),
     hasEnvApiKey: vi.fn(),
     normalizeApiKeyProvider: vi.fn(),
     deleteAllUserChats: vi.fn(),
@@ -226,14 +241,47 @@ vi.mock("../../middleware/auth", () => ({
 // (which encrypts) and never echo plaintext — getUserApiKeyStatus returns
 // presence-only booleans. getUserApiKeys must be exported too — lib/userSettings
 // imports it at module load.
-vi.mock("../../modules/user/user.apiKeyStore", () => ({
+vi.mock("../../modules/user/user.apiKeyStore", async (importOriginal) => {
+    // The pure validation helpers run for real; every database touch is a spy.
+    const actual =
+        await importOriginal<typeof import("../../modules/user/user.apiKeyStore")>();
+    return {
+    isSettingsApiKeyProvider: actual.isSettingsApiKeyProvider,
+    normalizeProviderSettings: actual.normalizeProviderSettings,
+    // Reads the saved row through the Supabase stub (user_api_keys table).
+    getSavedApiKeySettings: (
+        actual as unknown as Record<string, unknown>
+    ).getSavedApiKeySettings,
+    // The store serves a person's keys and an organization's through one
+    // owner-based implementation. These routes are the personal ones, so
+    // each owner-based call is handed to the spy the tests already assert
+    // on, with the owner unwrapped to the user id it carries.
+    userKeyOwner: actual.userKeyOwner,
+    orgKeyOwner: actual.orgKeyOwner,
+    updateApiKeySettings: (owner: { id: string }, ...args: unknown[]) =>
+        updateUserApiKeySettings(owner.id, ...args),
     getUserApiKeyStatus: (...args: unknown[]) => getUserApiKeyStatus(...args),
+    getApiKeyStatusFor: (owner: { id: string }, ...args: unknown[]) =>
+        getUserApiKeyStatus(owner.id, ...args),
     saveUserApiKey: (...args: unknown[]) => saveUserApiKey(...args),
+    saveApiKeyFor: (
+        owner: { id: string },
+        provider: string,
+        value: string | null,
+        db: unknown,
+        settings: Record<string, unknown> = {},
+    ) =>
+        // A provider with no companion setting was, and is asserted as, a
+        // four-argument save.
+        actual.isSettingsApiKeyProvider(provider as never)
+            ? saveUserApiKey(owner.id, provider, value, db, settings)
+            : saveUserApiKey(owner.id, provider, value, db),
     hasEnvApiKey: (...args: unknown[]) => hasEnvApiKey(...args),
     normalizeApiKeyProvider: (...args: unknown[]) =>
         normalizeApiKeyProvider(...args),
     getUserApiKeys: vi.fn(async () => ({})),
-}));
+    };
+});
 
 vi.mock("../../modules/user/user.dataCleanup", () => ({
     deleteAllUserChats: (...args: unknown[]) => deleteAllUserChats(...args),
@@ -264,6 +312,8 @@ vi.mock("../../modules/user/user.dataExport", () => ({
 import { app } from "../../app";
 
 const AUTH = ["Authorization", "Bearer test"] as const;
+// A team organization the caller may name as their workspace.
+const ORG_ID = "11111111-1111-4111-8111-111111111111";
 
 // A complete user_profiles row with credits_reset_date in the future so the
 // monthly-reset branch in loadProfile is not triggered.
@@ -281,12 +331,15 @@ function profileRow(overrides: Record<string, unknown> = {}) {
         credits_reset_date: "2999-01-01T00:00:00.000Z",
         tier: "Pro",
         title_model: null,
-        tabular_model: "gemini-3-flash-preview",
+        tabular_model: "gemini-3.8-flash",
         memory_curator_model: null,
+        subagent_model: null,
+        subagent_reasoning: null,
         last_selected_chat_model: null,
         mfa_on_login: false,
         legal_research_us: true,
         quick_actions_visible: true,
+        response_details_visible: false,
         dark_mode: false,
         ...overrides,
     };
@@ -301,6 +354,15 @@ function rejectMfa(_req: unknown, res: any) {
         code: "mfa_verification_required",
         detail: "MFA verification required",
     });
+}
+
+// The one event a failed request reported: an AppError whose kind names the
+// flow and whose cause is the failure that actually happened.
+function reportedFailure(): AppError {
+    expect(reportError).toHaveBeenCalledOnce();
+    const [failure] = reportError.mock.calls[0] as unknown as [unknown];
+    expect(failure).toBeInstanceOf(AppError);
+    return failure as AppError;
 }
 
 describe("user.routes", () => {
@@ -318,9 +380,22 @@ describe("user.routes", () => {
         dbJobsEnabled.mockReturnValue(true);
         getUserApiKeyStatus.mockResolvedValue(STATUS);
         saveUserApiKey.mockResolvedValue(undefined);
+        updateUserApiKeySettings.mockResolvedValue(true);
         hasEnvApiKey.mockReturnValue(false);
         normalizeApiKeyProvider.mockImplementation((v: string) =>
-            ["claude", "openai", "gemini", "openrouter", "vercel"].includes(v)
+            [
+                "claude",
+                "openai",
+                "gemini",
+                "openrouter",
+                "vercel",
+                "bedrock",
+                "azure",
+                "azure-foundry",
+                "vertex",
+                "xai",
+                "custom",
+            ].includes(v)
                 ? v
                 : null,
         );
@@ -334,6 +409,95 @@ describe("user.routes", () => {
         buildUserChatsExport.mockResolvedValue({ chats: "data" });
         buildUserTabularReviewsExport.mockResolvedValue({ reviews: "data" });
         supabaseRpc.mockResolvedValue({ data: null, error: null });
+    });
+
+    describe("profile photos", () => {
+        const photo = "data:image/png;base64,iVBORw0KGgo=";
+        it("saves, serializes and removes the caller's photo", async () => {
+            supabaseState.tables.user_profiles = { data: { ...profileRow(), profile_photo: photo }, error: null };
+            const saved = await request(app).put("/user/profile/photo").set(...AUTH).send({ data_url: photo, user_id: "another-user" });
+            expect(saved.status).toBe(200);
+            expect(saved.body).toEqual({ profilePhoto: photo });
+            expect(saved.headers["cache-control"]).toBe("private, no-store");
+            const loaded = await request(app).get("/user/profile").set(...AUTH);
+            expect(loaded.body.profilePhoto).toBe(photo);
+            const removed = await request(app).delete("/user/profile/photo").set(...AUTH);
+            expect(removed.status).toBe(200);
+            expect(removed.body).toEqual({ profilePhoto: null });
+        });
+        it.each([
+            "response_details_visible",
+            "subagent_model", "memory_curator_model", "project_memory_default",
+            "last_selected_reasoning_level", "last_selected_chat_model",
+            "dark_mode", "password_set_at", "onboarding_version",
+            "quick_actions_visible", "legal_research_us", "mfa_on_login", "title_model",
+        ])("keeps the saved photo on profile reload when %s is absent", async (column) => {
+            supabaseState.missingColumns = [column];
+            supabaseState.tables.user_profiles = {
+                data: { ...profileRow(), profile_photo: photo }, error: null,
+            };
+            const res = await request(app).get("/user/profile").set(...AUTH);
+            expect(res.status).toBe(200);
+            expect(res.body.profilePhoto).toBe(photo);
+            // The mock returns the seeded row; also assert the successful query
+            // actually requests the photo, as the live database requires.
+            const selects = supabaseState.selects.user_profiles;
+            expect(selects.length).toBeGreaterThan(1);
+            expect(selects.at(-1)?.split(/,\s*/)).toContain("profile_photo");
+        });
+        it("keeps profiles readable when both a preference and the photo column are absent", async () => {
+            supabaseState.missingColumns = ["memory_curator_model", "profile_photo"];
+            supabaseState.tables.user_profiles = { data: profileRow(), error: null };
+            const res = await request(app).get("/user/profile").set(...AUTH);
+            expect(res.status).toBe(200);
+            expect(res.body).toMatchObject({ displayName: "Ada", profilePhoto: null });
+            const columns = supabaseState.selects.user_profiles.at(-1)?.split(/,\s*/);
+            expect(columns).not.toContain("profile_photo");
+            expect(columns).not.toContain("memory_curator_model");
+        });
+        it("rejects non-raster and missing data", async () => {
+            for (const data_url of [undefined, "data:image/svg+xml;base64,PHN2Zy8+", "data:image/png;base64,PHN2Zy8+"]) {
+                const res = await request(app).put("/user/profile/photo").set(...AUTH).send({ data_url });
+                expect(res.status).toBe(400);
+            }
+            expect(supabaseState.updates.user_profiles).toBeUndefined();
+        });
+        it("keeps older profiles readable before the migration", async () => {
+            supabaseState.missingColumns = ["profile_photo"];
+            supabaseState.tables.user_profiles = { data: profileRow(), error: null };
+            const res = await request(app).get("/user/profile").set(...AUTH);
+            expect(res.status).toBe(200);
+            expect(res.body).toMatchObject({ displayName: "Ada", profilePhoto: null });
+        });
+    });
+
+    describe("GET /user/lookup", () => {
+        it("does not select or expose an unrelated user's photo", async () => {
+            supabaseState.tables.user_profiles = {
+                data: {
+                    user_id: "unrelated-user",
+                    email: "alice@example.com",
+                    display_name: "Alice",
+                    profile_photo: "data:image/png;base64,iVBORw0KGgo=",
+                },
+                error: null,
+            };
+
+            const res = await request(app)
+                .get("/user/lookup")
+                .query({ email: "ALICE@example.com" })
+                .set(...AUTH);
+
+            expect(res.status).toBe(200);
+            expect(res.body).toEqual({
+                exists: true,
+                email: "alice@example.com",
+                display_name: "Alice",
+            });
+            expect(supabaseState.selects.user_profiles).toEqual([
+                "user_id, email, display_name",
+            ]);
+        });
     });
 
     // ── GET /user/profile (MFA bootstrap path) ────────────────────────────
@@ -368,7 +532,6 @@ describe("user.routes", () => {
                 passwordSet: false,
                 messageCreditsUsed: 3,
                 tier: "Pro",
-                legalResearchUs: true,
                 quickActionsVisible: true,
                 mfaOnLogin: false,
                 openRouterModels: [
@@ -377,6 +540,8 @@ describe("user.routes", () => {
                 ],
                 apiKeyStatus: STATUS,
             });
+            // The CourtListener switch is per workspace now, not a profile field.
+            expect(res.body).not.toHaveProperty("legalResearchUs");
             // Presence-only key status — never plaintext.
             expect(JSON.stringify(res.body)).not.toContain("sk-");
         });
@@ -400,7 +565,7 @@ describe("user.routes", () => {
 
         it("keeps existing preferences before the memory curator migration", async () => {
             const preMigrationRow = profileRow({
-                title_model: "gpt-5.4-mini",
+                title_model: "gpt-6-luna",
             });
             delete (preMigrationRow as Record<string, unknown>)
                 .memory_curator_model;
@@ -421,7 +586,7 @@ describe("user.routes", () => {
                 .set(...AUTH);
 
             expect(res.status).toBe(200);
-            expect(res.body.titleModel).toBe("gpt-5.4-mini");
+            expect(res.body.titleModel).toBe("gpt-6-luna");
             expect(res.body.memoryCuratorModel).toBeNull();
             expect(res.body.projectMemoryDefault).toBe(true);
         });
@@ -433,7 +598,7 @@ describe("user.routes", () => {
             // project_memory_default therefore fails with the identical 42703
             // and the cascade falls further than it should, dropping
             // preference columns the database actually has.
-            const preMigrationRow = profileRow({ title_model: "gpt-5.4-mini" });
+            const preMigrationRow = profileRow({ title_model: "gpt-6-luna" });
             delete (preMigrationRow as Record<string, unknown>)
                 .memory_curator_model;
             delete (preMigrationRow as Record<string, unknown>)
@@ -462,7 +627,7 @@ describe("user.routes", () => {
             // The tier keeps every other preference the database does have.
             expect(selects[1]).toContain("last_selected_reasoning_level");
             expect(selects[1]).toContain("dark_mode");
-            expect(res.body.titleModel).toBe("gpt-5.4-mini");
+            expect(res.body.titleModel).toBe("gpt-6-luna");
             expect(res.body.memoryCuratorModel).toBeNull();
         });
 
@@ -479,7 +644,7 @@ describe("user.routes", () => {
                 credits_reset_date: "2999-01-01T00:00:00.000Z",
                 tier: "Pro",
                 title_model: null,
-                tabular_model: "gemini-3-flash-preview",
+                tabular_model: "gemini-3.8-flash",
                 mfa_on_login: false,
                 legal_research_us: false,
                 quick_actions_visible: false,
@@ -502,7 +667,6 @@ describe("user.routes", () => {
 
             expect(res.status).toBe(200);
             expect(res.body).toMatchObject({
-                legalResearchUs: false,
                 quickActionsVisible: false,
                 onboardingComplete: true,
                 onboardingVersion: 0,
@@ -556,7 +720,9 @@ describe("user.routes", () => {
                 .set(...AUTH);
 
             expect(res.status).toBe(500);
-            expect(res.body.detail).toBe("Something went wrong. Please try again.");
+            expect(res.body.detail).toBe(
+                "Something went wrong. Please try again.",
+            );
         });
     });
 
@@ -585,6 +751,59 @@ describe("user.routes", () => {
 
             expect(res.status).toBe(400);
             expect(res.body.detail).toMatch(/darkMode must be a boolean/);
+        });
+
+        it("persists and returns the response details preference", async () => {
+            supabaseState.tables.user_profiles = {
+                data: profileRow({ response_details_visible: true }),
+                error: null,
+            };
+
+            const res = await request(app)
+                .patch("/user/profile")
+                .set(...AUTH)
+                .send({ responseDetailsVisible: true });
+
+            expect(res.status).toBe(200);
+            expect(res.body.responseDetailsVisible).toBe(true);
+            expect(supabaseState.updates.user_profiles).toContainEqual(
+                expect.objectContaining({ response_details_visible: true }),
+            );
+        });
+
+        it("rejects a non-boolean response details preference", async () => {
+            const res = await request(app)
+                .patch("/user/profile")
+                .set(...AUTH)
+                .send({ responseDetailsVisible: "yes" });
+
+            expect(res.status).toBe(400);
+            expect(res.body.detail).toBe(
+                "responseDetailsVisible must be a boolean",
+            );
+        });
+
+        it("hides response details on a database without that column and keeps every other preference", async () => {
+            const preMigrationRow = profileRow({ subagent_model: "gpt-6-luna" });
+            delete (preMigrationRow as Record<string, unknown>)
+                .response_details_visible;
+            supabaseState.missingColumns = ["response_details_visible"];
+            supabaseState.tables.user_profiles = {
+                data: preMigrationRow,
+                error: null,
+            };
+
+            const res = await request(app)
+                .get("/user/profile")
+                .set(...AUTH);
+
+            expect(res.status).toBe(200);
+            const selects = supabaseState.selects.user_profiles ?? [];
+            expect(selects).toHaveLength(2);
+            expect(selects[1]).not.toContain("response_details_visible");
+            expect(selects[1]).toContain("subagent_model");
+            expect(res.body.responseDetailsVisible).toBe(false);
+            expect(res.body.subagentModel).toBe("gpt-6-luna");
         });
 
         it("persists and returns the project memory default", async () => {
@@ -631,6 +850,166 @@ describe("user.routes", () => {
     });
 
     // ── POST /user/profile (bootstrap upsert) ─────────────────────────────
+    describe("custom instructions", () => {
+        it("returns the stored instructions", async () => {
+            supabaseState.tables.user_profiles = {
+                data: { custom_instructions: "Use British spelling." },
+                error: null,
+            };
+
+            const res = await request(app)
+                .get("/user/custom-instructions")
+                .set(...AUTH);
+
+            expect(res.status).toBe(200);
+            expect(res.body).toEqual({ content: "Use British spelling." });
+            expect(res.headers["cache-control"]).toBe("private, no-store");
+        });
+
+        it("reads as empty before the migration is applied", async () => {
+            supabaseState.missingColumns = ["custom_instructions"];
+
+            const res = await request(app)
+                .get("/user/custom-instructions")
+                .set(...AUTH);
+
+            expect(res.status).toBe(200);
+            expect(res.body).toEqual({ content: "" });
+        });
+
+        it("saves normalized instructions for the caller only", async () => {
+            supabaseState.tables.user_profiles = {
+                data: { custom_instructions: "Be concise." },
+                error: null,
+            };
+
+            const res = await request(app)
+                .put("/user/custom-instructions")
+                .set(...AUTH)
+                .send({ content: "Be concise.\r\n\n" });
+
+            expect(res.status).toBe(200);
+            expect(res.body).toEqual({ content: "Be concise." });
+            expect(supabaseState.updates.user_profiles).toEqual([
+                expect.objectContaining({ custom_instructions: "Be concise." }),
+            ]);
+        });
+
+        it("rejects over-long or non-string content", async () => {
+            const tooLong = await request(app)
+                .put("/user/custom-instructions")
+                .set(...AUTH)
+                .send({ content: "x".repeat(8001) });
+            expect(tooLong.status).toBe(400);
+            expect(tooLong.body.detail).toMatch(/8000 characters or fewer/);
+
+            const wrongType = await request(app)
+                .put("/user/custom-instructions")
+                .set(...AUTH)
+                .send({ content: 1 });
+            expect(wrongType.status).toBe(400);
+            expect(supabaseState.updates.user_profiles).toBeUndefined();
+        });
+    });
+
+    describe("response style", () => {
+        it("returns the stored choices with defaults filled in", async () => {
+            supabaseState.tables.user_profiles = {
+                data: {
+                    response_style: {
+                        verbosity: "detailed",
+                        language: "en-GB",
+                    },
+                },
+                error: null,
+            };
+
+            const res = await request(app)
+                .get("/user/response-style")
+                .set(...AUTH);
+
+            expect(res.status).toBe(200);
+            expect(res.body).toEqual({
+                verbosity: "detailed",
+                formatting: "balanced",
+                tone: "balanced",
+                language: "en-GB",
+            });
+            expect(res.headers["cache-control"]).toBe("private, no-store");
+        });
+
+        it("reads as the default before the migration is applied", async () => {
+            supabaseState.missingColumns = ["response_style"];
+
+            const res = await request(app)
+                .get("/user/response-style")
+                .set(...AUTH);
+
+            expect(res.status).toBe(200);
+            expect(res.body).toEqual({
+                verbosity: "balanced",
+                formatting: "balanced",
+                tone: "balanced",
+                language: "auto",
+            });
+        });
+
+        it("merges only the field that changed, for the caller only", async () => {
+            // The merge function returns the user's whole stored object.
+            supabaseRpc.mockResolvedValue({
+                data: { verbosity: "concise", tone: "plain" },
+                error: null,
+            });
+
+            const res = await request(app)
+                .put("/user/response-style")
+                .set(...AUTH)
+                .send({ tone: "plain" });
+
+            expect(res.status).toBe(200);
+            expect(res.body).toEqual({
+                verbosity: "concise",
+                formatting: "balanced",
+                tone: "plain",
+                language: "auto",
+            });
+            expect(supabaseRpc).toHaveBeenCalledWith(
+                "merge_user_response_style",
+                {
+                    p_user_id: expect.any(String),
+                    p_patch: { tone: "plain" },
+                },
+            );
+            // Nothing is written outside the merge function.
+            expect(supabaseState.updates.user_profiles).toBeUndefined();
+        });
+
+        it("reports a missing profile as not found", async () => {
+            supabaseRpc.mockResolvedValue({ data: null, error: null });
+
+            const res = await request(app)
+                .put("/user/response-style")
+                .set(...AUTH)
+                .send({ tone: "plain" });
+
+            expect(res.status).toBe(404);
+        });
+
+        it("rejects an unknown value without calling the database", async () => {
+            const res = await request(app)
+                .put("/user/response-style")
+                .set(...AUTH)
+                .send({ formatting: "fancy" });
+
+            expect(res.status).toBe(400);
+            expect(res.body.detail).toMatch(/formatting must be one of/);
+            expect(supabaseRpc).not.toHaveBeenCalledWith(
+                "merge_user_response_style",
+                expect.anything(),
+            );
+        });
+    });
+
     describe("POST /user/profile", () => {
         it("ensures the profile row and returns ok", async () => {
             const res = await request(app)
@@ -656,6 +1035,40 @@ describe("user.routes", () => {
                 "u1",
                 expect.anything(),
             );
+        });
+    });
+
+    describe("PATCH /user/api-keys/:provider", () => {
+        it.each([false, true])("sets enabled=%s without rewriting the encrypted key", async (enabled) => {
+            supabaseState.tables.user_api_keys = { data: [{ provider: "openai" }], error: null };
+            const response = await request(app)
+                .patch("/user/api-keys/openai")
+                .send({ enabled });
+            expect(response.status).toBe(200);
+            expect(supabaseState.updates.user_api_keys).toEqual([
+                { enabled, updated_at: expect.any(String) },
+            ]);
+            expect(saveUserApiKey).not.toHaveBeenCalled();
+            expect(requireMfaIfEnrolled).toHaveBeenCalledOnce();
+        });
+
+        it("requires an existing saved key", async () => {
+            supabaseState.tables.user_api_keys = { data: [], error: null };
+            const response = await request(app).patch("/user/api-keys/openai").send({ enabled: false });
+            expect(response.status).toBe(404);
+        });
+
+        it.each([{ enabled: "false" }, {}, { enabled: null }])("rejects an invalid enabled value: %j", async (body) => {
+            const response = await request(app).patch("/user/api-keys/openai").send(body);
+            expect(response.status).toBe(400);
+            expect(supabaseState.updates.user_api_keys).toBeUndefined();
+        });
+
+        it("enforces MFA before changing a provider", async () => {
+            requireMfaIfEnrolled.mockImplementation((_req, res) => res.status(403).json({ code: "mfa_required" }));
+            const response = await request(app).patch("/user/api-keys/openai").send({ enabled: false });
+            expect(response.status).toBe(403);
+            expect(supabaseState.updates.user_api_keys).toBeUndefined();
         });
     });
 
@@ -723,7 +1136,8 @@ describe("user.routes", () => {
         });
 
         it("returns 500 when saving the key throws", async () => {
-            saveUserApiKey.mockRejectedValue(new Error("kms unavailable"));
+            const cause = new Error("kms unavailable");
+            saveUserApiKey.mockRejectedValue(cause);
 
             const res = await request(app)
                 .put("/user/api-keys/claude")
@@ -731,7 +1145,15 @@ describe("user.routes", () => {
                 .send({ api_key: "sk-x" });
 
             expect(res.status).toBe(500);
-            expect(res.body.detail).toBe("Something went wrong. Please try again.");
+            expect(res.body.detail).toBe(
+                "Something went wrong. Please try again.",
+            );
+            const failure = reportedFailure();
+            expect(failure.kind).toBe("user.api_key_failed");
+            expect(failure.cause).toBe(cause);
+            expect(reportError.mock.calls[0]?.[1]).toMatchObject({
+                tags: { http_route: "/user/api-keys/:provider", http_status: 500 },
+            });
         });
 
         it("is rejected with 403 mfa_verification_required when MFA is unsatisfied", async () => {
@@ -750,13 +1172,276 @@ describe("user.routes", () => {
             // Guarded: the crypto path is never reached.
             expect(saveUserApiKey).not.toHaveBeenCalled();
         });
+
+        it("saves a Bedrock key together with its normalized region", async () => {
+            const res = await request(app)
+                .put("/user/api-keys/bedrock")
+                .set(...AUTH)
+                .send({ api_key: "bedrock-key", settings: { region: " US-East-1 " } });
+
+            expect(res.status).toBe(200);
+            expect(saveUserApiKey).toHaveBeenCalledWith(
+                "u1",
+                "bedrock",
+                "bedrock-key",
+                expect.anything(),
+                { bedrock: { region: "us-east-1" } },
+            );
+        });
+
+        it("rejects a Bedrock key without a valid region", async () => {
+            for (const settings of [undefined, { region: "not a region" }]) {
+                const res = await request(app)
+                    .put("/user/api-keys/bedrock")
+                    .set(...AUTH)
+                    .send({ api_key: "bedrock-key", settings });
+
+                expect(res.status).toBe(400);
+                expect(res.body.detail).toMatch(/AWS region/);
+            }
+            expect(saveUserApiKey).not.toHaveBeenCalled();
+        });
+
+        it("rejects an Azure endpoint outside Azure's AI hostnames", async () => {
+            const res = await request(app)
+                .put("/user/api-keys/azure")
+                .set(...AUTH)
+                .send({
+                    api_key: "azure-key",
+                    settings: { endpoint: "https://attacker.example/openai" },
+                });
+
+            expect(res.status).toBe(400);
+            expect(res.body.detail).toMatch(/Azure OpenAI endpoint/);
+            expect(saveUserApiKey).not.toHaveBeenCalled();
+        });
+
+        it("rejects a Vertex key that is not a service-account file", async () => {
+            const res = await request(app)
+                .put("/user/api-keys/vertex")
+                .set(...AUTH)
+                .send({
+                    api_key: "AIzaSy-plain-key",
+                    settings: { location: "us-central1" },
+                });
+
+            expect(res.status).toBe(400);
+            expect(res.body.detail).toMatch(/service-account key file/);
+            expect(saveUserApiKey).not.toHaveBeenCalled();
+        });
+
+        it("saves a Vertex service-account key with its location", async () => {
+            const key = JSON.stringify({
+                type: "service_account",
+                project_id: "legal-prod",
+                private_key: "-----BEGIN PRIVATE KEY-----",
+                client_email: "mike@legal-prod.iam.gserviceaccount.com",
+            });
+            const res = await request(app)
+                .put("/user/api-keys/vertex")
+                .set(...AUTH)
+                .send({ api_key: key, settings: { location: " US-Central1 " } });
+
+            expect(res.status).toBe(200);
+            expect(saveUserApiKey).toHaveBeenCalledWith(
+                "u1",
+                "vertex",
+                key,
+                expect.anything(),
+                { vertex: { location: "us-central1" } },
+            );
+        });
+
+        it("rejects a custom endpoint that is not public https", async () => {
+            for (const baseUrl of [
+                "http://llm.example.com/v1",
+                "https://localhost:4000/v1",
+                "https://169.254.169.254/latest",
+                "https://10.1.2.3/v1",
+            ]) {
+                const res = await request(app)
+                    .put("/user/api-keys/custom")
+                    .set(...AUTH)
+                    .send({ api_key: "sk-custom", settings: { baseUrl } });
+
+                expect(res.status).toBe(400);
+                expect(res.body.detail).toMatch(/public https base URL/);
+            }
+            expect(saveUserApiKey).not.toHaveBeenCalled();
+        });
+
+        it("saves a custom endpoint, a Foundry key and an xAI key", async () => {
+            await request(app)
+                .put("/user/api-keys/custom")
+                .set(...AUTH)
+                .send({
+                    api_key: "sk-custom",
+                    settings: { baseUrl: "https://llm.example.com/v1/" },
+                })
+                .expect(200);
+            await request(app)
+                .put("/user/api-keys/azure-foundry")
+                .set(...AUTH)
+                .send({
+                    api_key: "foundry-key",
+                    settings: { endpoint: "Contoso-Foundry" },
+                })
+                .expect(200);
+            await request(app)
+                .put("/user/api-keys/xai")
+                .set(...AUTH)
+                .send({ api_key: "xai-key" })
+                .expect(200);
+
+            expect(saveUserApiKey).toHaveBeenCalledWith(
+                "u1",
+                "custom",
+                "sk-custom",
+                expect.anything(),
+                { custom: { baseUrl: "https://llm.example.com/v1" } },
+            );
+            expect(saveUserApiKey).toHaveBeenCalledWith(
+                "u1",
+                "azure-foundry",
+                "foundry-key",
+                expect.anything(),
+                {
+                    "azure-foundry": {
+                        endpoint: "https://contoso-foundry.services.ai.azure.com",
+                    },
+                },
+            );
+            expect(saveUserApiKey).toHaveBeenCalledWith(
+                "u1",
+                "xai",
+                "xai-key",
+                expect.anything(),
+            );
+        });
+
+        it("changes only the Azure endpoint when no new key is sent", async () => {
+            supabaseState.tables.user_api_keys = {
+                data: { settings: { endpoint: "contoso-openai" } },
+                error: null,
+            };
+            const res = await request(app)
+                .put("/user/api-keys/azure")
+                .set(...AUTH)
+                .send({ settings: { endpoint: "Contoso-OpenAI" } });
+
+            expect(res.status).toBe(200);
+            expect(updateUserApiKeySettings).toHaveBeenCalledWith(
+                "u1",
+                "azure",
+                { azure: { endpoint: "contoso-openai" } },
+                expect.anything(),
+            );
+            expect(saveUserApiKey).not.toHaveBeenCalled();
+        });
+
+        // PR #608 regression: a settings-only PUT repointed an already-saved
+        // key at a new host, so the next GET /models/custom (or chat) sent
+        // the stored secret to wherever the new URL pointed.
+        describe("endpoint changes without the key", () => {
+            const REENTER = "Re-enter the API key to change this provider's endpoint.";
+
+            it("refuses to move a saved custom-endpoint key to a new host", async () => {
+                supabaseState.tables.user_api_keys = {
+                    data: { settings: { baseUrl: "https://llm.example.com/v1" } },
+                    error: null,
+                };
+                const res = await request(app)
+                    .put("/user/api-keys/custom")
+                    .set(...AUTH)
+                    .send({ settings: { baseUrl: "https://collector.attacker.example/v1" } });
+
+                expect(res.status).toBe(400);
+                expect(res.body).toEqual({ detail: REENTER });
+                expect(updateUserApiKeySettings).not.toHaveBeenCalled();
+                expect(saveUserApiKey).not.toHaveBeenCalled();
+            });
+
+            it("refuses when the saved endpoint is no longer valid", async () => {
+                supabaseState.tables.user_api_keys = {
+                    data: { settings: { baseUrl: "https://10.0.0.5/v1" } },
+                    error: null,
+                };
+                const res = await request(app)
+                    .put("/user/api-keys/custom")
+                    .set(...AUTH)
+                    .send({ settings: { baseUrl: "https://llm.example.com/v1" } });
+                expect(res.status).toBe(400);
+                expect(res.body).toEqual({ detail: REENTER });
+            });
+
+            it("still allows a path change on the same host", async () => {
+                supabaseState.tables.user_api_keys = {
+                    data: { settings: { baseUrl: "https://llm.example.com/v1" } },
+                    error: null,
+                };
+                const res = await request(app)
+                    .put("/user/api-keys/custom")
+                    .set(...AUTH)
+                    .send({ settings: { baseUrl: "https://LLM.example.com/v2/" } });
+                expect(res.status).toBe(200);
+                expect(updateUserApiKeySettings).toHaveBeenCalledWith(
+                    "u1",
+                    "custom",
+                    { custom: { baseUrl: "https://llm.example.com/v2" } },
+                    expect.anything(),
+                );
+            });
+
+            it("still allows a Bedrock region change, which is not an endpoint host", async () => {
+                supabaseState.tables.user_api_keys = {
+                    data: { settings: { region: "us-east-1" } },
+                    error: null,
+                };
+                const res = await request(app)
+                    .put("/user/api-keys/bedrock")
+                    .set(...AUTH)
+                    .send({ settings: { region: "eu-west-2" } });
+                expect(res.status).toBe(200);
+                expect(updateUserApiKeySettings).toHaveBeenCalledOnce();
+            });
+        });
+
+        it("asks for a key first when changing settings with nothing saved", async () => {
+            updateUserApiKeySettings.mockResolvedValue(false);
+
+            const res = await request(app)
+                .put("/user/api-keys/bedrock")
+                .set(...AUTH)
+                .send({ settings: { region: "eu-west-2" } });
+
+            expect(res.status).toBe(400);
+            expect(res.body.detail).toBe(
+                "Save an API key before changing its settings.",
+            );
+        });
+
+        it("removes a Bedrock key and its region when neither is sent", async () => {
+            const res = await request(app)
+                .put("/user/api-keys/bedrock")
+                .set(...AUTH)
+                .send({ api_key: null });
+
+            expect(res.status).toBe(200);
+            expect(saveUserApiKey).toHaveBeenCalledWith(
+                "u1",
+                "bedrock",
+                null,
+                expect.anything(),
+                {},
+            );
+        });
     });
 
     describe("PATCH /user/profile", () => {
         it("persists the last-selected model from the initial chat view", async () => {
             supabaseState.tables.user_profiles = {
                 data: profileRow({
-                    last_selected_chat_model: "gpt-5.6-sol",
+                    last_selected_chat_model: "gpt-6-astra",
                 }),
                 error: null,
             };
@@ -764,33 +1449,33 @@ describe("user.routes", () => {
             const res = await request(app)
                 .patch("/user/profile")
                 .set(...AUTH)
-                .send({ lastSelectedChatModel: "gpt-5.6-sol" });
+                .send({ lastSelectedChatModel: "gpt-6-astra" });
 
             expect(res.status).toBe(200);
             expect(supabaseState.updates.user_profiles).toContainEqual(
                 expect.objectContaining({
-                    last_selected_chat_model: "gpt-5.6-sol",
+                    last_selected_chat_model: "gpt-6-astra",
                 }),
             );
-            expect(res.body.lastSelectedChatModel).toBe("gpt-5.6-sol");
+            expect(res.body.lastSelectedChatModel).toBe("gpt-6-astra");
         });
 
         it("persists and returns the memory curator model", async () => {
             supabaseState.tables.user_profiles = {
-                data: profileRow({ memory_curator_model: "gpt-5.4-mini" }),
+                data: profileRow({ memory_curator_model: "gpt-6-luna" }),
                 error: null,
             };
 
             const res = await request(app)
                 .patch("/user/profile")
                 .set(...AUTH)
-                .send({ memoryCuratorModel: "gpt-5.4-mini" });
+                .send({ memoryCuratorModel: "gpt-6-luna" });
 
             expect(res.status).toBe(200);
-            expect(res.body.memoryCuratorModel).toBe("gpt-5.4-mini");
+            expect(res.body.memoryCuratorModel).toBe("gpt-6-luna");
             expect(supabaseState.updates.user_profiles).toContainEqual(
                 expect.objectContaining({
-                    memory_curator_model: "gpt-5.4-mini",
+                    memory_curator_model: "gpt-6-luna",
                 }),
             );
         });
@@ -896,26 +1581,22 @@ describe("user.routes", () => {
         it.each([
             ["displayName", "display_name"],
             ["organisation", "organisation"],
-        ] as const)(
-            "truncates %s to 200 characters",
-            async (field, column) => {
-                supabaseState.tables.user_profiles = {
-                    data: profileRow(),
-                    error: null,
-                };
+        ] as const)("truncates %s to 200 characters", async (field, column) => {
+            supabaseState.tables.user_profiles = {
+                data: profileRow(),
+                error: null,
+            };
 
-                const res = await request(app)
-                    .patch("/user/profile")
-                    .set(...AUTH)
-                    .send({ [field]: "x".repeat(250) });
+            const res = await request(app)
+                .patch("/user/profile")
+                .set(...AUTH)
+                .send({ [field]: "x".repeat(250) });
 
-                expect(res.status).toBe(200);
-                const written = supabaseState.updates.user_profiles?.at(-1) as
-                    | Record<string, unknown>
-                    | undefined;
-                expect(written?.[column]).toBe("x".repeat(200));
-            },
-        );
+            expect(res.status).toBe(200);
+            const written = supabaseState.updates.user_profiles?.at(-1) as
+                Record<string, unknown> | undefined;
+            expect(written?.[column]).toBe("x".repeat(200));
+        });
     });
 
     describe("POST /user/onboarding", () => {
@@ -985,7 +1666,9 @@ describe("user.routes", () => {
                 .send({ jurisdiction: "" });
 
             expect(res.status).toBe(400);
-            expect(res.body.detail).toBe("Select a valid jurisdiction of practice");
+            expect(res.body.detail).toBe(
+                "Select a valid jurisdiction of practice",
+            );
         });
 
         it("requires a valid professional setting", async () => {
@@ -999,9 +1682,7 @@ describe("user.routes", () => {
                 });
 
             expect(res.status).toBe(400);
-            expect(res.body.detail).toBe(
-                "Select a valid professional setting",
-            );
+            expect(res.body.detail).toBe("Select a valid professional setting");
         });
 
         it("allows onboarding completion without a display name", async () => {
@@ -1043,10 +1724,9 @@ describe("user.routes", () => {
 
             expect(res.status).toBe(200);
             expect(res.body.passwordSet).toBe(true);
-            expect(supabaseRpc).toHaveBeenCalledWith(
-                "sync_user_password_set",
-                { p_user_id: "u1" },
-            );
+            expect(supabaseRpc).toHaveBeenCalledWith("sync_user_password_set", {
+                p_user_id: "u1",
+            });
         });
 
         it("rejects the marker when Supabase has no password", async () => {
@@ -1065,74 +1745,70 @@ describe("user.routes", () => {
         });
     });
 
-    // ── Data export endpoints (MFA-guarded, attachment headers) ───────────
-    describe("data export endpoints", () => {
-        it("GET /user/export returns the account export as a JSON attachment", async () => {
-            const res = await request(app)
-                .get("/user/export")
-                .set(...AUTH);
-
-            expect(res.status).toBe(200);
-            expect(res.body).toEqual({ account: "data" });
-            expect(res.headers["content-type"]).toContain("application/json");
-            expect(res.headers["content-disposition"]).toContain("attachment");
-            expect(res.headers["content-disposition"]).toContain(
-                "mike-account-export-u1.json",
-            );
-            expect(buildUserAccountExport).toHaveBeenCalledWith(
-                expect.anything(),
-                "u1",
-                "u1@test.local",
-            );
-        });
-
-        it("GET /user/chats/export returns the chats export", async () => {
-            const res = await request(app)
-                .get("/user/chats/export")
-                .set(...AUTH);
-
-            expect(res.status).toBe(200);
-            expect(res.body).toEqual({ chats: "data" });
-            expect(res.headers["content-disposition"]).toContain(
-                "mike-chats-export-u1.json",
-            );
-            expect(buildUserChatsExport).toHaveBeenCalledTimes(1);
-        });
-
-        it("GET /user/tabular-reviews/export returns the reviews export", async () => {
-            const res = await request(app)
-                .get("/user/tabular-reviews/export")
-                .set(...AUTH);
-
-            expect(res.status).toBe(200);
-            expect(res.body).toEqual({ reviews: "data" });
-            expect(res.headers["content-disposition"]).toContain(
-                "mike-tabular-reviews-export-u1.json",
-            );
-            expect(buildUserTabularReviewsExport).toHaveBeenCalledTimes(1);
-        });
-
-        it("GET /user/export returns 500 when the builder throws", async () => {
-            buildUserAccountExport.mockRejectedValue(new Error("export boom"));
-
-            const res = await request(app)
-                .get("/user/export")
-                .set(...AUTH);
-
-            expect(res.status).toBe(500);
-            expect(res.body.detail).toBe("Something went wrong. Please try again.");
-        });
-
-        it("GET /user/export is rejected when MFA is unsatisfied", async () => {
+    // ── Data export endpoint (MFA-guarded) ─────────────────────────────────
+    describe("data export endpoint", () => {
+        it("POST /user/exports is rejected when MFA is unsatisfied", async () => {
             requireMfaIfEnrolled.mockImplementation(rejectMfa);
 
             const res = await request(app)
-                .get("/user/export")
-                .set(...AUTH);
+                .post("/user/exports")
+                .set(...AUTH)
+                .send({ type: "account" });
 
             expect(res.status).toBe(403);
             expect(res.body.code).toBe("mfa_verification_required");
             expect(buildUserAccountExport).not.toHaveBeenCalled();
+        });
+
+        it("POST /user/exports reports a failed enqueue as export.failed and answers an opaque 500", async () => {
+            const cause = { code: "08006", message: "connection lost" };
+            supabaseState.tables.db_jobs = { data: null, error: cause };
+
+            const res = await request(app)
+                .post("/user/exports")
+                .set(...AUTH)
+                .send({ type: "account" });
+
+            expect(res.status).toBe(500);
+            expect(res.body).toMatchObject({
+                code: "internal_error",
+                detail: "Something went wrong. Please try again.",
+            });
+            expect(res.text).not.toContain("connection lost");
+            const failure = reportedFailure();
+            expect(failure.kind).toBe("export.failed");
+            // The enqueue's own failure, and the PostgREST code under it,
+            // stay on the cause chain for failure_code.
+            expect(failure.cause).toBeInstanceOf(AppError);
+            expect((failure.cause as AppError).kind).toBe("dbq.enqueue_failed");
+            expect((failure.cause as AppError).cause).toBe(cause);
+            expect(reportError.mock.calls[0]?.[1]).toMatchObject({
+                tags: { http_route: "/user/exports", http_status: 500 },
+            });
+        });
+    });
+
+    describe("GET /user/integrations/google-drive", () => {
+        it("reports a failed token-row query once, by kind, and answers an opaque 500", async () => {
+            const cause = { code: "08006", message: "connection lost" };
+            supabaseState.tables.user_google_drive_tokens = {
+                data: null,
+                error: cause,
+            };
+
+            const res = await request(app)
+                .get("/user/integrations/google-drive")
+                .set(...AUTH);
+
+            expect(res.status).toBe(500);
+            expect(res.body).toMatchObject({ code: "internal_error" });
+            expect(res.text).not.toContain("connection lost");
+            const failure = reportedFailure();
+            expect(failure.kind).toBe("db.query_failed");
+            expect(failure.cause).toBe(cause);
+            expect(reportError.mock.calls[0]?.[1]).toMatchObject({
+                tags: { http_route: "/user/integrations/google-drive", http_status: 500 },
+            });
         });
     });
 
@@ -1144,21 +1820,24 @@ describe("user.routes", () => {
                 .set(...AUTH);
 
             expect(res.status).toBe(204);
+            // No workspace named is Personal, never every workspace.
             expect(deleteAllUserChats).toHaveBeenCalledWith(
                 expect.anything(),
                 "u1",
+                null,
             );
         });
 
         it("DELETE /user/projects invokes deleteUserProjects and returns 204", async () => {
             const res = await request(app)
-                .delete("/user/projects")
+                .delete("/user/projects?workspace=personal")
                 .set(...AUTH);
 
             expect(res.status).toBe(204);
             expect(deleteUserProjects).toHaveBeenCalledWith(
                 expect.anything(),
                 "u1",
+                null,
             );
         });
 
@@ -1171,6 +1850,7 @@ describe("user.routes", () => {
             expect(deleteAllUserTabularReviews).toHaveBeenCalledWith(
                 expect.anything(),
                 "u1",
+                null,
             );
         });
 
@@ -1183,7 +1863,100 @@ describe("user.routes", () => {
             expect(deleteUserPrivateMemories).toHaveBeenCalledWith(
                 expect.anything(),
                 "u1",
+                null,
             );
+        });
+
+        it.each([
+            ["/user/chats", () => deleteAllUserChats],
+            ["/user/projects", () => deleteUserProjects],
+            ["/user/tabular-reviews", () => deleteAllUserTabularReviews],
+            ["/user/memories", () => deleteUserPrivateMemories],
+        ] as const)("DELETE %s deletes in the organization workspace named", async (path, helper) => {
+            // A member, in an organization whose owners allow bulk deletes.
+            supabaseState.tables.org_members = {
+                data: { org_id: ORG_ID, role: "member" },
+                error: null,
+            };
+            supabaseState.tables.organizations = {
+                data: { kind: "team", allow_member_deletes: true },
+                error: null,
+            };
+
+            const res = await request(app)
+                .delete(`${path}?workspace=${ORG_ID}`)
+                .set(...AUTH);
+
+            expect(res.status).toBe(204);
+            expect(helper()).toHaveBeenCalledWith(expect.anything(), "u1", ORG_ID);
+        });
+
+        it.each([
+            ["/user/chats", () => deleteAllUserChats],
+            ["/user/projects", () => deleteUserProjects],
+            ["/user/tabular-reviews", () => deleteAllUserTabularReviews],
+            ["/user/memories", () => deleteUserPrivateMemories],
+        ] as const)("DELETE %s refuses a member when the organization has not allowed it", async (path, helper) => {
+            supabaseState.tables.org_members = {
+                data: { org_id: ORG_ID, role: "admin" },
+                error: null,
+            };
+            supabaseState.tables.organizations = {
+                data: { kind: "team", allow_member_deletes: false },
+                error: null,
+            };
+
+            const res = await request(app)
+                .delete(`${path}?workspace=${ORG_ID}`)
+                .set(...AUTH);
+
+            expect(res.status).toBe(403);
+            expect(res.body.code).toBe("member_data_action_disabled");
+            expect(helper()).not.toHaveBeenCalled();
+        });
+
+        it("DELETE /user/chats lets an owner delete whatever the organization allows members", async () => {
+            supabaseState.tables.org_members = {
+                data: { org_id: ORG_ID, role: "owner" },
+                error: null,
+            };
+            supabaseState.tables.organizations = {
+                data: { kind: "team", allow_member_deletes: false },
+                error: null,
+            };
+
+            const res = await request(app)
+                .delete(`/user/chats?workspace=${ORG_ID}`)
+                .set(...AUTH);
+
+            expect(res.status).toBe(204);
+            expect(deleteAllUserChats).toHaveBeenCalledWith(expect.anything(), "u1", ORG_ID);
+        });
+
+        it.each([
+            ["/user/chats", () => deleteAllUserChats],
+            ["/user/projects", () => deleteUserProjects],
+            ["/user/tabular-reviews", () => deleteAllUserTabularReviews],
+            ["/user/memories", () => deleteUserPrivateMemories],
+        ] as const)("DELETE %s deletes nothing in a workspace the caller is not in", async (path, helper) => {
+            supabaseState.tables.org_members = { data: null, error: null };
+
+            const res = await request(app)
+                .delete(`${path}?workspace=${ORG_ID}`)
+                .set(...AUTH);
+
+            expect(res.status).toBe(404);
+            expect(res.body.code).toBe("workspace_not_found");
+            expect(helper()).not.toHaveBeenCalled();
+        });
+
+        it("DELETE /user/chats refuses a malformed workspace", async () => {
+            const res = await request(app)
+                .delete("/user/chats?workspace=everything")
+                .set(...AUTH);
+
+            expect(res.status).toBe(400);
+            expect(deleteAllUserChats).not.toHaveBeenCalled();
         });
 
         // ERASURE ORDERING. documents.user_id references auth.users ON DELETE
@@ -1202,13 +1975,9 @@ describe("user.routes", () => {
                 .set(...AUTH);
 
             expect(res.status).toBe(204);
-            // Durable job queued...
-            const jobInserts = (supabaseState.inserts.db_jobs ?? []) as Record<
-                string,
-                unknown
-            >[];
-            expect(jobInserts).toHaveLength(1);
-            expect(jobInserts[0]).toMatchObject({ kind: "account.delete" });
+            expect(supabaseRpc).toHaveBeenCalledWith("request_account_deletion", {
+                p_user_id: "u1", p_user_email: "u1@test.local",
+            });
             // ...auth user still present, so the cascade can still read the
             // storage paths it is about to delete.
             expect(adminDeleteUser).not.toHaveBeenCalled();
@@ -1220,7 +1989,7 @@ describe("user.routes", () => {
         // SOLE-ADMIN REFUSAL. Deleting this account would either hand the
         // organization to an arbitrary successor or strand it with no members
         // at all, so the product refuses and names the organizations.
-        it("DELETE /user/account returns 409 for the sole admin of a live org", async () => {
+        it("DELETE /user/account returns 409 for the sole owner of a live org", async () => {
             listOrgsBlockingAccountDeletion.mockResolvedValue([
                 { org_id: "o1", name: "Org A", reason: "members" },
                 { org_id: "o2", name: "Org B", reason: "content" },
@@ -1233,7 +2002,7 @@ describe("user.routes", () => {
             expect(res.status).toBe(409);
             expect(res.body.code).toBe("org_successor_required");
             expect(res.body.detail).toBe(
-                "You are the only admin of Org A. Make another member an admin, or delete the organization, before deleting your account. You are the only admin of Org B, which still owns content. Delete or move the organization's projects, workflows, documents and reviews, or delete the organization, before deleting your account.",
+                "You are the only owner of Org A. Make another member an owner, or delete the organization, before deleting your account. You are the only owner of Org B, and must appoint another owner or explicitly delete the organization before deleting your account.",
             );
             expect(res.body.organizations).toEqual([
                 { org_id: "o1", name: "Org A", reason: "members" },
@@ -1241,14 +2010,14 @@ describe("user.routes", () => {
             ]);
             // Nothing was scheduled, nothing was revoked, nothing was
             // destroyed — the user is still signed in and can appoint an
-            // admin. The old behaviour answered 204, revoked the session and
+            // owner. The old behaviour answered 204, revoked the session and
             // then failed the job forever.
             expect(supabaseState.inserts.db_jobs ?? []).toHaveLength(0);
             expect(adminSignOut).not.toHaveBeenCalled();
             expect(deleteUserAccountData).not.toHaveBeenCalled();
         });
 
-        it("DELETE /user/account refuses the inline path for a sole admin too", async () => {
+        it("DELETE /user/account refuses the inline path for a sole owner too", async () => {
             // The no-runner fallback runs the cascade synchronously, so the
             // check must gate it as well.
             dbJobsEnabled.mockReturnValue(false);
@@ -1291,16 +2060,24 @@ describe("user.routes", () => {
                 .set(...AUTH);
 
             expect(res.status).toBe(500);
-            expect(res.body.detail).toBe("Something went wrong. Please try again.");
+            expect(res.body.detail).toBe(
+                "Something went wrong. Please try again.",
+            );
+            const failure = reportedFailure();
+            expect(failure.kind).toBe("account.delete_failed");
+            expect(failure.cause).toEqual({ message: "auth boom" });
+            expect(reportError.mock.calls[0]?.[1]).toMatchObject({
+                tags: { http_route: "/user/account", http_status: 500 },
+            });
         });
 
         it("DELETE /user/account returns 500 when the cascade cannot be scheduled", async () => {
             // Nothing has been destroyed yet, so the request is cleanly
             // retriable — it must not answer 204.
-            supabaseState.tables.db_jobs = {
+            supabaseRpc.mockResolvedValueOnce({
                 data: null,
                 error: { code: "08006", message: "connection lost" },
-            };
+            });
 
             const res = await request(app)
                 .delete("/user/account")
@@ -1312,14 +2089,20 @@ describe("user.routes", () => {
         });
 
         it("DELETE /user/chats returns 500 when cleanup throws", async () => {
-            deleteAllUserChats.mockRejectedValue(new Error("cascade failed"));
+            const cause = new Error("cascade failed");
+            deleteAllUserChats.mockRejectedValue(cause);
 
             const res = await request(app)
                 .delete("/user/chats")
                 .set(...AUTH);
 
             expect(res.status).toBe(500);
-            expect(res.body.detail).toBe("Something went wrong. Please try again.");
+            expect(res.body.detail).toBe(
+                "Something went wrong. Please try again.",
+            );
+            const failure = reportedFailure();
+            expect(failure.kind).toBe("db.query_failed");
+            expect(failure.cause).toBe(cause);
         });
 
         it("DELETE /user/account is rejected when MFA is unsatisfied (no cleanup)", async () => {
@@ -1344,6 +2127,77 @@ describe("user.routes", () => {
             expect(res.status).toBe(403);
             expect(res.body.code).toBe("mfa_verification_required");
             expect(deleteUserPrivateMemories).not.toHaveBeenCalled();
+        });
+    });
+
+    // ── GET /user/mcp-connectors/oauth/callback (popup hand-off page) ─────
+    describe("GET /user/mcp-connectors/oauth/callback", () => {
+        // The 400 path (missing state/code) renders the same popup HTML via
+        // the same header helper as the success path, without needing any
+        // real OAuth machinery — so it is the regression probe for both.
+        it("relaxes COOP so window.opener survives, alongside the nonce CSP", async () => {
+            const log = vi
+                .spyOn(console, "error")
+                .mockImplementation(() => undefined);
+
+            const res = await request(app).get(
+                "/user/mcp-connectors/oauth/callback",
+            );
+
+            expect(res.status).toBe(400);
+            // Load-bearing: helmet's default COOP of same-origin would sever
+            // window.opener the moment the popup returns from the
+            // cross-origin consent page, silently breaking the postMessage
+            // hand-off. This must hold through the full app assembly (helmet
+            // runs on this very request), not just on the bare router.
+            expect(res.headers["cross-origin-opener-policy"]).toBe(
+                "unsafe-none",
+            );
+            // The route-scoped CSP (with the per-response script nonce) must
+            // survive alongside the COOP relaxation.
+            expect(res.headers["content-security-policy"]).toContain(
+                "script-src 'nonce-",
+            );
+            log.mockRestore();
+        });
+
+        it("keeps helmet's default COOP on every other route", async () => {
+            // Contrast probe: the relaxation must stay scoped to the popup
+            // page. If it ever leaks app-wide, this fails.
+            supabaseState.tables.user_profiles = {
+                data: profileRow(),
+                error: null,
+            };
+
+            const res = await request(app).get("/user/profile").set(...AUTH);
+
+            expect(res.headers["cross-origin-opener-policy"]).toBe(
+                "same-origin",
+            );
+        });
+
+        it("keeps a </script> breakout in ?error= out of the popup page", async () => {
+            const log = vi
+                .spyOn(console, "error")
+                .mockImplementation(() => undefined);
+
+            // ?error= is attacker-controllable and reaches this route's error
+            // path. The failure detail shown to the user is a fixed string
+            // (the raw error only goes to the server log), and the popup's
+            // JSON literal additionally escapes "<" as \u003c — so a
+            // </script><script>… payload can neither be reflected nor close
+            // the legitimate script element.
+            const res = await request(app).get(
+                "/user/mcp-connectors/oauth/callback?error=" +
+                    encodeURIComponent("</script><script>evil()</script>"),
+            );
+
+            expect(res.status).toBe(400);
+            expect(res.text).not.toContain("evil()");
+            // The only </script> left is the page's own closing tag.
+            expect(res.text).not.toContain("</script><script");
+            expect(res.text.match(/<\/script>/g)).toHaveLength(1);
+            log.mockRestore();
         });
     });
 

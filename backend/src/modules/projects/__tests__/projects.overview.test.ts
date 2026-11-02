@@ -103,6 +103,9 @@ describe("parseProjectScope", () => {
         expect(parseProjectScope("shared")).toBe("shared");
         expect(parseProjectScope("collaborative")).toBe("collaborative");
         expect(parseProjectScope("private")).toBe("private");
+        // The list's Public and Private tabs.
+        expect(parseProjectScope("public")).toBe("public");
+        expect(parseProjectScope("nonpublic")).toBe("nonpublic");
     });
 
     it("falls back to all for missing or unsupported scopes", () => {

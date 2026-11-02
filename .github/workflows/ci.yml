@@ -12,10 +12,19 @@
 name: CI
 
 on:
+  workflow_dispatch:
   push:
     branches: [main]
+  # Include stacked PRs whose base is another feature branch.
   pull_request:
-    branches: [main]
+
+# Don't pile up runs on rapid pushes to the same PR: a new push cancels the
+# superseded run so it stops holding job slots (the org's concurrent-job cap is
+# shared by every workflow). Pushes to main each get their own group (keyed by
+# sha) and are never cancelled.
+concurrency:
+  group: ci-${{ github.event_name == 'push' && github.sha || github.ref }}
+  cancel-in-progress: ${{ github.event_name != 'push' }}
 
 jobs:
   backend:
@@ -27,7 +36,7 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
-      - uses: actions/setup-node@v7
+      - uses: actions/setup-node@v7.1.0
         with:
           node-version: 22
           cache: npm
@@ -40,6 +49,9 @@ jobs:
       # reason instead.
       - name: Validate package.json and lockfile parse
         run: node -e "for (const f of ['package.json','package-lock.json']) JSON.parse(require('fs').readFileSync(f, 'utf8'))"
+
+      - name: Image publication recovery tests
+        run: node --test ../scripts/publish-images.test.mjs
 
       - run: npm ci
 
@@ -61,6 +73,9 @@ jobs:
 
       - run: npm run typecheck:contracts
 
+      - name: Google Workspace approval database guarantees
+        run: bash scripts/test-google-workspace-db.sh
+
   frontend:
     name: Frontend build and tests
     runs-on: ubuntu-latest
@@ -70,7 +85,7 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
-      - uses: actions/setup-node@v7
+      - uses: actions/setup-node@v7.1.0
         with:
           node-version: 22
           cache: npm
@@ -94,6 +109,14 @@ jobs:
       # Blocking gate: the eslint error backlog was burned down in this PR
       # (0 errors; warnings do not fail the step), so any new error fails CI.
       - run: npm run lint
+
+      # Type-checks the whole program, tests included. `next build` below
+      # checks only tsconfig.build.json, which excludes test files so the
+      # production image never depends on fixtures outside frontend/ (see
+      # frontend/src/__tests__/architecture.test.ts). Vitest strips types
+      # without checking them, so this step is the only gate on test type
+      # errors.
+      - run: npm run typecheck
 
       # Production build. Runtime-only server configuration is intentionally
       # not required for this compile-time check.

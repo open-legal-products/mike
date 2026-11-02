@@ -2,7 +2,9 @@
 //
 // The library organises a user's standalone (project_id === null) documents
 // into two collections — "files" and "templates" — each with an optional
-// folder tree (library_folders). These functions take an explicit Supabase
+// folder tree (library_folders). It is per workspace: what a person uploads
+// in an organization's workspace is filed under that organization, private
+// to them, and listed only there. These functions take an explicit Supabase
 // client (`db`) plus request-derived primitives and RETURN typed results;
 // the thin route handlers in library.routes.ts map them onto HTTP responses.
 
@@ -14,6 +16,11 @@ import {
   attachLatestVersionNumbers,
 } from "../../lib/documentVersions";
 import type { PaginationParams } from "../../lib/pagination";
+import {
+  PERSONAL_WORKSPACE,
+  workspaceRpcArg,
+  type WorkspaceFilter,
+} from "../../lib/workspace";
 
 export type LibraryKind = "file" | "template";
 
@@ -27,6 +34,52 @@ export function normalizeLibraryKind(value: unknown): LibraryKind | null {
   return null;
 }
 
+// The library is per workspace: a person's own documents and folders in
+// Personal, and their own in each organization they belong to. `workspace`
+// narrows every list here to one of them — "personal", an organization id,
+// or null for a caller that predates workspaces, which is not narrowed.
+//
+// Whatever the caller asks to see, a folder and what is in it are always in
+// the same workspace: a document is never moved into another workspace's
+// folder, and a new folder takes its parent's.
+
+// The query builders' own types are too deep to thread through a generic
+// constraint, so these ask only for the two filters they use.
+type OrgNarrowable = {
+  eq(column: string, value: string): unknown;
+  is(column: string, value: null): unknown;
+};
+
+/** Narrow a documents or library_folders query to one workspace. */
+function inWorkspace<Q>(query: Q, workspace: WorkspaceFilter): Q {
+  if (!workspace) return query;
+  const narrowable = query as unknown as OrgNarrowable;
+  return (
+    workspace === PERSONAL_WORKSPACE
+      ? narrowable.is("org_id", null)
+      : narrowable.eq("org_id", workspace)
+  ) as Q;
+}
+
+/** Narrow a query to exactly the workspace `orgId` names (null: Personal). */
+function inOrg<Q>(query: Q, orgId: string | null): Q {
+  const narrowable = query as unknown as OrgNarrowable;
+  return (
+    orgId ? narrowable.eq("org_id", orgId) : narrowable.is("org_id", null)
+  ) as Q;
+}
+
+/** The org_id a new row gets in `workspace`: null for Personal or unscoped. */
+function workspaceOrgId(workspace: WorkspaceFilter): string | null {
+  return workspace && workspace !== PERSONAL_WORKSPACE ? workspace : null;
+}
+
+type LibraryFolderRef = {
+  id: string;
+  parent_folder_id: string | null;
+  org_id: string | null;
+};
+
 function mapLibraryDocument<T extends Record<string, unknown>>(doc: T) {
   return {
     ...doc,
@@ -39,15 +92,24 @@ async function loadLibraryFolder(
   userId: string,
   kind: LibraryKind,
   folderId: string,
-): Promise<{ id: string; parent_folder_id: string | null } | null> {
-  const { data } = await db
-    .from("library_folders")
-    .select("id, parent_folder_id")
-    .eq("id", folderId)
-    .eq("user_id", userId)
-    .eq("library_kind", kind)
-    .maybeSingle();
-  return (data as { id: string; parent_folder_id: string | null } | null) ?? null;
+  workspace: WorkspaceFilter = null,
+): Promise<LibraryFolderRef | null> {
+  const { data } = await inWorkspace(
+    db
+      .from("library_folders")
+      .select("id, parent_folder_id, org_id")
+      .eq("id", folderId)
+      .eq("user_id", userId)
+      .eq("library_kind", kind),
+    workspace,
+  ).maybeSingle();
+  if (!data) return null;
+  const row = data as Partial<LibraryFolderRef> & { id: string };
+  return {
+    id: row.id,
+    parent_folder_id: row.parent_folder_id ?? null,
+    org_id: row.org_id ?? null,
+  };
 }
 
 async function deleteLibraryDocumentsAndVersionFiles(
@@ -101,12 +163,16 @@ async function loadLibraryLevel(
   kind: LibraryKind,
   parentFolderId: string | null,
   pagination: PaginationParams,
+  workspace: WorkspaceFilter = null,
 ) {
-  let documentsQuery = db
-    .from("documents")
-    .select("*")
-    .eq("user_id", userId)
-    .is("project_id", null);
+  let documentsQuery = inWorkspace(
+    db
+      .from("documents")
+      .select("*")
+      .eq("user_id", userId)
+      .is("project_id", null),
+    workspace,
+  );
   documentsQuery =
     parentFolderId === null
       ? documentsQuery.is("library_folder_id", null)
@@ -120,11 +186,14 @@ async function loadLibraryLevel(
     pagination.offset + pagination.limit,
   );
 
-  let foldersQuery = db
-    .from("library_folders")
-    .select("*")
-    .eq("user_id", userId)
-    .eq("library_kind", kind);
+  let foldersQuery = inWorkspace(
+    db
+      .from("library_folders")
+      .select("*")
+      .eq("user_id", userId)
+      .eq("library_kind", kind),
+    workspace,
+  );
   foldersQuery =
     parentFolderId === null
       ? foldersQuery.is("parent_folder_id", null)
@@ -174,6 +243,7 @@ export async function getLibrary(
   kind: LibraryKind,
   parentFolderId: string | null,
   pagination: PaginationParams,
+  workspace: WorkspaceFilter = null,
 ): Promise<
   ServiceResult<{
     documents: unknown[];
@@ -182,10 +252,23 @@ export async function getLibrary(
   }>
 > {
   if (parentFolderId) {
-    const folder = await loadLibraryFolder(db, userId, kind, parentFolderId);
+    const folder = await loadLibraryFolder(
+      db,
+      userId,
+      kind,
+      parentFolderId,
+      workspace,
+    );
     if (!folder) return err(404, "Folder not found");
   }
-  const result = await loadLibraryLevel(db, userId, kind, parentFolderId, pagination);
+  const result = await loadLibraryLevel(
+    db,
+    userId,
+    kind,
+    parentFolderId,
+    pagination,
+    workspace,
+  );
   if (result.error) return err(500, result.error);
   return ok({
     documents: result.documents,
@@ -202,6 +285,7 @@ export async function searchLibraryDocuments(
   fileType: string | null,
   sort: { key: string; direction: "asc" | "desc" },
   pagination: PaginationParams,
+  workspace: WorkspaceFilter = null,
 ): Promise<ServiceResult<{ documents: unknown[]; documentsHasMore: boolean }>> {
   const { data, error } = await db.rpc("search_library_documents", {
     p_user_id: userId,
@@ -212,6 +296,7 @@ export async function searchLibraryDocuments(
     p_file_type: fileType,
     p_sort_key: sort.key,
     p_sort_direction: sort.direction,
+    ...workspaceRpcArg(workspace),
   });
   if (error) return internalErr(error);
 
@@ -227,6 +312,7 @@ export async function getLibraryLevels(
   userId: string,
   kind: LibraryKind,
   levels: Array<{ parentId: string | null; limit: number }>,
+  workspace: WorkspaceFilter = null,
 ): Promise<
   ServiceResult<{
     levels: Array<{
@@ -249,10 +335,14 @@ export async function getLibraryLevels(
         const level = levels[index];
         results[index] = {
           parentId: level.parentId,
-          result: await loadLibraryLevel(db, userId, kind, level.parentId, {
-            limit: level.limit,
-            offset: 0,
-          }),
+          result: await loadLibraryLevel(
+            db,
+            userId,
+            kind,
+            level.parentId,
+            { limit: level.limit, offset: 0 },
+            workspace,
+          ),
         };
       }
     }),
@@ -273,10 +363,12 @@ export async function getLibraryFilterOptions(
   db: Db,
   userId: string,
   kind: LibraryKind,
+  workspace: WorkspaceFilter = null,
 ): Promise<ServiceResult<{ fileTypes: string[] }>> {
   const { data, error } = await db.rpc("get_library_filter_options", {
     p_user_id: userId,
     p_library_kind: kind,
+    ...workspaceRpcArg(workspace),
   });
   if (error) return internalErr(error);
   const row = (data?.[0] ?? {}) as { file_types?: unknown };
@@ -295,6 +387,7 @@ export async function getLibraryDocumentIds(
   kind: LibraryKind,
   searchTerm: string | null,
   fileType: string | null,
+  workspace: WorkspaceFilter = null,
 ): Promise<ServiceResult<string[]>> {
   const ids: string[] = [];
   let offset = 0;
@@ -306,6 +399,7 @@ export async function getLibraryDocumentIds(
       p_file_type: fileType,
       p_limit: LIBRARY_IDS_PAGE_SIZE,
       p_offset: offset,
+      ...workspaceRpcArg(workspace),
     });
     if (error) return internalErr(error);
     const rows = (data ?? []) as { id: string }[];
@@ -346,12 +440,16 @@ export async function getLibraryFolderPath(
   userId: string,
   kind: LibraryKind,
   folderId: string,
+  workspace: WorkspaceFilter = null,
 ): Promise<ServiceResult<{ folders: unknown[] }>> {
-  const { data, error } = await db
-    .from("library_folders")
-    .select("*")
-    .eq("user_id", userId)
-    .eq("library_kind", kind);
+  const { data, error } = await inWorkspace(
+    db
+      .from("library_folders")
+      .select("*")
+      .eq("user_id", userId)
+      .eq("library_kind", kind),
+    workspace,
+  );
   if (error) return internalErr(error);
 
   const folders = data ?? [];
@@ -388,14 +486,25 @@ export async function resolveLibraryFolderPath(
     segments?: unknown;
     conflict_resolution?: unknown;
   },
+  workspace: WorkspaceFilter = null,
 ): Promise<ServiceResult<unknown>> {
   const path = parseFolderPath(body);
   if (!path) return err(400, "Invalid folder path");
   const { segments, conflictResolution, baseFolderId } = path;
 
+  // The path is walked, and any missing folder made, in one workspace: the
+  // base folder's, or the one the caller is working in.
+  let orgId = workspaceOrgId(workspace);
   if (baseFolderId) {
-    const parent = await loadLibraryFolder(db, userId, kind, baseFolderId);
+    const parent = await loadLibraryFolder(
+      db,
+      userId,
+      kind,
+      baseFolderId,
+      workspace,
+    );
     if (!parent) return err(404, "Parent folder not found");
+    orgId = parent.org_id;
   }
 
   const { data, error } = await db.rpc("resolve_library_folder_path", {
@@ -404,23 +513,36 @@ export async function resolveLibraryFolderPath(
     base_folder_id: baseFolderId,
     path_segments: segments,
     conflict_resolution: conflictResolution,
+    ...(orgId ? { target_org_id: orgId } : {}),
   });
   if (error) return internalErr(error);
   return ok(data);
 }
 
+/** Create a named library folder in the authorized parent or current workspace. */
 export async function createLibraryFolder(
   db: Db,
   userId: string,
   kind: LibraryKind,
-  body: { name?: string; parent_folder_id?: string | null },
+  body: { name?: unknown; parent_folder_id?: string | null },
+  workspace: WorkspaceFilter = null,
 ): Promise<ServiceResult<unknown>> {
   const { name, parent_folder_id } = body;
-  if (!name?.trim()) return err(400, "name is required");
+  if (typeof name !== "string" || !name.trim()) return err(400, "name is required");
 
+  // A folder is in its parent's workspace; at the top level, the one the
+  // caller is working in.
+  let orgId = workspaceOrgId(workspace);
   if (parent_folder_id) {
-    const parent = await loadLibraryFolder(db, userId, kind, parent_folder_id);
+    const parent = await loadLibraryFolder(
+      db,
+      userId,
+      kind,
+      parent_folder_id,
+      workspace,
+    );
     if (!parent) return err(404, "Parent folder not found");
+    orgId = parent.org_id;
   }
 
   const { data, error } = await db
@@ -430,6 +552,7 @@ export async function createLibraryFolder(
       library_kind: kind,
       name: name.trim(),
       parent_folder_id: parent_folder_id ?? null,
+      ...(orgId ? { org_id: orgId } : {}),
     })
     .select("*")
     .single();
@@ -437,20 +560,23 @@ export async function createLibraryFolder(
   return ok(data);
 }
 
+/** Rename or move a library folder after checking its workspace and parent tree. */
 export async function updateLibraryFolder(
   db: Db,
   userId: string,
   kind: LibraryKind,
   folderId: string,
-  body: { name?: string; parent_folder_id?: string | null },
+  body: { name?: unknown; parent_folder_id?: string | null },
+  workspace: WorkspaceFilter = null,
 ): Promise<ServiceResult<unknown>> {
-  const folder = await loadLibraryFolder(db, userId, kind, folderId);
+  const folder = await loadLibraryFolder(db, userId, kind, folderId, workspace);
   if (!folder) return err(404, "Folder not found");
 
   const updates: Record<string, unknown> = {
     updated_at: new Date().toISOString(),
   };
-  if (body.name != null) {
+  if ("name" in body) {
+    if (typeof body.name !== "string") return err(400, "name must be a non-empty string");
     const trimmed = body.name.trim();
     if (!trimmed) return err(400, "name is required");
     updates.name = trimmed;
@@ -464,6 +590,16 @@ export async function updateLibraryFolder(
       if (moveError === "cycle")
         return err(400, "Cannot move a folder into itself or a descendant");
       if (moveError) return err(404, "Parent folder not found");
+      // A folder stays in its workspace: a parent in another one is, to
+      // this folder, not there.
+      const parent = await loadLibraryFolder(
+        db,
+        userId,
+        kind,
+        body.parent_folder_id,
+      );
+      if (!parent || parent.org_id !== folder.org_id)
+        return err(404, "Parent folder not found");
     }
     updates.parent_folder_id = body.parent_folder_id ?? null;
   }
@@ -485,12 +621,16 @@ export async function deleteLibraryFolder(
   userId: string,
   kind: LibraryKind,
   folderId: string,
+  workspace: WorkspaceFilter = null,
 ): Promise<ServiceResult<null>> {
-  const { data: allFolders, error: foldersError } = await db
-    .from("library_folders")
-    .select("id, parent_folder_id")
-    .eq("user_id", userId)
-    .eq("library_kind", kind);
+  const { data: allFolders, error: foldersError } = await inWorkspace(
+    db
+      .from("library_folders")
+      .select("id, parent_folder_id")
+      .eq("user_id", userId)
+      .eq("library_kind", kind),
+    workspace,
+  );
   if (foldersError) return internalErr(foldersError);
   if (!(allFolders ?? []).some((folder) => folder.id === folderId)) {
     return err(404, "Folder not found");
@@ -538,21 +678,29 @@ export async function moveLibraryDocument(
   kind: LibraryKind,
   documentId: string,
   folder_id: string | null,
+  workspace: WorkspaceFilter = null,
 ): Promise<ServiceResult<unknown>> {
+  let folder: LibraryFolderRef | null = null;
   if (folder_id) {
-    const folder = await loadLibraryFolder(db, userId, kind, folder_id);
+    folder = await loadLibraryFolder(db, userId, kind, folder_id, workspace);
     if (!folder) return err(404, "Folder not found");
   }
 
-  let moveQuery = db
-    .from("documents")
-    .update({
-      library_folder_id: folder_id ?? null,
-      updated_at: new Date().toISOString(),
-    })
-    .eq("id", documentId)
-    .eq("user_id", userId)
-    .is("project_id", null);
+  let moveQuery = inWorkspace(
+    db
+      .from("documents")
+      .update({
+        library_folder_id: folder_id ?? null,
+        updated_at: new Date().toISOString(),
+      })
+      .eq("id", documentId)
+      .eq("user_id", userId)
+      .is("project_id", null),
+    workspace,
+  );
+  // Into a folder: only a document of that folder's workspace. One from
+  // another workspace matches nothing, and is reported as not found.
+  if (folder) moveQuery = inOrg(moveQuery, folder.org_id);
   moveQuery =
     kind === "file"
       ? moveQuery.or("library_kind.eq.file,library_kind.is.null")

@@ -2,16 +2,19 @@
 
 ## A local account says “Email not confirmed”
 
-Docker autoconfirms newly created accounts by default. Accounts created before
-autoconfirm was enabled remain unconfirmed. Confirm the existing message in
-[Mailpit](http://localhost:8025), or create a new local account.
+Docker requires new accounts to confirm their email address. Confirm the
+message in [Mailpit](http://localhost:8025), or create a new local account and
+confirm that one.
 
-To test confirmation deliberately, set `GOTRUE_MAILER_AUTOCONFIRM=false` in the
-root `.env` and recreate the Auth service:
+For a throwaway single-user stack you may set `GOTRUE_MAILER_AUTOCONFIRM=true`
+in the root `.env` and recreate the Auth service:
 
 ```bash
 docker compose up -d --force-recreate auth
 ```
+
+Never do this on an instance other people can reach: shares and invitations are
+matched by email.
 
 ## Production authentication email does not arrive
 
@@ -31,16 +34,28 @@ authentication links expire and may only be usable once.
 For a secure email change, Supabase sends messages to both the current and new
 addresses. The change remains pending until both messages are confirmed. If an
 email change succeeds in Auth but the profile still shows the old address,
-verify that the latest database migration has been applied.
+verify that the latest database migration has been applied
+(`backend/scripts/migrate.sh status`; see "Database setup" in
+`docs/deployment.md`).
 
 ## Port 54322 is already allocated
 
 Another local Postgres or Supabase stack is using Mike's default host port.
-Stop that stack or choose another mapping, for example:
+`npm run stack:status` lists the stacks this repository has left behind,
+including active stacks in other checkouts. Stop the one holding the port
+(`npm run stack:down -- -p <project>` or
+`supabase stop --project-id <id>`), or choose another mapping:
 
 ```bash
 DB_PORT=54323 docker compose up --build
 ```
+
+## Docker is slow or the disk is full of old stacks
+
+Stopped stacks are never removed on their own; see "Stop and clean up" in
+`docs/local-development.md`. `npm run stack:gc` sweeps what this repository
+left behind, and `npm run stack:gc -- --deep` also drops unused images and
+build cache.
 
 ## The model picker reports a missing key
 
@@ -60,6 +75,19 @@ and optional bulk-data checks.
 
 Install LibreOffice and restart the backend so its conversion command is
 available on the process path.
+
+## Sentry receives no events
+
+- The backend logs `[sentry] enabled for api` at boot when reporting is active.
+  An unset custom `SENTRY_DSN` uses Mike's built-in community DSN; only
+  `SENTRY_DISABLED=true` (or the automatic test-process guard) disables it.
+- The browser bundle also uses the built-in DSN when no custom
+  `NEXT_PUBLIC_SENTRY_DSN` is set. Only `NEXT_PUBLIC_SENTRY_DISABLED=true`
+  disables reporting. Rebuild after changing either build-time value
+  (`FRONTEND_SENTRY_DSN` / `FRONTEND_SENTRY_DISABLED` for the compose image).
+- Prove the pipeline with `SENTRY_ENABLE_TEST_ROUTE=true` and
+  `curl -i http://localhost:3001/observability/sentry-test`, or run the local
+  sink in `scripts/sentry-sink.mjs`. Details in [observability.md](observability.md).
 
 ## Useful checks
 

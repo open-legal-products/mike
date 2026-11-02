@@ -1,19 +1,48 @@
+import { normalizeReasoningLevelForModel } from "./models";
 import type { LanguageModel, ToolSet } from "ai" with {
   "resolution-mode": "import",
 };
 import type * as AiSdk from "ai" with { "resolution-mode": "import" };
 import type {
+  LlmMessage,
   NormalizedToolCall,
   NormalizedToolResult,
   OpenAIToolSchema,
   Provider,
+  ProviderWebSearchEvent,
   StreamChatParams,
   StreamChatResult,
 } from "./types";
-import { toProviderStreamError } from "./providerErrors";
+import type { WebSource } from "@mike/contracts";
+import { providerDeadlines } from "./providerDeadlines";
+import { asProviderStallError, streamErrorMessage, toProviderStreamError } from "./providerErrors";
 import { createRawLlmStreamRecorder, logRawLlmStream } from "./rawStreamLog";
 
-const MAX_OUTPUT_TOKENS = 16_384;
+/**
+ * Per-step output limit, or undefined to leave it to the provider.
+ *
+ * Unset by default: each provider applies its own model-aware ceiling
+ * (`@ai-sdk/anthropic` fills in the model's maximum for the required
+ * `max_tokens`), which a single shared number cannot track. Operators who want
+ * a backstop set `LLM_MAX_OUTPUT_TOKENS`; an unusable value is ignored rather
+ * than sent upstream.
+ *
+ * OpenCode Go keeps the previous 16,384: its Messages models (MiniMax, Qwen)
+ * go through the Anthropic adapter, which does not recognise them and would
+ * otherwise fall back to 4,096.
+ *
+ * `adapterDefault` is an adapter's own model-aware ceiling for SDKs that do
+ * not fill one in (Bedrock sends no maxTokens unless given one, so Bedrock's
+ * small server default would apply); see AiSdkAdapterConfig.
+ */
+export function maxOutputTokensFor(
+  provider: Provider,
+  adapterDefault?: number,
+): number | undefined {
+  const value = Number(process.env.LLM_MAX_OUTPUT_TOKENS);
+  if (Number.isSafeInteger(value) && value > 0) return value;
+  return provider === "opencode-go" ? 16_384 : adapterDefault;
+}
 
 /**
  * Tool-call rounds allowed per turn before `stopWhen` halts the run.
@@ -37,7 +66,13 @@ export function stopNotice(
   iterations: number,
   maxIterations: number,
   finishReason: string | undefined,
+  rawFinishReason?: string,
 ): string {
+  // Anthropic pauses a turn whose server-side tools (web search) ran long and
+  // reports it as an ordinary "stop".
+  if (rawFinishReason === "pause_turn") {
+    return "\n\n_Stopped early: the web search for this response ran long. Ask a narrower question to get an answer._";
+  }
   if (finishReason === "length") {
     return "\n\n_Stopped early: this response reached the model's output limit. Asking for one part at a time will get the rest._";
   }
@@ -50,12 +85,17 @@ export function stopNotice(
   return "";
 }
 
-/** Ensure a proxy-closed final SSE event is still visible to SDK parsers. */
+/**
+ * Ensure a proxy-closed final SSE event is still visible to SDK parsers.
+ * `baseFetch` replaces the global fetch for endpoints that need guarded
+ * egress (a user-supplied base URL).
+ */
 export async function aiSdkFetch(
   input: RequestInfo | URL,
   init?: RequestInit,
+  baseFetch?: typeof fetch,
 ): Promise<Response> {
-  const response = await fetch(input, init);
+  const response = await (baseFetch ?? fetch)(input, init);
   if (
     !response.body ||
     !response.headers.get("content-type")?.includes("text/event-stream")
@@ -179,12 +219,25 @@ Do not use doc_id, page, top-level quote, case_name, or citation fields for Cour
 export type AiSdkAdapterConfig = {
   provider: Provider;
   label: string;
-  model: LanguageModel;
+  model: Exclude<LanguageModel, string>;
   modelId: string;
   /** Some protocol-compatible gateways reject reasoning request fields. */
   supportsReasoning?: boolean;
   /** OpenAI's CourtListener tools require an extra instruction after use. */
   courtlistenerCitationReminder?: boolean;
+  /** The provider's own web search tool. */
+  webSearchTool?: (options: { maxUses: number }) => ToolSet[string];
+  /** Send stored reasoning on earlier assistant turns; see ConfiguredModel. */
+  replayReasoning?: boolean;
+  /** Mark the prefix-cache breakpoint with a Bedrock cache point as well. */
+  bedrockCachePoint?: boolean;
+  /**
+   * Output ceiling for a chat step at the given reasoning level, for SDKs
+   * that send none by default. LLM_MAX_OUTPUT_TOKENS still wins.
+   */
+  defaultMaxOutputTokens?: (
+    reasoning: StreamChatParams["reasoning"],
+  ) => number | undefined;
 };
 
 type PendingToolExecution = {
@@ -294,19 +347,48 @@ function toAiSdkTools(
   );
 }
 
-function errorMessage(error: unknown, label: string): string {
-  if (error instanceof Error && error.message) return error.message;
-  if (typeof error === "string" && error.trim()) return error;
-  return `${label} stream failed.`;
-}
-
 /**
  * The ORIGINAL Error instance from a `tool-error` / `error` part. Re-wrapping
  * it discards error identity, including control-flow and user-facing error
  * types thrown inside runTools (the SDK's tool `execute`).
  */
 function rethrowable(error: unknown, label: string): Error {
-  return error instanceof Error ? error : new Error(errorMessage(error, label));
+  return error instanceof Error ? error : new Error(streamErrorMessage(error, label));
+}
+
+export const PROVIDER_WEB_SEARCH_TOOL = "web_search";
+
+function webSourcesFrom(output: unknown): WebSource[] {
+  // Anthropic returns the result list itself; OpenAI returns an action with
+  // the sources it read.
+  const items = Array.isArray(output)
+    ? output
+    : (output as { sources?: unknown } | null)?.sources;
+  if (!Array.isArray(items)) return [];
+  return items.flatMap((item) => {
+    const { url, title } = (item ?? {}) as { url?: unknown; title?: unknown };
+    if (typeof url !== "string") return [];
+    return [{ url, ...(typeof title === "string" ? { title } : {}) }];
+  });
+}
+
+/**
+ * What a search looked for. OpenAI also reports opening or searching within
+ * a page as a web search call; those are labelled with the page.
+ */
+function webSearchQueryFrom(input: unknown, output?: unknown): string | undefined {
+  const action = (output as {
+    action?: { query?: unknown; queries?: unknown; url?: unknown };
+  } | null)?.action;
+  const candidates = [
+    (input as { query?: unknown } | null)?.query,
+    action?.query,
+    Array.isArray(action?.queries) ? action.queries.join(", ") : undefined,
+    action?.url,
+  ];
+  return candidates.find(
+    (value): value is string => typeof value === "string" && value !== "",
+  );
 }
 
 function usesCourtlistenerTool(
@@ -329,24 +411,64 @@ function usesCourtlistenerTool(
  * covers the system prompt, tool definitions, and every earlier turn, and
  * the next request hits that prefix as long as it is byte-identical.
  * Providers ignore namespaces they do not own, so both hints are sent.
+ * Azure OpenAI reads the OpenAI hint from its own `azure` namespace. Bedrock
+ * caches at an explicit cache point too, but most Bedrock models reject one,
+ * so that marker is added only when the adapter asks for it.
  */
 type StreamTextProviderOptions = NonNullable<
   Parameters<typeof AiSdk.streamText>[0]["providerOptions"]
 >;
 
-export function withPrefixCacheHints(params: StreamChatParams): {
+/**
+ * An earlier assistant turn's reasoning becomes a reasoning part ahead of its
+ * text, which the OpenAI-compatible adapter sends as `reasoning_content`.
+ * Without `replay` the stored reasoning is dropped, so no other provider ever
+ * receives it.
+ */
+function toModelMessage(
+  message: LlmMessage,
+  replay: boolean,
+): AiSdk.UserModelMessage | AiSdk.AssistantModelMessage {
+  if (message.role === "user") {
+    return { role: "user", content: message.content };
+  }
+  if (!replay || !message.reasoning) {
+    return { role: "assistant", content: message.content };
+  }
+  return {
+    role: "assistant",
+    content: [
+      { type: "reasoning", text: message.reasoning },
+      { type: "text", text: message.content },
+    ],
+  };
+}
+
+export function withPrefixCacheHints(
+  params: StreamChatParams,
+  options: { replayReasoning?: boolean; bedrockCachePoint?: boolean } = {},
+): {
   messages: AiSdk.ModelMessage[];
   providerOptions?: StreamTextProviderOptions;
 } {
-  if (!params.conversationId || !params.messages.length) {
-    return { messages: params.messages };
+  const messages: (AiSdk.UserModelMessage | AiSdk.AssistantModelMessage)[] =
+    params.messages.some((m) => m.reasoning !== undefined)
+      ? params.messages.map((m) =>
+          toModelMessage(m, options.replayReasoning === true),
+        )
+      : params.messages;
+  if (!params.conversationId || !messages.length) {
+    return { messages };
   }
-  const last = params.messages.length - 1;
+  const last = messages.length - 1;
   const breakpoint = {
     anthropic: { cacheControl: { type: "ephemeral" } },
+    ...(options.bedrockCachePoint
+      ? { bedrock: { cachePoint: { type: "default" } } }
+      : {}),
   };
   return {
-    messages: params.messages.map((message, index): AiSdk.ModelMessage => {
+    messages: messages.map((message, index): AiSdk.ModelMessage => {
       if (index !== last) return message;
       return message.role === "assistant"
         ? { role: "assistant", content: message.content, providerOptions: breakpoint }
@@ -354,6 +476,7 @@ export function withPrefixCacheHints(params: StreamChatParams): {
     }),
     providerOptions: {
       openai: { promptCacheKey: params.conversationId },
+      azure: { promptCacheKey: params.conversationId },
     },
   };
 }
@@ -373,10 +496,23 @@ export async function streamAiSdk(
   if (params.abortSignal?.aborted) forwardAbort();
   else params.abortSignal?.addEventListener("abort", forwardAbort, { once: true });
   const runToolsFailure: { first: { error: unknown } | null } = { first: null };
-  const tools = toAiSdkTools(params.tools ?? [], params.runTools, sdk, (error) => {
+  const functionTools = toAiSdkTools(params.tools ?? [], params.runTools, sdk, (error) => {
     runToolsFailure.first ??= { error };
     internalAbort.abort();
   });
+  const webSearch =
+    params.providerWebSearch && config.webSearchTool
+      ? {
+          tool: config.webSearchTool({
+            maxUses: params.providerWebSearch.maxSearches,
+          }),
+        }
+      : null;
+  const tools = webSearch
+    ? { ...functionTools, [PROVIDER_WEB_SEARCH_TOOL]: webSearch.tool }
+    : functionTools;
+  const emitWebSearch = (event: ProviderWebSearchEvent) =>
+    params.callbacks?.onWebSearch?.(event);
   // An exception that merely LOOKS like an abort (name "AbortError" or
   // isAbortError's exact message) must not take streaming.ts's silent
   // user-cancel path unless the caller's signal really is aborted.
@@ -390,7 +526,23 @@ export async function streamAiSdk(
             : e.message,
           { cause: e },
         );
-  const cacheHints = withPrefixCacheHints(params);
+  const cacheHints = withPrefixCacheHints(params, {
+    replayReasoning: config.replayReasoning,
+    bedrockCachePoint: config.bedrockCachePoint,
+  });
+  const providerOptions: StreamTextProviderOptions = {
+    ...(cacheHints.providerOptions ?? {}),
+    ...(config.provider === "openrouter"
+      ? {
+          // OpenRouter's adapter does not consume AI SDK's call-level
+          // `reasoning` option. Its per-request namespace is merged into the
+          // outbound body, so mirror the selected level there as well.
+          openrouter: {
+            reasoning: { effort: params.reasoning ?? "none" },
+          },
+        }
+      : {}),
+  };
   const rawStreamRecorder = createRawLlmStreamRecorder({
     provider: config.provider,
     model: config.modelId,
@@ -400,17 +552,24 @@ export async function streamAiSdk(
   const openReasoningBlocks = new Set<string>();
   const maxIterations = params.maxIterations ?? DEFAULT_MAX_ITERATIONS;
   let lastFinishReason: string | undefined;
+  let lastRawFinishReason: string | undefined;
 
   try {
     const result = sdk.streamText({
-      model: config.model,
+      model: sdk.wrapLanguageModel({
+        model: config.model,
+        middleware: providerDeadlines(params.callbacks?.onActivity),
+      }),
       system: params.systemPrompt,
       messages: cacheHints.messages,
-      ...(cacheHints.providerOptions
-        ? { providerOptions: cacheHints.providerOptions }
+      ...(Object.keys(providerOptions).length
+        ? { providerOptions }
         : {}),
       tools,
-      maxOutputTokens: MAX_OUTPUT_TOKENS,
+      maxOutputTokens: maxOutputTokensFor(
+        config.provider,
+        config.defaultMaxOutputTokens?.(params.reasoning),
+      ),
       stopWhen: sdk.stepCountIs(maxIterations),
       abortSignal: internalAbort.signal,
       reasoning:
@@ -424,18 +583,39 @@ export async function streamAiSdk(
               | Exclude<NonNullable<StreamChatParams["reasoning"]>, "max">
               | undefined),
       include: { rawChunks: true },
-      ...(config.courtlistenerCitationReminder
+      // Without an onError, streamText's default is `console.error(error)`:
+      // the raw provider error is logged — and filed by the Sentry console
+      // bridge — before the same failure reaches the "error" part below,
+      // where it is classified and the caller reports it once
+      // (MIKE-BACKEND-C). Every failure still arrives through fullStream.
+      onError: () => {},
+      ...(config.courtlistenerCitationReminder ||
+      params.finishWithoutToolsOnLastStep
         ? {
             prepareStep: ({
               steps,
+              stepNumber,
             }: {
               steps: Array<{ toolCalls: Array<{ toolName: string }> }>;
-            }) =>
-              usesCourtlistenerTool(steps)
-                ? {
-                    system: `${params.systemPrompt}\n\n${COURTLISTENER_CITATION_REMINDER}`,
-                  }
-                : undefined,
+              stepNumber: number;
+            }) => {
+              const step: { system?: string; toolChoice?: "none" } = {};
+              if (
+                config.courtlistenerCitationReminder &&
+                usesCourtlistenerTool(steps)
+              ) {
+                step.system = `${params.systemPrompt}\n\n${COURTLISTENER_CITATION_REMINDER}`;
+              }
+              // Removing tools instead would break providers that reject a
+              // history of calls to a tool the request no longer defines.
+              if (
+                params.finishWithoutToolsOnLastStep &&
+                stepNumber === maxIterations - 1
+              ) {
+                step.toolChoice = "none";
+              }
+              return Object.keys(step).length ? step : undefined;
+            },
           }
         : {}),
     });
@@ -476,21 +656,89 @@ export async function streamAiSdk(
           }
           break;
         case "tool-call": {
+          if (part.providerExecuted) {
+            if (part.toolName === PROVIDER_WEB_SEARCH_TOOL) {
+              emitWebSearch({
+                kind: "search_started",
+                id: part.toolCallId,
+                query: webSearchQueryFrom(part.input),
+              });
+            }
+            break;
+          }
           const call: NormalizedToolCall = {
             id: part.toolCallId,
             name: part.toolName,
             input: normalizeToolInput(part.input),
+            ...(part.invalid ? { invalid: true as const } : {}),
           };
           params.callbacks?.onToolCallStart?.(call);
           break;
         }
+        case "tool-result":
+          if (part.providerExecuted && part.toolName === PROVIDER_WEB_SEARCH_TOOL) {
+            emitWebSearch({
+              kind: "search_finished",
+              id: part.toolCallId,
+              query: webSearchQueryFrom(part.input, part.output),
+              results: webSourcesFrom(part.output),
+              failed: false,
+            });
+          }
+          break;
+        case "source":
+          // Anthropic also reports every search result it was shown as a
+          // source, marked by its page age; the ones it cites carry none.
+          if (
+            part.sourceType === "url" &&
+            !(
+              part.providerMetadata?.anthropic &&
+              "pageAge" in part.providerMetadata.anthropic
+            )
+          ) {
+            emitWebSearch({
+              kind: "cited_source",
+              source: {
+                url: part.url,
+                ...(part.title ? { title: part.title } : {}),
+              },
+            });
+          }
+          break;
         case "finish-step":
+          if (
+            part.usage.inputTokens !== undefined ||
+            part.usage.outputTokens !== undefined
+          ) {
+            params.callbacks?.onUsage?.(
+              {
+                inputTokens: part.usage.inputTokens ?? 0,
+                outputTokens: part.usage.outputTokens ?? 0,
+              },
+              part.finishReason,
+            );
+          }
           lastFinishReason = part.finishReason;
+          lastRawFinishReason = part.rawFinishReason;
           break;
         // A tool's own failure is not the model provider's: a search tool
         // answering 401 says nothing about our LLM key, so this path keeps the
         // executor error rather than blaming the user's credentials.
         case "tool-error":
+          // A failed provider-run search (rate limit, too many uses) is
+          // reported to the model by the provider itself; the turn goes on.
+          if (part.providerExecuted) {
+            if (part.toolName === PROVIDER_WEB_SEARCH_TOOL) {
+              emitWebSearch({
+                kind: "search_finished",
+                id: part.toolCallId,
+                query: webSearchQueryFrom(part.input),
+                results: [],
+                failed: true,
+              });
+            }
+            break;
+          }
           // `dynamic: true` = the SDK synthesized this part for a call it could
           // not dispatch (unknown tool / unparseable input); it already queued
           // the error as that call's result and continues the loop so the
@@ -502,6 +750,10 @@ export async function streamAiSdk(
         case "error":
           throw guardAbortShaped(toProviderStreamError(part.error, config));
         case "abort": {
+          const stalled = params.abortSignal?.aborted
+            ? null
+            : asProviderStallError(part.reason, config);
+          if (stalled) throw stalled;
           const error = new Error(part.reason || "Stream aborted.");
           error.name = "AbortError";
           throw error;
@@ -518,7 +770,12 @@ export async function streamAiSdk(
     // function returns whatever text happened to accumulate. That renders as
     // a bare "Completed in N steps" with no answer and no error, which is
     // indistinguishable from the model having nothing to say. Name it instead.
-    const notice = stopNotice(iteration, maxIterations, lastFinishReason);
+    const notice = stopNotice(
+      iteration,
+      maxIterations,
+      lastFinishReason,
+      lastRawFinishReason,
+    );
     if (notice) {
       fullText += notice;
       params.callbacks?.onContentDelta?.(notice);
@@ -544,16 +801,41 @@ export async function completeAiSdkText(
     systemPrompt?: string;
     user: string;
     maxTokens?: number;
+    abortSignal?: AbortSignal;
   },
   config: AiSdkAdapterConfig,
 ): Promise<string> {
   const { generateText } = await import("ai");
+  const reasoning =
+    config.supportsReasoning === false
+      ? undefined
+      : normalizeReasoningLevelForModel(config.modelId, "none");
+  const requested = params.maxTokens ?? 512;
   const result = await generateText({
     model: config.model,
     system: params.systemPrompt,
     prompt: params.user,
-    maxOutputTokens: params.maxTokens ?? 512,
-    reasoning: config.supportsReasoning === false ? undefined : "none",
+    abortSignal: params.abortSignal,
+    // Some models cannot turn thinking off ("none" is normalized to the
+    // lowest level they accept), and thinking is output too. Without
+    // headroom a short call — a 64-token title — can spend its whole
+    // allowance thinking and return no text. The cap is only a ceiling, so
+    // the headroom costs nothing unless the model actually uses it.
+    maxOutputTokens:
+      reasoning && reasoning !== "none"
+        ? requested + COMPLETION_REASONING_HEADROOM_TOKENS
+        : requested,
+    reasoning: reasoning as
+      | Exclude<NonNullable<StreamChatParams["reasoning"]>, "max">
+      | undefined,
   });
   return result.text;
 }
+
+/**
+ * Extra output allowance for one-shot completions on models that always
+ * reason (Opus 5.5, Fable 5.1, GPT-6 Astra/Sol 6.1 — directly, or through
+ * Bedrock, Vertex, Foundry, Azure or a router). 4,096 matches what
+ * @ai-sdk/amazon-bedrock adds on top of a thinking budget for the answer.
+ */
+export const COMPLETION_REASONING_HEADROOM_TOKENS = 4_096;

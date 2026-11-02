@@ -1,12 +1,16 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useDocumentWorkspace } from "@/app/contexts/WorkspaceContext";
+import { useWorkspaceIdentity } from "@/app/hooks/useWorkspaceIdentity";
+
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import type { Document, Workflow } from "../shared/types";
 import { createTabularReview, listWorkflows } from "@/app/lib/mikeApi";
 import { useRouter } from "next/navigation";
 import { useDirectoryData } from "../shared/useDirectoryData";
 import { FileDirectory } from "../shared/FileDirectory";
 import { useChatHistoryContext } from "@/app/contexts/ChatHistoryContext";
+import { useWorkspaceOrgId } from "@/app/contexts/WorkspaceContext";
 import { Modal } from "../modals/Modal";
 import { FieldLabel } from "../ui/form-field";
 import { ModalSegmentedToggle } from "../modals/ModalSegmentedToggle";
@@ -14,13 +18,15 @@ import { ModalSelect } from "../modals/ModalSelect";
 import { ModalTextarea } from "../modals/ModalTextarea";
 import { WorkflowPickerContent } from "./WorkflowPickerContent";
 import { workflowDetailPath } from "./workflowRoutes";
+import { ModelToggle } from "../assistant/ModelToggle";
 import {
-    ModelToggle,
+    isRouterModelSelected,
     type NoModelsReason,
-    type RouterSlug,
-} from "../assistant/ModelToggle";
+} from "@/shared/lib/modelCatalog";
 import { NoModelsWarningPopup } from "../popups/NoModelsWarningPopup";
 import { useUserProfile } from "@/app/contexts/UserProfileContext";
+import { useModelApiKeys } from "@/app/hooks/useModelApiKeys";
+import { useModelRouterSelections } from "@/app/hooks/useModelRouterSelections";
 import { isModelAvailable } from "@/app/lib/modelAvailability";
 import { useConfiguredModels } from "@/app/hooks/useConfiguredModels";
 import { roleFrom } from "@/app/lib/permissions";
@@ -47,7 +53,13 @@ function SelectedWorkflowSummary({ workflow }: { workflow: Workflow }) {
 // ---------------------------------------------------------------------------
 // UseWorkflowModal
 // ---------------------------------------------------------------------------
-export function UseWorkflowModal({ workflow, onClose, skipSelect = false }: Props) {
+function UseWorkflowModalForWorkspace({ workflow, onClose, skipSelect = false }: Props) {
+    const workspace = useDocumentWorkspace();
+    const active = useRef(true);
+    useLayoutEffect(() => {
+        active.current = true;
+        return () => { active.current = false; };
+    }, []);
     const [screen, setScreen] = useState<"select" | "details" | "documents">("select");
     const [selected, setSelected] = useState<Workflow | null>(workflow);
     const [listSearch, setListSearch] = useState("");
@@ -66,7 +78,7 @@ export function UseWorkflowModal({ workflow, onClose, skipSelect = false }: Prop
     useEffect(() => {
         if (!workflow) return;
         let cancelled = false;
-        listWorkflows()
+        listWorkflows(undefined, workspace ?? "personal")
             .then((workflows) => {
                 if (cancelled) return;
                 setPickerWorkflows(workflows);
@@ -83,7 +95,7 @@ export function UseWorkflowModal({ workflow, onClose, skipSelect = false }: Prop
             cancelled = true;
         };
         // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [workflow?.id]);
+    }, [workflow?.id, workspace]);
 
     // Configure screen state
     const [inProject, setInProject] = useState(false);
@@ -94,9 +106,9 @@ export function UseWorkflowModal({ workflow, onClose, skipSelect = false }: Prop
     const [selectedModel, setSelectedModel] = useState("");
     const [noModelsWarning, setNoModelsWarning] =
         useState<NoModelsReason | null>(null);
-    const { profile, loading: profileLoading, apiKeysDegraded } =
-        useUserProfile();
-    const apiKeys = apiKeysDegraded ? undefined : profile?.apiKeys;
+    const { profile, loading: profileLoading } = useUserProfile();
+    const apiKeys = useModelApiKeys();
+    const modelRouterSelections = useModelRouterSelections();
     const configuredModels = useConfiguredModels();
     const configuredModelIds = useMemo(
         () => configuredModels.map((model) => model.id),
@@ -105,6 +117,7 @@ export function UseWorkflowModal({ workflow, onClose, skipSelect = false }: Prop
 
     const router = useRouter();
     const { saveChat, setNewChatMessages } = useChatHistoryContext();
+    const workspaceOrgId = useWorkspaceOrgId();
     const {
         loading: dirLoading,
         projects,
@@ -131,7 +144,7 @@ export function UseWorkflowModal({ workflow, onClose, skipSelect = false }: Prop
             setSelected(null);
         }
         // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [workflow?.id]);
+    }, [workflow?.id, workspace]);
 
     useEffect(() => {
         const activeWorkflow = selected ?? workflow;
@@ -143,19 +156,10 @@ export function UseWorkflowModal({ workflow, onClose, skipSelect = false }: Prop
             return;
         }
         const defaultModel = profile.tabularModel;
-        const router = (["openrouter", "vercel", "opencode-go"] as const).find(
-            (slug) => defaultModel.startsWith(`${slug}/`),
-        );
-        const routerSelections: Record<RouterSlug, string[]> = {
-            openrouter: profile.openRouterModels,
-            vercel: profile.vercelModels,
-            "opencode-go": profile.openCodeGoModels,
-        };
+        // Unknown lists (an organization's, still loading) preselect nothing.
         const routerSelectionValid =
-            !router ||
-            routerSelections[router].includes(
-                defaultModel.slice(router.length + 1),
-            );
+            !!modelRouterSelections &&
+            isRouterModelSelected(defaultModel, modelRouterSelections);
         if (
             routerSelectionValid &&
             (!apiKeys ||
@@ -163,7 +167,15 @@ export function UseWorkflowModal({ workflow, onClose, skipSelect = false }: Prop
         ) {
             setSelectedModel((current) => current || defaultModel);
         }
-    }, [apiKeys, configuredModelIds, profile, screen, selected, workflow]);
+    }, [
+        apiKeys,
+        configuredModelIds,
+        modelRouterSelections,
+        profile,
+        screen,
+        selected,
+        workflow,
+    ]);
 
     // Reset configure state on back
     useEffect(() => {
@@ -210,7 +222,7 @@ export function UseWorkflowModal({ workflow, onClose, skipSelect = false }: Prop
                 projectId,
                 projectRow ? roleFrom(projectRow) : null,
             );
-            if (!chatId) return;
+            if (!chatId || !active.current) return;
             const files = selectedDocuments.map((document) => ({
                 filename: document.filename,
                 document_id: document.id,
@@ -252,8 +264,12 @@ export function UseWorkflowModal({ workflow, onClose, skipSelect = false }: Prop
                 columns_config: wf.columns_config || [],
                 workflow_id: wf.is_system ? undefined : wf.id,
                 project_id: projectId,
+                // On its own, the review belongs to the workspace it is
+                // started in; in a project, the project decides.
+                org_id: projectId ? undefined : workspaceOrgId,
                 model: selectedModel,
             });
+            if (!active.current) return;
             handleClose();
             router.push(
                 projectId ? `/projects/${projectId}/tabular-reviews/${review.id}` : `/tabular-reviews/${review.id}`,
@@ -457,13 +473,7 @@ export function UseWorkflowModal({ workflow, onClose, skipSelect = false }: Prop
                                     onChange={setSelectedModel}
                                     apiKeys={apiKeys}
                                     apiKeysLoading={profileLoading && !profile}
-                                    openRouterModels={
-                                        profile?.openRouterModels
-                                    }
-                                    vercelModels={profile?.vercelModels}
-                                    openCodeGoModels={
-                                        profile?.openCodeGoModels
-                                    }
+                                    routerSelections={modelRouterSelections}
                                     onNoModelsClick={setNoModelsWarning}
                                 />
                             </div>
@@ -560,4 +570,12 @@ export function UseWorkflowModal({ workflow, onClose, skipSelect = false }: Prop
             />
         </Modal>
     );
+}
+
+export function UseWorkflowModal(props: Props) {
+    const identity = useWorkspaceIdentity();
+    const workspace = useDocumentWorkspace() ?? "personal";
+    const workflow = props.workflow;
+    const inWorkspace = workflow?.is_system || (workflow?.org_id ?? "personal") === workspace;
+    return <UseWorkflowModalForWorkspace key={identity} {...props} workflow={inWorkspace ? workflow : null} />;
 }

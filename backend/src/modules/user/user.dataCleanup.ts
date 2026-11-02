@@ -1,43 +1,19 @@
 import { captureInlineDocumentCleanup, completeInlineDocumentCleanup } from "../documents/documents.service";
 import { type Db } from "../../lib/supabase";
-import { assertStorageConfigured, deleteFile, listFiles } from "../../lib/storage";
+import { assertStorageConfigured, deleteFile, deleteFileBestEffort, listFiles } from "../../lib/storage";
 import { NonRetryableJobError } from "../../lib/dbq/runner";
 import { removeGrantsForEmail } from "../../lib/projectAccess";
 import { removeContentGrantsForEmail } from "../../lib/contentAccess";
 import { chunkArray } from "../../lib/arrays";
-import { ORG_CONTENT_TABLES } from "../../lib/orgs";
+import { listPersonalOrgIds } from "../../lib/personalOrgs";
+import { deleteOrgContent } from "../orgs/orgs.service";
+import { throwIfError, uniqueStrings } from "./user.shared";
 
 const DELETE_BATCH_SIZE = 500;
-
-function uniqueStrings(values: Array<string | null | undefined>): string[] {
-    return [...new Set(values.filter((value): value is string => !!value))];
-}
-
-async function throwIfError<T extends { message?: string } | null>(
-    error: T,
-    context: string,
-) {
-    if (error) throw new Error(`${context}: ${error.message ?? "unknown error"}`);
-}
 
 async function deleteByIds(db: Db, table: string, ids: string[]) {
     for (const batch of chunkArray(ids, DELETE_BATCH_SIZE)) {
         const { error } = await (db as any).from(table).delete().in("id", batch);
-        await throwIfError(error, `Failed to delete ${table}`);
-    }
-}
-
-async function deleteWhereIn(
-    db: Db,
-    table: string,
-    column: string,
-    values: string[],
-) {
-    for (const batch of chunkArray(values, DELETE_BATCH_SIZE)) {
-        const { error } = await (db as any)
-            .from(table)
-            .delete()
-            .in(column, batch);
         await throwIfError(error, `Failed to delete ${table}`);
     }
 }
@@ -107,29 +83,6 @@ const PROJECT_CONTENT_TABLES = [
     "tabular_reviews",
     "project_subfolders",
 ] as const;
-
-/**
- * Does this organization still directly own anything?
- *
- * The inventory lives in lib/orgs.ts so this and the `deleteOrg` API path
- * answer the identical question. Every org_id foreign key is ON DELETE
- * RESTRICT, so an org that owns content cannot be deleted at all — the probe
- * is how we say so deliberately instead of surfacing a constraint violation.
- */
-async function orgOwnsContent(db: Db, orgId: string): Promise<boolean> {
-    for (const table of ORG_CONTENT_TABLES) {
-        const { data, error } = await (db as any)
-            .from(table)
-            .select("id")
-            .eq("org_id", orgId)
-            .limit(1);
-        // A transient read error must never read as "this org holds nothing":
-        // that is the difference between tidying up and deleting a firm.
-        await throwIfError(error, `Failed to load org ${table}`);
-        if (((data ?? []) as unknown[]).length > 0) return true;
-    }
-    return false;
-}
 
 /**
  * Every organization-owned project this user left content in — including
@@ -327,7 +280,7 @@ async function detachOrgProjectContent(
 
     // Org-tagged content that sits outside any project still belongs to the
     // organization; `org_id` is the whole claim.
-    for (const table of ["documents", "tabular_reviews"] as const) {
+    for (const table of ["documents", "tabular_reviews", "chats"] as const) {
         const { error } = await (db as any)
             .from(table)
             .update({ user_id: null })
@@ -472,6 +425,28 @@ async function claimedStoragePaths(
             claim(row.storage_path);
             claim(row.pdf_storage_path);
         }
+
+        // A public playbook handed to the organization keeps its files under
+        // the departed creator's prefix.
+        const [playbooks, playbookSources] = await Promise.all([
+            db
+                .from("playbooks")
+                .select("source_storage_key")
+                .in("source_storage_key", batch),
+            db
+                .from("playbook_sources")
+                .select("storage_key")
+                .in("storage_key", batch),
+        ]);
+        await throwIfError(playbooks.error, "Failed to classify playbook files");
+        await throwIfError(
+            playbookSources.error,
+            "Failed to classify playbook source files",
+        );
+        for (const row of (playbooks.data ?? []) as Record<string, unknown>[])
+            claim(row.source_storage_key);
+        for (const row of (playbookSources.data ?? []) as Record<string, unknown>[])
+            claim(row.storage_key);
     }
 
     return claimed;
@@ -497,6 +472,10 @@ async function deleteOrphanedUserStorage(db: Db, userId: string) {
             ...new Set([
                 ...(await listFiles(`documents/${userId}/`)),
                 ...(await listFiles(`workflow-references/${userId}/`)),
+                // Playbook files, plus staged imports and source uploads that
+                // an interrupted request never consumed: no row or trigger
+                // owns those.
+                ...(await listFiles(`playbooks/${userId}/`)),
             ]),
         ];
         if (paths.length === 0) return;
@@ -505,7 +484,9 @@ async function deleteOrphanedUserStorage(db: Db, userId: string) {
         await Promise.all(
             paths
                 .filter((path) => !claimed.has(path))
-                .map((path) => deleteFile(path).catch(() => {})),
+                .map((path) =>
+                    deleteFileBestEffort(path, "user-prefix-cleanup"),
+                ),
         );
     } catch {
         // Version-linked objects are deleted above. Prefix cleanup is best-effort
@@ -556,8 +537,8 @@ export type AccountDeletionOrgBlocker = {
     /**
      * "members" — other people are still in the org and would be left with
      * nobody able to administer it (or, worse, with an arbitrary successor).
-     * "content" — nobody else is left, but the org still owns matters, so it
-     * cannot be deleted either.
+     * "content" — legacy wire value for no other members. The organization
+     * still requires explicit deletion, even when it owns no content.
      */
     reason: "members" | "content";
 };
@@ -565,9 +546,9 @@ export type AccountDeletionOrgBlocker = {
 /**
  * The organizations that make this account undeletable, and why.
  *
- * PRODUCT DECISION: an account that is the SOLE ADMIN of an organization
- * which still has other members, or still owns content, cannot be deleted.
- * The user must appoint another admin or delete the organization first.
+ * An account that is the sole owner of any team organization cannot be
+ * deleted, including when that organization is empty.
+ * The user must appoint another owner or delete the organization first.
  *
  * Both of the alternatives were implemented here before, and both were wrong:
  *
@@ -595,9 +576,13 @@ export async function listOrgsBlockingAccountDeletion(
 ): Promise<AccountDeletionOrgBlocker[]> {
     const { data: memberships, error: membershipError } = await db
         .from("org_members")
-        .select("id, org_id, role")
+        .select("id, org_id, role, organizations!inner(id)")
+        .is("organizations.deleted_at", null)
         .eq("user_id", userId);
     await throwIfError(membershipError, "Failed to load org memberships");
+    // The account's own organization is the account's: what it holds is
+    // deleted with everything else of theirs, so it never stands in the way.
+    const personalOrgIds = await listPersonalOrgIds(db, userId);
 
     const blockers: AccountDeletionOrgBlocker[] = [];
     for (const m of (memberships ?? []) as {
@@ -605,18 +590,19 @@ export async function listOrgsBlockingAccountDeletion(
         org_id: string;
         role: string;
     }[]) {
-        if (m.role !== "admin") continue;
+        if (m.role !== "owner") continue;
+        if (personalOrgIds.has(m.org_id)) continue;
 
-        const { data: otherAdmins, error: otherAdminsError } = await db
+        const { data: otherOwners, error: otherOwnersError } = await db
             .from("org_members")
             .select("id")
             .eq("org_id", m.org_id)
-            .eq("role", "admin")
+            .eq("role", "owner")
             .neq("id", m.id)
             .limit(1);
-        await throwIfError(otherAdminsError, "Failed to load org admins");
-        // Somebody else can administer it: leaving is unremarkable.
-        if (((otherAdmins ?? []) as unknown[]).length > 0) continue;
+        await throwIfError(otherOwnersError, "Failed to load org owners");
+        // Somebody else owns it too: leaving is unremarkable.
+        if (((otherOwners ?? []) as unknown[]).length > 0) continue;
 
         const { data: otherMembers, error: otherMembersError } = await db
             .from("org_members")
@@ -629,11 +615,6 @@ export async function listOrgsBlockingAccountDeletion(
             "Failed to load remaining org members",
         );
         const hasOtherMembers = ((otherMembers ?? []) as unknown[]).length > 0;
-        if (!hasOtherMembers && !(await orgOwnsContent(db, m.org_id))) {
-            // Nobody and nothing left: deleteUserOrganizations deletes the
-            // whole org, so this one blocks nothing.
-            continue;
-        }
 
         const { data: org, error: orgError } = await db
             .from("organizations")
@@ -653,26 +634,9 @@ export async function listOrgsBlockingAccountDeletion(
     return blockers;
 }
 
-/**
- * Tear down a user's organization footprint on account deletion.
- *
- * An organization is a durable owner in its own right, not an extension of
- * whoever happened to create it, so this NEVER deletes an org that still has
- * people or content in it:
- *
- *  - The departing user's membership row is removed.
- *  - A sole admin whose org still has members or content is REFUSED — see
- *    listOrgsBlockingAccountDeletion for why neither auto-promotion nor
- *    "leave it to the cascade" is an acceptable alternative. The route
- *    answers 409 long before this runs, and deleteUserAccountData re-asks
- *    the same question as its FIRST act, before a single row is destroyed.
- *    The throw here is the last line of defence for a caller that reached
- *    this function on its own, so by the time it fires the caller's content
- *    is already gone — which is exactly why the check above it exists.
- *  - An org left with no members and no content at all is deleted, which is
- *    what closing a personal workspace should do.
- *  - Any invitations the user sent lose their inviter reference through the
- *    FK's ON DELETE SET NULL; invitations addressed TO them are cancelled.
+/** Remove remaining membership references and cancel pending invitations.
+ * The account deletion transaction normally already removed team memberships.
+ * Keep the last-owner check here for direct callers and interrupted old jobs.
  */
 export async function deleteUserOrganizations(
     db: Db,
@@ -681,62 +645,34 @@ export async function deleteUserOrganizations(
 ) {
     const { data: memberships, error: membershipError } = await db
         .from("org_members")
-        .select("id, org_id, role")
+        .select("id, org_id, role, organizations!inner(id)")
+        .is("organizations.deleted_at", null)
         .eq("user_id", userId);
     await throwIfError(membershipError, "Failed to load org memberships");
+    // Left alone: the account's own organization is removed with the account
+    // itself (organizations.personal_user_id cascades), so a deletion that is
+    // interrupted and resumed never leaves an account without one.
+    const personalOrgIds = await listPersonalOrgIds(db, userId);
 
     for (const m of (memberships ?? []) as {
         id: string;
         org_id: string;
         role: string;
     }[]) {
-        if (m.role === "admin") {
-            const { data: otherAdmins, error: otherAdminsError } = await db
+        if (personalOrgIds.has(m.org_id)) continue;
+        if (m.role === "owner") {
+            const { data: otherOwners, error: otherOwnersError } = await db
                 .from("org_members")
                 .select("id")
                 .eq("org_id", m.org_id)
-                .eq("role", "admin")
+                .eq("role", "owner")
                 .neq("id", m.id)
                 .limit(1);
-            await throwIfError(otherAdminsError, "Failed to load org admins");
-            if (((otherAdmins ?? []) as unknown[]).length === 0) {
-                const { data: otherMembers, error: otherMembersError } =
-                    await db
-                        .from("org_members")
-                        .select("id")
-                        .eq("org_id", m.org_id)
-                        .neq("id", m.id)
-                        .limit(1);
-                await throwIfError(
-                    otherMembersError,
-                    "Failed to load remaining org members",
+            await throwIfError(otherOwnersError, "Failed to load org owners");
+            if (((otherOwners ?? []) as unknown[]).length === 0) {
+                throw new NonRetryableJobError(
+                    `Cannot delete this account while it is the only owner of organization ${m.org_id}`,
                 );
-                const hasOtherMembers =
-                    ((otherMembers ?? []) as unknown[]).length > 0;
-
-                if (hasOtherMembers || (await orgOwnsContent(db, m.org_id))) {
-                    // Unreachable through the API — routes/user.ts refuses
-                    // this account with a 409 before enqueueing anything, and
-                    // deleteUserAccountData re-checks before it destroys a
-                    // single row. Reaching it means the org changed underneath
-                    // a request that was already in flight, so stop here
-                    // rather than improvise a successor.
-                    //
-                    // NonRetryableJobError, not Error: an organization does
-                    // not acquire a second admin because the queue asked
-                    // twenty more times over the next few hours. A plain
-                    // Error burned the whole retry budget re-deriving the
-                    // same refusal and buried the reason under the repeats.
-                    throw new NonRetryableJobError(
-                        `Cannot delete this account while it is the only admin of organization ${m.org_id}`,
-                    );
-                }
-
-                // Nobody and nothing left: the org goes with the account, and
-                // the ON DELETE CASCADE from organizations takes the
-                // membership row with it.
-                await deleteByIds(db, "organizations", [m.org_id]);
-                continue;
             }
         }
 
@@ -761,27 +697,94 @@ export async function deleteUserOrganizations(
     }
 }
 
-export async function deleteAllUserChats(db: Db, userId: string) {
+/**
+ * The chats a user started in one workspace: an organization's (`orgId`), or
+ * Personal's (`orgId` null), matching public.workspace_matches. Settings'
+ * "Delete all" works on the active workspace only, so clearing Personal
+ * history never reaches a firm's, nor one firm's another's.
+ */
+export async function deleteAllUserChats(
+    db: Db,
+    userId: string,
+    orgId: string | null,
+) {
     // Conversation BEFORE DELETE triggers fence in-flight curator promotion
     // in the same transaction, including Word chats removed by document
-    // cascades. No pre-enumeration is needed, so new children cannot slip
-    // between a scan and deletion.
-    const [assistantChats, tabularChats, wordDocuments] = await Promise.all([
-        db.from("chats").delete().eq("user_id", userId),
-        db.from("tabular_review_chats").delete().eq("user_id", userId),
-        db.from("word_documents").delete().eq("user_id", userId),
+    // cascades. An assistant chat carries its workspace (a project chat its
+    // project's), so it is deleted by filter, with no pre-enumeration for a
+    // new one to slip past. Word chats exist only in Personal: the add-in
+    // works nowhere else.
+    const assistantChats = db.from("chats").delete().eq("user_id", userId);
+    const [assistantResult, wordResult] = await Promise.all([
+        orgId
+            ? assistantChats.eq("org_id", orgId)
+            : assistantChats.is("org_id", null),
+        orgId
+            ? Promise.resolve({ error: null })
+            : db.from("word_documents").delete().eq("user_id", userId),
     ]);
 
-    await throwIfError(assistantChats.error, "Failed to delete assistant chats");
-    await throwIfError(tabularChats.error, "Failed to delete tabular chats");
-    await throwIfError(wordDocuments.error, "Failed to delete Word chats");
+    await throwIfError(assistantResult.error, "Failed to delete assistant chats");
+    await throwIfError(wordResult.error, "Failed to delete Word chats");
+    await deleteUserTabularReviewChats(db, userId, orgId);
 }
 
-export async function deleteAllUserTabularReviews(db: Db, userId: string) {
-    const { data: reviews, error: reviewsError } = await db
-        .from("tabular_reviews")
-        .select("id")
+/**
+ * A tabular review chat has no workspace of its own; it is in its review's.
+ * The user's chats on other people's reviews count too, as in the
+ * unscoped delete this replaced.
+ */
+async function deleteUserTabularReviewChats(
+    db: Db,
+    userId: string,
+    orgId: string | null,
+) {
+    const { data: chats, error: chatsError } = await db
+        .from("tabular_review_chats")
+        .select("id, review_id")
         .eq("user_id", userId);
+    await throwIfError(chatsError, "Failed to load tabular chats");
+    const rows = (chats ?? []) as {
+        id: string | null;
+        review_id: string | null;
+    }[];
+
+    const reviewsInWorkspace = new Set<string>();
+    for (const batch of chunkArray(
+        uniqueStrings(rows.map((row) => row.review_id)),
+        DELETE_BATCH_SIZE,
+    )) {
+        const reviews = db.from("tabular_reviews").select("id").in("id", batch);
+        const { data, error } = await (orgId
+            ? reviews.eq("org_id", orgId)
+            : reviews.is("org_id", null));
+        await throwIfError(error, "Failed to load tabular reviews");
+        for (const row of (data ?? []) as { id: string | null }[]) {
+            if (row.id) reviewsInWorkspace.add(row.id);
+        }
+    }
+
+    await deleteByIds(
+        db,
+        "tabular_review_chats",
+        uniqueStrings(
+            rows
+                .filter((row) => !!row.review_id && reviewsInWorkspace.has(row.review_id))
+                .map((row) => row.id),
+        ),
+    );
+}
+
+/** The tabular reviews a user owns in one workspace (`orgId` null is Personal). */
+export async function deleteAllUserTabularReviews(
+    db: Db,
+    userId: string,
+    orgId: string | null,
+) {
+    const owned = db.from("tabular_reviews").select("id").eq("user_id", userId);
+    const { data: reviews, error: reviewsError } = await (orgId
+        ? owned.eq("org_id", orgId)
+        : owned.is("org_id", null));
     await throwIfError(reviewsError, "Failed to load tabular reviews");
 
     const reviewIds = uniqueStrings(
@@ -794,6 +797,82 @@ export async function deleteAllUserTabularReviews(db: Db, userId: string) {
     await deleteByIds(db, "tabular_reviews", reviewIds);
 
     return reviewIds.length;
+}
+
+/**
+ * Hand each organization-public playbook this user created to an owner of
+ * that organization before the account goes.
+ *
+ * `playbooks.user_id` is NOT NULL and cascades from auth.users, so unlike a
+ * project or workflow a playbook cannot be detached to a null creator: left
+ * alone, the firm's published policy would vanish with whoever first wrote
+ * it. The organization's owners already own every public playbook, so the
+ * creator moves to the same successor the departure functions pick for the
+ * rest of a leaver's work. A private playbook is not the organization's and
+ * is deleted with the account, matching docs/playbooks.md.
+ */
+async function handOverOrgPlaybooks(db: Db, userId: string) {
+    const { data, error } = await db
+        .from("playbooks")
+        .select("id, org_id")
+        .eq("user_id", userId)
+        .eq("visibility", "organization")
+        .not("org_id", "is", null);
+    await throwIfError(error, "Failed to load organization playbooks");
+
+    const orgIds = uniqueStrings(
+        ((data ?? []) as { org_id?: string | null }[]).map(
+            (row) => row.org_id ?? null,
+        ),
+    );
+    for (const orgId of orgIds) {
+        const successor = await db.rpc("org_default_departure_successor", {
+            p_org_id: orgId,
+            p_departing: [userId],
+        });
+        await throwIfError(successor.error, "Failed to find a playbook successor");
+        // No other owner: nobody is left to own it, so it goes with the account.
+        if (typeof successor.data !== "string" || !successor.data) continue;
+        const { error: updateError } = await db
+            .from("playbooks")
+            .update({ user_id: successor.data })
+            .eq("user_id", userId)
+            .eq("org_id", orgId)
+            .eq("visibility", "organization");
+        await throwIfError(updateError, "Failed to hand over organization playbooks");
+    }
+}
+
+/**
+ * Delete the playbooks this user created (after handOverOrgPlaybooks kept the
+ * organization's), the reviews and imports they ran on anyone's playbook, and
+ * the shares addressed to their email. The parent delete cascades runs,
+ * sources, shares and overrides; the playbook storage triggers queue durable
+ * cleanup of the imported file and every supplementary file in the same
+ * transaction. deleteOrphanedUserStorage clears the same bytes promptly.
+ */
+async function deleteUserPlaybooks(
+    db: Db,
+    userId: string,
+    userEmail?: string | null,
+) {
+    const normalizedEmail = userEmail?.trim().toLowerCase();
+    const results = await Promise.all([
+        db.from("playbook_runs").delete().eq("user_id", userId),
+        db.from("playbook_imports").delete().eq("user_id", userId),
+        normalizedEmail
+            ? db
+                  .from("playbook_shares")
+                  .delete()
+                  .eq("shared_with_email", normalizedEmail)
+            : Promise.resolve({ error: null }),
+    ]);
+    for (const result of results) {
+        await throwIfError(result.error, "Failed to delete playbook data");
+    }
+
+    const { error } = await db.from("playbooks").delete().eq("user_id", userId);
+    await throwIfError(error, "Failed to delete playbooks");
 }
 
 /**
@@ -814,58 +893,37 @@ export async function deleteProjectsByIds(db: Db, projectIds: string[]) {
 }
 
 /**
- * Remove the projects a user created — but only the personal ones.
+ * Destroy the projects a user created in one workspace (`orgId` null is
+ * Personal), with everything inside them.
  *
- * A project that belongs to an organization is the organization's, not the
- * creator's: the firm's other admins are still administering it and its
- * matter documents are still live. Those projects are DETACHED instead
- * (user_id → NULL, which the nullable FK now permits) so they survive their
- * creator's departure with their contents intact. Only `org_id IS NULL`
- * projects — the genuinely personal ones — are destroyed.
- *
- * The return value counts destroyed projects, so a caller deleting a single
- * org project sees 0 and can report "nothing was removed" accurately.
+ * In an organization this is what deleting each one would do: its creator is
+ * its owner (public.project_access_role), and an owner may delete it. Other
+ * members' projects, and the projects of other workspaces, are untouched.
  */
 export async function deleteUserProjects(
     db: Db,
     userId: string,
-    projectIds?: string[],
+    orgId: string | null,
 ) {
-    const requestedProjectIds = projectIds
-        ? uniqueStrings(projectIds)
-        : undefined;
-    if (requestedProjectIds && requestedProjectIds.length === 0) return 0;
-
-    let query = db.from("projects").select("id, org_id").eq("user_id", userId);
-    if (requestedProjectIds) query = query.in("id", requestedProjectIds);
-
-    const { data: projects, error: projectsError } = await query;
+    const created = db.from("projects").select("id").eq("user_id", userId);
+    const { data: projects, error: projectsError } = await (orgId
+        ? created.eq("org_id", orgId)
+        : created.is("org_id", null));
     await throwIfError(projectsError, "Failed to load user projects");
 
-    const rows = (projects ?? []) as {
-        id: string | null;
-        org_id?: string | null;
-    }[];
-    const personalProjectIds = uniqueStrings(
-        rows.filter((row) => !row.org_id).map((row) => row.id),
+    return deleteProjectsByIds(
+        db,
+        ((projects ?? []) as { id: string | null }[])
+            .map((row) => row.id)
+            .filter((id): id is string => !!id),
     );
-    const orgProjectIds = uniqueStrings(
-        rows.filter((row) => !!row.org_id).map((row) => row.id),
-    );
-
-    if (orgProjectIds.length > 0) {
-        for (const batch of chunkArray(orgProjectIds, DELETE_BATCH_SIZE)) {
-            const { error } = await db
-                .from("projects")
-                .update({ user_id: null })
-                .in("id", batch);
-            await throwIfError(error, "Failed to detach organization projects");
-        }
-    }
-
-    return deleteProjectsByIds(db, personalProjectIds);
 }
 
+/**
+ * Erase personal account data after checking organization ownership blockers.
+ * Retain organization work and contributed folder trees in surviving projects,
+ * detaching the departing user's attribution before their account is removed.
+ */
 export async function deleteUserAccountData(
     db: Db,
     userId: string,
@@ -881,12 +939,21 @@ export async function deleteUserAccountData(
     const blockers = await listOrgsBlockingAccountDeletion(db, userId);
     if (blockers.length > 0) {
         throw new NonRetryableJobError(
-            `Cannot delete this account while it is the only admin of ${blockers
+            `Cannot delete this account while it is the only owner of ${blockers
                 .map((blocker) => `${blocker.org_id} (${blocker.reason})`)
                 .join(", ")}`,
         );
     }
     if (process.env.DB_JOBS_ENABLED === "false") assertStorageConfigured();
+
+    // The same transaction as member removal, before any grants or creator
+    // references are detached. Safe to repeat after the request already ran it.
+    const departure = await db.rpc("prepare_account_org_departures", { p_user_id: userId });
+    await throwIfError(departure.error, "Failed to hand over organization work");
+
+    for (const personalOrgId of await listPersonalOrgIds(db, userId)) {
+        await deleteOrgContent(db, personalOrgId);
+    }
 
     const { personal: personalProjectIds, org: createdOrgProjectIds } =
         await partitionOwnedProjects(db, userId);
@@ -922,15 +989,22 @@ export async function deleteUserAccountData(
     // the organization BEFORE the by-user deletions below run, so those
     // deletions no longer match the rows we are keeping.
     await detachOrgProjectContent(db, userId, orgProjectIds);
+    await handOverOrgPlaybooks(db, userId);
 
     await deleteByIds(db, "documents", documentIds);
+
+    // A contributed folder can contain other people's nested folders. Keep
+    // the tree in surviving projects; deleting owned projects below still
+    // cascades their whole tree. The nullable attribution FK survives auth deletion.
+    const { error: folderError } = await db.from("project_subfolders")
+        .update({ user_id: null }).eq("user_id", userId);
+    await throwIfError(folderError, "Failed to preserve contributed folders");
 
     const deletions = [
         db.from("tabular_review_chats").delete().eq("user_id", userId),
         db.from("tabular_reviews").delete().eq("user_id", userId),
         db.from("chats").delete().eq("user_id", userId),
         db.from("word_documents").delete().eq("user_id", userId),
-        db.from("project_subfolders").delete().eq("user_id", userId),
         db.from("hidden_workflows").delete().eq("user_id", userId),
         db
             .from("workflow_open_source_submissions")
@@ -943,9 +1017,10 @@ export async function deleteUserAccountData(
                   .delete()
                   .eq("shared_with_email", userEmail.trim().toLowerCase())
             : Promise.resolve({ error: null }),
-        // Audit rows carry the user's id, email, chat/document titles and prompt
-        // excerpts, so account erasure must remove them as well.
-        db.from("audit_events").delete().eq("user_id", userId),
+        // Personal history is erased; organization history keeps its action
+        // evidence without the departing account identifier or email.
+        db.from("audit_events").delete().eq("user_id", userId).is("org_id", null),
+        db.from("audit_events").update({ user_id: null, user_email: null }).eq("user_id", userId).not("org_id", "is", null),
         db.from("quick_actions").delete().eq("user_id", userId),
         db
             .from("default_workflow_installations")
@@ -963,6 +1038,8 @@ export async function deleteUserAccountData(
         .delete()
         .eq("user_id", userId);
     await throwIfError(workflowsError, "Failed to delete workflows");
+
+    await deleteUserPlaybooks(db, userId, userEmail);
 
     // `wipe_memory_file` empties the body under the file's row lock and bumps
     // its epoch, fencing any curator job still in flight. Organization project
@@ -984,9 +1061,7 @@ export async function deleteUserAccountData(
     // database which objects under this user's storage prefixes are orphans.
     await deleteOrphanedUserStorage(db, userId);
 
-    // An organization's content is held by ON DELETE RESTRICT foreign keys —
-    // deleting an org that still owns anything is refused outright, never
-    // silently detached — so none of the content deletions above touch the
-    // user's org memberships. Settle those here.
+    // Cancel pending invitations and clean up any remaining membership
+    // references. Team memberships were offboarded before personal erasure.
     await deleteUserOrganizations(db, userId, userEmail);
 }

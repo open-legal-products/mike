@@ -135,7 +135,7 @@ test("uses a floating icon header with no logo, tabs, or visible sign-out button
     page.getByRole("menuitem", { name: "Chat", exact: true }),
   ).toHaveCount(0);
   await expect(assistantItem).toHaveAttribute("data-selected", "true");
-  await expect(page.getByRole("menu")).toHaveClass(/rounded-xl/);
+  await expect(page.getByRole("menu")).toHaveClass(/rounded-2xl/);
   await expect(assistantItem).toHaveClass(/rounded-lg/);
   await expect(assistantItem.locator("svg")).toHaveCount(0);
   await quickActionsItem.hover();
@@ -275,7 +275,7 @@ test("does not send without the required Word document context", async ({
   await page.getByRole("button", { name: "Send" }).click();
 
   await expect(page.getByRole("alert")).toHaveText(
-    "Mike couldn't read the current Word document. Please try again.",
+    "Mike couldn't read this Word document. Try again.",
   );
   await expect(composer).toHaveValue("Review this document");
   await expect(page.locator("[data-message-id]")).toHaveCount(0);
@@ -323,9 +323,9 @@ test("history button loads and opens a previous chat", async ({
   await historyButton.click();
   const dropdown = page.getByRole("menu");
   await expect(
-    dropdown.getByPlaceholder("Search recent chats..."),
+    dropdown.getByPlaceholder("Search chats…"),
   ).toBeVisible();
-  await dropdown.getByRole("button", { name: /Lease review/ }).click();
+  await dropdown.getByRole("menuitem", { name: /Lease review/ }).click();
 
   await expect(page.getByText("Review this lease")).toBeVisible();
   await expect(page.getByText("The lease has three risks.")).toBeVisible();
@@ -368,7 +368,12 @@ test("shows a scroll-to-bottom control while the transcript is scrolled up", asy
       {
         id: `long-assistant-${index}`,
         role: "assistant",
-        content: `Section ${index + 1} contains several provisions that require careful review and follow-up.`,
+        content: [
+          {
+            type: "content",
+            text: `Section ${index + 1} contains several provisions that require careful review and follow-up.`,
+          },
+        ],
       },
     ]).flat(),
   });
@@ -378,12 +383,34 @@ test("shows a scroll-to-bottom control while the transcript is scrolled up", asy
   await page.getByRole("button", { name: "Chat history" }).click();
   await page
     .getByRole("menu")
-    .getByRole("button", { name: /Long document review/ })
+    .getByRole("menuitem", { name: /Long document review/ })
     .click();
+
+  // Restored history positions asynchronously. Establish the user-scrolled-up
+  // condition after it is visible instead of clicking a transient load arrow.
+  const messagesContainer = page.getByTestId("messages-container");
+  await expect(messagesContainer).toHaveCSS("opacity", "1");
+  await expect(page.getByText("Section 6 contains", { exact: false })).toBeVisible();
+  await expect
+    .poll(() => messagesContainer.evaluate((container) => {
+      const users = container.querySelectorAll<HTMLElement>("[data-message-id]");
+      const latestUser = users[users.length - 1];
+      if (!latestUser) return Number.POSITIVE_INFINITY;
+      return Math.abs(
+        latestUser.getBoundingClientRect().top -
+        container.getBoundingClientRect().top - 80,
+      );
+    }))
+    .toBeLessThan(2);
+  await messagesContainer.hover();
+  await page.mouse.wheel(0, -10_000);
+  // WebKit can retain a small scroll offset while the transcript finishes
+  // layout. The user must see the oldest message, not hit an exact pixel.
+  await expect(page.getByText("Review section 1", { exact: true })).toBeInViewport();
 
   const scrollButton = page.getByRole("button", { name: "Scroll to bottom" });
   await expect(scrollButton).toBeVisible();
-  await scrollButton.dispatchEvent("click");
+  await scrollButton.click();
 
   const immediateBottomDistance = await page
     .getByTestId("messages-container")
@@ -413,7 +440,6 @@ test("shows a scroll-to-bottom control while the transcript is scrolled up", asy
   await expect(
     page.getByText("Review complete.", { exact: true }),
   ).toBeVisible();
-  const messagesContainer = page.getByTestId("messages-container");
   const settledMessageY = await waitForStableSample(async () =>
     latestUserMessage.evaluate((element) =>
       Math.round(element.getBoundingClientRect().y),
@@ -485,7 +511,7 @@ test("history preserves assistant event order and stored errors", async ({
   await page.getByRole("button", { name: "Chat history" }).click();
   await page
     .getByRole("menu")
-    .getByRole("button", { name: /Ordered response/ })
+    .getByRole("menuitem", { name: /Ordered response/ })
     .click();
 
   const intro = page.getByText("I’ll inspect the document.", { exact: true });
@@ -656,7 +682,7 @@ test("a reasoning delta replaces Thinking with a live reasoning trace", async ({
   ).toBeVisible();
 });
 
-test("a pre-[DONE] error event surfaces as 'Error: ...' in the assistant bubble", async ({
+test("a pre-[DONE] error event surfaces in the assistant bubble", async ({
   addin,
   page,
 }) => {
@@ -670,8 +696,50 @@ test("a pre-[DONE] error event surfaces as 'Error: ...' in the assistant bubble"
   await page.getByRole("button", { name: "Send" }).click();
 
   // The client throws on the pre-[DONE] error; ChatPanel replaces the bubble
-  // content with the error message.
-  await expect(page.getByText("Error: model rate limited")).toBeVisible();
+  // content with the backend's own (user-facing) message, no "Error:" prefix,
+  // and a toast offers a Retry that resends the turn.
+  await expect(page.getByText("model rate limited").first()).toBeVisible();
+  await expect(
+    page.getByTestId("toast").getByRole("button", { name: "Retry" }),
+  ).toBeVisible();
+});
+
+test("the failed-answer Retry re-sends in its own chat, never in one opened since", async ({
+  addin,
+  page,
+}) => {
+  await addin.mockChatStream(["partial answer"], {
+    errorBefore: "model rate limited",
+  });
+  await addin.gotoTaskpane();
+  await addin.expectAuthedShell();
+
+  await page.getByPlaceholder("How can I help?").fill("Prompt from chat A");
+  await page.getByRole("button", { name: "Send" }).click();
+  const retry = page.getByTestId("toast").getByRole("button", { name: "Retry" });
+  await expect(retry).toBeVisible();
+
+  // Same chat: Retry re-sends the same prompt.
+  let posts = 0;
+  page.on("request", (request) => {
+    if (request.method() === "POST" && /\/word-chat$/.test(request.url())) {
+      posts += 1;
+    }
+  });
+  await retry.click();
+  await expect.poll(() => posts).toBe(1);
+  await expect(retry).toBeVisible();
+
+  // Another chat: the toast is still on screen, but the prompt has no chat
+  // of its own to go to, so nothing is sent into the new conversation.
+  await page.getByRole("button", { name: "New chat" }).click();
+  await expect(page.getByText("Prompt from chat A")).toHaveCount(0);
+  await retry.click();
+  await expect(
+    page.getByText("This chat has changed. Open the original chat to check its answer."),
+  ).toBeVisible();
+  expect(posts).toBe(1);
+  await expect(page.getByText("Prompt from chat A")).toHaveCount(0);
 });
 
 test("sends a document snapshot without claiming the model read it", async ({
@@ -1127,7 +1195,7 @@ test("opens a left-aligned source menu and selects web files from the document m
   await expect(localFiles).toBeVisible();
   await expect(webFiles).toBeVisible();
   await expect(localFiles.locator('img[src*="desktop."]')).toBeVisible();
-  await expect(webFiles.locator('img[src*="earth."]')).toBeVisible();
+  await expect(webFiles.locator('img[src*="cloud."]')).toBeVisible();
 
   const menuBox = await page.getByRole("menu").boundingBox();
   expect(buttonBox).not.toBeNull();
@@ -1316,7 +1384,10 @@ test("reports a Templates-tab load failure", async ({ addin, page }) => {
   await page.getByRole("menuitem", { name: "Web files" }).click();
   const modal = page.getByRole("dialog", { name: "Add Documents" });
   await modal.getByRole("button", { name: "Templates" }).click();
-  await expect(modal.getByRole("alert")).toContainText("API error: 503");
+  // A 5xx body is never echoed; 503 reads as a temporary outage.
+  await expect(modal.getByRole("alert")).toContainText(
+    "Mike is temporarily unavailable",
+  );
 });
 
 test("uploads desktop files directly from the document source menu", async ({
@@ -1459,23 +1530,53 @@ test("selects a workflow from the plus menu and attaches it to chat", async ({
   });
 });
 
-test("model toggle sends the selected frontend model", async ({
-  addin,
-  page,
-}) => {
-  await addin.mockChatStream(["Using the selected model."]);
-  await addin.gotoTaskpane({ documentText: "Current Word document" });
-  await addin.expectAuthedShell();
+for (const model of [
+  {
+    provider: "openai",
+    group: "OpenAI",
+    label: "GPT-6.1 Sol",
+    id: "gpt-6.1-sol",
+  },
+  {
+    provider: "mistral",
+    group: "Mistral AI",
+    label: "Mistral Medium 3.5",
+    id: "mistral-medium-3-5",
+  },
+]) {
+  test(`model toggle sends the selected frontend model (${model.label})`, async ({
+    addin,
+    page,
+  }) => {
+    // Only the chosen provider has a key, including the Mistral-only case.
+    await addin.mockApiJson("GET", "**/user/api-keys", {
+      claude: false,
+      gemini: false,
+      openai: model.provider === "openai",
+      mistral: model.provider === "mistral",
+      openrouter: false,
+      vercel: false,
+      "opencode-go": false,
+      courtlistener: false,
+    });
+    await addin.mockChatStream(["Using the selected model."]);
+    await addin.gotoTaskpane({ documentText: "Current Word document" });
+    await addin.expectAuthedShell();
 
-  await page.getByRole("button", { name: "Choose model" }).click();
-  await page.getByRole("menuitem", { name: "OpenAI", exact: true }).click();
-  await page.getByRole("menuitem", { name: "GPT-5.4", exact: true }).click();
-  await page.getByPlaceholder("How can I help?").fill("Hello");
-  const requestPromise = page.waitForRequest("**/word-chat");
-  await page.getByRole("button", { name: "Send" }).click();
-  const body = (await requestPromise).postDataJSON();
-  expect(body.model).toBe("gpt-5.4");
-});
+    await page.getByRole("button", { name: "Choose model" }).click();
+    const group = page.getByRole("menuitem", { name: model.group, exact: true });
+    if ((await group.getAttribute("aria-expanded")) !== "true") {
+      await group.click();
+    }
+    await page.getByRole("menuitem", { name: model.label, exact: true }).click();
+    await page.getByPlaceholder("How can I help?").fill("Hello");
+    const requestPromise = page.waitForRequest("**/word-chat");
+    await page.getByRole("button", { name: "Send" }).click();
+    const body = (await requestPromise).postDataJSON();
+    expect(body.model).toBe(model.id);
+    await expect(page.getByText("Using the selected model.")).toBeVisible();
+  });
+}
 
 test("composer controls fit a narrow Word task pane", async ({
   addin,
@@ -2190,7 +2291,7 @@ test("keeps an edit reviewable through its passage when Word withholds revision 
   expect(calls.rejectedChanges).toEqual([]);
 });
 
-test("does not claim an edit was applied when the mutation sync failed before Word changed the document", async ({
+test("says it cannot confirm the outcome when the mutation sync failed mid-batch", async ({
   addin,
   page,
 }) => {
@@ -2207,7 +2308,14 @@ test("does not claim an edit was applied when the mutation sync failed before Wo
   await page.getByRole("button", { name: "Send" }).click();
   await page.getByRole("button", { name: "Apply", exact: true }).click();
 
-  await expect(page.getByText("Couldn’t apply this change.")).toBeVisible();
+  // Word was sent the mutation and then faulted. Re-reading the exact target
+  // ranges proves nothing either way, so the card must not claim the change
+  // failed (it might have landed) nor invite a retry that would double-apply.
+  await expect(
+    page.getByText(
+      "Mike couldn't confirm whether this change was applied — check the document before retrying.",
+    ),
+  ).toBeVisible();
   await expect(
     page.getByText("Applied in Word — review it from Word’s Review tab."),
   ).toHaveCount(0);

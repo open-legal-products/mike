@@ -38,3 +38,14 @@ export function errorMessage(error: unknown): string {
     if (error instanceof Error && error.message) return error.message;
     return typeof error === "string" && error ? error : "Unexpected error";
 }
+
+export function uniqueStrings(values: Array<string | null | undefined>): string[] {
+    return [...new Set(values.filter((value): value is string => !!value))];
+}
+
+export async function throwIfError<T extends { message?: string } | null>(
+    error: T,
+    context: string,
+) {
+    if (error) throw new Error(`${context}: ${error.message ?? "unknown error"}`);
+}

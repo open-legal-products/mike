@@ -1,0 +1,1980 @@
+import { afterEach, describe, expect, it, vi } from "vitest";
+import type { AssistantEvent, Message } from "@/app/components/shared/types";
+import type { ConnectorApprovalItem } from "@mike/contracts";
+import { streamChatTurn } from "./mikeApi";
+import { beginAssistantTurn } from "./assistantTurns";
+import {
+  consumeAssistantTurnStream,
+  createTurnCursor,
+  createTurnEventSink,
+  readAssistantTurn,
+} from "./assistantTurnStream";
+
+vi.mock("./mikeApi", () => ({ streamChatTurn: vi.fn(), stopChatTurn: vi.fn() }));
+const streamChatTurnMock = vi.mocked(streamChatTurn);
+
+/** An SSE body that emits the given chunks; `fail` makes it error out after them. */
+function sseResponse(chunks: string[], opts?: { fail?: boolean; status?: number }) {
+  const encoder = new TextEncoder();
+  // `fail` errors the stream only once the consumer has drained the queued
+  // chunks (pull runs when it asks for more), so the frames arrive first.
+  const stream = new ReadableStream<Uint8Array>({
+    start(controller) {
+      for (const chunk of chunks) controller.enqueue(encoder.encode(chunk));
+      if (!opts?.fail) controller.close();
+    },
+    pull(controller) {
+      if (opts?.fail) controller.error(new TypeError("network error"));
+    },
+  });
+  return new Response(stream, { status: opts?.status ?? 200 });
+}
+const frame = (seq: number, data: object) => `id: ${seq}\ndata: ${JSON.stringify(data)}\n\n`;
+const text = (message: Message) =>
+  (message.events ?? []).map((e) => (e.type === "content" ? e.text : "")).join("");
+const begin = () =>
+  beginAssistantTurn("chat-a", {
+    userMessage: { role: "user", content: "hello" },
+    assistant: { role: "assistant", content: "", citations: [], events: [] },
+    cancel: vi.fn(),
+  });
+
+afterEach(() => {
+  vi.clearAllMocks();
+  vi.useRealTimers();
+});
+
+describe("consumeAssistantTurnStream", () => {
+  it("keeps text cards between prose segments and ignores malformed cards", async () => {
+    const turn = begin();
+    const card = { type: "text_card" as const, card_id: "card-1", title: "Draft", text: "First paragraph.\n\nSecond paragraph." };
+    await consumeAssistantTurnStream(sseResponse([
+      frame(1, { type: "content_delta", text: "Before." }),
+      frame(2, card),
+      frame(3, { type: "content_delta", text: "After." }),
+      frame(4, { type: "text_card", title: "Incomplete" }),
+      "data: [DONE]\n\n",
+    ]), { turn, sink: createTurnEventSink(turn, []), cursor: createTurnCursor("chat-a") });
+    expect(turn.turn.assistant.events).toEqual([
+      { type: "content", text: "Before." }, card, { type: "content", text: "After.", isStreaming: true },
+    ]);
+    turn.finish();
+  });
+  it("records what the answer ran on and drops malformed details", async () => {
+    const turn = begin();
+    await consumeAssistantTurnStream(sseResponse([
+      frame(1, { type: "response_details", model: "gpt-6-luna", reasoning: "medium", usage: { input_tokens: 1200, output_tokens: 80 } }),
+      frame(2, { type: "response_details", reasoning: "high" }),
+      frame(3, { type: "response_details", model: "gpt-6-luna", usage: { input_tokens: "lots" } }),
+      frame(4, { type: "response_details", model: "gpt-6-luna" }),
+      "data: [DONE]\n\n",
+    ]), { turn, sink: createTurnEventSink(turn, []), cursor: createTurnCursor("chat-a") });
+    expect(turn.turn.assistant.events).toEqual([
+      { type: "response_details", model: "gpt-6-luna", reasoning: "medium", usage: { input_tokens: 1200, output_tokens: 80 } },
+      { type: "response_details", model: "gpt-6-luna" },
+      { type: "response_details", model: "gpt-6-luna" },
+    ]);
+    turn.finish();
+  });
+
+  it("tracks the chat, turn and last sequence number from the frames", async () => {
+    const turn = begin();
+    const sink = createTurnEventSink(turn, []);
+    const cursor = createTurnCursor("chat-a");
+    const onChatId = vi.fn();
+    await consumeAssistantTurnStream(
+      sseResponse([
+        frame(1, { type: "chat_id", chatId: "chat-a", turnId: "turn-1", assistantMessageId: "answer-1" }),
+        frame(2, { type: "content_delta", text: "Hel" }),
+        frame(3, { type: "content_delta", text: "lo" }),
+        "id: 4\ndata: [DONE]\n\n",
+      ]),
+      { turn, sink, cursor, hooks: { onChatId } },
+    );
+    expect(cursor).toEqual({ chatId: "chat-a", turnId: "turn-1", lastSeq: 4 });
+    expect(onChatId).toHaveBeenCalledWith("chat-a", "answer-1");
+    expect(turn.turn.assistant.id).toBe("answer-1");
+    expect(text(turn.turn.assistant)).toBe("Hello");
+    turn.finish();
+  });
+
+  it("labels the answer when the server reports the turn was stopped elsewhere", async () => {
+    const turn = begin();
+    const sink = createTurnEventSink(turn, []);
+    await consumeAssistantTurnStream(
+      sseResponse([
+        frame(1, { type: "content_delta", text: "Partial" }),
+        frame(2, { type: "cancelled" }),
+        "data: [DONE]\n\n",
+      ]),
+      { turn, sink, cursor: createTurnCursor("chat-a") },
+    );
+    expect(turn.turn.assistant.events).toEqual([
+      { type: "content", text: "Partial" },
+      { type: "content", text: "Cancelled by user." },
+    ]);
+    turn.finish();
+  });
+});
+
+describe("readAssistantTurn", () => {
+  it("resumes from the frame after the last one seen when the connection drops", async () => {
+    vi.useFakeTimers();
+    const turn = begin();
+    const sink = createTurnEventSink(turn, []);
+    const cursor = createTurnCursor("chat-a");
+    streamChatTurnMock.mockResolvedValueOnce(
+      sseResponse([frame(3, { type: "content_delta", text: " world" }), "id: 4\ndata: [DONE]\n\n"]),
+    );
+    const read = readAssistantTurn({
+      open: async () =>
+        sseResponse(
+          [
+            frame(1, { type: "chat_id", chatId: "chat-a", turnId: "turn-1" }),
+            frame(2, { type: "content_delta", text: "Hello" }),
+          ],
+          { fail: true },
+        ),
+      turn,
+      sink,
+      cursor,
+    });
+    await vi.advanceTimersByTimeAsync(1000);
+    await read;
+    expect(streamChatTurnMock).toHaveBeenCalledWith({
+      chatId: "chat-a",
+      turnId: "turn-1",
+      from: 3,
+      signal: undefined,
+    });
+    expect(text(turn.turn.assistant)).toBe("Hello world");
+    expect(cursor.lastSeq).toBe(4);
+    turn.finish();
+  });
+
+  it("surfaces the original failure when the server no longer has the turn", async () => {
+    vi.useFakeTimers();
+    const turn = begin();
+    const sink = createTurnEventSink(turn, []);
+    streamChatTurnMock.mockResolvedValueOnce(sseResponse([], { status: 404 }));
+    const read = readAssistantTurn({
+      open: async () =>
+        sseResponse([frame(1, { type: "chat_id", chatId: "chat-a", turnId: "turn-1" })], { fail: true }),
+      turn,
+      sink,
+      cursor: createTurnCursor("chat-a"),
+    });
+    const outcome = read.then(() => "resolved", (error: Error) => error.message);
+    await vi.advanceTimersByTimeAsync(1000);
+    expect(await outcome).toBe("network error");
+    expect(streamChatTurnMock).toHaveBeenCalledTimes(1);
+    turn.finish();
+  });
+
+  it("does not retry before the turn has a name, after Stop, or past the retry budget", async () => {
+    vi.useFakeTimers();
+    const turn = begin();
+    const sink = createTurnEventSink(turn, []);
+    // No chat_id frame yet: nothing to resume.
+    await expect(
+      readAssistantTurn({
+        open: async () => sseResponse([frame(1, { type: "content_delta", text: "x" })], { fail: true }),
+        turn,
+        sink,
+        cursor: createTurnCursor("chat-a"),
+      }),
+    ).rejects.toThrow("network error");
+    expect(streamChatTurnMock).not.toHaveBeenCalled();
+
+    // Stop aborts the read; an abort is final.
+    const controller = new AbortController();
+    const aborted = readAssistantTurn({
+      open: async () => {
+        controller.abort();
+        return sseResponse([frame(1, { type: "chat_id", chatId: "chat-a", turnId: "turn-1" })]);
+      },
+      turn,
+      sink,
+      cursor: createTurnCursor("chat-a"),
+      signal: controller.signal,
+    });
+    await expect(aborted).rejects.toMatchObject({ name: "AbortError" });
+    expect(streamChatTurnMock).not.toHaveBeenCalled();
+
+    // Every reconnect drops too: give up after the budget.
+    streamChatTurnMock.mockImplementation(async () =>
+      sseResponse([frame(2, { type: "content_delta", text: "y" })], { fail: true }),
+    );
+    const exhausted = readAssistantTurn({
+      open: async () =>
+        sseResponse([frame(1, { type: "chat_id", chatId: "chat-a", turnId: "turn-1" })], { fail: true }),
+      turn,
+      sink,
+      cursor: createTurnCursor("chat-a"),
+      retries: 2,
+    });
+    const outcome = exhausted.then(() => "resolved", (error: Error) => error.message);
+    await vi.advanceTimersByTimeAsync(5000);
+    expect(await outcome).toBe("network error");
+    expect(streamChatTurnMock).toHaveBeenCalledTimes(2);
+    turn.finish();
+  });
+
+  it("carries a JSON refusal's status, code, request id and 4xx detail", async () => {
+    const turn = begin();
+    const sink = createTurnEventSink(turn, []);
+    await expect(
+      readAssistantTurn({
+        open: async () =>
+          Response.json(
+            { detail: "Pick a model first.", code: "model_required", request_id: "req-1" },
+            { status: 400 },
+          ),
+        turn,
+        sink,
+        cursor: createTurnCursor("chat-a"),
+      }),
+    ).rejects.toMatchObject({
+      message: "Pick a model first.",
+      status: 400,
+      code: "model_required",
+      requestId: "req-1",
+    });
+    turn.finish();
+  });
+
+  it("never shows a 5xx body's detail, but keeps its code", async () => {
+    const turn = begin();
+    const sink = createTurnEventSink(turn, []);
+    await expect(
+      readAssistantTurn({
+        open: async () =>
+          Response.json(
+            { detail: "pg: relation missing", code: "rate_limited" },
+            { status: 503, headers: { "x-request-id": "req-h" } },
+          ),
+        turn,
+        sink,
+        cursor: createTurnCursor("chat-a"),
+      }),
+    ).rejects.toMatchObject({
+      message: "API error: 503",
+      status: 503,
+      code: "rate_limited",
+      requestId: "req-h",
+    });
+    turn.finish();
+  });
+
+  it("rejects a response that is not ok before reading it", async () => {
+    const turn = begin();
+    const sink = createTurnEventSink(turn, []);
+    await expect(
+      readAssistantTurn({
+        open: async () => sseResponse([], { status: 409 }),
+        turn,
+        sink,
+        cursor: createTurnCursor("chat-a"),
+      }),
+    ).rejects.toMatchObject({ message: "API error: 409", status: 409 });
+    turn.finish();
+  });
+});
+
+/* ------------------------------------------------------------------ */
+/* Frame-handler coverage                                             */
+/* ------------------------------------------------------------------ */
+
+type Frame = Record<string, unknown>;
+
+/** Feed `frames` through one turn and hand back the finished assistant message. */
+const run = async (frames: Frame[], initial?: AssistantEvent[]) => {
+  const turn = begin();
+  const sink = createTurnEventSink(turn, initial ?? []);
+  await consumeAssistantTurnStream(
+    sseResponse([...frames.map((f, i) => frame(i + 1, f)), "data: [DONE]\n\n"]),
+    { turn, sink, cursor: createTurnCursor("chat-a") },
+  );
+  const { assistant } = turn.turn;
+  turn.finish();
+  return assistant;
+};
+const eventsOf = async (frames: Frame[], initial?: AssistantEvent[]) =>
+  (await run(frames, initial)).events;
+
+const thinking = { type: "thinking", isStreaming: true };
+/** An event replayed from the server's stored copy of an earlier turn. */
+const storedEvent = (event: Record<string, unknown>) =>
+  event as unknown as AssistantEvent;
+/** The smallest object `isPanelDocument` accepts. */
+const panelDocument = {
+  document_id: "doc-1",
+  title: "Roe v. Wade",
+  type: "case",
+  metadata: [],
+  quotes: [],
+};
+
+describe("stream identity frames", () => {
+  it("adopts the chat id without a turn id, an answer id or hooks", async () => {
+    const turn = begin();
+    const sink = createTurnEventSink(turn, []);
+    const cursor = createTurnCursor();
+    await consumeAssistantTurnStream(
+      sseResponse([
+        frame(1, { type: "chat_id", chatId: "chat-b", assistantMessageId: 7 }),
+        "data: [DONE]\n\n",
+      ]),
+      { turn, sink, cursor },
+    );
+    expect(cursor).toEqual({ chatId: "chat-b", lastSeq: 1 });
+    expect(turn.turn.assistant.id).toBeUndefined();
+    turn.finish();
+  });
+
+  it("ignores a frame id that is not a sequence number", async () => {
+    const turn = begin();
+    const sink = createTurnEventSink(turn, []);
+    const cursor = createTurnCursor("chat-a");
+    await consumeAssistantTurnStream(
+      sseResponse([
+        `id: not-a-number\ndata: ${JSON.stringify({ type: "content_delta", text: "a" })}\n\n`,
+        "data: [DONE]\n\n",
+      ]),
+      { turn, sink, cursor },
+    );
+    expect(cursor.lastSeq).toBe(0);
+    turn.finish();
+  });
+
+  it("reports a renamed chat to the host only when the frame is well formed", async () => {
+    const turn = begin();
+    const sink = createTurnEventSink(turn, []);
+    const onChatTitle = vi.fn();
+    await consumeAssistantTurnStream(
+      sseResponse([
+        frame(1, { type: "chat_title", chatId: 7, title: "Kept" }),
+        frame(2, { type: "chat_title", chatId: "chat-a", title: 7 }),
+        frame(3, { type: "chat_title", chatId: "chat-a", title: "Renamed" }),
+        "data: [DONE]\n\n",
+      ]),
+      { turn, sink, cursor: createTurnCursor("chat-a"), hooks: { onChatTitle } },
+    );
+    expect(onChatTitle).toHaveBeenCalledTimes(1);
+    expect(onChatTitle).toHaveBeenCalledWith("chat-a", "Renamed");
+    turn.finish();
+  });
+
+  it("tolerates a chat_title frame when the host registered no hook", async () => {
+    expect(
+      await eventsOf([{ type: "chat_title", chatId: "chat-a", title: "Renamed" }]),
+    ).toEqual([]);
+  });
+
+  it("marks the turn as loading citations when content is done", async () => {
+    const turn = begin();
+    const sink = createTurnEventSink(turn, []);
+    await consumeAssistantTurnStream(
+      sseResponse([frame(1, { type: "content_done" }), "data: [DONE]\n\n"]),
+      { turn, sink, cursor: createTurnCursor("chat-a") },
+    );
+    expect(turn.turn.loadingCitations).toBe(true);
+    turn.finish();
+  });
+
+  it("ignores a frame type it does not know", async () => {
+    expect(await eventsOf([{ type: "something_new", text: "x" }])).toEqual([]);
+  });
+});
+
+describe("error frames", () => {
+  it("shows the server's message only when it is marked safe to display", async () => {
+    const message = await run([
+      { type: "error", message: "  Upstream is down  ", safe_to_display: true },
+    ]);
+    expect(message.error).toBe("Upstream is down");
+    expect(message.events).toEqual([
+      { type: "error", message: "Upstream is down", safe_to_display: true },
+    ]);
+  });
+
+  it.each([
+    ["an unsafe message", { message: "stack trace", safe_to_display: false }, {}],
+    [
+      "a blank safe message",
+      { message: "   ", safe_to_display: true },
+      { safe_to_display: true },
+    ],
+    [
+      "a safe message that is not a string",
+      { message: 42, safe_to_display: true },
+      { safe_to_display: true },
+    ],
+    ["no message at all", {}, {}],
+  ])("falls back to a generic message for %s", async (_label, extra, flag) => {
+    const message = await run([{ type: "error", ...extra }]);
+    expect(message.error).toBe("Sorry, something went wrong.");
+    expect(message.events).toEqual([
+      { type: "error", message: "Sorry, something went wrong.", ...flag },
+    ]);
+  });
+
+  it("hands the error frame's code and request id to the hook, and tolerates their absence", async () => {
+    const onErrorFrame = vi.fn();
+    const run = (data: object) =>
+      consumeAssistantTurnStream(sseResponse([frame(1, data), "data: [DONE]\n\n"]), {
+        turn: begin(),
+        sink: createTurnEventSink(begin(), []),
+        cursor: createTurnCursor("chat-a"),
+        hooks: { onErrorFrame },
+      });
+    await run({ type: "error", message: "x", code: "internal_error", request_id: "req-1", reporting_owner: "backend" });
+    await run({ type: "error", message: "x", request_id: 42 });
+    expect(onErrorFrame.mock.calls.map(([f]) => [f.code, f.requestId, f.reportingOwner])).toEqual([
+      ["internal_error", "req-1", "backend"],
+      [null, null, undefined],
+    ]);
+  });
+
+  it("raises a rejected key as its own signal and stops the citation spinner", async () => {
+    const turn = begin();
+    const sink = createTurnEventSink(turn, []);
+    const onRejectedApiKey = vi.fn();
+    const onErrorFrame = vi.fn();
+    await consumeAssistantTurnStream(
+      sseResponse([
+        frame(1, { type: "content_done" }),
+        frame(2, { type: "reasoning_delta", text: "hmm" }),
+        frame(3, { type: "tool_call_start", name: "t" }),
+        frame(4, { type: "error", message: "bad key", code: "invalid_api_key" }),
+        "data: [DONE]\n\n",
+      ]),
+      {
+        turn,
+        sink,
+        cursor: createTurnCursor("chat-a"),
+        hooks: { onRejectedApiKey, onErrorFrame },
+      },
+    );
+    expect(onRejectedApiKey).toHaveBeenCalledTimes(1);
+    expect(onErrorFrame).toHaveBeenCalledTimes(1);
+    expect(onErrorFrame).toHaveBeenCalledWith({
+      message: expect.any(String),
+      safeToDisplay: expect.any(Boolean),
+      code: "invalid_api_key",
+      requestId: null,
+    });
+    expect(turn.turn.loadingCitations).toBe(false);
+    expect(turn.turn.assistant.events).toEqual([
+      { type: "reasoning", text: "hmm" },
+      {
+        type: "error",
+        message: "Sorry, something went wrong.",
+        code: "invalid_api_key",
+      },
+    ]);
+    turn.finish();
+  });
+
+  it("finalizes an in-flight content block before appending the error", async () => {
+    expect(
+      await eventsOf([
+        { type: "content_delta", text: "Half an ans" },
+        { type: "error", message: "boom" },
+      ]),
+    ).toEqual([
+      { type: "content", text: "Half an ans" },
+      { type: "error", message: "Sorry, something went wrong." },
+    ]);
+  });
+});
+
+describe("content and reasoning deltas", () => {
+  it("starts a fresh content block after an interleaved event", async () => {
+    expect(
+      await eventsOf([
+        { type: "content_delta", text: "before" },
+        { type: "workflow_applied", workflow_id: "wf-1", title: "Intake" },
+        { type: "content_delta", text: "after" },
+      ]),
+    ).toEqual([
+      { type: "content", text: "before" },
+      { type: "workflow_applied", workflow_id: "wf-1", title: "Intake" },
+      { type: "content", text: "after", isStreaming: true },
+    ]);
+  });
+
+  it("merges consecutive reasoning deltas and finalizes them at the end of the stream", async () => {
+    expect(
+      await eventsOf([
+        { type: "reasoning_delta", text: "th" },
+        { type: "reasoning_delta", text: "ink" },
+      ]),
+    ).toEqual([{ type: "reasoning", text: "think" }]);
+  });
+
+  it("closes a content block when reasoning starts, and stacks one placeholder after the block ends", async () => {
+    expect(
+      await eventsOf([
+        { type: "content_delta", text: "answer" },
+        { type: "reasoning_delta", text: "why" },
+        { type: "reasoning_block_end" },
+        { type: "reasoning_block_end" },
+      ]),
+    ).toEqual([
+      { type: "content", text: "answer" },
+      { type: "reasoning", text: "why" },
+      thinking,
+    ]);
+  });
+});
+
+describe("tool placeholders and cancellation", () => {
+  it.each([
+    ["the tool's name", { name: "search" }, "search"],
+    ["an empty name when the server omits one", {}, ""],
+  ])("shows a running placeholder with %s", async (_label, extra, name) => {
+    expect(await eventsOf([{ type: "tool_call_start", ...extra }])).toEqual([
+      { type: "tool_call_start", name, isStreaming: true },
+    ]);
+  });
+
+  it("labels the answer once, dropping placeholders and streaming flags", async () => {
+    expect(
+      await eventsOf([
+        { type: "doc_read_start", filename: "brief.docx" },
+        { type: "doc_read", filename: "brief.docx" },
+        { type: "cancelled" },
+        { type: "cancelled" },
+      ]),
+    ).toEqual([
+      {
+        type: "doc_read",
+        filename: "brief.docx",
+        document_id: undefined,
+        version_id: null,
+        version_number: null,
+        isStreaming: false,
+      },
+      { type: "content", text: "Cancelled by user." },
+    ]);
+  });
+
+  it("leaves events that never carried a streaming flag untouched", async () => {
+    expect(
+      await eventsOf([
+        { type: "content_delta", text: "partial" },
+        { type: "workflow_applied", workflow_id: "wf-1", title: "Intake" },
+        { type: "cancelled" },
+      ]),
+    ).toEqual([
+      { type: "content", text: "partial" },
+      { type: "workflow_applied", workflow_id: "wf-1", title: "Intake" },
+      { type: "content", text: "Cancelled by user." },
+    ]);
+  });
+});
+
+describe("case panel frames", () => {
+  it("keeps every field of a fully populated case citation", async () => {
+    expect(
+      await eventsOf([
+        {
+          type: "case_citation",
+          cluster_id: 12,
+          case_name: "Roe v. Wade",
+          citation: "410 U.S. 113",
+          url: "https://cl/12",
+          pdfUrl: "https://cl/12.pdf",
+          dateFiled: "1973-01-22",
+          document: panelDocument,
+        },
+      ]),
+    ).toEqual([
+      {
+        type: "case_citation",
+        cluster_id: 12,
+        case_name: "Roe v. Wade",
+        citation: "410 U.S. 113",
+        url: "https://cl/12",
+        pdfUrl: "https://cl/12.pdf",
+        dateFiled: "1973-01-22",
+        document: panelDocument,
+      },
+    ]);
+  });
+
+  it("nulls out case-citation fields the server sent with the wrong shape", async () => {
+    expect(
+      await eventsOf([
+        {
+          type: "case_citation",
+          cluster_id: "12",
+          case_name: 1,
+          citation: 2,
+          url: "https://cl/12",
+          pdfUrl: 3,
+          dateFiled: 4,
+          document: { document_id: "doc-1" },
+        },
+      ]),
+    ).toEqual([
+      {
+        type: "case_citation",
+        cluster_id: null,
+        case_name: null,
+        citation: null,
+        url: "https://cl/12",
+        pdfUrl: null,
+        dateFiled: null,
+        document: undefined,
+      },
+    ]);
+  });
+
+  it.each([
+    [
+      "a document panel",
+      { cluster_id: 12, document: panelDocument },
+      { cluster_id: 12, document: panelDocument },
+    ],
+    ["nothing usable", {}, { cluster_id: 0, document: undefined }],
+  ])("renders case opinions with %s", async (_label, extra, expected) => {
+    expect(await eventsOf([{ type: "case_opinions", ...extra }])).toEqual([
+      { type: "case_opinions", ...expected },
+    ]);
+  });
+});
+
+describe("MCP tool frames", () => {
+  it("resolves a running MCP call into its result", async () => {
+    expect(
+      await eventsOf([
+        { type: "mcp_tool_start", name: "drive__search" },
+        {
+          type: "mcp_tool_result",
+          name: "drive__search",
+          connector_name: "Drive",
+          tool_name: "search",
+          status: "error",
+          error: "rate limited",
+        },
+      ]),
+    ).toEqual([
+      {
+        type: "mcp_tool_call",
+        connector_id: "",
+        connector_name: "Drive",
+        tool_name: "search",
+        openai_tool_name: "drive__search",
+        status: "error",
+        error: "rate limited",
+        isStreaming: false,
+      },
+      thinking,
+    ]);
+  });
+
+  it("keeps a tool's title only when the result names one", async () => {
+    const titled = await eventsOf([
+      { type: "mcp_tool_start", name: "drive__search" },
+      { type: "mcp_tool_result", name: "drive__search", connector_name: "Drive", tool_name: "search", tool_title: "Search Drive", status: "ok" },
+    ]);
+    expect(titled?.[0]).toMatchObject({ type: "mcp_tool_call", tool_title: "Search Drive" });
+    const untitled = await eventsOf([
+      { type: "mcp_tool_start", name: "drive__search" },
+      { type: "mcp_tool_result", name: "drive__search", connector_name: "Drive", tool_name: "search", tool_title: "", status: "ok" },
+    ]);
+    expect((untitled?.[0] as { tool_title?: string } | undefined)?.tool_title).toBeUndefined();
+  });
+
+  it("keeps the approval id a result names, so the timeline can tie it to its decision", async () => {
+    expect(
+      await eventsOf([
+        { type: "mcp_tool_start", name: "gmail__send" },
+        {
+          type: "mcp_tool_result",
+          name: "gmail__send",
+          connector_name: "Gmail",
+          tool_name: "send",
+          status: "ok",
+          approval_id: "approve-1",
+        },
+      ]),
+    ).toEqual([
+      {
+        type: "mcp_tool_call",
+        connector_id: "",
+        connector_name: "Gmail",
+        tool_name: "send",
+        openai_tool_name: "gmail__send",
+        status: "ok",
+        error: undefined,
+        approval_id: "approve-1",
+        isStreaming: false,
+      },
+      thinking,
+    ]);
+  });
+
+  it("falls back to the wire name and an ok status when the result is bare", async () => {
+    expect(
+      await eventsOf([{ type: "mcp_tool_start" }, { type: "mcp_tool_result" }]),
+    ).toEqual([
+      {
+        type: "mcp_tool_call",
+        connector_id: "",
+        connector_name: "",
+        tool_name: "",
+        openai_tool_name: "",
+        status: "ok",
+        error: undefined,
+        isStreaming: false,
+      },
+      thinking,
+    ]);
+  });
+
+  it("only shows a placeholder when a result has no call to resolve", async () => {
+    expect(
+      await eventsOf([{ type: "mcp_tool_result", name: "drive__search" }]),
+    ).toEqual([thinking]);
+  });
+});
+
+describe("CourtListener frames", () => {
+  it("resolves a case-law search into its result count", async () => {
+    expect(
+      await eventsOf([
+        { type: "courtlistener_search_case_law_start", query: "habeas" },
+        { type: "courtlistener_search_case_law", query: "habeas", result_count: 3 },
+      ]),
+    ).toEqual([
+      {
+        type: "courtlistener_search_case_law",
+        query: "habeas",
+        result_count: 3,
+        error: undefined,
+        isStreaming: false,
+      },
+      thinking,
+    ]);
+  });
+
+  it("reports a failed case-law search with a zero count", async () => {
+    expect(
+      await eventsOf([
+        { type: "courtlistener_search_case_law_start", query: "habeas" },
+        { type: "courtlistener_search_case_law", query: "habeas", error: "upstream 500" },
+      ]),
+    ).toEqual([
+      {
+        type: "courtlistener_search_case_law",
+        query: "habeas",
+        result_count: 0,
+        error: "upstream 500",
+        isStreaming: false,
+      },
+      thinking,
+    ]);
+  });
+
+  it("starts a case-law search placeholder with an empty query", async () => {
+    expect(await eventsOf([{ type: "courtlistener_search_case_law_start" }])).toEqual([
+      { type: "courtlistener_search_case_law", query: "", isStreaming: true },
+    ]);
+  });
+
+  it("keeps only numeric cluster ids and well formed cases when fetching cases", async () => {
+    expect(
+      await eventsOf([
+        { type: "courtlistener_get_cases_start", cluster_ids: [1, "x", 2] },
+        {
+          type: "courtlistener_get_cases",
+          cluster_ids: [1, 2],
+          case_count: 2,
+          opinion_count: 5,
+          cases: [
+            {
+              cluster_id: 5,
+              case_name: "A v. B",
+              citation: "1 U.S. 1",
+              dateFiled: "2020-01-01",
+              url: "https://cl/5",
+            },
+            { cluster_id: "5", case_name: 1, citation: 2, dateFiled: 3, url: 4 },
+            null,
+            ["not a case"],
+          ],
+          error: "partial",
+        },
+      ]),
+    ).toEqual([
+      {
+        type: "courtlistener_get_cases",
+        cluster_ids: [1, 2],
+        case_count: 2,
+        opinion_count: 5,
+        cases: [
+          {
+            cluster_id: 5,
+            case_name: "A v. B",
+            citation: "1 U.S. 1",
+            dateFiled: "2020-01-01",
+            url: "https://cl/5",
+          },
+        ],
+        error: "partial",
+        isStreaming: false,
+      },
+      thinking,
+    ]);
+  });
+
+  it("leaves the case list undefined when the server sends no cases", async () => {
+    expect(
+      await eventsOf([
+        { type: "courtlistener_get_cases_start" },
+        { type: "courtlistener_get_cases" },
+      ]),
+    ).toEqual([
+      {
+        type: "courtlistener_get_cases",
+        cluster_ids: [],
+        case_count: 0,
+        opinion_count: 0,
+        cases: undefined,
+        error: undefined,
+        isStreaming: false,
+      },
+      thinking,
+    ]);
+  });
+
+  it("resolves a single-case find by cluster id and query", async () => {
+    expect(
+      await eventsOf([
+        { type: "courtlistener_find_in_case_start", cluster_id: 7, query: "notice" },
+        {
+          type: "courtlistener_find_in_case",
+          cluster_id: 7,
+          query: "notice",
+          total_matches: 4,
+          case_name: "A v. B",
+          citation: "1 U.S. 1",
+        },
+      ]),
+    ).toEqual([
+      {
+        type: "courtlistener_find_in_case",
+        cluster_id: 7,
+        query: "notice",
+        total_matches: 4,
+        searches: undefined,
+        case_name: "A v. B",
+        citation: "1 U.S. 1",
+        error: undefined,
+        isStreaming: false,
+      },
+      thinking,
+    ]);
+  });
+
+  it("parses a batch of searches and ignores the per-call cluster id and query", async () => {
+    const searches = [
+      {
+        cluster_id: 1,
+        query: "q1",
+        total_matches: 2,
+        case_name: "A v. B",
+        citation: "1 U.S. 1",
+        error: "slow",
+      },
+      { cluster_id: "1", query: 1, total_matches: "2", case_name: 2, citation: 3, error: 4 },
+      null,
+      ["nope"],
+    ];
+    const parsed = [
+      {
+        cluster_id: 1,
+        query: "q1",
+        total_matches: 2,
+        case_name: "A v. B",
+        citation: "1 U.S. 1",
+        error: "slow",
+      },
+      {
+        cluster_id: null,
+        query: "",
+        total_matches: 0,
+        case_name: null,
+        citation: null,
+        error: undefined,
+      },
+    ];
+    expect(
+      await eventsOf([
+        { type: "courtlistener_find_in_case_start", cluster_id: 7, query: "x", searches },
+        { type: "courtlistener_find_in_case", cluster_id: 7, query: "x", searches },
+      ]),
+    ).toEqual([
+      {
+        type: "courtlistener_find_in_case",
+        cluster_id: null,
+        query: "",
+        total_matches: 0,
+        searches: parsed,
+        case_name: null,
+        citation: null,
+        error: undefined,
+        isStreaming: false,
+      },
+      thinking,
+    ]);
+  });
+
+  it("does not resolve a batched find against a single-case placeholder", async () => {
+    expect(
+      await eventsOf([
+        { type: "courtlistener_find_in_case_start" },
+        {
+          type: "courtlistener_find_in_case",
+          searches: [{ cluster_id: 1, query: "q1" }],
+        },
+      ]),
+    ).toEqual([
+      {
+        type: "courtlistener_find_in_case",
+        cluster_id: null,
+        query: "",
+        searches: undefined,
+        isStreaming: true,
+      },
+      thinking,
+    ]);
+  });
+
+  it("resolves a find with no cluster id and reports its error", async () => {
+    expect(
+      await eventsOf([
+        { type: "courtlistener_find_in_case_start", query: "" },
+        { type: "courtlistener_find_in_case", query: "", error: "no such case" },
+      ]),
+    ).toEqual([
+      {
+        type: "courtlistener_find_in_case",
+        cluster_id: null,
+        query: "",
+        total_matches: 0,
+        searches: undefined,
+        case_name: null,
+        citation: null,
+        error: "no such case",
+        isStreaming: false,
+      },
+      thinking,
+    ]);
+  });
+
+  // A resumed turn replays the server's stored events, which predate the
+  // fields the current wire format always sends.
+  it("resolves a stored search placeholder that carries no query", async () => {
+    expect(
+      await eventsOf(
+        [{ type: "courtlistener_search_case_law", result_count: 2 }],
+        [storedEvent({ type: "courtlistener_search_case_law", isStreaming: true })],
+      ),
+    ).toEqual([
+      {
+        type: "courtlistener_search_case_law",
+        query: "",
+        result_count: 2,
+        error: undefined,
+        isStreaming: false,
+      },
+      thinking,
+    ]);
+  });
+
+  it("resolves a stored find placeholder that carries no query", async () => {
+    expect(
+      await eventsOf(
+        [{ type: "courtlistener_find_in_case", total_matches: 1 }],
+        [
+          storedEvent({
+            type: "courtlistener_find_in_case",
+            cluster_id: null,
+            isStreaming: true,
+          }),
+        ],
+      ),
+    ).toEqual([
+      {
+        type: "courtlistener_find_in_case",
+        cluster_id: null,
+        query: "",
+        total_matches: 1,
+        searches: undefined,
+        case_name: null,
+        citation: null,
+        error: undefined,
+        isStreaming: false,
+      },
+      thinking,
+    ]);
+  });
+
+  it("resolves reading a case, with and without the case's details", async () => {
+    expect(
+      await eventsOf([
+        { type: "courtlistener_read_case_start", cluster_id: 9 },
+        {
+          type: "courtlistener_read_case",
+          cluster_id: 9,
+          case_name: "A v. B",
+          citation: "1 U.S. 1",
+          opinion_count: 3,
+          error: "truncated",
+        },
+        { type: "courtlistener_read_case_start" },
+        { type: "courtlistener_read_case" },
+      ]),
+    ).toEqual([
+      {
+        type: "courtlistener_read_case",
+        cluster_id: 9,
+        case_name: "A v. B",
+        citation: "1 U.S. 1",
+        opinion_count: 3,
+        error: "truncated",
+        isStreaming: false,
+      },
+      {
+        type: "courtlistener_read_case",
+        cluster_id: null,
+        case_name: null,
+        citation: null,
+        opinion_count: 0,
+        error: undefined,
+        isStreaming: false,
+      },
+      thinking,
+    ]);
+  });
+
+  it("resolves citation verification, with and without counts", async () => {
+    expect(
+      await eventsOf([
+        { type: "courtlistener_verify_citations_start", citation_count: 4 },
+        {
+          type: "courtlistener_verify_citations",
+          citation_count: 4,
+          match_count: 3,
+          error: "one unverified",
+        },
+      ]),
+    ).toEqual([
+      {
+        type: "courtlistener_verify_citations",
+        citation_count: 4,
+        match_count: 3,
+        error: "one unverified",
+        isStreaming: false,
+      },
+      thinking,
+    ]);
+    expect(
+      await eventsOf([
+        { type: "courtlistener_verify_citations_start" },
+        { type: "courtlistener_verify_citations" },
+      ]),
+    ).toEqual([
+      {
+        type: "courtlistener_verify_citations",
+        citation_count: 0,
+        match_count: 0,
+        error: undefined,
+        isStreaming: false,
+      },
+      thinking,
+    ]);
+  });
+});
+
+describe("document frames", () => {
+  it("fills in the version a read resolved to", async () => {
+    expect(
+      await eventsOf([
+        {
+          type: "doc_read_start",
+          filename: "brief.docx",
+          document_id: "doc-1",
+          version_id: "ver-1",
+          version_number: 1,
+        },
+        {
+          type: "doc_read",
+          filename: "brief.docx",
+          document_id: "doc-2",
+          version_id: "ver-2",
+          version_number: 2,
+        },
+      ]),
+    ).toEqual([
+      {
+        type: "doc_read",
+        filename: "brief.docx",
+        document_id: "doc-2",
+        version_id: "ver-2",
+        version_number: 2,
+        isStreaming: false,
+      },
+      thinking,
+    ]);
+  });
+
+  it("keeps the placeholder's version when the read reports none", async () => {
+    expect(
+      await eventsOf([
+        {
+          type: "doc_read_start",
+          filename: "brief.docx",
+          document_id: "doc-1",
+          version_id: "ver-1",
+          version_number: 1,
+        },
+        { type: "doc_read", filename: "brief.docx" },
+      ]),
+    ).toEqual([
+      {
+        type: "doc_read",
+        filename: "brief.docx",
+        document_id: "doc-1",
+        version_id: "ver-1",
+        version_number: 1,
+        isStreaming: false,
+      },
+      thinking,
+    ]);
+  });
+
+  it("only shows a placeholder when a read resolves no matching file", async () => {
+    expect(await eventsOf([{ type: "doc_read", filename: "other.docx" }])).toEqual([
+      thinking,
+    ]);
+  });
+
+  it("fills in the match count and version a find resolved to", async () => {
+    expect(
+      await eventsOf([
+        { type: "doc_find_start", filename: "brief.docx", query: "notice" },
+        {
+          type: "doc_find",
+          filename: "brief.docx",
+          query: "notice",
+          document_id: "doc-1",
+          version_id: "ver-1",
+          version_number: 1,
+          total_matches: 3,
+        },
+      ]),
+    ).toEqual([
+      {
+        type: "doc_find",
+        filename: "brief.docx",
+        query: "notice",
+        document_id: "doc-1",
+        version_id: "ver-1",
+        version_number: 1,
+        total_matches: 3,
+        isStreaming: false,
+      },
+      thinking,
+    ]);
+  });
+
+  it("keeps the placeholder's version and count when the find reports none", async () => {
+    expect(
+      await eventsOf([
+        {
+          type: "doc_find_start",
+          filename: "brief.docx",
+          query: "notice",
+          document_id: "doc-1",
+          version_id: "ver-1",
+          version_number: 1,
+        },
+        { type: "doc_find", filename: "brief.docx", query: "notice" },
+      ]),
+    ).toEqual([
+      {
+        type: "doc_find",
+        filename: "brief.docx",
+        query: "notice",
+        document_id: "doc-1",
+        version_id: "ver-1",
+        version_number: 1,
+        total_matches: 0,
+        isStreaming: false,
+      },
+      thinking,
+    ]);
+  });
+
+  it("starts a find placeholder with no version and no query", async () => {
+    expect(await eventsOf([{ type: "doc_find_start", filename: "brief.docx" }])).toEqual(
+      [
+        {
+          type: "doc_find",
+          filename: "brief.docx",
+          document_id: undefined,
+          version_id: null,
+          version_number: null,
+          query: "",
+          total_matches: 0,
+          isStreaming: true,
+        },
+      ],
+    );
+  });
+
+  it("attaches the download link and version to a created document", async () => {
+    expect(
+      await eventsOf([
+        { type: "doc_created_start", filename: "answer.docx" },
+        {
+          type: "doc_created",
+          filename: "answer.docx",
+          download_url: "https://dl/1",
+          document_id: "doc-1",
+          version_id: "ver-1",
+          version_number: 1,
+        },
+      ]),
+    ).toEqual([
+      {
+        type: "doc_created",
+        filename: "answer.docx",
+        download_url: "https://dl/1",
+        document_id: "doc-1",
+        version_id: "ver-1",
+        version_number: 1,
+        isStreaming: false,
+      },
+      thinking,
+    ]);
+  });
+
+  it("omits version details a created document did not report", async () => {
+    expect(
+      await eventsOf([
+        { type: "doc_created_start", filename: "answer.docx" },
+        { type: "doc_created", filename: "answer.docx", download_url: "https://dl/1" },
+      ]),
+    ).toEqual([
+      {
+        type: "doc_created",
+        filename: "answer.docx",
+        download_url: "https://dl/1",
+        isStreaming: false,
+      },
+      thinking,
+    ]);
+  });
+
+  it("appends a standalone download link", async () => {
+    expect(
+      await eventsOf([
+        { type: "doc_download", filename: "answer.docx", download_url: "https://dl/1" },
+      ]),
+    ).toEqual([
+      { type: "doc_download", filename: "answer.docx", download_url: "https://dl/1" },
+    ]);
+  });
+
+  const copies = [
+    { new_filename: "a.docx", document_id: "doc-1", version_id: "ver-1" },
+    { new_filename: "b.docx", document_id: "doc-2", version_id: "ver-2" },
+  ];
+  it.each<[string, Frame, Frame]>([
+    [
+      "the reported count",
+      { count: 3 },
+      { count: 3, copies: undefined, error: undefined },
+    ],
+    [
+      "the number of copies",
+      { copies },
+      { count: 2, copies, error: undefined },
+    ],
+    [
+      "one by default",
+      { error: "quota" },
+      { count: 1, copies: undefined, error: "quota" },
+    ],
+  ])("replicates a document using %s", async (_label, extra, expected) => {
+    expect(
+      await eventsOf([
+        { type: "doc_replicate_start", filename: "answer.docx" },
+        { type: "doc_replicated", filename: "answer.docx", ...extra },
+      ]),
+    ).toEqual([
+      {
+        type: "doc_replicated",
+        filename: "answer.docx",
+        isStreaming: false,
+        ...expected,
+      },
+      thinking,
+    ]);
+  });
+
+  it("starts a replication placeholder with the reported count", async () => {
+    expect(
+      await eventsOf([
+        { type: "doc_replicate_start", filename: "answer.docx", count: 4 },
+      ]),
+    ).toEqual([
+      { type: "doc_replicated", filename: "answer.docx", count: 4, isStreaming: true },
+    ]);
+  });
+
+  it("attaches the new version and annotations to an edited document", async () => {
+    const annotations = [{ kind: "replace", old_text: "a", new_text: "b" }];
+    expect(
+      await eventsOf([
+        { type: "doc_edited_start", filename: "brief.docx" },
+        {
+          type: "doc_edited",
+          filename: "brief.docx",
+          document_id: "doc-1",
+          version_id: "ver-2",
+          version_number: 2,
+          download_url: "https://dl/2",
+          annotations,
+          error: "one edit skipped",
+        },
+      ]),
+    ).toEqual([
+      {
+        type: "doc_edited",
+        filename: "brief.docx",
+        document_id: "doc-1",
+        version_id: "ver-2",
+        version_number: 2,
+        download_url: "https://dl/2",
+        annotations,
+        error: "one edit skipped",
+        isStreaming: false,
+      },
+      thinking,
+    ]);
+  });
+
+  it("empties out an edited document the server described with nothing", async () => {
+    expect(
+      await eventsOf([
+        { type: "doc_edited_start", filename: "brief.docx" },
+        { type: "doc_edited", filename: "brief.docx" },
+      ]),
+    ).toEqual([
+      {
+        type: "doc_edited",
+        filename: "brief.docx",
+        document_id: "",
+        version_id: "",
+        version_number: null,
+        download_url: "",
+        annotations: [],
+        error: undefined,
+        isStreaming: false,
+      },
+      thinking,
+    ]);
+  });
+});
+
+describe("ask_inputs frames", () => {
+  const calendarApproval: ConnectorApprovalItem = {
+    id: "approve-calendar",
+    kind: "approval",
+    connector_name: "Google Calendar",
+    tool_name: "google_calendar_update_event",
+    title: "Update event",
+    arguments: {
+      calendar_id: "primary",
+      event_id: "event-1",
+      start: { dateTime: "2026-10-01T15:00:00+08:00" },
+      end: { dateTime: "2026-10-01T16:00:00+08:00" },
+    },
+    before: { summary: "Client meeting", etag: "original-etag" },
+    account: "calendar@example.com",
+    binding: {
+      type: "google",
+      provider: "google-calendar",
+      grant_id: "grant-1",
+      etag: "original-etag",
+    },
+  };
+
+  it("keeps a live calendar approval when the turn pauses without an answer", async () => {
+    const event = { type: "ask_inputs", event_id: "ask-calendar", items: [calendarApproval] };
+    expect(await eventsOf([event])).toEqual([event]);
+  });
+
+  it.each([
+    { id: "" },
+    { arguments: null },
+    { arguments: [] },
+    { binding: null },
+    { binding: { type: "google", provider: "unknown", grant_id: "g1" } },
+    { binding: { type: "mcp", connector_id: "c1" } },
+    { binding: { type: "mcp", connector_id: "c1", tool_id: "t1", connection_fingerprint: "invalid" } },
+  ])("does not render an incomplete approval: %j", async (invalid) => {
+    const items = [{ ...calendarApproval, ...invalid }, calendarApproval];
+    expect(await eventsOf([{ type: "ask_inputs", event_id: "ask-calendar", items }])).toEqual([
+      { type: "ask_inputs", event_id: "ask-calendar", items: [calendarApproval] },
+    ]);
+  });
+
+  it("keeps live Google Drive approvals and their reviewed source", async () => {
+    const approval: ConnectorApprovalItem = {
+      id: "approve-drive", kind: "approval", connector_name: "Google Drive",
+      tool_name: "google_drive_update_file", title: "Rename file",
+      arguments: { file_id: "file-1", name: "Final" },
+      before: { file: { id: "file-1", name: "Draft", version: "1" } },
+      binding: { type: "google", provider: "google-drive", grant_id: "drive-grant" },
+    };
+    const event = { type: "ask_inputs", event_id: "ask-drive", items: [approval] };
+    expect(await eventsOf([event])).toEqual([event]);
+  });
+
+  it("keeps MCP approvals alongside questions in the same live prompt", async () => {
+    const approval: ConnectorApprovalItem = {
+      id: "approve-slack",
+      kind: "approval",
+      connector_name: "Slack",
+      tool_name: "mcp_slack_post",
+      title: "Post message",
+      arguments: { channel: "general", text: "Hello" },
+      binding: { type: "mcp", connector_id: "slack-1", tool_id: "post-1", connection_fingerprint: "a".repeat(64) },
+    };
+    const question = { id: "q1", kind: "text", question: "Anything else?" };
+    const events = await eventsOf([{ type: "ask_inputs", event_id: "ask-mixed", items: [question, approval] }]);
+    expect(events).toEqual([{ type: "ask_inputs", event_id: "ask-mixed", items: [question, approval] }]);
+  });
+
+  it("normalizes choice and multi-choice questions", async () => {
+    expect(
+      await eventsOf([
+        {
+          type: "ask_inputs",
+          event_id: "  ask-1  ",
+          items: [
+            {
+              id: "  jurisdiction  ",
+              kind: "choice",
+              question: "Which court?",
+              options: [
+                { value: "federal" },
+                { label: "state" },
+                { value: "   " },
+                {},
+                "not an option",
+                null,
+              ],
+              allow_other: false,
+              other_label: "Somewhere else",
+              response_prefix: "Court: ",
+            },
+            { id: "   ", kind: "multi_choice" },
+            { kind: "choice", options: "not a list" },
+          ],
+        },
+      ]),
+    ).toEqual([
+      {
+        type: "ask_inputs",
+        event_id: "ask-1",
+        items: [
+          {
+            id: "jurisdiction",
+            kind: "choice",
+            question: "Which court?",
+            options: [{ value: "federal" }, { value: "state" }],
+            allow_other: false,
+            other_label: "Somewhere else",
+            response_prefix: "Court: ",
+          },
+          {
+            id: "input-2",
+            kind: "multi_choice",
+            question: "Please choose one or more options.",
+            options: [],
+            allow_other: true,
+            other_label: "Other",
+            response_prefix: undefined,
+          },
+          {
+            id: "input-3",
+            kind: "choice",
+            question: "Please choose an option.",
+            options: [],
+            allow_other: true,
+            other_label: "Other",
+            response_prefix: undefined,
+          },
+        ],
+      },
+    ]);
+  });
+
+  it("normalizes text and document questions and drops the rest", async () => {
+    expect(
+      await eventsOf([
+        {
+          type: "ask_inputs",
+          event_id: "ask-2",
+          items: [
+            { id: "note", kind: "text", question: "Anything else?", response_prefix: "Note: " },
+            { kind: "text" },
+            {
+              kind: "documents",
+              document_types: ["  lease  ", "   ", 7, "deed"],
+              response_prefix: "Files: ",
+            },
+            { kind: "documents" },
+            { kind: "unsupported" },
+            null,
+            "not an item",
+          ],
+        },
+      ]),
+    ).toEqual([
+      {
+        type: "ask_inputs",
+        event_id: "ask-2",
+        items: [
+          {
+            id: "note",
+            kind: "text",
+            question: "Anything else?",
+            response_prefix: "Note: ",
+          },
+          {
+            id: "input-2",
+            kind: "text",
+            question: "Please provide the requested information.",
+            response_prefix: undefined,
+          },
+          {
+            id: "input-3",
+            kind: "documents",
+            document_types: ["lease", "deed"],
+            response_prefix: "Files: ",
+          },
+          {
+            id: "input-4",
+            kind: "documents",
+            document_types: [],
+            response_prefix: undefined,
+          },
+        ],
+      },
+    ]);
+  });
+
+  it.each([
+    ["the event has no id", { items: [{ kind: "text" }] }],
+    ["no item is usable", { event_id: "ask-3", items: [{ kind: "unsupported" }] }],
+    ["the items are not a list", { event_id: "ask-4", items: "text" }],
+  ])("asks nothing when %s", async (_label, extra) => {
+    expect(await eventsOf([{ type: "ask_inputs", ...extra }])).toEqual([]);
+  });
+});
+
+describe("citation frames", () => {
+  const citations = [{ id: "c1", document_id: "doc-1", quote: "a quote" }];
+
+  it.each([["started"], ["partial"]])(
+    "publishes %s citations without touching the streaming answer",
+    async (status) => {
+      const message = await run([
+        { type: "content_delta", text: "answer" },
+        { type: "citations", status, citations },
+      ]);
+      expect(message.citations).toEqual(citations);
+      expect(message.citationStatus).toBe(status);
+      expect(message.events).toEqual([
+        { type: "content", text: "answer", isStreaming: true },
+      ]);
+    },
+  );
+
+  it("finalizes the answer and scrubs placeholders on the last citation frame", async () => {
+    const message = await run([
+      { type: "content_delta", text: "answer" },
+      { type: "tool_call_start", name: "search" },
+      { type: "citations", status: "final", citations },
+    ]);
+    expect(message.citations).toEqual(citations);
+    expect(message.citationStatus).toBe("final");
+    expect(message.events).toEqual([{ type: "content", text: "answer" }]);
+  });
+
+  it("treats an unknown status as final and leaves no status when there are no citations", async () => {
+    const message = await run([{ type: "citations", status: "halfway" }]);
+    expect(message.citations).toEqual([]);
+    expect(message.citationStatus).toBeUndefined();
+  });
+});
+
+describe("handler failures", () => {
+  it("warns and keeps reading when applying a frame throws", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const turn = begin();
+    const sink = createTurnEventSink(turn, []);
+    vi.spyOn(turn, "update").mockImplementationOnce(() => {
+      throw new Error("boom");
+    });
+    await consumeAssistantTurnStream(
+      sseResponse([
+        frame(1, { type: "content_delta", text: "a" }),
+        frame(2, { type: "content_delta", text: "b" }),
+        "data: [DONE]\n\n",
+      ]),
+      { turn, sink, cursor: createTurnCursor("chat-a") },
+    );
+    expect(warn).toHaveBeenCalledWith(
+      "[useAssistantChat] failed to handle SSE event:",
+      { type: "content_delta", text: "a" },
+      expect.any(Error),
+    );
+    expect(turn.turn.assistant.events).toEqual([
+      { type: "content", text: "ab", isStreaming: true },
+    ]);
+    warn.mockRestore();
+    turn.finish();
+  });
+});
+
+describe("readAssistantTurn connection handling", () => {
+  /** A response whose body refuses to be cancelled. */
+  function unreadableResponse(status: number) {
+    const stream = new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(new TextEncoder().encode("id: 1\n"));
+      },
+      cancel() {
+        throw new Error("the connection was already gone");
+      },
+    });
+    return new Response(stream, { status });
+  }
+
+  it("still reports the status when a rejected response's body cannot be released", async () => {
+    const turn = begin();
+    const sink = createTurnEventSink(turn, []);
+    await expect(
+      readAssistantTurn({
+        open: async () => unreadableResponse(500),
+        turn,
+        sink,
+        cursor: createTurnCursor("chat-a"),
+      }),
+    ).rejects.toMatchObject({ message: "API error: 500", status: 500 });
+    turn.finish();
+  });
+
+  it("still surfaces the original failure when a rejected resume cannot be released", async () => {
+    vi.useFakeTimers();
+    const turn = begin();
+    const sink = createTurnEventSink(turn, []);
+    streamChatTurnMock.mockResolvedValueOnce(unreadableResponse(404));
+    const read = readAssistantTurn({
+      open: async () =>
+        sseResponse([frame(1, { type: "chat_id", chatId: "chat-a", turnId: "turn-1" })], {
+          fail: true,
+        }),
+      turn,
+      sink,
+      cursor: createTurnCursor("chat-a"),
+    });
+    const outcome = read.then(
+      () => "resolved",
+      (error: Error) => error.message,
+    );
+    await vi.advanceTimersByTimeAsync(1000);
+    expect(await outcome).toBe("network error");
+    turn.finish();
+  });
+
+  it("gives up on a reconnect when Stop lands during the backoff", async () => {
+    vi.useFakeTimers();
+    const turn = begin();
+    const sink = createTurnEventSink(turn, []);
+    const controller = new AbortController();
+    const read = readAssistantTurn({
+      open: async () =>
+        sseResponse([frame(1, { type: "chat_id", chatId: "chat-a", turnId: "turn-1" })], {
+          fail: true,
+        }),
+      turn,
+      sink,
+      cursor: createTurnCursor("chat-a"),
+      signal: controller.signal,
+    });
+    const outcome = read.then(
+      () => "resolved",
+      (error: Error) => error.message,
+    );
+    // Let the first connection drop and the retry backoff start.
+    await vi.advanceTimersByTimeAsync(0);
+    expect(streamChatTurnMock).not.toHaveBeenCalled();
+    controller.abort();
+    await vi.advanceTimersByTimeAsync(1000);
+    expect(await outcome).toBe("network error");
+    expect(streamChatTurnMock).not.toHaveBeenCalled();
+    turn.finish();
+  });
+});
+
+
+describe("scoped document search activity", () => {
+  const search = { search_id: "search-1", scope: "project", query: "change of control", offset: 0 };
+  it("replaces the generic placeholder, completes by call ID, and preserves paginated calls", async () => {
+    const coverage = { total_versions: 12, indexed_versions: 10, pending_versions: 1, failed_versions: 1, versions_needing_ocr: 2 };
+    const events = await eventsOf([
+      { type: "tool_call_start", name: "find_documents" },
+      { type: "doc_search_start", ...search },
+      { type: "doc_search", ...search, match_count: 10, next_offset: 10, coverage },
+      { type: "doc_search_start", ...search, search_id: "search-2", offset: 10 },
+      { type: "doc_search", ...search, search_id: "search-2", offset: 10, match_count: 1, next_offset: null, coverage },
+    ]);
+    expect(events!.filter(e => e.type === "doc_search")).toMatchObject([
+      { ...search, match_count: 10, next_offset: 10, coverage, isStreaming: false },
+      { ...search, search_id: "search-2", offset: 10, match_count: 1, next_offset: null, isStreaming: false },
+    ]);
+    expect(events!.some(e => e.type === "tool_call_start")).toBe(false);
+  });
+  it("retains a completion without a start on reconnect, including failure", async () => {
+    const failure = { error_code: "schema_out_of_date", error: "Document search is unavailable because the server's database needs an update. Please contact your administrator." };
+    const events = await eventsOf([{ type: "doc_search", ...search, ...failure }]);
+    expect(events![0]).toMatchObject({ type: "doc_search", ...search, isStreaming: false, ...failure });
+    expect(events![0]).not.toHaveProperty("match_count", 0);
+  });
+  it("completes a live search with the failure reason", async () => {
+    const failure = { error_code: "search_timeout", error: "Document search took too long. Try a more specific phrase or a smaller search scope." };
+    const events = await eventsOf([{ type: "doc_search_start", ...search }, { type: "doc_search", ...search, ...failure }]);
+    expect(events!.filter(e => e.type === "doc_search")).toEqual([
+      expect.objectContaining({ type: "doc_search", ...search, ...failure, isStreaming: false }),
+    ]);
+  });
+  it("updates a replayed start instead of duplicating it", async () => {
+    const events = await eventsOf([{ type: "doc_search_start", ...search }, { type: "doc_search_start", ...search }]);
+    expect(events!.filter(e => e.type === "doc_search")).toHaveLength(1);
+  });
+});
+
+it.each(["search_id", "scope", "query", "offset"])("ignores malformed search frames missing %s", async (key) => {
+  const event: Record<string, unknown> = { type: "doc_search", search_id: "id", scope: "project", query: "clause", offset: 0, match_count: 2 };
+  delete event[key];
+  expect(await eventsOf([event])).toEqual([]);
+});
+
+describe("web activity", () => {
+  const web = (events: AssistantEvent[] | undefined) =>
+    events!.filter((e) => e.type.startsWith("web_"));
+
+  it("keeps live activity and completes searches by ID without losing their query", async () => {
+    const starts = [
+      { type: "web_search_start", search_id: "ws-1", query: "late payment interest" },
+      { type: "web_search_start", search_id: "ws-2", query: "directors duties" },
+      { type: "web_read_start", read_id: "wr-1", url: "https://law.example/act", title: "Act" },
+    ];
+    const live = web(await eventsOf([...starts, starts[0], starts[2]]));
+    expect(live).toEqual([
+      { type: "web_search", search_id: "ws-1", query: "late payment interest", results: [], isStreaming: true },
+      { type: "web_search", search_id: "ws-2", query: "directors duties", results: [], isStreaming: true },
+      { type: "web_read", read_id: "wr-1", url: "https://law.example/act", title: "Act", isStreaming: true },
+    ]);
+
+    expect(web(await eventsOf([
+      { type: "web_search", search_id: "ws-2", error: "Search timed out." },
+    ], live))).toEqual([
+      live[0],
+      { type: "web_search", search_id: "ws-2", query: "directors duties", results: [], error: "Search timed out.", isStreaming: false },
+      live[2],
+    ]);
+  });
+
+  it("keeps completion frames received without starts after reconnecting", async () => {
+    expect(await eventsOf([
+      { type: "web_search", search_id: "ws-1", query: 42, results: [] },
+      { type: "web_read", read_id: "wr-1", url: "https://law.example/act", title: "Act" },
+    ])).toEqual([
+      { type: "web_search", search_id: "ws-1", query: "", results: [], isStreaming: false },
+      { type: "web_read", read_id: "wr-1", url: "https://law.example/act", title: "Act", isStreaming: false },
+      thinking,
+    ]);
+  });
+
+  it.each([
+    { type: "web_search_start" },
+    { type: "web_search", search_id: 1 },
+    { type: "web_read_start", url: "https://law.example/act" },
+    { type: "web_read", read_id: 1, url: "https://law.example/act" },
+    { type: "web_read_start", read_id: "wr-1" },
+    { type: "web_read", read_id: "wr-1", url: 1 },
+  ])("ignores malformed web activity: %j", async (event) => {
+    expect(await eventsOf([event])).toEqual([]);
+  });
+
+  it.each([undefined, "", 42])("ignores an unusable error or page title: %j", async (value) => {
+    expect(web(await eventsOf([
+      { type: "web_search", search_id: "ws-1", query: "law", error: value },
+      { type: "web_read", read_id: "wr-1", url: "https://law.example/act", title: value, error: value },
+    ]))).toEqual([
+      { type: "web_search", search_id: "ws-1", query: "law", results: [], isStreaming: false },
+      { type: "web_read", read_id: "wr-1", url: "https://law.example/act", isStreaming: false },
+    ]);
+  });
+
+  it("keeps valid cited sources and search results while discarding malformed entries", async () => {
+    const sources = [
+      null, {}, "not a source", { url: 42 }, { url: "" },
+      { url: "https://law.example/act", title: "Act" },
+      { url: "https://law.example/order" },
+      { url: "https://law.example/rules", title: "" },
+      { url: "https://law.example/case", title: 42 },
+    ];
+    const valid = [
+      { url: "https://law.example/act", title: "Act" },
+      { url: "https://law.example/order" },
+      { url: "https://law.example/rules" },
+      { url: "https://law.example/case" },
+    ];
+    expect(web(await eventsOf([
+      { type: "web_search", search_id: "ws-1", query: "law", results: sources },
+      { type: "web_sources", sources },
+    ]))).toEqual([
+      { type: "web_search", search_id: "ws-1", query: "law", results: valid, isStreaming: false },
+      { type: "web_sources", sources: valid },
+    ]);
+  });
+
+  it.each([undefined, null, {}, [], [null, { url: "" }]])("omits empty or malformed source lists: %j", async (sources) => {
+    expect(await eventsOf([{ type: "web_sources", sources }])).toEqual([]);
+  });
+
+  it("completes a search and a read from their start frames", async () => {
+    const events = await eventsOf([
+      { type: "web_search_start", search_id: "ws-1", query: "late payment interest" },
+      {
+        type: "web_search",
+        search_id: "ws-1",
+        query: "late payment interest",
+        results: [{ url: "https://www.legislation.gov.uk/ukpga/1998/20", title: "Late Payment Act" }],
+      },
+      { type: "web_read_start", read_id: "wr-1", url: "https://b.example/page" },
+      {
+        type: "web_read", read_id: "wr-1", url: "https://b.example/moved",
+        error: "This page could not be read.", error_code: "unreadable",
+      },
+    ]);
+    expect(web(events)).toEqual([
+      {
+        type: "web_search",
+        search_id: "ws-1",
+        query: "late payment interest",
+        results: [{ url: "https://www.legislation.gov.uk/ukpga/1998/20", title: "Late Payment Act" }],
+        isStreaming: false,
+      },
+      {
+        type: "web_read", read_id: "wr-1", url: "https://b.example/moved",
+        error: "This page could not be read.", isStreaming: false,
+      },
+    ]);
+  });
+});
+
+describe("delegation", () => {
+  const start = (id: string) => ({
+    type: "delegation_start", delegation_id: id, title: `Review ${id}`, task: "Summarise the lease.",
+  });
+  const running = (id: string) => ({
+    type: "delegation", delegation_id: id, title: `Review ${id}`, task: "Summarise the lease.",
+    events: [], isStreaming: true,
+  });
+  const finished = (id: string) => ({
+    type: "delegation", delegation_id: id, title: `Review ${id}`, task: "Summarise the lease.",
+    status: "completed", brief: "Rent is due monthly.", events: [{ type: "doc_read", filename: "lease.pdf" }],
+    model: "claude-haiku-4-5", effort: "standard",
+  });
+
+  it("retains the source run when a continued task omits its display labels", async () => {
+    expect(await eventsOf([
+      { type: "delegation_start", delegation_id: "d2", continued_from: "d1", title: null, task: 42 },
+    ])).toEqual([
+      { type: "delegation", delegation_id: "d2", continued_from: "d1", title: "", task: "", events: [], isStreaming: true },
+    ]);
+  });
+
+  it.each([
+    { type: "delegation_start" },
+    { type: "delegation_start", delegation_id: 42 },
+    { type: "delegation" },
+    { type: "delegation", delegation_id: 42 },
+  ])("ignores a delegation without a usable ID: %j", async (event) => {
+    expect(await eventsOf([event])).toEqual([]);
+  });
+
+  it("ignores orphan activity and clears missing activity only on the matching task", async () => {
+    expect(await eventsOf([
+      { type: "delegation_activity", delegation_id: "missing", name: "read_document" },
+      start("d1"),
+      start("d2"),
+      { type: "delegation_activity", delegation_id: "d1", name: "web_search" },
+      { type: "delegation_activity", delegation_id: "d2", name: "read_document" },
+      { type: "delegation_activity", delegation_id: "d1" },
+    ])).toEqual([
+      { ...running("d1"), activity: "" },
+      { ...running("d2"), activity: "read_document" },
+    ]);
+  });
+
+  it("retains a completed delegation received without its start after reconnecting", async () => {
+    expect(await eventsOf([
+      { type: "content_delta", text: "Earlier findings." },
+      finished("d1"),
+    ])).toEqual([
+      { type: "content", text: "Earlier findings." },
+      finished("d1"),
+      thinking,
+    ]);
+  });
+
+  it("shows the running step, then the persisted result", async () => {
+    expect(await eventsOf([
+      { type: "tool_call_start", name: "delegate" },
+      start("d1"),
+      { type: "delegation_activity", delegation_id: "d1", name: "web_search" },
+    ])).toEqual([{ ...running("d1"), activity: "web_search" }]);
+
+    expect(await eventsOf([start("d1"), finished("d1")])).toEqual([finished("d1"), thinking]);
+  });
+
+  it("keeps parallel delegations apart and waits for the last before thinking", async () => {
+    expect(await eventsOf([start("d1"), start("d2"), finished("d1")]))
+      .toEqual([finished("d1"), running("d2")]);
+    expect(await eventsOf([start("d1"), start("d2"), finished("d1"), finished("d2")]))
+      .toEqual([finished("d1"), finished("d2"), thinking]);
+  });
+
+  it("stops a running delegation on Stop", async () => {
+    expect(await eventsOf([start("d1"), { type: "cancelled" }])).toEqual([
+      { ...running("d1"), isStreaming: undefined },
+      { type: "content", text: "Cancelled by user." },
+    ]);
+  });
+});

@@ -14,13 +14,13 @@
 //   documents.download.ts  — display bytes, zip bundling, signed URLs, raw file
 //   documents.versions.ts  — version lifecycle (list/create/rename/delete)
 //   documents.edits.ts     — tracked-change ids + accept/reject edits
+//   documents.trackedEdits.ts — apply tracked-change edits as a new version
 //
 // Upload sessions own transport and destination authorization; version metadata
 // creation, activation, replacement, copying, and cleanup use this facade.
 
 export {
     getDocument,
-    listSingleDocuments,
     deleteDocument,
 } from "./documents.access";
 
@@ -31,7 +31,6 @@ export {
     getDownloadUrl,
     getFileStreamSource,
 } from "./documents.download";
-export type { ZipExportEntry } from "./documents.download";
 
 export {
     listVersions,
@@ -41,9 +40,13 @@ export {
 } from "./documents.versions";
 
 export {
-    getTrackedChangeIds,
     resolveEdit,
 } from "./documents.edits";
+
+export {
+    applyTrackedEditsToDocument,
+    loadCurrentVersionBytes,
+} from "./documents.trackedEdits";
 
 export { renameDocument } from "./documents.rename";
 export { deleteCollectionDocuments } from "./documents.cleanup";
@@ -52,10 +55,13 @@ export { handleDocumentPrecomputeText } from "./documents.textJobs";
 export { handleConversionConvert, markConversionFailed } from "./documents.conversionJobs";
 export { sweepStaleProcessingDocuments } from "./documents.maintenance";
 
-export { createDocumentVersion, type NewDocumentVersion, type DocumentVersionRecord } from "./documents.lifecycle";
+export { createDocumentVersion } from "./documents.lifecycle";
 export { handleDocumentCleanup } from "./documents.cleanupJobs";
 export { copyDocumentVersionFiles } from "./documents.copyFiles";
 export { captureInlineDocumentCleanup, completeInlineDocumentCleanup } from "./documents.cleanupJobs";
-export { createDocumentVersions, activateDocumentVersion, updateDocumentVersion, type DocumentVersionPatch } from "./documents.lifecycle";
+export { createDocumentVersions, activateDocumentVersion, updateDocumentVersion } from "./documents.lifecycle";
 
 export { runConversionJob, setDocumentTerminalStatus } from "./documents.conversion";
+
+export { handleDocumentExtractText, markDocumentTextFailed, backfillDocumentText } from "./documents.indexing";
+export { findDocumentText, readStoredDocumentText } from "./documents.textSearch";

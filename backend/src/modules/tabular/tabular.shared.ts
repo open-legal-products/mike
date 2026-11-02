@@ -21,6 +21,7 @@ import { resolveRequestedModel } from "../../lib/routerModels";
 import {
     CLAUDE_CODE_DISABLED_DETAIL,
     TABULAR_MODEL_REQUIRED_DETAIL,
+    hasApiKeyForModel,
 } from "../../lib/modelSelection";
 import { UserFacingError } from "../../lib/userFacingError";
 import type { Db } from "../../lib/supabase";
@@ -111,9 +112,16 @@ export function isReviewGenerationRunning(
 function providerLabel(provider: Provider): string {
     if (provider === "claude") return "Anthropic";
     if (provider === "openai") return "OpenAI";
+    if (provider === "mistral") return "Mistral AI";
     if (provider === "openrouter") return "OpenRouter";
     if (provider === "vercel") return "Vercel AI Gateway";
     if (provider === "opencode-go") return "OpenCode Go";
+    if (provider === "bedrock") return "Amazon Bedrock";
+    if (provider === "azure") return "Azure OpenAI";
+    if (provider === "azure-foundry") return "Azure AI Foundry";
+    if (provider === "vertex") return "Google Vertex AI";
+    if (provider === "xai") return "xAI";
+    if (provider === "custom") return "OpenAI-compatible endpoint";
     if (provider === "ollama") return "Local (Ollama)";
     if (provider === "claude-code") return "Claude Code";
     if (provider === "openai-compatible") return "Configured endpoint";
@@ -146,7 +154,16 @@ export function missingModelApiKey(
             detail: `An API key is required to use ${configured.label || model}. Add the configured key or select a different tabular review model.`,
         };
     }
-    if (apiKeys[provider]?.trim()) return null;
+    // The same check chat uses: a key that needs a region, endpoint,
+    // location or base URL only counts together with it.
+    if (hasApiKeyForModel(model, apiKeys)) return null;
+    if (apiKeys.disabledProviders?.includes(provider)) {
+        return {
+            provider,
+            model,
+            detail: `${providerLabel(provider)} is turned off. Turn it on in Settings → Bring Your Own Keys or select a different tabular review model.`,
+        };
+    }
     return {
         provider,
         model,
@@ -179,6 +196,8 @@ export async function validateSelectedModel(
     model: unknown,
     userId: string,
     db: Db,
+    /** The review's organization, whose keys it then runs on. */
+    orgId?: string | null,
 ): Promise<ValidatedModel | ModelValidationFailure> {
     const requested = resolveModel(
         typeof model === "string" ? model.trim() : "",
@@ -209,6 +228,7 @@ export async function validateSelectedModel(
             userId,
             db,
             "throw",
+            orgId,
         );
     } catch (error) {
         if (error instanceof UserFacingError) {
@@ -221,7 +241,9 @@ export async function validateSelectedModel(
         throw error;
     }
 
-    const { api_keys: apiKeys } = await getUserModelSettings(userId, db);
+    const { api_keys: apiKeys } = await getUserModelSettings(userId, db, {
+        orgId,
+    });
 
     if (providerForModel(selected) === "claude-code" && !isClaudeCodeEnabled()) {
         return {

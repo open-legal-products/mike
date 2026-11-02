@@ -311,7 +311,7 @@ export function WorkflowPromptEditor({
   };
 
   return (
-    <div className="flex h-full min-h-[240px] flex-col overflow-hidden rounded-xl border border-white/70 bg-white/55 shadow-[inset_0_1px_0_rgba(255,255,255,0.9),0_8px_24px_rgba(15,23,42,0.06)] backdrop-blur-xl">
+    <div className="flex h-full min-h-[240px] flex-col overflow-hidden rounded-xl border border-white/70 bg-white/55 shadow-[inset_0_1px_0_rgba(255,255,255,0.9),0_8px_24px_rgba(15,23,42,0.06)]">
       <div className="flex min-h-10 shrink-0 items-center gap-0.5 border-b border-white/70 bg-white/45 px-2 py-1.5">
         {readOnly ? (
           <span className="mr-auto px-2 text-xs font-medium text-gray-500">

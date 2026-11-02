@@ -36,6 +36,7 @@ vi.mock("../../../lib/dbq/enqueue", () => ({
   enqueueStorageCleanup: (...args: unknown[]) => enqueueStorageCleanup(...args),
 }));
 
+import { AppError } from "../../../lib/appError";
 import type { Db } from "../../../lib/supabase";
 import {
   getWorkflowAddon,
@@ -176,6 +177,45 @@ describe("listWorkflowAddons", () => {
     expect(
       filtersOf(rejected.calls, "mike_workflows").some(([, column]) => column === "type"),
     ).toBe(false);
+  });
+
+  it("looks up assets in batches so the query string stays bounded", async () => {
+    const addons = Array.from({ length: 120 }, (_, i) => ({
+      id: `a${i}`,
+      workflow_key: `k${i}`,
+      type: "assistant",
+    }));
+    const { db, calls } = makeDb({
+      mike_workflows: [{ data: addons, error: null }],
+      mike_workflow_assets: [
+        {
+          data: [
+            { id: "x0", mike_workflow_id: "a0", filename: "a.docx", file_type: "docx", size_bytes: 1, created_at: "t" },
+          ],
+          error: null,
+        },
+        { data: [], error: null },
+        {
+          data: [
+            { id: "x119", mike_workflow_id: "a119", filename: "b.docx", file_type: "docx", size_bytes: 1, created_at: "t" },
+          ],
+          error: null,
+        },
+      ],
+    });
+
+    const result = await listWorkflowAddons(db, { type: null });
+
+    const batches = calls
+      .filter((c) => c.table === "mike_workflow_assets")
+      .map((c) => c.filters.find(([op]) => op === "in")?.[2] as string[]);
+    expect(batches.map((b) => b.length)).toEqual([50, 50, 20]);
+    expect(batches.flat()).toEqual(addons.map((a) => a.id));
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.data[0].assets).toEqual([expect.objectContaining({ id: "x0" })]);
+    expect(result.data[119].assets).toEqual([expect.objectContaining({ id: "x119" })]);
+    expect(result.data[60].assets).toEqual([]);
   });
 
   it("skips the asset query when no assistant add-ons matched", async () => {
@@ -497,11 +537,18 @@ describe("importWorkflowAddon", () => {
 
     const result = await importWorkflowAddon(db, { addonId: "a1", userId: "u1" });
 
-    expect(result).toEqual({
+    expect(result).toMatchObject({
       ok: false,
       kind: "assets_copy_failed",
       detail: "Failed to copy add-on assets",
     });
+    // The failure that caused the rollback travels with the result under its
+    // kind, with the database's error as the cause, so the route can report
+    // it; the detail string alone said nothing.
+    const failure = (result as { error?: unknown }).error;
+    expect(failure).toBeInstanceOf(AppError);
+    expect((failure as AppError).kind).toBe("workflows.addon_failed");
+    expect((failure as AppError).cause).toEqual({ message: "insert failed" });
     // Row first, then the durable object deletes — nothing may point at the
     // half-made copies while the cleanup job drains.
     const rollback = calls.find((c) => c.table === "workflows" && c.op === "delete");

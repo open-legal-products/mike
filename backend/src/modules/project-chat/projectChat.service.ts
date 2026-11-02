@@ -10,18 +10,28 @@
 
 import type { Db } from "../../lib/supabase";
 import {
+    webSearchPlanFor,
+    type WebSearchPlan,
+} from "../../lib/webSearch";
+import { resolveRequestTimeZone } from "../../lib/userTime";
+import type { McpToolEvent } from "@mike/contracts";
+import {
     buildProjectDocContext,
     buildMessages,
     buildUserPersonalisationPrompt,
     buildWorkflowStore,
+    attachPriorReasoning,
     enrichWithPriorEvents,
+    loadUserMessageSentTimes,
     appendAskInputsResponseToAssistantMessage,
+    runApprovedConnectorActions,
     generateSpotlightNonce,
     spotlightFilename,
     type AskInputsResponseRequest,
     type AssistantEvent,
     type ChatDocumentReference,
     type ChatMessage,
+    type SubagentDefaults,
 } from "../chat/chat.service";
 import { getUserModelSettings, resolveUserChatSelection } from "../user/user.service";
 import {
@@ -31,10 +41,16 @@ import {
     resolveContentOrgId,
 } from "../../lib/access";
 import { hasDirectContentGrants } from "../../lib/contentAccess";
+import {
+    DOCUMENT_WORKSPACE_MISMATCH_CODE,
+    DOCUMENT_WORKSPACE_MISMATCH_DETAIL,
+    findNewAttachmentsOutsideWorkspace,
+} from "../../lib/documentWorkspace";
 import { can, type ProjectRole } from "../../lib/permissions";
 import {
     resolveEffectiveReasoningLevel,
 } from "../../lib/modelSelection";
+import { replaysReasoning } from "../../lib/llm/registry";
 import {
     beginMemoryConversationTurn,
     releaseMemoryConversationTurn,
@@ -102,6 +118,9 @@ export type PreparedProjectChatStream = {
     // An ask_inputs continuation that could not be appended is not durable,
     // and must not trigger memory consolidation.
     completedTurnPersisted: boolean;
+    // Connector actions the user approved in this continuation, already run
+    // and appended; the route streams them before the model continues.
+    approvalEvents: McpToolEvent[];
     // Whether the document-WRITING tools are offered this turn. This is a
     // question about the caller's standing on the PROJECT, never about their
     // standing in the thread — see the long note in prepareProjectChatStream.
@@ -113,8 +132,12 @@ export type PreparedProjectChatStream = {
     apiMessages: ReturnType<typeof buildMessages>;
     workflowStore: Awaited<ReturnType<typeof buildWorkflowStore>>;
     legalResearchUs: boolean;
+    webSearch: WebSearchPlan | null;
     apiKeys: Awaited<ReturnType<typeof getUserModelSettings>>["api_keys"];
+    /** The organization the chat belongs to, whose keys and model lists apply. */
+    orgId: string | null;
     titleModel: Awaited<ReturnType<typeof getUserModelSettings>>["title_model"];
+    subagentDefaults: SubagentDefaults;
     selectedModel: string;
     selectedReasoningLevel: ReturnType<
         typeof resolveEffectiveReasoningLevel
@@ -122,6 +145,7 @@ export type PreparedProjectChatStream = {
     nonce: ReturnType<typeof generateSpotlightNonce>;
 };
 
+/** Authorize a project chat turn and assemble its caller-scoped document context. */
 export async function prepareProjectChatStream(
     db: Db,
     args: {
@@ -144,6 +168,8 @@ export async function prepareProjectChatStream(
         requestedReasoning:
             | ReturnType<typeof resolveEffectiveReasoningLevel>
             | undefined;
+        /** The browser's IANA time zone; unvalidated request input. */
+        requestedTimeZone?: unknown;
     },
 ): Promise<
     | { ok: true; prepared: PreparedProjectChatStream }
@@ -276,12 +302,33 @@ export async function prepareProjectChatStream(
             detail: "You do not have permission to write in this project.",
         };
 
+    // A project chat draws on its project, and on attachments from the
+    // project's own workspace. Checked before anything is written.
+    try {
+        const outside = await findNewAttachmentsOutsideWorkspace(db, {
+            messages,
+            chatId,
+            orgId: projectAccess.project.org_id ?? null,
+        });
+        if (outside.length > 0)
+            return {
+                ok: false,
+                status: 400,
+                code: DOCUMENT_WORKSPACE_MISMATCH_CODE,
+                detail: DOCUMENT_WORKSPACE_MISMATCH_DETAIL,
+            };
+    } catch (error) {
+        return { ok: false, internal: true, error };
+    }
+
     const selection = await resolveUserChatSelection(db, {
         userId,
         chatModel,
         chatReasoningLevel,
         requestedModel: args.requestedModel,
         requestedReasoning: args.requestedReasoning,
+        // The project's organization pays for its chats.
+        orgId: projectAccess.project.org_id ?? null,
     });
     if (!selection.ok) return selection;
     const { modelSettings, selectedModel, selectedReasoningLevel } = selection;
@@ -332,6 +379,7 @@ export async function prepareProjectChatStream(
     const lastUser = [...messages].reverse().find((m) => m.role === "user");
     let completedTurnPersisted = true;
     let memoryTurn: MemoryConversationTurn | null = null;
+    let approvalEvents: McpToolEvent[] = [];
     if (args.askInputsResponse) {
         const appendResult = await appendAskInputsResponseToAssistantMessage(
             db,
@@ -367,6 +415,16 @@ export async function prepareProjectChatStream(
         if (!completedTurnPersisted) {
             return { ok: false, status: 500, detail: "Failed to save message" };
         }
+        // The append above is the single-use claim; only now may an approved
+        // connector action run.
+        approvalEvents = await runApprovedConnectorActions({
+            db,
+            chatId,
+            messageId: args.askInputsResponse.assistant_message_id,
+            askEventId: args.askInputsResponse.ask_event_id,
+            userId,
+            orgId: projectAccess.project.org_id ?? null,
+        });
     } else if (lastUser) {
         const { error: userMessageError } = await db
             .from("chat_messages")
@@ -405,6 +463,7 @@ export async function prepareProjectChatStream(
             userId,
             db,
             messages,
+            userEmail,
         );
         const docAvailability = Object.entries(docIndex).map(([doc_id, info]) => ({
             doc_id,
@@ -434,12 +493,18 @@ export async function prepareProjectChatStream(
             };
         };
 
+        const historyMessages = replaysReasoning(selectedModel)
+            ? await attachPriorReasoning(messages, chatId, db)
+            : messages;
+        const timeZone = resolveRequestTimeZone(args.requestedTimeZone);
         const enrichedMessages = await enrichWithPriorEvents(
-            messages,
+            historyMessages,
             chatId,
             db,
             docIndex,
             nonce,
+            "chat_messages",
+            timeZone,
         );
         const messagesForLLM: ChatMessage[] = displayed_doc
             ? enrichedMessages.map((m, i) => {
@@ -485,6 +550,13 @@ export async function prepareProjectChatStream(
         if (personalisationPrompt) {
             systemPromptExtra += `\n\n${personalisationPrompt}`;
         }
+        const userSentAt = await loadUserMessageSentTimes(
+            db,
+            "chat_messages",
+            chatId,
+            messagesForLLM,
+            !!args.askInputsResponse,
+        );
         const apiMessages = buildMessages(
             messagesForLLM,
             docAvailability,
@@ -492,9 +564,11 @@ export async function prepareProjectChatStream(
             undefined,
             legalResearchUs,
             nonce,
+            "append",
+            { timeZone, now: new Date(), userSentAt },
         );
 
-        const workflowStore = await buildWorkflowStore(userId, userEmail, db);
+        const workflowStore = await buildWorkflowStore(userId, userEmail, db, projectAccess.project.org_id ?? null);
 
         return {
             ok: true,
@@ -503,6 +577,7 @@ export async function prepareProjectChatStream(
                 chatTitle,
                 lastUser,
                 completedTurnPersisted,
+                approvalEvents,
                 allowDocumentMutation,
                 memorySharedAudience,
                 memoryTurn,
@@ -511,8 +586,18 @@ export async function prepareProjectChatStream(
                 apiMessages,
                 workflowStore,
                 legalResearchUs,
+                webSearch: webSearchPlanFor(
+                    modelSettings.web_search,
+                    selectedModel,
+                    apiKeys,
+                ),
                 apiKeys,
+                orgId: projectAccess.project.org_id ?? null,
                 titleModel,
+                subagentDefaults: {
+                    model: modelSettings.subagent_model,
+                    reasoning: modelSettings.subagent_reasoning,
+                },
                 selectedModel,
                 selectedReasoningLevel,
                 nonce,

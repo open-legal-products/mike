@@ -11,9 +11,10 @@ import {
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { Pencil, Trash2 } from "lucide-react";
-import { MikeIcon } from "@/app/components/chat/mike-icon";
 import {
     streamTabularChat,
+    streamTabularChatTurn,
+    stopTabularChatTurn,
     getTabularChats,
     getTabularChatMessages,
     deleteTabularChat,
@@ -30,22 +31,33 @@ import {
 } from "../shared/types";
 import { ChatInput } from "../assistant/ChatInput";
 import { PreResponseWrapper } from "../assistant/PreResponseWrapper";
+import { ResponseStatus } from "../assistant/message/ResponseStatus";
 import {
     DocReadBlock,
     EventBlock,
     ReasoningBlock,
 } from "../assistant/message/EventBlocks";
 import { readSseFrames } from "@/app/lib/sse";
+import { chatRequestError } from "@/app/lib/assistantTurnStream";
+import { restoreOptimisticallyDeletedRows } from "@/app/lib/optimisticRows";
+import { notifyError, notifyInfo } from "@/app/lib/userFacingError";
 import {
-    LIQUID_GLASS_FLAT_CLASS,
-    LIQUID_GLASS_HOVER_CLASS,
-} from "@/app/components/ui/liquid-surface";
+    CHAT_CHANGED_MESSAGE,
+    TURN_INTERRUPTED_MESSAGE,
+    TURN_MAY_BE_RUNNING_MESSAGE,
+    checkHistoryLabel,
+    errorFrameFailure,
+    isUncertainDelivery,
+    uncertainDeliveryError,
+} from "@/app/lib/chatTurnFailure";
+import { LIQUID_GLASS_FLAT_CLASS } from "@/app/components/ui/liquid-surface";
 import { ChatPanelHeader } from "../shared/ChatPanelHeader";
 import { HeaderActionsMenu } from "../shared/HeaderActionsMenu";
 import { cn } from "@/app/lib/utils";
 import { buildTabularChatHistory } from "@/app/lib/tabularChatHistory";
 import { CitationPillUI } from "@/shared/ui/CitationPillUI";
 import { subscribeToTabularChatSettingsUpdates } from "@/app/lib/tabularChatSettingsEvents";
+import { sortChatsByActivity, touchChatActivity } from "@/app/lib/chatActivity";
 import { WarningPopup } from "../popups/WarningPopup";
 import { ApiKeyMissingPopup } from "../popups/ApiKeyMissingPopup";
 import {
@@ -64,6 +76,12 @@ interface TRMessage {
     events?: AssistantEvent[];
     annotations?: TRCitationAnnotation[];
     isStreaming?: boolean;
+    /**
+     * This turn ended in a failure. Already-streamed text is kept, but the
+     * bubble has to say the answer is unfinished — a half-written answer with
+     * nothing after it reads as a complete one.
+     */
+    error?: string;
 }
 
 function parseCourtlistenerEventCases(value: unknown) {
@@ -158,43 +176,6 @@ function preprocessTRCitations(
         });
         return tokens.length > 0 ? tokens.join("") : full;
     });
-}
-
-// ---------------------------------------------------------------------------
-// ResponseStatus
-// ---------------------------------------------------------------------------
-
-function TRResponseStatus({ isActive }: { isActive: boolean }) {
-    const [showDone, setShowDone] = useState(false);
-    const [doneVisible, setDoneVisible] = useState(false);
-    const wasActiveRef = useRef(false);
-
-    useEffect(() => {
-        if (wasActiveRef.current && !isActive) {
-            // eslint-disable-next-line react-hooks/set-state-in-effect -- timed 'Done' flash on the active->idle transition
-            setShowDone(true);
-            setDoneVisible(true);
-            const t = setTimeout(() => setDoneVisible(false), 1500);
-            wasActiveRef.current = isActive;
-            return () => clearTimeout(t);
-        }
-        if (!wasActiveRef.current && isActive) {
-            setShowDone(false);
-            setDoneVisible(false);
-        }
-        wasActiveRef.current = isActive;
-    }, [isActive]);
-
-    return (
-        <div className="w-full h-9 flex items-center mb-2">
-            <MikeIcon
-                spin={isActive}
-                done={showDone && doneVisible}
-                mike={!(showDone && doneVisible)}
-                size={22}
-            />
-        </div>
-    );
 }
 
 // ---------------------------------------------------------------------------
@@ -366,7 +347,11 @@ function TRAssistantMessage({
 
     return (
         <div className="text-gray-900 font-serif">
-            <TRResponseStatus isActive={!!msg.isStreaming} />
+            <ResponseStatus
+                status={
+                    msg.error ? "error" : msg.isStreaming ? "active" : null
+                }
+            />
             {groups.length > 0 && (
                 <div className="flex flex-col gap-2.5">
                     {groups.map((g, gIdx) => {
@@ -406,6 +391,11 @@ function TRAssistantMessage({
                     })}
                 </div>
             )}
+            {msg.error ? (
+                <p className="mt-2 text-sm leading-6 text-red-700">
+                    {msg.error}
+                </p>
+            ) : null}
         </div>
     );
 }
@@ -465,6 +455,14 @@ export function TRChatPanel({
     const [currentChatId, setCurrentChatId] = useState<string | null>(
         initialChatId ?? null,
     );
+    const currentChatIdRef = useRef(currentChatId);
+    const historyRequestGeneration = useRef(0);
+    useLayoutEffect(() => {
+        currentChatIdRef.current = currentChatId;
+    }, [currentChatId]);
+    const [chatResponseStatuses, setChatResponseStatuses] = useState<
+        Record<string, "loading" | "complete">
+    >({});
     const [currentChatTitle, setCurrentChatTitle] = useState<string | null>(
         null,
     );
@@ -563,29 +561,57 @@ export function TRChatPanel({
     const dripTargetRef = useRef<string>("");
     const dripDisplayLenRef = useRef<number>(0);
     const eventsRef = useRef<AssistantEvent[]>([]);
+    // Where the panel is in the turn the server owns: which thread and run it
+    // is reading, the sequence number of the last frame it applied, and
+    // whether the server reported an error. A reconnect resumes from
+    // `lastSeq + 1`; Stop needs `turnId`; the history list's status needs
+    // `hadError`.
+    type TurnCursor = {
+        chatId: string | null;
+        turnId: string | null;
+        lastSeq: number;
+        hadError: boolean;
+    };
+    const turnCursorRef = useRef<TurnCursor>({
+        chatId: null,
+        turnId: null,
+        lastSeq: 0,
+        hadError: false,
+    });
     const DRIP_CHARS = 8;
 
     // Load existing chats from DB on mount
     useEffect(() => {
-        getTabularChats(reviewId)
-            .then((loadedChats) => {
-                setChats(loadedChats);
-                if (!initialChatId) return;
-                const initialChat = loadedChats.find(
-                    (chat) => chat.id === initialChatId,
-                );
-                setCurrentChatModel(initialChat?.model ?? null);
-                setCurrentChatReasoningLevel(
-                    initialChat?.reasoning_level ?? null,
-                );
-            })
-            .catch(() => {
-                if (initialChatId) {
-                    setCurrentChatModel(null);
-                    setCurrentChatReasoningLevel(null);
-                }
-            })
-            .finally(() => setIsLoadingChats(false));
+        const loadChats = () => {
+            setIsLoadingChats(true);
+            getTabularChats(reviewId)
+                .then((loadedChats) => {
+                    setChats(sortChatsByActivity(loadedChats));
+                    if (!initialChatId) return;
+                    const initialChat = loadedChats.find(
+                        (chat) => chat.id === initialChatId,
+                    );
+                    setCurrentChatModel(initialChat?.model ?? null);
+                    setCurrentChatReasoningLevel(
+                        initialChat?.reasoning_level ?? null,
+                    );
+                })
+                .catch((error) => {
+                    if (initialChatId) {
+                        setCurrentChatModel(null);
+                        setCurrentChatReasoningLevel(null);
+                    }
+                    // Without this the chat menu just stays empty and the
+                    // model/reasoning pickers silently fall back to defaults.
+                    notifyError(error, {
+                        action: "load your chat history",
+                        dedupeKey: `tr-chats:${reviewId}`,
+                        onRetry: loadChats,
+                    });
+                })
+                .finally(() => setIsLoadingChats(false));
+        };
+        loadChats();
     }, [reviewId]); // eslint-disable-line react-hooks/exhaustive-deps -- initialChatId is the mount-time thread; live chat id changes must not refetch settings
 
     // ChatInput persists through UserProfileContext. Mirror successful saves
@@ -596,21 +622,24 @@ export function TRChatPanel({
             subscribeToTabularChatSettingsUpdates((update) => {
                 if (update.reviewId !== reviewId) return;
                 setChats((current) =>
-                    current.map((chat) =>
-                        chat.id === update.chatId
-                            ? {
-                                  ...chat,
-                                  ...(update.model !== undefined
-                                      ? { model: update.model }
-                                      : {}),
-                                  ...(update.reasoningLevel !== undefined
-                                      ? {
-                                            reasoning_level:
-                                                update.reasoningLevel,
-                                        }
-                                      : {}),
-                              }
-                            : chat,
+                    touchChatActivity(
+                        current.map((chat) =>
+                            chat.id === update.chatId
+                                ? {
+                                      ...chat,
+                                      ...(update.model !== undefined
+                                          ? { model: update.model }
+                                          : {}),
+                                      ...(update.reasoningLevel !== undefined
+                                          ? {
+                                                reasoning_level:
+                                                    update.reasoningLevel,
+                                            }
+                                          : {}),
+                                  }
+                                : chat,
+                        ),
+                        update.chatId,
                     ),
                 );
                 if (update.chatId !== currentChatId) return;
@@ -624,14 +653,43 @@ export function TRChatPanel({
         [currentChatId, reviewId],
     );
 
-    // Load messages for an initial chat id (e.g. from URL)
-    useEffect(() => {
-        if (!initialChatId) return;
+    // History requests can finish out of order (including A → B → A). Only
+    // the latest selection owns the transcript, loading state and warning.
+    // Resolves to the stored rows when this request still owns the
+    // transcript, or null when it failed or a newer selection replaced it.
+    async function loadHistory(chatId: string) {
+        const generation = ++historyRequestGeneration.current;
         setIsLoadingMessages(true);
-        getTabularChatMessages(reviewId, initialChatId)
-            .then((raw) => setMessages(mapTRMessages(raw) as TRMessage[]))
-            .catch(() => setMessageLoadWarning(true))
-            .finally(() => setIsLoadingMessages(false));
+        setMessageLoadWarning(false);
+        try {
+            const raw = await getTabularChatMessages(reviewId, chatId);
+            if (generation === historyRequestGeneration.current) {
+                setMessages(mapTRMessages(raw) as TRMessage[]);
+                return raw;
+            }
+            return null;
+        } catch {
+            if (generation === historyRequestGeneration.current) {
+                setMessageLoadWarning(true);
+            }
+            return null;
+        } finally {
+            if (generation === historyRequestGeneration.current) {
+                setIsLoadingMessages(false);
+            }
+        }
+    }
+
+    // Load messages for an initial chat id (e.g. from URL). Cleanup also
+    // retires a manually selected history request when the panel unmounts.
+    useEffect(() => {
+        if (initialChatId) void loadHistory(initialChatId);
+        return () => {
+            // Retire the latest request, including selections made since mount.
+            // This ref is a counter, not a DOM node captured for cleanup.
+            // eslint-disable-next-line react-hooks/exhaustive-deps
+            historyRequestGeneration.current++;
+        };
     }, [reviewId]); // eslint-disable-line react-hooks/exhaustive-deps
 
     // Fill in title once chats list arrives
@@ -655,21 +713,22 @@ export function TRChatPanel({
         hasScrolledRef.current = false;
     }, [currentChatId]);
 
+    const hasMessages = messages.length > 0;
+    const userMessageCount = messages.filter(
+        (message) => message.role === "user",
+    ).length;
     useEffect(() => {
         if (isLoadingMessages) {
             hasScrolledRef.current = false;
             setMessagesVisible(false);
             return;
         }
-        if (messages.length === 0) {
+        if (!hasMessages) {
             hasScrolledRef.current = false;
             setMessagesVisible(false);
         } else if (!hasScrolledRef.current) {
-            const userMsgCount = messages.filter(
-                (m) => m.role === "user",
-            ).length;
             if (
-                userMsgCount >= 2 &&
+                userMessageCount >= 2 &&
                 latestUserMessageRef.current &&
                 messagesContainerRef.current
             ) {
@@ -684,7 +743,15 @@ export function TRChatPanel({
                 setMessagesVisible(true);
             }
         }
-    }, [messages, isLoadingMessages, currentChatId, scrollLatestUserToTop]);
+        // Text chunks must not restart the positioning delay: a resumed stream
+        // can otherwise keep the entire transcript at opacity: 0 until DONE.
+    }, [
+        hasMessages,
+        userMessageCount,
+        isLoadingMessages,
+        currentChatId,
+        scrollLatestUserToTop,
+    ]);
 
     useLayoutEffect(() => {
         if (isLoadingMessages) return;
@@ -708,6 +775,33 @@ export function TRChatPanel({
         setTitleDraft(null);
     }, [currentChatId]);
 
+    // Resume on open. The chat list reports, per thread, the turn this
+    // backend is still generating into it, so a panel that has just loaded —
+    // a refresh, a second tab, or a thread opened from the list while its
+    // answer runs elsewhere — attaches to it instead of showing a transcript
+    // whose last answer is simply missing. The row is cleared as it is
+    // claimed, so a later send into the same thread cannot re-trigger it.
+    const resumeTurnRef = useRef(resumeTurn);
+    useEffect(() => {
+        resumeTurnRef.current = resumeTurn;
+    });
+    useEffect(() => {
+        if (isLoadingChats || isLoadingMessages || isLoading) return;
+        if (!currentChatId) return;
+        const active = chats.find(
+            (chat) => chat.id === currentChatId,
+        )?.active_turn;
+        if (!active) return;
+        setChats((prev) =>
+            prev.map((chat) =>
+                chat.id === currentChatId
+                    ? { ...chat, active_turn: null }
+                    : chat,
+            ),
+        );
+        void resumeTurnRef.current(currentChatId, active.id);
+    }, [chats, currentChatId, isLoadingChats, isLoadingMessages, isLoading]);
+
     // ---- drip ----
 
     function stopDrip() {
@@ -719,11 +813,11 @@ export function TRChatPanel({
 
     // Detach whatever is still streaming from the message list: stop the
     // 16ms drip timer and retire the generation so the in-flight loop stops
-    // writing into a list it no longer owns. Deliberately does NOT abort —
-    // the backend reads a closed socket as a cancellation and persists a
-    // truncated "Cancelled by user." answer, so closing the panel or
-    // switching chats must let the request run to completion. Only
-    // handleCancel (the Stop control) aborts.
+    // writing into a list it no longer owns. Deliberately does NOT abort:
+    // the answer belongs to the server now, so closing the panel or
+    // switching chats simply stops watching it — the turn keeps generating
+    // and is still there to reattach to. Only the Stop control ends it, and
+    // it does so through the stop endpoint rather than by dropping a socket.
     function detachActiveStream() {
         streamGenerationRef.current += 1;
         stopDrip();
@@ -881,7 +975,12 @@ export function TRChatPanel({
     // ---- chat actions ----
 
     function handleNewChat() {
+        historyRequestGeneration.current++;
+        setIsLoadingMessages(false);
+        setMessageLoadWarning(false);
         detachActiveStream();
+        setIsLoading(false);
+        currentChatIdRef.current = null;
         setCurrentChatId(null);
         setCurrentChatTitle(null);
         setCurrentChatModel(null);
@@ -890,68 +989,262 @@ export function TRChatPanel({
     }
 
     async function handleDeleteChat(chatId: string) {
+        // Everything the optimistic removal throws away, so a failed delete
+        // can put the thread back instead of losing it from the menu.
+        const snapshot = {
+            chats,
+            currentChatId,
+            currentChatTitle,
+            currentChatModel,
+            currentChatReasoningLevel,
+            messages,
+        };
         setChats((prev) => prev.filter((c) => c.id !== chatId));
-        if (chatId === currentChatId) {
+        const clearedActiveThread = chatId === currentChatId;
+        if (clearedActiveThread) {
+            historyRequestGeneration.current++;
+            setIsLoadingMessages(false);
+            setMessageLoadWarning(false);
             // Same exit as New chat / Load chat: retire the in-flight stream's
             // generation so its late events cannot land in the emptied list.
             detachActiveStream();
+            setIsLoading(false);
+            currentChatIdRef.current = null;
             setCurrentChatId(null);
             setCurrentChatTitle(null);
             setCurrentChatModel(null);
             setCurrentChatReasoningLevel(null);
             setMessages([]);
         }
+        // Every thread switch (and every submit) bumps this, so it doubles
+        // as "has the panel moved on since we emptied it?".
+        const clearedGeneration = streamGenerationRef.current;
         try {
             await deleteTabularChat(reviewId, chatId);
-        } catch {
-            /* ignore */
+        } catch (error) {
+            // Put back only the thread that failed to delete: the list is
+            // reloaded, renamed and appended to while this request is in
+            // flight, and restoring the whole snapshot threw that away.
+            setChats((current) =>
+                restoreOptimisticallyDeletedRows(current, snapshot.chats, [
+                    chatId,
+                ]),
+            );
+            if (
+                clearedActiveThread &&
+                // Reopen the deleted thread only if the user has not since
+                // opened another, started a new chat or sent a message —
+                // re-seating these messages over that would lose their work.
+                streamGenerationRef.current === clearedGeneration
+            ) {
+                currentChatIdRef.current = snapshot.currentChatId;
+                setCurrentChatId(snapshot.currentChatId);
+                setCurrentChatTitle(snapshot.currentChatTitle);
+                setCurrentChatModel(snapshot.currentChatModel);
+                setCurrentChatReasoningLevel(
+                    snapshot.currentChatReasoningLevel,
+                );
+                setMessages(snapshot.messages);
+            }
+            notifyError(error, {
+                action: "delete this chat",
+                onRetry: () => {
+                    void handleDeleteChat(chatId);
+                },
+            });
         }
     }
 
     async function handleRenameChat(chatId: string, title: string) {
+        const previousTitle =
+            chats.find((c) => c.id === chatId)?.title ?? null;
         setChats((prev) =>
-            prev.map((c) => (c.id === chatId ? { ...c, title } : c)),
+            touchChatActivity(
+                prev.map((c) => (c.id === chatId ? { ...c, title } : c)),
+                chatId,
+            ),
         );
         if (chatId === currentChatId) setCurrentChatTitle(title);
         try {
             await renameTabularChat(reviewId, chatId, title);
-        } catch {
-            /* ignore */
+        } catch (error) {
+            setChats((prev) =>
+                prev.map((c) =>
+                    c.id === chatId ? { ...c, title: previousTitle } : c,
+                ),
+            );
+            if (chatId === currentChatId) setCurrentChatTitle(previousTitle);
+            notifyError(error, {
+                action: "rename this chat",
+                onRetry: () => {
+                    void handleRenameChat(chatId, title);
+                },
+            });
         }
     }
 
     async function handleLoadChat(chatId: string) {
         detachActiveStream();
+        setIsLoading(false);
+        currentChatIdRef.current = chatId;
+        setChatResponseStatuses((current) => {
+            if (current[chatId] !== "complete") return current;
+            const next = { ...current };
+            delete next[chatId];
+            return next;
+        });
         const chat = chats.find((c) => c.id === chatId);
         setCurrentChatId(chatId);
         setCurrentChatTitle(chat?.title ?? null);
         setCurrentChatModel(chat?.model ?? null);
         setCurrentChatReasoningLevel(chat?.reasoning_level ?? null);
         setMessages([]);
-        setIsLoadingMessages(true);
-        try {
-            const raw = await getTabularChatMessages(reviewId, chatId);
-            setMessages(mapTRMessages(raw) as TRMessage[]);
-        } catch {
-            /* ignore */
-        } finally {
-            setIsLoadingMessages(false);
-        }
+        await loadHistory(chatId);
     }
 
     function handleCancel() {
-        abortRef.current?.abort();
+        const cursor = turnCursorRef.current;
+        const chatId = cursor.chatId ?? currentChatId;
+        if (!chatId || !cursor.turnId) {
+            // The turn has no server-side identity yet (its `chat_id` frame
+            // has not arrived), so dropping this request is the only lever
+            // there is — and it is still the whole cancellation, because the
+            // server has nothing registered to keep generating.
+            abortRef.current?.abort();
+            return;
+        }
+        // Closing the socket is no longer how Stop works: it would detach
+        // this panel and leave the server answering into the transcript.
+        void stopTabularChatTurn(reviewId, chatId, cursor.turnId).catch(() => {
+            // The server does not know this turn any more (another tab
+            // stopped it, or the process restarted). Dropping our own
+            // connection is all that is left to do.
+            abortRef.current?.abort();
+        });
     }
 
-    async function handleSubmit(message: Message) {
+    /**
+     * Attach to an answer the server is already generating into `chatId` — a
+     * reload, a second tab, or this thread opened from the list while its
+     * answer runs somewhere else.
+     *
+     * The stored transcript holds the user turn already and gains the
+     * assistant row only once the turn finishes, so the placeholder belongs
+     * after the loaded messages and the replay starts at frame 1. The stream
+     * is opened BEFORE the placeholder is appended: a turn that ended in the
+     * meantime answers 404, and the transcript that has just loaded is then
+     * already complete.
+     */
+    /**
+     * A notice raised for one turn may only act while the panel still shows
+     * that turn's thread with nothing newer streaming in it.
+     */
+    function turnStillCurrent(gen: number, chatId: string | null) {
+        return (
+            streamGenerationRef.current === gen &&
+            !abortRef.current &&
+            currentChatIdRef.current === chatId
+        );
+    }
+
+    /**
+     * Re-read a thread after its stream broke, then re-attach to `turnId`
+     * only if the stored transcript does not already hold it. The server
+     * stores the answer under the turn's id once the run ends (the assistant
+     * chat makes the same check in loadAssistantChat), and a finished run
+     * can still replay with 200 for a retention window, so re-attaching
+     * without this check would draw the answer twice.
+     */
+    async function recoverTurn(
+        gen: number,
+        chatId: string,
+        turnId: string | null,
+    ) {
+        const stored = await loadHistory(chatId);
+        if (!stored || !turnStillCurrent(gen, chatId) || !turnId) return;
+        if (stored.some((row) => row.id === turnId)) return;
+        await resumeTurn(chatId, turnId);
+    }
+
+    /** The uncertain-delivery action: refresh the list, then the thread. */
+    async function checkChatHistory(gen: number, chatId: string | null) {
+        try {
+            if (streamGenerationRef.current !== gen || abortRef.current) return;
+            const loaded = await getTabularChats(reviewId);
+            if (streamGenerationRef.current !== gen || abortRef.current) return;
+            setChats(sortChatsByActivity(loaded));
+            if (!chatId || currentChatIdRef.current !== chatId) return;
+            const active = loaded.find((chat) => chat.id === chatId)?.active_turn;
+            await recoverTurn(gen, chatId, active?.id ?? null);
+        } catch (error) {
+            notifyError(error, { action: "load your chat history" });
+        }
+    }
+
+    async function resumeTurn(chatId: string, turnId: string) {
+        const controller = new AbortController();
+        const response = await streamTabularChatTurn({
+            reviewId,
+            chatId,
+            turnId,
+            from: 1,
+            signal: controller.signal,
+        }).catch(() => null);
+        if (!response?.ok) {
+            await response?.body?.cancel().catch(() => {});
+            return;
+        }
+
+        detachActiveStream();
+        const gen = streamGenerationRef.current;
+        dripTargetRef.current = "";
+        dripDisplayLenRef.current = 0;
+        eventsRef.current = [];
+        turnCursorRef.current = {
+            chatId,
+            turnId,
+            lastSeq: 0,
+            hadError: false,
+        };
+        setMessages((prev) => [
+            ...prev,
+            {
+                role: "assistant",
+                content: "",
+                events: [],
+                isStreaming: true,
+            },
+        ]);
+        setIsLoading(true);
+        abortRef.current = controller;
+
+        await runTurn({
+            gen,
+            controller,
+            settings: {
+                model: currentChatModel ?? undefined,
+                reasoning: currentChatReasoningLevel ?? undefined,
+            },
+            open: () => Promise.resolve(response),
+        });
+    }
+
+    async function handleSubmit(
+        message: Message,
+        retry?: { transcript: TRMessage[]; chatId: string | null },
+    ) {
         const trimmed = message.content.trim();
         if (!trimmed || isLoading) return;
         if (!message.model || !message.reasoning) return;
         setCurrentChatModel(message.model);
         setCurrentChatReasoningLevel(message.reasoning);
 
+        // The transcript as it stood before this turn. Retry rewinds to it so
+        // resending cannot duplicate the question or the failed answer.
+        const transcriptBeforeSend = retry?.transcript ?? messages;
+        const targetChatId = retry ? retry.chatId : currentChatId;
         // Build messages array for backend (plain text history)
-        const history = buildTabularChatHistory(messages);
+        const history = buildTabularChatHistory(transcriptBeforeSend);
         const allMessages = [...history, { role: "user", content: trimmed }];
 
         const userMsg: TRMessage = { role: "user", content: trimmed };
@@ -962,7 +1255,7 @@ export function TRChatPanel({
             isStreaming: true,
         };
 
-        setMessages((prev) => [...prev, userMsg, assistantMsg]);
+        setMessages([...transcriptBeforeSend, userMsg, assistantMsg]);
         setIsLoading(true);
 
         setTimeout(() => {
@@ -977,50 +1270,141 @@ export function TRChatPanel({
 
         const controller = new AbortController();
         abortRef.current = controller;
+        const cursor: TurnCursor = {
+            chatId: targetChatId,
+            turnId: null,
+            lastSeq: 0,
+            hadError: false,
+        };
+        turnCursorRef.current = cursor;
+        // Re-send this exact turn from its toast. The cursor follows the chat
+        // id the stream assigns, so a retry lands in the chat the first
+        // attempt created; it refuses once the panel has moved on.
+        const retryThisTurn = async () => {
+            if (!turnStillCurrent(gen, cursor.chatId)) {
+                notifyInfo(CHAT_CHANGED_MESSAGE);
+                return;
+            }
+            await handleSubmit(message, {
+                transcript: transcriptBeforeSend,
+                chatId: cursor.chatId,
+            });
+        };
+        if (targetChatId) {
+            // The history list shows this thread as answering, and moves it
+            // to the top, from the moment the request leaves.
+            setChatResponseStatuses((current) => ({
+                ...current,
+                [targetChatId]: "loading",
+            }));
+            setChats((current) => touchChatActivity(current, targetChatId));
+        }
+        await runTurn({
+            gen,
+            controller,
+            settings: {
+                model: message.model,
+                reasoning: message.reasoning,
+                retry: retryThisTurn,
+            },
+            open: () =>
+                streamTabularChat(
+                    reviewId,
+                    allMessages,
+                    targetChatId,
+                    controller.signal,
+                    { reviewTitle, projectName },
+                    message.model,
+                    message.reasoning,
+                ),
+        });
+    }
 
-        try {
-            const response = await streamTabularChat(
-                reviewId,
-                allMessages,
-                currentChatId,
-                controller.signal,
-                { reviewTitle, projectName },
-                message.model,
-                message.reasoning,
-            );
-            for await (const frame of readSseFrames(response, {
-                signal: controller.signal,
-            })) {
+    // ---- one turn, whichever response is carrying it ----
+
+    /**
+     * Apply one response's frames to this panel's state.
+     *
+     * Both ends of a turn go through here — the POST that starts it and the
+     * GET that reattaches to it — which is why nothing below knows which one
+     * it is reading. The cursor it keeps (the turn's id, and the last `id:`
+     * line applied) is what a reconnect or a Stop needs afterwards.
+     */
+    type TurnSettings = {
+        model: Message["model"];
+        reasoning: Message["reasoning"];
+        /** Re-send the turn; absent for a resumed turn, which has no request of its own. */
+        retry?: () => Promise<void>;
+    };
+
+    async function consumeTurnStream(
+        response: Response,
+        gen: number,
+        signal: AbortSignal,
+        settings: TurnSettings,
+        cursor: TurnCursor,
+    ) {
+        const { model, reasoning, retry } = settings;
+        for await (const frame of readSseFrames(response, {
+            signal,
+            onEventId: (id) => {
+                const seq = Number.parseInt(id, 10);
+                if (Number.isFinite(seq)) cursor.lastSeq = seq;
+            },
+        })) {
+                const data = frame as Record<string, unknown>;
+
+                if (data.type === "chat_id") {
+                    const newId = data.chatId as string;
+                    // What a reconnect needs: which thread this is and which
+                    // run inside it to reattach to.
+                    cursor.chatId = newId;
+                    if (typeof data.turnId === "string")
+                        cursor.turnId = data.turnId;
+                    // Handled before the ownership check below: even a stream
+                    // another thread has since replaced still names a real
+                    // chat that belongs in the list, and is still answering.
+                    setChatResponseStatuses((current) => ({
+                        ...current,
+                        [newId]: "loading",
+                    }));
+                    setChats((prev) => {
+                        const now = new Date().toISOString();
+                        const next = prev.some((chat) => chat.id === newId)
+                            ? prev
+                            : [
+                                  {
+                                      id: newId,
+                                      title: null,
+                                      model: model ?? null,
+                                      reasoning_level: reasoning ?? null,
+                                      created_at: now,
+                                      updated_at: now,
+                                  },
+                                  ...prev,
+                              ];
+                        return touchChatActivity(next, newId, now);
+                    });
+                    if (streamGenerationRef.current !== gen) continue;
+                    currentChatIdRef.current = newId;
+                    setCurrentChatId(newId);
+                    continue;
+                }
+                if (data.type === "error") cursor.hadError = true;
+
                 // Another chat owns the message list now — stop writing,
                 // but keep draining: breaking out cancels the reader, which
                 // closes the socket and makes the server persist a
                 // truncated answer.
                 if (streamGenerationRef.current !== gen) continue;
 
-                const data = frame as Record<string, unknown>;
-
                 try {
-                        if (data.type === "chat_id") {
-                            const newId = data.chatId as string;
-                            setCurrentChatId(newId);
-                            setChats((prev) =>
-                                prev.some((c) => c.id === newId)
-                                    ? prev
-                                    : [
-                                          {
-                                              id: newId,
-                                              title: null,
-                                              model: message.model ?? null,
-                                              reasoning_level:
-                                                  message.reasoning ?? null,
-                                              created_at:
-                                                  new Date().toISOString(),
-                                              updated_at:
-                                                  new Date().toISOString(),
-                                          },
-                                          ...prev,
-                                      ],
-                            );
+                        if (data.type === "cancelled") {
+                            // Stop was pressed — in this panel or another
+                            // tab. The server has already stored the partial
+                            // answer and [DONE] follows immediately, so all
+                            // that is left is to stop pretending to think.
+                            clearStreamingPlaceholders();
                             continue;
                         }
 
@@ -1030,8 +1414,11 @@ export function TRChatPanel({
                                 title: string;
                             };
                             setChats((prev) =>
-                                prev.map((c) =>
-                                    c.id === chatId ? { ...c, title } : c,
+                                touchChatActivity(
+                                    prev.map((c) =>
+                                        c.id === chatId ? { ...c, title } : c,
+                                    ),
+                                    chatId,
                                 ),
                             );
                             setCurrentChatTitle(title);
@@ -1472,25 +1859,58 @@ export function TRChatPanel({
                         if (data.type === "error") {
                             if (data.code === "invalid_api_key") {
                                 setRejectedApiKey({
-                                    provider: getModelProvider(message.model),
+                                    provider: model
+                                        ? getModelProvider(model)
+                                        : null,
                                 });
                             }
+                            // The server ends a failed turn with this frame
+                            // and then `[DONE]`, so without the bubble error
+                            // and the notice the answer just stops
+                            // mid-sentence and looks finished.
+                            const safeToDisplay = data.safe_to_display === true;
+                            const failure = errorFrameFailure(
+                                data.message,
+                                safeToDisplay,
+                                {
+                                    code: data.code,
+                                    requestId: data.request_id,
+                                    reportingOwner: data.reporting_owner,
+                                },
+                            );
+                            flushDrip();
                             clearStreamingPlaceholders();
                             pushEvent({
                                 type: "error",
-                                message:
-                                    data.safe_to_display === true &&
-                                    typeof data.message === "string" &&
-                                    data.message.trim()
-                                        ? data.message.trim()
-                                        : "An error occurred. Please try again.",
-                                ...(data.safe_to_display === true
+                                message: failure.message,
+                                ...(safeToDisplay
                                     ? { safe_to_display: true }
                                     : {}),
                                 ...(data.code === "invalid_api_key"
                                     ? { code: "invalid_api_key" as const }
                                     : {}),
                             });
+                            setMessages((prev) => {
+                                const updated = [...prev];
+                                const last = updated[updated.length - 1];
+                                if (last?.role === "assistant") {
+                                    // Partial content stays; the turn is
+                                    // marked failed rather than erased.
+                                    updated[updated.length - 1] = {
+                                        ...last,
+                                        isStreaming: false,
+                                        error: failure.message,
+                                    };
+                                }
+                                return updated;
+                            });
+                            notifyError(failure, {
+                                action: "get a response",
+                                operation: "tabular.chat",
+                                dedupeKey: `tr-chat-error:${cursor.chatId ?? reviewId}`,
+                                onRetry: retry,
+                            });
+                            setIsLoading(false);
                             continue;
                         }
 
@@ -1515,10 +1935,119 @@ export function TRChatPanel({
                             continue;
                         }
                 } catch (err) {
-                    console.warn("[TRChatPanel] failed to handle SSE event:", data, err);
+                    // One notice per stream: an event we could not apply means
+                    // part of the answer is missing from the transcript, and
+                    // the stream itself keeps going.
+                    notifyError(err, {
+                        action: "show part of this answer",
+                        dedupeKey: `tr-chat-frame:${gen}`,
+                    });
                 }
-            }
+        }
+    }
 
+    /**
+     * Read a turn to its end, rejoining the server's copy of it when the
+     * connection drops.
+     *
+     * A dropped connection is no longer a cancellation — the answer is still
+     * being generated on the server — so it is a transport failure to
+     * recover from, by resuming at the frame after the last one applied. An
+     * abort (the local Stop fallback) is never retried, and neither is a
+     * turn the server no longer knows.
+     */
+    async function readTurn(args: {
+        open: () => Promise<Response>;
+        gen: number;
+        signal: AbortSignal;
+        settings: TurnSettings;
+        cursor: TurnCursor;
+        retries?: number;
+    }) {
+        const { cursor } = args;
+        const retries = args.retries ?? 2;
+        let response = await args.open();
+        // Status, code and request id ride on the error so the toast can
+        // classify the refusal (429, 5xx) like the assistant chat does.
+        if (!response.ok) throw await chatRequestError(response);
+        for (let attempt = 0; ; attempt += 1) {
+            try {
+                await consumeTurnStream(
+                    response,
+                    args.gen,
+                    args.signal,
+                    args.settings,
+                    cursor,
+                );
+                return;
+            } catch (error) {
+                if (
+                    (error instanceof Error && error.name === "AbortError") ||
+                    args.signal.aborted ||
+                    !cursor.chatId ||
+                    !cursor.turnId ||
+                    attempt >= retries
+                ) {
+                    throw error;
+                }
+                await new Promise((resolve) =>
+                    setTimeout(resolve, 400 * (attempt + 1)),
+                );
+                if (args.signal.aborted) throw error;
+                const resumed = await streamTabularChatTurn({
+                    reviewId,
+                    chatId: cursor.chatId,
+                    turnId: cursor.turnId,
+                    from: cursor.lastSeq + 1,
+                    signal: args.signal,
+                });
+                if (!resumed.ok) {
+                    await resumed.body?.cancel().catch(() => {});
+                    throw error;
+                }
+                response = resumed;
+            }
+        }
+    }
+
+    /** The shared ending: finalise the message, or report the failure. */
+    async function runTurn(args: {
+        open: () => Promise<Response>;
+        gen: number;
+        controller: AbortController;
+        settings: TurnSettings;
+    }) {
+        const { gen, controller } = args;
+        // This turn's cursor, held here rather than re-read from the ref: a
+        // later send replaces the ref while a superseded stream is still
+        // being drained.
+        const cursor = turnCursorRef.current;
+        try {
+            await readTurn({
+                open: args.open,
+                gen,
+                signal: controller.signal,
+                settings: args.settings,
+                cursor,
+            });
+            const streamChatId = cursor.chatId;
+            if (streamChatId) {
+                setChats((current) =>
+                    touchChatActivity(current, streamChatId),
+                );
+                setChatResponseStatuses((current) => {
+                    if (
+                        cursor.hadError ||
+                        currentChatIdRef.current === streamChatId
+                    ) {
+                        if (!(streamChatId in current)) return current;
+                        const next = { ...current };
+                        delete next[streamChatId];
+                        return next;
+                    }
+                    return { ...current, [streamChatId]: "complete" };
+                });
+            }
             if (streamGenerationRef.current !== gen) return;
 
             flushDrip();
@@ -1535,47 +2064,96 @@ export function TRChatPanel({
                 return updated;
             });
         } catch (err: unknown) {
+            const streamChatId = cursor.chatId;
+            if (streamChatId) {
+                setChatResponseStatuses((current) => {
+                    if (!(streamChatId in current)) return current;
+                    const next = { ...current };
+                    delete next[streamChatId];
+                    return next;
+                });
+            }
             // Superseded stream: the list it would repaint is someone
             // else's now.
             if (streamGenerationRef.current !== gen) return;
 
-            const isAbort = err instanceof Error && err.name === "AbortError";
+            const isAbort =
+                controller.signal.aborted ||
+                (err instanceof Error && err.name === "AbortError");
+            // Once the server has named the turn it owns the run: it is still
+            // generating or has stored the answer.
+            const serverChatId = cursor.chatId;
+            const serverTurnId = cursor.turnId;
+            const uncertain =
+                !isAbort &&
+                isUncertainDelivery(err, Boolean(serverChatId && serverTurnId));
             stopDrip();
             clearStreamingPlaceholders();
             setMessages((prev) => {
                 const updated = [...prev];
                 const last = updated[updated.length - 1];
                 if (last?.role === "assistant") {
-                    const hasContent = (last.events ?? []).some(
-                        (e) =>
-                            e.type === "content" &&
-                            (e as { type: "content"; text: string }).text,
-                    );
-                    if (!hasContent) {
-                        updated[updated.length - 1] = {
-                            ...last,
-                            isStreaming: false,
-                            events: [
-                                ...(last.events ?? []),
-                                {
-                                    type: "content" as const,
-                                    text: isAbort
-                                        ? ""
-                                        : "An error occurred. Please try again.",
-                                },
-                            ],
-                        };
-                    } else {
-                        updated[updated.length - 1] = {
-                            ...last,
-                            isStreaming: false,
-                        };
-                    }
+                    // Whatever arrived before the break is real answer text
+                    // and stays on screen; only the streaming state is closed,
+                    // and the bubble says it is unfinished once the notice is
+                    // gone. A Stop is the user's own doing and is not marked.
+                    updated[updated.length - 1] = {
+                        ...last,
+                        isStreaming: false,
+                        ...(isAbort
+                            ? {}
+                            : {
+                                  error: uncertain
+                                      ? TURN_MAY_BE_RUNNING_MESSAGE
+                                      : TURN_INTERRUPTED_MESSAGE,
+                              }),
+                    };
                 }
                 return updated;
             });
+            if (isAbort) return;
+
+            if (uncertain) {
+                // The request may have stored the question and started a run
+                // before the response was lost, so a re-send could ask twice.
+                // Offer a history check instead.
+                const chatKnown = serverChatId ?? currentChatIdRef.current;
+                notifyError(uncertainDeliveryError(err), {
+                    action: "finish this answer",
+                    dedupeKey: `tr-chat-stream:${reviewId}`,
+                    actions: [
+                        {
+                            label: checkHistoryLabel(Boolean(chatKnown)),
+                            onClick: () => checkChatHistory(gen, chatKnown),
+                        },
+                    ],
+                });
+                return;
+            }
+
+            // A named turn is recovered, never re-sent: re-sending would
+            // store the question twice (and, while the run is alive, be
+            // refused with 409 turn_in_progress after that insert). This
+            // also gives a resumed turn, which has no request of its own to
+            // re-send, a way back.
+            const retry =
+                serverChatId && serverTurnId
+                    ? async () => {
+                          if (!turnStillCurrent(gen, serverChatId)) {
+                              notifyInfo(CHAT_CHANGED_MESSAGE);
+                              return;
+                          }
+                          await recoverTurn(gen, serverChatId, serverTurnId);
+                      }
+                    : args.settings.retry;
+            notifyError(err, {
+                action: "finish this answer",
+                fallback: `${TURN_INTERRUPTED_MESSAGE} Anything already shown is kept.`,
+                dedupeKey: `tr-chat-stream:${reviewId}`,
+                onRetry: retry,
+            });
         } finally {
-            setIsLoading(false);
+            if (streamGenerationRef.current === gen) setIsLoading(false);
             if (abortRef.current === controller) abortRef.current = null;
         }
     }
@@ -1599,7 +2177,9 @@ export function TRChatPanel({
                 // Mobile: replaces the table, filling the row minus margins.
                 // md+: fixed width beside the table, top-aligned with it
                 // (below the toolbar).
-                "flex-1 min-w-0 mx-3 mb-3 md:flex-none md:w-[var(--tr-chat-panel-width)] md:mt-12 md:-ml-6 md:mr-6",
+                // The table's 26px right margin minus this 20px overlap
+                // leaves the same 6px gap as the IDE panel dividers.
+                "flex-1 min-w-0 mx-3 mb-3 md:flex-none md:w-[var(--tr-chat-panel-width)] md:mt-12 md:-ml-5 md:mr-6",
                 "rounded-2xl",
                 LIQUID_GLASS_FLAT_CLASS,
                 "overflow-hidden",
@@ -1617,8 +2197,8 @@ export function TRChatPanel({
                 }}
                 className={`absolute top-0 left-0 h-full w-1 cursor-col-resize z-20 transition-colors hidden md:block ${
                     isResizing
-                        ? "bg-blue-400/70"
-                        : "bg-transparent hover:bg-blue-400/70"
+                        ? "bg-blue-600"
+                        : "bg-transparent hover:bg-blue-600/60"
                 }`}
             />
             {/* Header — fixed, overlaid on top of the messages */}
@@ -1628,6 +2208,7 @@ export function TRChatPanel({
                     currentChatId={currentChatId ?? ""}
                     currentTitle={currentChatTitle}
                     loading={isLoadingChats}
+                    responseStatuses={chatResponseStatuses}
                     newChatDisabled={!canSend || isLoading}
                     onLoad={(chatId) => void handleLoadChat(chatId)}
                     onNewChat={handleNewChat}
@@ -1658,6 +2239,9 @@ export function TRChatPanel({
                         currentChatId ? (
                             <HeaderActionsMenu
                                 triggerClassName="h-6 w-6"
+                                // One header menu at a time: opening the
+                                // chat history closes this, and the reverse.
+                                modal={false}
                                 onCloseAutoFocus={(event) => {
                                     if (titleDraft !== null)
                                         event.preventDefault();

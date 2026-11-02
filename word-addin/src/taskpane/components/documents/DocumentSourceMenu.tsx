@@ -1,5 +1,5 @@
 import React from "react";
-import { Loader2, Plus, Waypoints } from "lucide-react";
+import { ClipboardCheck, Loader2, Plus, Waypoints } from "lucide-react";
 import { ComposerButton } from "../primitives/ComposerButton";
 import {
   Dropdown,
@@ -8,7 +8,7 @@ import {
   DropdownTrigger,
 } from "@mike/dropdown-ui";
 import desktopIcon from "@icons/desktop.svg";
-import earthIcon from "@icons/earth.svg";
+import cloudIcon from "@icons/cloud.svg";
 
 interface DocumentSourceMenuProps {
   attachedCount: number;
@@ -17,6 +17,7 @@ interface DocumentSourceMenuProps {
   onLocalFiles: () => void;
   onWebFiles: () => void;
   onWorkflows: () => void;
+  onPlaybooks: () => void;
 }
 
 export function DocumentSourceMenu({
@@ -26,6 +27,7 @@ export function DocumentSourceMenu({
   onLocalFiles,
   onWebFiles,
   onWorkflows,
+  onPlaybooks,
 }: DocumentSourceMenuProps): React.ReactElement {
   return (
     <Dropdown>
@@ -64,7 +66,7 @@ export function DocumentSourceMenu({
         </DropdownItem>
         <DropdownItem onSelect={onWebFiles}>
           <img
-            src={earthIcon}
+            src={cloudIcon}
             alt=""
             aria-hidden="true"
             draggable={false}
@@ -75,6 +77,13 @@ export function DocumentSourceMenu({
         <DropdownItem onSelect={onWorkflows}>
           <Waypoints className="h-4 w-4 shrink-0 text-gray-500" />
           Workflows
+        </DropdownItem>
+        <DropdownItem onSelect={onPlaybooks}>
+          <ClipboardCheck
+            aria-hidden="true"
+            className="h-4 w-4 shrink-0 text-gray-500"
+          />
+          Playbooks
         </DropdownItem>
       </DropdownContent>
     </Dropdown>

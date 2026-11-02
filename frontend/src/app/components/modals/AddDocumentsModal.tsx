@@ -1,5 +1,7 @@
 "use client";
 
+import { useWorkspaceIdentity } from "@/app/hooks/useWorkspaceIdentity";
+
 import { useEffect, useRef, useState } from "react";
 import { AlertCircle, Upload, Loader2, X } from "lucide-react";
 import {
@@ -11,6 +13,7 @@ import {
     getProject,
     type UploadProgress,
 } from "@/app/lib/mikeApi";
+import { useDocumentWorkspace } from "@/app/contexts/WorkspaceContext";
 import type { Document, Folder } from "../shared/types";
 import { FileDirectory } from "../shared/FileDirectory";
 import type { DirectoryTab } from "../shared/useDirectoryData";
@@ -21,7 +24,7 @@ import {
     partitionSupportedDocumentFiles,
 } from "@/app/lib/documentUploadValidation";
 import { useRemountPersistentState } from "@/app/hooks/useRemountPersistentState";
-import { userFacingApiError } from "@/app/lib/userFacingError";
+import { notifyError, userFacingApiError } from "@/app/lib/userFacingError";
 
 interface Props {
     open: boolean;
@@ -54,7 +57,7 @@ interface Props {
 
 const DIRECTORY_PAGE_SIZE = 40;
 
-export function AddDocumentsModal({
+function AddDocumentsModalForWorkspace({
     open,
     onClose,
     onSelect,
@@ -69,6 +72,9 @@ export function AddDocumentsModal({
     disabledDocumentIds,
     uploadStateId,
 }: Props) {
+    // A document uploaded on its own belongs to the workspace it is
+    // uploaded in.
+    const workspace = useDocumentWorkspace();
     const uploadSurfaceId =
         uploadStateId ??
         [
@@ -76,7 +82,8 @@ export function AddDocumentsModal({
             projectDocumentsOnly ? "project" : "all",
             initialTab,
         ].join(":");
-    const uploadStateKey = `add-documents-upload:${uploadSurfaceId}`;
+    const identity = useWorkspaceIdentity();
+    const uploadStateKey = `add-documents-upload:${identity}:${uploadSurfaceId}`;
     const [selectedDocuments, setSelectedDocuments] = useState<Document[]>([]);
     const [uploading, setUploading] = useRemountPersistentState(
         `${uploadStateKey}:active`,
@@ -101,6 +108,8 @@ export function AddDocumentsModal({
     // keeps it (and its directory fetch) alive after first use rather than
     // eagerly loading on page mount.
     const [hasOpened, setHasOpened] = useState(open);
+    // Bumped by the "Retry" on a failed directory load so the effect refetches.
+    const [directoryReloadKey, setDirectoryReloadKey] = useState(0);
     const fileInputRef = useRef<HTMLInputElement>(null);
     const wasOpenRef = useRef(false);
 
@@ -124,10 +133,15 @@ export function AddDocumentsModal({
                 setProjectDocumentLimitByLevel({ root: DIRECTORY_PAGE_SIZE });
                 setLoadedProjectFolderIds(new Set());
             })
-            .catch(() => {
+            .catch((error) => {
                 if (cancelled) return;
                 setProjectDocuments([]);
                 setProjectFolders([]);
+                notifyError(error, {
+                    action: "load this project's files",
+                    dedupeKey: `add-documents-directory:${projectId}`,
+                    onRetry: () => setDirectoryReloadKey((key) => key + 1),
+                });
             })
             .finally(() => {
                 if (!cancelled) setProjectDirectoryLoading(false);
@@ -135,7 +149,7 @@ export function AddDocumentsModal({
         return () => {
             cancelled = true;
         };
-    }, [open, projectDocumentsOnly, projectId]);
+    }, [directoryReloadKey, open, projectDocumentsOnly, projectId]);
 
     // Key the sync on the id list itself so a reopen targeting different
     // documents (or ids arriving late) always re-seeds the selection.
@@ -206,6 +220,57 @@ export function AddDocumentsModal({
 
     if (!open && (!keepMounted || !hasOpened)) return null;
 
+    /**
+     * Assign the picked documents to the project. Failures keep the modal
+     * open with the selection intact, and "Retry" re-runs only the documents
+     * that did not make it, carrying the ones that did.
+     */
+    async function assignDocuments(
+        targetProjectId: string,
+        toAssign: Document[],
+        carry: Document[],
+    ) {
+        setUploading(true);
+        let results: PromiseSettledResult<Document>[];
+        try {
+            results = await Promise.allSettled(
+                toAssign.map((d) => addDocumentToProject(targetProjectId, d.id)),
+            );
+        } finally {
+            setUploading(false);
+        }
+        const assigned = results.flatMap((result) =>
+            result.status === "fulfilled" ? [result.value] : [],
+        );
+        const failed = toAssign.filter(
+            (_, index) => results[index]?.status === "rejected",
+        );
+        if (failed.length === 0) {
+            onSelect([...carry, ...assigned], targetProjectId);
+            onClose();
+            return;
+        }
+        const firstFailure = results.find(
+            (result) => result.status === "rejected",
+        ) as PromiseRejectedResult | undefined;
+        const names = failed.map((d) => d.filename).join(", ");
+        notifyError(firstFailure?.reason, {
+            action:
+                failed.length === 1
+                    ? `add ${names} to this project`
+                    : `add ${failed.length} of ${toAssign.length} files to this project`,
+            fallback: `${names} could not be added to this project. Try again.`,
+            // A second Confirm, or a Retry that fails again, replaces this
+            // notice: an older one's Retry would resend its own stale sets.
+            dedupeKey: `add-documents-assign:${targetProjectId}`,
+            onRetry: () =>
+                void assignDocuments(targetProjectId, failed, [
+                    ...carry,
+                    ...assigned,
+                ]),
+        });
+    }
+
     async function handleConfirm() {
         if (projectId) {
             const toAssign = selectedDocuments.filter(
@@ -215,22 +280,10 @@ export function AddDocumentsModal({
                 (d) => d.project_id === projectId,
             );
             if (toAssign.length > 0) {
-                setUploading(true);
-                try {
-                    const assigned = await Promise.all(
-                        toAssign.map((d) =>
-                            addDocumentToProject(projectId, d.id),
-                        ),
-                    );
-                    onSelect([...alreadyHere, ...assigned], projectId);
-                } catch (err) {
-                    console.error("Failed to assign documents:", err);
-                } finally {
-                    setUploading(false);
-                }
-            } else {
-                onSelect(alreadyHere, projectId);
+                await assignDocuments(projectId, toAssign, alreadyHere);
+                return;
             }
+            onSelect(alreadyHere, projectId);
             onClose();
             return;
         }
@@ -299,6 +352,7 @@ export function AddDocumentsModal({
                 : await uploadStandaloneDocuments(
                       uploadInputs,
                       { onProgress: handleProgress },
+                      workspace,
                   );
             const uploaded = outcomes.flatMap((outcome) =>
                 outcome.status === "completed" && outcome.result
@@ -408,7 +462,10 @@ export function AddDocumentsModal({
             />
 
             {uploadWarning && (
-                <div className="mb-2 flex items-center gap-2 rounded-lg border border-red-100 bg-red-50 px-3 py-2 text-xs text-gray-900">
+                <div
+                    role="alert"
+                    className="mb-2 flex items-center gap-2 rounded-lg border border-red-100 bg-red-50 px-3 py-2 text-xs text-gray-900"
+                >
                     <AlertCircle className="h-3.5 w-3.5 shrink-0 text-red-600" />
                     <span className="min-w-0 flex-1">{uploadWarning}</span>
                     <button
@@ -463,4 +520,9 @@ export function AddDocumentsModal({
             </div>
         </Modal>
     );
+}
+
+export function AddDocumentsModal(props: Props) {
+    const identity = useWorkspaceIdentity();
+    return <AddDocumentsModalForWorkspace key={identity} {...props} />;
 }

@@ -1,0 +1,334 @@
+import { useImperativeHandle, type Ref } from "react";
+import { fireEvent, render, screen } from "@testing-library/react";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+import type { Chat, Message } from "@/app/components/shared/types";
+import { AssistantChatColumn } from "./ChatView";
+import { useAssistantDocumentPanel } from "./useAssistantDocumentPanel";
+
+const useItemWorkspace = vi.hoisted(() => vi.fn());
+const workspaceState = vi.hoisted(() => ({
+    workspaceId: "org-1",
+    organizations: [{ id: "org-1", name: "Colsons LLP" }],
+    setWorkspace: vi.fn(),
+}));
+const history = vi.hoisted(() => ({ rows: [] as Partial<Chat>[] }));
+vi.mock("@/app/contexts/WorkspaceContext", async (importOriginal) => ({
+    ...(await importOriginal<typeof import("@/app/contexts/WorkspaceContext")>()),
+    useWorkspace: () => workspaceState,
+}));
+vi.mock("@/app/hooks/useItemWorkspace", async (importOriginal) => {
+    const actual = await importOriginal<typeof import("@/app/hooks/useItemWorkspace")>();
+    return { useItemWorkspace: (...args: Parameters<typeof actual.useItemWorkspace>) => {
+        useItemWorkspace(...args);
+        actual.useItemWorkspace(...args);
+    } };
+});
+
+vi.mock("next/navigation", () => ({
+    useRouter: () => ({ push: vi.fn() }),
+}));
+vi.mock("@/app/contexts/SidebarContext", () => ({
+    // A new function on every render, as the shell's provider hands out.
+    useSidebar: () => ({ setSidebarOpen: vi.fn() }),
+}));
+vi.mock("@/app/contexts/ChatHistoryContext", () => ({
+    useChatHistoryContext: () => ({
+        chats: history.rows,
+        hasMoreChats: false,
+        loadingMoreChats: false,
+        loadMoreChats: vi.fn(),
+        renameChat: vi.fn(),
+        deleteChat: vi.fn(),
+    }),
+}));
+vi.mock("@/app/hooks/useQuickActions", () => ({
+    useQuickActions: () => ({
+        quickActions: [],
+        saveQuickAction: vi.fn(),
+        addQuickAction: vi.fn(),
+    }),
+}));
+const addExcerpt = vi.hoisted(() => vi.fn());
+vi.mock("./ChatInput", () => ({
+    ChatInput: ({ ref }: { ref?: Ref<{ addExcerpt: typeof addExcerpt }> }) => {
+        useImperativeHandle(ref, () => ({ addExcerpt }));
+        return <div>Composer</div>;
+    },
+}));
+vi.mock("./InitialView", () => ({
+    InitialView: () => <div>Initial view</div>,
+}));
+vi.mock("./UserMessage", () => ({
+    UserMessage: ({ content }: { content: string }) => <div>{content}</div>,
+}));
+vi.mock("./AssistantMessage", () => ({ AssistantMessage: () => null }));
+vi.mock("./QuickActionsModal", () => ({ QuickActionsModal: () => null }));
+vi.mock("./AssistantWorkflowModal", () => ({
+    AssistantWorkflowModal: () => null,
+}));
+vi.mock("./ChatAccessModal", () => ({ ChatAccessModal: () => null }));
+
+const started: Message[] = [{ role: "user", content: "Summarise the lease" }];
+
+// jsdom has no element scrolling API. The initial message is positioned in a
+// pair of animation frames, which can run while an async menu assertion waits.
+beforeEach(() => {
+    workspaceState.workspaceId = "org-1";
+    workspaceState.setWorkspace.mockClear();
+    history.rows = [
+        { id: "chat-1", title: "Quarterly filing", org_id: "org-1" },
+        { id: "chat-2", title: "Lease review" },
+        { id: "chat-3", title: "Board minutes" },
+    ];
+    Object.defineProperty(HTMLElement.prototype, "scrollTo", {
+        configurable: true,
+        value: vi.fn(),
+    });
+});
+
+function Column({
+    newChat = false,
+    onLoadChat = vi.fn(),
+    onOpenSideChat,
+    onCloseSideChat,
+    hiddenChatId,
+    incomingExcerpt,
+    onIncomingExcerptAdded,
+    chatLoading,
+    paneId,
+    chat,
+}: {
+    chat?: Chat | null;
+    paneId?: string;
+    incomingExcerpt?: { id: number; excerpt: { text: string } } | null;
+    onIncomingExcerptAdded?: () => void;
+    chatLoading?: boolean;
+    newChat?: boolean;
+    onLoadChat?: (chatId: string) => void;
+    onOpenSideChat?: () => void;
+    onCloseSideChat?: () => void;
+    hiddenChatId?: string;
+}) {
+    const documentPanel = useAssistantDocumentPanel();
+    return (
+        <AssistantChatColumn
+            chatId={newChat ? null : "chat-1"}
+            chat={chat}
+            messages={newChat ? [] : started}
+            onInitialSubmit={newChat ? vi.fn() : undefined}
+            isResponseLoading={false}
+            handleChat={vi.fn().mockResolvedValue(null)}
+            cancel={vi.fn()}
+            onNewChat={vi.fn()}
+            documentPanel={documentPanel}
+            onLoadChat={onLoadChat}
+            onOpenSideChat={onOpenSideChat}
+            onCloseSideChat={onCloseSideChat}
+            hiddenChatId={hiddenChatId}
+            incomingExcerpt={incomingExcerpt}
+            onIncomingExcerptAdded={onIncomingExcerptAdded}
+            chatLoading={chatLoading}
+            paneId={paneId}
+        />
+    );
+}
+
+function press(element: HTMLElement) {
+    fireEvent.pointerDown(
+        element,
+        new MouseEvent("pointerdown", { bubbles: true, cancelable: true }),
+    );
+    fireEvent.click(element);
+}
+
+function openActions() {
+    press(screen.getByRole("button", { name: "Chat actions" }));
+}
+
+describe("the workspace a chat opens", () => {
+    beforeEach(() => {
+        useItemWorkspace.mockClear();
+        vi.stubGlobal(
+            "ResizeObserver",
+            class {
+                observe() {}
+                unobserve() {}
+                disconnect() {}
+            },
+        );
+    });
+
+    it("is the chat's own", () => {
+        render(<Column />);
+        expect(useItemWorkspace).toHaveBeenLastCalledWith("chat-1", "org-1");
+    });
+
+    it("keeps Colsons active while a History row without org_id loads its organization detail", () => {
+        // The overview RPC omits org_id; GET /chat/:id supplies it later.
+        history.rows = [{ id: "chat-1", title: "Draft completion steps", project_id: null }];
+        const { rerender } = render(<Column chat={null} />);
+        expect(workspaceState.setWorkspace).not.toHaveBeenCalled();
+        expect(useItemWorkspace).toHaveBeenLastCalledWith("chat-1", undefined);
+
+        rerender(<Column chat={{ ...history.rows[0], org_id: "org-1" } as Chat} />);
+        expect(useItemWorkspace).toHaveBeenLastCalledWith("chat-1", "org-1");
+        expect(workspaceState.setWorkspace).not.toHaveBeenCalled();
+    });
+
+    it("waits for explicit null before switching to Personal", () => {
+        history.rows = [{ id: "chat-1", title: "Personal chat", project_id: null }];
+        const { rerender } = render(<Column chat={null} />);
+        expect(workspaceState.setWorkspace).not.toHaveBeenCalled();
+        rerender(<Column chat={{ ...history.rows[0], org_id: null } as Chat} />);
+        expect(workspaceState.setWorkspace).toHaveBeenCalledExactlyOnceWith("personal");
+    });
+
+    it("does not use the previous chat's detail while the next one loads", () => {
+        history.rows = [];
+        const { rerender } = render(<Column chat={{ id: "old-chat", org_id: null } as Chat} />);
+        expect(workspaceState.setWorkspace).not.toHaveBeenCalled();
+        rerender(<Column chat={{ id: "chat-1", org_id: "org-1" } as Chat} />);
+        expect(workspaceState.setWorkspace).not.toHaveBeenCalled();
+        expect(useItemWorkspace).toHaveBeenLastCalledWith("chat-1", "org-1");
+    });
+
+    it("is not decided by a chat that has not begun", () => {
+        render(<Column newChat />);
+        expect(useItemWorkspace).toHaveBeenLastCalledWith(undefined, undefined);
+    });
+
+    it("is not decided by the chat beside the primary one", () => {
+        render(<Column paneId="side" />);
+        expect(useItemWorkspace).toHaveBeenLastCalledWith(null, "org-1");
+    });
+});
+
+describe("AssistantChatColumn header", () => {
+    beforeEach(() => {
+        addExcerpt.mockClear();
+        vi.stubGlobal(
+            "ResizeObserver",
+            class {
+                observe() {}
+                unobserve() {}
+                disconnect() {}
+            },
+        );
+    });
+
+    it("offers the chat history on a new chat, where there is nothing to leave", () => {
+        const onLoadChat = vi.fn();
+        render(<Column newChat onLoadChat={onLoadChat} />);
+
+        expect(
+            screen.queryByRole("button", { name: "New chat" }),
+        ).not.toBeInTheDocument();
+        press(screen.getByRole("button", { name: "Chat history" }));
+        fireEvent.click(screen.getByRole("menuitem", { name: /Lease review/ }));
+
+        expect(onLoadChat).toHaveBeenCalledWith("chat-2");
+    });
+
+    it("has no Load chat action on a new chat", () => {
+        render(<Column newChat />);
+        openActions();
+
+        expect(
+            screen.queryByRole("menuitem", { name: "Load chat" }),
+        ).not.toBeInTheDocument();
+    });
+
+    it("swaps the history button for New chat once the chat has started", () => {
+        render(<Column />);
+
+        expect(
+            screen.getByRole("button", { name: "New chat" }),
+        ).toBeInTheDocument();
+        expect(
+            screen.queryByRole("button", { name: "Chat history" }),
+        ).not.toBeInTheDocument();
+    });
+
+    it("opens the chat history in place of the actions from Load chat", async () => {
+        const onLoadChat = vi.fn();
+        render(<Column onLoadChat={onLoadChat} />);
+        openActions();
+        fireEvent.click(screen.getByRole("menuitem", { name: "Load chat" }));
+
+        fireEvent.click(
+            await screen.findByRole("menuitem", { name: /Board minutes/ }),
+        );
+        expect(
+            screen.queryByRole("menuitem", { name: "Rename" }),
+        ).not.toBeInTheDocument();
+        expect(onLoadChat).toHaveBeenCalledWith("chat-3");
+    });
+
+    it("leaves the chat in the other pane out of the history", () => {
+        render(<Column newChat hiddenChatId="chat-2" />);
+        press(screen.getByRole("button", { name: "Chat history" }));
+
+        expect(
+            screen.getByRole("menuitem", { name: /Board minutes/ }),
+        ).toBeInTheDocument();
+        expect(
+            screen.queryByRole("menuitem", { name: /Lease review/ }),
+        ).not.toBeInTheDocument();
+    });
+
+    it.each(["primary", "side"])("offers closing the side chat from the %s column", (paneId) => {
+        const onOpenSideChat = vi.fn();
+        const onCloseSideChat = vi.fn();
+        const { unmount } = render(<Column onOpenSideChat={onOpenSideChat} />);
+        openActions();
+        fireEvent.click(
+            screen.getByRole("menuitem", { name: "Open side chat" }),
+        );
+        expect(onOpenSideChat).toHaveBeenCalled();
+        unmount();
+
+        const { container } = render(
+            <Column paneId={paneId} onCloseSideChat={onCloseSideChat} />,
+        );
+        const column = container.querySelector(`[data-chat-pane="${paneId}"]`);
+        if (paneId === "side") expect(column).toHaveClass("hidden");
+        else expect(column).not.toHaveClass("hidden");
+        openActions();
+        expect(
+            screen.queryByRole("menuitem", { name: "Open side chat" }),
+        ).not.toBeInTheDocument();
+        fireEvent.click(
+            screen.getByRole("menuitem", { name: "Close side chat" }),
+        );
+        expect(onCloseSideChat).toHaveBeenCalled();
+    });
+
+    it("puts a passage quoted from the other chat into its composer, once", () => {
+        const onAdded = vi.fn();
+        const excerpt = { id: 1, excerpt: { text: "The notice period" } };
+        const { rerender } = render(
+            <Column incomingExcerpt={excerpt} onIncomingExcerptAdded={onAdded} />,
+        );
+
+        expect(addExcerpt).toHaveBeenCalledTimes(1);
+        expect(addExcerpt).toHaveBeenCalledWith({ text: "The notice period" });
+        expect(onAdded).toHaveBeenCalledTimes(1);
+
+        rerender(
+            <Column
+                incomingExcerpt={excerpt}
+                onIncomingExcerptAdded={onAdded}
+                chatLoading
+            />,
+        );
+        expect(addExcerpt).toHaveBeenCalledTimes(1);
+
+        rerender(
+            <Column
+                incomingExcerpt={{ id: 2, excerpt: { text: "Clause 4" } }}
+                onIncomingExcerptAdded={onAdded}
+            />,
+        );
+        expect(addExcerpt).toHaveBeenLastCalledWith({ text: "Clause 4" });
+    });
+});

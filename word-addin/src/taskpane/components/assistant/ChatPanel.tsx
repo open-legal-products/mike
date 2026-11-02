@@ -1,4 +1,4 @@
-import React, { useCallback } from "react";
+import React, { useCallback, useEffect, useRef } from "react";
 import { useWordAssistantChat } from "../../hooks/useWordAssistantChat";
 import { useWordTrackedEdits } from "../../hooks/useWordTrackedEdits";
 import type { Message as SavedMessage } from "../../types";
@@ -34,6 +34,13 @@ interface ChatPanelProps {
   chatReasoningLevel: ReasoningLevel | null;
   lastSelectedReasoningLevel: ReasoningLevel;
   initialMessages: SavedMessage[];
+  /**
+   * A turn the server is still generating into the opened chat. The pane
+   * attaches to it once this session has mounted, so a pane closed mid-answer
+   * — or a chat opened from history while its answer runs — shows the answer
+   * still streaming instead of a transcript with it missing.
+   */
+  resumeTurnId?: string | null;
   selectedWorkflow: WorkflowAttachment | null;
   onSelectedWorkflowChange: (workflow: WorkflowAttachment | null) => void;
   onChatIdChange: (chatId: string) => void;
@@ -60,6 +67,7 @@ export function ChatPanel({
   chatReasoningLevel,
   lastSelectedReasoningLevel,
   initialMessages,
+  resumeTurnId,
   selectedWorkflow,
   onSelectedWorkflowChange,
   onChatIdChange,
@@ -153,6 +161,20 @@ export function ChatPanel({
     // controller would tie handleChat's identity to every edit-state change.
     editController: trackedEdits.streamController,
   });
+
+  // Attach once per opened session. `sessionKey` is the conversation
+  // boundary the hook itself resets on, so keying the guard to it is what
+  // stops a re-render (or a finished turn) from reattaching.
+  const resumedSessionRef = useRef<number | null>(null);
+  const resumeTurn = chat.resumeTurn;
+  useEffect(() => {
+    if (!chatId || !resumeTurnId) return;
+    if (resumedSessionRef.current === sessionKey) return;
+    resumedSessionRef.current = sessionKey;
+    // A turn the server has forgotten answers 404; the transcript that has
+    // just loaded is then already complete, so there is nothing to report.
+    void resumeTurn({ chatId, turnId: resumeTurnId }).catch(() => {});
+  }, [chatId, resumeTurn, resumeTurnId, sessionKey]);
 
   const persistModelSelection = useCallback(
     async (model: string): Promise<void> => {

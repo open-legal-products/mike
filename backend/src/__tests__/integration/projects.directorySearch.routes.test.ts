@@ -80,15 +80,6 @@ vi.mock("../../lib/access", async (importOriginal) => ({
     resolveContentOrgId: vi.fn(async () => null),
 }));
 
-vi.mock("../../lib/userDataCleanup", () => ({
-    deleteProjectsByIds: vi.fn(async () => 0),
-    deleteAllUserChats: vi.fn(async () => {}),
-    deleteAllUserTabularReviews: vi.fn(async () => {}),
-    deleteUserAccountData: vi.fn(async () => {}),
-    deleteUserProjects: vi.fn(async () => 0),
-    listOrgsBlockingAccountDeletion: vi.fn(async () => []),
-}));
-
 vi.mock("../../lib/documentVersions", () => ({
     attachActiveVersionPaths: vi.fn(async () => {}),
     attachLatestVersionNumbers: vi.fn(async () => {}),
@@ -171,7 +162,10 @@ function directorySearchDb(options: {
                                 denied.has(project.id as string) &&
                                 orgIds.includes(project.org_id as string),
                         )
-                        .map((project) => ({ project_id: project.id }));
+                        .map((project) => ({
+                            project_id: project.id,
+                            role: "deny",
+                        }));
                 });
             if (table === "org_members") return build(table, () => memberships);
             return build(table, () => []);
@@ -271,7 +265,7 @@ describe("GET /projects?view=directory-search", () => {
         ]);
     });
 
-    it("asks for the deny overrides by org, never by a list of project ids", async () => {
+    it("asks for the caller's overrides by org, never by a list of project ids", async () => {
         // The candidate-id list grows with the firm's matters and is spliced
         // verbatim into the PostgREST query string, so a large tenant sent a
         // URL past the server's request-line limit; the read then failed and
@@ -291,11 +285,70 @@ describe("GET /projects?view=directory-search", () => {
             (read) => read.table === "project_org_access_overrides",
         );
         expect(overrideReads).toHaveLength(1);
-        expect(overrideReads[0].filters).toEqual([
-            "in:org_id",
-            "eq:user_id",
-            "eq:role",
-        ]);
+        // Every override the caller holds, not only the denials: a grant is
+        // what admits them to a private project.
+        expect(overrideReads[0].filters).toEqual(["in:org_id", "eq:user_id"]);
         expect(overrideReads[0].filters).not.toContain("in:project_id");
+    });
+
+    describe("narrowed to a workspace", () => {
+        // The picker offers documents to attach, and a chat or review takes
+        // documents from its own workspace only — so it searches that one.
+        const FIRM = "11111111-1111-4111-8111-111111111111";
+        const firmProject = { ...CREATED_ORG_PROJECT, org_id: FIRM };
+        const personalProject = {
+            id: "p-personal",
+            name: "Matter Personal",
+            org_id: null,
+            user_id: "u1",
+            updated_at: "2026-08-01T00:00:00Z",
+        };
+        const both = () =>
+            directorySearchDb({
+                created: [firmProject, personalProject],
+                orgProjects: [firmProject],
+                memberships: [{ org_id: FIRM, role: "member" }],
+            });
+        const searchIn = (workspace: string) =>
+            request(app)
+                .get(
+                    `/projects?view=directory-search&search=Matter&workspace=${workspace}`,
+                )
+                .set(...AUTH);
+        const ids = (res: { body: { id: string }[] }) =>
+            res.body.map((project) => project.id);
+
+        it("finds both when no workspace is named", async () => {
+            useDb(both());
+            const res = await search();
+            expect(res.status).toBe(200);
+            expect(ids(res)).toEqual(["p-firm", "p-personal"]);
+        });
+
+        it("leaves an organization's projects out of Personal", async () => {
+            useDb(both());
+            const res = await searchIn("personal");
+            expect(res.status).toBe(200);
+            expect(ids(res)).toEqual(["p-personal"]);
+        });
+
+        it("leaves personal projects out of an organization", async () => {
+            useDb(both());
+            const res = await searchIn(FIRM);
+            expect(res.status).toBe(200);
+            expect(ids(res)).toEqual(["p-firm"]);
+        });
+
+        it("404s a workspace the caller is not in", async () => {
+            useDb(
+                directorySearchDb({
+                    created: [personalProject],
+                    memberships: [],
+                }),
+            );
+            const res = await searchIn(FIRM);
+            expect(res.status).toBe(404);
+            expect(res.body.code).toBe("workspace_not_found");
+        });
     });
 });

@@ -1,16 +1,19 @@
 import { describe, expect, it, vi } from "vitest";
 import type { Message } from "@/app/components/shared/types";
-import { getChat } from "./mikeApi";
+import { getChat, stopChatTurn, streamChatTurn } from "./mikeApi";
 import {
   beginAssistantTurn,
   cancelAssistantTurn,
   getAssistantTurn,
   hasAssistantTurn,
   loadAssistantChat,
+  resumeAssistantTurn,
   withLiveTurn,
 } from "./assistantTurns";
-vi.mock("./mikeApi", () => ({ getChat: vi.fn() }));
+vi.mock("./mikeApi", () => ({ getChat: vi.fn(), streamChatTurn: vi.fn(), stopChatTurn: vi.fn() }));
 const getChatMock = vi.mocked(getChat);
+const streamChatTurnMock = vi.mocked(streamChatTurn);
+const stopChatTurnMock = vi.mocked(stopChatTurn);
 const history = { chat: { id: "a" }, messages: [{ role: "assistant", content: "Finished" }] } as Awaited<ReturnType<typeof getChat>>;
 
 const user = (content = "hello", id?: string): Message => ({ role: "user", content, ...(id ? { id } : {}) });
@@ -247,5 +250,119 @@ describe("withLiveTurn", () => {
     const named = turnOn({ userMessage: user("hello"), assistant: assistant("Streaming", "answer-1") });
     const onceNamed = withLiveTurn([], named);
     expect(withLiveTurn(onceNamed, named)).toEqual(onceNamed);
+  });
+});
+
+
+describe("resuming a server-owned turn after a reload", () => {
+  /** An SSE body the test releases frame by frame. */
+  function controllableStream() {
+    const encoder = new TextEncoder();
+    let controller!: ReadableStreamDefaultController<Uint8Array>;
+    const response = new Response(
+      new ReadableStream<Uint8Array>({ start(c) { controller = c; } }),
+      { status: 200 },
+    );
+    return {
+      response,
+      send: (seq: number, data: object) =>
+        controller.enqueue(encoder.encode(`id: ${seq}\ndata: ${JSON.stringify(data)}\n\n`)),
+      /** A comment line: wakes the reader without carrying a frame. */
+      keepAlive: () => controller.enqueue(encoder.encode(": keep-alive\n\n")),
+      done: (seq: number) => {
+        controller.enqueue(encoder.encode(`id: ${seq}\ndata: [DONE]\n\n`));
+        controller.close();
+      },
+    };
+  }
+  const tick = () => new Promise((resolve) => setTimeout(resolve, 10));
+  const active = { id: "turn-1", seq: 2, assistant_message_id: "answer-1" };
+  const text = (message: Message) =>
+    (message.events ?? []).map((e) => (e.type === "content" ? e.text : "")).join("");
+
+  it("attaches to the turn the server reports and streams it into the registry", async () => {
+    const body = controllableStream();
+    streamChatTurnMock.mockResolvedValue(body.response);
+    getChatMock.mockResolvedValue({ ...history, messages: [user("hello", "u1")], active_turn: active });
+    try {
+      const loaded = await loadAssistantChat("a");
+      expect(loaded.active_turn).toEqual(active);
+      // The whole stream is replayed: the reload saw none of it.
+      expect(streamChatTurnMock).toHaveBeenCalledWith({
+        chatId: "a", turnId: "turn-1", from: 1, signal: expect.any(AbortSignal),
+      });
+      const live = getAssistantTurn("a");
+      expect(live).not.toBeNull();
+      expect(live!.assistant.id).toBe("answer-1");
+      expect(live!.userMessage).toBeNull();
+      // Overlaid on the loaded history: the stored question, then the answer.
+      body.send(1, { type: "chat_id", chatId: "a", turnId: "turn-1", assistantMessageId: "answer-1" });
+      body.send(2, { type: "content_delta", text: "Partial" });
+      await tick();
+      expect(withLiveTurn(loaded.messages, live).map((m) => m.role)).toEqual(["user", "assistant"]);
+      expect(text(live!.assistant)).toBe("Partial");
+      body.send(3, { type: "content_delta", text: " and the rest" });
+      body.done(4);
+      await tick();
+      expect(text(live!.assistant)).toBe("Partial and the rest");
+      expect(live!.finished).toBe(true);
+      expect(hasAssistantTurn("a")).toBe(false);
+    } finally {
+      getChatMock.mockReset(); streamChatTurnMock.mockReset();
+    }
+  });
+
+  it("stops a resumed turn through the server, and labels it locally", async () => {
+    const body = controllableStream();
+    streamChatTurnMock.mockResolvedValue(body.response);
+    // The stop request failing (offline, or the run already gone) must not
+    // stop the local Stop from taking effect.
+    stopChatTurnMock.mockRejectedValue(new Error("offline"));
+    resumeAssistantTurn("a", active);
+    const live = getAssistantTurn("a")!;
+    body.send(1, { type: "content_delta", text: "Partial" });
+    await tick();
+    cancelAssistantTurn("a");
+    expect(stopChatTurnMock).toHaveBeenCalledWith("a", "turn-1");
+    expect(live.assistant.events).toEqual([
+      { type: "content", text: "Partial" },
+      { type: "content", text: "Cancelled by user." },
+    ]);
+    expect(live.finished).toBe(true);
+    // The reader notices the abort on its next read; the label is not
+    // added twice and the record stays as Stop left it.
+    body.keepAlive();
+    await tick();
+    expect(live.assistant.events).toHaveLength(2);
+    streamChatTurnMock.mockReset(); stopChatTurnMock.mockReset();
+  });
+
+  it("resumes a continuation turn with no row of its own without inventing an id", async () => {
+    // An ask-inputs answer continues an existing assistant row; the server
+    // names that row. An empty name means the record has no id to match by.
+    const body = controllableStream();
+    streamChatTurnMock.mockResolvedValue(body.response);
+    resumeAssistantTurn("a", { ...active, assistant_message_id: "" });
+    const live = getAssistantTurn("a")!;
+    expect(live.assistant.id).toBeUndefined();
+    body.done(1);
+    await tick();
+    expect(live.finished).toBe(true);
+    streamChatTurnMock.mockReset();
+  });
+
+  it("does not resume when a hook here already owns a turn for the chat, and reports a lost stream", async () => {
+    const own = begin("a");
+    resumeAssistantTurn("a", active);
+    expect(streamChatTurnMock).not.toHaveBeenCalled();
+    own.finish();
+
+    streamChatTurnMock.mockResolvedValue(new Response(null, { status: 404 }));
+    resumeAssistantTurn("a", active);
+    const live = getAssistantTurn("a")!;
+    await tick();
+    expect(live.finished).toBe(true);
+    expect(live.assistant.error).toBe("Sorry, something went wrong.");
+    streamChatTurnMock.mockReset();
   });
 });

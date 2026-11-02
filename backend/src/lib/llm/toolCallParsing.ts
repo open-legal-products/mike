@@ -140,13 +140,6 @@ export class TextToolMarkupFilter {
   }
 }
 
-export function stripThinkTags(text: string): string {
-  return text
-    .replace(/<think>[\s\S]*?<\/think>/g, "")
-    .replace(/<\/?think>/g, "")
-    .trim();
-}
-
 export function parseToolInput(value: unknown): Record<string, unknown> {
   if (value && typeof value === "object" && !Array.isArray(value)) {
     return value as Record<string, unknown>;

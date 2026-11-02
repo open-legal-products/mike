@@ -4,7 +4,7 @@ import { useEffect } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { Loader2 } from "lucide-react";
-import { authGlassCardClassName } from "@/app/components/auth/authStyles";
+import { authGlassCardUIClassName } from "@/shared/ui/AuthStylesUI";
 import { SiteLogo } from "@/app/components/site-logo";
 import { pillButtonUIClassName } from "@/shared/ui/PillButtonUI.styles";
 import { useAuth } from "@/app/contexts/AuthContext";
@@ -25,7 +25,7 @@ export default function SignupCheckEmailPage() {
                 <SiteLogo size="lg" asLink />
             </div>
             <div className="w-full max-w-md">
-                <div className={authGlassCardClassName}>
+                <div className={authGlassCardUIClassName}>
                     {authLoading || isAuthenticated ? (
                         <Loader2 className="mx-auto h-6 w-6 animate-spin text-gray-500" />
                     ) : (

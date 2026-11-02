@@ -7,6 +7,7 @@
 // a single module.
 
 import type { Db } from "../../lib/supabase";
+import { loadCreatorProfiles } from "../../lib/userLookup";
 export type { Db };
 import { deleteCollectionDocuments } from "../documents/documents.service";
 
@@ -80,8 +81,8 @@ export async function deleteProjectDocumentsAndVersionFiles(
   return result.ok ? null : result.kind === "error" ? result.error : result.detail;
 }
 
-// Shared core of the two attach*Labels helpers below: resolve the distinct
-// user_ids on the rows to trimmed, non-empty display names. Lookup failures
+// Resolve the distinct user_ids on document rows to trimmed, non-empty
+// display names. Lookup failures
 // only warn — a missing label must never fail the listing that wanted it.
 async function loadDisplayNamesByUserId(
   db: Db,
@@ -136,23 +137,48 @@ export async function attachDocumentOwnerLabels(
   }
 }
 
+/**
+ * Labels a project directory's documents and folders with their creator's
+ * name and photo, in one profile lookup. The directory renders a Creator
+ * column; lists that only need names use attachDocumentOwnerLabels.
+ */
+export async function attachDirectoryCreatorLabels(
+  db: Db,
+  docs: { user_id?: string | null }[],
+  folders: { user_id?: string | null }[],
+) {
+  const profileByUserId = await loadCreatorProfiles(db, [...docs, ...folders]);
+  const label = (row: {
+    user_id?: string | null;
+    owner_display_name?: string | null;
+    owner_profile_photo?: string | null;
+  }) => {
+    if (!row.user_id) return;
+    const profile = profileByUserId.get(row.user_id);
+    row.owner_display_name = profile?.display_name ?? null;
+    row.owner_profile_photo = profile?.profile_photo ?? null;
+  };
+  for (const doc of docs as { user_id?: string | null; owner_email?: string | null }[]) {
+    doc.owner_email = null;
+    label(doc);
+  }
+  for (const folder of folders) label(folder);
+}
+
 export async function attachChatCreatorLabels(
   db: Db,
   chats: { user_id?: string | null }[],
 ) {
-  const displayNameByUserId = await loadDisplayNamesByUserId(
-    db,
-    chats,
-    "chat creator profiles",
-  );
-  if (!displayNameByUserId) return;
-
+  const profileByUserId = await loadCreatorProfiles(db, chats);
   for (const chat of chats as ({
     user_id?: string | null;
     creator_display_name?: string | null;
+    creator_profile_photo?: string | null;
   })[]) {
     if (!chat.user_id) continue;
-    chat.creator_display_name = displayNameByUserId.get(chat.user_id) ?? null;
+    const profile = profileByUserId.get(chat.user_id);
+    chat.creator_display_name = profile?.display_name ?? null;
+    chat.creator_profile_photo = profile?.profile_photo ?? null;
   }
 }
 

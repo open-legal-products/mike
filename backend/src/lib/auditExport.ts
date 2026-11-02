@@ -1,12 +1,13 @@
 // Audit-history querying + CSV assembly.
 //
-// This lives in lib/ rather than routes/audit.ts because two callers need it:
-// the synchronous GET /audit/export route, and the "audit-csv" export job
-// (lib/dbq/handlers.ts), which runs in a worker where importing an Express
-// router would drag in the whole HTTP surface.
+// This lives in lib/ because two modules need it: the audit module's paginated
+// GET /audit, and the user module's "audit-csv" export job, which runs in a
+// worker where importing an Express router would drag in the whole HTTP
+// surface.
 
-import { listAccessibleProjectIds } from "./access";
-import { normalizeDisplayName } from "./userLookup";
+import { getOrgRole, isOrgAdmin } from "./access";
+import { mapWithConcurrency } from "./concurrency";
+import { normalizeDisplayName, normalizeEmail } from "./userLookup";
 import type { Db } from "./supabase";
 
 /** One CSV export is a single flat page; this caps the artifact size. */
@@ -16,8 +17,13 @@ export const AUDIT_EXPORT_LIMIT = 2000;
 // page keeps the offset well inside Postgres' integer range.
 const MAX_PAGE = 100_000;
 const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 export type AuditQuery = {
+    orgId?: string;
+    userName?: string;
+    actorUserId?: string;
+    eventIds?: string[];
     q?: string;
     action?: string;
     status?: string;
@@ -58,6 +64,28 @@ export function parseQuery(
     // Clamp page into [1, MAX_PAGE] so a huge ?page= can't overflow the offset.
     const parsedPage = Number.parseInt(String(raw.page ?? "1"), 10) || 1;
     const page = Math.min(Math.max(parsedPage, 1), MAX_PAGE);
+    const orgId = str(raw.org_id);
+    if (raw.org_id !== undefined && (!orgId || !UUID_RE.test(orgId)))
+        return { ok: false, error: "Invalid organization id" };
+    if (raw.username !== undefined && typeof raw.username !== "string")
+        return { ok: false, error: "Invalid username filter" };
+    const userName = str(raw.username)?.slice(0, 200);
+    const actorUserId = str(raw.actor_user_id);
+    if (raw.actor_user_id !== undefined && (!actorUserId || !UUID_RE.test(actorUserId)))
+        return { ok: false, error: "Invalid audit actor id" };
+    if (actorUserId && !orgId)
+        return { ok: false, error: "Actor filtering requires an organization" };
+    if (userName && !orgId)
+        return { ok: false, error: "Username filtering requires an organization" };
+    let eventIds: string[] | undefined;
+    if (raw.event_ids !== undefined) {
+        if (!Array.isArray(raw.event_ids) || raw.event_ids.length === 0 ||
+            raw.event_ids.length > AUDIT_EXPORT_LIMIT ||
+            raw.event_ids.some((id) => typeof id !== "string" || !UUID_RE.test(id))) {
+            return { ok: false, error: `Select between 1 and ${AUDIT_EXPORT_LIMIT} valid audit events` };
+        }
+        eventIds = [...new Set(raw.event_ids.map((id: string) => id.toLowerCase()))];
+    }
     const from = str(raw.from);
     const to = str(raw.to);
     const requestedSortBy = str(raw.sort_by);
@@ -85,6 +113,10 @@ export function parseQuery(
     return {
         ok: true,
         query: {
+            ...(orgId ? { orgId } : {}),
+            ...(userName ? { userName } : {}),
+            ...(actorUserId ? { actorUserId } : {}),
+            ...(eventIds ? { eventIds } : {}),
             q: str(raw.q)?.slice(0, 200),
             action: str(raw.action)?.slice(0, 60),
             status: str(raw.status)?.slice(0, 20),
@@ -102,17 +134,8 @@ export function parseQuery(
     };
 }
 
-/**
- * How many accessible project ids go into ONE PostgREST filter.
- *
- * The scope used to be a single `or=(user_id.eq.<id>,project_id.in.(<every
- * accessible project id>))`, spliced into the query STRING. Each uuid costs
- * 37 characters, so a few hundred matters pushed the request line past the
- * proxy/PostgREST limit and the audit page answered 500 — and it degraded
- * with the size of the firm, which is exactly the deployment that needs the
- * audit trail most.
- */
-const PROJECT_FILTER_CHUNK = 200;
+/** Selected-event IDs per personal-history request, below proxy URL limits. */
+const ID_FILTER_CHUNK = 200;
 
 /**
  * Deepest page the chunked read will assemble in memory.
@@ -127,9 +150,56 @@ const PROJECT_FILTER_CHUNK = 200;
 const MERGE_WINDOW_ROWS = 10_000;
 
 const AUDIT_EVENT_COLUMNS =
-    "id, created_at, user_id, user_email, action, status, title, surface, project_id, chat_id, document_id, review_id, model, detail";
+    "id, org_id, created_at, user_id, user_email, action, status, title, surface, project_id, chat_id, document_id, review_id, model, detail";
 
 type AuditRow = Record<string, unknown>;
+
+/** A person explicitly identified by an authorized member/invitation event. */
+function affectedUser(
+    event: AuditRow,
+): { column: "user_id" | "email"; value: string } | null {
+    const action = String(event.action ?? "");
+    if (
+        !action.startsWith("org.member.") &&
+        !action.startsWith("org.invite.") &&
+        action !== "org.private_content.permission_changed" &&
+        action !== "org.departure.member.departed"
+    ) return null;
+    const detail = event.detail as Record<string, unknown> | null;
+    const id = typeof detail?.target_user_id === "string"
+        ? detail.target_user_id.trim()
+        : "";
+    if (id) return { column: "user_id", value: id };
+    const email = normalizeEmail(detail?.target_email ?? event.title);
+    return /^[^\s@]+@[^\s@]+$/.test(email) ? { column: "email", value: email } : null;
+}
+
+/** Resolve current names without changing the event's recorded identity. */
+async function affectedUserNames(db: Db, events: AuditRow[]) {
+    const targets = events.map(affectedUser).filter((target) => target !== null);
+    const names = new Map<string, string>();
+    for (const column of ["user_id", "email"] as const) {
+        const values = [...new Set(targets
+            .filter((target) => target.column === column)
+            .map((target) => target.value))];
+        for (const batch of chunk(values, ID_FILTER_CHUNK)) {
+            // Fetch names only, scoped to affected people on the final authorized
+            // page. An ID never falls back to email, which may have changed owners.
+            const { data, error } = await db.from("user_profiles")
+                .select("user_id, email, display_name")
+                .in(column, batch);
+            if (error) continue; // The recorded identity remains the fallback.
+            for (const profile of data ?? []) {
+                const name = normalizeDisplayName(profile.display_name);
+                const key = column === "email"
+                    ? normalizeEmail(profile.email)
+                    : profile.user_id;
+                if (name) names.set(`${column}:${key}`, name);
+            }
+        }
+    }
+    return names;
+}
 
 type EventsResult = {
     data: AuditRow[] | null;
@@ -146,7 +216,6 @@ type EventsResult = {
 type EventsQuery = {
     eq(column: string, value: unknown): EventsQuery;
     in(column: string, values: unknown[]): EventsQuery;
-    or(filter: string): EventsQuery;
     ilike(column: string, pattern: string): EventsQuery;
     gte(column: string, value: unknown): EventsQuery;
     lte(column: string, value: unknown): EventsQuery;
@@ -169,7 +238,7 @@ function chunk<T>(values: T[], size: number): T[][] {
 const AUDIT_READ_PAGE_SIZE = 1000;
 
 async function readEventWindow(
-    makeQuery: () => EventsQuery,
+    makeQuery: () => Pick<EventsQuery, "range">,
     from: number,
     limit: number,
 ): Promise<EventsResult> {
@@ -209,6 +278,11 @@ function compareRows(a: AuditRow, b: AuditRow, q: AuditQuery): number {
     return String(a.id).localeCompare(String(b.id));
 }
 
+export async function canReadOrgAudit(db: Db, userId: string, orgId: string): Promise<boolean> {
+    const role = await getOrgRole(userId, orgId, db);
+    return role !== null && isOrgAdmin(role);
+}
+
 export async function queryEvents(
     db: Db,
     userId: string,
@@ -216,18 +290,12 @@ export async function queryEvents(
     q: AuditQuery,
     resolveDisplayNames = true,
 ) {
-    // The scope helper THROWS when one of its access reads fails, so that a
-    // walled matter can never leak through an unreadable override table. The
-    // GET /audit handler has no try/catch of its own (an unhandled rejection
-    // in an Express 4 handler hangs the request), so the throw is turned into
-    // the same `{ error }` shape a failed events query already returns and
-    // the route answers its generic 500.
-    let projectIds: string[];
+    // Organization access must fail closed. Personal
+    // activity is scoped directly to its actor, independent of project access.
     try {
-        // Shared with the chat/document listings: one definition of
-        // "projects this user can see" for everything that scopes a
-        // collection query.
-        projectIds = await listAccessibleProjectIds(userId, email, db);
+        if (q.orgId && !(await canReadOrgAudit(db, userId, q.orgId))) {
+            return { data: null, error: { message: "Organization audit access denied" }, count: null } satisfies EventsResult;
+        }
     } catch (err) {
         // Hand back the underlying PostgREST error when there is one, so the
         // route's log and the CSV job's retry see code/details/hint exactly
@@ -264,47 +332,62 @@ export async function queryEvents(
         }).order("id", { ascending: true, nullsFirst: false });
     };
 
-    const base = () =>
-        db
-            .from("audit_events")
-            .select(AUDIT_EVENT_COLUMNS, {
-                count: "exact",
-            }) as unknown as EventsQuery;
+    const base = () => db.from("audit_events")
+        .select(AUDIT_EVENT_COLUMNS, { count: "exact" }) as unknown as EventsQuery;
 
     const offset = (q.page - 1) * q.limit;
     let result: EventsResult;
 
-    if (projectIds.length === 0) {
-        result = await readEventWindow(
-            () => applyFilters(base().eq("user_id", userId)),
-            offset,
-            q.limit,
-        );
+    // Organization RPCs send selected IDs in a JSON body. Personal queries
+    // retain bounded URL partitions; username matching stays inside org SQL.
+    const eventChunks = q.orgId ? [q.eventIds]
+        : q.eventIds ? chunk(q.eventIds, ID_FILTER_CHUNK) : [undefined];
+    const queries = eventChunks.map((eventIds) => () => {
+        if (q.orgId) {
+            return {
+                range: async (from: number, to: number): Promise<EventsResult> => {
+                    // Pagination must happen inside the RPC, before its
+                    // resource joins and access checks. PostgREST's outer
+                    // range cannot push through a function with SET.
+                    const { data, error } = await db.rpc("organization_audit_events_page", {
+                        p_org_id: q.orgId,
+                        p_actor_id: userId,
+                        p_actor_email: email ?? null,
+                        p_filter: {
+                            username_pattern: q.userName ? `%${escapeLikePattern(q.userName)}%` : undefined,
+                            action: q.action,
+                            status: q.status,
+                            surface: q.surface,
+                            actor_user_id: q.actorUserId,
+                            title_pattern: q.q ? `%${escapeLikePattern(q.q)}%` : undefined,
+                            from: q.from,
+                            to: q.to ? `${q.to}T23:59:59.999Z` : undefined,
+                            ...(eventIds ? { event_ids: eventIds } : {}),
+                        },
+                        p_sort_by: q.sortBy,
+                        p_sort_direction: q.sortDirection,
+                        p_offset: from,
+                        p_limit: to - from + 1,
+                    });
+                    const page = data as { events: AuditRow[]; total: number } | null;
+                    return { data: page?.events ?? null, count: page?.total ?? null, error };
+                },
+            };
+        }
+        let query = base().eq("user_id", userId);
+        if (eventIds) query = query.in("id", eventIds);
+        return applyFilters(query);
+    });
+
+    if (queries.length === 1) {
+        result = await readEventWindow(queries[0], offset, q.limit);
     } else {
-        // The caller's OWN events and the events of projects they can reach
-        // are read as separate queries and merged here. Splitting on
-        // `user_id` keeps the two sides DISJOINT, which is what makes the
-        // exact counts summable and stops a row the caller wrote inside an
-        // accessible project appearing twice.
+        // Distinct selected-event partitions are disjoint,
+        // so their exact counts can be summed before merging the sorted rows.
         const window = Math.min(offset + q.limit, MERGE_WINDOW_ROWS);
-        const notTheCaller = `user_id.is.null,user_id.neq.${userId}`;
-        const responses: EventsResult[] = await Promise.all([
-            readEventWindow(
-                () => applyFilters(base().eq("user_id", userId)),
-                0,
-                window,
-            ),
-            ...chunk(projectIds, PROJECT_FILTER_CHUNK).map((ids) =>
-                readEventWindow(
-                    () =>
-                        applyFilters(
-                            base().in("project_id", ids).or(notTheCaller),
-                        ),
-                    0,
-                    window,
-                ),
-            ),
-        ]);
+        const responses = await mapWithConcurrency(queries, 4, (makeQuery) =>
+            readEventWindow(makeQuery, 0, window),
+        );
 
         const failed = responses.find((response) => response.error);
         if (failed) return failed;
@@ -342,20 +425,34 @@ export async function queryEvents(
         ),
     ];
     const displayNameByUserId = new Map<string, string | null>();
-    if (resolveDisplayNames) {
-        const { data: profiles, error: profileError } = await db
-            .from("user_profiles")
-            .select("user_id, display_name")
-            .in("user_id", userIds);
+    const photoByUserId = new Map<string, string | null>();
+    if (resolveDisplayNames && userIds.length) {
+        // Photos belong only to actors on this authorized organization page.
+        // Personal activity omits identities, and CSV exports skip this lookup.
+        const profilesQuery = db.from("user_profiles");
+        const { data: profiles, error: profileError } = await (q.orgId
+            ? profilesQuery.select("user_id, display_name, profile_photo")
+            : profilesQuery.select("user_id, display_name")
+        ).in("user_id", userIds);
         if (!profileError) {
             for (const profile of profiles ?? []) {
                 displayNameByUserId.set(
                     profile.user_id as string,
                     normalizeDisplayName(profile.display_name),
                 );
+                if (q.orgId) {
+                    photoByUserId.set(
+                        profile.user_id as string,
+                        (profile as { profile_photo?: string | null }).profile_photo ?? null,
+                    );
+                }
             }
         }
     }
+
+    const affectedNames = resolveDisplayNames
+        ? await affectedUserNames(db, result.data)
+        : new Map<string, string>();
 
     return {
         ...result,
@@ -364,10 +461,16 @@ export async function queryEvents(
         // without this the callers lose every other column from the type.
         data: result.data.map((row): AuditRow => {
             const { user_id: userId, ...event } = row;
+            const target = affectedUser(row);
+            const affectedName = target && affectedNames.get(`${target.column}:${target.value}`);
             return {
                 ...event,
+                ...(affectedName ? { affected_user_display_name: affectedName } : {}),
                 user_display_name:
                     displayNameByUserId.get(userId as string) ?? null,
+                ...(q.orgId ? {
+                    user_profile_photo: photoByUserId.get(userId as string) ?? null,
+                } : {}),
             };
         }),
     };
@@ -385,7 +488,7 @@ export function csvCell(v: unknown): string {
     return /[",\n\r]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
 }
 
-export const AUDIT_CSV_FILENAME = "history-export.csv";
+export const AUDIT_CSV_FILENAME = "my-activity.csv";
 
 /**
  * Render the caller's visible audit events as a CSV document. Throws on a
@@ -411,7 +514,7 @@ export async function buildAuditCsv(
     // sync route can log it exactly as it did before this helper existed.
     if (error) throw new Error(error.message, { cause: error });
     const header =
-        "created_at,user,action,status,title,application,project_id,model";
+        "created_at,user,action,status,title,application,project_id,model" + (query.orgId ? ",organization_id" : "");
     const rows = ((data ?? []) as Record<string, unknown>[]).map((e) =>
         [
             e.created_at,
@@ -422,6 +525,7 @@ export async function buildAuditCsv(
             e.surface,
             e.project_id,
             e.model,
+            ...(query.orgId ? [e.org_id] : []),
         ]
             .map(csvCell)
             .join(","),

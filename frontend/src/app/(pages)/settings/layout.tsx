@@ -1,18 +1,19 @@
 "use client";
 
-import { useEffect } from "react";
+import { useEffect, useMemo } from "react";
 import { usePathname, useRouter } from "next/navigation";
 import { Loader2 } from "lucide-react";
 import { useAuth } from "@/app/contexts/AuthContext";
-import { settingsTabButtonClassName } from "./settingsStyles";
+import { useOrganizationInvitationCount } from "@/app/hooks/useOrganizationInvitationCount";
+import { useMemberDataActions } from "@/app/hooks/useMemberDataActions";
+import {
+    SettingsShell,
+    type SettingsShellTab,
+} from "@/app/components/settings/SettingsShell";
+import { SettingsSearch } from "@/app/components/settings/SettingsSearch";
+import { SETTINGS_SEARCH_ENTRIES } from "@/app/lib/settingsSearch";
 
-interface TabDef {
-    id: string;
-    label: string;
-    href: string;
-}
-
-const TABS: TabDef[] = [
+const TABS: SettingsShellTab[] = [
     { id: "account", label: "Account", href: "/settings" },
     {
         id: "personalisation",
@@ -27,6 +28,11 @@ const TABS: TabDef[] = [
         label: "Privacy & Data",
         href: "/settings/privacy-data",
     },
+    {
+        id: "my-activity",
+        label: "My Activity",
+        href: "/settings/my-activity",
+    },
     { id: "security", label: "Security", href: "/settings/security" },
     { id: "models", label: "Model Preferences", href: "/settings/models" },
     {
@@ -35,6 +41,14 @@ const TABS: TabDef[] = [
         href: "/settings/byok",
     },
     { id: "connectors", label: "Connectors", href: "/settings/connectors" },
+    // The organizations the person belongs to, and their invitations. Each
+    // organization's own settings are a separate area, opened from here or
+    // from the account menu.
+    {
+        id: "organizations",
+        label: "Organizations",
+        href: "/settings/organizations",
+    },
 ];
 
 export default function SettingsLayout({
@@ -44,7 +58,29 @@ export default function SettingsLayout({
 }) {
     const router = useRouter();
     const pathname = usePathname();
-    const { isAuthenticated, authLoading } = useAuth();
+    const { user, isAuthenticated, authLoading } = useAuth();
+    const invitationCount = useOrganizationInvitationCount(
+        isAuthenticated && !authLoading ? user?.id : undefined,
+    );
+    // Privacy & Data has nothing to offer a member of an organization whose
+    // owners allow neither exports nor bulk deletes, so it is not listed.
+    const { canExport, canDelete } = useMemberDataActions();
+    const hidePrivacyData = !canExport && !canDelete;
+    const visibleTabs = useMemo(
+        () =>
+            TABS.filter(
+                (tab) => !(hidePrivacyData && tab.id === "privacy-data"),
+            ),
+        [hidePrivacyData],
+    );
+    // Search only what is listed: an entry on a hidden tab would open a page
+    // the person is not offered.
+    const searchEntries = useMemo(() => {
+        const visibleTabIds = new Set(visibleTabs.map((tab) => tab.id));
+        return SETTINGS_SEARCH_ENTRIES.filter((entry) =>
+            visibleTabIds.has(entry.tabId),
+        );
+    }, [visibleTabs]);
 
     useEffect(() => {
         if (!authLoading && !isAuthenticated) {
@@ -64,57 +100,36 @@ export default function SettingsLayout({
         return null;
     }
 
+    // My Activity is linked from Settings but uses the full table-page layout.
+    if (pathname === "/settings/my-activity") {
+        return children;
+    }
+
     return (
-        <div className="flex h-full flex-col overflow-y-auto">
-            <header className="mx-auto flex h-16 w-full max-w-5xl shrink-0 items-end px-6 pb-2 md:h-24 md:pb-4">
-                <h1 className="text-4xl font-medium font-eb-garamond">
-                    Settings
-                </h1>
-            </header>
-
-            <main className="mx-auto w-full max-w-5xl flex-1 px-6 pb-10 pt-4 md:pt-6">
-                <div className="grid grid-cols-1 gap-y-6 md:grid-cols-[224px_minmax(0,1fr)] md:gap-x-10">
-                    <nav
-                        aria-label="Settings"
-                        className="z-10 -ml-3 min-w-0 self-start md:sticky md:top-4"
-                    >
-                        <div className="-m-1 min-w-0 p-1">
-                            <div className="-m-1 min-w-0 overflow-x-auto overflow-y-hidden p-1">
-                                <ul className="mb-0 flex gap-1 md:flex-col">
-                                    {TABS.map((tab) => {
-                                        const active =
-                                            pathname === tab.href ||
-                                            (tab.href !== "/settings" &&
-                                                pathname.startsWith(tab.href));
-                                        return (
-                                            <li key={tab.id}>
-                                                <button
-                                                    type="button"
-                                                    aria-current={
-                                                        active
-                                                            ? "page"
-                                                            : undefined
-                                                    }
-                                                    onClick={() =>
-                                                        router.push(tab.href)
-                                                    }
-                                                    className={settingsTabButtonClassName(
-                                                        active,
-                                                    )}
-                                                >
-                                                    {tab.label}
-                                                </button>
-                                            </li>
-                                        );
-                                    })}
-                                </ul>
-                            </div>
-                        </div>
-                    </nav>
-
-                    <div className="min-w-0 outline-none">{children}</div>
-                </div>
-            </main>
-        </div>
+        <SettingsShell
+            title="Settings"
+            navLabel="Settings"
+            search={<SettingsSearch entries={searchEntries} />}
+            tabs={visibleTabs.map((tab) =>
+                tab.id === "organizations" && invitationCount > 0
+                    ? {
+                          ...tab,
+                          badge: (
+                              <span className="ml-2 inline-flex h-5 min-w-5 shrink-0 items-center justify-center rounded-full bg-blue-600 px-1.5 text-xs font-semibold tabular-nums text-white">
+                                  {invitationCount}{" "}
+                                  <span className="sr-only">
+                                      {invitationCount === 1
+                                          ? "pending invitation"
+                                          : "pending invitations"}
+                                  </span>
+                              </span>
+                          ),
+                      }
+                    : tab,
+            )}
+            rootHref="/settings"
+        >
+            {children}
+        </SettingsShell>
     );
 }

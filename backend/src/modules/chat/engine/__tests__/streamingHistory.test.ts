@@ -5,7 +5,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 // every assertion on it type-checks vacuously.
 type StreamChatCall = {
   systemPrompt: string;
-  messages: { role: string; content: string }[];
+  messages: { role: string; content: string; reasoning?: string }[];
   [key: string]: unknown;
 };
 
@@ -39,7 +39,7 @@ describe("runLLMStream history", () => {
     // replays as content "". Anthropic rejects the whole request over one
     // such block ("text content blocks must be non-empty").
     await runLLMStream({
-      model: "gemini-3-flash-preview",
+      model: "gemini-3.8-flash",
       apiMessages: [
         { role: "system", content: "SYSTEM" },
         { role: "user", content: "first" },
@@ -61,5 +61,80 @@ describe("runLLMStream history", () => {
       ["assistant", "kept"],
       ["user", "third"],
     ]);
+  });
+
+  it("carries attached reasoning on assistant turns through to the model call", async () => {
+    await runLLMStream({
+      model: "gemini-3.8-flash",
+      apiMessages: [
+        { role: "system", content: "SYSTEM" },
+        { role: "user", content: "first" },
+        { role: "assistant", content: "answer", reasoning: "why" },
+        { role: "user", content: "second" },
+      ],
+      docStore: new Map(),
+      docIndex: {},
+      userId: "u1",
+      db: {} as never,
+      write: vi.fn(),
+    });
+    const params = streamChatWithTools.mock.calls[0]![0];
+    expect(params.messages).toEqual([
+      { role: "user", content: "first" },
+      { role: "assistant", content: "answer", reasoning: "why" },
+      { role: "user", content: "second" },
+    ]);
+  });
+});
+
+type ReasoningCallbacks = {
+  onReasoningDelta: (delta: string) => void;
+  onReasoningBlockEnd: () => void;
+  onContentDelta: (delta: string) => void;
+};
+
+const streamArgs = () => ({
+  model: "gemini-3.8-flash",
+  apiMessages: [
+    { role: "system", content: "SYSTEM" },
+    { role: "user", content: "question" },
+  ],
+  docStore: new Map(),
+  docIndex: {},
+  userId: "u1",
+  db: {} as never,
+  write: vi.fn(),
+});
+
+describe("runLLMStream reasoning persistence", () => {
+  it("stores completed reasoning without model metadata", async () => {
+    streamChatWithTools.mockImplementationOnce(async (params) => {
+      const callbacks = params.callbacks as ReasoningCallbacks;
+      callbacks.onReasoningDelta("Thinking.");
+      callbacks.onReasoningBlockEnd();
+      callbacks.onContentDelta("Answer.");
+      return { fullText: "Answer." };
+    });
+
+    const { events } = await runLLMStream(streamArgs());
+
+    expect(events).toContainEqual({
+      type: "reasoning",
+      text: "Thinking.",
+    });
+  });
+
+  it("stores reasoning flushed from a failed turn without model metadata", async () => {
+    streamChatWithTools.mockImplementationOnce(async (params) => {
+      (params.callbacks as ReasoningCallbacks).onReasoningDelta("Half a thought");
+      throw new Error("upstream dropped");
+    });
+
+    const failure = await runLLMStream(streamArgs()).catch((e: unknown) => e);
+
+    expect((failure as { events?: unknown[] }).events).toContainEqual({
+      type: "reasoning",
+      text: "Half a thought",
+    });
   });
 });

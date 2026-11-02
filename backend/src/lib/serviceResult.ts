@@ -21,7 +21,7 @@
 // the narrowing guard for callers that compose several service calls.
 
 import type { Response } from "express";
-import { sendInternalError } from "./httpError";
+import { asReportableError, sendInternalError } from "./httpError";
 
 export type ServiceFailureKind =
   | "validation"
@@ -55,8 +55,35 @@ export function failure(
   return code ? { ok: false, kind, detail, code } : { ok: false, kind, detail };
 }
 
+// A service's `{ data, error }` from supabase-js carries a PLAIN object
+// (`{ code, message, details, hint }`), not an Error: it has no stack. Left
+// alone, the first stack anyone takes is inside the Sentry reporter, so the
+// issue points at the reporting code instead of the query that failed
+// (MIKE-BACKEND-A). The stack is therefore captured HERE, at the service
+// boundary, the only moment the failing service is still on the call stack.
+// The raw value stays in `error` (callers and tests read it); the wrapper
+// travels beside it as a non-enumerable property so equality checks and
+// spreads of the failure are unaffected — a spread copy simply falls back to
+// being wrapped later, in sendInternalError.
+const BOUNDARY_ERROR = Symbol("serviceBoundaryError");
+
 export function internalFailure(error: unknown): ServiceFailure {
-  return { ok: false, kind: "error", error };
+  const result: ServiceFailure = { ok: false, kind: "error", error };
+  if (!(error instanceof Error)) {
+    Object.defineProperty(result, BOUNDARY_ERROR, {
+      // `internalFailure` as the boundary: the top frame is the service.
+      value: asReportableError(error, internalFailure),
+      enumerable: false,
+    });
+  }
+  return result;
+}
+
+/** The Error that reports this failure: the original, or its boundary wrapper. */
+export function reportableServiceError(failure: ServiceFailure): unknown {
+  if (failure.kind !== "error") return undefined;
+  const boundary = (failure as { [BOUNDARY_ERROR]?: Error })[BOUNDARY_ERROR];
+  return boundary ?? failure.error;
 }
 
 export function isFailure<T>(
@@ -78,7 +105,9 @@ export function sendServiceFailure(
   res: Response,
   failure: ServiceFailure,
 ): Response {
-  if (failure.kind === "error") return sendInternalError(res, failure.error);
+  if (failure.kind === "error") {
+    return sendInternalError(res, reportableServiceError(failure));
+  }
   // `code` first: that is the key order the pre-existing handlers emitted.
   return res.status(STATUS_FOR_KIND[failure.kind]).json({
     ...(failure.code ? { code: failure.code } : {}),

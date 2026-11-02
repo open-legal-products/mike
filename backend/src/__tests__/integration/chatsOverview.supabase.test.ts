@@ -1,5 +1,7 @@
 import { createClient, type SupabaseClient } from "@supabase/supabase-js";
+import type { DocumentSearchEvent } from "@mike/contracts";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { getAccessibleChat, getChatMessages, leaveChat, listChats } from "../../modules/chat/chat.service";
 
 // Gated: runs only against a real (local) Supabase stack.
 //   supabase start, then export:
@@ -76,8 +78,16 @@ maybeDescribe("get_chats_overview — role-aware grants", () => {
         strangerId = stranger.data.user.id;
 
         const orgs = await admin.from("organizations").insert([
-            { id: sharedOrgId, name: `shared-${suffix}`, created_by: strangerId },
-            { id: foreignOrgId, name: `foreign-${suffix}`, created_by: strangerId },
+            {
+                id: sharedOrgId,
+                name: `shared-${suffix}`,
+                created_by: strangerId,
+            },
+            {
+                id: foreignOrgId,
+                name: `foreign-${suffix}`,
+                created_by: strangerId,
+            },
         ]);
         if (orgs.error) throw orgs.error;
 
@@ -89,23 +99,31 @@ maybeDescribe("get_chats_overview — role-aware grants", () => {
         if (members.error) throw members.error;
 
         const projects = await admin.from("projects").insert([
-            { id: myProjectId, user_id: callerId, name: `mine-${suffix}` },
+            {
+                id: myProjectId,
+                user_id: callerId,
+                name: `mine-${suffix}`,
+                visibility: "private",
+            },
             {
                 id: sharedOrgProjectId,
                 user_id: strangerId,
                 name: `org-${suffix}`,
                 org_id: sharedOrgId,
+                visibility: "organization",
             },
             {
                 id: grantedProjectId,
                 user_id: strangerId,
                 name: `granted-${suffix}`,
+                visibility: "private",
             },
             {
                 id: foreignOrgProjectId,
                 user_id: strangerId,
                 name: `foreign-${suffix}`,
                 org_id: foreignOrgId,
+                visibility: "organization",
             },
         ]);
         if (projects.error) throw projects.error;
@@ -121,11 +139,9 @@ maybeDescribe("get_chats_overview — role-aware grants", () => {
         ]);
         if (grants.error) throw grants.error;
 
-        // Chats with no project carry org_id null — there is no personal
-        // organization to park them in. Stamping the fixtures the way
-        // resolveContentOrgId stamps real rows is what makes the "the chat's
-        // own org branch can never add a row" claim in 20260902_05's header
-        // testable rather than merely asserted.
+        // Keep legacy personal rows with org_id null to exercise their
+        // creator/direct-grant access. Organization chats inherit the
+        // explicitly public project's visibility.
         const chatRows = await admin.from("chats").insert([
             {
                 id: chats.mine,
@@ -193,7 +209,10 @@ maybeDescribe("get_chats_overview — role-aware grants", () => {
                 grantedProjectId,
                 foreignOrgProjectId,
             ]);
-        await admin.from("organizations").delete().in("id", [sharedOrgId, foreignOrgId]);
+        await admin
+            .from("organizations")
+            .delete()
+            .in("id", [sharedOrgId, foreignOrgId]);
         if (callerId) await admin.auth.admin.deleteUser(callerId);
         if (strangerId) await admin.auth.admin.deleteUser(strangerId);
     });
@@ -237,6 +256,72 @@ maybeDescribe("get_chats_overview — role-aware grants", () => {
         expect(roleOf(chats.sharedDirectly)).toBe("editor"); // chat grant
     });
 
+    it("persists message activity and orders refreshed history by it", async () => {
+        const staleAt = "2000-01-01T00:00:00.000Z";
+        const stale = await admin
+            .from("chats")
+            .update({ updated_at: staleAt })
+            .eq("id", chats.inMyProject);
+        if (stale.error) throw stale.error;
+
+        const message = await admin.from("chat_messages").insert({
+            chat_id: chats.inMyProject,
+            author_user_id: callerId,
+            role: "user",
+            content: "Most recent message",
+        });
+        if (message.error) throw message.error;
+
+        const refreshed = await admin.rpc("get_chats_overview", {
+            p_user_id: callerId,
+            p_user_email: callerEmail,
+            p_limit: null,
+            p_offset: 0,
+        });
+
+        expect(refreshed.error).toBeNull();
+        const fixtureRows = (
+            refreshed.data as {
+                id: string;
+                created_at: string;
+                updated_at: string;
+            }[]
+        ).filter((row) => allChatIds.includes(row.id));
+        expect(fixtureRows[0]?.id).toBe(chats.inMyProject);
+        expect(Date.parse(fixtureRows[0]!.updated_at)).toBeGreaterThan(
+            Date.parse(staleAt),
+        );
+    });
+
+    it("pages with a stable activity cursor without repeating rows", async () => {
+        const first = await admin.rpc("get_chats_overview", {
+            p_user_id: callerId,
+            p_user_email: callerEmail,
+            p_limit: 2,
+            p_offset: 0,
+            p_before_updated_at: null,
+            p_before_id: null,
+        });
+        expect(first.error).toBeNull();
+        const firstRows = first.data as { id: string; updated_at: string }[];
+        expect(firstRows).toHaveLength(2);
+
+        const cursor = firstRows.at(-1)!;
+        const second = await admin.rpc("get_chats_overview", {
+            p_user_id: callerId,
+            p_user_email: callerEmail,
+            p_limit: 2,
+            p_offset: 0,
+            p_before_updated_at: cursor.updated_at,
+            p_before_id: cursor.id,
+        });
+        expect(second.error).toBeNull();
+        const secondRows = second.data as { id: string }[];
+        expect(secondRows).toHaveLength(2);
+        const firstIds = new Set(firstRows.map((row) => row.id));
+        expect(secondRows.some((row) => firstIds.has(row.id))).toBe(false);
+    });
+
     it("clamps and applies paging", async () => {
         const page = await admin.rpc("get_chats_overview", {
             p_user_id: callerId,
@@ -247,4 +332,66 @@ maybeDescribe("get_chats_overview — role-aware grants", () => {
         expect(page.error).toBeNull();
         expect((page.data as unknown[]).length).toBe(1);
     });
+
+    it("retrieves persisted document-search events through the chat history service", async () => {
+        const search: DocumentSearchEvent = {
+            type: "doc_search", search_id: "persisted-search", scope: "library",
+            query: "change of control", offset: 0, match_count: 3, next_offset: null,
+        };
+        const messageId = crypto.randomUUID();
+        const saved = await admin.from("chat_messages").insert({
+            id: messageId,
+            chat_id: chats.mine,
+            role: "assistant",
+            content: [search, { type: "content", text: "Found three matching documents." }],
+        });
+        expect(saved.error).toBeNull();
+
+        const access = await getAccessibleChat(admin, { chatId: chats.mine, userId: callerId, userEmail: callerEmail });
+        expect(access.ok).toBe(true);
+        const messages = await getChatMessages(admin, chats.mine);
+        expect(messages.find((message) => message.id === messageId)?.content).toEqual([
+            search,
+            { type: "content", text: "Found three matching documents." },
+        ]);
+    });
+
+    it("leaves a directly shared chat without deleting it, its messages or other access", async () => {
+        const message = await admin.from("chat_messages").insert({
+            chat_id: chats.sharedDirectly, role: "user", content: "Synthetic shared message", author_user_id: strangerId,
+        });
+        expect(message.error).toBeNull();
+        const args = { chatId: chats.sharedDirectly, userId: callerId, userEmail: callerEmail };
+        const before = await listChats(admin, { ...args, limit: null, offset: 0, beforeUpdatedAt: null, beforeId: null });
+        expect(before.ok && before.data).toContainEqual(expect.objectContaining({ id: chats.sharedDirectly, can_leave: true }));
+        let restoreError: unknown;
+        try {
+            expect(await leaveChat(admin, args)).toEqual({ ok: true, data: undefined });
+            expect(await getAccessibleChat(admin, args)).toEqual({ ok: false });
+            const after = await listChats(admin, { ...args, limit: null, offset: 0, beforeUpdatedAt: null, beforeId: null });
+            expect(after.ok && after.data).not.toContainEqual(expect.objectContaining({ id: chats.sharedDirectly }));
+            const retained = await admin.from("chats").select("id").eq("id", chats.sharedDirectly).single();
+            expect(retained.error).toBeNull();
+            const messages = await admin.from("chat_messages").select("id").eq("chat_id", chats.sharedDirectly);
+            expect(messages.error).toBeNull();
+            expect(messages.data).toHaveLength(1);
+            const owner = await getAccessibleChat(admin, { chatId: chats.sharedDirectly, userId: strangerId, userEmail: null });
+            expect(owner.ok && owner.projectRole).toBe("owner");
+            const otherGrant = await admin.from("project_access_grants").select("role").eq("project_id", grantedProjectId).eq("email", callerEmail.toLowerCase()).single();
+            expect(otherGrant.error).toBeNull();
+            expect(otherGrant.data?.role).toBe("editor");
+        } finally {
+            try {
+                const restored = await admin.from("chat_access_grants").upsert({
+                    chat_id: chats.sharedDirectly, email: callerEmail.toLowerCase(), role: "editor", created_by: strangerId,
+                }, { onConflict: "chat_id,email" });
+                restoreError = restored.error;
+            } catch (error) {
+                restoreError = error;
+            }
+        }
+        // Reached only when the assertions succeeded; preserve any original failure.
+        if (restoreError) throw restoreError;
+    });
+
 });

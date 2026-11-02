@@ -1,3 +1,4 @@
+import { useState } from "react";
 import { fireEvent, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
@@ -26,31 +27,38 @@ const chats: Chat[] = [
     },
 ];
 
-function renderTable(selectedChatIds: string[]) {
+function renderTable(selectedChatIds: string[], canCreateChat = true, rows = chats) {
+    const onCreateChat = vi.fn();
     const onDeleteChat = vi.fn();
     const onDeleteSelectedChats = vi.fn();
     const onOpenChat = vi.fn();
     const setSelectedChatIds = vi.fn();
-    render(
-        <ProjectAssistantTable
-            chats={chats}
-            filteredChats={chats}
+    function Harness() {
+        const [renamingChatId, setRenamingChatId] = useState<string | null>(null);
+        const [renameChatValue, setRenameChatValue] = useState("");
+        return <ProjectAssistantTable
+            renderToolbar={(actions) => <>{actions}</>}
+            canCreateChat={canCreateChat}
+            chats={rows}
+            filteredChats={rows}
             selectedChatIds={selectedChatIds}
-            renamingChatId={null}
-            renameChatValue=""
+            renamingChatId={renamingChatId}
+            renameChatValue={renameChatValue}
             currentUserId="user-1"
-            onCreateChat={vi.fn()}
+            onCreateChat={onCreateChat}
             onOpenChat={onOpenChat}
             onDeleteChat={onDeleteChat}
             onDeleteSelectedChats={onDeleteSelectedChats}
             onOwnerOnlyAction={vi.fn()}
             submitChatRename={vi.fn()}
             setSelectedChatIds={setSelectedChatIds}
-            setRenamingChatId={vi.fn()}
-            setRenameChatValue={vi.fn()}
-        />,
-    );
+            setRenamingChatId={setRenamingChatId}
+            setRenameChatValue={setRenameChatValue}
+        />;
+    }
+    render(<Harness />);
     return {
+        onCreateChat,
         onDeleteChat,
         onDeleteSelectedChats,
         onOpenChat,
@@ -59,17 +67,80 @@ function renderTable(selectedChatIds: string[]) {
 }
 
 describe("ProjectAssistantTable row context actions", () => {
-    it("deletes the whole selection when right-clicking a selected row", async () => {
+    it.each(["viewer", "editor"] as const)("hides owner actions and Leave for a project %s on every menu", async (role) => {
+        const user = userEvent.setup();
+        renderTable(["chat-1"], true, chats.map((chat) => ({ ...chat, access_role: role })));
+        await user.click(screen.getByRole("button", { name: "Actions" }));
+        expect(screen.getAllByRole("menuitem").map((item) => item.textContent)).toEqual(["View"]);
+        await user.keyboard("{Escape}");
+        fireEvent.contextMenu(screen.getByText("First chat"));
+        expect(screen.getAllByRole("menuitem").map((item) => item.textContent)).toEqual(["View"]);
+        await user.keyboard("{Escape}");
+        await user.click(screen.getAllByRole("button", { name: "Open row actions" })[0]);
+        expect(screen.getAllByRole("menuitem").map((item) => item.textContent)).toEqual(["View"]);
+    });
+
+    it("does not offer bulk deletion for a selection containing a non-owner chat", async () => {
+        const user = userEvent.setup();
+        renderTable(["chat-1", "chat-2"], true, [chats[0], { ...chats[1], access_role: "editor" }]);
+        await user.click(screen.getByRole("button", { name: "Actions" }));
+        expect(screen.queryByRole("menuitem", { name: /Delete/ })).toBeNull();
+    });
+
+    it.each([1, 2])("matches toolbar and right-click actions for %i selected chats", async (count) => {
+        const user = userEvent.setup();
+        renderTable(chats.slice(0, count).map((chat) => chat.id));
+        await user.click(screen.getByRole("button", { name: "Actions" }));
+        const toolbarItems = screen.getAllByRole("menuitem").map((item) => item.textContent);
+        expect(toolbarItems).toEqual(count === 1 ? ["View", "Rename", "Delete"] : ["Delete 2 chats"]);
+        await user.keyboard("{Escape}");
+        fireEvent.contextMenu(screen.getByText("First chat"));
+        expect(screen.getAllByRole("menuitem").map((item) => item.textContent)).toEqual(toolbarItems);
+    });
+
+    it("keeps focus in the rename field after a toolbar action", async () => {
+        const user = userEvent.setup();
+        renderTable(["chat-1"]);
+        await user.click(screen.getByRole("button", { name: "Actions" }));
+        await user.click(screen.getByRole("menuitem", { name: "Rename" }));
+        const input = screen.getByDisplayValue("First chat");
+        expect(input).toHaveFocus();
+        await user.type(input, " renamed");
+        expect(input).toHaveValue("First chat renamed");
+    });
+
+    it("confirms a single toolbar delete before invoking the handler", async () => {
+        const user = userEvent.setup();
+        const { onDeleteChat, onDeleteSelectedChats } = renderTable(["chat-1"]);
+        await user.click(screen.getByRole("button", { name: "Actions" }));
+        await user.click(screen.getByRole("menuitem", { name: "Delete" }));
+        expect(onDeleteChat).not.toHaveBeenCalled();
+        await user.click(screen.getByRole("button", { name: "Delete" }));
+        expect(onDeleteChat).toHaveBeenCalledWith(chats[0]);
+        expect(onDeleteSelectedChats).not.toHaveBeenCalled();
+    });
+
+    it.each([false, true])("gates empty-state Create on resolved edit permission (%s)", (allowed) => {
+        const { onCreateChat } = renderTable([], allowed, []);
+        const button = screen.getByRole("button", { name: "Create" });
+        if (allowed) expect(button).toBeEnabled();
+        else expect(button).toBeDisabled();
+        fireEvent.click(button);
+        expect(onCreateChat).toHaveBeenCalledTimes(allowed ? 1 : 0);
+    });
+    it.each(["right-click", "toolbar"])("deletes the whole selection from the %s menu", async (surface) => {
         const user = userEvent.setup();
         const { onDeleteChat, onDeleteSelectedChats } = renderTable([
             "chat-1",
             "chat-2",
         ]);
 
-        fireEvent.contextMenu(screen.getByText("First chat"));
-        expect(screen.queryByRole("button", { name: "Rename" })).toBeNull();
-        expect(screen.queryByRole("button", { name: "View" })).toBeNull();
-        await user.click(screen.getByRole("button", { name: "Delete 2 chats" }));
+        if (surface === "toolbar")
+            await user.click(screen.getByRole("button", { name: "Actions" }));
+        else fireEvent.contextMenu(screen.getByText("First chat"));
+        expect(screen.queryByRole("menuitem", { name: "Rename" })).toBeNull();
+        expect(screen.queryByRole("menuitem", { name: "View" })).toBeNull();
+        await user.click(screen.getByRole("menuitem", { name: "Delete 2 chats" }));
 
         expect(onDeleteSelectedChats).toHaveBeenCalledOnce();
         expect(onDeleteChat).not.toHaveBeenCalled();
@@ -80,7 +151,7 @@ describe("ProjectAssistantTable row context actions", () => {
         const { onDeleteChat, onDeleteSelectedChats } = renderTable(["chat-2"]);
 
         fireEvent.contextMenu(screen.getByText("First chat"));
-        await user.click(screen.getByRole("button", { name: "Delete" }));
+        await user.click(screen.getByRole("menuitem", { name: "Delete" }));
         // The single-row delete is confirmed first; the bulk one is confirmed
         // by the page that owns the selection.
         await user.click(screen.getByRole("button", { name: "Delete" }));
@@ -94,7 +165,7 @@ describe("ProjectAssistantTable row context actions", () => {
         const { onOpenChat } = renderTable([]);
 
         fireEvent.contextMenu(screen.getByText("First chat"));
-        await user.click(screen.getByRole("button", { name: "View" }));
+        await user.click(screen.getByRole("menuitem", { name: "View" }));
 
         expect(onOpenChat).toHaveBeenCalledWith("chat-1");
     });
@@ -137,5 +208,31 @@ describe("ProjectAssistantTable row context actions", () => {
         expect(firstSelection).toEqual(["chat-1"]);
         expect(secondUpdate(firstSelection)).toEqual(["chat-1", "chat-2"]);
         expect(onOpenChat).not.toHaveBeenCalled();
+    });
+});
+
+describe("ProjectAssistantTable creator column", () => {
+    it("shows the creator's avatar beside their label", () => {
+        renderTable([], true, [
+            chats[0],
+            { ...chats[1], user_id: "user-2", creator_display_name: "Ada Lovelace" },
+        ]);
+        expect(screen.getByText("Me")).toBeVisible();
+        expect(screen.getAllByRole("img", { name: /User|Ada Lovelace/ })).toHaveLength(2);
+        expect(screen.getByRole("img", { name: "Ada Lovelace" })).toHaveTextContent("AL");
+    });
+});
+
+describe("ProjectAssistantTable creator filter", () => {
+    it("narrows the chats to the chosen creator", async () => {
+        const user = userEvent.setup();
+        renderTable([], true, [
+            chats[0],
+            { ...chats[1], user_id: "user-2", creator_display_name: "Ada Lovelace" },
+        ]);
+        await user.click(screen.getByRole("button", { name: "Filter by creator" }));
+        await user.click(await screen.findByRole("button", { name: /Ada Lovelace/ }));
+        expect(screen.getByText("Second chat")).toBeVisible();
+        expect(screen.queryByText("First chat")).toBeNull();
     });
 });

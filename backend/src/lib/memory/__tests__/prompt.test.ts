@@ -8,10 +8,27 @@ vi.mock("../files", () => ({
   getMemoryCurrent: (...args: unknown[]) => getMemoryCurrent(...args),
 }));
 
+// Which organizations are team ones is the database's to say.
+const teamOrgIdOf = vi.hoisted(() => vi.fn());
+vi.mock("../../personalOrgs", () => ({
+  teamOrgIdOf: (...args: unknown[]) => teamOrgIdOf(...args),
+}));
+const reportError = vi.hoisted(() => vi.fn());
+vi.mock("../../observability/sentry", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../observability/sentry")>()),
+  reportError,
+}));
+
+import { AppError } from "../../appError";
 import { buildMemoryTurn, MEMORY_SYSTEM_POLICY } from "../prompt";
 
 beforeEach(() => {
+  reportError.mockReset();
   getMemoryCurrent.mockReset();
+  teamOrgIdOf.mockReset();
+  teamOrgIdOf.mockImplementation(
+    async (_db: unknown, orgId: string | null | undefined) => orgId ?? null,
+  );
 });
 
 function nonceOf(turn: { message: { content: string } | null }): string {
@@ -19,6 +36,85 @@ function nonceOf(turn: { message: { content: string } | null }): string {
   if (!match) throw new Error("memory turn has no fenced document");
   return match[1];
 }
+
+// A person has one memory per workspace, and a conversation is shown only
+// the one for the workspace it is in.
+describe("the active user's memory, by workspace", () => {
+  const turnIn = (orgId?: string | null) =>
+    buildMemoryTurn({
+      db: {} as never,
+      systemPrompt: "BASE",
+      userId: "user-1",
+      orgId,
+    });
+
+  it("shows a chat in an organization that organization's memory, not Personal", async () => {
+    getMemoryCurrent.mockResolvedValue({
+      current: { enabled: true, content: "# Learned at the firm" },
+    });
+    const turn = await turnIn("org-1");
+
+    expect(getMemoryCurrent).toHaveBeenCalledExactlyOnceWith(
+      {},
+      "user",
+      "user-1",
+      "org-1",
+    );
+    expect(turn.message?.content).toContain("# Learned at the firm");
+  });
+
+  it("shows a personal chat the Personal memory, asking nothing about organizations", async () => {
+    getMemoryCurrent.mockResolvedValue({
+      current: { enabled: true, content: "# Personal" },
+    });
+    await turnIn(null);
+
+    expect(teamOrgIdOf).not.toHaveBeenCalled();
+    expect(getMemoryCurrent).toHaveBeenCalledExactlyOnceWith(
+      {},
+      "user",
+      "user-1",
+    );
+  });
+
+  it("treats a chat filed under a personal organization as Personal", async () => {
+    teamOrgIdOf.mockResolvedValue(null);
+    getMemoryCurrent.mockResolvedValue({
+      current: { enabled: true, content: "# Personal" },
+    });
+    await turnIn("personal-org");
+
+    expect(getMemoryCurrent).toHaveBeenCalledExactlyOnceWith(
+      {},
+      "user",
+      "user-1",
+      null,
+    );
+  });
+
+  it("shows no memory at all when it cannot tell which workspace this is", async () => {
+    // Falling back to Personal here is the leak this rule exists to stop.
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    teamOrgIdOf.mockRejectedValue(new Error("connection reset"));
+    const turn = await turnIn("org-1");
+
+    expect(getMemoryCurrent).not.toHaveBeenCalled();
+    expect(turn).toEqual({ message: null, systemPrompt: "BASE" });
+    warn.mockRestore();
+  });
+
+  it("never shows it to a shared-audience conversation, whatever the workspace", async () => {
+    const turn = await buildMemoryTurn({
+      db: {} as never,
+      systemPrompt: "BASE",
+      userId: "user-1",
+      orgId: "org-1",
+      sharedAudience: true,
+    });
+    expect(getMemoryCurrent).not.toHaveBeenCalled();
+    expect(turn.message).toBeNull();
+  });
+});
 
 describe("buildMemoryTurn", () => {
   it("loads app and project memory in parallel", async () => {
@@ -207,8 +303,9 @@ describe("buildMemoryTurn", () => {
 
   it("omits disabled content and contains strict read failures", async () => {
     const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const unavailable = new Error("storage unavailable");
     getMemoryCurrent
-      .mockRejectedValueOnce(new Error("storage unavailable"))
+      .mockRejectedValueOnce(unavailable)
       .mockResolvedValueOnce({
         current: { enabled: false, content: "must not appear" },
       });
@@ -225,6 +322,15 @@ describe("buildMemoryTurn", () => {
       "[memory-context] scoped memory could not be loaded",
       { scope: "app" },
     );
+    // Contained for the answer, reported for the operator: one warning under
+    // its kind with the read's error as the cause. The disabled scope, which
+    // loaded fine, reports nothing.
+    expect(reportError).toHaveBeenCalledTimes(1);
+    const [reported, context] = reportError.mock.calls[0];
+    expect(reported).toBeInstanceOf(AppError);
+    expect((reported as AppError).kind).toBe("memory.consolidation_failed");
+    expect((reported as AppError).cause).toBe(unavailable);
+    expect(context).toEqual({ level: "warning" });
     warn.mockRestore();
   });
 });

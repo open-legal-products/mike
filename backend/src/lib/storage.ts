@@ -1,94 +1,80 @@
 /**
- * Cloudflare R2 storage utilities for Mike document management.
- * R2 is S3-compatible — uses @aws-sdk/client-s3.
+ * Object storage facade for Mike document management.
  *
- * Required env vars:
- *   R2_ENDPOINT_URL     — https://<account-id>.r2.cloudflarestorage.com
- *   R2_ACCESS_KEY_ID    — R2 API token (Access Key ID)
- *   R2_SECRET_ACCESS_KEY — R2 API token (Secret Access Key)
- *   R2_BUCKET_NAME      — bucket name (default: "mike")
+ * The transport lives behind the StorageAdapter interface
+ * (./storage/adapter.ts); the default is the S3-protocol adapter
+ * (./storage/s3.ts — Cloudflare R2, RustFS, MinIO). This module owns the
+ * policy every backend shares: not-configured degradation (reads return
+ * null/empty, writes throw), error logging, StorageOperationError wrapping,
+ * Content-Disposition building, and the storage-key layout.
+ *
+ * Deployments on a different object store implement StorageAdapter in one
+ * file and call setStorageAdapter() at boot; no call sites change.
  */
 
-import {
-  S3Client,
-  PutObjectCommand,
-  CopyObjectCommand,
-  DeleteObjectCommand,
-  HeadObjectCommand,
-  ListObjectsV2Command,
-} from "@aws-sdk/client-s3";
-import * as S3Commands from "@aws-sdk/client-s3";
-import { getSignedUrl as awsGetSignedUrl } from "@aws-sdk/s3-request-presigner";
-import { createReadStream } from "node:fs";
-import { stat } from "node:fs/promises";
+import { AppError, type ErrorKind } from "./appError";
+import { bestEffort } from "./observability/sentry";
 import { Readable } from "node:stream";
+import type {
+  StorageAdapter,
+  StoredObjectMetadata,
+} from "./storage/adapter";
+import { createS3StorageAdapter } from "./storage/s3";
+import { createFilesystemStorageAdapter } from "./storage/filesystem";
+import { buildContentDisposition } from "./storage/filenames";
+export { BlobUploadSizeError } from "./storage/filesystem";
+export {
+  buildContentDisposition,
+  encodeRFC5987,
+  normalizeDownloadFilename,
+  sanitizeDispositionFilename,
+} from "./storage/filenames";
 
-const GetObjectCommand = (S3Commands as any).GetObjectCommand;
+export type { StorageAdapter, StoredObjectMetadata } from "./storage/adapter";
 
-let cachedClient: S3Client | undefined;
-let cachedUploadSigningClient:
-  | { endpoint: string; client: S3Client }
-  | undefined;
+let adapter: StorageAdapter = process.env.STORAGE_DRIVER === "fs"
+  ? createFilesystemStorageAdapter()
+  : createS3StorageAdapter();
 
-// The SDK defaults to computing a CRC32 checksum for every PutObject. When a
-// request is only presigned, that checksum is computed over the *empty*
-// signable body and hoisted into the query string, so a checksum-validating
-// store rejects the browser's real body. Only send a checksum where the S3
-// operation actually requires one.
-const CHECKSUM_DEFAULTS = {
-  requestChecksumCalculation: "WHEN_REQUIRED",
-  responseChecksumValidation: "WHEN_REQUIRED",
-} as const;
+export let storageEnabled = adapter.enabled;
 
-function getClient(): S3Client {
-  if (!cachedClient) {
-    cachedClient = new S3Client({
-      region: "auto",
-      endpoint: process.env.R2_ENDPOINT_URL!,
-      forcePathStyle: true,
-      ...CHECKSUM_DEFAULTS,
-      credentials: {
-        accessKeyId: process.env.R2_ACCESS_KEY_ID!,
-        secretAccessKey: process.env.R2_SECRET_ACCESS_KEY!,
-      },
-    });
-  }
-  return cachedClient;
+/** Replace the storage backend. Call before the first request is served. */
+export function setStorageAdapter(next: StorageAdapter): void {
+  adapter = next;
+  storageEnabled = next.enabled;
 }
 
-function getUploadSigningClient(): S3Client {
-  const endpoint =
-    process.env.R2_PUBLIC_ENDPOINT_URL || process.env.R2_ENDPOINT_URL!;
-  if (cachedUploadSigningClient?.endpoint === endpoint) {
-    return cachedUploadSigningClient.client;
+const STORAGE_FAILURE_KIND = {
+  HEAD: "storage.head_failed",
+  copy: "storage.copy_failed",
+  upload: "storage.upload_failed",
+  download: "storage.download_failed",
+  delete: "storage.delete_failed",
+} as const satisfies Record<string, ErrorKind>;
+
+export type StorageOperation = keyof typeof STORAGE_FAILURE_KIND;
+
+/**
+ * One object-storage call failed. The operation is the kind (one issue per
+ * operation), the adapter's own error is the cause (its AWS/system code
+ * reaches Sentry as `failure_code`); the key never leaves the process.
+ */
+export class StorageOperationError extends AppError {
+  constructor(readonly operation: StorageOperation, options?: { cause?: unknown }) {
+    super(STORAGE_FAILURE_KIND[operation], `Object storage ${operation} failed`, options);
   }
-  const client = new S3Client({
-    region: "auto",
-    endpoint,
-    forcePathStyle: true,
-    ...CHECKSUM_DEFAULTS,
-    credentials: {
-      accessKeyId: process.env.R2_ACCESS_KEY_ID!,
-      secretAccessKey: process.env.R2_SECRET_ACCESS_KEY!,
-    },
-  });
-  cachedUploadSigningClient = { endpoint, client };
-  return client;
 }
 
-const BUCKET = process.env.R2_BUCKET_NAME ?? "mike";
-
-export const storageEnabled = Boolean(
-  process.env.R2_ENDPOINT_URL &&
-  process.env.R2_ACCESS_KEY_ID &&
-  process.env.R2_SECRET_ACCESS_KEY,
-);
-
+/**
+ * A storage failure this facade absorbs: the caller gets null, as it does
+ * when storage is not configured, so nothing above reports it. Report it
+ * here, once, with the operation (and the SDK's code via the cause) on the
+ * event, then log the SAME object: the console bridge recognises a reported
+ * error and files no second, context-free "Failure in application".
+ */
 function requireStorageConfig(): void {
-  if (!storageEnabled) {
-    throw new Error(
-      "R2_ENDPOINT_URL, R2_ACCESS_KEY_ID, and R2_SECRET_ACCESS_KEY must be set",
-    );
+  if (!adapter.enabled) {
+    throw new Error(adapter.configurationHint);
   }
 }
 
@@ -110,15 +96,7 @@ export async function uploadFile(
   contentType: string,
 ): Promise<void> {
   requireStorageConfig();
-  const client = getClient();
-  await client.send(
-    new PutObjectCommand({
-      Bucket: BUCKET,
-      Key: key,
-      Body: Buffer.from(content),
-      ContentType: contentType,
-    }),
-  );
+  await adapter.uploadFile(key, content, contentType);
 }
 
 export async function uploadFileFromPath(
@@ -127,22 +105,10 @@ export async function uploadFileFromPath(
   contentType: string,
 ): Promise<void> {
   requireStorageConfig();
-  const metadata = await stat(filePath);
-  const body = createReadStream(filePath);
   try {
-    await getClient().send(
-      new PutObjectCommand({
-        Bucket: BUCKET,
-        Key: key,
-        Body: body,
-        ContentLength: metadata.size,
-        ContentType: contentType,
-      }),
-    );
+    await adapter.uploadFileFromPath(key, filePath, contentType);
   } catch (error) {
     throw new StorageOperationError("upload", { cause: error });
-  } finally {
-    if (!body.destroyed) body.destroy();
   }
 }
 
@@ -158,63 +124,36 @@ export async function getSignedUploadUrl(
   expectedSizeBytes: number,
   expiresIn = 900,
 ): Promise<string | null> {
-  if (!storageEnabled) return null;
+  if (!adapter.enabled) return null;
   try {
-    const client = getUploadSigningClient();
-    return await awsGetSignedUrl(
-      client,
-      new PutObjectCommand({
-        Bucket: BUCKET,
-        Key: key,
-        ContentType: contentType,
-        ContentLength: expectedSizeBytes,
-      }),
-      {
-        expiresIn,
-        signableHeaders: new Set(["content-type", "content-length"]),
-      },
+    return await adapter.getSignedUploadUrl(
+      key,
+      contentType,
+      expectedSizeBytes,
+      expiresIn,
     );
   } catch (error) {
-    console.error("[storage] getSignedUploadUrl failed", { key, error });
-    return null;
-  }
-}
-
-export type StoredObjectMetadata = {
-  size: number;
-  etag: string | null;
-  contentType: string | null;
-};
-
-export class StorageOperationError extends Error {
-  constructor(operation: string, options?: { cause?: unknown }) {
-    super(`Object storage ${operation} failed`, options);
-    this.name = "StorageOperationError";
+    // Thrown once with the SDK's own code on the cause; the route that
+    // answers reports it. Logging and returning null here filed the failure
+    // twice: once from storage, once from the caller's cause-less throw.
+    throw new AppError(
+      "storage.signed_url_failed",
+      "Object storage signed upload URL failed",
+      { cause: error },
+    );
   }
 }
 
 export async function headFile(
   key: string,
 ): Promise<StoredObjectMetadata | null> {
-  if (!storageEnabled) return null;
+  if (!adapter.enabled) return null;
   try {
-    const client = getClient();
-    const response = await client.send(
-      new HeadObjectCommand({ Bucket: BUCKET, Key: key }),
-    );
-    return {
-      size: response.ContentLength ?? 0,
-      etag: response.ETag ?? null,
-      contentType: response.ContentType ?? null,
-    };
+    return await adapter.headFile(key);
   } catch (error) {
-    const status = (error as { $metadata?: { httpStatusCode?: number } })
-      .$metadata?.httpStatusCode;
-    if (status !== 404) {
-      console.error("[storage] headFile failed", { key, error });
-      throw new StorageOperationError("HEAD", { cause: error });
-    }
-    return null;
+    // Thrown, not logged: the caller that catches this reports it, and a
+    // console line here filed the same failure a second time.
+    throw new StorageOperationError("HEAD", { cause: error });
   }
 }
 
@@ -223,19 +162,8 @@ export async function copyFile(
   targetKey: string,
 ): Promise<void> {
   requireStorageConfig();
-  const client = getClient();
-  const copySource = encodeURIComponent(`${BUCKET}/${sourceKey}`).replace(
-    /%2F/g,
-    "/",
-  );
   try {
-    await client.send(
-      new CopyObjectCommand({
-        Bucket: BUCKET,
-        Key: targetKey,
-        CopySource: copySource,
-      }),
-    );
+    await adapter.copyFile(sourceKey, targetKey);
   } catch (error) {
     throw new StorageOperationError("copy", { cause: error });
   }
@@ -246,45 +174,51 @@ export async function copyFile(
 // ---------------------------------------------------------------------------
 
 export async function downloadFile(key: string): Promise<ArrayBuffer | null> {
-  if (!storageEnabled) return null;
+  if (!adapter.enabled) return null;
   try {
-    const client = getClient();
-    const response = (await client.send(
-      new GetObjectCommand({ Bucket: BUCKET, Key: key }),
-    )) as any;
-    if (!response.Body) return null;
-    const bytes = await response.Body.transformToByteArray();
-    return bytes.buffer as ArrayBuffer;
+    return await adapter.downloadFile(key);
   } catch (error) {
-    console.error("[storage] downloadFile failed", {
-      key,
-      error: error,
-    });
-    return null;
+    // null is "not there" (the adapters translate a missing object); a
+    // transport or permission failure is thrown so the caller's handler
+    // reports it once, with the store's own code on the cause.
+    throw new StorageOperationError("download", { cause: error });
   }
 }
 
 /**
- * Lazily stream an object from R2. The GET starts only when a consumer reads
- * from the returned stream, allowing archive writers to apply backpressure
- * without buffering whole files or opening every object concurrently.
+ * Read an object the caller can go on without: a cached rendition, an
+ * optional PDF copy, a fallback source. null for an object that is not
+ * there, and null for a failure too, which is reported once here as a
+ * warning with the store's code, because the caller will carry on and
+ * nothing else would file it. A read the caller cannot do without uses
+ * downloadFile, whose failure propagates to the handler that reports it.
+ */
+export async function downloadFileIfAvailable(
+  key: string,
+): Promise<ArrayBuffer | null> {
+  return (await bestEffort(downloadFile(key), { what: "optional-read" })) ?? null;
+}
+
+/**
+ * Lazily stream an object from the store. The read starts only when a consumer
+ * reads from the returned stream, allowing archive writers to apply
+ * backpressure without buffering whole files or opening every object
+ * concurrently.
  */
 export function createFileReadStream(key: string): Readable {
   return Readable.from(
     (async function* () {
       requireStorageConfig();
       try {
-        const response = (await getClient().send(
-          new GetObjectCommand({ Bucket: BUCKET, Key: key }),
-        )) as any;
-        if (!response.Body) {
+        const body = await adapter.openReadStream(key);
+        if (!body) {
           throw new StorageOperationError("download");
         }
-        for await (const chunk of response.Body as AsyncIterable<Uint8Array>) {
+        for await (const chunk of body) {
           yield chunk;
         }
       } catch (error) {
-        console.error("[storage] createFileReadStream failed", { key, error });
+        // Thrown, not logged (see headFile).
         if (error instanceof StorageOperationError) throw error;
         throw new StorageOperationError("download", { cause: error });
       }
@@ -293,24 +227,8 @@ export function createFileReadStream(key: string): Readable {
 }
 
 export async function listFiles(prefix: string): Promise<string[]> {
-  if (!storageEnabled) return [];
-  const client = getClient();
-  const keys: string[] = [];
-  let ContinuationToken: string | undefined;
-  do {
-    const response = await client.send(
-      new ListObjectsV2Command({
-        Bucket: BUCKET,
-        Prefix: prefix,
-        ContinuationToken,
-      }),
-    );
-    for (const item of response.Contents ?? []) {
-      if (item.Key) keys.push(item.Key);
-    }
-    ContinuationToken = response.NextContinuationToken;
-  } while (ContinuationToken);
-  return keys;
+  if (!adapter.enabled) return [];
+  return adapter.listFiles(prefix);
 }
 
 // ---------------------------------------------------------------------------
@@ -318,9 +236,63 @@ export async function listFiles(prefix: string): Promise<string[]> {
 // ---------------------------------------------------------------------------
 
 export async function deleteFile(key: string): Promise<void> {
-  if (!storageEnabled) return;
-  const client = getClient();
-  await client.send(new DeleteObjectCommand({ Bucket: BUCKET, Key: key }));
+  if (!adapter.enabled) return;
+  // An empty key names no object. Sent anyway, the SDK either rejects it
+  // (a missing URI label) or, on some stores, addresses the bucket itself.
+  if (!key) return;
+  try {
+    // The adapter resolves when the store itself says the object is already
+    // gone (see deleteFile in ./storage/adapter.ts), so reaching this catch
+    // means the delete genuinely failed.
+    await adapter.deleteFile(key);
+  } catch (error) {
+    // Same shape as HEAD/copy/download failures: the operation is named and
+    // the SDK error (with its errno or S3 code) is the cause, which is where
+    // the Sentry privacy boundary reads storage_operation and failure_code.
+    throw new StorageOperationError("delete", { cause: error });
+  }
+}
+
+/**
+ * Delete an object the caller can live without but must not leak (a
+ * rollback, a cancelled upload's staging blob). A failure here is not the
+ * caller's failure, so instead of `.catch(() => {})` it is reported as a
+ * warning grouped by `stage`. The key never goes on the event: keys embed
+ * the user's original filename.
+ */
+export function deleteFileBestEffort(
+  key: string,
+  stage: string,
+): Promise<void | undefined> {
+  return deleteFilesBestEffort([key], stage);
+}
+
+/**
+ * Best-effort delete of several objects that belong to ONE operation (an
+ * upload's staging and sealed copies). Every key is attempted, but the
+ * operation reports at most one warning: when storage is unreachable or the
+ * credentials are wrong, every key fails for the same reason, and one event
+ * per key only multiplies the noise (MIKE-BACKEND-5/6 arrived in pairs).
+ * Null/empty keys are skipped: there is nothing to delete.
+ */
+export function deleteFilesBestEffort(
+  keys: ReadonlyArray<string | null | undefined>,
+  stage: string,
+): Promise<void | undefined> {
+  const targets = keys.filter((key): key is string => !!key);
+  if (targets.length === 0) return Promise.resolve();
+  const work = Promise.allSettled(targets.map((key) => deleteFile(key))).then(
+    (results) => {
+      const failed = results.find(
+        (result): result is PromiseRejectedResult => result.status === "rejected",
+      );
+      if (failed) throw failed.reason;
+    },
+  );
+  return bestEffort(work, {
+    what: stage,
+    tags: { component: "storage", stage, storage_operation: "delete" },
+  });
 }
 
 // ---------------------------------------------------------------------------
@@ -332,56 +304,28 @@ export async function getSignedUrl(
   expiresIn = 3600,
   downloadFilename?: string,
 ): Promise<string | null> {
-  if (!storageEnabled) return null;
+  if (!adapter.enabled) return null;
   try {
-    const client = getClient();
     // Override the response Content-Disposition so the browser uses this
-    // filename on download, instead of the last path segment of the R2 key
-    // (which includes the document UUID). The `download` attribute on <a>
+    // filename on download, instead of the last path segment of the storage
+    // key (which includes the document UUID). The `download` attribute on <a>
     // is ignored for cross-origin URLs, so we have to set it server-side.
     const responseContentDisposition = downloadFilename
       ? buildContentDisposition("attachment", downloadFilename)
       : undefined;
-    const command = new GetObjectCommand({
-      Bucket: BUCKET,
-      Key: key,
-      ResponseContentDisposition: responseContentDisposition,
-    }) as any;
-    return await awsGetSignedUrl(client, command, { expiresIn });
-  } catch (error) {
-    console.error("[storage] getSignedUrl failed", {
+    return await adapter.getSignedUrl(
       key,
-      error: error,
-    });
-    return null;
+      expiresIn,
+      responseContentDisposition,
+      downloadFilename,
+    );
+  } catch (error) {
+    throw new AppError(
+      "storage.signed_url_failed",
+      "Object storage signed URL failed",
+      { cause: error },
+    );
   }
-}
-
-export function normalizeDownloadFilename(name: string): string {
-  const trimmed = name.trim();
-  const base = trimmed || "download";
-  return base.replace(/[\x00-\x1F\x7F]/g, "_").replace(/[\\/]/g, "_");
-}
-
-export function sanitizeDispositionFilename(name: string): string {
-  return normalizeDownloadFilename(name)
-    .replace(/["\\]/g, "_")
-    .replace(/[^\x20-\x7E]/g, "_");
-}
-
-export function encodeRFC5987(str: string): string {
-  return encodeURIComponent(str).replace(
-    /['()*]/g,
-    (c) => "%" + c.charCodeAt(0).toString(16).toUpperCase(),
-  );
-}
-
-export function buildContentDisposition(
-  kind: "inline" | "attachment",
-  filename: string,
-): string {
-  const normalized = normalizeDownloadFilename(filename);
-  return `${kind}; filename="${sanitizeDispositionFilename(normalized)}"; filename*=UTF-8''${encodeRFC5987(normalized)}`;
 }
 
 // ---------------------------------------------------------------------------
@@ -394,14 +338,6 @@ export function storageKey(
   filename: string,
 ): string {
   return `documents/${userId}/${docId}/source${storageExtension(filename, ".bin")}`;
-}
-
-export function pdfStorageKey(
-  userId: string,
-  docId: string,
-  stem: string,
-): string {
-  return `documents/${userId}/${docId}/${stem}.pdf`;
 }
 
 export function generatedDocKey(
@@ -436,4 +372,31 @@ function storageExtension(filename: string, fallback: string): string {
   if (lastDot < 0) return fallback;
   const ext = filename.slice(lastDot).toLowerCase();
   return /^\.[a-z0-9]{1,16}$/.test(ext) ? ext : fallback;
+}
+
+// ---------------------------------------------------------------------------
+// Streamed signed uploads (filesystem driver)
+// ---------------------------------------------------------------------------
+
+/**
+ * Redeem a backend-minted upload capability by streaming the request body
+ * into storage. Only the filesystem driver mints those capabilities (an S3
+ * store takes the browser's presigned PUT directly), so a transport without
+ * writeBlobFromStream rejects the call rather than silently dropping bytes.
+ */
+export async function writeBlobFromStream(
+  key: string,
+  body: Readable,
+  maxBytes: number,
+): Promise<number> {
+  if (!adapter.writeBlobFromStream) {
+    throw new Error("writeBlobFromStream is only available on the fs driver");
+  }
+  requireStorageConfig();
+  return adapter.writeBlobFromStream(key, body, maxBytes);
+}
+
+/** Remove a partially written blob after a failed or oversized upload. */
+export async function discardBlob(key: string): Promise<void> {
+  await adapter.discardBlob?.(key);
 }

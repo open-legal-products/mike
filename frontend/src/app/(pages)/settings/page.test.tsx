@@ -3,6 +3,8 @@ import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { MikeApiError } from "@/app/lib/mikeApi";
 import SettingsPage from "./page";
+import { deleteAccount } from "@/app/lib/mikeApi";
+import { ToastViewportUI, clearToasts } from "@/shared/ui/ToastUI";
 
 const state = vi.hoisted(() => ({
     push: vi.fn(),
@@ -87,45 +89,14 @@ describe("SettingsPage Google email changes", () => {
         };
     });
 
-    it("keeps in-progress organisation text when the name autosave lands", async () => {
-        const user = userEvent.setup();
-        // The save must still be IN FLIGHT while the user types in the
-        // sibling field — an immediately-resolved mock closes the race
-        // window inside user.click()'s microtask flush and the test then
-        // passes even against the unfixed combined hydration effect.
-        let resolveNameSave!: () => void;
-        state.updateDisplayName.mockImplementation(
-            (name: string) =>
-                new Promise<boolean>((resolve) => {
-                    resolveNameSave = () => {
-                        // Mirror the real context: a successful save
-                        // refreshes the whole profile object.
-                        state.profile = {
-                            ...state.profile,
-                            displayName: name,
-                        };
-                        resolve(true);
-                    };
-                }),
-        );
+    it("keeps onboarding organisation out of account settings and places the photo below the name", () => {
         render(<SettingsPage />);
-
-        const name = screen.getByPlaceholderText("Enter your name");
-        const organisation = screen.getByPlaceholderText(
-            "Enter your organisation",
-        );
-        await user.clear(name);
-        await user.type(name, "Alexandra");
-        await user.click(organisation); // blurs the name field -> autosave
-        await user.type(organisation, " & Partners");
-
-        expect(state.updateDisplayName).toHaveBeenCalledWith("Alexandra");
-        resolveNameSave(); // profile refresh lands mid-typing
-        await waitFor(() =>
-            expect(screen.getByText("Saved")).toBeInTheDocument(),
-        );
-        expect(organisation).toHaveValue("Example LLP & Partners");
-        expect(name).toHaveValue("Alexandra");
+        expect(screen.queryByLabelText("Organisation")).not.toBeInTheDocument();
+        expect(screen.queryByDisplayValue("Example LLP")).not.toBeInTheDocument();
+        const name = screen.getByLabelText("Display Name");
+        const photo = screen.getByText("Profile photo");
+        expect(name.compareDocumentPosition(photo) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+        expect(state.updateOrganisation).not.toHaveBeenCalled();
     });
 
     it("directs Google-created accounts without a password to Security", async () => {
@@ -172,7 +143,7 @@ describe("SettingsPage Google email changes", () => {
         ).not.toBeInTheDocument();
     });
 
-    it("auto-saves name and organisation when their fields lose focus", async () => {
+    it("auto-saves the name when it loses focus", async () => {
         const user = userEvent.setup();
         render(<SettingsPage />);
 
@@ -184,21 +155,30 @@ describe("SettingsPage Google email changes", () => {
             expect(state.updateDisplayName).toHaveBeenCalledWith("Alex Chen"),
         );
 
-        const organisation = screen.getByPlaceholderText(
-            "Enter your organisation",
-        );
-        await user.clear(organisation);
-        await user.type(organisation, "New LLP");
+        expect(state.updateOrganisation).not.toHaveBeenCalled();
+    });
+
+    it("reports a failed name save only through the notice", async () => {
+        // updateDisplayName raises the notice itself; the field must not
+        // repeat the failure inline.
+        state.updateDisplayName.mockResolvedValue(false);
+        const user = userEvent.setup();
+        render(<SettingsPage />);
+
+        const name = screen.getByPlaceholderText("Enter your name");
+        await user.clear(name);
+        await user.type(name, "Alex Chen");
         await user.tab();
         await waitFor(() =>
-            expect(state.updateOrganisation).toHaveBeenCalledWith("New LLP"),
+            expect(state.updateDisplayName).toHaveBeenCalledWith("Alex Chen"),
         );
+        expect(screen.queryByText(/not saved/i)).not.toBeInTheDocument();
     });
 
     it("keeps the session and shows the reason when deletion is refused", async () => {
         const user = userEvent.setup();
         const detail =
-            "You are the only admin of Elite Law LLP. Make another member an admin, or delete the organization, before deleting your account.";
+            "You are the only owner of Elite Law LLP. Make another member an owner, or delete the organization, before deleting your account.";
         state.deleteAccount.mockRejectedValue(
             new MikeApiError({
                 status: 409,
@@ -206,7 +186,7 @@ describe("SettingsPage Google email changes", () => {
                 message: detail,
             }),
         );
-        render(<SettingsPage />);
+        render(<><SettingsPage /><ToastViewportUI /></>);
 
         await user.click(
             screen.getByRole("button", { name: "Delete account" }),
@@ -217,7 +197,7 @@ describe("SettingsPage Google email changes", () => {
         // delete account" would leave the user with no way to unblock it.
         expect(await screen.findByText(detail)).toBeInTheDocument();
         expect(
-            screen.getByText("Account deletion failed"),
+            screen.getByText("Couldn't delete your account"),
         ).toBeInTheDocument();
         expect(state.signOut).not.toHaveBeenCalled();
         expect(state.push).not.toHaveBeenCalled();
@@ -237,23 +217,104 @@ describe("SettingsPage Google email changes", () => {
         expect(screen.queryByText("Name is required.")).not.toBeInTheDocument();
     });
 
-    it("shows a warning popup when account deletion fails", async () => {
-        state.deleteAccount.mockRejectedValue(new Error("delete failed"));
+    async function submitEmailChange(rejection: unknown) {
+        state.passwordSet = true;
+        state.updateEmail.mockRejectedValue(rejection);
         const user = userEvent.setup();
         render(<SettingsPage />);
+
+        const email = screen.getByPlaceholderText("Enter your email");
+        await user.clear(email);
+        await user.type(email, "new@example.com");
+        const emailSection = screen.getByRole("heading", { name: "Email" })
+            .parentElement!;
+        await user.click(
+            emailSection.querySelector<HTMLButtonElement>("button")!,
+        );
+    }
+
+    it("recognises a taken address by its code, not by its wording", async () => {
+        // GoTrue reworded this message once already; the code is the contract.
+        await submitEmailChange(
+            Object.assign(new Error("Email address already in use"), {
+                status: 422,
+                code: "email_exists",
+            }),
+        );
+
+        expect(
+            await screen.findByText("An account with this email already exists."),
+        ).toBeInTheDocument();
+    });
+
+    it("says the connection failed rather than blaming the address", async () => {
+        await submitEmailChange(new TypeError("Failed to fetch"));
+
+        expect(
+            await screen.findByText(
+                "Mike couldn't reach the server. Check your connection and try again.",
+            ),
+        ).toBeInTheDocument();
+    });
+
+    it("reports a refused account deletion in a toast, not an alert", async () => {
+        const alertSpy = vi.spyOn(window, "alert").mockImplementation(() => {});
+        vi.spyOn(console, "error").mockImplementation(() => {});
+        clearToasts();
+        vi.mocked(deleteAccount).mockRejectedValue(
+            Object.assign(new Error("boom"), { status: 500 }),
+        );
+        const user = userEvent.setup();
+        render(
+            <>
+                <SettingsPage />
+                <ToastViewportUI />
+            </>,
+        );
 
         await user.click(
             screen.getByRole("button", { name: "Delete account" }),
         );
         await user.click(screen.getByRole("button", { name: "Delete" }));
 
-        expect(
-            await screen.findByText("Account deletion failed"),
-        ).toBeInTheDocument();
-        expect(
-            screen.getByText(
-                "Your account could not be deleted. Please try again.",
-            ),
-        ).toBeInTheDocument();
+        const toast = await screen.findByRole("alert");
+        expect(toast).toHaveTextContent("Couldn't delete your account");
+        expect(toast).toHaveTextContent(
+            "Something went wrong on our side. Try again.",
+        );
+        expect(alertSpy).not.toHaveBeenCalled();
+        expect(state.push).not.toHaveBeenCalled();
+        clearToasts();
+    });
+
+    it("re-asks for confirmation when Retry follows a failed deletion", async () => {
+        vi.spyOn(console, "error").mockImplementation(() => {});
+        clearToasts();
+        vi.mocked(deleteAccount).mockRejectedValue(
+            Object.assign(new Error("boom"), { status: 500 }),
+        );
+        const user = userEvent.setup();
+        render(
+            <>
+                <SettingsPage />
+                <ToastViewportUI />
+            </>,
+        );
+
+        await user.click(
+            screen.getByRole("button", { name: "Delete account" }),
+        );
+        await user.click(screen.getByRole("button", { name: "Delete" }));
+        expect(deleteAccount).toHaveBeenCalledTimes(1);
+
+        await user.click(await screen.findByRole("button", { name: "Retry" }));
+
+        // Retry re-opens the confirmation instead of deleting outright.
+        expect(deleteAccount).toHaveBeenCalledTimes(1);
+        expect(await screen.findByText("Delete account?")).toBeInTheDocument();
+
+        await user.click(screen.getByRole("button", { name: "Delete" }));
+        expect(deleteAccount).toHaveBeenCalledTimes(2);
+        clearToasts();
     });
 });

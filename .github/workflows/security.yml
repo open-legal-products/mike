@@ -5,6 +5,14 @@ on:
     branches: [main]
   pull_request:
 
+# Don't pile up runs on rapid pushes to the same PR: a new push cancels the
+# superseded run so it stops holding job slots (the org's concurrent-job cap is
+# shared by every workflow). Pushes to main each get their own group (keyed by
+# sha) and are never cancelled.
+concurrency:
+  group: security-${{ github.event_name == 'push' && github.sha || github.ref }}
+  cancel-in-progress: ${{ github.event_name != 'push' }}
+
 # Least privilege for the job token: this workflow only reads the repo and
 # queries the npm registry — it never writes to the repo, issues, or checks.
 # Without this block the job token inherits the repository default, which
@@ -23,16 +31,16 @@ jobs:
   audit-gate-tests:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
-      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: 22
       - name: Audit gate self-tests
         run: node --test scripts/audit-gate.test.mjs
 
   # Blocking for EVERY tree in the matrix below: high/critical advisories
-  # fail the build unless their GHSA id is documented (with a reason) in
-  # scripts/audit-allowlist.json — see scripts/audit-gate.mjs. Auditing
+  # fail the build unless every affected copy matches a documented dependency
+  # scope in scripts/audit-allowlist.json — see scripts/audit-gate.mjs. Auditing
   # straight from the lockfile needs no install, so this gate costs seconds.
   # Advisories with no non-breaking fix anywhere in the ecosystem get an
   # allowlist entry instead of demoting the whole job to report-only (which
@@ -41,6 +49,9 @@ jobs:
   dependency-audit:
     runs-on: ubuntu-latest
     strategy:
+      # Report every affected workspace; one vulnerable tree must not cancel
+      # the remaining audits and hide other updates that need attention.
+      fail-fast: false
       # npm throttles concurrent advisory requests from one runner egress IP.
       # Serialize the four lockfile scans so one workspace cannot force the
       # others onto the retired quick-audit endpoint or into a timeout.
@@ -71,7 +82,7 @@ jobs:
       # tags are mutable, so a compromised action repo could silently swap
       # what "v4" points at; a 40-char SHA cannot be moved.
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: 22
       - name: Dependency security audit

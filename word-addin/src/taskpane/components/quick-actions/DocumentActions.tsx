@@ -24,6 +24,7 @@ import {
   ModalTextInput,
 } from "../primitives/ModalForm";
 import { PageTitle } from "../primitives/PageTitle";
+import { reportFault, notifyError } from "../../lib/notify";
 
 interface DocumentActionsProps {
   createOpen: boolean;
@@ -40,6 +41,9 @@ export function DocumentActions({
   );
   const [workflows, setWorkflows] = useState<Workflow[]>([]);
   const [workflowsError, setWorkflowsError] = useState<string | null>(null);
+  // Bumped by the "Retry" on the failure toast; this list has no button of
+  // its own to hang a retry on.
+  const [workflowsAttempt, setWorkflowsAttempt] = useState(0);
   const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState<string | null>(null);
   const [creating, setCreating] = useState(false);
@@ -60,15 +64,23 @@ export function DocumentActions({
       .catch((reason: unknown) => {
         if (cancelled) return;
         setWorkflowsError(
-          reason instanceof Error
-            ? reason.message
-            : "Could not load assistant workflows.",
+          reportFault(reason, {
+            fallback: "Mike couldn't load your quick actions. Try again.",
+            operation: "quick_actions.run",
+          }).message,
         );
+        notifyError(reason, {
+          action: "load your quick actions",
+          dedupeKey: "quick-actions",
+          page: "Quick actions",
+          operation: "quick_actions.run",
+          onRetry: () => setWorkflowsAttempt((count) => count + 1),
+        });
       });
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [workflowsAttempt]);
 
   useEffect(() => {
     if (!createOpen) return;
@@ -127,9 +139,10 @@ export function DocumentActions({
       setSelectedAction(null);
     } catch (reason) {
       setSaveError(
-        reason instanceof Error
-          ? reason.message
-          : "Failed to save quick action",
+        reportFault(reason, {
+          fallback: "Failed to save quick action",
+          operation: "quick_actions.run",
+        }).message,
       );
     } finally {
       setSaving(false);
@@ -154,9 +167,10 @@ export function DocumentActions({
       onCreateClose();
     } catch (reason) {
       setCreateError(
-        reason instanceof Error
-          ? reason.message
-          : "Could not create quick action.",
+        reportFault(reason, {
+          fallback: "Could not create quick action.",
+          operation: "quick_actions.run",
+        }).message,
       );
     } finally {
       setCreating(false);
@@ -340,7 +354,7 @@ function QuickActionForm({
   error: string | null;
 }) {
   return (
-    <div className="flex min-h-0 flex-1 flex-col gap-6 overflow-y-auto pb-5">
+    <div data-modal-scroll="vertical" className="flex min-h-0 flex-1 flex-col gap-6 overflow-y-auto pb-5">
       <div>
         <ModalFieldLabel htmlFor="quick-action-name">Name</ModalFieldLabel>
         <ModalTextInput

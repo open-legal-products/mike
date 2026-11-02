@@ -42,4 +42,24 @@ describe("ModalUI", () => {
         fireEvent.keyDown(window, { key: "Escape" });
         expect(onClose).toHaveBeenCalledOnce();
     });
+
+    it("leaves Escape to a control inside the dialog that handled it", () => {
+        const onClose = vi.fn();
+
+        render(
+            <ModalUI open onClose={onClose} ariaLabel="Example">
+                <input
+                    aria-label="Search"
+                    onKeyDown={(event) => {
+                        if (event.key === "Escape") event.preventDefault();
+                    }}
+                />
+            </ModalUI>,
+        );
+
+        fireEvent.keyDown(screen.getByRole("textbox", { name: "Search" }), {
+            key: "Escape",
+        });
+        expect(onClose).not.toHaveBeenCalled();
+    });
 });

@@ -29,7 +29,7 @@ describe("ToggleSwitchUI", () => {
         expect(onCheckedChange).toHaveBeenCalledWith(false);
     });
 
-    it("gives the off-state track a contrasting boundary", () => {
+    it("renders the off-state track without an outline", () => {
         const { container } = render(
             <ToggleSwitchUI checked={false} onCheckedChange={() => {}}>
                 Group documents
@@ -39,8 +39,8 @@ describe("ToggleSwitchUI", () => {
         const track = container.querySelector(
             '[data-slot="toggle-switch-track"]',
         );
-        expect(track).toHaveClass(
-            "bg-gray-300",
+        expect(track).toHaveClass("bg-gray-300");
+        expect(track).not.toHaveClass(
             "ring-1",
             "ring-inset",
             "ring-gray-500",

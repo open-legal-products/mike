@@ -76,20 +76,18 @@ describe("Slack provider quirks", () => {
         // standard `scope` parameter (unlike classic Slack OAuth's
         // `user_scope`), so the SDK-built URL needs no additions.
         expect(slack?.authorizationParams).toBeUndefined();
+        expect(slack?.requiresClientSecret).toBe(true);
     });
 
-    it("names the env vars and the redirect URI in its setup instructions", () => {
-        const instructions = slack?.setupInstructions?.(
-            "https://app.test/callback",
-        );
-        expect(instructions).toMatch(/SLACK_MCP_OAUTH_CLIENT_ID/);
-        expect(instructions).toMatch(/SLACK_MCP_OAUTH_CLIENT_SECRET/);
-        // Operators must be able to paste the exact redirect URL into the
-        // Slack app's OAuth settings form.
-        expect(instructions).toContain("https://app.test/callback");
-        // The two non-obvious app requirements the flow dies without.
-        expect(instructions).toMatch(/Slack MCP Server/);
-        expect(instructions).toMatch(/PKCE/);
+    it("explains the setup requirement without assuming a redirect URI", () => {
+        const instructions = slack?.setupInstructions?.();
+        expect(instructions).toMatch(/administrator setup/i);
+        expect(instructions).toMatch(/dynamic client registration/i);
+        expect(instructions).not.toMatch(/redirect URI/i);
+        // Detailed, change-prone steps belong in docs/connectors.md rather
+        // than being duplicated in every warning response.
+        expect(instructions).not.toMatch(/SLACK_MCP_OAUTH_CLIENT_ID/);
+        expect(instructions).not.toMatch(/PKCE/);
     });
 
     it("hints at the real endpoint when a wrong Slack path redirects", () => {

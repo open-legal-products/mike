@@ -1,20 +1,18 @@
-import { createDocumentVersion, activateDocumentVersion, updateDocumentVersion } from "../../../documents/documents.service";
 import {
-  downloadFile,
-  extractedTextKey,
-  generatedDocKey,
-  uploadFile,
-} from "../../../../lib/storage";
+  applyTrackedEditsToDocument,
+  createDocumentVersion,
+  loadCurrentVersionBytes,
+  readStoredDocumentText,
+} from "../../../documents/documents.service";
+
+// Tracked-change editing lives in the documents module; the tool dispatcher
+// keeps calling it by its tool-facing name.
+export { applyTrackedEditsToDocument as runEditDocument, loadCurrentVersionBytes };
+import { downloadFileIfAvailable, extractedTextKey, generatedDocKey, uploadFile } from "../../../../lib/storage";
 import { convertedPdfKey, docxToPdf } from "../../../../lib/convert";
 import { enqueueConversion } from "../../../../lib/queue/conversionQueue";
-import { enqueueDbJob, enqueueStorageCleanup } from "../../../../lib/dbq/enqueue";
+import { enqueueDbJob } from "../../../../lib/dbq/enqueue";
 import type { Db } from "../../../../lib/supabase";
-import { profileAttributionName } from "../../../../lib/userLookup";
-import {
-  applyTrackedEdits,
-  extractDocxBodyText,
-  type EditInput,
-} from "../../../../lib/docxTrackedChanges";
 import { buildDownloadUrl } from "../../../../lib/downloadTokens";
 import {
   contentSha256,
@@ -34,8 +32,11 @@ import {
   requiresLibreOfficeTextExtraction,
   shouldConvertToPdf,
 } from "../../../../lib/documentTypes";
-import { extractPresentationText } from "../../../../lib/officeText";
-import { spreadsheetToLLMText } from "../../../../lib/spreadsheet";
+import {
+  ExtractionLimitError,
+  ExtractionBusyError,
+  withExtractionRequest,
+} from "../../../../lib/extraction/isolated";
 
 
 export function citationReminder(
@@ -60,7 +61,6 @@ export function citationReminder(
 }
 
 export { extractPdfText, extractLegacyOfficeText } from "../../../../lib/pdfText";
-import { extractPdfText, extractLegacyOfficeText } from "../../../../lib/pdfText";
 
 export async function generateDocx(
   title: string,
@@ -71,6 +71,8 @@ export async function generateDocx(
     landscape?: boolean;
     numberSections?: boolean;
     projectId?: string | null;
+    /** The conversation's organization: where a standalone document is filed. */
+    orgId?: string | null;
   },
 ) {
   try {
@@ -517,6 +519,7 @@ export async function generateDocx(
       userId,
       db,
       projectId: options?.projectId ?? null,
+      orgId: options?.orgId ?? null,
     });
   } catch (e) {
     return { error: String(e) };
@@ -915,8 +918,14 @@ async function persistGeneratedFile(params: {
   userId: string;
   db: Db;
   projectId?: string | null;
+  /**
+   * The organization of the conversation it was generated in. A document
+   * made in an organization's workspace belongs to that organization; inside
+   * a project the project's organization is stamped by the database.
+   */
+  orgId?: string | null;
 }) {
-  const { title, extension, buffer, userId, db, projectId } = params;
+  const { title, extension, buffer, userId, db, projectId, orgId } = params;
   const docId = crypto.randomUUID().replace(/-/g, "");
   const filename = safeGeneratedFilename(title, extension);
   const key = generatedDocKey(userId, docId, filename);
@@ -962,6 +971,7 @@ async function persistGeneratedFile(params: {
     .from("documents")
     .insert({
       project_id: projectId ?? null,
+      org_id: orgId ?? null,
       user_id: userId,
       status: "ready",
     })
@@ -1032,7 +1042,7 @@ export async function generateExcel(
   sheets: unknown[],
   userId: string,
   db: Db,
-  options?: { projectId?: string | null },
+  options?: { projectId?: string | null; orgId?: string | null },
 ) {
   try {
     const normalizedTitle = typeof title === "string" ? title : "Workbook";
@@ -1047,6 +1057,7 @@ export async function generateExcel(
       userId,
       db,
       projectId: options?.projectId ?? null,
+      orgId: options?.orgId ?? null,
     });
   } catch (e) {
     return { error: String(e) };
@@ -1058,7 +1069,7 @@ export async function generatePpt(
   slides: unknown[],
   userId: string,
   db: Db,
-  options?: { projectId?: string | null },
+  options?: { projectId?: string | null; orgId?: string | null },
 ) {
   try {
     const normalizedTitle = typeof title === "string" ? title : "Presentation";
@@ -1073,6 +1084,7 @@ export async function generatePpt(
       userId,
       db,
       projectId: options?.projectId ?? null,
+      orgId: options?.orgId ?? null,
     });
   } catch (e) {
     return { error: String(e) };
@@ -1082,235 +1094,6 @@ export async function generatePpt(
 // ---------------------------------------------------------------------------
 // Document version helpers (DOCX tracked-change editing)
 // ---------------------------------------------------------------------------
-
-/**
- * Resolve the current .docx bytes for a document, preferring the active
- * tracked-changes version if one exists, else the original upload.
- */
-export async function loadCurrentVersionBytes(
-  documentId: string,
-  db: Db,
-  versionId?: string | null,
-): Promise<{ bytes: Buffer; storage_path: string } | null> {
-  const active = await loadActiveVersion(documentId, db, versionId);
-  if (!active) return null;
-  const raw = await downloadFile(active.storage_path);
-  if (!raw) return null;
-  return { bytes: Buffer.from(raw), storage_path: active.storage_path };
-}
-
-/**
- * Ensure the document has a document_versions row for the current upload.
- * Called before writing the first 'assistant_edit' row so the history is
- * complete. Idempotent.
- */
-export async function runEditDocument(params: {
-  documentId: string;
-  userId: string;
-  edits: EditInput[];
-  db: Db;
-  /**
-   * If provided, append these edits to the existing turn-scoped version
-   * (overwrites the file at storagePath and reuses the document_versions
-   * row) instead of creating a new version. Used to collapse multiple
-   * edit_document tool calls within a single assistant turn into one
-   * version.
-   */
-  reuseVersion?: {
-    versionId: string;
-    versionNumber: number;
-    storagePath: string;
-  };
-}): Promise<
-  | {
-      ok: true;
-      version_id: string;
-      version_number: number;
-      storage_path: string;
-      download_url: string;
-      annotations: EditAnnotation[];
-      errors: { index: number; reason: string }[];
-    }
-  | { ok: false; error: string }
-> {
-  const { documentId, userId, edits, db, reuseVersion } = params;
-
-  const { data: doc } = await db
-    .from("documents")
-    .select("id")
-    .eq("id", documentId)
-    .single();
-  if (!doc) return { ok: false, error: "Document not found." };
-
-  const activeVersion = await loadActiveVersion(documentId, db);
-  let versionFilename =
-    activeVersion?.filename?.trim() || "Untitled document";
-
-  const current = await loadCurrentVersionBytes(documentId, db);
-  if (!current) return { ok: false, error: "Could not load document bytes." };
-
-  const { data: authorProfile } = await db
-    .from("user_profiles")
-    .select("display_name, email")
-    .eq("user_id", userId)
-    .maybeSingle();
-  const author = profileAttributionName(authorProfile, "Mike");
-
-  const {
-    bytes: editedBytes,
-    changes,
-    errors,
-  } = await applyTrackedEdits(current.bytes, edits, { author });
-
-  if (changes.length === 0) {
-    return {
-      ok: false,
-      error:
-        errors[0]?.reason ??
-        "No edits could be applied. Refine context_before/context_after and retry.",
-    };
-  }
-
-  const ab = editedBytes.buffer.slice(
-    editedBytes.byteOffset,
-    editedBytes.byteOffset + editedBytes.byteLength,
-  ) as ArrayBuffer;
-
-  let versionRowId: string;
-  let newPath: string;
-  let nextVersionNumber: number;
-
-  if (reuseVersion) {
-    // Overwrite the existing turn version's file in place. The version
-    // row, version_number, and current_version_id all already point here.
-    newPath = reuseVersion.storagePath;
-    versionRowId = reuseVersion.versionId;
-    nextVersionNumber = reuseVersion.versionNumber;
-
-    const clear = await updateDocumentVersion(db, documentId, versionRowId, { content_sha256: null });
-    if (clear.error || !clear.data) return { ok: false, error: "Document version is unavailable." };
-    await uploadFile(newPath, ab, "application/vnd.openxmlformats-officedocument.wordprocessingml.document");
-    const updated = await updateDocumentVersion(db, documentId, versionRowId, {
-      file_type: "docx", size_bytes: editedBytes.byteLength, page_count: null,
-      content_sha256: contentSha256(editedBytes), pdf_storage_path: null,
-    });
-    if (updated.error || !updated.data) return { ok: false, error: "Failed to update document version." };
-  } else {
-    const versionId = crypto.randomUUID().replace(/-/g, "");
-    newPath = `documents/${userId}/${documentId}/edits/${versionId}.docx`;
-    await uploadFile(
-      newPath,
-      ab,
-      "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-    );
-
-    // Inherit the filename from the most recent prior version so
-    // user-applied renames carry forward through further edits. Malformed
-    // legacy rows without a filename get a neutral placeholder, not the
-    // parent document filename. We intentionally do NOT append "[Edited Vn]"
-    // — the version number is surfaced separately as a tag in the UI.
-    const { data: prevRow } = await db
-      .from("document_versions")
-      .select("filename, created_at")
-      .eq("document_id", documentId)
-      .order("created_at", { ascending: false })
-      .limit(1)
-      .maybeSingle();
-    const inheritedFilename =
-      (prevRow?.filename as string | null)?.trim() || "Untitled document";
-    versionFilename = inheritedFilename;
-
-    const { data: versionRow, error: verErr } = await createDocumentVersion(db, {
-        document_id: documentId,
-        storage_path: newPath,
-        source: "assistant_edit",
-
-        filename: inheritedFilename,
-        file_type: "docx",
-        size_bytes: editedBytes.byteLength,
-        page_count: null,
-        content_sha256: contentSha256(editedBytes),
-      }, { activate: false });
-    if (verErr || !versionRow) {
-      return { ok: false, error: "Failed to record document version." };
-    }
-    versionRowId = versionRow.id as string;
-    nextVersionNumber = versionRow.version_number;
-  }
-
-  // Insert one row per change
-  const editRows = changes.map((c) => ({
-    document_id: documentId,
-    version_id: versionRowId,
-    change_id: c.id,
-    del_w_id: c.delId ?? null,
-    ins_w_id: c.insId ?? null,
-    deleted_text: c.deletedText,
-    inserted_text: c.insertedText,
-    context_before: c.contextBefore ?? "",
-    context_after: c.contextAfter ?? "",
-    status: "pending" as const,
-  }));
-  const { data: insertedEdits, error: editsErr } = await db
-    .from("document_edits")
-    .insert(editRows)
-    .select(
-      "id, change_id, del_w_id, ins_w_id, deleted_text, inserted_text, context_before, context_after",
-    );
-
-  if (editsErr || !insertedEdits) {
-    return { ok: false, error: "Failed to record edits." };
-  }
-
-  const activation = await activateDocumentVersion(db, documentId, versionRowId);
-  if (activation.error || !activation.activated) {
-    return { ok: false, error: "Failed to activate document version." };
-  }
-
-  const annotations: EditAnnotation[] = insertedEdits.map(
-    (r: {
-      id: string;
-      change_id: string;
-      deleted_text: string;
-      inserted_text: string;
-      context_before: string | null;
-      context_after: string | null;
-    }) => {
-      const src = changes.find((c) => c.id === r.change_id);
-      return {
-        kind: "edit",
-        edit_id: r.id,
-        document_id: documentId,
-        version_id: versionRowId,
-        version_number: nextVersionNumber,
-        change_id: r.change_id,
-        del_w_id: src?.delId,
-        ins_w_id: src?.insId,
-        deleted_text: r.deleted_text ?? "",
-        inserted_text: r.inserted_text ?? "",
-        context_before: r.context_before ?? "",
-        context_after: r.context_after ?? "",
-        reason: src?.reason,
-        status: "pending",
-      };
-    },
-  );
-
-  // Persistent, non-expiring permalink. The backend streams fresh bytes
-  // on each request, so this URL stays valid as long as the file exists.
-  const resolvedFilename = versionFilename.trim() || "Untitled document.docx";
-  const permalink = buildDownloadUrl(newPath, resolvedFilename);
-
-  return {
-    ok: true,
-    version_id: versionRowId,
-    version_number: nextVersionNumber,
-    storage_path: newPath,
-    download_url: permalink,
-    annotations,
-    errors,
-  };
-}
 
 // ---------------------------------------------------------------------------
 // Tool dispatch
@@ -1335,11 +1118,21 @@ export async function getTurnReadIdentity(params: {
   if (!docInfo) return null;
 
   const documentId = docIndex?.[docLabel]?.document_id;
+  if (docInfo.search_source) {
+    const indexed = docIndex?.[docLabel];
+    return {
+      key: `${documentId}:${indexed?.version_id}:${docInfo.search_source.revision}`,
+      docLabel, filename: docInfo.filename, documentId,
+      versionId: indexed?.version_id, versionNumber: indexed?.version_number,
+      storagePath: docInfo.storage_path,
+    };
+  }
   if (documentId && db) {
     const active = await loadActiveVersion(documentId, db);
     if (active?.storage_path) {
       return {
-        key: `${documentId}:${active.id}`,
+        // A reused version keeps its id but moves to a new file.
+        key: `${documentId}:${active.id}:${active.storage_path}`,
         docLabel,
         filename: docInfo.filename,
         documentId,
@@ -1466,151 +1259,170 @@ export async function readDocumentContent(
       return docInfo.inline_text;
     }
 
-    // Prefer the current tracked-changes version (if any) so read_document
-    // reflects accepted/pending edits rather than the original upload.
-    let raw: ArrayBuffer | null = null;
-    let sourcePath = docInfo.storage_path;
-    if (documentId && db) {
-      const current = await loadCurrentVersionBytes(documentId, db, versionId);
-      if (current) {
-        raw = current.bytes.buffer.slice(
-          current.bytes.byteOffset,
-          current.bytes.byteOffset + current.bytes.byteLength,
-        ) as ArrayBuffer;
-        sourcePath = current.storage_path;
-        devLog(
-          `[read_document] using current version path="${sourcePath}" (bytes=${raw.byteLength})`,
-        );
-      } else {
-        devLog(
-          `[read_document] loadCurrentVersionBytes returned null for documentId="${documentId}", falling back to original storage_path`,
-        );
+    // Search results are bound to a content revision, not just a mutable
+    // version id. Recheck access before serving persisted text or any bytes.
+    if (docInfo.search_source) {
+      if (!db || !documentId || !versionId) {
+        emitDocRead();
+        return "Document could not be read.";
       }
-    }
-    if (!raw) {
-      raw = await downloadFile(docInfo.storage_path);
-      if (raw) {
-        devLog(
-          `[read_document] fallback download from storage_path="${docInfo.storage_path}" (bytes=${raw.byteLength})`,
-        );
+      const stored = await readStoredDocumentText(db, {
+        userId: docInfo.search_source.userId, userEmail: docInfo.search_source.userEmail,
+        documentId, versionId,
+      });
+      if (!stored || stored.revision !== docInfo.search_source.revision || stored.status !== "ready") {
+        emitDocRead();
+        return "Document could not be read.";
       }
-    }
-    if (!raw) {
-      devLog(
-        `[read_document] FAILED to download any bytes for docLabel="${docLabel}" (tried path="${sourcePath}")`,
-      );
       emitDocRead();
-      return "Document could not be read.";
+      const notice = stored.textless_page_count
+        ? `[${stored.textless_page_count} page(s) have no text layer and need OCR. Search coverage is incomplete.]\n\n`
+        : "";
+      return notice + (stored.text ?? "");
     }
-    // Log the first 8 bytes so we can identify real file format regardless
-    // of the declared file_type. Valid .docx starts with "PK\x03\x04"
-    // (zip). Legacy .doc starts with "\xD0\xCF\x11\xE0" (OLE/CFB).
-    // %PDF-1 is a PDF even if mislabeled. Truncated uploads show as all-zero.
-    {
-      const head = Buffer.from(raw).subarray(0, 8);
-      const hex = head.toString("hex");
-      const ascii = head.toString("binary").replace(/[^\x20-\x7e]/g, ".");
-      devLog(
-        `[read_document] magic bytes hex=${hex} ascii="${ascii}" for filename="${docInfo.filename}"`,
-      );
-    }
-    let text: string;
-    const fileType = docInfo.file_type?.toLowerCase?.() ?? "";
-    if (fileType === "pdf") {
-      text = await extractPdfText(raw);
-      devLog(
-        `[read_document] pdf extracted length=${text.length} for filename="${docInfo.filename}"`,
-      );
-    } else if (fileType === "docx") {
-      // Use the same flattening as the edit_document matcher so the
-      // LLM sees exactly the characters it can anchor against.
-      text = await extractDocxBodyText(Buffer.from(raw));
-      devLog(
-        `[read_document] docx extractDocxBodyText length=${text.length} for filename="${docInfo.filename}"`,
-      );
-      if (!text) {
-        devLog(
-          `[read_document] docx accepted-view extractor returned empty, falling back to mammoth for filename="${docInfo.filename}"`,
-        );
-        const mammoth = await import("mammoth");
-        const result = await mammoth.extractRawText({
-          buffer: Buffer.from(raw),
-        });
-        text = result.value;
-        devLog(
-          `[read_document] docx mammoth fallback length=${text.length} for filename="${docInfo.filename}"`,
-        );
-      }
-    } else if (isSpreadsheetDocumentType(fileType)) {
-      // SheetJS reads .xlsx/.xlsm/.xls directly (no PDF detour), emitting a
-      // cell-addressed markdown view with Excel-formatted values.
-      text = spreadsheetToLLMText(Buffer.from(raw));
-      devLog(
-        `[read_document] spreadsheet extracted length=${text.length} for filename="${docInfo.filename}"`,
-      );
-    } else if (fileType === "pptx") {
-      text = await extractPresentationText(Buffer.from(raw));
-      devLog(
-        `[read_document] presentation extracted length=${text.length} for filename="${docInfo.filename}"`,
-      );
-    } else if (
-      isPresentationDocumentType(fileType) ||
-      isWordDocumentType(fileType)
-    ) {
-      // This branch is the only one that shells out to LibreOffice — every
-      // other type has an in-process reader above — so it is the only one
-      // worth caching. The cached object is written by the
-      // document.precompute_text job, keyed on the immutable version id.
-      const cacheKey =
-        versionId && requiresLibreOfficeTextExtraction(fileType)
-          ? extractedTextKey(versionId)
-          : null;
-      const cached = cacheKey ? await downloadFile(cacheKey) : null;
-      if (cached) {
-        text = Buffer.from(cached).toString("utf8");
-        devLog(
-          `[read_document] legacy Office text served from cache key="${cacheKey}" length=${text.length} for filename="${docInfo.filename}"`,
-        );
-      } else {
-        devLog(
-          `[read_document] legacy Office file_type="${fileType}" for filename="${docInfo.filename}", converting to pdf for text extraction`,
-        );
-        text = await extractLegacyOfficeText(raw);
-        devLog(
-          `[read_document] legacy Office PDF extraction length=${text.length} for filename="${docInfo.filename}"`,
-        );
-        // Warm the cache for the next read of this version. Fire-and-forget
-        // and deduped: several tool calls in one turn queue one job, and a
-        // failure here must never affect the text we just produced.
-        if (cacheKey && db) {
-          void enqueueDbJob(db, {
-            kind: "document.precompute_text",
-            payload: { versionId, storagePath: sourcePath, fileType },
-            dedupeKey: `precompute:${versionId}`,
-            maxAttempts: 3,
-          }).catch((err) =>
-            devLog(`[read_document] precompute enqueue failed`, err),
+
+    return await withExtractionRequest(async (extract) => {
+      // Prefer the current tracked-changes version (if any) so read_document
+      // reflects accepted/pending edits rather than the original upload.
+      let raw: ArrayBuffer | null = null;
+      let sourcePath = docInfo.storage_path;
+      if (documentId && db) {
+        const current = await loadCurrentVersionBytes(documentId, db, versionId);
+        if (current) {
+          raw = current.bytes.buffer.slice(
+            current.bytes.byteOffset,
+            current.bytes.byteOffset + current.bytes.byteLength,
+          ) as ArrayBuffer;
+          sourcePath = current.storage_path;
+          devLog(
+            `[read_document] using current version path="${sourcePath}" (bytes=${raw.byteLength})`,
+          );
+        } else {
+          devLog(
+            `[read_document] loadCurrentVersionBytes returned null for documentId="${documentId}", falling back to original storage_path`,
           );
         }
       }
-    } else {
+      if (!raw) {
+        raw = await downloadFileIfAvailable(docInfo.storage_path);
+        if (raw) {
+          devLog(
+            `[read_document] fallback download from storage_path="${docInfo.storage_path}" (bytes=${raw.byteLength})`,
+          );
+        }
+      }
+      if (!raw) {
+        devLog(
+          `[read_document] FAILED to download any bytes for docLabel="${docLabel}" (tried path="${sourcePath}")`,
+        );
+        emitDocRead();
+        return "Document could not be read.";
+      }
+      // Log the first 8 bytes so we can identify real file format regardless
+      // of the declared file_type. Valid .docx starts with "PK\x03\x04"
+      // (zip). Legacy .doc starts with "\xD0\xCF\x11\xE0" (OLE/CFB).
+      // %PDF-1 is a PDF even if mislabeled. Truncated uploads show as all-zero.
+      {
+        const head = Buffer.from(raw).subarray(0, 8);
+        const hex = head.toString("hex");
+        const ascii = head.toString("binary").replace(/[^\x20-\x7e]/g, ".");
+        devLog(
+          `[read_document] magic bytes hex=${hex} ascii="${ascii}" for filename="${docInfo.filename}"`,
+        );
+      }
+      let text: string;
+      const fileType = docInfo.file_type?.toLowerCase?.() ?? "";
+      // Parsing runs in a bounded process, while downloads may overlap.
+      const source = raw;
+      const readIsolated = (
+        op:
+          | "pdfForModel"
+          | "docxText"
+          | "spreadsheet"
+          | "presentation"
+          | "legacyOfficeText"
+          | "rawText",
+      ) => extract(op, source);
+      if (fileType === "pdf") {
+        text = await readIsolated("pdfForModel");
+        devLog(
+          `[read_document] pdf extracted length=${text.length} for filename="${docInfo.filename}"`,
+        );
+      } else if (fileType === "docx") {
+        // Use the same flattening as the edit_document matcher so the
+        // LLM sees exactly the characters it can anchor against.
+        // (falls back to mammoth when the accepted view comes back empty)
+        text = await readIsolated("docxText");
+        devLog(
+          `[read_document] docx extracted length=${text.length} for filename="${docInfo.filename}"`,
+        );
+      } else if (isSpreadsheetDocumentType(fileType)) {
+        // SheetJS reads .xlsx/.xlsm/.xls directly (no PDF detour), emitting a
+        // cell-addressed markdown view with Excel-formatted values.
+        text = await readIsolated("spreadsheet");
+        devLog(
+          `[read_document] spreadsheet extracted length=${text.length} for filename="${docInfo.filename}"`,
+        );
+      } else if (fileType === "pptx") {
+        text = await readIsolated("presentation");
+        devLog(
+          `[read_document] presentation extracted length=${text.length} for filename="${docInfo.filename}"`,
+        );
+      } else if (
+        isPresentationDocumentType(fileType) ||
+        isWordDocumentType(fileType)
+      ) {
+        // This branch is the only one that shells out to LibreOffice — every
+        // other type has an in-process reader above — so it is the only one
+        // worth caching. The cached object is written by the
+        // document.precompute_text job, keyed on the immutable version id.
+        const cacheKey =
+          versionId && requiresLibreOfficeTextExtraction(fileType)
+            ? extractedTextKey(versionId)
+            : null;
+        const cached = cacheKey ? await downloadFileIfAvailable(cacheKey) : null;
+        if (cached) {
+          text = Buffer.from(cached).toString("utf8");
+          devLog(
+            `[read_document] legacy Office text served from cache key="${cacheKey}" length=${text.length} for filename="${docInfo.filename}"`,
+          );
+        } else {
+          devLog(
+            `[read_document] legacy Office file_type="${fileType}" for filename="${docInfo.filename}", converting to pdf for text extraction`,
+          );
+          text = await readIsolated("legacyOfficeText");
+          devLog(
+            `[read_document] legacy Office PDF extraction length=${text.length} for filename="${docInfo.filename}"`,
+          );
+          // Warm the cache for the next read of this version. Fire-and-forget
+          // and deduped: several tool calls in one turn queue one job, and a
+          // failure here must never affect the text we just produced.
+          if (cacheKey && db) {
+            void enqueueDbJob(db, {
+              kind: "document.precompute_text",
+              payload: { versionId, storagePath: sourcePath, fileType },
+              dedupeKey: `precompute:${versionId}`,
+              maxAttempts: 3,
+            }).catch((err) =>
+              devLog(`[read_document] precompute enqueue failed`, err),
+            );
+          }
+        }
+      } else {
+        devLog(
+          `[read_document] unknown file_type="${docInfo.file_type}" for filename="${docInfo.filename}", trying mammoth`,
+        );
+        text = await readIsolated("rawText");
+        devLog(
+          `[read_document] mammoth length=${text.length} for filename="${docInfo.filename}"`,
+        );
+      }
       devLog(
-        `[read_document] unknown file_type="${docInfo.file_type}" for filename="${docInfo.filename}", trying mammoth`,
+        `[read_document] DONE filename="${docInfo.filename}" finalTextLength=${text.length} firstChars=${JSON.stringify(text.slice(0, 120))}`,
       );
-      const mammoth = await import("mammoth");
-      const result = await mammoth.extractRawText({
-        buffer: Buffer.from(raw),
-      });
-      text = result.value;
-      devLog(
-        `[read_document] mammoth length=${text.length} for filename="${docInfo.filename}"`,
-      );
-    }
-    devLog(
-      `[read_document] DONE filename="${docInfo.filename}" finalTextLength=${text.length} firstChars=${JSON.stringify(text.slice(0, 120))}`,
-    );
-    emitDocRead();
-    return text;
+      emitDocRead();
+      return text;
+    });
   } catch (err) {
     devLog(
       `[read_document] THREW for docLabel="${docLabel}" filename="${docInfo.filename}":`,
@@ -1626,7 +1438,10 @@ export async function readDocumentContent(
           version_number: versionNumber,
         })}\n\n`,
       );
-    return "Document could not be read.";
+    if (err instanceof ExtractionBusyError) return "Document processing is busy. Try again shortly.";
+    return err instanceof ExtractionLimitError
+      ? "Document is too large to read."
+      : "Document could not be read.";
   }
 }
 

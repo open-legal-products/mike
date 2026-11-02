@@ -1,19 +1,19 @@
-import { fireEvent, render, screen } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { SidebarChatItem } from "./SidebarChatItem";
 import type { Chat } from "@/app/components/shared/types";
 
-// The live round left this surface as the one place still gating on
-// `chat.user_id === user.id` with failures swallowed. These tests pin the
-// ladder rules the rest of the stack enforces: rename is member-tier
-// (content.edit), delete is admin-tier (container.delete), and a failed
-// delete is told to the user instead of silently reappearing on reload.
+// Chat management is owner-only; direct recipients may leave.
 
 const renameChat = vi.fn();
 const deleteChat = vi.fn();
+const leaveChat = vi.fn();
+const push = vi.fn();
+const replace = vi.fn();
+vi.mock("next/navigation", () => ({ useRouter: () => ({ push, replace }) }));
 
 vi.mock("@/app/contexts/ChatHistoryContext", () => ({
-    useChatHistoryContext: () => ({ renameChat, deleteChat }),
+    useChatHistoryContext: () => ({ renameChat, deleteChat, leaveChat }),
 }));
 vi.mock("@/app/components/assistant/ChatAccessModal", () => ({
     ChatAccessModal: ({ open }: { open: boolean }) =>
@@ -23,6 +23,7 @@ vi.mock("@/app/components/assistant/ChatAccessModal", () => ({
 function chat(overrides: Partial<Chat>): Chat {
     return {
         id: "chat-1",
+        project_id: null,
         title: "Quarterly filing",
         user_id: "someone-else",
         created_at: new Date().toISOString(),
@@ -45,6 +46,7 @@ function openMenu() {
 beforeEach(() => {
     vi.clearAllMocks();
     deleteChat.mockResolvedValue(undefined);
+    leaveChat.mockResolvedValue(undefined);
 });
 
 describe("SidebarChatItem role gates", () => {
@@ -62,36 +64,39 @@ describe("SidebarChatItem role gates", () => {
         expect(await screen.findByText("Chat access modal")).toBeInTheDocument();
     });
 
-    it("gates Share for a non-owner", async () => {
-        render(
-            <SidebarChatItem
-                chat={chat({ is_owner: false, access_role: "editor" })}
-                isActive
-                onSelect={vi.fn()}
-            />,
-        );
+    it.each(["viewer", "editor"] as const)("hides owner actions and lets a shared %s leave", async (role) => {
+        render(<SidebarChatItem chat={chat({ is_owner: false, access_role: role, can_leave: true })} isActive onSelect={vi.fn()} />);
         openMenu();
-        fireEvent.click(await screen.findByText("Share"));
-
-        expect(screen.queryByText("Chat access modal")).not.toBeInTheDocument();
-        expect(await screen.findByText(/only an owner/i)).toBeInTheDocument();
+        expect(await screen.findByRole("menuitem", { name: "Leave" })).toBeVisible();
+        for (const name of ["Share", "Rename", "Delete"]) {
+            expect(screen.queryByRole("menuitem", { name })).toBeNull();
+        }
+        fireEvent.click(screen.getByRole("menuitem", { name: "Leave" }));
+        expect(leaveChat).not.toHaveBeenCalled();
+        fireEvent.click(screen.getByRole("button", { name: "Leave" }));
+        await waitFor(() => expect(leaveChat).toHaveBeenCalledWith("chat-1"));
+        await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+        expect(deleteChat).not.toHaveBeenCalled();
     });
 
-    it("lets a shared member rename but not delete", async () => {
-        render(
-            <SidebarChatItem
-                chat={chat({ is_owner: false, access_role: "editor" })}
-                isActive
-                onSelect={vi.fn()}
-            />,
-        );
-        openMenu();
-        fireEvent.click(await screen.findByText("Delete"));
+    it.each([
+        { project_id: "project-1", can_leave: true },
+        { project_id: null, can_leave: false },
+    ])("does not offer Leave for project or audited access: %j", (access) => {
+        render(<SidebarChatItem chat={chat({ ...access, access_role: "viewer" })} isActive onSelect={vi.fn()} />);
+        expect(screen.queryByRole("button", { name: "Actions for Quarterly filing" })).toBeNull();
+    });
 
+    it("shows a failed leave without deleting or navigating", async () => {
+        leaveChat.mockRejectedValue(new Error("internal database details"));
+        render(<SidebarChatItem chat={chat({ can_leave: true, access_role: "viewer" })} isActive onSelect={vi.fn()} />);
+        openMenu();
+        fireEvent.click(await screen.findByRole("menuitem", { name: "Leave" }));
+        fireEvent.click(screen.getByRole("button", { name: "Leave" }));
+        expect(await screen.findByText("The chat could not be left. Please try again.")).toBeVisible();
+        expect(screen.queryByText("internal database details")).toBeNull();
         expect(deleteChat).not.toHaveBeenCalled();
-        expect(
-            await screen.findByText(/only an owner/i),
-        ).toBeInTheDocument();
+        expect(push).not.toHaveBeenCalled();
     });
 
     it("lets the creator delete — is_owner alone derives admin", async () => {
@@ -106,22 +111,6 @@ describe("SidebarChatItem role gates", () => {
         fireEvent.click(await screen.findByText("Delete"));
 
         expect(deleteChat).toHaveBeenCalledWith("chat-1");
-    });
-
-    it("refuses a viewer's rename with the member tier", async () => {
-        render(
-            <SidebarChatItem
-                chat={chat({ is_owner: false, access_role: "viewer" })}
-                isActive
-                onSelect={vi.fn()}
-            />,
-        );
-        openMenu();
-        fireEvent.click(await screen.findByText("Rename"));
-
-        expect(
-            await screen.findByText(/only an editor/i),
-        ).toBeInTheDocument();
     });
 
     it("lets a project admin delete a colleague's chat", async () => {
@@ -143,24 +132,9 @@ describe("SidebarChatItem role gates", () => {
         expect(deleteChat).toHaveBeenCalledWith("chat-1");
     });
 
-    it("fails closed to viewer when a row carries no role fields at all", async () => {
-        // A row with neither is_owner nor access_role has told us nothing;
-        // offering member-tier affordances on it is how the sidebar ended up
-        // offering renames the server refuses. Nothing may be offered.
-        render(
-            <SidebarChatItem
-                chat={chat({})}
-                isActive
-                onSelect={vi.fn()}
-            />,
-        );
-        openMenu();
-        fireEvent.click(await screen.findByText("Rename"));
-
-        expect(renameChat).not.toHaveBeenCalled();
-        expect(
-            await screen.findByText(/only an editor/i),
-        ).toBeInTheDocument();
+    it("hides management and Leave when role metadata is missing", () => {
+        render(<SidebarChatItem chat={chat({})} isActive onSelect={vi.fn()} />);
+        expect(screen.queryByRole("button", { name: "Actions for Quarterly filing" })).toBeNull();
     });
 
     it("surfaces a failed rename instead of a silent revert", async () => {
@@ -177,13 +151,61 @@ describe("SidebarChatItem role gates", () => {
         );
         openMenu();
         fireEvent.click(await screen.findByText("Rename"));
-        const input = screen.getByRole("textbox");
+        const input = await screen.findByLabelText("Chat title");
         fireEvent.change(input, { target: { value: "New title" } });
-        fireEvent.keyDown(input, { key: "Enter" });
+        fireEvent.click(screen.getByRole("button", { name: "Save" }));
 
         expect(
             await screen.findByText(/could not be renamed/i),
         ).toBeInTheDocument();
+        // The modal stays open with the typed title so it can be retried.
+        expect(screen.getByLabelText("Chat title")).toHaveValue("New title");
+        await waitFor(() =>
+            expect(screen.getByRole("button", { name: "Save" })).toBeEnabled(),
+        );
+    });
+
+    it("renames through the rename modal", async () => {
+        renameChat.mockResolvedValue(undefined);
+        render(
+            <SidebarChatItem
+                chat={chat({ is_owner: true })}
+                isActive
+                onSelect={vi.fn()}
+            />,
+        );
+        openMenu();
+        fireEvent.click(await screen.findByText("Rename"));
+        const input = await screen.findByLabelText("Chat title");
+        expect(input).toHaveValue("Quarterly filing");
+        fireEvent.change(input, { target: { value: "  New title  " } });
+        fireEvent.click(screen.getByRole("button", { name: "Save" }));
+
+        expect(renameChat).toHaveBeenCalledWith("chat-1", "New title");
+        await waitFor(() =>
+            expect(screen.queryByLabelText("Chat title")).not.toBeInTheDocument(),
+        );
+    });
+
+    it("keeps the actions trigger revealed while its menu is open", async () => {
+        // The trigger is zero-width until the row is hovered; collapsing it
+        // under an open menu moves the menu's anchor.
+        render(
+            <SidebarChatItem
+                chat={chat({ is_owner: true })}
+                isActive={false}
+                onSelect={vi.fn()}
+            />,
+        );
+        const trigger = screen.getByRole("button", {
+            name: "Actions for Quarterly filing",
+        });
+        expect(trigger).toHaveClass("pointer-events-none");
+        openMenu();
+        await screen.findByText("Rename");
+
+        expect(trigger).toHaveClass("w-6", "opacity-100");
+        expect(trigger).not.toHaveClass("pointer-events-none");
     });
 
     it("marks a colleague's chat as shared", async () => {
@@ -199,11 +221,9 @@ describe("SidebarChatItem role gates", () => {
             />,
         );
 
-        // Plain text, not a pill badge (AGENTS.md: informational labels are
-        // text), at a size and colour that meets the contrast baseline —
-        // text-[10px] text-gray-400 measured about 2.6:1.
+        // Plain text, using the same muted treatment as project prefixes.
         const marker = screen.getByText("Shared");
-        expect(marker).toHaveClass("text-xs", "text-gray-500");
+        expect(marker).toHaveClass("text-xs", "text-gray-400", "font-normal");
         // The marker renders in a sibling element, so it reached neither the
         // row's tooltip nor its accessible name: a screen-reader user heard
         // exactly what the thread's owner hears.
@@ -249,5 +269,32 @@ describe("SidebarChatItem role gates", () => {
         expect(
             await screen.findByText(/could not be deleted/i),
         ).toBeInTheDocument();
+    });
+
+    it("offers opening the chat beside the current one only where asked to", async () => {
+        const onOpenInSideChat = vi.fn();
+        const { unmount } = render(
+            <SidebarChatItem
+                chat={chat({ is_owner: true })}
+                isActive={false}
+                onSelect={vi.fn()}
+            />,
+        );
+        openMenu();
+        expect(screen.queryByText("Open in side chat")).not.toBeInTheDocument();
+        unmount();
+
+        render(
+            <SidebarChatItem
+                chat={chat({ is_owner: true })}
+                isActive={false}
+                onSelect={vi.fn()}
+                onOpenInSideChat={onOpenInSideChat}
+            />,
+        );
+        openMenu();
+        fireEvent.click(await screen.findByText("Open in side chat"));
+
+        expect(onOpenInSideChat).toHaveBeenCalled();
     });
 });

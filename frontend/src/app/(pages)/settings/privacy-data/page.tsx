@@ -7,12 +7,19 @@ import {
   SettingsDescription,
   SettingsLabel,
 } from "@/app/components/settings/SettingsText";
-import { SettingsCard } from "@/app/components/settings/SettingsCard";
+import { GlassCardUI } from "@/shared/ui/GlassCardUI";
 import { SettingsHeading } from "@/app/components/settings/SettingsHeading";
 import { SettingsRow } from "@/app/components/settings/SettingsRow";
 import { useChatHistoryContext } from "@/app/contexts/ChatHistoryContext";
+import {
+  PERSONAL_WORKSPACE,
+  PERSONAL_WORKSPACE_LABEL,
+  useWorkspace,
+} from "@/app/contexts/WorkspaceContext";
+import { useHasMultipleWorkspaces } from "@/app/hooks/useHasMultipleWorkspaces";
+import { useMemberDataActions } from "@/app/hooks/useMemberDataActions";
+import { EmptyState } from "@/app/components/ui/empty-state";
 import { ConfirmPopup } from "@/app/components/popups/ConfirmPopup";
-import { WarningPopup } from "@/app/components/popups/WarningPopup";
 import {
   MfaVerificationPopup,
   needsMfaVerification,
@@ -28,6 +35,7 @@ import {
   startUserExport,
   type UserExportType,
 } from "@/app/lib/mikeApi";
+import { UserVisibleError, notifyError } from "@/app/lib/userFacingError";
 
 type DeleteDataAction = "chats" | "tabular-reviews" | "projects" | "memory";
 type ExportDataAction =
@@ -42,36 +50,103 @@ const devLog = (...args: Parameters<typeof console.log>) => {
   if (isDev) console.log(...args);
 };
 
-const DELETE_DATA_COPY: Record<
-  DeleteDataAction,
-  {
-    title: string;
-    message: string;
+/**
+ * The confirmation for deleting data in one workspace. Each "Delete all"
+ * reaches the active workspace only. `workspaceName` is set when the person
+ * has more than one workspace, and the copy then says which; with only
+ * Personal there is nothing to tell apart, and it names none.
+ */
+function deleteDataCopy(
+  action: DeleteDataAction,
+  personal: boolean,
+  workspaceName: string | null,
+): { title: string; message: string } {
+  const where = workspaceName ? ` in ${workspaceName}` : "";
+  const others = workspaceName
+    ? " Your other workspaces are not affected."
+    : "";
+  const undo = "This action cannot be undone.";
+  switch (action) {
+    case "chats":
+      return {
+        title: `Delete all chats${where}?`,
+        message: `This will permanently delete your assistant and tabular review chat history${where}.${others} ${undo}`,
+      };
+    case "tabular-reviews":
+      return {
+        title: `Delete all tabular reviews${where}?`,
+        message: `This will permanently delete all tabular reviews you own${where}, including their cells and review chats.${others} ${undo}`,
+      };
+    case "projects":
+      return {
+        title: `Delete all projects${where}?`,
+        message: personal
+          ? `This will permanently delete all projects you own${where}, including their documents, chats, and tabular reviews.${others} ${undo}`
+          : `This will permanently delete all projects you created${where}, including their documents, chats, and tabular reviews. Colleagues lose them too.${others} ${undo}`,
+      };
+    case "memory":
+      return {
+        title: `Delete all memory${where}?`,
+        message: personal
+          ? `This permanently deletes your ${workspaceName ? `${workspaceName} memory` : "app memory"} and memories for private projects you created. Project collaborators will also lose those memories.${others} Memory remains enabled and can be rebuilt from future conversations. ${undo}`
+          : `This permanently deletes your memory${where}. Project memories there are not affected, and neither are your other workspaces. Memory remains enabled and can be rebuilt from future conversations. ${undo}`,
+      };
   }
-> = {
-  chats: {
-    title: "Delete all chats?",
-    message:
-      "This will permanently delete your assistant and tabular review chat history. This action cannot be undone.",
-  },
-  "tabular-reviews": {
-    title: "Delete all tabular reviews?",
-    message:
-      "This will permanently delete all tabular reviews you own, including their cells and review chats. This action cannot be undone.",
-  },
-  projects: {
-    title: "Delete all projects?",
-    message:
-      "This will permanently delete all projects you own, including their documents, chats, and tabular reviews. This action cannot be undone.",
-  },
-  memory: {
-    title: "Delete all memory?",
-    message:
-      "This permanently deletes your app memory and memories for private projects you created. Project collaborators will also lose those memories. Memory remains enabled and can be rebuilt from future conversations. This action cannot be undone.",
-  },
+}
+
+/** Imperative, lower case: "Couldn't delete your chats". */
+const DELETE_ACTION_LABELS: Record<DeleteDataAction, string> = {
+  chats: "delete your chats",
+  "tabular-reviews": "delete your tabular reviews",
+  projects: "delete your projects",
+  memory: "delete your memory",
 };
 
+// Exports and deletion work on the active workspace, and in an organization
+// only as far as its owners allow members. Keyed by workspace, so switching
+// drops a confirmation or verification still open for the old one rather
+// than carrying it into the new one.
 export default function PrivacyDataPage() {
+  const { workspaceId, activeOrganization } = useWorkspace();
+  const multipleWorkspaces = useHasMultipleWorkspaces();
+  const { canExport, canDelete } = useMemberDataActions();
+  const workspace = workspaceId ?? PERSONAL_WORKSPACE;
+  if (!canExport && !canDelete) {
+    return (
+      <EmptyState
+        title="Managed by your organization"
+        description={`Exporting and bulk-deleting your data in ${activeOrganization?.name ?? "this organization"} is managed by its owners and is not available to members. Your other workspaces are not affected.`}
+      />
+    );
+  }
+  return (
+    <PrivacyData
+      key={workspace}
+      workspace={workspace}
+      workspaceName={
+        multipleWorkspaces
+          ? (activeOrganization?.name ?? PERSONAL_WORKSPACE_LABEL)
+          : null
+      }
+      canExport={canExport}
+      canDelete={canDelete}
+    />
+  );
+}
+
+function PrivacyData({
+  workspace,
+  workspaceName,
+  canExport,
+  canDelete,
+}: {
+  /** "personal" or an organization id. */
+  workspace: string;
+  /** The workspace's name when the person has more than one, else null. */
+  workspaceName: string | null;
+  canExport: boolean;
+  canDelete: boolean;
+}) {
   const { loadChats, setCurrentChatId } = useChatHistoryContext();
   const [pendingDeleteAction, setPendingDeleteAction] =
     useState<DeleteDataAction | null>(null);
@@ -85,7 +160,6 @@ export default function PrivacyDataPage() {
   const [isExportingTabularReviews, setIsExportingTabularReviews] =
     useState(false);
   const [isExportingMemory, setIsExportingMemory] = useState(false);
-  const [warningMessage, setWarningMessage] = useState<string | null>(null);
 
   const downloadBlob = (blob: Blob, filename: string) => {
     const url = URL.createObjectURL(blob);
@@ -108,18 +182,26 @@ export default function PrivacyDataPage() {
     type: UserExportType,
     fallbackFilename: string,
   ) => {
-    const { export_id } = await startUserExport(type);
+    const { export_id } = await startUserExport(type, { workspace });
     for (let i = 0; i < EXPORT_POLL_LIMIT; i++) {
       await new Promise((resolve) => setTimeout(resolve, EXPORT_POLL_MS));
       const status = await getUserExportStatus(export_id);
-      if (status.status === "failed") throw new Error("Export build failed");
+      if (status.status === "failed") {
+        throw new UserVisibleError(
+          "Mike couldn't build the export. Try again, and contact support if it keeps happening.",
+          { retryable: true },
+        );
+      }
       if (status.status === "done") {
         const { blob, filename } = await downloadUserExport(export_id);
         downloadBlob(blob, filename ?? status.filename ?? fallbackFilename);
         return;
       }
     }
-    throw new Error("Export timed out");
+    throw new UserVisibleError(
+      "The export is taking longer than expected. It may still be building, so try again in a few minutes.",
+      { retryable: true },
+    );
   };
 
   const handleExportAccountData = async () => {
@@ -140,7 +222,10 @@ export default function PrivacyDataPage() {
         setPendingMfaAction("export-account");
         return;
       }
-      setWarningMessage("Failed to export account data. Please try again.");
+      notifyError(error, {
+        action: "export your account data",
+        onRetry: () => void handleExportAccountData(),
+      });
     } finally {
       setIsExportingAccount(false);
     }
@@ -164,7 +249,10 @@ export default function PrivacyDataPage() {
         setPendingMfaAction("export-chats");
         return;
       }
-      setWarningMessage("Failed to export chats. Please try again.");
+      notifyError(error, {
+        action: "export your chats",
+        onRetry: () => void handleExportChatData(),
+      });
     } finally {
       setIsExportingChats(false);
     }
@@ -191,7 +279,10 @@ export default function PrivacyDataPage() {
         setPendingMfaAction("export-tabular-reviews");
         return;
       }
-      setWarningMessage("Failed to export tabular reviews. Please try again.");
+      notifyError(error, {
+        action: "export your tabular reviews",
+        onRetry: () => void handleExportTabularReviewsData(),
+      });
     } finally {
       setIsExportingTabularReviews(false);
     }
@@ -215,7 +306,10 @@ export default function PrivacyDataPage() {
         setPendingMfaAction("export-memory");
         return;
       }
-      setWarningMessage("Failed to export memory. Please try again.");
+      notifyError(error, {
+        action: "export your memory",
+        onRetry: () => void handleExportMemoryData(),
+      });
     } finally {
       setIsExportingMemory(false);
     }
@@ -231,15 +325,15 @@ export default function PrivacyDataPage() {
         return;
       }
       if (action === "chats") {
-        await deleteAllChats();
+        await deleteAllChats(workspace);
         setCurrentChatId(null);
         await loadChats();
       } else if (action === "tabular-reviews") {
-        await deleteAllTabularReviews();
+        await deleteAllTabularReviews(workspace);
       } else if (action === "memory") {
-        await deleteAllMemories();
+        await deleteAllMemories(workspace);
       } else {
-        await deleteAllProjects();
+        await deleteAllProjects(workspace);
         setCurrentChatId(null);
         await loadChats();
       }
@@ -255,7 +349,13 @@ export default function PrivacyDataPage() {
         setPendingMfaAction(action);
         return;
       }
-      setWarningMessage("Failed to delete data. Please try again.");
+      notifyError(error, {
+        action: DELETE_ACTION_LABELS[action],
+        // Re-open the confirmation rather than deleting again from the
+        // notice: this erases data permanently, so it is always the dialog
+        // that starts it.
+        onRetry: () => setPendingDeleteAction(action),
+      });
     } finally {
       setDeletingAction(null);
     }
@@ -280,184 +380,206 @@ export default function PrivacyDataPage() {
     }
   };
 
+  const personal = workspace === PERSONAL_WORKSPACE;
   const pendingDeleteCopy = pendingDeleteAction
-    ? DELETE_DATA_COPY[pendingDeleteAction]
+    ? deleteDataCopy(pendingDeleteAction, personal, workspaceName)
     : null;
 
   return (
     <div className="space-y-8">
-      <section className="space-y-3">
-        <SettingsHeading>Export data</SettingsHeading>
-        <SettingsCard>
-          <SettingsRow>
-            <div className="space-y-1">
-              <SettingsLabel>Export chats</SettingsLabel>
-              <SettingsDescription>
-                Download assistant and tabular review chat history as JSON.
-              </SettingsDescription>
-            </div>
-            <PillButtonUI
-              tone="black"
-              size="sm"
-              onClick={handleExportChatData}
-              disabled={isExportingChats}
-              loading={isExportingChats}
-              className="shrink-0"
-            >
-              <Download className="h-4 w-4 shrink-0" />
-              {isExportingChats ? "Exporting..." : "Export"}
-            </PillButtonUI>
-          </SettingsRow>
-          <SettingsRow>
-            <div className="space-y-1">
-              <SettingsLabel>Export tabular reviews</SettingsLabel>
-              <SettingsDescription>
-                Download all owned tabular reviews, cells, and review chat
-                records as JSON.
-              </SettingsDescription>
-            </div>
-            <PillButtonUI
-              tone="black"
-              size="sm"
-              onClick={handleExportTabularReviewsData}
-              disabled={isExportingTabularReviews}
-              loading={isExportingTabularReviews}
-              className="shrink-0"
-            >
-              <Download className="h-4 w-4 shrink-0" />
-              {isExportingTabularReviews ? "Exporting..." : "Export"}
-            </PillButtonUI>
-          </SettingsRow>
-          <SettingsRow>
-            <div className="space-y-1">
-              <SettingsLabel>Export account JSON</SettingsLabel>
-              <SettingsDescription>
-                Download account metadata, projects, document metadata,
-                workflows, and review data as JSON.
-              </SettingsDescription>
-            </div>
-            <PillButtonUI
-              tone="black"
-              size="sm"
-              onClick={handleExportAccountData}
-              disabled={isExportingAccount}
-              loading={isExportingAccount}
-              className="shrink-0"
-            >
-              <Download className="h-4 w-4 shrink-0" />
-              {isExportingAccount ? "Exporting..." : "Export"}
-            </PillButtonUI>
-          </SettingsRow>
-          <SettingsRow>
-            <div className="space-y-1">
-              <SettingsLabel>Export memory</SettingsLabel>
-              <SettingsDescription>
-                Download your app memory and every project memory you can access
-                as Markdown files in a ZIP archive.
-              </SettingsDescription>
-            </div>
-            <PillButtonUI
-              tone="black"
-              size="sm"
-              aria-label="Export memory"
-              onClick={handleExportMemoryData}
-              disabled={isExportingMemory}
-              loading={isExportingMemory}
-              className="shrink-0"
-            >
-              <Download className="h-4 w-4 shrink-0" />
-              {isExportingMemory ? "Exporting..." : "Export"}
-            </PillButtonUI>
-          </SettingsRow>
-        </SettingsCard>
-      </section>
+      {canExport && (
+        <section className="space-y-3">
+          <SettingsHeading id="export-data">Export data</SettingsHeading>
+          {workspaceName && (
+            <SettingsDescription>
+              Exports data in {workspaceName} only. To export another workspace,
+              switch to it first.
+            </SettingsDescription>
+          )}
+          <GlassCardUI>
+            <SettingsRow>
+              <div className="space-y-1">
+                <SettingsLabel>Export chats</SettingsLabel>
+                <SettingsDescription>
+                  Download assistant and tabular review chat history as JSON.
+                </SettingsDescription>
+              </div>
+              <PillButtonUI
+                tone="black"
+                size="sm"
+                onClick={handleExportChatData}
+                disabled={isExportingChats}
+                loading={isExportingChats}
+                className="shrink-0"
+              >
+                <Download className="h-4 w-4 shrink-0" />
+                {isExportingChats ? "Exporting..." : "Export"}
+              </PillButtonUI>
+            </SettingsRow>
+            <SettingsRow>
+              <div className="space-y-1">
+                <SettingsLabel>Export tabular reviews</SettingsLabel>
+                <SettingsDescription>
+                  Download all owned tabular reviews, cells, and review chat
+                  records as JSON.
+                </SettingsDescription>
+              </div>
+              <PillButtonUI
+                tone="black"
+                size="sm"
+                onClick={handleExportTabularReviewsData}
+                disabled={isExportingTabularReviews}
+                loading={isExportingTabularReviews}
+                className="shrink-0"
+              >
+                <Download className="h-4 w-4 shrink-0" />
+                {isExportingTabularReviews ? "Exporting..." : "Export"}
+              </PillButtonUI>
+            </SettingsRow>
+            <SettingsRow>
+              <div className="space-y-1">
+                <SettingsLabel>Export account JSON</SettingsLabel>
+                <SettingsDescription>
+                  {workspace === PERSONAL_WORKSPACE
+                    ? "Download account metadata, projects, document metadata, workflows, playbooks, and review data as JSON."
+                    : "Download your projects, document metadata, workflows, playbooks, and review data here as JSON."}
+                </SettingsDescription>
+              </div>
+              <PillButtonUI
+                tone="black"
+                size="sm"
+                onClick={handleExportAccountData}
+                disabled={isExportingAccount}
+                loading={isExportingAccount}
+                className="shrink-0"
+              >
+                <Download className="h-4 w-4 shrink-0" />
+                {isExportingAccount ? "Exporting..." : "Export"}
+              </PillButtonUI>
+            </SettingsRow>
+            <SettingsRow>
+              <div className="space-y-1">
+                <SettingsLabel>Export memory</SettingsLabel>
+                <SettingsDescription>
+                  Download your app memory and every project memory you can
+                  access as Markdown files in a ZIP archive.
+                </SettingsDescription>
+              </div>
+              <PillButtonUI
+                tone="black"
+                size="sm"
+                aria-label="Export memory"
+                onClick={handleExportMemoryData}
+                disabled={isExportingMemory}
+                loading={isExportingMemory}
+                className="shrink-0"
+              >
+                <Download className="h-4 w-4 shrink-0" />
+                {isExportingMemory ? "Exporting..." : "Export"}
+              </PillButtonUI>
+            </SettingsRow>
+          </GlassCardUI>
+        </section>
+      )}
 
-      <section className="space-y-3">
-        <SettingsHeading>Delete data</SettingsHeading>
-        <SettingsCard>
-          <SettingsRow>
-            <div className="space-y-1">
-              <SettingsLabel>Delete all chats</SettingsLabel>
-              <SettingsDescription>
-                Permanently delete your assistant and tabular review chat
-                history.
-              </SettingsDescription>
-            </div>
-            <PillButtonUI
-              tone="danger"
-              size="sm"
-              onClick={() => setPendingDeleteAction("chats")}
-              disabled={!!deletingAction}
-              loading={deletingAction === "chats"}
-              className="w-full shrink-0 sm:w-auto"
-            >
-              <Trash2 className="h-4 w-4 shrink-0" />
-              Delete
-            </PillButtonUI>
-          </SettingsRow>
-          <SettingsRow>
-            <div className="space-y-1">
-              <SettingsLabel>Delete all tabular reviews</SettingsLabel>
-              <SettingsDescription>
-                Permanently delete all tabular reviews you own, including cells
-                and review chats.
-              </SettingsDescription>
-            </div>
-            <PillButtonUI
-              tone="danger"
-              size="sm"
-              onClick={() => setPendingDeleteAction("tabular-reviews")}
-              disabled={!!deletingAction}
-              loading={deletingAction === "tabular-reviews"}
-              className="w-full shrink-0 sm:w-auto"
-            >
-              <Trash2 className="h-4 w-4 shrink-0" />
-              Delete
-            </PillButtonUI>
-          </SettingsRow>
-          <SettingsRow>
-            <div className="space-y-1">
-              <SettingsLabel>Delete all projects</SettingsLabel>
-              <SettingsDescription>
-                Permanently delete all projects you own, including documents,
-                chats, and tabular reviews.
-              </SettingsDescription>
-            </div>
-            <PillButtonUI
-              tone="danger"
-              size="sm"
-              onClick={() => setPendingDeleteAction("projects")}
-              disabled={!!deletingAction}
-              loading={deletingAction === "projects"}
-              className="w-full shrink-0 sm:w-auto"
-            >
-              <Trash2 className="h-4 w-4 shrink-0" />
-              Delete
-            </PillButtonUI>
-          </SettingsRow>
-          <SettingsRow>
-            <div className="space-y-1">
-              <SettingsLabel>Delete all memory</SettingsLabel>
-              <SettingsDescription>
-                Permanently delete your app memory and memories for private
-                projects you created.
-              </SettingsDescription>
-            </div>
-            <PillButtonUI
-              tone="danger"
-              size="sm"
-              aria-label="Delete all memory"
-              onClick={() => setPendingDeleteAction("memory")}
-              disabled={!!deletingAction}
-              loading={deletingAction === "memory"}
-              className="w-full shrink-0 sm:w-auto"
-            >
-              <Trash2 className="h-4 w-4 shrink-0" />
-              Delete
-            </PillButtonUI>
-          </SettingsRow>
-        </SettingsCard>
-      </section>
+      {canDelete && (
+        <section className="space-y-3">
+          <SettingsHeading id="delete-data">Delete data</SettingsHeading>
+          {workspaceName && (
+            <SettingsDescription>
+              Deletes data in {workspaceName} only. To delete data in another
+              workspace, switch to it first.
+            </SettingsDescription>
+          )}
+          <GlassCardUI>
+            <SettingsRow>
+              <div className="space-y-1">
+                <SettingsLabel>Delete all chats</SettingsLabel>
+                <SettingsDescription>
+                  Permanently delete your assistant and tabular review chat
+                  history.
+                </SettingsDescription>
+              </div>
+              <PillButtonUI
+                tone="danger"
+                size="sm"
+                onClick={() => setPendingDeleteAction("chats")}
+                disabled={!!deletingAction}
+                loading={deletingAction === "chats"}
+                className="w-full shrink-0 sm:w-auto"
+              >
+                <Trash2 className="h-4 w-4 shrink-0" />
+                Delete
+              </PillButtonUI>
+            </SettingsRow>
+            <SettingsRow>
+              <div className="space-y-1">
+                <SettingsLabel>Delete all tabular reviews</SettingsLabel>
+                <SettingsDescription>
+                  Permanently delete all tabular reviews you own, including
+                  cells and review chats.
+                </SettingsDescription>
+              </div>
+              <PillButtonUI
+                tone="danger"
+                size="sm"
+                onClick={() => setPendingDeleteAction("tabular-reviews")}
+                disabled={!!deletingAction}
+                loading={deletingAction === "tabular-reviews"}
+                className="w-full shrink-0 sm:w-auto"
+              >
+                <Trash2 className="h-4 w-4 shrink-0" />
+                Delete
+              </PillButtonUI>
+            </SettingsRow>
+            <SettingsRow>
+              <div className="space-y-1">
+                <SettingsLabel>Delete all projects</SettingsLabel>
+                <SettingsDescription>
+                  {personal
+                    ? "Permanently delete all projects you own, including documents, chats, and tabular reviews."
+                    : "Permanently delete all projects you created here, including documents, chats, and tabular reviews."}
+                </SettingsDescription>
+              </div>
+              <PillButtonUI
+                tone="danger"
+                size="sm"
+                onClick={() => setPendingDeleteAction("projects")}
+                disabled={!!deletingAction}
+                loading={deletingAction === "projects"}
+                className="w-full shrink-0 sm:w-auto"
+              >
+                <Trash2 className="h-4 w-4 shrink-0" />
+                Delete
+              </PillButtonUI>
+            </SettingsRow>
+            <SettingsRow>
+              <div className="space-y-1">
+                <SettingsLabel>Delete all memory</SettingsLabel>
+                <SettingsDescription>
+                  {!personal
+                    ? `Permanently delete your memory in ${workspaceName ?? "this workspace"}.`
+                    : workspaceName
+                      ? `Permanently delete your ${workspaceName} memory and memories for private projects you created.`
+                      : "Permanently delete your app memory and memories for private projects you created."}
+                </SettingsDescription>
+              </div>
+              <PillButtonUI
+                tone="danger"
+                size="sm"
+                aria-label="Delete all memory"
+                onClick={() => setPendingDeleteAction("memory")}
+                disabled={!!deletingAction}
+                loading={deletingAction === "memory"}
+                className="w-full shrink-0 sm:w-auto"
+              >
+                <Trash2 className="h-4 w-4 shrink-0" />
+                Delete
+              </PillButtonUI>
+            </SettingsRow>
+          </GlassCardUI>
+        </section>
+      )}
       <ConfirmPopup
         open={!!pendingDeleteAction}
         title={pendingDeleteCopy?.title}
@@ -481,12 +603,6 @@ export default function PrivacyDataPage() {
         onVerified={() => void handleMfaVerified()}
         title="Two-factor verification required"
         message="This action is sensitive. Enter a code from your authenticator app to continue."
-      />
-      <WarningPopup
-        open={!!warningMessage}
-        title="Action failed"
-        message={warningMessage}
-        onClose={() => setWarningMessage(null)}
       />
     </div>
   );

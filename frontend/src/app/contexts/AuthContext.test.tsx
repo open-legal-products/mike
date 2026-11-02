@@ -1,7 +1,12 @@
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { AuthProvider, useAuth } from "./AuthContext";
 import { AUTH_SESSION_INVALIDATED_EVENT } from "@/app/lib/authEvents";
+import {
+    ToastViewportUI,
+    clearToasts,
+    showToast,
+} from "@/shared/ui/ToastUI";
 
 const {
     clearLegacyBrowserAuthStorage,
@@ -50,7 +55,9 @@ function Consumer() {
 }
 
 describe("AuthProvider", () => {
+    afterEach(() => clearToasts());
     beforeEach(() => {
+        clearToasts();
         getAuthSession.mockReset();
         logout.mockReset();
         clearLegacyBrowserAuthStorage.mockReset();
@@ -76,6 +83,42 @@ describe("AuthProvider", () => {
             "We could not check your session",
         );
     });
+
+    it.each([
+        ["/login", 0],
+        ["/signup", 0],
+        ["/reset-password", 0],
+        ["/assistant", 1],
+    ])(
+        "on %s, a failed session check raises %i session toasts",
+        async (path, toasts) => {
+            // Live check (2026-10-04, backend down): /login showed its inline
+            // "We could not check your session" AND a toast saying the same,
+            // and the two disagreed once the user tried to sign in. Auth
+            // screens own their error; the toast is for every other page.
+            window.history.pushState({}, "", path);
+            clearToasts();
+            getAuthSession.mockRejectedValue(new Error("gateway unavailable"));
+
+            render(
+                <AuthProvider>
+                    <Consumer />
+                    <ToastViewportUI />
+                </AuthProvider>,
+            );
+
+            await waitFor(() =>
+                expect(screen.getByTestId("error")).toHaveTextContent(
+                    "We could not check your session",
+                ),
+            );
+            expect(
+                screen.queryAllByText(/Couldn't check your session/),
+            ).toHaveLength(toasts);
+            clearToasts();
+            window.history.pushState({}, "", "/");
+        },
+    );
 
     it("clears stale in-memory auth when an API request returns 401", async () => {
         getAuthSession.mockResolvedValue(user);
@@ -139,4 +182,61 @@ describe("AuthProvider", () => {
             expect(screen.getByTestId("user")).toHaveTextContent("signed-out"),
         );
     });
+
+    it("clears leftover toasts when the user signs out", async () => {
+        getAuthSession.mockResolvedValue(user);
+        logout.mockResolvedValue(undefined);
+
+        render(
+            <AuthProvider>
+                <Consumer />
+                <ToastViewportUI />
+            </AuthProvider>,
+        );
+        await waitFor(() =>
+            expect(screen.getByTestId("user")).toHaveTextContent(user.email),
+        );
+
+        // A failure raised while signed in, still on screen: its "Retry"
+        // would now run as nobody, over the login form.
+        showToast({
+            tone: "error",
+            title: "Couldn't save the document",
+            message: "Try again.",
+            actions: [{ label: "Retry", onClick: () => {} }],
+        });
+        expect(await screen.findByRole("alert")).toBeInTheDocument();
+
+        fireEvent.click(screen.getByRole("button", { name: "Sign out" }));
+
+        await waitFor(() =>
+            expect(screen.getByTestId("user")).toHaveTextContent("signed-out"),
+        );
+        await waitFor(() => expect(screen.queryByRole("alert")).toBeNull());
+        clearToasts();
+    });
+    it.each(["invalidation", "null refresh", "account switch"])(
+        "clears previous-session actions on %s",
+        async (transition) => {
+            getAuthSession.mockResolvedValue(user);
+            render(<AuthProvider><Consumer /><ToastViewportUI /></AuthProvider>);
+            await screen.findByText(user.email);
+            showToast({ tone: "error", title: "Save failed", message: "Try again.",
+                actions: [{ label: "Retry old write", onClick: vi.fn() }] });
+            expect(await screen.findByRole("button", { name: "Retry old write" })).toBeVisible();
+            if (transition === "invalidation") {
+                fireEvent(window, new Event(AUTH_SESSION_INVALIDATED_EVENT));
+            } else {
+                getAuthSession.mockResolvedValue(transition === "null refresh" ? null : {
+                    ...user, id: "user-2", email: "second@example.test",
+                });
+                fireEvent(window, new Event("focus"));
+            }
+            await waitFor(() => expect(screen.getByTestId("user")).toHaveTextContent(
+                transition === "account switch" ? "second@example.test" : "signed-out",
+            ));
+            expect(screen.queryByRole("button", { name: "Retry old write" })).not.toBeInTheDocument();
+        },
+    );
+
 });

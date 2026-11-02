@@ -1,19 +1,27 @@
-// "owned" and "shared" retain the list's original source semantics, while
-// "private" and "collaborative" power the Access-column filter. The latter
-// groups direct grants and organisation access together as collaborative.
+import { workspaceRpcArg, type WorkspaceFilter } from "../../lib/workspace";
+
+// "owned" and "shared" retain the list's original source semantics.
+// "public" and "nonpublic" power the Access-column filter: open to the whole
+// organization, or not (private to its creator, or shared with individuals).
+// "private" and "collaborative" are the filter's older pair, kept for older
+// clients.
 export type WorkflowScope =
     | "all"
     | "owned"
     | "shared"
     | "private"
-    | "collaborative";
+    | "collaborative"
+    | "public"
+    | "nonpublic";
 
 export function parseWorkflowScope(value: unknown): WorkflowScope {
     if (
         value === "owned" ||
         value === "shared" ||
         value === "private" ||
-        value === "collaborative"
+        value === "collaborative" ||
+        value === "public" ||
+        value === "nonpublic"
     )
         return value;
     return "all";
@@ -32,6 +40,7 @@ export interface WorkflowsOverviewRpcArgs {
     p_practice: string | null;
     p_language: string | null;
     p_jurisdiction: string | null;
+    p_workspace?: string;
 }
 
 export function buildWorkflowsOverviewRpcArgs(params: {
@@ -45,6 +54,7 @@ export function buildWorkflowsOverviewRpcArgs(params: {
     practice?: string | null;
     language?: string | null;
     jurisdiction?: string | null;
+    workspace?: WorkspaceFilter;
 }): WorkflowsOverviewRpcArgs {
     return {
         p_user_id: params.userId,
@@ -59,6 +69,7 @@ export function buildWorkflowsOverviewRpcArgs(params: {
         p_practice: params.practice ?? null,
         p_language: params.language ?? null,
         p_jurisdiction: params.jurisdiction ?? null,
+        ...workspaceRpcArg(params.workspace),
     };
 }
 
@@ -73,6 +84,7 @@ export interface WorkflowIdsOverviewRpcArgs {
     p_jurisdiction: string | null;
     p_limit: number;
     p_offset: number;
+    p_workspace?: string;
 }
 
 // Lightweight sibling of buildWorkflowsOverviewRpcArgs for "select all
@@ -89,6 +101,7 @@ export function buildWorkflowIdsOverviewRpcArgs(params: {
     practice?: string | null;
     language?: string | null;
     jurisdiction?: string | null;
+    workspace?: WorkspaceFilter;
     pagination: { limit: number; offset: number };
 }): WorkflowIdsOverviewRpcArgs {
     return {
@@ -102,5 +115,6 @@ export function buildWorkflowIdsOverviewRpcArgs(params: {
         p_jurisdiction: params.jurisdiction ?? null,
         p_limit: params.pagination.limit,
         p_offset: params.pagination.offset,
+        ...workspaceRpcArg(params.workspace),
     };
 }

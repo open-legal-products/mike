@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
     SUPPORTED_DOCUMENT_ACCEPT,
     UNSUPPORTED_DOCUMENT_WARNING_MESSAGE,
+    combineUploadWarnings,
     formatUnsupportedDocumentWarning,
     isSupportedDocumentFile,
     partitionSupportedDocumentFiles,
@@ -84,5 +85,31 @@ describe("formatUnsupportedDocumentWarning", () => {
         expect(formatUnsupportedDocumentWarning([file("x.txt")])).toBe(
             UNSUPPORTED_DOCUMENT_WARNING_MESSAGE,
         );
+    });
+});
+
+describe("combineUploadWarnings", () => {
+    it("returns null when there is nothing to warn about", () => {
+        expect(combineUploadWarnings(null, undefined)).toBeNull();
+    });
+
+    it("treats a blank string as nothing to warn about", () => {
+        expect(combineUploadWarnings("   ", null)).toBeNull();
+    });
+
+    it("passes a single warning through unchanged", () => {
+        expect(combineUploadWarnings(null, "Only warning.")).toBe(
+            "Only warning.",
+        );
+    });
+
+    it("joins unsupported-type and failed-upload warnings into one strip", () => {
+        expect(combineUploadWarnings("First.", null, "Second.")).toBe(
+            "First. Second.",
+        );
+    });
+
+    it("does not repeat an identical message twice", () => {
+        expect(combineUploadWarnings("Same.", "Same.")).toBe("Same.");
     });
 });

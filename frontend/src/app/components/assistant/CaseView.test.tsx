@@ -74,7 +74,7 @@ describe("CaseView", () => {
                 subdocument_id: "case:test:opinion:2",
             },
         };
-        const { container } = render(
+        const { container, rerender } = render(
             <CaseView
                 document={{ ...document, quotes: [quote] }}
                 activeQuote={quote}
@@ -86,6 +86,9 @@ describe("CaseView", () => {
         expect(
             container.querySelector(".case-quote-highlight"),
         ).toHaveTextContent("Dissent content");
+        rerender(<CaseView document={{ ...document, quotes: [quote] }} />);
+        expect(container.querySelector(".case-quote-highlight")).toBeNull();
+        expect(screen.getByText("Dissent content")).toBeVisible();
     });
 
     it("marks the full case quote across nested HTML nodes", () => {

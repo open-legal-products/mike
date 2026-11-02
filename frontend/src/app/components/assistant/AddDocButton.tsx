@@ -1,40 +1,93 @@
 "use client";
 
-import { PlusIcon } from "lucide-react";
+import { useRef } from "react";
+import {
+    ClipboardCheck,
+    Cloud,
+    PlusIcon,
+    Upload,
+    Waypoints,
+} from "lucide-react";
+import {
+    Dropdown,
+    DropdownContent,
+    DropdownItem,
+    DropdownSeparator,
+    DropdownTrigger,
+} from "@/shared/ui/dropdown";
 
 interface Props {
     onBrowseAll: () => void;
-    selectedDocIds?: string[];
-    hideLabel?: boolean;
+    onLocalFiles: () => void;
+    /** Adds the workflow and playbook pickers to the menu. */
+    onWorkflows?: () => void;
+    onPlaybooks?: () => void;
 }
 
+/** The composer's + menu: documents, then workflows and playbooks. */
 export function AddDocButton({
     onBrowseAll,
-    selectedDocIds = [],
-    hideLabel = false,
+    onLocalFiles,
+    onWorkflows,
+    onPlaybooks,
 }: Props) {
+    const openingDialog = useRef(false);
     return (
-        <button
-            type="button"
-            onClick={onBrowseAll}
-            className={`flex items-center gap-1 px-2 h-8 rounded-lg text-sm transition-colors cursor-pointer ${
-                selectedDocIds.length > 0
-                    ? "text-gray-700 hover:text-gray-900"
-                    : "text-gray-400 hover:text-gray-700"
-            }`}
-            title="Add documents"
-            aria-label="Add documents"
-        >
-            {selectedDocIds.length > 0 ? (
-                <span className="font-medium tabular-nums">
-                    {selectedDocIds.length}
-                </span>
-            ) : (
-                <PlusIcon className="h-4 w-4 shrink-0" />
-            )}
-            <span className={hideLabel ? "hidden" : "hidden sm:inline"}>
-                {selectedDocIds.length === 1 ? "Document" : "Documents"}
-            </span>
-        </button>
+        <Dropdown>
+            <DropdownTrigger asChild>
+                <button
+                    type="button"
+                    className="flex h-7.5 items-center gap-1 rounded-lg px-2 text-sm text-gray-400 transition-colors hover:text-gray-700 cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500/40"
+                    title="Add to message"
+                    aria-label="Add to message"
+                >
+                    <PlusIcon aria-hidden="true" className="h-4 w-4 shrink-0" />
+                </button>
+            </DropdownTrigger>
+            <DropdownContent
+                side="top"
+                align="start"
+                sideOffset={8}
+                collisionPadding={12}
+                className="min-w-36"
+                onCloseAutoFocus={(event) => {
+                    // Let the newly opened picker own focus instead of returning
+                    // it to the composer trigger as the menu unmounts.
+                    if (openingDialog.current) event.preventDefault();
+                    openingDialog.current = false;
+                }}
+            >
+                <DropdownItem onSelect={onLocalFiles}>
+                    <Upload aria-hidden="true" className="h-4 w-4 shrink-0 text-gray-500" />
+                    Upload Documents
+                </DropdownItem>
+                <DropdownItem onSelect={() => {
+                    openingDialog.current = true;
+                    onBrowseAll();
+                }}>
+                    <Cloud aria-hidden="true" className="h-4 w-4 shrink-0 text-gray-500" />
+                    Saved Documents
+                </DropdownItem>
+                {(onWorkflows || onPlaybooks) && <DropdownSeparator />}
+                {onWorkflows && (
+                    <DropdownItem onSelect={() => {
+                        openingDialog.current = true;
+                        onWorkflows();
+                    }}>
+                        <Waypoints aria-hidden="true" className="h-4 w-4 shrink-0 text-gray-500" />
+                        Workflows
+                    </DropdownItem>
+                )}
+                {onPlaybooks && (
+                    <DropdownItem onSelect={() => {
+                        openingDialog.current = true;
+                        onPlaybooks();
+                    }}>
+                        <ClipboardCheck aria-hidden="true" className="h-4 w-4 shrink-0 text-gray-500" />
+                        Playbooks
+                    </DropdownItem>
+                )}
+            </DropdownContent>
+        </Dropdown>
     );
 }

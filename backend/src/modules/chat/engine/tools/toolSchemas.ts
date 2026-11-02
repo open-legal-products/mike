@@ -1,3 +1,5 @@
+import { TEXT_CARD_TOOL } from "./textCard";
+
 /**
  * The tools that WRITE to stored content rather than read it: they create
  * `documents` rows (and, in a project chat, attach them to the project) or
@@ -16,6 +18,9 @@
  */
 export const DOCUMENT_MUTATING_TOOL_NAMES: ReadonlySet<string> = new Set([
   "edit_document",
+  // A playbook review of a Word document saves its suggestions as tracked
+  // changes in a new version.
+  "run_playbook",
   "replicate_document",
   "generate_docx",
   "generate_excel",
@@ -23,7 +28,7 @@ export const DOCUMENT_MUTATING_TOOL_NAMES: ReadonlySet<string> = new Set([
 ]);
 
 /** Read a tool schema's function name, whatever shape the entry arrived in. */
-function toolName(tool: unknown): string | null {
+export function toolName(tool: unknown): string | null {
   const fn = (tool as { function?: { name?: unknown } } | null)?.function;
   return typeof fn?.name === "string" ? fn.name : null;
 }
@@ -131,7 +136,52 @@ export const WORKFLOW_TOOLS = [
   },
 ];
 
+export const PLAYBOOK_TOOLS = [
+  {
+    type: "function",
+    function: {
+      name: "list_playbooks",
+      description:
+        "List the contract review playbooks the user can run in this workspace. Returns each playbook's id, name, description, document types, and represented party. Call this when the user asks to review a contract against a playbook, or names one you need the id of.",
+      parameters: { type: "object", properties: {} },
+    },
+  },
+  {
+    type: "function",
+    function: {
+      name: "run_playbook",
+      description:
+        "Review one attached document against a playbook, rule by rule. For a .docx, every recommended change is applied to the document as tracked changes, which the UI shows as Accept/Reject cards. Returns a summary and each rule's finding. Summarise the findings for the user; do not repeat the suggested language of findings that already have a tracked change.",
+      parameters: {
+        type: "object",
+        properties: {
+          playbook_id: {
+            type: "string",
+            description: "The playbook id from list_playbooks.",
+          },
+          doc_id: {
+            type: "string",
+            description: "Document slug of the contract to review (e.g. 'doc-0').",
+          },
+          review_mode: {
+            type: "string",
+            enum: ["strict", "permissive"],
+            description:
+              "strict flags fallback positions for review; permissive may accept them. Default strict.",
+          },
+          instructions: {
+            type: "string",
+            description: "Optional extra focus for the review, from the user's request.",
+          },
+        },
+        required: ["playbook_id", "doc_id"],
+      },
+    },
+  },
+];
+
 export const TOOLS = [
+  TEXT_CARD_TOOL,
   {
     type: "function",
     function: {
@@ -262,6 +312,26 @@ export const TOOLS = [
           },
         },
         required: ["doc_id"],
+      },
+    },
+  },
+  {
+    type: "function",
+    function: {
+      name: "find_documents",
+      description:
+        "Find a literal phrase across stored document text in the current project, Library Files, Library Templates, or one document in the current workspace. Matching is case-insensitive; punctuation and whitespace are literal. Returns one excerpt per matching document, exact version/revision identifiers, doc_id handles for read_document/find_in_document, next_offset, and extraction coverage. Follow next_offset for more documents. Pending, failed, or OCR-incomplete coverage means no match does NOT establish absence. Search current versions by default; supply version_id only with document scope for history. If a returned handle cannot be read, repeat find_documents to refresh it. Try alternative wording for conceptual questions, then read full clauses before concluding.",
+      parameters: {
+        type: "object",
+        properties: {
+          scope: { type: "string", enum: ["project", "library", "templates", "document"] },
+          query: { type: "string", minLength: 2, maxLength: 500 },
+          doc_id: { type: "string", description: "Document handle or UUID, required for document scope." },
+          version_id: { type: "string", description: "Optional historical version UUID; document scope only." },
+          limit: { type: "integer", minimum: 1, maximum: 20 },
+          offset: { type: "integer", minimum: 0, maximum: 100000 },
+        },
+        required: ["scope", "query"],
       },
     },
   },

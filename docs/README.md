@@ -12,12 +12,22 @@
 
 ## Features and clients
 
-- [Claude subscription models](claude-subscription.md): run Claude on a
+- [Organization offboarding](organization-offboarding.md) — member removal,
+  account deletion, shared-work transfer and owner-only recovery
+- [MCP connectors](connectors.md) — hosted presets, custom servers, OAuth,
+  redirect URIs, and Slack/Google deployment setup
+- [Claude subscription models](claude-subscription.md) — run Claude on a
   Claude Pro/Max subscription through Claude Code instead of an API key
 - [Scoped memory](memory.md) — app and project Markdown memory, permissions,
   asynchronous learning, deletion, and operations
+- [Google Workspace](google-workspace.md) — Drive, Gmail, and Calendar
+  connectors: setup, permissions, approvals, limits, and acceptance tests
 - [CourtListener integration](courtlistener.md) — live US case-law tools and
   optional bulk data
+- [Web search](web-search.md) — provider search and search services, page
+  reading, keys, and safety
+- [Subagents](subagents.md) — delegated tasks, what they may do, approvals,
+  and limits
 - [Microsoft Word add-in](../word-addin/README.md) — concise setup and command
   reference
 - [Word add-in development and deployment](word-addin-development.md) — manual
@@ -42,6 +52,11 @@
 - [Backend unit-test coverage](testing-coverage.md)
 - [Frontend unit-test coverage](frontend-testing.md)
 - [Mutation testing and the SSE load harness](test-depth.md)
+
+## Open-source acknowledgments
+
+- [Open-source credits](../CREDITS.md) — the libraries, tools, and
+  infrastructure behind Mike
 
 ## Historical design and investigation notes
 

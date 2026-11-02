@@ -111,4 +111,131 @@ describe("ProjectDetailsModal", () => {
             await screen.findByText("A project with that CM number exists."),
         ).toBeInTheDocument();
     });
+
+    // Whether a project is public or private is one of its details. Public
+    // opens it to the whole organisation; private keeps it to the people it
+    // is shared with.
+    describe("Public setting", () => {
+        const orgProject = (overrides: Partial<Project> = {}) =>
+            ({
+                ...project,
+                organization_name: "Elite Law LLP",
+                visibility: "private",
+                ...overrides,
+            }) as Project;
+
+        it("shows the project's current setting and saves a change with the other details", async () => {
+            const user = userEvent.setup();
+            const onSave = vi.fn().mockResolvedValue(undefined);
+            render(
+                <ProjectDetailsModal
+                    open
+                    project={orgProject()}
+                    canEdit
+                    onClose={vi.fn()}
+                    onSave={onSave}
+                />,
+            );
+
+            const toggle = screen.getByRole("button", { name: "Public" });
+            expect(toggle).toHaveAttribute("aria-pressed", "false");
+            expect(
+                screen.getByRole("button", { name: "Private" }),
+            ).toHaveAttribute("aria-pressed", "true");
+            // Nothing changed yet, so nothing to save.
+            expect(screen.getByRole("button", { name: "Update" })).toBeDisabled();
+
+            await user.click(toggle);
+            expect(
+                screen.getByText(
+                    "Everyone in Elite Law LLP can open and edit this project.",
+                ),
+            ).toBeInTheDocument();
+            await user.click(screen.getByRole("button", { name: "Update" }));
+
+            expect(onSave).toHaveBeenCalledWith({
+                name: "Matter",
+                cmNumber: "CM-123",
+                practice: "Litigation",
+                visibility: "organization",
+            });
+        });
+
+        it("makes a public project private again", async () => {
+            const user = userEvent.setup();
+            const onSave = vi.fn().mockResolvedValue(undefined);
+            render(
+                <ProjectDetailsModal
+                    open
+                    project={orgProject({ visibility: "organization" })}
+                    canEdit
+                    onClose={vi.fn()}
+                    onSave={onSave}
+                />,
+            );
+
+            expect(
+                screen.getByRole("button", { name: "Public" }),
+            ).toHaveAttribute("aria-pressed", "true");
+            await user.click(screen.getByRole("button", { name: "Private" }));
+            await user.click(screen.getByRole("button", { name: "Update" }));
+
+            expect(onSave).toHaveBeenCalledWith(
+                expect.objectContaining({ visibility: "private" }),
+            );
+        });
+
+        it("leaves the setting out when only other details changed", async () => {
+            const user = userEvent.setup();
+            const onSave = vi.fn().mockResolvedValue(undefined);
+            render(
+                <ProjectDetailsModal
+                    open
+                    project={orgProject()}
+                    canEdit
+                    onClose={vi.fn()}
+                    onSave={onSave}
+                />,
+            );
+
+            const name = screen.getByLabelText("Project name");
+            await user.clear(name);
+            await user.type(name, "Renamed");
+            await user.click(screen.getByRole("button", { name: "Update" }));
+
+            expect(onSave).toHaveBeenCalledTimes(1);
+            expect(onSave.mock.calls[0][0]).not.toHaveProperty("visibility");
+        });
+
+        it("shows the setting, unchangeable, to somebody who cannot edit the project", () => {
+            render(
+                <ProjectDetailsModal
+                    open
+                    project={orgProject({ visibility: "organization" })}
+                    canEdit={false}
+                    onClose={vi.fn()}
+                    onSave={vi.fn()}
+                />,
+            );
+            const toggle = screen.getByRole("button", { name: "Public" });
+            expect(toggle).toHaveAttribute("aria-pressed", "true");
+            expect(toggle).toBeDisabled();
+            expect(screen.getByRole("button", { name: "Private" })).toBeDisabled();
+        });
+
+        it("is not offered for a personal project", () => {
+            render(
+                <ProjectDetailsModal
+                    open
+                    project={{ ...project, org_id: null }}
+                    canEdit
+                    onClose={vi.fn()}
+                    onSave={vi.fn()}
+                />,
+            );
+            expect(
+                screen.queryByRole("group", { name: "Organisational Access" }),
+            ).not.toBeInTheDocument();
+        });
+    });
 });

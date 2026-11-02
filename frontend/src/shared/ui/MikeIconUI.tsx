@@ -45,6 +45,41 @@ const ERROR_PALETTE: IconPalette = {
     innerOpacities: [0, 0.16, 0.08, 0],
 };
 
+// Tints that tell several marks apart, such as subagents working side by
+// side. Each follows the status palettes' recipe one step darker on one
+// Tailwind hue (fill 500/400/600/300, border 100/400/200, inner
+// white/200/500/white), so a small mark keeps its colour against a light
+// surface. Red and green are left out so a tint never reads as an error or
+// as done.
+type TintScale = [string, string, string, string, string, string];
+
+function tintPalette([c100, c200, c300, c400, c500, c600]: TintScale): IconPalette {
+    return {
+        fillStops: [c500, c400, c600, c300],
+        fillOpacities: [0.95, 0.88, 0.9, 0.94],
+        specularStops: [0.68, 0.32, 0.03, 0],
+        borderStops: [c100, c400, c200],
+        borderOpacities: [0.42, 0.24, 0.3],
+        innerStops: ["#ffffff", c200, c500, "#ffffff"],
+        innerOpacities: [0, 0.16, 0.08, 0],
+    };
+}
+
+// Tailwind 100–600 for each hue.
+const TINT_PALETTES = {
+    sky: tintPalette(["#e0f2fe", "#bae6fd", "#7dd3fc", "#38bdf8", "#0ea5e9", "#0284c7"]),
+    violet: tintPalette(["#ede9fe", "#ddd6fe", "#c4b5fd", "#a78bfa", "#8b5cf6", "#7c3aed"]),
+    amber: tintPalette(["#fef3c7", "#fde68a", "#fcd34d", "#fbbf24", "#f59e0b", "#d97706"]),
+    pink: tintPalette(["#fce7f3", "#fbcfe8", "#f9a8d4", "#f472b6", "#ec4899", "#db2777"]),
+    teal: tintPalette(["#ccfbf1", "#99f6e4", "#5eead4", "#2dd4bf", "#14b8a6", "#0d9488"]),
+    indigo: tintPalette(["#e0e7ff", "#c7d2fe", "#a5b4fc", "#818cf8", "#6366f1", "#4f46e5"]),
+} satisfies Record<string, IconPalette>;
+
+export type MikeIconTint = keyof typeof TINT_PALETTES;
+
+/** The tints in the order a list of marks should take them. */
+export const MIKE_ICON_TINTS = Object.keys(TINT_PALETTES) as MikeIconTint[];
+
 // The dark mark, inverted for dark surfaces: white glass blades, with the
 // depth cues (inner shading, hairline border) darkened instead of lightened
 // so overlapping blades stay readable against a dark background.
@@ -105,6 +140,33 @@ function useDarkTheme(): boolean {
     );
 }
 
+function GlassGradient({
+    offsets,
+    colors,
+    opacities,
+    ...props
+}: React.SVGProps<SVGLinearGradientElement> & {
+    offsets: number[];
+    colors: string | string[];
+    opacities: number[];
+}) {
+    return (
+        <linearGradient {...props}>
+            {offsets.map((offset, index) => (
+                <stop
+                    key={offset}
+                    offset={`${offset}%`}
+                    style={{
+                        stopColor: typeof colors === "string" ? colors : colors[index],
+                        stopOpacity: opacities[index],
+                        transition: STOP_TRANSITION,
+                    }}
+                />
+            ))}
+        </linearGradient>
+    );
+}
+
 function Blades({ ids }: { ids: Record<string, string> }) {
     return (
         <g transform="translate(250, 250)">
@@ -140,6 +202,7 @@ export function MikeIcon({
     done = false,
     error = false,
     mike = false,
+    tint,
     size = 24,
     style,
 }: {
@@ -147,6 +210,8 @@ export function MikeIcon({
     done?: boolean;
     error?: boolean;
     mike?: boolean;
+    /** A colour for the mark; the status palettes take precedence. */
+    tint?: MikeIconTint;
     size?: number;
     style?: React.CSSProperties;
 }) {
@@ -157,9 +222,11 @@ export function MikeIcon({
         ? ERROR_PALETTE
         : done
           ? DONE_PALETTE
-          : darkTheme
-            ? WHITE_PALETTE
-            : DEFAULT_PALETTE;
+          : tint
+            ? TINT_PALETTES[tint]
+            : darkTheme
+              ? WHITE_PALETTE
+              : DEFAULT_PALETTE;
     const m = {
         glassFill: `${id}-m-glassFill`,
         specular: `${id}-m-specular`,
@@ -185,158 +252,34 @@ export function MikeIcon({
                 style={{ display: "block" }}
             >
                 <defs>
-                    <linearGradient
+                    <GlassGradient
                         id={m.glassFill}
-                        x1="0%"
-                        y1="0%"
-                        x2="100%"
-                        y2="100%"
-                    >
-                        <stop
-                            offset="0%"
-                            style={{
-                                stopColor: palette.fillStops[0],
-                                stopOpacity: palette.fillOpacities[0],
-                                transition: STOP_TRANSITION,
-                            }}
-                        />
-                        <stop
-                            offset="30%"
-                            style={{
-                                stopColor: palette.fillStops[1],
-                                stopOpacity: palette.fillOpacities[1],
-                                transition: STOP_TRANSITION,
-                            }}
-                        />
-                        <stop
-                            offset="70%"
-                            style={{
-                                stopColor: palette.fillStops[2],
-                                stopOpacity: palette.fillOpacities[2],
-                                transition: STOP_TRANSITION,
-                            }}
-                        />
-                        <stop
-                            offset="100%"
-                            style={{
-                                stopColor: palette.fillStops[3],
-                                stopOpacity: palette.fillOpacities[3],
-                                transition: STOP_TRANSITION,
-                            }}
-                        />
-                    </linearGradient>
-                    <linearGradient
+                        x1="0%" y1="0%" x2="100%" y2="100%"
+                        offsets={[0, 30, 70, 100]}
+                        colors={palette.fillStops}
+                        opacities={palette.fillOpacities}
+                    />
+                    <GlassGradient
                         id={m.specular}
-                        x1="0%"
-                        y1="0%"
-                        x2="0%"
-                        y2="100%"
-                    >
-                        <stop
-                            offset="0%"
-                            style={{
-                                stopColor: "#ffffff",
-                                stopOpacity: palette.specularStops[0],
-                                transition: STOP_TRANSITION,
-                            }}
-                        />
-                        <stop
-                            offset="15%"
-                            style={{
-                                stopColor: "#ffffff",
-                                stopOpacity: palette.specularStops[1],
-                                transition: STOP_TRANSITION,
-                            }}
-                        />
-                        <stop
-                            offset="35%"
-                            style={{
-                                stopColor: "#ffffff",
-                                stopOpacity: palette.specularStops[2],
-                                transition: STOP_TRANSITION,
-                            }}
-                        />
-                        <stop
-                            offset="100%"
-                            style={{
-                                stopColor: "#ffffff",
-                                stopOpacity: palette.specularStops[3],
-                                transition: STOP_TRANSITION,
-                            }}
-                        />
-                    </linearGradient>
-                    <linearGradient
+                        x1="0%" y1="0%" x2="0%" y2="100%"
+                        offsets={[0, 15, 35, 100]}
+                        colors="#ffffff"
+                        opacities={palette.specularStops}
+                    />
+                    <GlassGradient
                         id={m.glassBorder}
-                        x1="0%"
-                        y1="0%"
-                        x2="0%"
-                        y2="100%"
-                    >
-                        <stop
-                            offset="0%"
-                            style={{
-                                stopColor: palette.borderStops[0],
-                                stopOpacity: palette.borderOpacities[0],
-                                transition: STOP_TRANSITION,
-                            }}
-                        />
-                        <stop
-                            offset="50%"
-                            style={{
-                                stopColor: palette.borderStops[1],
-                                stopOpacity: palette.borderOpacities[1],
-                                transition: STOP_TRANSITION,
-                            }}
-                        />
-                        <stop
-                            offset="100%"
-                            style={{
-                                stopColor: palette.borderStops[2],
-                                stopOpacity: palette.borderOpacities[2],
-                                transition: STOP_TRANSITION,
-                            }}
-                        />
-                    </linearGradient>
-                    <linearGradient
+                        x1="0%" y1="0%" x2="0%" y2="100%"
+                        offsets={[0, 50, 100]}
+                        colors={palette.borderStops}
+                        opacities={palette.borderOpacities}
+                    />
+                    <GlassGradient
                         id={m.innerLight}
-                        x1="100%"
-                        y1="0%"
-                        x2="0%"
-                        y2="100%"
-                    >
-                        <stop
-                            offset="0%"
-                            style={{
-                                stopColor: palette.innerStops[0],
-                                stopOpacity: palette.innerOpacities[0],
-                                transition: STOP_TRANSITION,
-                            }}
-                        />
-                        <stop
-                            offset="40%"
-                            style={{
-                                stopColor: palette.innerStops[1],
-                                stopOpacity: palette.innerOpacities[1],
-                                transition: STOP_TRANSITION,
-                            }}
-                        />
-                        <stop
-                            offset="60%"
-                            style={{
-                                stopColor: palette.innerStops[2],
-                                stopOpacity: palette.innerOpacities[2],
-                                transition: STOP_TRANSITION,
-                            }}
-                        />
-                        <stop
-                            offset="100%"
-                            style={{
-                                stopColor: palette.innerStops[3],
-                                stopOpacity: palette.innerOpacities[3],
-                                transition: STOP_TRANSITION,
-                            }}
-                        />
-                    </linearGradient>
+                        x1="100%" y1="0%" x2="0%" y2="100%"
+                        offsets={[0, 40, 60, 100]}
+                        colors={palette.innerStops}
+                        opacities={palette.innerOpacities}
+                    />
                     <clipPath id={m.topClip}>
                         <rect x="30" y="-25" width="130" height="23" />
                     </clipPath>

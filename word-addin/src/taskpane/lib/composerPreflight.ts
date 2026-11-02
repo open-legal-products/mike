@@ -24,6 +24,8 @@ export async function loadWithRetry<T>(
     try {
       return await load();
     } catch (error) {
+      // Held, not swallowed: the last failure is handed to onFinalFailure so
+      // the caller can classify it and tell the user.
       lastError = error;
     }
   }

@@ -13,16 +13,31 @@
 import { Router, type Response } from "express";
 import { randomUUID } from "node:crypto";
 import { requireAuth } from "../../middleware/auth";
+import {
+    attachStreamRunSse,
+    getActiveStreamRun,
+    startStreamRun,
+    stopOutcomeFrame,
+} from "../../lib/streamRuns";
+import {
+    attachAssistantTurnSse,
+    getActiveAssistantTurn,
+    getAssistantTurnRun,
+    startAssistantTurnRun,
+} from "../../lib/assistantTurnRuns";
+import { openAssistantSse } from "../../lib/assistantSse";
 import { asyncRoute, routerErrorHandler } from "../../middleware/asyncRoute";
 import { createServerSupabase } from "../../lib/supabase";
 import { recordAudit } from "../../lib/audit";
 import { sendInternalError } from "../../lib/httpError";
+import { reportError, setOperation } from "../../lib/observability/sentry";
+import { AppError } from "../../lib/appError";
 import { sendServiceFailure } from "../../lib/serviceResult";
 import {
     AssistantStreamError,
     assistantStreamErrorPayload,
     ASSISTANT_ERROR_MESSAGE,
-    buildCancelledAssistantMessage,
+    buildStoppedAssistantMessage,
     isAbortError,
     runLLMStream,
     stripTransientAssistantEvents,
@@ -40,6 +55,7 @@ import {
     claimTabularGeneration,
     loadTabularGenerateWork,
     preparedGenerateFailure,
+    ensureReviewGenerateStopAccess,
     prepareTabularGenerate,
     prepareTabularRunView,
 } from "./tabular.generate";
@@ -56,7 +72,9 @@ import {
     getTabularReviewAccess,
     getTabularReviewDetail,
     getTabularReviewPeople,
+    getTabularReviewHistoryStatuses,
     grantTabularReviewAccess,
+    listProjectReviewCreators,
     listTabularReviewIds,
     listTabularReviews,
     revokeTabularReviewAccess,
@@ -69,6 +87,8 @@ import {
 } from "./tabular.cells";
 import {
     deleteTabularReviewChat,
+    ensureReviewChatReadAccess,
+    ensureReviewChatWriteAccess,
     extractTabularAnnotations,
     listTabularReviewChatMessages,
     listTabularReviewChats,
@@ -88,6 +108,10 @@ import {
 } from "../../lib/memory/schedule";
 import { parsePaginationQuery } from "../../lib/pagination";
 import { normalizeSearchTerm } from "../../lib/search";
+import {
+    resolveWorkspaceFilter,
+    sendWorkspaceFailure,
+} from "../../lib/workspace";
 import { parseTabularReviewSort } from "../../lib/sort";
 import { parseTabularReviewScope } from "./tabular.overview";
 
@@ -111,6 +135,20 @@ function sendTabularFailure(res: Response, failure: TabularFailure): void {
     sendServiceFailure(res, failure);
 }
 
+/**
+ * A review may have one synchronous generation at a time, so its run is keyed
+ * by review id — the same slot the generation lease guards in the database,
+ * held here for the frames the lease knows nothing about.
+ */
+const reviewRunKey = (reviewId: string) => `review:${reviewId}`;
+
+/** `?owner_user_id=` as a creator filter, or null when absent or empty. */
+function ownerUserIdFilterOf(query: Record<string, unknown>): string | null {
+    return typeof query.owner_user_id === "string" && query.owner_user_id
+        ? query.owner_user_id
+        : null;
+}
+
 /** `?project_id=` as a filter, or null when it is absent or empty. */
 function projectIdFilterOf(query: Record<string, unknown>): string | null {
     return typeof query.project_id === "string" && query.project_id
@@ -121,15 +159,36 @@ function projectIdFilterOf(query: Record<string, unknown>): string | null {
 // GET /tabular-review
 tabularRouter.get("/", requireAuth, asyncRoute(async (req, res) => {
     const query = req.query as Record<string, unknown>;
-    const result = await listTabularReviews(createServerSupabase(), {
-        userId: res.locals.userId as string,
+    const db = createServerSupabase();
+    const userId = res.locals.userId as string;
+    const workspace = await resolveWorkspaceFilter(db, userId, query.workspace);
+    if (!workspace.ok) return void sendWorkspaceFailure(res, workspace);
+    const result = await listTabularReviews(db, {
+        userId,
         userEmail: res.locals.userEmail as string | undefined,
         projectIdFilter: projectIdFilterOf(query),
         scope: parseTabularReviewScope(query.scope),
         pagination: parsePaginationQuery(query),
         searchTerm: normalizeSearchTerm(query.search),
         sort: parseTabularReviewSort(query),
+        workspace: workspace.workspace,
+        includeStatus: query.include === "status",
+        ownerUserIdFilter: ownerUserIdFilterOf(query),
     });
+    if (!result.ok) return void sendTabularFailure(res, result);
+    res.json(result.data);
+}));
+
+// Only small status snapshots; the RPC rechecks review access for every id.
+tabularRouter.get("/history-status", requireAuth, asyncRoute(async (req, res) => {
+    const ids = typeof req.query.ids === "string" ? req.query.ids.split(",") : [];
+    if (ids.length === 0 || ids.length > 100 || ids.some(id => !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(id))) {
+        return void res.status(400).json({ detail: "Provide between 1 and 100 valid review ids" });
+    }
+    const result = await getTabularReviewHistoryStatuses(
+        createServerSupabase(), res.locals.userId as string,
+        res.locals.userEmail as string | undefined, [...new Set(ids)],
+    );
     if (!result.ok) return void sendTabularFailure(res, result);
     res.json(result.data);
 }));
@@ -140,12 +199,32 @@ tabularRouter.get("/", requireAuth, asyncRoute(async (req, res) => {
 // have to page through full review payloads just to collect checkboxes.
 tabularRouter.get("/ids", requireAuth, asyncRoute(async (req, res) => {
     const query = req.query as Record<string, unknown>;
-    const result = await listTabularReviewIds(createServerSupabase(), {
-        userId: res.locals.userId as string,
+    const db = createServerSupabase();
+    const userId = res.locals.userId as string;
+    const workspace = await resolveWorkspaceFilter(db, userId, query.workspace);
+    if (!workspace.ok) return void sendWorkspaceFailure(res, workspace);
+    const result = await listTabularReviewIds(db, {
+        userId,
         userEmail: res.locals.userEmail as string | undefined,
         projectIdFilter: projectIdFilterOf(query),
         scope: parseTabularReviewScope(query.scope),
         searchTerm: normalizeSearchTerm(query.search),
+        workspace: workspace.workspace,
+        ownerUserIdFilter: ownerUserIdFilterOf(query),
+    });
+    if (!result.ok) return void sendTabularFailure(res, result);
+    res.json(result.data);
+}));
+
+// GET /tabular-review/creators?project_id= (must come before /:reviewId)
+// The people behind a project's reviews, for its Creator filter.
+tabularRouter.get("/creators", requireAuth, asyncRoute(async (req, res) => {
+    const projectId = projectIdFilterOf(req.query as Record<string, unknown>);
+    if (!projectId) return void res.status(400).json({ detail: "project_id is required" });
+    const result = await listProjectReviewCreators(createServerSupabase(), {
+        projectId,
+        userId: res.locals.userId as string,
+        userEmail: res.locals.userEmail as string | undefined,
     });
     if (!result.ok) return void sendTabularFailure(res, result);
     res.json(result.data);
@@ -209,13 +288,23 @@ tabularRouter.post("/prompt", requireAuth, asyncRoute(async (req, res) => {
 
 // GET /tabular-review/:reviewId
 tabularRouter.get("/:reviewId", requireAuth, asyncRoute(async (req, res) => {
+    const { reviewId } = req.params;
     const result = await getTabularReviewDetail(createServerSupabase(), {
-        reviewId: req.params.reviewId,
+        reviewId,
         userId: res.locals.userId as string,
         userEmail: res.locals.userEmail as string | undefined,
     });
     if (!result.ok) return void sendTabularFailure(res, result);
-    res.json(result.data);
+    // A generation this process is running, so a client that has just loaded
+    // (a refresh, a second tab) knows to attach to it — and that it may stop
+    // it. `review.is_running` is the lease, which an async or another
+    // replica's run also holds; this is the stronger, stoppable statement.
+    const run = getActiveStreamRun(reviewRunKey(reviewId));
+    res.json({
+        ...result.data,
+        active_generation:
+            run && !run.finished ? { id: run.id, seq: run.seq } : null,
+    });
 }));
 
 // GET /tabular-review/:reviewId/people
@@ -319,6 +408,7 @@ tabularRouter.post(
     "/:reviewId/regenerate-cell",
     requireAuth,
     asyncRoute(async (req, res) => {
+        setOperation("tabular.cell");
         const { row_id, column_index } = req.body as {
             row_id?: string;
             column_index: number;
@@ -343,14 +433,21 @@ tabularRouter.post(
 
 // POST /tabular-review/:reviewId/generate
 tabularRouter.post("/:reviewId/generate", requireAuth, asyncRoute(async (req, res) => {
+    setOperation("tabular.run");
     const userId = res.locals.userId as string;
     const userEmail = res.locals.userEmail as string | undefined;
     const { reviewId } = req.params;
     const db = createServerSupabase();
-    const generationAbort = new AbortController();
+    // Phase 1 (the pre-lease guards) is still tied to the request: nothing has
+    // been claimed yet, so a caller that walks away costs nothing to drop.
+    // Once the lease is claimed the SYNCHRONOUS path hands ownership to a
+    // server-owned run and this controller stops being consulted; the async
+    // path keeps it, because there the request is only a view over the queue.
+    const requestAbort = new AbortController();
     const generationId = randomUUID();
+    const asyncPath = process.env.ASYNC_TABULAR_EXTRACTION === "true";
     let leaseHeartbeat: ReturnType<typeof setInterval> | null = null;
-    req.on("aborted", () => generationAbort.abort());
+    req.on("aborted", () => requestAbort.abort());
 
     // Pre-lease guards only (review, access, columns, model policy). Row and
     // cell state is deliberately NOT read here — see the note at the lease
@@ -373,7 +470,7 @@ tabularRouter.post("/:reviewId/generate", requireAuth, asyncRoute(async (req, re
             detail: "expected_updated_at must be a valid timestamp",
         });
     }
-    if (generationAbort.signal.aborted || res.destroyed) return;
+    if (requestAbort.signal.aborted || res.destroyed) return;
 
     const claim = await claimTabularGeneration(db, {
         reviewId,
@@ -381,6 +478,44 @@ tabularRouter.post("/:reviewId/generate", requireAuth, asyncRoute(async (req, re
         generationId,
     });
     if (!claim.ok) return void sendTabularFailure(res, claim);
+
+    // The synchronous generation is a SERVER-OWNED RUN from here on: the
+    // frames go into the run's buffer, every attached response is fed from
+    // it, and the caller's socket closing is a detach rather than an abort.
+    // Only POST /generate/stop cancels. (The async path never registers one —
+    // its durability comes from the queue, and its request is only a view.)
+    const run = asyncPath
+        ? null
+        : startStreamRun({
+              id: generationId,
+              key: reviewRunKey(reviewId),
+              userId,
+              forcedStopFrames: [
+                  `data: ${JSON.stringify({ type: "cancelled" })}\n\n`,
+                  "data: [DONE]\n\n",
+              ],
+          });
+    if (!asyncPath && !run) {
+        // The lease was free but the previous run for this review has not let
+        // go of its frame buffer yet (it releases the lease just before it
+        // finishes). Hand the lease straight back and answer like any other
+        // concurrent run.
+        await finishGeneration(
+            db,
+            reviewId,
+            generationId,
+            console,
+            "[tabular/generate]",
+        );
+        return void res.status(409).json({
+            code: "review_running",
+            detail: "This tabular review is already running elsewhere.",
+        });
+    }
+    // What stops the work, and what tells us it has been stopped. On the sync
+    // path that is the run (Stop endpoint); on the async path the request.
+    const generationSignal = run ? run.signal : requestAbort.signal;
+    const abortGeneration = () => (run ? run.stop() : requestAbort.abort());
 
     // Everything used to decide which cells need work is loaded only after
     // the atomic lease claim. Otherwise, a request can snapshot pending cells
@@ -395,10 +530,13 @@ tabularRouter.post("/:reviewId/generate", requireAuth, asyncRoute(async (req, re
     // the response in its `finally`.
     let leaseHandedOff = false;
     let streamFinished = false;
-    res.on("close", () => {
-        if (!streamFinished) generationAbort.abort();
-    });
+    if (!run) {
+        res.on("close", () => {
+            if (!streamFinished) requestAbort.abort();
+        });
+    }
     const write = (line: string) => {
+        if (run) return run.write(line);
         if (res.destroyed || res.writableEnded) return false;
         return res.write(line);
     };
@@ -411,8 +549,8 @@ tabularRouter.post("/:reviewId/generate", requireAuth, asyncRoute(async (req, re
             db,
             reviewId,
             generationId,
-            skip: () => generationAbort.signal.aborted,
-            onLost: () => generationAbort.abort(),
+            skip: () => generationSignal.aborted,
+            onLost: abortGeneration,
         });
 
         const work = await loadTabularGenerateWork(db, {
@@ -427,13 +565,15 @@ tabularRouter.post("/:reviewId/generate", requireAuth, asyncRoute(async (req, re
         rows = work.data.rows;
         cellMap = work.data.cellMap;
 
-        if (generationAbort.signal.aborted || res.destroyed) return;
+        // A closed socket is only a reason to stop when nothing owns the work
+        // for us: with a run registered the generation carries on regardless.
+        if (generationSignal.aborted || (!run && res.destroyed)) return;
 
         // Async path: hand extraction to the durable BullMQ queue and turn this
         // request into a reconnectable view that tails progress. The work
         // survives a disconnect and retries on failure. Falls through to the
         // historical inline path when the flag is off (no Redis required).
-        if (process.env.ASYNC_TABULAR_EXTRACTION === "true") {
+        if (asyncPath) {
             // The workers renew the lease from here on, so stop our heartbeat
             // before handing over — two renewers would just race each other.
             if (leaseHeartbeat) {
@@ -461,6 +601,11 @@ tabularRouter.post("/:reviewId/generate", requireAuth, asyncRoute(async (req, re
             return;
         }
 
+        // Past the async branch there is always a run — it is only null when
+        // `asyncPath` is, and that returned above. Stated rather than
+        // asserted so the rest of this handler is narrowed honestly.
+        if (!run) return;
+
         // Synchronous path: claim the cells this run intends to fill by
         // stamping them with the generation id — the same call the async path
         // makes before enqueuing. Every write extractRowColumns then performs
@@ -483,9 +628,15 @@ tabularRouter.post("/:reviewId/generate", requireAuth, asyncRoute(async (req, re
             return;
         }
 
+        // Only now does the response become a stream: everything above can
+        // still answer with a status code, and attaching earlier would make
+        // an internal error unreportable.
+        attachStreamRunSse(res, run);
+
         let sentGenerationError = false;
         const completed = await streamTabularGenerateSync({
-            res,
+            onActivity: run.touch,
+            write,
             db,
             reviewId,
             columns,
@@ -494,7 +645,7 @@ tabularRouter.post("/:reviewId/generate", requireAuth, asyncRoute(async (req, re
             model: tabular_model,
             apiKeys: api_keys,
             generationId,
-            abortSignal: generationAbort.signal,
+            abortSignal: generationSignal,
             onError: (error) => {
                 if (sentGenerationError) return;
                 const payload = assistantStreamErrorPayload(error);
@@ -516,9 +667,15 @@ tabularRouter.post("/:reviewId/generate", requireAuth, asyncRoute(async (req, re
                 model: tabular_model,
             });
             write("data: [DONE]\n\n");
+        } else {
+            // Stopped. The cells are already back to "pending"; tell every
+            // attached reader how the run ended, the way a chat turn does,
+            // so a second tab does not sit on a spinner.
+            write(stopOutcomeFrame(run));
+            write("data: [DONE]\n\n");
         }
     } catch (err) {
-        if (!generationAbort.signal.aborted) {
+        if (!generationSignal.aborted) {
             console.error("[tabular/generate] stream error", err);
             if (res.headersSent) {
                 try {
@@ -547,10 +704,57 @@ tabularRouter.post("/:reviewId/generate", requireAuth, asyncRoute(async (req, re
                 console,
                 "[tabular/generate]",
             );
+            // Ending the run ends every response attached to it — this one,
+            // a reload, a second tab — and starts its retention window, so a
+            // client reconnecting a moment later still gets the last frames.
+            run?.finish();
             if (!res.writableEnded) res.end();
         }
     }
 }));
+
+// POST /tabular-review/:reviewId/generate/stop
+// The one way to cut a synchronous generation short. Closing the SSE socket
+// no longer does it, so the client's Stop control calls this. Stopping is a
+// write on the review, so it needs exactly what starting the run needed —
+// a viewer is refused here as they are at POST /generate.
+//
+// A deployment running the async path (ASYNC_TABULAR_EXTRACTION) registers no
+// run: its work belongs to the queue, so there is nothing in this process to
+// stop and the answer is 404 generation_not_found. The same answer covers a
+// run owned by another replica.
+tabularRouter.post(
+    "/:reviewId/generate/stop",
+    requireAuth,
+    asyncRoute(async (req, res) => {
+        setOperation("tabular.run");
+        const { reviewId } = req.params;
+        // Edit standing only — not a usable model or keys for the caller, who
+        // may not be the collaborator who started the run.
+        const gate = await ensureReviewGenerateStopAccess(
+            createServerSupabase(),
+            {
+                reviewId,
+                userId: res.locals.userId as string,
+                userEmail: res.locals.userEmail as string | undefined,
+            },
+        );
+        if (!gate.ok)
+            return void sendTabularFailure(res, preparedGenerateFailure(gate));
+
+        const run = getActiveStreamRun(reviewRunKey(reviewId));
+        if (!run) {
+            return void res.status(404).json({
+                code: "generation_not_found",
+                detail: "No generation is running for this review.",
+            });
+        }
+        if (run.finished)
+            return void res.json({ stopped: false, finished: true });
+        run.stop();
+        res.json({ stopped: true, finished: false });
+    }),
+);
 
 // GET /tabular-review/:reviewId/generate/stream — reconnect to an in-flight (or
 // just-finished) generate run without re-triggering work. A client whose POST
@@ -562,6 +766,7 @@ tabularRouter.get(
     "/:reviewId/generate/stream",
     requireAuth,
     asyncRoute(async (req, res) => {
+        setOperation("tabular.run");
         const { reviewId } = req.params;
         const db = createServerSupabase();
         const view = await prepareTabularRunView(db, {
@@ -571,6 +776,19 @@ tabularRouter.get(
         });
         if (!view.ok) return void sendTabularFailure(res, view);
 
+        // An in-process run is the better answer: it has every frame this
+        // generation has emitted, so a client that dropped replays from the
+        // sequence number it last saw and then tails the live ones. Replaying
+        // `cell_update` frames is idempotent, so `from` defaults to the start.
+        const run = getActiveStreamRun(reviewRunKey(reviewId));
+        if (run) {
+            const rawFrom = Number.parseInt(String(req.query.from ?? "1"), 10);
+            const from = Number.isFinite(rawFrom) && rawFrom > 0 ? rawFrom : 1;
+            return void attachStreamRunSse(res, run, from);
+        }
+
+        // No run here: the async path (the work is the queue's), another
+        // replica, or a lease with nothing attached. Tail the DB instead.
         await streamTabularRunView({
             res,
             db,
@@ -591,8 +809,85 @@ tabularRouter.get("/:reviewId/chats", requireAuth, asyncRoute(async (req, res) =
         userEmail: res.locals.userEmail as string | undefined,
     });
     if (!result.ok) return void sendTabularFailure(res, result);
-    res.json(result.data);
+    // Each row carries the turn this process is still generating into it, if
+    // any, so a panel that has just loaded (a refresh, a second tab, a chat
+    // opened from the list while its answer runs elsewhere) attaches instead
+    // of showing a finished-looking transcript with the answer missing. The
+    // messages endpoint keeps its bare array shape: it is the transcript, and
+    // the transcript does not have the running turn in it yet.
+    res.json(
+        result.data.map((chat) => ({
+            ...chat,
+            active_turn: getActiveAssistantTurn(chat.id, "tabular"),
+        })),
+    );
 }));
+
+// GET /tabular-review/:reviewId/chats/:chatId/turn/:turnId/stream?from=<seq>
+// Attach to a turn that is (or was, within the retention window) generating
+// into this review chat. Frames with a sequence number >= `from` are
+// replayed, then the live ones follow until the turn ends. Seeing the review
+// is enough to watch, exactly as it is enough to read the transcript.
+tabularRouter.get(
+    "/:reviewId/chats/:chatId/turn/:turnId/stream",
+    requireAuth,
+    asyncRoute(async (req, res) => {
+        setOperation("tabular.chat");
+        const { reviewId, chatId, turnId } = req.params;
+        const gate = await ensureReviewChatReadAccess(
+            createServerSupabase(),
+            reviewId,
+            chatId,
+            res.locals.userId as string,
+            res.locals.userEmail as string | undefined,
+        );
+        if (!gate.ok) return void sendTabularFailure(res, gate);
+
+        const run = getAssistantTurnRun(turnId, "tabular");
+        if (!run || run.chatId !== chatId) {
+            return void res.status(404).json({
+                code: "turn_not_found",
+                detail: "This response is no longer being generated.",
+            });
+        }
+        const rawFrom = Number.parseInt(String(req.query.from ?? "1"), 10);
+        const from = Number.isFinite(rawFrom) && rawFrom > 0 ? rawFrom : 1;
+        attachAssistantTurnSse(res, run, from);
+    }),
+);
+
+// POST /tabular-review/:reviewId/chats/:chatId/turn/:turnId/stop
+// The one way to cut a review-chat answer short. Closing the SSE socket no
+// longer does it, so the panel's Stop control calls this. Stopping needs the
+// same standing as sending into the thread: review chats are creator-write,
+// so this is the gate PATCH and DELETE use.
+tabularRouter.post(
+    "/:reviewId/chats/:chatId/turn/:turnId/stop",
+    requireAuth,
+    asyncRoute(async (req, res) => {
+        setOperation("tabular.chat");
+        const { reviewId, chatId, turnId } = req.params;
+        const gate = await ensureReviewChatWriteAccess(
+            createServerSupabase(),
+            reviewId,
+            chatId,
+            res.locals.userId as string,
+            res.locals.userEmail as string | undefined,
+        );
+        if (!gate.ok) return void sendTabularFailure(res, gate);
+
+        const run = getAssistantTurnRun(turnId, "tabular");
+        if (!run || run.chatId !== chatId) {
+            return void res.status(404).json({
+                code: "turn_not_found",
+                detail: "This response is no longer being generated.",
+            });
+        }
+        if (run.finished) return void res.json({ stopped: false, finished: true });
+        run.stop();
+        res.json({ stopped: true, finished: false });
+    }),
+);
 
 // DELETE /tabular-review/:reviewId/chats/:chatId — delete a single chat
 tabularRouter.delete(
@@ -657,6 +952,7 @@ tabularRouter.get(
 
 // POST /tabular-review/:reviewId/chat
 tabularRouter.post("/:reviewId/chat", requireAuth, asyncRoute(async (req, res) => {
+    setOperation("tabular.chat");
     const userId = res.locals.userId as string;
     const userEmail = res.locals.userEmail as string | undefined;
     const { reviewId } = req.params;
@@ -706,6 +1002,7 @@ tabularRouter.post("/:reviewId/chat", requireAuth, asyncRoute(async (req, res) =
         chatId: existingChatId,
         requestedModel: parsedModel.value,
         requestedReasoning: parsedReasoning.value,
+        requestedTimeZone: req.body?.time_zone,
     });
     if (!preparation.ok) return void sendTabularFailure(res, preparation);
     const {
@@ -718,6 +1015,7 @@ tabularRouter.post("/:reviewId/chat", requireAuth, asyncRoute(async (req, res) =
         memorySharedAudience,
         memoryTurn,
         model: selectedChatModel,
+        orgId,
         readableMemoryProjectId,
         reasoningLevel: selectedReasoningLevel,
         reviewTitle,
@@ -729,25 +1027,77 @@ tabularRouter.post("/:reviewId/chat", requireAuth, asyncRoute(async (req, res) =
     // hands it to the curator (`scheduleMemoryConsolidation`).
     let memoryTurnScheduled = false;
     const assistantMessageId = randomUUID();
+    const releaseMemoryFence = async () => {
+        if (!memoryTurn) return;
+        try {
+            await releaseMemoryConversationTurn({
+                db,
+                surface: "tabular",
+                conversationId: chatId as string,
+                turn: memoryTurn,
+            });
+        } catch (error) {
+            // The lease lapses on its own; the turn is answered either way.
+            // Reported as a warning, with the database's error as the cause.
+            reportError(
+                new AppError(
+                    "memory.consolidation_failed",
+                    "Memory activity lease could not be released",
+                    { cause: error },
+                ),
+                { level: "warning" },
+            );
+            console.warn("[memory] tabular activity release failed", {
+                chatId,
+            });
+        }
+    };
 
-    res.setHeader("Content-Type", "text/event-stream");
-    res.setHeader("Cache-Control", "no-cache");
-    res.setHeader("Connection", "keep-alive");
-    res.setHeader("X-Accel-Buffering", "no");
-    res.flushHeaders();
-    const write = (line: string) => res.write(line);
-    const streamAbort = new AbortController();
-    let streamFinished = false;
-    res.on("close", () => {
-        if (!streamFinished) streamAbort.abort();
-    });
+    // The answer is a server-owned run from here on: it survives the caller's
+    // socket (a refresh, a closed panel, a second tab taking over) and only
+    // POST .../turn/:turnId/stop aborts it. A chat may have one at a time.
+    const run = chatId
+        ? startAssistantTurnRun({
+              id: assistantMessageId,
+              chatId,
+              userId,
+              assistantMessageId,
+              surface: "tabular",
+          })
+        : null;
+    if (chatId && !run) {
+        // Refused before the first SSE byte, so the caller gets a status code
+        // rather than an error frame — but the user turn is already stored,
+        // so the fence this request opened has to be handed back here.
+        await releaseMemoryFence();
+        return void res.status(409).json({
+            code: "turn_in_progress",
+            detail: "A response is already being generated for this chat.",
+        });
+    }
 
-    if (chatId) {
-        write(`data: ${JSON.stringify({ type: "chat_id", chatId })}\n\n`);
+    // `prepareTabularChat` is allowed to return no chat id (chat creation was
+    // skipped); there is then no thread to key a run on and nothing that
+    // could ever attach to it, so THAT request alone keeps the old
+    // single-socket contract: closing the socket aborts it.
+    const stream = run
+        ? attachAssistantTurnSse(res, run)
+        : openAssistantSse(res);
+    const write = stream.write;
+
+    if (chatId && run) {
+        write(
+            `data: ${JSON.stringify({
+                type: "chat_id",
+                chatId,
+                turnId: run.id,
+            })}\n\n`,
+        );
     }
 
     try {
         const { fullText, events } = await runLLMStream({
+            onActivity: run?.touch,
             apiMessages,
             docStore: new Map(),
             docIndex: {},
@@ -762,7 +1112,8 @@ tabularRouter.post("/:reviewId/chat", requireAuth, asyncRoute(async (req, res) =
             model: selectedChatModel,
             reasoning: selectedReasoningLevel,
             apiKeys: api_keys,
-            signal: streamAbort.signal,
+            orgId,
+            signal: stream.signal,
             conversationId: chatId,
             includeMemory: true,
             memoryProjectId: readableMemoryProjectId,
@@ -834,9 +1185,10 @@ tabularRouter.post("/:reviewId/chat", requireAuth, asyncRoute(async (req, res) =
         write("data: [DONE]\n\n");
     } catch (err) {
         if (isAbortError(err)) {
-            console.log("[tabular/chat] client aborted stream", { chatId });
+            console.log("[tabular/chat] turn stopped", { chatId });
             if (chatId && err instanceof AssistantStreamError) {
-                const partial = buildCancelledAssistantMessage({
+                const partial = buildStoppedAssistantMessage({
+                    stopReason: run?.stopReason,
                     fullText: err.fullText,
                     events: err.events,
                     buildCitations: (fullText) =>
@@ -857,6 +1209,11 @@ tabularRouter.post("/:reviewId/chat", requireAuth, asyncRoute(async (req, res) =
                         saveError,
                     );
             }
+            // Readers still attached (Stop came from another tab, or this one
+            // is only watching) learn the outcome the same way a reload
+            // would: persistence uses the same stop reason.
+            write(stopOutcomeFrame(run));
+            write("data: [DONE]\n\n");
             return;
         }
         console.error("[tabular/chat] error", err);
@@ -900,25 +1257,14 @@ tabularRouter.post("/:reviewId/chat", requireAuth, asyncRoute(async (req, res) =
             /* ignore */
         }
     } finally {
-        streamFinished = true;
-        res.end();
+        // Ends every response attached to the run — this one, a reload, a
+        // second tab — and starts its retention window, so a client
+        // reconnecting a moment later still gets the last frames.
+        stream.finish();
         // Whatever ended the stream, the fence must not outlive it: released
         // here unless this turn already handed it to the curator, which owns
         // it from that point on.
-        if (memoryTurn && !memoryTurnScheduled) {
-            try {
-                await releaseMemoryConversationTurn({
-                    db,
-                    surface: "tabular",
-                    conversationId: chatId as string,
-                    turn: memoryTurn,
-                });
-            } catch {
-                console.warn("[memory] tabular activity release failed", {
-                    chatId,
-                });
-            }
-        }
+        if (!memoryTurnScheduled) await releaseMemoryFence();
     }
 }));
 

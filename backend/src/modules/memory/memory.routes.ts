@@ -12,8 +12,14 @@ import {
 } from "express";
 import type { ParamsFlatDictionary } from "express-serve-static-core";
 import { sendInternalError } from "../../lib/httpError";
+import { setOperation } from "../../lib/observability/sentry";
 import type { Capability } from "../../lib/permissions";
 import { createServerSupabase } from "../../lib/supabase";
+import {
+  PERSONAL_WORKSPACE,
+  resolveWorkspaceFilter,
+  sendWorkspaceFailure,
+} from "../../lib/workspace";
 import { requireAuth } from "../../middleware/auth";
 import { asyncRoute, routerErrorHandler } from "../../middleware/asyncRoute";
 import {
@@ -46,13 +52,26 @@ type ContextResolver = (
   res: Response,
 ) => Promise<MemoryContext | null>;
 
+// A person has one memory per workspace. `?workspace=` names the one being
+// read or changed — "personal", or an organization the caller belongs to —
+// and its absence means Personal, as it did before workspaces had their own.
 async function userContext(
-  _req: Request<ParamsFlatDictionary>,
+  req: Request<ParamsFlatDictionary>,
   res: Response,
 ): Promise<MemoryContext | null> {
+  const db = createServerSupabase();
+  const userId = res.locals.userId as string;
+  const workspace = await resolveWorkspaceFilter(db, userId, req.query.workspace);
+  if (!workspace.ok) {
+    sendWorkspaceFailure(res, workspace);
+    return null;
+  }
   return resolveUserMemoryContext(
-    createServerSupabase(),
-    res.locals.userId as string,
+    db,
+    userId,
+    workspace.workspace && workspace.workspace !== PERSONAL_WORKSPACE
+      ? workspace.workspace
+      : null,
   );
 }
 
@@ -121,6 +140,7 @@ function installMemoryRoutes(
   wipeContext?: ContextResolver,
 ) {
   router.get("/", asyncRoute(async (req, res) => {
+    setOperation("memory.read");
     try {
       const ctx = await readContext(req, res);
       if (!ctx) return;

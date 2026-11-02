@@ -8,8 +8,9 @@ vi.mock("../../../lib/access", async (original) => ({
 vi.mock("../../../lib/dbq/enqueue", () => ({
   enqueueStorageCleanup: mocks.cleanup,
 }));
-import { updateProjectFolder, deleteProjectFolder } from "../projects.service";
+import { createProject, updateProject, createProjectFolder, updateProjectFolder, deleteProjectFolder } from "../projects.service";
 import {
+  createLibraryFolder,
   updateLibraryFolder,
   deleteLibraryFolder,
 } from "../../library/library.service";
@@ -136,7 +137,7 @@ describe("folder callers retain their scope and failure policies", () => {
             { id: "other", parent_folder_id: null },
           ],
         },
-        { table: "documents", data: [{ id: "doc" }] },
+        { table: "documents", data: [{ id: "doc", user_id: "actor" }] },
         ...(library ? [{ table: "documents", data: [{ id: "doc" }] }] : []),
         {
           table: "documents",
@@ -157,4 +158,66 @@ describe("folder callers retain their scope and failure policies", () => {
       fake.done();
     },
   );
+
+  // Deleting a single document is creator-scoped, so cascading a folder must
+  // not let an Editor delete colleagues' documents wholesale.
+  const subtree = {
+    table: "project_subfolders",
+    data: [
+      { id: "root", parent_folder_id: null },
+      { id: "child", parent_folder_id: "root" },
+    ],
+  };
+  it.each([
+    ["a colleague's document", "colleague"],
+    ["a document whose creator is gone", null],
+  ])("refuses an Editor when the subtree holds %s", async (_label, creator) => {
+    const fake = scriptedDb([
+      subtree,
+      {
+        table: "documents",
+        data: [
+          { id: "mine", user_id: "actor" },
+          { id: "theirs", user_id: creator },
+        ],
+      },
+    ]);
+    expect(await deleteProjectFolder(fake.db, actor)).toEqual({
+      ok: false,
+      kind: "role_forbidden",
+      detail:
+        "This folder contains documents added by other people. Only the project owner can delete it.",
+    });
+    expect(fake.calls.some((call) => call.op === "delete")).toBe(false);
+    fake.done();
+  });
+
+  it("lets an Owner clear a subtree holding colleagues' documents", async () => {
+    mocks.access.mockResolvedValue({ ok: true, projectRole: "owner" });
+    const fake = scriptedDb([
+      subtree,
+      { table: "documents", data: [{ id: "theirs", user_id: "colleague" }] },
+      {
+        table: "documents",
+        op: "delete",
+        error: { message: "stop after the gate" },
+      },
+    ]);
+    expect(await deleteProjectFolder(fake.db, actor)).toMatchObject({
+      ok: false,
+      kind: "db_error",
+    });
+    fake.done();
+  });
+});
+
+it.each([null, 7, {}, [], "", "   "])("rejects an invalid project/folder name: %j", async name => {
+  mocks.access.mockResolvedValue({ ok: true, projectRole: "owner" });
+  const fake = scriptedDb([]);
+  expect(await createProject(fake.db, { userId: "actor", name })).toMatchObject({ ok: false, kind: "validation" });
+  expect(await updateProject(fake.db, { ...actor, body: { name } })).toMatchObject({ ok: false, kind: "validation" });
+  expect(await createProjectFolder(fake.db, { ...actor, name })).toMatchObject({ ok: false, kind: "validation" });
+  expect(await updateProjectFolder(fake.db, { ...actor, body: { name } })).toMatchObject({ ok: false, kind: "validation" });
+  expect(await createLibraryFolder(fake.db, "actor", "file", { name })).toMatchObject({ ok: false, status: 400 });
+  fake.done();
 });

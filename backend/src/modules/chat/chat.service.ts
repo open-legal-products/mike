@@ -1,8 +1,5 @@
 // Stable public API. Keep implementations in the topic files below.
 export {
-  type AccessibleChat,
-  validateAccessibleProjectId,
-  type ChatAccess,
   getAccessibleChat,
 } from "./chat.access";
 export { getChatMessages } from "./chat.messages";
@@ -10,6 +7,7 @@ export {
   listChats,
   createChat,
   deleteChat,
+  discardRejectedChatInput,
   type ChatWriteResult,
 } from "./chat.crud";
 export {
@@ -17,10 +15,12 @@ export {
   listChatGrants,
   grantChatAccess,
   revokeChatAccess,
+  leaveChat,
+  withChatLeaveAccess,
 } from "./chat.sharing";
 export { updateChatSettings } from "./chat.settings";
-export { updateChatTitle, generateChatTitle } from "./chat.titles";
-export { type PreparedChatStream, prepareChatStream } from "./chat.prepare";
+export { updateChatTitle } from "./chat.titles";
+export { prepareChatStream } from "./chat.prepare";
 export {
   devLog,
   appendAssistantEventsToMessage,
@@ -28,6 +28,7 @@ export {
   assistantStreamErrorPayload,
   ASSISTANT_ERROR_MESSAGE,
   buildCancelledAssistantMessage,
+  buildStoppedAssistantMessage,
   extractCitations,
   isAbortError,
   runLLMStream,
@@ -42,21 +43,33 @@ export {
   parseOptionalReasoning,
   buildProjectDocContext,
   buildMessages,
+  loadUserMessageSentTimes,
+  userMessageStamper,
+  type MessageTimeContext,
   buildUserPersonalisationPrompt,
   buildWorkflowStore,
+  attachPriorReasoning,
   enrichWithPriorEvents,
   appendAskInputsResponseToAssistantMessage,
+  runApprovedConnectorActions,
+  writeApprovedConnectorFrames,
   generateSpotlightNonce,
   spotlightFilename,
+  createSubagentRunStore,
+  purgeExpiredSubagentRuns,
   type AskInputsResponseRequest,
   type AssistantEvent,
   type ChatDocumentReference,
   type ChatMessage,
+  type SubagentDefaults,
   type TabularCellStore,
   TABULAR_TOOLS,
   parseOptionalDocumentContext,
   createReservedAssistantMessageUpdater,
   createWordClientToolsAdapter,
+  isClientToolCallPending,
+  logAssistantMessageFailure,
+  requestIdOf,
   reserveAssistantMessage,
   submitClientToolResult,
   ACTIVE_WORD_DOCUMENT_ID,
@@ -64,7 +77,7 @@ export {
   buildWordChatSystemPrompt,
   withoutEmptyAssistantReservations,
 } from "./engine/index";
-export { generateAssistantChatTitle } from "./chat.title";
+export { generateAssistantChatTitle, logChatTitleFailure } from "./chat.title";
 
 export {
   persistWordDocumentEdits,

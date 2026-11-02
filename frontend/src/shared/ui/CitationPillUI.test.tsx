@@ -20,13 +20,14 @@ describe("CitationPillUI", () => {
     });
 
     it("exposes its active state for styling and accessibility", () => {
-        render(
+        const { rerender } = render(
             <CitationPillUI active aria-label="Citation 4">
                 4
             </CitationPillUI>,
         );
 
         const pill = screen.getByRole("button", { name: "Citation 4" });
+        expect(pill).toHaveAttribute("aria-pressed", "true");
         expect(pill).toHaveAttribute("aria-current", "true");
         expect(pill).toHaveAttribute("data-active", "true");
         expect(pill).toHaveClass(
@@ -35,5 +36,9 @@ describe("CitationPillUI", () => {
             "dark:!bg-blue-950",
             "dark:!text-white",
         );
+        rerender(<CitationPillUI aria-label="Citation 4">4</CitationPillUI>);
+        expect(pill).toHaveAttribute("aria-pressed", "false");
+        expect(pill).not.toHaveAttribute("aria-current");
+        expect(pill).not.toHaveClass("!bg-blue-100");
     });
 });

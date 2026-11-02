@@ -1,7 +1,8 @@
 import { captureInlineDocumentCleanup, completeInlineDocumentCleanup } from "../documents/documents.service";
 // workflows crud — implementation behind the module facade.
 import { type Db } from "../../lib/supabase";
-import { getOrgRole } from "../../lib/access";
+import { getOrgRole, parseContentVisibility } from "../../lib/access";
+import { isPersonalOrg } from "../../lib/personalOrgs";
 // devLog comes from lib/chat/types (a leaf file — importing the whole chat
 // barrel here just for a logger would be a heavy dependency edge).
 import { devLog } from "../../lib/log";
@@ -28,6 +29,7 @@ export async function createWorkflow(
     columns_config?: unknown;
     metadata?: Partial<WorkflowMetadata>;
     org_id?: unknown;
+    visibility?: unknown;
   },
 ): Promise<CreateWorkflowResult> {
   const {
@@ -41,9 +43,10 @@ export async function createWorkflow(
   } = params;
   // Tenant assignment, exactly as POST /projects does it: an explicit
   // org_id must be one the caller belongs to, and its absence means
-  // personal (org_id stays NULL, which IS the representation of personal
-  // now that hidden personal orgs are gone). Workflows have no project to
-  // inherit from, so an explicit id is the only context available.
+  // personal (org_id stays NULL, which is still the representation of
+  // personal). A person's own organization is not named here: it answers as
+  // one they do not belong to. Workflows have no project to inherit from, so
+  // an explicit id is the only context available.
   let orgId: string | null = null;
   if (org_id != null) {
     if (typeof org_id !== "string" || !org_id.trim())
@@ -53,7 +56,7 @@ export async function createWorkflow(
         detail: "org_id must be a non-empty string",
       };
     const role = await getOrgRole(userId, org_id, db);
-    if (!role)
+    if (!role || (await isPersonalOrg(db, org_id)))
       return {
         ok: false,
         kind: "validation",
@@ -61,6 +64,15 @@ export async function createWorkflow(
       };
     orgId = org_id;
   }
+  // An organization's workflow is private unless its creator opens it to the
+  // whole organization; a personal workflow never can be.
+  const requestedVisibility = parseContentVisibility(params.visibility, orgId);
+  if (!requestedVisibility.ok)
+    return {
+      ok: false,
+      kind: "validation",
+      detail: requestedVisibility.detail,
+    };
   devLog("[workflows/create] request", {
     userId,
     title: title.trim(),
@@ -92,6 +104,7 @@ export async function createWorkflow(
         normalizeJurisdictions(metadata?.jurisdictions) ??
         DEFAULT_WORKFLOW_JURISDICTIONS,
       org_id: orgId,
+      visibility: requestedVisibility.visibility ?? "private",
     })
     .select("*")
     .single();
@@ -118,7 +131,12 @@ export async function createWorkflow(
     workflow: withWorkflowAccess(
       withDatabaseWorkflow({
         ...(data as WorkflowRecord),
-        access_scope: orgId ? "organization" : "private",
+        // Private until shared: an organization's new workflow is not open
+        // to the organization unless its creator made it so.
+        access_scope:
+          requestedVisibility.visibility === "organization"
+            ? "organization"
+            : "private",
         organization_name: null,
       }),
       {
@@ -132,7 +150,9 @@ export async function createWorkflow(
 
 export type UpdateWorkflowResult =
   | { ok: true; body: Record<string, unknown> }
-  | { ok: false; kind: "not_editable" };
+  | { ok: false; kind: "not_editable" }
+  | { ok: false; kind: "forbidden"; detail: string }
+  | { ok: false; kind: "validation"; detail: string };
 
 export async function updateWorkflow(
   db: Db,
@@ -144,6 +164,7 @@ export async function updateWorkflow(
       metadata?: Partial<WorkflowMetadata>;
       skill_md?: unknown;
       columns_config?: unknown;
+      visibility?: unknown;
     };
   },
 ): Promise<UpdateWorkflowResult> {
@@ -164,6 +185,27 @@ export async function updateWorkflow(
   const access = await resolveWorkflowAccess(db, workflowId, userId, userEmail);
   if (!access || !access.allowEdit) {
     return { ok: false, kind: "not_editable" };
+  }
+  // Who can open a workflow is an Owner's decision, unlike its content,
+  // which an Editor may change.
+  const requestedVisibility = parseContentVisibility(
+    body.visibility,
+    access.workflow.org_id,
+  );
+  if (!requestedVisibility.ok)
+    return {
+      ok: false,
+      kind: "validation",
+      detail: requestedVisibility.detail,
+    };
+  if (requestedVisibility.visibility) {
+    if (!access.isOwner)
+      return {
+        ok: false,
+        kind: "forbidden",
+        detail: "Only a workflow owner can change who has access.",
+      };
+    updates.visibility = requestedVisibility.visibility;
   }
   const { data, error } = await db
     .from("workflows")

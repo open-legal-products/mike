@@ -1,5 +1,13 @@
 import { describe, expect, it, vi } from "vitest";
-import { deleteTabularReviewsWithConcurrency } from "./deleteTabularReviewsWithConcurrency";
+import {
+    deleteTabularReviewsWithConcurrency,
+    notifyBulkReviewDeleteOutcome,
+} from "./deleteTabularReviewsWithConcurrency";
+import { notifyPartialFailure } from "@/app/lib/userFacingError";
+
+vi.mock("@/app/lib/userFacingError", () => ({
+    notifyPartialFailure: vi.fn(),
+}));
 
 describe("deleteTabularReviewsWithConcurrency", () => {
     it("limits concurrent requests and reports only confirmed deletions", async () => {
@@ -75,5 +83,28 @@ describe("deleteTabularReviewsWithConcurrency", () => {
             deletedIds: ["review-1", "review-2"],
             failedIds: [],
         });
+    });
+});
+
+describe("notifyBulkReviewDeleteOutcome", () => {
+    it("names skipped and failed rows in one notice, with Retry only for failures", () => {
+        const retry = vi.fn();
+        notifyBulkReviewDeleteOutcome({ blocked: 1, failedCount: 2, retry });
+
+        expect(notifyPartialFailure).toHaveBeenCalledWith(
+            "1 selected review was skipped because only a review owner can delete them. 2 reviews were not deleted because the request failed. They remain selected so you can try again.",
+            { action: "delete those reviews", onRetry: retry },
+        );
+
+        vi.mocked(notifyPartialFailure).mockClear();
+        notifyBulkReviewDeleteOutcome({ blocked: 2, failedCount: 0, retry });
+        expect(notifyPartialFailure).toHaveBeenCalledWith(
+            expect.stringContaining("2 selected reviews were skipped"),
+            { action: "delete those reviews", onRetry: undefined },
+        );
+
+        vi.mocked(notifyPartialFailure).mockClear();
+        notifyBulkReviewDeleteOutcome({ blocked: 0, failedCount: 0, retry });
+        expect(notifyPartialFailure).not.toHaveBeenCalled();
     });
 });

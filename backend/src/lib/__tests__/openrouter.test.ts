@@ -11,6 +11,35 @@ function streamResponse(chunks: unknown[]): Response {
     });
 }
 
+function gatewayStreamResponse(text: string): Response {
+    const events = [
+        { type: "stream-start", warnings: [] },
+        { type: "text-start", id: "text-1" },
+        { type: "text-delta", id: "text-1", delta: text },
+        { type: "text-end", id: "text-1" },
+        {
+            type: "finish",
+            finishReason: "stop",
+            usage: {
+                inputTokens: {
+                    total: 2,
+                    noCache: 2,
+                    cacheRead: 0,
+                    cacheWrite: 0,
+                },
+                outputTokens: { total: 1, text: 1, reasoning: 0 },
+            },
+        },
+    ];
+    const body = events
+        .map((event) => `data: ${JSON.stringify(event)}\n\n`)
+        .join("");
+    return new Response(body, {
+        status: 200,
+        headers: { "Content-Type": "text/event-stream" },
+    });
+}
+
 function functionTool(
     name: string,
     parameters: Record<string, unknown> = { type: "object" },
@@ -163,6 +192,66 @@ describe("OpenRouter LLM adapter", () => {
         });
     });
 
+    it.each(["none", "low", "medium", "high", "xhigh", "max"] as const)(
+        "forwards the %s reasoning level in OpenRouter's request body",
+        async (reasoning) => {
+            const fetchMock = vi.fn().mockResolvedValue(
+                streamResponse([
+                    {
+                        choices: [
+                            {
+                                delta: { content: "Done" },
+                                finish_reason: "stop",
+                            },
+                        ],
+                    },
+                ]),
+            );
+            vi.stubGlobal("fetch", fetchMock);
+
+            await streamWithProvider({
+                model: "openrouter/openai/gpt-5.6-sol",
+                systemPrompt: "Help",
+                messages: [{ role: "user", content: "Review" }],
+                apiKeys: { openrouter: "or-user-key" },
+                reasoning,
+            });
+
+            const body = JSON.parse(
+                String((fetchMock.mock.calls[0]?.[1] as RequestInit).body),
+            );
+            expect(body.reasoning).toEqual({ effort: reasoning });
+        },
+    );
+
+    it("disables OpenRouter reasoning when the caller omits the level", async () => {
+        const fetchMock = vi.fn().mockResolvedValue(
+            streamResponse([
+                {
+                    choices: [
+                        {
+                            delta: { content: "Done" },
+                            finish_reason: "stop",
+                        },
+                    ],
+                },
+            ]),
+        );
+        vi.stubGlobal("fetch", fetchMock);
+
+        await streamWithProvider({
+            model: "openrouter/openai/gpt-5.4",
+            systemPrompt: "Help",
+            messages: [{ role: "user", content: "Review" }],
+            apiKeys: { openrouter: "or-user-key" },
+        });
+
+        const body = JSON.parse(
+            String((fetchMock.mock.calls[0]?.[1] as RequestInit).body),
+        );
+        expect(body.reasoning).toEqual({ effort: "none" });
+    });
+
     it("streams reasoning and content and continues after a tool call", async () => {
         const fetchMock = vi
             .fn()
@@ -239,6 +328,13 @@ describe("OpenRouter LLM adapter", () => {
         });
         expect(runTools).toHaveBeenCalledOnce();
         expect(fetchMock).toHaveBeenCalledTimes(2);
+        for (const [, init] of fetchMock.mock.calls as Array<
+            [string, RequestInit]
+        >) {
+            expect(JSON.parse(String(init.body)).reasoning).toEqual({
+                effort: "high",
+            });
+        }
 
         const secondBody = JSON.parse(
             String((fetchMock.mock.calls[1]?.[1] as RequestInit).body),
@@ -255,6 +351,8 @@ describe("OpenRouter LLM adapter", () => {
         );
     });
 
+    // OpenRouter 3.1 rejects incomplete tool-call responses during SDK validation,
+    // before our argument parser runs. Both paths must reject without executing tools.
     it("fails the stream instead of executing a tool with truncated arguments", async () => {
         // The upstream connection died mid-arguments: the JSON fragment can
         // never parse. Coercing it to {} would EXECUTE a side-effecting tool
@@ -298,7 +396,7 @@ describe("OpenRouter LLM adapter", () => {
                 apiKeys: { openrouter: "or-user-key" },
                 runTools,
             }),
-        ).rejects.toThrow(/malformed JSON arguments .* "delete_document"/);
+        ).rejects.toThrow(/malformed JSON arguments .* "delete_document"|Failed to process successful response/);
         expect(runTools).not.toHaveBeenCalled();
     });
 
@@ -344,7 +442,7 @@ describe("OpenRouter LLM adapter", () => {
                 apiKeys: { openrouter: "or-user-key" },
                 runTools,
             }),
-        ).rejects.toThrow(/before a clean terminal event .* "delete_document"/);
+        ).rejects.toThrow(/before a clean terminal event .* "delete_document"|Failed to process successful response/);
         expect(runTools).not.toHaveBeenCalled();
     });
 
@@ -389,7 +487,7 @@ describe("OpenRouter LLM adapter", () => {
                 apiKeys: { openrouter: "or-user-key" },
                 runTools,
             }),
-        ).rejects.toThrow(/ended before any arguments .* "delete_document"/);
+        ).rejects.toThrow(/ended before any arguments .* "delete_document"|Failed to process successful response/);
         expect(runTools).not.toHaveBeenCalled();
     });
 
@@ -521,6 +619,28 @@ describe("Vercel AI Gateway LLM adapter", () => {
         expect(headers.get("ai-language-model-id")).toBe("openai/gpt-5.4");
         expect(headers.get("ai-language-model-streaming")).toBe("false");
         expect(headers.get("x-title")).toBeNull();
+    });
+
+    it("forwards reasoning through the gateway's standard request body", async () => {
+        const fetchMock = vi
+            .fn()
+            .mockResolvedValue(gatewayStreamResponse("Done"));
+        vi.stubGlobal("fetch", fetchMock);
+
+        const result = await streamWithProvider({
+            model: "vercel/openai/gpt-5.6-sol",
+            systemPrompt: "Help",
+            messages: [{ role: "user", content: "Review" }],
+            apiKeys: { vercel: "vercel-user-key" },
+            reasoning: "max",
+        });
+
+        expect(result.fullText).toBe("Done");
+        const body = JSON.parse(
+            String((fetchMock.mock.calls[0]?.[1] as RequestInit).body),
+        );
+        expect(body.reasoning).toBe("max");
+        expect(body.providerOptions?.openrouter).toBeUndefined();
     });
 });
 

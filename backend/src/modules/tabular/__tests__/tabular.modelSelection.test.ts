@@ -48,6 +48,32 @@ describe("configured tabular model authentication", () => {
     });
 });
 
+describe("missingModelApiKey for provider keys", () => {
+    it("says a switched-off provider is off rather than missing a key", () => {
+        const missing = missingModelApiKey("claude-sonnet-5-5", {
+            claude: null,
+            disabledProviders: ["claude"],
+        });
+        expect(missing?.detail).toMatch(/Anthropic is turned off/);
+        expect(missing?.detail).not.toMatch(/API key is required/);
+    });
+
+    it("needs the setting saved with a cloud key, like chat does", () => {
+        expect(
+            missingModelApiKey("bedrock/anthropic.claude-sonnet-5-5", {
+                bedrock: "key-without-region",
+            })?.detail,
+        ).toMatch(/Amazon Bedrock API key is required/);
+        expect(
+            missingModelApiKey("bedrock/anthropic.claude-sonnet-5-5", {
+                bedrock: "key",
+                providerSettings: { bedrock: { region: "us-east-1" } },
+            }),
+        ).toBeNull();
+        expect(missingModelApiKey("xai/grok-4.3", { xai: "key" })).toBeNull();
+    });
+});
+
 describe("Claude Code tabular authentication", () => {
     afterEach(() => {
         vi.unstubAllEnvs();

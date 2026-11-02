@@ -1,5 +1,30 @@
 import { describe, it, expect, vi, afterEach } from "vitest";
 
+const { redisEnabled, reportError, redisConnect } = vi.hoisted(() => ({
+    redisEnabled: vi.fn(() => false),
+    reportError: vi.fn(),
+    redisConnect: vi.fn(),
+}));
+vi.mock("../../../lib/dbq/driver", () => ({
+    redisEnabled: () => redisEnabled(),
+}));
+vi.mock("../../../lib/observability/sentry", async (importOriginal) => ({
+    ...(await importOriginal<
+        typeof import("../../../lib/observability/sentry")
+    >()),
+    reportError,
+}));
+// A subscriber whose connection fails the way a down or misconfigured Redis
+// does: the constructor throws.
+vi.mock("ioredis", () => ({
+    default: class {
+        constructor() {
+            redisConnect();
+        }
+    },
+}));
+
+import { AppError } from "../../../lib/appError";
 import {
     awaitCellTerminal,
     targetPendingCells,
@@ -148,6 +173,46 @@ describe("awaitCellTerminal", () => {
         // this request, so nothing here may finish either.
         expect(terminal).toBeNull();
         expect(db.calls.every((c) => c.op === "select")).toBe(true);
+    });
+
+    it("falls back to the DB poll and reports a failed subscribe under its kind", async () => {
+        process.env.ASYNC_TABULAR_EXTRACTION = "true";
+        redisEnabled.mockReturnValue(true);
+        const cause = Object.assign(new Error("connect refused"), {
+            code: "ECONNREFUSED",
+        });
+        redisConnect.mockImplementation(() => {
+            throw cause;
+        });
+        const log = { error: vi.fn() };
+        const db = makeCellDb([
+            { status: "done", content: JSON.stringify({ summary: "x" }) },
+        ]);
+
+        const terminal = await awaitCellTerminal({
+            db: db as never,
+            ...WAIT_ARGS,
+            log,
+            timeoutMs: 1_000,
+        });
+
+        // Degraded, not failed: the backstop still resolved the cell.
+        expect(terminal).toEqual({
+            status: "done",
+            content: { summary: "x", flag: undefined, reasoning: "" },
+        });
+        expect(reportError).toHaveBeenCalledTimes(1);
+        const [reported] = reportError.mock.calls[0];
+        expect(reported).toBeInstanceOf(AppError);
+        expect(reported.kind).toBe("tabular.stream_failed");
+        expect(reported.cause).toBe(cause);
+        // The log carries the reported object; the bridge files it once.
+        expect(log.error).toHaveBeenCalledWith(
+            "[tabular/regenerate-async] subscribe failed",
+            expect.objectContaining({ err: reported }),
+        );
+        redisEnabled.mockReturnValue(false);
+        redisConnect.mockReset();
     });
 
     it("does not dial Redis in synchronous deployments", async () => {
