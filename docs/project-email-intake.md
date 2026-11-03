@@ -8,7 +8,10 @@ mark messages read. No model calls are part of this flow.
 
 In Documents, choose **Refresh from Gmail**, enter a Gmail query, preview a
 page, select messages, and confirm that their contents may be shared with
-project members. Each page contains at most five messages. A next-page token
+project members. If the preview marks an email body excluded, selecting that
+message imports only its supported attachments. Review the original email for
+the missing body or headers. A message with no readable body and no supported
+attachments cannot be selected. Each page contains at most five messages. A next-page token
 means more results exist; it is never treated as a completed mailbox scan.
 The last confirmed query/receipt is private to the initiating person and can
 be reopened. Importing into an organization project makes the imported
@@ -17,7 +20,8 @@ share access to the Gmail connection.
 
 ## What is imported
 
-- A DOCX text rendering of each selected message, with source message/thread
+- A DOCX text rendering of each selected message whose body and retained headers
+  can be read safely, with source message/thread
   IDs, sender, To/Cc recipients, Reply-To, date as written, subject, and the
   complete supported text body. This is a rendering, not preservation of the original EML or its
   visual formatting. The rendered header subset is From, To, Cc, Reply-To,
@@ -28,6 +32,14 @@ share access to the Gmail connection.
   resources. Unsupported or relative destinations retain their label text only;
   rendering that exceeds the text/structure limits is unavailable rather than
   silently truncated.
+- If a body or retained header cannot be decoded or rendered safely, the preview
+  discloses the exclusion before sharing consent. No email text document or
+  placeholder is created. Independently identified supported attachments can
+  still be imported, and the receipt records the body as excluded with a reason.
+  The message remains incomplete even if all supported attachments succeed.
+  Invalid retained header fields use explicit unavailable labels; those labels
+  are not original source text. The exact original content fingerprint still
+  binds the raw headers and MIME content, including the unreadable text.
 - PDF/DOCX attachments, from inline MIME data or Gmail's attachment endpoint.
   Original bytes and SHA-256 are recorded at import in an ordinary native
   document version. Native editor saves and explicit version replacement can
@@ -51,12 +63,19 @@ The initial slice accepts UTF-8/ASCII bodies up to 60,000 bytes, up to 40 MIME
 parts and 10 MIME nesting levels, 5 MiB per attachment and 20 MiB per preview
 page. HTML rendering accepts up to 40 nested element levels and 4,000 children
 per element; the combined rendered body must also fit the 60,000-byte limit.
-Unsupported, encrypted, malformed, oversized, or separately stored text bodies
-are reported as unavailable; unsupported attachments are shown as excluded.
-Unsupported control/non-XML characters in retained headers or body text are
-rejected rather than silently deleted or written into a corrupt DOCX. Ordinary
-TAB/LF/CR whitespace and valid Unicode remain supported.
-Such messages remain explicitly incomplete. Attached EMLs, archives, images,
+Unsupported charset declarations, malformed base64 or UTF-8, separately stored
+bodies, body-specific text/HTML limits, and unsupported control/non-XML
+characters exclude the entire email body. A failure in any candidate body or
+retained header also excludes the body when another MIME alternative or mixed
+section is readable; no partial rendering is presented as the complete body.
+These failures do not trigger character stripping, lossy byte decoding, or a
+placeholder DOCX. Ordinary TAB/LF/CR whitespace and valid Unicode remain supported.
+
+Ambiguous message identity or MIME structure, MIME part/depth limits, encrypted
+content, and aggregate packet/page budget failures remain whole-message
+unavailable. Unsupported or unsafe attachment parts are shown as excluded;
+attachment download or byte-verification failures remain item failures. Other
+independently supported attachments can still succeed. Attached EMLs, archives, images,
 legacy Office documents and OCR are outside this slice. Visually inspect
 original messages and execution/signature pages where relevant.
 
@@ -88,7 +107,17 @@ rolls back both document creation and processed status. Receipt verification
 ignores extraction, filename and rendition metadata updates; it checks the
 original source identity/path/hash against the live version.
 A per-item lease and database uniqueness serialize competing attempts.
-Retries retain committed items and retry failures. A document deleted after
+Retries retain committed items and retry failures. An excluded body is terminal
+for that confirmation; it is not retried or replaced with a placeholder.
+An excluded body with successful attachments offers no ineffective retry, while
+a failed or pending attachment can still be retried with the same confirmation.
+If a previously readable confirmed message is newly found to have an unavailable
+body on re-read, a fresh preview is required so the changed warning can be reviewed.
+Older successfully parsed manifests remain supported without an exclusion flag.
+Historical committed files are not retrospectively re-rendered or requalified.
+Their stored hashes identify bytes, not proof that an older rendering preserved
+every original source character.
+A document deleted after
 import is a tombstone and is never recreated by replaying intake.
 
 Staging registers its storage key and a delayed existing `document.cleanup`

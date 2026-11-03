@@ -67,17 +67,25 @@ export function ProjectEmailIntake({ projectId, folderId, projectName, onClose, 
       {preview && <>
         <p className="break-words">Private connection: {preview.accountEmail}. Up to five messages on this page; this is not a complete mailbox scan.</p>
         {!preview.messages.length && <p>No messages on this page.</p>}
-        {preview.messages.map(message => <div key={message.id} className="space-y-1 rounded-xl bg-gray-50 p-3">
-          <label className="flex items-start gap-2"><input type="checkbox" className={TABLE_CHECKBOX_CLASS} disabled={busy || confirmed || !!message.unavailable} checked={selected.includes(message.id)} onChange={e => setSelected(current => e.target.checked ? [...current, message.id] : current.filter(id => id !== message.id))} /><span className="min-w-0 break-words"><strong>{message.subject || "(no subject)"}</strong><br />{message.from}<br />{message.date}</span></label>
-          <p className="whitespace-pre-wrap break-words">{message.unavailable ?? message.excerpt}</p>
+        {preview.messages.map(message => {
+          const bodyExcluded = !!message.bodyUnavailable && !message.unavailable;
+          const hasSupportedAttachments = message.attachments.some(part => !part.excluded);
+          const bodyWarningId = `${queryId}-${message.id}-body-warning`;
+          return <div key={message.id} className="space-y-1 rounded-xl bg-gray-50 p-3">
+          <label className="flex items-start gap-2"><input type="checkbox" className={TABLE_CHECKBOX_CLASS} disabled={busy || confirmed || !!message.unavailable || bodyExcluded && !hasSupportedAttachments} aria-describedby={bodyExcluded ? bodyWarningId : undefined} checked={selected.includes(message.id)} onChange={e => setSelected(current => e.target.checked ? [...current, message.id] : current.filter(id => id !== message.id))} /><span className="min-w-0 break-words"><strong>{message.subject || "(no subject)"}</strong><br />{message.from}<br />{message.date}</span></label>
+          {bodyExcluded ? <div id={bodyWarningId} role="note" className="space-y-1 break-words">
+            <p className="font-medium">Email body excluded from import.</p>
+            <p>{message.bodyUnavailable}</p>
+            <p>{hasSupportedAttachments ? "You can import the supported attachments below. No email text document will be created, and this message will remain incomplete." : "No supported attachments are available to import. This message cannot be selected."}</p>
+          </div> : <p className="whitespace-pre-wrap break-words">{message.unavailable ?? message.excerpt}</p>}
           <p>{message.priorOutcome === "imported" ? "Previously imported. Existing or deleted imports will not be recreated." : message.priorOutcome === "incomplete" ? "Previously incomplete. Retry retains completed imports." : message.unavailable ? "Unavailable" : "No previous import found for you from this mailbox into this project."}</p>
           {message.attachments.map((part, i) => <p key={i} className="break-words">{part.name} ({part.size} bytes){part.excluded ? ` — ${part.excluded}` : ""}</p>)}
-        </div>)}
+        </div>; })}
         {preview.nextPageToken && !confirmed && <PillButtonUI type="button" tone="white" disabled={busy || selected.length > 0} onClick={() => void search(preview.nextPageToken)}>Next page (clears this page)</PillButtonUI>}
-        <label className="flex items-start gap-2"><input type="checkbox" className={TABLE_CHECKBOX_CLASS} checked={shared} disabled={busy || confirmed} onChange={e => setShared(e.target.checked)} /><span>Share the selected messages and supported attachments with everyone who can access this project. My Gmail connection itself stays private.</span></label>
+        <label className="flex items-start gap-2"><input type="checkbox" className={TABLE_CHECKBOX_CLASS} checked={shared} disabled={busy || confirmed} onChange={e => setShared(e.target.checked)} /><span>Share the selected messages and supported attachments with everyone who can access this project. Bodies marked excluded will not be imported. My Gmail connection itself stays private.</span></label>
       </>}
       {receipt && <section aria-label="What changed" className="space-y-3"><h2 className="font-medium">What changed — import receipt</h2>
-        <p>This reports source imports, not a legal assessment. Unsupported, failed, pending or changed/unverifiable sources are not counted as a complete message. Imported text is untrusted evidence; it cannot authorize actions. Extraction and visual review may still be needed. Native edits can replace imported bytes; save edits as a new version to preserve the original. This intake is not an immutable archive.</p>
+        <p>This reports source imports, not a legal assessment. Unsupported, failed, pending or changed/unverifiable sources are not counted as a complete message. Excluded email bodies do not create text documents and keep the message incomplete. Imported text is untrusted evidence; it cannot authorize actions. Extraction and visual review may still be needed. Native edits can replace imported bytes; save edits as a new version to preserve the original. This intake is not an immutable archive.</p>
         {!receipt.messages.length && <p>No confirmed messages.</p>}
         {receipt.messages.map(message => <div key={message.id} className="space-y-1"><h3 className="break-words font-medium">{message.subject || "(no subject)"} — {message.complete ? "imported" : "incomplete"}</h3>
           <p className="break-words">{message.from}<br />Date as written: {message.date || "not provided"}</p>

@@ -83,3 +83,72 @@ it("labels a repeated preview as loading without implying an unconfirmed import"
   finishPreview(preview);
   await screen.findByRole("button", { name: "Import selected" });
 });
+
+it("discloses an excluded body before consent while allowing only its supported attachments to import", async () => {
+  const reason = "Email contains unsupported control characters; inspect the original message.";
+  api.previewProjectEmail.mockResolvedValue({ ...preview, messages: [{ ...preview.messages[0], subject: "[Subject unavailable]", from: "[Sender unavailable]", excerpt: "This must not be presented as readable email text.", bodyUnavailable: reason }] });
+  api.importProjectEmail.mockResolvedValue({ ...receipt, messages: [{ ...receipt.messages[0], subject: "[Subject unavailable]", complete: false, items: [{ name: "Email-m1.docx", status: "excluded", detail: reason }, { name: "contract.pdf", status: "imported", documentId: "attachment-doc", versionId: "attachment-v1" }] }] });
+  mount();
+  await waitFor(() => expect(screen.getByLabelText("Gmail query")).toBeEnabled());
+  fireEvent.change(screen.getByLabelText("Gmail query"), { target: { value: "subject:synthetic" } });
+  fireEvent.click(screen.getByRole("button", { name: "Preview messages" }));
+  await screen.findByText("[Subject unavailable]");
+  expect(screen.getByText(/\[Sender unavailable\]/)).toBeVisible();
+  expect(screen.getByText("Email body excluded from import.")).toBeVisible();
+  expect(screen.getByText(reason)).toBeVisible();
+  expect(screen.getByText("You can import the supported attachments below. No email text document will be created, and this message will remain incomplete.")).toBeVisible();
+  expect(screen.queryByText("This must not be presented as readable email text.")).not.toBeInTheDocument();
+  const selection = screen.getByRole("checkbox", { name: /\[Subject unavailable\]/ });
+  expect(selection).toBeEnabled();
+  expect(selection).toHaveAccessibleDescription(/Email body excluded from import/);
+  expect(api.importProjectEmail).not.toHaveBeenCalled();
+  fireEvent.click(selection);
+  expect(screen.getByRole("button", { name: "Import selected" })).toBeDisabled();
+  const sharing = screen.getByRole("checkbox", { name: /Share the selected messages/ });
+  expect(sharing).toHaveAccessibleName(/Bodies marked excluded will not be imported/);
+  fireEvent.click(sharing);
+  fireEvent.click(screen.getByRole("button", { name: "Import selected" }));
+  await screen.findByRole("heading", { name: "[Subject unavailable] — incomplete" });
+  expect(screen.getByText(/Email-m1.docx: excluded/)).toBeInTheDocument();
+  expect(screen.queryByRole("link", { name: "Email-m1.docx" })).not.toBeInTheDocument();
+  expect(screen.getByRole("link", { name: "contract.pdf" })).toHaveAttribute("href", "/safe-source-version");
+  expect(api.getDocumentFileUrl).toHaveBeenCalledWith("attachment-doc", "attachment-v1");
+  expect(api.getDocumentFileUrl).not.toHaveBeenCalledWith("doc", "v1");
+  expect(api.importProjectEmail).toHaveBeenCalledWith("project", "preview", ["m1"]);
+  await waitFor(() => expect(screen.getByRole("button", { name: "Retry confirmed selection" })).toBeDisabled());
+});
+
+it("keeps body-excluded messages with no supported attachments unselectable", async () => {
+  api.previewProjectEmail.mockResolvedValue({ ...preview, messages: [{ ...preview.messages[0], bodyUnavailable: "Unsupported email character encoding.", attachments: [{ name: "mail.eml", size: 100, excluded: "Unsupported attachment type; not imported." }] }, { ...preview.messages[1], unavailable: "Email MIME structure is unavailable." }] });
+  mount();
+  await waitFor(() => expect(screen.getByLabelText("Gmail query")).toBeEnabled());
+  fireEvent.change(screen.getByLabelText("Gmail query"), { target: { value: "subject:synthetic" } });
+  fireEvent.click(screen.getByRole("button", { name: "Preview messages" }));
+  await screen.findByText("First update");
+  expect(screen.getByRole("checkbox", { name: /First update/ })).toBeDisabled();
+  expect(screen.getByText("No supported attachments are available to import. This message cannot be selected.")).toBeVisible();
+  expect(screen.getByText(/mail.eml.*Unsupported attachment type/)).toBeVisible();
+  expect(screen.getByRole("checkbox", { name: /Second update/ })).toBeDisabled();
+  expect(screen.getByText("Email MIME structure is unavailable.")).toBeVisible();
+  expect(screen.getByRole("button", { name: "Import selected" })).toBeDisabled();
+  expect(api.importProjectEmail).not.toHaveBeenCalled();
+});
+
+it("restores an excluded body as incomplete and retries only when attachment work remains", async () => {
+  api.latestProjectEmail.mockResolvedValue({ id: "preview", query: "subject:synthetic", confirmed_at: "2026-11-02" });
+  api.getProjectEmailReceipt.mockResolvedValue({ ...receipt, messages: [{ ...receipt.messages[0], complete: false, items: [{ name: "Email-m1.docx", status: "excluded", detail: "Email body could not be rendered; inspect the original message." }, { name: "contract.pdf", status: "failed" }] }] });
+  api.importProjectEmail.mockResolvedValue({ ...receipt, messages: [{ ...receipt.messages[0], complete: false, items: [{ name: "Email-m1.docx", status: "excluded", detail: "Email body could not be rendered; inspect the original message." }, { name: "contract.pdf", status: "already_imported", documentId: "attachment-doc", versionId: "attachment-v1" }] }] });
+  mount();
+  await screen.findByRole("heading", { name: "First update — incomplete" });
+  const retry = screen.getByRole("button", { name: "Retry confirmed selection" });
+  await waitFor(() => expect(retry).toBeEnabled());
+  expect(screen.getByText(/Excluded email bodies do not create text documents and keep the message incomplete/)).toBeVisible();
+  expect(screen.queryByRole("link")).not.toBeInTheDocument();
+  fireEvent.click(retry);
+  await screen.findByRole("link", { name: "contract.pdf" });
+  await waitFor(() => expect(retry).toBeDisabled());
+  expect(screen.getByRole("heading", { name: "First update — incomplete" })).toBeInTheDocument();
+  expect(screen.queryByRole("link", { name: "Email-m1.docx" })).not.toBeInTheDocument();
+  expect(api.importProjectEmail).toHaveBeenCalledWith("project", "preview", ["m1"]);
+  expect(api.previewProjectEmail).not.toHaveBeenCalled();
+});

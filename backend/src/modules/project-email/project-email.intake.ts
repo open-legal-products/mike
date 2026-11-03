@@ -14,7 +14,7 @@ import { uploadFile, versionStorageKey } from "../../lib/storage";
 import { documentSuffix, contentTypeForDocumentType } from "../../lib/documentTypes";
 import { commitEmailDocument } from "../documents/documents.service";
 import { emailConnection, emailProvider } from "./project-email.provider";
-import { decodeEmailData, digest, EmailInputError, EMAIL_LIMITS, parseEmail, providerId, verifyAttachment, type EmailManifest } from "./project-email.mime";
+import { decodeEmailData, digest, EmailInputError, EMAIL_LIMITS, parseEmail, providerId, safeEmailDisplay, verifyAttachment, type EmailManifest } from "./project-email.mime";
 
 type Actor = { userId: string; userEmail?: string; projectId: string };
 type Preview = { id: string; user_id: string; project_id: string; org_id: string | null; folder_id: string | null; grant_id: string; account_id: string; account_email: string; query: string; manifest: { messages: EmailManifest[]; unavailable: Array<{ id: string; detail: string }>; nextPageToken?: string }; selected_ids: string[] | null; confirmed_at: string | null; expires_at: string };
@@ -59,7 +59,11 @@ export async function previewProjectEmail(db: Db, actor: Actor, input: { query: 
     const messages: EmailManifest[] = [], unavailable: Preview["manifest"]["unavailable"] = [];
     for (const row of ((page.messages ?? []) as Array<{ id: string }>).slice(0, EMAIL_LIMITS.messages)) {
       const id = providerId(row.id);
-      try { messages.push(parseEmail(await provider.message(id))); }
+      try {
+        const message = parseEmail(await provider.message(id));
+        if (message.id !== id) throw new EmailInputError("Email identity changed during preview.");
+        messages.push(message);
+      }
       catch (error) {
         if (!(error instanceof GoogleWorkspaceError || error instanceof EmailInputError)) throw error;
         unavailable.push({ id, detail: "Message could not be fully read within the import limits. Not imported." });
@@ -68,7 +72,7 @@ export async function previewProjectEmail(db: Db, actor: Actor, input: { query: 
     // Inline attachment data is re-fetched on confirmation; never stored in a
     // preview. The fingerprint binds the source content without retaining it.
     const manifest = { messages: messages.map(m => ({ ...m, text: m.text.slice(0, 500), parts: m.parts.map(({ data: _data, ...p }) => p) })), unavailable, nextPageToken: typeof page.nextPageToken === "string" ? page.nextPageToken : undefined };
-    if (messages.reduce((sum, m) => sum + Buffer.byteLength(m.text) + m.parts.reduce((n, p) => n + p.size, 0), 0) > EMAIL_LIMITS.totalBytes) throw new EmailInputError("Selected page exceeds the total import size limit. Narrow the Gmail query.");
+    if (messages.reduce((sum, m) => sum + Math.max(m.sourceBytes ?? 0, Buffer.byteLength(m.text) + m.parts.reduce((n, p) => n + p.size, 0)), 0) > EMAIL_LIMITS.totalBytes) throw new EmailInputError("Selected page exceeds the total import size limit. Narrow the Gmail query.");
     const id = randomUUID(), expiresAt = new Date(Date.now() + 60 * 60 * 1000).toISOString();
     const prior = messages.length ? await db.from("project_email_items").select("message_id,part_key,status").eq("user_id", actor.userId).eq("project_id", actor.projectId).eq("account_id", connection.account_id).in("message_id", messages.map(m => m.id)) : { data: [], error: null };
     if (prior.error) return internalFailure(prior.error);
@@ -77,8 +81,8 @@ export async function previewProjectEmail(db: Db, actor: Actor, input: { query: 
     return ok({ id, projectId: actor.projectId, accountEmail: connection.account_email, query: input.query, expiresAt, nextPageToken: manifest.nextPageToken, messages: [
       ...messages.map(m => {
         const rows = (prior.data ?? []) as Array<{ message_id: string; part_key: string; status: string }>;
-        const priorOutcome: "imported" | "incomplete" | undefined = rows.some(r => r.message_id === m.id) ? (["body", ...m.parts.map(p => p.key)].every(key => rows.some(r => r.message_id === m.id && r.part_key === key && r.status === "imported")) ? "imported" : "incomplete") : undefined;
-        return { id: m.id, subject: m.subject, from: m.from, date: m.date, excerpt: m.text.slice(0, 500), attachments: m.parts.map(p => ({ name: p.filename, size: p.size, excluded: p.excluded })), priorOutcome };
+        const priorOutcome: "imported" | "incomplete" | undefined = rows.some(r => r.message_id === m.id) ? (!m.bodyUnavailable && ["body", ...m.parts.map(p => p.key)].every(key => rows.some(r => r.message_id === m.id && r.part_key === key && r.status === "imported")) ? "imported" : "incomplete") : undefined;
+        return { id: m.id, subject: m.subject, from: m.from, date: m.date, excerpt: m.bodyUnavailable ? `Email body unavailable: ${m.bodyUnavailable} Supported attachments only; review the original email.` : m.text.slice(0, 500), bodyUnavailable: m.bodyUnavailable, attachments: m.parts.map(p => ({ name: p.filename, size: p.size, excluded: p.excluded })), priorOutcome };
       }),
       ...unavailable.map(m => ({ id: m.id, subject: "Unavailable email", from: "", date: "", excerpt: "", attachments: [], unavailable: m.detail })),
     ] });
@@ -150,6 +154,8 @@ export async function importProjectEmail(db: Db, actor: Actor, id: string, selec
     const preview = found.data;
     const ids = [...new Set(selectedIds)].sort();
     if (!ids.length || ids.some(id => !preview.manifest.messages.some(m => m.id === id))) return failure("validation", "Select available messages from this preview.");
+    if (preview.manifest.messages.some(m => ids.includes(m.id) && m.bodyUnavailable && !m.parts.some(p => !p.excluded))) return failure("validation", "No supported attachments are available for a message whose body is unavailable.");
+    if (preview.manifest.messages.some(m => ids.includes(m.id) && safeEmailDisplay(m).bodyUnavailable)) return failure("conflict", "Stored email display metadata is unavailable. Preview again before importing.");
     if (preview.selected_ids && JSON.stringify(preview.selected_ids) !== JSON.stringify(ids)) return failure("conflict", "This confirmation is bound to its original selection. Preview again to change it.");
     if (!preview.confirmed_at && Date.parse(preview.expires_at) <= Date.now()) return failure("conflict", "Email preview expired. Search again.");
     const access = await authorize(db, actor, preview.folder_id);
@@ -157,7 +163,7 @@ export async function importProjectEmail(db: Db, actor: Actor, id: string, selec
     await emailConnection(db, access.data, preview);
     // CAS binds the exact selection once, even for simultaneous confirmations.
     if (!preview.confirmed_at) {
-      const selectedManifest = { ...preview.manifest, messages: preview.manifest.messages.filter(m => ids.includes(m.id)).map(m => ({ ...m, text: "" })), unavailable: [] };
+      const selectedManifest = { ...preview.manifest, messages: preview.manifest.messages.filter(m => ids.includes(m.id)).map(m => ({ ...m, text: "", parts: m.parts.map(({ data: _data, ...p }) => p) })), unavailable: [] };
       const confirmed = await db.from("project_email_previews").update({ selected_ids: ids, confirmed_at: new Date().toISOString(), manifest: selectedManifest }).eq("id", id).eq("user_id", actor.userId).is("confirmed_at", null).select("id").maybeSingle();
       if (confirmed.error) return internalFailure(confirmed.error);
       if (!confirmed.data) return failure("conflict", "Confirmation changed. Refresh its receipt before retrying.");
@@ -167,7 +173,7 @@ export async function importProjectEmail(db: Db, actor: Actor, id: string, selec
       let message: EmailManifest;
       try {
         message = parseEmail(await provider.message(expected.id));
-        if (message.fingerprint !== expected.fingerprint) throw new EmailInputError("Email content changed. Preview again before importing.");
+        if (message.id !== expected.id || message.threadId !== expected.threadId || message.fingerprint !== expected.fingerprint) throw new EmailInputError("Email content changed. Preview again before importing.");
       } catch (error) {
         // A committed body skips its callback, so report fetch faults before claiming it.
         reportImportFailure(error, "read-source");
@@ -176,7 +182,8 @@ export async function importProjectEmail(db: Db, actor: Actor, id: string, selec
         await persistItem(db, actor, preview, expected, { key: "body", filename: `Email-${expected.id}.docx` }, async () => { throw new EmailInputError(detail); });
         continue;
       }
-      await persistItem(db, actor, preview, message, { key: "body", filename: `Email-${message.id}.docx` }, () => emailDocx(message));
+      if (!!message.bodyUnavailable !== !!expected.bodyUnavailable) return failure("conflict", "Email body availability changed. Preview again before importing.");
+      await persistItem(db, actor, preview, message, { key: "body", filename: `Email-${message.id}.docx`, excluded: expected.bodyUnavailable }, () => emailDocx(message));
       for (const part of message.parts) {
         await persistItem(db, actor, preview, message, part, async () => {
           const raw = part.data !== undefined ? part.data : (await provider.attachment(message.id, part.attachmentId ?? "")).data;
@@ -244,14 +251,18 @@ export async function getProjectEmailReceipt(db: Db, actor: Actor, id: string): 
   if (versions.error) return internalFailure(versions.error);
   const liveVersions = new Map((versions.data as SourceVersion[] ?? []).map(v => [v.id, v]));
   return ok({ previewId: id, query: preview.query, messages: preview.manifest.messages.filter(m => preview.selected_ids?.includes(m.id)).map(m => {
-    const expected = [{ key: "body", filename: `Email-${m.id}.docx` }, ...m.parts];
+    const display = safeEmailDisplay(m);
+    const bodyUnavailable = display.bodyUnavailable ?? m.bodyUnavailable;
+    const expected = [{ key: "body", filename: `Email-${m.id}.docx`, excluded: bodyUnavailable }, ...m.parts];
     const items = expected.map(p => {
       const row = rows.find(r => r.message_id === m.id && r.part_key === p.key);
       const version = row ? liveVersions.get(row.version_id) : undefined;
       const documentExists = !!row?.document_id && live.has(row.document_id);
+      // A known unreadable body never acquires a source link from a historical ledger row.
+      if (p.key === "body" && p.excluded) return { name: p.filename, status: "excluded" as const, detail: p.excluded };
       return buildReceiptItem(p.filename, row, version, documentExists, id);
     });
-    return { id: m.id, subject: m.subject, from: m.from, date: m.date, complete: items.every(i => i.status === "imported" || i.status === "already_imported"), items };
+    return { id: m.id, subject: display.subject, from: display.from, date: display.date, complete: items.every(i => i.status === "imported" || i.status === "already_imported"), items };
   }) });
 }
 

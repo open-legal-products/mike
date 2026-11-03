@@ -1,7 +1,7 @@
 export type ProjectEmailMessage = {
   id: string; subject: string; from: string; date: string; excerpt: string;
   attachments: Array<{ name: string; size: number; excluded?: string }>;
-  unavailable?: string;
+  unavailable?: string; bodyUnavailable?: string;
   priorOutcome?: "imported" | "incomplete";
 };
 export type ProjectEmailPreview = {

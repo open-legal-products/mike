@@ -66,4 +66,89 @@ begin
   perform pg_temp.assert_true(not has_table_privilege('authenticated','public.project_email_items','SELECT'),'browser cannot enumerate private provenance');
   perform pg_temp.assert_true(not has_function_privilege('authenticated','public.commit_project_email_document(uuid,uuid,uuid,jsonb)','EXECUTE'),'browser cannot bypass confirmation/auth via RPC');
 end $$;
+-- A partial message has durable per-item outcomes: an unreadable body is
+-- excluded, while a supported attachment follows the normal version lifecycle.
+do $$
+declare
+  actor uuid:=gen_random_uuid();project uuid:=gen_random_uuid();grant_id uuid:=gen_random_uuid();preview uuid:=gen_random_uuid();
+  body_lease uuid:=gen_random_uuid();attachment_lease uuid:=gen_random_uuid();
+  reason text:='Email body could not be fully read within the supported text formats and limits; inspect the original email.';
+  body_item jsonb;attachment_item jsonb;body_claim jsonb;body_terminal jsonb;attachment_claim jsonb;committed jsonb;again jsonb;v jsonb;
+  rows_changed integer;
+begin
+  insert into auth.users(id,email) values(actor,'partial-intake@example.invalid');
+  insert into public.projects(id,user_id,name) values(project,actor,'Synthetic partial email intake');
+  insert into public.user_google_workspace_tokens(user_id,provider,grant_id,account_email,account_id,encrypted_access_token,access_token_iv,access_token_tag,encrypted_refresh_token,refresh_token_iv,refresh_token_tag,scope,expires_at)
+    values(actor,'gmail',grant_id,'partial-intake@example.invalid','partial-mailbox','synthetic','synthetic','synthetic','synthetic','synthetic','synthetic','gmail.readonly',now()+interval '1 day');
+  perform public.create_project_email_preview(jsonb_build_object('id',preview,'user_id',actor,'project_id',project,
+    'grant_id',grant_id,'account_id','partial-mailbox','account_email','partial-intake@example.invalid','query','subject:synthetic-partial',
+    'manifest',jsonb_build_object('messages',jsonb_build_array(jsonb_build_object('id','partial-m1','threadId','partial-t1',
+      'subject','Synthetic partial source','from','sender@example.invalid','to','partial-intake@example.invalid','date','2 November 2026',
+      'fingerprint',repeat('c',64),'text','','bodyUnavailable',reason,'parts',jsonb_build_array(jsonb_build_object(
+        'key','0.1','filename','Attachment.pdf','mime','application/pdf','size',9,'attachmentId','attachment-locator')))), 'unavailable','[]'::jsonb),
+    'expires_at',now()+interval '1 hour'));
+  update public.project_email_previews set confirmed_at=now(),selected_ids='["partial-m1"]' where id=preview;
+  body_item:=jsonb_build_object('user_id',actor,'project_id',project,'account_id','partial-mailbox','message_id','partial-m1',
+    'thread_id','partial-t1','part_key','body','filename','Email-partial-m1.docx');
+  body_claim:=public.claim_project_email_item(body_item,body_lease);
+  -- Same guarded transition as persistItem's authored exclusion branch; no
+  -- byte staging, upload or document commit is attempted for this body.
+  update public.project_email_items set status='excluded',detail=reason,lease_id=null,lease_until=null
+    where id=(body_claim->>'id')::uuid and lease_id=body_lease and status='processing';
+  get diagnostics rows_changed=row_count;
+  perform pg_temp.assert_true(rows_changed=1,'partial body exclusion owns its processing lease');
+  select to_jsonb(item) into body_terminal from public.project_email_items item where id=(body_claim->>'id')::uuid;
+  perform pg_temp.assert_true(body_terminal->>'status'='excluded' and body_terminal->>'detail'=reason,
+    'body exclusion and authored explanation are durable receipt facts');
+  perform pg_temp.assert_true(not exists(select 1 from public.documents where project_id=project),
+    'excluded body creates no project document');
+  perform pg_temp.assert_true(not exists(select 1 from public.document_versions where id=(body_claim->>'version_id')::uuid
+    or document_id=(body_claim->>'reserved_document_id')::uuid),'excluded body creates no document version');
+  perform pg_temp.assert_true(not exists(select 1 from public.document_version_texts where version_id=(body_claim->>'version_id')::uuid)
+    and not exists(select 1 from public.db_jobs where kind='document.extract_text' and payload->>'versionId'=body_claim->>'version_id'),
+    'excluded body creates neither extraction cache nor extraction job');
+  attachment_item:=body_item||jsonb_build_object('part_key','0.1','filename','Attachment.pdf');
+  attachment_claim:=public.claim_project_email_item(attachment_item,attachment_lease);
+  again:=public.claim_project_email_item(attachment_item,gen_random_uuid());
+  perform pg_temp.assert_true(again->>'id'=attachment_claim->>'id' and again->>'lease_id'=attachment_lease::text,
+    'rival cannot steal the supported attachment processing lease');
+  perform pg_temp.assert_true(public.stage_project_email_item((attachment_claim->>'id')::uuid,attachment_lease,'synthetic/partial-attachment.pdf'),
+    'supported attachment stages with its current lease');
+  v:=jsonb_build_object('filename','Attachment.pdf','file_type','pdf','storage_path','synthetic/partial-attachment.pdf',
+    'pdf_storage_path','synthetic/partial-attachment.pdf','content_sha256',encode(sha256(convert_to('%PDF-test','UTF8')),'hex'),'size_bytes',9);
+  committed:=public.commit_project_email_document((attachment_claim->>'id')::uuid,attachment_lease,preview,v);
+  perform pg_temp.assert_true(committed->>'status'='imported' and committed->>'import_preview_id'=preview::text
+    and exists(select 1 from public.documents document join public.document_versions version on version.id=document.current_version_id
+      where document.id=(committed->>'document_id')::uuid and document.project_id=project
+        and version.id=(attachment_claim->>'version_id')::uuid and version.content_sha256=v->>'content_sha256'),
+    'attachment identity, committed native version and preview provenance are retained');
+  perform pg_temp.assert_true((select count(*)=1 from public.db_jobs where kind='document.extract_text'
+    and payload->>'versionId'=attachment_claim->>'version_id'),'attachment commit has the normal extraction job');
+  perform pg_temp.assert_true((select count(*)=2 from public.project_email_items where user_id=actor and project_id=project
+    and account_id='partial-mailbox' and message_id='partial-m1')
+    and exists(select 1 from public.project_email_items where id=(body_claim->>'id')::uuid and status='excluded' and detail=reason and document_id is null)
+    and exists(select 1 from public.project_email_items where id=(attachment_claim->>'id')::uuid and status='imported'
+      and document_id=(committed->>'document_id')::uuid and version_id=(committed->>'version_id')::uuid),
+    'per-item receipt ledger preserves body exclusion alongside attachment identity');
+  for retry in 1..3 loop
+    again:=public.claim_project_email_item(body_item,gen_random_uuid());
+    perform pg_temp.assert_true(again=body_terminal,'repeat body claim preserves its entire terminal exclusion identity');
+    again:=public.claim_project_email_item(attachment_item,gen_random_uuid());
+    perform pg_temp.assert_true(again=committed,'repeat attachment claim preserves its entire committed identity');
+  end loop;
+  perform pg_temp.assert_true(not public.stage_project_email_item((body_claim->>'id')::uuid,body_lease,'synthetic/resurrected-body.docx'),
+    'former body lease cannot stage excluded content on retry');
+  begin
+    perform public.commit_project_email_document((body_claim->>'id')::uuid,body_lease,preview,
+      v||'{"filename":"Email-partial-m1.docx","file_type":"docx","storage_path":"synthetic/resurrected-body.docx"}');
+    raise exception 'excluded body unexpectedly resurrected';
+  exception when raise_exception then if sqlerrm<>'email_intake_lease_lost' then raise;end if;end;
+  perform pg_temp.assert_true((select count(*)=1 from public.documents where project_id=project)
+    and (select count(*)=1 from public.document_versions version join public.documents document on document.id=version.document_id where document.project_id=project),
+    'partial retries leave exactly one attachment document and one version');
+  perform pg_temp.assert_true(not exists(select 1 from public.document_version_texts where version_id=(body_claim->>'version_id')::uuid)
+    and not exists(select 1 from public.db_jobs where kind='document.extract_text' and payload->>'versionId'=body_claim->>'version_id'),
+    'retries never resurrect body extraction work');
+  raise notice 'partial receipt: body excluded, attachment imported; three retries retain one document/version and no body extraction';
+end $$;
 rollback;

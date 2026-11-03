@@ -50,14 +50,14 @@ describe("bounded, inert Gmail MIME import", () => {
     expect(() => parseEmail(message(p))).toThrow("MIME");
     expect(() => parseEmail(message({ mimeType: "multipart/mixed", parts: Array.from({ length: 41 }, () => plain("x")) }))).toThrow("MIME");
   });
-  it("rejects oversized/truncated or separately stored bodies instead of importing a snippet", () => {
-    expect(() => parseEmail(message(plain("a".repeat(EMAIL_LIMITS.bodyBytes + 1))))).toThrow();
-    expect(() => parseEmail(message({ mimeType: "text/plain", body: { attachmentId: "a" } }))).toThrow("incomplete");
+  it("excludes oversized/truncated or separately stored bodies instead of importing a snippet", () => {
+    expect(parseEmail(message(plain("a".repeat(EMAIL_LIMITS.bodyBytes + 1)))).bodyUnavailable).toBeTruthy();
+    expect(parseEmail(message({ mimeType: "text/plain", body: { attachmentId: "a" } })).bodyUnavailable).toContain("separate download");
   });
   it("rejects encrypted content", () => expect(() => parseEmail(message({ mimeType: "multipart/encrypted" }))).toThrow("Encrypted"));
-  it("classifies unsupported and invalid character encodings as a per-message input error", () => {
-    expect(() => parseEmail(message({ mimeType: "text/plain", headers: [{ name: "Content-Type", value: "text/plain; charset=windows-1252" }], body: { data: Buffer.from([0x93]).toString("base64url") } }))).toThrow("character encoding");
-    expect(() => parseEmail(message({ mimeType: "text/plain", body: { data: Buffer.from([0xff]).toString("base64url") } }))).toThrow("character encoding");
+  it("excludes unsupported and invalid character encodings from the body", () => {
+    expect(parseEmail(message({ mimeType: "text/plain", headers: [{ name: "Content-Type", value: "text/plain; charset=windows-1252" }], body: { data: Buffer.from([0x93]).toString("base64url") } })).bodyUnavailable).toContain("character encoding");
+    expect(parseEmail(message({ mimeType: "text/plain", body: { data: Buffer.from([0xff]).toString("base64url") } })).bodyUnavailable).toContain("character encoding");
   });
   it("binds content but ignores unrelated mailbox label/history changes", () => {
     const m = message(plain("hello"));
@@ -107,31 +107,31 @@ describe("bounded, inert Gmail MIME import", () => {
     for (const absent of ["javascript:", "data:text", "file:", "unknown.invalid", "[/local]", "[#section]", "spoof", "evil_script", "evil_style", "tracker.invalid"]) expect(parsed.text).not.toContain(absent);
     expect(parsed.text).toContain("Script label"); expect(parsed.text).toContain("Control label");
   });
-  it("rejects expanded HTML text exceeding the body limit instead of silently truncating it", () => {
+  it("excludes expanded HTML text exceeding the body limit instead of silently truncating it", () => {
     const html = `<p>${"a".repeat(EMAIL_LIMITS.bodyBytes - 70)}</p><hr><hr><hr><hr>`;
     expect(Buffer.byteLength(html)).toBeLessThanOrEqual(EMAIL_LIMITS.bodyBytes);
-    expect(() => parseEmail(message({ mimeType: "text/html", body: { data: b64(html) } }))).toThrow("limit");
+    expect(parseEmail(message({ mimeType: "text/html", body: { data: b64(html) } })).bodyUnavailable).toContain("limit");
   });
-  it.each(["deep", "broad"])("rejects %s HTML structure truncation rather than accepting a partial rendering", shape => {
+  it.each(["deep", "broad"])("excludes %s HTML structure truncation rather than accepting a partial rendering", shape => {
     const html = shape === "deep" ? '<div>'.repeat(100) + 'Deep terms must survive or fail.' + '</div>'.repeat(100) : '<span>x</span>'.repeat(4001);
     expect(Buffer.byteLength(html)).toBeLessThanOrEqual(EMAIL_LIMITS.bodyBytes);
-    expect(() => parseEmail(message({ mimeType: "text/html", body: { data: b64(html) } }))).toThrow("limit");
+    expect(parseEmail(message({ mimeType: "text/html", body: { data: b64(html) } })).bodyUnavailable).toContain("limit");
   });
 
-  it.each(["\u0000", "\u0007", "\u000b", "\u001f", "\u007f", "\ufffe", "\uffff"])("rejects unsupported control/non-XML body text instead of producing corrupt DOCX XML: %j", control => {
-    expect(() => parseEmail(message(plain(`Terms before${control}terms after`)))).toThrow("control characters");
+  it.each(["\u0000", "\u0007", "\u000b", "\u001f", "\u007f", "\ufffe", "\uffff"])("excludes unsupported control/non-XML body text instead of producing corrupt DOCX XML: %j", control => {
+    expect(parseEmail(message(plain(`Terms before${control}terms after`)))).toMatchObject({ text: "", bodyUnavailable: expect.stringContaining("control characters") });
   });
-  it.each(["Subject", "From", "To", "Cc", "Reply-To", "Date"])("rejects unsupported controls in retained %s headers instead of silently joining text", name => {
-    expect(() => parseEmail(message({ ...plain("body"), headers: [{ name, value: "before\u0000after" }] }))).toThrow("control characters");
+  it.each(["Subject", "From", "To", "Cc", "Reply-To", "Date"])("excludes bodies with unsupported controls in retained %s headers instead of silently joining text", name => {
+    expect(parseEmail(message({ ...plain("body"), headers: [{ name, value: "before\u0000after" }] }))).toMatchObject({ text: "", bodyUnavailable: expect.stringContaining("headers") });
   });
-  it("rejects lone surrogate header characters while preserving valid Unicode and TAB/LF/CR", () => {
-    expect(() => parseEmail(message({ ...plain("body"), headers: [{ name: "Subject", value: "before\ud800after" }] }))).toThrow("control characters");
+  it("excludes lone surrogate header characters while preserving valid Unicode and TAB/LF/CR", () => {
+    expect(parseEmail(message({ ...plain("body"), headers: [{ name: "Subject", value: "before\ud800after" }] }))).toMatchObject({ subject: "[Subject unavailable]", text: "", bodyUnavailable: expect.any(String) });
     const text = "Café — 😀\tFirst line\nSecond line\rThird line";
     expect(parseEmail(message({ ...plain(text), headers: [{ name: "Subject", value: text }] }))).toMatchObject({ subject: text, text });
   });
 
-  it("rejects non-XML characters produced by HTML entity decoding", () => {
-    expect(() => parseEmail(message({ mimeType: "text/html", body: { data: b64("<p>Terms&#xfffe;changed</p>") } }))).toThrow("control characters");
+  it("excludes non-XML characters produced by HTML entity decoding", () => {
+    expect(parseEmail(message({ mimeType: "text/html", body: { data: b64("<p>Terms&#xfffe;changed</p>") } }))).toMatchObject({ text: "", bodyUnavailable: expect.stringContaining("control characters") });
   });
   it("does not split a Unicode surrogate pair at the bounded header limit", () => {
     const subject = "x".repeat(1999) + "😀";
@@ -166,13 +166,13 @@ describe("bounded, inert Gmail MIME import", () => {
     expect(first.text).toBe("[Email HTML structure exceeds the import limit]"); expect(second.text).toBe(first.text); expect(second.fingerprint).toBe(first.fingerprint);
   });
   it("keeps fail-closed validation for malformed source headers beyond their rendering bound", () => {
-    expect(() => parseEmail(message({ ...plain("body"), headers: [{ name: "Subject", value: "x".repeat(2000) + "\u0000" }] }))).toThrow("control characters");
-    expect(() => parseEmail(message({ ...plain("body"), headers: [{ name: "Subject", value: "x".repeat(2000) + "\ud800" }] }))).toThrow("control characters");
+    expect(parseEmail(message({ ...plain("body"), headers: [{ name: "Subject", value: "x".repeat(2000) + "\u0000" }] }))).toMatchObject({ subject: "[Subject unavailable]", text: "", bodyUnavailable: expect.any(String) });
+    expect(parseEmail(message({ ...plain("body"), headers: [{ name: "Subject", value: "x".repeat(2000) + "\ud800" }] }))).toMatchObject({ subject: "[Subject unavailable]", text: "", bodyUnavailable: expect.any(String) });
   });
 
-  it.each(["deep", "broad"])("rejects truncated heading %s content", shape => {
+  it.each(["deep", "broad"])("excludes truncated heading %s content", shape => {
     const html = shape === "deep" ? "<h1>" + "<span>".repeat(60) + "MATERIAL TERMS" + "</span>".repeat(60) + "</h1>" : "<h1>" + "<span>x</span>".repeat(4001) + "</h1>";
-    expect(() => parseEmail(message({ mimeType: "text/html", body: { data: b64(html) } }))).toThrow("limit");
+    expect(parseEmail(message({ mimeType: "text/html", body: { data: b64(html) } })).bodyUnavailable).toContain("limit");
   });
 
   it("accepts exactly forty MIME parts including skipped attachment descendants", () => {
@@ -180,6 +180,79 @@ describe("bounded, inert Gmail MIME import", () => {
     const payload = message({ mimeType: "multipart/mixed", parts: [plain("Cover note"), { filename: "forwarded.eml", mimeType: "message/rfc822", body: { size: 10 }, parts: Array.from({ length: EMAIL_LIMITS.parts - 3 }, () => plain("nested")) }] });
     const parsed = parseEmail(payload);
     expect(parsed.text).toBe("Cover note"); expect(parsed.parts).toHaveLength(1); expect(parsed.parts[0].excluded).toContain("Unsupported");
+  });
+
+  it("salvages independently valid attachments while excluding the entire malformed alternative body", () => {
+    const parsed = parseEmail(message({ mimeType: "multipart/mixed", parts: [
+      { mimeType: "multipart/alternative", parts: [plain("Apparently good alternative"), { mimeType: "text/html", body: { data: "*" } }] },
+      file(),
+    ] }));
+    expect(parsed).toMatchObject({ text: "", bodyUnavailable: expect.any(String), parts: [{ filename: "contract.pdf", excluded: undefined }] });
+  });
+  it("labels invalid retained headers safely and still discovers attachments", () => {
+    const parsed = parseEmail(message({ mimeType: "multipart/mixed", headers: [{ name: "Subject", value: "x".repeat(2000) + "\u0000PRIVATE" }], parts: [plain("body"), file()] }));
+    expect(parsed.text).toBe(""); expect(parsed.bodyUnavailable).toBeTruthy();
+    expect(parsed.subject).toBe("[Subject unavailable]");
+    expect(JSON.stringify(parsed)).not.toContain("PRIVATE"); expect(parsed.parts[0].excluded).toBeUndefined();
+  });
+  it("continues structural validation after a body failure", () => {
+    const badBody = { mimeType: "text/plain", body: { data: "*" } };
+    expect(() => parseEmail(message({ mimeType: "multipart/mixed", parts: [badBody, { ...file(), partId: "1" }, { ...file(), partId: "1" }] }))).toThrow("identity");
+    expect(() => parseEmail(message({ mimeType: "multipart/mixed", parts: [badBody, ...Array.from({ length: 40 }, () => file())] }))).toThrow("MIME");
+  });
+  it("excludes unsafe attachment metadata and locators without retaining unsafe display text", () => {
+    const parsed = parseEmail(message({ mimeType: "multipart/mixed", parts: [plain("bad\u0000body"), file("bad\ud800.pdf"), { ...file(), body: { size: 10, attachmentId: "bad/locator" } }, file()] }));
+    expect(parsed.bodyUnavailable).toBeTruthy();
+    expect(parsed.parts.map(p => !!p.excluded)).toEqual([true, true, false]);
+    expect(parsed.parts[0].filename).toBe("[Attachment name unavailable: 0.1]");
+    expect(parsed.parts[1].attachmentId).toBeUndefined();
+    expect(JSON.stringify(parsed)).not.toContain("bad\\ud800");
+  });
+  it("binds malformed raw body content even though no readable body is retained", () => {
+    const source = (data: string) => message({ mimeType: "multipart/mixed", parts: [{ mimeType: "text/plain", body: { data } }, file()] });
+    expect(parseEmail(source("*")).fingerprint).not.toBe(parseEmail(source("!")).fingerprint);
+  });
+
+  it("keeps top identifiers, malformed trees and aggregate source budgets fatal despite an unreadable body", () => {
+    const payload = { mimeType: "multipart/mixed", parts: [{ mimeType: "text/plain", body: { data: "*" } }, file()] };
+    expect(() => parseEmail({ ...message(payload), id: "bad/id" })).toThrow("identifier");
+    expect(() => parseEmail(message({ ...payload, parts: [...payload.parts, null] }))).toThrow("structure");
+    expect(() => parseEmail(message({ ...payload, parts: [payload.parts[0], ...Array.from({ length: 5 }, () => file("big.pdf", "application/pdf", EMAIL_LIMITS.fileBytes))] }))).toThrow("total");
+    const largeBody = parseEmail(message({ mimeType: "multipart/mixed", parts: [plain("x".repeat(EMAIL_LIMITS.bodyBytes + 1)), file()] }));
+    expect(largeBody).toMatchObject({ text: "", bodyUnavailable: expect.any(String), sourceBytes: EMAIL_LIMITS.bodyBytes + 11 });
+  });
+  it.each([
+    ["charset", { mimeType: "text/plain", headers: [{ name: "Content-Type", value: "text/plain; charset=windows-1252" }], body: { data: b64("body") } }],
+    ["UTF-8", { mimeType: "text/plain", body: { data: Buffer.from([255]).toString("base64url") } }],
+    ["truncated bytes", { mimeType: "text/plain", body: { data: b64("body"), size: 20 } }],
+    ["separate body", { mimeType: "text/plain", body: { attachmentId: "separate" } }],
+    ["HTML limit", { mimeType: "text/html", body: { data: b64("<span>".repeat(60) + "terms" + "</span>".repeat(60)) } }],
+  ])("retains supported siblings while excluding an unreadable %s body", (_reason, body) => {
+    const parsed = parseEmail(message({ mimeType: "multipart/mixed", parts: [plain("other text must also be excluded"), body, file()] }));
+    expect(parsed).toMatchObject({ text: "", bodyUnavailable: expect.any(String), parts: [{ filename: "contract.pdf", excluded: undefined }] });
+  });
+
+  it("charges skipped attachment descendants to source budgets without decoding their bodies", () => {
+    const skipped = { filename: "forwarded.eml", mimeType: "message/rfc822", body: { size: 1 }, parts: [{ mimeType: "text/plain", body: { size: EMAIL_LIMITS.totalBytes, data: "*" } }] };
+    expect(() => parseEmail(message(skipped))).toThrow("total");
+    const parsed = parseEmail(message({ ...skipped, parts: [{ mimeType: "text/plain", body: { size: 100, data: "*" } }] }));
+    expect(parsed.sourceBytes).toBe(101); expect(parsed.parts).toHaveLength(1); expect(parsed.text).toBe("");
+    expect(parsed.bodyUnavailable).toBeUndefined(); // Excluded EML text is never represented as message body.
+  });
+
+  it.each(["\u0000", "\t", "\n", "\r", "\u007f", "\ufffe", "\ud800"])("excludes the body for unsafe header names without disguising the field as absent: %j", control => {
+    const parsed = parseEmail(message({ mimeType: "multipart/mixed", headers: [{ name: `Subject${control}`, value: "PRIVATE SUBJECT" }], parts: [plain("body"), file()] }));
+    expect(parsed).toMatchObject({ subject: "[Subject unavailable]", text: "", bodyUnavailable: expect.any(String), parts: [{ filename: "contract.pdf", excluded: undefined }] });
+    expect(JSON.stringify(parsed)).not.toContain("PRIVATE SUBJECT");
+    const contentType = parseEmail(message({ mimeType: "multipart/mixed", parts: [{ ...plain("body"), headers: [{ name: `Content-Type${control}`, value: "text/plain; charset=windows-1252" }] }, file()] }));
+    expect(contentType).toMatchObject({ text: "", bodyUnavailable: expect.any(String), parts: [{ filename: "contract.pdf", excluded: undefined }] });
+  });
+
+  it.each([null, -1, 1.5, "9", Number.NaN])("excludes malformed attachment size metadata %j beside a valid attachment", size => {
+    const parsed = parseEmail(message({ mimeType: "multipart/mixed", parts: [plain("bad\u0000body"), { ...file(), body: { size, attachmentId: "invalid-size" } }, file()] }));
+    expect(parsed.bodyUnavailable).toBeTruthy();
+    expect(parsed.parts[0]).toMatchObject({ size: 0, excluded: "Attachment size metadata is invalid; not imported." });
+    expect(parsed.parts[1]).toMatchObject({ size: 10, excluded: undefined });
   });
 
 });
