@@ -59,7 +59,9 @@ returns jsonb language sql stable security invoker set search_path='' as $$
       and coalesce(t.textless_page_count,0)=0,false),
     'reason',case
       when v.content_sha256 is null then 'Byte fingerprint unavailable'
+      when v.storage_path is null then 'Stored file unavailable'
       when t.source_revision is distinct from v.text_revision or t.source_sha256 is distinct from v.content_sha256 then 'Extraction is stale or pending'
+      when t.extractor_version is distinct from 1 then 'Extraction must be refreshed'
       when t.status is distinct from 'ready' then 'Text extraction is not ready'
       when coalesce(t.textless_page_count,0)>0 then 'Some pages have no extracted text'
       when length(trim(t.text_content))=0 then 'No readable text'
@@ -93,15 +95,22 @@ begin
     select 1 from public.documents d where d.id=selected.document_id and d.project_id=p_project_id and d.archived_at is null)) then
     raise exception 'brief_not_found' using errcode='P0002'; end if;
   select * into b from public.project_reviewed_briefs where project_id=p_project_id;
-  select coalesce(jsonb_agg(x.snapshot order by x.document_id),'[]') into snapshots from (
-    select d.id document_id, coalesce(public.project_brief_source(d.id),jsonb_build_object('documentId',d.id,'versionId','','revision','','hash','','textHash','','filename','Document awaiting version','ready',false,'reason','No active readable version')) || jsonb_build_object(
+  -- The materialization fence prevents repeated full-text hashing in the
+  -- review predicate and reuses the same snapshot for the designated brief.
+  with source_snapshots as materialized (
+    select d.id document_id,d.current_version_id,public.project_brief_source(d.id) source
+    from public.documents d where d.project_id=p_project_id and d.archived_at is null
+  )
+  select coalesce(jsonb_agg(x.snapshot order by x.document_id),'[]'),
+    (select source from source_snapshots where document_id=b.document_id)
+    into snapshots,s from (
+    select d.document_id, coalesce(d.source,jsonb_build_object('documentId',d.document_id,'versionId','','revision','','hash','','textHash','','filename','Document awaiting version','ready',false,'reason','No active readable version')) || jsonb_build_object(
       'reviewed',exists(select 1 from public.project_brief_reviews r where r.project_id=p_project_id
-        and r.source=public.project_brief_source(d.id) and exists(select 1 from public.project_brief_proposals reviewed_proposal where reviewed_proposal.id=r.proposal_id and reviewed_proposal.base->>'documentId'=b.document_id::text)),
-      'text',case when d.id=b.document_id or d.id=any(p_selected) then
+        and r.source=d.source and exists(select 1 from public.project_brief_proposals reviewed_proposal where reviewed_proposal.id=r.proposal_id and reviewed_proposal.base->>'documentId'=b.document_id::text)),
+      'text',case when d.document_id=b.document_id or d.document_id=any(p_selected) then
         (select t.text_content from public.document_version_texts t where t.version_id=d.current_version_id) end
-    ) snapshot from public.documents d where d.project_id=p_project_id and d.archived_at is null
+    ) snapshot from source_snapshots d
   ) x where x.snapshot is not null;
-  s:=case when exists(select 1 from public.documents where id=b.document_id and project_id=p_project_id and archived_at is null) then public.project_brief_source(b.document_id) else null end;
   return jsonb_build_object('brief',s,'accepted',b.accepted_snapshot,'acceptedContent',b.accepted_content,
     'pendingProposalId',(select q.id from public.project_brief_proposals q where q.project_id=p_project_id and q.actor_id=p_actor_id and q.applied_at is null and q.expires_at>now() and s is not null and q.base=s and not exists(select 1 from jsonb_array_elements(q.sources) source_row(value) where source_row.value is distinct from public.project_brief_source((source_row.value->>'documentId')::uuid)) order by q.created_at desc limit 1),
     'acceptedEvidence',coalesce((select jsonb_build_array(q.base)||q.sources from public.project_brief_proposals q where q.project_id=p_project_id and q.applied_version_id=(b.accepted_snapshot->>'versionId')::uuid order by q.applied_at desc limit 1),'[]'::jsonb),

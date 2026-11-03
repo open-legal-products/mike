@@ -94,4 +94,51 @@ begin
  perform pg_temp.assert_true(not has_table_privilege('authenticated','public.project_brief_proposals','SELECT'),'private proposals not directly enumerable');
  perform pg_temp.assert_true(not has_function_privilege('authenticated','public.project_brief_apply(uuid,uuid,text,uuid)','EXECUTE'),'browser cannot bypass human Apply route');
 end $$;
+-- Count actual calls in this disposable database, not an EXPLAIN estimate.
+-- SQL functions with SET options are not inlined; track_functions=all also
+-- includes them. This fixture runs as the disposable database's administrator.
+set local track_functions='all';
+do $$
+declare a uuid:=gen_random_uuid();p uuid:=gen_random_uuid();b uuid;s uuid;q uuid;
+  calls_before bigint;calls_after bigint;expected_calls bigint;source jsonb;bundle jsonb;
+begin
+ insert into auth.users(id,email) values(a,'snapshot-test@example.invalid');
+ insert into public.projects(id,user_id,name) values(p,a,'Fictional snapshot diagnostics');
+ b:=pg_temp.make_doc(p,a,'Existing brief.');s:=pg_temp.make_doc(p,a,'Source evidence.');
+ perform public.project_brief_designate(p,a,'snapshot-test@example.invalid',b);
+ q:=pg_temp.make_proposal(p,a,b,s);
+ perform public.project_brief_apply(p,a,'snapshot-test@example.invalid',q);
+ select count(*) into expected_calls from public.documents where project_id=p and archived_at is null;
+ select coalesce(sum(calls),0) into calls_before from pg_stat_xact_user_functions
+   where funcid='public.project_brief_source(uuid)'::regprocedure;
+ bundle:=public.project_brief_bundle(p,a,'snapshot-test@example.invalid');
+ select coalesce(sum(calls),0) into calls_after from pg_stat_xact_user_functions
+   where funcid='public.project_brief_source(uuid)'::regprocedure;
+ perform pg_temp.assert_true(calls_after-calls_before=expected_calls,
+   format('one source snapshot per document: expected %s calls, received %s',expected_calls,calls_after-calls_before));
+ raise notice 'snapshot calls per bundle: % for % documents',calls_after-calls_before,expected_calls;
+ perform pg_temp.assert_true(jsonb_array_length(bundle->'sources')=expected_calls,'bundle retains all project sources');
+ perform pg_temp.assert_true((select (x->>'reviewed')::boolean from jsonb_array_elements(bundle->'sources') x
+   where x->>'documentId'=s::text),'reused snapshot preserves reviewed-source detection');
+ begin
+  update public.document_versions set storage_path=null where id=(select current_version_id from public.documents where id=s);
+  source:=public.project_brief_source(s);
+  perform pg_temp.assert_true(not (source->>'ready')::boolean and source->>'reason'='Stored file unavailable',
+    'missing stored file has an explicit readiness reason');
+  bundle:=public.project_brief_bundle(p,a,'snapshot-test@example.invalid');
+  perform pg_temp.assert_true((select x->>'reason'='Stored file unavailable' from jsonb_array_elements(bundle->'sources') x
+    where x->>'documentId'=s::text),'bundle preserves stored-file reason rather than an unselected fallback');
+  raise sqlstate 'ZX001';
+ exception when sqlstate 'ZX001' then null;end;
+ begin
+  update public.document_version_texts set extractor_version=2 where version_id=(select current_version_id from public.documents where id=s);
+  source:=public.project_brief_source(s);
+  perform pg_temp.assert_true(not (source->>'ready')::boolean and source->>'reason'='Extraction must be refreshed',
+    'noncurrent extractor has an explicit readiness reason');
+  bundle:=public.project_brief_bundle(p,a,'snapshot-test@example.invalid');
+  perform pg_temp.assert_true((select x->>'reason'='Extraction must be refreshed' from jsonb_array_elements(bundle->'sources') x
+    where x->>'documentId'=s::text),'bundle preserves extractor reason rather than an unselected fallback');
+  raise sqlstate 'ZX001';
+ exception when sqlstate 'ZX001' then null;end;
+end $$;
 rollback;
