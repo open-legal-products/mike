@@ -152,3 +152,64 @@ it("restores an excluded body as incomplete and retries only when attachment wor
   expect(api.importProjectEmail).toHaveBeenCalledWith("project", "preview", ["m1"]);
   expect(api.previewProjectEmail).not.toHaveBeenCalled();
 });
+
+it("keeps completed source links on a blocked receipt and requires new selection and sharing after a fresh preview", async () => {
+  api.latestProjectEmail.mockResolvedValue({ id: "preview", query: "subject:synthetic", confirmed_at: "2026-11-02" });
+  api.getProjectEmailReceipt.mockResolvedValue({ ...receipt, messages: [{ ...receipt.messages[0], complete: false, requiresPreview: true }] });
+  api.previewProjectEmail.mockResolvedValue({ ...preview, id: "fresh-preview" });
+  api.importProjectEmail.mockResolvedValue({ ...receipt, previewId: "fresh-preview" });
+  mount();
+  await screen.findByRole("heading", { name: "First update — incomplete" });
+  expect(screen.getByRole("alert")).toHaveTextContent("Fresh preview required for this message.");
+  expect(screen.getByRole("alert")).toHaveTextContent("retrying this confirmation will skip it");
+  expect(screen.getByRole("link", { name: "Email-m1.docx" })).toHaveAttribute("href", "/safe-source-version");
+  await waitFor(() => expect(screen.getByRole("button", { name: "Retry confirmed selection" })).toBeDisabled());
+  expect(api.importProjectEmail).not.toHaveBeenCalled();
+  fireEvent.click(screen.getByRole("button", { name: "Preview messages" }));
+  await screen.findByText("First update");
+  expect(api.previewProjectEmail).toHaveBeenCalledWith("project", { query: "subject:synthetic", folderId: null, pageToken: undefined });
+  expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+  expect(screen.queryByRole("button", { name: "Retry confirmed selection" })).not.toBeInTheDocument();
+  expect(screen.getByRole("checkbox", { name: /First update/ })).not.toBeChecked();
+  expect(screen.getByRole("checkbox", { name: /Share the selected messages/ })).not.toBeChecked();
+  expect(screen.getByRole("button", { name: "Import selected" })).toBeDisabled();
+  expect(api.importProjectEmail).not.toHaveBeenCalled();
+  fireEvent.click(screen.getByRole("checkbox", { name: /First update/ }));
+  expect(screen.getByRole("button", { name: "Import selected" })).toBeDisabled();
+  fireEvent.click(screen.getByRole("checkbox", { name: /Share the selected messages/ }));
+  fireEvent.click(screen.getByRole("button", { name: "Import selected" }));
+  await waitFor(() => expect(api.importProjectEmail).toHaveBeenCalledWith("project", "fresh-preview", ["m1"]));
+});
+
+it.each(["failed", "processing"])("does not retry a blocked message even when its native item is %s", async status => {
+  api.latestProjectEmail.mockResolvedValue({ id: "preview", query: "subject:synthetic", confirmed_at: "2026-11-02" });
+  api.getProjectEmailReceipt.mockResolvedValue({ ...receipt, messages: [{ ...receipt.messages[0], complete: false, requiresPreview: true, items: [{ name: "contract.pdf", status }] }] });
+  mount();
+  await screen.findByRole("heading", { name: "First update — incomplete" });
+  await waitFor(() => expect(screen.getByRole("button", { name: "Retry confirmed selection" })).toBeDisabled());
+  expect(screen.getByRole("alert")).toHaveTextContent("Choose Preview messages");
+  expect(screen.queryByRole("link")).not.toBeInTheDocument();
+  expect(api.importProjectEmail).not.toHaveBeenCalled();
+});
+
+it("retries exact original IDs for later transient failures while keeping a blocked message skipped and incomplete", async () => {
+  const blocked = { ...receipt.messages[0], complete: false, requiresPreview: true, items: [...receipt.messages[0].items, { name: "contract.pdf", status: "failed" }] };
+  const later = { ...receipt.messages[0], id: "m2", subject: "Second update", complete: false, items: [{ name: "Email-m2.docx", status: "failed" }] };
+  api.latestProjectEmail.mockResolvedValue({ id: "preview", query: "subject:synthetic", confirmed_at: "2026-11-02" });
+  api.getProjectEmailReceipt.mockResolvedValue({ ...receipt, messages: [blocked, later] });
+  api.importProjectEmail.mockResolvedValue({ ...receipt, messages: [blocked, { ...later, complete: true, items: [{ name: "Email-m2.docx", status: "imported", documentId: "later-doc", versionId: "later-version" }] }] });
+  mount();
+  await screen.findByRole("heading", { name: "Second update — incomplete" });
+  const retry = screen.getByRole("button", { name: "Retry confirmed selection" });
+  await waitFor(() => expect(retry).toBeEnabled());
+  expect(screen.getByRole("alert")).toHaveTextContent("Fresh preview required for this message.");
+  expect(screen.getByRole("link", { name: "Email-m1.docx" })).toBeInTheDocument();
+  fireEvent.click(retry);
+  await waitFor(() => expect(api.importProjectEmail).toHaveBeenCalledWith("project", "preview", ["m1", "m2"]));
+  await screen.findByRole("heading", { name: "Second update — imported" });
+  expect(screen.getByRole("heading", { name: "First update — incomplete" })).toBeInTheDocument();
+  expect(screen.getByRole("link", { name: "Email-m1.docx" })).toBeInTheDocument();
+  expect(screen.getByRole("link", { name: "Email-m2.docx" })).toBeInTheDocument();
+  await waitFor(() => expect(retry).toBeDisabled());
+  expect(api.previewProjectEmail).not.toHaveBeenCalled();
+});

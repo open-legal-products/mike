@@ -151,4 +151,119 @@ begin
     'retries never resurrect body extraction work');
   raise notice 'partial receipt: body excluded, attachment imported; three retries retain one document/version and no body extraction';
 end $$;
+-- Review markers reuse the private item ledger without becoming source items.
+-- Exercise the claim/failure flow used by the service; generic service-only
+-- staging/commit RPCs are deliberately never invoked for reserved marker keys.
+do $$
+declare
+  p_actor uuid;p_project uuid;p_account text;p_message text:='partial-m1';p_preview uuid;
+  other_actor uuid:=gen_random_uuid();other_project uuid:=gen_random_uuid();other_preview uuid:=gen_random_uuid();fresh_preview uuid:=gen_random_uuid();
+  lease_a uuid:=gen_random_uuid();lease_b uuid:=gen_random_uuid();lease_c uuid:=gen_random_uuid();
+  marker_key text;marker_item jsonb;marker jsonb;identity jsonb;again jsonb;variant jsonb;separate jsonb;
+  source_rows jsonb;imported jsonb;resources bigint[];rows_changed integer;
+  reason text:='Message availability or import consent changed. Create a fresh preview; this confirmation will not import further content from this message.';
+begin
+  -- Reuse the actual committed/excluded partial-source rows above rather than
+  -- fabricate terminal source states for the marker-preservation assertions.
+  select user_id,project_id,account_id,id into strict p_actor,p_project,p_account,p_preview
+    from public.project_email_previews where query='subject:synthetic-partial';
+  select jsonb_agg(to_jsonb(item) order by item.id) into source_rows from public.project_email_items item
+    where user_id=p_actor and project_id=p_project and account_id=p_account and message_id=p_message;
+  perform pg_temp.assert_true(jsonb_array_length(source_rows)=2
+    and exists(select 1 from jsonb_array_elements(source_rows) item where item->>'status'='excluded')
+    and exists(select 1 from jsonb_array_elements(source_rows) item where item->>'status'='imported'),
+    'marker fixture begins with real excluded and committed source receipts');
+  insert into auth.users(id,email) values(other_actor,'marker-identity@example.invalid');
+  insert into public.projects(id,user_id,name) values(other_project,other_actor,'Synthetic marker identity');
+  select array[(select count(*) from public.documents),(select count(*) from public.document_versions),
+    (select count(*) from public.document_version_texts),(select count(*) from public.db_jobs)] into resources;
+  marker_key:='review:'||p_preview::text;
+  marker_item:=jsonb_build_object('user_id',p_actor,'project_id',p_project,'account_id',p_account,'message_id',p_message,
+    'thread_id','partial-t1','part_key',marker_key,'filename','Message consent review');
+  separate:=public.claim_project_email_item(marker_item||jsonb_build_object('part_key','review:'||other_preview::text),gen_random_uuid());
+  perform pg_temp.assert_true(not exists(select 1 from public.project_email_items where user_id=p_actor and project_id=p_project
+    and account_id=p_account and message_id=p_message and part_key=marker_key),
+    'a different preview marker does not falsely invalidate the current preview');
+  marker:=public.claim_project_email_item(marker_item,lease_a);
+  identity:=marker-'status'-'lease_id'-'lease_until'-'detail';
+  perform pg_temp.assert_true(marker->>'status'='processing' and marker->>'id'<>separate->>'id',
+    'current preview receives its own durable processing marker identity');
+  again:=public.claim_project_email_item(marker_item,lease_b);
+  perform pg_temp.assert_true(again=marker,'rival marker claim cannot steal a live lease');
+  update public.project_email_items set status='failed',detail=reason,lease_id=null,lease_until=null
+    where id=(marker->>'id')::uuid and lease_id=lease_b and status='processing';
+  get diagnostics rows_changed=row_count;
+  perform pg_temp.assert_true(rows_changed=0 and exists(select 1 from public.project_email_items where id=(marker->>'id')::uuid
+    and part_key=marker_key and status='processing' and lease_id=lease_a),
+    'failed stale-owner status write leaves the processing marker present');
+  update public.project_email_items set status='failed',detail=reason,lease_id=null,lease_until=null
+    where id=(marker->>'id')::uuid and lease_id=lease_a and status='processing';
+  get diagnostics rows_changed=row_count;
+  perform pg_temp.assert_true(rows_changed=1 and exists(select 1 from public.project_email_items where id=(marker->>'id')::uuid
+    and part_key=marker_key and status='failed' and detail=reason),'owned failure persists the static fresh-preview marker');
+  again:=public.claim_project_email_item(marker_item,lease_b);
+  perform pg_temp.assert_true(again-'status'-'lease_id'-'lease_until'-'detail'=identity
+    and again->>'status'='processing' and again->>'lease_id'=lease_b::text and again->>'detail' is null,
+    'retry may clear failed detail and reacquire processing without clearing marker presence or identity');
+  update public.project_email_items set lease_until=now()-interval '1 second' where id=(marker->>'id')::uuid and lease_id=lease_b;
+  again:=public.claim_project_email_item(marker_item,lease_c);
+  perform pg_temp.assert_true(again-'status'-'lease_id'-'lease_until'-'detail'=identity and again->>'lease_id'=lease_c::text,
+    'expired processing marker is reclaimed under the same identity');
+  update public.project_email_items set status='failed',detail=reason,lease_id=null,lease_until=null
+    where id=(marker->>'id')::uuid and lease_id=lease_b and status='processing';
+  get diagnostics rows_changed=row_count;
+  perform pg_temp.assert_true(rows_changed=0,'expired marker owner cannot overwrite a newer lease');
+  update public.project_email_items set status='failed',detail=reason,lease_id=null,lease_until=null
+    where id=(marker->>'id')::uuid and lease_id=lease_c and status='processing';
+  get diagnostics rows_changed=row_count;
+  perform pg_temp.assert_true(rows_changed=1,'current marker owner may record the persistent failure');
+  -- These are ledger-identity checks, not additional authorization grants.
+  for variant in select value from jsonb_array_elements(jsonb_build_array(
+    marker_item||jsonb_build_object('user_id',other_actor),marker_item||jsonb_build_object('project_id',other_project),
+    marker_item||jsonb_build_object('account_id','different-marker-account'),marker_item||jsonb_build_object('message_id','different-message'))) loop
+    perform pg_temp.assert_true(not exists(select 1 from public.project_email_items
+      where user_id=(variant->>'user_id')::uuid and project_id=(variant->>'project_id')::uuid
+        and account_id=variant->>'account_id' and message_id=variant->>'message_id' and part_key=marker_key),
+      'an actor/project/account/message identity does not inherit a foreign marker');
+    separate:=public.claim_project_email_item(variant,gen_random_uuid());
+    perform pg_temp.assert_true(separate->>'id'<>marker->>'id','separate marker tuple cannot overwrite the original marker identity');
+  end loop;
+  perform pg_temp.assert_true((select count(*)=1 from public.project_email_items where user_id=p_actor and project_id=p_project
+    and account_id=p_account and message_id=p_message and part_key=marker_key)
+    and not exists(select 1 from public.project_email_items where user_id=p_actor and project_id=p_project
+      and account_id=p_account and message_id=p_message and part_key='review:'||fresh_preview::text),
+    'exact current-preview lookup finds one marker and a fresh preview has no inherited marker');
+  perform pg_temp.assert_true((select jsonb_agg(to_jsonb(item) order by item.id) from public.project_email_items item
+    where user_id=p_actor and project_id=p_project and account_id=p_account and message_id=p_message and part_key not like 'review:%')=source_rows,
+    'marker failure/reclaim/identity operations leave every native terminal source row field-for-field unchanged');
+  perform pg_temp.assert_true(resources=array[(select count(*) from public.documents),(select count(*) from public.document_versions),
+    (select count(*) from public.document_version_texts),(select count(*) from public.db_jobs)],
+    'marker claim/failure/reclaim creates no document, version, extraction row or job');
+  perform pg_temp.assert_true(not exists(select 1 from public.project_email_items item where part_key like 'review:%' and (
+    document_id is not null or storage_path is not null or content_sha256 is not null or imported_at is not null or import_preview_id is not null
+    or cardinality(staged_paths)<>0 or filename<>'Message consent review'
+    or exists(select 1 from public.documents d where d.id=item.reserved_document_id)
+    or exists(select 1 from public.document_versions v where v.id=item.version_id)
+    or exists(select 1 from public.document_version_texts t where t.version_id=item.version_id))),
+    'reserved marker identities contain no staged paths, source content or document artifacts');
+  select value into strict imported from jsonb_array_elements(source_rows) where value->>'status'='imported';
+  delete from public.documents where id=(imported->>'document_id')::uuid;
+  select array[(select count(*) from public.documents),(select count(*) from public.document_versions),
+    (select count(*) from public.document_version_texts),(select count(*) from public.db_jobs)] into resources;
+  again:=public.claim_project_email_item(marker_item,gen_random_uuid());
+  perform pg_temp.assert_true(again-'status'-'lease_id'-'lease_until'-'detail'=identity,
+    'marker presence and identity survive a source becoming a deletion tombstone');
+  for variant in select value from jsonb_array_elements(source_rows) loop
+    again:=public.claim_project_email_item(variant,gen_random_uuid());
+    perform pg_temp.assert_true(again=variant,'marker retries preserve native exclusion and imported-tombstone receipts exactly');
+  end loop;
+  perform pg_temp.assert_true(not exists(select 1 from public.documents where project_id=p_project)
+    and not exists(select 1 from public.document_versions v join public.project_email_items item on item.version_id=v.id
+      where item.user_id=p_actor and item.project_id=p_project),
+    'marker and native terminal retries cannot resurrect deleted source documents or versions');
+  perform pg_temp.assert_true(resources=array[(select count(*) from public.documents),(select count(*) from public.document_versions),
+    (select count(*) from public.document_version_texts),(select count(*) from public.db_jobs)],
+    'post-deletion marker/source retries create no source artifacts or jobs');
+  raise notice 'review marker: processing/failed/reclaimed identity persists; native terminal rows unchanged, no marker artifacts or cross-preview flags';
+end $$;
 rollback;

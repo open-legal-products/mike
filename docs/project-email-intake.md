@@ -96,27 +96,50 @@ Same-name/byte-identical attachments in distinct MIME parts remain distinct
 evidence. A same-account reconnect does not duplicate completed identities;
 an old preview must still be reviewed again after a grant replacement.
 
-Every confirmation and item read/write rechecks project authorization and the
-enabled workspace-bound connection. An atomic documents-owned transaction
-rechecks destination, current role, grant and lease; creates/activates the
-version using the existing lifecycle; and marks its provenance imported.
-These checks apply at request, phase and finalization boundaries. An already
-authorized overlapping transaction may finish after a concurrent access or
-connection change; they do not promise retroactive cancellation. Version failure
-rolls back both document creation and processed status. Receipt verification
-ignores extraction, filename and rendition metadata updates; it checks the
-original source identity/path/hash against the live version.
+Import checks project authorization and the enabled workspace-bound connection
+before each message fetch and item claim, after a claim that may have waited,
+and before storage upload and document commit. These checks also cover excluded
+items. The provider adapter separately rechecks the connection before each Gmail
+GET. Necessary private failure/cleanup bookkeeping may finish an owned lease
+after a later denial; new source-import claims, reads and exclusions stop at the next
+check. These phase boundaries do not promise atomic or retroactive cancellation
+of an already-authorized overlapping operation.
+An atomic documents-owned transaction rechecks destination, current role, grant
+and lease; creates/activates the native version; and marks its provenance imported.
+Version failure rolls back both document creation and processed status. Receipt
+verification ignores extraction, filename and rendition metadata updates; it
+checks the original source identity/path/hash against the live version.
 A per-item lease and database uniqueness serialize competing attempts.
-Retries retain committed items and retry failures. An excluded body is terminal
-for that confirmation; it is not retried or replaced with a placeholder.
-An excluded body with successful attachments offers no ineffective retry, while
-a failed or pending attachment can still be retried with the same confirmation.
-If a previously readable confirmed message is newly found to have an unavailable
-body on re-read, a fresh preview is required so the changed warning can be reviewed.
-Older successfully parsed manifests remain supported without an exclusion flag.
-Historical committed files are not retrospectively re-rendered or requalified.
-Their stored hashes identify bytes, not proof that an older rendering preserved
-every original source character.
+
+Messages in a confirmed batch progress independently. If a message's content,
+body readability, attachment identities/importability, or legacy display metadata
+cannot be reconfirmed, intake records a private per-preview review marker without
+creating a document. It records still-claimable source items as failed, preserves
+terminal imported/excluded identities and tombstones, and continues to later
+selected messages. Marker presence (including a processing marker whose failure
+record could not be completed) makes the receipt incomplete with
+`requiresPreview: true`. Historical item receipts retain their existing source
+verification and unavailable-body qualifications. The UI directs a fresh preview
+instead of offering an ineffective retry for the blocked message. Same-confirmation
+retries skip that message without fetching it, even if a later parser or download
+locator again matches. A new preview has a separate marker key and needs fresh
+selection/sharing consent; it does not revive globally terminal source identities.
+Ordinary non-authentication provider/transport failures remain retryable and do
+not create a review marker; typed authentication failures stop later batch reads
+and claims even if cached grant metadata still looks enabled. A database error recording failure is reported with its original cause
+under a static stage and fails the request; intake does not claim that a failed
+transition persisted, shorten an unresolved lease, or regress an ambiguous commit.
+Earlier successful imports remain durable if a later infrastructure failure stops
+the request.
+
+An excluded source identity is terminal for that actor/project/account/message/MIME
+path across previews and reconnects. It is not requalified by a fresh preview or
+replaced with a placeholder. An excluded body with successful attachments offers
+no ineffective retry, while a genuinely failed attachment in an unblocked message
+can still be retried with the same confirmation. Older successfully parsed
+manifests remain supported without an exclusion flag. Historical committed files
+are not retrospectively re-rendered or requalified. Their stored hashes identify
+bytes, not proof that an older rendering preserved every original source character.
 A document deleted after
 import is a tombstone and is never recreated by replaying intake.
 

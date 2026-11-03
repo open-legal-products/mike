@@ -54,7 +54,7 @@ export function ProjectEmailIntake({ projectId, folderId, projectName, onClose, 
     } catch (error) { report(error); }
     finally { setBusy(false); setActivity(null); }
   }
-  const retryable = receipt?.messages.some(m => m.items.some(item => item.status === "failed" || item.status === "processing"));
+  const retryable = receipt?.messages.some(m => !m.requiresPreview && m.items.some(item => item.status === "failed" || item.status === "processing"));
   return <Modal open onClose={() => { if (!busy) onClose(); }} breadcrumbs={["Refresh from Gmail"]} size="lg"
     primaryAction={preview || (receipt && confirmed) ? { label: busy ? (activity === "import" ? "Importing…" : "Loading…") : confirmed ? "Retry confirmed selection" : "Import selected", onClick: () => void importSelection(), disabled: busy || !selected.length || (!shared && !confirmed) || (!!receipt && !retryable) } : undefined}
     cancelAction={{ label: "Close", onClick: onClose, disabled: busy }}>
@@ -87,7 +87,8 @@ export function ProjectEmailIntake({ projectId, folderId, projectName, onClose, 
       {receipt && <section aria-label="What changed" className="space-y-3"><h2 className="font-medium">What changed — import receipt</h2>
         <p>This reports source imports, not a legal assessment. Unsupported, failed, pending or changed/unverifiable sources are not counted as a complete message. Excluded email bodies do not create text documents and keep the message incomplete. Imported text is untrusted evidence; it cannot authorize actions. Extraction and visual review may still be needed. Native edits can replace imported bytes; save edits as a new version to preserve the original. This intake is not an immutable archive.</p>
         {!receipt.messages.length && <p>No confirmed messages.</p>}
-        {receipt.messages.map(message => <div key={message.id} className="space-y-1"><h3 className="break-words font-medium">{message.subject || "(no subject)"} — {message.complete ? "imported" : "incomplete"}</h3>
+        {receipt.messages.map(message => <div key={message.id} className="space-y-1"><h3 className="break-words font-medium">{message.subject || "(no subject)"} — {message.complete && !message.requiresPreview ? "imported" : "incomplete"}</h3>
+          {message.requiresPreview && <p role="alert" className="break-words"><strong>Fresh preview required for this message.</strong> Message content or import availability could not be reconfirmed, so retrying this confirmation will skip it. Choose Preview messages, review the warnings, then select messages and confirm sharing again. Earlier import results remain listed below.</p>}
           <p className="break-words">{message.from}<br />Date as written: {message.date || "not provided"}</p>
           <p className="break-all text-xs">Gmail message {message.id}</p>
           {message.items.map((item, i) => <p key={i} className="break-words">{item.documentId && item.versionId && (item.status === "imported" || item.status === "already_imported") ? <a className="text-blue-600 underline focus-visible:ring-2" href={getDocumentFileUrl(item.documentId, item.versionId)} download>{item.name}</a> : item.name}: {item.status.replaceAll("_", " ")}{item.detail ? ` — ${item.detail}` : ""}</p>)}

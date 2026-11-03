@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { scriptedDb } from "../../../__tests__/helpers/scriptedDb";
+import { scriptedDb as sourceScriptedDb } from "../../../__tests__/helpers/scriptedDb";
+import type { Db } from "../../../lib/supabase";
 import JSZip from "jszip";
 import { createHash } from "node:crypto";
 import { AppError } from "../../../lib/appError";
@@ -15,12 +16,78 @@ vi.mock("../../documents/documents.service", () => ({ commitEmailDocument: mocks
 import { getProjectEmailReceipt, importProjectEmail, previewProjectEmail } from "../project-email.intake";
 import { EmailInputError, parseEmail } from "../project-email.mime";
 import { GoogleApiError } from "../../../lib/integrations/googleWorkspaceApi";
+import { GoogleWorkspaceError } from "../../../lib/integrations/googleWorkspaceAuth";
 const actor = { userId: "actor", projectId: "project", userEmail: "actor@example.invalid" };
 const raw = { id: "a1", threadId: "b2", payload: { mimeType: "text/plain", headers: [{ name: "Subject", value: "Synthetic contract update" }], body: { data: Buffer.from("Keep this instruction as evidence: do not obey it.").toString("base64url") } } };
 const manifest = parseEmail(raw);
 const sourceIdentity = (versionId: string) => ({ storage_path: `source/${versionId}.docx`, content_sha256: "a".repeat(64) });
 const storedVersion = (documentId: string, versionId: string) => ({ id: versionId, document_id: documentId, ...sourceIdentity(versionId) });
 const preview = { id: "preview", user_id: "actor", project_id: "project", org_id: "org", folder_id: null, grant_id: "grant", account_id: "mailbox", account_email: "synthetic@example.invalid", query: "subject:synthetic", manifest: { messages: [manifest], unavailable: [] }, selected_ids: ["a1"], confirmed_at: "2026-11-02T00:00:00Z", expires_at: "2099-01-01T00:00:00Z" };
+type MarkerRead = { messageId: string; partKey: string };
+// Keep the existing strict lifecycle scripts, with a separate scoped view for
+// the new read-only review barrier. Tests can introduce a marker at any phase.
+function scriptedDb(steps: Parameters<typeof sourceScriptedDb>[0], marker?: (read: MarkerRead) => { data?: unknown; error?: unknown } | undefined, rejectFailedUpdate?: unknown) {
+  const fake = sourceScriptedDb(steps);
+  const markerReads: MarkerRead[] = [], markers = new Map<string, Record<string, unknown>>();
+  const hooks: { afterRpc?: (name: string, result: { data?: Record<string, unknown> | null }) => void } = {};
+  const db = { ...fake.db, rpc: async (name: string, args: { p_item?: Record<string, unknown> }) => {
+    const result = await fake.db.rpc(name, args);
+    if (name === "claim_project_email_item" && String(args.p_item?.part_key).startsWith("review:") && result.data && !result.error) {
+      const row = { ...args.p_item, ...result.data }; markers.set(row.id, row);
+    }
+    hooks.afterRpc?.(name, result);
+    return result;
+  }, from: (table: string) => {
+    const target = fake.db.from(table);
+    let fields: unknown, mutation: string | undefined, patch: Record<string, unknown> = {};
+    const filters: Array<[string, ...unknown[]]> = [];
+    const updateMarkers = (result: { error?: unknown }) => {
+      if (table !== "project_email_items" || mutation !== "update" || result.error) return;
+      for (const row of markers.values()) if (filters.every(([op, key, value]) => op === "eq" && row[key as string] === value)) Object.assign(row, patch);
+    };
+    const proxy: typeof target = new Proxy(target, { get(object, key) {
+      if (key === "maybeSingle") return () => {
+        const partKey = filters.find(f => f[0] === "eq" && f[1] === "part_key")?.[2];
+        if (table === "project_email_items" && !mutation && fields === "id" && typeof partKey === "string" && partKey.startsWith("review:")) {
+          expect(filters).toEqual(expect.arrayContaining([["eq", "user_id", "actor"], ["eq", "project_id", "project"], ["eq", "account_id", "mailbox"]]));
+          const messageId = filters.find(f => f[0] === "eq" && f[1] === "message_id")?.[2] as string;
+          expect(typeof messageId).toBe("string");
+          const previewStep = steps.find(step => "table" in step && step.table === "project_email_previews" && step.data);
+          expect(partKey).toBe(`review:${(previewStep?.data as { id: string }).id}`);
+          const read = { messageId, partKey }; markerReads.push(read);
+          const found = [...markers.values()].find(row => filters.every(([op, field, value]) => op === "eq" && row[field as string] === value));
+          return Promise.resolve(marker?.(read) ?? { data: found ?? null, error: null });
+        }
+        return Reflect.get(object, "maybeSingle").call(object);
+      };
+      if (key === "then") return (resolve: (value: unknown) => unknown, reject: (error: unknown) => unknown) => {
+        if (table === "project_email_items" && mutation === "update" && patch.status === "failed" && rejectFailedUpdate !== undefined) return Promise.reject(rejectFailedUpdate).then(resolve, reject);
+        return Reflect.get(object, "then").call(object, (result: { error?: unknown }) => { updateMarkers(result); return resolve(result); }, reject);
+      };
+      const value = Reflect.get(object, key);
+      if (typeof value !== "function") return value;
+      return (...args: unknown[]) => {
+        if (key === "select") fields = args[0];
+        if (["update", "insert", "delete"].includes(String(key))) { mutation = String(key); patch = args[0] as Record<string, unknown>; }
+        if (["eq", "is", "in"].includes(String(key))) filters.push([String(key), ...args]);
+        const result = value.apply(object, args);
+        return result === object ? proxy : result;
+      };
+    } });
+    return proxy;
+  } } as unknown as Db;
+  return { ...fake, db, markerReads, markers, hooks };
+}
+function reviewScenario(p: typeof preview) {
+  const message = p.manifest.messages[0];
+  const marker = { id: "review-row", message_id: message.id, part_key: `review:${p.id}`, status: "processing", lease_id: "test-lease" };
+  const sources = [...new Map([{ key: "body", filename: `Email-${message.id}.docx` }, ...message.parts].map(part => [part.key, part])).values()].map((part, i) => ({ id: `source-${i}`, message_id: message.id, part_key: part.key, status: "processing", lease_id: "test-lease" }));
+  const steps: Parameters<typeof sourceScriptedDb>[0] = [{ table: "project_email_previews", data: p }];
+  for (const row of [marker, ...sources]) steps.push({ rpc: "claim_project_email_item", data: row }, { table: "project_email_items", op: "update" });
+  steps.push({ table: "project_email_previews", data: p }, { table: "project_email_items", data: [marker, ...sources].map(row => ({ ...row, status: "failed", lease_id: null })) });
+  return scriptedDb(steps);
+}
+
 beforeEach(() => {
   vi.resetAllMocks();
   mocks.reportError.mockReturnValue("synthetic-event-id");
@@ -128,11 +195,9 @@ describe("project-bound Gmail intake", () => {
     const withFile = (text: string, filename: string, attachmentId: string) => ({ ...raw, payload: { mimeType: "multipart/mixed", parts: [{ ...raw.payload, body: { data: Buffer.from(text).toString("base64url") } }, { partId: "1", filename, mimeType: "application/pdf", body: { size: 9, attachmentId } }] } });
     const expected = { ...preview, manifest: { messages: [parseEmail(withFile("Original terms", "contract.pdf", "preview-handle"))], unavailable: [] } };
     mocks.message.mockResolvedValue(withFile(changedField === "body text" ? "Changed terms" : "Original terms", changedField === "attachment name" ? "changed.pdf" : "contract.pdf", "fresh-handle"));
-    const body = { id: "body", status: "processing", lease_id: "test-lease", message_id: "a1", part_key: "body", reserved_document_id: "body-doc", version_id: "body-version" };
-    const failed = { ...body, status: "failed", document_id: null, detail: "Message unavailable or changed since preview. Nothing further imported." };
-    const fake = scriptedDb([{ table: "project_email_previews", data: expected }, { rpc: "claim_project_email_item", data: body }, { table: "project_email_items", op: "update" }, { table: "project_email_previews", data: expected }, { table: "project_email_items", data: [failed] }]);
+    const fake = reviewScenario(expected);
     const result = await importProjectEmail(fake.db, actor, "preview", ["a1"]);
-    expect(result.ok && result.data.messages[0]).toMatchObject({ complete: false, items: [{ status: "failed", detail: failed.detail }, { name: "contract.pdf", status: "failed", detail: "Not imported yet." }] });
+    expect(result.ok && result.data.messages[0]).toMatchObject({ complete: false, requiresPreview: true, items: [{ status: "failed" }, { name: "contract.pdf", status: "failed" }] });
     expect(mocks.attachment).not.toHaveBeenCalled();
     expect(mocks.upload).not.toHaveBeenCalled();
     expect(mocks.commit).not.toHaveBeenCalled(); expect(mocks.reportError).not.toHaveBeenCalled(); expect(mocks.logError).not.toHaveBeenCalled();
@@ -294,10 +359,10 @@ describe("project-bound Gmail intake", () => {
     const detail = unexpected ? "Import did not complete. Retry the confirmed selection or inspect the original." : "Message unavailable or changed since preview. Nothing further imported.";
     const pending = { id: "item", status: "processing", lease_id: "test-lease", message_id: "a1", part_key: "body", reserved_document_id: "doc", version_id: "version" };
     const failed = { ...pending, status: "failed", document_id: null, detail };
-    const fake = scriptedDb([{ table: "project_email_previews", data: preview }, { rpc: "claim_project_email_item", data: pending }, { table: "project_email_items", op: "update" }, { table: "project_email_previews", data: preview }, { table: "project_email_items", data: [failed] }]);
+    const fake = unexpected ? scriptedDb([{ table: "project_email_previews", data: preview }, { rpc: "claim_project_email_item", data: pending }, { table: "project_email_items", op: "update" }, { table: "project_email_previews", data: preview }, { table: "project_email_items", data: [failed] }]) : reviewScenario(preview);
     const result = await importProjectEmail(fake.db, actor, "preview", ["a1"]);
-    expect(result.ok && result.data.messages[0]).toMatchObject({ complete: false, items: [{ status: "failed", detail }] });
-    expect(fake.calls.find(call => call.table === "project_email_items" && call.op === "update")?.payload).toMatchObject({ status: "failed", detail });
+    expect(result.ok && result.data.messages[0]).toMatchObject(unexpected ? { complete: false, items: [{ status: "failed", detail }] } : { complete: false, requiresPreview: true, items: [{ status: "failed" }] });
+    expect(fake.calls.find(call => call.table === "project_email_items" && call.op === "update")?.payload).toMatchObject(unexpected ? { status: "failed", detail } : { status: "failed", detail: expect.stringContaining("fresh preview") });
     if (unexpected) {
       expect(mocks.reportError).toHaveBeenCalledTimes(1);
       const [reported, context] = mocks.reportError.mock.calls[0];
@@ -389,8 +454,9 @@ describe("project-bound Gmail intake", () => {
     const { bodyUnavailable: _bodyUnavailable, ...legacy } = parsed;
     const p = { ...preview, manifest: { messages: [legacy], unavailable: [] } };
     mocks.message.mockResolvedValue(source);
-    const fake = scriptedDb([{ table: "project_email_previews", data: p }]);
-    expect(await importProjectEmail(fake.db, actor, "preview", ["a1"])).toMatchObject({ ok: false, kind: "conflict" });
+    const fake = reviewScenario(p);
+    const result = await importProjectEmail(fake.db, actor, "preview", ["a1"]);
+    expect(result.ok && result.data.messages[0]).toMatchObject({ complete: false, requiresPreview: true });
     expect(mocks.attachment).not.toHaveBeenCalled(); expect(mocks.upload).not.toHaveBeenCalled(); fake.done();
   });
   it("withholds a historical body link when the new confirmed preview declares body exclusion", async () => {
@@ -430,10 +496,9 @@ describe("project-bound Gmail intake", () => {
   it("rejects a changed malformed raw body before any attachment fetch or document creation", async () => {
     const p = { ...preview, manifest: { messages: [parseEmail(partialSource("*"))], unavailable: [] } };
     mocks.message.mockResolvedValue(partialSource("!"));
-    const body = { id: "body", status: "processing", lease_id: "test-lease", message_id: "a1", part_key: "body" };
-    const fake = scriptedDb([{ table: "project_email_previews", data: p }, { rpc: "claim_project_email_item", data: body }, { table: "project_email_items", op: "update" }, { table: "project_email_previews", data: p }, { table: "project_email_items", data: [{ ...body, status: "failed" }] }]);
+    const fake = reviewScenario(p);
     const result = await importProjectEmail(fake.db, actor, "preview", ["a1"]);
-    expect(result.ok && result.data.messages[0].complete).toBe(false);
+    expect(result.ok && result.data.messages[0]).toMatchObject({ complete: false, requiresPreview: true });
     expect(mocks.attachment).not.toHaveBeenCalled(); expect(mocks.upload).not.toHaveBeenCalled(); expect(mocks.commit).not.toHaveBeenCalled(); fake.done();
   });
   it("never downloads an invalid locator beside a valid independently identified attachment", async () => {
@@ -465,9 +530,9 @@ describe("project-bound Gmail intake", () => {
   });
   it.each(["id", "threadId"])("rejects a changed top-level %s despite an unchanged MIME fingerprint", async field => {
     mocks.message.mockResolvedValue({ ...raw, [field]: "different" });
-    const body = { id: "body", status: "processing", lease_id: "test-lease", message_id: "a1", part_key: "body" };
-    const fake = scriptedDb([{ table: "project_email_previews", data: preview }, { rpc: "claim_project_email_item", data: body }, { table: "project_email_items", op: "update" }, { table: "project_email_previews", data: preview }, { table: "project_email_items", data: [{ ...body, status: "failed" }] }]);
-    expect((await importProjectEmail(fake.db, actor, "preview", ["a1"])).ok).toBe(true);
+    const fake = reviewScenario(preview);
+    const result = await importProjectEmail(fake.db, actor, "preview", ["a1"]);
+    expect(result.ok && result.data.messages[0]).toMatchObject({ complete: false, requiresPreview: true });
     expect(mocks.upload).not.toHaveBeenCalled(); expect(mocks.commit).not.toHaveBeenCalled(); fake.done();
   });
 
@@ -475,8 +540,9 @@ describe("project-bound Gmail intake", () => {
     const source = partialSource(Buffer.from("Readable body").toString("base64url"));
     const expected = { ...parseEmail(source), text: "", bodyUnavailable: "Previously unreadable body." };
     mocks.message.mockResolvedValue(source);
-    const fake = scriptedDb([{ table: "project_email_previews", data: { ...preview, manifest: { messages: [expected], unavailable: [] } } }]);
-    expect(await importProjectEmail(fake.db, actor, "preview", ["a1"])).toMatchObject({ ok: false, kind: "conflict" });
+    const fake = reviewScenario({ ...preview, manifest: { messages: [expected], unavailable: [] } });
+    const result = await importProjectEmail(fake.db, actor, "preview", ["a1"]);
+    expect(result.ok && result.data.messages[0]).toMatchObject({ complete: false, requiresPreview: true });
     expect(mocks.upload).not.toHaveBeenCalled(); expect(mocks.commit).not.toHaveBeenCalled(); expect(mocks.attachment).not.toHaveBeenCalled(); fake.done();
   });
 
@@ -508,8 +574,9 @@ describe("project-bound Gmail intake", () => {
     expect(parseEmail(source(currentLocator)).fingerprint).toBe(previous.fingerprint);
     const p = { ...preview, manifest: { messages: [previous], unavailable: [] } };
     mocks.message.mockResolvedValue(source(currentLocator));
-    const fake = scriptedDb([{ table: "project_email_previews", data: p }]);
-    expect(await importProjectEmail(fake.db, actor, "preview", ["a1"])).toMatchObject({ ok: false, kind: "conflict" });
+    const fake = reviewScenario(p);
+    const result = await importProjectEmail(fake.db, actor, "preview", ["a1"]);
+    expect(result.ok && result.data.messages[0]).toMatchObject({ complete: false, requiresPreview: true });
     expect(mocks.attachment).not.toHaveBeenCalled(); expect(mocks.upload).not.toHaveBeenCalled(); expect(mocks.commit).not.toHaveBeenCalled(); fake.done();
   });
   it.each(["added", "removed", "duplicate"])("requires fresh consent when the attachment key set is %s under the same source fingerprint", async difference => {
@@ -518,8 +585,9 @@ describe("project-bound Gmail intake", () => {
     const expectedParts = difference === "added" ? [] : difference === "duplicate" ? [current.parts[0], current.parts[0]] : [...current.parts, { ...current.parts[0], key: "0.2" }];
     const p = { ...preview, manifest: { messages: [{ ...current, parts: expectedParts }], unavailable: [] } };
     mocks.message.mockResolvedValue(source);
-    const fake = scriptedDb([{ table: "project_email_previews", data: p }]);
-    expect(await importProjectEmail(fake.db, actor, "preview", ["a1"])).toMatchObject({ ok: false, kind: "conflict" });
+    const fake = reviewScenario(p);
+    const result = await importProjectEmail(fake.db, actor, "preview", ["a1"]);
+    expect(result.ok && result.data.messages[0]).toMatchObject({ complete: false, requiresPreview: true });
     expect(mocks.attachment).not.toHaveBeenCalled(); expect(mocks.upload).not.toHaveBeenCalled(); expect(mocks.commit).not.toHaveBeenCalled(); fake.done();
   });
   it.each([undefined, 0])("does not offer or download attachment-only messages with missing/zero size (%j)", async size => {
@@ -536,6 +604,209 @@ describe("project-bound Gmail intake", () => {
     mocks.provider.mockClear();
     expect(await importProjectEmail(confirmation.db, actor, "preview", ["a1"])).toMatchObject({ ok: false, kind: "validation" });
     expect(mocks.provider).not.toHaveBeenCalled(); expect(mocks.attachment).not.toHaveBeenCalled(); expect(mocks.upload).not.toHaveBeenCalled(); expect(mocks.commit).not.toHaveBeenCalled(); confirmation.done();
+  });
+
+  it("reports the original database failure when recording a failed import does not persist", async () => {
+    const original = new TypeError("PRIVATE_SOURCE_FAILURE");
+    const recording = Object.assign(new Error("PRIVATE_DATABASE_FAILURE private@example.invalid"), { code: "ECONNRESET" });
+    mocks.upload.mockRejectedValue(original);
+    const pending = { id: "item", status: "processing", lease_id: "test-lease", message_id: "a1", part_key: "body", reserved_document_id: "doc", version_id: "version" };
+    const fake = scriptedDb([{ table: "project_email_previews", data: preview }, { rpc: "claim_project_email_item", data: pending }, { rpc: "stage_project_email_item", data: true }, { table: "project_email_items", op: "update", error: recording }, { table: "project_email_previews", data: preview }, { table: "project_email_items", data: [pending] }]);
+    expect(await importProjectEmail(fake.db, actor, "preview", ["a1"])).toMatchObject({ ok: false, kind: "error", error: recording });
+    expect(mocks.reportError.mock.calls.map(([error, context]) => [error.cause, context.tags.stage])).toEqual([[original, "upload-source"], [recording, "record-failure"]]);
+    const [reported, context] = mocks.reportError.mock.calls[1];
+    const event = diagnosticEvent({ tags: { ...context.tags, ...diagnosticErrorTags(reported) }, extra: { failure: recording } });
+    expect(event.tags).toMatchObject({ stage: "record-failure", failure_code: "ECONNRESET" });
+    expect(JSON.stringify(event)).not.toContain("PRIVATE_DATABASE_FAILURE"); expect(JSON.stringify(event)).not.toContain("private@example.invalid");
+    expect(fake.calls).toHaveLength(4); // Receipt fixtures are not consumed after a recording error.
+  });
+
+  it.each(["body availability", "attachment availability", "legacy display"])("continues a confirmed batch after middle-message %s drift, permanently skips it on retry, and preserves prior imports", async drift => {
+    const firstSource = { ...raw, id: "a1" }, laterSource = { ...raw, id: "a3" };
+    const middleSource = { ...partialSource(Buffer.from("Readable middle body").toString("base64url")), id: "a2" };
+    const currentMiddle = parseEmail(middleSource);
+    const expectedMiddle = drift === "body availability" ? { ...currentMiddle, text: "", bodyUnavailable: "Previous parser could not read the body." }
+      : drift === "legacy display" ? { ...currentMiddle, subject: "PRIVATE\u0000SUBJECT" }
+      : { ...currentMiddle, parts: currentMiddle.parts.map(part => ({ ...part, excluded: "Previous parser could not verify attachment access." })) };
+    const p = { ...preview, selected_ids: ["a1", "a2", "a3"], manifest: { messages: [parseEmail(firstSource), expectedMiddle, parseEmail(laterSource)], unavailable: [] } };
+    const pending = (id: string, messageId: string, partKey = "body") => ({ id, message_id: messageId, part_key: partKey, status: "processing", lease_id: "test-lease", reserved_document_id: `${id}-doc`, version_id: `${id}-version` });
+    const imported = (row: ReturnType<typeof pending>) => ({ ...row, status: "imported", lease_id: null, document_id: row.reserved_document_id, import_preview_id: "preview", ...sourceIdentity(row.version_id) });
+    const first = pending("first", "a1"), later = pending("later", "a3"), middleBody = imported(pending("middle-body", "a2")), middlePart = pending("middle-part", "a2", "0.1"), review = pending("review", "a2", "review:preview");
+    const rows = [imported(first), middleBody, { ...middlePart, status: "failed", lease_id: null }, imported(later), { ...review, status: "failed", lease_id: null }];
+    const receipt: Parameters<typeof sourceScriptedDb>[0] = [{ table: "project_email_previews", data: p }, { table: "project_email_items", data: rows }, { table: "documents", data: [first, middleBody, later].map(row => ({ id: row.reserved_document_id })) }, { table: "document_versions", data: [first, middleBody, later].map(row => storedVersion(row.reserved_document_id, row.version_id)) }];
+    const fake = scriptedDb([
+      { table: "project_email_previews", data: p }, { rpc: "claim_project_email_item", data: first }, { rpc: "stage_project_email_item", data: true },
+      { rpc: "claim_project_email_item", data: review }, { table: "project_email_items", op: "update" }, { rpc: "claim_project_email_item", data: middleBody }, { rpc: "claim_project_email_item", data: middlePart }, { table: "project_email_items", op: "update" },
+      { rpc: "claim_project_email_item", data: later }, { rpc: "stage_project_email_item", data: true }, ...receipt,
+      { table: "project_email_previews", data: p }, { rpc: "claim_project_email_item", data: imported(first) }, { rpc: "claim_project_email_item", data: imported(later) }, ...receipt,
+    ]);
+    const sources = new Map<string, Record<string, unknown>>([["a1", firstSource], ["a2", middleSource], ["a3", laterSource]]);
+    mocks.message.mockImplementation(async id => sources.get(id)); mocks.commit.mockResolvedValue({ error: null });
+    const result = await importProjectEmail(fake.db, actor, "preview", p.selected_ids);
+    expect(result.ok && result.data.messages.map(m => [m.id, m.complete, m.requiresPreview])).toEqual([["a1", true, undefined], ["a2", false, true], ["a3", true, undefined]]);
+    expect(result.ok && result.data.messages[1].subject).not.toContain("PRIVATE");
+    expect(result.ok && result.data.messages[1].items[0]).toMatchObject(drift === "attachment availability" ? { status: "imported", documentId: "middle-body-doc" } : { status: "excluded" });
+    expect(result.ok && result.data.messages[1].items[1]).toMatchObject({ status: "failed" });
+    expect(mocks.commit.mock.calls.map(call => call[1])).toEqual(["first", "later"]); expect(mocks.attachment).not.toHaveBeenCalled();
+    const saved = fake.markers.get("review")!;
+    expect(saved).toMatchObject({ status: "failed", lease_id: null, part_key: "review:preview", detail: expect.stringContaining("fresh preview") });
+    expect(fake.calls.filter(c => c.op === "update").every(c => (c.payload as { status: string }).status === "failed")).toBe(true);
+    // Even restoring the old parsing/locator result cannot clear the durable warning.
+    mocks.message.mockClear();
+    const retried = await importProjectEmail(fake.db, actor, "preview", p.selected_ids);
+    expect(retried.ok && retried.data.messages[1]).toMatchObject({ complete: false, requiresPreview: true });
+    expect(mocks.message.mock.calls.map(call => call[0])).toEqual(["a1", "a3"]);
+    expect(mocks.commit).toHaveBeenCalledTimes(2); expect(mocks.upload).toHaveBeenCalledTimes(2); fake.done();
+  });
+  it("keeps all imported and globally excluded source outcomes intact while recording a message review warning", async () => {
+    const source = partialSource(Buffer.from("body").toString("base64url"));
+    const current = parseEmail(source), expected = { ...current, parts: current.parts.map(part => ({ ...part, excluded: "Old attachment availability unavailable." })) };
+    const p = { ...preview, manifest: { messages: [expected], unavailable: [] } };
+    const body = { id: "body", message_id: "a1", part_key: "body", status: "imported", lease_id: null, document_id: "doc", version_id: "version", ...sourceIdentity("version") };
+    const part = { id: "part", message_id: "a1", part_key: "0.1", status: "excluded", lease_id: null, detail: "Previously excluded source identity." };
+    const review = { id: "review", message_id: "a1", part_key: "review:preview", status: "processing", lease_id: "test-lease" };
+    const fake = scriptedDb([{ table: "project_email_previews", data: p }, { rpc: "claim_project_email_item", data: review }, { table: "project_email_items", op: "update" }, { rpc: "claim_project_email_item", data: body }, { rpc: "claim_project_email_item", data: part }, { table: "project_email_previews", data: p }, { table: "project_email_items", data: [body, part, review] }, { table: "documents", data: [{ id: "doc" }] }, { table: "document_versions", data: [storedVersion("doc", "version")] }]);
+    mocks.message.mockResolvedValue(source);
+    const result = await importProjectEmail(fake.db, actor, "preview", ["a1"]);
+    expect(result.ok && result.data.messages[0]).toMatchObject({ complete: false, requiresPreview: true, items: [{ status: "already_imported", documentId: "doc" }, { status: "excluded", detail: part.detail }] });
+    expect(fake.calls.filter(c => c.op === "update").map(c => c.filters)).toEqual([expect.arrayContaining([["eq", "id", "review"], ["eq", "lease_id", "test-lease"], ["eq", "status", "processing"]])]);
+    expect(mocks.upload).not.toHaveBeenCalled(); expect(mocks.commit).not.toHaveBeenCalled(); fake.done();
+  });
+
+  const concurrentMarker = () => ({ id: "concurrent-review", user_id: "actor", project_id: "project", account_id: "mailbox", message_id: "a1", part_key: "review:preview", status: "failed", lease_id: null, detail: "A concurrent request required a fresh preview." });
+  it.each(["claim", "stage", "upload"])("observes a durable review marker created during an awaited %s before the next source phase", async phase => {
+    const pending = { id: "item", status: "processing", lease_id: "test-lease", message_id: "a1", part_key: "body", reserved_document_id: "doc", version_id: "version" };
+    const steps: Parameters<typeof sourceScriptedDb>[0] = [{ table: "project_email_previews", data: preview }, { rpc: "claim_project_email_item", data: pending }];
+    if (phase !== "claim") steps.push({ rpc: "stage_project_email_item", data: true });
+    steps.push({ table: "project_email_items", op: "update" }, { table: "project_email_previews", data: preview }, { table: "project_email_items", data: [{ ...pending, status: "failed" }, concurrentMarker()] });
+    const fake = scriptedDb(steps);
+    fake.hooks.afterRpc = name => {
+      if (phase === "claim" && name === "claim_project_email_item" || phase === "stage" && name === "stage_project_email_item") fake.markers.set("concurrent-review", concurrentMarker());
+    };
+    mocks.upload.mockImplementation(async () => { if (phase === "upload") fake.markers.set("concurrent-review", concurrentMarker()); });
+    const result = await importProjectEmail(fake.db, actor, "preview", ["a1"]);
+    expect(result.ok && result.data.messages[0]).toMatchObject({ complete: false, requiresPreview: true, items: [{ status: "failed" }] });
+    expect(mocks.upload).toHaveBeenCalledTimes(phase === "upload" ? 1 : 0); expect(mocks.commit).not.toHaveBeenCalled();
+    expect(fake.calls.find(c => c.op === "update")?.payload).toMatchObject({ status: "failed", detail: expect.stringContaining("fresh preview") }); fake.done();
+  });
+  it("observes a review marker created during attachment download before staging or committing it", async () => {
+    const source = partialSource(Buffer.from("body").toString("base64url")), p = { ...preview, manifest: { messages: [parseEmail(source)], unavailable: [] } };
+    const body = { id: "body", message_id: "a1", part_key: "body", status: "imported", lease_id: null, document_id: "doc", version_id: "version", ...sourceIdentity("version") };
+    const part = { id: "part", message_id: "a1", part_key: "0.1", status: "processing", lease_id: "test-lease", reserved_document_id: "part-doc", version_id: "part-version" };
+    const fake = scriptedDb([{ table: "project_email_previews", data: p }, { rpc: "claim_project_email_item", data: body }, { rpc: "claim_project_email_item", data: part }, { table: "project_email_items", op: "update" }, { table: "project_email_previews", data: p }, { table: "project_email_items", data: [body, { ...part, status: "failed" }, concurrentMarker()] }, { table: "documents", data: [{ id: "doc" }] }, { table: "document_versions", data: [storedVersion("doc", "version")] }]);
+    mocks.message.mockResolvedValue(source); mocks.attachment.mockImplementation(async () => { fake.markers.set("concurrent-review", concurrentMarker()); return { data: Buffer.from("%PDF-test").toString("base64url") }; });
+    const result = await importProjectEmail(fake.db, actor, "preview", ["a1"]);
+    expect(result.ok && result.data.messages[0]).toMatchObject({ requiresPreview: true, items: [{ status: "already_imported", documentId: "doc" }, { status: "failed" }] });
+    expect(mocks.upload).not.toHaveBeenCalled(); expect(mocks.commit).not.toHaveBeenCalled(); expect(fake.calls.some(c => c.table === "stage_project_email_item")).toBe(false); fake.done();
+  });
+  it.each(["before claim", "before later fetch"])("stops source work after an in-memory project denial %s", async point => {
+    const later = { ...raw, id: "a2" }, p = { ...preview, selected_ids: ["a1", "a2"], manifest: { messages: [manifest, parseEmail(later)], unavailable: [] } };
+    let denied = false;
+    mocks.access.mockImplementation(async () => denied ? { ok: false } : { ok: true, projectRole: "editor", project: { org_id: "org" } });
+    mocks.message.mockImplementation(async id => { if (point === "before claim") denied = true; return id === "a1" ? raw : later; });
+    const steps: Parameters<typeof sourceScriptedDb>[0] = [{ table: "project_email_previews", data: p }];
+    if (point === "before later fetch") steps.push({ rpc: "claim_project_email_item", data: { status: "imported", lease_id: null } });
+    const fake = scriptedDb(steps);
+    fake.hooks.afterRpc = () => { denied = true; };
+    expect(await importProjectEmail(fake.db, actor, "preview", p.selected_ids)).toMatchObject({ ok: false, kind: "validation" });
+    expect(mocks.message.mock.calls.map(call => call[0])).toEqual(["a1"]);
+    expect(mocks.upload).not.toHaveBeenCalled(); expect(mocks.commit).not.toHaveBeenCalled(); fake.done();
+  });
+  it("rechecks the connection after a blocked exclusion claim and stops later messages without terminal exclusion", async () => {
+    const source = { ...raw, payload: { mimeType: "multipart/mixed", parts: [raw.payload, { filename: "unsupported.txt", mimeType: "text/plain", body: { size: 10, attachmentId: "file" } }] } }, later = { ...raw, id: "a2" };
+    const p = { ...preview, selected_ids: ["a1", "a2"], manifest: { messages: [parseEmail(source), parseEmail(later)], unavailable: [] } };
+    const body = { id: "body", message_id: "a1", part_key: "body", status: "imported", lease_id: null }, part = { id: "part", message_id: "a1", part_key: "0.1", status: "processing", lease_id: "test-lease" };
+    let denied = false;
+    mocks.connection.mockImplementation(async () => { if (denied) throw new GoogleWorkspaceError("Connection changed."); return { grant_id: "grant", account_id: "mailbox", account_email: "synthetic@example.invalid" }; });
+    mocks.message.mockResolvedValue(source);
+    const fake = scriptedDb([{ table: "project_email_previews", data: p }, { rpc: "claim_project_email_item", data: body }, { rpc: "claim_project_email_item", data: part }, { table: "project_email_items", op: "update" }]);
+    fake.hooks.afterRpc = (_name, result) => { if (result.data?.id === "part") denied = true; };
+    expect(await importProjectEmail(fake.db, actor, "preview", p.selected_ids)).toMatchObject({ ok: false, kind: "unavailable" });
+    expect(mocks.message.mock.calls.map(call => call[0])).toEqual(["a1"]);
+    expect(fake.calls.find(c => c.op === "update")?.payload).toMatchObject({ status: "failed" });
+    expect(mocks.attachment).not.toHaveBeenCalled(); expect(mocks.upload).not.toHaveBeenCalled(); expect(mocks.commit).not.toHaveBeenCalled(); fake.done();
+  });
+  it("keeps a processing review marker durable when its failure-record promise rejects, then skips it on retry", async () => {
+    const source = partialSource(Buffer.from("body").toString("base64url")), expected = { ...parseEmail(source), bodyUnavailable: "Old parser unavailable." };
+    const p = { ...preview, manifest: { messages: [expected], unavailable: [] } }, recording = Object.assign(new Error("PRIVATE_FAILED_RECORD private@example.invalid"), { code: "ECONNRESET" });
+    const review = { id: "review", message_id: "a1", part_key: "review:preview", status: "processing", lease_id: "test-lease", lease_until: "2099-01-01" };
+    const fake = scriptedDb([{ table: "project_email_previews", data: p }, { rpc: "claim_project_email_item", data: review }, { table: "project_email_previews", data: p }, { table: "project_email_previews", data: p }, { table: "project_email_items", data: [review] }], undefined, recording);
+    mocks.message.mockResolvedValue(source);
+    expect(await importProjectEmail(fake.db, actor, "preview", ["a1"])).toMatchObject({ ok: false, kind: "error", error: recording });
+    expect(fake.markers.get("review")).toMatchObject({ status: "processing", lease_id: "test-lease", lease_until: "2099-01-01" });
+    expect(mocks.reportError.mock.calls[0][0].cause).toBe(recording); expect(mocks.reportError.mock.calls[0][1].tags.stage).toBe("record-failure");
+    mocks.message.mockClear();
+    const retried = await importProjectEmail(fake.db, actor, "preview", ["a1"]);
+    expect(retried.ok && retried.data.messages[0]).toMatchObject({ complete: false, requiresPreview: true });
+    expect(mocks.message).not.toHaveBeenCalled(); expect(mocks.upload).not.toHaveBeenCalled(); expect(mocks.commit).not.toHaveBeenCalled(); fake.done();
+  });
+  it("fails closed on review-marker lookup or claim errors instead of assuming a durable warning", async () => {
+    const lookup = new Error("PRIVATE_LOOKUP"), missing = scriptedDb([{ table: "project_email_previews", data: preview }], () => ({ error: lookup }));
+    expect(await importProjectEmail(missing.db, actor, "preview", ["a1"])).toMatchObject({ ok: false, kind: "error", error: lookup });
+    expect(mocks.message).not.toHaveBeenCalled(); missing.done();
+    const source = partialSource(Buffer.from("body").toString("base64url")), p = { ...preview, manifest: { messages: [{ ...parseEmail(source), bodyUnavailable: "Old parser unavailable." }], unavailable: [] } }, claim = new Error("PRIVATE_CLAIM");
+    mocks.message.mockResolvedValue(source);
+    const failed = scriptedDb([{ table: "project_email_previews", data: p }, { rpc: "claim_project_email_item", error: claim }]);
+    expect(await importProjectEmail(failed.db, actor, "preview", ["a1"])).toMatchObject({ ok: false, kind: "error", error: claim });
+    expect(failed.markers.size).toBe(0); expect(mocks.reportError.mock.calls[0][0].cause).toBe(claim); expect(mocks.reportError.mock.calls[0][1].tags.stage).toBe("record-failure");
+    expect(mocks.upload).not.toHaveBeenCalled(); expect(mocks.commit).not.toHaveBeenCalled(); failed.done();
+  });
+  it("preserves an ambiguously committed item when its fenced failed-state write affects zero rows", async () => {
+    const fault = new Error("PRIVATE_COMMIT_RESPONSE"), pending = { id: "body", message_id: "a1", part_key: "body", status: "processing", lease_id: "test-lease", reserved_document_id: "doc", version_id: "version" };
+    const committed = { ...pending, status: "imported", document_id: "doc", import_preview_id: "preview", ...sourceIdentity("version") };
+    mocks.commit.mockResolvedValue({ error: fault });
+    const fake = scriptedDb([{ table: "project_email_previews", data: preview }, { rpc: "claim_project_email_item", data: pending }, { rpc: "stage_project_email_item", data: true }, { table: "project_email_items", op: "update", data: [] }, { table: "project_email_previews", data: preview }, { table: "project_email_items", data: [committed] }, { table: "documents", data: [{ id: "doc" }] }, { table: "document_versions", data: [storedVersion("doc", "version")] }]);
+    const result = await importProjectEmail(fake.db, actor, "preview", ["a1"]);
+    expect(result.ok && result.data.messages[0]).toMatchObject({ complete: true, items: [{ status: "imported", documentId: "doc", sha256: sourceIdentity("version").content_sha256 }] });
+    expect(fake.calls.find(c => c.op === "update")?.filters).toEqual(expect.arrayContaining([["eq", "id", "body"], ["eq", "lease_id", "test-lease"], ["eq", "status", "processing"]]));
+    expect(mocks.reportError).toHaveBeenCalledTimes(1); expect(mocks.reportError.mock.calls[0][0].cause).toBe(fault); fake.done();
+  });
+  it("shows a changed-source review warning even when every native source was already imported", async () => {
+    const source = partialSource(Buffer.from("Original body").toString("base64url")), p = { ...preview, manifest: { messages: [parseEmail(source)], unavailable: [] } };
+    const body = { id: "body", message_id: "a1", part_key: "body", status: "imported", lease_id: null, document_id: "body-doc", version_id: "body-version", ...sourceIdentity("body-version") }, part = { id: "part", message_id: "a1", part_key: "0.1", status: "imported", lease_id: null, document_id: "part-doc", version_id: "part-version", ...sourceIdentity("part-version") }, review = { id: "review", message_id: "a1", part_key: "review:preview", status: "processing", lease_id: "test-lease" };
+    mocks.message.mockResolvedValue(partialSource(Buffer.from("Changed body").toString("base64url")));
+    const fake = scriptedDb([{ table: "project_email_previews", data: p }, { rpc: "claim_project_email_item", data: review }, { table: "project_email_items", op: "update" }, { rpc: "claim_project_email_item", data: body }, { rpc: "claim_project_email_item", data: part }, { table: "project_email_previews", data: p }, { table: "project_email_items", data: [body, part, review] }, { table: "documents", data: [{ id: "body-doc" }, { id: "part-doc" }] }, { table: "document_versions", data: [storedVersion("body-doc", "body-version"), storedVersion("part-doc", "part-version")] }]);
+    const result = await importProjectEmail(fake.db, actor, "preview", ["a1"]);
+    expect(result.ok && result.data.messages[0]).toMatchObject({ complete: false, requiresPreview: true, items: [{ status: "already_imported", documentId: "body-doc" }, { status: "already_imported", documentId: "part-doc" }] });
+    expect(mocks.upload).not.toHaveBeenCalled(); expect(mocks.commit).not.toHaveBeenCalled(); expect(mocks.attachment).not.toHaveBeenCalled(); fake.done();
+  });
+
+  it.each([503, 401])("distinguishes actual Google API %s attachment failures from lost authentication before later batch work", async status => {
+    const source = partialSource(Buffer.from("body").toString("base64url")), laterSource = { ...raw, id: "a2" }, p = { ...preview, selected_ids: ["a1", "a2"], manifest: { messages: [parseEmail(source), parseEmail(laterSource)], unavailable: [] } };
+    const fault = new GoogleApiError("Google request could not complete.", status);
+    const body = { id: "body", message_id: "a1", part_key: "body", status: "imported", lease_id: null, document_id: "doc", version_id: "version", ...sourceIdentity("version") }, part = { id: "part", message_id: "a1", part_key: "0.1", status: "processing", lease_id: "test-lease", reserved_document_id: "part-doc", version_id: "part-version" }, later = { id: "later", message_id: "a2", part_key: "body", status: "processing", lease_id: "test-lease", reserved_document_id: "later-doc", version_id: "later-version" };
+    const steps: Parameters<typeof sourceScriptedDb>[0] = [{ table: "project_email_previews", data: p }, { rpc: "claim_project_email_item", data: body }, { rpc: "claim_project_email_item", data: part }, { table: "project_email_items", op: "update" }];
+    if (status === 503) steps.push({ rpc: "claim_project_email_item", data: later }, { rpc: "stage_project_email_item", data: true }, { table: "project_email_previews", data: p }, { table: "project_email_items", data: [body, { ...part, status: "failed", detail: "Import did not complete. Retry the confirmed selection or inspect the original." }, { ...later, status: "imported", document_id: "later-doc", ...sourceIdentity("later-version") }] }, { table: "documents", data: [{ id: "doc" }, { id: "later-doc" }] }, { table: "document_versions", data: [storedVersion("doc", "version"), storedVersion("later-doc", "later-version")] });
+    const fake = scriptedDb(steps);
+    mocks.message.mockImplementation(async id => id === "a1" ? source : laterSource); mocks.attachment.mockRejectedValue(fault); mocks.commit.mockResolvedValue({ error: null });
+    const result = await importProjectEmail(fake.db, actor, "preview", p.selected_ids);
+    if (status === 503) {
+      expect(result.ok && result.data.messages).toMatchObject([{ complete: false, items: [{ status: "already_imported", documentId: "doc" }, { status: "failed" }] }, { complete: true }]);
+      expect(result.ok && result.data.messages[0].requiresPreview).toBeUndefined();
+      expect(mocks.message.mock.calls.map(call => call[0])).toEqual(["a1", "a2"]); expect(mocks.commit.mock.calls.map(call => call[1])).toEqual(["later"]);
+    } else {
+      expect(result).toMatchObject({ ok: false, kind: "unavailable" });
+      expect(mocks.message.mock.calls.map(call => call[0])).toEqual(["a1"]); expect(mocks.commit).not.toHaveBeenCalled(); expect(mocks.upload).not.toHaveBeenCalled();
+    }
+    expect(fake.markers.size).toBe(0); expect(mocks.reportError).toHaveBeenCalledExactlyOnceWith(fault, { tags: { component: "project-email", operation: "project_email.import", stage: "read-source" } });
+    fake.done();
+  });
+  it.each([false, true])("stops after message-fetch authentication failure (wrapped: %j) even while grant metadata remains enabled", async wrapped => {
+    const later = { ...raw, id: "a2" }, p = { ...preview, selected_ids: ["a1", "a2"], manifest: { messages: [manifest, parseEmail(later)], unavailable: [] } }, auth = new GoogleApiError("Google authentication is unavailable.", 401);
+    const fault = wrapped ? new Error("Request failed.", { cause: auth }) : auth;
+    mocks.message.mockRejectedValue(fault);
+    const fake = scriptedDb([{ table: "project_email_previews", data: p }]);
+    const result = await importProjectEmail(fake.db, actor, "preview", p.selected_ids);
+    expect(result.ok).toBe(false); expect(mocks.message.mock.calls.map(call => call[0])).toEqual(["a1"]);
+    expect(mocks.reportError).toHaveBeenCalledExactlyOnceWith(fault, { tags: { component: "project-email", operation: "project_email.import", stage: "read-source" } });
+    expect(mocks.attachment).not.toHaveBeenCalled(); expect(mocks.upload).not.toHaveBeenCalled(); expect(mocks.commit).not.toHaveBeenCalled(); expect(fake.markers.size).toBe(0); fake.done();
+  });
+
+  it("preserves a destination-phase database failure instead of disguising it as access denial", async () => {
+    const fault = new Error("PRIVATE_FOLDER_DATABASE_FAILURE"), p = { ...preview, folder_id: "folder" };
+    const fake = scriptedDb([{ table: "project_email_previews", data: p }, { table: "project_subfolders", data: { id: "folder" } }, { table: "project_subfolders", error: fault }]);
+    expect(await importProjectEmail(fake.db, actor, "preview", ["a1"])).toMatchObject({ ok: false, kind: "error", error: fault });
+    expect(mocks.message).not.toHaveBeenCalled(); expect(mocks.upload).not.toHaveBeenCalled(); expect(mocks.commit).not.toHaveBeenCalled(); fake.done();
   });
 
 });

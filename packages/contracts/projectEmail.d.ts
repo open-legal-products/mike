@@ -11,7 +11,13 @@ export type ProjectEmailPreview = {
 };
 export type ProjectEmailReceipt = {
   previewId: string; query: string;
-  messages: Array<{ id: string; subject: string; from: string; date: string; complete: boolean; items: Array<{
+  messages: Array<{ id: string; subject: string; from: string; date: string; complete: boolean;
+    /**
+     * True when this confirmation cannot import more for this message; it remains incomplete and requires fresh preview and consent.
+     * Existing item receipts remain intact. Omitted for unblocked and legacy receipts.
+     */
+    requiresPreview?: boolean;
+    items: Array<{
     name: string; status: "imported" | "already_imported" | "processing" | "excluded" | "failed" | "deleted" | "source_changed" | "source_unverified";
     documentId?: string; versionId?: string; sha256?: string; detail?: string;
   }> }>;
