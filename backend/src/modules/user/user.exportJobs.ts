@@ -23,6 +23,7 @@ import { type Db, type DbJob } from "../../lib/dbq/types";
 import { buildMemoryArchive } from "../../lib/memory/archive";
 import { NonRetryableJobError } from "../../lib/dbq/runner";
 import { memberDataActionAllowed } from "../orgs/orgs.service";
+import { uniqueArchiveFilename } from "../../lib/zipExport";
 import { JsonExportType, MAX_ZIP_EXPORT_DOCUMENTS, ExportType, EXPORT_TYPES, isWorkspaceExportType } from "./user.exportContracts";
 
 /** One finished artifact, ready to park in storage. */
@@ -111,6 +112,7 @@ async function buildDocumentsZipExport(
 
     const JSZip = (await import("jszip")).default;
     const zip = new JSZip();
+    const usedNames = new Set<string>();
     let added = 0;
     for (const doc of (rawDocs ?? []) as {
         id: string;
@@ -132,10 +134,13 @@ async function buildDocumentsZipExport(
         // for selections large enough that fetching every file at once is
         // what would blow the memory ceiling.
         zip.file(
-            downloadFilenameForVersion(
-                active.filename,
-                active.version_number,
-                active.source === "assistant_edit",
+            uniqueArchiveFilename(
+                downloadFilenameForVersion(
+                    active.filename,
+                    active.version_number,
+                    active.source === "assistant_edit",
+                ),
+                usedNames,
             ),
             Buffer.from(raw),
         );
