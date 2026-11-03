@@ -6,10 +6,10 @@ import { failure, internalFailure, ok, type ServiceResult } from "../../lib/serv
 import { downloadFile, uploadFile, versionStorageKey } from "../../lib/storage";
 import { contentSha256 } from "../../lib/documentVersions";
 import { completeText } from "../../lib/llm";
-import { hasApiKeyForModel } from "../../lib/modelSelection";
+import { resolveEffectiveChatModel } from "../../lib/modelSelection";
 import { getEffectiveApiKeys } from "../user/user.service";
 import { applyReviewedBrief } from "../documents/documents.service";
-import { hashText, publicIdentity, proposalSystemPrompt, sections, generateValidatedContent, sourceExcerpts, resolveExcerptContent, type Evidence } from "./projectBrief.content";
+import { hashText, publicIdentity, contentSchema, proposalSystemPrompt, sections, generateValidatedContent, sourceExcerpts, resolveExcerptContent, type Evidence } from "./projectBrief.content";
 type Actor = {
     projectId: string;
     userId: string;
@@ -42,6 +42,8 @@ function dbFailure(error: {
         return failure("not_found", "The project or proposal is unavailable.");
     if (error.code === "42501")
         return failure("forbidden", "Editing this project is not permitted.");
+    if (error.code === "PB002")
+        return failure("conflict", "This project already has a live designated brief. Use the existing document; another can be designated only after that brief is moved, archived or deleted.");
     if (error.code === "PB001")
         return failure("conflict", "The brief or a source changed. Refresh and prepare a new proposal.");
     if (error.code === "22023")
@@ -125,13 +127,15 @@ export async function proposeBrief(db: Db, a: Actor, input: {
             if (error)
                 return internalFailure(error);
             const apiKeys = await getEffectiveApiKeys(a.userId, project.org_id, db);
-            if (!hasApiKeyForModel(input.model, apiKeys))
-                return failure("unavailable", "The selected model is not configured for this workspace.");
+            const resolution = await resolveEffectiveChatModel({ requested: input.model, apiKeys, userId: a.userId, db, orgId: project.org_id });
+            if (!resolution.ok)
+                return failure("validation", resolution.detail);
             const generationSignal = AbortSignal.timeout(120000);
             resolve = resolveExcerptContent;
-            generate = async (packet) => completeText({ model: packet.model, apiKeys,
+            generate = async (packet) => completeText({ model: resolution.model, apiKeys,
                 systemPrompt: proposalSystemPrompt, user: JSON.stringify({
-                    evidence: packet.evidence.map((s, index) => ({ index, filename: s.filename, documentId: s.documentId, versionId: s.versionId, excerpts: sourceExcerpts(s, index) })),
+                    priorBriefContext: { filename: packet.evidence[0].filename, text: packet.before },
+                    evidence: packet.evidence.slice(1).map((s, index) => ({ index: index + 1, filename: s.filename, documentId: s.documentId, versionId: s.versionId, excerpts: sourceExcerpts(s, index + 1) })),
                     ...(packet.repair ? { repairInstruction: "The previous response failed the JSON shape or source-excerpt reference contract. Regenerate from this original evidence within all stated limits, using only supplied source-bound excerpt IDs. Do not infer that a previous draft was approved." } : {}),
                 }),
                 maxTokens: 6000, abortSignal: generationSignal });
@@ -160,7 +164,8 @@ export async function proposeBrief(db: Db, a: Actor, input: {
         }
     }
     paragraphs.push(new Paragraph({ text: "Outstanding sources", heading: "Heading1" }));
-    paragraphs.push(new Paragraph(gaps.length ? gaps.map(g => `${g.filename}: ${g.reason}`).join("\n") : "No outstanding sources in the current project inventory. This does not establish that the file is complete."));
+    if (gaps.length) for (const gap of gaps) paragraphs.push(new Paragraph(`${gap.filename}: ${gap.reason}`));
+    else paragraphs.push(new Paragraph("No outstanding sources in the current project inventory. This does not establish that the file is complete."));
     const bytes = await Packer.toBuffer(new Document({ sections: [{ children: paragraphs }] }));
     const path = versionStorageKey(a.userId, b.brief.documentId, versionId, filename);
     // Durable cleanup precedes upload; failed requests/crashes cannot strand bytes.
@@ -184,7 +189,24 @@ export async function getBriefProposal(db: Db, a: Actor, id: string): Promise<Se
     const { data, error } = await db.from("project_brief_proposals").select("*").eq("id", id).eq("project_id", a.projectId).eq("actor_id", a.userId).maybeSingle();
     if (error)
         return internalFailure(error);
-    return data ? ok(view(data)) : failure("not_found", "The proposal is unavailable.");
+    if (!data)
+        return failure("not_found", "The proposal is unavailable.");
+    if (!data.applied_at && !contentSchema.safeParse(data.content).success)
+        return failure("conflict", "The proposal uses an obsolete evidence contract. Prepare a new proposal citing selected source documents rather than the prior brief.");
+    // Retained proposal text is not authority to read a document that has
+    // since left this project. Native shared copies follow their own lifecycle.
+    const currentDocuments = new Set(gate.data.sources.map(s => s.documentId));
+    const references = [data.base, ...data.sources];
+    if (!references.every(s => currentDocuments.has(s.documentId)))
+        return failure("not_found", "The proposal is unavailable.");
+    const { data: versions, error: versionsError } = await db.from("document_versions").select("id,document_id")
+        .in("id", references.map(s => s.versionId)).is("deleted_at", null);
+    if (versionsError)
+        return internalFailure(versionsError);
+    const liveVersions = new Map((versions ?? []).map((v: { id: string; document_id: string }) => [v.id, v.document_id]));
+    if (!references.every(s => liveVersions.get(s.versionId) === s.documentId))
+        return failure("not_found", "The proposal is unavailable.");
+    return ok(view(data));
 }
 export async function applyBrief(db: Db, a: Actor, id: string): Promise<ServiceResult<{
     versionId: string;
@@ -197,12 +219,14 @@ export async function applyBrief(db: Db, a: Actor, id: string): Promise<ServiceR
         return failure("forbidden", "Editing this project is not permitted.");
     // Check staged bytes before the transaction. Paths are immutable and private;
     // expired proposals cannot race the delayed cleanup job.
-    const { data: q, error: readError } = await db.from("project_brief_proposals").select("staged_version,applied_at").eq("id", id).eq("project_id", a.projectId).eq("actor_id", a.userId).maybeSingle();
+    const { data: q, error: readError } = await db.from("project_brief_proposals").select("staged_version,applied_at,content").eq("id", id).eq("project_id", a.projectId).eq("actor_id", a.userId).maybeSingle();
     if (readError)
         return internalFailure(readError);
     if (!q)
         return failure("not_found", "The proposal is unavailable.");
     if (!q.applied_at) {
+        if (!contentSchema.safeParse(q.content).success)
+            return failure("conflict", "The proposal uses an obsolete evidence contract. Prepare a new proposal citing selected source documents rather than the prior brief.");
         const bytes = await downloadFile(q.staged_version.storage_path);
         if (!bytes || contentSha256(bytes) !== q.staged_version.content_sha256)
             return failure("conflict", "The staged proposal is unavailable. Prepare a new proposal.");

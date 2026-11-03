@@ -2,13 +2,26 @@
 -- Project brief state is identity-bound, never inferred from a filename.
 create table if not exists public.project_reviewed_briefs (
   project_id uuid primary key references public.projects(id) on delete cascade,
-  document_id uuid not null references public.documents(id) on delete cascade,
+  document_id uuid references public.documents(id) on delete set null,
   designation_id uuid not null default gen_random_uuid(),
   accepted_snapshot jsonb,
   accepted_content jsonb,
   accepted_at timestamptz,
   accepted_by uuid references auth.users(id) on delete set null
 );
+-- Brief metadata belongs to the project, even after normal document deletion.
+-- Upgrade the earlier prototype's cascading/non-null document binding in place.
+alter table public.project_reviewed_briefs alter column document_id drop not null;
+do $$ begin
+  if not exists(select 1 from pg_constraint
+    where conrelid='public.project_reviewed_briefs'::regclass
+      and conname='project_reviewed_briefs_document_id_fkey'
+      and contype='f' and confrelid='public.documents'::regclass and confdeltype='n') then
+    alter table public.project_reviewed_briefs drop constraint if exists project_reviewed_briefs_document_id_fkey;
+    alter table public.project_reviewed_briefs add constraint project_reviewed_briefs_document_id_fkey
+      foreign key(document_id) references public.documents(id) on delete set null;
+  end if;
+end $$;
 -- A moved document can be designated in its new project while the old
 -- project retains its historical binding. Current project membership, not global
 -- document uniqueness, determines the active designation.
@@ -59,6 +72,96 @@ do $$ declare t text; begin
   end loop;
 end $$;
 
+-- FK SET NULL detaches a deleted document atomically. Retain historical rows,
+-- but never leave their accepted position or reviewed stamps active.
+create or replace function public.project_brief_detach_deleted_document()
+returns trigger language plpgsql security invoker set search_path='' as $$
+begin
+  if old.document_id is not null and new.document_id is null then
+    new.designation_id:=gen_random_uuid();
+    new.accepted_snapshot:=null;
+    new.accepted_content:=null;
+    new.accepted_at:=null;
+    new.accepted_by:=null;
+  end if;
+  return new;
+end $$;
+drop trigger if exists project_brief_detach_deleted_document on public.project_reviewed_briefs;
+create trigger project_brief_detach_deleted_document before update of document_id on public.project_reviewed_briefs
+  for each row execute function public.project_brief_detach_deleted_document();
+
+-- Keep identity/fingerprint audit rows without retaining copied text from a
+-- physically deleted base brief, including a former designation in any project.
+create index if not exists project_brief_proposals_base_document_idx
+  on public.project_brief_proposals((base->>'documentId'));
+create or replace function public.project_brief_scrub_deleted_base()
+returns trigger language plpgsql security invoker set search_path='' as $$
+begin
+  -- Version cascade rows may already be gone while their FK SET NULL event
+  -- is still queued. Match that final FK state before updating copied text.
+  update public.project_brief_proposals q set before_text='',
+    content='{"position":[],"awaiting":[],"uncertainties":[],"nextAction":[]}'::jsonb,
+    gaps='[]'::jsonb,
+    applied_version_id=case when exists(select 1 from public.document_versions v
+      where v.id=q.applied_version_id) then q.applied_version_id else null end
+  where q.base->>'documentId'=old.id::text
+    -- Project cascade may have removed this parent while its proposal cascade
+    -- is still queued. Those rows will disappear; do not update dying children.
+    and exists(select 1 from public.project_reviewed_briefs binding where binding.project_id=q.project_id);
+  return old;
+end $$;
+drop trigger if exists project_brief_scrub_deleted_base on public.documents;
+create trigger project_brief_scrub_deleted_base after delete on public.documents
+  for each row execute function public.project_brief_scrub_deleted_base();
+-- Also repair retained rows whose base was deleted before this revision.
+update public.project_brief_proposals q set before_text='',
+  content='{"position":[],"awaiting":[],"uncertainties":[],"nextAction":[]}'::jsonb,
+  gaps='[]'::jsonb
+where not exists(select 1 from public.documents d where d.id=(q.base->>'documentId')::uuid);
+
+-- Version deletion follows the same copied-text policy, including the normal
+-- soft-delete lifecycle. Missing staged versions are expected for pending work.
+create index if not exists project_brief_proposals_base_version_idx
+  on public.project_brief_proposals((base->>'versionId'));
+create index if not exists project_brief_proposals_staged_version_idx
+  on public.project_brief_proposals((staged_version->>'id'));
+create or replace function public.project_brief_scrub_deleted_version()
+returns trigger language plpgsql security invoker set search_path='' as $$
+begin
+  update public.project_brief_proposals q set before_text='',
+    content='{"position":[],"awaiting":[],"uncertainties":[],"nextAction":[]}'::jsonb,
+    gaps='[]'::jsonb,
+    applied_version_id=case when exists(select 1 from public.document_versions v
+      where v.id=q.applied_version_id) then q.applied_version_id else null end
+  where (q.base->>'versionId'=old.id::text or q.staged_version->>'id'=old.id::text)
+    and exists(select 1 from public.project_reviewed_briefs binding where binding.project_id=q.project_id);
+  update public.project_reviewed_briefs binding set accepted_content=null
+  where binding.accepted_snapshot->>'versionId'=old.id::text
+    and exists(select 1 from public.projects project where project.id=binding.project_id)
+    -- A missing document is awaiting FK detach, which clears acceptance itself.
+    and (binding.document_id is null or exists(select 1 from public.documents document where document.id=binding.document_id));
+  return old;
+end $$;
+drop trigger if exists project_brief_scrub_deleted_version on public.document_versions;
+create trigger project_brief_scrub_deleted_version after delete on public.document_versions
+  for each row execute function public.project_brief_scrub_deleted_version();
+drop trigger if exists project_brief_scrub_tombstoned_version on public.document_versions;
+create trigger project_brief_scrub_tombstoned_version after update of deleted_at on public.document_versions
+  for each row when(old.deleted_at is null and new.deleted_at is not null)
+  execute function public.project_brief_scrub_deleted_version();
+update public.project_brief_proposals q set before_text='',
+  content='{"position":[],"awaiting":[],"uncertainties":[],"nextAction":[]}'::jsonb,
+  gaps='[]'::jsonb
+where not exists(select 1 from public.document_versions v
+    where v.id=(q.base->>'versionId')::uuid and v.deleted_at is null)
+  or (q.applied_at is not null and not exists(select 1 from public.document_versions v
+    where v.id=(q.staged_version->>'id')::uuid and v.deleted_at is null));
+
+update public.project_reviewed_briefs binding set accepted_content=null
+where binding.accepted_content is not null and binding.accepted_snapshot is not null
+  and not exists(select 1 from public.document_versions v
+    where v.id=(binding.accepted_snapshot->>'versionId')::uuid and v.deleted_at is null);
+
 -- Internal service-only snapshot. The extractor's revision AND byte hash must
 -- match; a pending/partial/empty extraction cannot become reviewed evidence.
 create or replace function public.project_brief_source(p_document_id uuid)
@@ -102,10 +205,10 @@ end $$;
 
 create or replace function public.project_brief_bundle(p_project_id uuid,p_actor_id uuid,p_actor_email text,p_selected uuid[] default '{}')
 returns jsonb language plpgsql security invoker set search_path='' as $$
-declare b public.project_reviewed_briefs%rowtype; s jsonb; snapshots jsonb; role text;
+declare b public.project_reviewed_briefs%rowtype; s jsonb; snapshots jsonb; role text; accepted_live boolean;
 begin
   role:=public.project_brief_access(p_project_id,p_actor_id,p_actor_email,false);
-  if (select count(*) from public.documents where project_id=p_project_id and archived_at is null)>500 then
+  if cardinality(p_selected)>0 and (select count(*) from public.documents where project_id=p_project_id and archived_at is null)>500 then
     raise exception 'brief_project_limit' using errcode='22023'; end if;
   if exists(select 1 from unnest(p_selected) selected(document_id) where not exists(
     select 1 from public.documents d where d.id=selected.document_id and d.project_id=p_project_id and d.archived_at is null)) then
@@ -121,13 +224,17 @@ begin
     (select source from source_snapshots where document_id=b.document_id)
     into snapshots,s from (
     select d.document_id, coalesce(d.source,jsonb_build_object('documentId',d.document_id,'versionId','','revision','','hash','','textHash','','filename','Document awaiting version','ready',false,'reason','No active readable version')) || jsonb_build_object(
-      'reviewed',exists(select 1 from public.project_brief_reviews r where r.project_id=p_project_id
+      'reviewed',exists(select 1 from source_snapshots live_brief where live_brief.document_id=b.document_id and live_brief.source is not null)
+        and exists(select 1 from public.project_brief_reviews r where r.project_id=p_project_id
         and r.source=d.source and exists(select 1 from public.project_brief_proposals reviewed_proposal where reviewed_proposal.id=r.proposal_id and reviewed_proposal.designation_id=b.designation_id)),
       'text',case when d.document_id=b.document_id or d.document_id=any(p_selected) then
         (select t.text_content from public.document_version_texts t where t.version_id=d.current_version_id) end
     ) snapshot from source_snapshots d
   ) x where x.snapshot is not null;
-  return jsonb_build_object('designationId',b.designation_id,'brief',s,'accepted',b.accepted_snapshot,'acceptedContent',b.accepted_content,
+  accepted_live:=s is not null and exists(select 1 from public.document_versions accepted_version
+    where accepted_version.id=(b.accepted_snapshot->>'versionId')::uuid
+      and accepted_version.document_id=b.document_id and accepted_version.deleted_at is null);
+  return jsonb_build_object('designationId',b.designation_id,'brief',s,'accepted',case when accepted_live then b.accepted_snapshot end,'acceptedContent',case when accepted_live then b.accepted_content end,
     'pendingProposalId',(select q.id from public.project_brief_proposals q
       where q.project_id=p_project_id and q.actor_id=p_actor_id and q.designation_id=b.designation_id
         and q.applied_at is null and q.expires_at>now() and s is not null and q.base=s
@@ -137,8 +244,8 @@ begin
               and source_document.project_id=p_project_id and source_document.archived_at is null)
             or source_row.value is distinct from public.project_brief_source((source_row.value->>'documentId')::uuid))
       order by q.created_at desc limit 1),
-    'acceptedEvidence',coalesce((select jsonb_build_array(q.base)||q.sources from public.project_brief_proposals q where q.project_id=p_project_id and q.applied_version_id=(b.accepted_snapshot->>'versionId')::uuid order by q.applied_at desc limit 1),'[]'::jsonb),
-    'acceptedAt',b.accepted_at,'canEdit',role in ('owner','editor'),'sources',snapshots);
+    'acceptedEvidence',case when not accepted_live then '[]'::jsonb else coalesce((select jsonb_build_array(q.base)||q.sources from public.project_brief_proposals q where q.project_id=p_project_id and q.applied_version_id=(b.accepted_snapshot->>'versionId')::uuid order by q.applied_at desc limit 1),'[]'::jsonb) end,
+    'acceptedAt',case when accepted_live then b.accepted_at end,'canEdit',role in ('owner','editor'),'sources',snapshots);
 end $$;
 
 create or replace function public.project_brief_designate(p_project_id uuid,p_actor_id uuid,p_actor_email text,p_document_id uuid)
@@ -157,7 +264,7 @@ begin
       designation_id=excluded.designation_id,accepted_snapshot=null,accepted_content=null,accepted_at=null,accepted_by=null
     where not exists(select 1 from public.documents old_brief where old_brief.id=project_reviewed_briefs.document_id and old_brief.project_id=p_project_id and old_brief.archived_at is null);
   if not exists(select 1 from public.project_reviewed_briefs where project_id=p_project_id and document_id=p_document_id)
-    then raise exception 'brief_already_designated' using errcode='PB001'; end if;
+    then raise exception 'brief_already_designated' using errcode='PB002'; end if;
 end $$;
 
 -- Compare the complete snapshot: this includes hash/revision/path and extraction
@@ -180,6 +287,8 @@ returns void language plpgsql security invoker set search_path='' as $$
 declare b public.project_reviewed_briefs%rowtype; s jsonb;
 begin
   perform public.project_brief_access(p_project_id,p_actor_id,p_actor_email,true);
+  if (select count(*) from public.documents where project_id=p_project_id and archived_at is null)>500 then
+    raise exception 'brief_project_limit' using errcode='22023'; end if;
   select * into b from public.project_reviewed_briefs where project_id=p_project_id for update;
   if b.designation_id is null or b.designation_id is distinct from (p_proposal->>'designationId')::uuid
     or b.document_id is distinct from (p_proposal->'base'->>'documentId')::uuid then
@@ -203,7 +312,12 @@ begin
   select * into b from public.project_reviewed_briefs where project_id=p_project_id for update;
   select * into q from public.project_brief_proposals where id=p_proposal_id and project_id=p_project_id and actor_id=p_actor_id for update;
   if not found then raise exception 'brief_not_found' using errcode='P0002'; end if;
-  if q.applied_at is not null then return jsonb_build_object('versionId',q.applied_version_id,'replayed',true); end if;
+  if q.applied_at is not null then
+    if q.applied_version_id is null or not exists(select 1 from public.document_versions
+      where id=q.applied_version_id and deleted_at is null) then
+      raise exception 'brief_version_not_found' using errcode='P0002'; end if;
+    return jsonb_build_object('versionId',q.applied_version_id,'replayed',true);
+  end if;
   if q.expires_at<now() or q.designation_id is distinct from b.designation_id
     or b.document_id is distinct from (q.base->>'documentId')::uuid then
     raise exception 'brief_stale' using errcode='PB001'; end if;
@@ -222,11 +336,11 @@ begin
 end $$;
 
 -- These are internal service-role APIs, never direct browser RPCs.
-revoke all on function public.project_brief_source(uuid),public.project_brief_access(uuid,uuid,text,boolean),
+revoke all on function public.project_brief_detach_deleted_document(),public.project_brief_scrub_deleted_base(),public.project_brief_scrub_deleted_version(),public.project_brief_source(uuid),public.project_brief_access(uuid,uuid,text,boolean),
   public.project_brief_bundle(uuid,uuid,text,uuid[]),public.project_brief_designate(uuid,uuid,text,uuid),
   public.project_brief_check_source(uuid,jsonb),public.project_brief_save_proposal(uuid,uuid,text,jsonb),
   public.project_brief_apply(uuid,uuid,text,uuid) from public,anon,authenticated;
-grant execute on function public.project_brief_source(uuid),public.project_brief_access(uuid,uuid,text,boolean),
+grant execute on function public.project_brief_detach_deleted_document(),public.project_brief_scrub_deleted_base(),public.project_brief_scrub_deleted_version(),public.project_brief_source(uuid),public.project_brief_access(uuid,uuid,text,boolean),
   public.project_brief_bundle(uuid,uuid,text,uuid[]),public.project_brief_designate(uuid,uuid,text,uuid),
   public.project_brief_check_source(uuid,jsonb),public.project_brief_save_proposal(uuid,uuid,text,jsonb),
   public.project_brief_apply(uuid,uuid,text,uuid) to service_role;

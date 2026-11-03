@@ -117,3 +117,17 @@ it("guards both Close controls while an explicit Apply is pending", async () => 
     await screen.findByText(/A new brief version and the source-review checkpoint/);
     await waitFor(() => expect(within(dialog.querySelector("footer")!).getByRole("button", { name: "Close" })).toBeEnabled());
 });
+
+it("requires informed confirmation of whole-document replacement before Apply", async () => {
+    api.getMatterBrief.mockResolvedValue({ ...state, pendingProposalId: "proposal" });
+    await open();
+    await screen.findByText(row.text);
+    expect(screen.getByText("Applying replaces the entire current brief with this generated document. Manual notes, tables and formatting may not carry over. The previous version remains available in document version history.")).toBeVisible();
+    const confirmation = screen.getByRole("checkbox", { name: /I reviewed this proposed text.*approve replacing the entire current brief with this generated document.*manual notes, tables and formatting may not carry over/ });
+    expect(confirmation).not.toBeChecked();
+    expect(screen.getByRole("button", { name: "Apply reviewed update" })).toBeDisabled();
+    expect(api.applyMatterBrief).not.toHaveBeenCalled();
+    fireEvent.click(confirmation);
+    fireEvent.click(screen.getByRole("button", { name: "Apply reviewed update" }));
+    await waitFor(() => expect(api.applyMatterBrief).toHaveBeenCalledWith("project", "proposal"));
+});

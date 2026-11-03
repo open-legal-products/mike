@@ -30,6 +30,10 @@ begin
  perform public.project_brief_designate(p,a,'owner@example.invalid',b);
  perform public.project_brief_designate(p,a,'owner@example.invalid',b);
  perform pg_temp.assert_true((select count(*)=1 from public.project_reviewed_briefs where project_id=p),'designation idempotent');
+ begin
+  perform public.project_brief_designate(p,a,'owner@example.invalid',pg_temp.make_doc(p,a,'Other live DOCX'));
+  raise exception 'live designated brief unexpectedly replaced';
+ exception when sqlstate 'PB002' then null;end;
  begin perform public.project_brief_bundle(p,outsider,'outsider@example.invalid');raise exception 'foreign access unexpectedly allowed';exception when no_data_found then null;end;
  begin perform public.project_brief_bundle(p,a,'owner@example.invalid',array[pg_temp.make_doc(p2,outsider,'Other private source')]);raise exception 'foreign selection unexpectedly allowed';exception when no_data_found then null;end;
  q:=pg_temp.make_proposal(p,a,b,s);rival:=pg_temp.make_proposal(p,a,b,s);
@@ -77,6 +81,19 @@ begin
  begin
   update public.documents set project_id=p2 where id=b;
   perform pg_temp.assert_true(public.project_brief_bundle(p,a,'owner@example.invalid')->'brief'='null'::jsonb,'moved brief hidden from former project');
+  perform pg_temp.assert_true(public.project_brief_bundle(p,a,'owner@example.invalid')->'accepted'='null'::jsonb
+    and public.project_brief_bundle(p,a,'owner@example.invalid')->'acceptedContent'='null'::jsonb
+    and public.project_brief_bundle(p,a,'owner@example.invalid')->'acceptedAt'='null'::jsonb
+    and public.project_brief_bundle(p,a,'owner@example.invalid')->'acceptedEvidence'='[]'::jsonb
+    and public.project_brief_bundle(p,a,'owner@example.invalid')->>'pendingProposalId' is null,'raw bundle cannot disclose accepted body or evidence after base moves out');
+  perform pg_temp.assert_true(not exists(select 1 from jsonb_array_elements(public.project_brief_bundle(p,a,'owner@example.invalid')->'sources') x where (x->>'reviewed')::boolean),'unavailable base has no active reviewed stamps');
+  update public.documents set project_id=p where id=b;
+  perform pg_temp.assert_true(public.project_brief_bundle(p,a,'owner@example.invalid')->'accepted' is distinct from 'null'::jsonb
+    and public.project_brief_bundle(p,a,'owner@example.invalid')->'acceptedContent' is distinct from 'null'::jsonb
+    and public.project_brief_bundle(p,a,'owner@example.invalid')->'acceptedAt' is distinct from 'null'::jsonb
+    and jsonb_array_length(public.project_brief_bundle(p,a,'owner@example.invalid')->'acceptedEvidence')>0,'unchanged base returning to same designation restores authorized accepted state');
+  perform pg_temp.assert_true(exists(select 1 from jsonb_array_elements(public.project_brief_bundle(p,a,'owner@example.invalid')->'sources') x where (x->>'reviewed')::boolean),'unchanged returning base restores existing review stamps');
+  update public.documents set project_id=p2 where id=b;
   -- Destination designation must work BEFORE the former project replaces its brief.
   perform public.project_brief_designate(p2,outsider,'outsider@example.invalid',b);
   perform pg_temp.assert_true((select accepted_snapshot is null from public.project_reviewed_briefs where project_id=p2),'destination does not inherit former project review stamp');
@@ -155,6 +172,167 @@ begin
  update public.documents set project_id=p where id=s;
  perform pg_temp.assert_true(public.project_brief_bundle(p,a,'designation-test@example.invalid')->>'pendingProposalId'=q::text,'unchanged source returning to same designation may resume');
  perform public.project_brief_apply(p,a,'designation-test@example.invalid',q);
+end $$;
+-- Physical deletion retains audit identities, but scrubs copied text for every deleted base.
+do $$
+declare a uuid:=gen_random_uuid();p uuid:=gen_random_uuid();p2 uuid:=gen_random_uuid();
+  b uuid;b2 uuid;b3 uuid;source_doc uuid;q uuid;q2 uuid;q3 uuid;pending uuid;v uuid;first_version uuid;epoch text;state jsonb;outcome jsonb;first_metadata jsonb;second_metadata jsonb;pending_metadata jsonb;third_snapshot jsonb;
+begin
+ insert into auth.users(id,email) values(a,'deletion-test@example.invalid');
+ insert into public.projects(id,user_id,name) values(p,a,'Fictional retained review metadata'),(p2,a,'Fictional prior brief location');
+ b:=pg_temp.make_doc(p,a,'First brief');source_doc:=pg_temp.make_doc(p,a,'Source evidence');
+ perform public.project_brief_designate(p,a,'deletion-test@example.invalid',b);
+ q:=pg_temp.make_proposal(p,a,b,source_doc);
+ update public.project_brief_proposals set before_text='First private base text',
+   content='{"position":[{"text":"First proposed statement","status":"source_assertion","citations":[{"source":1,"quote":"Source evidence"}]}],"awaiting":[],"uncertainties":[],"nextAction":[]}',
+   gaps='[{"filename":"Private context filename","reason":"Not selected"}]' where id=q;
+ first_version:=(public.project_brief_apply(p,a,'deletion-test@example.invalid',q)->>'versionId')::uuid;
+ update public.documents set project_id=p2 where id=b;
+ b2:=pg_temp.make_doc(p,a,'Replacement brief');
+ perform public.project_brief_designate(p,a,'deletion-test@example.invalid',b2);
+ q2:=pg_temp.make_proposal(p,a,b2,source_doc);
+ update public.project_brief_proposals set before_text='Replacement private base text',
+   content='{"position":[{"text":"Replacement proposed statement","status":"source_assertion","citations":[{"source":1,"quote":"Source evidence"}]}],"awaiting":[],"uncertainties":[],"nextAction":[]}',
+   gaps='[{"filename":"Replacement context filename","reason":"Not selected"}]' where id=q2;
+ v:=(public.project_brief_apply(p,a,'deletion-test@example.invalid',q2)->>'versionId')::uuid;
+ update public.document_version_texts set status='ready',text_content='Accepted replacement',source_sha256=repeat('a',64),textless_page_count=0 where version_id=v;
+ pending:=pg_temp.make_proposal(p,a,b2,source_doc);
+ update public.project_brief_proposals set before_text='Pending private base text',
+   content='{"position":[{"text":"Pending proposed statement","status":"source_assertion","citations":[{"source":1,"quote":"Source evidence"}]}],"awaiting":[],"uncertainties":[],"nextAction":[]}',
+   gaps='[{"filename":"Pending context filename","reason":"Not selected"}]' where id=pending;
+ select to_jsonb(proposal)-'before_text'-'content'-'gaps'-'applied_version_id' into first_metadata from public.project_brief_proposals proposal where id=q;
+ select to_jsonb(proposal)-'before_text'-'content'-'gaps'-'applied_version_id' into second_metadata from public.project_brief_proposals proposal where id=q2;
+ select to_jsonb(proposal)-'before_text'-'content'-'gaps'-'applied_version_id' into pending_metadata from public.project_brief_proposals proposal where id=pending;
+ epoch:=public.project_brief_bundle(p,a,'deletion-test@example.invalid')->>'designationId';
+ -- This is the normal documents.shared delete operation, not version soft delete.
+ delete from public.documents where id=b2;
+ perform pg_temp.assert_true((select count(*)=1 from public.project_reviewed_briefs where project_id=p),'project binding survives designated document deletion');
+ perform pg_temp.assert_true((select count(*)=3 from public.project_brief_proposals where project_id=p),'all designation proposal history survives current brief deletion');
+ perform pg_temp.assert_true((select count(*)=2 from public.project_brief_reviews where project_id=p),'all review metadata survives current brief deletion');
+ perform pg_temp.assert_true((select bool_and(before_text='' and content='{"position":[],"awaiting":[],"uncertainties":[],"nextAction":[]}'::jsonb and gaps='[]'::jsonb) from public.project_brief_proposals where id in(q2,pending)),'deleted current base scrubs applied and pending copied text and gaps');
+ perform pg_temp.assert_true((select to_jsonb(proposal)-'before_text'-'content'-'gaps'-'applied_version_id'=second_metadata from public.project_brief_proposals proposal where id=q2) and (select to_jsonb(proposal)-'before_text'-'content'-'gaps'-'applied_version_id'=pending_metadata from public.project_brief_proposals proposal where id=pending),'deleted current-base applied/pending identities, timestamps and source fingerprints retained');
+ perform pg_temp.assert_true((select before_text='First private base text' and jsonb_array_length(content->'position')=1 and jsonb_array_length(gaps)=1 from public.project_brief_proposals where id=q),'current base deletion leaves other-base proposal text intact');
+ perform pg_temp.assert_true((select to_jsonb(proposal)-'before_text'-'content'-'gaps'-'applied_version_id'=first_metadata from public.project_brief_proposals proposal where id=q),'other-base audit identities and fingerprints unchanged');
+ state:=public.project_brief_bundle(p,a,'deletion-test@example.invalid');
+ perform pg_temp.assert_true((select document_id is null from public.project_reviewed_briefs where project_id=p),'deleted brief is detached');
+ perform pg_temp.assert_true(state->>'designationId'<>epoch,'detachment rotates designation generation');
+ perform pg_temp.assert_true(state->'brief'='null'::jsonb and state->'accepted'='null'::jsonb and state->'acceptedContent'='null'::jsonb and state->'acceptedAt'='null'::jsonb and state->>'pendingProposalId' is null,'detachment clears every active checkpoint field');
+ perform pg_temp.assert_true(not exists(select 1 from jsonb_array_elements(state->'sources') x where (x->>'reviewed')::boolean),'detachment cannot retain active reviewed stamps');
+ begin
+  perform public.project_brief_apply(p,a,'deletion-test@example.invalid',q2);
+  raise exception 'deleted applied version unexpectedly replayed';
+ exception when no_data_found then null;end;
+ outcome:=public.project_brief_apply(p,a,'deletion-test@example.invalid',q);
+ perform pg_temp.assert_true((outcome->>'replayed')::boolean and (outcome->>'versionId')::uuid=first_version,'live historical applied version still replays');
+ -- Soft deletion of a historical applied version also returns typed not-found.
+ perform public.delete_document_version(b,first_version,a);
+ begin
+  perform public.project_brief_apply(p,a,'deletion-test@example.invalid',q);
+  raise exception 'soft-deleted applied version unexpectedly replayed';
+ exception when no_data_found then null;end;
+ b3:=pg_temp.make_doc(p,a,'New brief after deletion');
+ perform public.project_brief_designate(p,a,'deletion-test@example.invalid',b3);
+ state:=public.project_brief_bundle(p,a,'deletion-test@example.invalid');
+ perform pg_temp.assert_true(state->'brief'->>'documentId'=b3::text and state->'accepted'='null'::jsonb,'new designation after deletion starts fresh');
+ perform pg_temp.assert_true(not exists(select 1 from jsonb_array_elements(state->'sources') x where (x->>'reviewed')::boolean),'new designation cannot revive retained review stamps');
+ q3:=pg_temp.make_proposal(p,a,b3,source_doc);
+ update public.project_brief_proposals set before_text='Still-live third base text',
+   content='{"position":[{"text":"Still-live proposed statement","status":"source_assertion","citations":[{"source":1,"quote":"Source evidence"}]}],"awaiting":[],"uncertainties":[],"nextAction":[]}',
+   gaps='[{"filename":"Still-live context filename","reason":"Not selected"}]' where id=q3;
+ select to_jsonb(proposal) into third_snapshot from public.project_brief_proposals proposal where id=q3;
+ delete from public.documents where id=b;
+ perform pg_temp.assert_true((select before_text='' and content='{"position":[],"awaiting":[],"uncertainties":[],"nextAction":[]}'::jsonb and gaps='[]'::jsonb from public.project_brief_proposals where id=q),'deleting former designated base also scrubs copied text and gaps');
+ perform pg_temp.assert_true((select to_jsonb(proposal)-'before_text'-'content'-'gaps'-'applied_version_id'=first_metadata from public.project_brief_proposals proposal where id=q),'deleted former-base audit identities and source fingerprints retained');
+ perform pg_temp.assert_true((select to_jsonb(proposal)=third_snapshot from public.project_brief_proposals proposal where id=q3),'former-base deletion leaves all still-live other-base proposal data intact');
+ delete from public.documents where id=source_doc;
+ perform pg_temp.assert_true((select count(*)=4 from public.project_brief_proposals where project_id=p) and (select count(*)=2 from public.project_brief_reviews where project_id=p),'ordinary source deletion also preserves proposal/review metadata');
+ delete from public.projects where id=p;
+ perform pg_temp.assert_true(not exists(select 1 from public.project_reviewed_briefs where project_id=p) and not exists(select 1 from public.project_brief_proposals where project_id=p) and not exists(select 1 from public.project_brief_reviews where project_id=p),'project deletion removes retained brief metadata');
+end $$;
+-- Version tombstones and physical deletes also remove copied brief text.
+do $$
+declare a uuid:=gen_random_uuid();p uuid:=gen_random_uuid();other_p uuid:=gen_random_uuid();b uuid;source_doc uuid;other_b uuid;other_source uuid;other_q uuid;other_content jsonb;
+  initial_version uuid;accepted_version uuid;live_version uuid;physical_version uuid;
+  q uuid;q2 uuid;live_q uuid;physical_q uuid;live_snapshot jsonb;state jsonb;
+  empty_content jsonb:='{"position":[],"awaiting":[],"uncertainties":[],"nextAction":[]}';
+begin
+ insert into auth.users(id,email) values(a,'version-privacy-test@example.invalid');
+ insert into public.projects(id,user_id,name) values(p,a,'Fictional version privacy');
+ b:=pg_temp.make_doc(p,a,'Original version text');source_doc:=pg_temp.make_doc(p,a,'Source evidence');
+ select current_version_id into initial_version from public.documents where id=b;
+ perform public.project_brief_designate(p,a,'version-privacy-test@example.invalid',b);
+ q:=pg_temp.make_proposal(p,a,b,source_doc);
+ update public.project_brief_proposals set before_text='Original version copied text',
+   content='{"position":[{"text":"Original proposed text","status":"source_assertion","citations":[{"source":1,"quote":"Source evidence"}]}],"awaiting":[],"uncertainties":[],"nextAction":[]}',gaps='[{"filename":"Original gap"}]' where id=q;
+ accepted_version:=(public.project_brief_apply(p,a,'version-privacy-test@example.invalid',q)->>'versionId')::uuid;
+ update public.document_version_texts set status='ready',text_content='Accepted output text',source_sha256=repeat('a',64),textless_page_count=0 where version_id=accepted_version;
+ q2:=pg_temp.make_proposal(p,a,b,source_doc);
+ update public.project_brief_proposals set before_text='Accepted version copied text',
+   content='{"position":[{"text":"Pending proposed text","status":"source_assertion","citations":[{"source":1,"quote":"Source evidence"}]}],"awaiting":[],"uncertainties":[],"nextAction":[]}',gaps='[{"filename":"Accepted gap"}]' where id=q2;
+ live_version:=(public.create_document_version(b,jsonb_build_object('storage_path','fictional/live-version','filename','Live.docx','file_type','docx','size_bytes',100,'content_sha256',repeat('d',64),'source','assistant_edit'),true)->>'id')::uuid;
+ update public.document_version_texts set status='ready',text_content='Still live current revision',source_sha256=repeat('d',64),textless_page_count=0 where version_id=live_version;
+ live_q:=pg_temp.make_proposal(p,a,b,source_doc);
+ update public.project_brief_proposals set before_text='Still live copied text',
+   content='{"position":[{"text":"Still live pending text","status":"source_assertion","citations":[{"source":1,"quote":"Source evidence"}]}],"awaiting":[],"uncertainties":[],"nextAction":[]}',gaps='[{"filename":"Live gap"}]' where id=live_q;
+ select to_jsonb(proposal) into live_snapshot from public.project_brief_proposals proposal where id=live_q;
+ insert into public.projects(id,user_id,name) values(other_p,a,'Fictional unaffected checkpoint');
+ other_b:=pg_temp.make_doc(other_p,a,'Other live brief');other_source:=pg_temp.make_doc(other_p,a,'Other source evidence');
+ perform public.project_brief_designate(other_p,a,'version-privacy-test@example.invalid',other_b);
+ other_q:=pg_temp.make_proposal(other_p,a,other_b,other_source);
+ update public.project_brief_proposals set content='{"position":[{"text":"Other accepted text","status":"source_assertion","citations":[{"source":1,"quote":"Other source evidence"}]}],"awaiting":[],"uncertainties":[],"nextAction":[]}' where id=other_q;
+ perform public.project_brief_apply(other_p,a,'version-privacy-test@example.invalid',other_q);
+ select accepted_content into other_content from public.project_reviewed_briefs where project_id=other_p;
+ perform public.delete_document_version(b,initial_version,a);
+ perform pg_temp.assert_true((select before_text='' and content=empty_content and gaps='[]'::jsonb from public.project_brief_proposals where id=q),'base version tombstone scrubs copied proposal text');
+ perform pg_temp.assert_true((select before_text='Accepted version copied text' from public.project_brief_proposals where id=q2),'base version tombstone leaves unrelated base proposal intact');
+ perform pg_temp.assert_true((public.project_brief_apply(p,a,'version-privacy-test@example.invalid',q)->>'replayed')::boolean,'live output still replays after its deleted base text was scrubbed');
+ perform public.delete_document_version(b,accepted_version,a);
+ perform pg_temp.assert_true((select accepted_content is null from public.project_reviewed_briefs where project_id=p),'accepted output tombstone scrubs stored accepted-content duplicate');
+ perform pg_temp.assert_true((select accepted_content=other_content from public.project_reviewed_briefs where project_id=other_p),'version tombstone preserves unrelated current checkpoint body');
+ perform pg_temp.assert_true((select bool_and(before_text='' and content=empty_content and gaps='[]'::jsonb) from public.project_brief_proposals where id in(q,q2)),'accepted output tombstone scrubs output and dependent base proposal text');
+ state:=public.project_brief_bundle(p,a,'version-privacy-test@example.invalid');
+ perform pg_temp.assert_true(state->'brief'->>'versionId'=live_version::text and state->'accepted'='null'::jsonb and state->'acceptedContent'='null'::jsonb and state->'acceptedAt'='null'::jsonb and state->'acceptedEvidence'='[]'::jsonb,'deleted accepted version cannot leak cached body while another current brief version remains live');
+ perform pg_temp.assert_true((select to_jsonb(proposal)=live_snapshot from public.project_brief_proposals proposal where id=live_q),'tombstones leave all still-live proposal data intact');
+ physical_version:=(public.create_document_version(b,jsonb_build_object('storage_path','fictional/physical-version','filename','Physical.docx','file_type','docx','size_bytes',100,'content_sha256',repeat('e',64),'source','assistant_edit'),true)->>'id')::uuid;
+ update public.document_version_texts set status='ready',text_content='Later deleted physical version',source_sha256=repeat('e',64),textless_page_count=0 where version_id=physical_version;
+ physical_q:=pg_temp.make_proposal(p,a,b,source_doc);
+ update public.project_brief_proposals set before_text='Physical version copied text',content=(select content from public.project_brief_proposals where id=live_q),gaps='[{"filename":"Physical gap"}]' where id=physical_q;
+ update public.documents set current_version_id=live_version where id=b;
+ delete from public.document_versions where id=physical_version;
+ perform pg_temp.assert_true((select before_text='' and content=empty_content and gaps='[]'::jsonb from public.project_brief_proposals where id=physical_q),'physical base version deletion scrubs copied proposal text');
+ delete from public.document_versions where id=accepted_version;
+ perform pg_temp.assert_true((select applied_version_id is null from public.project_brief_proposals where id=q),'physical output deletion clears obsolete FK pointer safely');
+ perform pg_temp.assert_true((select to_jsonb(proposal)=live_snapshot from public.project_brief_proposals proposal where id=live_q),'physical deletions leave unrelated current-base proposal intact');
+ perform pg_temp.assert_true((select count(*)=4 from public.project_brief_proposals where project_id=p) and (select count(*)=1 from public.project_brief_reviews where project_id=p),'version deletions preserve proposal identities and review fingerprints');
+end $$;
+-- Crossing the proposal-size limit does not strand existing history or citations.
+do $$
+declare a uuid:=gen_random_uuid();p uuid:=gen_random_uuid();b uuid;source_doc uuid;q uuid;v uuid;captured jsonb;state jsonb;
+begin
+ insert into auth.users(id,email) values(a,'large-inventory-test@example.invalid');
+ insert into public.projects(id,user_id,name) values(p,a,'Fictional large inventory');
+ b:=pg_temp.make_doc(p,a,'Brief');source_doc:=pg_temp.make_doc(p,a,'Source evidence');
+ perform public.project_brief_designate(p,a,'large-inventory-test@example.invalid',b);
+ q:=pg_temp.make_proposal(p,a,b,source_doc);
+ v:=(public.project_brief_apply(p,a,'large-inventory-test@example.invalid',q)->>'versionId')::uuid;
+ update public.document_version_texts set status='ready',text_content='Accepted brief',source_sha256=repeat('a',64),textless_page_count=0 where version_id=v;
+ q:=pg_temp.make_proposal(p,a,b,source_doc);
+ select jsonb_build_object('id',gen_random_uuid(),'designationId',designation_id,'base',base,'sources',sources,
+   'content',content,'before',before_text,'gaps',gaps,'stagedVersion',staged_version)
+   into captured from public.project_brief_proposals where id=q;
+ insert into public.documents(project_id,user_id,status) select p,a,'ready' from generate_series(1,499);
+ state:=public.project_brief_bundle(p,a,'large-inventory-test@example.invalid');
+ perform pg_temp.assert_true(jsonb_array_length(state->'sources')=501 and state->'accepted'->>'versionId'=v::text,'accepted history and full inventory readable above proposal limit');
+ perform pg_temp.assert_true(exists(select 1 from jsonb_array_elements(state->'sources') x where x->>'documentId'=source_doc::text),'citation membership gate remains readable above proposal limit');
+ begin
+  perform public.project_brief_bundle(p,a,'large-inventory-test@example.invalid',array[source_doc]);
+  raise exception 'oversized proposal generation inventory unexpectedly accepted';
+ exception when invalid_parameter_value then null;end;
+ begin
+  perform public.project_brief_save_proposal(p,a,'large-inventory-test@example.invalid',captured);
+  raise exception 'oversized proposal save inventory unexpectedly accepted';
+ exception when invalid_parameter_value then null;end;
+ perform public.project_brief_apply(p,a,'large-inventory-test@example.invalid',q);
 end $$;
 -- Count actual calls in this disposable database, not an EXPLAIN estimate.
 -- SQL functions with SET options are not inlined; track_functions=all also

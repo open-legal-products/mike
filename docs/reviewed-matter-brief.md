@@ -13,8 +13,10 @@ ordinary uploaded project documents.
    Expand the prior brief, inspect the quotations and open every listed included
    source revision, including sources the model did not cite.
 4. Confirm review and project sharing, then **Apply reviewed update**. This saves
-   exactly the proposed text as a native DOCX version and records the readable
-   source fingerprints reviewed. Unreadable/unselected sources stay outstanding.
+   exactly the proposed text as a new active DOCX version and records the readable
+   source fingerprints reviewed. It replaces the active contents; tables, formatting
+   and manual notes absent from the proposal are not carried forward. The prior
+   version remains available through normal version history unless deleted. Unreadable/unselected sources stay outstanding.
 5. Reopen later to resume the accepted position and remaining gaps. A manual brief
    edit is flagged separately. Changed source revisions become outstanding again.
 
@@ -31,6 +33,42 @@ reactivating it or making another version. Two proposals from the same base have
 one winner. Old live version citations remain usable; an in-place replacement
 returns a conflict rather than silently opening different bytes.
 
+A live designated brief cannot be switched to another document through this
+prototype. Use its normal editor/version history; a replacement designation is
+available once the bound document is moved away, archived or deleted.
+
+Proposal identifiers, timestamps, source fingerprints and review rows belong to the
+project until project deletion. Physical deletion of a proposal's base brief clears
+its copied prior-brief text, generated content and outstanding-source descriptions,
+including proposals from former designations. The same copied-text scrub applies
+when a proposal's base version or applied output version is soft-deleted or
+physically deleted. Deleting an accepted output also clears its stored accepted-body
+cache while leaving nontext audit identity/time records. Deleting the currently designated
+brief also detaches it, rotates the generation and clears active acceptance and
+review stamps; a new designation starts fresh. A direct proposal-text read requires
+current project access, current membership of its base and every included source,
+and live referenced base/source versions.
+Moved or deleted documents therefore make that text unavailable through the proposal
+endpoint. Accepted body, evidence and timestamps are also hidden from a raw
+resume response while the designated brief is outside the project or unavailable,
+or the accepted version has been deleted.
+Review stamps are inactive while the current bound brief is unavailable; retained
+source-review records are separate from an accepted output version. Returning an unchanged brief to the same designation
+restores that state without rewriting its history. This does not erase already shared derived documents or every copy of a
+source quotation: native documents, versions and staged files follow their ordinary
+document/storage-cleanup lifecycle. Deleted originals are not preserved for audit.
+Replaying an applied proposal whose version was deleted returns not-found.
+
+The prior brief is supplied separately as untrusted context without citable excerpt
+IDs. It cannot corroborate its own previous claims: index 0 is reserved and rejected
+as a citation, and every proposed entry needs a quotation from the selected source
+revisions. Existing positions lacking that support may be omitted; compare the
+proposal with the prior brief before accepting it. Pending legacy proposals that
+cite the brief itself must be regenerated. Applied historical proposal text remains
+readable only while its base and included sources still belong to the current project.
+The configured model must pass the same personal/workspace model-resolution policy
+as ordinary chat, including saved router-model selections and provider availability.
+
 This is human review support, not verified advice or deadline calculation. Exact
 quotes come from server-supplied source excerpts, not model-written quotation text.
 The model selects IDs bound to the source document, version, extraction revision
@@ -44,10 +82,14 @@ interpretation. Visually check signatures and execution pages in the originals; 
 extraction may not capture them. The inventory does not prove the matter file is
 complete. Source text is untrusted evidence and cannot trigger tools or writes.
 
-Limits: an existing DOCX brief, 500 project documents, ten selected sources,
+Proposal limits: an existing DOCX brief, 500 active project documents, ten selected sources,
 100,000 characters per source, 200,000 characters and 30 MB total evidence bytes,
 20 MB per source; proposals expire after one hour. Full current extraction and byte
-fingerprints are required. Pending/failed/empty/oversized or textless-page extraction
+fingerprints are required. The 500-document limit applies to preparing and saving new
+proposals. Existing accepted state, proposal reads, Apply and checked-source downloads
+remain available above that limit; a proposal prepared within the limit may still be
+applied after the inventory grows. Resume still snapshots and hashes the current
+inventory once per document, so large inventories can take longer to load. Pending/failed/empty/oversized or textless-page extraction
 is a gap. Generic project memory remains a separate feature.
 
 Generation permits at most two application completion attempts within one shared
@@ -68,7 +110,10 @@ designation, proposal, Apply, immediate document-table refresh, fresh-session re
 and checked source download. Authentication and app routes were not mocked in that
 run. Separate live-provider qualification used fictional documents; invalid model
 outputs were preserved as failures and drove the source-excerpt and bounded
-regeneration behavior.
+regeneration behavior. That live-provider qualification predates the current
+noncitable-prior-context prompt and validation revision. It has not been repeated
+for this revision, and it does not establish its output quality. Current regression
+checks use fictional fixtures; no new provider-quality claim is made.
 These checks do not establish general model reliability, prompt-injection
 resistance, time savings or production-build coverage.
 
@@ -89,8 +134,9 @@ Each proposal captures the designation generation before model work. Save and Ap
 recheck that generation as well as the source identities. Designating the same
 currently bound brief is idempotent. The review screen lists every included source
 revision independently of citations, and confirmation covers that entire list.
-A historical applied-proposal replay returns its original result without restoring
-an older designation or reactivating a version.
+A historical applied-proposal replay returns its original result while its version
+exists, without restoring an older designation or reactivating a version. Deleted
+applied versions return not-found.
 
 The revised unmerged migration can be reapplied to a disposable earlier prototype
 database. It preserves history and conservatively invalidates legacy proposals
