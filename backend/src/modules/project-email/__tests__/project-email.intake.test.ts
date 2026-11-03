@@ -155,6 +155,8 @@ describe("project-bound Gmail intake", () => {
     ["same-ID changed hash", {}, { content_sha256: "b".repeat(64) }, "source_changed"],
     ["same-ID changed path", {}, { storage_path: "replacement/source.docx" }, "source_changed"],
     ["wrong document identity", {}, { document_id: "another-doc" }, "source_changed"],
+    ["changed path despite missing ledger hash", { content_sha256: null }, { storage_path: "replacement/source.docx" }, "source_changed"],
+    ["changed hash despite missing ledger path", { storage_path: null }, { content_sha256: "b".repeat(64) }, "source_changed"],
     ["missing ledger hash", { content_sha256: null }, {}, "source_unverified"],
     ["missing live hash", {}, { content_sha256: null }, "source_unverified"],
     ["invalid live hash", {}, { content_sha256: "unknown" }, "source_unverified"],

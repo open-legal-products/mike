@@ -101,11 +101,13 @@ export function parseEmail(raw: Record<string, unknown>): EmailManifest {
       if (bodySize > EMAIL_LIMITS.bodyBytes) throw new EmailInputError("Email body exceeds the import limit.");
       const charset = (part.headers ?? []).find(h => h.name.toLowerCase() === "content-type")?.value.match(/charset\s*=\s*["']?([^;\s"']+)/i)?.[1]?.toLowerCase();
       if (charset && !["utf-8", "us-ascii"].includes(charset)) throw new EmailInputError("Unsupported email character encoding.");
-      let text: string;
-      try { text = new TextDecoder("utf-8", { fatal: true }).decode(bytes); }
+      let decodedText: string;
+      try { decodedText = new TextDecoder("utf-8", { fatal: true }).decode(bytes); }
       catch { throw new EmailInputError("Unsupported email character encoding."); }
-      checkedEmailText(text);
-      sections.push({ text: checkedEmailText(mime === "text/plain" ? text : renderHtml(text)), hasPlain: mime === "text/plain" });
+      // Check both stages: HTML entity decoding can introduce non-XML characters.
+      const sourceText = checkedEmailText(decodedText);
+      const renderedText = mime === "text/html" ? checkedEmailText(renderHtml(sourceText)) : sourceText;
+      sections.push({ text: renderedText, hasPlain: mime === "text/plain" });
     }
     sections.push(...(part.parts ?? []).map((child, i) => visit(child, `${path}.${i}`, depth + 1)));
     if (mime === "multipart/alternative") {
