@@ -151,10 +151,10 @@ export function ReviewedMatterBrief({ projectId, onApplied }: {
     const targetAvailable = docxSources.some(source => source.documentId === target);
     return <>
         <TextButtonUI onClick={() => setOpen(true)}>Resume matter</TextButtonUI>
-        <Modal open={open} onClose={close} breadcrumbs={["Reviewed matter brief"]} size="xl" cancelAction={{ label: "Close", onClick: close, disabled: busy }}>
+        <Modal open={open} onClose={close} breadcrumbs={["Reviewed matter brief"]} size="xl" closeButtonDisabled={busy} headerAction={busy ? <p role="status" className="min-w-0 text-xs text-gray-600 [overflow-wrap:anywhere]">Working… Please wait until this operation finishes before closing.</p> : undefined} cancelAction={{ label: "Close", onClick: close, disabled: busy }}>
             <div data-modal-scroll className="min-h-0 flex-1 space-y-6 overflow-y-auto p-6 text-gray-800 [overflow-wrap:anywhere]">
                 <p className="text-sm text-gray-600">An internal, project-visible brief. Imported documents are not automatically read or reviewed. Source statements and dates are not verified legal obligations.</p>
-                {busy && <p role="status">Working…</p>}{notice && <p role="status">{notice}</p>}
+                {notice && <p role="status">{notice}</p>}
                 {!busy && !state && <PillButtonUI tone="black" onClick={() => void act(async isCurrent => { await load(isCurrent); })}>Retry loading brief</PillButtonUI>}
                 {state && !state.brief && <section className="space-y-3"><h2 className="font-serif text-xl">Choose the project’s brief</h2><p className="text-sm">Upload a DOCX first, then designate it here. Existing document permissions and version history apply.</p>
                     <label className="block text-sm">Brief document<select className="mt-1 block w-full rounded-lg p-2 focus-visible:ring-2" value={target} onChange={e => setTarget(e.target.value)} disabled={!state.canEdit || busy}><option value="">Select a DOCX</option>{docxSources.map(s => <option key={s.documentId} value={s.documentId}>{s.filename}</option>)}</select></label>

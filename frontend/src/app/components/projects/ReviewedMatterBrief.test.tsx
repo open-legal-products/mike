@@ -369,3 +369,58 @@ it("does not let a previous project's designation reload affect the new project"
     expect(screen.queryByText(/Brief designated/)).not.toBeInTheDocument(); expect(notifyError).toHaveBeenCalledTimes(errorsBefore);
     expect(api.designateMatterBrief).toHaveBeenCalledWith("matter-a", "candidate"); expect(api.designateMatterBrief).toHaveBeenCalledTimes(1);
 });
+
+
+it.each(["designation", "proposal", "apply"] as const)("disables and explains header close throughout a pending %s write, then recovers on either outcome", async operation => {
+    for (const outcome of ["resolve", "reject"] as const) {
+        const pending = deferred<unknown>();
+        api.getMatterBrief.mockResolvedValue(operation === "designation" ? { ...state, brief: null } : { ...state, pendingProposalId: operation === "apply" ? "proposal" : null });
+        const write = operation === "designation" ? api.designateMatterBrief : operation === "proposal" ? api.proposeMatterBrief : api.applyMatterBrief;
+        write.mockReturnValueOnce(pending.promise);
+        const view = render(<ReviewedMatterBrief projectId="project"/>);
+        fireEvent.click(screen.getByRole("button", { name: "Resume matter" }));
+        if (operation === "designation") {
+            await screen.findByText("Choose the project’s brief");
+            fireEvent.change(screen.getByRole("combobox", { name: "Brief document" }), { target: { value: "message1" } });
+            fireEvent.click(screen.getByRole("checkbox", { name: /I understand updates/ }));
+            fireEvent.click(screen.getByRole("button", { name: "Designate brief" }));
+        } else if (operation === "proposal") {
+            await screen.findByText("Outstanding sources (3)");
+            fireEvent.click(screen.getByRole("checkbox", { name: /message1.docx/ }));
+            fireEvent.change(screen.getByLabelText("Configured model ID"), { target: { value: "mock-model" } });
+            fireEvent.click(screen.getByRole("checkbox", { name: /Send only the current brief/ }));
+            fireEvent.click(screen.getByRole("button", { name: "Prepare proposed update" }));
+        } else {
+            await screen.findByText(row.text);
+            approveDisplayedProposal();
+            fireEvent.click(screen.getByRole("button", { name: "Apply reviewed update" }));
+        }
+        const dialog = screen.getByRole("dialog");
+        const headerClose = within(dialog.querySelector("header")!).getByRole("button", { name: "Close" });
+        const footerClose = within(dialog.querySelector("footer")!).getByRole("button", { name: "Close" });
+        expect(headerClose).toBeDisabled();
+        expect(footerClose).toBeDisabled();
+        expect(within(dialog.querySelector("header")!).getByRole("status")).toHaveTextContent("Please wait until this operation finishes before closing.");
+        expect(within(dialog.querySelector("header")!).getByRole("status")).toBeVisible();
+        fireEvent.click(headerClose);
+        fireEvent.click(footerClose);
+        fireEvent.keyDown(window, { key: "Escape" });
+        fireEvent.mouseDown(dialog.parentElement!);
+        expect(screen.getByRole("dialog")).toBe(dialog);
+        expect(write).toHaveBeenCalledTimes(1);
+        await act(async () => {
+            if (outcome === "reject") pending.reject(new Error("Fictional write failure"));
+            else pending.resolve(operation === "proposal" ? proposal : { versionId: "new", replayed: false });
+        });
+        await waitFor(() => expect(headerClose).toBeEnabled());
+        expect(footerClose).toBeEnabled();
+        expect(within(dialog.querySelector("header")!).queryByRole("status")).not.toBeInTheDocument();
+        fireEvent.click(headerClose);
+        expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+        expect(write).toHaveBeenCalledTimes(1);
+        if (operation !== "proposal") expect(api.proposeMatterBrief).not.toHaveBeenCalled();
+        if (operation !== "apply") expect(api.applyMatterBrief).not.toHaveBeenCalled();
+        view.unmount();
+        vi.clearAllMocks();
+    }
+});

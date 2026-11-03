@@ -167,6 +167,9 @@ which view could not refresh.
 The designation chooser uses actual DOCX extension/MIME type metadata, compared
 case-insensitively. It does not infer type from filenames; missing or unknown type
 metadata is not eligible. Other source types remain in the outstanding inventory.
-The shared modal currently has no disabled header-close prop: busy dismissal is
-blocked by this feature's close guard, the footer Close is disabled, and Working
-is shown, but the header close icon itself remains an enabled-looking affordance.
+While an operation is pending, both header and footer Close buttons are natively
+disabled. A visible header status explains that closing becomes available when
+the operation finishes. The feature’s close guard also prevents Escape or backdrop
+dismissal while busy; success and failure both restore the close controls. Other
+modal callers retain their existing close behavior unless they explicitly disable
+their header button.

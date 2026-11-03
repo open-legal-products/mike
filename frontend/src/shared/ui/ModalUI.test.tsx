@@ -1,4 +1,4 @@
-import { fireEvent, render, screen } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 import { ModalUI } from "./ModalUI";
@@ -62,4 +62,21 @@ describe("ModalUI", () => {
         });
         expect(onClose).not.toHaveBeenCalled();
     });
+    it("natively disables only the opt-in header close and restores ordinary close", async () => {
+        const onClose = vi.fn();
+        const user = userEvent.setup();
+        const view = render(<ModalUI open onClose={onClose} breadcrumbs={["Example"]} closeButtonDisabled>Content</ModalUI>);
+        expect(screen.getByRole("button", { name: "Close" })).toBeDisabled();
+        await waitFor(() => expect(screen.getByRole("dialog")).toHaveFocus());
+        await user.click(screen.getByRole("button", { name: "Close" }));
+        expect(onClose).not.toHaveBeenCalled();
+        // The prop concerns the header button; callers retain Escape/backdrop policy.
+        fireEvent.keyDown(window, { key: "Escape" });
+        expect(onClose).toHaveBeenCalledTimes(1);
+        view.rerender(<ModalUI open onClose={onClose} breadcrumbs={["Example"]}>Content</ModalUI>);
+        expect(screen.getByRole("button", { name: "Close" })).toBeEnabled();
+        await user.click(screen.getByRole("button", { name: "Close" }));
+        expect(onClose).toHaveBeenCalledTimes(2);
+    });
+
 });
