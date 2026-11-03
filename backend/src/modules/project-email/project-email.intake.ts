@@ -1,6 +1,8 @@
 import { randomUUID } from "node:crypto";
+import { logError } from "../../lib/log";
+import { safeError } from "../../lib/safeError";
 import { Document, Packer, Paragraph, TextRun } from "docx";
-import type { ProjectEmailPreview, ProjectEmailReceipt } from "@mike/contracts";
+import type { ProjectEmailLatest, ProjectEmailPreview, ProjectEmailReceipt } from "@mike/contracts";
 import type { Db } from "../../lib/supabase";
 import { checkProjectAccess } from "../../lib/access";
 import { can } from "../../lib/permissions";
@@ -113,6 +115,7 @@ async function persistItem(db: Db, actor: Actor, preview: Preview, message: Emai
     const result = await commitEmailDocument(db, item.id, lease, preview.id, { storage_path: path, filename: part.filename, file_type: suffix, size_bytes: content.length, content_sha256: digest(content), ...(suffix === "pdf" ? { pdf_storage_path: path } : {}) });
     if (result.error) throw result.error;
   } catch (error) {
+    logError("project-email", safeError(error));
     // Ambiguous DB completion is resolved by reading the durable receipt on
     // retry; a committed item no longer matches this lease, so cannot regress.
     await db.from("project_email_items").update({ status: "failed", detail: error instanceof EmailInputError ? error.message : "Import did not complete. Retry the confirmed selection or inspect the original.", lease_id: null, lease_until: null }).eq("id", item.id).eq("lease_id", lease).eq("status", "processing");
@@ -190,7 +193,7 @@ export async function getProjectEmailReceipt(db: Db, actor: Actor, id: string): 
   }) });
 }
 
-export async function latestProjectEmail(db: Db, actor: Actor) {
+export async function latestProjectEmail(db: Db, actor: Actor): Promise<ServiceResult<ProjectEmailLatest | null>> {
   const access = await authorize(db, actor);
   if (!access.ok) return access;
   const { data, error } = await db.from("project_email_previews").select("id,query,confirmed_at").eq("user_id", actor.userId).eq("project_id", actor.projectId).not("confirmed_at", "is", null).order("confirmed_at", { ascending: false }).limit(1).maybeSingle();

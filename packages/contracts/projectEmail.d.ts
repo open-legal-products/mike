@@ -16,3 +16,5 @@ export type ProjectEmailReceipt = {
     documentId?: string; versionId?: string; sha256?: string; detail?: string;
   }> }>;
 };
+
+export type ProjectEmailLatest = { id: string; query: string; confirmed_at: string };

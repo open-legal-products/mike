@@ -64,6 +64,29 @@ describe("bounded, inert Gmail MIME import", () => {
     expect(parseEmail({ ...m, labelIds: ["UNREAD"], historyId: "9" }).fingerprint).toBe(parseEmail({ ...m, labelIds: [], historyId: "10" }).fingerprint);
     expect(parseEmail(m).fingerprint).not.toBe(parseEmail(message(plain("changed"))).fingerprint);
   });
+  it("ignores only MIME-body download locators while retaining the fresh locator", () => {
+    const original = message({ mimeType: "multipart/mixed", parts: [plain("hello"), { ...file(), partId: "1" }] });
+    const refreshed = message({ ...original.payload, parts: [plain("hello"), { ...file(), partId: "1", body: { ...file().body, attachmentId: "fresh-handle" } }] });
+    expect(parseEmail(refreshed).fingerprint).toBe(parseEmail(original).fingerprint);
+    expect(parseEmail(refreshed).parts[0].attachmentId).toBe("fresh-handle");
+    expect(parseEmail(original).parts[0].attachmentId).toBe("aa1");
+  });
+  const boundPayload = { mimeType: "multipart/mixed", headers: [{ name: "Subject", value: "Original subject" }], parts: [plain("hello"), { ...file(), partId: "1" }] };
+  it.each([
+    ["subject", { ...boundPayload, headers: [{ name: "Subject", value: "Changed subject" }] }],
+    ["body text", { ...boundPayload, parts: [plain("changed"), { ...file(), partId: "1" }] }],
+    ["part identity", { ...boundPayload, parts: [plain("hello"), { ...file(), partId: "2" }] }],
+    ["filename", { ...boundPayload, parts: [plain("hello"), { ...file("changed.pdf"), partId: "1" }] }],
+    ["MIME type", { ...boundPayload, parts: [plain("hello"), { ...file("contract.pdf", "application/octet-stream"), partId: "1" }] }],
+    ["declared size", { ...boundPayload, parts: [plain("hello"), { ...file("contract.pdf", "application/pdf", 11), partId: "1" }] }],
+    ["inline bytes", { ...boundPayload, parts: [plain("hello"), { ...file(), partId: "1", body: { size: 10, data: b64("%PDF-data") } }] }],
+  ])("still binds changed %s", (_name, payload) => {
+    expect(parseEmail(message(payload)).fingerprint).not.toBe(parseEmail(message(boundPayload)).fingerprint);
+  });
+  it("keeps similarly named metadata outside MIME bodies in the fingerprint", () => {
+    expect(parseEmail(message({ ...boundPayload, attachmentId: "metadata-one" })).fingerprint)
+      .not.toBe(parseEmail(message({ ...boundPayload, attachmentId: "metadata-two" })).fingerprint);
+  });
   it("checks actual decoded size and type", () => {
     const part = parseEmail(message(file("contract.pdf", "application/pdf", 9))).parts[0];
     expect(() => verifyAttachment(Buffer.from("%PDF-test"), part)).not.toThrow();

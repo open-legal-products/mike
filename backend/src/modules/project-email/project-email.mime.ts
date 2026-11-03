@@ -38,11 +38,13 @@ export function parseEmail(raw: Record<string, unknown>): EmailManifest {
   const header = (name: string) => (payload.headers ?? []).find(h => h.name.toLowerCase() === name)?.value ?? "";
   const clean = (value: string) => value.replace(/[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]/g, "").slice(0, 2000);
   const parts: EmailPart[] = [];
+  const mimeBodies = new WeakSet<object>();
   let count = 0, bodySize = 0, declaredTotal = 0;
   type Body = { text: string; hasPlain: boolean };
   const visit = (part: Part, path: string, depth: number): Body => {
     if (++count > EMAIL_LIMITS.parts || depth > EMAIL_LIMITS.depth) throw new EmailInputError("Email has too many MIME parts.");
     const mime = String(part.mimeType ?? "").toLowerCase(), name = String(part.filename ?? ""), body = part.body ?? {};
+    if (part.body && typeof part.body === "object") mimeBodies.add(part.body);
     if (mime === "multipart/encrypted" || mime === "application/pkcs7-mime") throw new EmailInputError("Encrypted email needs manual review.");
     if (name || (!mime.startsWith("multipart/") && !["text/plain", "text/html"].includes(mime))) {
       const size = body.size ?? 0;
@@ -79,7 +81,13 @@ export function parseEmail(raw: Record<string, unknown>): EmailManifest {
   const { text } = visit(payload, "0", 0);
   // Labels/history can change merely by reading elsewhere. Bind the actual
   // immutable message content, not those mutable mailbox attributes.
-  return { id, threadId, subject: clean(header("subject")), from: clean(header("from")), to: clean(header("to")), date: clean(header("date")), text, parts, fingerprint: digest(JSON.stringify(payload)) };
+  // A body attachmentId is an opaque retrieval handle, not source content.
+  // Scope omission to MIME bodies visited above, retaining fresh download IDs
+  // in parts and all similarly named metadata outside those bodies.
+  const fingerprint = digest(JSON.stringify(payload, function (this: object, key: string, value: unknown) {
+    return key === "attachmentId" && mimeBodies.has(this) ? undefined : value;
+  }));
+  return { id, threadId, subject: clean(header("subject")), from: clean(header("from")), to: clean(header("to")), date: clean(header("date")), text, parts, fingerprint };
 }
 
 export function verifyAttachment(bytes: Buffer, part: EmailPart) {

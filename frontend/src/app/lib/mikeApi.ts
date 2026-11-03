@@ -1,5 +1,5 @@
 import type { Operation } from "@/shared/lib/sentryPrivacy";
-import type { ProjectEmailPreview, ProjectEmailReceipt } from "@mike/contracts";
+import type { ProjectEmailLatest, ProjectEmailPreview, ProjectEmailReceipt } from "@mike/contracts";
 export async function previewProjectEmail(projectId: string, input: { query: string; folderId?: string | null; pageToken?: string }): Promise<ProjectEmailPreview> {
     return apiRequest("projects.email-intake", `/project-email/${encodeURIComponent(projectId)}/preview`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(input) });
 }
@@ -9,7 +9,7 @@ export async function importProjectEmail(projectId: string, previewId: string, s
 export async function getProjectEmailReceipt(projectId: string, previewId: string): Promise<ProjectEmailReceipt> {
     return apiRequest("projects.email-intake", `/project-email/${encodeURIComponent(projectId)}/${encodeURIComponent(previewId)}/receipt`);
 }
-export async function latestProjectEmail(projectId: string): Promise<{ id: string; query: string; confirmed_at: string } | null> {
+export async function latestProjectEmail(projectId: string): Promise<ProjectEmailLatest | null> {
     return apiRequest("projects.email-intake", `/project-email/${encodeURIComponent(projectId)}/latest`);
 }
 import type {
