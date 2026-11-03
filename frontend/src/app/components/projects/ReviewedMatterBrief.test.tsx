@@ -1,22 +1,27 @@
 import { beforeEach, expect, it, vi } from "vitest";
-import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 const api = vi.hoisted(() => ({ getMatterBrief: vi.fn(), designateMatterBrief: vi.fn(), proposeMatterBrief: vi.fn(), getMatterBriefProposal: vi.fn(), applyMatterBrief: vi.fn(), matterBriefSourceUrl: vi.fn() }));
 vi.mock("@/app/lib/mikeApi", () => api);
 vi.mock("@/app/lib/userFacingError", () => ({ describeError: vi.fn(x => x), notifyError: vi.fn() }));
 import { ReviewedMatterBrief } from "./ReviewedMatterBrief";
+import { notifyError } from "@/app/lib/userFacingError";
 const source = (id: string) => ({ documentId: id, versionId: id + "v", revision: id + "r", hash: "a".repeat(64), textHash: "b".repeat(64), filename: id + ".docx", ready: true, reason: null, reviewed: false });
 const row = { text: "Supplier alleges May 12 delivery; acceptance remains disputed.", status: "source_assertion", citations: [{ source: 1, quote: "Delivery May 12." }] };
 const proposal = { id: "proposal", base: source("brief"), sources: [source("message1"), source("message2")], content: { position: [row], awaiting: [], uncertainties: [], nextAction: [] }, before: "Previous brief", gaps: [{ documentId: "scan", filename: "scan.pdf", reason: "Text extraction is not ready" }], expiresAt: "2030-01-01", appliedVersionId: null };
 const state = { pendingProposalId: null, brief: source("brief"), acceptedVersionId: null, acceptedAt: null, acceptedContent: null, acceptedEvidence: [], manualChanges: false, canEdit: true, sources: [source("message1"), source("message2"), { ...source("scan"), filename: "scan.pdf", ready: false, reason: "Text extraction is not ready" }] };
 beforeEach(() => { vi.resetAllMocks(); api.getMatterBrief.mockResolvedValue(state); api.proposeMatterBrief.mockResolvedValue(proposal); api.getMatterBriefProposal.mockResolvedValue(proposal); api.applyMatterBrief.mockResolvedValue({ versionId: "new", replayed: false }); api.matterBriefSourceUrl.mockReturnValue("/checked-source"); });
 const onApplied = vi.fn(async () => {});
-async function open() { render(<ReviewedMatterBrief projectId="project" onApplied={onApplied}/>); fireEvent.click(screen.getByRole("button", { name: "Resume matter" })); await screen.findByText("Outstanding sources (3)"); }
-it("requires exact source selection and provider consent before proposing, then explicit human review before Apply", async () => { await open(); fireEvent.click(screen.getByRole("checkbox", { name: /message1.docx/ })); fireEvent.click(screen.getByRole("checkbox", { name: /message2.docx/ })); fireEvent.change(screen.getByLabelText("Configured model ID"), { target: { value: "mock-model" } }); expect(screen.getByRole("button", { name: "Prepare proposed update" })).toBeDisabled(); fireEvent.click(screen.getByRole("checkbox", { name: /Send only the current brief/ })); fireEvent.click(screen.getByRole("button", { name: "Prepare proposed update" })); await screen.findByText(row.text); expect(api.proposeMatterBrief).toHaveBeenCalledWith("project", ["message1", "message2"], "mock-model"); expect(api.applyMatterBrief).not.toHaveBeenCalled(); expect(screen.getByRole("button", { name: "Apply reviewed update" })).toBeDisabled(); expect(screen.getByRole("link", { name: /message1.docx — checked/ })).toHaveAttribute("href", "/checked-source"); fireEvent.click(screen.getByRole("checkbox", { name: /I reviewed this proposed text/ })); fireEvent.click(screen.getByRole("button", { name: "Apply reviewed update" })); await waitFor(() => expect(api.applyMatterBrief).toHaveBeenCalledWith("project", "proposal")); await screen.findByText(/A new brief version and the source-review checkpoint/); await waitFor(() => expect(onApplied).toHaveBeenCalledTimes(1)); });
+async function open(outstanding = 3) { render(<ReviewedMatterBrief projectId="project" onApplied={onApplied}/>); fireEvent.click(screen.getByRole("button", { name: "Resume matter" })); await screen.findByText(`Outstanding sources (${outstanding})`); }
+function approveDisplayedProposal() {
+    fireEvent.click(screen.getByRole("checkbox", { name: /I reviewed this proposed text/ }));
+    fireEvent.click(screen.getByRole("checkbox", { name: /I compared the current brief/ }));
+}
+it("requires exact source selection and provider consent before proposing, then explicit human review before Apply", async () => { await open(); fireEvent.click(screen.getByRole("checkbox", { name: /message1.docx/ })); fireEvent.click(screen.getByRole("checkbox", { name: /message2.docx/ })); fireEvent.change(screen.getByLabelText("Configured model ID"), { target: { value: "mock-model" } }); expect(screen.getByRole("button", { name: "Prepare proposed update" })).toBeDisabled(); fireEvent.click(screen.getByRole("checkbox", { name: /Send only the current brief/ })); fireEvent.click(screen.getByRole("button", { name: "Prepare proposed update" })); await screen.findByText(row.text); expect(api.proposeMatterBrief).toHaveBeenCalledWith("project", ["message1", "message2"], "mock-model"); expect(api.applyMatterBrief).not.toHaveBeenCalled(); expect(screen.getByRole("button", { name: "Apply reviewed update" })).toBeDisabled(); expect(screen.getByRole("link", { name: /message1.docx — checked/ })).toHaveAttribute("href", "/checked-source"); approveDisplayedProposal(); fireEvent.click(screen.getByRole("button", { name: "Apply reviewed update" })); await waitFor(() => expect(api.applyMatterBrief).toHaveBeenCalledWith("project", "proposal")); await screen.findByText(/A new brief version and the source-review checkpoint/); await waitFor(() => expect(onApplied).toHaveBeenCalledTimes(1)); });
 it("restores an unapplied durable proposal after reopening without regenerating", async () => { api.getMatterBrief.mockResolvedValue({ ...state, pendingProposalId: "proposal" }); await open(); await screen.findByText(row.text); expect(api.getMatterBriefProposal).toHaveBeenCalledWith("project", "proposal"); expect(api.proposeMatterBrief).not.toHaveBeenCalled(); expect(api.applyMatterBrief).not.toHaveBeenCalled(); });
 it("warns about manual edits and keeps the prior accepted brief historical", async () => { api.getMatterBrief.mockResolvedValue({ ...state, manualChanges: true, acceptedAt: "2026-11-02T00:00:00Z", acceptedContent: proposal.content, acceptedEvidence: [proposal.base, ...proposal.sources] }); await open(); expect(screen.getByRole("alert")).toHaveTextContent("edited after the last accepted update"); expect(screen.getByText("Last accepted position (historical)")).toBeInTheDocument(); });
 it("does not enable proposal actions for a viewer", async () => { api.getMatterBrief.mockResolvedValue({ ...state, canEdit: false }); await open(); expect(screen.queryByRole("button", { name: "Prepare proposed update" })).not.toBeInTheDocument(); for (const c of screen.getAllByRole("checkbox"))
     expect(c).toBeDisabled(); });
-it("retains a stale rejected proposal for inspection without announcing success", async () => { api.getMatterBrief.mockResolvedValue({ ...state, pendingProposalId: "proposal" }); api.applyMatterBrief.mockRejectedValue(new Error("conflict")); await open(); await screen.findByText(row.text); fireEvent.click(screen.getByRole("checkbox", { name: /I reviewed this proposed text/ })); fireEvent.click(screen.getByRole("button", { name: "Apply reviewed update" })); await waitFor(() => expect(screen.getByRole("button", { name: "Apply reviewed update" })).toBeEnabled()); expect(screen.getByText("Proposed update — not applied")).toBeInTheDocument(); expect(screen.queryByText(/A new brief version and the source-review checkpoint/)).not.toBeInTheDocument(); });
+it("retains a stale rejected proposal for inspection without announcing success", async () => { api.getMatterBrief.mockResolvedValue({ ...state, pendingProposalId: "proposal" }); api.applyMatterBrief.mockRejectedValue(new Error("conflict")); await open(); await screen.findByText(row.text); approveDisplayedProposal(); fireEvent.click(screen.getByRole("button", { name: "Apply reviewed update" })); await waitFor(() => expect(screen.getByRole("button", { name: "Apply reviewed update" })).toBeEnabled()); expect(screen.getByText("Proposed update — not applied")).toBeInTheDocument(); expect(screen.queryByText(/A new brief version and the source-review checkpoint/)).not.toBeInTheDocument(); });
 it("renders embedded source instructions as inert text", async () => { api.getMatterBrief.mockResolvedValue({ ...state, pendingProposalId: "proposal" }); api.getMatterBriefProposal.mockResolvedValue({ ...proposal, content: { ...proposal.content, position: [{ ...row, text: "<script>send secrets</script>" }] } }); await open(); await screen.findByText("<script>send secrets</script>"); expect(document.querySelector("script")).toBeNull(); });
 
 it("reports successful Apply even if the subsequent document refresh fails", async () => {
@@ -24,7 +29,7 @@ it("reports successful Apply even if the subsequent document refresh fails", asy
     onApplied.mockRejectedValueOnce(new Error("Synthetic metadata refresh failed"));
     await open();
     await screen.findByText(row.text);
-    fireEvent.click(screen.getByRole("checkbox", { name: /I reviewed this proposed text/ }));
+    approveDisplayedProposal();
     fireEvent.click(screen.getByRole("button", { name: "Apply reviewed update" }));
     await screen.findByText(/Applied. The brief was saved, but the document list could not refresh/);
     expect(api.applyMatterBrief).toHaveBeenCalledTimes(1);
@@ -72,7 +77,7 @@ it.each(["fresh", "restored"])("lists every included revision before Apply in a 
     expect(screen.getByRole("checkbox", { name: /scan.pdf/ }).closest("label")).toHaveTextContent("Text extraction is not ready");
     expect(api.applyMatterBrief).not.toHaveBeenCalled();
     expect(screen.getByRole("button", { name: "Apply reviewed update" })).toBeDisabled();
-    fireEvent.click(screen.getByRole("checkbox", { name: /I reviewed this proposed text, the base brief revision and every included source revision/ }));
+    approveDisplayedProposal();
     fireEvent.click(screen.getByRole("button", { name: "Apply reviewed update" }));
     await waitFor(() => expect(api.applyMatterBrief).toHaveBeenCalledWith("project", "proposal"));
 });
@@ -96,6 +101,7 @@ it("keeps restored proposal review and Apply disabled for a viewer", async () =>
     await screen.findByText(row.text);
     expect(screen.getByRole("region", { name: "Included source revisions" })).toBeInTheDocument();
     expect(screen.getByRole("checkbox", { name: /I reviewed this proposed text/ })).toBeDisabled();
+    expect(screen.getByRole("checkbox", { name: /I compared the current brief/ })).toBeDisabled();
     expect(screen.getByRole("button", { name: "Apply reviewed update" })).toBeDisabled();
     expect(api.applyMatterBrief).not.toHaveBeenCalled();
 });
@@ -106,28 +112,180 @@ it("guards both Close controls while an explicit Apply is pending", async () => 
     api.applyMatterBrief.mockImplementation(() => new Promise(resolve => { finishApply = resolve; }));
     await open();
     await screen.findByText(row.text);
-    fireEvent.click(screen.getByRole("checkbox", { name: /I reviewed this proposed text/ }));
+    approveDisplayedProposal();
     fireEvent.click(screen.getByRole("button", { name: "Apply reviewed update" }));
     const dialog = screen.getByRole("dialog");
     expect(within(dialog.querySelector("footer")!).getByRole("button", { name: "Close" })).toBeDisabled();
     fireEvent.click(within(dialog.querySelector("header")!).getByRole("button", { name: "Close" }));
     expect(screen.getByRole("dialog")).toBeInTheDocument();
     expect(screen.getByRole("checkbox", { name: /I reviewed this proposed text/ })).toBeDisabled();
+    expect(screen.getByRole("checkbox", { name: /I compared the current brief/ })).toBeDisabled();
     finishApply({ versionId: "new", replayed: false });
     await screen.findByText(/A new brief version and the source-review checkpoint/);
     await waitFor(() => expect(within(dialog.querySelector("footer")!).getByRole("button", { name: "Close" })).toBeEnabled());
 });
 
-it("requires informed confirmation of whole-document replacement before Apply", async () => {
+it("requires both independent confirmations in either order before Apply", async () => {
     api.getMatterBrief.mockResolvedValue({ ...state, pendingProposalId: "proposal" });
     await open();
     await screen.findByText(row.text);
     expect(screen.getByText("Applying replaces the entire current brief with this generated document. Manual notes, tables and formatting may not carry over. The previous version remains available in document version history.")).toBeVisible();
-    const confirmation = screen.getByRole("checkbox", { name: /I reviewed this proposed text.*approve replacing the entire current brief with this generated document.*manual notes, tables and formatting may not carry over/ });
-    expect(confirmation).not.toBeChecked();
-    expect(screen.getByRole("button", { name: "Apply reviewed update" })).toBeDisabled();
+    const review = screen.getByRole("checkbox", { name: /I reviewed this proposed text/ });
+    const comparison = screen.getByRole("checkbox", { name: /I compared the current brief/ });
+    const apply = screen.getByRole("button", { name: "Apply reviewed update" });
+    expect(comparison).toHaveAccessibleName(/as a new project-visible version/);
+    expect(review).not.toBeChecked(); expect(comparison).not.toBeChecked(); expect(apply).toBeDisabled();
+    fireEvent.click(review); expect(apply).toBeDisabled();
+    fireEvent.click(review); fireEvent.click(comparison); expect(apply).toBeDisabled();
     expect(api.applyMatterBrief).not.toHaveBeenCalled();
-    fireEvent.click(confirmation);
+    fireEvent.click(review); expect(apply).toBeEnabled(); fireEvent.click(apply);
+    await waitFor(() => expect(api.applyMatterBrief).toHaveBeenCalledWith("project", "proposal"));
+});
+
+function deferred<T>() {
+    let resolve!: (value: T) => void;
+    let reject!: (error: unknown) => void;
+    const promise = new Promise<T>((yes, no) => { resolve = yes; reject = no; });
+    return { promise, resolve, reject };
+}
+function contextState(project: string, pending = false) {
+    return { ...state, brief: source(project + "-brief"), sources: [source(project + "-source")], pendingProposalId: pending ? project + "-proposal" : null };
+}
+function contextProposal(project: string) {
+    return { ...proposal, id: project + "-proposal", base: source(project + "-brief"), sources: [source(project + "-source")], before: project + " prior position", content: { ...proposal.content, position: [{ ...row, text: project + " proposed position" }] } };
+}
+it.each([false, true])("ignores a late proposal after project navigation, including returning to the original project=%s", async returnToOriginal => {
+    const pending = deferred<typeof proposal>();
+    api.getMatterBrief.mockImplementation(async (project: string) => contextState(project));
+    api.proposeMatterBrief.mockReturnValue(pending.promise);
+    const view = render(<ReviewedMatterBrief projectId="matter-a" onApplied={onApplied}/>);
+    fireEvent.click(screen.getByRole("button", { name: "Resume matter" }));
+    await screen.findByRole("link", { name: "Open current brief: matter-a-brief.docx" });
+    fireEvent.click(screen.getByRole("checkbox", { name: /matter-a-source.docx/ }));
+    fireEvent.change(screen.getByLabelText("Configured model ID"), { target: { value: "mock-model" } });
+    fireEvent.click(screen.getByRole("checkbox", { name: /Send only the current brief/ }));
+    fireEvent.click(screen.getByRole("button", { name: "Prepare proposed update" }));
+    await waitFor(() => expect(api.proposeMatterBrief).toHaveBeenCalledWith("matter-a", ["matter-a-source"], "mock-model"));
+    view.rerender(<ReviewedMatterBrief projectId="matter-b" onApplied={onApplied}/>);
+    await screen.findByRole("link", { name: "Open current brief: matter-b-brief.docx" });
+    if (returnToOriginal) {
+        view.rerender(<ReviewedMatterBrief projectId="matter-a" onApplied={onApplied}/>);
+        await screen.findByRole("link", { name: "Open current brief: matter-a-brief.docx" });
+    }
+    await act(async () => { pending.resolve(contextProposal("matter-a")); });
+    expect(screen.queryByText("matter-a proposed position")).not.toBeInTheDocument();
+    expect(screen.queryByText("Proposed update — not applied")).not.toBeInTheDocument();
+    expect(api.applyMatterBrief).not.toHaveBeenCalled();
+});
+it("does not show a late Apply result or refresh the previous project after navigation", async () => {
+    const pending = deferred<{ versionId: string; replayed: boolean }>();
+    api.getMatterBrief.mockImplementation(async (project: string) => contextState(project, project === "matter-a"));
+    api.getMatterBriefProposal.mockResolvedValue(contextProposal("matter-a"));
+    api.applyMatterBrief.mockReturnValue(pending.promise);
+    const view = render(<ReviewedMatterBrief projectId="matter-a" onApplied={onApplied}/>);
+    fireEvent.click(screen.getByRole("button", { name: "Resume matter" }));
+    await screen.findByText("matter-a proposed position");
+    approveDisplayedProposal();
+    fireEvent.click(screen.getByRole("button", { name: "Apply reviewed update" }));
+    await waitFor(() => expect(api.applyMatterBrief).toHaveBeenCalledWith("matter-a", "matter-a-proposal"));
+    view.rerender(<ReviewedMatterBrief projectId="matter-b" onApplied={onApplied}/>);
+    await screen.findByRole("link", { name: "Open current brief: matter-b-brief.docx" });
+    await act(async () => { pending.resolve({ versionId: "matter-a-applied", replayed: false }); });
+    expect(screen.queryByText(/A new brief version and the source-review checkpoint/)).not.toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "Open current brief: matter-b-brief.docx" })).toBeInTheDocument();
+    expect(api.getMatterBrief.mock.calls.filter(([project]) => project === "matter-a")).toHaveLength(1);
+    expect(onApplied).not.toHaveBeenCalled();
+});
+it.each(["fresh", "restored"])("shows omitted prior positions by default and separately requires removal consent for a %s proposal", async mode => {
+    const before = "Maintain the separate price-adjustment claim. Await litigation instructions before settlement.";
+    const replacement = { ...proposal, before, sources: [source("message1")] };
+    api.getMatterBrief.mockResolvedValue({ ...state, pendingProposalId: mode === "restored" ? "proposal" : null, sources: [{ ...source("message1"), reviewed: true }, ...state.sources.slice(1)] });
+    api.getMatterBriefProposal.mockResolvedValue(replacement);
+    api.proposeMatterBrief.mockResolvedValue(replacement);
+    await open(2);
+    if (mode === "fresh") {
+        fireEvent.click(screen.getByRole("checkbox", { name: /message1.docx/ }));
+        fireEvent.change(screen.getByLabelText("Configured model ID"), { target: { value: "mock-model" } });
+        fireEvent.click(screen.getByRole("checkbox", { name: /Send only the current brief/ }));
+        fireEvent.click(screen.getByRole("button", { name: "Prepare proposed update" }));
+    }
+    await screen.findByText(row.text);
+    const current = screen.getByText("Current brief — will be replaced").closest("details")!;
+    expect(current).toHaveAttribute("open"); expect(within(current).getByText(before)).toBeVisible();
+    const after = screen.getByRole("region", { name: "Complete proposed replacement" });
+    expect(after).not.toHaveTextContent("price-adjustment claim"); expect(after).not.toHaveTextContent("Await litigation instructions");
+    expect(screen.getByText(/Omission does not mean an item is resolved or withdrawn/)).toBeVisible();
+    expect(screen.getByRole("checkbox", { name: /message1.docx/ }).closest("label")).toHaveTextContent("Reviewed revision");
+    expect(screen.getByRole("checkbox", { name: /message2.docx/ }).closest("label")).toHaveTextContent("Not reviewed");
+    const review = screen.getByRole("checkbox", { name: /I reviewed this proposed text/ });
+    const comparison = screen.getByRole("checkbox", { name: /I compared the current brief/ });
+    fireEvent.click(review); expect(screen.getByRole("button", { name: "Apply reviewed update" })).toBeDisabled();
+    expect(api.applyMatterBrief).not.toHaveBeenCalled(); fireEvent.click(comparison);
     fireEvent.click(screen.getByRole("button", { name: "Apply reviewed update" }));
     await waitFor(() => expect(api.applyMatterBrief).toHaveBeenCalledWith("project", "proposal"));
+});
+it("resets both confirmations on close/reopen, restoration and preparing a different proposal", async () => {
+    api.getMatterBrief.mockResolvedValue({ ...state, pendingProposalId: "proposal" });
+    await open(); await screen.findByText(row.text); approveDisplayedProposal();
+    expect(screen.getByRole("button", { name: "Apply reviewed update" })).toBeEnabled();
+    fireEvent.click(within(screen.getByRole("dialog").querySelector("footer")!).getByRole("button", { name: "Close" }));
+    fireEvent.click(screen.getByRole("button", { name: "Resume matter" })); await screen.findByText(row.text);
+    expect(screen.getByRole("checkbox", { name: /I reviewed this proposed text/ })).not.toBeChecked();
+    expect(screen.getByRole("checkbox", { name: /I compared the current brief/ })).not.toBeChecked();
+    approveDisplayedProposal(); fireEvent.click(screen.getByRole("button", { name: "Prepare a different proposal" }));
+    api.proposeMatterBrief.mockResolvedValue({ ...proposal, id: "different-proposal" });
+    fireEvent.click(screen.getByRole("checkbox", { name: /message1.docx/ }));
+    fireEvent.change(screen.getByLabelText("Configured model ID"), { target: { value: "mock-model" } });
+    fireEvent.click(screen.getByRole("checkbox", { name: /Send only the current brief/ }));
+    fireEvent.click(screen.getByRole("button", { name: "Prepare proposed update" })); await screen.findByText(row.text);
+    expect(screen.getByRole("checkbox", { name: /I reviewed this proposed text/ })).not.toBeChecked();
+    expect(screen.getByRole("checkbox", { name: /I compared the current brief/ })).not.toBeChecked();
+    expect(screen.getByRole("button", { name: "Apply reviewed update" })).toBeDisabled(); expect(api.applyMatterBrief).not.toHaveBeenCalled();
+});
+it("resets both confirmations when navigation restores another project's proposal", async () => {
+    api.getMatterBrief.mockImplementation(async (project: string) => contextState(project, true));
+    api.getMatterBriefProposal.mockImplementation(async (project: string) => contextProposal(project));
+    const view = render(<ReviewedMatterBrief projectId="matter-a" onApplied={onApplied}/>);
+    fireEvent.click(screen.getByRole("button", { name: "Resume matter" })); await screen.findByText("matter-a proposed position"); approveDisplayedProposal();
+    view.rerender(<ReviewedMatterBrief projectId="matter-b" onApplied={onApplied}/>); await screen.findByText("matter-b proposed position");
+    expect(screen.getByRole("checkbox", { name: /I reviewed this proposed text/ })).not.toBeChecked();
+    expect(screen.getByRole("checkbox", { name: /I compared the current brief/ })).not.toBeChecked();
+    expect(screen.getByRole("button", { name: "Apply reviewed update" })).toBeDisabled(); expect(api.applyMatterBrief).not.toHaveBeenCalled();
+});
+it("ignores a previous project's post-Apply refresh after navigation", async () => {
+    const refresh = deferred<ReturnType<typeof contextState>>(); let aReads = 0;
+    api.getMatterBrief.mockImplementation((project: string) => project === "matter-a" && ++aReads > 1 ? refresh.promise : Promise.resolve(contextState(project, project === "matter-a")));
+    api.getMatterBriefProposal.mockResolvedValue(contextProposal("matter-a"));
+    const view = render(<ReviewedMatterBrief projectId="matter-a" onApplied={onApplied}/>);
+    fireEvent.click(screen.getByRole("button", { name: "Resume matter" })); await screen.findByText("matter-a proposed position"); approveDisplayedProposal();
+    fireEvent.click(screen.getByRole("button", { name: "Apply reviewed update" })); await waitFor(() => expect(aReads).toBe(2));
+    view.rerender(<ReviewedMatterBrief projectId="matter-b" onApplied={onApplied}/>); await screen.findByRole("link", { name: "Open current brief: matter-b-brief.docx" });
+    await act(async () => { refresh.resolve(contextState("matter-a")); });
+    expect(screen.getByRole("link", { name: "Open current brief: matter-b-brief.docx" })).toBeInTheDocument();
+    expect(screen.queryByText(/A new brief version and the source-review checkpoint/)).not.toBeInTheDocument(); expect(onApplied).not.toHaveBeenCalled();
+});
+
+it.each(["resolve", "reject"])("ignores an old preparation %s without clearing the new project's busy state", async outcome => {
+    const old = deferred<typeof proposal>(), current = deferred<typeof proposal>();
+    api.getMatterBrief.mockImplementation(async (project: string) => contextState(project));
+    api.proposeMatterBrief.mockImplementation((project: string) => project === "matter-a" ? old.promise : current.promise);
+    const view = render(<ReviewedMatterBrief projectId="matter-a" onApplied={onApplied}/>);
+    fireEvent.click(screen.getByRole("button", { name: "Resume matter" }));
+    async function prepare(project: string) {
+        await screen.findByRole("link", { name: `Open current brief: ${project}-brief.docx` });
+        fireEvent.click(screen.getByRole("checkbox", { name: new RegExp(project + "-source.docx") }));
+        fireEvent.change(screen.getByLabelText("Configured model ID"), { target: { value: "mock-model" } });
+        fireEvent.click(screen.getByRole("checkbox", { name: /Send only the current brief/ }));
+        fireEvent.click(screen.getByRole("button", { name: "Prepare proposed update" }));
+        await waitFor(() => expect(api.proposeMatterBrief).toHaveBeenCalledWith(project, [project + "-source"], "mock-model"));
+    }
+    await prepare("matter-a"); view.rerender(<ReviewedMatterBrief projectId="matter-b" onApplied={onApplied}/>); await prepare("matter-b");
+    await act(async () => { if (outcome === "resolve") old.resolve(contextProposal("matter-a")); else old.reject(new Error("Fictional old-project preparation failure")); });
+    expect(within(screen.getByRole("dialog").querySelector("footer")!).getByRole("button", { name: "Close" })).toBeDisabled();
+    expect(screen.getByRole("checkbox", { name: /matter-b-source.docx/ })).toBeDisabled();
+    expect(screen.queryByText("matter-a proposed position")).not.toBeInTheDocument(); expect(notifyError).not.toHaveBeenCalled();
+    await act(async () => { current.resolve(contextProposal("matter-b")); }); await screen.findByText("matter-b proposed position");
+    expect(screen.getByRole("checkbox", { name: /I reviewed this proposed text/ })).not.toBeChecked();
+    expect(screen.getByRole("checkbox", { name: /I compared the current brief/ })).not.toBeChecked();
+    expect(api.applyMatterBrief).not.toHaveBeenCalled();
 });

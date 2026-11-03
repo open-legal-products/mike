@@ -9,10 +9,13 @@ ordinary uploaded project documents.
 2. Select up to ten source documents and a model configured for the project's
    workspace. Confirm that the current brief and selected source text may be sent
    to that provider. Private account memory and chat are excluded.
-3. Review the proposed position, awaiting items, uncertainties and next action.
-   Expand the prior brief, inspect the quotations and open every listed included
+3. Compare the visible current brief with the complete proposed replacement.
+   Prior positions, uncertainties, awaiting items and actions absent from it will be
+   removed from the active brief; omission does not mean resolution or withdrawal.
+   Review the proposed statements, inspect the quotations and open every listed included
    source revision, including sources the model did not cite.
-4. Confirm review and project sharing, then **Apply reviewed update**. This saves
+4. Separately confirm revision review and approval of any prior-content omissions,
+   then **Apply reviewed update** to share the replacement with the project. This saves
    exactly the proposed text as a new active DOCX version and records the readable
    source fingerprints reviewed. It replaces the active contents; tables, formatting
    and manual notes absent from the proposal are not carried forward. The prior
@@ -144,3 +147,11 @@ whose designation cannot be established; the currently accepted checkpoint stays
 bound. The migration ledger does not automatically replay an already-applied
 filename, so pre-merge testers must reset their disposable database or explicitly
 reapply the revised prototype migration before using this version.
+
+The before/after confirmations are local review controls using the existing Apply
+contract. They reset for each proposal/open/project context and do not certify that
+every prior point was preserved or that the selected evidence is complete. Add earlier
+supporting sources when needed, or keep the current brief instead of approving its
+omissions. Prior context remains noncitable. Late preparation/Apply results from a
+previous open or project are discarded by the UI; the original server operation may
+still finish for its original project, so reopening that project is the way to inspect it.
