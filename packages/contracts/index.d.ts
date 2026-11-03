@@ -749,6 +749,8 @@ export interface BriefSourceIdentity {
   /** Null while current text extraction is unavailable. */
   textHash: string | null;
   filename: string;
+  /** Stored version type or MIME; absent in legacy identities, null when unknown. */
+  fileType?: string | null;
 }
 export interface BriefCitation { source: number; quote: string }
 export interface BriefEntry {

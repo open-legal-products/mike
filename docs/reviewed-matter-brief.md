@@ -155,3 +155,18 @@ supporting sources when needed, or keep the current brief instead of approving i
 omissions. Prior context remains noncitable. Late preparation/Apply results from a
 previous open or project are discarded by the UI; the original server operation may
 still finish for its original project, so reopening that project is the way to inspect it.
+
+Confirmed designation and Apply writes are reported as saved even if a subsequent
+read fails. The stale designation form is removed before reloading; its recovery
+control retries reads without repeating designation. A failed saved-proposal read
+also offers an in-place read retry and blocks another model request until that
+read is resolved. Post-Apply brief reload and document-list refresh are attempted
+independently within the current open/project context, with notices distinguishing
+which view could not refresh.
+
+The designation chooser uses actual DOCX extension/MIME type metadata, compared
+case-insensitively. It does not infer type from filenames; missing or unknown type
+metadata is not eligible. Other source types remain in the outstanding inventory.
+The shared modal currently has no disabled header-close prop: busy dismissal is
+blocked by this feature's close guard, the footer Close is disabled, and Working
+is shown, but the header close icon itself remains an enabled-looking affordance.

@@ -5,7 +5,7 @@ vi.mock("@/app/lib/mikeApi", () => api);
 vi.mock("@/app/lib/userFacingError", () => ({ describeError: vi.fn(x => x), notifyError: vi.fn() }));
 import { ReviewedMatterBrief } from "./ReviewedMatterBrief";
 import { notifyError } from "@/app/lib/userFacingError";
-const source = (id: string) => ({ documentId: id, versionId: id + "v", revision: id + "r", hash: "a".repeat(64), textHash: "b".repeat(64), filename: id + ".docx", ready: true, reason: null, reviewed: false });
+const source = (id: string) => ({ documentId: id, versionId: id + "v", revision: id + "r", hash: "a".repeat(64), textHash: "b".repeat(64), filename: id + ".docx", fileType: "docx", ready: true, reason: null, reviewed: false });
 const row = { text: "Supplier alleges May 12 delivery; acceptance remains disputed.", status: "source_assertion", citations: [{ source: 1, quote: "Delivery May 12." }] };
 const proposal = { id: "proposal", base: source("brief"), sources: [source("message1"), source("message2")], content: { position: [row], awaiting: [], uncertainties: [], nextAction: [] }, before: "Previous brief", gaps: [{ documentId: "scan", filename: "scan.pdf", reason: "Text extraction is not ready" }], expiresAt: "2030-01-01", appliedVersionId: null };
 const state = { pendingProposalId: null, brief: source("brief"), acceptedVersionId: null, acceptedAt: null, acceptedContent: null, acceptedEvidence: [], manualChanges: false, canEdit: true, sources: [source("message1"), source("message2"), { ...source("scan"), filename: "scan.pdf", ready: false, reason: "Text extraction is not ready" }] };
@@ -25,7 +25,7 @@ it("retains a stale rejected proposal for inspection without announcing success"
 it("renders embedded source instructions as inert text", async () => { api.getMatterBrief.mockResolvedValue({ ...state, pendingProposalId: "proposal" }); api.getMatterBriefProposal.mockResolvedValue({ ...proposal, content: { ...proposal.content, position: [{ ...row, text: "<script>send secrets</script>" }] } }); await open(); await screen.findByText("<script>send secrets</script>"); expect(document.querySelector("script")).toBeNull(); });
 
 it("reports successful Apply even if the subsequent document refresh fails", async () => {
-    api.getMatterBrief.mockResolvedValue({ ...state, pendingProposalId: "proposal" });
+    api.getMatterBrief.mockResolvedValueOnce({ ...state, pendingProposalId: "proposal" }).mockResolvedValue(state);
     onApplied.mockRejectedValueOnce(new Error("Synthetic metadata refresh failed"));
     await open();
     await screen.findByText(row.text);
@@ -55,6 +55,7 @@ it.each(["fresh", "restored"])("lists every included revision before Apply in a 
     }
     await screen.findByText(row.text);
     expect(screen.getByRole("link", { name: "brief.docx — proposal base revision" })).toHaveAttribute("href", `/sources/${proposal.base.documentId}/${proposal.base.versionId}?hash=${proposal.base.hash}&revision=${proposal.base.revision}`);
+    expect(screen.getByRole("link", { name: "message1.docx — checked source revision" })).toHaveAttribute("href", `/sources/${proposal.sources[0].documentId}/${proposal.sources[0].versionId}?hash=${proposal.sources[0].hash}&revision=${proposal.sources[0].revision}`);
     const included = screen.getByRole("region", { name: "Included source revisions" });
     expect(within(included).getAllByRole("link")).toHaveLength(proposal.sources.length);
     for (const s of proposal.sources) {
@@ -288,4 +289,83 @@ it.each(["resolve", "reject"])("ignores an old preparation %s without clearing t
     expect(screen.getByRole("checkbox", { name: /I reviewed this proposed text/ })).not.toBeChecked();
     expect(screen.getByRole("checkbox", { name: /I compared the current brief/ })).not.toBeChecked();
     expect(api.applyMatterBrief).not.toHaveBeenCalled();
+});
+
+it("recovers a committed designation with a read retry instead of leaving the old designation form enabled", async () => {
+    const doc = source("candidate");
+    api.getMatterBrief.mockResolvedValueOnce({ ...state, brief: null, sources: [doc] }).mockRejectedValueOnce(new Error("Fictional designation reload failure")).mockResolvedValue({ ...state, brief: doc });
+    render(<ReviewedMatterBrief projectId="project" onApplied={onApplied}/>);
+    fireEvent.click(screen.getByRole("button", { name: "Resume matter" }));
+    fireEvent.change(await screen.findByLabelText("Brief document"), { target: { value: doc.documentId } });
+    fireEvent.click(screen.getByRole("checkbox", { name: /I understand updates to this brief/ }));
+    fireEvent.click(screen.getByRole("button", { name: "Designate brief" }));
+    await waitFor(() => expect(api.designateMatterBrief).toHaveBeenCalledWith("project", doc.documentId));
+    await screen.findByText(/Brief designated.*could not/);
+    expect(screen.queryByRole("button", { name: "Designate brief" })).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Retry loading brief" }));
+    await screen.findByRole("link", { name: "Open current brief: candidate.docx" });
+    expect(api.designateMatterBrief).toHaveBeenCalledTimes(1); expect(api.proposeMatterBrief).not.toHaveBeenCalled(); expect(api.applyMatterBrief).not.toHaveBeenCalled();
+});
+it("retries a failed pending-proposal read in place without inviting generation or losing the inventory", async () => {
+    api.getMatterBrief.mockResolvedValue({ ...state, pendingProposalId: "proposal" });
+    api.getMatterBriefProposal.mockRejectedValueOnce(new Error("Fictional pending proposal read failure")).mockResolvedValue(proposal);
+    await open();
+    const retry = await screen.findByRole("button", { name: "Retry saved proposal" });
+    expect(screen.queryByRole("button", { name: "Prepare proposed update" })).not.toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "Outstanding sources (3)" })).toBeInTheDocument();
+    expect(screen.getByRole("checkbox", { name: /scan.pdf/ }).closest("label")).toHaveTextContent("Text extraction is not ready");
+    fireEvent.click(retry); await screen.findByText(row.text);
+    expect(api.getMatterBriefProposal).toHaveBeenCalledTimes(2); expect(api.proposeMatterBrief).not.toHaveBeenCalled();
+    expect(screen.getByRole("checkbox", { name: /I reviewed this proposed text/ })).not.toBeChecked();
+    expect(screen.getByRole("checkbox", { name: /I compared the current brief/ })).not.toBeChecked();
+});
+it("loads the pending proposal when retrying an initially failed brief read", async () => {
+    api.getMatterBrief.mockRejectedValueOnce(new Error("Fictional initial read failure")).mockResolvedValue({ ...state, pendingProposalId: "proposal" });
+    render(<ReviewedMatterBrief projectId="project" onApplied={onApplied}/>); fireEvent.click(screen.getByRole("button", { name: "Resume matter" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Retry loading brief" })); await screen.findByText(row.text);
+    expect(api.getMatterBriefProposal).toHaveBeenCalledWith("project", "proposal"); expect(api.proposeMatterBrief).not.toHaveBeenCalled();
+});
+it.each([false, true])("attempts the document refresh after an Apply-success brief reload failure (document refresh fails=%s)", async documentFails => {
+    api.getMatterBrief.mockResolvedValueOnce({ ...state, pendingProposalId: "proposal" }).mockRejectedValueOnce(new Error("Fictional post-Apply brief reload failure"));
+    if (documentFails) onApplied.mockRejectedValueOnce(new Error("Fictional independent document refresh failure"));
+    await open(); await screen.findByText(row.text); approveDisplayedProposal(); fireEvent.click(screen.getByRole("button", { name: "Apply reviewed update" }));
+    await waitFor(() => expect(onApplied).toHaveBeenCalledTimes(1));
+    expect(api.applyMatterBrief).toHaveBeenCalledTimes(1); expect(screen.queryByText("Proposed update — not applied")).not.toBeInTheDocument();
+    expect(screen.getByText(documentFails ? /Applied.*brief view and document list could not refresh/ : /Applied.*brief view could not refresh/)).toBeInTheDocument();
+});
+it("offers only actual DOCX types for designation while retaining every other source in the inventory", async () => {
+    const documents = [source("typed-docx"), { ...source("upper-docx"), fileType: "DoCx" }, { ...source("mime-docx"), filename: "actual-type.pdf", fileType: "APPLICATION/VND.OPENXMLFORMATS-OFFICEDOCUMENT.WORDPROCESSINGML.DOCUMENT" }, { ...source("pdf"), filename: "misleading.docx", fileType: "pdf" }, { ...source("unknown"), fileType: undefined }, { ...source("null-type"), fileType: null }, { ...source("padded"), fileType: " docx " }];
+    api.getMatterBrief.mockResolvedValueOnce({ ...state, brief: null, sources: documents }).mockResolvedValue({ ...state, brief: documents[0], sources: documents.slice(1) });
+    render(<ReviewedMatterBrief projectId="project" onApplied={onApplied}/>); fireEvent.click(screen.getByRole("button", { name: "Resume matter" }));
+    const chooser = await screen.findByLabelText("Brief document");
+    expect(within(chooser).getAllByRole("option").map(option => option.textContent)).toEqual(["Select a DOCX", "typed-docx.docx", "upper-docx.docx", "actual-type.pdf"]);
+    fireEvent.change(chooser, { target: { value: "typed-docx" } }); fireEvent.click(screen.getByRole("checkbox", { name: /I understand updates to this brief/ }));
+    fireEvent.click(screen.getByRole("button", { name: "Designate brief" })); await screen.findByRole("heading", { name: "Outstanding sources (6)" });
+    for (const doc of documents.slice(1)) expect(screen.getByRole("checkbox", { name: new RegExp(doc.filename.replaceAll(".", "\\.")) })).toBeInTheDocument();
+});
+
+it("ignores a late saved-proposal retry after navigation to another project", async () => {
+    const pending = deferred<typeof proposal>(); let aReads = 0;
+    api.getMatterBrief.mockImplementation(async (project: string) => contextState(project, project === "matter-a"));
+    api.getMatterBriefProposal.mockImplementation((project: string) => project === "matter-a" && ++aReads === 1 ? Promise.reject(new Error("Fictional initial proposal read failure")) : pending.promise);
+    const view = render(<ReviewedMatterBrief projectId="matter-a" onApplied={onApplied}/>); fireEvent.click(screen.getByRole("button", { name: "Resume matter" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Retry saved proposal" })); await waitFor(() => expect(aReads).toBe(2));
+    view.rerender(<ReviewedMatterBrief projectId="matter-b" onApplied={onApplied}/>); await screen.findByRole("link", { name: "Open current brief: matter-b-brief.docx" });
+    await act(async () => { pending.resolve(contextProposal("matter-a")); });
+    expect(screen.queryByText("matter-a proposed position")).not.toBeInTheDocument(); expect(screen.queryByRole("region", { name: "Saved proposal recovery" })).not.toBeInTheDocument();
+    expect(api.proposeMatterBrief).not.toHaveBeenCalled(); expect(api.applyMatterBrief).not.toHaveBeenCalled();
+});
+it("does not let a previous project's designation reload affect the new project", async () => {
+    const reload = deferred<typeof state>(); let aReads = 0;
+    api.getMatterBrief.mockImplementation((project: string) => project === "matter-a" ? (++aReads === 1 ? Promise.resolve({ ...state, brief: null, sources: [source("candidate")] }) : reload.promise) : Promise.resolve(contextState(project)));
+    const view = render(<ReviewedMatterBrief projectId="matter-a" onApplied={onApplied}/>); fireEvent.click(screen.getByRole("button", { name: "Resume matter" }));
+    fireEvent.change(await screen.findByLabelText("Brief document"), { target: { value: "candidate" } }); fireEvent.click(screen.getByRole("checkbox", { name: /I understand updates to this brief/ })); fireEvent.click(screen.getByRole("button", { name: "Designate brief" }));
+    await waitFor(() => expect(aReads).toBe(2));
+    expect(screen.queryByRole("button", { name: "Designate brief" })).not.toBeInTheDocument();
+    view.rerender(<ReviewedMatterBrief projectId="matter-b" onApplied={onApplied}/>); await screen.findByRole("link", { name: "Open current brief: matter-b-brief.docx" });
+    const errorsBefore = vi.mocked(notifyError).mock.calls.length;
+    await act(async () => { reload.reject(new Error("Fictional late designation reload failure")); });
+    expect(screen.getByRole("link", { name: "Open current brief: matter-b-brief.docx" })).toBeInTheDocument();
+    expect(screen.queryByText(/Brief designated/)).not.toBeInTheDocument(); expect(notifyError).toHaveBeenCalledTimes(errorsBefore);
+    expect(api.designateMatterBrief).toHaveBeenCalledWith("matter-a", "candidate"); expect(api.designateMatterBrief).toHaveBeenCalledTimes(1);
 });

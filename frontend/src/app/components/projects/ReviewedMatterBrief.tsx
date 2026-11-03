@@ -1,5 +1,5 @@
 "use client";
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import type { MatterBriefContent, MatterBriefProposal, MatterBriefState, BriefSourceIdentity } from "@mike/contracts";
 import { Modal } from "@/app/components/modals/Modal";
 import { FormTextInput } from "@/app/components/ui/form-field";
@@ -28,9 +28,33 @@ export function ReviewedMatterBrief({ projectId, onApplied }: {
     const [proposal, setProposal] = useState<MatterBriefProposal | null>(null), [selected, setSelected] = useState<string[]>([]);
     const [target, setTarget] = useState(""), [model, setModel] = useState("");
     const [comparison, setComparison] = useState(false);
+    const [proposalReadFailed, setProposalReadFailed] = useState(false);
     const sessionRef = useRef(0);
     const [confirm, setConfirm] = useState(false), [provider, setProvider] = useState(false), [busy, setBusy] = useState(false), [notice, setNotice] = useState("");
-    async function load(isCurrent: () => boolean) { const next = await getMatterBrief(projectId); if (isCurrent()) setState(next); return next; }
+    const readProposal = useCallback(async (id: string, isCurrent: () => boolean) => {
+        try {
+            const next = await getMatterBriefProposal(projectId, id);
+            if (!isCurrent()) return;
+            setProposal(next);
+            setProposalReadFailed(false);
+            setConfirm(false);
+            setComparison(false);
+        } catch (error) {
+            if (isCurrent()) setProposalReadFailed(true);
+            throw error;
+        }
+    }, [projectId]);
+    const load = useCallback(async (isCurrent: () => boolean) => {
+        const next = await getMatterBrief(projectId);
+        if (!isCurrent()) return next;
+        setState(next);
+        setProposal(null);
+        setProposalReadFailed(false);
+        setConfirm(false);
+        setComparison(false);
+        if (next.pendingProposalId) await readProposal(next.pendingProposalId, isCurrent);
+        return next;
+    }, [projectId, readProposal]);
     function report(error: unknown) { notifyError(error, { operation: "project_brief.ui" }); }
     function close() { if (!busy) { setConfirm(false); setComparison(false); setOpen(false); } }
     useEffect(() => {
@@ -41,25 +65,17 @@ export function ReviewedMatterBrief({ projectId, onApplied }: {
         setBusy(true);
         setState(null);
         setProposal(null);
+        setProposalReadFailed(false);
         setConfirm(false);
         setComparison(false);
         setProvider(false);
         setNotice("");
         setSelected([]);
-        getMatterBrief(projectId).then(async (next) => {
-            if (!isCurrent())
-                return;
-            setState(next);
-            if (next.pendingProposalId) {
-                const q = await getMatterBriefProposal(projectId, next.pendingProposalId);
-                if (isCurrent())
-                    setProposal(q);
-            }
-        }).catch(error => { if (isCurrent())
+        load(isCurrent).catch(error => { if (isCurrent())
             report(error); }).finally(() => { if (isCurrent())
             setBusy(false); });
         return () => { if (sessionRef.current === session) sessionRef.current++; };
-    }, [open, projectId]);
+    }, [open, projectId, load]);
     async function act(action: (isCurrent: () => boolean) => Promise<void>) {
         const session = sessionRef.current;
         const isCurrent = () => sessionRef.current === session;
@@ -73,6 +89,23 @@ export function ReviewedMatterBrief({ projectId, onApplied }: {
     finally {
         if (isCurrent()) setBusy(false);
     } }
+    async function designateCurrentBrief(isCurrent: () => boolean) {
+        await designateMatterBrief(projectId, target);
+        if (!isCurrent()) return;
+        setConfirm(false);
+        setComparison(false);
+        setTarget("");
+        setState(null);
+        setNotice("Brief designated. Reloading the saved brief view…");
+        try {
+            await load(isCurrent);
+            if (isCurrent()) setNotice("Brief designated.");
+        } catch (error) {
+            if (!isCurrent()) return;
+            report(error);
+            setNotice("Brief designated. The saved brief view could not finish loading. Retry the read below to see it.");
+        }
+    }
     async function applyReviewedUpdate(isCurrent: () => boolean) {
         if (!proposal || !confirm || !comparison) return;
         await applyMatterBrief(projectId, proposal.id);
@@ -81,19 +114,41 @@ export function ReviewedMatterBrief({ projectId, onApplied }: {
         setConfirm(false);
         setComparison(false);
         setSelected([]);
+        setState(null);
         setNotice("Applied. A new brief version and the source-review checkpoint were saved together.");
+        let briefRefreshFailed = false;
+        let documentRefreshFailed = false;
         try {
             await load(isCurrent);
+        } catch (error) {
             if (!isCurrent()) return;
+            briefRefreshFailed = true;
+            report(error);
+        }
+        if (!isCurrent()) return;
+        try {
             await onApplied?.();
         } catch (error) {
             if (!isCurrent()) return;
+            documentRefreshFailed = true;
             report(error);
-            setNotice("Applied. The brief was saved, but the document list could not refresh. Reload the project to see its current version.");
         }
+        if (!isCurrent()) return;
+        if (briefRefreshFailed && documentRefreshFailed)
+            setNotice("Applied. The brief was saved, but the brief view and document list could not refresh. Retry loading the brief or reload the project.");
+        else if (briefRefreshFailed)
+            setNotice("Applied. The brief was saved, but the brief view could not refresh. Retry loading the brief to see its current version.");
+        else if (documentRefreshFailed)
+            setNotice("Applied. The brief was saved, but the document list could not refresh. Reload the project to see its current version.");
     }
     const unreviewed = state?.sources.filter(s => !s.reviewed) ?? [];
     const includedSourceIds = new Set(proposal?.sources.map(s => s.documentId));
+    const docxSources = state?.sources.filter(source => {
+        if (typeof source.fileType !== "string") return false;
+        const type = source.fileType.toLowerCase();
+        return type === "docx" || type === "application/vnd.openxmlformats-officedocument.wordprocessingml.document";
+    }) ?? [];
+    const targetAvailable = docxSources.some(source => source.documentId === target);
     return <>
         <TextButtonUI onClick={() => setOpen(true)}>Resume matter</TextButtonUI>
         <Modal open={open} onClose={close} breadcrumbs={["Reviewed matter brief"]} size="xl" cancelAction={{ label: "Close", onClick: close, disabled: busy }}>
@@ -102,9 +157,9 @@ export function ReviewedMatterBrief({ projectId, onApplied }: {
                 {busy && <p role="status">Working…</p>}{notice && <p role="status">{notice}</p>}
                 {!busy && !state && <PillButtonUI tone="black" onClick={() => void act(async isCurrent => { await load(isCurrent); })}>Retry loading brief</PillButtonUI>}
                 {state && !state.brief && <section className="space-y-3"><h2 className="font-serif text-xl">Choose the project’s brief</h2><p className="text-sm">Upload a DOCX first, then designate it here. Existing document permissions and version history apply.</p>
-                    <label className="block text-sm">Brief document<select className="mt-1 block w-full rounded-lg p-2 focus-visible:ring-2" value={target} onChange={e => setTarget(e.target.value)} disabled={!state.canEdit || busy}><option value="">Select a DOCX</option>{state.sources.map(s => <option key={s.documentId} value={s.documentId}>{s.filename}</option>)}</select></label>
+                    <label className="block text-sm">Brief document<select className="mt-1 block w-full rounded-lg p-2 focus-visible:ring-2" value={target} onChange={e => setTarget(e.target.value)} disabled={!state.canEdit || busy}><option value="">Select a DOCX</option>{docxSources.map(s => <option key={s.documentId} value={s.documentId}>{s.filename}</option>)}</select></label>
                     <label className="flex gap-2 text-sm"><input type="checkbox" className={TABLE_CHECKBOX_CLASS} checked={confirm} onChange={e => setConfirm(e.target.checked)}/>I understand updates to this brief will be visible to people with project access.</label>
-                    <PillButtonUI tone="black" disabled={!state.canEdit || !target || !confirm || busy} onClick={() => void act(async isCurrent => { await designateMatterBrief(projectId, target); if (!isCurrent()) return; await load(isCurrent); if (isCurrent()) { setConfirm(false); setComparison(false); } })}>Designate brief</PillButtonUI>
+                    <PillButtonUI tone="black" disabled={!state.canEdit || !targetAvailable || !confirm || busy} onClick={() => void act(designateCurrentBrief)}>Designate brief</PillButtonUI>
                 </section>}
                 {state?.brief && <>
                     <section className="space-y-2"><h2 className="font-serif text-xl">Resume this matter</h2><a className="text-sm underline focus-visible:ring-2" href={matterBriefSourceUrl(projectId, state.brief)} target="_blank" rel="noopener noreferrer">Open current brief: {state.brief.filename}</a>
@@ -113,16 +168,17 @@ export function ReviewedMatterBrief({ projectId, onApplied }: {
                         {state.acceptedContent && <details><summary className="cursor-pointer text-sm">Last accepted position {state.manualChanges ? "(historical)" : ""}</summary><div className="mt-3 space-y-4"><BriefContent content={state.acceptedContent} evidence={state.acceptedEvidence} projectId={projectId}/></div></details>}
                     </section>
                     <section className="space-y-3"><h2 className="font-medium">Outstanding sources ({unreviewed.length})</h2><p className="text-sm text-gray-600">Select up to ten. Unreadable or incomplete extraction stays outstanding. This inventory does not prove the matter file is complete.</p>
-                        {state.sources.map(s => <label key={s.documentId} className="flex items-start gap-2 text-sm"><input type="checkbox" className={TABLE_CHECKBOX_CLASS} disabled={busy || !state.canEdit || !!proposal || selected.length >= 10 && !selected.includes(s.documentId)} checked={proposal ? includedSourceIds.has(s.documentId) : selected.includes(s.documentId)} onChange={e => setSelected(ids => e.target.checked ? [...ids, s.documentId] : ids.filter(id => id !== s.documentId))}/><span>{s.filename}
+                        {state.sources.map(s => <label key={s.documentId} className="flex items-start gap-2 text-sm"><input type="checkbox" className={TABLE_CHECKBOX_CLASS} disabled={busy || !state.canEdit || !!proposal || proposalReadFailed || selected.length >= 10 && !selected.includes(s.documentId)} checked={proposal ? includedSourceIds.has(s.documentId) : selected.includes(s.documentId)} onChange={e => setSelected(ids => e.target.checked ? [...ids, s.documentId] : ids.filter(id => id !== s.documentId))}/><span>{s.filename}
                             {proposal && <span className="block text-xs text-gray-500">{includedSourceIds.has(s.documentId) ? "Included in this proposal — review the listed revision below." : "Not included in this proposal."}</span>}
                             <span className="block text-xs text-gray-500">{s.reviewed ? "Reviewed revision" : s.ready ? "Not reviewed" : s.reason ?? "Not readable"}</span></span></label>)}
                         {!state.sources.length && <p className="text-sm">No source documents in this project yet.</p>}
                     </section>
-                    {state.canEdit && !proposal && <section className="space-y-3"><label className="block text-sm">Configured model ID<FormTextInput value={model} onChange={e => setModel(e.target.value)} placeholder="Choose a model configured for this workspace" disabled={busy}/></label>
+                    {state.canEdit && !proposal && !proposalReadFailed && !busy && <section className="space-y-3"><label className="block text-sm">Configured model ID<FormTextInput value={model} onChange={e => setModel(e.target.value)} placeholder="Choose a model configured for this workspace" disabled={busy}/></label>
                         <label className="flex gap-2 text-sm"><input type="checkbox" className={TABLE_CHECKBOX_CLASS} checked={provider} onChange={e => setProvider(e.target.checked)}/>Send only the current brief and selected source text to this model’s configured provider. Provider charges may apply.</label>
                         <PillButtonUI tone="black" disabled={busy || !selected.length || !model.trim() || !provider} onClick={() => void act(async isCurrent => { const next = await proposeMatterBrief(projectId, selected, model.trim()); if (!isCurrent()) return; setProposal(next); setConfirm(false); setComparison(false); })}>Prepare proposed update</PillButtonUI>
                     </section>}
                 </>}
+                {state && proposalReadFailed && <section className="space-y-2" aria-label="Saved proposal recovery"><p className="text-sm">Your saved proposal could not be loaded. Retry reading it before preparing another update.</p><PillButtonUI tone="black" disabled={busy} onClick={() => void act(async isCurrent => { await load(isCurrent); })}>Retry saved proposal</PillButtonUI></section>}
                 {proposal && <section className="space-y-4"><h2 className="font-serif text-xl">Proposed update — not applied</h2><p className="text-sm">Review every statement and quote. The model cannot approve a decision or verify an obligation. Exact quote matching does not establish that a summary is correct.</p>
                     <p className="text-sm"><a className="underline focus-visible:ring-2" href={matterBriefSourceUrl(projectId, proposal.base)} target="_blank" rel="noopener noreferrer">{proposal.base.filename} — proposal base revision</a></p>
                     <section aria-label="Included source revisions" className="space-y-2">
