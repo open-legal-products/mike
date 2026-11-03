@@ -152,11 +152,10 @@ export async function proposeBrief(db: Db, a: Actor, input: {
             return failure("conflict", "A source's stored bytes changed or are unavailable. Refresh before proposing.");
     }
     const evidence = snapshots.map(s => ({ ...s, text: s.text! })) as Evidence[];
-    let content: MatterBriefContent;
-    try {
-        let generate = generator;
-        let resolve: ((value: unknown, evidence: Evidence[]) => unknown) | undefined;
-        if (!generate) {
+    let generate = generator;
+    let resolve: ((value: unknown, evidence: Evidence[]) => unknown) | undefined;
+    if (!generate) {
+        try {
             const { data: project, error } = await db.from("projects").select("org_id").eq("id", a.projectId).single();
             if (error)
                 return internalFailure(error);
@@ -173,7 +172,12 @@ export async function proposeBrief(db: Db, a: Actor, input: {
                     ...(packet.repair ? { repairInstruction: "The previous response failed the JSON shape or source-excerpt reference contract. Regenerate from this original evidence within all stated limits, using only supplied source-bound excerpt IDs. Do not infer that a previous draft was approved." } : {}),
                 }),
                 maxTokens: 6000, abortSignal: generationSignal });
+        } catch (error) {
+            return internalFailure(error);
         }
+    }
+    let content: MatterBriefContent;
+    try {
         const generateAttempt = generate;
         content = await generateValidatedContent(repair => generateAttempt({ before: evidence[0].text, evidence, model: input.model, ...(repair ? { repair: true as const } : {}) }), evidence, resolve);
     }

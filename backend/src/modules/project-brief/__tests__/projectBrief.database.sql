@@ -339,7 +339,7 @@ end $$;
 -- includes them. This fixture runs as the disposable database's administrator.
 set local track_functions='all';
 do $$
-declare a uuid:=gen_random_uuid();p uuid:=gen_random_uuid();b uuid;s uuid;q uuid;
+declare a uuid:=gen_random_uuid();p uuid:=gen_random_uuid();b uuid;s uuid;q uuid;invalid uuid;
   calls_before bigint;calls_after bigint;expected_calls bigint;source jsonb;bundle jsonb;
 begin
  insert into auth.users(id,email) values(a,'snapshot-test@example.invalid');
@@ -348,6 +348,15 @@ begin
  perform public.project_brief_designate(p,a,'snapshot-test@example.invalid',b);
  q:=pg_temp.make_proposal(p,a,b,s);
  perform public.project_brief_apply(p,a,'snapshot-test@example.invalid',q);
+ update public.document_version_texts set status='ready',text_content='Accepted brief',source_sha256=repeat('a',64),textless_page_count=0
+   where version_id=(select current_version_id from public.documents where id=b);
+ for i in 1..3 loop
+  q:=pg_temp.make_proposal(p,a,b,s);
+  update public.project_brief_proposals set created_at=now()+i*interval '1 second' where id=q;
+ end loop;
+ invalid:=pg_temp.make_proposal(p,a,b,s);
+ update public.project_brief_proposals set created_at=now()+interval '10 seconds',
+   sources=sources||jsonb_build_array(jsonb_build_object('documentId',gen_random_uuid())) where id=invalid;
  select count(*) into expected_calls from public.documents where project_id=p and archived_at is null;
  select coalesce(sum(calls),0) into calls_before from pg_stat_xact_user_functions
    where funcid='public.project_brief_source(uuid)'::regprocedure;
@@ -357,6 +366,7 @@ begin
  perform pg_temp.assert_true(calls_after-calls_before=expected_calls,
    format('one source snapshot per document: expected %s calls, received %s',expected_calls,calls_after-calls_before));
  raise notice 'snapshot calls per bundle: % for % documents',calls_after-calls_before,expected_calls;
+ perform pg_temp.assert_true(bundle->>'pendingProposalId'=q::text,'newest invalid candidate cannot shadow newest valid pending proposal');
  perform pg_temp.assert_true(jsonb_array_length(bundle->'sources')=expected_calls,'bundle retains all project sources');
  perform pg_temp.assert_true((select (x->>'reviewed')::boolean from jsonb_array_elements(bundle->'sources') x
    where x->>'documentId'=s::text),'reused snapshot preserves reviewed-source detection');
@@ -368,6 +378,7 @@ begin
   bundle:=public.project_brief_bundle(p,a,'snapshot-test@example.invalid');
   perform pg_temp.assert_true((select x->>'reason'='Stored file unavailable' from jsonb_array_elements(bundle->'sources') x
     where x->>'documentId'=s::text),'bundle preserves stored-file reason rather than an unselected fallback');
+  perform pg_temp.assert_true(bundle->>'pendingProposalId' is null,'missing stored source suppresses every pending candidate');
   raise sqlstate 'ZX001';
  exception when sqlstate 'ZX001' then null;end;
  begin
@@ -378,6 +389,7 @@ begin
   bundle:=public.project_brief_bundle(p,a,'snapshot-test@example.invalid');
   perform pg_temp.assert_true((select x->>'reason'='Extraction must be refreshed' from jsonb_array_elements(bundle->'sources') x
     where x->>'documentId'=s::text),'bundle preserves extractor reason rather than an unselected fallback');
+  perform pg_temp.assert_true(bundle->>'pendingProposalId' is null,'noncurrent extractor suppresses every pending candidate');
   raise sqlstate 'ZX001';
  exception when sqlstate 'ZX001' then null;end;
 end $$;

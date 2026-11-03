@@ -11246,7 +11246,7 @@ end $$;
 
 create or replace function public.project_brief_bundle(p_project_id uuid,p_actor_id uuid,p_actor_email text,p_selected uuid[] default '{}')
 returns jsonb language plpgsql security invoker set search_path='' as $$
-declare b public.project_reviewed_briefs%rowtype; s jsonb; snapshots jsonb; role text; accepted_live boolean;
+declare b public.project_reviewed_briefs%rowtype; s jsonb; snapshots jsonb; role text; accepted_live boolean; pending_proposal_id uuid;
 begin
   role:=public.project_brief_access(p_project_id,p_actor_id,p_actor_email,false);
   if cardinality(p_selected)>0 and (select count(*) from public.documents where project_id=p_project_id and archived_at is null)>500 then
@@ -11260,10 +11260,23 @@ begin
   with source_snapshots as materialized (
     select d.id document_id,d.current_version_id,public.project_brief_source(d.id) source
     from public.documents d where d.project_id=p_project_id and d.archived_at is null
+  ), pending_proposal as (
+    select q.id from public.project_brief_proposals q
+    where q.project_id=p_project_id and q.actor_id=p_actor_id and q.designation_id=b.designation_id
+      and q.applied_at is null and q.expires_at>now()
+      and q.base=(select source from source_snapshots where document_id=b.document_id)
+      -- This inventory contains only active documents in the requested project.
+      -- Compare plain identities before adding presentation text/reviewed fields.
+      and not exists(select 1 from jsonb_array_elements(q.sources) source_row(value)
+        where not exists(select 1 from source_snapshots current_source
+          where current_source.document_id=(source_row.value->>'documentId')::uuid
+            and current_source.source=source_row.value))
+    order by q.created_at desc limit 1
   )
   select coalesce(jsonb_agg(x.snapshot order by x.document_id),'[]'),
-    (select source from source_snapshots where document_id=b.document_id)
-    into snapshots,s from (
+    (select source from source_snapshots where document_id=b.document_id),
+    (select id from pending_proposal)
+    into snapshots,s,pending_proposal_id from (
     select d.document_id, coalesce(d.source,jsonb_build_object('documentId',d.document_id,'versionId','','revision','','hash','','textHash','','filename','Document awaiting version','ready',false,'reason','No active readable version')) || jsonb_build_object(
       'reviewed',exists(select 1 from source_snapshots live_brief where live_brief.document_id=b.document_id and live_brief.source is not null)
         and exists(select 1 from public.project_brief_reviews r where r.project_id=p_project_id
@@ -11276,15 +11289,7 @@ begin
     where accepted_version.id=(b.accepted_snapshot->>'versionId')::uuid
       and accepted_version.document_id=b.document_id and accepted_version.deleted_at is null);
   return jsonb_build_object('designationId',b.designation_id,'brief',s,'accepted',case when accepted_live then b.accepted_snapshot end,'acceptedContent',case when accepted_live then b.accepted_content end,
-    'pendingProposalId',(select q.id from public.project_brief_proposals q
-      where q.project_id=p_project_id and q.actor_id=p_actor_id and q.designation_id=b.designation_id
-        and q.applied_at is null and q.expires_at>now() and s is not null and q.base=s
-        and not exists(select 1 from jsonb_array_elements(q.sources) source_row(value)
-          where not exists(select 1 from public.documents source_document
-            where source_document.id=(source_row.value->>'documentId')::uuid
-              and source_document.project_id=p_project_id and source_document.archived_at is null)
-            or source_row.value is distinct from public.project_brief_source((source_row.value->>'documentId')::uuid))
-      order by q.created_at desc limit 1),
+    'pendingProposalId',pending_proposal_id,
     'acceptedEvidence',case when not accepted_live then '[]'::jsonb else coalesce((select jsonb_build_array(q.base)||q.sources from public.project_brief_proposals q where q.project_id=p_project_id and q.applied_version_id=(b.accepted_snapshot->>'versionId')::uuid order by q.applied_at desc limit 1),'[]'::jsonb) end,
     'acceptedAt',case when accepted_live then b.accepted_at end,'canEdit',role in ('owner','editor'),'sources',snapshots);
 end $$;
