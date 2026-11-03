@@ -34,6 +34,17 @@ type Bundle = {
     canEdit: boolean;
     sources: Snapshot[];
 };
+type StoredBriefProposal = {
+    id: string;
+    base: Snapshot;
+    sources: Snapshot[];
+    content: MatterBriefContent;
+    before_text: string;
+    gaps: MatterBriefProposal["gaps"];
+    expires_at: string;
+    applied_version_id: string | null;
+    applied_at: string | null;
+};
 const args = (a: Actor) => ({ p_project_id: a.projectId, p_actor_id: a.userId, p_actor_email: a.userEmail ?? "" });
 function dbFailure(error: {
     code?: string;
@@ -80,9 +91,32 @@ export type BriefGenerator = (input: {
     repair?: true;
 }) => Promise<unknown>;
 function stripText(s: Snapshot) { const { text: _text, reviewed: _reviewed, ...snapshot } = s; return snapshot; }
-function view(q: Record<string, any>): MatterBriefProposal {
+function toProposal(q: StoredBriefProposal): MatterBriefProposal {
     return { id: q.id, base: identity(q.base), sources: q.sources.map(identity), content: q.content,
         before: q.before_text, gaps: q.gaps, expiresAt: q.expires_at, appliedVersionId: q.applied_version_id };
+}
+function renderProposalDocx({ content, evidence, gaps }: {
+    content: MatterBriefContent;
+    evidence: Evidence[];
+    gaps: MatterBriefProposal["gaps"];
+}) {
+    const paragraphs: Paragraph[] = [new Paragraph({ text: "Matter brief — internal human-reviewed update", heading: "Title" }),
+        new Paragraph("Acceptance records a review of the listed source revisions; it does not certify legal conclusions or deadlines."),
+        new Paragraph("Visually check signatures and execution pages in the originals; text extraction may not capture them.")];
+    for (const [key, title] of Object.entries(sections)) {
+        paragraphs.push(new Paragraph({ text: title, heading: "Heading1" }));
+        for (const row of content[key as keyof MatterBriefContent]) {
+            paragraphs.push(new Paragraph({ children: [new TextRun({ text: `[${row.status}] `, italics: true }), new TextRun(row.text)] }));
+            for (const c of row.citations) {
+                const s = evidence[c.source];
+                paragraphs.push(new Paragraph(`${s.filename} · document ${s.documentId} · version ${s.versionId} · SHA-256 ${s.hash}: “${c.quote}”`));
+            }
+        }
+    }
+    paragraphs.push(new Paragraph({ text: "Outstanding sources", heading: "Heading1" }));
+    if (gaps.length) for (const gap of gaps) paragraphs.push(new Paragraph(`${gap.filename}: ${gap.reason}`));
+    else paragraphs.push(new Paragraph("No outstanding sources in the current project inventory. This does not establish that the file is complete."));
+    return Packer.toBuffer(new Document({ sections: [{ children: paragraphs }] }));
 }
 /** Only server-loaded evidence enters the adapter. No user memory or chat context. */
 export async function proposeBrief(db: Db, a: Actor, input: {
@@ -150,23 +184,7 @@ export async function proposeBrief(db: Db, a: Actor, input: {
         .map(s => ({ documentId: s.documentId, filename: s.filename, reason: s.reason ?? "Not selected for this proposal" }));
     const id = randomUUID(), versionId = randomUUID();
     const filename = "Reviewed matter brief.docx";
-    const paragraphs: Paragraph[] = [new Paragraph({ text: "Matter brief — internal human-reviewed update", heading: "Title" }),
-        new Paragraph("Acceptance records a review of the listed source revisions; it does not certify legal conclusions or deadlines."),
-        new Paragraph("Visually check signatures and execution pages in the originals; text extraction may not capture them.")];
-    for (const [key, title] of Object.entries(sections)) {
-        paragraphs.push(new Paragraph({ text: title, heading: "Heading1" }));
-        for (const row of content[key as keyof MatterBriefContent]) {
-            paragraphs.push(new Paragraph({ children: [new TextRun({ text: `[${row.status}] `, italics: true }), new TextRun(row.text)] }));
-            for (const c of row.citations) {
-                const s = evidence[c.source];
-                paragraphs.push(new Paragraph(`${s.filename} · document ${s.documentId} · version ${s.versionId} · SHA-256 ${s.hash}: “${c.quote}”`));
-            }
-        }
-    }
-    paragraphs.push(new Paragraph({ text: "Outstanding sources", heading: "Heading1" }));
-    if (gaps.length) for (const gap of gaps) paragraphs.push(new Paragraph(`${gap.filename}: ${gap.reason}`));
-    else paragraphs.push(new Paragraph("No outstanding sources in the current project inventory. This does not establish that the file is complete."));
-    const bytes = await Packer.toBuffer(new Document({ sections: [{ children: paragraphs }] }));
+    const bytes = await renderProposalDocx({ content, evidence, gaps });
     const path = versionStorageKey(a.userId, b.brief.documentId, versionId, filename);
     // Durable cleanup precedes upload; failed requests/crashes cannot strand bytes.
     // The normal cleanup worker protects committed version references.
@@ -189,14 +207,15 @@ export async function getBriefProposal(db: Db, a: Actor, id: string): Promise<Se
     const { data, error } = await db.from("project_brief_proposals").select("*").eq("id", id).eq("project_id", a.projectId).eq("actor_id", a.userId).maybeSingle();
     if (error)
         return internalFailure(error);
-    if (!data)
+    const proposal = data as StoredBriefProposal | null;
+    if (!proposal)
         return failure("not_found", "The proposal is unavailable.");
-    if (!data.applied_at && !contentSchema.safeParse(data.content).success)
+    if (!proposal.applied_at && !contentSchema.safeParse(proposal.content).success)
         return failure("conflict", "The proposal uses an obsolete evidence contract. Prepare a new proposal citing selected source documents rather than the prior brief.");
     // Retained proposal text is not authority to read a document that has
     // since left this project. Native shared copies follow their own lifecycle.
     const currentDocuments = new Set(gate.data.sources.map(s => s.documentId));
-    const references = [data.base, ...data.sources];
+    const references = [proposal.base, ...proposal.sources];
     if (!references.every(s => currentDocuments.has(s.documentId)))
         return failure("not_found", "The proposal is unavailable.");
     const { data: versions, error: versionsError } = await db.from("document_versions").select("id,document_id")
@@ -206,7 +225,7 @@ export async function getBriefProposal(db: Db, a: Actor, id: string): Promise<Se
     const liveVersions = new Map((versions ?? []).map((v: { id: string; document_id: string }) => [v.id, v.document_id]));
     if (!references.every(s => liveVersions.get(s.versionId) === s.documentId))
         return failure("not_found", "The proposal is unavailable.");
-    return ok(view(data));
+    return ok(toProposal(proposal));
 }
 export async function applyBrief(db: Db, a: Actor, id: string): Promise<ServiceResult<{
     versionId: string;
