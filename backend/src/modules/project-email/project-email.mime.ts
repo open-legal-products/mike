@@ -1,4 +1,4 @@
-import { createHash } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { convert } from "html-to-text";
 import { contentTypeForDocumentType, documentSuffix } from "../../lib/documentTypes";
 
@@ -44,7 +44,7 @@ function sourceDestination(value: string | undefined): string | undefined {
   return undefined;
 }
 function renderHtml(text: string): string {
-  const limitMarker = "[Email HTML structure exceeds the import limit]";
+  const limitMarker = `[Email HTML structure exceeds the import limit ${randomUUID()}]`;
   const rendered = convert(text, {
     wordwrap: false,
     // Reject rather than silently accept the converter's partial rendering.
@@ -58,7 +58,8 @@ function renderHtml(text: string): string {
     },
     selectors: [{ selector: "img", format: "skip" }, { selector: "script", format: "skip" }, { selector: "style", format: "skip" }, { selector: "a", format: "sourceLink" }],
   });
-  if (rendered.includes(limitMarker)) throw new EmailInputError("Email HTML exceeds the import structure limit.");
+  // Heading formatters can uppercase the injected marker; source output stays unchanged.
+  if (rendered.toLowerCase().includes(limitMarker.toLowerCase())) throw new EmailInputError("Email HTML exceeds the import structure limit.");
   return rendered;
 }
 // DOCX uses XML 1.0. Never silently erase source characters or write an
@@ -80,12 +81,22 @@ export function parseEmail(raw: Record<string, unknown>): EmailManifest {
   const mimeBodies = new WeakSet<object>();
   let count = 0, bodySize = 0, declaredTotal = 0;
   type Body = { text: string; hasPlain: boolean };
-  const visit = (part: Part, path: string, depth: number): Body => {
+  const registerPart = (part: Part, depth: number) => {
     if (++count > EMAIL_LIMITS.parts || depth > EMAIL_LIMITS.depth) throw new EmailInputError("Email has too many MIME parts.");
-    const mime = String(part.mimeType ?? "").toLowerCase(), name = String(part.filename ?? ""), body = part.body ?? {};
     if (part.body && typeof part.body === "object") mimeBodies.add(part.body);
+  };
+  const registerSkippedSubtree = (part: Part, depth: number): void => {
+    registerPart(part, depth);
+    for (const child of part.parts ?? []) registerSkippedSubtree(child, depth + 1);
+  };
+  const visit = (part: Part, path: string, depth: number): Body => {
+    registerPart(part, depth);
+    const mime = String(part.mimeType ?? "").toLowerCase(), name = String(part.filename ?? ""), body = part.body ?? {};
     if (mime === "multipart/encrypted" || mime === "application/pkcs7-mime") throw new EmailInputError("Encrypted email needs manual review.");
     if (name || (!mime.startsWith("multipart/") && !["text/plain", "text/html"].includes(mime))) {
+      // Fingerprint their MIME bodies without decoding skipped attachments;
+      // the same budgets bound this structural walk and ordinary rendering.
+      for (const child of part.parts ?? []) registerSkippedSubtree(child, depth + 1);
       const size = body.size ?? 0;
       declaredTotal += Math.max(0, size);
       if (declaredTotal > EMAIL_LIMITS.totalBytes) throw new EmailInputError("Email attachments exceed the total limit.");
@@ -125,8 +136,8 @@ export function parseEmail(raw: Record<string, unknown>): EmailManifest {
   // Labels/history can change merely by reading elsewhere. Bind the actual
   // immutable message content, not those mutable mailbox attributes.
   // A body attachmentId is an opaque retrieval handle, not source content.
-  // Scope omission to MIME bodies visited above, retaining fresh download IDs
-  // in parts and all similarly named metadata outside those bodies.
+  // Omit only MIME-body locators, including skipped attachment descendants;
+  // fresh download IDs stay in parts, and non-body metadata stays bound.
   const fingerprint = digest(JSON.stringify(payload, function (this: object, key: string, value: unknown) {
     return key === "attachmentId" && mimeBodies.has(this) ? undefined : value;
   }));

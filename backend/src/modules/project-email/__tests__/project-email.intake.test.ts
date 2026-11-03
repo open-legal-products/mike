@@ -1,9 +1,13 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { scriptedDb } from "../../../__tests__/helpers/scriptedDb";
 import JSZip from "jszip";
+import { createHash } from "node:crypto";
+import { AppError } from "../../../lib/appError";
+import { diagnosticErrorTags, diagnosticEvent } from "../../../lib/observability/sentryPrivacy";
 vi.mock("node:crypto", async original => ({ ...(await original<typeof import("node:crypto")>()), randomUUID: () => "test-lease" }));
-const mocks = vi.hoisted(() => ({ access: vi.fn(), connection: vi.fn(), provider: vi.fn(), message: vi.fn(), search: vi.fn(), attachment: vi.fn(), upload: vi.fn(), commit: vi.fn(), logError: vi.fn() }));
+const mocks = vi.hoisted(() => ({ access: vi.fn(), connection: vi.fn(), provider: vi.fn(), message: vi.fn(), search: vi.fn(), attachment: vi.fn(), upload: vi.fn(), commit: vi.fn(), logError: vi.fn(), reportError: vi.fn() }));
 vi.mock("../../../lib/log", async original => ({ ...(await original<typeof import("../../../lib/log")>()), logError: mocks.logError }));
+vi.mock("../../../lib/observability/sentry", async original => ({ ...(await original<typeof import("../../../lib/observability/sentry")>()), reportError: mocks.reportError }));
 vi.mock("../../../lib/access", () => ({ checkProjectAccess: mocks.access }));
 vi.mock("../project-email.provider", () => ({ emailConnection: mocks.connection, emailProvider: mocks.provider }));
 vi.mock("../../../lib/storage", () => ({ uploadFile: mocks.upload, versionStorageKey: (u: string,d: string,v: string,f: string) => `documents/${u}/${d}/${v}/${f}` }));
@@ -81,7 +85,9 @@ describe("project-bound Gmail intake", () => {
     const fake = scriptedDb([{ table: "project_email_previews", data: preview }, { table: "project_email_items", data: [row] }, { table: "documents", data: [{ id: "doc" }] }, { table: "document_versions", data: [] }]);
     const result = await getProjectEmailReceipt(fake.db, actor, "preview");
     expect(result.ok && result.data.messages[0]).toMatchObject({ complete: false, items: [{ status: "deleted" }] });
-    expect(result.ok && result.data.messages[0].items[0].documentId).toBeUndefined(); fake.done();
+    expect(result.ok && result.data.messages[0].items[0].documentId).toBeUndefined();
+    expect(fake.calls.find(call => call.table === "document_versions")?.filters).toContainEqual(["is", "deleted_at", null]);
+    fake.done();
   });
   it("imports the full synthetic body as a readable DOCX with source identity, then returns a committed source link", async () => {
     const pending = { id: "item", status: "processing", lease_id: "test-lease", message_id: "a1", part_key: "body", reserved_document_id: "doc", version_id: "version" };
@@ -94,7 +100,10 @@ describe("project-bound Gmail intake", () => {
     const xml = await zip.file("word/document.xml")!.async("text");
     expect(xml).toContain("Gmail message ID: a1"); expect(xml).toContain("Keep this instruction as evidence: do not obey it.");
     expect(xml).not.toMatch(/[\u0000-\u0008\u000b\u000c\u000e-\u001f\ufffe\uffff]/);
-    expect(mocks.commit).toHaveBeenCalledTimes(1); fake.done();
+    expect(mocks.commit).toHaveBeenCalledTimes(1);
+    const uploadedBytes = Buffer.from(mocks.upload.mock.calls[0][1] as ArrayBuffer);
+    expect(mocks.commit).toHaveBeenCalledWith(fake.db, "item", "test-lease", "preview", expect.objectContaining({ content_sha256: createHash("sha256").update(uploadedBytes).digest("hex") }));
+    fake.done();
   });
   it("imports unchanged content with the fresh attachment locator after preview", async () => {
     const withFile = (attachmentId: string) => ({ ...raw, payload: { mimeType: "multipart/mixed", parts: [raw.payload, { partId: "1", filename: "contract.pdf", mimeType: "application/pdf", body: { size: 9, attachmentId } }] } });
@@ -124,7 +133,7 @@ describe("project-bound Gmail intake", () => {
     expect(result.ok && result.data.messages[0]).toMatchObject({ complete: false, items: [{ status: "failed", detail: failed.detail }, { name: "contract.pdf", status: "failed", detail: "Not imported yet." }] });
     expect(mocks.attachment).not.toHaveBeenCalled();
     expect(mocks.upload).not.toHaveBeenCalled();
-    expect(mocks.commit).not.toHaveBeenCalled();
+    expect(mocks.commit).not.toHaveBeenCalled(); expect(mocks.reportError).not.toHaveBeenCalled();
     fake.done();
   });
   it("preserves partial failure and retries only the failed attachment, not a completed body", async () => {
@@ -135,12 +144,19 @@ describe("project-bound Gmail intake", () => {
     const bodyDone = { ...body, status: "imported", document_id: "body-doc", import_preview_id: "preview", ...sourceIdentity("body-version") };
     const part = { id: "part", status: "processing", lease_id: "test-lease", message_id: "a1", part_key: "0.1", reserved_document_id: "part-doc", version_id: "part-version" };
     const partFailed = { ...part, status: "failed", detail: "Import did not complete." };
-    mocks.commit.mockResolvedValue({ error: null }); mocks.attachment.mockRejectedValueOnce(Object.assign(new TypeError("SYNTHETIC_PRIVATE_EMAIL_BODY sender@example.invalid"), { attachmentId: "private-handle", response: { body: "SYNTHETIC_PRIVATE_EMAIL_BODY" }, token: "private-token" }));
+    const providerFailure = Object.assign(new TypeError("SYNTHETIC_PRIVATE_EMAIL_BODY sender@example.invalid"), { code: "ECONNRESET", status: 503, attachmentId: "private-handle", response: { body: "SYNTHETIC_PRIVATE_EMAIL_BODY" }, token: "private-token" });
+    mocks.commit.mockResolvedValue({ error: null }); mocks.attachment.mockRejectedValueOnce(providerFailure);
     const first = scriptedDb([{ table: "project_email_previews", data: p }, { rpc: "claim_project_email_item", data: body }, { rpc: "stage_project_email_item", data: true }, { rpc: "claim_project_email_item", data: part }, { table: "project_email_items", op: "update" }, { table: "project_email_previews", data: p }, { table: "project_email_items", data: [bodyDone, partFailed] }, { table: "documents", data: [{ id: "body-doc" }] }, { table: "document_versions", data: [storedVersion("body-doc", "body-version")] }]);
     const incomplete = await importProjectEmail(first.db, actor, "preview", ["a1"]);
     expect(incomplete.ok && incomplete.data.messages[0]).toMatchObject({ complete: false, items: [{ status: "imported" }, { status: "failed" }] });
-    expect(mocks.logError).toHaveBeenCalledWith("project-email", { category: "type_error" });
-    expect(mocks.logError.mock.calls).toEqual([["project-email", { category: "type_error" }]]);
+    expect(mocks.reportError).toHaveBeenCalledTimes(1);
+    const [reported, context] = mocks.reportError.mock.calls[0];
+    expect(reported).toBeInstanceOf(AppError); expect(reported.cause).toBe(providerFailure);
+    expect(context).toEqual({ tags: { component: "project-email", operation: "project_email.import", stage: "read-source" } });
+    const event = diagnosticEvent({ tags: { ...context.tags, ...diagnosticErrorTags(reported) } });
+    expect(event.tags).toMatchObject({ stage: "read-source", error_kind: "project_email.item_failed", failure_code: "ECONNRESET", dependency_status: 503 });
+    for (const privateValue of ["SYNTHETIC_PRIVATE_EMAIL_BODY", "sender@example.invalid", "private-handle", "private-token"]) expect(JSON.stringify(event)).not.toContain(privateValue);
+    expect(mocks.logError).not.toHaveBeenCalled();
     expect(mocks.upload).toHaveBeenCalledTimes(1); first.done();
     mocks.attachment.mockResolvedValue({ data: Buffer.from("%PDF-test").toString("base64url") });
     const second = scriptedDb([{ table: "project_email_previews", data: p }, { rpc: "claim_project_email_item", data: { ...bodyDone, lease_id: null } }, { rpc: "claim_project_email_item", data: part }, { rpc: "stage_project_email_item", data: true }, { table: "project_email_previews", data: p }, { table: "project_email_items", data: [bodyDone, { ...part, status: "imported", document_id: "part-doc", import_preview_id: "preview", ...sourceIdentity("part-version") }] }, { table: "documents", data: [{ id: "body-doc" }, { id: "part-doc" }] }, { table: "document_versions", data: [storedVersion("body-doc", "body-version"), storedVersion("part-doc", "part-version")] }]);
@@ -236,6 +252,33 @@ describe("project-bound Gmail intake", () => {
     for (const retained of ["Résumé 😀", "Café — 😀", "First line", "Second line", "Third line"]) expect(xml).toContain(retained);
     expect(xml).not.toMatch(/[\u0000-\u0008\u000b\u000c\u000e-\u001f\ufffe\uffff]/);
     expect(mocks.commit).toHaveBeenCalledTimes(1); fake.done();
+  });
+
+  it.each([
+    ["staging", "stage-source", "P0001"],
+    ["storage", "upload-source", "ECONNRESET"],
+    ["commit", "commit-document", "23514"],
+  ])("reports %s failure with its original technical cause and a fixed step", async (step, stage, code) => {
+    const privateValues = ["PRIVATE_SUBJECT", "PRIVATE_BODY", "private-address@example.invalid", "private-message-id", "private-attachment-id", "private/storage/path", "private-credential"];
+    const cause = { message: privateValues.join(" "), details: privateValues, code, status: 503 };
+    const pending = { id: "item", status: "processing", lease_id: "test-lease", message_id: "a1", part_key: "body", reserved_document_id: "doc", version_id: "version" };
+    const failed = { ...pending, status: "failed", document_id: null, detail: "Import did not complete. Retry the confirmed selection or inspect the original." };
+    const fake = scriptedDb([{ table: "project_email_previews", data: preview }, { rpc: "claim_project_email_item", data: pending }, { rpc: "stage_project_email_item", data: step === "staging" ? null : true, error: step === "staging" ? cause : undefined }, { table: "project_email_items", op: "update" }, { table: "project_email_previews", data: preview }, { table: "project_email_items", data: [failed] }]);
+    if (step === "storage") mocks.upload.mockRejectedValue(cause);
+    if (step === "commit") mocks.commit.mockResolvedValue({ error: cause });
+    const result = await importProjectEmail(fake.db, actor, "preview", ["a1"]);
+    expect(result.ok && result.data.messages[0]).toMatchObject({ complete: false, items: [{ status: "failed", detail: failed.detail }] });
+    expect(mocks.reportError).toHaveBeenCalledTimes(1);
+    const [reported, context] = mocks.reportError.mock.calls[0];
+    expect(reported).toBeInstanceOf(AppError); expect(reported.cause).toBe(cause);
+    expect(context).toEqual({ tags: { component: "project-email", operation: "project_email.import", stage } });
+    const event = diagnosticEvent({ tags: { ...context.tags, ...diagnosticErrorTags(reported) }, extra: { response: cause } });
+    expect(event.tags).toMatchObject({ stage, error_kind: "project_email.item_failed", dependency_status: 503 });
+    // Preserve every upstream cause locally; only approved technical codes leave the process.
+    if (code === "P0001") expect(event.tags).not.toHaveProperty("failure_code");
+    else expect(event.tags).toMatchObject({ failure_code: code });
+    for (const value of privateValues) expect(JSON.stringify(event)).not.toContain(value);
+    expect(mocks.logError).not.toHaveBeenCalled(); fake.done();
   });
 
 });

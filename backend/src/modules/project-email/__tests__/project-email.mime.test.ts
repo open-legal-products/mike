@@ -138,4 +138,41 @@ describe("bounded, inert Gmail MIME import", () => {
     expect(parseEmail(message({ ...plain("body"), headers: [{ name: "Subject", value: subject }] })).subject).toBe("x".repeat(1999));
   });
 
+  const skippedMessage = (locator: string, text = "nested source", metadataId = "metadata-one") => message({ mimeType: "multipart/mixed", parts: [plain("Cover note"), {
+    filename: "forwarded.eml", mimeType: "message/rfc822", body: { size: 100, attachmentId: "outer-locator" }, parts: [{ mimeType: "multipart/mixed", parts: [
+      { ...file(), body: { size: 10, attachmentId: locator }, metadata: { attachmentId: metadataId } }, plain(text),
+    ] }],
+  }] });
+  it("ignores refreshed download locators beneath skipped EML attachments", () => {
+    const original = parseEmail(skippedMessage("nested-old"));
+    const refreshed = parseEmail(skippedMessage("nested-new"));
+    expect(refreshed.fingerprint).toBe(original.fingerprint);
+    expect(refreshed.parts).toHaveLength(1); expect(refreshed.parts[0]).toMatchObject({ filename: "forwarded.eml", excluded: expect.any(String) });
+  });
+  it("still binds nested source content and non-body metadata beneath skipped attachments", () => {
+    const original = parseEmail(skippedMessage("nested-old")).fingerprint;
+    expect(parseEmail(skippedMessage("nested-new", "changed source")).fingerprint).not.toBe(original);
+    expect(parseEmail(skippedMessage("nested-new", "nested source", "metadata-two")).fingerprint).not.toBe(original);
+  });
+  it("enforces MIME depth and part budgets while registering skipped subtree locators", () => {
+    let nested: object = plain("nested");
+    for (let i = 0; i < EMAIL_LIMITS.depth; i++) nested = { mimeType: "multipart/mixed", parts: [nested] };
+    expect(() => parseEmail(message({ filename: "forwarded.eml", mimeType: "message/rfc822", body: { size: 10 }, parts: [nested] }))).toThrow("MIME");
+    expect(() => parseEmail(message({ filename: "forwarded.eml", mimeType: "message/rfc822", body: { size: 10 }, parts: Array.from({ length: EMAIL_LIMITS.parts }, () => plain("nested")) }))).toThrow("MIME");
+  });
+  it("preserves a literal HTML limit phrase without confusing it with converter truncation", () => {
+    const payload = message({ mimeType: "text/html", body: { data: b64("<p>[Email HTML structure exceeds the import limit]</p>") } });
+    const first = parseEmail(payload), second = parseEmail(payload);
+    expect(first.text).toBe("[Email HTML structure exceeds the import limit]"); expect(second.text).toBe(first.text); expect(second.fingerprint).toBe(first.fingerprint);
+  });
+  it("keeps fail-closed validation for malformed source headers beyond their rendering bound", () => {
+    expect(() => parseEmail(message({ ...plain("body"), headers: [{ name: "Subject", value: "x".repeat(2000) + "\u0000" }] }))).toThrow("control characters");
+    expect(() => parseEmail(message({ ...plain("body"), headers: [{ name: "Subject", value: "x".repeat(2000) + "\ud800" }] }))).toThrow("control characters");
+  });
+
+  it.each(["deep", "broad"])("rejects truncated heading %s content", shape => {
+    const html = shape === "deep" ? "<h1>" + "<span>".repeat(60) + "MATERIAL TERMS" + "</span>".repeat(60) + "</h1>" : "<h1>" + "<span>x</span>".repeat(4001) + "</h1>";
+    expect(() => parseEmail(message({ mimeType: "text/html", body: { data: b64(html) } }))).toThrow("limit");
+  });
+
 });
