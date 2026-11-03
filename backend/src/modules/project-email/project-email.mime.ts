@@ -25,9 +25,10 @@ export function decodeEmailData(value: string, limit: number): Buffer {
 function safeAttachmentName(name: string): boolean {
   return !!name && name.length <= 200 && !/[\x00-\x1f\x7f/\\\u202a-\u202e\u2066-\u2069\ufffe\uffff]|\p{Surrogate}/u.test(name) && name !== "." && name !== "..";
 }
-function attachmentExclusion(name: string, mime: string, size: number): string | undefined {
+function attachmentExclusion(name: string, mime: string, size: unknown): string | undefined {
   if (!safeAttachmentName(name)) return "Unsafe filename; not imported.";
-  if (!Number.isSafeInteger(size) || size < 0) return "Attachment size metadata is invalid; not imported.";
+  if (size === undefined || size === 0) return "Attachment size metadata is missing or empty; not imported.";
+  if (typeof size !== "number" || !Number.isSafeInteger(size) || size < 0) return "Attachment size metadata is invalid; not imported.";
   if (size > EMAIL_LIMITS.fileBytes) return "Attachment exceeds the import limit.";
   // A focused initial slice: PDF and DOCX. Other attachments remain visible
   // in the receipt instead of disappearing from the processing checkpoint.
@@ -153,7 +154,7 @@ export function parseEmail(raw: Record<string, unknown>): EmailManifest {
     if (mime === "multipart/encrypted" || mime === "application/pkcs7-mime") throw new EmailInputError("Encrypted email needs manual review.");
     if (name || part.filename !== undefined && typeof part.filename !== "string" || (!mime.startsWith("multipart/") && !["text/plain", "text/html"].includes(mime))) {
       const size = Number.isSafeInteger(body.size) && body.size! >= 0 ? body.size! : 0;
-      let excluded = attachmentExclusion(name, mime, body.size === undefined ? 0 : body.size);
+      let excluded = attachmentExclusion(name, mime, body.size);
       const unsafeName = !safeAttachmentName(name);
       const filename = unsafeName ? `[Attachment name unavailable: ${path}]` : name;
       let attachmentId: string | undefined;

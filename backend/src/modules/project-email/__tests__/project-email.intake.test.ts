@@ -497,4 +497,45 @@ describe("project-bound Gmail intake", () => {
     expect(mocks.provider).not.toHaveBeenCalled(); expect(mocks.attachment).not.toHaveBeenCalled(); expect(mocks.upload).not.toHaveBeenCalled(); expect(mocks.commit).not.toHaveBeenCalled(); confirmation.done();
   });
 
+  it.each([
+    ["eligible to invalid locator", "valid-handle", "invalid/handle"],
+    ["invalid locator to eligible", "invalid/handle", "valid-handle"],
+    ["eligible to missing locator", "valid-handle", undefined],
+    ["missing locator to eligible", undefined, "valid-handle"],
+  ])("requires fresh attachment consent for %s despite an unchanged content fingerprint", async (_case, previousLocator, currentLocator) => {
+    const source = (attachmentId: string | undefined) => ({ ...raw, payload: { mimeType: "multipart/mixed", parts: [raw.payload, { filename: "unchanged.pdf", mimeType: "application/pdf", body: { size: 9, attachmentId: "stable-handle" } }, { filename: "contract.pdf", mimeType: "application/pdf", body: { size: 9, ...(attachmentId === undefined ? {} : { attachmentId }) } }] } });
+    const previous = parseEmail(source(previousLocator));
+    expect(parseEmail(source(currentLocator)).fingerprint).toBe(previous.fingerprint);
+    const p = { ...preview, manifest: { messages: [previous], unavailable: [] } };
+    mocks.message.mockResolvedValue(source(currentLocator));
+    const fake = scriptedDb([{ table: "project_email_previews", data: p }]);
+    expect(await importProjectEmail(fake.db, actor, "preview", ["a1"])).toMatchObject({ ok: false, kind: "conflict" });
+    expect(mocks.attachment).not.toHaveBeenCalled(); expect(mocks.upload).not.toHaveBeenCalled(); expect(mocks.commit).not.toHaveBeenCalled(); fake.done();
+  });
+  it.each(["added", "removed", "duplicate"])("requires fresh consent when the attachment key set is %s under the same source fingerprint", async difference => {
+    const source = partialSource(Buffer.from("Readable body").toString("base64url"));
+    const current = parseEmail(source);
+    const expectedParts = difference === "added" ? [] : difference === "duplicate" ? [current.parts[0], current.parts[0]] : [...current.parts, { ...current.parts[0], key: "0.2" }];
+    const p = { ...preview, manifest: { messages: [{ ...current, parts: expectedParts }], unavailable: [] } };
+    mocks.message.mockResolvedValue(source);
+    const fake = scriptedDb([{ table: "project_email_previews", data: p }]);
+    expect(await importProjectEmail(fake.db, actor, "preview", ["a1"])).toMatchObject({ ok: false, kind: "conflict" });
+    expect(mocks.attachment).not.toHaveBeenCalled(); expect(mocks.upload).not.toHaveBeenCalled(); expect(mocks.commit).not.toHaveBeenCalled(); fake.done();
+  });
+  it.each([undefined, 0])("does not offer or download attachment-only messages with missing/zero size (%j)", async size => {
+    const source = { ...raw, payload: { mimeType: "multipart/mixed", parts: [
+      { mimeType: "text/plain", body: { data: "*" } },
+      { filename: "empty.pdf", mimeType: "application/pdf", body: { ...(size === undefined ? {} : { size }), attachmentId: "unreadable-size" } },
+    ] } };
+    mocks.search.mockResolvedValue({ messages: [{ id: "a1" }] }); mocks.message.mockResolvedValue(source);
+    const search = scriptedDb([{ table: "project_email_items", data: [] }, { rpc: "create_project_email_preview" }]);
+    const result = await previewProjectEmail(search.db, actor, { query: "a" });
+    expect(result.ok && result.data.messages[0]).toMatchObject({ bodyUnavailable: expect.any(String), attachments: [{ name: "empty.pdf", size: 0, excluded: "Attachment size metadata is missing or empty; not imported." }] }); search.done();
+    const p = { ...preview, manifest: { messages: [parseEmail(source)], unavailable: [] }, selected_ids: null, confirmed_at: null };
+    const confirmation = scriptedDb([{ table: "project_email_previews", data: p }]);
+    mocks.provider.mockClear();
+    expect(await importProjectEmail(confirmation.db, actor, "preview", ["a1"])).toMatchObject({ ok: false, kind: "validation" });
+    expect(mocks.provider).not.toHaveBeenCalled(); expect(mocks.attachment).not.toHaveBeenCalled(); expect(mocks.upload).not.toHaveBeenCalled(); expect(mocks.commit).not.toHaveBeenCalled(); confirmation.done();
+  });
+
 });

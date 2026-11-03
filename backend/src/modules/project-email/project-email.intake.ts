@@ -147,6 +147,15 @@ async function persistItem(db: Db, actor: Actor, preview: Preview, message: Emai
   }
 }
 
+function sameAttachmentConsent(expected: EmailManifest, current: EmailManifest): boolean {
+  // Retrieval handles may rotate without changing the source fingerprint, but
+  // neither additional parts nor a changed import/exclude decision were consented to.
+  const previous = new Map(expected.parts.map(p => [p.key, !!p.excluded]));
+  const fresh = new Map(current.parts.map(p => [p.key, !!p.excluded]));
+  return previous.size === expected.parts.length && fresh.size === current.parts.length
+    && previous.size === fresh.size && [...previous].every(([key, excluded]) => fresh.get(key) === excluded);
+}
+
 export async function importProjectEmail(db: Db, actor: Actor, id: string, selectedIds: string[]): Promise<ServiceResult<ProjectEmailReceipt>> {
   try {
     const found = await load(db, actor, id);
@@ -183,6 +192,7 @@ export async function importProjectEmail(db: Db, actor: Actor, id: string, selec
         continue;
       }
       if (!!message.bodyUnavailable !== !!expected.bodyUnavailable) return failure("conflict", "Email body availability changed. Preview again before importing.");
+      if (!sameAttachmentConsent(expected, message)) return failure("conflict", "Attachment availability changed. Preview again before importing.");
       await persistItem(db, actor, preview, message, { key: "body", filename: `Email-${message.id}.docx`, excluded: expected.bodyUnavailable }, () => emailDocx(message));
       for (const part of message.parts) {
         await persistItem(db, actor, preview, message, part, async () => {

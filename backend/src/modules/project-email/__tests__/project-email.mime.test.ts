@@ -255,4 +255,11 @@ describe("bounded, inert Gmail MIME import", () => {
     expect(parsed.parts[1]).toMatchObject({ size: 10, excluded: undefined });
   });
 
+  it.each([undefined, 0])("excludes an attachment whose size is missing or zero (%j) while retaining a valid sibling", size => {
+    const parsed = parseEmail(message({ mimeType: "multipart/mixed", parts: [plain("bad\u0000body"), { ...file(), body: { ...(size === undefined ? {} : { size }), attachmentId: "unreadable-size" } }, file()] }));
+    expect(parsed.bodyUnavailable).toBeTruthy();
+    expect(parsed.parts[0]).toMatchObject({ size: 0, excluded: "Attachment size metadata is missing or empty; not imported." });
+    expect(parsed.parts[1]).toMatchObject({ size: 10, excluded: undefined });
+  });
+
 });
