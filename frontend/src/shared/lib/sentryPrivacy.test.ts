@@ -6,6 +6,19 @@ const eventId = '1234567890abcdef1234567890abcdef';
 afterEach(() => vi.restoreAllMocks());
 
 describe('outbound telemetry privacy boundary', () => {
+  it.each([
+    ['/projects/Private-project/brief', '/projects/:id/brief'],
+    ['/projects/Private-project/brief/designate', '/projects/:id/brief/designate'],
+    ['/projects/Private-project/brief/proposals', '/projects/:id/brief/proposals'],
+    ['/projects/Private-project/brief/proposals/Private-proposal', '/projects/:id/brief/proposals/:id'],
+    ['/projects/Private-project/brief/proposals/Private-proposal/apply', '/projects/:id/brief/proposals/:id/apply'],
+    ['/projects/Private-project/brief/sources/Private-document/Private-version?hash=Private-hash&revision=Private-revision#Private-fragment', '/projects/:id/brief/sources/:id/:id'],
+  ])('retains only fixed matter-brief route vocabulary: %s', (route, expected) => {
+    expect(diagnosticRoute(route)).toBe(expected);
+    const out = diagnosticEvent({ tags: { http_route: route } });
+    expect(out.tags).toEqual({ http_route: expected });
+    expect(JSON.stringify(out)).not.toContain('Private-');
+  });
   it.each(['Synthetic_Client_Jane_Doe_NDA.pdf', 'Jane Doe medical claim', '秘密の依頼人契約.docx'])('drops client-controlled text in every event carrier: %s', privateName => {
     const out = diagnosticEvent({
       event_id: eventId, message: privateName, logentry: { message: privateName },

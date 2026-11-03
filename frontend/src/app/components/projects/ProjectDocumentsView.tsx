@@ -1,5 +1,7 @@
 "use client";
 
+import { ReviewedMatterBrief } from "./ReviewedMatterBrief";
+
 import { SelectionActionsMenu } from "@/app/components/shared/SelectionActionsMenu";
 import {
     type Dispatch,
@@ -321,6 +323,7 @@ export function ProjectDocumentsView({ projectId, folderId = null }: Props) {
                 backAction={folderBackAction}
                 actions={toolbarActions}
             />
+            <div className="px-4"><ReviewedMatterBrief projectId={projectId} onApplied={refreshCollection} /></div>
             <DocTable
                 showCreator
                 scopeKey={projectId}
