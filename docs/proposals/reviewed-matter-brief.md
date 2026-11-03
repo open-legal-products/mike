@@ -34,7 +34,11 @@ Validation remains strict and no invalid attempt is staged or applied.
 Apply compares document identity, active version, storage path, byte hash, text
 revision, and extracted-text hash. Same-ID editor saves invalidate proposals. Stable
 proposal/version IDs make retries idempotent; concurrent proposals have one winner.
-A manual brief edit does not inherit an accepted-review stamp. Pending, failed,
+A manual brief edit does not inherit an accepted-review stamp. A replacement
+brief starts a fresh UUID designation generation; proposals capture it before model
+work, and pending/save/Apply/reviewed-history checks require the current generation.
+The review screen separately lists and links every included source revision,
+including uncited evidence, before the user confirms the full review checkpoint. Pending, failed,
 empty or incomplete extraction remains outstanding; selection is not review.
 Historical quotes/fingerprints are retained, but historical source bytes are not
 promised where the normal editor replaces them in place.

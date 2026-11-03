@@ -24,6 +24,7 @@ type Snapshot = Omit<Evidence, "text"> & {
     text?: string | null;
 };
 type Bundle = {
+    designationId: string | null;
     pendingProposalId: string | null;
     brief: Snapshot | null;
     accepted: Snapshot | null;
@@ -93,6 +94,7 @@ export async function proposeBrief(db: Db, a: Actor, input: {
     if (!result.ok)
         return result;
     const b = result.data;
+    const designationId = b.designationId;
     if (!b.canEdit)
         return failure("forbidden", "Editing this project is not permitted.");
     if (!b.brief?.ready)
@@ -169,7 +171,7 @@ export async function proposeBrief(db: Db, a: Actor, input: {
         return internalFailure(cleanupError);
     await uploadFile(path, new Uint8Array(bytes).buffer, "application/vnd.openxmlformats-officedocument.wordprocessingml.document");
     const stagedVersion = { id: versionId, storage_path: path, filename, file_type: "docx", size_bytes: bytes.length, content_sha256: contentSha256(bytes), source: "assistant_edit" };
-    const proposal = { id, base: stripText(snapshots[0]), sources: readable.map(stripText), content, before: evidence[0].text, gaps, stagedVersion };
+    const proposal = { id, designationId, base: stripText(snapshots[0]), sources: readable.map(stripText), content, before: evidence[0].text, gaps, stagedVersion };
     const { error } = await db.rpc("project_brief_save_proposal", { ...args(a), p_proposal: proposal });
     if (error)
         return dbFailure(error);

@@ -10,7 +10,8 @@ ordinary uploaded project documents.
    workspace. Confirm that the current brief and selected source text may be sent
    to that provider. Private account memory and chat are excluded.
 3. Review the proposed position, awaiting items, uncertainties and next action.
-   Expand the prior brief, inspect the quotations and open the checked sources.
+   Expand the prior brief, inspect the quotations and open every listed included
+   source revision, including sources the model did not cite.
 4. Confirm review and project sharing, then **Apply reviewed update**. This saves
    exactly the proposed text as a native DOCX version and records the readable
    source fingerprints reviewed. Unreadable/unselected sources stay outstanding.
@@ -19,8 +20,13 @@ ordinary uploaded project documents.
 
 Only project editors can designate, propose or apply. Proposals are private to
 their author until applied. Accepted brief versions follow ordinary project access.
-A stale target/source, deleted or moved document, or expired proposal requires a
-fresh proposal. Retrying an applied proposal returns its original version without
+A changed target/source, deleted document or expired proposal blocks Apply. A
+source currently outside the project also hides pending work and blocks Apply.
+Returning the identical source version to the same designation may make an earlier
+proposal valid again; movement is not tracked as a permanent invalidation event.
+Replacing the designated brief starts a fresh designation generation, even when a
+previously designated document later returns. Old proposals and review stamps do
+not become current under that new designation. Retrying an applied proposal returns its original version without
 reactivating it or making another version. Two proposals from the same base have
 one winner. Old live version citations remain usable; an in-place replacement
 returns a conflict rather than silently opening different bytes.
@@ -78,3 +84,17 @@ The SQL fixture rolls back its fictional rows and never changes an existing
 permission. Migration `20261102_02_reviewed_matter_brief.sql` must be applied before
 using the feature. Sequence 01 is reserved for the separately proposed email intake
 migration, avoiding a collision when both contributions are combined.
+
+Each proposal captures the designation generation before model work. Save and Apply
+recheck that generation as well as the source identities. Designating the same
+currently bound brief is idempotent. The review screen lists every included source
+revision independently of citations, and confirmation covers that entire list.
+A historical applied-proposal replay returns its original result without restoring
+an older designation or reactivating a version.
+
+The revised unmerged migration can be reapplied to a disposable earlier prototype
+database. It preserves history and conservatively invalidates legacy proposals
+whose designation cannot be established; the currently accepted checkpoint stays
+bound. The migration ledger does not automatically replay an already-applied
+filename, so pre-merge testers must reset their disposable database or explicitly
+reapply the revised prototype migration before using this version.

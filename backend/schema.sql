@@ -11044,6 +11044,7 @@ select public.backfill_document_text(100,false);
 create table if not exists public.project_reviewed_briefs (
   project_id uuid primary key references public.projects(id) on delete cascade,
   document_id uuid not null references public.documents(id) on delete cascade,
+  designation_id uuid not null default gen_random_uuid(),
   accepted_snapshot jsonb,
   accepted_content jsonb,
   accepted_at timestamptz,
@@ -11058,6 +11059,7 @@ create table if not exists public.project_brief_proposals (
   id uuid primary key,
   project_id uuid not null references public.project_reviewed_briefs(project_id) on delete cascade,
   actor_id uuid references auth.users(id) on delete set null,
+  designation_id uuid not null,
   base jsonb not null,
   sources jsonb not null,
   content jsonb not null,
@@ -11069,6 +11071,20 @@ create table if not exists public.project_brief_proposals (
   applied_version_id uuid references public.document_versions(id) on delete set null,
   applied_at timestamptz
 );
+-- Upgrade earlier unmerged prototype databases without deleting history.
+-- Only the currently accepted legacy proposal proves its designation. Other
+-- legacy proposals retain independent generations and must be regenerated;
+-- matching document IDs alone cannot reconstruct a past leave/rebind cycle.
+alter table public.project_reviewed_briefs add column if not exists designation_id uuid;
+update public.project_reviewed_briefs set designation_id=gen_random_uuid() where designation_id is null;
+alter table public.project_reviewed_briefs alter column designation_id set default gen_random_uuid();
+alter table public.project_reviewed_briefs alter column designation_id set not null;
+alter table public.project_brief_proposals add column if not exists designation_id uuid;
+update public.project_brief_proposals q set designation_id=case
+  when q.applied_at is not null and q.applied_version_id=(b.accepted_snapshot->>'versionId')::uuid
+    then b.designation_id else gen_random_uuid() end
+from public.project_reviewed_briefs b where q.project_id=b.project_id and q.designation_id is null;
+alter table public.project_brief_proposals alter column designation_id set not null;
 create table if not exists public.project_brief_reviews (
   proposal_id uuid not null references public.project_brief_proposals(id) on delete cascade,
   project_id uuid not null references public.project_reviewed_briefs(project_id) on delete cascade,
@@ -11147,13 +11163,21 @@ begin
     into snapshots,s from (
     select d.document_id, coalesce(d.source,jsonb_build_object('documentId',d.document_id,'versionId','','revision','','hash','','textHash','','filename','Document awaiting version','ready',false,'reason','No active readable version')) || jsonb_build_object(
       'reviewed',exists(select 1 from public.project_brief_reviews r where r.project_id=p_project_id
-        and r.source=d.source and exists(select 1 from public.project_brief_proposals reviewed_proposal where reviewed_proposal.id=r.proposal_id and reviewed_proposal.base->>'documentId'=b.document_id::text)),
+        and r.source=d.source and exists(select 1 from public.project_brief_proposals reviewed_proposal where reviewed_proposal.id=r.proposal_id and reviewed_proposal.designation_id=b.designation_id)),
       'text',case when d.document_id=b.document_id or d.document_id=any(p_selected) then
         (select t.text_content from public.document_version_texts t where t.version_id=d.current_version_id) end
     ) snapshot from source_snapshots d
   ) x where x.snapshot is not null;
-  return jsonb_build_object('brief',s,'accepted',b.accepted_snapshot,'acceptedContent',b.accepted_content,
-    'pendingProposalId',(select q.id from public.project_brief_proposals q where q.project_id=p_project_id and q.actor_id=p_actor_id and q.applied_at is null and q.expires_at>now() and s is not null and q.base=s and not exists(select 1 from jsonb_array_elements(q.sources) source_row(value) where source_row.value is distinct from public.project_brief_source((source_row.value->>'documentId')::uuid)) order by q.created_at desc limit 1),
+  return jsonb_build_object('designationId',b.designation_id,'brief',s,'accepted',b.accepted_snapshot,'acceptedContent',b.accepted_content,
+    'pendingProposalId',(select q.id from public.project_brief_proposals q
+      where q.project_id=p_project_id and q.actor_id=p_actor_id and q.designation_id=b.designation_id
+        and q.applied_at is null and q.expires_at>now() and s is not null and q.base=s
+        and not exists(select 1 from jsonb_array_elements(q.sources) source_row(value)
+          where not exists(select 1 from public.documents source_document
+            where source_document.id=(source_row.value->>'documentId')::uuid
+              and source_document.project_id=p_project_id and source_document.archived_at is null)
+            or source_row.value is distinct from public.project_brief_source((source_row.value->>'documentId')::uuid))
+      order by q.created_at desc limit 1),
     'acceptedEvidence',coalesce((select jsonb_build_array(q.base)||q.sources from public.project_brief_proposals q where q.project_id=p_project_id and q.applied_version_id=(b.accepted_snapshot->>'versionId')::uuid order by q.applied_at desc limit 1),'[]'::jsonb),
     'acceptedAt',b.accepted_at,'canEdit',role in ('owner','editor'),'sources',snapshots);
 end $$;
@@ -11171,7 +11195,7 @@ begin
     then raise exception 'brief_requires_docx' using errcode='22023'; end if;
   insert into public.project_reviewed_briefs(project_id,document_id) values(p_project_id,p_document_id)
     on conflict(project_id) do update set document_id=excluded.document_id,
-      accepted_snapshot=null,accepted_content=null,accepted_at=null,accepted_by=null
+      designation_id=excluded.designation_id,accepted_snapshot=null,accepted_content=null,accepted_at=null,accepted_by=null
     where not exists(select 1 from public.documents old_brief where old_brief.id=project_reviewed_briefs.document_id and old_brief.project_id=p_project_id and old_brief.archived_at is null);
   if not exists(select 1 from public.project_reviewed_briefs where project_id=p_project_id and document_id=p_document_id)
     then raise exception 'brief_already_designated' using errcode='PB001'; end if;
@@ -11198,14 +11222,15 @@ declare b public.project_reviewed_briefs%rowtype; s jsonb;
 begin
   perform public.project_brief_access(p_project_id,p_actor_id,p_actor_email,true);
   select * into b from public.project_reviewed_briefs where project_id=p_project_id for update;
-  if b.document_id is distinct from (p_proposal->'base'->>'documentId')::uuid then
+  if b.designation_id is null or b.designation_id is distinct from (p_proposal->>'designationId')::uuid
+    or b.document_id is distinct from (p_proposal->'base'->>'documentId')::uuid then
     raise exception 'brief_stale' using errcode='PB001'; end if;
   -- One deterministic lock order for all evidence and target documents.
   for s in select value from jsonb_array_elements((p_proposal->'sources') || jsonb_build_array(p_proposal->'base')) order by value->>'documentId' loop
     perform public.project_brief_check_source(p_project_id,s);
   end loop;
-  insert into public.project_brief_proposals(id,project_id,actor_id,base,sources,content,before_text,gaps,staged_version)
-  values((p_proposal->>'id')::uuid,p_project_id,p_actor_id,p_proposal->'base',p_proposal->'sources',
+  insert into public.project_brief_proposals(id,project_id,actor_id,designation_id,base,sources,content,before_text,gaps,staged_version)
+  values((p_proposal->>'id')::uuid,p_project_id,p_actor_id,b.designation_id,p_proposal->'base',p_proposal->'sources',
     p_proposal->'content',p_proposal->>'before',p_proposal->'gaps',p_proposal->'stagedVersion');
 end $$;
 
@@ -11220,7 +11245,8 @@ begin
   select * into q from public.project_brief_proposals where id=p_proposal_id and project_id=p_project_id and actor_id=p_actor_id for update;
   if not found then raise exception 'brief_not_found' using errcode='P0002'; end if;
   if q.applied_at is not null then return jsonb_build_object('versionId',q.applied_version_id,'replayed',true); end if;
-  if q.expires_at<now() or b.document_id is distinct from (q.base->>'documentId')::uuid then
+  if q.expires_at<now() or q.designation_id is distinct from b.designation_id
+    or b.document_id is distinct from (q.base->>'documentId')::uuid then
     raise exception 'brief_stale' using errcode='PB001'; end if;
   for s in select value from jsonb_array_elements(q.sources || jsonb_build_array(q.base)) order by value->>'documentId' loop
     perform public.project_brief_check_source(p_project_id,s);

@@ -15,7 +15,7 @@ end $$;
 create function pg_temp.make_proposal(p uuid,a uuid,b uuid,s uuid) returns uuid language plpgsql as $$
 declare q uuid:=gen_random_uuid();
 begin
- perform public.project_brief_save_proposal(p,a,'owner@example.invalid',jsonb_build_object('id',q,'base',public.project_brief_source(b),'sources',jsonb_build_array(public.project_brief_source(s)),
+ perform public.project_brief_save_proposal(p,a,'owner@example.invalid',jsonb_build_object('id',q,'designationId',public.project_brief_bundle(p,a,'owner@example.invalid')->>'designationId','base',public.project_brief_source(b),'sources',jsonb_build_array(public.project_brief_source(s)),
  'content','{"position":[],"awaiting":[],"uncertainties":[],"nextAction":[]}'::jsonb,'before','Fictional previous brief','gaps','[]'::jsonb,
  'stagedVersion',jsonb_build_object('id',gen_random_uuid(),'storage_path','fictional/proposal/'||q,'filename','Brief.docx','file_type','docx','size_bytes',100,'content_sha256',repeat('a',64),'source','assistant_edit')));
  return q;
@@ -93,6 +93,68 @@ begin
  perform pg_temp.assert_true((select count(*)=2 from public.document_versions where document_id=b),'prior brief version retained');
  perform pg_temp.assert_true(not has_table_privilege('authenticated','public.project_brief_proposals','SELECT'),'private proposals not directly enumerable');
  perform pg_temp.assert_true(not has_function_privilege('authenticated','public.project_brief_apply(uuid,uuid,text,uuid)','EXECUTE'),'browser cannot bypass human Apply route');
+end $$;
+-- Designation history must not follow a returning document into a fresh binding.
+do $$
+declare a uuid:=gen_random_uuid();p uuid:=gen_random_uuid();p2 uuid:=gen_random_uuid();
+  b uuid;b2 uuid;s uuid;q uuid;stale uuid;accepted_version uuid;epoch text;replacement_epoch text;
+  captured jsonb;state jsonb;outcome jsonb;
+begin
+ insert into auth.users(id,email) values(a,'designation-test@example.invalid');
+ insert into public.projects(id,user_id,name) values(p,a,'Fictional designation history'),(p2,a,'Fictional temporary project');
+ b:=pg_temp.make_doc(p,a,'Existing brief.');s:=pg_temp.make_doc(p,a,'Source evidence.');
+ perform public.project_brief_designate(p,a,'designation-test@example.invalid',b);
+ epoch:=public.project_brief_bundle(p,a,'designation-test@example.invalid')->>'designationId';
+ q:=pg_temp.make_proposal(p,a,b,s);
+ outcome:=public.project_brief_apply(p,a,'designation-test@example.invalid',q);
+ accepted_version:=(outcome->>'versionId')::uuid;
+ update public.document_version_texts set status='ready',text_content='Accepted position',source_sha256=repeat('a',64),textless_page_count=0 where version_id=accepted_version;
+ stale:=pg_temp.make_proposal(p,a,b,s);
+ -- This payload represents generation already in flight at the original epoch.
+ select jsonb_build_object('id',gen_random_uuid(),'designationId',epoch,'base',base,'sources',sources,
+   'content',content,'before',before_text,'gaps',gaps,'stagedVersion',staged_version)
+   into captured from public.project_brief_proposals where id=stale;
+ update public.documents set project_id=p2 where id=b;
+ b2:=pg_temp.make_doc(p,a,'Replacement brief');
+ perform public.project_brief_designate(p,a,'designation-test@example.invalid',b2);
+ replacement_epoch:=public.project_brief_bundle(p,a,'designation-test@example.invalid')->>'designationId';
+ update public.documents set project_id=p2 where id=b2;
+ update public.documents set project_id=p where id=b;
+ perform public.project_brief_designate(p,a,'designation-test@example.invalid',b);
+ state:=public.project_brief_bundle(p,a,'designation-test@example.invalid');
+ perform pg_temp.assert_true(state->'accepted'='null'::jsonb and state->'acceptedAt'='null'::jsonb,'returning document begins without accepted position');
+ perform pg_temp.assert_true(not exists(select 1 from jsonb_array_elements(state->'sources') x where (x->>'reviewed')::boolean),'returning designated document cannot revive old reviewed stamps');
+ perform pg_temp.assert_true(epoch is not null and replacement_epoch<>epoch and state->>'designationId'<>replacement_epoch and state->>'designationId'<>epoch,'each replacement has a distinct designation generation');
+ perform public.project_brief_designate(p,a,'designation-test@example.invalid',b);
+ perform pg_temp.assert_true(public.project_brief_bundle(p,a,'designation-test@example.invalid')->>'designationId'=state->>'designationId','same active designation preserves generation');
+ perform pg_temp.assert_true(state->>'pendingProposalId' is null,'returning designation hides old pending proposal');
+ begin
+  perform public.project_brief_apply(p,a,'designation-test@example.invalid',stale);
+  raise exception 'old-generation proposal unexpectedly applied';
+ exception when sqlstate 'PB001' then null;end;
+ begin
+  perform public.project_brief_save_proposal(p,a,'designation-test@example.invalid',captured);
+  raise exception 'old-generation in-flight proposal unexpectedly saved';
+ exception when sqlstate 'PB001' then null;end;
+ begin
+  perform public.project_brief_save_proposal(p,a,'designation-test@example.invalid',captured-'designationId');
+  raise exception 'proposal without generation unexpectedly saved';
+ exception when sqlstate 'PB001' then null;end;
+ outcome:=public.project_brief_apply(p,a,'designation-test@example.invalid',q);
+ perform pg_temp.assert_true((outcome->>'replayed')::boolean and (outcome->>'versionId')::uuid=accepted_version,'old applied proposal retains historical replay');
+ perform pg_temp.assert_true((select count(*)=2 from public.document_versions where document_id=b),'stale proposal and replay create no versions');
+ perform pg_temp.assert_true((select count(*)=1 from public.project_brief_reviews where project_id=p),'historical review ledger retained');
+ q:=pg_temp.make_proposal(p,a,b,s);
+ update public.documents set project_id=p2 where id=s;
+ perform pg_temp.assert_true(public.project_brief_bundle(p,a,'designation-test@example.invalid')->>'pendingProposalId' is null,'moved source is not resumable pending work');
+ begin
+  perform public.project_brief_apply(p,a,'designation-test@example.invalid',q);
+  raise exception 'moved-source proposal unexpectedly applied';
+ exception when sqlstate 'PB001' then null;end;
+ -- Identical evidence returning to the same designation may revalidate.
+ update public.documents set project_id=p where id=s;
+ perform pg_temp.assert_true(public.project_brief_bundle(p,a,'designation-test@example.invalid')->>'pendingProposalId'=q::text,'unchanged source returning to same designation may resume');
+ perform public.project_brief_apply(p,a,'designation-test@example.invalid',q);
 end $$;
 -- Count actual calls in this disposable database, not an EXPLAIN estimate.
 -- SQL functions with SET options are not inlined; track_functions=all also

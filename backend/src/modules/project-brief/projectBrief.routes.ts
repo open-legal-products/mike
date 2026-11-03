@@ -53,7 +53,7 @@ projectBriefRouter.post("/proposals/:proposalId/apply", asyncRoute(async (req, r
     res.json(r.data);
 }));
 projectBriefRouter.get("/sources/:documentId/:versionId", asyncRoute(async (req, res) => {
-    const input = z.object({ documentId: z.string().uuid(), versionId: z.string().uuid(), hash: z.string().regex(/^[a-f0-9]{64}$/), revision: z.string().uuid() }).safeParse({ ...req.params, ...req.query });
+    const input = z.object({ documentId: z.string().uuid(), versionId: z.string().uuid(), hash: z.string().regex(/^[a-f0-9]{64}$/), revision: z.string().uuid() }).safeParse({ documentId: req.params.documentId, versionId: req.params.versionId, hash: req.query.hash, revision: req.query.revision });
     if (!input.success)
         return void res.status(400).json({ detail: "Invalid source identity." });
     const r = await readBriefSource(createServerSupabase(), { projectId: req.params.projectId, userId: res.locals.userId, userEmail: res.locals.userEmail }, input.data);

@@ -18,3 +18,11 @@ it("does not accept client-supplied text or source fingerprints at Apply", async
 it("maps stale conflict and sends no-store", async () => { svc.applyBrief.mockResolvedValue({ ok: false, kind: "conflict", detail: "Refresh changed sources." }); const r = await request(app).post(base + `/proposals/${id}/apply`).send({ confirmReviewed: true, confirmShared: true }); expect(r.status).toBe(409); expect(r.headers["cache-control"]).toBe("private, no-store"); });
 it("unknown subroute terminates with 404 rather than invoking an error factory", async () => { const r = await request(app).get(base + "/unknown").timeout(1000); expect(r.status).toBe(404); });
 it("rejects malformed source navigation and streams verified bytes with their type", async () => { expect((await request(app).get(base + `/sources/${id}/${id}?hash=bad&revision=${id}`)).status).toBe(400); svc.readBriefSource.mockResolvedValue({ ok: true, data: { bytes: new TextEncoder().encode("fictional").buffer, filename: "source.xlsx", mime: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" } }); const r = await request(app).get(base + `/sources/${id}/${id}?hash=${"a".repeat(64)}&revision=${id}`); expect(r.status).toBe(200); expect(r.headers["content-disposition"]).toContain("source.xlsx"); });
+
+it("binds checked source identity to path parameters instead of similarly named query fields", async () => {
+    const other = "40000000-0000-4000-8000-000000000003";
+    svc.readBriefSource.mockResolvedValue({ ok: true, data: { bytes: new TextEncoder().encode("fictional path source").buffer, filename: "source.txt", mime: "text/plain" } });
+    const r = await request(app).get(base + `/sources/${id}/${id}?hash=${"a".repeat(64)}&revision=${id}&documentId=${other}&versionId=${other}`);
+    expect(r.status).toBe(200);
+    expect(svc.readBriefSource).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ projectId: "40000000-0000-4000-8000-000000000001", userId: "actor" }), { documentId: id, versionId: id, hash: "a".repeat(64), revision: id });
+});

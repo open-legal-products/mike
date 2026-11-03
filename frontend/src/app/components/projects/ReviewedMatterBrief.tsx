@@ -30,6 +30,7 @@ export function ReviewedMatterBrief({ projectId, onApplied }: {
     const [confirm, setConfirm] = useState(false), [provider, setProvider] = useState(false), [busy, setBusy] = useState(false), [notice, setNotice] = useState("");
     async function load() { const next = await getMatterBrief(projectId); setState(next); return next; }
     function report(error: unknown) { notifyError(error, { operation: "project_brief.ui" }); }
+    function close() { if (!busy) setOpen(false); }
     useEffect(() => {
         if (!open)
             return;
@@ -80,10 +81,10 @@ export function ReviewedMatterBrief({ projectId, onApplied }: {
         }
     }
     const unreviewed = state?.sources.filter(s => !s.reviewed) ?? [];
+    const includedSourceIds = new Set(proposal?.sources.map(s => s.documentId));
     return <>
         <TextButtonUI onClick={() => setOpen(true)}>Resume matter</TextButtonUI>
-        <Modal open={open} onClose={() => { if (!busy)
-        setOpen(false); }} breadcrumbs={["Reviewed matter brief"]} size="xl" cancelAction={{ label: "Close", disabled: busy }}>
+        <Modal open={open} onClose={close} breadcrumbs={["Reviewed matter brief"]} size="xl" cancelAction={{ label: "Close", onClick: close, disabled: busy }}>
             <div data-modal-scroll className="min-h-0 flex-1 space-y-6 overflow-y-auto p-6 text-gray-800 [overflow-wrap:anywhere]">
                 <p className="text-sm text-gray-600">An internal, project-visible brief. Imported documents are not automatically read or reviewed. Source statements and dates are not verified legal obligations.</p>
                 {busy && <p role="status">Working…</p>}{notice && <p role="status">{notice}</p>}
@@ -100,7 +101,9 @@ export function ReviewedMatterBrief({ projectId, onApplied }: {
                         {state.acceptedContent && <details><summary className="cursor-pointer text-sm">Last accepted position {state.manualChanges ? "(historical)" : ""}</summary><div className="mt-3 space-y-4"><BriefContent content={state.acceptedContent} evidence={state.acceptedEvidence} projectId={projectId}/></div></details>}
                     </section>
                     <section className="space-y-3"><h2 className="font-medium">Outstanding sources ({unreviewed.length})</h2><p className="text-sm text-gray-600">Select up to ten. Unreadable or incomplete extraction stays outstanding. This inventory does not prove the matter file is complete.</p>
-                        {state.sources.map(s => <label key={s.documentId} className="flex items-start gap-2 text-sm"><input type="checkbox" className={TABLE_CHECKBOX_CLASS} disabled={busy || !state.canEdit || !!proposal || selected.length >= 10 && !selected.includes(s.documentId)} checked={selected.includes(s.documentId)} onChange={e => setSelected(ids => e.target.checked ? [...ids, s.documentId] : ids.filter(id => id !== s.documentId))}/><span>{s.filename}<span className="block text-xs text-gray-500">{s.reviewed ? "Reviewed revision" : s.ready ? "Not reviewed" : s.reason ?? "Not readable"}</span></span></label>)}
+                        {state.sources.map(s => <label key={s.documentId} className="flex items-start gap-2 text-sm"><input type="checkbox" className={TABLE_CHECKBOX_CLASS} disabled={busy || !state.canEdit || !!proposal || selected.length >= 10 && !selected.includes(s.documentId)} checked={proposal ? includedSourceIds.has(s.documentId) : selected.includes(s.documentId)} onChange={e => setSelected(ids => e.target.checked ? [...ids, s.documentId] : ids.filter(id => id !== s.documentId))}/><span>{s.filename}
+                            {proposal && <span className="block text-xs text-gray-500">{includedSourceIds.has(s.documentId) ? "Included in this proposal — review the listed revision below." : "Not included in this proposal."}</span>}
+                            <span className="block text-xs text-gray-500">{s.reviewed ? "Reviewed revision" : s.ready ? "Not reviewed" : s.reason ?? "Not readable"}</span></span></label>)}
                         {!state.sources.length && <p className="text-sm">No source documents in this project yet.</p>}
                     </section>
                     {state.canEdit && !proposal && <section className="space-y-3"><label className="block text-sm">Configured model ID<FormTextInput value={model} onChange={e => setModel(e.target.value)} placeholder="Choose a model configured for this workspace" disabled={busy}/></label>
@@ -109,11 +112,17 @@ export function ReviewedMatterBrief({ projectId, onApplied }: {
                     </section>}
                 </>}
                 {proposal && <section className="space-y-4"><h2 className="font-serif text-xl">Proposed update — not applied</h2><p className="text-sm">Review every statement and quote. The model cannot approve a decision or verify an obligation. Exact quote matching does not establish that a summary is correct.</p>
+                    <p className="text-sm"><a className="underline focus-visible:ring-2" href={matterBriefSourceUrl(projectId, proposal.base)} target="_blank" rel="noopener noreferrer">{proposal.base.filename} — proposal base revision</a></p>
+                    <section aria-label="Included source revisions" className="space-y-2">
+                        <h3 className="font-medium">Included source revisions ({proposal.sources.length})</h3>
+                        <p className="text-sm text-gray-600">Review every revision below, including sources with no quoted statement. Applying this proposal records all of these source revisions as reviewed. Other inventory documents stay outside this proposal.</p>
+                        <ul className="space-y-2 text-sm">{proposal.sources.map(s => <li key={s.documentId}><a className="underline focus-visible:ring-2" href={matterBriefSourceUrl(projectId, s)} target="_blank" rel="noopener noreferrer">{s.filename} — included source revision</a></li>)}</ul>
+                    </section>
                     <details><summary className="cursor-pointer text-sm">Before: source text of the brief</summary><pre className="mt-2 whitespace-pre-wrap text-xs">{proposal.before}</pre></details>
                     <div className="space-y-4"><BriefContent content={proposal.content} evidence={[proposal.base, ...proposal.sources]} projectId={projectId}/></div>
                     <h3 className="font-medium">Sources still outstanding</h3>{proposal.gaps.map(g => <p key={g.documentId} className="text-sm">{g.filename}: {g.reason}</p>)}{!proposal.gaps.length && <p className="text-sm">None in the captured inventory; this does not certify completeness.</p>}
                     <p className="text-sm">Visually check signatures and execution pages in the originals; text extraction may not capture them.</p>
-                    <label className="flex gap-2 text-sm"><input type="checkbox" className={TABLE_CHECKBOX_CLASS} checked={confirm} onChange={e => setConfirm(e.target.checked)}/>I reviewed this proposed text and the listed readable source revisions. Apply the exact proposal as a new project-visible brief version.</label>
+                    <label className="flex gap-2 text-sm"><input type="checkbox" className={TABLE_CHECKBOX_CLASS} checked={confirm} disabled={busy || !state?.canEdit} onChange={e => setConfirm(e.target.checked)}/>I reviewed this proposed text, the base brief revision and every included source revision listed above. Apply the exact proposal as a new project-visible brief version.</label>
                     <PillButtonUI tone="black" disabled={!state?.canEdit || !confirm || busy} onClick={() => void act(applyReviewedUpdate)}>Apply reviewed update</PillButtonUI>
                     <TextButtonUI disabled={busy} onClick={() => { setProposal(null); setConfirm(false); }}>Prepare a different proposal</TextButtonUI>
                 </section>}
