@@ -33,7 +33,7 @@ it("proposes a native DOCX with two messages and an unreadable gap without savin
     return; expect(r.data.gaps).toEqual([{ documentId: "scan", filename: "scan.docx", reason: "Text extraction is not ready" }]); expect(generate.mock.calls[0][0].evidence).toHaveLength(3); expect(Object.keys(generate.mock.calls[0][0]).sort()).toEqual(["before", "evidence", "model"]); expect(st.calls.map(c => c.name)).not.toContain("project_brief_apply"); const zip = await JSZip.loadAsync(st.uploads[0]); const xml = await zip.file("word/document.xml")!.async("string"); expect(xml).toContain("Delivery is disputed."); expect(xml).toContain("Visually check signatures"); expect(xml).toContain(st.bundle.sources[1].hash); expect(st.calls.find(c => c.job).job.run_at).toBeTruthy(); });
 it.each(["pending", "empty", "textless"])("keeps %s sources outstanding rather than marking selection reviewed", async () => { st.bundle.sources[1].ready = false; const r = await proposeBrief(db, actor, { sourceIds: ["m1", "m2"], model: "mock" }, async () => ({ position: [row("Supplier record requested.", "Await supplier record.")], awaiting: [], uncertainties: [], nextAction: [] })); expect(r.ok).toBe(true); if (r.ok)
     expect(r.data.gaps.map(x => x.documentId)).toContain("m1"); });
-it("rejects unsupported quote before storage or checkpoint", async () => { const c = content(); c.position[0].citations[0].quote = "not in evidence"; const r = await proposeBrief(db, actor, { sourceIds: ["m1", "m2"], model: "mock" }, async () => c); expect(r.ok).toBe(false); expect(st.uploads).toHaveLength(0); expect(st.proposal).toBeNull(); });
+it("rejects unsupported quote before storage or checkpoint", async () => { const c = content(); c.position[0].citations[0].quote = "not in evidence"; const r = await proposeBrief(db, actor, { sourceIds: ["m1", "m2"], model: "mock" }, async () => c); expect(r.ok).toBe(false); if (!r.ok) expect(r.kind).toBe("validation"); expect(st.uploads).toHaveLength(0); expect(st.proposal).toBeNull(); });
 it("regenerates an invalid quotation once without weakening exact matching or staging the invalid draft", async () => {
     const invalid = content(); invalid.position[0].citations[0].quote = "Delivery disputed!";
     const generate = vi.fn<BriefGenerator>().mockResolvedValueOnce(invalid).mockImplementationOnce(async packet => {
@@ -45,13 +45,36 @@ it("regenerates an invalid quotation once without weakening exact matching or st
 it("regenerates a schema-invalid draft once and fails closed after a second invalid response", async () => {
     const invalid = content(); invalid.position[0].citations = Array.from({ length: 5 }, () => ({ source: 1, quote: "Delivery disputed." }));
     const generate = vi.fn<BriefGenerator>().mockResolvedValue(invalid);
-    expect((await proposeBrief(db, actor, { sourceIds: ["m1", "m2"], model: "mock" }, generate)).ok).toBe(false);
+    const result = await proposeBrief(db, actor, { sourceIds: ["m1", "m2"], model: "mock" }, generate);
+    expect(result.ok).toBe(false); if (!result.ok) expect(result.kind).toBe("validation");
     expect(generate).toHaveBeenCalledTimes(2); expect(st.uploads).toHaveLength(0); expect(st.proposal).toBeNull();
 });
-it.each([new Error("Provider unavailable"), new SyntaxError("Malformed provider transport")])("does not retry thrown provider failures: %s", async error => {
-    const generate = vi.fn<BriefGenerator>().mockRejectedValue(error);
-    expect((await proposeBrief(db, actor, { sourceIds: ["m1", "m2"], model: "mock" }, generate)).ok).toBe(false);
-    expect(generate).toHaveBeenCalledTimes(1); expect(st.uploads).toHaveLength(0);
+it.each([false, true].flatMap(repair => [new Error("Provider unavailable"), new SyntaxError("Malformed provider transport"), null, undefined].map(error => ({ repair, error }))))("preserves thrown provider failure $error during repair=$repair without another attempt", async ({ repair, error }) => {
+    const generate = vi.fn<BriefGenerator>();
+    if (repair) generate.mockResolvedValueOnce("{invalid model JSON");
+    generate.mockRejectedValueOnce(error);
+    const result = await proposeBrief(db, actor, { sourceIds: ["m1", "m2"], model: "mock" }, generate);
+    expect(result).toEqual({ ok: false, kind: "error", error });
+    if (!result.ok && result.kind === "error") expect(result.error).toBe(error);
+    expect(generate).toHaveBeenCalledTimes(repair ? 2 : 1); expect(st.uploads).toHaveLength(0); expect(st.proposal).toBeNull();
+    expect(st.calls.some(c => c.job || c.name === "project_brief_save_proposal")).toBe(false);
+});
+it.each([false, true])("preserves production-adapter timeout rejection during repair=%s", async repair => {
+    const error = new DOMException("Fictional completion deadline exceeded", "TimeoutError");
+    vi.mocked(getEffectiveApiKeys).mockResolvedValueOnce({ claude: "fictional-test-key" }); vi.mocked(completeText).mockClear();
+    if (repair) vi.mocked(completeText).mockResolvedValueOnce("{invalid model JSON");
+    vi.mocked(completeText).mockRejectedValueOnce(error);
+    const result = await proposeBrief(db, actor, { sourceIds: ["m1", "m2"], model: "claude-sonnet-5-5" });
+    expect(result).toEqual({ ok: false, kind: "error", error });
+    if (!result.ok && result.kind === "error") expect(result.error).toBe(error);
+    expect(completeText).toHaveBeenCalledTimes(repair ? 2 : 1); expect(st.uploads).toHaveLength(0); expect(st.proposal).toBeNull();
+    expect(st.calls.some(c => c.job || c.name === "project_brief_save_proposal")).toBe(false);
+});
+it("keeps twice-invalid model JSON on the validation path", async () => {
+    const generate = vi.fn<BriefGenerator>().mockResolvedValue("{invalid model JSON");
+    const result = await proposeBrief(db, actor, { sourceIds: ["m1", "m2"], model: "mock" }, generate);
+    expect(result.ok).toBe(false); if (!result.ok) expect(result.kind).toBe("validation");
+    expect(generate).toHaveBeenCalledTimes(2); expect(st.uploads).toHaveLength(0); expect(st.proposal).toBeNull();
 });
 it("can regenerate invalid JSON once using only the original evidence", async () => {
     const generate = vi.fn<BriefGenerator>().mockResolvedValueOnce("{invalid model JSON").mockResolvedValueOnce(JSON.stringify(content()));

@@ -177,11 +177,23 @@ export async function proposeBrief(db: Db, a: Actor, input: {
         }
     }
     let content: MatterBriefContent;
+    const generationState: { failure?: { error: unknown } } = {};
     try {
         const generateAttempt = generate;
-        content = await generateValidatedContent(repair => generateAttempt({ before: evidence[0].text, evidence, model: input.model, ...(repair ? { repair: true as const } : {}) }), evidence, resolve);
+        content = await generateValidatedContent(async repair => {
+            try {
+                return await generateAttempt({ before: evidence[0].text, evidence, model: input.model, ...(repair ? { repair: true as const } : {}) });
+            } catch (error) {
+                // Parsing may throw the same error types; record only generator failures,
+                // including thrown null/undefined, without changing retry behavior.
+                generationState.failure = { error };
+                throw error;
+            }
+        }, evidence, resolve);
     }
     catch {
+        if (generationState.failure)
+            return internalFailure(generationState.failure.error);
         return failure("validation", "The model did not return a valid proposal with exact source quotations. No document or review checkpoint was saved.");
     }
     const gaps = b.sources.filter(s => s.documentId !== b.brief!.documentId && !readable.some(r => r.documentId === s.documentId) && !s.reviewed)
