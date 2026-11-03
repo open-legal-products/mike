@@ -175,4 +175,11 @@ describe("bounded, inert Gmail MIME import", () => {
     expect(() => parseEmail(message({ mimeType: "text/html", body: { data: b64(html) } }))).toThrow("limit");
   });
 
+  it("accepts exactly forty MIME parts including skipped attachment descendants", () => {
+    // Root + cover note + skipped EML + 37 nested parts use the complete budget.
+    const payload = message({ mimeType: "multipart/mixed", parts: [plain("Cover note"), { filename: "forwarded.eml", mimeType: "message/rfc822", body: { size: 10 }, parts: Array.from({ length: EMAIL_LIMITS.parts - 3 }, () => plain("nested")) }] });
+    const parsed = parseEmail(payload);
+    expect(parsed.text).toBe("Cover note"); expect(parsed.parts).toHaveLength(1); expect(parsed.parts[0].excluded).toContain("Unsupported");
+  });
+
 });

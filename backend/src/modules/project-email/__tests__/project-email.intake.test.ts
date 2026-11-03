@@ -13,7 +13,8 @@ vi.mock("../project-email.provider", () => ({ emailConnection: mocks.connection,
 vi.mock("../../../lib/storage", () => ({ uploadFile: mocks.upload, versionStorageKey: (u: string,d: string,v: string,f: string) => `documents/${u}/${d}/${v}/${f}` }));
 vi.mock("../../documents/documents.service", () => ({ commitEmailDocument: mocks.commit }));
 import { getProjectEmailReceipt, importProjectEmail, previewProjectEmail } from "../project-email.intake";
-import { parseEmail } from "../project-email.mime";
+import { EmailInputError, parseEmail } from "../project-email.mime";
+import { GoogleApiError } from "../../../lib/integrations/googleWorkspaceApi";
 const actor = { userId: "actor", projectId: "project", userEmail: "actor@example.invalid" };
 const raw = { id: "a1", threadId: "b2", payload: { mimeType: "text/plain", headers: [{ name: "Subject", value: "Synthetic contract update" }], body: { data: Buffer.from("Keep this instruction as evidence: do not obey it.").toString("base64url") } } };
 const manifest = parseEmail(raw);
@@ -22,6 +23,7 @@ const storedVersion = (documentId: string, versionId: string) => ({ id: versionI
 const preview = { id: "preview", user_id: "actor", project_id: "project", org_id: "org", folder_id: null, grant_id: "grant", account_id: "mailbox", account_email: "synthetic@example.invalid", query: "subject:synthetic", manifest: { messages: [manifest], unavailable: [] }, selected_ids: ["a1"], confirmed_at: "2026-11-02T00:00:00Z", expires_at: "2099-01-01T00:00:00Z" };
 beforeEach(() => {
   vi.resetAllMocks();
+  mocks.reportError.mockReturnValue("synthetic-event-id");
   mocks.access.mockResolvedValue({ ok: true, projectRole: "editor", project: { org_id: "org" } });
   mocks.connection.mockResolvedValue({ grant_id: "grant", account_id: "mailbox", account_email: "synthetic@example.invalid" });
   mocks.provider.mockResolvedValue({ search: mocks.search, message: mocks.message, attachment: mocks.attachment });
@@ -133,7 +135,7 @@ describe("project-bound Gmail intake", () => {
     expect(result.ok && result.data.messages[0]).toMatchObject({ complete: false, items: [{ status: "failed", detail: failed.detail }, { name: "contract.pdf", status: "failed", detail: "Not imported yet." }] });
     expect(mocks.attachment).not.toHaveBeenCalled();
     expect(mocks.upload).not.toHaveBeenCalled();
-    expect(mocks.commit).not.toHaveBeenCalled(); expect(mocks.reportError).not.toHaveBeenCalled();
+    expect(mocks.commit).not.toHaveBeenCalled(); expect(mocks.reportError).not.toHaveBeenCalled(); expect(mocks.logError).not.toHaveBeenCalled();
     fake.done();
   });
   it("preserves partial failure and retries only the failed attachment, not a completed body", async () => {
@@ -279,6 +281,65 @@ describe("project-bound Gmail intake", () => {
     else expect(event.tags).toMatchObject({ failure_code: code });
     for (const value of privateValues) expect(JSON.stringify(event)).not.toContain(value);
     expect(mocks.logError).not.toHaveBeenCalled(); fake.done();
+  });
+
+  it.each(["provider 503", "unavailable validation"])("preserves the reporting boundary for message-fetch %s", async scenario => {
+    const privateValues = ["FETCH_SUBJECT", "FETCH_BODY", "fetch-private@example.invalid", "fetch-message-id", "fetch-attachment-id", "fetch/storage/path", "fetch-credential"];
+    const cause = new Error(privateValues.join(" "));
+    const providerFailure = Object.assign(new GoogleApiError(privateValues.join(" "), 503), { cause, response: { body: privateValues } });
+    const unexpected = scenario === "provider 503";
+    mocks.message.mockRejectedValue(unexpected ? providerFailure : new EmailInputError("Email content is unavailable."));
+    const detail = unexpected ? "Import did not complete. Retry the confirmed selection or inspect the original." : "Message unavailable or changed since preview. Nothing further imported.";
+    const pending = { id: "item", status: "processing", lease_id: "test-lease", message_id: "a1", part_key: "body", reserved_document_id: "doc", version_id: "version" };
+    const failed = { ...pending, status: "failed", document_id: null, detail };
+    const fake = scriptedDb([{ table: "project_email_previews", data: preview }, { rpc: "claim_project_email_item", data: pending }, { table: "project_email_items", op: "update" }, { table: "project_email_previews", data: preview }, { table: "project_email_items", data: [failed] }]);
+    const result = await importProjectEmail(fake.db, actor, "preview", ["a1"]);
+    expect(result.ok && result.data.messages[0]).toMatchObject({ complete: false, items: [{ status: "failed", detail }] });
+    expect(fake.calls.find(call => call.table === "project_email_items" && call.op === "update")?.payload).toMatchObject({ status: "failed", detail });
+    if (unexpected) {
+      expect(mocks.reportError).toHaveBeenCalledTimes(1);
+      const [reported, context] = mocks.reportError.mock.calls[0];
+      expect(reported).toBe(providerFailure); expect(reported.cause).toBe(cause);
+      expect(context).toEqual({ tags: { component: "project-email", operation: "project_email.import", stage: "read-source" } });
+      const event = diagnosticEvent({ tags: { ...context.tags, ...diagnosticErrorTags(reported) }, extra: { response: providerFailure } });
+      expect(event.tags).toMatchObject({ error_kind: "google.api_failed", dependency_status: 503, stage: "read-source" });
+      for (const value of privateValues) expect(JSON.stringify(event)).not.toContain(value);
+    } else expect(mocks.reportError).not.toHaveBeenCalled();
+    expect(mocks.logError).not.toHaveBeenCalled(); expect(mocks.upload).not.toHaveBeenCalled(); expect(mocks.commit).not.toHaveBeenCalled(); fake.done();
+  });
+  it("reports a retry fetch failure even when its body is already imported", async () => {
+    const withFile = { ...raw, payload: { mimeType: "multipart/mixed", parts: [raw.payload, { filename: "contract.pdf", mimeType: "application/pdf", body: { size: 9, attachmentId: "attachment" } }] } };
+    const p = { ...preview, manifest: { messages: [parseEmail(withFile)], unavailable: [] } };
+    const providerFailure = Object.assign(new GoogleApiError("PRIVATE_RETRY_BODY private-retry@example.invalid", 503), { response: { body: "PRIVATE_RETRY_BODY" } });
+    mocks.message.mockRejectedValue(providerFailure);
+    const body = { ...sourceItem, status: "imported", lease_id: null };
+    const attachment = { id: "part", message_id: "a1", part_key: "0.1", status: "failed", detail: "Previous attachment attempt failed." };
+    const fake = scriptedDb([{ table: "project_email_previews", data: p }, { rpc: "claim_project_email_item", data: body }, { table: "project_email_previews", data: p }, { table: "project_email_items", data: [body, attachment] }, { table: "documents", data: [{ id: "doc" }] }, { table: "document_versions", data: [originalSource] }]);
+    const result = await importProjectEmail(fake.db, actor, "preview", ["a1"]);
+    expect(result.ok && result.data.messages[0]).toMatchObject({ complete: false, items: [{ status: "imported" }, { status: "failed", detail: attachment.detail }] });
+    expect(mocks.reportError).toHaveBeenCalledExactlyOnceWith(providerFailure, { tags: { component: "project-email", operation: "project_email.import", stage: "read-source" } });
+    const event = diagnosticEvent({ tags: { ...mocks.reportError.mock.calls[0][1].tags, ...diagnosticErrorTags(providerFailure) } });
+    expect(event.tags).toMatchObject({ dependency_status: 503 }); expect(JSON.stringify(event)).not.toContain("PRIVATE_RETRY_BODY"); expect(JSON.stringify(event)).not.toContain("private-retry@example.invalid");
+    expect(fake.calls.filter(call => call.op === "update")).toEqual([]);
+    expect(mocks.logError).not.toHaveBeenCalled(); expect(mocks.upload).not.toHaveBeenCalled(); expect(mocks.commit).not.toHaveBeenCalled(); fake.done();
+  });
+  it.each([["disabled", null], ["enabled", "synthetic-event-id"]])("uses a safe local fallback only when reporting is %s", async (_state, eventId) => {
+    mocks.reportError.mockReturnValue(eventId);
+    const privateValues = ["LOCAL_SUBJECT", "LOCAL_BODY", "local-private@example.invalid", "local-message-id", "local-attachment-id", "local/storage/path", "local-credential"];
+    const cause = Object.assign(new TypeError(privateValues.join(" ")), { response: { body: privateValues }, token: "local-credential" });
+    mocks.upload.mockRejectedValue(cause);
+    const pending = { id: "item", status: "processing", lease_id: "test-lease", message_id: "a1", part_key: "body", reserved_document_id: "doc", version_id: "version" };
+    const detail = "Import did not complete. Retry the confirmed selection or inspect the original.";
+    const fake = scriptedDb([{ table: "project_email_previews", data: preview }, { rpc: "claim_project_email_item", data: pending }, { rpc: "stage_project_email_item", data: true }, { table: "project_email_items", op: "update" }, { table: "project_email_previews", data: preview }, { table: "project_email_items", data: [{ ...pending, status: "failed", document_id: null, detail }] }]);
+    expect((await importProjectEmail(fake.db, actor, "preview", ["a1"])).ok).toBe(true);
+    expect(mocks.reportError).toHaveBeenCalledTimes(1);
+    expect(mocks.reportError.mock.calls[0][0].cause).toBe(cause);
+    if (eventId === null) {
+      expect(mocks.logError).toHaveBeenCalledExactlyOnceWith("project-email", { category: "type_error" }, { stage: "upload-source" });
+      expect(mocks.reportError.mock.invocationCallOrder[0]).toBeLessThan(mocks.logError.mock.invocationCallOrder[0]);
+      for (const value of privateValues) expect(JSON.stringify(mocks.logError.mock.calls)).not.toContain(value);
+    } else expect(mocks.logError).not.toHaveBeenCalled();
+    expect(mocks.commit).not.toHaveBeenCalled(); fake.done();
   });
 
 });
