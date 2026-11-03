@@ -18,17 +18,29 @@ share access to the Gmail connection.
 ## What is imported
 
 - A DOCX text rendering of each selected message, with source message/thread
-  IDs, sender, recipients, date as written, subject, and the complete supported
-  text body. This is a rendering, not preservation of the original EML or its
-  visual formatting. Plain text is preferred within each MIME alternative group; independent
-  mixed-message sections are retained. HTML
-  conversion does not fetch images or remote resources.
+  IDs, sender, To/Cc recipients, Reply-To, date as written, subject, and the
+  complete supported text body. This is a rendering, not preservation of the original EML or its
+  visual formatting. The rendered header subset is From, To, Cc, Reply-To,
+  Date and Subject, rather than all RFC headers. Plain text is preferred
+  within each MIME alternative group; independent mixed-message sections are
+  retained. HTML conversion retains absolute HTTP(S) and mailto destinations
+  as inert literal text, without active hyperlinks or fetching images/remote
+  resources. Unsupported or relative destinations retain their label text only;
+  rendering that exceeds the text/structure limits is unavailable rather than
+  silently truncated.
 - PDF/DOCX attachments, from inline MIME data or Gmail's attachment endpoint.
-  Original bytes and SHA-256 are retained in an immutable document version.
+  Original bytes and SHA-256 are recorded at import in an ordinary native
+  document version. Native editor saves and explicit version replacement can
+  replace those bytes; this intake is not an immutable archive. Save edits as
+  a new version to preserve the imported original.
   MIME/name agreement, basic type signatures and byte limits are checked;
   these are not a malware scanner or a guarantee of valid document structure.
 - A source-backed receipt of imported, previously imported, excluded, failed,
-  processing and deleted items, with links to the exact committed versions.
+  processing, deleted, source-changed and source-unverified items. At receipt
+  check time, original-source links are shown only while the committed version
+  still has the original document identity, storage path and SHA-256. An edited
+  or replaced source or missing verification data makes its message incomplete
+  and withholds the source link; retry does not overwrite edits or recreate it.
   Sender/date/subject are source metadata, not independently verified facts.
 
 The receipt describes new source material, not the legal significance of a
@@ -36,7 +48,9 @@ change. The documents become available to existing project-chat reading and
 citation tools. No automatic legal summary or measured model benefit is claimed.
 
 The initial slice accepts UTF-8/ASCII bodies up to 60,000 bytes, up to 40 MIME
-parts and 10 nesting levels, 5 MiB per attachment and 20 MiB per preview page.
+parts and 10 MIME nesting levels, 5 MiB per attachment and 20 MiB per preview
+page. HTML rendering accepts up to 40 nested element levels and 4,000 children
+per element; the combined rendered body must also fit the 60,000-byte limit.
 Unsupported, encrypted, malformed, oversized, or separately stored text bodies
 are reported as unavailable; unsupported attachments are shown as excluded.
 Such messages remain explicitly incomplete. Attached EMLs, archives, images,
@@ -64,7 +78,12 @@ Every confirmation and item read/write rechecks project authorization and the
 enabled workspace-bound connection. An atomic documents-owned transaction
 rechecks destination, current role, grant and lease; creates/activates the
 version using the existing lifecycle; and marks its provenance imported.
-Version failure rolls back both document creation and processed status.
+These checks apply at request, phase and finalization boundaries. An already
+authorized overlapping transaction may finish after a concurrent access or
+connection change; they do not promise retroactive cancellation. Version failure
+rolls back both document creation and processed status. Receipt verification
+ignores extraction, filename and rendition metadata updates; it checks the
+original source identity/path/hash against the live version.
 A per-item lease and database uniqueness serialize competing attempts.
 Retries retain committed items and retry failures. A document deleted after
 import is a tombstone and is never recreated by replaying intake.

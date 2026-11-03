@@ -80,7 +80,7 @@ export async function previewProjectEmail(db: Db, actor: Actor, input: { query: 
 }
 
 async function emailDocx(message: EmailManifest) {
-  const lines = ["Imported Gmail message", EXTERNAL_NOTE, `Gmail message ID: ${message.id}`, `Gmail thread ID: ${message.threadId}`, `From: ${message.from}`, `To: ${message.to}`, `Date as written: ${message.date}`, `Subject: ${message.subject}`, "", ...message.text.split(/\r?\n/)];
+  const lines = ["Imported Gmail message", EXTERNAL_NOTE, `Gmail message ID: ${message.id}`, `Gmail thread ID: ${message.threadId}`, `From: ${message.from}`, `To: ${message.to}`, `Cc: ${message.cc ?? ""}`, `Reply-To: ${message.replyTo ?? ""}`, `Date as written: ${message.date}`, `Subject: ${message.subject}`, "", ...message.text.split(/\r?\n/)];
   return Packer.toBuffer(new Document({ creator: "Mike", sections: [{ children: lines.map(text => new Paragraph({ children: [new TextRun(text)] })) }] }));
 }
 
@@ -178,16 +178,29 @@ export async function getProjectEmailReceipt(db: Db, actor: Actor, id: string): 
   if (docs.error) return internalFailure(docs.error);
   const live = new Set((docs.data ?? []).map((d: { id: string }) => d.id));
   const versionIds = rows.filter(r => r.status === "imported" && r.document_id && live.has(r.document_id)).map(r => r.version_id);
-  const versions = versionIds.length ? await db.from("document_versions").select("id").in("document_id", [...live]).in("id", versionIds).is("deleted_at", null) : { data: [], error: null };
+  const versions = versionIds.length ? await db.from("document_versions").select("id,document_id,storage_path,content_sha256").in("document_id", [...live]).in("id", versionIds).is("deleted_at", null) : { data: [], error: null };
   if (versions.error) return internalFailure(versions.error);
-  const liveVersions = new Set((versions.data ?? []).map((v: { id: string }) => v.id));
+  type SourceVersion = { id: string; document_id: string; storage_path: string | null; content_sha256: string | null };
+  const liveVersions = new Map((versions.data as SourceVersion[] ?? []).map(v => [v.id, v]));
+  const hasFingerprint = (hash: string | null) => typeof hash === "string" && /^[a-f0-9]{64}$/i.test(hash);
+  const hasPath = (path: string | null) => typeof path === "string" && path.length > 0;
   return ok({ previewId: id, query: preview.query, messages: preview.manifest.messages.filter(m => preview.selected_ids?.includes(m.id)).map(m => {
     const expected = [{ key: "body", filename: `Email-${m.id}.docx` }, ...m.parts];
     const items = expected.map(p => {
       const row = rows.find(r => r.message_id === m.id && r.part_key === p.key);
-      const deleted = row?.status === "imported" && (!row.document_id || !live.has(row.document_id) || !liveVersions.has(row.version_id));
-      const status = deleted ? "deleted" : row?.status === "imported" ? (row.import_preview_id === id ? "imported" : "already_imported") : row?.status === "excluded" ? "excluded" : row?.status === "processing" ? "processing" : "failed";
-      return { name: p.filename, status, ...(row?.status === "imported" && !deleted ? { documentId: row.document_id!, versionId: row.version_id, sha256: row.content_sha256 ?? undefined } : {}), detail: deleted ? "Previously imported document/version was deleted or moved; it will not be recreated." : row?.detail ?? (row ? undefined : "Not imported yet.") } as ProjectEmailReceipt["messages"][number]["items"][number];
+      const version = row ? liveVersions.get(row.version_id) : undefined;
+      const deleted = row?.status === "imported" && (!row.document_id || !live.has(row.document_id) || !version);
+      // Native versions can be replaced by ordinary editing. A surviving ID
+      // alone cannot certify the originally imported source or its hash.
+      const unverified = row?.status === "imported" && !deleted && (!hasFingerprint(row.content_sha256) || !hasFingerprint(version!.content_sha256) || !hasPath(row.storage_path) || !hasPath(version!.storage_path));
+      const changed = row?.status === "imported" && !deleted && (version!.document_id !== row.document_id || (hasPath(row.storage_path) && hasPath(version!.storage_path) && version!.storage_path !== row.storage_path) || (hasFingerprint(row.content_sha256) && hasFingerprint(version!.content_sha256) && version!.content_sha256!.toLowerCase() !== row.content_sha256!.toLowerCase()));
+      const status = deleted ? "deleted" : changed ? "source_changed" : unverified ? "source_unverified" : row?.status === "imported" ? (row.import_preview_id === id ? "imported" : "already_imported") : row?.status === "excluded" ? "excluded" : row?.status === "processing" ? "processing" : "failed";
+      const detail = deleted ? "Previously imported document/version was deleted or moved; it will not be recreated."
+        : changed ? "The imported source version was edited or replaced. Its original source link is withheld; retry will not overwrite edits or recreate it."
+        : unverified ? "The original imported source cannot be verified because its stored fingerprint or path is unavailable. Its source link is withheld; retry will not recreate it."
+        : row?.detail ?? (row ? undefined : "Not imported yet.");
+      const verified = status === "imported" || status === "already_imported";
+      return { name: p.filename, status, ...(verified ? { documentId: row!.document_id!, versionId: row!.version_id, sha256: row!.content_sha256! } : {}), detail } as ProjectEmailReceipt["messages"][number]["items"][number];
     });
     return { id: m.id, subject: m.subject, from: m.from, date: m.date, complete: items.every(i => i.status === "imported" || i.status === "already_imported"), items };
   }) });

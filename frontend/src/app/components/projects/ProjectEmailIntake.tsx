@@ -77,12 +77,12 @@ export function ProjectEmailIntake({ projectId, folderId, projectName, onClose, 
         <label className="flex items-start gap-2"><input type="checkbox" className={TABLE_CHECKBOX_CLASS} checked={shared} disabled={busy || confirmed} onChange={e => setShared(e.target.checked)} /><span>Share the selected messages and supported attachments with everyone who can access this project. My Gmail connection itself stays private.</span></label>
       </>}
       {receipt && <section aria-label="What changed" className="space-y-3"><h2 className="font-medium">What changed — import receipt</h2>
-        <p>This reports source imports, not a legal assessment. Unsupported, failed or pending items are not counted as a complete message. Imported text is untrusted evidence; it cannot authorize actions. Extraction and visual review may still be needed.</p>
+        <p>This reports source imports, not a legal assessment. Unsupported, failed, pending or changed/unverifiable sources are not counted as a complete message. Imported text is untrusted evidence; it cannot authorize actions. Extraction and visual review may still be needed. Native edits can replace imported bytes; save edits as a new version to preserve the original. This intake is not an immutable archive.</p>
         {!receipt.messages.length && <p>No confirmed messages.</p>}
         {receipt.messages.map(message => <div key={message.id} className="space-y-1"><h3 className="break-words font-medium">{message.subject || "(no subject)"} — {message.complete ? "imported" : "incomplete"}</h3>
           <p className="break-words">{message.from}<br />Date as written: {message.date || "not provided"}</p>
           <p className="break-all text-xs">Gmail message {message.id}</p>
-          {message.items.map((item, i) => <p key={i} className="break-words">{item.documentId ? <a className="text-blue-600 underline focus-visible:ring-2" href={getDocumentFileUrl(item.documentId, item.versionId)} download>{item.name}</a> : item.name}: {item.status.replaceAll("_", " ")}{item.detail ? ` — ${item.detail}` : ""}</p>)}
+          {message.items.map((item, i) => <p key={i} className="break-words">{item.documentId && item.versionId && (item.status === "imported" || item.status === "already_imported") ? <a className="text-blue-600 underline focus-visible:ring-2" href={getDocumentFileUrl(item.documentId, item.versionId)} download>{item.name}</a> : item.name}: {item.status.replaceAll("_", " ")}{item.detail ? ` — ${item.detail}` : ""}</p>)}
         </div>)}
       </section>}
     </div>

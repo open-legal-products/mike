@@ -93,4 +93,29 @@ describe("bounded, inert Gmail MIME import", () => {
     expect(() => verifyAttachment(Buffer.from("evil-test"), part)).toThrow();
     expect(() => verifyAttachment(Buffer.from("%PDF-longer"), part)).toThrow();
   });
+  it("retains bounded sanitized Cc and Reply-To source headers", () => {
+    const parsed = parseEmail(message({ ...plain("body"), headers: [{ name: "Cc", value: "cc@example.invalid\u0000" }, { name: "REPLY-TO", value: "reply@example.invalid\u0007" }] }));
+    expect(parsed).toMatchObject({ cc: "cc@example.invalid", replyTo: "reply@example.invalid" });
+    const long = "x".repeat(2100);
+    expect(parseEmail(message({ ...plain("body"), headers: [{ name: "Cc", value: long }, { name: "Reply-To", value: long }] }))).toMatchObject({ cc: long.slice(0, 2000), replyTo: long.slice(0, 2000) });
+  });
+  it("retains HTTP(S)/mailto destinations as literal text without converting unsafe or unresolved hrefs", () => {
+    const html = '<p><a href="https://example.invalid/terms?x=1&amp;y=2">Terms</a> <a href="  http://example.invalid/plain  ">Plain</a> <a href="mailto:reply@example.invalid">Contact</a> <a href="mailto:?subject=Terms">Compose</a> <a href="https://example.invalid/only"></a></p><a href="javascript:alert(1)">Script label</a><a href="data:text/html,evil">Data label</a><a href="file:///secret">File label</a><a href="//unknown.invalid/path">Relative label</a><a href="/local">Local label</a><a href="#section">Section</a><a href="https://example.invalid/&#10;spoof">Control label</a><a href="https://example.invalid/&#8232;unicode-spoof">Unicode control label</a><script>evil_script()</script><style>evil_style</style><img src="https://tracker.invalid/pixel">';
+    const parsed = parseEmail(message({ mimeType: "text/html", body: { data: b64(html) } }));
+    expect(parsed.text).toContain("Terms [https://example.invalid/terms?x=1&y=2]");
+    expect(parsed.text).toContain("Plain [http://example.invalid/plain]"); expect(parsed.text).toContain("Contact [mailto:reply@example.invalid]"); expect(parsed.text).toContain("Compose [mailto:?subject=Terms]"); expect(parsed.text).toContain("[https://example.invalid/only]");
+    for (const absent of ["javascript:", "data:text", "file:", "unknown.invalid", "[/local]", "[#section]", "spoof", "evil_script", "evil_style", "tracker.invalid"]) expect(parsed.text).not.toContain(absent);
+    expect(parsed.text).toContain("Script label"); expect(parsed.text).toContain("Control label");
+  });
+  it("rejects expanded HTML text exceeding the body limit instead of silently truncating it", () => {
+    const html = `<p>${"a".repeat(EMAIL_LIMITS.bodyBytes - 70)}</p><hr><hr><hr><hr>`;
+    expect(Buffer.byteLength(html)).toBeLessThanOrEqual(EMAIL_LIMITS.bodyBytes);
+    expect(() => parseEmail(message({ mimeType: "text/html", body: { data: b64(html) } }))).toThrow("limit");
+  });
+  it.each(["deep", "broad"])("rejects %s HTML structure truncation rather than accepting a partial rendering", shape => {
+    const html = shape === "deep" ? '<div>'.repeat(100) + 'Deep terms must survive or fail.' + '</div>'.repeat(100) : '<span>x</span>'.repeat(4001);
+    expect(Buffer.byteLength(html)).toBeLessThanOrEqual(EMAIL_LIMITS.bodyBytes);
+    expect(() => parseEmail(message({ mimeType: "text/html", body: { data: b64(html) } }))).toThrow("limit");
+  });
+
 });

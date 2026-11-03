@@ -45,13 +45,27 @@ it("editing the query clears a prior confirmation instead of silently retargetin
   expect(screen.queryByRole("button", { name: "Retry confirmed selection" })).not.toBeInTheDocument();
   expect(api.importProjectEmail).not.toHaveBeenCalled();
 });
-it("does not offer ineffective retries for excluded-only or deleted imports", async () => {
+it("does not offer ineffective retries for excluded, deleted, changed or unverifiable imports", async () => {
   api.latestProjectEmail.mockResolvedValue({ id: "preview", query: "subject:synthetic", confirmed_at: "2026-11-02" });
-  api.getProjectEmailReceipt.mockResolvedValue({ ...receipt, messages: [{ ...receipt.messages[0], complete: false, items: [{ name: "mail.eml", status: "excluded" }, { name: "old.pdf", status: "deleted" }] }] });
+  api.getProjectEmailReceipt.mockResolvedValue({ ...receipt, messages: [{ ...receipt.messages[0], complete: false, items: [{ name: "mail.eml", status: "excluded" }, { name: "old.pdf", status: "deleted" }, { name: "edited.docx", status: "source_changed", documentId: "stale-doc", versionId: "stale-version", detail: "The imported source version was edited or replaced." }, { name: "unknown.docx", status: "source_unverified", documentId: "unverified-doc", versionId: "unverified-version", detail: "The original imported source cannot be verified." }] }] });
   mount();
   await screen.findByText(/Retrying the restored confirmation keeps its original destination/);
   await waitFor(() => expect(screen.getByRole("button", { name: "Retry confirmed selection" })).toBeDisabled());
+  expect(screen.queryByRole("link")).not.toBeInTheDocument();
+  expect(api.getDocumentFileUrl).not.toHaveBeenCalled();
+  expect(screen.getByText(/edited.docx: source changed/)).toBeInTheDocument();
+  expect(screen.getByText(/unknown.docx: source unverified/)).toBeInTheDocument();
   expect(api.importProjectEmail).not.toHaveBeenCalled();
+});
+it("offers retry for genuine mixed failures while changed sources remain incomplete and unlinked", async () => {
+  api.latestProjectEmail.mockResolvedValue({ id: "preview", query: "subject:synthetic", confirmed_at: "2026-11-02" });
+  api.getProjectEmailReceipt.mockResolvedValue({ ...receipt, messages: [{ ...receipt.messages[0], complete: false, items: [{ name: "Email-m1.docx", status: "source_changed" }, { name: "contract.pdf", status: "failed" }] }] });
+  mount();
+  const retry = await screen.findByRole("button", { name: "Retry confirmed selection" });
+  await waitFor(() => expect(retry).toBeEnabled());
+  expect(screen.queryByRole("link")).not.toBeInTheDocument();
+  fireEvent.click(retry);
+  await waitFor(() => expect(api.importProjectEmail).toHaveBeenCalledWith("project", "preview", ["m1"]));
 });
 it("labels a repeated preview as loading without implying an unconfirmed import", async () => {
   let finishPreview!: (value: typeof preview) => void;

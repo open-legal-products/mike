@@ -12,7 +12,7 @@ export type ProjectEmailPreview = {
 export type ProjectEmailReceipt = {
   previewId: string; query: string;
   messages: Array<{ id: string; subject: string; from: string; date: string; complete: boolean; items: Array<{
-    name: string; status: "imported" | "already_imported" | "processing" | "excluded" | "failed" | "deleted";
+    name: string; status: "imported" | "already_imported" | "processing" | "excluded" | "failed" | "deleted" | "source_changed" | "source_unverified";
     documentId?: string; versionId?: string; sha256?: string; detail?: string;
   }> }>;
 };

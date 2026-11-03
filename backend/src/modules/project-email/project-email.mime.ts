@@ -8,7 +8,7 @@ export const EMAIL_LIMITS = { messages: 5, parts: 40, depth: 10, fileBytes: 5 * 
 export class EmailInputError extends Error {}
 type Part = { partId?: string; mimeType?: string; filename?: string; headers?: Array<{ name: string; value: string }>; body?: { size?: number; data?: string; attachmentId?: string }; parts?: Part[] };
 export type EmailPart = { key: string; attachmentId?: string; filename: string; mime: string; size: number; data?: string; excluded?: string };
-export type EmailManifest = { id: string; threadId: string; subject: string; from: string; to: string; date: string; fingerprint: string; text: string; parts: EmailPart[] };
+export type EmailManifest = { id: string; threadId: string; subject: string; from: string; to: string; cc: string; replyTo: string; date: string; fingerprint: string; text: string; parts: EmailPart[] };
 export function digest(value: string | Uint8Array) { return createHash("sha256").update(value).digest("hex"); }
 export function providerId(value: unknown): string {
   if (typeof value !== "string" || !/^[a-zA-Z0-9_-]{1,1024}$/.test(value)) throw new EmailInputError("Invalid Gmail identifier.");
@@ -30,6 +30,36 @@ function attachmentExclusion(name: string, mime: string, size: number): string |
   const suffix = documentSuffix(name);
   if (!["pdf", "docx"].includes(suffix) || contentTypeForDocumentType(suffix) !== mime) return "Unsupported attachment type; not imported.";
   return undefined;
+}
+// These are literal source destinations, never hyperlinks or fetch targets.
+// Relative/active schemes have no meaningful safe destination in this rendering.
+function sourceDestination(value: string | undefined): string | undefined {
+  const destination = value?.trim();
+  if (!destination || /[\s\x00-\x20\x7f-\x9f\u202a-\u202e\u2066-\u2069]/.test(destination)) return undefined;
+  try {
+    const url = new URL(destination);
+    if ((url.protocol === "https:" || url.protocol === "http:") && url.hostname) return destination;
+    if (url.protocol === "mailto:" && (url.pathname || url.search)) return destination;
+  } catch { /* Unresolvable destinations remain label text only. */ }
+  return undefined;
+}
+function renderHtml(text: string): string {
+  const limitMarker = "[Email HTML structure exceeds the import limit]";
+  const rendered = convert(text, {
+    wordwrap: false,
+    // Reject rather than silently accept the converter's partial rendering.
+    limits: { maxInputLength: EMAIL_LIMITS.bodyBytes, maxDepth: 40, maxChildNodes: 4000, ellipsis: limitMarker },
+    formatters: {
+      sourceLink: (element, walk, builder) => {
+        walk(element.children, builder);
+        const destination = sourceDestination(element.attribs?.href);
+        if (destination) builder.addInline(` [${destination}]`, { noWordTransform: true });
+      },
+    },
+    selectors: [{ selector: "img", format: "skip" }, { selector: "script", format: "skip" }, { selector: "style", format: "skip" }, { selector: "a", format: "sourceLink" }],
+  });
+  if (rendered.includes(limitMarker)) throw new EmailInputError("Email HTML exceeds the import structure limit.");
+  return rendered;
 }
 export function parseEmail(raw: Record<string, unknown>): EmailManifest {
   const id = providerId(raw.id), threadId = providerId(raw.threadId);
@@ -65,7 +95,7 @@ export function parseEmail(raw: Record<string, unknown>): EmailManifest {
       let text: string;
       try { text = new TextDecoder("utf-8", { fatal: true }).decode(bytes); }
       catch { throw new EmailInputError("Unsupported email character encoding."); }
-      sections.push({ text: mime === "text/plain" ? text : convert(text, { wordwrap: false, selectors: [{ selector: "img", format: "skip" }, { selector: "a", options: { ignoreHref: true } }] }), hasPlain: mime === "text/plain" });
+      sections.push({ text: mime === "text/plain" ? text : renderHtml(text), hasPlain: mime === "text/plain" });
     }
     sections.push(...(part.parts ?? []).map((child, i) => visit(child, `${path}.${i}`, depth + 1)));
     if (mime === "multipart/alternative") {
@@ -79,6 +109,7 @@ export function parseEmail(raw: Record<string, unknown>): EmailManifest {
     return { text: sections.map(section => section.text).filter(Boolean).join("\n\n"), hasPlain: sections.some(section => section.hasPlain) };
   };
   const { text } = visit(payload, "0", 0);
+  if (Buffer.byteLength(text) > EMAIL_LIMITS.bodyBytes) throw new EmailInputError("Rendered email body exceeds the import limit.");
   // Labels/history can change merely by reading elsewhere. Bind the actual
   // immutable message content, not those mutable mailbox attributes.
   // A body attachmentId is an opaque retrieval handle, not source content.
@@ -87,7 +118,7 @@ export function parseEmail(raw: Record<string, unknown>): EmailManifest {
   const fingerprint = digest(JSON.stringify(payload, function (this: object, key: string, value: unknown) {
     return key === "attachmentId" && mimeBodies.has(this) ? undefined : value;
   }));
-  return { id, threadId, subject: clean(header("subject")), from: clean(header("from")), to: clean(header("to")), date: clean(header("date")), text, parts, fingerprint };
+  return { id, threadId, subject: clean(header("subject")), from: clean(header("from")), to: clean(header("to")), cc: clean(header("cc")), replyTo: clean(header("reply-to")), date: clean(header("date")), text, parts, fingerprint };
 }
 
 export function verifyAttachment(bytes: Buffer, part: EmailPart) {
