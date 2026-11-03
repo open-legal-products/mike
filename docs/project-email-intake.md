@@ -53,6 +53,9 @@ page. HTML rendering accepts up to 40 nested element levels and 4,000 children
 per element; the combined rendered body must also fit the 60,000-byte limit.
 Unsupported, encrypted, malformed, oversized, or separately stored text bodies
 are reported as unavailable; unsupported attachments are shown as excluded.
+Unsupported control/non-XML characters in retained headers or body text are
+rejected rather than silently deleted or written into a corrupt DOCX. Ordinary
+TAB/LF/CR whitespace and valid Unicode remain supported.
 Such messages remain explicitly incomplete. Attached EMLs, archives, images,
 legacy Office documents and OCR are outside this slice. Visually inspect
 original messages and execution/signature pages where relevant.

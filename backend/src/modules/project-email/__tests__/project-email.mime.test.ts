@@ -93,8 +93,8 @@ describe("bounded, inert Gmail MIME import", () => {
     expect(() => verifyAttachment(Buffer.from("evil-test"), part)).toThrow();
     expect(() => verifyAttachment(Buffer.from("%PDF-longer"), part)).toThrow();
   });
-  it("retains bounded sanitized Cc and Reply-To source headers", () => {
-    const parsed = parseEmail(message({ ...plain("body"), headers: [{ name: "Cc", value: "cc@example.invalid\u0000" }, { name: "REPLY-TO", value: "reply@example.invalid\u0007" }] }));
+  it("retains bounded Cc and Reply-To source headers", () => {
+    const parsed = parseEmail(message({ ...plain("body"), headers: [{ name: "Cc", value: "cc@example.invalid" }, { name: "REPLY-TO", value: "reply@example.invalid" }] }));
     expect(parsed).toMatchObject({ cc: "cc@example.invalid", replyTo: "reply@example.invalid" });
     const long = "x".repeat(2100);
     expect(parseEmail(message({ ...plain("body"), headers: [{ name: "Cc", value: long }, { name: "Reply-To", value: long }] }))).toMatchObject({ cc: long.slice(0, 2000), replyTo: long.slice(0, 2000) });
@@ -116,6 +116,26 @@ describe("bounded, inert Gmail MIME import", () => {
     const html = shape === "deep" ? '<div>'.repeat(100) + 'Deep terms must survive or fail.' + '</div>'.repeat(100) : '<span>x</span>'.repeat(4001);
     expect(Buffer.byteLength(html)).toBeLessThanOrEqual(EMAIL_LIMITS.bodyBytes);
     expect(() => parseEmail(message({ mimeType: "text/html", body: { data: b64(html) } }))).toThrow("limit");
+  });
+
+  it.each(["\u0000", "\u0007", "\u000b", "\u001f", "\u007f", "\ufffe", "\uffff"])("rejects unsupported control/non-XML body text instead of producing corrupt DOCX XML: %j", control => {
+    expect(() => parseEmail(message(plain(`Terms before${control}terms after`)))).toThrow("control characters");
+  });
+  it.each(["Subject", "From", "To", "Cc", "Reply-To", "Date"])("rejects unsupported controls in retained %s headers instead of silently joining text", name => {
+    expect(() => parseEmail(message({ ...plain("body"), headers: [{ name, value: "before\u0000after" }] }))).toThrow("control characters");
+  });
+  it("rejects lone surrogate header characters while preserving valid Unicode and TAB/LF/CR", () => {
+    expect(() => parseEmail(message({ ...plain("body"), headers: [{ name: "Subject", value: "before\ud800after" }] }))).toThrow("control characters");
+    const text = "Café — 😀\tFirst line\nSecond line\rThird line";
+    expect(parseEmail(message({ ...plain(text), headers: [{ name: "Subject", value: text }] }))).toMatchObject({ subject: text, text });
+  });
+
+  it("rejects non-XML characters produced by HTML entity decoding", () => {
+    expect(() => parseEmail(message({ mimeType: "text/html", body: { data: b64("<p>Terms&#xfffe;changed</p>") } }))).toThrow("control characters");
+  });
+  it("does not split a Unicode surrogate pair at the bounded header limit", () => {
+    const subject = "x".repeat(1999) + "😀";
+    expect(parseEmail(message({ ...plain("body"), headers: [{ name: "Subject", value: subject }] })).subject).toBe("x".repeat(1999));
   });
 
 });

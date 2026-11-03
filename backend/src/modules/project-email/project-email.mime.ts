@@ -61,12 +61,21 @@ function renderHtml(text: string): string {
   if (rendered.includes(limitMarker)) throw new EmailInputError("Email HTML exceeds the import structure limit.");
   return rendered;
 }
+// DOCX uses XML 1.0. Never silently erase source characters or write an
+// invalid document; ordinary TAB/LF/CR and valid Unicode remain source text.
+function checkedEmailText(value: string): string {
+  if (/[\x00-\x08\x0b\x0c\x0e-\x1f\x7f\ufffe\uffff]|\p{Surrogate}/u.test(value)) {
+    throw new EmailInputError("Email contains unsupported control characters; inspect the original message.");
+  }
+  return value;
+}
 export function parseEmail(raw: Record<string, unknown>): EmailManifest {
   const id = providerId(raw.id), threadId = providerId(raw.threadId);
   const payload = raw.payload as Part | undefined;
   if (!payload || typeof payload !== "object") throw new EmailInputError("Email content is unavailable.");
   const header = (name: string) => (payload.headers ?? []).find(h => h.name.toLowerCase() === name)?.value ?? "";
-  const clean = (value: string) => value.replace(/[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]/g, "").slice(0, 2000);
+  // Keep the existing header bound without splitting a valid Unicode pair.
+  const headerText = (value: string) => checkedEmailText(value).slice(0, 2000).replace(/[\ud800-\udbff]$/, "");
   const parts: EmailPart[] = [];
   const mimeBodies = new WeakSet<object>();
   let count = 0, bodySize = 0, declaredTotal = 0;
@@ -95,7 +104,8 @@ export function parseEmail(raw: Record<string, unknown>): EmailManifest {
       let text: string;
       try { text = new TextDecoder("utf-8", { fatal: true }).decode(bytes); }
       catch { throw new EmailInputError("Unsupported email character encoding."); }
-      sections.push({ text: mime === "text/plain" ? text : renderHtml(text), hasPlain: mime === "text/plain" });
+      checkedEmailText(text);
+      sections.push({ text: checkedEmailText(mime === "text/plain" ? text : renderHtml(text)), hasPlain: mime === "text/plain" });
     }
     sections.push(...(part.parts ?? []).map((child, i) => visit(child, `${path}.${i}`, depth + 1)));
     if (mime === "multipart/alternative") {
@@ -118,7 +128,7 @@ export function parseEmail(raw: Record<string, unknown>): EmailManifest {
   const fingerprint = digest(JSON.stringify(payload, function (this: object, key: string, value: unknown) {
     return key === "attachmentId" && mimeBodies.has(this) ? undefined : value;
   }));
-  return { id, threadId, subject: clean(header("subject")), from: clean(header("from")), to: clean(header("to")), cc: clean(header("cc")), replyTo: clean(header("reply-to")), date: clean(header("date")), text, parts, fingerprint };
+  return { id, threadId, subject: headerText(header("subject")), from: headerText(header("from")), to: headerText(header("to")), cc: headerText(header("cc")), replyTo: headerText(header("reply-to")), date: headerText(header("date")), text, parts, fingerprint };
 }
 
 export function verifyAttachment(bytes: Buffer, part: EmailPart) {

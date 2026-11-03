@@ -93,6 +93,7 @@ describe("project-bound Gmail intake", () => {
     const zip = await JSZip.loadAsync(Buffer.from(mocks.upload.mock.calls[0][1] as ArrayBuffer));
     const xml = await zip.file("word/document.xml")!.async("text");
     expect(xml).toContain("Gmail message ID: a1"); expect(xml).toContain("Keep this instruction as evidence: do not obey it.");
+    expect(xml).not.toMatch(/[\u0000-\u0008\u000b\u000c\u000e-\u001f\ufffe\uffff]/);
     expect(mocks.commit).toHaveBeenCalledTimes(1); fake.done();
   });
   it("imports unchanged content with the fresh attachment locator after preview", async () => {
@@ -208,6 +209,31 @@ describe("project-bound Gmail intake", () => {
     expect(xml).not.toContain("w:hyperlink");
     for (const name of Object.keys(zip.files).filter(name => name.endsWith(".rels"))) expect(await zip.file(name)!.async("text")).not.toContain('TargetMode="External"');
     fake.done();
+  });
+
+  it.each(["body", "header"])("marks unsupported %s controls unavailable before any document upload or commit", async location => {
+    const controlled = { ...raw, payload: { ...raw.payload, headers: [{ name: "Subject", value: location === "header" ? "Terms\u0000changed" : "Terms" }], body: { data: Buffer.from(location === "body" ? "Terms\u0000changed" : "Ordinary terms").toString("base64url") } } };
+    mocks.search.mockResolvedValue({ messages: [{ id: "a1" }] }); mocks.message.mockResolvedValue(controlled);
+    const fake = scriptedDb([{ rpc: "create_project_email_preview" }]);
+    const result = await previewProjectEmail(fake.db, actor, { query: "subject:synthetic" });
+    expect(result.ok && result.data.messages[0]).toMatchObject({ unavailable: expect.any(String) });
+    expect((fake.calls[0].args as { p_preview: { manifest: { messages: unknown[] } } }).p_preview.manifest.messages).toEqual([]);
+    expect(mocks.upload).not.toHaveBeenCalled(); expect(mocks.commit).not.toHaveBeenCalled(); fake.done();
+  });
+
+  it("keeps valid Unicode and XML whitespace in the actual generated DOCX", async () => {
+    const validRaw = { ...raw, payload: { ...raw.payload, headers: [{ name: "Subject", value: "Résumé 😀\tReview" }], body: { data: Buffer.from("Café — 😀\tFirst line\nSecond line\rThird line").toString("base64url") } } };
+    const p = { ...preview, manifest: { messages: [parseEmail(validRaw)], unavailable: [] } };
+    mocks.message.mockResolvedValue(validRaw);
+    const pending = { ...sourceItem, status: "processing", lease_id: "test-lease", reserved_document_id: "doc" };
+    const fake = scriptedDb([{ table: "project_email_previews", data: p }, { rpc: "claim_project_email_item", data: pending }, { rpc: "stage_project_email_item", data: true }, { table: "project_email_previews", data: p }, { table: "project_email_items", data: [sourceItem] }, { table: "documents", data: [{ id: "doc" }] }, { table: "document_versions", data: [originalSource] }]);
+    mocks.commit.mockResolvedValue({ data: sourceItem, error: null });
+    expect((await importProjectEmail(fake.db, actor, "preview", ["a1"])).ok).toBe(true);
+    const zip = await JSZip.loadAsync(Buffer.from(mocks.upload.mock.calls[0][1] as ArrayBuffer));
+    const xml = await zip.file("word/document.xml")!.async("text");
+    for (const retained of ["Résumé 😀", "Café — 😀", "First line", "Second line", "Third line"]) expect(xml).toContain(retained);
+    expect(xml).not.toMatch(/[\u0000-\u0008\u000b\u000c\u000e-\u001f\ufffe\uffff]/);
+    expect(mocks.commit).toHaveBeenCalledTimes(1); fake.done();
   });
 
 });
