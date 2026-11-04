@@ -42,11 +42,28 @@ export type UploadProgress<T = unknown> = Omit<UploadOutcome<T>, "status"> & {
  */
 export class UploadBatchError extends Error {
     readonly outcomes: UploadOutcome[];
+    /**
+     * Set when `message` is written for the user: a file the server refused
+     * for its content. The shared classifier then shows it verbatim as a
+     * validation failure, with no Retry, no support offer and no report.
+     */
+    readonly userVisible?: true;
+    readonly kind?: "validation";
+    readonly retryable?: false;
 
-    constructor(message: string, outcomes: UploadOutcome[]) {
+    constructor(
+        message: string,
+        outcomes: UploadOutcome[],
+        options: { userVisible?: boolean } = {},
+    ) {
         super(message);
         this.name = "UploadBatchError";
         this.outcomes = outcomes;
+        if (options.userVisible) {
+            this.userVisible = true;
+            this.kind = "validation";
+            this.retryable = false;
+        }
     }
 }
 
@@ -143,7 +160,20 @@ export function failedUploadMessage<T>(
 export function firstUploadResult<T>(outcomes: UploadOutcome<T>[]): T {
     const first = outcomes[0];
     if (!first || first.status !== "completed" || !first.result) {
-        throw new UploadBatchError("The file could not be processed.", outcomes);
+        // A file refused for its content is the user's to fix: name it and
+        // the reason instead of the generic line. Everything else keeps the
+        // generic line so the notifier classifies the real cause.
+        const refused =
+            first !== undefined &&
+            first.status === "error" &&
+            !uploadOutcomeNeedsRetry(first);
+        throw new UploadBatchError(
+            refused
+                ? failedUploadMessage(outcomes)
+                : "The file could not be processed.",
+            outcomes,
+            { userVisible: refused },
+        );
     }
     return first.result;
 }
