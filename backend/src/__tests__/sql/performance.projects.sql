@@ -5,12 +5,16 @@ create temporary table project_test_actors(uid text,email text);
 create temporary table project_test_workspaces(workspace text);
 create temporary sequence project_verdict_calls minvalue 0 start 0;
 do $$
-declare owner_id uuid:=gen_random_uuid(); member_id uuid:=gen_random_uuid(); outsider uuid:=gen_random_uuid();
+declare owner_id uuid:=gen_random_uuid(); member_id uuid:=gen_random_uuid(); outsider uuid:=gen_random_uuid(); admin_id uuid:=gen_random_uuid();
   org uuid:=gen_random_uuid(); other_org uuid:=gen_random_uuid(); pid uuid;
 begin
-  insert into auth.users(id,email) values(owner_id,owner_id||'@example.test'),(member_id,member_id||'@example.test'),(outsider,outsider||'@example.test');
+  insert into auth.users(id,email) values(owner_id,owner_id||'@example.test'),(member_id,member_id||'@example.test'),(outsider,outsider||'@example.test'),(admin_id,admin_id||'@example.test');
   insert into public.organizations(id,name,created_by) values(org,'Our org',owner_id),(other_org,'Other org',outsider);
   insert into public.org_members(org_id,user_id,role) values(org,owner_id,'owner'),(org,member_id,'member'),(other_org,outsider,'owner');
+  -- An admin (not an Owner) allowed into private content: the ladder treats
+  -- them as a member, plus the projects they open.
+  insert into public.org_members(org_id,user_id,role,can_access_private_content) values(org,admin_id,'admin',true);
+  insert into project_test_actors values(admin_id::text,admin_id||'@example.test');
   insert into project_test_actors values(owner_id::text,owner_id||'@example.test'),(member_id::text,member_id||'@example.test'),(outsider::text,outsider||'@example.test'),('invalid',null);
   insert into project_test_workspaces values(null),('personal'),(org::text),(other_org::text);
   insert into public.projects(user_id,org_id,name,visibility) values
@@ -27,6 +31,7 @@ begin
   -- override, and an ownerless private project only the org Owner inherits.
   insert into public.projects(user_id,org_id,name,visibility) select owner_id,org,'Owner private '||n,'private' from generate_series(1,200) n;
   insert into public.projects(user_id,org_id,name,visibility) values(owner_id,org,'Overridden','private') returning id into pid;
+  perform public.open_org_private_content(org,admin_id,'project',pid);
   insert into public.project_org_access_overrides(project_id,org_id,user_id,role) values(pid,org,member_id,'viewer');
   insert into public.projects(user_id,org_id,name,visibility) values(null,org,'Ownerless','private');
   perform set_config('mike.test_project_actor',owner_id::text,true);

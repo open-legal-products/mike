@@ -4,11 +4,14 @@ create temporary table workflow_actors(uid text,email text);
 create temporary table workflow_workspaces(workspace text);
 create temporary sequence workflow_calls minvalue 0 start 0;
 do $$
-declare actor uuid:=gen_random_uuid(); other_actor uuid:=gen_random_uuid(); org uuid:=gen_random_uuid(); foreign_org uuid:=gen_random_uuid(); wid uuid;
+declare actor uuid:=gen_random_uuid(); other_actor uuid:=gen_random_uuid(); admin_id uuid:=gen_random_uuid(); org uuid:=gen_random_uuid(); foreign_org uuid:=gen_random_uuid(); wid uuid;
 begin
-  insert into auth.users(id,email) values(actor,actor||'@example.test'),(other_actor,other_actor||'@example.test');
+  insert into auth.users(id,email) values(actor,actor||'@example.test'),(other_actor,other_actor||'@example.test'),(admin_id,admin_id||'@example.test');
   insert into public.organizations(id,name,created_by) values(org,'Visible org',actor),(foreign_org,'Unrelated org',other_actor);
   insert into public.org_members(org_id,user_id,role) values(org,actor,'owner'),(org,other_actor,'member'),(foreign_org,other_actor,'owner');
+  -- An admin allowed into private content, and a denial on a public workflow.
+  insert into public.org_members(org_id,user_id,role,can_access_private_content) values(org,admin_id,'admin',true);
+  insert into workflow_actors values(admin_id::text,admin_id||'@example.test');
   insert into workflow_actors values(actor::text,actor||'@example.test'),(other_actor::text,other_actor||'@example.test'),('invalid',null);
   insert into workflow_workspaces values(null),('personal'),(org::text),(foreign_org::text);
   insert into public.workflows(user_id,org_id,title,type,visibility) values(actor,null,'Owned','assistant','private'),(other_actor,org,'Public','assistant','organization'),(other_actor,org,'Hidden','assistant','private');
@@ -26,6 +29,9 @@ begin
   insert into public.workflows(user_id,org_id,title,type,visibility) values(actor,org,'Overridden','assistant','private') returning id into wid;
   insert into public.workflow_org_access_overrides(workflow_id,org_id,user_id,role) values(wid,org,other_actor,'viewer');
   insert into public.workflows(user_id,org_id,title,type,visibility) values(null,org,'Ownerless','assistant','private');
+  perform public.open_org_private_content(org,admin_id,'workflow',wid);
+  insert into public.workflows(user_id,org_id,title,type,visibility) values(actor,org,'Public, denied','assistant','organization') returning id into wid;
+  insert into public.workflow_org_access_overrides(workflow_id,org_id,user_id,role) values(wid,org,other_actor,'deny'),(wid,org,admin_id,'deny');
   perform set_config('mike.test_workflow_actor',actor::text,true);
   perform set_config('mike.test_workflow_member',other_actor::text,true);
 end;
