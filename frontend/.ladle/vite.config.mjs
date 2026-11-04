@@ -1,12 +1,9 @@
 // Vite settings for the Ladle catalog (npm run catalog / catalog:build).
 //
-// Ladle applies tsconfig.json's `paths` through vite-tsconfig-paths, which is
-// how "@/..." and "@mike/ui" resolve in stories. Two of those mappings exist
-// only so `tsc` can type the shared packages, which have no node_modules of
-// their own: `react` and `react-dom` point at their @types declarations. A
-// bundler must not follow those, so the runtime dependencies the packages use
-// are aliased here to this application's installed copies. Vite applies
-// `resolve.alias` before any plugin, so these win over the tsconfig mappings.
+// Ladle applies tsconfig.json's `paths` through vite-tsconfig-paths. The
+// shared packages have no node_modules of their own, so resolve their runtime
+// dependencies from this application's installed copies as well. Vite applies
+// `resolve.alias` before the tsconfig plugin.
 import { fileURLToPath } from "node:url";
 
 const here = (relative) => fileURLToPath(new URL(relative, import.meta.url));

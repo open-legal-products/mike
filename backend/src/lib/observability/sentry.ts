@@ -532,7 +532,7 @@ export function normalizeVersion(raw: string | undefined): string {
 
 /**
  * `mike@<version>+<sha12>`: the release every runtime tags events with. Same
- * rule as frontend/src/shared/lib/sentryEvent.ts (this module cannot import
+ * rule as packages/client/src/sentryEvent.ts (this module cannot import
  * it). An explicit SENTRY_RELEASE wins; a build without MIKE_VERSION is
  * `mike@0.0.0...`, valid and visibly not a release.
  */

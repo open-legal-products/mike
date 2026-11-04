@@ -18,13 +18,16 @@ Client behavior shared by the Mike web app (`frontend/`) and the Word add-in
 
 ## Public surface
 
-`src/index.ts` is the package's only entry point:
+Application code imports the package's `src/index.ts` entry point:
 
 ```ts
 import { describeError, MODELS, serializeExcerpts } from "@mike/client";
 ```
 
-A file under `src/` that `index.ts` does not re-export is internal.
+The Word webpack config also loads `src/releaseName.cjs`, the CommonJS twin
+of the exported release identity helper, by its source path: TypeScript and
+webpack aliases are not active while loading that config. Other files under
+`src/` that `index.ts` does not re-export are internal.
 
 ## Rules
 

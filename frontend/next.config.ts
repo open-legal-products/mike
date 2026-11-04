@@ -1,7 +1,7 @@
 import path from "node:path";
 import type { NextConfig } from "next";
 import { withSentryConfig } from "@sentry/nextjs/config";
-import { releaseName } from "../packages/client/src/releaseName.cjs";
+import { releaseName } from "@mike/client";
 
 // The repository root: the parent of this directory, here and in the Docker
 // image (frontend/Dockerfile mirrors the layout at /app/frontend and

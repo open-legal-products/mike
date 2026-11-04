@@ -30,10 +30,6 @@ import {
   type UploadOutcome,
   type UploadProgress,
 } from "@mike/client";
-import { networkFailure } from "../lib/networkError";
-import { sessionHandledError } from "../lib/sessionRefresh";
-import { reportApiFailure, reportNetworkFailure } from "../lib/errorReporting";
-import type { ReasoningLevel } from "../lib/wordChatTypes";
 
 export {
   UploadBatchError,
