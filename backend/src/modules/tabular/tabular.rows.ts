@@ -141,7 +141,14 @@ export async function loadReviewRows(
     );
     sources.sort((a, b) => a.sort_index - b.sort_index);
     const byRow = new Map<string, string[]>();
+    // Offset pages can overlap when a source is inserted between two page
+    // reads (every later row shifts by one), so a (row, document) pair —
+    // the primary key — is taken once.
+    const seen = new Set<string>();
     for (const source of sources) {
+        const key = `${source.row_id}:${source.document_id}`;
+        if (seen.has(key)) continue;
+        seen.add(key);
         const ids = byRow.get(source.row_id) ?? [];
         ids.push(source.document_id);
         byRow.set(source.row_id, ids);

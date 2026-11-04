@@ -37,10 +37,11 @@ describe("review row loading", () => {
     // per source (the old implementation) turns this from zero into n(n-1)/2.
     const original = Array.prototype[Symbol.iterator];
     let reads = 0;
-    const marker = { document_id: "doc", row_id: "row" };
+    // Distinct documents: a (row, document) pair is a primary key.
+    const sources = Array.from({ length: 200 }, (_, i) => ({ document_id: `doc-${i}`, row_id: "row", sort_index: i }));
     Array.prototype[Symbol.iterator] = function* (this: unknown[]) {
       for (const value of original.call(this)) {
-        if (value === "doc") reads++;
+        if (typeof value === "string" && value.startsWith("doc-")) reads++;
         yield value;
       }
     } as typeof original;
@@ -48,13 +49,27 @@ describe("review row loading", () => {
     const fake = scriptedDb([
       { table: "tabular_review_rows", data: [row] },
       { table: "tabular_review_rows", data: [] },
-      { table: "tabular_review_row_sources", data: Array.from({ length: 200 }, () => marker) },
+      { table: "tabular_review_row_sources", data: sources },
       { table: "tabular_review_row_sources", data: [] },
     ]);
     let result;
     try { result = await loadReviewRows(fake.db, "review"); } finally { Array.prototype[Symbol.iterator] = original; }
     expect(result[0].source_document_ids).toHaveLength(200);
     expect(reads).toBe(0);
+    fake.done();
+  });
+  it("takes each source once when offset pages overlap under a concurrent insert", async () => {
+    const source = (document_id: string, sort_index: number) => ({ row_id: "row", document_id, sort_index });
+    const fake = scriptedDb([
+      { table: "tabular_review_rows", data: [row] },
+      { table: "tabular_review_rows", data: [] },
+      // An insert between the two reads shifted "b" onto the second page too.
+      { table: "tabular_review_row_sources", data: [source("a", 0), source("b", 1)] },
+      { table: "tabular_review_row_sources", data: [source("b", 1), source("c", 2)] },
+      { table: "tabular_review_row_sources", data: [] },
+    ]);
+    const [loaded] = await loadReviewRows(fake.db, "review");
+    expect(loaded.source_document_ids).toEqual(["a", "b", "c"]);
     fake.done();
   });
 });
