@@ -350,6 +350,36 @@ describe("scrubEvent", () => {
     ).not.toBeNull();
   });
 
+  it("drops the Vercel AI integration's copy of a tool error (MIK-96)", () => {
+    // What captureToolError in @sentry/server-utils files when the ask_inputs
+    // pause ends a tool step: handled:false, so it read as an unhandled
+    // rejection.
+    const pause = Object.assign(new Error("ask_inputs pause"), {
+      name: "AssistantStreamAskInputsPause",
+    });
+    const eventWith = (type: string) =>
+      ({
+        exception: {
+          values: [
+            {
+              type: "AssistantStreamAskInputsPause",
+              mechanism: { type, handled: false },
+            },
+          ],
+        },
+      }) as Parameters<typeof scrubEvent>[0];
+
+    expect(
+      scrubEvent(eventWith("auto.vercelai.channel"), { originalException: pause }),
+    ).toBeNull();
+    // A genuine unhandled rejection of the same error is still filed.
+    expect(
+      scrubEvent(eventWith("auto.node.onunhandledrejection"), {
+        originalException: pause,
+      }),
+    ).not.toBeNull();
+  });
+
   it("drops the console bridge's copy of a wrapper whose cause chain holds a reported error (MIKE-BACKEND-B)", () => {
     // runLLMStream reports the provider failure, then rethrows it wrapped
     // for the route (AssistantStreamError { cause }); the route logs the
