@@ -76,8 +76,24 @@ export const UPLOAD_LIMIT_MESSAGES: Record<string, string> = {
 };
 
 /**
+ * Codes the server gives a file whose bytes are wrong, not the batch or the
+ * connection. Trying again sends the same bytes, so the message names the
+ * file and the reason instead of asking for a retry.
+ */
+const UPLOAD_FILE_CONTENT_MESSAGES: Record<
+    string,
+    (filenames: string[]) => string
+> = {
+    invalid_pdf_file: (filenames) =>
+        filenames.length === 1
+            ? `${filenames[0]} is not a valid PDF file.`
+            : `${filenames.join(", ")} are not valid PDF files.`,
+};
+
+/**
  * Prefer the actionable reason over a filename list: when every failure shares
- * one validation code, the limit itself is what the user has to act on.
+ * one validation code, the limit (or the file fault) itself is what the user
+ * has to act on.
  *
  * Known layering compromise: user-facing copy lives in this shared client
  * because both the web app and the add-in already call it for exactly this
@@ -90,11 +106,14 @@ export function failedUploadMessage<T>(
     const failures = outcomes.filter((outcome) => outcome.status === "error");
     if (failures.length === 0) return fallback;
     const codes = new Set(failures.map((outcome) => outcome.errorCode));
-    if (codes.size === 1) {
-        const limitMessage = UPLOAD_LIMIT_MESSAGES[[...codes][0] ?? ""];
-        if (limitMessage) return limitMessage;
-    }
     const filenames = failures.map((outcome) => outcome.filename);
+    if (codes.size === 1) {
+        const code = [...codes][0] ?? "";
+        const limitMessage = UPLOAD_LIMIT_MESSAGES[code];
+        if (limitMessage) return limitMessage;
+        const contentMessage = UPLOAD_FILE_CONTENT_MESSAGES[code];
+        if (contentMessage) return contentMessage(filenames);
+    }
     if (filenames.length === 1) {
         return `${filenames[0]} could not be uploaded. Please try again.`;
     }

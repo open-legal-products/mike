@@ -1309,3 +1309,37 @@ describe("upload session polling", () => {
         }
     });
 });
+
+describe("failedUploadMessage for a file the worker refused", () => {
+    const refused = (filename: string, errorCode: string | null) => ({
+        clientId: filename,
+        filename,
+        status: "error" as const,
+        result: null,
+        errorCode,
+    });
+
+    it("names the file and the reason instead of asking for a retry", () => {
+        expect(failedUploadMessage([refused("notes.pdf", "invalid_pdf_file")])).toBe(
+            "notes.pdf is not a valid PDF file.",
+        );
+    });
+
+    it("lists every refused file when all share the reason", () => {
+        expect(
+            failedUploadMessage([
+                refused("a.pdf", "invalid_pdf_file"),
+                refused("b.pdf", "invalid_pdf_file"),
+            ]),
+        ).toBe("a.pdf, b.pdf are not valid PDF files.");
+    });
+
+    it("falls back to the generic line when the failures have mixed causes", () => {
+        expect(
+            failedUploadMessage([
+                refused("a.pdf", "invalid_pdf_file"),
+                refused("b.pdf", "processing_failed"),
+            ]),
+        ).toBe("a.pdf, b.pdf could not be uploaded. Please try again.");
+    });
+});
