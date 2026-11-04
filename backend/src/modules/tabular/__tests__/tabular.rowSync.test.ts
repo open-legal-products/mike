@@ -76,4 +76,32 @@ describe("changing a review's document set", () => {
     expect(fake.tables.tabular_review_row_sources.filter((src) => src.row_id === byLabel.F1.id).map((src) => src.document_id)).toEqual(["d00"]);
     expect(rows.map((row) => row.sort_index).sort()).toEqual([0, 1, 2]);
   });
+
+  it("gives kept rows cells for a column added in the same request as a document", async () => {
+    const existing = ids(3);
+    const fake = tableDb({
+      tabular_reviews: [{
+        id: "rev", user_id: "u", project_id: null, org_id: null, document_grouping: "document",
+        document_ids: existing, columns_config: [{ index: 0, name: "A", prompt: "a" }],
+      }],
+      documents: ids(4).map((id) => ({ id, current_version_id: `v-${id}`, project_id: null })),
+      document_versions: ids(4).map((id) => ({ id: `v-${id}`, filename: `${id}.pdf`, deleted_at: null })),
+      tabular_review_rows: existing.map((id, i) => ({
+        id: `row-${id}`, review_id: "rev", label: `${id}.pdf`, row_type: "document",
+        folder_id: null, library_folder_id: null, document_id: id, sort_index: i,
+      })),
+      tabular_review_row_sources: existing.map((id) => ({ row_id: `row-${id}`, document_id: id, sort_index: 0 })),
+      tabular_cells: existing.map((id) => ({ id: `cell-${id}`, review_id: "rev", row_id: `row-${id}`, column_index: 0, status: "done" })),
+    });
+    const result = await updateTabularReview(fake.db, {
+      reviewId: "rev", userId: "u", userEmail: "u@example.com",
+      body: {
+        document_ids: ids(4),
+        columns_config: [{ index: 0, name: "A", prompt: "a" }, { index: 1, name: "B", prompt: "b" }],
+      },
+    });
+    expect(result.ok).toBe(true);
+    expect(fake.tables.tabular_cells.filter((cell) => cell.column_index === 1)).toHaveLength(4);
+    expect(fake.tables.tabular_cells.filter((cell) => cell.status === "done")).toHaveLength(3);
+  });
 });

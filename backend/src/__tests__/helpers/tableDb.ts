@@ -19,10 +19,25 @@ export type TableDbCall = {
  * request URL does at the gateway (a 414 with `data: null`). Tests built on
  * it observe truncation and dropped batches as wrong results, the way users
  * would, and can count round trips through `calls`.
+ *
+ * `cascade` mirrors ON DELETE CASCADE foreign keys (parent table -> child
+ * tables and their referencing column), so a test sees a deleted row take its
+ * children with it; `failSelects` makes every read of a table fail, to test
+ * what a caller has (not) written by the time a read fails.
  */
 export function tableDb(
   tables: Record<string, Row[]>,
-  { maxRows = 1000, maxInList = 50 }: { maxRows?: number; maxInList?: number } = {},
+  {
+    maxRows = 1000,
+    maxInList = 50,
+    cascade = {},
+    failSelects = [],
+  }: {
+    maxRows?: number;
+    maxInList?: number;
+    cascade?: Record<string, Array<[table: string, column: string]>>;
+    failSelects?: string[];
+  } = {},
 ) {
   const calls: TableDbCall[] = [];
   const from = (table: string) => {
@@ -55,6 +70,9 @@ export function tableDb(
       let matched = rows.filter((row) => preds.every((pred) => pred(row)));
       if (op === "delete") {
         tables[table] = rows.filter((row) => !matched.includes(row));
+        const removed = new Set(matched.map((row) => row.id));
+        for (const [child, column] of cascade[table] ?? [])
+          tables[child] = (tables[child] ?? []).filter((row) => !removed.has(row[column]));
         return Promise.resolve({ data: null, error: null });
       }
       if (op === "update") {
@@ -62,6 +80,8 @@ export function tableDb(
         const copies = matched.map((row) => ({ ...row }));
         return Promise.resolve({ data: one ? (copies[0] ?? null) : copies, error: null });
       }
+      if (failSelects.includes(table))
+        return Promise.resolve({ data: null, error: { message: `${table} unavailable` } });
       matched = [...matched].sort((a, b) => {
         for (const [column, ascending] of orders) {
           const left = a[column] as string | number;

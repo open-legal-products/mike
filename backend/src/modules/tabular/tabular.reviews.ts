@@ -1384,17 +1384,21 @@ export async function updateTabularReview(
                 activeColumns,
                 normalizeGrouping(updatedReview.document_grouping),
             );
-        } else if (rowShapeChanged) {
-            await syncRowsForDocumentChange(
-                db,
-                reviewId,
-                userId,
-                (updatedReview.document_ids ?? []) as string[],
-                activeColumns,
-                normalizeGrouping(updatedReview.document_grouping),
-            );
-        } else if (Array.isArray(body.columns_config)) {
-            await syncCellsForReviewRows(db, reviewId, activeColumns);
+        } else {
+            if (rowShapeChanged)
+                await syncRowsForDocumentChange(
+                    db,
+                    reviewId,
+                    userId,
+                    (updatedReview.document_ids ?? []) as string[],
+                    activeColumns,
+                    normalizeGrouping(updatedReview.document_grouping),
+                );
+            // The grid sends its columns with every document change, so both
+            // can change in one PATCH: rows the sync kept still need cells for
+            // an added column and must lose those of a removed one.
+            if (Array.isArray(body.columns_config))
+                await syncCellsForReviewRows(db, reviewId, activeColumns);
         }
     } catch (syncError) {
         // The cause stays in the server log; a database message is not a
