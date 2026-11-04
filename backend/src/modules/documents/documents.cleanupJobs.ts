@@ -2,6 +2,7 @@ import { type Db, type DbJob, DbJobDeferredError } from "../../lib/dbq/types";
 import { jobErrorMessage } from "../../lib/dbq/jobError";
 import { retryDelayMs, STALE_SECONDS } from "../../lib/dbq/runner";
 import { requestDocumentCleanupDelivery } from "../../lib/dbq/enqueue";
+import { mapWithConcurrency } from "../../lib/concurrency";
 import { logError } from "../../lib/log";
 import { setOperation } from "../../lib/observability/sentry";
 
@@ -200,15 +201,20 @@ async function deleteCleanupKeys(
   for (const row of (referencedRows ?? []) as { key?: unknown }[]) {
     if (typeof row.key === "string") referenced.add(row.key);
   }
+  // A few deletes in flight at once, not one after another: a project's
+  // cleanup can name thousands of objects.
   const failed = new Set<string>();
-  for (const key of keys) {
-    if (referenced.has(key)) continue;
-    try {
-      await deleteFile(key);
-    } catch {
-      failed.add(key);
-    }
-  }
+  await mapWithConcurrency(
+    keys.filter((key) => !referenced.has(key)),
+    8,
+    async (key) => {
+      try {
+        await deleteFile(key);
+      } catch {
+        failed.add(key);
+      }
+    },
+  );
   for (const row of siblings) {
     const rowFailures = cleanupKeys(row.payload).filter((key) =>
       failed.has(key),

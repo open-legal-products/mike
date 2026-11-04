@@ -71,6 +71,10 @@ function makeDb(opts?: {
                 state.filters[`lt:${col}`] = val;
                 return b;
             },
+            in(col: string, vals: unknown[]) {
+                state.filters[col] = vals;
+                return b;
+            },
             order() {
                 return b;
             },
@@ -415,6 +419,13 @@ describe("startDbJobRunner", () => {
     });
 });
 
+/** Row ids the sweep deleted, whether one by one or as a batch. */
+function deletedIds(deletes: Record<string, unknown>[]): string[] {
+    return deletes.flatMap((d) =>
+        Array.isArray(d.id) ? (d.id as string[]) : typeof d.id === "string" ? [d.id] : [],
+    );
+}
+
 describe("runDbJobRetentionSweep", () => {
     it("deletes an expired export's storage object BEFORE dropping its row", async () => {
         const order: string[] = [];
@@ -430,7 +441,7 @@ describe("runDbJobRetentionSweep", () => {
             },
         });
         expect(order).toEqual(["file:exports/u/e1.json"]);
-        expect(origThen.some((d) => d.id === "e1")).toBe(true);
+        expect(deletedIds(origThen)).toContain("e1");
     });
 
     it("keeps the row when the artifact delete fails, so the next sweep retries", async () => {
@@ -444,7 +455,7 @@ describe("runDbJobRetentionSweep", () => {
                 throw new Error("storage down");
             },
         });
-        expect(db.deletes.some((d) => d.id === "e1")).toBe(false);
+        expect(deletedIds(db.deletes)).not.toContain("e1");
     });
 
     // The keep-to-retry promise above is only real if no OTHER deleter can
@@ -483,7 +494,27 @@ describe("runDbJobRetentionSweep", () => {
             },
         });
         expect(deleted).toHaveLength(250);
-        expect(db.deletes.filter((d) => typeof d.id === "string")).toHaveLength(250);
+        expect(deletedIds(db.deletes)).toHaveLength(250);
+    });
+
+    it("removes a batch's artifacts concurrently and their rows together", async () => {
+        const keysetRows = Array.from({ length: 40 }, (_, i) => ({
+            id: `e${String(i).padStart(3, "0")}`,
+            result: { storage_path: `exports/u/${i}.json` },
+        }));
+        const db = makeDb({ keysetRows });
+        let inFlight = 0;
+        let peak = 0;
+        await runDbJobRetentionSweep(db as never, {
+            deleteStoredFile: async () => {
+                peak = Math.max(peak, ++inFlight);
+                await new Promise((resolve) => setTimeout(resolve, 1));
+                inFlight--;
+            },
+        });
+        expect(peak).toBeGreaterThan(1);
+        expect(peak).toBeLessThanOrEqual(8);
+        expect(db.deletes.filter((d) => Array.isArray(d.id))).toHaveLength(1);
     });
 
     it("never sweeps failed cleanup rows that own private object pointers", async () => {

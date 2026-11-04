@@ -18,6 +18,11 @@ import { createServerSupabase } from "../supabase";
 import { jobErrorMessage } from "./jobError";
 import { runIsolated } from "./jobScope";
 import { deleteFile } from "../storage";
+import { mapWithConcurrency } from "../concurrency";
+import { mutateInBatches } from "../batchedQuery";
+
+/** Object deletes in flight at once, per sweep or cleanup. */
+const STORAGE_DELETE_CONCURRENCY = 8;
 import { enqueueAppJobDelivery } from "../queue/appJobsQueue";
 import { redisEnabled } from "./driver";
 import {
@@ -482,7 +487,9 @@ export async function runDbJobRetentionSweep(
         if (after) query = query.gt("id", after);
         const { data: expired } = await query;
         const rows = (expired ?? []) as Pick<DbJob, "id" | "result">[];
-        for (const row of rows) {
+        // Objects are removed a few at a time rather than one after another,
+        // and the rows whose object is gone are deleted together.
+        const removable = await mapWithConcurrency(rows, STORAGE_DELETE_CONCURRENCY, async (row) => {
             const path = row.result?.storage_path;
             if (typeof path === "string" && path.length > 0) {
                 try {
@@ -493,10 +500,20 @@ export async function runDbJobRetentionSweep(
                         id: row.id,
                         err,
                     });
-                    continue;
+                    return null;
                 }
             }
-            await db.from("db_jobs").delete().eq("id", row.id);
+            return row.id;
+        });
+        try {
+            await mutateInBatches(
+                "export row expiry",
+                removable.filter((id): id is string => id !== null),
+                (ids) => db.from("db_jobs").delete().in("id", ids),
+            );
+        } catch (err) {
+            // As before, a failed row delete leaves the row for the next sweep.
+            console.error("[dbq] export row delete failed", { err });
         }
         if (rows.length < EXPORT_EXPIRY_BATCH) break;
         after = rows[rows.length - 1].id;
