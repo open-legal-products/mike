@@ -9,7 +9,8 @@ import {
     NonRetryableJobError,
     processClaimedJob,
     retryDelayMs,
-    runDbJobTick,
+    createDbJobPool,
+    createDbJobClaimGate,
     startDbJobRunner,
     stopDbJobRunner,
     runDbJobRetentionSweep,
@@ -130,6 +131,19 @@ const JOB = (over: Partial<DbJob> = {}): DbJob => ({
     created_at: "2026-08-21T00:00:00Z",
     ...over,
 });
+
+
+/** One claim through the production pool, then wait for the claimed jobs. */
+async function claimAndRun(
+    db: unknown,
+    handlers: Parameters<typeof createDbJobPool>[1],
+    failureHooks: Parameters<typeof createDbJobPool>[2] = {},
+    claimGate = createDbJobClaimGate(),
+) {
+    const pool = createDbJobPool(db as never, handlers, failureHooks, { claimGate });
+    await pool.fill();
+    await pool.drain();
+}
 
 describe("retryDelayMs", () => {
     it("backs off exponentially and caps at 30 minutes", () => {
@@ -346,7 +360,7 @@ describe("processClaimedJob", () => {
     });
 });
 
-describe("runDbJobTick", () => {
+describe("job pool claim and run", () => {
     it("survives a claim failure (e.g. migration not applied) without throwing", async () => {
         const db = makeDb({
             rpc: async () => ({
@@ -354,14 +368,14 @@ describe("runDbJobTick", () => {
                 error: { message: "relation db_jobs does not exist" },
             }),
         });
-        await expect(runDbJobTick(db as never, {})).resolves.toBe(0);
+        await expect(claimAndRun(db, {})).resolves.toBeUndefined();
     });
 
     it("processes every claimed job even when one handler rejects unexpectedly", async () => {
         const jobs = [JOB({ id: "a" }), JOB({ id: "b" })];
         const db = makeDb({ rpc: async () => ({ data: jobs, error: null }) });
         const seen: string[] = [];
-        await runDbJobTick(db as never, {
+        await claimAndRun(db, {
             "test.kind": async (_db, job) => {
                 seen.push(job.id);
                 if (job.id === "a") throw new Error("boom");
@@ -491,7 +505,7 @@ describe("explicit failure hooks", () => {
             expect(seenJob).toBe(job);
             expect(db.updates[0].payload.status).toBe("failed");
         });
-        await runDbJobTick(db as never, { "test.kind": async () => { throw new Error("terminal"); } }, { "test.kind": hook });
+        await claimAndRun(db, { "test.kind": async () => { throw new Error("terminal"); } }, { "test.kind": hook });
         expect(hook).toHaveBeenCalledOnce();
     });
     it("does not call terminal hooks for retryable or deferred work", async () => {
@@ -506,7 +520,7 @@ describe("explicit failure hooks", () => {
     it("contains a hook failure without abandoning later batch jobs", async () => {
         const db = makeDb({ rpc: async () => ({ data: [JOB({ attempts: 3 }), JOB({ id: "next", kind: "success" })], error: null }) });
         const hook = vi.fn(async () => { throw new Error("hook unavailable"); });
-        await runDbJobTick(db as never, { "test.kind": async () => { throw new Error("terminal"); }, success: async () => {} }, { "test.kind": hook });
+        await claimAndRun(db, { "test.kind": async () => { throw new Error("terminal"); }, success: async () => {} }, { "test.kind": hook });
         expect(hook).toHaveBeenCalledOnce();
         expect(db.updates.find(row => row.id === "next")?.payload.status).toBe("done");
     });

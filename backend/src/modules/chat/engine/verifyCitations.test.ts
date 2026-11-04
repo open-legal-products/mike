@@ -11,6 +11,7 @@ vi.mock("../../../lib/storage", () => ({ downloadFile: vi.fn() }));
 import {
   locateQuote,
   verifyQuoteAgainstSource,
+  caseSourceCache,
   verifyCaseCitationAnnotation,
   verifyDocumentCitationAnnotation,
   verifyCitations,
@@ -345,7 +346,7 @@ describe("verifyCaseCitationAnnotation", () => {
 
     const verified = (await verifyCaseCitationAnnotation(
       annotation,
-      opinions,
+      caseSourceCache(opinions),
     )) as Record<string, unknown>;
     expect(verified.verified).toBe(true);
     const quotes = verified.quotes as {
@@ -379,7 +380,7 @@ describe("verifyCaseCitationAnnotation", () => {
           },
         ],
       },
-      opinions,
+      caseSourceCache(opinions),
     )) as Record<string, unknown>;
     expect(verified.verified).toBe(false);
   });

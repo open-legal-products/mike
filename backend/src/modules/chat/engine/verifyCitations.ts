@@ -50,7 +50,7 @@ type CaseSource = { opinions: CaseOpinionSource[]; completeCaseText: string };
  * the verifier cache hits by identity instead of rebuilding (and rehashing)
  * the full opinion text per annotation.
  */
-function caseSourceCache(
+export function caseSourceCache(
   getCaseOpinions: (clusterId: number) => Promise<CaseOpinionSource[]>,
 ) {
   const byCluster = new Map<number, Promise<CaseSource>>();
@@ -354,9 +354,9 @@ function caseQuoteOpinionId(quote: CaseQuoteEntry): number | null {
  */
 export async function verifyCaseCitationAnnotation(
   annotation: unknown,
-  getCaseOpinions: (clusterId: number) => Promise<CaseOpinionSource[]>,
+  /** One cluster's opinions and joined text, shared across a batch (caseSourceCache). */
+  caseSources: ReturnType<typeof caseSourceCache>,
   verifierFor = verifierCache(),
-  caseSources = caseSourceCache(getCaseOpinions),
 ): Promise<unknown> {
   const a = record(annotation);
   if (!a || a.kind !== "case") return annotation;
@@ -484,7 +484,7 @@ export async function verifyCitations(
     annotations.map((annotation) => {
       const value = record(annotation);
       return value?.kind === "case"
-        ? verifyCaseCitationAnnotation(annotation, getCaseOpinions, verifierFor, caseSources)
+        ? verifyCaseCitationAnnotation(annotation, caseSources, verifierFor)
         : verifyDocumentCitationAnnotation(annotation, getSourceText, verifierFor);
     }),
   );
