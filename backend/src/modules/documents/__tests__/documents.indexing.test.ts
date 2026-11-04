@@ -110,13 +110,30 @@ describe("version text extraction", () => {
     await handleDocumentExtractText(fake.db, job);
     expect(fake.calls[2].payload).toMatchObject({ status: "failed", error_code: "too_large" }); fake.done();
   });
-  it("propagates extraction failure for queue retries", async () => {
+  // The source hash already matched, so a parser rejection repeats on every
+  // attempt: max_attempts=3 used to parse the same corrupt file three times.
+  it("fails an unreadable document once instead of spending its retries", async () => {
     mocks.docx.mockRejectedValue(new Error("invalid document"));
-    const fake = scriptedDb([{ table: "document_versions", data: version }, { table: "document_version_texts", op: "update", data: { version_id: "v1" } }]);
-    await expect(handleDocumentExtractText(fake.db, job)).rejects.toThrow("invalid document"); fake.done();
-    // The runner reports the throw; the job named its operation for that event.
+    vi.spyOn(console, "error").mockImplementation(() => undefined);
+    const fake = scriptedDb([
+      { table: "document_versions", data: version },
+      { table: "document_version_texts", op: "update", data: { version_id: "v1" } },
+      { table: "db_jobs", op: "update" },
+      { table: "document_version_texts", op: "update" },
+    ]);
+    await processClaimedJob(
+      fake.db,
+      { "document.extract_text": handleDocumentExtractText },
+      { ...job, status: "running", attempts: 1 },
+      { "document.extract_text": markDocumentTextFailed },
+    );
+    expect(fake.calls[2].payload).toMatchObject({ status: "failed", last_error: "document_text_unreadable" });
+    expect(fake.calls[3].payload).toMatchObject({ status: "failed", error_code: "extraction_failed" });
+    fake.done();
+    // Reported once, named after the operation and the parser's own kind.
     expect(sentry.setOperation).toHaveBeenCalledWith("documents.extract");
-    expect(sentry.reportError).not.toHaveBeenCalled();
+    expect(sentry.reportError).toHaveBeenCalledOnce();
+    expect(diagnosticErrorTags(sentry.reportError.mock.calls[0]![0])).toMatchObject({ error_kind: "extraction.parse_failed" });
   });
   it.each(["xlsx", "xlsm", "xls"])("uses the full spreadsheet reader for %s", async (type) => {
     mocks.sheet.mockReturnValue("Sheet and cell addresses");
@@ -165,7 +182,7 @@ describe("version text extraction", () => {
     expect(sentry.reportError).toHaveBeenCalledOnce();
     const [reported, context] = sentry.reportError.mock.calls[0]!;
     expect(diagnosticErrorTags(reported)).toEqual({ error_kind: "extraction.parse_failed", failure_code: "ENOENT" });
-    expect((reported as Error).cause).toBe(cause);
+    expect(((reported as Error).cause as Error).cause).toBe(cause);
     expect(context).toMatchObject({ tags: { job_kind: "document.extract_text" }, extra: { job_id: "job" } });
     expect(JSON.stringify(context)).not.toContain("PRIVATE_NAME");
     expect(log).toHaveBeenCalledWith(expect.any(String), reported);

@@ -117,8 +117,9 @@ export type DbJobFailureHook = (db: Db, job: DbJob) => Promise<void>;
  * user's request in limbo far longer than it needs to be.
  */
 export class NonRetryableJobError extends AppError {
-    constructor(message: string) {
-        super("dbq.non_retryable", message);
+    /** `cause` keeps the reason's own kind and code on the reported chain. */
+    constructor(message: string, options?: { cause?: unknown }) {
+        super("dbq.non_retryable", message, options);
     }
 }
 

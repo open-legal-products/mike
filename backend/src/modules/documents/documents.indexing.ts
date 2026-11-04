@@ -1,7 +1,8 @@
 import { createHash } from "node:crypto";
 import { downloadFile } from "../../lib/storage";
-import { EXTRACTION_MAX_BYTES, ExtractionLimitError, ExtractionBusyError, withBackgroundExtraction } from "../../lib/extraction/isolated";
+import { EXTRACTION_MAX_BYTES, ExtractionLimitError, ExtractionBusyError, ExtractionParseError, withBackgroundExtraction } from "../../lib/extraction/isolated";
 import { DbJobDeferredError, type Db, type DbJob } from "../../lib/dbq/types";
+import { NonRetryableJobError } from "../../lib/dbq/runner";
 import { AppError } from "../../lib/appError";
 import { reportError, setOperation } from "../../lib/observability/sentry";
 
@@ -39,6 +40,10 @@ export async function handleDocumentExtractText(db: Db, job: DbJob): Promise<voi
       try {
         extracted = await extract("documentText", raw, { fileType });
       } catch (err) {
+        // The source hash matched, so the parser saw the same bytes it will
+        // see on every retry: an unreadable file fails once, not three times.
+        // The runner's failure hook marks the text failed.
+        if (err instanceof ExtractionParseError) throw new NonRetryableJobError("document_text_unreadable", { cause: err });
         if (!(err instanceof ExtractionLimitError)) throw err;
         await markDocumentTextFailed(db, job, "too_large");
         return;
