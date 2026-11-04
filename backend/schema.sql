@@ -1700,17 +1700,38 @@ language sql
 stable
 set search_path = public
 as $$
+  -- project_is_ownerless / workflow_is_ownerless, written as anti-joins so
+  -- the planner evaluates them for the whole set at once instead of calling
+  -- a function (three subqueries) per private item. Keep the conditions in
+  -- step with those functions: not archived, creator no longer a member of
+  -- the item's organization, and no 'owner' override.
   select 'project'::text, p.id
   from public.projects p
   where p.org_id = any(p_org_ids)
     and p.visibility <> 'organization'
-    and public.project_is_ownerless(p.id, p.user_id, p.org_id)
+    and p.archived_at is null
+    and not exists (
+      select 1 from public.org_members creator
+      where creator.org_id = p.org_id and creator.user_id = p.user_id
+    )
+    and not exists (
+      select 1 from public.project_org_access_overrides o
+      where o.project_id = p.id and o.role = 'owner'
+    )
   union all
   select 'workflow'::text, w.id
   from public.workflows w
   where w.org_id = any(p_org_ids)
     and w.visibility <> 'organization'
-    and public.workflow_is_ownerless(w.id, w.user_id, w.org_id);
+    and w.archived_at is null
+    and not exists (
+      select 1 from public.org_members creator
+      where creator.org_id = w.org_id and creator.user_id = w.user_id
+    )
+    and not exists (
+      select 1 from public.workflow_org_access_overrides o
+      where o.workflow_id = w.id and o.role = 'owner'
+    );
 $$;
 
 create or replace function public.workflow_access_role(
@@ -12177,5 +12198,6 @@ insert into public.schema_migrations (filename) values
   ('20261101_13_document_text_search_per_version.sql'),
   ('20261101_14_claim_jobs_index_order.sql'),
   ('20261101_15_db_jobs_payload_indexes.sql'),
-  ('20261101_16_folder_name_indexes.sql')
+  ('20261101_16_folder_name_indexes.sql'),
+  ('20261101_17_ownerless_items_set_based.sql')
 on conflict (filename) do nothing;
