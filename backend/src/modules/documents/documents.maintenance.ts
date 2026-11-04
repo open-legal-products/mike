@@ -39,8 +39,14 @@ import { ID_FILTER_BATCH_SIZE, selectInBatches } from "../../lib/batchedQuery";
 import { mapWithConcurrency } from "../../lib/concurrency";
 
 const DEFAULT_DOC_STALE_MS = 30 * 60 * 1000;
-/** Documents judged per sweep; a larger backlog drains over later sweeps. */
+/** Documents judged per sweep; a larger backlog is visited over later sweeps. */
 const STALE_DOC_SWEEP_LIMIT = 500;
+/**
+ * Where the next sweep resumes: the last document id the previous sweep
+ * judged (null = start of a pass). Process-local by design: a restart only
+ * starts a new pass from the beginning, and each process cycles on its own.
+ */
+let staleDocCursor: string | null = null;
 
 function docStaleMs(): number {
     const raw = Number(process.env.STALE_DOC_PROCESSING_MS);
@@ -55,16 +61,30 @@ export async function sweepStaleProcessingDocuments(
     db: Db = createServerSupabase(),
 ): Promise<number> {
     const cutoff = new Date(Date.now() - docStaleMs()).toISOString();
-    // Bounded per sweep, oldest first: a backlog (an outage that stranded
-    // thousands of uploads) drains over successive sweeps instead of being
-    // read whole and walked one document at a time.
-    const { data: docs, error } = await db
-        .from("documents")
-        .select("id, current_version_id")
-        .eq("status", "processing")
-        .lt("updated_at", cutoff)
-        .order("updated_at", { ascending: true })
-        .limit(STALE_DOC_SWEEP_LIMIT);
+    // Bounded per sweep, and fair: a keyset scan on the unique id that
+    // resumes where the last sweep stopped. Re-reading the oldest page every
+    // time would park an orphan forever behind a page of documents whose
+    // conversions are still live (they stay "processing" and keep their
+    // place). Every candidate is judged once per pass of
+    // ceil(candidates / STALE_DOC_SWEEP_LIMIT) sweeps; a document that turns
+    // stale mid-pass is reached by the next pass at the latest.
+    const page = (after: string | null) => {
+        let query = db
+            .from("documents")
+            .select("id, current_version_id")
+            .eq("status", "processing")
+            .lt("updated_at", cutoff);
+        if (after) query = query.gt("id", after);
+        return query.order("id", { ascending: true }).limit(STALE_DOC_SWEEP_LIMIT);
+    };
+    let { data: docs, error } = await page(staleDocCursor);
+    if (!error && staleDocCursor && !docs?.length) {
+        // The pass is over: wrap around and start the next one now. (Only an
+        // EMPTY page ends a pass; a gateway max_rows below the limit returns
+        // short pages that are not the end.)
+        staleDocCursor = null;
+        ({ data: docs, error } = await page(null));
+    }
     if (error) {
         console.error("[stale-sweep] documents query failed", error);
         return 0;
@@ -129,6 +149,9 @@ export async function sweepStaleProcessingDocuments(
         console.error("[stale-sweep] liveness lookup failed", lookupError);
         return 0;
     }
+    // Judged: the next sweep resumes after this page (a failed lookup above
+    // retries the same page).
+    staleDocCursor = rows.length ? rows[rows.length - 1].id : null;
 
     let flipped = 0;
     for (const batch of chunkArray(stale, ID_FILTER_BATCH_SIZE)) {

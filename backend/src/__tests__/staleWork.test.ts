@@ -92,6 +92,10 @@ function makeDb(responses: Record<string, Responder>) {
                 state.filters[`lt:${col}`] = val;
                 return b;
             },
+            gt(col: string, val: unknown) {
+                state.filters[`gt:${col}`] = val;
+                return b;
+            },
             limit(n: number) {
                 state.limited = true;
                 state.filters["limit"] = n;
