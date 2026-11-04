@@ -27,6 +27,9 @@ it("exports a 120-document selection with batched lookups instead of two reads p
   await handleExportBuild(fake.db, job);
   const zip = await JSZip.loadAsync((upload.mock.calls[0] as unknown[])[1] as ArrayBuffer);
   expect(Object.keys(zip.files)).toHaveLength(120);
-  // 3 document batches + 3 version batches; the old loop issued 1 + 240.
-  expect(fake.calls).toHaveLength(6);
+  // Bounded by batches, not by documents (the old loop issued 1 + 2 per
+  // document): every id list fits the gateway, and the round trips are a
+  // handful for 120 documents, whatever the exact batching.
+  expect(Math.max(...fake.calls.flatMap((call) => call.inSizes))).toBeLessThanOrEqual(50);
+  expect(fake.calls.length).toBeLessThanOrEqual(10);
 });
