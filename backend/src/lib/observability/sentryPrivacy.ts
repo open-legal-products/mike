@@ -61,6 +61,8 @@ export const DIAGNOSTIC_VOCABULARY: Record<string, ReadonlySet<string>> = Object
   office_platform: 'PC Mac OfficeOnline Universal iOS Android',
   storage: 'local cloud',
   storage_operation: 'HEAD copy upload download delete',
+  // Where a browser's direct storage PUT went, relative to the page (uploadSessionClient.ts).
+  storage_target: 'loopback mixed_content cross_origin same_origin',
   // Node's own process warnings (reported by the backend's 'warning' listener).
   warning_name: 'Warning DeprecationWarning ExperimentalWarning MaxListenersExceededWarning TimeoutOverflowWarning TimeoutNegativeWarning UnsupportedWarning',
 }).map(([key, values]) => [key, new Set(values.split(' '))]));
@@ -79,7 +81,7 @@ function isRepositoryFrame(filename: string): boolean {
 }
 const LEVELS = new Set('fatal error warning info debug'.split(' '));
 /** Caller fingerprints that replace code-location grouping: one condition, one issue. */
-const PINNED_FINGERPRINTS = new Set(['upstream-unavailable', 'api-unreachable', 'runtime-warning']);
+const PINNED_FINGERPRINTS = new Set(['upstream-unavailable', 'api-unreachable', 'runtime-warning', 'upload-storage-put']);
 
 function record(value: unknown): RecordValue {
   return value !== null && typeof value === 'object' && !Array.isArray(value) ? value as RecordValue : {};

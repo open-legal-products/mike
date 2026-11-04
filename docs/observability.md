@@ -285,6 +285,11 @@ the backend, Next server/edge, browser, and all Word add-in entries.
   category; response bodies, prompts and credentials are never retained.
   Browser fetch failures include only `network_state` (online/offline/unknown)
   and `request_origin` (same-origin/cross-origin/unknown), never the hostname.
+  A browser's direct storage PUT that fails after its retries adds
+  `storage_target` (loopback/mixed_content/cross_origin/same_origin: where
+  the signed URL points relative to the page) and groups as one pinned
+  `upload-storage-put` issue; a 4xx other than 403 is the file's, not the
+  deployment's, and is not reported.
   Online means the browser reports connectivity, not that a server is reachable. Arbitrary
   codes/names/messages and dependency metadata are not transmitted.
 - Invalid configuration reports may name approved environment **fields**, never
