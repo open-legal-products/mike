@@ -177,6 +177,7 @@ export const CODE_KINDS: Readonly<Record<string, UserErrorKind>> = {
     request_too_large: "payload_too_large",
     upload_file_too_large: "payload_too_large",
     upload_batch_too_large: "payload_too_large",
+    spreadsheet_values_limit: "payload_too_large",
     // Input the user can correct
     validation_failed: "validation",
     invalid_request: "validation",
@@ -188,6 +189,9 @@ export const CODE_KINDS: Readonly<Record<string, UserErrorKind>> = {
     missing_api_key: "validation",
     model_unavailable: "validation",
     model_required: "validation",
+    spreadsheet_values_unsupported: "validation",
+    spreadsheet_values_encrypted: "validation",
+    spreadsheet_values_malformed: "validation",
     // Identity
     authentication_failed: "unauthenticated",
     session_expired: "unauthenticated",
@@ -203,9 +207,12 @@ export const CODE_KINDS: Readonly<Record<string, UserErrorKind>> = {
     upload_target_busy: "conflict",
     access_inherited: "conflict",
     ask_inputs_stale: "conflict",
+    spreadsheet_values_changed: "conflict",
     // Ours, not theirs
     internal_error: "server",
     upstream_unavailable: "unavailable",
+    spreadsheet_values_unavailable: "unavailable",
+    spreadsheet_values_busy: "unavailable",
 };
 
 type ErrorLike = {

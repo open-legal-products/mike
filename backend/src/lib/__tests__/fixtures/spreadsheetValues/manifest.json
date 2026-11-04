@@ -1,0 +1,168 @@
+{
+  "provenance": "Original AI-generated synthetic fixtures; no real documents; not SME-reviewed.",
+  "generator": "generate.cjs",
+  "sheetjs": "0.20.3",
+  "formulaCacheNote": "BIFF8 FormulaValue has a cached value including valid blank strings. The missing-string-cache fixture is deliberately malformed and must reject, not masquerade as valid missing-cache evidence.",
+  "fixtures": [
+    {
+      "id": "values-and-metadata",
+      "filename": "values-and-metadata.xls",
+      "bytes": 5632,
+      "sha256": "ea39c11e8f6696f768c788b520adc6f23dc5ad1fceb2971cbc9f2e78bbe44ab9",
+      "purpose": "Whitespace/newline/Unicode, HTML-looking literal, number formats, hidden metadata, merge and empty sheet.",
+      "expected": "ok"
+    },
+    {
+      "id": "book-stream-name",
+      "filename": "book-stream-name.xls",
+      "bytes": 5632,
+      "sha256": "c29d698cb1d2bc7e9b0e814766d5520234c458d64ec809e875032f438324e487",
+      "purpose": "Same genuine BIFF8 workbook using root Book stream.",
+      "expected": "ok"
+    },
+    {
+      "id": "date-system-1904",
+      "filename": "date-system-1904.xls",
+      "bytes": 3584,
+      "sha256": "59e504ac7d99615b3b353e54b455ca4e1fdc1801015f515084e8002d1fbf9177",
+      "purpose": "Genuine BIFF8 DATEMODE=1; stored serial 0 and 43830 display 1904-01-01 and 2024-01-01. SheetJS readback only, not Excel certification.",
+      "expected": "ok"
+    },
+    {
+      "id": "offset-range-z-aa",
+      "filename": "offset-range-z-aa.xls",
+      "bytes": 4096,
+      "sha256": "71f4eebc4e05c1c3a042204dc325940c8b97b9e69d89a823755a5e065e68ea2e",
+      "purpose": "Nonzero Z8:AA28 used range: 21 rows crossing Z to AA, leading-zero and currency display strings.",
+      "expected": "ok"
+    },
+    {
+      "id": "distinct-sheet-names",
+      "filename": "distinct-sheet-names.xls",
+      "bytes": 4096,
+      "sha256": "c020352088ca62d0f630b838b127acd2bf87d53754fd002739c40b9b4309438e",
+      "purpose": "Valid two-sheet control with independently distinguishable original values.",
+      "expected": "ok"
+    },
+    {
+      "id": "duplicate-sheet-names",
+      "filename": "duplicate-sheet-names.xls",
+      "bytes": 4096,
+      "sha256": "67cc01e3ab08861d75ee7ab16a12a1733408abd825f718ebfe65d700422ac38c",
+      "purpose": "Deliberately invalid duplicate BoundSheet names (case-insensitive); reject instead of displaying overwritten or ambiguous sheet values.",
+      "expected": "malformed_workbook"
+    },
+    {
+      "id": "case-duplicate-sheet-names",
+      "filename": "case-duplicate-sheet-names.xls",
+      "bytes": 4096,
+      "sha256": "e6591354e1044926eb5d33c91b3bd44adbf23d4fa35ea1224e42352c13c193c4",
+      "purpose": "Deliberately invalid duplicate BoundSheet names (case-insensitive); reject instead of displaying overwritten or ambiguous sheet values.",
+      "expected": "malformed_workbook"
+    },
+    {
+      "id": "formula-caches",
+      "filename": "formula-caches.xls",
+      "bytes": 3584,
+      "sha256": "ad2ab1141dd02d7f4d986b7430c743c250bf68c14e5809757cce0b6cfa4613c3",
+      "purpose": "Real BIFF8 cached 999 for 1+2; valid cached blank string; literal equals text.",
+      "expected": "ok"
+    },
+    {
+      "id": "chart-substream",
+      "filename": "chart-substream.xls",
+      "bytes": 3584,
+      "sha256": "1fd59db6ad769f9b2b9ef77c8611caaa051e976bebd4e27afb2151898a8dcb9c",
+      "purpose": "Synthetic unsupported BOF type marker; not a complete real chart or macro payload.",
+      "expected": "unsupported_format"
+    },
+    {
+      "id": "macro-substream",
+      "filename": "macro-substream.xls",
+      "bytes": 3584,
+      "sha256": "7e68fc1c1dab4f27394a0d254da5991c10239793de1b7b3e191765ae618a20ce",
+      "purpose": "Synthetic unsupported BOF type marker; not a complete real chart or macro payload.",
+      "expected": "unsupported_format"
+    },
+    {
+      "id": "missing-string-cache",
+      "filename": "missing-string-cache.xls",
+      "bytes": 3584,
+      "sha256": "ad30ad8aa8f29870f0ca198d63f5bee6af1fa8d4ffd9fbfe30a2445bec0b0c75",
+      "purpose": "Deliberately malformed FORMULA string cache with missing mandatory String record; not a valid cache-less workbook.",
+      "expected": "malformed_workbook"
+    },
+    {
+      "id": "encryption-marked",
+      "filename": "encryption-marked.xls",
+      "bytes": 3584,
+      "sha256": "1049cdd9ca49164cb5082a05059e86bb5b62fd9483edc15b97859ae5ca00bb86",
+      "purpose": "Synthetic FILEPASS declaration to prove rejection before parsing; not cryptographically encrypted content.",
+      "expected": "encrypted_workbook"
+    },
+    {
+      "id": "row-limit",
+      "filename": "row-limit.xls",
+      "bytes": 3584,
+      "sha256": "ed350578a847774f989825f804bf129e66998eacc2a50eced95a725bd1089bc5",
+      "purpose": "201-row range, only two populated cells.",
+      "expected": "preview_limit"
+    },
+    {
+      "id": "column-limit",
+      "filename": "column-limit.xls",
+      "bytes": 3584,
+      "sha256": "42694113adc3f3c429a8e608be8d08278194b1fb209393ae5737e05a566c10f3",
+      "purpose": "51-column range.",
+      "expected": "preview_limit"
+    },
+    {
+      "id": "sparse-area-limit",
+      "filename": "sparse-area-limit.xls",
+      "bytes": 3584,
+      "sha256": "ec04a4bc4cabe28c0914e6bfa336e39f8a24850448e882502d2b6d638e50f085",
+      "purpose": "5050 rendered positions with only two populated cells.",
+      "expected": "preview_limit"
+    },
+    {
+      "id": "sheet-limit",
+      "filename": "sheet-limit.xls",
+      "bytes": 7168,
+      "sha256": "3107652e479eadedfd7e78abe949a4920457154c295604924a6ca912daed79c4",
+      "purpose": "Nine ordinary worksheets.",
+      "expected": "preview_limit"
+    },
+    {
+      "id": "text-limit",
+      "filename": "text-limit.xls",
+      "bytes": 4096,
+      "sha256": "b18eaca4d7b6dd4b946e8637733d2a4482443dcdf3d20a680f68b0adcb3b9ad0",
+      "purpose": "600 UTF-8 bytes exceed the prototype 512-byte cell-text limit.",
+      "expected": "preview_limit"
+    },
+    {
+      "id": "output-limit",
+      "filename": "output-limit.xls",
+      "bytes": 715264,
+      "sha256": "3b95fe257b80e2738e7bf78b053c3af3463e01d88c3230fb56db82c0585048de",
+      "purpose": "2000 cells of 510 UTF-8 bytes each fit individual/range bounds but full serialized output exceeds 1 MiB.",
+      "expected": "preview_limit"
+    },
+    {
+      "id": "corrupt",
+      "filename": "corrupt.xls",
+      "bytes": 35,
+      "sha256": "810be15b83c447ae710c9df8b1fda26d7f00a022273961ac612fa526ebadd705",
+      "purpose": "Non-CFB bytes renamed .xls.",
+      "expected": "unsupported_format"
+    },
+    {
+      "id": "malformed-record",
+      "filename": "malformed-record.xls",
+      "bytes": 3584,
+      "sha256": "a806a2b2376d4761f75f030aed373ea47417454a5cb4874a69532a9a2cca7cd8",
+      "purpose": "CFB container with BIFF record extending beyond stream.",
+      "expected": "malformed_workbook"
+    }
+  ]
+}

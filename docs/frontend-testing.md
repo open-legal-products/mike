@@ -23,6 +23,21 @@ scroll extents. Upgrades must pass `SpreadsheetWorkbook.zoom.test.tsx` and
 `SpreadsheetView.session.test.tsx`, followed by a browser check of zoom and
 scrolling to the last row and column.
 
+The OOXML (`.xlsx`/`.xlsm`) viewer uses LuckyExcel. Its session tests cover
+the 30-second pending-parser deadline,
+malformed callbacks, late results and unmount cleanup. Real-hook tests defer
+replacement fetches to verify that document/version/source-URL/refetch changes
+clear old bytes, errors and parser state immediately; same-source visibility
+and citation changes do not reparse the workbook.
+
+Ordinary unencrypted BIFF8 `.xls` files use the separate, bounded server-side
+stored-values viewer. `SpreadsheetValuesView.test.tsx` covers cache/missing-result
+labels, source checkpoints, pagination, cancellation and changed-source recovery;
+API and backend tests cover the serialized contract, isolated parsing and
+authorization. Unsupported or encrypted input fails explicitly, without a claim
+that renaming converts it. See [spreadsheet-values-preview.md](spreadsheet-values-preview.md)
+for the supported formats, limits and qualification boundaries.
+
 Tests live next to the code they test (`*.test.ts` / `*.test.tsx`). Read a
 couple of the existing suites first (`src/app/lib/mikeApi.test.ts`,
 `src/app/hooks/useAssistantChat.sse.test.ts`) and match their conventions:

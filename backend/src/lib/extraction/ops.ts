@@ -6,6 +6,7 @@ import { extractDocxBodyText } from "../docxTrackedChanges";
 import { extractPresentationText } from "../officeText";
 import { extractLegacyOfficeText, extractPdfTextForModel } from "../pdfText";
 import { spreadsheetToLLMText } from "../spreadsheet";
+import { spreadsheetToValues } from "../spreadsheetValues";
 import { extractDocumentMarkdown } from "./documentMarkdown";
 import { extractDocumentText } from "./documentText";
 
@@ -29,6 +30,7 @@ export const EXTRACTION_OPS = {
     (await extractDocxBodyText(Buffer.from(bytes))) || mammothRawText(bytes),
   spreadsheet: async (bytes: ArrayBuffer) =>
     spreadsheetToLLMText(Buffer.from(bytes)),
+  spreadsheetValues: async (bytes: ArrayBuffer) => spreadsheetToValues(Buffer.from(bytes)),
   presentation: (bytes: ArrayBuffer) =>
     extractPresentationText(Buffer.from(bytes)),
   legacyOfficeText: (bytes: ArrayBuffer) => extractLegacyOfficeText(bytes),
