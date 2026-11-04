@@ -339,7 +339,29 @@ S3-compatible provider:
 
 List exact trusted origins; do not use `*` for a production deployment. The
 signed URL authorizes only its generated object key and expires independently
-of the CORS cache. The backend still verifies the uploaded byte count and
+of the CORS cache.
+
+With Docker Compose, two settings in the compose-root `.env` decide whether
+browser uploads work from anywhere other than the machine running the stack:
+
+- `FRONTEND_URL` (and `WORD_ADDIN_URL`, when set) is the origin the bundled
+  storage bucket allows. The `createbucket` job generates the policy above
+  from them with `docker/storage-cors.sh` on every `docker compose up`, so
+  changing the public URL and re-running `up` updates the bucket. Unset, the
+  policy allows `http://localhost:3000` and `https://localhost:3200`.
+- `R2_PUBLIC_ENDPOINT_URL` is the storage URL the backend signs for browsers.
+  It defaults to `http://localhost:${STORAGE_PORT:-9000}`, which is correct
+  only when the browser runs on the same machine. For any other host, set it
+  to a URL that reaches the storage service from users' browsers, typically
+  an https host or path on the reverse proxy in front of Mike that forwards to
+  `storage:9000` without rewriting the `Host` header (the signature covers
+  it). The storage port itself is bound to `127.0.0.1` because it carries the
+  default admin credentials; do not publish it directly.
+
+On boot the backend logs a `[storage]` warning when `FRONTEND_URL` is not a
+loopback address but the public storage endpoint is loopback, a bare service
+name such as `storage`, or `http` under an `https` front end. Each of those
+makes every upload fail in the browser with a bare network error. The backend still verifies the uploaded byte count and
 copies accepted bytes to a non-signed, sealed key before queuing processing.
 Each file is verified and queued as soon as its individual `PUT` completes;
 the remaining files in the same session may continue uploading while the
