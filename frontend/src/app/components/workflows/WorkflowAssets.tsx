@@ -188,18 +188,24 @@ export const WorkflowAssets = forwardRef<
       setFiles((current) => [...current, ...created]);
       // The upload client returns one outcome per input, in input order.
       // Filenames are not identities: separate files can share a name.
-      const failedFiles = supported.filter((_, index) => {
+      const failedFiles = supported.filter((_, index) => outcomes[index]?.status === "error");
+      // A Retry re-sends only the failures that could still land; a file the
+      // server refused for its content is reported but not re-sent.
+      const retryableFiles = supported.filter((_, index) => {
         const outcome = outcomes[index];
         return outcome !== undefined && uploadOutcomeNeedsRetry(outcome);
       });
       if (failedFiles.length > 0) {
         // One notification for the batch, naming the files that did not make
-        // it, with a retry that re-runs only those.
+        // it, with a retry that re-runs only those that can.
         notifyPartialFailure(
           failedUploadMessage(outcomes),
           {
             action: uploadAction(failedFiles.length, supported.length),
-            onRetry: () => void upload(failedFiles),
+            onRetry:
+              retryableFiles.length > 0
+                ? () => void upload(retryableFiles)
+                : undefined,
             // Storage failures were reported per part by the API client;
             // what is left to report is a file the server never finished.
             ...ASSET_FLOW,
