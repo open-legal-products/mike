@@ -3,6 +3,7 @@
 // 42703 and enforcement cannot apply, so the request proceeds as before — but
 // the degraded state is reported once per process instead of being silent.
 import express from "express";
+import rateLimit from "express-rate-limit";
 import request from "supertest";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { AppError } from "../lib/appError";
@@ -59,7 +60,10 @@ function app() {
     res.locals.requestId = "req-1";
     next();
   });
-  server.get("/projects", requireAuth, (_req, res) => res.json({ ok: true }));
+  // The real app rate-limits every auth-guarded route (app.ts); CodeQL's
+  // js/missing-rate-limiting query expects the same in front of this one.
+  const limiter = rateLimit({ windowMs: 60_000, limit: 100 });
+  server.get("/projects", limiter, requireAuth, (_req, res) => res.json({ ok: true }));
   return server;
 }
 
