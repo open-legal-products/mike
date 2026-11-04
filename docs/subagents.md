@@ -107,7 +107,8 @@ replaces the cap.
 | Standard | The provider's mid-tier model (for example Claude Sonnet) |
 | Same | The chat's model |
 
-A tier never picks a more capable model than the chat. Models reached
+A tier never picks a more capable model than the chat. Claude Code models
+step down to `claude-code/haiku` and `claude-code/sonnet`. Models reached
 through a router, a cloud platform, a custom endpoint or Ollama run tiered
 subagents on the chat's model.
 

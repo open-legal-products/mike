@@ -134,6 +134,7 @@ export const MODEL_TOGGLE_GROUPS: readonly ModelToggleGroup[] = [
   "xAI",
   "Configured",
   "Local",
+  "Claude Code",
   "Other providers",
 ];
 

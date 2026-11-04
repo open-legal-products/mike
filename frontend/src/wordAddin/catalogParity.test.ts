@@ -152,6 +152,9 @@ describe("word add-in model catalog", () => {
             "openrouter/openai/gpt-5.4",
             "vercel/openai/gpt-5.4",
             "opencode-go/glm-5",
+            "claude-code/opus",
+            "claude-code/sonnet",
+            "claude-code/haiku",
             ...BYOK_PROBES,
         ];
         for (const configured of providers) {

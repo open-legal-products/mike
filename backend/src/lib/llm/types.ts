@@ -19,7 +19,8 @@ export type Provider =
     | "vertex"
     | "xai"
     | "custom"
-    | "ollama";
+    | "ollama"
+    | "claude-code";
 
 export const REASONING_LEVELS = [
     "none",

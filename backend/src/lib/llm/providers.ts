@@ -4,6 +4,7 @@ import {
   streamAiSdk,
   type AiSdkAdapterConfig,
 } from "./aiSdk";
+import { completeClaudeCode, streamClaudeCode } from "./claudeCode";
 import {
   azureClientTarget,
   azureCredentials,
@@ -573,6 +574,10 @@ async function createProviderAdapter(
     );
   }
 
+  if (provider === "claude-code") {
+    throw new Error("Claude Code models do not use an AI SDK adapter.");
+  }
+
   if (provider === "claude") {
     return createAnthropicAdapter({
       provider,
@@ -680,6 +685,15 @@ async function createProviderAdapter(
 export async function streamWithProvider(
   params: StreamChatParams,
 ): Promise<StreamChatResult> {
+  if (providerForModel(params.model) === "claude-code") {
+    return streamClaudeCode({
+      ...params,
+      reasoning: normalizeReasoningLevelForModel(
+        params.model,
+        params.reasoning,
+      ),
+    });
+  }
   const normalizedParams = {
     ...params,
     reasoning: normalizeReasoningLevelForModel(
@@ -812,6 +826,9 @@ export function fallbackReasoningLevelFromProviderError(
 export async function completeWithProvider(
   params: CompleteProviderParams,
 ): Promise<string> {
+  if (providerForModel(params.model) === "claude-code") {
+    return completeClaudeCode(params);
+  }
   return completeAiSdkText(
     params,
     await createProviderAdapter(params.model, params.apiKeys),

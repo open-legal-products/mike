@@ -35,7 +35,10 @@ import {
   providerForModel,
 } from "../../lib/llm/models";
 import type { Provider } from "../../lib/llm/types";
-import { hasApiKeyForModel } from "../../lib/modelSelection";
+import {
+  CLAUDE_CODE_DISABLED_DETAIL,
+  hasApiKeyForModel,
+} from "../../lib/modelSelection";
 import { getUserApiKeys, getEffectiveApiKeys } from "../user/user.service";
 import { uploadFile } from "../../lib/storage";
 import { getFileStreamSource } from "../documents/documents.service";
@@ -564,6 +567,7 @@ const PROVIDER_DISPLAY_NAMES: Record<Provider, string> = {
   custom: "OpenAI-compatible endpoint",
   "openai-compatible": "Configured endpoint",
   ollama: "Local (Ollama)",
+  "claude-code": "Claude Code",
 };
 
 // Keyed rather than positional: a provider added later must not inherit the
@@ -586,6 +590,10 @@ export function playbookModelAvailability(
     };
   }
   if (hasApiKeyForModel(modelId, apiKeys)) return { available: true };
+  // Keyless: unavailable only because the operator turned it off.
+  if (provider === "claude-code") {
+    return { available: false, reason: CLAUDE_CODE_DISABLED_DETAIL };
+  }
   return {
     available: false,
     reason: `${providerDisplayName(provider)} API key is not configured.`,

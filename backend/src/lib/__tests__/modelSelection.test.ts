@@ -1,5 +1,6 @@
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
+    CLAUDE_CODE_DISABLED_DETAIL,
     hasApiKeyForModel,
     normalizeOptionalModelPreference,
     resolveEffectiveChatModel,
@@ -63,6 +64,10 @@ describe("subagentModelFor", () => {
         ["claude-opus-5-5", "standard", "claude-sonnet-5-5"],
         ["claude-opus-5-5", "same", "claude-opus-5-5"],
         ["claude-haiku-4-5", "standard", "claude-haiku-4-5"],
+        ["claude-code/opus", "light", "claude-code/haiku"],
+        ["claude-code/opus", "standard", "claude-code/sonnet"],
+        ["claude-code/sonnet", "standard", "claude-code/sonnet"],
+        ["claude-code/haiku", "standard", "claude-code/haiku"],
         ["openrouter/anthropic/claude-sonnet-4.5", "light", "openrouter/anthropic/claude-sonnet-4.5"],
     ] as const)("runs a %s chat's %s subagent on %s, never above the chat model", (chatModel, tier, expected) => {
         expect(subagentModelFor(chatModel, tier)).toBe(expected);
@@ -197,6 +202,11 @@ describe("resolveEffectiveReasoningLevel", () => {
 describe("resolveEffectiveChatModel", () => {
     const db = {} as Db;
 
+    // Env stubs below must not leak into the sibling cases in this file.
+    afterEach(() => {
+        vi.unstubAllEnvs();
+    });
+
     it("uses an explicit request before persisted values", async () => {
         await expect(
             resolveEffectiveChatModel({
@@ -241,6 +251,38 @@ describe("resolveEffectiveChatModel", () => {
             ok: false,
             code: "model_required",
         });
+    });
+
+    // A disabled Claude Code is a server setting, so it must not be reported
+    // as a missing key: that code drives the "add your API key" prompts, and
+    // there is no key for a subscription provider.
+    it("reports a disabled Claude Code model as unavailable, not keyless", async () => {
+        vi.stubEnv("CLAUDE_CODE_ENABLED", "");
+        await expect(
+            resolveEffectiveChatModel({
+                requested: "claude-code/opus",
+                apiKeys: {},
+                userId: "user-1",
+                db,
+            }),
+        ).resolves.toMatchObject({
+            ok: false,
+            status: 400,
+            code: "model_unavailable",
+            detail: CLAUDE_CODE_DISABLED_DETAIL,
+        });
+    });
+
+    it("accepts a Claude Code model with no keys once enabled", async () => {
+        vi.stubEnv("CLAUDE_CODE_ENABLED", "true");
+        await expect(
+            resolveEffectiveChatModel({
+                requested: "claude-code/opus",
+                apiKeys: {},
+                userId: "user-1",
+                db,
+            }),
+        ).resolves.toMatchObject({ ok: true, model: "claude-code/opus" });
     });
 });
 

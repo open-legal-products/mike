@@ -1,10 +1,13 @@
 import type { DelegationModelTier } from "@mike/contracts";
 import {
+    CLAUDE_CODE_LOW_MODELS,
+    CLAUDE_CODE_MID_MODELS,
     builtInModelIds,
     CLAUDE_LOW_MODELS,
     CLAUDE_MID_MODELS,
     GEMINI_LOW_MODELS,
     GEMINI_MID_MODELS,
+    isClaudeCodeEnabled,
     OPENAI_LOW_MODELS,
     OPENAI_MID_MODELS,
     MISTRAL_LOW_MODELS,
@@ -42,6 +45,14 @@ export const MODEL_REQUIRED_DETAIL =
 
 export const TABULAR_MODEL_REQUIRED_DETAIL =
     "Select a model for this tabular review before running it.";
+
+/**
+ * Claude Code authenticates with the operator's subscription, so when it is
+ * switched off the remedy is a server setting rather than a key the user could
+ * add. Its failures must stay clear of the "add your API key" prompts.
+ */
+export const CLAUDE_CODE_DISABLED_DETAIL =
+    "Claude Code models are disabled on this server. Select another model.";
 
 export const DEFAULT_REASONING_LEVEL: ReasoningLevel = "high";
 
@@ -98,6 +109,8 @@ export function hasApiKeyForModel(
     const provider = providerForModel(model);
     if (apiKeys.disabledProviders?.includes(provider)) return false;
     if (provider === "ollama") return true;
+    // Keyless, but only while the operator has turned the local CLI on.
+    if (provider === "claude-code") return isClaudeCodeEnabled();
     if (provider === "openai-compatible") {
         const configured = getConfiguredModel(model);
         return (
@@ -167,6 +180,14 @@ export async function resolveEffectiveChatModel(args: {
                 args.orgId,
             );
             if (!hasApiKeyForModel(model, args.apiKeys)) {
+                if (providerForModel(model) === "claude-code") {
+                    return {
+                        ok: false,
+                        status: 400,
+                        code: "model_unavailable",
+                        detail: CLAUDE_CODE_DISABLED_DETAIL,
+                    };
+                }
                 if (args.apiKeys.disabledProviders?.includes(providerForModel(model))) {
                     return {
                         ok: false,
@@ -253,6 +274,8 @@ export function titleModelForChat(
             return OPENAI_LOW_MODELS[0];
         case "mistral":
             return MISTRAL_LOW_MODELS[0];
+        case "claude-code":
+            return CLAUDE_CODE_LOW_MODELS[0];
         case "openrouter":
         case "vercel":
         case "opencode-go":
@@ -286,6 +309,11 @@ function tieredModels(
             return { light: OPENAI_LOW_MODELS, standard: OPENAI_MID_MODELS };
         case "mistral":
             return { light: MISTRAL_LOW_MODELS, standard: MISTRAL_MID_MODELS };
+        case "claude-code":
+            return {
+                light: CLAUDE_CODE_LOW_MODELS,
+                standard: CLAUDE_CODE_MID_MODELS,
+            };
         default:
             return null;
     }

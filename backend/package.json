@@ -25,6 +25,8 @@
     "@ai-sdk/openai": "^4.0.77",
     "@ai-sdk/openai-compatible": "^3.0.57",
     "@ai-sdk/xai": "^5.0.30",
+    "@anthropic-ai/claude-agent-sdk": "^0.3.270",
+    "@anthropic-ai/sdk": "^0.125.0",
     "@aws-sdk/client-s3": "^3.1156.0",
     "@aws-sdk/s3-request-presigner": "^3.1156.0",
     "@modelcontextprotocol/sdk": "^1.32.2",

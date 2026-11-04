@@ -180,7 +180,8 @@ export function isRouterModelSelected(
 
 /**
  * The ids a composer accepts as a selection: the static catalog, any
- * deployment-configured model, local models and router-prefixed ids.
+ * deployment-configured model, local and Claude Code models, and
+ * router-prefixed ids.
  */
 export function isAllowedModelId(
   id: string,
@@ -190,6 +191,7 @@ export function isAllowedModelId(
     ALLOWED_MODEL_IDS.has(id) ||
     configuredModelIds.includes(id) ||
     id.startsWith("ollama/") ||
+    id.startsWith("claude-code/") ||
     routerForModelId(id) !== null
   );
 }
@@ -385,6 +387,18 @@ export function routerModelOptions(
   });
 }
 
+/** Keyless model groups discovered at runtime (Ollama, Claude Code). */
+export function isKeylessModelGroup(group: ModelOption["group"]): boolean {
+  return group === "Local" || group === "Claude Code";
+}
+
+/** Claude Code models keep the backend's labels ("Claude Opus (subscription)"). */
+export function claudeCodeModelOptions(
+  models: readonly ModelOption[],
+): ModelOption[] {
+  return models.map((model) => ({ ...model, source: "Claude Code" }));
+}
+
 /** Picker rows for every router's saved Model Selections, in router order. */
 export function allRouterModelOptions(
   selections: Partial<RouterSelections>,
@@ -398,14 +412,18 @@ export function allRouterModelOptions(
 // Availability
 // ---------------------------------------------------------------------------
 
-/** The key provider behind a model; "ollama" is local and needs no key. */
+/**
+ * The key provider behind a model; "ollama" is local and "claude-code" runs on
+ * the operator's Claude subscription, so neither needs a key.
+ */
 export type ModelProvider =
   | "claude"
   | "gemini"
   | "openai"
   | "mistral"
   | RouterSlug
-  | "ollama";
+  | "ollama"
+  | "claude-code";
 
 /** Key providers that serve chat models (CourtListener does not). */
 const MODEL_KEY_PROVIDERS = [
@@ -442,12 +460,15 @@ export function modelGroupToProvider(group: ModelOption["group"]): ModelProvider
   if (group === "Vercel AI Gateway") return "vercel";
   if (group === "OpenCode Go") return "opencode-go";
   if (group === "Local") return "ollama";
+  if (group === "Claude Code") return "claude-code";
   return "gemini";
 }
 
 /** The key provider that serves a model id, or null for an unknown id. */
 export function getModelProvider(modelId: string): ModelProvider | null {
   if (modelId.startsWith("ollama/")) return "ollama"; // dynamic, not in the static list
+  // Before any "claude" matching: claude-code/ ids are keyless subscription models.
+  if (modelId.startsWith("claude-code/")) return "claude-code";
   const router = routerForModelId(modelId);
   if (router) return router;
   const model = SETTINGS_MODELS.find(
@@ -462,6 +483,7 @@ export function isProviderAvailable(
   keys: ProviderKeyStates,
 ): boolean {
   if (provider === "ollama") return true; // local, no key needed
+  if (provider === "claude-code") return true; // subscription, no key needed
   return !!keys[provider]?.configured && keys[provider]?.enabled !== false;
 }
 
@@ -493,6 +515,7 @@ const PROVIDER_NAMES: Record<
   xai: { name: "xAI" },
   custom: { name: "OpenAI-compatible endpoint" },
   ollama: { name: "Local", product: "Ollama" },
+  "claude-code": { name: "Claude Code", product: "subscription" },
 };
 
 /**

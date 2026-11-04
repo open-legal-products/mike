@@ -5,10 +5,16 @@ import {
   reasoningLevelsForModel,
   type ReasoningLevel,
 } from "@mike/model-toggle-ui";
-import { getOllamaModels, type ApiKeyStatus } from "../../api/mikeApi";
+import {
+  getClaudeCodeModels,
+  getOllamaModels,
+  type ApiKeyStatus,
+} from "../../api/mikeApi";
 import {
   MODELS,
   allRouterModelOptions,
+  claudeCodeModelOptions,
+  isKeylessModelGroup,
   modelDisplayName,
   type ModelOption,
   type RouterSelections,
@@ -40,6 +46,7 @@ export function ModelToggle({
   onReasoningChange?: (level: ReasoningLevel) => void;
 }): React.ReactElement {
   const [ollamaModels, setOllamaModels] = useState<ModelOption[]>([]);
+  const [claudeCodeModels, setClaudeCodeModels] = useState<ModelOption[]>([]);
 
   useEffect(() => {
     let cancelled = false;
@@ -50,6 +57,11 @@ export function ModelToggle({
       // Local (Ollama) models are an optional extra: when the host is not
       // running there is simply no "Local" group, and nothing the user asked
       // for has failed.
+      .catch(() => {});
+    void getClaudeCodeModels()
+      .then((models) => {
+        if (!cancelled) setClaudeCodeModels(models);
+      })
       .catch(() => {});
     return () => {
       cancelled = true;
@@ -67,11 +79,13 @@ export function ModelToggle({
       ...MODELS,
       ...routerOptions,
       ...localOptions,
+      ...claudeCodeModelOptions(claudeCodeModels),
     ].filter(
       (model) =>
-        model.group === "Local" || isModelAvailable(model.id, keyStatus),
+        isKeylessModelGroup(model.group) ||
+        isModelAvailable(model.id, keyStatus),
     );
-  }, [keyStatus, ollamaModels, routerSelections]);
+  }, [keyStatus, ollamaModels, claudeCodeModels, routerSelections]);
   const selected = models.find((model) => model.id === value);
   const supportedReasoningLevels = reasoningLevelsForModel(value);
   const normalizedReasoningLevel = reasoningLevel

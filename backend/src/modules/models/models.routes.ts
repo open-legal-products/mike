@@ -17,6 +17,7 @@ import {
     sendWorkspaceFailure,
 } from "../../lib/workspace";
 import {
+    listClaudeCodeModels,
     listOllamaModels,
     listConfiguredModels,
     listOpenCodeGoModels,
@@ -86,6 +87,11 @@ async function sendCatalog(
 modelsRouter.get("/ollama", requireAuth, asyncRoute(async (_req, res) => {
     res.json({ models: await listOllamaModels() });
 }));
+
+// GET /models/claude-code
+modelsRouter.get("/claude-code", requireAuth, (_req, res) => {
+    res.json({ models: listClaudeCodeModels() });
+});
 
 // GET /models/configured
 modelsRouter.get("/configured", requireAuth, asyncRoute(async (_req, res) => {

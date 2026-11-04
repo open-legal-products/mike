@@ -1,40 +1,12 @@
-import { useEffect, useState } from "react";
 import { getOllamaModels, type OllamaModelOption } from "@/app/lib/mikeApi";
+import { createDynamicModelStore } from "./dynamicModelStore";
 
-// Module-level store so every picker shares one fetch. Empty list if Ollama
-// is unreachable — the app works without it.
-let cache: OllamaModelOption[] | null = null;
-let inflight: Promise<OllamaModelOption[]> | null = null;
-const listeners = new Set<() => void>();
-
-function load(): Promise<OllamaModelOption[]> {
-    if (cache) return Promise.resolve(cache);
-    if (!inflight) {
-        inflight = getOllamaModels()
-            .then((m) => {
-                cache = m;
-                listeners.forEach((l) => l());
-                return m;
-            })
-            .catch(() => {
-                inflight = null; // don't poison cache — retry on next load
-                return [];
-            });
-    }
-    return inflight;
-}
+// Empty list if Ollama is unreachable; the app works without it. The fetcher
+// is wrapped so the API client is only touched on first load, not at import.
+const store = createDynamicModelStore<OllamaModelOption>(() =>
+    getOllamaModels(),
+);
 
 export function useOllamaModels(): OllamaModelOption[] {
-    const [models, setModels] = useState<OllamaModelOption[]>(cache ?? []);
-
-    useEffect(() => {
-        const update = () => setModels(cache ?? []);
-        listeners.add(update);
-        void load().then(update);
-        return () => {
-            listeners.delete(update);
-        };
-    }, []);
-
-    return models;
+    return store.useModels();
 }

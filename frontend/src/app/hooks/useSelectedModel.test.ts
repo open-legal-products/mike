@@ -75,6 +75,17 @@ describe("useSelectedModel", () => {
         expect(selected([])).toBe("gpt-6-luna");
     });
 
+    it("restores a saved claude-code model with no Anthropic key", () => {
+        const { result } = renderHook(() =>
+            useSelectedModel({
+                chatModel: "claude-code/sonnet",
+                lastSelectedModel: "gpt-5.6-luna",
+                apiKeys: { ...keys, claude: { configured: false, source: null } },
+            }),
+        );
+        expect(result.current[0]).toBe("claude-code/sonnet");
+    });
+
     it("keeps an explicit selection in component state only", () => {
         const { result } = renderHook(() => useSelectedModel());
 

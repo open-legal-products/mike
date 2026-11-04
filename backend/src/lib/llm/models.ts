@@ -43,6 +43,30 @@ export const GEMINI_LOW_MODELS = ["gemini-3.5-flash-lite"] as const;
 export const OPENAI_LOW_MODELS = ["gpt-6-luna"] as const;
 export const MISTRAL_LOW_MODELS = ["mistral-small-2603"] as const;
 
+// Local Claude Code (Claude subscription), see lib/llm/claudeCode.ts. The
+// part after the prefix is the Claude Code model alias. Offered only when the
+// backend sets CLAUDE_CODE_ENABLED.
+export const CLAUDE_CODE_MAIN_MODELS = [
+    "claude-code/opus",
+    "claude-code/sonnet",
+] as const;
+export const CLAUDE_CODE_MID_MODELS = ["claude-code/sonnet"] as const;
+export const CLAUDE_CODE_LOW_MODELS = ["claude-code/haiku"] as const;
+export const CLAUDE_CODE_MODELS = [
+    ...CLAUDE_CODE_MAIN_MODELS,
+    ...CLAUDE_CODE_LOW_MODELS,
+] as const;
+
+export function isClaudeCodeEnabled(): boolean {
+    return /^(1|true|yes)$/i.test(
+        process.env.CLAUDE_CODE_ENABLED?.trim() ?? "",
+    );
+}
+
+export function claudeCodeModelAlias(model: string): string {
+    return model.replace(/^claude-code\//, "");
+}
+
 const STANDARD_REASONING_LEVELS: readonly ReasoningLevel[] =
     REASONING_LEVELS.filter((level) => level !== "max");
 const ALWAYS_REASONING_LEVELS: readonly ReasoningLevel[] =
@@ -151,6 +175,7 @@ const ALL_MODELS = new Set<string>([
     ...CLAUDE_LOW_MODELS,
     ...GEMINI_LOW_MODELS,
     ...OPENAI_LOW_MODELS,
+    ...CLAUDE_CODE_MODELS,
     ...MISTRAL_LOW_MODELS,
 ]);
 
@@ -172,6 +197,7 @@ export function providerForModel(model: string): Provider {
     if (model.startsWith("openrouter/")) return "openrouter";
     if (model.startsWith("vercel/")) return "vercel";
     if (model.startsWith("opencode-go/")) return "opencode-go";
+    if (model.startsWith("claude-code/")) return "claude-code";
     if (model.startsWith("bedrock/")) return "bedrock";
     if (model.startsWith("azure/")) return "azure";
     if (model.startsWith("azure-foundry/")) return "azure-foundry";

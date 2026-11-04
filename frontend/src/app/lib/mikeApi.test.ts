@@ -83,6 +83,7 @@ import {
     getGoogleDriveStatus,
     getMcpConnector,
     getOllamaModels,
+    getClaudeCodeModels,
     getOpenCodeGoModels,
     getXaiModels,
     getCustomEndpointModels,
@@ -3538,6 +3539,20 @@ describe("unwrapping and blob wrappers", () => {
 
         await expect(getOllamaModels()).resolves.toEqual(models);
         expect(lastFetchCall().url).toBe("/api/models/ollama");
+    });
+
+    it("getClaudeCodeModels unwraps the models envelope", async () => {
+        const models = [
+            {
+                id: "claude-code/opus",
+                label: "Claude Opus (subscription)",
+                group: "Claude Code",
+            },
+        ];
+        fetchMock.mockResolvedValue(jsonResponse({ models }));
+
+        await expect(getClaudeCodeModels()).resolves.toEqual(models);
+        expect(lastFetchCall().url).toBe("/api/models/claude-code");
     });
 
     it("getConfiguredModels unwraps the authenticated catalog", async () => {

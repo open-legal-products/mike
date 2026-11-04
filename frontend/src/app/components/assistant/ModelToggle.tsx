@@ -11,6 +11,8 @@ import { isModelAvailable } from "@/app/lib/modelAvailability";
 import {
   MODELS,
   allRouterModelOptions,
+  claudeCodeModelOptions,
+  isKeylessModelGroup,
   modelDisplayName,
   noModelsReason,
   type ModelOption,
@@ -23,6 +25,7 @@ import {
   useWorkspace,
 } from "@/app/contexts/WorkspaceContext";
 import { useOllamaModels } from "@/app/hooks/useOllamaModels";
+import { useClaudeCodeModels } from "@/app/hooks/useClaudeCodeModels";
 import { useConfiguredModels } from "@/app/hooks/useConfiguredModels";
 
 export type { ReasoningLevel };
@@ -81,6 +84,7 @@ export function ModelToggle({
   onReasoningChange,
 }: Props) {
   const ollamaModels = useOllamaModels();
+  const claudeCodeModels = useClaudeCodeModels();
   const configuredModels = useConfiguredModels();
   const models = mergeConfiguredModelOptions(configuredModels, [
     ...MODELS,
@@ -90,10 +94,12 @@ export function ModelToggle({
       label: modelDisplayName(model.id),
       source: "Local",
     })),
+    ...claudeCodeModelOptions(claudeCodeModels),
   ]);
   const availableModels = models.filter((model) => {
     if (model.source === "Configured") return true;
-    if (model.group === "Local") return true;
+    // Local (Ollama) and Claude Code are discovered at runtime and keyless.
+    if (isKeylessModelGroup(model.group)) return true;
     if (apiKeysLoading) return false; // nothing offered until known
     if (!apiKeys) return true; // unknown after a failed load → fail open
     return isModelAvailable(model.id, apiKeys);

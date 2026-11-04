@@ -15,6 +15,10 @@ vi.mock("@/app/hooks/useConfiguredModels", () => ({
     useConfiguredModels: () => configuredModels,
 }));
 
+vi.mock("@/app/hooks/useClaudeCodeModels", () => ({
+    useClaudeCodeModels: () => [],
+}));
+
 vi.mock("@/app/contexts/UserProfileContext", () => ({
     useUserProfile: () => ({
         profile: {
