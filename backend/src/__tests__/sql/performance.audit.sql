@@ -67,9 +67,13 @@ returns setof public.audit_events language sql stable set search_path = public, 
   )).* from scoped s;
 $$;
 create temporary sequence audit_project_calls minvalue 0 start 0;
+-- Live rows a statement read from a table: sequential and bitmap heap reads
+-- plus heap fetches through its indexes. Index entries alone are not
+-- counted, because rolled-back fixtures in other suites leave dead entries
+-- that an index scan steps over until vacuum.
 create function pg_temp.rel_work(rel regclass) returns bigint language sql as $$
-  select sum(pg_stat_get_xact_tuples_returned(c.oid)+pg_stat_get_xact_tuples_fetched(c.oid))::bigint
-  from pg_class c where c.oid=rel or c.oid in (select indexrelid from pg_index where indrelid=rel);
+  select (pg_stat_get_xact_tuples_returned(rel)+pg_stat_get_xact_tuples_fetched(rel)
+    +coalesce((select sum(pg_stat_get_xact_tuples_fetched(indexrelid)) from pg_index where indrelid=rel),0))::bigint;
 $$;
 do $$
 declare owner_id uuid:=gen_random_uuid(); member_id uuid:=gen_random_uuid(); admin_id uuid:=gen_random_uuid(); org uuid:=gen_random_uuid(); project uuid:=gen_random_uuid();
