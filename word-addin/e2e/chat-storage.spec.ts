@@ -653,3 +653,25 @@ test("device-only history pages read one page from an upgraded database", async 
   // Page two: the cursor's first step, then advance() past page one unread.
   expect(await idbReads(page, "word-chats")).toBe(11 + 1 + 11);
 });
+
+test("an add-in older than the device-only database says to reopen it", async ({ addin, page }) => {
+  await addin.gotoTaskpane({ token: TOKEN });
+  await addin.expectAuthedShell();
+  // A newer build already upgraded this device's database past this bundle.
+  await page.evaluate(() => new Promise<void>((resolve, reject) => {
+    const deletion = indexedDB.deleteDatabase("mike-word-addin");
+    deletion.onsuccess = () => {
+      const open = indexedDB.open("mike-word-addin", 99);
+      open.onupgradeneeded = () => open.result.createObjectStore("word-chats", { keyPath: "id" });
+      open.onsuccess = () => { open.result.close(); resolve(); };
+      open.onerror = () => reject(open.error);
+    };
+  }));
+  await page.getByRole("button", { name: "Open menu" }).click();
+  await page.getByRole("menuitem", { name: "Settings" }).click();
+  await page.getByRole("switch", { name: "Save chats in the cloud" }).click();
+  await page.getByRole("button", { name: "Open menu" }).click();
+  await page.getByRole("menuitem", { name: "Assistant" }).click();
+  await page.getByRole("button", { name: "Chat history" }).click();
+  await expect(page.getByText(/Close and reopen the add-in to load them/).first()).toBeVisible();
+});

@@ -1,6 +1,11 @@
 import type { Chat, Message, WordDocumentEdit } from "../types";
 import type { PersistedWordEditPatch } from "./wordChatTypes";
 import { notifyWordChatHistoryChanged } from "./wordChatHistoryEvents";
+import { UserVisibleError } from "./notify";
+
+/** Shown when this pane's code is older than the device-only chat database. */
+export const OUTDATED_ADDIN_MESSAGE =
+  "A newer version of Mike updated this device's chats. Close and reopen the add-in to load them.";
 
 const DATABASE_NAME = "mike-word-addin";
 // 5: word-chats gains the recency index history pages walk.
@@ -115,11 +120,30 @@ function openDatabase(): Promise<IDBDatabase> {
         }
       }
     };
-    request.onsuccess = () => resolve(request.result);
-    request.onerror = () =>
+    request.onsuccess = () => {
+      const database = request.result;
+      // A newer add-in build (another pane, another tab) upgrading the
+      // schema must not wait on this connection: close it and let the next
+      // operation reopen at the new version.
+      database.onversionchange = () => database.close();
+      resolve(database);
+    };
+    request.onerror = () => {
+      // An older bundle (a cached pane) opening a database a newer build
+      // already upgraded cannot read it at all. Say what fixes it instead
+      // of a history pane that fails on every retry.
+      if (request.error?.name === "VersionError") {
+        reject(
+          new UserVisibleError(OUTDATED_ADDIN_MESSAGE, {
+            cause: request.error,
+          }),
+        );
+        return;
+      }
       reject(
         request.error ?? new Error("Could not open local Word chat storage."),
       );
+    };
   });
 }
 
