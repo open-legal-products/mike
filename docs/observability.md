@@ -32,7 +32,14 @@ records the final transport boundary that closes them. Internal source-code
 filenames identify the failing code; client document filenames are excluded.
 
 Resolution order, per runtime: `*_SENTRY_DISABLED=true` → off;
-`*_SENTRY_DSN` set → that DSN; otherwise the built-in Mike project DSN. For the
+`*_SENTRY_DSN` set → that DSN; a development build → off; otherwise the
+built-in Mike project DSN. A development build is `next dev` (the Next
+server's `NODE_ENV=development`), the backend run from its TypeScript source
+(`tsx watch src/index.ts`, `npm run dev`; the compiled image is never one,
+whatever `NODE_ENV` compose sets), and the add-in's webpack dev server. It
+never falls back to the Mike project, and `*_SENTRY_DISABLED=false` does not
+change that; to see a development build's events, point its DSN at your own
+project or at `node scripts/sentry-sink.mjs`. For the
 web app one rule, `reportingDestination` in `frontend/src/app/lib/errorReporting.ts`,
 decides for the Next server's own events and for every browser envelope alike
 (the browser posts to `/monitoring`, `frontend/src/app/monitoring/route.ts`,
@@ -50,8 +57,10 @@ processes (vitest, `NODE_ENV=test`) never report unless
 `SENTRY_ALLOW_IN_TESTS=true`. Browser tests disable reporting or use intercepted
 transports. Every event carries `install=community` unless
 the deployment sets `SENTRY_INSTALL=official` (env, all three runtimes), and
-`environment` defaults to `self-hosted`, so the official deployment and the
-community are separable in Sentry. The boot log says which applies:
+`environment` defaults to `self-hosted` (`development` for a development build
+that has a DSN set; an explicit `SENTRY_ENVIRONMENT` always wins), so the
+official deployment, the community and contributors' checkouts are separable
+in Sentry. The boot log says which applies:
 `[sentry] enabled for api → Mike project Sentry (community install). Opt out
 with SENTRY_DISABLED=true or point SENTRY_DSN at your own project.`
 
@@ -321,7 +330,7 @@ Backend (`backend/.env`, read at process start):
 SENTRY_DISABLED=false                  # true = send nothing
 SENTRY_DSN=                            # your own Sentry; empty = image default, then Mike project
 SENTRY_INSTALL=                        # "official" only on Mike's own deployment
-SENTRY_ENVIRONMENT=production          # defaults to self-hosted
+SENTRY_ENVIRONMENT=production          # defaults to self-hosted (development when run from source)
 SENTRY_RELEASE=mike@1.4.0              # optional; defaults to mike@<MIKE_VERSION>+<sha12>
 SENTRY_TRACES_SAMPLE_RATE=0            # optional, 0..1
 SENTRY_ENABLE_TEST_ROUTE=false         # see "Verifying" below
