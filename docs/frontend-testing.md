@@ -23,6 +23,15 @@ scroll extents. Upgrades must pass `SpreadsheetWorkbook.zoom.test.tsx` and
 `SpreadsheetView.session.test.tsx`, followed by a browser check of zoom and
 scrolling to the last row and column.
 
+Spreadsheet preview uses LuckyExcel for OOXML (`.xlsx`/`.xlsm`), not legacy
+BIFF `.xls` or encrypted OLE workbooks. Those sources remain downloadable;
+the viewer explains the limitation rather than pretending a rename converts
+them. Session tests also cover its 30-second pending-parser deadline,
+malformed callbacks, late results and unmount cleanup. Real-hook tests defer
+replacement fetches to verify that document/version/source-URL/refetch changes
+clear old bytes, errors and parser state immediately; same-source visibility
+and citation changes retain the session.
+
 Tests live next to the code they test (`*.test.ts` / `*.test.tsx`). Read a
 couple of the existing suites first (`src/app/lib/mikeApi.test.ts`,
 `src/app/hooks/useAssistantChat.sse.test.ts`) and match their conventions:
