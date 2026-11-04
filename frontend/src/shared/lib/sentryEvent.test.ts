@@ -436,6 +436,39 @@ describe("automatic captures of an already-reported error", () => {
     });
 });
 
+// MIKE-FRONTEND-X (409), 1A (429), 1C (404), 11 (401): a refusal the screen
+// already showed, re-filed at error level by the global unhandled handler or
+// the console bridge. A cancellation is not a failure at all.
+describe("automatic captures of a handled outcome", () => {
+    const unhandled = { exception: { values: [{ mechanism: { type: "onunhandledrejection", handled: false } }] } };
+    const refusal = (status: number) => Object.assign(new Error(`API error: ${status}`), { status });
+
+    it("drops an unhandled AbortError and an unhandled 4xx, keeps an unhandled 5xx", () => {
+        const { scrubEvent } = createEventScrubber({ install: "official" });
+        const abort = Object.assign(new Error("The user aborted a request."), { name: "AbortError" });
+        expect(scrubEvent(structuredClone(unhandled), { originalException: abort })).toBeNull();
+        expect(scrubEvent(structuredClone(unhandled), { originalException: refusal(409) })).toBeNull();
+        expect(scrubEvent(structuredClone(unhandled), { originalException: refusal(500) })).not.toBeNull();
+    });
+
+    it("drops a console.error of a nested 429", () => {
+        const { scrubEvent } = createEventScrubber({ install: "official" });
+        const args = ["[chat] failed", { error: refusal(429) }];
+        expect(scrubEvent(
+            { logger: "console", message: "[chat] failed [object Object]" },
+            { captureContext: { extra: { arguments: args } } },
+        )).toBeNull();
+    });
+
+    it("keeps an explicit capture of the same 4xx", () => {
+        const { scrubEvent } = createEventScrubber({ install: "official" });
+        expect(scrubEvent(
+            { exception: { values: [{ mechanism: { type: "generic", handled: true } }] } },
+            { originalException: refusal(409) },
+        )).not.toBeNull();
+    });
+});
+
 describe("resolveDsn", () => {
     it("is off when disabled, uses an explicit DSN, else the built-in Mike DSN", () => {
         expect(resolveDsn({ disabled: "true", dsn: "https://x@y/1", fallback: MIKE_SENTRY_DSN.frontend })).toEqual({ dsn: "", source: "disabled" });

@@ -604,6 +604,33 @@ function isDevToolchainNoise(event: ScrubbableEvent, automatic: boolean): boolea
     return known.length > 0 && known.every((location) => DEV_TOOLCHAIN_FRAME.test(location));
 }
 
+/**
+ * An outcome the code that saw it already handles, so an AUTOMATIC copy of
+ * it (console bridge, global unhandled handler) is not a defect report:
+ *
+ * - a cancellation (`AbortError`): the user stopped a stream or left a
+ *   screen; and
+ * - an HTTP refusal: an error carrying its own `status` in 400–499 (the
+ *   API client's `MikeApiError`, `AuthApiError`, a chat request refused
+ *   before streaming). A 409 `turn_in_progress` or a 429 is the server's
+ *   deliberate answer; the screen shows it, and nothing in the frontend can
+ *   fix it (MIKE-FRONTEND-X, 2N, 2S, 3Q, 11, 1C, 1A, G).
+ *
+ * Only the original error's own fields are read: a 5xx whose cause chain
+ * happens to contain a 4xx is still a server fault.
+ */
+function isHandledOutcome(original: unknown): boolean {
+    if (!original || typeof original !== "object") return false;
+    try {
+        const { name, status } = original as { name?: unknown; status?: unknown };
+        if (name === "AbortError") return true;
+        return typeof status === "number" && Number.isInteger(status) && status >= 400 && status <= 499;
+    } catch {
+        // Exotic objects with throwing accessors are kept, not dropped.
+        return false;
+    }
+}
+
 const DEFAULT_MAX_EVENTS_PER_ISSUE_PER_MINUTE = 10;
 const THROTTLE_WINDOW_MS = 60_000;
 
@@ -681,6 +708,11 @@ export function createEventScrubber(options?: {
         ) {
             return null;
         }
+        const consoleCapture =
+            mechanism === CONSOLE_CAPTURE_MECHANISM || event.logger === "console";
+        if ((automatic || consoleCapture) && isHandledOutcome(original)) {
+            return null;
+        }
 
         // console.error("[label] failed", { jobId, error }) — the common shape
         // in this codebase. The bridge only recognises a top-level Error, so
@@ -691,6 +723,11 @@ export function createEventScrubber(options?: {
             event.logger === "console" ? consoleArguments(hint) : null;
         if (args) {
             if (args.some((arg) => findNested(arg, isReported))) {
+                return null;
+            }
+            // console.error("[chat] failed", { error }) where the error is a
+            // 4xx refusal or a cancellation: same rule as a top-level one.
+            if (args.some((arg) => findNested(arg, (c) => c instanceof Error && isHandledOutcome(c)))) {
                 return null;
             }
             // Only the first argument is the logging label. Other strings
@@ -716,8 +753,6 @@ export function createEventScrubber(options?: {
             }
         }
 
-        const consoleCapture =
-            mechanism === CONSOLE_CAPTURE_MECHANISM || event.logger === "console";
         if (isDevToolchainNoise(event, automatic || consoleCapture)) return null;
 
         event.tags = {
