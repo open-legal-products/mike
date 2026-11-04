@@ -315,6 +315,32 @@ function cachedCaseNotFetchedResult(clusterId: number | null) {
   };
 }
 
+/**
+ * read_workflow's access verdict, once per workflow per turn. The store is
+ * built afresh for every turn, so it is the turn's identity: the first
+ * read_workflow of a workflow re-checks access (the store's list may be a
+ * few seconds old), and a model that reads the same workflow again in that
+ * turn reuses the answer instead of repeating the full access check.
+ */
+const turnWorkflowVerdicts = new WeakMap<WorkflowStore, Map<string, Promise<boolean>>>();
+function workflowVerdictForTurn(
+  store: WorkflowStore,
+  workflowId: string,
+  check: () => Promise<boolean>,
+): Promise<boolean> {
+  let verdicts = turnWorkflowVerdicts.get(store);
+  if (!verdicts) {
+    verdicts = new Map();
+    turnWorkflowVerdicts.set(store, verdicts);
+  }
+  let verdict = verdicts.get(workflowId);
+  if (!verdict) {
+    verdict = check();
+    verdicts.set(workflowId, verdict);
+  }
+  return verdict;
+}
+
 export async function runToolCalls(
   toolCalls: ToolCall[],
   docStore: DocStore,
@@ -1097,9 +1123,11 @@ export async function runToolCalls(
       const candidate = workflowStore?.get(wfId);
       const allowed = candidate && (
         catalogKeyFromWorkflowId(wfId) !== null ||
-        await canUseWorkflowInWorkspace(
-          db, wfId, userId, options.userEmail,
-          (await teamOrgIdOf(db, options.orgId)) ?? "personal",
+        await workflowVerdictForTurn(workflowStore!, wfId, async () =>
+          canUseWorkflowInWorkspace(
+            db, wfId, userId, options.userEmail,
+            (await teamOrgIdOf(db, options.orgId)) ?? "personal",
+          ),
         )
       );
       const wf = allowed ? candidate : undefined;
