@@ -8,7 +8,7 @@
 // client (`db`) plus request-derived primitives and RETURN typed results;
 // the thin route handlers in library.routes.ts map them onto HTTP responses.
 
-import { parseFolderPath, validateFolderMove } from "../../lib/folderTree";
+import { parseFolderPath, validateFolderMove, walkFolderGraph } from "../../lib/folderTree";
 import { readFolderSubtree } from "../../lib/folderSubtree";
 import { ID_FILTER_BATCH_SIZE } from "../../lib/batchedQuery";
 import { chunkArray } from "../../lib/arrays";
@@ -445,30 +445,43 @@ export async function getLibraryFolderPath(
   folderId: string,
   workspace: WorkspaceFilter = null,
 ): Promise<ServiceResult<{ folders: unknown[] }>> {
-  const { data, error } = await inWorkspace(
-    db
-      .from("library_folders")
-      .select("*")
-      .eq("user_id", userId)
-      .eq("library_kind", kind),
-    workspace,
-  );
-  if (error) return internalErr(error);
-
-  const folders = data ?? [];
-  const foldersById = new Map(
-    folders.map((folder) => [folder.id as string, folder]),
-  );
-  const path: typeof folders = [];
+  // Walk up from the folder, one round trip per level, instead of loading
+  // every library folder of this kind to follow one chain — an unpaged read
+  // that also stopped at max_rows, answering 404 for folders past it.
+  type FolderRow = Record<string, unknown> & { id: string; parent_folder_id?: string | null };
+  let folders: FolderRow[];
+  try {
+    folders = await walkFolderGraph<FolderRow>(
+      [folderId],
+      async (ids) => {
+        const { data, error } = await inWorkspace(
+          db
+            .from("library_folders")
+            .select("*")
+            .eq("user_id", userId)
+            .eq("library_kind", kind)
+            .in("id", ids),
+          workspace,
+        );
+        if (error) throw error;
+        return (data ?? []) as FolderRow[];
+      },
+      (folder) => [folder.parent_folder_id ?? null],
+    );
+  } catch (error) {
+    return internalErr(error);
+  }
+  const foldersById = new Map(folders.map((folder) => [folder.id, folder]));
+  const path: FolderRow[] = [];
   const visited = new Set<string>();
   let current = foldersById.get(folderId);
   if (!current) return err(404, "Folder not found");
 
-  while (current && !visited.has(current.id as string)) {
-    visited.add(current.id as string);
+  while (current && !visited.has(current.id)) {
+    visited.add(current.id);
     path.unshift(current);
     current = current.parent_folder_id
-      ? foldersById.get(current.parent_folder_id as string)
+      ? foldersById.get(current.parent_folder_id)
       : undefined;
   }
 
