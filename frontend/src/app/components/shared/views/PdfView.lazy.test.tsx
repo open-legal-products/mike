@@ -1,16 +1,16 @@
 import { act, render, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { PdfView } from "./PdfView";
-const mocks = vi.hoisted(() => ({ render: vi.fn(), stream: vi.fn(), result: {type:"pdf",buffer:new ArrayBuffer(4)}, waits: new Map<number, Promise<void>>(), observe: vi.fn(), observer: null as IntersectionObserverCallback | null }));
+const mocks = vi.hoisted(() => ({ render: vi.fn(), stream: vi.fn(), result: {type:"pdf",buffer:new ArrayBuffer(4)}, waits: new Map<number, Promise<void>>(), docGate: null as Promise<void> | null, observe: vi.fn(), observer: null as IntersectionObserverCallback | null }));
 vi.mock("@/app/hooks/useFetchSingleDoc", () => ({useFetchSingleDoc: () => ({result:mocks.result, loading:false, error:null})}));
 vi.mock("./highlightQuote", async importOriginal => ({
     ...await importOriginal<typeof import("./highlightQuote")>(),
     getPdfJs: async () => ({
-        getDocument: () => ({promise:Promise.resolve({numPages:100, getPage: async (number:number) => ({
+        getDocument: () => ({promise:(mocks.docGate ?? Promise.resolve()).then(() => ({numPages:100, getPage: async (number:number) => ({
             getViewport: () => ({width:100,height:100}),
             render: () => {mocks.render(number); return {promise:mocks.waits.get(number) ?? Promise.resolve(),cancel(){}};},
             streamTextContent: () => {mocks.stream(number); return new ReadableStream({start(controller){controller.enqueue({items:[{str:`Page ${number} content`, transform:[1,0,0,10,0,0],width:80,height:10}]});controller.close();}});},
-        })}),destroy:async()=>{}}),
+        })})),destroy:async()=>{}}),
         TextLayer: class {
             static cleanup() {}
             textDivs: HTMLElement[] = [];
@@ -20,7 +20,7 @@ vi.mock("./highlightQuote", async importOriginal => ({
     }),
 }));
 beforeEach(() => {
-    vi.clearAllMocks(); mocks.waits.clear();
+    vi.clearAllMocks(); mocks.waits.clear(); mocks.docGate = null;
     mocks.result={type:"pdf",buffer:new ArrayBuffer(4)};
     vi.stubGlobal("ResizeObserver", class {observe(){} disconnect(){}});
     vi.stubGlobal("IntersectionObserver", class {constructor(callback:IntersectionObserverCallback){mocks.observer=callback;} observe=mocks.observe; disconnect(){} });
@@ -116,5 +116,36 @@ describe("citation selection while a cited page renders", () => {
         await act(async () => {release();});
         expect(view.container.querySelector(".pdf-text-highlight")).toBeNull();
         expect(scrollTo().mock.calls.length).toBe(scrolls);
+    });
+
+    it("highlights a selection made while the document is still loading", async () => {
+        let loaded!: () => void;
+        mocks.docGate = new Promise<void>(resolve => {loaded = resolve;});
+        vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockImplementation(function (this: HTMLElement) {
+            const all = [...document.querySelectorAll(".shadow-md")];
+            const wrapper = this.closest(".shadow-md");
+            const top = wrapper ? (all.indexOf(wrapper) + 1) * 100 : 0;
+            return {top,bottom:top+10,left:0,right:100,width:100,height:10,x:0,y:top,toJSON(){}};
+        });
+        const view = render(<PdfView doc={{document_id:"doc"}} quotes={[{page:50, quote:"Page 50 content"}]} />);
+        await select(view, [{page:1, quote:"Page 1 content"}]);
+        await act(async () => {loaded();});
+        await waitFor(() => expect((view.container.querySelector("[data-document-scroll-viewport]") as HTMLElement).style.opacity).toBe("1"));
+        expect(highlighted(view, 1)).not.toBeNull();
+        expect(highlighted(view, 50)).toBeNull();
+        expect(scrollTo()).toHaveBeenLastCalledWith(expect.objectContaining({top:105}));
+    });
+
+    it("re-renders a zoom with the latest selection and drops the older pending one", async () => {
+        const view = await readyViewer();
+        const release = delayPage(50);
+        await select(view, [{page:50, quote:"Page 50 content"}]);
+        await select(view, [{page:1, quote:"Page 1 content"}]);
+        const zoomIn = view.container.querySelectorAll("button")[1] as HTMLButtonElement;
+        await act(async () => {zoomIn.click();});
+        await waitFor(() => expect(highlighted(view, 1)).not.toBeNull());
+        await act(async () => {release();});
+        expect(highlighted(view, 50)).toBeNull();
+        expect(scrollTo()).toHaveBeenLastCalledWith(expect.objectContaining({top:105}));
     });
 });

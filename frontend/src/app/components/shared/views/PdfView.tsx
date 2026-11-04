@@ -804,8 +804,10 @@ export function PdfView({
 
     // Re-highlight when quotes change without full re-render
     useEffect(() => {
-        if (!pdfDocRef.current) return;
+        // Recorded even while the document is still loading: the render that
+        // follows highlights whatever this ref holds when it gets there.
         quoteListRef.current = quoteList;
+        if (!pdfDocRef.current) return;
         rehighlightQuotes(quoteList);
     }, [quoteKey, quoteFocusKey, rehighlightQuotes]); // eslint-disable-line react-hooks/exhaustive-deps
 
