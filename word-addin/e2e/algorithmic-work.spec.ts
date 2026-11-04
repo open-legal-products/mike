@@ -170,7 +170,7 @@ test("reopening a chat validates its proposed edits in one Word batch", async ({
   expect(after.searches - before.searches).toBe(10);
 });
 
-test("applying one tracked edit costs eight host round trips", async ({ addin, page }) => {
+test("applying one tracked edit costs seven host round trips", async ({ addin, page }) => {
   addin.seedToken("test-jwt");
   await addin.mockChatStream([wordEdits(replacementEdit("Suplier", "Supplier", "Fix the party name."))], PERSISTED);
   await addin.gotoTaskpane({ documentText: "The Suplier shall deliver the goods." });
@@ -184,9 +184,9 @@ test("applying one tracked edit costs eight host round trips", async ({ addin, p
   await expect(page.getByRole("button", { name: "Accept", exact: true })).toBeVisible();
   const after = await addin.wordCalls();
   expect(after.insertedBookmarks).toHaveLength(1);
-  // Read mode, TrackAll, search, revision check + paragraph, mutation,
-  // revision types, tracking + bookmark, restore mode.
-  expect(after.syncs - before.syncs).toBe(8);
+  // Read mode, TrackAll, search, revision check + paragraph, mutation (with
+  // the generated revisions' type and text), tracking + bookmark, restore mode.
+  expect(after.syncs - before.syncs).toBe(7);
 });
 
 test("a bookmark Word refuses in the shared tracking batch stays a warning", async ({ addin, page }) => {
@@ -237,10 +237,10 @@ test("Word for Mac restores many edits with one adjacency round trip", async ({ 
   const before = (await addin.wordCalls()).syncs;
   await page.getByRole("menu").getByRole("menuitem", { name: /Mac restore/ }).click();
   await expect(page.getByRole("button", { name: "Accept", exact: true })).toHaveCount(6);
-  // Bookmark lookup, their revisions, revision details, the document
-  // revision inventory (two), the adjacency probes for every edit at once,
-  // and tracking.
-  expect((await addin.wordCalls()).syncs - before).toBe(7);
+  // Bookmark lookup, their revisions with type and text, the document
+  // revision inventory with range text, the adjacency probes for every edit
+  // at once, and tracking.
+  expect((await addin.wordCalls()).syncs - before).toBe(5);
   await page.getByRole("button", { name: "Accept", exact: true }).first().click();
   await expect(page.getByText("Accepted.", { exact: true })).toHaveCount(1);
   expect((await addin.wordCalls()).acceptedChanges).toHaveLength(1);

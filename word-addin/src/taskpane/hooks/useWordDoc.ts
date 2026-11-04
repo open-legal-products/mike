@@ -479,11 +479,9 @@ async function verifyQueuedMutationApplied(
   for (const range of ranges) {
     try {
       const collection = range.getTrackedChanges();
-      collection.load("items");
+      collection.load(TRACKED_CHANGE_FIELDS);
       await context.sync();
       if (collection.items.length === 0) continue;
-      for (const change of collection.items) change.load(["type", "text"]);
-      await context.sync();
       if (pickEditRevisionSubset(collection.items, edit)) return true;
     } catch {
       // A stale range cannot prove that the mutation landed. Try the next
@@ -558,6 +556,13 @@ function matchesForSides(
     ),
   };
 }
+
+/**
+ * Load a tracked-change collection's items together with the properties
+ * every matcher reads, in ONE round trip. Loading "items" and then each
+ * item's type/text costs a second sync for data the first could carry.
+ */
+const TRACKED_CHANGE_FIELDS = "items/type,items/text";
 
 function trackedObjectsFor(
   entry: PendingTrackedEdit,
@@ -706,7 +711,7 @@ async function scanAnchorForEdit(
 ): Promise<AnchorEditScan> {
   return Word.run([range], async (context) => {
     const collection = range.getTrackedChanges();
-    collection.load("items");
+    collection.load(TRACKED_CHANGE_FIELDS);
     await context.sync();
     if (collection.items.length === 0) {
       return {
@@ -716,8 +721,6 @@ async function scanAnchorForEdit(
         formattedMatches: 0,
       };
     }
-    for (const change of collection.items) change.load(["type", "text"]);
-    await context.sync();
     const matches = matchesForSides(collection.items, edit);
     return {
       pendingCount: collection.items.length,
@@ -740,9 +743,7 @@ async function resolveEditSidesThroughAnchor(
 ): Promise<"resolved" | "changed"> {
   return Word.run([range], async (context) => {
     const collection = range.getTrackedChanges();
-    collection.load("items");
-    await context.sync();
-    for (const change of collection.items) change.load(["type", "text"]);
+    collection.load(TRACKED_CHANGE_FIELDS);
     await context.sync();
     const matches = matchesForSides(collection.items, edit);
     if (sides.added && matches.added.length !== 1) return "changed" as const;
@@ -873,11 +874,9 @@ async function resolveEditThroughBodyOnce(
     context: Word.RequestContext,
   ): Promise<"resolved" | "changed" | "empty" | "ambiguous"> => {
     const collection = context.document.body.getTrackedChanges();
-    collection.load("items");
+    collection.load(TRACKED_CHANGE_FIELDS);
     await context.sync();
     if (collection.items.length === 0) return "empty" as const;
-    for (const change of collection.items) change.load(["type", "text"]);
-    await context.sync();
     const raw = matchesForSides(collection.items, edit);
     const sides = editRevisionSides(edit);
 
@@ -1105,16 +1104,16 @@ function finishEditDocumentRevisionPlan(
   return adjacentDelete ? [plan.addedMatch, adjacentDelete] : null;
 }
 
-/** Load the document's pending revisions as plain views (two syncs). */
+/** Load the document's pending revisions as plain views (one sync). */
 async function loadDocumentRevisionViews(
   context: Word.RequestContext,
 ): Promise<DocumentRevisionView[]> {
   const collection = context.document.revisions;
-  collection.load("items/type");
+  // Each item's range is a navigation property, so its text loads with
+  // the items in the same round trip.
+  collection.load("items/type,items/range/text");
   await context.sync();
   if (collection.items.length === 0) return [];
-  for (const revision of collection.items) revision.range.load("text");
-  await context.sync();
   return collection.items.map((revision) => ({
     revision,
     type: String(revision.type),
@@ -1635,7 +1634,7 @@ async function restoreTrackedEditNow(
       if (range.isNullObject) return { status: "not-found" as const };
 
       const collection = range.getTrackedChanges();
-      collection.load("items");
+      collection.load(TRACKED_CHANGE_FIELDS);
       await context.sync();
       if (collection.items.length === 0) {
         context.document.deleteBookmark(bookmarkName);
@@ -1643,8 +1642,6 @@ async function restoreTrackedEditNow(
         return { status: "resolved" as const };
       }
 
-      for (const change of collection.items) change.load(["type", "text"]);
-      await context.sync();
       // The bookmark range can report sibling revisions from the same
       // paragraph — or, on Word for the web, only one half of the
       // replacement pair. Manage the unambiguous subset that reconstructs
@@ -1654,11 +1651,7 @@ async function restoreTrackedEditNow(
       let managedCollection = collection;
       if (!editRevisions) {
         const bodyCollection = context.document.body.getTrackedChanges();
-        bodyCollection.load("items");
-        await context.sync();
-        for (const change of bodyCollection.items) {
-          change.load(["type", "text"]);
-        }
+        bodyCollection.load(TRACKED_CHANGE_FIELDS);
         await context.sync();
         editRevisions = pickEditRevisionSubset(bodyCollection.items, edit);
         managedCollection = bodyCollection;
@@ -1841,7 +1834,7 @@ async function restoreTrackedEditsNow(
             continue;
           }
           const collection = range.getTrackedChanges();
-          collection.load("items");
+          collection.load(TRACKED_CHANGE_FIELDS);
           present.push({ candidate, range, collection });
         }
         if (present.length > 0) await context.sync();
@@ -1855,14 +1848,9 @@ async function restoreTrackedEditsNow(
             byCandidate.set(entry.candidate, { status: "resolved" });
             continue;
           }
-          for (const change of entry.collection.items) {
-            change.load(["type", "text"]);
-          }
           withRevisions.push(entry);
         }
-        if (staleBookmarkQueued || withRevisions.length > 0) {
-          await context.sync();
-        }
+        if (staleBookmarkQueued) await context.sync();
 
         let trackingQueued = false;
         let bodyFallback: typeof present = [];
@@ -1940,11 +1928,7 @@ async function restoreTrackedEditsNow(
           // The consumed set stops two edits from ever binding the same
           // revision proxy.
           const bodyCollection = context.document.body.getTrackedChanges();
-          bodyCollection.load("items");
-          await context.sync();
-          for (const change of bodyCollection.items) {
-            change.load(["type", "text"]);
-          }
+          bodyCollection.load(TRACKED_CHANGE_FIELDS);
           await context.sync();
           const revisionIndex = createRevisionIndex(bodyCollection.items, change => String(change.type).toLowerCase(), change => change.text);
           const consumed = new Set<Word.TrackedChange>();
@@ -3112,7 +3096,7 @@ export function useWordDoc() {
                     }
                   }
                   const collection = match.getTrackedChanges();
-                  collection.load("items");
+                  collection.load(TRACKED_CHANGE_FIELDS);
                   return collection;
                 });
                 // A rejected sync is ambiguous: Office may fail before sending
@@ -3168,11 +3152,6 @@ export function useWordDoc() {
                 }
 
                 if (exactRevisions) {
-                  for (const change of generatedChanges) {
-                    change.load(["type", "text"]);
-                  }
-                  await context.sync();
-
                   const verifiedSubset = pickEditRevisionSubset(
                     generatedChanges,
                     edit,
@@ -3199,17 +3178,13 @@ export function useWordDoc() {
                   ];
                   const rereadCollections = rereadTargets.map((range) => {
                     const collection = range.getTrackedChanges();
-                    collection.load("items");
+                    collection.load(TRACKED_CHANGE_FIELDS);
                     return collection;
                   });
                   await context.sync();
                   const rereadChanges = rereadCollections.flatMap(
                     (collection) => collection.items,
                   );
-                  for (const change of rereadChanges) {
-                    change.load(["type", "text"]);
-                  }
-                  await context.sync();
 
                   // Evaluate each collection on its own: the same underlying
                   // revision reaches this batch as a distinct proxy per
