@@ -177,10 +177,11 @@ describe("runExtractionJob", () => {
 
         await runExtractionJob(DATA, { db: db as never, publish });
 
-        // Two "generating" inserts (no pre-existing cells) + two "done" updates.
+        // One bulk "generating" insert of both new cells + two "done" updates.
         const inserts = db.calls.filter((c) => c.op === "insert");
-        expect(inserts).toHaveLength(2);
-        expect(inserts[0].payload).toMatchObject({
+        expect(inserts).toHaveLength(1);
+        expect((inserts[0].payload as unknown as unknown[])).toHaveLength(2);
+        expect((inserts[0].payload as unknown as unknown[])[0]).toMatchObject({
             review_id: "rev-1",
             row_id: "row-1",
             document_id: "doc-1",
@@ -227,10 +228,12 @@ describe("runExtractionJob", () => {
         await runExtractionJob(DATA, { db: db as never, publish });
 
         expect(db.calls.filter((c) => c.op === "insert")).toHaveLength(0);
+        // Both existing cells are marked in one update.
         const generatingUpdates = db.calls.filter(
             (c) => c.op === "update" && c.payload?.status === "generating",
         );
-        expect(generatingUpdates).toHaveLength(2);
+        expect(generatingUpdates).toHaveLength(1);
+        expect(generatingUpdates[0].filters.id).toEqual(["c0", "c1"]);
     });
 
     it("skips columns already done with content — no LLM call", async () => {
@@ -333,7 +336,12 @@ describe("runExtractionJob", () => {
         // Only column 1's cell was touched.
         const updates = db.calls.filter((c) => c.op === "update");
         expect(
-            updates.every((c) => c.filters.column_index === 1 || c.filters.id === "c1"),
+            updates.every(
+                (c) =>
+                    c.filters.column_index === 1 ||
+                    c.filters.id === "c1" ||
+                    JSON.stringify(c.filters.id) === JSON.stringify(["c1"]),
+            ),
         ).toBe(true);
     });
 
@@ -735,10 +743,8 @@ describe("generation lease", () => {
         const generatingUpdates = db.calls.filter(
             (c) => c.op === "update" && c.payload?.status === "generating",
         );
-        expect(generatingUpdates).toHaveLength(2);
-        expect(
-            generatingUpdates.every((c) => c.payload?.generation_id === "gen-1"),
-        ).toBe(true);
+        expect(generatingUpdates).toHaveLength(1);
+        expect(generatingUpdates[0].payload?.generation_id).toBe("gen-1");
 
         const doneUpdates = db.calls.filter(
             (c) => c.op === "update" && c.payload?.status === "done",

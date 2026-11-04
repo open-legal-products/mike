@@ -171,23 +171,19 @@ export async function extractRowColumns(args: {
     // claim their cells (stamping generation_id) before extraction begins, so
     // for a run that still owns its cells this matches, and for one that has
     // been superseded it matches nothing.
+    //
+    // Two writes per row (one update over the existing cells, one insert of
+    // the new ones) rather than one round trip per column before the model
+    // is even called; a row has at most one cell per column, so the id list
+    // is bounded by the column count.
+    const existingIds: string[] = [];
+    const inserts: Record<string, unknown>[] = [];
     for (const col of processed) {
         await sink.generating(row.id, col.index);
         const existing = existingByColumn.get(col.index);
-        if (existing?.id) {
-            const markQuery = db
-                .from("tabular_cells")
-                .update({
-                    status: "generating",
-                    content: null,
-                    generation_id: generationId ?? null,
-                })
-                .eq("id", existing.id);
-            await (generationId
-                ? markQuery.eq("generation_id", generationId)
-                : markQuery);
-        } else {
-            await db.from("tabular_cells").insert({
+        if (existing?.id) existingIds.push(existing.id as string);
+        else
+            inserts.push({
                 review_id: reviewId,
                 row_id: row.id,
                 document_id: row.document_id,
@@ -195,8 +191,21 @@ export async function extractRowColumns(args: {
                 status: "generating",
                 generation_id: generationId ?? null,
             });
-        }
     }
+    if (existingIds.length) {
+        const markQuery = db
+            .from("tabular_cells")
+            .update({
+                status: "generating",
+                content: null,
+                generation_id: generationId ?? null,
+            })
+            .in("id", existingIds);
+        await (generationId
+            ? markQuery.eq("generation_id", generationId)
+            : markQuery);
+    }
+    if (inserts.length) await db.from("tabular_cells").insert(inserts);
 
     // One LLM call for all outstanding columns; persist + announce each result.
     const received = new Set<number>();
