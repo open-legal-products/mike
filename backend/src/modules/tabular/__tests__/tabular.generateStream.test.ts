@@ -262,8 +262,42 @@ describe("run-view reconcile poll", () => {
             expect(writes.at(-1)).toBe("data: [DONE]\n\n");
             // Only the pending row's finished cells travel: no read of the
             // whole review, whatever number of pages the poll takes.
-            expect(fake.calls.reduce((rows, c) => rows + c.returned, 0)).toBe(2);
+            // (just the one pending cell: the row's resolved column is not re-sent)
+            expect(fake.calls.reduce((rows, c) => rows + c.returned, 0)).toBe(1);
             expect(fake.calls.every((c) => c.inSizes[0] === 1)).toBe(true);
+        } finally {
+            vi.useRealTimers();
+        }
+    });
+});
+
+describe("run-view reconcile poll pacing", () => {
+    it("skips a tick while the previous reconcile is still reading", async () => {
+        vi.useFakeTimers();
+        try {
+            let reads = 0;
+            let release: () => void = () => {};
+            const gate = new Promise<void>((resolve) => (release = resolve));
+            const builder: Record<string, unknown> = {};
+            for (const name of ["select", "eq", "in", "order", "limit", "gt"]) builder[name] = () => builder;
+            builder.then = (resolve: (value: unknown) => unknown) => {
+                reads++;
+                return gate.then(() => resolve({ data: [], error: null }));
+            };
+            const db = { from: () => builder };
+            const res = Object.assign(new EventEmitter(), {
+                setHeader: () => {}, flushHeaders: () => {}, writableEnded: false,
+                write: () => true, end() { this.writableEnded = true; },
+            });
+            await streamTabularRunView({
+                res: res as never, db: db as never, reviewId: "rev", columns: COLUMNS,
+                rows: ROWS as never, cellMap: new Map(), log: { error: vi.fn() } as never,
+            });
+            await vi.advanceTimersByTimeAsync(3_000 * 4);
+            // The first tick's read never returned: the next three ticks wait.
+            expect(reads).toBe(1);
+            release();
+            res.emit("close");
         } finally {
             vi.useRealTimers();
         }

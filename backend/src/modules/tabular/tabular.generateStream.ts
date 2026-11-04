@@ -291,8 +291,13 @@ async function tailTabularRun(args: {
 
     // Backstop: reconcile against the DB in case a pub/sub frame was missed (or,
     // for a reconnecting view, to replay progress that happened while away).
+    // One reconcile at a time: a tick is now ceil(pending rows / 50) reads,
+    // and on a slow database overlapping ticks would pile up behind each
+    // other. A tick that finds the previous one still running is skipped.
+    let reconciling = false;
     poll = setInterval(() => {
-        if (finished) return;
+        if (finished || reconciling) return;
+        reconciling = true;
         void (async () => {
             // Only the rows still waiting, and only cells that reached a
             // terminal state: re-reading every cell's content of the whole
@@ -305,6 +310,12 @@ async function tailTabularRun(args: {
                 status: string;
                 content: unknown;
             };
+            // Narrowed to the pending columns too, so the content of a
+            // pending row's already-resolved columns is not re-sent each tick
+            // (a row's cells still pending are a subset of these columns).
+            const pendingColumns = [
+                ...new Set([...pending].map((key) => Number(key.slice(key.lastIndexOf(":") + 1)))),
+            ];
             const cells = await selectInBatches<PolledCell>(
                 "reconcile poll",
                 [...pending].map((key) => key.slice(0, key.lastIndexOf(":"))),
@@ -315,6 +326,7 @@ async function tailTabularRun(args: {
                             .select("id, row_id, column_index, status, content")
                             .eq("review_id", reviewId)
                             .in("row_id", batch)
+                            .in("column_index", pendingColumns)
                             .in("status", ["done", "error"])),
             );
             for (const c of cells) {
@@ -338,12 +350,16 @@ async function tailTabularRun(args: {
                     });
                 }
             }
-        })().catch((err) =>
-            log.error("[tabular/generate-async] reconcile poll failed", {
-                err,
-                reviewId,
-            }),
-        );
+        })()
+            .catch((err) =>
+                log.error("[tabular/generate-async] reconcile poll failed", {
+                    err,
+                    reviewId,
+                }),
+            )
+            .finally(() => {
+                reconciling = false;
+            });
     }, RECONCILE_INTERVAL_MS);
     if (typeof poll.unref === "function") poll.unref();
 
