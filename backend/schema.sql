@@ -11946,6 +11946,28 @@ create index if not exists chat_messages_files_idx
 create index if not exists tabular_reviews_document_ids_idx
   on public.tabular_reviews using gin (document_ids);
 
+-- Migration date: 2026-11-01
+-- Payload lookups the backend runs against db_jobs. Without these each one
+-- reads the whole queue table, done and failed history included:
+--  * account erasure deletes every job naming the user (payload userId, or
+--    base.userId) and lists that user's export.build jobs;
+--  * account erasure lists the user's memory.consolidate jobs by actorUserId
+--    in any status (the epoch index covers only live ones);
+--  * document_cache_writer_active and the inline text runner find a
+--    version's precompute/extract jobs by versionId.
+-- Partial predicates keep each index to the rows that carry the key; an
+-- equality on the expression implies "is not null", so the planner can use
+-- them for parameterized queries.
+create index if not exists db_jobs_payload_user_idx
+  on public.db_jobs((payload->>'userId')) where (payload->>'userId') is not null;
+create index if not exists db_jobs_payload_base_user_idx
+  on public.db_jobs((payload->'base'->>'userId')) where (payload->'base'->>'userId') is not null;
+create index if not exists db_jobs_memory_actor_idx
+  on public.db_jobs((payload->>'actorUserId')) where kind = 'memory.consolidate';
+create index if not exists db_jobs_text_version_idx
+  on public.db_jobs((payload->>'versionId'))
+  where kind in ('document.extract_text', 'document.precompute_text');
+
 insert into public.schema_migrations (filename) values
   ('20260419_tabular_chat_jsonb.sql'),
   ('20260421_01_docx_editing.sql'),
@@ -12140,5 +12162,6 @@ insert into public.schema_migrations (filename) values
   ('20261101_11_audit_page_event_lookup.sql'),
   ('20261101_12_overview_counts_after_page.sql'),
   ('20261101_13_document_text_search_per_version.sql'),
-  ('20261101_14_claim_jobs_index_order.sql')
+  ('20261101_14_claim_jobs_index_order.sql'),
+  ('20261101_15_db_jobs_payload_indexes.sql')
 on conflict (filename) do nothing;
