@@ -30,16 +30,16 @@ import {
   type LiveAssistantTurn,
 } from "@/app/lib/assistantTurns";
 import { assistantHistoryContent } from "@/app/lib/assistantHistoryContent";
-import { reportError } from "@/app/lib/errorReporting";
+import { markErrorHandled } from "@/app/lib/errorReporting";
 import { useChatHistoryContext } from "@/app/contexts/ChatHistoryContext";
 import { useWorkspaceIdentity } from "@/app/hooks/useWorkspaceIdentity";
 import { useWorkspaceOrgId } from "@/app/contexts/WorkspaceContext";
 import {
   UserVisibleError,
-  describeError,
   notifyError,
   type Operation,
   notifyInfo,
+  reportFault,
 } from "@/app/lib/userFacingError";
 import {
   CHAT_CHANGED_MESSAGE,
@@ -687,23 +687,25 @@ export function useAssistantChat({
         sink.finalizeStreamingReasoning();
         sink.appendCancellation();
       } else {
-        // The stream broke for a reason other than the user stopping it:
-        // the user sees a generic message, Sentry gets the real one.
-        reportError(error, {
-          tags: {
-            component: "assistant-chat",
-            operation: turnOperation,
-            project: Boolean(projectId),
-          },
+        // The stream broke for a reason other than the user stopping it.
+        // Classify it once: only a server or unknown fault nothing has
+        // reported yet goes to Sentry. A 4xx refusal (409 turn_in_progress,
+        // 404 turn_not_found, 429…) is the server's answer, a dropped
+        // connection was already reported by the API client, and a 5xx the
+        // backend owns is the backend's event.
+        const described = reportFault(error, {
+          action: "get a response",
+          fallback: TURN_FAILED_MESSAGE,
+          operation: turnOperation,
         });
+        // That decision is final for this failure: the toast below may
+        // wrap it (uncertain delivery), and the wrapper must not be filed
+        // as a fresh "unknown" fault.
+        markErrorHandled(error);
         sink.endStreamingAfterFailure();
         if (cursor.chatId && cursor.turnId) {
           retrySnapshot.recoveryChatId = cursor.chatId;
         }
-        const described = describeError(error, {
-          action: "get a response",
-          fallback: TURN_FAILED_MESSAGE,
-        });
         const uncertain = isUncertainDelivery(
           error,
           Boolean(retrySnapshot.recoveryChatId),
