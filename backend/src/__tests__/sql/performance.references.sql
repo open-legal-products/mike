@@ -64,8 +64,10 @@ rollback;
 -- C5/S4: departure classification starts from the departing member's
 -- documents and looks up their references; it never expands every retained
 -- chat or review in the organization. Every reference shape and every
--- retained/not-retained container is pinned to its disposition.
+-- retained/not-retained container, for chats and reviews alike, gets the
+-- disposition the pre-rewrite function (a verbatim oracle) gives it.
 begin;
+\ir oracles/departure-items.sql
 create temporary table departure_expected(label text,id uuid,disposition text);
 do $$
 declare owner_id uuid:=gen_random_uuid(); member_id uuid:=gen_random_uuid(); org uuid:=gen_random_uuid(); other_org uuid:=gen_random_uuid();
@@ -73,13 +75,16 @@ declare owner_id uuid:=gen_random_uuid(); member_id uuid:=gen_random_uuid(); org
   retained_chat uuid:=gen_random_uuid(); archived_chat uuid:=gen_random_uuid(); member_chat uuid:=gen_random_uuid();
   project_chat uuid:=gen_random_uuid(); archived_project_chat uuid:=gen_random_uuid(); member_project_chat uuid:=gen_random_uuid(); other_chat uuid:=gen_random_uuid();
   review uuid:=gen_random_uuid(); key_review uuid:=gen_random_uuid(); scalar_review uuid:=gen_random_uuid(); row_id uuid:=gen_random_uuid();
+  archived_review uuid:=gen_random_uuid(); member_review uuid:=gen_random_uuid(); archived_project_review uuid:=gen_random_uuid();
+  member_project_review uuid:=gen_random_uuid(); other_review uuid:=gen_random_uuid();
   fixture_label text; doc uuid;
 begin
   insert into auth.users(id,email) values(owner_id,owner_id||'@example.test'),(member_id,member_id||'@example.test');
   insert into public.organizations(id,name,created_by) values(org,'Departure references',owner_id),(other_org,'Elsewhere',owner_id);
   insert into public.org_members(org_id,user_id,role) values(org,owner_id,'owner'),(org,member_id,'member'),(other_org,owner_id,'owner');
   foreach fixture_label in array array['chat','chat-upper','review-array','review-key','review-scalar','row','source','archived-chat',
-    'member-chat','project-chat','archived-project-chat','member-project-chat','other-org-chat','unreferenced'] loop
+    'member-chat','project-chat','archived-project-chat','member-project-chat','other-org-chat','unreferenced',
+    'archived-review','member-review','archived-project-review','member-project-review','other-org-review'] loop
     insert into public.documents(org_id,user_id) values(org,member_id) returning id into doc;
     insert into departure_expected values(fixture_label,doc,case when fixture_label in ('chat','review-array','review-key','review-scalar','row','source','project-chat') then 'transfer' else 'archive' end);
   end loop;
@@ -105,10 +110,22 @@ begin
     (scalar_review,org,owner_id,'Scalar',to_jsonb((select id from departure_expected where label='review-scalar')::text));
   insert into public.tabular_review_rows(id,review_id,label,row_type,document_id) values(row_id,review,'Row','document',(select id from departure_expected where label='row'));
   insert into public.tabular_review_row_sources(row_id,document_id) values(row_id,(select id from departure_expected where label='source'));
+  -- Review containers that are not retained: archived, the departing
+  -- member's own, in an archived project, in the departing member's private
+  -- project, and in another organization.
+  insert into public.tabular_reviews(id,org_id,user_id,project_id,title,document_ids)
+    select r.id,r.org_id,r.user_id,r.project_id,'Not retained',jsonb_build_array(e.id::text)
+    from departure_expected e join (values('archived-review',archived_review,org,owner_id,null::uuid),('member-review',member_review,org,member_id,null),
+      ('archived-project-review',archived_project_review,org,owner_id,archived_project),('member-project-review',member_project_review,org,owner_id,member_project),
+      ('other-org-review',other_review,other_org,owner_id,null)) r(label,id,org_id,user_id,project_id) on r.label=e.label;
+  update public.tabular_reviews set archived_at=now() where id=archived_review;
   perform set_config('mike.test_ref_org',org::text,true);
   perform set_config('mike.test_ref_member',member_id::text,true);
 end;
 $$;
+create temporary table departure_oracle as
+  select item_id,disposition from pg_temp.departure_items_oracle(current_setting('mike.test_ref_org')::uuid,array[current_setting('mike.test_ref_member')::uuid])
+  where kind='document';
 create or replace function public.org_item_document_ids(p_kind text,p_item_id uuid)
 returns table(document_id uuid) language plpgsql stable set search_path=public as $$
 begin raise exception 'Departure classification expanded every retained item''s references'; end;
@@ -119,11 +136,11 @@ begin
   select jsonb_object_agg(item_id,disposition) into actual
     from public.org_members_departure_items(current_setting('mike.test_ref_org')::uuid,array[current_setting('mike.test_ref_member')::uuid])
     where kind='document';
-  select jsonb_object_agg(id,disposition) into expected from departure_expected;
-  expected:=expected||(select jsonb_object_agg(d.id,'archive') from public.documents d
-    where d.org_id=current_setting('mike.test_ref_org')::uuid and d.id not in (select id from departure_expected));
+  select jsonb_object_agg(item_id,disposition) into expected from departure_oracle;
+  assert (select bool_and(o.disposition=e.disposition) from departure_expected e join departure_oracle o on o.item_id=e.id),
+    'fixture labels disagree with the original function';
   assert actual=expected,format('departure dispositions changed: %s',
-    (select jsonb_object_agg(e.label,actual->>e.id::text) from departure_expected e where actual->>e.id::text is distinct from e.disposition));
+    (select jsonb_object_agg(e.label,actual->>e.id::text) from departure_expected e where actual->>e.id::text is distinct from expected->>e.id::text));
 end;
 $$;
 rollback;
