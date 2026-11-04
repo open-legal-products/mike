@@ -679,13 +679,20 @@ describe("workflows.routes", () => {
     // batch back rather than stopping half way.
     function orgShareDb(options: { upsertError?: string } = {}) {
       const upserts: { payload: unknown; options: unknown }[] = [];
+      const reads: string[] = [];
       const build = (resolve: (filters: Record<string, unknown>) => unknown) => {
         const filters: Record<string, unknown> = {};
         const b: Record<string, unknown> = {};
-        for (const method of ["select", "order", "limit", "in", "is"])
+        for (const method of ["select", "order", "limit", "is"])
           b[method] = () => b;
         b.eq = (column: string, value: unknown) => {
           filters[column] = value;
+          return b;
+        };
+        // Member lookups are batched: an `.in()` list answers with one row
+        // per match.
+        b.in = (column: string, values: unknown) => {
+          filters[column] = values;
           return b;
         };
         b.upsert = (payload: unknown, upsertOptions?: unknown) => {
@@ -707,6 +714,7 @@ describe("workflows.routes", () => {
       };
       const db = {
         from: (table: string) => {
+          reads.push(table);
           if (table === "workflows")
             return build(() => ({
               id: "w-org",
@@ -715,19 +723,23 @@ describe("workflows.routes", () => {
             }));
           if (table === "user_profiles")
             return build((filters) => {
-              const email = String(filters.email ?? "");
-              return email
-                ? { user_id: `u-${email.split("@")[0]}`, email }
-                : null;
+              const row = (email: string) => ({ user_id: `u-${email.split("@")[0]}`, email });
+              return Array.isArray(filters.email)
+                ? (filters.email as string[]).map(row)
+                : filters.email ? row(String(filters.email)) : null;
             });
           if (table === "org_members")
-            return build((filters) =>
+            return build((filters) => {
               // The third address belongs to a real user who is not in this
               // organization.
-              filters.user_id === "u-third"
-                ? null
-                : { user_id: filters.user_id, role: "member" },
-            );
+              const ids = Array.isArray(filters.user_id)
+                ? (filters.user_id as string[])
+                : [String(filters.user_id)];
+              const rows = ids
+                .filter((userId) => userId !== "u-third")
+                .map((userId) => ({ user_id: userId, role: "member" }));
+              return Array.isArray(filters.user_id) ? rows : rows[0] ?? null;
+            });
           return build(() => null);
         },
         rpc: () => Promise.resolve({ data: null, error: null }),
@@ -736,7 +748,7 @@ describe("workflows.routes", () => {
             Promise.resolve({ data: { user: { id: "u1" } }, error: null }),
         },
       } as unknown as ReturnType<typeof createServerSupabase>;
-      return { db, upserts };
+      return { db, upserts, reads };
     }
 
     function shareOrgWorkflow(emails: string[]) {
@@ -766,6 +778,18 @@ describe("workflows.routes", () => {
       // changed the status code would have been reported as a status bug.
       expect.soft(res.status).toBe(400);
       expect.soft(upserts).toEqual([]);
+    });
+
+    it("resolves a whole share request's members in one batched lookup, not two per address", async () => {
+      const { db, reads } = orgShareDb();
+      vi.mocked(createServerSupabase).mockImplementationOnce(() => db);
+      const emails = Array.from({ length: 30 }, (_, i) => `person${i}@firm.test`);
+
+      const res = await shareOrgWorkflow(emails);
+
+      expect(res.status).toBe(204);
+      expect(reads.filter((table) => table === "user_profiles")).toHaveLength(1);
+      expect(reads.filter((table) => table === "org_members").length).toBeLessThanOrEqual(2);
     });
 
     it("writes the whole batch in exactly one upsert", async () => {

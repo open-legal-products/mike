@@ -2,11 +2,18 @@ import { describe, expect, it } from "vitest";
 import { findAssignableOrgMember } from "../orgAccessOverrides";
 import { scriptedDb } from "../../__tests__/helpers/scriptedDb";
 
+/** The two reads a lookup makes: the profile by email, then the membership. */
+function memberLookup(user_id: string, role: string, email: string) {
+  return [
+    { table: "user_profiles", data: [{ user_id, email }] },
+    { table: "org_members", data: [{ user_id, role }] },
+  ];
+}
+
 describe("organization override target shared by projects and workflows", () => {
   it("normalizes the email and scopes membership to the resource's organization", async () => {
     const fake = scriptedDb([
-      { table: "user_profiles", data: { user_id: "target" } },
-      { table: "org_members", data: { role: "member" } },
+      ...memberLookup("target", "member", "person@example.com"),
     ]);
     expect(
       await findAssignableOrgMember(
@@ -25,11 +32,11 @@ describe("organization override target shared by projects and workflows", () => 
       },
     });
     expect(fake.calls[0].filters).toEqual([
-      ["eq", "email", "person@example.com"],
+      ["in", "email", ["person@example.com"]],
     ]);
     expect(fake.calls[1].filters).toEqual([
       ["eq", "org_id", "org"],
-      ["eq", "user_id", "target"],
+      ["in", "user_id", ["target"]],
     ]);
     fake.done();
   });
@@ -48,8 +55,7 @@ describe("organization override target shared by projects and workflows", () => 
     "protects %s with org role %s on a %s item",
     async (user_id, role, visibility, detail) => {
       const fake = scriptedDb([
-        { table: "user_profiles", data: { user_id } },
-        { table: "org_members", data: { role } },
+        ...memberLookup(user_id, role, "person@example.com"),
       ]);
       expect(
         await findAssignableOrgMember(
@@ -67,8 +73,7 @@ describe("organization override target shared by projects and workflows", () => 
     // Owning the organization gives no standing on a member's private
     // matter, so there is something to give them, and nothing to protect.
     const fake = scriptedDb([
-      { table: "user_profiles", data: { user_id: "principal" } },
-      { table: "org_members", data: { role: "owner" } },
+      ...memberLookup("principal", "owner", "principal@example.com"),
     ]);
     expect(
       await findAssignableOrgMember(
@@ -92,8 +97,7 @@ describe("organization override target shared by projects and workflows", () => 
     // Administering the organization gives no standing on its content, so
     // there is nothing implicit here to protect.
     const fake = scriptedDb([
-      { table: "user_profiles", data: { user_id: "manager" } },
-      { table: "org_members", data: { role: "admin" } },
+      ...memberLookup("manager", "admin", "manager@example.com"),
     ]);
     expect(
       await findAssignableOrgMember(
@@ -111,8 +115,7 @@ describe("organization override target shared by projects and workflows", () => 
   });
   it("allows a member when the resource's creator has been deleted", async () => {
     const fake = scriptedDb([
-      { table: "user_profiles", data: { user_id: "target" } },
-      { table: "org_members", data: { role: "member" } },
+      ...memberLookup("target", "member", "person@example.com"),
     ]);
     expect(
       await findAssignableOrgMember(
@@ -127,8 +130,8 @@ describe("organization override target shared by projects and workflows", () => 
   });
   it("rejects a user outside the resource's organization", async () => {
     const fake = scriptedDb([
-      { table: "user_profiles", data: { user_id: "target" } },
-      { table: "org_members", data: null },
+      { table: "user_profiles", data: [{ user_id: "target", email: "person@example.com" }] },
+      { table: "org_members", data: [] },
     ]);
     expect(
       await findAssignableOrgMember(
@@ -153,7 +156,7 @@ describe("organization override target shared by projects and workflows", () => 
         null,
         "private",
       ),
-    ).toEqual({ ok: false, kind: "db_error", error: "query failed" });
+    ).toEqual({ ok: false, kind: "db_error", error: "member profiles by email failed" });
     fake.done();
   });
 });
