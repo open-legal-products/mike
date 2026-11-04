@@ -436,18 +436,37 @@ describe("projects.routes", () => {
 
     // Regression guard: legacy project pickers call GET /projects with no
     // query params and need the full, unpaginated list back.
-        it("calls the legacy 2-arg RPC shape when no pagination params are present", async () => {
+        it.each(["", "?include=documents"])("calls the legacy 2-arg RPC shape without pagination%s", async (query) => {
             const captured = captureRpcArgs();
             supabaseState.rpc = { data: [], error: null };
 
       await request(app)
-        .get("/projects")
+        .get(`/projects${query}`)
         .set(...AUTH);
 
             expect(captured.args).toEqual({
                 p_user_id: "u1",
                 p_user_email: "u1@test.local",
             });
+        });
+
+        it.each(["", "&limit=10&offset=20"])("preserves directory inclusion and explicit pagination%s", async (page) => {
+            const projects = Array.from({ length: 25 }, (_, i) => ({ id: `p${i}`, name: `Project ${i}` }));
+            vi.mocked(createServerSupabase).mockImplementationOnce(() => {
+                const db = mockSupabase();
+                db.rpc = vi.fn((_name: string, raw?: unknown) => {
+                    const args = raw as { p_limit?: number; p_offset?: number };
+                    return Promise.resolve({ data: args.p_limit === undefined ? projects : projects.slice(args.p_offset ?? 0, (args.p_offset ?? 0) + args.p_limit), error: null });
+                });
+                return db as unknown as Db;
+            });
+            const res = await request(app).get(`/projects?include=documents${page}`).set(...AUTH);
+            expect(res.status).toBe(200);
+            expect(res.body.map((project: { id: string }) => project.id)).toEqual(
+                (page ? projects.slice(20) : projects).map(project => project.id),
+            );
+            expect(res.body.every((project: { documents: unknown[]; folders: unknown[] }) =>
+                Array.isArray(project.documents) && Array.isArray(project.folders))).toBe(true);
         });
 
         it("calls the paginated RPC shape with every filter parsed once any pagination param is present", async () => {
