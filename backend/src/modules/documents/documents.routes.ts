@@ -12,6 +12,7 @@ import { requireAuth } from "../../middleware/auth";
 import { asyncRoute, routerErrorHandler } from "../../middleware/asyncRoute";
 import { createServerSupabase } from "../../lib/supabase";
 import { sendInternalError } from "../../lib/httpError";
+import { sendServiceFailure, type ServiceFailure } from "../../lib/serviceResult";
 import { setOperation } from "../../lib/observability/sentry";
 import { buildContentDisposition, createFileReadStream } from "../../lib/storage";
 import { sendDocumentDisplay } from "../../lib/documentDisplay";
@@ -29,9 +30,56 @@ import {
     renameVersion,
     deleteVersion,
     resolveEdit,
+    getSpreadsheetValuesPreview,
+    getSpreadsheetValuesSource,
 } from "./documents.service";
 
 export const documentsRouter = Router();
+
+function previewFailure(res: import("express").Response, result: ServiceFailure) {
+    if (result.kind !== "error" && result.code === "spreadsheet_values_limit") {
+        return res.status(413).json({ code: result.code, detail: result.detail });
+    }
+    return sendServiceFailure(res, result);
+}
+
+for (const original of [false, true]) {
+    documentsRouter.get(`/:documentId/spreadsheet-preview${original ? "/source" : ""}`, requireAuth, asyncRoute(async (req, res) => {
+        setOperation("documents.spreadsheet_values");
+        res.setHeader("Cache-Control", "private, no-store");
+        res.setHeader("X-Content-Type-Options", "nosniff");
+        const controller = new AbortController();
+        const cancel = () => { if (!res.writableEnded) controller.abort(); };
+        res.once("close", cancel);
+        try {
+            // Reject duplicate/structured query parameters rather than silently
+            // discarding an explicit historical checkpoint.
+            const allowed = new Set(original ? ["version_id", "sha256"] : ["version_id"]);
+            if (Object.keys(req.query).some(key => !allowed.has(key)) ||
+                req.query.version_id !== undefined && typeof req.query.version_id !== "string" ||
+                original && typeof req.query.sha256 !== "string") {
+                res.status(400).json({ detail: "Invalid spreadsheet checkpoint" }); return;
+            }
+            const args = { documentId: req.params.documentId, userId: res.locals.userId as string,
+                userEmail: res.locals.userEmail as string | undefined,
+                versionId: req.query.version_id as string | undefined, signal: controller.signal };
+            const db = createServerSupabase();
+            if (original) {
+                const result = await getSpreadsheetValuesSource(db, { ...args, sha256: req.query.sha256 as string });
+                if (res.destroyed) return;
+                if (!result.ok) { previewFailure(res, result); return; }
+                res.setHeader("Content-Type", "application/octet-stream");
+                res.setHeader("Content-Disposition", buildContentDisposition("attachment", result.data.filename));
+                res.send(Buffer.from(result.data.bytes));
+            } else {
+                const result = await getSpreadsheetValuesPreview(db, args);
+                if (res.destroyed) return;
+                if (!result.ok) { previewFailure(res, result); return; }
+                res.json(result.data);
+            }
+        } finally { res.removeListener("close", cancel); }
+    }));
+}
 
 // GET /single-documents/:documentId
 // One document, same shape as a list entry — the client polls this while a

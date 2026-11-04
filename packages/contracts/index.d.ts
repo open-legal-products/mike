@@ -1,5 +1,26 @@
 // Authored wire contracts. No server, browser, UI or storage dependencies.
 
+/** Stored BIFF8 cell values only: no executable formula, HTML, link or macro payload. */
+export type SpreadsheetValueCell = {
+  row: number; column: number; address: string; displayText: string;
+  kind: "number" | "text" | "boolean" | "error" | "blank" | "formula";
+  formulaStatus: "none" | "cached" | "missing";
+};
+export type SpreadsheetValueRange = { startRow: number; startColumn: number; endRow: number; endColumn: number };
+export type SpreadsheetValues = {
+  parserVersion: string;
+  sheets: Array<{
+    name: string; visibility: "visible" | "hidden" | "very-hidden";
+    range: SpreadsheetValueRange | null; merges: SpreadsheetValueRange[];
+    hiddenRows: number[]; hiddenColumns: number[]; cells: SpreadsheetValueCell[];
+  }>;
+  warnings: string[];
+};
+export type SpreadsheetValuesPreview = {
+  source: { documentId: string; versionId: string; sha256: string; filename: string; bytes: number };
+  values: SpreadsheetValues;
+};
+
 export type TabularReviewHistoryStatus = {
   id: string;
   is_running: boolean;

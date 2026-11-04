@@ -8,6 +8,8 @@ import type { Cell, Sheet } from "@fortune-sheet/core";
 import "@fortune-sheet/react/dist/index.css";
 import { useFetchDocxBytes } from "@/app/hooks/useFetchDocxBytes";
 import { normalizeSpreadsheetImages } from "@/app/lib/spreadsheetImages";
+import { getDocumentFileUrl } from "@/app/lib/mikeApi";
+import { SpreadsheetValuesView } from "./SpreadsheetValuesView";
 import {
     SpreadsheetWorkbook,
     type SpreadsheetSession,
@@ -29,6 +31,8 @@ export type HighlightCell = { sheet?: string; cell?: string };
 
 interface Props {
     documentId: string;
+    /** Routing hint only; the backend validates original bytes. */
+    fileType?: string | null;
     versionId?: string | null;
     displayUrl?: string | null;
     refetchKey?: number | string;
@@ -261,19 +265,45 @@ export function SpreadsheetView(props: Props) {
         props.versionId ?? null,
         props.displayUrl ?? null,
         props.refetchKey ?? null,
+        props.fileType ?? null,
     ]);
+    if (props.fileType?.toLowerCase() === "xls") return <SpreadsheetLegacySource key={sourceKey} {...props} />;
     return <SpreadsheetSourceView key={sourceKey} {...props} />;
 }
 
-function SpreadsheetSourceView({
-    documentId,
-    versionId,
-    displayUrl,
-    refetchKey,
+function SpreadsheetLegacySource(props: Props) {
+    const frameClass = `relative flex flex-col flex-1 min-h-0 overflow-hidden ${viewRoundingClass(props.rounded ?? true)}`;
+    if (props.displayUrl && props.displayUrl !== getDocumentFileUrl(props.documentId, props.versionId)) {
+        return <div role="alert" className={`${frameClass} p-6 text-sm text-gray-500`}>Values preview requires a saved Mike document revision. This asset URL cannot be bound to one; download the original to open it separately.</div>;
+    }
+    const highlights = (props.highlightCells ?? []).flatMap(target => {
+        if (!target.cell) return [];
+        const range = parseRange(target.cell);
+        return range ? [{ ...range, sheet: target.sheet }] : [];
+    });
+    return <div className={frameClass}><SpreadsheetValuesView documentId={props.documentId} versionId={props.versionId} refetchKey={props.refetchKey} highlights={highlights} /></div>;
+}
+
+function SpreadsheetSourceView(props: Props) {
+    const { bytes, error } = useFetchDocxBytes(props.documentId, props.versionId, props.refetchKey, props.displayUrl, false);
+    const frameClass = `relative flex flex-col flex-1 min-h-0 overflow-hidden ${viewRoundingClass(props.rounded ?? true)}`;
+    if (error) return <div role="alert" className={`${frameClass} p-6 text-sm text-gray-500`}>Failed to load spreadsheet.</div>;
+    if (!bytes) return <div role="status" className={`${frameClass} p-6 text-sm text-gray-500`}>Loading spreadsheet…</div>;
+    const header = new Uint8Array(bytes, 0, Math.min(bytes.byteLength, OLE_SIGNATURE.length));
+    if (OLE_SIGNATURE.every((value, index) => header[index] === value)) {
+        // Compatibility for mislabeled sources: this path has already fetched
+        // raw bytes and does not establish a browser input-size bound.
+        return <SpreadsheetLegacySource {...props} />;
+    }
+    return <SpreadsheetOoxmlView {...props} bytes={bytes} />;
+}
+
+function SpreadsheetOoxmlView({
     highlightCells,
     rounded = true,
     active = true,
-}: Props) {
+    bytes,
+}: Props & { bytes: ArrayBuffer }) {
     const workbookRef = useRef<WorkbookInstance>(null);
     const [session, setSession] = useState<SpreadsheetSession | null>(null);
     // The frame element, used to reach Fortune-sheet's scrollbars for measuring
@@ -287,16 +317,6 @@ function SpreadsheetSourceView({
     const [WorkbookComponent, setWorkbookComponent] =
         useState<WorkbookComponent | null>(null);
     const [error, setError] = useState<string | null>(null);
-
-    // Fetch the raw workbook bytes from /file, or from the caller's source
-    // URL (workflow add-on assets). Uncached: a replaced version must reload.
-    const { bytes, error: fetchError } = useFetchDocxBytes(
-        documentId,
-        versionId,
-        refetchKey,
-        displayUrl,
-        false,
-    );
 
     // Fortune-sheet touches browser-only APIs while loading, so keep the import
     // inside the client component even though this file also owns the view.
@@ -328,12 +348,6 @@ function SpreadsheetSourceView({
         let settled = false;
         setSheets(null);
         setError(null);
-
-        const header = new Uint8Array(bytes, 0, Math.min(bytes.byteLength, OLE_SIGNATURE.length));
-        if (OLE_SIGNATURE.every((value, index) => header[index] === value)) {
-            setError("Legacy or encrypted Excel files cannot be previewed here. For preview, save an unencrypted .xlsx copy and upload it.");
-            return;
-        }
 
         // LuckyExcel 1.0.1 logs some asynchronous ZIP errors without invoking
         // its callback or returning a promise. Bound the pending UI and ignore
@@ -550,8 +564,7 @@ function SpreadsheetSourceView({
 
     const frameClass = `fortune-sheet-viewer relative flex flex-col flex-1 min-h-0 overflow-hidden ${viewRoundingClass(rounded)}`;
 
-    const message =
-        error ?? (fetchError ? "Failed to load spreadsheet." : null);
+    const message = error;
     if (message) {
         return (
             <div className={frameClass}>

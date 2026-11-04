@@ -601,6 +601,7 @@ export function DocumentSidePanel({
                         {selectedViewType === "spreadsheet" ? (
                             <SpreadsheetView
                                 rounded="top-right"
+                                fileType={selectedFilename.toLowerCase().endsWith(".xls") ? "xls" : selectedFilename.toLowerCase().endsWith(".xlsx") ? "xlsx" : selectedFilename.toLowerCase().endsWith(".xlsm") ? "xlsm" : selectedFileType}
                                 key={`${selectedVersionId ?? "current"}:${selectedUploadedAt ?? ""}:${selectedSizeBytes ?? ""}`}
                                 documentId={doc.id}
                                 versionId={selectedVersionId}

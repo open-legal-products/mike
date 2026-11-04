@@ -78,19 +78,19 @@ it("cancels the old deadline during replacement fetch and starts a fresh deadlin
     expect(screen.getByRole("alert")).toHaveTextContent(/could not be displayed/);
 });
 
-it("clears an old OLE error while the next source fetches and reports its own failure", async () => {
+it("clears an unbound OLE asset error while the next source fetches and reports its own failure", async () => {
     const first = deferred<Response>();
     const second = deferred<Response>();
     state.fetch.mockReturnValueOnce(first.promise).mockReturnValueOnce(second.promise);
-    const { rerender } = render(<SpreadsheetView documentId="same" versionId="v1" />);
+    const { rerender } = render(<SpreadsheetView documentId="same" versionId="v1" displayUrl="/synthetic/unbound-asset.xls" />);
     await act(async () => { first.resolve(response(new Uint8Array([0xd0, 0xcf, 0x11, 0xe0, 0xa1, 0xb1, 0x1a, 0xe1]))); });
-    expect(screen.getByRole("alert")).toHaveTextContent(/Legacy or encrypted/);
+    expect(screen.getByRole("alert")).toHaveTextContent(/asset URL cannot be bound/);
 
     rerender(<SpreadsheetView documentId="same" versionId="v2" />);
     expect(screen.queryByRole("alert")).toBeNull();
     await act(async () => { second.reject(new Error("synthetic fetch failure")); });
     expect(screen.getByRole("alert")).toHaveTextContent("Failed to load spreadsheet.");
-    expect(screen.getByRole("alert")).not.toHaveTextContent(/Legacy or encrypted/);
+    expect(screen.getByRole("alert")).not.toHaveTextContent(/asset URL cannot be bound/);
 });
 
 it("retains same-source parsing across visibility and citation changes", async () => {

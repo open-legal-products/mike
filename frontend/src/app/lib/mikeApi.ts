@@ -6,6 +6,7 @@ import type {
     OrgMemberHandover,
     OrgDepartureList,
     OrgDepartureResolution,
+    SpreadsheetValuesPreview,
 } from "@mike/contracts";
 export type {
     AuditActor,
@@ -285,12 +286,13 @@ export async function uploadFilesWithSession<T>(args: {
     });
 }
 
-async function apiBlobRequest(operation: Operation, path: string): Promise<{
+async function apiBlobRequest(operation: Operation, path: string, signal?: AbortSignal): Promise<{
     blob: Blob;
     filename: string | null;
 }> {
     const response = await apiFetch(`${API_BASE}${path}`, {
         cache: "no-store",
+        signal,
         headers: {
             Accept: "application/json",
         },
@@ -2892,6 +2894,24 @@ export async function getDocumentFile(
     versionId?: string | null,
 ): Promise<{ blob: Blob; filename: string | null }> {
     return apiBlobRequest("documents.directory", documentFilePath(documentId, versionId));
+}
+
+export function getSpreadsheetValuesPreview(
+    documentId: string,
+    versionId?: string | null,
+    signal?: AbortSignal,
+): Promise<SpreadsheetValuesPreview> {
+    const query = versionId ? `?version_id=${encodeURIComponent(versionId)}` : "";
+    return apiRequest("documents.directory", `/single-documents/${encodeURIComponent(documentId)}/spreadsheet-preview${query}`, { signal });
+}
+
+/** Download only the exact source checkpoint returned with the values. */
+export function getSpreadsheetValuesSource(
+    source: Pick<SpreadsheetValuesPreview["source"], "documentId" | "versionId" | "sha256">,
+    signal?: AbortSignal,
+): Promise<{ blob: Blob; filename: string | null }> {
+    const query = new URLSearchParams({ version_id: source.versionId, sha256: source.sha256 });
+    return apiBlobRequest("documents.directory", `/single-documents/${encodeURIComponent(source.documentId)}/spreadsheet-preview/source?${query}`, signal);
 }
 
 export async function downloadDocumentsZip(

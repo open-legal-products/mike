@@ -22,6 +22,13 @@ const state = vi.hoisted(() => ({
     fetch: vi.fn(),
     parse: vi.fn(),
     mounts: vi.fn(),
+    values: vi.fn(),
+}));
+vi.mock("./SpreadsheetValuesView", () => ({
+    SpreadsheetValuesView: (props: unknown) => {
+        state.values(props);
+        return <div data-testid="values-preview">Stored values preview</div>;
+    },
 }));
 vi.mock("@/app/hooks/useFetchDocxBytes", () => ({
     useFetchDocxBytes: (...args: unknown[]) => {
@@ -114,14 +121,37 @@ beforeEach(() => {
 });
 afterEach(() => vi.restoreAllMocks());
 
-it("reports a legacy or encrypted OLE workbook without handing it to the XLSX-only parser", () => {
+it("routes an OLE workbook to the separate values viewer without parsing it as XLSX", () => {
     state.bytes = new Uint8Array([0xd0, 0xcf, 0x11, 0xe0, 0xa1, 0xb1, 0x1a, 0xe1, 0, 0]).buffer;
-    render(<SpreadsheetView documentId="legacy-workbook" />);
+    render(<SpreadsheetView documentId="legacy-workbook" versionId="v1" refetchKey={3} highlightCells={[{ sheet: "Budget", cell: "B21:C22" }]} />);
 
-    expect(screen.getByRole("alert")).toHaveTextContent(/Legacy or encrypted Excel files cannot be previewed/);
-    expect(screen.getByRole("alert")).toHaveTextContent(/save an unencrypted .xlsx copy and upload it/);
-    expect(screen.getByRole("alert")).not.toHaveTextContent(/Download the original/);
+    expect(screen.getByTestId("values-preview")).toBeInTheDocument();
+    expect(state.values).toHaveBeenCalledWith({ documentId: "legacy-workbook", versionId: "v1", refetchKey: 3, highlights: [{ sheet: "Budget", row: [20, 21], column: [1, 2] }] });
     expect(state.parse).not.toHaveBeenCalled();
+    expect(state.mounts).not.toHaveBeenCalled();
+});
+
+it("routes a known XLS before any raw-byte fetch or XLSX parsing", () => {
+    state.bytes = null;
+    render(<SpreadsheetView documentId="legacy-workbook" fileType="xls" versionId="v1" />);
+    expect(screen.getByTestId("values-preview")).toBeInTheDocument();
+    expect(state.fetch).not.toHaveBeenCalled();
+    expect(state.parse).not.toHaveBeenCalled();
+    expect(state.mounts).not.toHaveBeenCalled();
+});
+
+it("does not attach an arbitrary asset URL to a stored document checkpoint", () => {
+    state.bytes = new Uint8Array([0xd0, 0xcf, 0x11, 0xe0, 0xa1, 0xb1, 0x1a, 0xe1]).buffer;
+    render(<SpreadsheetView documentId="document" displayUrl="/api/workflow-addons/asset/display" />);
+    expect(screen.getByRole("alert")).toHaveTextContent(/asset URL cannot be bound/);
+    expect(state.values).not.toHaveBeenCalled();
+    expect(state.parse).not.toHaveBeenCalled();
+});
+
+it("accepts the exact internal document/version raw-source URL", () => {
+    state.bytes = new Uint8Array([0xd0, 0xcf, 0x11, 0xe0, 0xa1, 0xb1, 0x1a, 0xe1]).buffer;
+    render(<SpreadsheetView documentId="document" versionId="v1" displayUrl="/api/single-documents/document/file?version_id=v1" />);
+    expect(screen.getByTestId("values-preview")).toBeInTheDocument();
 });
 
 it("ends a silent parser failure and ignores a callback arriving after the preview timed out", async () => {
