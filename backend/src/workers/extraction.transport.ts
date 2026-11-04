@@ -2,7 +2,7 @@
 import { Worker, UnrecoverableError, type Job } from "bullmq";
 import { ExtractionLimitError } from "../lib/extraction/limits";
 import { runIsolated } from "../lib/dbq/jobScope";
-import { getRedisConnection } from "../lib/queue/connection";
+import { getRedisConnection, watchQueueErrors } from "../lib/queue/connection";
 import { reportError } from "../lib/observability/sentry";
 import { EXTRACTION_QUEUE, type ExtractionJobData } from "../lib/queue/extractionQueue";
 import { extractionJobOperation, runExtractionJob, markExtractionFailed } from "../modules/tabular/tabular.service";
@@ -41,6 +41,7 @@ export function createExtractionWorker(): Worker<ExtractionJobData> {
             maxStalledCount: 2,
         },
     );
+    watchQueueErrors(worker, "queue.worker_error");
     worker.on("stalled", (jobId) => {
         console.warn(
             "[extraction-worker] job stalled; will be re-queued",

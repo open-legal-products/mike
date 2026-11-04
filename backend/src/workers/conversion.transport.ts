@@ -1,7 +1,7 @@
 // conversion transport — implementation behind the module facade.
 import { Worker, type Job } from "bullmq";
 import { runIsolated } from "../lib/dbq/jobScope";
-import { getRedisConnection } from "../lib/queue/connection";
+import { getRedisConnection, watchQueueErrors } from "../lib/queue/connection";
 import { reportError } from "../lib/observability/sentry";
 import { CONVERSION_QUEUE, type ConversionJobData } from "../lib/queue/conversionQueue";
 import { createServerSupabase } from "../lib/supabase";
@@ -34,6 +34,7 @@ export function createConversionWorker(): Worker<ConversionJobData> {
             maxStalledCount: 2,
         },
     );
+    watchQueueErrors(worker, "queue.worker_error");
     worker.on("stalled", (jobId) => {
         console.warn(
             "[conversion-worker] job stalled; will be re-queued",
