@@ -88,6 +88,7 @@ import {
     documentUploadEntriesFromFiles,
     documentUploadFolderSegments,
     folderUploadProgressLabel,
+    groupUploadFilesByTopFolder,
     resolvedDocumentUploadProgressEntries,
     MAX_DOCUMENTS_PER_DIRECTORY_UPLOAD,
     resolveDocumentUploadRootFolder,
@@ -2341,6 +2342,19 @@ export function DocTable({
         );
     }
 
+    // Rebuilt when progress changes (once per frame while uploading), not
+    // per tree level and folder row on every render.
+    const uploadFilesByUploadId = useMemo(
+        () =>
+            new Map(
+                collectionUploadProgress.map((upload) => [
+                    upload.uploadId,
+                    groupUploadFilesByTopFolder(upload.files),
+                ]),
+            ),
+        [collectionUploadProgress],
+    );
+
     function renderUploadingDocumentRows(
         depth: number,
         parentFolderId: string | null,
@@ -2349,10 +2363,10 @@ export function DocTable({
             (upload) => upload.parentFolderId === parentFolderId,
         );
         const directRows = visibleUploads.flatMap((upload) =>
-            upload.files
-                .filter(
+            uploadFilesByUploadId
+                .get(upload.uploadId)!
+                .direct.filter(
                     (file) =>
-                        documentUploadFolderSegments(file.entry).length === 0 &&
                         file.status !== "completed" &&
                         file.status !== "error",
                 )
@@ -2371,11 +2385,9 @@ export function DocTable({
             upload.entries
                 .filter((entry) => entry.kind === "folder")
                 .map((entry, index) => {
-                    const folderFiles = upload.files.filter(
-                        (file) =>
-                            documentUploadFolderSegments(file.entry)[0] ===
-                            entry.sourceName,
-                    );
+                    const folderFiles = uploadFilesByUploadId
+                        .get(upload.uploadId)!
+                        .inFolder(entry.sourceName);
                     return renderDocumentActivityRow({
                         key: `uploading-folder-${upload.uploadId}-${entry.name}-${index}`,
                         filename: entry.name,
