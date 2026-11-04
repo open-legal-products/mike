@@ -2,6 +2,9 @@
   "name": "mike-backend",
   "version": "1.0.0",
   "private": true,
+  "engines": {
+    "node": ">=22.19.0"
+  },
   "scripts": {
     "dev": "tsx watch src/index.ts",
     "build": "tsc",

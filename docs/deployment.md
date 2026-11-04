@@ -5,7 +5,8 @@ storage instead of the infrastructure bundled with Docker Compose.
 
 ## Prerequisites
 
-- Node.js 22 or newer
+- Node.js 22.19 or newer. The backend's HTTP client (undici 8) needs it;
+  an older 22.x crashes at boot inside `undici/lib/interceptor/decompress.js`.
 - npm and Git
 - A Supabase project
 - A Cloudflare R2, MinIO, or other S3-compatible bucket
