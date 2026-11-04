@@ -128,7 +128,7 @@ describe("exports enforce current read access", () => {
 
         expect(ids(personal.profile!)).toEqual(["profile"]);
         expect(ids(personal.quick_actions!)).toEqual(["quick-action"]);
-        expect(personal.org_members).toEqual([{ org_id: "current-org", user_id: userId, role: "member" }]);
+        expect(personal.org_members).toMatchObject([{ org_id: "current-org", user_id: userId, role: "member" }]);
         for (const key of ["profile", "api_keys", "router_models", "organizations", "org_members", "org_invitations", "quick_actions", "hidden_workflows"])
             expect(firm).not.toHaveProperty(key);
     });

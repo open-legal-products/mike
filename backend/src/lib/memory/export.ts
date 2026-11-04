@@ -1,28 +1,12 @@
 import { createHash } from "node:crypto";
 import type { Db } from "../supabase";
-import { throwIfError } from "../serviceData";
-const PAGE_SIZE = 1000;
+import { selectAllByKey } from "../batchedQuery";
+
 type ExportWorkspace = string | null;
-function inWorkspace(query: any, orgId: ExportWorkspace, column = "org_id") {
-    return orgId ? query.eq(column, orgId) : query.is(column, null);
-}
-export async function selectAll(db: Db, table: string, configure: (query: any) => any, columns = "*"): Promise<Record<string, unknown>[]> {
-    const rows: Record<string, unknown>[] = [];
-    for (let from = 0;; from += PAGE_SIZE) {
-        const to = from + PAGE_SIZE - 1;
-        const query = configure((db as any)
-            .from(table)
-            .select(columns)
-            .range(from, to));
-        const { data, error } = await query;
-        await throwIfError(error, `Failed to export ${table}`);
-        const batch = (data ?? []) as Record<string, unknown>[];
-        rows.push(...batch);
-        if (batch.length < PAGE_SIZE)
-            break;
-    }
-    return rows;
-}
+
+const MEMORY_FILE_COLUMNS =
+    "id, enabled, epoch, revision, content, content_sha256, size_bytes, status, last_source, updated_by, created_at, updated_at";
+
 /**
  * One memory file: a project's, or a person's for one workspace. A person
  * has one per workspace, so the user scope names which (`orgId`, null for
@@ -30,10 +14,11 @@ export async function selectAll(db: Db, table: string, configure: (query: any) =
  */
 export async function loadMemoryExport(db: Db, scope: "user" | "project", ownerId: string, orgId: ExportWorkspace = null) {
     const ownerColumn = scope === "user" ? "user_id" : "project_id";
-    const rows = await selectAll(db, "memory_files", (query) => {
-        const owned = query.eq("scope", scope).eq(ownerColumn, ownerId);
-        return scope === "user" ? inWorkspace(owned, orgId) : owned;
-    }, "id, enabled, epoch, revision, content, content_sha256, size_bytes, status, last_source, updated_by, created_at, updated_at");
+    const rows = await selectAllByKey<Record<string, unknown>>("memory export", () => {
+        const owned = db.from("memory_files").select(MEMORY_FILE_COLUMNS).eq("scope", scope).eq(ownerColumn, ownerId);
+        if (scope !== "user") return owned;
+        return orgId ? owned.eq("org_id", orgId) : owned.is("org_id", null);
+    });
     const file = rows[0];
     if (!file) {
         return {

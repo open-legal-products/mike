@@ -1,4 +1,4 @@
-import { selectAll, loadMemoryExport } from "../../lib/memory/export";
+import { loadMemoryExport } from "../../lib/memory/export";
 import {
     checkProjectAccess,
     checkWorkflowAccess,
@@ -7,8 +7,7 @@ import {
     type OrgRole,
 } from "../../lib/access";
 import { mapWithConcurrency } from "../../lib/concurrency";
-import { chunkArray } from "../../lib/arrays";
-import { ID_FILTER_BATCH_SIZE } from "../../lib/batchedQuery";
+import { selectAllByKey, selectInBatches, sortRows } from "../../lib/batchedQuery";
 import { type Db } from "../../lib/supabase";
 import {
     resolvePlaybookRoles,
@@ -30,20 +29,47 @@ export function userExportFilename(
     return `mike-${kind}-export-${userId.slice(0, 8)}${workspace}-${nowStamp()}.json`;
 }
 
+type Row = Record<string, unknown>;
+
+type ReadOptions = {
+    /** Narrows the builder; no `order`/`limit` — paging adds them. */
+    filter?: (query: any) => any;
+    /** Must include `id`, the paging key. */
+    columns?: string;
+    /** The order the export promises, applied after the complete read. */
+    order?: string[];
+};
+
+/**
+ * Every row of `table` the filter matches. Keyset-paged on `id` to an empty
+ * page: the `.range` loop this replaced stopped on a short page, which a
+ * gateway configured below the page size returns long before the end.
+ */
+async function selectAll(
+    db: Db,
+    table: string,
+    { filter = (query) => query, columns = "*", order = [] }: ReadOptions = {},
+): Promise<Row[]> {
+    const rows = await selectAllByKey<Row>(`export ${table}`, () =>
+        filter((db as any).from(table).select(columns)),
+    );
+    return sortRows(rows, ...order);
+}
+
+/** Rows whose `column` is one of `ids`: URL-safe id batches, each paged. */
 async function selectByIds(
     db: Db,
     table: string,
     column: string,
     ids: string[],
-    configure: (query: any) => any = (query) => query,
-    columns = "*",
-): Promise<Record<string, unknown>[]> {
-    const rows: Record<string, unknown>[] = [];
-    for (const batch of chunkArray(uniqueStrings(ids), ID_FILTER_BATCH_SIZE))
-        rows.push(...(await selectAll(db, table, (query) => configure(query.in(column, batch)), columns)));
-    return rows.sort((a, b) =>
-        String(a.created_at ?? "").localeCompare(String(b.created_at ?? "")),
+    { filter = (query) => query, columns = "*", order = ["created_at"] }: ReadOptions = {},
+): Promise<Row[]> {
+    const rows = await selectInBatches<Row>(`export ${table}`, ids, (batch) =>
+        selectAllByKey<Row>(`export ${table}`, () =>
+            filter((db as any).from(table).select(columns).in(column, batch)),
+        ),
     );
+    return sortRows(rows, ...order);
 }
 
 /**
@@ -57,11 +83,11 @@ function inWorkspace(query: any, orgId: ExportWorkspace, column = "org_id") {
     return orgId ? query.eq(column, orgId) : query.is(column, null);
 }
 
-function rowInWorkspace(row: Record<string, unknown>, orgId: ExportWorkspace) {
+function rowInWorkspace(row: Row, orgId: ExportWorkspace) {
     return (typeof row.org_id === "string" ? row.org_id : null) === orgId;
 }
 
-function idsFrom(rows: Record<string, unknown>[], column = "id"): string[] {
+function idsFrom(rows: Row[], column = "id"): string[] {
     return uniqueStrings(
         rows.map((row) =>
             typeof row[column] === "string" ? (row[column] as string) : null,
@@ -69,7 +95,7 @@ function idsFrom(rows: Record<string, unknown>[], column = "id"): string[] {
     );
 }
 
-type ExportResourceRow = Record<string, unknown> & {
+type ExportResourceRow = Row & {
     id: string;
     user_id: string | null;
     project_id: string | null;
@@ -84,9 +110,9 @@ type ExportResourceRow = Record<string, unknown> & {
  * Check at build time, since membership or sharing may change while queued.
  */
 async function readableRows(
-    rows: Record<string, unknown>[],
+    rows: Row[],
     authorize: (row: ExportResourceRow) => Promise<{ ok: boolean }>,
-): Promise<Record<string, unknown>[]> {
+): Promise<Row[]> {
     const allowed = await mapWithConcurrency(rows, 8, async (row) =>
         typeof row.id === "string" && !row.archived_at
             ? (await authorize(row as ExportResourceRow)).ok
@@ -101,11 +127,10 @@ async function loadUserReviews(
     userEmail: string | null | undefined,
     orgId: ExportWorkspace,
 ) {
-    const reviews = await selectAll(db, "tabular_reviews", (query) =>
-        inWorkspace(query.eq("user_id", userId), orgId).order("created_at", {
-            ascending: true,
-        }),
-    );
+    const reviews = await selectAll(db, "tabular_reviews", {
+        filter: (query) => inWorkspace(query.eq("user_id", userId), orgId),
+        order: ["created_at"],
+    });
     return readableRows(
         reviews,
         createSharedRowAccessChecker("tabular_review", userId, userEmail, db),
@@ -118,11 +143,10 @@ async function loadUserChats(
     userEmail: string | null | undefined,
     orgId: ExportWorkspace,
 ) {
-    const candidates = await selectAll(db, "chats", (query) =>
-        inWorkspace(query.eq("user_id", userId), orgId).order("created_at", {
-            ascending: true,
-        }),
-    );
+    const candidates = await selectAll(db, "chats", {
+        filter: (query) => inWorkspace(query.eq("user_id", userId), orgId),
+        order: ["created_at"],
+    });
     const chats = await readableRows(
         candidates,
         createSharedRowAccessChecker("chat", userId, userEmail, db),
@@ -133,12 +157,14 @@ async function loadUserChats(
 }
 
 async function loadUserWordChats(db: Db, userId: string) {
-    const documents = await selectAll(db, "word_documents", (query) =>
-        query.eq("user_id", userId).order("created_at", { ascending: true }),
-    );
-    const chats = await selectAll(db, "word_chats", (query) =>
-        query.eq("user_id", userId).order("created_at", { ascending: true }),
-    );
+    const documents = await selectAll(db, "word_documents", {
+        filter: (query) => query.eq("user_id", userId),
+        order: ["created_at"],
+    });
+    const chats = await selectAll(db, "word_chats", {
+        filter: (query) => query.eq("user_id", userId),
+        order: ["created_at"],
+    });
     const messages = await selectByIds(
         db,
         "word_chat_messages",
@@ -154,9 +180,10 @@ async function loadUserTabularChats(
     userEmail: string | null | undefined,
     orgId: ExportWorkspace,
 ) {
-    const candidates = await selectAll(db, "tabular_review_chats", (query) =>
-        query.eq("user_id", userId).order("created_at", { ascending: true }),
-    );
+    const candidates = await selectAll(db, "tabular_review_chats", {
+        filter: (query) => query.eq("user_id", userId),
+        order: ["created_at"],
+    });
     // A review chat retains its creator after that person leaves the team.
     // Its parent review, not that creator id, controls access to the transcript.
     const reviews = await selectByIds(
@@ -198,7 +225,7 @@ async function loadUserPlaybooks(
     db: Db,
     userId: string,
     userEmail: string | null | undefined,
-    orgMemberships: Record<string, unknown>[],
+    orgMemberships: Row[],
     orgId: ExportWorkspace,
 ) {
     const orgRoles = new Map<string, OrgRole>();
@@ -208,15 +235,18 @@ async function loadUserPlaybooks(
     }
 
     const [created, runCandidates, imports] = await Promise.all([
-        selectAll(db, "playbooks", (query) =>
-            query.eq("user_id", userId).order("created_at", { ascending: true }),
-        ),
-        selectAll(db, "playbook_runs", (query) =>
-            query.eq("user_id", userId).order("started_at", { ascending: true }),
-        ),
-        selectAll(db, "playbook_imports", (query) =>
-            query.eq("user_id", userId).order("started_at", { ascending: true }),
-        ),
+        selectAll(db, "playbooks", {
+            filter: (query) => query.eq("user_id", userId),
+            order: ["created_at"],
+        }),
+        selectAll(db, "playbook_runs", {
+            filter: (query) => query.eq("user_id", userId),
+            order: ["started_at"],
+        }),
+        selectAll(db, "playbook_imports", {
+            filter: (query) => query.eq("user_id", userId),
+            order: ["started_at"],
+        }),
     ]);
     const createdIds = new Set(idsFrom(created));
     const runPlaybooks = await selectByIds(
@@ -241,19 +271,9 @@ async function loadUserPlaybooks(
         ),
     );
     const playbooks = created.filter((row) => inScope.has(row.id as string));
-    const playbookIds = idsFrom(playbooks);
-    const sources =
-        playbookIds.length === 0
-            ? []
-            : await selectAll(
-                  db,
-                  "playbook_sources",
-                  (query) =>
-                      query
-                          .in("playbook_id", playbookIds)
-                          .order("created_at", { ascending: true }),
-                  "id, playbook_id, filename, file_type, size_bytes, text_length, created_at",
-              );
+    const sources = await selectByIds(db, "playbook_sources", "playbook_id", idsFrom(playbooks), {
+        columns: "id, playbook_id, filename, file_type, size_bytes, text_length, created_at",
+    });
 
     return {
         playbooks,
@@ -274,14 +294,13 @@ async function loadUserPlaybooks(
 }
 
 async function loadApiKeyStatus(db: Db, userId: string) {
-    const rows = await selectAll(db, "user_api_keys", (query) =>
-        query
-            .eq("user_id", userId)
-            .order("provider", { ascending: true }),
+    const rows = await selectAll(db, "user_api_keys", {
+        filter: (query) => query.eq("user_id", userId),
         // Never the key material (encrypted_key, iv, auth_tag): only what
         // the user can already see in Settings.
-        "provider, settings, enabled, created_at, updated_at",
-    );
+        columns: "id, provider, settings, enabled, created_at, updated_at",
+        order: ["provider"],
+    });
     return rows.map((row) => ({
         provider: row.provider,
         has_key: true,
@@ -373,6 +392,7 @@ export async function buildUserAccountExport(
     // Account-level data has no workspace; it leaves with Personal's export.
     const personalOnly = <T>(load: () => Promise<T>, empty: T): Promise<T> =>
         orgId ? Promise.resolve(empty) : load();
+    const normalizedEmail = userEmail?.trim().toLowerCase();
     const [
         profile,
         apiKeys,
@@ -395,125 +415,103 @@ export async function buildUserAccountExport(
         appMemory,
     ] = await Promise.all([
         personalOnly(
-            () =>
-                selectAll(db, "user_profiles", (query) =>
-                    query.eq("user_id", userId),
-                ),
+            () => selectAll(db, "user_profiles", { filter: (query) => query.eq("user_id", userId) }),
             [],
         ),
         personalOnly(() => loadApiKeyStatus(db, userId), null),
         personalOnly(
             () =>
-                selectAll(db, "user_router_models", (query) =>
-                    query
-                        .eq("user_id", userId)
-                        .order("router", { ascending: true })
-                        .order("sort_order", { ascending: true }),
-                ),
+                selectAll(db, "user_router_models", {
+                    filter: (query) => query.eq("user_id", userId),
+                    order: ["router", "sort_order"],
+                }),
             [],
         ),
-        selectAll(db, "projects", (query) =>
-            inWorkspace(query.eq("user_id", userId), orgId).order("created_at", {
-                ascending: true,
-            }),
-        ).then((rows) =>
+        selectAll(db, "projects", {
+            filter: (query) => inWorkspace(query.eq("user_id", userId), orgId),
+            order: ["created_at"],
+        }).then((rows) =>
             readableRows(rows, (row) =>
                 checkProjectAccess(row.id, userId, userEmail, db),
             ),
         ),
-        selectAll(db, "documents", (query) =>
-            inWorkspace(query.eq("user_id", userId).is("project_id", null), orgId)
-                .order("created_at", { ascending: true }),
-        ),
-        selectAll(db, "workflows", (query) =>
-            inWorkspace(query.eq("user_id", userId), orgId).order("created_at", {
-                ascending: true,
-            }),
-        ).then((rows) =>
+        selectAll(db, "documents", {
+            filter: (query) =>
+                inWorkspace(query.eq("user_id", userId).is("project_id", null), orgId),
+            order: ["created_at"],
+        }),
+        selectAll(db, "workflows", {
+            filter: (query) => inWorkspace(query.eq("user_id", userId), orgId),
+            order: ["created_at"],
+        }).then((rows) =>
             readableRows(rows, (row) =>
                 checkWorkflowAccess(row.id, userId, userEmail, db),
             ),
         ),
         personalOnly(
             () =>
-                selectAll(db, "default_workflow_installations", (query) =>
-                    query
-                        .eq("user_id", userId)
-                        .order("installed_at", { ascending: true }),
-                ),
+                selectAll(db, "default_workflow_installations", {
+                    filter: (query) => query.eq("user_id", userId),
+                    order: ["installed_at"],
+                }),
             [],
         ),
         personalOnly(
             () =>
-                selectAll(db, "quick_actions", (query) =>
-                    query.eq("user_id", userId).order("sort_order", { ascending: true }),
-                ),
+                selectAll(db, "quick_actions", {
+                    filter: (query) => query.eq("user_id", userId),
+                    order: ["sort_order"],
+                }),
             [],
         ),
         personalOnly(
             () =>
-                selectAll(db, "workflow_open_source_submissions", (query) =>
-                    query
-                        .eq("submitted_by_user_id", userId)
-                        .order("submitted_at", { ascending: true }),
-                ),
+                selectAll(db, "workflow_open_source_submissions", {
+                    filter: (query) => query.eq("submitted_by_user_id", userId),
+                    order: ["submitted_at"],
+                }),
             [],
         ),
         personalOnly(
             () =>
-                selectAll(db, "hidden_workflows", (query) =>
-                    query.eq("user_id", userId).order("created_at", { ascending: true }),
-                ),
+                selectAll(db, "hidden_workflows", {
+                    filter: (query) => query.eq("user_id", userId),
+                    order: ["created_at"],
+                }),
             [],
         ),
         // Narrowed to the exported workflows below.
-        selectAll(db, "workflow_shares", (query) =>
-            query
-                .eq("shared_by_user_id", userId)
-                .order("created_at", { ascending: true }),
-        ),
+        selectAll(db, "workflow_shares", {
+            filter: (query) => query.eq("shared_by_user_id", userId),
+            order: ["created_at"],
+        }),
         userEmail
             ? personalOnly(
                   () =>
-                      selectAll(db, "workflow_shares", (query) =>
-                          query
-                              .eq("shared_with_email", userEmail)
-                              .order("created_at", { ascending: true }),
-                      ),
+                      selectAll(db, "workflow_shares", {
+                          filter: (query) => query.eq("shared_with_email", userEmail),
+                          order: ["created_at"],
+                      }),
                   [],
               )
             : Promise.resolve([]),
         loadUserChats(db, userId, userEmail, orgId),
         loadUserTabularChats(db, userId, userEmail, orgId),
         loadUserReviews(db, userId, userEmail, orgId),
-        userEmail
+        normalizedEmail
             ? (async () => {
                   // Grants are candidates too: stale grants cannot override
                   // current organization membership or resource permissions.
-                  const grantRows = await selectAll(
-                      db,
-                      "project_access_grants",
-                      (query) =>
-                          query.eq(
-                              "email",
-                              userEmail.trim().toLowerCase(),
-                          ),
-                      "project_id",
-                  );
-                  const projectIds = [
-                      ...new Set(
-                          grantRows
-                              .map((row) => row.project_id as string | null)
-                              .filter((id): id is string => !!id),
-                      ),
-                  ];
+                  const grantRows = await selectAll(db, "project_access_grants", {
+                      filter: (query) => query.eq("email", normalizedEmail),
+                      columns: "id, project_id",
+                  });
+                  const projectIds = idsFrom(grantRows, "project_id");
                   if (projectIds.length === 0) return [];
-                  return selectByIds(db, "projects", "id", projectIds, (query) =>
-                      inWorkspace(query.neq("user_id", userId), orgId).order("created_at", {
-                          ascending: true,
-                      }),
-                      "id, user_id, org_id, name, cm_number, created_at, updated_at",
-                  ).then(async (rows) => {
+                  return selectByIds(db, "projects", "id", projectIds, {
+                      filter: (query) => inWorkspace(query.neq("user_id", userId), orgId),
+                      columns: "id, user_id, org_id, name, cm_number, created_at, updated_at",
+                  }).then(async (rows) => {
                       const readable = await readableRows(rows, (row) =>
                           checkProjectAccess(row.id, userId, userEmail, db),
                       );
@@ -521,33 +519,18 @@ export async function buildUserAccountExport(
                   });
               })()
             : Promise.resolve([]),
-        userEmail
+        normalizedEmail
             ? (async () => {
-                  const grantRows = await selectAll(
-                      db,
-                      "tabular_review_access_grants",
-                      (query) =>
-                          query.eq(
-                              "email",
-                              userEmail.trim().toLowerCase(),
-                          ),
-                      "tabular_review_id",
-                  );
-                  const reviewIds = [
-                      ...new Set(
-                          grantRows
-                              .map(
-                                  (row) =>
-                                      row.tabular_review_id as string | null,
-                              )
-                              .filter((id): id is string => !!id),
-                      ),
-                  ];
+                  const grantRows = await selectAll(db, "tabular_review_access_grants", {
+                      filter: (query) => query.eq("email", normalizedEmail),
+                      columns: "id, tabular_review_id",
+                  });
+                  const reviewIds = idsFrom(grantRows, "tabular_review_id");
                   if (reviewIds.length === 0) return [];
-                  return selectByIds(db, "tabular_reviews", "id", reviewIds, (query) =>
-                      query.neq("user_id", userId).order("created_at", { ascending: true }),
-                      "id, user_id, project_id, org_id, archived_at, title, practice, created_at, updated_at",
-                  ).then(async (rows) => {
+                  return selectByIds(db, "tabular_reviews", "id", reviewIds, {
+                      filter: (query) => query.neq("user_id", userId),
+                      columns: "id, user_id, project_id, org_id, archived_at, title, practice, created_at, updated_at",
+                  }).then(async (rows) => {
                       const readable = await readableRows(
                           rows.filter((row) => rowInWorkspace(row, orgId)),
                           createSharedRowAccessChecker("tabular_review", userId, userEmail, db),
@@ -558,31 +541,30 @@ export async function buildUserAccountExport(
                   });
               })()
             : Promise.resolve([]),
-        selectAll(db, "audit_events", (query) =>
-            inWorkspace(query.eq("user_id", userId), orgId).order("created_at", {
-                ascending: true,
-            }),
-        ),
+        selectAll(db, "audit_events", {
+            filter: (query) => inWorkspace(query.eq("user_id", userId), orgId),
+            order: ["created_at"],
+        }),
         loadMemoryExport(db, "user", userId, orgId),
     ]);
 
     // Organization membership + the orgs the user belongs to and the
     // invitations addressed to them, for a complete GDPR-style export of
     // their multi-tenant footprint.
-    const orgMemberships = await selectAll(db, "org_members", (query) =>
-        query.eq("user_id", userId).order("created_at", { ascending: true }),
-    );
+    const orgMemberships = await selectAll(db, "org_members", {
+        filter: (query) => query.eq("user_id", userId),
+        order: ["created_at"],
+    });
     const orgIds = idsFrom(orgMemberships, "org_id");
     const [organizations, orgInvitations] = await Promise.all([
         personalOnly(() => selectByIds(db, "organizations", "id", orgIds), []),
-        userEmail
+        normalizedEmail
             ? personalOnly(
                   () =>
-                      selectAll(db, "org_invitations", (query) =>
-                          query
-                              .eq("email", userEmail.trim().toLowerCase())
-                              .order("created_at", { ascending: true }),
-                      ),
+                      selectAll(db, "org_invitations", {
+                          filter: (query) => query.eq("email", normalizedEmail),
+                          order: ["created_at"],
+                      }),
                   [],
               )
             : Promise.resolve([]),

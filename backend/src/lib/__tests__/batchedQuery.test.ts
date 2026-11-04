@@ -5,6 +5,7 @@ import {
   selectAllByKey,
   selectAllPages,
   selectInBatches,
+  sortRows,
 } from "../batchedQuery";
 import { tableDb } from "../../__tests__/helpers/tableDb";
 
@@ -61,5 +62,18 @@ describe("batchedQuery", () => {
       return builder;
     });
     expect(stuck).toEqual([{ id: "x" }]);
+  });
+
+  it("sorts rows by the promised columns with id as the tie-break", () => {
+    const rows = [
+      { id: "b", created_at: "2026-01-02", sort_order: 2 },
+      { id: "a", created_at: "2026-01-02", sort_order: 10 },
+      { id: "c", created_at: "2026-01-01", sort_order: 1 },
+      { id: "d", created_at: null, sort_order: 0 },
+    ];
+    expect(sortRows(rows, "created_at").map((r) => r.id)).toEqual(["d", "c", "a", "b"]);
+    // Numbers compare numerically (10 after 2), not as "10" < "2".
+    expect(sortRows(rows, "sort_order").map((r) => r.id)).toEqual(["d", "c", "b", "a"]);
+    expect(rows.map((r) => r.id)).toEqual(["b", "a", "c", "d"]);
   });
 });

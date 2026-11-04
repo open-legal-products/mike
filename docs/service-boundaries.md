@@ -20,7 +20,7 @@ classes or separate deployed services are unnecessary for these boundaries.
 | Personal key settings | `modules/user/user.apiKeys.ts`, a thin adapter to owner-aware credential operations |
 | Router model validation shared by orgs and user | `lib/routerModelValidation.ts`; user retains its profile field mapping |
 | Project deletion and signed manifest | `modules/projects/projects.lifecycle.ts` and `projects.export.ts`, exported through `projects.service.ts` |
-| Scoped reusable memory-export reads | `lib/memory/export.ts` |
+| Scoped reusable memory-export reads | `lib/memory/export.ts`, paged through `lib/batchedQuery.ts` like every other export read |
 | Account deletion, retention and workspace data clearing | `application/accounts/` |
 | Permanent organization content purge | `application/organizations/purgeContent.ts`, composing org-owned cleanup operations |
 | Export request lifecycle and artifact creation | `application/exports/`; `buildExport.ts` re-authorizes execution |
@@ -68,6 +68,12 @@ service functions through the new boundaries.
   document cleanup triggers remain the source of truth.
 - `orgs.deletion.ts` still suspends an organization for its 30-day recovery period.
   Permanent content purge is a separate, authorized application workflow.
+- Export and manifest reads use the shared `selectAllByKey`/`selectInBatches`
+  primitives: every table is keyset-paged to an empty page (the former
+  `.range` loop stopped on a short page, so a gateway configured below the
+  page size truncated silently) and every id filter goes in URL-safe batches
+  (the project manifest sent all document ids in one `.in()`). Orders the
+  export promises are applied with `sortRows` after the complete read.
 
 Account-specific traversal and retention queries remain together in
 `application/accounts/dataCleanup.ts`; they coordinate the departure graph.
@@ -93,7 +99,10 @@ imports, require calls, aliases, missing sources, indirect cycles, self-imports,
 declaration files, and cycles inside a shared package or across the
 application/package boundary.
 Project lifecycle regression tests cover deduplicated/batched IDs, capture and
-completion ordering, and failure propagation. Existing credential, route, export,
+completion ordering, and failure propagation. Export regression tests read a
+120-document project and account through a fake gateway capped at a few rows
+per response and 50 ids per filter, and fail on a missing table instead of
+sealing a partial manifest. Existing credential, route, export,
 queue, organization recovery and PostgreSQL retention suites cover the preserved
 behavior above. The PR records the executed builds, coverage gates, database and
 browser runs; mock-only suites are distinguished from real-stack tests.

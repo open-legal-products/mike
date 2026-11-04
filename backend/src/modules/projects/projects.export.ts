@@ -1,11 +1,25 @@
 import type { Db } from "../../lib/supabase";
 import { sealManifest } from "../../lib/manifestSigning";
 import { throwIfError, uniqueStrings } from "../../lib/serviceData";
-import { selectAll, loadMemoryExport } from "../../lib/memory/export";
+import { selectAllByKey, selectInBatches, sortRows } from "../../lib/batchedQuery";
+import { loadMemoryExport } from "../../lib/memory/export";
+type Row = Record<string, unknown>;
 function nowStamp() { return new Date().toISOString().replace(/[:.]/g, "-"); }
-function idsFrom(rows: Record<string, unknown>[], column = "id"): string[] { return uniqueStrings(rows.map(row => typeof row[column] === "string" ? row[column] as string : null)); }
+function idsFrom(rows: Row[], column = "id"): string[] { return uniqueStrings(rows.map(row => typeof row[column] === "string" ? row[column] as string : null)); }
 export function projectManifestFilename(projectId: string) {
     return `mike-project-manifest-${projectId.slice(0, 8)}-${nowStamp()}.json`;
+}
+/**
+ * Every row of `table` for the given documents, in creation order. The
+ * document ids go in URL-safe batches and each batch is paged to an empty
+ * page, so a large project is listed completely whatever the gateway's
+ * row cap.
+ */
+async function documentRows(db: Db, table: string, documentIds: string[], columns: string): Promise<Row[]> {
+    const rows = await selectInBatches<Row>(`project export ${table}`, documentIds, (batch) =>
+        selectAllByKey<Row>(`project export ${table}`, () =>
+            db.from(table).select(columns).in("document_id", batch)));
+    return sortRows(rows, "created_at");
 }
 /**
  * Tamper-evident manifest for one project: every document version with its
@@ -30,47 +44,22 @@ export async function buildProjectExportManifest(db: Db, projectId: string) {
 
     const memory = await loadMemoryExport(db, "project", projectId);
 
-    const documents = await selectAll(
-        db,
-        "documents",
-        (query) =>
-            query
-                .eq("project_id", projectId)
-                .order("created_at", { ascending: true })
-                .order("id", { ascending: true }),
-        "id, project_id, status, current_version_id, created_at",
+    const documents = sortRows(
+        await selectAllByKey<Row>("project export documents", () =>
+            db.from("documents").select("id, project_id, status, current_version_id, created_at").eq("project_id", projectId)),
+        "created_at",
     );
     const documentIds = idsFrom(documents);
 
     const [versions, edits] = await Promise.all([
-        documentIds.length === 0
-            ? Promise.resolve([])
-            : selectAll(
-                  db,
-                  "document_versions",
-                  (query) =>
-                      query
-                          .in("document_id", documentIds)
-                          .order("created_at", { ascending: true })
-                          .order("id", { ascending: true }),
-                  "id, document_id, version_number, source, filename, file_type, size_bytes, content_sha256, deleted_at, created_at",
-              ),
-        documentIds.length === 0
-            ? Promise.resolve([])
-            : selectAll(
-                  db,
-                  "document_edits",
-                  (query) =>
-                      query
-                          .in("document_id", documentIds)
-                          .order("created_at", { ascending: true })
-                          .order("id", { ascending: true }),
-                  "id, document_id, version_id, change_id, status, created_at, resolved_at",
-              ),
+        documentRows(db, "document_versions", documentIds,
+            "id, document_id, version_number, source, filename, file_type, size_bytes, content_sha256, deleted_at, created_at"),
+        documentRows(db, "document_edits", documentIds,
+            "id, document_id, version_id, change_id, status, created_at, resolved_at"),
     ]);
 
-    const groupByDocument = (rows: Record<string, unknown>[]) => {
-        const byDoc = new Map<string, Record<string, unknown>[]>();
+    const groupByDocument = (rows: Row[]) => {
+        const byDoc = new Map<string, Row[]>();
         for (const row of rows) {
             const docId = row.document_id as string;
             const list = byDoc.get(docId) ?? [];
