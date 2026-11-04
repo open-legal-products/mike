@@ -8,8 +8,10 @@ import {
 import type { SupabaseClient, User } from "@supabase/supabase-js";
 import { requestOriginIsWordAddin } from "./origins";
 import { supabaseSessionConfiguration } from "./runtimeConfig";
+import { singleFlightRefreshFetch } from "./authRefresh";
 
 const AUTH_COOKIE_BASE_NAME = "mike-session";
+const refreshFetch = singleFlightRefreshFetch();
 
 function authConfiguration() {
   const { url, key } = supabaseSessionConfiguration();
@@ -115,6 +117,8 @@ export function createRequestSupabase(
         }
       },
     },
+    // Parallel requests holding one expired session share a single refresh.
+    global: { fetch: refreshFetch },
     auth: {
       persistSession: true,
       autoRefreshToken: false,
