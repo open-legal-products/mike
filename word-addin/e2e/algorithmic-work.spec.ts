@@ -157,17 +157,21 @@ test("reopening a chat validates its proposed edits in one Word batch", async ({
       })),
     }],
   });
-  await addin.gotoTaskpane({ documentText: originals.join(".\n") });
+  // The last proposal's text is no longer in the document.
+  await addin.gotoTaskpane({ documentText: originals.slice(0, -1).join(".\n") });
   await addin.expectAuthedShell();
   await page.getByRole("button", { name: "Chat history" }).click();
   const before = await addin.wordCalls();
   await page.getByRole("menu").getByRole("menuitem", { name: /Proposed review/ }).click();
-  await expect(page.getByRole("button", { name: "Apply", exact: true })).toHaveCount(10);
+  await expect(page.getByRole("button", { name: "Apply", exact: true })).toHaveCount(9);
+  await expect(page.locator('[data-edit-status="validating"]')).toHaveCount(0);
   const after = await addin.wordCalls();
   // One batch probes the document for already-applied rows; one validates all
-  // ten: every search in one sync, every revision check in the next.
-  expect(after.runs - before.runs).toBe(2);
-  expect(after.searches - before.searches).toBe(10);
+  // ten: every search in one sync, every revision check in the next. The
+  // not-found verdict hides Apply and is persisted, so it is confirmed on its
+  // own first: one more run, one more search.
+  expect(after.runs - before.runs).toBe(3);
+  expect(after.searches - before.searches).toBe(11);
 });
 
 test("applying one tracked edit costs at most eight host round trips", async ({ addin, page }) => {

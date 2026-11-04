@@ -2114,8 +2114,12 @@ export interface TrackedEditValidationResult {
 
 /**
  * Check whether one proposed edit can be located safely without changing the
- * document. Review mode uses this before exposing its Apply action; the real
- * apply repeats the same checks because the document may change meanwhile.
+ * document. Review mode uses this before exposing its Apply action, and the
+ * verdict is binding, not advisory: a non-ready verdict hides Apply and is
+ * persisted as apply_status "failed" (apply also repeats the checks, but
+ * only for a card that got an Apply button). A non-ready verdict reached in
+ * a shared batch is therefore confirmed by the one-edit path before it is
+ * returned.
  */
 export function validateTrackedEdit(
   edit: RedlineEdit,
@@ -2249,6 +2253,14 @@ async function validateTrackedEditsNow(
           );
         }
       });
+      // A non-ready verdict hides Apply and is persisted, so confirm each
+      // one through the original one-edit path before it sticks; the
+      // multi-search batch is only trusted for the common "ready" answer.
+      for (const index of searchable) {
+        if (results[index]?.status !== "ready") {
+          results[index] = await validateTrackedEditNow(edits[index]!);
+        }
+      }
     } catch (error) {
       // One failing command fails the whole shared sync. Re-validate each
       // edit on its own, so a failure stays attributed to its own card.
