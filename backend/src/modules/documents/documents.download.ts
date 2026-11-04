@@ -8,7 +8,7 @@ import {
 } from "../../lib/documentVersions";
 import { checkProjectAccess, createDocumentAccessChecker } from "../../lib/access";
 import { mapWithConcurrency } from "../../lib/concurrency";
-import { BatchedQueryError, selectAllByKey, selectInBatches } from "../../lib/batchedQuery";
+import { queryFailureCause, selectAllByKey, selectInBatches } from "../../lib/batchedQuery";
 import { zipExportLimitDetail } from "../../lib/zipExport";
 import {
     loadDocumentDisplay,
@@ -252,7 +252,7 @@ export async function resolveZipExportDocuments(
         return {
             ok: false,
             kind: "internal",
-            error: error instanceof BatchedQueryError ? error.cause : error,
+            error: queryFailureCause(error),
         };
     }
 

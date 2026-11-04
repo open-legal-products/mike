@@ -20,6 +20,7 @@
 import { type UserApiKeys } from "../../lib/llm";
 import { ensureReviewAccess } from "../../lib/access";
 import { can } from "../../lib/permissions";
+import { queryFailureCause } from "../../lib/batchedQuery";
 import { failure, internalFailure } from "../../lib/serviceResult";
 import {
     filterReadableReviewRows,
@@ -173,7 +174,7 @@ export async function loadTabularGenerateWork(
     try {
         cells = await loadReviewCells(db, reviewId);
     } catch (cellsError) {
-        return { ok: false, kind: "cells_error", error: cellsError };
+        return { ok: false, kind: "cells_error", error: queryFailureCause(cellsError) };
     }
     const cellMap = new Map<string, Record<string, unknown>>();
     for (const cell of cells)

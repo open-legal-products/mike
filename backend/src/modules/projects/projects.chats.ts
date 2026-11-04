@@ -1,7 +1,7 @@
 // Project chat service functions: list a project's assistant chats.
 
 import { checkProjectAccess } from "../../lib/access";
-import { BatchedQueryError, selectAllByKey } from "../../lib/batchedQuery";
+import { queryFailureCause, selectAllByKey } from "../../lib/batchedQuery";
 import { type ProjectRole } from "../../lib/permissions";
 import { type Db, attachChatCreatorLabels } from "./projects.shared";
 
@@ -28,7 +28,7 @@ export async function listProjectChats(
           .select("*")
           .eq("project_id", projectId));
   } catch (error) {
-    return { ok: false, kind: "db_error", error: error instanceof BatchedQueryError ? error.cause : error };
+    return { ok: false, kind: "db_error", error: queryFailureCause(error) };
   }
   chats.sort(
     (a, b) =>

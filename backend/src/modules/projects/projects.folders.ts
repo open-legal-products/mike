@@ -3,7 +3,7 @@
 
 import { parseFolderPath, validateFolderMove, walkFolderGraph } from "../../lib/folderTree";
 import { chunkArray } from "../../lib/arrays";
-import { ID_FILTER_BATCH_SIZE, selectAllByKey, selectInBatches } from "../../lib/batchedQuery";
+import { ID_FILTER_BATCH_SIZE, queryFailureCause, selectAllByKey, selectInBatches } from "../../lib/batchedQuery";
 import { checkProjectAccess, creatorScopedAllowed } from "../../lib/access";
 import { can, DOCS_ORGANIZE_FORBIDDEN } from "../../lib/permissions";
 import {
@@ -190,7 +190,7 @@ export async function deleteProjectFolder(
             .in("folder_id", batch)),
     );
   } catch (error) {
-    return { ok: false, kind: "db_error", error };
+    return { ok: false, kind: "db_error", error: queryFailureCause(error) };
   }
 
   if (!can(access.projectRole, "container.delete")) {

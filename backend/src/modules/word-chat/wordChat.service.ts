@@ -14,7 +14,7 @@ import { wordChatHasWorkspaceAttachments } from "../../lib/wordWorkspace";
 // chat-activity write (`recordWordChatActivity`) live here.
 
 import { randomUUID } from "node:crypto";
-import { BatchedQueryError, selectInBatches } from "../../lib/batchedQuery";
+import { queryFailureCause, selectInBatches } from "../../lib/batchedQuery";
 import type { Db } from "../../lib/supabase";
 import { resolveRequestTimeZone } from "../../lib/userTime";
 import {
@@ -325,8 +325,7 @@ export async function getWordChatWithMessages(
             .order("block_index", { ascending: true }),
       );
     } catch (editsError) {
-      const cause = editsError instanceof BatchedQueryError ? editsError.cause : editsError;
-      return serviceFailure("db.query_failed", "Word document edits load failed", cause);
+      return serviceFailure("db.query_failed", "Word document edits load failed", queryFailureCause(editsError));
     }
     for (const edit of edits) {
       const messageId = edit.word_chat_message_id;

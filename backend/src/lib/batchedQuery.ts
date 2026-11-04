@@ -18,6 +18,12 @@ import { chunkArray } from "./arrays";
  * A failed batch or page is not "no rows": every helper throws (with the
  * PostgREST error as `cause`, never in the message sent to a client) instead
  * of returning a partial list that the caller would act on as if complete.
+ *
+ * Error convention: these helpers THROW a BatchedQueryError (fixed message,
+ * the database error as `cause`). A caller that turns the failure into a
+ * result carrying the raw database error (`db_error`, `cells_error`, a
+ * service failure) puts {@link queryFailureCause}(error) there, so those
+ * results look the same whether the read was batched or not.
  */
 
 export const ID_FILTER_BATCH_SIZE = 50;
