@@ -14,7 +14,8 @@ import {
 } from "../documents/documents.service";
 import { deleteProjectsByIds } from "../user/user.service";
 import { chunkArray } from "../../lib/arrays";
-import { mutateInBatches, selectAllByKey, selectInBatches } from "../../lib/batchedQuery";
+import { selectAllByKey, selectInBatches } from "../../lib/batchedQuery";
+import { wipeMemoryFiles as wipeMemoryFilesBatch } from "../../lib/memory/files";
 import { dbJobsEnabled } from "../../lib/dbq/runner";
 import { deleteFilesBestEffort } from "../../lib/storage";
 import type { Db } from "../../lib/supabase";
@@ -298,17 +299,10 @@ export async function deleteOrgMemories(db: Db, orgId: string): Promise<void> {
     await wipeMemoryFiles(db, projectFiles.map((row) => row.id));
 }
 
-/**
- * Empty many memory files with one wipe_memory_files call per 50 ids, the
- * set form of wipe_memory_file: each body is emptied under its own row lock
- * (so an in-flight curator job cannot write the old content back), the files
- * stay and keep their enabled setting.
- */
+/** Empty the files (keeping each one's enabled setting under its lock). */
 async function wipeMemoryFiles(db: Db, ids: string[]): Promise<void> {
     try {
-        await mutateInBatches("organization memory wipe", ids, (batch) =>
-            db.rpc("wipe_memory_files", { p_ids: batch }),
-        );
+        await wipeMemoryFilesBatch(db, ids, { enabled: null });
     } catch {
         fail("Failed to delete organization memory");
     }
