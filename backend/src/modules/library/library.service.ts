@@ -8,8 +8,9 @@
 // client (`db`) plus request-derived primitives and RETURN typed results;
 // the thin route handlers in library.routes.ts map them onto HTTP responses.
 
-import { parseFolderPath, validateFolderMove, walkFolderGraph } from "../../lib/folderTree";
-import { ID_FILTER_BATCH_SIZE, selectAllByKey, selectInBatches } from "../../lib/batchedQuery";
+import { parseFolderPath, validateFolderMove } from "../../lib/folderTree";
+import { readFolderSubtree } from "../../lib/folderSubtree";
+import { ID_FILTER_BATCH_SIZE } from "../../lib/batchedQuery";
 import { chunkArray } from "../../lib/arrays";
 import { renameDocument, deleteCollectionDocuments } from "../documents/documents.service";
 import type { Db } from "../../lib/supabase";
@@ -643,40 +644,31 @@ export async function deleteLibraryFolder(
   // max_rows and the remainder silently moved to the library root.
   let docIds: string[];
   try {
-    const children = await walkFolderGraph<{ id: string }>(
-      [folderId],
-      (parents) =>
-        selectInBatches("library subfolder walk", parents, (batch) =>
-          selectAllByKey<{ id: string }>("library subfolder walk", () =>
-            inWorkspace(
-              db
-                .from("library_folders")
-                .select("id")
-                .eq("user_id", userId)
-                .eq("library_kind", kind)
-                .in("parent_folder_id", batch),
-              workspace,
-            ),
-          ),
-        ),
-      (child) => [child.id],
-    );
-    const docs = await selectInBatches(
-      "library folder documents",
-      [folderId, ...children.map((child) => child.id)],
-      (batch) =>
-        selectAllByKey<{ id: string }>("library folder documents", () => {
-          const query = db
-            .from("documents")
+    const { documents: docs } = await readFolderSubtree<{ id: string }>({
+      label: "library folder subtree",
+      rootId: folderId,
+      childrenOf: (parents) =>
+        inWorkspace(
+          db
+            .from("library_folders")
             .select("id")
             .eq("user_id", userId)
-            .is("project_id", null)
-            .in("library_folder_id", batch);
-          return kind === "file"
-            ? query.or("library_kind.eq.file,library_kind.is.null")
-            : query.eq("library_kind", kind);
-        }),
-    );
+            .eq("library_kind", kind)
+            .in("parent_folder_id", parents),
+          workspace,
+        ),
+      documentsIn: (folders) => {
+        const query = db
+          .from("documents")
+          .select("id")
+          .eq("user_id", userId)
+          .is("project_id", null)
+          .in("library_folder_id", folders);
+        return kind === "file"
+          ? query.or("library_kind.eq.file,library_kind.is.null")
+          : query.eq("library_kind", kind);
+      },
+    });
     docIds = docs.map((doc) => doc.id);
   } catch (error) {
     return internalErr(error);

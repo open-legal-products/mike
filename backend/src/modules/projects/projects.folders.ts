@@ -1,9 +1,10 @@
 // Project subfolder service functions: create, rename/move (with cycle
 // check), recursive delete, and moving documents between folders.
 
-import { parseFolderPath, validateFolderMove, walkFolderGraph } from "../../lib/folderTree";
+import { parseFolderPath, validateFolderMove } from "../../lib/folderTree";
+import { readFolderSubtree } from "../../lib/folderSubtree";
 import { chunkArray } from "../../lib/arrays";
-import { ID_FILTER_BATCH_SIZE, queryFailureCause, selectAllByKey, selectInBatches } from "../../lib/batchedQuery";
+import { ID_FILTER_BATCH_SIZE, queryFailureCause } from "../../lib/batchedQuery";
 import { checkProjectAccess, creatorScopedAllowed } from "../../lib/access";
 import { can, DOCS_ORGANIZE_FORBIDDEN } from "../../lib/permissions";
 import {
@@ -165,30 +166,22 @@ export async function deleteProjectFolder(
   // .folder_id is ON DELETE SET NULL, so they silently moved to the root).
   let docs: { id: string; user_id: string | null }[];
   try {
-    const children = await walkFolderGraph<{ id: string }>(
-      [folderId],
-      (parents) =>
-        selectInBatches("project subfolder walk", parents, (batch) =>
-          selectAllByKey<{ id: string }>("project subfolder walk", () =>
-            db
-              .from("project_subfolders")
-              .select("id")
-              .eq("project_id", projectId)
-              .in("parent_folder_id", batch)),
-        ),
-      (child) => [child.id],
-    );
-    docs = await selectInBatches(
-      "folder documents",
-      [folderId, ...children.map((child) => child.id)],
-      (batch) =>
-        selectAllByKey<{ id: string; user_id: string | null }>("folder documents", () =>
-          db
-            .from("documents")
-            .select("id, user_id")
-            .eq("project_id", projectId)
-            .in("folder_id", batch)),
-    );
+    ({ documents: docs } = await readFolderSubtree<{ id: string; user_id: string | null }>({
+      label: "project folder subtree",
+      rootId: folderId,
+      childrenOf: (parents) =>
+        db
+          .from("project_subfolders")
+          .select("id")
+          .eq("project_id", projectId)
+          .in("parent_folder_id", parents),
+      documentsIn: (folders) =>
+        db
+          .from("documents")
+          .select("id, user_id")
+          .eq("project_id", projectId)
+          .in("folder_id", folders),
+    }));
   } catch (error) {
     return { ok: false, kind: "db_error", error: queryFailureCause(error) };
   }
