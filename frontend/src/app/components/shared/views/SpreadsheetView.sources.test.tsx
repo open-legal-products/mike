@@ -93,7 +93,7 @@ it("clears an old OLE error while the next source fetches and reports its own fa
     expect(screen.getByRole("alert")).not.toHaveTextContent(/Legacy or encrypted/);
 });
 
-it("retains same-source parsing and session across visibility and citation changes", async () => {
+it("retains same-source parsing across visibility and citation changes", async () => {
     state.fetch.mockResolvedValue(response());
     const { rerender } = render(<SpreadsheetView documentId="same" />);
     await act(async () => {});

@@ -331,7 +331,7 @@ function SpreadsheetSourceView({
 
         const header = new Uint8Array(bytes, 0, Math.min(bytes.byteLength, OLE_SIGNATURE.length));
         if (OLE_SIGNATURE.every((value, index) => header[index] === value)) {
-            setError("Legacy or encrypted Excel files cannot be previewed here. Download the original, or save an unencrypted .xlsx copy and upload it.");
+            setError("Legacy or encrypted Excel files cannot be previewed here. For preview, save an unencrypted .xlsx copy and upload it.");
             return;
         }
 

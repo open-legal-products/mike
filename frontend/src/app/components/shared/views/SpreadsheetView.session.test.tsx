@@ -119,7 +119,8 @@ it("reports a legacy or encrypted OLE workbook without handing it to the XLSX-on
     render(<SpreadsheetView documentId="legacy-workbook" />);
 
     expect(screen.getByRole("alert")).toHaveTextContent(/Legacy or encrypted Excel files cannot be previewed/);
-    expect(screen.getByRole("alert")).toHaveTextContent(/Download the original/);
+    expect(screen.getByRole("alert")).toHaveTextContent(/save an unencrypted .xlsx copy and upload it/);
+    expect(screen.getByRole("alert")).not.toHaveTextContent(/Download the original/);
     expect(state.parse).not.toHaveBeenCalled();
 });
 
@@ -146,6 +147,7 @@ it("clears the parser deadline after a successful callback", async () => {
     vi.useFakeTimers();
     const { unmount } = render(<SpreadsheetView documentId="successful-parser" />);
     try {
+        expect(vi.getTimerCount()).toBe(0);
         await act(async () => { vi.advanceTimersByTime(30_000); });
         expect(screen.getByText("Zoom 1")).toBeInTheDocument();
         expect(screen.queryByRole("alert")).toBeNull();
