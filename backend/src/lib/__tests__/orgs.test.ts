@@ -877,6 +877,19 @@ describe("handing over a departing member's work", () => {
         })).resolves.toMatchObject({ ok: false, kind: "owner_required" });
     });
 
+    it("authorizes a bulk preview with one batched role read, not two lookups per person", async () => {
+        const db = seed();
+        const departing = Array.from({ length: 60 }, (_, i) => `member-${i}`);
+        db._tables.org_members.push(...departing.map((user_id) => ({ org_id: "o1", user_id, role: "member" })));
+        const tables: string[] = [];
+        const counting = { ...db, from: (table: string) => (tables.push(table), db.from(table)) };
+        await expect(getMemberHandover(counting, {
+            actorId: "alex", orgId: "o1", targetUserId: "sam", departingUserIds: departing,
+        })).resolves.toMatchObject({ ok: true });
+        // The actor once, then the 61 departing members in two batches.
+        expect(tables.filter((table) => table === "org_members").length).toBeLessThanOrEqual(3);
+    });
+
     it("answers that question only to somebody who could remove them", async () => {
         const db = seed();
         const ask = (actorId: string) =>

@@ -682,22 +682,51 @@ async function authorizeRemoval(
     db: Db,
     params: { actorId: string; orgId: string; targetUserId: string },
 ): Promise<RemovalGate> {
+    const [gate] = await authorizeRemovals(db, { ...params, targetUserIds: [params.targetUserId] });
+    return gate;
+}
+
+/**
+ * authorizeRemoval for several departing members at once: the actor's role
+ * is read once and every target's role in one batched org_members read
+ * (same join on live organizations as getOrgRole), instead of two
+ * sequential role lookups per member. Gates come back in input order.
+ */
+async function authorizeRemovals(
+    db: Db,
+    params: { actorId: string; orgId: string; targetUserIds: string[] },
+): Promise<RemovalGate[]> {
     const actorRole = await getOrgRole(params.actorId, params.orgId, db);
-    if (!actorRole) return { ok: false, kind: "not_found" };
-    // A member may remove themselves (leave); removing others needs admin.
-    const isSelf = params.actorId === params.targetUserId;
-    if (!isSelf && !isOrgAdmin(actorRole))
-        return { ok: false, kind: "forbidden" };
-
-    const targetRole = await getOrgRole(params.targetUserId, params.orgId, db);
-    if (!targetRole) return { ok: false, kind: "not_found" };
-
-    // Leaving is always the member's own call. Removing somebody else is
-    // not: an admin may remove members, and only an owner may remove an
-    // admin or another owner.
-    if (!isSelf && !canManageOrgRole(actorRole, targetRole))
-        return { ok: false, kind: "owner_required" };
-    return { ok: true, isSelf, targetRole };
+    if (!actorRole) return params.targetUserIds.map(() => ({ ok: false, kind: "not_found" }));
+    const members = await selectInBatches<{ user_id: string; role: unknown }>(
+        "departing member roles",
+        params.targetUserIds,
+        (batch) =>
+            db
+                .from("org_members")
+                .select("user_id, role, organizations!inner(id)")
+                .is("organizations.deleted_at", null)
+                .eq("org_id", params.orgId)
+                .in("user_id", batch),
+    );
+    const roleByUser = new Map(
+        members.flatMap((member) =>
+            isOrgRole(member.role) ? [[member.user_id, member.role] as const] : [],
+        ),
+    );
+    return params.targetUserIds.map((targetUserId): RemovalGate => {
+        // A member may remove themselves (leave); removing others needs admin.
+        const isSelf = params.actorId === targetUserId;
+        if (!isSelf && !isOrgAdmin(actorRole)) return { ok: false, kind: "forbidden" };
+        const targetRole = roleByUser.get(targetUserId);
+        if (!targetRole) return { ok: false, kind: "not_found" };
+        // Leaving is always the member's own call. Removing somebody else is
+        // not: an admin may remove members, and only an owner may remove an
+        // admin or another owner.
+        if (!isSelf && !canManageOrgRole(actorRole, targetRole))
+            return { ok: false, kind: "owner_required" };
+        return { ok: true, isSelf, targetRole };
+    });
 }
 
 /**
@@ -714,10 +743,8 @@ export async function getMemberHandover(
         otherIds.some((id) => typeof id !== "string" || !id)
     )) return { ok: false, kind: "validation", detail: "Choose valid organization members." };
     const userIds = [...new Set([params.targetUserId, ...((otherIds ?? []) as string[])])];
-    for (const targetUserId of userIds) {
-        const gate = await authorizeRemoval(db, { ...params, targetUserId });
+    for (const gate of await authorizeRemovals(db, { ...params, targetUserIds: userIds }))
         if (!gate.ok) return gate;
-    }
     const loaded = await loadMemberHandover(db, params.orgId, userIds);
     if (!loaded.ok)
         return { ok: false, kind: "db_error", detail: loaded.detail };
