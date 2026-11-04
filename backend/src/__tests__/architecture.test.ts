@@ -34,9 +34,9 @@
 
 import { readdirSync, readFileSync, statSync, existsSync } from "node:fs";
 import { join, relative, resolve, sep } from "node:path";
-import { describe, expect, it } from "vitest";
+import { beforeAll, describe, expect, it } from "vitest";
 
-import { dependencies, readPaths, resolveDependency } from "./helpers/sourceDependencies";
+import { dependencies, loadSourceParser, readPaths, resolveDependency, type Paths } from "./helpers/sourceDependencies";
 
 const SRC = resolve(__dirname, "..");
 
@@ -61,7 +61,11 @@ function read(file: string): string {
   return readFileSync(join(SRC, file), "utf8");
 }
 
-const PATHS = readPaths(resolve(SRC, "../tsconfig.json"));
+let PATHS: Paths;
+beforeAll(async () => {
+  await loadSourceParser();
+  PATHS = readPaths(resolve(SRC, "../tsconfig.json"));
+});
 function importsOf(file: string): string[] {
   return dependencies(read(file), file).map(({ specifier }) => {
     const resolved = resolveDependency(join(SRC, file), specifier, resolve(SRC, ".."), PATHS);

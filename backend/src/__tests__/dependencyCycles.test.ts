@@ -1,14 +1,16 @@
 import { existsSync, readFileSync } from "node:fs";
 import { join, relative, resolve } from "node:path";
-import { describe, expect, it } from "vitest";
+import { beforeAll, describe, expect, it } from "vitest";
 import {
     cycles,
     dependencies,
+    loadSourceParser,
     readPaths,
     resolveDependency,
     sourceFiles,
 } from "./helpers/sourceDependencies";
 const ROOT = resolve(__dirname, "../../..");
+beforeAll(loadSourceParser);
 describe("source dependency contracts", () => {
     it("parses imports, re-exports, erased types, require and dynamic import without matching comments", () => {
         expect(dependencies(`
@@ -28,6 +30,12 @@ describe("source dependency contracts", () => {
             { specifier: "./lazy", typeOnly: false },
         ]);
         expect(() => dependencies("import(variable)")).toThrow("nonliteral");
+    });
+    it("parses TypeScript generics separately from JSX", () => {
+        expect(dependencies("const identity = <T>(value: T): T => value;", "source.ts")).toEqual([]);
+        expect(dependencies("import { Widget } from './widget'; const view = <Widget />;", "source.tsx")).toEqual([
+            { specifier: "./widget", typeOnly: false },
+        ]);
     });
     it("detects indirect cycles and self imports, leaving acyclic dependencies alone", () => {
         expect(cycles(new Map([['a', ['b']], ['b', ['c']], ['c', ['a']], ['self', ['self']], ['root', ['leaf']], ['leaf', []]]))).toEqual([['a', 'b', 'c'], ['self']]);

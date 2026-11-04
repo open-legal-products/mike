@@ -1,4 +1,8 @@
-import { parse } from "@babel/parser";
+// Babel 8 is ESM-only; these test helpers are checked as CommonJS.
+let parse: typeof import("@babel/parser", { with: { "resolution-mode": "import" } }).parse;
+export async function loadSourceParser(): Promise<void> {
+    ({ parse } = await import("@babel/parser"));
+}
 import { existsSync, readFileSync, readdirSync } from "node:fs";
 import { dirname, extname, join, resolve } from "node:path";
 export type Dependency = {
@@ -11,10 +15,12 @@ type Ast = {
 };
 /** Parse syntax, not comments/string contents. Include erased dependencies too. */
 export function dependencies(source: string, filename = "source.ts"): Dependency[] {
-    const ast = parse(source, { sourceType: "unambiguous", plugins: ["typescript", "jsx"], sourceFilename: filename });
+    const ast = parse(source, { sourceType: "unambiguous", plugins: /\.[jt]sx$/.test(filename) ? ["typescript", "jsx"] : ["typescript"], sourceFilename: filename });
     const result: Dependency[] = [];
     function add(node: unknown, typeOnly = false) {
-        const literal = node as Ast | undefined;
+        let literal = node as Ast | undefined;
+        while (literal && ["TSAsExpression", "TSNonNullExpression", "TSTypeAssertion"].includes(literal.type))
+            literal = literal.expression as Ast;
         if (literal?.type === "StringLiteral")
             result.push({ specifier: String(literal.value), typeOnly });
         else
@@ -33,7 +39,7 @@ export function dependencies(source: string, filename = "source.ts"): Dependency
             add(n.source, n.importKind === "type" || n.exportKind === "type" || Boolean(specs?.length && specs.every(s => s.importKind === "type" || s.exportKind === "type")));
         }
         else if (n.type === "TSImportType")
-            add(n.argument, true);
+            add(n.source, true);
         else if (n.type === "TSExternalModuleReference")
             add(n.expression);
         else if (n.type === "ImportExpression")
@@ -41,10 +47,7 @@ export function dependencies(source: string, filename = "source.ts"): Dependency
         else if (n.type === "CallExpression") {
             const callee = n.callee as Ast;
             if (callee.type === "Import" || (callee.type === "Identifier" && callee.name === "require")) {
-                let argument = (n.arguments as Ast[])[0];
-                while (argument && ["TSAsExpression", "TSNonNullExpression", "TSTypeAssertion"].includes(argument.type))
-                    argument = argument.expression as Ast;
-                add(argument);
+                add((n.arguments as Ast[])[0]);
             }
         }
         for (const [key, value] of Object.entries(n))
