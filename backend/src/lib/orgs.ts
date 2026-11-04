@@ -32,6 +32,7 @@ import type { OrgMemberHandover } from "@mike/contracts";
 import { listOrgPrivateContentAccess } from "./orgPrivateContent";
 import type { Db } from "./supabase";
 import { selectAllPages, selectInBatches } from "./batchedQuery";
+import { INTERNAL_ERROR_MESSAGE } from "./httpError";
 import { safeError } from "./safeError";
 import { recordAudit } from "./audit";
 import {
@@ -751,6 +752,10 @@ export async function getMemberHandover(
     return { ok: true, handover: loaded.handover };
 }
 
+/** Deadlock and serialization failures: the transaction was rolled back whole. */
+const TRANSIENT_LOCK_CODES = new Set(["40P01", "40001"]);
+const REMOVAL_RETRY_DELAY_MS = 150;
+
 export async function removeMember(
     db: Db,
     params: {
@@ -796,12 +801,27 @@ export async function removeMember(
     // The RPC rechecks roles and ownership under an organization lock, then
     // transfers/archives and removes membership in the same transaction.
     const assignedTo = typeof assignTo === "string" && assignTo ? assignTo : null;
-    const { error } = await db.rpc("remove_org_member", {
-        p_org_id: params.orgId,
-        p_user_id: params.targetUserId,
-        p_actor_id: params.actorId,
-        p_successor_id: assignedTo,
-    });
+    const removal = () =>
+        db.rpc("remove_org_member", {
+            p_org_id: params.orgId,
+            p_user_id: params.targetUserId,
+            p_actor_id: params.actorId,
+            p_successor_id: assignedTo,
+        });
+    let { error } = await removal();
+    // The departure fence locks the departing member's documents, then (on a
+    // rare late path) chats and reviews. A concurrent writer holding those in
+    // the reverse order makes Postgres abort one side with a deadlock
+    // (40P01) or serialization failure (40001); the whole transaction rolled
+    // back, so trying once more after a short pause is safe and usually wins.
+    if (error && TRANSIENT_LOCK_CODES.has(String(error.code))) {
+        await new Promise((resolve) => setTimeout(resolve, REMOVAL_RETRY_DELAY_MS));
+        ({ error } = await removal());
+        // Still contended: say so as the retryable conflict it is, not as an
+        // internal failure.
+        if (error && TRANSIENT_LOCK_CODES.has(String(error.code)))
+            return { ok: false, kind: "conflict", detail: INTERNAL_ERROR_MESSAGE };
+    }
     if (error) {
         if (isLastOwnerViolation(error)) return { ok: false, kind: "last_owner" };
         if (error.code === "42501") return { ok: false, kind: "forbidden" };

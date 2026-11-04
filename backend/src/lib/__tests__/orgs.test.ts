@@ -850,6 +850,32 @@ describe("handing over a departing member's work", () => {
         });
     });
 
+    it("retries a removal once when the departure fence deadlocks, then reports a retryable conflict", async () => {
+        const failing = (times: number) => {
+            const db = seed();
+            db._tables.projects = db._tables.projects.filter((row: Row) => row.visibility !== "organization");
+            db._tables.workflows = db._tables.workflows.filter((row: Row) => row.visibility !== "organization");
+            let left = times;
+            const rpc = db.rpc.bind(db);
+            const calls: string[] = [];
+            db.rpc = (name: string, args: unknown) => {
+                if (name === "remove_org_member") calls.push(name);
+                if (name === "remove_org_member" && left-- > 0)
+                    return Promise.resolve({ data: null, error: { code: "40P01", message: "deadlock detected" } });
+                return rpc(name, args);
+            };
+            return { db, calls };
+        };
+        const once = failing(1);
+        await expect(remove(once.db, "alex", "alex")).resolves.toEqual({ ok: true });
+        expect(once.calls).toHaveLength(2);
+        expect(isMember(once.db, "sam")).toBe(false);
+
+        const twice = failing(2);
+        await expect(remove(twice.db, "alex", "alex")).resolves.toMatchObject({ ok: false, kind: "conflict" });
+        expect(twice.calls).toHaveLength(2);
+    });
+
     it("needs no successor when only private work remains", async () => {
         const db = seed();
         db._tables.projects = db._tables.projects.filter((row: Row) => row.visibility !== "organization");
