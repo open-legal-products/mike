@@ -268,8 +268,11 @@ export const MIKE_SENTRY_DSN = {
 
 export type DsnResolution = {
     dsn: string;
-    /** Where the DSN came from; "default" means the Mike project's Sentry. */
-    source: "disabled" | "env" | "default";
+    /**
+     * Where the DSN came from; "default" means the Mike project's Sentry and
+     * "development" means off because this is a development build.
+     */
+    source: "disabled" | "env" | "default" | "development";
 };
 
 /**
@@ -281,13 +284,34 @@ export function resolveDsn(input: {
     disabled?: string;
     dsn?: string;
     fallback: string;
+    /**
+     * A development build (`next dev`, `tsx watch`, the add-in's webpack dev
+     * server): a contributor's laptop, not an install. It never falls back to
+     * the Mike project; only a DSN set on purpose (your own project, or the
+     * local sink in scripts/sentry-sink.mjs) turns it on.
+     */
+    development?: boolean;
 }): DsnResolution {
     if (input.disabled?.trim().toLowerCase() === "true") {
         return { dsn: "", source: "disabled" };
     }
     const explicit = input.dsn?.trim();
     if (explicit) return { dsn: explicit, source: "env" };
+    if (input.development) return { dsn: "", source: "development" };
     return { dsn: input.fallback, source: "default" };
+}
+
+/**
+    * The `environment` every runtime reports under. An explicit
+    * SENTRY_ENVIRONMENT always wins; otherwise a development build is
+    * "development" and everything else (an install) is "self-hosted", so a
+    * developer who does opt in can never be mistaken for an install.
+    */
+export function sentryEnvironment(
+    explicit: string | undefined,
+    development: boolean,
+): string {
+    return explicit?.trim() || (development ? "development" : "self-hosted");
 }
 
 export type InstallKind = "official" | "community";
