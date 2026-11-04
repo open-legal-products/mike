@@ -12,6 +12,7 @@ const mocks = vi.hoisted(() => ({
   reportError: vi.fn((..._args: unknown[]) => "event-1"),
   createServerSupabase: vi.fn(),
   createRequestSupabase: vi.fn(),
+  clearRequestAuthCookies: vi.fn(),
   assurance: vi.fn(),
 }));
 vi.mock("../lib/observability/sentry", async (importOriginal) => ({
@@ -24,6 +25,7 @@ vi.mock("../lib/supabase", () => ({
 }));
 vi.mock("../lib/authSession", () => ({
   createRequestSupabase: () => mocks.createRequestSupabase(),
+  clearRequestAuthCookies: mocks.clearRequestAuthCookies,
 }));
 import { requireAuth, requireMfaIfEnrolled } from "./auth";
 
@@ -95,6 +97,19 @@ describe("auth middleware failure reporting", () => {
       "[http/internal-error]",
       expect.objectContaining({ error: failure }),
     );
+  });
+
+  it("answers a session GoTrue refused with a 401 and cleared cookies, not a reported 500", async () => {
+    const { AuthApiError } = await import("@supabase/supabase-js");
+    const refused = new AuthApiError("Invalid Refresh Token: Already Used", 400, "refresh_token_already_used");
+    mocks.createRequestSupabase.mockReturnValue({ auth: { getUser: vi.fn().mockRejectedValue(refused) } });
+
+    const res = await request(appWith(requireAuth)).get(ROUTE);
+
+    expect(res.status).toBe(401);
+    expect(res.body).toEqual({ code: "session_expired", detail: "Invalid or expired session" });
+    expect(mocks.clearRequestAuthCookies).toHaveBeenCalledOnce();
+    expect(mocks.reportError).not.toHaveBeenCalled();
   });
 
   it("reports a missing admin client as auth.supabase_unavailable instead of a bare 500", async () => {

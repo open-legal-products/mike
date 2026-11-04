@@ -5,8 +5,9 @@ import { syncProfileEmail } from "../lib/userLookup";
 import { sendInternalError, sendUpstreamUnavailable } from "../lib/httpError";
 import { isAuthUpstreamFailure } from "../lib/authUpstream";
 import { noteUpstreamReachable } from "../lib/upstreamOutage";
-import { createRequestSupabase } from "../lib/authSession";
+import { clearRequestAuthCookies, createRequestSupabase } from "../lib/authSession";
 import { reportSchemaOutOfDateOnce } from "../lib/schemaOutOfDate";
+import { isAuthError } from "@supabase/supabase-js";
 import { requestOriginIsTrusted } from "../lib/origins";
 import { devLog, isDev } from "../lib/log";
 import { AppError } from "../lib/appError";
@@ -214,6 +215,15 @@ export async function requireAuth(
         res.locals.authSource = "cookie";
       }
     } catch (error) {
+      // GoTrue refused the session (a refresh token that was revoked or
+      // already used): the visitor must sign in again, which is a 401 the
+      // client already handles, not a server failure. Clear the dead cookies
+      // so the next request does not present them again.
+      if (isAuthError(error)) {
+        clearRequestAuthCookies(req, res);
+        res.status(401).json({ code: "session_expired", detail: "Invalid or expired session" });
+        return;
+      }
       sendInternalError(
         res,
         new AppError(
