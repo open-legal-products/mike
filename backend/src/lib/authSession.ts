@@ -9,6 +9,7 @@ import type { SupabaseClient, User } from "@supabase/supabase-js";
 import { requestOriginIsWordAddin } from "./origins";
 import { supabaseSessionConfiguration } from "./runtimeConfig";
 import { singleFlightRefreshFetch } from "./authRefresh";
+import { AppError } from "./appError";
 
 const AUTH_COOKIE_BASE_NAME = "mike-session";
 const refreshFetch = singleFlightRefreshFetch();
@@ -106,6 +107,18 @@ export function createRequestSupabase(
         return parseCookieHeader(req.headers.cookie ?? "");
       },
       setAll(cookiesToSet, responseHeaders) {
+        // GoTrue can announce a session change after this request's
+        // response has started. Writing then throws ERR_HTTP_HEADERS_SENT
+        // inside GoTrue's subscriber loop, which rethrows it out of
+        // getUser() as a 500. Nothing can still reach this response, so
+        // skip the write; the next request refreshes again.
+        if (res.headersSent) {
+          console.warn(
+            "[auth] session cookies changed after the response was sent",
+            new AppError("auth.cookie_write_after_response", "session cookie write skipped: response already sent"),
+          );
+          return;
+        }
         for (const { name, value, options } of cookiesToSet) {
           appendCookie(res, name, value, {
             ...options,
