@@ -612,6 +612,26 @@ describe("next dev toolchain noise", () => {
         expect(scrubEvent(event, { captureContext: { extra: { arguments: ["Build Error"] } } })).toBeNull();
     });
 
+    it("drops a dev-server compile error whose last frame is the edited file (2Y)", () => {
+        const { scrubEvent } = createEventScrubber();
+        const next = "frontend/node_modules/next/dist/server";
+        const event: ScrubbableEvent = {
+            tags: { ...devTags },
+            exception: { values: [{
+                type: "Error",
+                mechanism: { type: "generic", handled: false },
+                stacktrace: { frames: [
+                    { filename: `${next}/base-server.js` },
+                    { filename: `${next}/dev/next-dev-server.js` },
+                    { filename: `${next}/lib/dev-bundler-service.js` },
+                    { filename: `${next}/dev/hot-reloader-turbopack.js` },
+                    { filename: "src/app/components/intake/IntakeInbox.tsx" },
+                ] },
+            }] },
+        };
+        expect(scrubEvent(event)).toBeNull();
+    });
+
     it("keeps a genuine app error in development", () => {
         const { scrubEvent } = createEventScrubber();
         const appFrame = { filename: `${origin}/_next/static/chunks/src_app_components_chat_ChatView_tsx_1a2b3c._.js` };

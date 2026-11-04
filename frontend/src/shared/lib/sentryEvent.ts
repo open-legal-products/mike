@@ -565,6 +565,14 @@ function findNested(
 const DEV_TOOLCHAIN_FRAME =
     /(?:^|\/)node_modules\/(?:next\/dist|react-dom|react|scheduler)\/|(?:^|\/)_next\/static\/chunks\/(?:node_modules_(?:next_dist|react-dom|react|scheduler)_|(?:\[|%5B)turbopack(?:\]|%5D)_)/i;
 const STACK_LINE_LOCATION = /\(?([^\s()]+):\d+:\d+\)?\s*$/;
+/**
+ * The `next dev` compile pipeline itself. A frame here means the event was
+ * raised by the dev server compiling the developer's edits (MIKE-FRONTEND-2Y:
+ * hot-reloader-turbopack → next-dev-server → base-server, ending at the
+ * edited `src/…` file). Production builds never run these modules, so one
+ * such frame is enough, whatever other frames the stack carries.
+ */
+const DEV_COMPILE_FRAME = /(?:^|\/)next\/dist\/server\/dev\/(?:hot-reloader-turbopack|next-dev-server)\.js$/i;
 
 /**
  * True for an AUTOMATIC capture (console bridge, global unhandled handler)
@@ -601,6 +609,7 @@ function isDevToolchainNoise(event: ScrubbableEvent, automatic: boolean): boolea
     const known = locations.filter(
         (location) => location !== "<anonymous>" && location !== "native",
     );
+    if (known.some((location) => DEV_COMPILE_FRAME.test(location))) return true;
     return known.length > 0 && known.every((location) => DEV_TOOLCHAIN_FRAME.test(location));
 }
 
