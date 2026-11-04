@@ -92,6 +92,18 @@ set_kv() {
 
 [ -f .env ] || cp .env.example .env
 [ -f .env.hosted.bak ] || cp .env .env.hosted.bak
+# The template's placeholder secrets are refused at boot (runtimeConfig.ts), so
+# a fresh checkout gets the same throwaway values CI uses (.github/workflows/e2e.yml).
+# Real values already in .env are left alone.
+for pair in \
+    "DOWNLOAD_SIGNING_SECRET=replace-with-a-random-32-byte-hex-string=ci-download-signing-secret-0123456789abcdef" \
+    "USER_API_KEYS_ENCRYPTION_SECRET=your-long-random-secret=ci-user-api-keys-encryption-secret-0123456789abcdef"; do
+    key=${pair%%=*}; rest=${pair#*=}; placeholder=${rest%%=*}; local_value=${rest#*=}
+    current=$(grep -E "^${key}=" .env | tail -1 | cut -d= -f2-)
+    if [ -z "$current" ] || [ "$current" = "$placeholder" ]; then
+        set_kv .env "$key" "$local_value"
+    fi
+done
 set_kv .env SUPABASE_URL "$API_URL"
 set_kv .env SUPABASE_PUBLISHABLE_KEY "$ANON_KEY"
 set_kv .env SUPABASE_SECRET_KEY "$SERVICE_KEY"
