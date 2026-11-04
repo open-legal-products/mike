@@ -332,6 +332,28 @@ describe("browserSentryOptions", () => {
     });
 });
 
+// MIKE-FRONTEND-2, 9, N, S: `next dev` checkouts reported to the Mike
+// project as environment=self-hosted, indistinguishable from installs.
+describe("development builds", () => {
+    const own = "https://k@o9.ingest.sentry.io/9";
+    const dev = (env: Record<string, string>) => ({ NODE_ENV: "development", ...env }) as unknown as NodeJS.ProcessEnv;
+
+    it("do not fall back to the Mike project; a DSN set on purpose still reports", () => {
+        expect(reportingDestination(dev({}))).toEqual({ dsn: "", source: "development" });
+        // The shipped example .env.local sets these to false: not an opt-in.
+        expect(reportingDestination(dev({ SENTRY_DISABLED: "false", NEXT_PUBLIC_SENTRY_DISABLED: "false" })).dsn).toBe("");
+        expect(serverSentryOptions("server", dev({})).enabled).toBe(false);
+        expect(reportingDestination(dev({ SENTRY_DSN: own }))).toEqual({ dsn: own, source: "runtime" });
+    });
+
+    it("report as environment development unless SENTRY_ENVIRONMENT says otherwise", () => {
+        expect(browserSentryOptions({ nodeEnv: "development" }).environment).toBe("development");
+        expect(serverSentryOptions("server", dev({ SENTRY_DSN: own })).environment).toBe("development");
+        expect(serverSentryOptions("server", dev({ SENTRY_DSN: own, SENTRY_ENVIRONMENT: "staging" })).environment).toBe("staging");
+        expect(browserSentryOptions({ nodeEnv: "development", environment: "staging" }).environment).toBe("staging");
+    });
+});
+
 describe("release tagging", () => {
     it("builds mike@<version>+<sha12> for both the browser and the server options", () => {
         expect(
