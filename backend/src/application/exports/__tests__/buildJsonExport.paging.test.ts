@@ -10,7 +10,7 @@ vi.mock("../../../lib/access", async (importOriginal) => ({
     createDocumentAccessChecker: () => async () => ({ ok: true }),
     createSharedRowAccessChecker: () => async () => ({ ok: true }),
 }));
-import { buildUserAccountExport, buildUserChatsExport } from "../../../application/exports/buildJsonExport";
+import { buildUserAccountExport, buildUserChatsExport } from "../buildJsonExport";
 
 const stamp = (i: number) => `2026-01-01T00:00:00.${String(i).padStart(3, "0")}Z`;
 const userId = "u1";

@@ -3,7 +3,7 @@ import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { buildUserAccountExport, buildUserChatsExport } from "../../application/exports/buildJsonExport";
-import { makeExportDb, type Row } from "../../modules/user/__tests__/user.dataExport.fixture";
+import { makeExportDb, type Row } from "../../application/exports/__tests__/exportDb.fixture";
 
 // Opt in with MIKE_TEST_POSTGRES_CONTAINER=supabase_db_backend. All writes
 // target a disposable database; the container's application DB is untouched.

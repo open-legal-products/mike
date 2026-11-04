@@ -9,7 +9,7 @@ import {
     saveApiKeyFor,
     saveCourtListenerConnection,
     userKeyOwner,
-} from "../../../lib/providerCredentials/store";
+} from "./store";
 
 // Whose key a piece of work runs on. The tests go through the real store —
 // encryption included — against an in-memory copy of the four tables it

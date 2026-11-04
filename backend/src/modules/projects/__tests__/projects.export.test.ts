@@ -37,6 +37,17 @@ describe("project export manifest", () => {
         expect(Math.max(...fake.calls.map((call) => call.returned))).toBeLessThanOrEqual(7);
     });
 
+    it("includes project memory and seals the manifest, refusing a body that does not match its digest", async () => {
+        const markdown = "# Memory\n\n- Prefers concise drafts.\n";
+        const hash = "6adb5e098c8e2d456cd117d73fbdb23cdf1b50f3bebb5f96e2e02acde6d24c83";
+        const memory = (content: string) => ({ id: "memory-project", scope: "project", project_id: "p1", enabled: true, epoch: 0, revision: 1, content, content_sha256: hash, size_bytes: 1, last_source: "curator", updated_by: "u1", status: "idle" });
+        const { tables } = project(1);
+        const manifest = await buildProjectExportManifest(tableDb({ ...tables, memory_files: [memory(markdown)] }).db, "p1");
+        expect(manifest.memory).toMatchObject({ enabled: true, markdown, source: "curator" });
+        expect(manifest.digest.value).toMatch(/^[0-9a-f]{64}$/);
+        await expect(buildProjectExportManifest(tableDb({ ...tables, memory_files: [memory("# Tampered")] }).db, "p1")).rejects.toThrow(/checksum mismatch/i);
+    });
+
     it("fails rather than sealing a manifest with a table missing", async () => {
         const { tables } = project(3);
         const fake = tableDb(tables, { failSelects: ["document_versions"] });

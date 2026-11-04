@@ -16,7 +16,7 @@ import {
     deleteUserOrganizations,
     deleteUserProjects,
     listOrgsBlockingAccountDeletion,
-} from "../../../application/accounts/dataCleanup";
+} from "../dataCleanup";
 
 type Row = Record<string, unknown>;
 

@@ -3,8 +3,8 @@ import {
     buildUserAccountExport,
     buildUserChatsExport,
     buildUserTabularReviewsExport,
-} from "../../../application/exports/buildJsonExport";
-import { makeExportDb, type Row } from "./user.dataExport.fixture";
+} from "../buildJsonExport";
+import { makeExportDb, type Row } from "./exportDb.fixture";
 
 const userId = "departed-user";
 const email = "departed@example.test";

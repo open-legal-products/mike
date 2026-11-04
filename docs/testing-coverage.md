@@ -20,7 +20,7 @@ nested feature directories, `modules/<domain>/__tests__/`, and
 `src/__tests__/integration/`. `src/__tests__/architecture.test.ts` enforces
 the module layering described in `docs/backend-architecture.md`.
 Read a couple of the existing suites first (`lib/__tests__/access.test.ts`,
-`modules/user/__tests__/user.dataCleanup.test.ts`) and match their
+`application/accounts/__tests__/dataCleanup.test.ts`) and match their
 conventions: plain in-memory Supabase query mocks for unit tests, no real
 network, one `describe` block per function or concern, and assertions on
 current behavior. Tests that
