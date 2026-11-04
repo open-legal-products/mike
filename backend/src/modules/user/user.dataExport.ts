@@ -7,6 +7,8 @@ import {
     type OrgRole,
 } from "../../lib/access";
 import { mapWithConcurrency } from "../../lib/concurrency";
+import { chunkArray } from "../../lib/arrays";
+import { ID_FILTER_BATCH_SIZE } from "../../lib/batchedQuery";
 import { sealManifest } from "../../lib/manifestSigning";
 import { type Db } from "../../lib/supabase";
 import {
@@ -56,14 +58,26 @@ async function selectAll(
     return rows;
 }
 
+/**
+ * Every row whose `column` is one of `ids`. The ids go 50 per request (an
+ * export can name thousands of documents, past the gateway's URL limit),
+ * each batch read in full pages; `configure` adds further filters, and rows
+ * are returned oldest first across batches.
+ */
 async function selectByIds(
     db: Db,
     table: string,
     column: string,
     ids: string[],
+    configure: (query: any) => any = (query) => query,
+    columns = "*",
 ): Promise<Record<string, unknown>[]> {
-    if (ids.length === 0) return [];
-    return selectAll(db, table, (query) => query.in(column, ids));
+    const rows: Record<string, unknown>[] = [];
+    for (const batch of chunkArray(uniqueStrings(ids), ID_FILTER_BATCH_SIZE))
+        rows.push(...(await selectAll(db, table, (query) => configure(query.in(column, batch)), columns)));
+    return rows.sort((a, b) =>
+        String(a.created_at ?? "").localeCompare(String(b.created_at ?? "")),
+    );
 }
 
 /**
@@ -710,11 +724,10 @@ export async function buildUserAccountExport(
                       ),
                   ];
                   if (projectIds.length === 0) return [];
-                  return selectAll(db, "projects", (query) =>
-                      inWorkspace(
-                          query.in("id", projectIds).neq("user_id", userId),
-                          orgId,
-                      ).order("created_at", { ascending: true }),
+                  return selectByIds(db, "projects", "id", projectIds, (query) =>
+                      inWorkspace(query.neq("user_id", userId), orgId).order("created_at", {
+                          ascending: true,
+                      }),
                       "id, user_id, org_id, name, cm_number, created_at, updated_at",
                   ).then(async (rows) => {
                       const readable = await readableRows(rows, (row) =>
@@ -747,11 +760,8 @@ export async function buildUserAccountExport(
                       ),
                   ];
                   if (reviewIds.length === 0) return [];
-                  return selectAll(db, "tabular_reviews", (query) =>
-                      query
-                          .in("id", reviewIds)
-                          .neq("user_id", userId)
-                          .order("created_at", { ascending: true }),
+                  return selectByIds(db, "tabular_reviews", "id", reviewIds, (query) =>
+                      query.neq("user_id", userId).order("created_at", { ascending: true }),
                       "id, user_id, project_id, org_id, archived_at, title, practice, created_at, updated_at",
                   ).then(async (rows) => {
                       const readable = await readableRows(

@@ -7,6 +7,7 @@
 // a single module.
 
 import type { Db } from "../../lib/supabase";
+import { queryFailureCause, selectInBatches } from "../../lib/batchedQuery";
 import { loadCreatorProfiles } from "../../lib/userLookup";
 export type { Db };
 import { deleteCollectionDocuments } from "../documents/documents.service";
@@ -27,17 +28,20 @@ export async function attachProjectMemoryEnabled<
   T extends { id: string; memory_enabled?: boolean },
 >(db: Db, projects: T[]): Promise<{ rows: T[]; error: unknown | null }> {
   if (projects.length === 0) return { rows: projects, error: null };
-  const { data, error } = await db
-    .from("memory_files")
-    .select("project_id, enabled")
-    .eq("scope", "project")
-    .in(
-      "project_id",
-      projects.map((project) => project.id),
+  let data: { project_id: string; enabled: unknown }[];
+  try {
+    data = await selectInBatches("project memory settings", projects.map((project) => project.id), (batch) =>
+      db
+        .from("memory_files")
+        .select("project_id, enabled")
+        .eq("scope", "project")
+        .in("project_id", batch),
     );
-  if (error) return { rows: projects, error };
+  } catch (error) {
+    return { rows: projects, error: queryFailureCause(error) };
+  }
   const enabledByProject = new Map(
-    (data ?? []).map((row) => [row.project_id as string, row.enabled === true]),
+    data.map((row) => [row.project_id, row.enabled === true]),
   );
   return {
     rows: projects.map((project) => ({
