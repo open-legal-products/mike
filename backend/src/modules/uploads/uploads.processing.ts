@@ -148,14 +148,21 @@ class InvalidPdfFileError extends Error {
   }
 }
 
+const PDF_HEADER_SIGNATURE = Buffer.from("%PDF-");
+// ISO 32000 lets a reader accept the header anywhere in the first 1024 bytes
+// (Annex H, implementation note 13), and pdf.js — which renders and page-counts
+// these files downstream — scans exactly that window. Mirroring it means a
+// file the viewer can open is never refused here as "not a PDF".
+const PDF_HEADER_SEARCH_WINDOW_BYTES = 1024;
+
+// A bounded signature search, not a parser: it rejects bytes that cannot be a
+// PDF (a renamed .txt, a ZIP, a truncated or empty file), not malformed PDFs.
 async function validatePdfHeader(filePath: string): Promise<void> {
   const handle = await open(filePath, "r");
   try {
-    // Require the signature within the first KiB; \s also accepts a UTF-8 BOM.
-    // This is a bounded signature check, not a parser.
-    const prefix = Buffer.alloc(1024);
-    const { bytesRead } = await handle.read(prefix, 0, prefix.length, 0);
-    if (!/^\s*%PDF-/.test(prefix.toString("utf8", 0, bytesRead))) {
+    const window = Buffer.alloc(PDF_HEADER_SEARCH_WINDOW_BYTES);
+    const { bytesRead } = await handle.read(window, 0, window.length, 0);
+    if (window.subarray(0, bytesRead).indexOf(PDF_HEADER_SIGNATURE) === -1) {
       throw new InvalidPdfFileError();
     }
   } finally {

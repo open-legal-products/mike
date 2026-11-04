@@ -318,9 +318,18 @@ describe("upload processing", () => {
     });
   });
 
-  it.each(["", " \t\r\n\f", "\uFEFF", " \n\uFEFF\t"])(
-    "accepts a PDF header with leading prefix %j",
-    async (prefix) => {
+  it.each([
+    ["nothing", ""],
+    ["whitespace", " \t\r\n\f"],
+    ["a UTF-8 BOM", "\uFEFF"],
+    ["whitespace and a BOM", " \n\uFEFF\t"],
+    // pdf.js accepts a header anywhere in the first 1024 bytes, so a
+    // preamble that ends exactly there must still pass.
+    ["a short binary preamble", "junk"],
+    ["a preamble that fills the window", "x".repeat(1024 - "%PDF-".length)],
+  ])(
+    "accepts a PDF header preceded by %s",
+    async (_label, prefix) => {
       const bytes = Buffer.concat([Buffer.from(prefix), pdfBytes]);
       mocks.createFileReadStream.mockImplementation(() => Readable.from([bytes]));
       const db = fakeDb({ documents: [{ data: { id: baseFile.resource_id } }] });
@@ -332,9 +341,17 @@ describe("upload processing", () => {
     },
   );
 
-  it.each(["", "plain text", "PK\u0003\u0004Office bytes", "%PDF", "junk%PDF-1.7", " \uFEFF\n"])(
-    "rejects non-PDF bytes %j before destination writes and removes the artifact",
-    async (content) => {
+  it.each([
+    ["an empty file", ""],
+    ["a renamed text file", "plain text"],
+    ["a ZIP container", "PK\u0003\u0004Office bytes"],
+    ["a signature missing its dash", "%PDF"],
+    ["whitespace only", " \uFEFF\n"],
+    // One byte past the window pdf.js scans: the viewer would not open it.
+    ["a header past 1024 bytes", "x".repeat(1024 - "%PDF-".length + 1) + "%PDF-1.7"],
+  ])(
+    "rejects %s before destination writes and removes the artifact",
+    async (_label, content) => {
       const bytes = Buffer.from(content);
       mocks.createFileReadStream.mockImplementation(() => Readable.from([bytes]));
       const db = fakeDb();
