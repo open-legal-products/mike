@@ -2,9 +2,8 @@ import { createHash } from "node:crypto";
 import {
     checkProjectAccess,
     checkWorkflowAccess,
-    ensureChatAccess,
-    ensureDocAccess,
-    ensureReviewAccess,
+    createDocumentAccessChecker,
+    createSharedRowAccessChecker,
     type OrgRole,
 } from "../../lib/access";
 import { mapWithConcurrency } from "../../lib/concurrency";
@@ -127,8 +126,9 @@ async function loadUserReviews(
             ascending: true,
         }),
     );
-    return readableRows(reviews, (row) =>
-        ensureReviewAccess(row, userId, userEmail, db),
+    return readableRows(
+        reviews,
+        createSharedRowAccessChecker("tabular_review", userId, userEmail, db),
     );
 }
 
@@ -213,8 +213,9 @@ async function loadUserChats(
             ascending: true,
         }),
     );
-    const chats = await readableRows(candidates, (row) =>
-        ensureChatAccess(row, userId, userEmail, db),
+    const chats = await readableRows(
+        candidates,
+        createSharedRowAccessChecker("chat", userId, userEmail, db),
     );
     const chatIds = idsFrom(chats);
     const messages = await selectByIds(db, "chat_messages", "chat_id", chatIds);
@@ -257,7 +258,7 @@ async function loadUserTabularChats(
     // A review chat is in its review's workspace.
     const readableReviews = await readableRows(
         reviews.filter((review) => rowInWorkspace(review, orgId)),
-        (row) => ensureReviewAccess(row, userId, userEmail, db),
+        createSharedRowAccessChecker("tabular_review", userId, userEmail, db),
     );
     const reviewIds = new Set(idsFrom(readableReviews));
     const chats = candidates.filter(
@@ -755,7 +756,7 @@ export async function buildUserAccountExport(
                   ).then(async (rows) => {
                       const readable = await readableRows(
                           rows.filter((row) => rowInWorkspace(row, orgId)),
-                          (row) => ensureReviewAccess(row, userId, userEmail, db),
+                          createSharedRowAccessChecker("tabular_review", userId, userEmail, db),
                       );
                       return readable.map(
                           ({ org_id: _org, archived_at: _archive, ...row }) => row,
@@ -811,7 +812,7 @@ export async function buildUserAccountExport(
     );
     const documents = await readableRows(
         [...standaloneDocuments, ...projectDocuments],
-        (row) => ensureDocAccess(row, userId, userEmail, db),
+        createDocumentAccessChecker(userId, userEmail, db),
     );
     const documentIds = idsFrom(documents);
     const reviewIds = idsFrom(tabularReviews);

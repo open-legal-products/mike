@@ -718,6 +718,46 @@ export function createDocumentAccessChecker(userId: string, userEmail: string | 
 }
 
 /**
+ * The review/chat twin of createDocumentAccessChecker, for callers that
+ * authorize many rows at once (data exports). A project child's verdict is
+ * its project's, so each project is checked once; a creator's own
+ * standalone rows depend only on their organization membership, so that is
+ * resolved once per organization. Anything else (a non-creator's standalone
+ * row, reached through a per-row grant) is still checked row by row.
+ */
+export function createSharedRowAccessChecker(
+    kind: "tabular_review" | "chat",
+    userId: string,
+    userEmail: string | null | undefined,
+    db: Db,
+) {
+    const projects = new Map<string, ReturnType<typeof checkProjectAccess>>();
+    const creatorOrgs = new Map<string, Promise<ResourceAccess>>();
+    return async (row: Parameters<typeof ensureSharedRowAccess>[1]): Promise<ResourceAccess> => {
+        const isCreator = !!row.user_id && row.user_id === userId;
+        if (row.project_id) {
+            let pending = projects.get(row.project_id);
+            if (!pending) {
+                pending = checkProjectAccess(row.project_id, userId, userEmail, db);
+                projects.set(row.project_id, pending);
+            }
+            const access = await pending;
+            return access.ok
+                ? resourceAccessFor(access.projectRole, access.orgRole, isCreator)
+                : { ok: false };
+        }
+        if (!isCreator) return ensureSharedRowAccess(kind, row, userId, userEmail, db);
+        const key = row.org_id ?? "";
+        let pending = creatorOrgs.get(key);
+        if (!pending) {
+            pending = ensureSharedRowAccess(kind, row, userId, userEmail, db);
+            creatorOrgs.set(key, pending);
+        }
+        return pending;
+    };
+}
+
+/**
  * Shared derivation for tabular reviews and assistant chats. Project children
  * inherit the project role exactly.
  *
