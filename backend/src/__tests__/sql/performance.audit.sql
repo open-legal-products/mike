@@ -123,3 +123,53 @@ begin
 end;
 $$;
 rollback;
+
+-- M-S6: the username filter resolves matching profiles once per page call,
+-- among the organization's actors, instead of probing a profile per event.
+-- Events, order and the total count are unchanged.
+begin;
+-- Live rows a statement read from a table: sequential and bitmap heap reads
+-- plus heap fetches through its indexes. Index entries alone are not
+-- counted, because rolled-back fixtures in other suites leave dead entries
+-- that an index scan steps over until vacuum.
+create function pg_temp.rel_work(rel regclass) returns bigint language sql as $$
+  select (pg_stat_get_xact_tuples_returned(rel)+pg_stat_get_xact_tuples_fetched(rel)
+    +coalesce((select sum(pg_stat_get_xact_tuples_fetched(indexrelid)) from pg_index where indrelid=rel),0))::bigint;
+$$;
+do $$
+declare admin_id uuid:=gen_random_uuid(); alice uuid:=gen_random_uuid(); busy uuid:=gen_random_uuid(); org uuid:=gen_random_uuid();
+  pattern text; result jsonb; expected_ids jsonb; expected_total bigint; before bigint; reads bigint;
+begin
+  insert into auth.users(id,email) values(admin_id,admin_id||'@example.test'),(alice,'alice@example.test'),(busy,busy||'@example.test');
+  update public.user_profiles set display_name='Alice Smith' where user_id=alice;
+  update public.user_profiles set display_name='Busy Robot' where user_id=busy;
+  -- Everyone else on the platform, none of whom acts in this organization.
+  insert into auth.users(id,email) select gen_random_uuid(),'platform-'||n||'@example.test' from generate_series(1,3000) n;
+  insert into public.organizations(id,name,created_by) values(org,'Username filter',admin_id);
+  insert into public.org_members(org_id,user_id,role) values(org,admin_id,'owner');
+  insert into public.audit_events(org_id,user_id,user_email,action,created_at)
+    select org,busy,'recorded-'||n||'@example.test','project.updated',now()-n*interval '1 second' from generate_series(1,3000) n;
+  insert into public.audit_events(org_id,user_id,user_email,action,created_at)
+    select org,alice,'old-address@example.test','chat.created',now()-n*interval '1 minute' from generate_series(1,5) n;
+  analyze public.audit_events; analyze public.user_profiles;
+  foreach pattern in array array['%alice%','%SMITH%','%robot%','%recorded-7%','%old-address%','%nobody%'] loop
+    -- The original predicate, evaluated directly.
+    select coalesce(jsonb_agg(id order by created_at desc,id),'[]'),count(*) into expected_ids,expected_total from (
+      select a.id,a.created_at from public.audit_events a where a.org_id=org and (a.user_email ilike pattern
+        or exists(select 1 from public.user_profiles profile where profile.user_id=a.user_id
+          and (profile.display_name ilike pattern or profile.email ilike pattern)))
+      order by a.created_at desc,a.id limit 50) page;
+    select count(*) into expected_total from public.audit_events a where a.org_id=org and (a.user_email ilike pattern
+        or exists(select 1 from public.user_profiles profile where profile.user_id=a.user_id
+          and (profile.display_name ilike pattern or profile.email ilike pattern)));
+    before:=pg_temp.rel_work('public.user_profiles');
+    result:=public.organization_audit_events_page(org,admin_id,'',jsonb_build_object('username_pattern',pattern));
+    reads:=pg_temp.rel_work('public.user_profiles')-before;
+    assert (select coalesce(jsonb_agg(e->'id'),'[]') from jsonb_array_elements(result->'events') e)=expected_ids,
+      format('username filter %s changed the page',pattern);
+    assert (result->>'total')::bigint=expected_total,format('username filter %s changed the total',pattern);
+    assert reads<50,format('username filter %s read %s profile rows',pattern,reads);
+  end loop;
+end;
+$$;
+rollback;

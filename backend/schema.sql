@@ -9640,9 +9640,25 @@ begin
   -- remain bound parameters, including arrays, search patterns and dates.
   candidates:=$query$
     select a.* from public.audit_events a where a.org_id=$1
+      -- Profile matches are resolved once per call: the organization's
+      -- distinct actors (an index seek per actor, as organization_audit_actors
+      -- does), each profile read by its key, instead of a profile probe per
+      -- event or a pass over every profile on the platform.
       and ($4->>'username_pattern' is null or a.user_email ilike $4->>'username_pattern'
-        or exists(select 1 from public.user_profiles profile where profile.user_id=a.user_id
-          and (profile.display_name ilike $4->>'username_pattern' or profile.email ilike $4->>'username_pattern')))
+        or a.user_id = any(array(
+          with recursive actors as (
+            (select e.user_id from public.audit_events e
+              where e.org_id=$1 and e.user_id is not null order by e.user_id limit 1)
+            union all
+            select next_actor.user_id from actors previous cross join lateral (
+              select e.user_id from public.audit_events e
+              where e.org_id=$1 and e.user_id>previous.user_id order by e.user_id limit 1
+            ) next_actor
+          )
+          select profile.user_id from actors cross join lateral (
+            select p.user_id,p.display_name,p.email from public.user_profiles p where p.user_id=actors.user_id offset 0
+          ) profile
+          where profile.display_name ilike $4->>'username_pattern' or profile.email ilike $4->>'username_pattern')))
       and ($4->>'action' is null or a.action=$4->>'action')
       and ($4->>'status' is null or a.status=$4->>'status')
       and ($4->>'surface' is null or a.surface=$4->>'surface')
@@ -12234,5 +12250,6 @@ insert into public.schema_migrations (filename) values
   ('20261101_15_db_jobs_payload_indexes.sql'),
   ('20261101_16_folder_name_indexes.sql'),
   ('20261101_17_ownerless_items_set_based.sql'),
-  ('20261101_18_departure_root_candidates.sql')
+  ('20261101_18_departure_root_candidates.sql'),
+  ('20261101_19_audit_username_filter_actors.sql')
 on conflict (filename) do nothing;
