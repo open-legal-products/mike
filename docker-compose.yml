@@ -213,13 +213,18 @@ services:
       AWS_ACCESS_KEY_ID: rustfsadmin
       AWS_SECRET_ACCESS_KEY: rustfsadmin
       AWS_DEFAULT_REGION: us-east-1
+      # The bucket CORS policy allows browser uploads from exactly these
+      # origins (docker/storage-cors.sh). Same values the backend gets below.
+      FRONTEND_URL: ${FRONTEND_URL:-http://localhost:3000}
+      WORD_ADDIN_URL: ${WORD_ADDIN_URL:-}
     volumes:
-      - ./docker/storage-cors.json:/storage-cors.json:ro
+      - ./docker/storage-cors.sh:/storage-cors.sh:ro
     entrypoint: /bin/sh
     command: >
       -c "until aws --endpoint-url http://storage:9000 s3 ls; do echo 'waiting for storage'; sleep 2; done;
           aws --endpoint-url http://storage:9000 s3 mb s3://mike || true;
-          aws --endpoint-url http://storage:9000 s3api put-bucket-cors --bucket mike --cors-configuration file:///storage-cors.json"
+          sh /storage-cors.sh > /tmp/storage-cors.json &&
+          aws --endpoint-url http://storage:9000 s3api put-bucket-cors --bucket mike --cors-configuration file:///tmp/storage-cors.json"
     restart: "no"
 
   # --- Redis: backs the BullMQ job queues (conversion, extraction, fast
