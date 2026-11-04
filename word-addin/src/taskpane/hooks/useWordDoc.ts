@@ -2494,9 +2494,17 @@ export function resolveTrackedEdit(
  * sync. A stale proxy fails that read with the document untouched, and the
  * group's edits go to the per-edit resolver, which proves ownership through
  * the edit's own anchors (its bookmark/range) before touching a revision, as
- * do edits that retained no proxies. The same happens if the decision batch
- * itself fails: that resolver re-reads live revisions and owns the honest
- * partial-failure verdicts.
+ * do edits that retained no proxies.
+ *
+ * Decisions then sync ONE EDIT AT A TIME inside the same Word.run. An Office
+ * batch is not a transaction: a sync that fails on its fifth command has
+ * already run the first four. Syncing per edit means a failure can only be
+ * ambiguous for the edit whose sync failed; every edit before it is known to
+ * be decided (and is recorded, with its cleanup, as soon as its sync
+ * returns), and the failing edit and those after it go to the per-edit
+ * resolver, which re-reads live revisions and owns the honest
+ * partial-failure verdicts. One sync per edit is still one Word.run per
+ * request context, where per-edit resolution costs at least two runs.
  */
 async function resolveRetainedEditBatch(
   handles: readonly TrackedEditHandle[],
@@ -2510,6 +2518,17 @@ async function resolveRetainedEditBatch(
     if (entry && entry.changes.length > 0) retained.push({ handle, entry });
   }
   if (retained.length < 2) return results;
+  const decided = (handle: TrackedEditHandle, entry: PendingTrackedEdit) => {
+    pendingTrackedEdits.delete(handle);
+    rememberTerminalState(handle, decision);
+    const result: TrackedEditResolutionResult = {
+      handle,
+      status: decision === "accept" ? "accepted" : "rejected",
+      resolvedAs: decision,
+    };
+    deferred.push({ entry, result });
+    results.set(handle, result);
+  };
   const { groups } = groupByRequestContext(retained, ({ entry }) => trackedObjectsFor(entry));
   for (const group of groups) {
     try {
@@ -2518,28 +2537,19 @@ async function resolveRetainedEditBatch(
           for (const change of entry.changes) change.load("type");
         }
         await context.sync();
-        for (const { entry } of group) {
+        for (const { handle, entry } of group) {
           for (const change of entry.changes) {
             if (decision === "accept") change.accept();
             else change.reject();
           }
+          await context.sync();
+          decided(handle, entry);
         }
-        await context.sync();
       });
     } catch (error) {
+      // Edits decided before the failure are already recorded; the rest
+      // (still pending) fall through to the per-edit resolver.
       console.debug("[tracked-edit/resolve] retained batch failed", error);
-      continue;
-    }
-    for (const { handle, entry } of group) {
-      pendingTrackedEdits.delete(handle);
-      rememberTerminalState(handle, decision);
-      const result: TrackedEditResolutionResult = {
-        handle,
-        status: decision === "accept" ? "accepted" : "rejected",
-        resolvedAs: decision,
-      };
-      deferred.push({ entry, result });
-      results.set(handle, result);
     }
   }
   return results;

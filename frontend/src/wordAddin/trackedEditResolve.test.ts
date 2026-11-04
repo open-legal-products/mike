@@ -21,6 +21,8 @@ type RevisionRecord = { id: string; type: "Added" | "Deleted"; text: string; boo
 function wordHost({ desktopRevisions = false } = {}) {
     const records: RevisionRecord[] = [];
     const proxies: { record: RevisionRecord; stale: boolean }[] = [];
+    const refusals = new Set<string>();
+    const deletedBookmarks: string[] = [];
     let runs = 0;
 
     class Context {
@@ -44,6 +46,7 @@ function wordHost({ desktopRevisions = false } = {}) {
         };
         const decide = (decision: State) => () => {
             live();
+            if (refusals.delete(record.id)) throw new Error("GeneralException");
             record.state = decision;
         };
         return {
@@ -70,7 +73,7 @@ function wordHost({ desktopRevisions = false } = {}) {
                 untrack() {},
                 getTrackedChanges: () => collection(context, pendingIn(name)),
             }),
-            deleteBookmark() {},
+            deleteBookmark: (name: string) => context.queue.push(() => deletedBookmarks.push(name)),
             body: { getTrackedChanges: () => collection(context, pendingIn()) },
             // The desktop Word.Revision surface (WordApiDesktop 1.4).
             get revisions() {
@@ -113,7 +116,12 @@ function wordHost({ desktopRevisions = false } = {}) {
 
     return {
         records,
+        deletedBookmarks,
         get runs() { return runs; },
+        /** Word refuses the next decision on this revision once (after a clean read-back). */
+        refuseOnce(id: string) {
+            refusals.add(id);
+        },
         /** One of Mike's replacements, inside its persistent bookmark. */
         mikeEdit(stableEditId: string, original: string, replacement: string) {
             const bookmark = bookmarkNameForEdit(stableEditId);
@@ -196,5 +204,24 @@ describe("bulk tracked-edit resolution", () => {
         // The read-back failed before anything was decided, so nothing was
         // resolved twice or reported as missing.
         expect((await resolveTrackedEdits(handles, "accept")).map((r) => r.status)).toEqual(["already-resolved", "already-resolved"]);
+    });
+
+    it("keeps the edits decided before a failed sync decided, with their cleanup", async () => {
+        const host = wordHost();
+        const edits = [0, 1, 2].map((i) => host.mikeEdit(`m:edit-${i}`, `original ${i}`, `replacement ${i}`));
+        const handles = await restore(edits);
+        // An Office batch is not a transaction: edit 0's accepts run, then
+        // Word refuses edit 1's first revision.
+        host.refuseOnce("m:edit-1:added");
+
+        const results = await resolveTrackedEdits(handles, "accept");
+
+        expect(results.map((r) => [r.status, r.error])).toEqual([
+            ["accepted", undefined],
+            ["accepted", undefined],
+            ["accepted", undefined],
+        ]);
+        expect(host.records.every((r) => r.state === "accept")).toBe(true);
+        expect(host.deletedBookmarks).toContain(bookmarkNameForEdit("m:edit-0"));
     });
 });

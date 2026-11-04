@@ -25,10 +25,16 @@ test("bulk acceptance resolves twenty edits through their own revisions in one b
   // (a text match there could be someone else's revision).
   expect(after.bodyRevisionReads - before.bodyRevisionReads).toBe(0);
   expect(after.rejectedChanges).toEqual([]);
-  // Per apply batch (request context): one decision batch and at most one
-  // cleanup batch (bookmarks + proxies) -- not two per edit -- and one
-  // registry save.
-  expect(after.runs - before.runs).toBeLessThanOrEqual(2 * after.trackAllContexts);
+  // Per apply batch (request context; streaming makes 2-5 of them here):
+  // exactly one decision run and one cleanup run (bookmarks + proxies), and
+  // one registry save. Inside the decision run: one read-back sync, then one
+  // sync per edit, so a failed sync leaves no doubt about the edits before
+  // it. Per-edit resolution would cost at least two runs per edit (40+), so
+  // the absolute ceiling also catches a silent fallback to it.
+  const runs = after.runs - before.runs;
+  expect(runs).toBe(2 * after.trackAllContexts);
+  expect(runs).toBeLessThan(20);
+  expect(after.syncs - before.syncs).toBe(20 + 2 * after.trackAllContexts);
   expect(after.settingsSaves - before.settingsSaves).toBe(1);
   expect(after.deletedBookmarks.length - before.deletedBookmarks.length).toBe(20);
 });
