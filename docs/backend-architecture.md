@@ -241,8 +241,9 @@ CI the same way a broken assertion does. It needs no lint plugin: a directory
 walk and the Babel syntax parser resolve imports, re-exports, literal dynamic
 imports, `require` and type references, including configured path aliases.
 `dependencyCycles.test.ts` checks all production source in backend, web, Word and
-desktop for strongly connected components; type-only edges are included, so the
-gate is stronger than runtime-cycle detection. Nonliteral and unresolved local
+desktop, the shared `packages/` sources, and every local file they reach for
+strongly connected components; type-only edges and declaration files are
+included, so the gate is stronger than runtime-cycle detection. Nonliteral and unresolved local
 imports fail explicitly rather than silently escaping the graph.
 
 Each rule has an explicit allowlist in the test. Adding an entry is a reviewed

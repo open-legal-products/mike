@@ -4,7 +4,7 @@ export async function loadSourceParser(): Promise<void> {
     ({ parse } = await import("@babel/parser"));
 }
 import { existsSync, readFileSync, readdirSync } from "node:fs";
-import { dirname, extname, join, resolve } from "node:path";
+import { dirname, extname, join, relative, resolve, sep } from "node:path";
 export type Dependency = {
     specifier: string;
     typeOnly: boolean;
@@ -13,9 +13,17 @@ type Ast = {
     type: string;
     [key: string]: unknown;
 };
-/** Parse syntax, not comments/string contents. Include erased dependencies too. */
+const isDeclaration = (file: string) => /\.d\.[cm]?ts$/.test(file);
+/**
+ * Parse syntax, not comments/string contents. Include erased dependencies too.
+ * A declaration file is parsed as one, and its `/// <reference path="…" />`
+ * directives count as (erased) dependencies: they are the only way a `.d.ts`
+ * can name another local file without an import.
+ */
 export function dependencies(source: string, filename = "source.ts"): Dependency[] {
-    const ast = parse(source, { sourceType: "unambiguous", plugins: /\.[jt]sx$/.test(filename) ? ["typescript", "jsx"] : ["typescript"], sourceFilename: filename });
+    type Plugin = Parameters<typeof parse>[1] extends { plugins?: Array<infer P> } | undefined ? P : never;
+    const typescript: Plugin = isDeclaration(filename) ? ["typescript", { dts: true }] : "typescript";
+    const ast = parse(source, { sourceType: "unambiguous", plugins: /\.[jt]sx$/.test(filename) ? [typescript, "jsx"] : [typescript], sourceFilename: filename });
     const result: Dependency[] = [];
     function add(node: unknown, typeOnly = false) {
         let literal = node as Ast | undefined;
@@ -55,16 +63,28 @@ export function dependencies(source: string, filename = "source.ts"): Dependency
                 visit(value);
     }
     visit(ast);
+    for (const comment of (ast.comments ?? []) as Array<{ type: string; value: string }>) {
+        const reference = comment.type === "CommentLine" && comment.value.match(/^\/\s*<reference\s+path\s*=\s*["']([^"']+)["']/);
+        if (reference)
+            result.push({ specifier: reference[1], typeOnly: true });
+    }
     return result;
 }
-export function sourceFiles(dir: string): string[] {
+const SOURCE = /\.[cm]?[jt]sx?$/;
+const EXCLUDED = /\.(test|spec|stories)\.[cm]?[jt]sx?$/;
+/**
+ * Production source under `dir`: implementation files and, with
+ * `declarations`, hand-written `.d.ts` files too (tests, stories and fixtures
+ * are not part of the dependency graph).
+ */
+export function sourceFiles(dir: string, { declarations = false } = {}): string[] {
     return readdirSync(dir, { withFileTypes: true }).flatMap(entry => {
         if (["node_modules", "__tests__", "__mocks__"].includes(entry.name))
             return [];
         const file = join(dir, entry.name);
         if (entry.isDirectory())
-            return sourceFiles(file);
-        return /\.[cm]?[jt]sx?$/.test(file) && !/\.(test|spec|stories|d)\.[cm]?[jt]sx?$/.test(file) ? [file] : [];
+            return sourceFiles(file, { declarations });
+        return SOURCE.test(file) && !EXCLUDED.test(file) && (declarations || !isDeclaration(file)) ? [file] : [];
     });
 }
 export type Paths = Record<string, string[]>;
@@ -83,12 +103,73 @@ export function resolveDependency(file: string, spec: string, root: string, path
     }
     for (const candidate of candidates) {
         const stem = /\.[cm]?jsx?$/.test(candidate) ? candidate.slice(0, -extname(candidate).length) : candidate;
-        const found = [candidate, ...[".ts", ".tsx", ".mts", ".cts", ".js", ".jsx", "/index.ts", "/index.tsx", "/index.js"].map(e => stem + e)].find(f => existsSync(f) && /\.[cm]?[jt]sx?$/.test(f));
+        const found = [candidate, ...[".ts", ".tsx", ".d.ts", ".mts", ".cts", ".js", ".jsx", "/index.ts", "/index.tsx", "/index.d.ts", "/index.js"].map(e => stem + e)].find(f => existsSync(f) && SOURCE.test(f));
         if (found)
             return found;
     }
     if (candidates.length && !/\.(css|svg|png|jpg|json)$/.test(spec))
         throw new Error(`${file}: unresolved local dependency ${spec}`);
+}
+/** An application (or package) directory and the alias map its files resolve with. */
+export type Context = {
+    root: string;
+    paths: Paths;
+};
+export function contextOf(root: string): Context {
+    const config = join(root, "tsconfig.json");
+    return { root, paths: existsSync(config) ? readPaths(config) : {} };
+}
+const within = (dir: string, file: string) => file === dir || file.startsWith(dir + sep);
+/**
+ * Every production file an application can reach, with its local edges —
+ * keyed by path relative to `repoRoot`.
+ *
+ * Roots are each application's `src/` and each shared package under
+ * `packagesDir`. From a root, every resolved local target that is not under
+ * `node_modules` is traversed in turn, with the alias map of the application
+ * that reached it, so shared code outside the four `src/` trees (the
+ * `packages/` sources, a file one application borrows from another) is
+ * checked rather than being an edge into nothing. A package is also
+ * enumerated directly, under the alias maps of the applications that map a
+ * path into it (or its own, if none does), so a cycle inside a package that
+ * no application imports yet still fails. A file reached under several alias
+ * maps keeps the union of its edges: an extra edge can only find more cycles.
+ */
+export function dependencyGraph(repoRoot: string, apps: string[], packagesDir = "packages"): Map<string, string[]> {
+    const contexts = apps.map(app => contextOf(join(repoRoot, app)));
+    const queue: Array<{ file: string; context: Context }> = [];
+    for (const context of contexts)
+        for (const file of sourceFiles(join(context.root, "src"), { declarations: true }))
+            queue.push({ file, context });
+    const packagesRoot = join(repoRoot, packagesDir);
+    for (const entry of existsSync(packagesRoot) ? readdirSync(packagesRoot, { withFileTypes: true }) : []) {
+        if (!entry.isDirectory())
+            continue;
+        const pkg = join(packagesRoot, entry.name);
+        const consumers = contexts.filter(c => Object.values(c.paths).flat().some(t => within(pkg, resolve(c.root, t.replace("*", "")))));
+        for (const context of consumers.length ? consumers : [contextOf(pkg)])
+            for (const file of sourceFiles(pkg, { declarations: true }))
+                queue.push({ file, context });
+    }
+    const edges = new Map<string, Set<string>>();
+    const visited = new Set<string>();
+    for (let next = queue.shift(); next; next = queue.shift()) {
+        const { file, context } = next;
+        const key = `${context.root}\0${file}`;
+        if (visited.has(key))
+            continue;
+        visited.add(key);
+        const targets = edges.get(relative(repoRoot, file)) ?? new Set<string>();
+        edges.set(relative(repoRoot, file), targets);
+        for (const dependency of dependencies(readFileSync(file, "utf8"), file)) {
+            const target = resolveDependency(file, dependency.specifier, context.root, context.paths);
+            if (!target || !within(repoRoot, target) || target.split(sep).includes("node_modules"))
+                continue;
+            targets.add(relative(repoRoot, target));
+            queue.push({ file: target, context });
+        }
+    }
+    return new Map([...edges].sort(([a], [b]) => a.localeCompare(b)).map(([file, targets]) => [file, [...targets].sort()]));
 }
 /** Strongly connected components, including self imports. */
 export function cycles(graph: Map<string, string[]>): string[][] {

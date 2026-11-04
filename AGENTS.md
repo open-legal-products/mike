@@ -147,7 +147,8 @@ failure is shown.
   test run. If it fails, fix the layering rather than the test; allowlist
   entries need a comment explaining why. `dependencyCycles.test.ts` also parses
   imports/re-exports, literal dynamic imports, require calls and type references
-  across all four applications. All source cycles fail CI.
+  across all four applications, the shared `packages/` sources and every local
+  file they reach. All source cycles fail CI.
 - Document-version creation, activation, replacement, and deletion belong to
   `backend/src/modules/documents/`. Call its facade instead of writing version
   rows or lifecycle RPCs from another module. Callers authorize destination and

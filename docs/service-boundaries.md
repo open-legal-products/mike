@@ -80,13 +80,18 @@ contexts or that every business dependency is captured by imports.
 `architecture.test.ts` uses a syntax parser to enforce the facade, shared-kernel,
 HTTP and application-layer rules. `dependencyCycles.test.ts` resolves local
 imports and configured aliases, including re-exports, literal dynamic imports,
-CommonJS requires and erased type references. It checks production source across
-backend, web, Word and desktop, and also checks the backend domain graph excluding
-route entrypoints. There is no cycle allowlist. Nonliteral imports and missing
-local source dependencies fail explicitly.
+CommonJS requires, erased type references and `/// <reference path>` directives.
+It checks production source across backend, web, Word and desktop, the shared
+`packages/` sources, and every local file those reach (so code moved into a
+package stays covered), and also checks the backend domain graph excluding route
+entrypoints. Hand-written declaration files are nodes like any other source.
+There is no cycle allowlist. Nonliteral imports and missing local source
+dependencies fail explicitly.
 
 Parser and graph regression cases cover erased types, re-exports, dynamic
-imports, require calls, aliases, missing sources, indirect cycles and self-imports.
+imports, require calls, aliases, missing sources, indirect cycles, self-imports,
+declaration files, and cycles inside a shared package or across the
+application/package boundary.
 Project lifecycle regression tests cover deduplicated/batched IDs, capture and
 completion ordering, and failure propagation. Existing credential, route, export,
 queue, organization recovery and PostgreSQL retention suites cover the preserved
