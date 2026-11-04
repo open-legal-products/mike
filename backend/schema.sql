@@ -11968,6 +11968,19 @@ create index if not exists db_jobs_text_version_idx
   on public.db_jobs((payload->>'versionId'))
   where kind in ('document.extract_text', 'document.precompute_text');
 
+-- Migration date: 2026-11-01
+-- resolve_project_folder_path / resolve_library_folder_path look a sibling
+-- up by its case- and space-insensitive name once per path segment, and
+-- once per "(2)", "(3)" ... rename probe. With only (project_id) or
+-- (user_id, library_kind) indexed, each lookup read every folder in the
+-- project or library. Keyed by the normalized name, a lookup reads only
+-- the folders of that name; the parent (matched with IS NOT DISTINCT FROM,
+-- which no index can serve) and workspace are checked on those few rows.
+create index if not exists project_subfolders_name_idx
+  on public.project_subfolders(project_id,lower(btrim(name)));
+create index if not exists library_folders_name_idx
+  on public.library_folders(user_id,library_kind,lower(btrim(name)));
+
 insert into public.schema_migrations (filename) values
   ('20260419_tabular_chat_jsonb.sql'),
   ('20260421_01_docx_editing.sql'),
@@ -12163,5 +12176,6 @@ insert into public.schema_migrations (filename) values
   ('20261101_12_overview_counts_after_page.sql'),
   ('20261101_13_document_text_search_per_version.sql'),
   ('20261101_14_claim_jobs_index_order.sql'),
-  ('20261101_15_db_jobs_payload_indexes.sql')
+  ('20261101_15_db_jobs_payload_indexes.sql'),
+  ('20261101_16_folder_name_indexes.sql')
 on conflict (filename) do nothing;
