@@ -69,6 +69,7 @@ import {
   reportMessage,
   resetSentryForTests,
   scrubEvent,
+  isDevelopmentBuild,
   sentryConfiguration,
   setCurrentUser,
   tagCurrentRequest,
@@ -1094,5 +1095,38 @@ describe("community install minimisation", () => {
     expect(out.server_name).toBe("api-1");
     expect(out.user).toEqual({ id: "user-1" });
     expect(out.breadcrumbs).toHaveLength(1);
+  });
+});
+
+// MIKE-BACKEND-B, 8, C, 1V, 1M: culprits under backend/src/... are `tsx
+// watch` checkouts reporting to the Mike project as environment=self-hosted.
+describe("development builds", () => {
+  it("are the TypeScript source, not the compiled image", () => {
+    expect(isDevelopmentBuild(["node", "/home/dev/mike/backend/src/index.ts"])).toBe(true);
+    expect(isDevelopmentBuild(["node", "/app/dist/index.js"])).toBe(false);
+    expect(isDevelopmentBuild(["node", "/app/dist/jobs/syncWorkflows.js"])).toBe(false);
+  });
+
+  it("do not fall back to the Mike project, even with the example's SENTRY_DISABLED=false", () => {
+    const config = sentryConfiguration({ NODE_ENV: "development", SENTRY_DISABLED: "false" } as NodeJS.ProcessEnv, true);
+    expect(config).toMatchObject({ enabled: false, dsn: "", dsnSource: "development" });
+    // The compiled image under compose's NODE_ENV=development is an install.
+    expect(sentryConfiguration({ NODE_ENV: "development" } as NodeJS.ProcessEnv, false)).toMatchObject({
+      enabled: true,
+      dsnSource: "default",
+      environment: "self-hosted",
+    });
+  });
+
+  it("report as environment development to a DSN set on purpose, unless SENTRY_ENVIRONMENT says otherwise", () => {
+    const dsn = "http://mike@localhost:9999/1";
+    expect(sentryConfiguration({ SENTRY_DSN: dsn } as NodeJS.ProcessEnv, true)).toMatchObject({
+      enabled: true,
+      dsn,
+      environment: "development",
+    });
+    expect(
+      sentryConfiguration({ SENTRY_DSN: dsn, SENTRY_ENVIRONMENT: "staging" } as NodeJS.ProcessEnv, true).environment,
+    ).toBe("staging");
   });
 });

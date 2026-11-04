@@ -618,14 +618,31 @@ function parseRate(raw: string | undefined, fallback: number): number {
   return Math.min(Math.max(parsed, 0), 1);
 }
 
-export function sentryConfiguration(env: NodeJS.ProcessEnv = process.env) {
-  // ON BY DEFAULT: without SENTRY_DISABLED or a DSN of your own, errors go
-  // to the Mike project's Sentry as a community install (see the README's
-  // Telemetry section). Only Mike's own deployment sets SENTRY_INSTALL.
+/**
+ * True when this process runs the TypeScript source (`tsx watch
+ * src/index.ts`, `npm run dev`), i.e. a contributor's checkout. Every
+ * install runs compiled JavaScript (`node dist/index.js`, the image's
+ * `npm start`, `node dist/jobs/...`). NODE_ENV cannot tell the two apart:
+ * docker compose runs the compiled image with NODE_ENV=development by
+ * default. Worker threads share the parent's argv, so they agree with it.
+ */
+export function isDevelopmentBuild(argv: readonly string[] = process.argv): boolean {
+  return /\.[cm]?tsx?$/.test(argv[1] ?? "");
+}
+
+export function sentryConfiguration(
+  env: NodeJS.ProcessEnv = process.env,
+  development: boolean = isDevelopmentBuild(),
+) {
+  // ON BY DEFAULT for installs: without SENTRY_DISABLED or a DSN of your own,
+  // errors go to the Mike project's Sentry as a community install (see the
+  // README's Telemetry section). A development build stays off unless a DSN
+  // is set on purpose. Only Mike's own deployment sets SENTRY_INSTALL.
   const resolved = resolveDsn({
     disabled: env.SENTRY_DISABLED?.trim() || env.MIKE_BUILD_SENTRY_DISABLED,
     dsn: env.SENTRY_DSN?.trim() || env.MIKE_BUILD_SENTRY_DSN,
     fallback: MIKE_SENTRY_DSN.backend,
+    development,
   });
   const dsn = resolved.dsn;
   // A test process must never report, even when a developer's backend/.env
@@ -640,7 +657,7 @@ export function sentryConfiguration(env: NodeJS.ProcessEnv = process.env) {
     enabled:
       dsn.length > 0 &&
       (!isTestProcess || env.SENTRY_ALLOW_IN_TESTS === "true"),
-    environment: env.SENTRY_ENVIRONMENT?.trim() || "self-hosted",
+    environment: sentryEnvironment(env.SENTRY_ENVIRONMENT, development),
     // An explicit SENTRY_RELEASE wins; otherwise mike@<version>+<sha12> from
     // the MIKE_VERSION and GIT_SHA build arguments — what lets Sentry say
     // "regressed in this release" and resolve an issue until the next.
@@ -933,7 +950,11 @@ export function initSentry(
     if (env.NODE_ENV !== "test") {
       console.log(
         `[sentry] disabled for ${role} (${
-          config.dsnSource === "disabled" ? "SENTRY_DISABLED=true" : "test process"
+          config.dsnSource === "disabled"
+            ? "SENTRY_DISABLED=true"
+            : config.dsnSource === "development"
+              ? "development build; set SENTRY_DSN to report to your own project"
+              : "test process"
         })`,
       );
     }
