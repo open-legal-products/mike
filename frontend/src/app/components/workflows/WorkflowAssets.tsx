@@ -13,6 +13,7 @@ import {
   deleteDocumentVersion,
   deleteWorkflowAsset,
   failedUploadMessage,
+  uploadOutcomeNeedsRetry,
   getDocumentUrl,
   listDocumentVersions,
   listWorkflowAssets,
@@ -187,7 +188,10 @@ export const WorkflowAssets = forwardRef<
       setFiles((current) => [...current, ...created]);
       // The upload client returns one outcome per input, in input order.
       // Filenames are not identities: separate files can share a name.
-      const failedFiles = supported.filter((_, index) => outcomes[index]?.status === "error");
+      const failedFiles = supported.filter((_, index) => {
+        const outcome = outcomes[index];
+        return outcome !== undefined && uploadOutcomeNeedsRetry(outcome);
+      });
       if (failedFiles.length > 0) {
         // One notification for the batch, naming the files that did not make
         // it, with a retry that re-runs only those.

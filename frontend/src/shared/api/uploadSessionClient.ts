@@ -91,6 +91,21 @@ const UPLOAD_FILE_CONTENT_MESSAGES: Record<
 };
 
 /**
+ * Whether a Retry should send this outcome's file again: it did not land, and
+ * nothing about its bytes says it would fail the same way. A file the server
+ * refused for its content is left out, so a batch of only such files offers
+ * no Retry at all.
+ */
+export function uploadOutcomeNeedsRetry(
+    outcome: Pick<UploadOutcome, "status" | "errorCode">,
+): boolean {
+    return (
+        outcome.status !== "completed" &&
+        !(outcome.errorCode !== null && outcome.errorCode in UPLOAD_FILE_CONTENT_MESSAGES)
+    );
+}
+
+/**
  * Prefer the actionable reason over a filename list: when every failure shares
  * one validation code, the limit (or the file fault) itself is what the user
  * has to act on.

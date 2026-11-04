@@ -19,6 +19,7 @@ import { configureMikeApiClient, uploadStandaloneDocuments as uploadWordDocument
 import {
     UploadBatchError,
     failedUploadMessage,
+    uploadOutcomeNeedsRetry,
     replaceDocumentVersionFile,
     uploadDocumentVersion,
     uploadFilesWithSession,
@@ -1341,5 +1342,23 @@ describe("failedUploadMessage for a file the worker refused", () => {
                 refused("b.pdf", "processing_failed"),
             ]),
         ).toBe("a.pdf, b.pdf could not be uploaded. Please try again.");
+    });
+});
+
+describe("uploadOutcomeNeedsRetry", () => {
+    const outcome = (status: "completed" | "error", errorCode: string | null) => ({
+        status,
+        errorCode,
+    });
+
+    it("re-sends a file whose failure was not about its bytes", () => {
+        expect(uploadOutcomeNeedsRetry(outcome("error", "processing_failed"))).toBe(true);
+        expect(uploadOutcomeNeedsRetry(outcome("error", "direct_upload_failed"))).toBe(true);
+        expect(uploadOutcomeNeedsRetry(outcome("error", null))).toBe(true);
+    });
+
+    it("leaves out a file the server refused as not a PDF, and files that landed", () => {
+        expect(uploadOutcomeNeedsRetry(outcome("error", "invalid_pdf_file"))).toBe(false);
+        expect(uploadOutcomeNeedsRetry(outcome("completed", null))).toBe(false);
     });
 });
