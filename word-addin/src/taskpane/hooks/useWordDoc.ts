@@ -624,10 +624,14 @@ async function removePersistentAnchorForEntry(
  *
  * Tracked proxies can only be batched with objects of their own request
  * context, so entries are grouped by it: everything one apply batch or one
- * restore pass produced shares a context and is released together. If a
- * group's batch fails (one stale proxy fails the whole sync), each of its
- * entries falls back to the original per-entry cleanup, so the failure is
- * attributed to the entry that left something behind.
+ * restore pass produced shares a context and is released together.
+ *
+ * If a group's batch fails (one stale proxy fails the whole sync), the
+ * failure is reported once and every entry of the group gets
+ * PROXY_CLEANUP_FAILURE. Retrying untrack per entry would prove nothing:
+ * untrack() clears the client-side tracking flag when it is queued, so a
+ * second untrack is a local no-op that "succeeds" whatever the host did.
+ * Bookmark deletion, a document command, is still retried per entry.
  *
  * Returns the fixed cleanup sentences per entry (never host text).
  */
@@ -681,8 +685,14 @@ async function releaseEntryProxies(
         await context.sync();
       });
     } catch (error) {
-      console.debug("[tracked-edit/cleanup] batched cleanup failed; retrying per edit", error);
-      for (const entry of group) await perEntry(entry);
+      options.onUntrackFailure(error);
+      for (const entry of group) {
+        const left = failures.get(entry)!;
+        if (options.deleteBookmarks) {
+          left.push(...(await removePersistentAnchorForEntry(entry, false)));
+        }
+        left.push(PROXY_CLEANUP_FAILURE);
+      }
     }
   }
   for (const entry of singles) await perEntry(entry);

@@ -46,6 +46,11 @@ export interface OfficeSeed {
    */
   macDesktopRevisions?: boolean;
   /**
+   * Make Word reject this many batches that untrack a range: the failure
+   * surfaces at that batch's sync, as a stale proxy does on a real host.
+   */
+  untrackSyncFailures?: number;
+  /**
    * Structured description of the document body for the markdown document
    * context: when present, body.paragraphs/body.tables exist and describe
    * these blocks; when absent (every pre-existing spec), those collections
@@ -555,10 +560,12 @@ export function installOfficeMock(seed: OfficeSeed): void {
   };
 
   let bookmarkSyncFailures = seed.bookmarkSyncFailures ?? 0;
+  let untrackSyncFailures = seed.untrackSyncFailures ?? 0;
 
   function makeContext(): any {
     let mutationSyncPending = false;
     let refusedBookmarkPending = false;
+    let refusedUntrackPending = false;
     let documentStateBeforeMutation: StoredDocumentState | null = null;
     let trackedCallsBeforeMutation = 0;
     const context: any = {
@@ -568,6 +575,10 @@ export function installOfficeMock(seed: OfficeSeed): void {
         if (refusedBookmarkPending) {
           refusedBookmarkPending = false;
           throw new Error("GeneralException: bookmark could not be inserted");
+        }
+        if (refusedUntrackPending) {
+          refusedUntrackPending = false;
+          throw new Error("InvalidObjectPath: tracked range is no longer valid");
         }
         if (!mutationSyncPending || !trackedMutationSyncFailure) return;
         if (trackedMutationSyncsBeforeFailure > 0) {
@@ -685,7 +696,13 @@ export function installOfficeMock(seed: OfficeSeed): void {
         isNullObject: !!args.isNullObject,
         load: (_properties?: any) => undefined,
         track: () => range,
-        untrack: () => range,
+        untrack: () => {
+          if (untrackSyncFailures > 0 && !refusedUntrackPending) {
+            untrackSyncFailures--;
+            refusedUntrackPending = true;
+          }
+          return range;
+        },
         select: () => {
           if (args.cannotSelect || args.stale || args.isNullObject) {
             throw new Error("GeneralException");
