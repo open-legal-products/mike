@@ -146,7 +146,7 @@ export function dependencyGraph(repoRoot: string, apps: string[], packagesDir = 
         if (!entry.isDirectory())
             continue;
         const pkg = join(packagesRoot, entry.name);
-        const consumers = contexts.filter(c => Object.values(c.paths).flat().some(t => within(pkg, resolve(c.root, t.replace("*", "")))));
+        const consumers = contexts.filter(c => Object.values(c.paths).flat().some(t => within(pkg, resolve(c.root, t.replaceAll("*", "")))));
         for (const context of consumers.length ? consumers : [contextOf(pkg)])
             for (const file of sourceFiles(pkg, { declarations: true }))
                 queue.push({ file, context });
