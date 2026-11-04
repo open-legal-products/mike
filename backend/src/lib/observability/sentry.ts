@@ -35,6 +35,17 @@ export type ReportContext = {
 };
 
 const CONSOLE_MECHANISM = "auto.core.capture_console";
+/**
+ * The mechanism of the events Sentry's Vercel AI integration files itself.
+ * It subscribes to the AI SDK's `ai:telemetry` diagnostics channel and calls
+ * captureException(…, { handled: false }) for EVERY `tool-error` a tool step
+ * produces (`captureToolError` in @sentry/server-utils). For Mike that is
+ * never a fresh report: a tool failure ends the turn and is reported once,
+ * typed, by its owner (chat-stream's `reportError`, the job runner for the
+ * memory curator), and the ask_inputs / approval pause is control flow that
+ * travels the same `tool-error` path and is not a failure at all.
+ */
+const VERCEL_AI_TOOL_ERROR_MECHANISM = "auto.vercelai.channel";
 const NESTED_SEARCH_DEPTH = 2;
 
 /**
@@ -738,6 +749,11 @@ export function scrubEvent(
     mechanism === CONSOLE_MECHANISM || mechanismInfo?.handled === false;
   const original = hint.originalException;
   if (automatic && isReported(original)) {
+    return null;
+  }
+  // handled:false made these read as unhandled rejections (MIKE-BACKEND-4,
+  // -3Q, -5N, -7D, -1K); see VERCEL_AI_TOOL_ERROR_MECHANISM.
+  if (mechanism === VERCEL_AI_TOOL_ERROR_MECHANISM) {
     return null;
   }
 
