@@ -9859,12 +9859,20 @@ create or replace function public.backfill_document_text(p_limit integer default
 returns integer language plpgsql security invoker set search_path=public,pg_temp as $$
 declare row record; queued integer := 0;
 begin
+  -- Work starts from the unfinished text rows (partial index). Every live
+  -- version with a source file has a row for its current revision and
+  -- extractor: document_text_changed queues one on insert and on every
+  -- revision change, and 20261101_23 turned versions from before text
+  -- search into pending rows. So no live version is missing a row or has a
+  -- stale one, and "pending or processing" is the whole old work list.
+  -- Bumping extractor_version must turn its outdated rows pending likewise.
   for row in
-    select v.id from public.document_versions v join public.documents d on d.id=v.document_id
-    left join public.document_version_texts t on t.version_id=v.id
-    where v.deleted_at is null and v.storage_path is not null and d.archived_at is null
-      and (t.version_id is null or t.source_revision<>v.text_revision or t.extractor_version<>1
-        or t.status in ('pending','processing') or (p_retry_failed and t.status='failed'))
+    select v.id from public.document_version_texts t
+    join public.document_versions v on v.id=t.version_id
+    join public.documents d on d.id=v.document_id
+    where t.status <> 'ready'
+      and (t.status in ('pending','processing') or (p_retry_failed and t.status='failed'))
+      and v.deleted_at is null and v.storage_path is not null and d.archived_at is null
       and not exists(select 1 from public.db_jobs j where j.dedupe_key='document.text:'||v.id||':'||v.text_revision
         and j.status in ('pending','running'))
     order by (v.id=d.current_version_id) desc, v.id
@@ -12100,6 +12108,12 @@ create index if not exists chats_private_catalogue_idx
 create index if not exists tabular_reviews_private_catalogue_idx
   on public.tabular_reviews(org_id,lower(title),id) where archived_at is null and project_id is null;
 
+-- Migration date: 2026-11-01
+-- backfill_document_text's work list: text rows not yet ready. Ready rows
+-- (almost all of them) stay out of the index.
+create index if not exists document_version_texts_unfinished_idx
+  on public.document_version_texts(status,version_id) where status <> 'ready';
+
 insert into public.schema_migrations (filename) values
   ('20260419_tabular_chat_jsonb.sql'),
   ('20260421_01_docx_editing.sql'),
@@ -12301,5 +12315,7 @@ insert into public.schema_migrations (filename) values
   ('20261101_18_departure_root_candidates.sql'),
   ('20261101_19_audit_username_filter_actors.sql'),
   ('20261101_20_private_catalogue_indexes.sql'),
-  ('20261101_21_private_catalogue_paged_per_kind.sql')
+  ('20261101_21_private_catalogue_paged_per_kind.sql'),
+  ('20261101_22_document_text_unfinished_index.sql'),
+  ('20261101_23_document_text_backfill_from_unfinished.sql')
 on conflict (filename) do nothing;
