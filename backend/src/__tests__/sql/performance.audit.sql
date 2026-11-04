@@ -76,11 +76,13 @@ create function pg_temp.rel_work(rel regclass) returns bigint language sql as $$
     +coalesce((select sum(pg_stat_get_xact_tuples_fetched(indexrelid)) from pg_index where indrelid=rel),0))::bigint;
 $$;
 do $$
-declare owner_id uuid:=gen_random_uuid(); member_id uuid:=gen_random_uuid(); admin_id uuid:=gen_random_uuid(); org uuid:=gen_random_uuid(); project uuid:=gen_random_uuid();
+declare owner_id uuid:=gen_random_uuid(); member_id uuid:=gen_random_uuid(); admin_id uuid:=gen_random_uuid(); org uuid:=gen_random_uuid(); other_org uuid:=gen_random_uuid(); project uuid:=gen_random_uuid();
   expected jsonb; actual jsonb; actor_id uuid; before bigint;
 begin
   insert into auth.users(id,email) values(owner_id,owner_id||'@example.test'),(member_id,member_id||'@example.test'),(admin_id,admin_id||'@example.test');
-  insert into public.organizations(id,name,created_by) values(org,'Audit resource grouping',owner_id);
+  insert into public.organizations(id,name,created_by) values(org,'Audit resource grouping',owner_id),(other_org,'Other audit org',owner_id);
+  insert into public.org_members(org_id,user_id,role) values(other_org,owner_id,'owner');
+  insert into public.audit_events(org_id,user_id,action,title) select other_org,owner_id,'project.updated','Other org '||n from generate_series(1,3) n;
   insert into public.org_members(org_id,user_id,role) values(org,owner_id,'owner'),(org,member_id,'member'),(org,admin_id,'admin');
   insert into public.projects(id,org_id,user_id,name) values(project,org,member_id,'Private title');
   insert into public.audit_events(org_id,user_id,action,title,project_id,detail)
@@ -89,12 +91,17 @@ begin
     select jsonb_agg(to_jsonb(e) order by id) into expected from pg_temp.audit_oracle(org,actor_id,'',null) e;
     select jsonb_agg(to_jsonb(e) order by id) into actual from public.organization_audit_events(org,actor_id,'',null) e;
     assert actual is not distinct from expected,'redacted rows must match original policy exactly';
-    -- S6: a page's ids are the same rows the oracle filters to.
+    -- S6: a page's ids are the same rows the oracle filters to, and ids
+    -- of another organization's events are never returned.
     select jsonb_agg(to_jsonb(e) order by id) into expected
-      from pg_temp.audit_oracle(org,actor_id,'',array(select id from public.audit_events where org_id=org order by id limit 7)) e;
+      from pg_temp.audit_oracle(org,actor_id,'',array(select id from public.audit_events where org_id=org order by id limit 7)
+        ||array(select id from public.audit_events where org_id=other_org)) e;
     select jsonb_agg(to_jsonb(e) order by id) into actual
-      from public.organization_audit_events(org,actor_id,'',array(select id from public.audit_events where org_id=org order by id limit 7)) e;
+      from public.organization_audit_events(org,actor_id,'',array(select id from public.audit_events where org_id=org order by id limit 7)
+        ||array(select id from public.audit_events where org_id=other_org)) e;
     assert actual is not distinct from expected,'paged rows must match original policy exactly';
+    assert not exists(select 1 from jsonb_array_elements(coalesce(actual,'[]')) e where (e->>'org_id')::uuid<>org),
+      'another organization''s event ids must not resolve';
   end loop;
   -- S6: resolving one page of ids reads those events, not the org's history.
   analyze public.audit_events;
