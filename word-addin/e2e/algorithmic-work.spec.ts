@@ -245,3 +245,62 @@ test("Word for Mac restores many edits with one adjacency round trip", async ({ 
   await expect(page.getByText("Accepted.", { exact: true })).toHaveCount(1);
   expect((await addin.wordCalls()).acceptedChanges).toHaveLength(1);
 });
+
+test("a card decision re-renders only the assistant message that owns it", async ({ addin, page }) => {
+  addin.seedToken("test-jwt");
+  // Count, per assistant message id, the commits in which React gave
+  // AssistantMessage new props. React reports every commit to a DevTools
+  // hook (production builds too); an unchanged memoizedProps object means
+  // React.memo skipped that message.
+  await page.addInitScript(() => {
+    type Fiber = { tag: number; child: Fiber | null; sibling: Fiber | null; memoizedProps?: { message?: { id?: string }; editStateByKey?: unknown } };
+    const renders: Record<string, number> = {};
+    const lastProps = new Map<string, unknown>();
+    (window as unknown as { __MESSAGE_RENDERS__: Record<string, number> }).__MESSAGE_RENDERS__ = renders;
+    const visit = (start: Fiber | null): void => {
+      for (let fiber = start; fiber; fiber = fiber.sibling) {
+        const props = fiber.memoizedProps;
+        if ((fiber.tag === 14 || fiber.tag === 15) && props?.message?.id && props.editStateByKey) {
+          if (lastProps.get(props.message.id) !== props) {
+            if (lastProps.has(props.message.id)) renders[props.message.id] = (renders[props.message.id] ?? 0) + 1;
+            lastProps.set(props.message.id, props);
+          }
+        }
+        visit(fiber.child);
+      }
+    };
+    (window as unknown as { __REACT_DEVTOOLS_GLOBAL_HOOK__: unknown }).__REACT_DEVTOOLS_GLOBAL_HOOK__ = {
+      isDisabled: false,
+      supportsFiber: true,
+      renderers: new Map(),
+      inject: () => 1,
+      checkDCE: () => undefined,
+      onScheduleFiberRoot: () => undefined,
+      onCommitFiberUnmount: () => undefined,
+      onPostCommitFiberRoot: () => undefined,
+      onCommitFiberRoot: (_id: number, root: { current: Fiber }) => visit(root.current.child),
+    };
+  });
+  const originals = Array.from({ length: 5 }, (_, i) => `Clause ${i} wording`);
+  await addin.gotoTaskpane({ documentText: originals.join(".\n") });
+  await addin.expectAuthedShell();
+  await page.getByTestId("edit-apply-toggle").click();
+  await page.getByRole("menuitem", { name: /Edit/ }).click();
+  for (const [i, original] of originals.entries()) {
+    await addin.mockChatStream([`Turn ${i}. ` + wordEdits(replacementEdit(original, `Clause ${i} text`, "Tighten."))]);
+    await page.getByPlaceholder("How can I help?").fill(`Tighten clause ${i}`);
+    await page.getByRole("button", { name: "Send" }).click();
+    await expect(page.getByRole("button", { name: "Accept", exact: true })).toHaveCount(i + 1);
+  }
+  await page.evaluate(() => {
+    const renders = (window as unknown as { __MESSAGE_RENDERS__: Record<string, number> }).__MESSAGE_RENDERS__;
+    for (const key of Object.keys(renders)) delete renders[key];
+  });
+  // dispatchEvent: in WebKit Playwright never sees this mid-transcript
+  // button as "stable" (layout keeps settling), though it is clickable.
+  await page.getByRole("button", { name: "Accept", exact: true }).nth(2).dispatchEvent("click");
+  await expect(page.getByText("Accepted.", { exact: true })).toHaveCount(1);
+  const renders = await page.evaluate(() => (window as unknown as { __MESSAGE_RENDERS__: Record<string, number> }).__MESSAGE_RENDERS__);
+  // Busy, then accepted: one message, never the other four.
+  expect(Object.keys(renders)).toHaveLength(1);
+});
