@@ -39,6 +39,13 @@ export interface OfficeSeed {
    */
   bookmarkSyncFailures?: number;
   /**
+   * Word for Mac: WordApiDesktop's document.revisions surface is available,
+   * and every pending Delete revision reads as empty text through both
+   * surfaces (office-js#5188). A Delete revision's range is adjacent to the
+   * Insert revision of the same edit, and unrelated to every other.
+   */
+  macDesktopRevisions?: boolean;
+  /**
    * Structured description of the document body for the markdown document
    * context: when present, body.paragraphs/body.tables exist and describe
    * these blocks; when absent (every pre-existing spec), those collections
@@ -438,7 +445,9 @@ export function installOfficeMock(seed: OfficeSeed): void {
       // WordApiDesktop sets stay unsupported so the app keeps exercising the
       // getTrackedChanges code paths, like Word on the web.
       requirements: {
-        isSetSupported: (set: string, _version?: string) => set === "WordApi",
+        isSetSupported: (set: string, _version?: string) =>
+          set === "WordApi" ||
+          (!!seed.macDesktopRevisions && set === "WordApiDesktop"),
       },
     },
     AsyncResultStatus,
@@ -768,7 +777,10 @@ export function installOfficeMock(seed: OfficeSeed): void {
         context,
         id: revision.id,
         type: revision.type,
-        text: revision.text,
+        text:
+          seed.macDesktopRevisions && revision.type === "Deleted"
+            ? ""
+            : revision.text,
         load: (_properties?: any) => undefined,
         track: () => change,
         untrack: () => change,
@@ -1179,6 +1191,41 @@ export function installOfficeMock(seed: OfficeSeed): void {
     }
 
     doc.body = body;
+    if (seed.macDesktopRevisions) {
+      const desktopType = { Added: "Insert", Deleted: "Delete", Formatted: "Property" } as const;
+      Object.defineProperty(doc, "revisions", {
+        get: () => {
+          const items = Object.values(documentState.revisions)
+            .filter((revision) => revision.resolution === null)
+            .map((revision) => {
+              const range: any = {
+                context,
+                text: revision.type === "Deleted" ? "" : revision.text,
+                load: (_properties?: any) => undefined,
+                __revisionId: revision.id,
+                __groupId: revision.groupId,
+                compareLocationWith: (other: any) => {
+                  const sameEdit =
+                    other?.__groupId === revision.groupId &&
+                    other?.__revisionId !== revision.id;
+                  const inside = ((other?.__locationIds?.() as string[] | undefined) ?? []).includes(revision.id);
+                  return {
+                    value: sameEdit ? "AdjacentBefore" : inside ? "Inside" : "Unrelated",
+                  };
+                },
+              };
+              return {
+                type: desktopType[revision.type],
+                range,
+                load: (_properties?: any) => undefined,
+                accept: () => resolveStoredRevision(revision.id, "accepted"),
+                reject: () => resolveStoredRevision(revision.id, "rejected"),
+              };
+            });
+          return { items, load: (_properties?: any) => undefined };
+        },
+      });
+    }
     doc.getBookmarkRangeOrNullObject = (name: string) => {
       wordCalls.bookmarkLookups.push(name);
       const bookmark = documentState.bookmarks[name];

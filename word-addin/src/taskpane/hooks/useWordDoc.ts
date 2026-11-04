@@ -1040,33 +1040,69 @@ async function pickEditDocumentRevisionsInContext(
   edit: RedlineEdit,
   index?: RevisionIndex<DocumentRevisionView>,
 ): Promise<DocumentRevisionView[] | null> {
+  const plan = planEditDocumentRevisions(views, edit, index);
+  if (plan.kind === "escalate") await context.sync();
+  return finishEditDocumentRevisionPlan(plan);
+}
+
+/**
+ * The read-free half of pickEditDocumentRevisionsInContext: either a final
+ * answer, or the adjacency probes for the empty-Delete escalation QUEUED
+ * (not synced), so a caller with many edits can sync every edit's probes in
+ * one round trip and then finish each plan.
+ */
+type DocumentRevisionPlan =
+  | { kind: "done"; targets: DocumentRevisionView[] | null }
+  | {
+      kind: "escalate";
+      addedMatch: DocumentRevisionView;
+      emptyDeletes: readonly DocumentRevisionView[];
+      relations: OfficeExtension.ClientResult<Word.LocationRelation>[];
+    };
+
+function planEditDocumentRevisions(
+  views: readonly DocumentRevisionView[],
+  edit: RedlineEdit,
+  index?: RevisionIndex<DocumentRevisionView>,
+): DocumentRevisionPlan {
   const direct = pickEditDocumentRevisions(views, edit, index);
-  if (direct) return direct;
+  if (direct) return { kind: "done", targets: direct };
 
   const sides = editRevisionSides(edit);
-  if (!sides.added || !sides.deleted) return null;
+  if (!sides.added || !sides.deleted) return { kind: "done", targets: null };
   const wordReplacement = normalizeBreaks(toWordText(edit.replacement));
   const added = index ? index.matching("Insert", wordReplacement) : views.filter(
     (view) => view.type === "Insert" && view.text === wordReplacement,
   );
   const addedMatch = added.length === 1 ? added[0] : undefined;
-  if (!addedMatch) return null;
+  if (!addedMatch) return { kind: "done", targets: null };
   const emptyDeletes = index ? index.matching("Delete", "") : views.filter(
     (view) => view.type === "Delete" && view.text.length === 0,
   );
-  if (emptyDeletes.length < 2) return null;
+  if (emptyDeletes.length < 2) return { kind: "done", targets: null };
 
-  const relations = emptyDeletes.map((view) =>
-    view.revision.range.compareLocationWith(addedMatch.revision.range),
-  );
-  await context.sync();
-  const adjacent = emptyDeletes.filter((_view, index) => {
-    const relation = String(relations[index]?.value ?? "").toLowerCase();
+  return {
+    kind: "escalate",
+    addedMatch,
+    emptyDeletes,
+    relations: emptyDeletes.map((view) =>
+      view.revision.range.compareLocationWith(addedMatch.revision.range),
+    ),
+  };
+}
+
+/** Complete a plan once its queued probes (if any) have been synced. */
+function finishEditDocumentRevisionPlan(
+  plan: DocumentRevisionPlan,
+): DocumentRevisionView[] | null {
+  if (plan.kind === "done") return plan.targets;
+  const adjacent = plan.emptyDeletes.filter((_view, index) => {
+    const relation = String(plan.relations[index]?.value ?? "").toLowerCase();
     return relation === "adjacentbefore" || relation === "adjacentafter";
   });
   if (adjacent.length !== 1) return null;
   const adjacentDelete = adjacent[0];
-  return adjacentDelete ? [addedMatch, adjacentDelete] : null;
+  return adjacentDelete ? [plan.addedMatch, adjacentDelete] : null;
 }
 
 /** Load the document's pending revisions as plain views (two syncs). */
@@ -1864,13 +1900,18 @@ async function restoreTrackedEditsNow(
           const revisionIndex = createRevisionIndex(views, view => view.type, view => view.text);
           const consumedRevisions = new Set<Word.Revision>();
           const remaining: typeof present = [];
-          for (const entry of bodyFallback) {
-            const targets = await pickEditDocumentRevisionsInContext(
-              context,
-              views,
-              entry.candidate.edit,
-              revisionIndex,
-            );
+          // Plan every candidate first, queueing each one's empty-Delete
+          // adjacency probes, then sync ONCE for all of them. Mac reads every
+          // Delete as empty (office-js#5188), so nearly every candidate
+          // escalates; one sync per candidate made opening a chat cost a
+          // round trip per restored edit. Picks do not depend on each other;
+          // the consumed set below is still applied in candidate order.
+          const plans = bodyFallback.map((entry) =>
+            planEditDocumentRevisions(views, entry.candidate.edit, revisionIndex),
+          );
+          if (plans.some((plan) => plan.kind === "escalate")) await context.sync();
+          for (const [planIndex, entry] of bodyFallback.entries()) {
+            const targets = finishEditDocumentRevisionPlan(plans[planIndex]!);
             if (
               !targets ||
               targets.some((target) => consumedRevisions.has(target.revision))

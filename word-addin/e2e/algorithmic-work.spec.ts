@@ -205,3 +205,43 @@ test("a bookmark Word refuses in the shared tracking batch stays a warning", asy
   await page.getByRole("button", { name: "Accept", exact: true }).click();
   await expect(page.getByText("Accepted.", { exact: true })).toBeVisible();
 });
+
+test("Word for Mac restores many edits with one adjacency round trip", async ({ addin, page }) => {
+  addin.seedToken("test-jwt");
+  const originals = Array.from({ length: 6 }, (_, i) => `Payment term ${i}`);
+  const chat = { id: PERSISTED.chatId, project_id: null, user_id: "user-1", title: "Mac restore", created_at: "2026-08-19T00:00:00Z" };
+  await addin.mockChatStream([wordEdits(...originals.map((original, i) => replacementEdit(original, `Term ${i}`, "Shorten.")))], PERSISTED);
+  await addin.mockApiJson("GET", "**/word-chat?*", [chat]);
+  await addin.mockApiJson("GET", `**/word-chat/${chat.id}?*`, {
+    chat,
+    messages: [{
+      id: PERSISTED.assistantMessageId, chat_id: chat.id, role: "assistant", created_at: "2026-08-19T00:00:01Z",
+      content: originals.map((_, i) => ({ type: "word_edit_ref", edit_id: `mac-${i}` })),
+      edits: originals.map((original, i) => ({
+        id: `mac-${i}`, word_chat_message_id: PERSISTED.assistantMessageId, block_index: i, original_text: original,
+        replacement_text: `Term ${i}`, formats: [], apply_mode: "direct", apply_status: "applied", resolution_status: null,
+        matched_occurrences: 1, applied_occurrences: 1,
+      })),
+    }],
+  });
+  await addin.gotoTaskpane({ documentText: originals.join(".\n"), macDesktopRevisions: true });
+  await addin.expectAuthedShell();
+  await page.getByTestId("edit-apply-toggle").click();
+  await page.getByRole("menuitem", { name: /Edit/ }).click();
+  await page.getByPlaceholder("How can I help?").fill("Shorten the terms");
+  await page.getByRole("button", { name: "Send" }).click();
+  await expect.poll(async () => (await addin.wordDocument()).bookmarks.length).toBe(6);
+
+  await addin.reloadTaskpane();
+  await page.getByRole("button", { name: "Chat history" }).click();
+  const before = (await addin.wordCalls()).syncs;
+  await page.getByRole("menu").getByRole("menuitem", { name: /Mac restore/ }).click();
+  await expect(page.getByRole("button", { name: "Accept", exact: true })).toHaveCount(6);
+  // Bookmark lookup, their revisions, revision details, the document
+  // revision inventory (two), the adjacency probes for every edit at once,
+  // and tracking.
+  expect((await addin.wordCalls()).syncs - before).toBe(7);
+  await page.getByRole("button", { name: "Accept", exact: true }).first().click();
+  await expect(page.getByText("Accepted.", { exact: true })).toHaveCount(1);
+  expect((await addin.wordCalls()).acceptedChanges).toHaveLength(1);
+});
