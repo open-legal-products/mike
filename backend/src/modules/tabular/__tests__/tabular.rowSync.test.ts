@@ -137,6 +137,76 @@ describe("changing a review's document set", () => {
     expect(labels).toEqual(["F", "G"]);
   });
 
+  it("regroups members that moved folders and keeps an unchanged folder row with its answers", async () => {
+    // Rows were built as F[a, b], G[c], K[k]. Since then b moved into G.
+    // The request only adds h (folder H).
+    const folderOf: Record<string, string> = { a: "F", b: "G", c: "G", k: "K", h: "H" };
+    const built: Record<string, string[]> = { F: ["a", "b"], G: ["c"], K: ["k"] };
+    const fake = tableDb({
+      tabular_reviews: [{
+        id: "rev", user_id: "u", project_id: "p", org_id: null, document_grouping: "folder",
+        document_ids: ["a", "b", "c", "k"], columns_config: [{ index: 0, name: "A", prompt: "a" }],
+      }],
+      documents: Object.entries(folderOf).map(([id, folder_id]) => ({ id, current_version_id: null, project_id: "p", folder_id })),
+      project_subfolders: ["F", "G", "H", "K"].map((id) => ({ id, name: id, parent_folder_id: null, project_id: "p" })),
+      tabular_review_rows: Object.keys(built).map((f, i) => ({
+        id: `row-${f}`, review_id: "rev", label: f, row_type: "folder", folder_id: f, library_folder_id: null, document_id: null, sort_index: i,
+      })),
+      tabular_review_row_sources: Object.entries(built).flatMap(([f, docs]) =>
+        docs.map((document_id, sort_index) => ({ row_id: `row-${f}`, document_id, sort_index }))),
+      tabular_cells: Object.keys(built).map((f) => ({ id: `cell-${f}`, review_id: "rev", row_id: `row-${f}`, column_index: 0, status: "done" })),
+    }, { cascade: { tabular_review_rows: [["tabular_review_row_sources", "row_id"], ["tabular_cells", "row_id"]] } });
+    const result = await updateTabularReview(fake.db, {
+      reviewId: "rev", userId: "u", userEmail: "u@example.com", body: { document_ids: ["a", "b", "c", "k", "h"] },
+    });
+    expect(result.ok).toBe(true);
+    const rows = fake.tables.tabular_review_rows as { id: string; label: string; sort_index: number }[];
+    const members = Object.fromEntries(rows.map((row) => [
+      row.label,
+      fake.tables.tabular_review_row_sources.filter((src) => src.row_id === row.id).map((src) => src.document_id).sort(),
+    ]));
+    expect(members).toEqual({ F: ["a"], G: ["b", "c"], H: ["h"], K: ["k"] });
+    const byLabel = Object.fromEntries(rows.map((row) => [row.label, row]));
+    // The unchanged folder keeps its row and its finished answer...
+    expect(byLabel.K.id).toBe("row-K");
+    expect(fake.tables.tabular_cells.filter((cell) => cell.row_id === "row-K").map((cell) => cell.status)).toEqual(["done"]);
+    // ...while the old answers of both groups the move changed are gone.
+    expect(byLabel.F.id).not.toBe("row-F");
+    expect(byLabel.G.id).not.toBe("row-G");
+    expect(fake.tables.tabular_cells.filter((cell) => cell.status === "done")).toHaveLength(1);
+    expect(fake.tables.tabular_cells.filter((cell) => cell.status === "pending")).toHaveLength(3);
+    expect(rows.map((row) => [row.label, row.sort_index]).sort()).toEqual([["F", 0], ["G", 1], ["H", 2], ["K", 3]]);
+  });
+
+  it.each([[20, 1], [120, 3]])(
+    "reads source metadata in id batches when %i moved folders form a chain",
+    async (n, documentReads) => {
+      // Row Fi held di; each di has since moved into F(i+1). A new document joins F0.
+      const chain = Array.from({ length: n }, (_, i) => `d${i}`);
+      const fake = tableDb({
+        tabular_reviews: [{ id: "rev", user_id: "u", project_id: "p", org_id: null, document_grouping: "folder", document_ids: chain, columns_config: [] }],
+        documents: [
+          ...chain.map((id, i) => ({ id, current_version_id: null, project_id: "p", folder_id: `F${i + 1}` })),
+          { id: "new", current_version_id: null, project_id: "p", folder_id: "F0" },
+        ],
+        project_subfolders: Array.from({ length: n + 1 }, (_, i) => ({ id: `F${i}`, name: `F${i}`, parent_folder_id: null, project_id: "p" })),
+        tabular_review_rows: chain.map((id, i) => ({
+          id: `row-${id}`, review_id: "rev", label: `F${i}`, row_type: "folder", folder_id: `F${i}`, library_folder_id: null, document_id: null, sort_index: i,
+        })),
+        tabular_review_row_sources: chain.map((document_id) => ({ row_id: `row-${document_id}`, document_id, sort_index: 0 })),
+        tabular_cells: [],
+      }, { cascade: { tabular_review_rows: [["tabular_review_row_sources", "row_id"], ["tabular_cells", "row_id"]] } });
+      const result = await updateTabularReview(fake.db, {
+        reviewId: "rev", userId: "u", userEmail: "u@example.com", body: { document_ids: [...chain, "new"] },
+      });
+      expect(result.ok).toBe(true);
+      // One read per 50 selected ids, however long the chain of moves.
+      expect(fake.calls.filter((call) => call.table === "documents" && call.op === "select")).toHaveLength(documentReads);
+      expect((fake.tables.tabular_review_rows as { label: string }[]).map((row) => row.label).sort())
+        .toEqual(Array.from({ length: n + 1 }, (_, i) => `F${i}`).sort());
+    },
+  );
+
   it("reads everything a sync needs before deleting any row", async () => {
     // Adding d to folder F rebuilds F; its label read fails part-way.
     const fake = tableDb({
