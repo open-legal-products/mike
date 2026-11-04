@@ -136,5 +136,28 @@ describe("changing a review's document set", () => {
     const labels = (fake.tables.tabular_review_rows as { label: string }[]).map((row) => row.label).sort();
     expect(labels).toEqual(["F", "G"]);
   });
-});
 
+  it("reads everything a sync needs before deleting any row", async () => {
+    // Adding d to folder F rebuilds F; its label read fails part-way.
+    const fake = tableDb({
+      tabular_reviews: [{
+        id: "rev", user_id: "u", project_id: "p", org_id: null, document_grouping: "folder",
+        document_ids: ["a"], columns_config: [{ index: 0, name: "A", prompt: "a" }],
+      }],
+      documents: ["a", "d"].map((id) => ({ id, current_version_id: null, project_id: "p", folder_id: "F" })),
+      project_subfolders: [{ id: "F", name: "F", parent_folder_id: null, project_id: "p" }],
+      tabular_review_rows: [{ id: "row-F", review_id: "rev", label: "F", row_type: "folder", folder_id: "F", library_folder_id: null, document_id: null, sort_index: 0 }],
+      tabular_review_row_sources: [{ row_id: "row-F", document_id: "a", sort_index: 0 }],
+      tabular_cells: [{ id: "cell-F", review_id: "rev", row_id: "row-F", column_index: 0, status: "done" }],
+    }, {
+      cascade: { tabular_review_rows: [["tabular_review_row_sources", "row_id"], ["tabular_cells", "row_id"]] },
+      failSelects: ["project_subfolders"],
+    });
+    const result = await updateTabularReview(fake.db, {
+      reviewId: "rev", userId: "u", userEmail: "u@example.com", body: { document_ids: ["a", "d"] },
+    });
+    expect(result.ok).toBe(false);
+    expect(fake.tables.tabular_review_rows.map((row) => row.id)).toEqual(["row-F"]);
+    expect(fake.tables.tabular_cells).toHaveLength(1);
+  });
+});

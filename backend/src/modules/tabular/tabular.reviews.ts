@@ -391,6 +391,11 @@ export async function syncRowsForDocumentChange(
         );
     }
 
+    // Every read (folder labels included) happens before the first write: a
+    // failure here must leave the grid as it was, not with rows deleted
+    // (their finished cells cascading away) and nothing inserted.
+    const inputs = await buildRowInputs(db, userId, docs, grouping);
+
     await mutateInBatches(
         "review row delete",
         dropped.map((row) => row.id),
@@ -401,8 +406,6 @@ export async function syncRowsForDocumentChange(
                 .eq("review_id", reviewId)
                 .in("id", batch),
     );
-
-    const inputs = await buildRowInputs(db, userId, docs, grouping);
     const order = [
         ...[...kept.values()].map((row) => ({ label: row.label, row, input: null as RowInput | null })),
         ...inputs.map((input) => ({ label: input.label, row: null as ReviewRow | null, input })),
