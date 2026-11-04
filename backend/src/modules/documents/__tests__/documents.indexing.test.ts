@@ -164,7 +164,7 @@ describe("version text extraction", () => {
 
     expect(sentry.reportError).toHaveBeenCalledOnce();
     const [reported, context] = sentry.reportError.mock.calls[0]!;
-    expect(diagnosticErrorTags(reported)).toEqual({ error_kind: "extraction.failed", failure_code: "ENOENT" });
+    expect(diagnosticErrorTags(reported)).toEqual({ error_kind: "extraction.parse_failed", failure_code: "ENOENT" });
     expect((reported as Error).cause).toBe(cause);
     expect(context).toMatchObject({ tags: { job_kind: "document.extract_text" }, extra: { job_id: "job" } });
     expect(JSON.stringify(context)).not.toContain("PRIVATE_NAME");

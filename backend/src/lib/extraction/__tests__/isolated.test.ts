@@ -10,6 +10,8 @@ import {
   runIsolatedExtraction,
   stopExtractionProcess,
 } from "../isolated";
+import { ExtractionParseError } from "../failure";
+import { diagnosticErrorTags } from "../../observability/sentryPrivacy";
 
 vi.mock("node:child_process", async (importOriginal) => {
   const actual = await importOriginal<typeof import("node:child_process")>();
@@ -78,6 +80,17 @@ describe("runIsolatedExtraction", () => {
     await expect(
       runIsolatedExtraction("documentText", async () => onePagePdf(), { fileType: "pdf" }),
     ).resolves.toMatchObject({ text: expect.stringContaining("24CV-1234"), textlessPageCount: 0 });
+  });
+
+  // A thrown Error crosses IPC as data. The parent used to rebuild it as a
+  // bare Error(message), so every unreadable PDF reached Sentry kindless
+  // and its job could not tell a corrupt file from a transient fault.
+  it("rebuilds a parser's typed failure, with its kind, on the parent side", async () => {
+    const corrupt = Uint8Array.from(Buffer.from("%PDF-1.7\nnot really a pdf")).buffer;
+    const error = await runIsolatedExtraction("documentText", async () => corrupt, { fileType: "pdf" })
+      .catch((caught: unknown) => caught);
+    expect(error).toBeInstanceOf(ExtractionParseError);
+    expect(diagnosticErrorTags(error)).toMatchObject({ error_kind: "extraction.pdf_parse_failed" });
   });
 
   it.skipIf(!existsSync("/usr/bin/soffice"))("converts Office content using real LibreOffice inside the bounded process", async () => {
