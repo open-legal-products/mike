@@ -17,8 +17,6 @@ import {
   isGoogleWorkspaceTool,
   executeGoogleWorkspaceToolCall,
 } from "../../../../lib/integrations/googleWorkspace";
-import { logError } from "../../../../lib/log";
-import { diagnosticErrorTags } from "../../../../lib/observability/sentryPrivacy";
 import { documentSearchFailure } from "./documentSearchErrors";
 import { findDocumentText, createDocumentVersions } from "../../../documents/documents.service";
 import {
@@ -117,12 +115,15 @@ import { renderTableCells } from "./tableCells";
  * sent); where the log line was a safeError() category, keep it and log at
  * warn level, which the bridge does not forward.
  */
-function reportToolFailure(error: unknown): AppError {
+function reportToolFailure(error: unknown, level?: "warning"): AppError {
   const failure =
     error instanceof AppError
       ? error
       : new AppError("chat.tool_failed", "Tool call failed", { cause: error });
-  reportError(failure, { tags: { component: "chat-stream", operation: "chat.tool" } });
+  reportError(failure, {
+    tags: { component: "chat-stream", operation: "chat.tool" },
+    ...(level ? { level } : {}),
+  });
   return failure;
 }
 
@@ -776,10 +777,21 @@ export async function runToolCalls(
       }).catch(internalFailure);
       if (!result.ok) {
         const failure = documentSearchFailure(result);
-        logError("find_documents", {
-          category: failure.error_code,
-          ...(result.kind === "error" ? diagnosticErrorTags(result.error) : {}),
-        });
+        // Only a thrown database/storage error is ours to report. The model's
+        // own bad arguments (invalid_search) and a disabled search are
+        // answered in the tool result; the category is enough locally.
+        if (result.kind === "error") {
+          // The PostgREST error rides as the cause, so its SQLSTATE (57014 =
+          // statement timeout) reaches the event as failure_code. A timeout
+          // is the install's database load, not a defect: warning level.
+          reportToolFailure(
+            new AppError("chat.document_search_failed", "Document search failed", {
+              cause: result.error,
+            }),
+            failure.error_code === "search_timeout" ? "warning" : undefined,
+          );
+        }
+        console.warn("[run_tools] find_documents failed", failure.error_code);
         finishSearch(failure);
         toolResults.push({ role: "tool", tool_call_id: tc.id, content: JSON.stringify({
           ok: false, ...failure,
