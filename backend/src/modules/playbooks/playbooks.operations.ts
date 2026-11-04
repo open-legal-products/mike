@@ -2804,7 +2804,14 @@ async function readVisibleRuns(
   const names = new Map<string, string>();
   const decided = new Set<string>();
   const rows: Record<string, unknown>[] = [];
-  let before = options.before;
+  // Newest first by (started_at, id). Between rounds the cursor is that
+  // pair: rows tied on started_at with the last row read come next (by
+  // id), then rows strictly older. A started_at-only cursor skipped the
+  // rest of a tie group whenever a round ended inside one.
+  let cursor: { at?: string; id?: string } = { at: options.before };
+  const newestFirst = (a: Record<string, unknown>, b: Record<string, unknown>) =>
+    String(b.started_at).localeCompare(String(a.started_at)) ||
+    String(b.id).localeCompare(String(a.id));
   // Bounded: each round reads `limit` runs; stop after a fixed number of
   // rounds of runs the caller can no longer see.
   for (let round = 0; round < 20 && rows.length < read.limit; round++) {
@@ -2812,14 +2819,20 @@ async function readVisibleRuns(
       .from("playbook_runs")
       .select(read.columns)
       .eq("user_id", userId);
-    if (before) query = query.lt("started_at", before);
-    const { data, error } = await query
-      .order("started_at", { ascending: false })
-      .limit(read.limit);
+    if (cursor.id) {
+      query = query
+        .eq("started_at", cursor.at as string)
+        .lt("id", cursor.id)
+        .order("id", { ascending: false });
+    } else {
+      if (cursor.at) query = query.lt("started_at", cursor.at);
+      query = query
+        .order("started_at", { ascending: false })
+        .order("id", { ascending: false });
+    }
+    const { data, error } = await query.limit(read.limit);
     if (error) throw error;
-    const page = ((data ?? []) as unknown as Record<string, unknown>[]).sort((a, b) =>
-      String(b.started_at).localeCompare(String(a.started_at)),
-    );
+    const page = ((data ?? []) as unknown as Record<string, unknown>[]).sort(newestFirst);
     const unknownIds = [...new Set(page.map((row) => String(row.playbook_id)))]
       .filter((id) => !decided.has(id));
     if (unknownIds.length) {
@@ -2839,8 +2852,14 @@ async function readVisibleRuns(
     for (const row of page) {
       if (rows.length < read.limit && names.has(String(row.playbook_id))) rows.push(row);
     }
-    if (page.length < read.limit) break;
-    before = String(page[page.length - 1].started_at);
+    if (page.length < read.limit) {
+      // The tie group is exhausted: continue strictly older. Otherwise done.
+      if (!cursor.id) break;
+      cursor = { at: cursor.at };
+      continue;
+    }
+    const last = page[page.length - 1];
+    cursor = { at: String(last.started_at), id: String(last.id) };
   }
   return { rows, names };
 }
