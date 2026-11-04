@@ -4,7 +4,7 @@ import { formatEdit, replacementEdit, wordEdits } from "./support/editProtocol";
 // A persisted assistant message: applied edits get durable anchors.
 const PERSISTED = { chatId: "chat-algorithmic-work", assistantMessageId: "assistant-algorithmic-work" };
 
-test("bulk acceptance loads one revision inventory for twenty distinct edits", async ({ addin, page }) => {
+test("bulk acceptance resolves twenty edits through their own revisions in one batch", async ({ addin, page }) => {
   addin.seedToken("test-jwt");
   const originals = Array.from({ length: 20 }, (_, i) => `Original clause ${String(i).padStart(2, "0")}`);
   await addin.mockChatStream([wordEdits(...originals.map((original, i) => replacementEdit(original, `Revised clause ${i}`, "Clarify wording.")))], PERSISTED);
@@ -21,11 +21,14 @@ test("bulk acceptance loads one revision inventory for twenty distinct edits", a
   await expect.poll(async () => (await addin.wordCalls()).acceptedChanges.length).toBe(20);
   await expect(page.getByText("Accepted.", { exact: true })).toHaveCount(20);
   const after = await addin.wordCalls();
-  expect(after.bodyRevisionReads - before.bodyRevisionReads).toBe(1);
+  // Each edit's retained revisions are its own: no document-wide inventory
+  // (a text match there could be someone else's revision).
+  expect(after.bodyRevisionReads - before.bodyRevisionReads).toBe(0);
   expect(after.rejectedChanges).toEqual([]);
-  // The inventory/accept batch, then at most one cleanup batch (bookmarks +
-  // proxies) per apply batch -- not two per edit -- and one registry save.
-  expect(after.runs - before.runs).toBeLessThanOrEqual(1 + after.trackAllContexts);
+  // Per apply batch (request context): one decision batch and at most one
+  // cleanup batch (bookmarks + proxies) -- not two per edit -- and one
+  // registry save.
+  expect(after.runs - before.runs).toBeLessThanOrEqual(2 * after.trackAllContexts);
   expect(after.settingsSaves - before.settingsSaves).toBe(1);
   expect(after.deletedBookmarks.length - before.deletedBookmarks.length).toBe(20);
 });
