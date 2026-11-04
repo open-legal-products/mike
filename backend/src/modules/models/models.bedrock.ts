@@ -60,6 +60,12 @@ export async function listBedrockModels(
             if (!model.inferenceTypesSupported?.includes("ON_DEMAND")) continue;
             models.set(model.modelId, { id: model.modelId, label: typeof model.modelName === "string" ? model.modelName : model.modelId });
         }
+        // Foundation ARNs in cross-region profiles differ only in their
+        // region, so profiles are matched on the part after
+        // ":foundation-model/" — computed once here, not once per foundation
+        // model for every model of every profile.
+        const foundationSuffix = (arn: string) => arn.split(":foundation-model/")[1];
+        const textModelSuffixes = new Set([...textArns].map(foundationSuffix));
         let token: string | undefined;
         const seen = new Set<string>();
         do {
@@ -68,9 +74,8 @@ export async function listBedrockModels(
             for (const profile of profiles.inferenceProfileSummaries) {
                 if (!profile || !modelId(profile.inferenceProfileId) || profile.status !== "ACTIVE") continue;
                 if (operatorAccount && (profile.type !== "SYSTEM_DEFINED" || profile.inferenceProfileId.startsWith("arn:"))) continue;
-                // Foundation ARNs in cross-region profiles differ only in their region.
                 const isText = Array.isArray(profile.models) && profile.models.some((entry: { modelArn?: unknown }) =>
-                    typeof entry?.modelArn === "string" && [...textArns].some(arn => arn.split(":foundation-model/")[1] === (entry.modelArn as string).split(":foundation-model/")[1]));
+                    typeof entry?.modelArn === "string" && textModelSuffixes.has(foundationSuffix(entry.modelArn)));
                 if (!isText) continue;
                 models.set(profile.inferenceProfileId, { id: profile.inferenceProfileId, label: typeof profile.inferenceProfileName === "string" ? profile.inferenceProfileName : profile.inferenceProfileId });
             }
