@@ -226,6 +226,12 @@ export function PdfView({
     const pageObserverRef = useRef<IntersectionObserver | null>(null);
     const sourceTextRef = useRef(new Map<number, Promise<string>>());
     const renderGenerationRef = useRef(0);
+    // Highlight requests are lazy (a cited page may first have to render), so
+    // an older selection's request can finish after a newer one. Each request
+    // takes a number; a request that is no longer the latest stops touching
+    // highlights and scroll. Bumped by every selection change (including a
+    // clear), every re-render (zoom, resize) and every document change.
+    const highlightRequestRef = useRef(0);
     const quoteListRef = useRef<QuoteEntry[]>([]);
     const zoomRef = useRef(1.0);
     const currentPageRef = useRef(1);
@@ -313,9 +319,11 @@ export function PdfView({
     }, []);
 
     // Highlights all entries in `list` across the already-rendered pages.
-    // Returns the 1-based page number of the first successfully highlighted entry, or null.
+    // Returns the 1-based page number of the first successfully highlighted
+    // entry, or null. Stops (returning null) as soon as `isCurrent` turns
+    // false, so the caller must check it again before acting on the result.
     const applyHighlights = useCallback(
-        async (list: QuoteEntry[]): Promise<number | null> => {
+        async (list: QuoteEntry[], isCurrent: () => boolean): Promise<number | null> => {
             // Clear any prior highlights across all pages
             for (const p of renderedPagesRef.current)
                 clearHighlights(p.textDivs);
@@ -327,7 +335,7 @@ export function PdfView({
                 const target = entry.page ? pages[entry.page - 1] : undefined;
                 if (target) {
                     await target.ensureRendered();
-                    if (pages !== renderedPagesRef.current) return null;
+                    if (pages !== renderedPagesRef.current || !isCurrent()) return null;
                     if (await highlightQuote(target.textDivs, entry.quote, target.readingOrder)) {
                         hits.set(index, entry.page!);
                         continue;
@@ -339,13 +347,13 @@ export function PdfView({
                 const matcher = createPdfQuoteMatcher(missing.map(({entry}) => entry.quote));
                 for (const [index, page] of pages.entries()) {
                     matcher.scan(await page.searchText(), index + 1);
-                    if (pages !== renderedPagesRef.current) return null;
+                    if (pages !== renderedPagesRef.current || !isCurrent()) return null;
                     if (matcher.pages.size === missing.length) break;
                 }
                 for (const [index, pageNumber] of matcher.pages) {
                     const page = pages[pageNumber - 1];
                     await page.ensureRendered();
-                    if (pages !== renderedPagesRef.current) return null;
+                    if (pages !== renderedPagesRef.current || !isCurrent()) return null;
                     if (await highlightQuote(page.textDivs, missing[index].entry.quote, page.readingOrder)) hits.set(missing[index].index, pageNumber);
                 }
             }
@@ -402,6 +410,9 @@ export function PdfView({
             const container = containerRef.current;
             if (!container) return;
             const renderGeneration = ++renderGenerationRef.current;
+            // The pages are about to be replaced: no older highlight request
+            // may land on them.
+            highlightRequestRef.current += 1;
             const isStale = () =>
                 renderGenerationRef.current !== renderGeneration ||
                 containerRef.current !== container;
@@ -564,23 +575,34 @@ export function PdfView({
 
             if (isStale()) return;
 
-            // Apply highlights across all entries, then scroll to the first hit.
+            // Apply highlights across all entries, then scroll to the first
+            // hit. The selection may have changed while the pages were built:
+            // highlight the latest one, never the snapshot this run began with.
+            // A selection change from here on owns highlight and scroll, and
+            // this run only reveals the viewer.
+            const quotesNow = quoteListRef.current;
+            const request = ++highlightRequestRef.current;
+            const superseded = () => highlightRequestRef.current !== request;
             let targetPage: number | null = null;
-            if (list.length) {
-                targetPage = await applyHighlights(list);
+            if (quotesNow.length) {
+                targetPage = await applyHighlights(quotesNow, () => !superseded());
                 if (isStale()) return;
                 if (targetPage === null) {
                     // Fallback: scroll to the first entry's page hint, even without a highlight
-                    const hint = list.find((e) => e.page)?.page ?? null;
+                    const hint = quotesNow.find((e) => e.page)?.page ?? null;
                     targetPage = hint;
                 }
             }
             if (!targetPage && hasCitation) await renderedPagesRef.current[0]?.ensureRendered();
             if (isStale()) return;
+            if (superseded()) {
+                reveal();
+                return;
+            }
             if (targetPage && targetPage >= 1) {
                 await renderedPagesRef.current[targetPage - 1]?.ensureRendered();
                 if (isStale()) return;
-                scrollToHighlightOnPage(targetPage);
+                if (!superseded()) scrollToHighlightOnPage(targetPage);
             } else if (!hasCitation && scrollToPage && scrollToPage > 1) {
                 // Restore scroll position after zoom re-render
                 const pageEntry = renderedPagesRef.current[scrollToPage - 1];
@@ -598,7 +620,10 @@ export function PdfView({
 
     const rehighlightQuotes = useCallback(
         async (list: QuoteEntry[]) => {
-            const targetPage = await applyHighlights(list);
+            const request = ++highlightRequestRef.current;
+            const isCurrent = () => highlightRequestRef.current === request;
+            const targetPage = await applyHighlights(list, isCurrent);
+            if (!isCurrent()) return;
             const scrollPage =
                 targetPage ?? list.find((e) => e.page)?.page ?? null;
             if (scrollPage && scrollPage >= 1) {
@@ -712,6 +737,7 @@ export function PdfView({
     useEffect(() => {
         return () => {
             renderGenerationRef.current += 1;
+            highlightRequestRef.current += 1;
             pageObserverRef.current?.disconnect();
             getPdfJs().then((lib) => lib.TextLayer.cleanup());
         };
@@ -758,6 +784,7 @@ export function PdfView({
             cancelled = true;
             pageObserverRef.current?.disconnect();
             renderGenerationRef.current += 1;
+            highlightRequestRef.current += 1;
             pdfDocRef.current = null;
             renderedPagesRef.current = [];
             void loadingTask?.destroy().catch(() => {});
