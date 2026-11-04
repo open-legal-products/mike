@@ -10,7 +10,7 @@ import {
 } from "./dataCleanup";
 import { withKind, type ErrorKind } from "../../lib/appError";
 import { reportError } from "../../lib/observability/sentry";
-import { type Db } from "../../lib/serviceData";
+import type { Db } from "../../lib/supabase";
 
 /**
  * The failure as the route's sendInternalError should report it: its kind

@@ -1,11 +1,11 @@
 import type { Db } from "../../lib/supabase";
 import { sealManifest } from "../../lib/manifestSigning";
-import { throwIfError, uniqueStrings } from "../../lib/serviceData";
-import { selectAllByKey, selectInBatches, sortRows } from "../../lib/batchedQuery";
+import { throwIfError } from "../../lib/serviceData";
+import { selectAllByKey, selectInBatches, sortRows, uniqueIds } from "../../lib/batchedQuery";
 import { loadMemoryExport } from "../../lib/memory/export";
 type Row = Record<string, unknown>;
 function nowStamp() { return new Date().toISOString().replace(/[:.]/g, "-"); }
-function idsFrom(rows: Row[], column = "id"): string[] { return uniqueStrings(rows.map(row => typeof row[column] === "string" ? row[column] as string : null)); }
+function idsFrom(rows: Row[], column = "id"): string[] { return uniqueIds(rows.map(row => typeof row[column] === "string" ? row[column] as string : null)); }
 export function projectManifestFilename(projectId: string) {
     return `mike-project-manifest-${projectId.slice(0, 8)}-${nowStamp()}.json`;
 }

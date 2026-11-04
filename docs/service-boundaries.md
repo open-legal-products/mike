@@ -74,6 +74,11 @@ service functions through the new boundaries.
   page size truncated silently) and every id filter goes in URL-safe batches
   (the project manifest sent all document ids in one `.in()`). Orders the
   export promises are applied with `sortRows` after the complete read.
+- `lib/serviceData.ts` holds only `throwIfError`, the legacy helper the
+  account cleanup and project lifecycle code still use to throw a database
+  message. `errorMessage` stays the user module's `{ ok: false, detail }`
+  convention in `user.shared.ts`; neither is the pattern for new services,
+  which return a `ServiceResult` and read through `lib/batchedQuery`.
 
 Account-specific traversal and retention queries remain together in
 `application/accounts/dataCleanup.ts`; they coordinate the departure graph.

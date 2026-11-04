@@ -8,7 +8,8 @@ import { EXPORT_TYPES, MAX_ZIP_EXPORT_DOCUMENTS, type ExportType, } from "./expo
 import type { DbJob } from "../../lib/dbq/types";
 import { downloadFile } from "../../lib/storage";
 import { AppError } from "../../lib/appError";
-import { type Db, errorMessage } from "../../lib/serviceData";
+import type { Db } from "../../lib/supabase";
+import { errorMessage } from "../../modules/user/user.service";
 // ---------------------------------------------------------------------------
 // Async exports (durable): POST creates a DB-queue job that builds the
 // export off the request thread; GET polls it; the download endpoint streams

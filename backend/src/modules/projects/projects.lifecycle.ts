@@ -1,6 +1,7 @@
 import { chunkArray } from "../../lib/arrays";
 import type { Db } from "../../lib/supabase";
-import { uniqueStrings, throwIfError } from "../../lib/serviceData";
+import { throwIfError } from "../../lib/serviceData";
+import { uniqueIds } from "../../lib/batchedQuery";
 import { captureInlineDocumentCleanup, completeInlineDocumentCleanup } from "../documents/documents.service";
 /**
  * Delete projects (and everything inside them) by id, with no ownership
@@ -9,7 +10,7 @@ import { captureInlineDocumentCleanup, completeInlineDocumentCleanup } from "../
  * have no creator left to scope by anyway.
  */
 export async function deleteProjectsByIds(db: Db, projectIds: string[]) {
-    const ownedProjectIds = uniqueStrings(projectIds);
+    const ownedProjectIds = uniqueIds(projectIds);
     if (ownedProjectIds.length === 0)
         return 0;
     const keys = await captureInlineDocumentCleanup(db, { projectIds: ownedProjectIds });

@@ -7,13 +7,12 @@ import {
     type OrgRole,
 } from "../../lib/access";
 import { mapWithConcurrency } from "../../lib/concurrency";
-import { selectAllByKey, selectInBatches, sortRows } from "../../lib/batchedQuery";
+import { selectAllByKey, selectInBatches, sortRows, uniqueIds } from "../../lib/batchedQuery";
 import { type Db } from "../../lib/supabase";
 import {
     resolvePlaybookRoles,
     type PlaybookAccessRow,
 } from "../../modules/playbooks/playbooks.service";
-import { uniqueStrings } from "../../lib/serviceData";
 
 
 function nowStamp() {
@@ -88,7 +87,7 @@ function rowInWorkspace(row: Row, orgId: ExportWorkspace) {
 }
 
 function idsFrom(rows: Row[], column = "id"): string[] {
-    return uniqueStrings(
+    return uniqueIds(
         rows.map((row) =>
             typeof row[column] === "string" ? (row[column] as string) : null,
         ),
