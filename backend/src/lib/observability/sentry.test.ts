@@ -58,6 +58,7 @@ import {
   MIKE_SENTRY_DSN,
   flushSentry,
   initSentry,
+  issueThrottleKeyCountForTests,
   markStage,
   setOperation,
   redactText,
@@ -519,6 +520,14 @@ describe("per-issue flood control", () => {
       expect.stringContaining("suppressed 2 further event(s)"),
     );
     warn.mockRestore();
+  });
+
+  it("stays bounded when more distinct issues than the cap arrive in one window", () => {
+    const t0 = 3_000_000;
+    for (let i = 0; i < 2_500; i += 1) {
+      withinIssueBudget(exceptionEvent(`distinct ${i}`), t0 + i);
+    }
+    expect(issueThrottleKeyCountForTests()).toBeLessThanOrEqual(1_000);
   });
 
   it("keys on the fingerprint when one is set and on the message otherwise", () => {

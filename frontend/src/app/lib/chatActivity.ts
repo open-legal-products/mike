@@ -1,3 +1,5 @@
+import { parsedTime, sortByNewest } from "./sortByNewest";
+
 export type ChatActivity = {
     id: string;
     created_at?: string | null;
@@ -9,12 +11,11 @@ export function chatActivityAt(chat: ChatActivity): string | undefined {
 }
 
 export function sortChatsByActivity<T extends ChatActivity>(chats: T[]): T[] {
-    return [...chats].sort((a, b) => {
-        const difference =
-            (Date.parse(chatActivityAt(b) ?? "") || 0) -
-            (Date.parse(chatActivityAt(a) ?? "") || 0);
-        return difference || a.id.localeCompare(b.id);
-    });
+    return sortByNewest(
+        chats,
+        (chat) => parsedTime(chatActivityAt(chat)),
+        (a, b) => a.id.localeCompare(b.id),
+    );
 }
 
 export function touchChatActivity<T extends ChatActivity>(

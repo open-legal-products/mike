@@ -202,3 +202,33 @@ test("a mid-stream chat failure is reported once, tagged as word-chat", async ({
   );
   expect(chatEvents).toHaveLength(1);
 });
+
+test("a failed grouped cleanup after Accept all is reported once, never swallowed", async ({
+  addin,
+  page,
+}) => {
+  const sentry = captureEvents(page);
+  await sentry.ready;
+  addin.seedToken("seeded-jwt");
+  const originals = Array.from({ length: 4 }, (_, i) => `Recital ${i} text`);
+  await addin.mockChatStream(
+    [`<EDITS>${JSON.stringify(originals.map((original, i) => ({ type: "edit_data", kind: "edit", deleted_text: original, inserted_text: `Recital ${i}` })))}</EDITS>`],
+    { chatId: "chat-cleanup", assistantMessageId: "assistant-cleanup" },
+  );
+  // Word rejects the first batch that untracks the applied edits' proxies.
+  await addin.gotoTaskpane({ documentText: originals.join(".\n"), untrackSyncFailures: 1 });
+  await addin.expectAuthedShell();
+  await page.getByTestId("edit-apply-toggle").click();
+  await page.getByRole("menuitem", { name: /Edit/ }).click();
+  await page.getByPlaceholder("How can I help?").fill("Shorten the recitals");
+  await page.getByRole("button", { name: "Send" }).click();
+  await expect(page.getByRole("button", { name: "Accept", exact: true })).toHaveCount(4);
+  await page.getByRole("button", { name: "Accept all", exact: true }).click();
+  // The document decision stands; only the proxy release failed.
+  await expect(page.getByText("Accepted.", { exact: true })).toHaveCount(4);
+  const cleanupLevels = () =>
+    sentry.events.filter((event) => tagsOf(event).stage === "resolve-cleanup").map((event) => event.level);
+  await expect.poll(cleanupLevels).toEqual(["warning"]);
+  await page.waitForTimeout(500);
+  expect(cleanupLevels()).toEqual(["warning"]);
+});

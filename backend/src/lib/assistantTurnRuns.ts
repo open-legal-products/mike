@@ -6,6 +6,7 @@ import {
     resetStreamRunsForTests,
     startStreamRun,
     type StreamRun,
+    type StreamRunWriteOptions,
 } from "./streamRuns";
 
 /**
@@ -176,7 +177,7 @@ export function attachAssistantTurnSse(
     from = 1,
 ): {
     signal: AbortSignal;
-    write: (line: string) => boolean;
+    write: (line: string, opts?: StreamRunWriteOptions) => boolean;
     finish: () => void;
 } {
     return attachStreamRunSse(res, run, from);

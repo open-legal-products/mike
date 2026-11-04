@@ -383,6 +383,40 @@ describe("AddDocumentsModal project assignment", () => {
         await waitFor(() => expect(screen.getAllByRole("alert")).toHaveLength(1));
     });
 
+    it("keeps a bounded number of assignment requests in flight", async () => {
+        let inFlight = 0;
+        let peak = 0;
+        vi.mocked(addDocumentToProject).mockImplementation(
+            async (projectId: string, documentId: string) => {
+                inFlight++;
+                peak = Math.max(peak, inFlight);
+                await new Promise((resolve) => setTimeout(resolve, 0));
+                inFlight--;
+                return { ...document(documentId, "Ok.pdf"), project_id: projectId } as never;
+            },
+        );
+        const onSelect = vi.fn();
+        const selected = Array.from({ length: 30 }, (_, i) =>
+            document(`doc-${i}`, `File ${i}.pdf`) as never,
+        );
+        render(
+            <AddDocumentsModal
+                open
+                projectId="project-1"
+                onClose={vi.fn()}
+                onSelect={onSelect}
+                breadcrumb={["Documents"]}
+                initialSelectedDocuments={selected}
+            />,
+        );
+
+        fireEvent.click(screen.getByRole("button", { name: "Confirm" }));
+
+        await waitFor(() => expect(onSelect).toHaveBeenCalledTimes(1));
+        expect(onSelect.mock.calls[0][0]).toHaveLength(30);
+        expect(peak).toBeLessThanOrEqual(5);
+    });
+
     it("retries only the documents that failed", async () => {
         vi.mocked(addDocumentToProject).mockImplementation(
             async (projectId: string, documentId: string) => {

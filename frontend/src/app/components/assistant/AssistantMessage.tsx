@@ -1,7 +1,10 @@
 "use client";
 
+import { useLatestRef } from "@/app/hooks/useLatestRef";
+import { useMarkdownCheckpoint } from "./message/markdownCheckpoint";
+import { createCitationPreprocessor } from "./message/citationPreprocessor";
 import { TextCardUI } from "@/shared/ui/TextCardUI";
-import { useRef, useState, type ReactNode } from "react";
+import { memo, useMemo, useRef, useState, type ReactNode } from "react";
 import type { WebSource } from "@mike/contracts";
 import { Check, Copy } from "lucide-react";
 import type {
@@ -55,6 +58,8 @@ import {
     WorkflowAppliedBlock,
     type CourtListenerBlockItem,
 } from "./message/EventBlocks";
+
+const EMPTY_CITATIONS: Citation[] = [];
 
 interface Props {
     events?: AssistantEvent[];
@@ -134,13 +139,13 @@ interface Props {
     resolvedEditStatuses?: Record<string, "accepted" | "rejected">;
 }
 
-export function AssistantMessage({
+function AssistantMessageImpl({
     events,
     isStreaming = false,
     awaitingInput = false,
     isError = false,
     errorMessage,
-    citations = [],
+    citations = EMPTY_CITATIONS,
     citationStatus,
     activeCitation,
     onCitationClick,
@@ -236,6 +241,9 @@ export function AssistantMessage({
         isStreaming && contentIsTail,
     );
 
+    const {richText, plainTail} = useMarkdownCheckpoint(smoothedLastText, isStreaming && contentIsTail);
+    const processCitations = useMemo(() => createCitationPreprocessor(preprocessCitations), []);
+
     // Pre-process citations for all content events. Each [N] marker resolves
     // to exactly one citation (models are instructed to use shared refs
     // only for cross-page continuations via the [[PAGE_BREAK]] sentinel).
@@ -259,11 +267,7 @@ export function AssistantMessage({
             }
             processedTexts.push(
                 event.type === "content"
-                    ? preprocessCitations(
-                          i === lastContentIdx ? smoothedLastText : event.text,
-                          citations,
-                          inlineCitationTargets,
-                      )
+                    ? processCitations(i, i === lastContentIdx ? richText : event.text, citations, inlineCitationTargets)
                     : "",
             );
         }
@@ -970,6 +974,7 @@ export function AssistantMessage({
                                                     : undefined
                                             }
                                         />
+                                        {isLastContent && plainTail && <span className="whitespace-pre-wrap font-serif">{plainTail}</span>}
                                     </div>
                                 );
                             }
@@ -1288,4 +1293,32 @@ export function AssistantMessage({
             </div>
         </div>
     );
+}
+
+const MemoAssistantMessage = memo(AssistantMessageImpl);
+/** Stable event dispatchers keep completed messages memoized without stale closures. */
+export function AssistantMessage(props: Props) {
+    const latest = useLatestRef(props);
+    const handlers = useMemo(() => ({
+        onCitationClick: ((...args) => latest.current.onCitationClick?.(...args)) as NonNullable<Props["onCitationClick"]>,
+        onOpenCitationSource: ((...args) => latest.current.onOpenCitationSource?.(...args)) as NonNullable<Props["onOpenCitationSource"]>,
+        onCaseClick: ((...args) => latest.current.onCaseClick?.(...args)) as NonNullable<Props["onCaseClick"]>,
+        onWorkflowClick: ((...args) => latest.current.onWorkflowClick?.(...args)) as NonNullable<Props["onWorkflowClick"]>,
+        onEditViewClick: ((...args) => latest.current.onEditViewClick?.(...args)) as NonNullable<Props["onEditViewClick"]>,
+        onOpenDocument: ((...args) => latest.current.onOpenDocument?.(...args)) as NonNullable<Props["onOpenDocument"]>,
+        onEditResolveStart: ((...args) => latest.current.onEditResolveStart?.(...args)) as NonNullable<Props["onEditResolveStart"]>,
+        onEditResolved: ((...args) => latest.current.onEditResolved?.(...args)) as NonNullable<Props["onEditResolved"]>,
+        onEditError: ((...args) => latest.current.onEditError?.(...args)) as NonNullable<Props["onEditError"]>,
+    }), [latest]);
+    return <MemoAssistantMessage {...props}
+        onCitationClick={props.onCitationClick ? handlers.onCitationClick : undefined}
+        onOpenCitationSource={props.onOpenCitationSource ? handlers.onOpenCitationSource : undefined}
+        onCaseClick={props.onCaseClick ? handlers.onCaseClick : undefined}
+        onWorkflowClick={props.onWorkflowClick ? handlers.onWorkflowClick : undefined}
+        onEditViewClick={props.onEditViewClick ? handlers.onEditViewClick : undefined}
+        onOpenDocument={props.onOpenDocument ? handlers.onOpenDocument : undefined}
+        onEditResolveStart={props.onEditResolveStart ? handlers.onEditResolveStart : undefined}
+        onEditResolved={props.onEditResolved ? handlers.onEditResolved : undefined}
+        onEditError={props.onEditError ? handlers.onEditError : undefined}
+    />;
 }

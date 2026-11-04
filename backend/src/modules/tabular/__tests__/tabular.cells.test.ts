@@ -39,11 +39,11 @@ vi.mock("../tabular.extractRow", () => ({ finalizeCell }));
 const awaitCellTerminal = vi.hoisted(() => vi.fn());
 vi.mock("../tabular.generateStream", () => ({ awaitCellTerminal }));
 
-const { loadReviewRows, loadRowDocumentText } = vi.hoisted(() => ({
-    loadReviewRows: vi.fn(),
+const { loadReviewRow, loadRowDocumentText } = vi.hoisted(() => ({
+    loadReviewRow: vi.fn(),
     loadRowDocumentText: vi.fn(),
 }));
-vi.mock("../tabular.rows", () => ({ loadReviewRows, loadRowDocumentText }));
+vi.mock("../tabular.rows", () => ({ loadReviewRow, loadRowDocumentText }));
 
 const validateSelectedModel = vi.hoisted(() => vi.fn());
 vi.mock("../tabular.shared", async (importOriginal) => ({
@@ -103,7 +103,7 @@ beforeEach(() => {
         projectRole: "owner",
     });
     filterAccessibleDocumentIds.mockResolvedValue(["doc-1"]);
-    loadReviewRows.mockResolvedValue([ROW]);
+    loadReviewRow.mockResolvedValue(ROW);
     loadRowDocumentText.mockResolvedValue("markdown");
     validateSelectedModel.mockResolvedValue({
         ok: true,

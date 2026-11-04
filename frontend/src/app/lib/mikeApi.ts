@@ -1,4 +1,5 @@
 import type { Operation } from "@/shared/lib/sentryPrivacy";
+import { settleWithConcurrency } from "@/shared/lib/settleWithConcurrency";
 import type {
     TabularReviewHistoryStatus,
     AuditActor,
@@ -426,7 +427,7 @@ export async function listProjects(options?: {
     if (options?.workspace) params.set("workspace", options.workspace);
     // Workspace filters select the paginated backend overload. Pickers still
     // need the full list, including projects beyond its default first page.
-    if (options?.workspace && !options.participatingOnly) {
+    if (options?.includeDocuments || (options?.workspace && !options.participatingOnly)) {
         const projects: Project[] = [];
         const pageSize = 100;
         params.set("limit", String(pageSize));
@@ -2834,6 +2835,35 @@ export async function uploadStandaloneDocuments(
         onProgress: options?.onProgress,
         signal: options?.signal,
     });
+}
+
+export async function getDocumentStatuses(documentIds: string[], signal?: AbortSignal): Promise<Document[]> {
+    try {
+        return await apiRequest<Document[]>("documents.directory", "/single-documents/status", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ document_ids: documentIds }),
+            signal,
+        });
+    } catch (error) {
+        // Self-hosted frontends and backends may be upgraded independently.
+        // Only an unsupported endpoint selects the legacy reads: auth/server
+        // failures must retain their normal handling and retry behavior.
+        if (!(error instanceof MikeApiError) || ![404, 405].includes(error.status)) throw error;
+        signal?.throwIfAborted();
+        const results = await settleWithConcurrency([...new Set(documentIds)], 2, async id => {
+            signal?.throwIfAborted();
+            return apiRequest<Document>("documents.directory", `/single-documents/${encodeURIComponent(id)}`, { signal });
+        });
+        signal?.throwIfAborted();
+        return results.flatMap(result => {
+            if (result.status === "fulfilled") return [result.value];
+            // The batch endpoint also omits deleted or no-longer-readable
+            // documents. Other failures must not look like an empty result.
+            if (result.reason instanceof MikeApiError && result.reason.status === 404) return [];
+            throw result.reason;
+        });
+    }
 }
 
 export async function getDocument(documentId: string): Promise<Document> {

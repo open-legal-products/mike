@@ -22,6 +22,7 @@ import { markStage, reportError } from "../../../lib/observability/sentry";
 import { providerFailureKind } from "../../../lib/llm/providerErrors";
 import { safeError } from "../../../lib/safeError";
 import type { Db } from "../../../lib/supabase";
+import type { StreamRunWriteOptions } from "../../../lib/streamRuns";
 import { buildUserMcpTools } from "../../../lib/mcpConnectors";
 import { buildGoogleDriveTools } from "../../../lib/integrations/googleDrive";
 import { COURTLISTENER_TOOLS } from "./tools/courtlistenerTools";
@@ -57,7 +58,7 @@ import {
   type WorkflowStore,
   type ToolCall,
   devLog,
-  resolveDocLabel,
+  createDocLabelResolver,
   TOOL_ERROR_MESSAGE,
 } from "./types";
 import {
@@ -70,7 +71,7 @@ import {
 } from "./tools/toolSchemas";
 import {
   parseCitationsWithDiagnostics,
-  parsePartialCitationObjects,
+  createPartialCitationParser,
   createCitation,
   CITATIONS_OPEN_TAG,
 } from "./citations";
@@ -260,7 +261,8 @@ export async function runLLMStream(params: {
    */
   userEmail?: string | null;
   db: Db;
-  write: (s: string) => void;
+  /** `opts.replay` is honoured by a server-owned run and ignored otherwise. */
+  write: (s: string, opts?: StreamRunWriteOptions) => void;
   onActivity?: () => void;
   extraTools?: unknown[];
   includeResearchTools?: boolean;
@@ -382,8 +384,11 @@ export async function runLLMStream(params: {
     subagentDefaults,
     subagentRun,
   } = params;
-  const write = (chunk: string) =>
-    unsafeWrite(sanitizeAssistantSseChunk(chunk));
+  // Only frames that carry replay options pass a second argument.
+  const write = (chunk: string, opts?: StreamRunWriteOptions) =>
+    opts
+      ? unsafeWrite(sanitizeAssistantSseChunk(chunk), opts)
+      : unsafeWrite(sanitizeAssistantSseChunk(chunk));
   const isSubagent = subagentRun !== undefined;
   const researchTools = includeResearchTools ? COURTLISTENER_TOOLS : [];
   // The person's own connections for the workspace this conversation is in.
@@ -521,34 +526,48 @@ export async function runLLMStream(params: {
   let iterReasoning = "";
   let visibleTailBuffer = "";
   let citationsOpenSeen = false;
-  let streamingCitationsBuffer = "";
-  let streamedCitationCount = 0;
+  // The CITATIONS block streams through an incremental parser, so each delta
+  // is scanned once and each citation is parsed and built once.
+  let citationParser = createPartialCitationParser();
+  let streamedCitations: unknown[] = [];
+  // Every snapshot frame carries the whole list so far, and the client
+  // replaces its list with it. Only the newest snapshot is worth replaying to
+  // a client that attaches later; replaying them all would hand it O(C²)
+  // citations. The final frame bumps this too, so no partial outlives it.
+  let citationSnapshotSeq = 0;
 
   const emitCitationStreamSnapshot = (
     status: "started" | "partial",
     citations: unknown[],
   ) => {
     if (buildCitations) return;
+    const snapshot = ++citationSnapshotSeq;
     write(
       `data: ${JSON.stringify({ type: "citations", status, citations })}\n\n`,
+      { replay: () => snapshot === citationSnapshotSeq },
     );
+  };
+
+  const resetCitationStream = () => {
+    citationParser = createPartialCitationParser();
+    streamedCitations = [];
   };
 
   const streamHiddenCitationContent = (delta: string) => {
     if (buildCitations || !delta) return;
-    streamingCitationsBuffer += delta;
-    const partial = parsePartialCitationObjects(streamingCitationsBuffer);
-    if (partial.length <= streamedCitationCount) return;
-    streamedCitationCount = partial.length;
-    const citations = partial.map((c) =>
-      createCitation(
-        c,
-        docIndex,
-        courtlistenerTurnState.casesByClusterId,
-        docStore,
-      ),
-    );
-    emitCitationStreamSnapshot("partial", citations);
+    const completed = citationParser.push(delta);
+    if (completed.length === 0) return;
+    for (const c of completed) {
+      streamedCitations.push(
+        createCitation(
+          c,
+          docIndex,
+          courtlistenerTurnState.casesByClusterId,
+          docStore,
+        ),
+      );
+    }
+    emitCitationStreamSnapshot("partial", streamedCitations);
   };
 
   const streamVisibleContent = (delta: string) => {
@@ -570,8 +589,7 @@ export async function runLLMStream(params: {
       }
       visibleTailBuffer = "";
       citationsOpenSeen = true;
-      streamingCitationsBuffer = "";
-      streamedCitationCount = 0;
+      resetCitationStream();
       emitCitationStreamSnapshot("started", []);
       streamHiddenCitationContent(
         combined.slice(markerIdx + CITATIONS_OPEN_TAG.length),
@@ -616,8 +634,7 @@ export async function runLLMStream(params: {
     iterVisibleText = "";
     visibleTailBuffer = "";
     citationsOpenSeen = false;
-    streamingCitationsBuffer = "";
-    streamedCitationCount = 0;
+    resetCitationStream();
   };
 
   const flushPartialTurn = (opts: { emit?: boolean } = {}) => {
@@ -1180,10 +1197,11 @@ export async function runLLMStream(params: {
     // already in storage with emitEvents:false. Case citations are matched
     // against the opinion text cached during this turn.
     const sourceTextByDocId = new Map<string, Promise<string>>();
+    const labelFor = createDocLabelResolver(docStore, docIndex);
     const getSourceText = (docId: string): Promise<string> => {
       let pending = sourceTextByDocId.get(docId);
       if (!pending) {
-        const label = resolveDocLabel(docId, docStore, docIndex);
+        const label = labelFor(docId);
         pending = label
           ? readDocumentContent(label, docStore, () => {}, docIndex, db, {
               emitEvents: false,
@@ -1208,6 +1226,7 @@ export async function runLLMStream(params: {
     emittedCitationCount: citations.length,
     usedCustomCitationBuilder: !!buildCitations,
   });
+  citationSnapshotSeq += 1;
   write(
     `data: ${JSON.stringify({ type: "citations", status: "final", citations })}\n\n`,
   );
