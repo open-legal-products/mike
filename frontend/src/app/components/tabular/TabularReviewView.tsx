@@ -7,6 +7,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useReviewCells } from "./reviewCellStore";
 import { indexReviewCells } from "./reviewCellIndex";
 import { reviewRowRemoval } from "./reviewRowRemoval";
+import { reviewColumnRemoval } from "./reviewColumnRemoval";
 import { useRouter, useSearchParams } from "next/navigation";
 import {
     Plus,
@@ -1200,22 +1201,11 @@ export function TRView({ reviewId, projectId }: Props) {
         } catch (err) {
             // Take back only the columns this call added; an edit to a
             // different column may have landed while the save was in flight.
-            applyColumns((current) =>
-                current.filter(
-                    (column) =>
-                        !normalizedColumns.some(
-                            (added) => added.index === column.index,
-                        ),
-                ),
+            const removal = reviewColumnRemoval(
+                normalizedColumns.map((column) => column.index),
             );
-            setCells((prev) =>
-                prev.filter(
-                    (cell) =>
-                        !normalizedColumns.some(
-                            (column) => column.index === cell.column_index,
-                        ),
-                ),
-            );
+            applyColumns((current) => current.filter(removal.keepsColumn));
+            setCells((prev) => prev.filter(removal.keepsCell));
             notifyError(err, {
                 action: "add the column",
                 fallback: "This column could not be saved. Try again.",
