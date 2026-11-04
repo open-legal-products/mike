@@ -19,6 +19,7 @@ import {
   parseSampleRate,
   releaseName,
   resolveDsn,
+  sentryEnvironment,
 } from "@mike/sentry-event";
 
 export type ReportLevel = "fatal" | "error" | "warning";
@@ -63,10 +64,14 @@ export function addinSentryOptions(
 ): Sentry.BrowserOptions {
   // ON BY DEFAULT: the Mike project's own DSN unless REACT_APP_SENTRY_DISABLED
   // or a DSN of your own is baked in at build time (README, "Telemetry").
+  // webpack sets NODE_ENV from --mode: the dev server is "development",
+  // `npm run build` (every image) is "production".
+  const development = env.nodeEnv === "development";
   const { dsn } = resolveDsn({
     disabled: env.disabled,
     dsn: env.dsn,
     fallback: MIKE_SENTRY_DSN.wordAddin,
+    development,
   });
   const dataCollection = {
             userInfo: false,
@@ -84,7 +89,7 @@ export function addinSentryOptions(
   return {
     dsn: dsn || undefined,
     enabled: dsn.length > 0,
-    environment: env.environment?.trim() || "self-hosted",
+    environment: sentryEnvironment(env.environment, development),
     release: releaseName(env.release, env.version, env.gitSha),
     tracesSampleRate: parseSampleRate(env.tracesSampleRate, 0),
     // No session replay: the pane sits next to a privileged document.
