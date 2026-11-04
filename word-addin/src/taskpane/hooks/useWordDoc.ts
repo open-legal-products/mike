@@ -3224,14 +3224,12 @@ export function useWordDoc() {
                 // Word.run completes: the exact children when they were
                 // verified, and always the edited passage itself.
                 trackingQueued = true;
-                const queueRevisionTracking = (): void => {
-                  if (!exactRevisions) return;
+                if (exactRevisions) {
                   for (const collection of managedCollections) {
                     collection.track();
                   }
                   for (const change of managedChanges) change.track();
-                };
-                queueRevisionTracking();
+                }
                 const revisionRanges = exactRevisions
                   ? managedChanges
                       .map((change) => ({
@@ -3263,12 +3261,15 @@ export function useWordDoc() {
                     ];
                 for (const range of candidateRanges) range.track();
 
-                // The hidden bookmark is queued in the same round trip as the
-                // tracking above. Its failure must stay a warning, never an
-                // apply failure, and a failed sync does not say which command
-                // failed -- so on failure both are re-run apart, exactly as
-                // they ran before they shared a sync: tracking first (fatal),
-                // then the bookmark (a warning).
+                await context.sync();
+
+                // The hidden bookmark keeps its own round trip after the
+                // tracking sync. Sharing that sync would save one round trip
+                // per edit, but a failed shared sync does not say which
+                // command failed, and retrying would re-track proxies and
+                // re-read ranges from the failed batch -- whose validity on a
+                // real host is unproven. A refused bookmark must stay a
+                // warning, never an unmanaged edit, so it stays separate.
                 let bookmarkName: string | undefined;
                 const persistentEditId = edit.stableEditId;
                 const reportBookmarkFailure = (error: unknown): void => {
@@ -3318,29 +3319,12 @@ export function useWordDoc() {
                   });
                 };
                 const queuedBookmark = queueBookmark();
-                if (!queuedBookmark) {
-                  await context.sync();
-                } else {
+                if (queuedBookmark) {
                   try {
                     await context.sync();
                     commitBookmark(queuedBookmark);
                   } catch (error) {
-                    console.debug(
-                      "[tracked-edit/apply] tracking + bookmark batch failed; retrying apart",
-                      logErrorMessage(error),
-                    );
-                    queueRevisionTracking();
-                    for (const range of candidateRanges) range.track();
-                    await context.sync();
-                    const retriedBookmark = queueBookmark();
-                    if (retriedBookmark) {
-                      try {
-                        await context.sync();
-                        commitBookmark(retriedBookmark);
-                      } catch (bookmarkError) {
-                        reportBookmarkFailure(bookmarkError);
-                      }
-                    }
+                    reportBookmarkFailure(error);
                   }
                 }
 

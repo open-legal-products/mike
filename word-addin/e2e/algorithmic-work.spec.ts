@@ -170,7 +170,7 @@ test("reopening a chat validates its proposed edits in one Word batch", async ({
   expect(after.searches - before.searches).toBe(10);
 });
 
-test("applying one tracked edit costs seven host round trips", async ({ addin, page }) => {
+test("applying one tracked edit costs at most eight host round trips", async ({ addin, page }) => {
   addin.seedToken("test-jwt");
   await addin.mockChatStream([wordEdits(replacementEdit("Suplier", "Supplier", "Fix the party name."))], PERSISTED);
   await addin.gotoTaskpane({ documentText: "The Suplier shall deliver the goods." });
@@ -185,15 +185,17 @@ test("applying one tracked edit costs seven host round trips", async ({ addin, p
   const after = await addin.wordCalls();
   expect(after.insertedBookmarks).toHaveLength(1);
   // Read mode, TrackAll, search, revision check + paragraph, mutation (with
-  // the generated revisions' type and text), tracking + bookmark, restore mode.
-  expect(after.syncs - before.syncs).toBe(7);
+  // the generated revisions' type and text), tracking, bookmark (its own
+  // sync: a refused bookmark must stay a warning), restore mode. A bound, not
+  // an exact count: it fails if the paragraph or revision-field loads regain
+  // their own round trips (9).
+  expect(after.syncs - before.syncs).toBeLessThanOrEqual(8);
 });
 
-test("a bookmark Word refuses in the shared tracking batch stays a warning", async ({ addin, page }) => {
+test("a bookmark Word refuses at sync stays a warning", async ({ addin, page }) => {
   addin.seedToken("test-jwt");
   await addin.mockChatStream([wordEdits(replacementEdit("Suplier", "Supplier", "Fix the party name."))], PERSISTED);
-  // Refused in the shared batch and again when retried on its own.
-  await addin.gotoTaskpane({ documentText: "The Suplier shall deliver the goods.", bookmarkSyncFailures: 2 });
+  await addin.gotoTaskpane({ documentText: "The Suplier shall deliver the goods.", bookmarkSyncFailures: 1 });
   await addin.expectAuthedShell();
   await page.getByPlaceholder("How can I help?").fill("Fix the typo");
   await page.getByRole("button", { name: "Send" }).click();
