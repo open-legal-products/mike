@@ -227,6 +227,26 @@ function scriptedDb(results: QueryResult[]) {
 
 const pdfBytes = Buffer.from("%PDF-1.7\n");
 
+/** The smallest PDF pdf.js opens: one empty page, a cross-reference table, a trailer. */
+function buildOnePagePdf(): Buffer {
+  const objects = [
+    "<< /Type /Catalog /Pages 2 0 R >>",
+    "<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
+    "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] >>",
+  ];
+  let pdf = "%PDF-1.7\n";
+  const offsets: number[] = [];
+  for (const [index, object] of objects.entries()) {
+    offsets.push(Buffer.byteLength(pdf));
+    pdf += `${index + 1} 0 obj\n${object}\nendobj\n`;
+  }
+  const xrefOffset = Buffer.byteLength(pdf);
+  pdf += `xref\n0 ${objects.length + 1}\n0000000000 65535 f \n`;
+  for (const offset of offsets) pdf += `${String(offset).padStart(10, "0")} 00000 n \n`;
+  pdf += `trailer\n<< /Size ${objects.length + 1} /Root 1 0 R >>\nstartxref\n${xrefOffset}\n%%EOF\n`;
+  return Buffer.from(pdf, "binary");
+}
+
 const baseFile = {
   id: "22222222-2222-4222-8222-222222222222",
   session_id: "11111111-1111-4111-8111-111111111111",
@@ -319,18 +339,20 @@ describe("upload processing", () => {
   });
 
   it.each([
-    ["nothing", ""],
-    ["whitespace", " \t\r\n\f"],
-    ["a UTF-8 BOM", "\uFEFF"],
-    ["whitespace and a BOM", " \n\uFEFF\t"],
+    ["nothing", pdfBytes],
+    ["whitespace", Buffer.concat([Buffer.from(" \t\r\n\f"), pdfBytes])],
+    ["a UTF-8 BOM", Buffer.concat([Buffer.from("\uFEFF"), pdfBytes])],
+    ["whitespace and a BOM", Buffer.concat([Buffer.from(" \n\uFEFF\t"), pdfBytes])],
     // pdf.js accepts a header anywhere in the first 1024 bytes, so a
     // preamble that ends exactly there must still pass.
-    ["a short binary preamble", "junk"],
-    ["a preamble that fills the window", "x".repeat(1024 - "%PDF-".length)],
+    ["a short binary preamble", Buffer.concat([Buffer.from("junk"), pdfBytes])],
+    ["a preamble that fills the window", Buffer.concat([Buffer.from("x".repeat(1024 - "%PDF-".length)), pdfBytes])],
+    // Past the window the signature search misses, but pdf.js still opens
+    // the file by rebuilding its cross-reference table, so it must pass too.
+    ["a preamble longer than the window, on a file pdf.js can parse", Buffer.concat([Buffer.from("x".repeat(1020)), buildOnePagePdf()])],
   ])(
-    "accepts a PDF header preceded by %s",
-    async (_label, prefix) => {
-      const bytes = Buffer.concat([Buffer.from(prefix), pdfBytes]);
+    "accepts a PDF preceded by %s",
+    async (_label, bytes) => {
       mocks.createFileReadStream.mockImplementation(() => Readable.from([bytes]));
       const db = fakeDb({ documents: [{ data: { id: baseFile.resource_id } }] });
       await processUploadFile(db as never, baseSession, {
@@ -347,8 +369,8 @@ describe("upload processing", () => {
     ["a ZIP container", "PK\u0003\u0004Office bytes"],
     ["a signature missing its dash", "%PDF"],
     ["whitespace only", " \uFEFF\n"],
-    // One byte past the window pdf.js scans: the viewer would not open it.
-    ["a header past 1024 bytes", "x".repeat(1024 - "%PDF-".length + 1) + "%PDF-1.7"],
+    // The signature search misses and pdf.js has nothing to parse either.
+    ["a bare header past 1024 bytes with no document behind it", "x".repeat(1024 - "%PDF-".length + 1) + "%PDF-1.7"],
   ])(
     "rejects %s before destination writes and removes the artifact",
     async (_label, content) => {
