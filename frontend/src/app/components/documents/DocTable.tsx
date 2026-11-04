@@ -26,6 +26,7 @@ import {
     copyDocumentVersionFromDocument,
     deleteDocumentVersion,
     failedUploadMessage,
+    uploadOutcomeNeedsRetry,
     renameDocumentVersion,
     type DocumentVersion,
     type UploadOutcome,
@@ -1684,11 +1685,13 @@ export function DocTable({
             status: "pending" as UploadProgressStatus,
         }));
         // What a Retry re-sends: only the entries whose upload did not
-        // complete, so the files already stored are not uploaded twice.
+        // complete, so the files already stored are not uploaded twice, and
+        // not the ones the server refused for their content, which would
+        // fail the same way again.
         const entriesThatDidNotLand = (outcomes: UploadOutcome<unknown>[]) => {
             const failedClientIds = new Set(
                 outcomes
-                    .filter((outcome) => outcome.status !== "completed")
+                    .filter(uploadOutcomeNeedsRetry)
                     .map((outcome) => outcome.clientId),
             );
             return progressFiles

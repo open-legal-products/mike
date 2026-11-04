@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { clearToasts, getSnapshot } from "@/shared/lib/toastStore";
 import { MikeApiError, UploadBatchError } from "./mikeApi";
+import { firstUploadResult } from "@/shared/api/uploadSessionClient";
 import { errorFrameFailure } from "./chatTurnFailure";
 import {
     UserVisibleError,
@@ -204,6 +205,53 @@ describe("uploadBatchFault", () => {
                 outcome(null, "completed"),
             ]),
         ).toBeNull();
+    });
+
+    it("shows a single-file upload refused as not a PDF verbatim: no retry, no support, no report", () => {
+        // Version uploads unwrap one outcome through firstUploadResult and
+        // throw, so they never pass through uploadBatchFault.
+        let thrown: unknown;
+        try {
+            firstUploadResult([outcome("invalid_pdf_file")]);
+        } catch (error) {
+            thrown = error;
+        }
+        expect(thrown).toBeInstanceOf(UploadBatchError);
+
+        const described = notifyError(thrown, {
+            action: "upload a new version",
+            operation: "documents.upload",
+        });
+
+        expect(described?.message).toBe("a.pdf is not a valid PDF file.");
+        expect(described?.kind).toBe("validation");
+        expect(described?.retryable).toBe(false);
+        expect(described?.supportable).toBe(false);
+        expect(reporting.reportError).not.toHaveBeenCalled();
+        expect(getSnapshot().map((toast) => toast.message)).toEqual([
+            "a.pdf is not a valid PDF file.",
+        ]);
+    });
+
+    it("keeps the generic line and the report for a single-file upload that failed for another reason", () => {
+        let thrown: unknown;
+        try {
+            firstUploadResult([outcome("processing_failed")]);
+        } catch (error) {
+            thrown = error;
+        }
+        const described = notifyError(thrown, {
+            action: "upload a new version",
+            operation: "documents.upload",
+        });
+        expect(described?.message).not.toContain("not a valid PDF");
+        expect(described?.retryable).toBe(true);
+        expect(reporting.reportError).toHaveBeenCalledOnce();
+    });
+
+    it("does not report a file the server refused as not a PDF", () => {
+        // The worker names the bytes, not a fault of ours (PR #577).
+        expect(uploadBatchFault([outcome("invalid_pdf_file")])).toBeNull();
     });
 
     it("wraps the failures when one of them is ours", () => {
