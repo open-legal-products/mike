@@ -4,8 +4,14 @@ vi.mock("../../../lib/storage", () => ({
     deleteFilesBestEffort: vi.fn(async () => undefined),
 }));
 
+vi.mock("../../../lib/dbq/enqueue", async (original) => ({
+    ...(await original<typeof import("../../../lib/dbq/enqueue")>()),
+    requestDocumentCleanupDelivery: vi.fn(async () => {}),
+}));
+
 import { deleteFilesBestEffort } from "../../../lib/storage";
-import { deleteOrgPlaybooks } from "../orgs.dataCleanup";
+import { tableDb } from "../../../__tests__/helpers/tableDb";
+import { deleteOrgMemories, deleteOrgPlaybooks, deleteOrgWorkflows } from "../orgs.dataCleanup";
 
 type Row = Record<string, unknown>;
 
@@ -97,4 +103,26 @@ describe("deleteOrgPlaybooks", () => {
             "playbooks/u2/pb-private/sources/src.pdf",
         ]);
     });
+});
+
+it("deletes an organization's workflows and wipes its memory in batches, not per row", async () => {
+    const fake = tableDb({
+        workflows: Array.from({ length: 120 }, (_, i) => ({ id: `w${String(i).padStart(3, "0")}`, org_id: "org" })),
+        memory_files: Array.from({ length: 70 }, (_, i) => ({ id: `m${String(i).padStart(3, "0")}`, scope: "user", org_id: "org" })),
+        projects: [],
+        documents: [],
+    });
+    const rpc = vi.fn(async (_name: string, _args: Record<string, unknown>) => ({ data: null, error: null }));
+    const db = { from: fake.db.from, rpc } as never;
+
+    expect(await deleteOrgWorkflows(db, "org")).toBe(120);
+    await deleteOrgMemories(db, "org");
+
+    expect(fake.tables.workflows).toEqual([]);
+    expect(fake.calls.filter((call) => call.table === "workflows" && call.op === "delete")).toHaveLength(3);
+    // One set-wipe per 50 files (wipe_memory_files, the set form of wipe_memory_file).
+    expect(rpc.mock.calls.map(([name, args]) => [name, (args.p_ids as string[]).length])).toEqual([
+        ["wipe_memory_files", 50],
+        ["wipe_memory_files", 20],
+    ]);
 });

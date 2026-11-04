@@ -247,7 +247,8 @@ export async function captureInlineDocumentCleanup(
     | { documentIds: string[] }
     | { versionIds: string[] }
     | { projectIds: string[] }
-    | { workflowId: string },
+    | { workflowId: string }
+    | { workflowIds: string[] },
 ): Promise<string[]> {
   if (process.env.DB_JOBS_ENABLED !== "false") return [];
   try {
@@ -260,7 +261,9 @@ export async function captureInlineDocumentCleanup(
       const { data, error } =
         "projectIds" in scope
           ? await query.in("project_id", scope.projectIds)
-          : await query.eq("workflow_id", scope.workflowId);
+          : "workflowIds" in scope
+            ? await query.in("workflow_id", scope.workflowIds)
+            : await query.eq("workflow_id", scope.workflowId);
       if (error) throw error;
       ids = (data ?? []).map((row) => row.id as string);
     }
