@@ -12,7 +12,7 @@ import {
   type OrgRole,
 } from "../../lib/access";
 import { PERSONAL_WORKSPACE, resolveWorkspaceFilter, workspaceMatches, type WorkspaceFilter } from "../../lib/workspace";
-import { selectInBatches } from "../../lib/batchedQuery";
+import { selectAllByKey, selectInBatches } from "../../lib/batchedQuery";
 import type { EditAnnotation } from "@mike/contracts";
 import { extractDocxBodyText, type EditInput } from "../../lib/docxTrackedChanges";
 import { loadActiveVersion } from "../../lib/documentVersions";
@@ -909,12 +909,17 @@ async function readVisiblePlaybooks(
   // Typed as `*` (untyped rows either way): a column-list variable defeats
   // the builder's select-string parser.
   const playbooks = () => db.from("playbooks").select(columns as "*");
+  // One user or organization can own more playbooks than max_rows: those
+  // two reads are paged in full (a truncated list would drop playbooks, and
+  // with them their runs from History). Granted ids are 50 per request.
   const [own, shared, direct] = await Promise.all([
-    selectInBatches<Record<string, unknown>>("own playbooks", [userId], () =>
+    selectAllByKey<Record<string, unknown>>("own playbooks", () =>
       inPlaybookWorkspace(playbooks().eq("user_id", userId), workspace),
     ),
     selectInBatches<Record<string, unknown>>("organization playbooks", orgIds, (batch) =>
-      playbooks().eq("visibility", "organization").in("org_id", batch),
+      selectAllByKey<Record<string, unknown>>("organization playbooks", () =>
+        playbooks().eq("visibility", "organization").in("org_id", batch),
+      ),
     ),
     selectInBatches<Record<string, unknown>>("granted playbooks", granted, (batch) =>
       inPlaybookWorkspace(playbooks().in("id", batch), workspace),

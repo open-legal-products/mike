@@ -32,7 +32,8 @@ describe("playbook run history", () => {
     } as unknown as typeof fake.db;
     const page = await listPlaybookRunHistory("owner", db, { workspace: "personal" });
     expect(page.map((entry) => [entry.id, entry.playbookName])).toEqual([["run", "Guide 7"]]);
-    expect(selected.filter((call) => call.startsWith("playbooks:"))).toEqual([
+    // Every playbook read (pages included) uses the narrow projection.
+    expect([...new Set(selected.filter((call) => call.startsWith("playbooks:")))]).toEqual([
       "playbooks: id, name, user_id, org_id, visibility",
     ]);
   });
@@ -88,6 +89,24 @@ describe("playbook run history", () => {
     expect(seen).toEqual(expected);
     // Each page asks for at most one batch of playbook ids per request.
     expect(fake.calls.every((call) => call.inSizes.every((size) => size <= 50))).toBe(true);
+  });
+
+  it("finds runs of playbooks past the response cap of the playbook reads", async () => {
+    const book = (id: string, org_id: string | null, visibility: string) =>
+      ({ id, name: id, user_id: org_id ? "colleague" : "owner", org_id, visibility });
+    const fake = tableDb({
+      playbooks: [
+        ...Array.from({ length: 12 }, (_, i) => book(`own-${String(i).padStart(2, "0")}`, null, "private")),
+        ...Array.from({ length: 12 }, (_, i) => book(`org-${String(i).padStart(2, "0")}`, "org", "organization")),
+      ],
+      organizations: [{ id: "org", deleted_at: null }],
+      org_members: [{ org_id: "org", user_id: "owner", role: "member", organizations: { id: "org" } }],
+      playbook_org_access_overrides: [], playbook_shares: [], user_profiles: [],
+      // Runs only on the playbooks that sort last by id.
+      playbook_runs: [run("own-run", "own-11", 1), run("org-run", "org-11", 0)],
+    }, { maxRows: 5 });
+    const page = await listPlaybookRunHistory("owner", fake.db, {});
+    expect(page.map((entry) => entry.id)).toEqual(["own-run", "org-run"]);
   });
 
   it("does not skip runs tied on started_at when a round ends inside the tie", async () => {
