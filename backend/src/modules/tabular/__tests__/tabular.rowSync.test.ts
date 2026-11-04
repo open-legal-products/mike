@@ -104,4 +104,37 @@ describe("changing a review's document set", () => {
     expect(fake.tables.tabular_cells.filter((cell) => cell.column_index === 1)).toHaveLength(4);
     expect(fake.tables.tabular_cells.filter((cell) => cell.status === "done")).toHaveLength(3);
   });
+
+  it.each([
+    ["a new document joins a kept folder", ["a", "b", "c", "d"]],
+    ["a removed document's folder is rebuilt", ["a", "b", "c"]],
+  ])("never creates a second row for a folder when %s and a member moved", async (_label, selected) => {
+    // Rows F[a, b] and G[c] were built; b has since moved into G.
+    const folderOf: Record<string, string> = { a: "F", b: "G", c: "G", d: "F", e: "F" };
+    const before = selected.includes("d") ? ["a", "b", "c"] : ["a", "b", "c", "e"];
+    const fake = tableDb({
+      tabular_reviews: [{
+        id: "rev", user_id: "u", project_id: "p", org_id: null, document_grouping: "folder",
+        document_ids: before, columns_config: [{ index: 0, name: "A", prompt: "a" }],
+      }],
+      documents: Object.entries(folderOf).map(([id, folder_id]) => ({ id, current_version_id: null, project_id: "p", folder_id })),
+      project_subfolders: ["F", "G"].map((id) => ({ id, name: id, parent_folder_id: null, project_id: "p" })),
+      tabular_review_rows: [
+        { id: "row-F", review_id: "rev", label: "F", row_type: "folder", folder_id: "F", library_folder_id: null, document_id: null, sort_index: 0 },
+        { id: "row-G", review_id: "rev", label: "G", row_type: "folder", folder_id: "G", library_folder_id: null, document_id: null, sort_index: 1 },
+      ],
+      tabular_review_row_sources: [
+        ...["a", "b", ...(before.includes("e") ? ["e"] : [])].map((id) => ({ row_id: "row-F", document_id: id, sort_index: 0 })),
+        { row_id: "row-G", document_id: "c", sort_index: 0 },
+      ],
+      tabular_cells: [],
+    }, { cascade: { tabular_review_rows: [["tabular_review_row_sources", "row_id"], ["tabular_cells", "row_id"]] } });
+    const result = await updateTabularReview(fake.db, {
+      reviewId: "rev", userId: "u", userEmail: "u@example.com", body: { document_ids: selected },
+    });
+    expect(result.ok).toBe(true);
+    const labels = (fake.tables.tabular_review_rows as { label: string }[]).map((row) => row.label).sort();
+    expect(labels).toEqual(["F", "G"]);
+  });
 });
+

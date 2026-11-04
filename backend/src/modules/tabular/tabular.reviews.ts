@@ -362,28 +362,33 @@ export async function syncRowsForDocumentChange(
         else dropped.push(row);
     }
     const covered = new Set([...kept.values()].flatMap((row) => row.source_document_ids ?? []));
-    let docs = await fetchSourceDocuments(
+    const docs = await fetchSourceDocuments(
         db,
         [...next].filter((id) => !covered.has(id)),
     );
-    // A new document joining a folder that still has a row: that folder row
-    // is rebuilt with its old members plus the newcomer.
-    const joined = new Set(docs.map((doc) => rowKeyOf(grouping, doc, doc.id)));
-    const merged = [...kept].filter(
-        ([key]) => !key.startsWith("document:") && joined.has(key),
-    );
-    if (merged.length) {
+    // A document to be (re)placed whose row key belongs to a row we kept — a
+    // new document joining a folder, or a member of a rebuilt folder row that
+    // has since moved into another folder — would create a second row for
+    // that folder. The kept row is rebuilt instead, with its members, and
+    // those members can in turn land in yet another kept folder: repeat until
+    // no document still to be placed collides with a kept row. Each round
+    // removes at least one kept row, so this ends.
+    for (;;) {
+        const placing = new Set(docs.map((doc) => rowKeyOf(grouping, doc, doc.id)));
+        const merged = [...kept].filter(
+            ([key]) => !key.startsWith("document:") && placing.has(key),
+        );
+        if (!merged.length) break;
         for (const [key, row] of merged) {
             kept.delete(key);
             dropped.push(row);
         }
-        docs = [
-            ...docs,
+        docs.push(
             ...(await fetchSourceDocuments(
                 db,
                 merged.flatMap(([, row]) => row.source_document_ids ?? []),
             )),
-        ];
+        );
     }
 
     await mutateInBatches(
