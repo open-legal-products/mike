@@ -11,7 +11,7 @@ import { createTextExtractionCache, type TextExtractionCache } from "../../lib/t
 import { ExtractionBusyError, ExtractionLimitError } from "../../lib/extraction/isolated";
 import { downloadFile } from "../../lib/storage";
 import { attachActiveVersionPaths } from "../../lib/documentVersions";
-import { selectAllPages, selectInBatches } from "../../lib/batchedQuery";
+import { selectAllByKey, selectAllPages, selectInBatches } from "../../lib/batchedQuery";
 import { filterAccessibleDocumentIds } from "../../lib/access";
 import { extractDocumentMarkdown } from "./tabular.extract";
 import { AppError } from "../../lib/appError";
@@ -116,16 +116,11 @@ export async function loadReviewRows(
     db: Db,
     reviewId: string,
 ): Promise<ReviewRow[]> {
-    const rows = await selectAllPages<ReviewRow>("review rows", (after, limit) => {
-        let query = db
+    const rows = await selectAllByKey<ReviewRow>("review rows", () =>
+          db
             .from("tabular_review_rows")
             .select("*")
-            .eq("review_id", reviewId)
-            .order("id", { ascending: true })
-            .limit(limit);
-        if (after) query = query.gt("id", after.id);
-        return query;
-    });
+            .eq("review_id", reviewId));
     if (!rows.length) return rows;
     rows.sort((a, b) => a.sort_index - b.sort_index || a.id.localeCompare(b.id));
     type Source = { row_id: string; document_id: string; sort_index: number };
@@ -163,21 +158,14 @@ export async function loadReviewRows(
  * id so a review past max_rows cells is read completely instead of as a
  * plausible-looking prefix.
  */
-export async function loadReviewCells<T extends { id: string } = Record<string, unknown> & { id: string }>(
+export async function loadReviewCells<T extends Record<string, unknown> & { id: string } = Record<string, unknown> & { id: string }>(
     db: Db,
     reviewId: string,
     columns = "*",
 ): Promise<T[]> {
-    return selectAllPages<T>("review cells", (after, limit) => {
-        let query = db
-            .from("tabular_cells")
-            .select(columns)
-            .eq("review_id", reviewId)
-            .order("id", { ascending: true })
-            .limit(limit);
-        if (after) query = query.gt("id", after.id);
-        return query as unknown as PromiseLike<{ data: T[] | null; error: unknown }>;
-    });
+    return selectAllByKey<T>("review cells", () =>
+        db.from("tabular_cells").select(columns).eq("review_id", reviewId),
+    );
 }
 
 /** Load one row of a review (with its source ids resolved), or null. */

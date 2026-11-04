@@ -22,12 +22,17 @@ beforeEach(() => {
 });
 const actor = { userId: "actor", projectId: "p", folderId: "root" };
 
+/** A paged read: its rows, then the empty page that ends it. */
+function paged(table: string, rows: Record<string, unknown>[]) {
+  return rows.length ? [{ table, data: rows }, { table, data: [] }] : [{ table, data: [] }];
+}
+
 /** The folder exists, has one child, and that child has none. */
 function subtreeWalk(table: string) {
   return [
     { table, data: { id: "root" } },
-    { table, data: [{ id: "child" }] },
-    { table, data: [] },
+    ...paged(table, [{ id: "child" }]),
+    ...paged(table, []),
   ];
 }
 
@@ -139,7 +144,7 @@ describe("folder callers retain their scope and failure policies", () => {
       const table = library ? "library_folders" : "project_subfolders";
       const fake = scriptedDb([
         ...subtreeWalk(table),
-        { table: "documents", data: [{ id: "doc", user_id: "actor" }] },
+        ...paged("documents", [{ id: "doc", user_id: "actor" }]),
         ...(library ? [{ table: "documents", data: [{ id: "doc" }] }] : []),
         {
           table: "documents",
@@ -153,7 +158,7 @@ describe("folder callers retain their scope and failure policies", () => {
       expect(result.ok).toBe(false);
       // The walk asked only for children of the folder, level by level.
       expect(fake.calls[1].filters).toContainEqual(["in", "parent_folder_id", ["root"]]);
-      expect(fake.calls[3].filters).toContainEqual([
+      expect(fake.calls[4].filters).toContainEqual([
         "in",
         library ? "library_folder_id" : "folder_id",
         ["root", "child"],
@@ -172,13 +177,10 @@ describe("folder callers retain their scope and failure policies", () => {
   ])("refuses an Editor when the subtree holds %s", async (_label, creator) => {
     const fake = scriptedDb([
       ...subtree,
-      {
-        table: "documents",
-        data: [
-          { id: "mine", user_id: "actor" },
-          { id: "theirs", user_id: creator },
-        ],
-      },
+      ...paged("documents", [
+        { id: "mine", user_id: "actor" },
+        { id: "theirs", user_id: creator },
+      ]),
     ]);
     expect(await deleteProjectFolder(fake.db, actor)).toEqual({
       ok: false,
@@ -194,7 +196,7 @@ describe("folder callers retain their scope and failure policies", () => {
     mocks.access.mockResolvedValue({ ok: true, projectRole: "owner" });
     const fake = scriptedDb([
       ...subtree,
-      { table: "documents", data: [{ id: "theirs", user_id: "colleague" }] },
+      ...paged("documents", [{ id: "theirs", user_id: "colleague" }]),
       {
         table: "documents",
         op: "delete",

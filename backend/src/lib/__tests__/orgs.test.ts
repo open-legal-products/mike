@@ -35,7 +35,7 @@ function makeDb(initial: Record<string, Row[]>) {
 
     function query(table: string) {
         const filters: (
-            | { type: "eq" | "is"; col: string; val: unknown }
+            | { type: "eq" | "is" | "gt"; col: string; val: unknown }
             | { type: "in"; col: string; vals: unknown[] }
         )[] = [];
         let op: "select" | "insert" | "update" | "delete" = "select";
@@ -50,7 +50,9 @@ function makeDb(initial: Record<string, Row[]>) {
                 filters.every((f) =>
                     f.type === "in"
                         ? f.vals.includes(r[f.col])
-                        : f.type === "is"
+                        : f.type === "gt"
+                          ? String(r[f.col]) > String(f.val)
+                          : f.type === "is"
                           ? (r[f.col] ?? null) === f.val
                           : r[f.col] === f.val,
                 ),
@@ -105,6 +107,10 @@ function makeDb(initial: Record<string, Row[]>) {
             },
             in: (col: string, vals: unknown[]) => {
                 filters.push({ type: "in", col, vals });
+                return builder;
+            },
+            gt: (col: string, val: unknown) => {
+                filters.push({ type: "gt", col, val });
                 return builder;
             },
             order: (col: string, opts?: { ascending?: boolean }) => {
@@ -425,7 +431,8 @@ describe("organization resources", () => {
             ok: true,
             workflows: [{ id: "workflow1" }],
         });
-        expect(db._selects.workflows).toEqual([
+        // Every page asks for the same columns.
+        expect([...new Set(db._selects.workflows)]).toEqual([
             "id, user_id, org_id, visibility, title, type, practice, created_at",
         ]);
     });

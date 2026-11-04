@@ -44,7 +44,13 @@ describe("review row loading", () => {
         yield value;
       }
     } as typeof original;
-    const fake = scriptedDb([{ table: "tabular_review_rows", data: [row] }, { table: "tabular_review_row_sources", data: Array.from({ length: 200 }, () => marker) }]);
+    // Each paged read ends on an empty page.
+    const fake = scriptedDb([
+      { table: "tabular_review_rows", data: [row] },
+      { table: "tabular_review_rows", data: [] },
+      { table: "tabular_review_row_sources", data: Array.from({ length: 200 }, () => marker) },
+      { table: "tabular_review_row_sources", data: [] },
+    ]);
     let result;
     try { result = await loadReviewRows(fake.db, "review"); } finally { Array.prototype[Symbol.iterator] = original; }
     expect(result[0].source_document_ids).toHaveLength(200);

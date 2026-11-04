@@ -9,7 +9,7 @@
 // the thin route handlers in library.routes.ts map them onto HTTP responses.
 
 import { parseFolderPath, validateFolderMove, walkFolderGraph } from "../../lib/folderTree";
-import { ID_FILTER_BATCH_SIZE, selectAllPages, selectInBatches } from "../../lib/batchedQuery";
+import { ID_FILTER_BATCH_SIZE, selectAllByKey, selectInBatches } from "../../lib/batchedQuery";
 import { chunkArray } from "../../lib/arrays";
 import { renameDocument, deleteCollectionDocuments } from "../documents/documents.service";
 import type { Db } from "../../lib/supabase";
@@ -647,8 +647,8 @@ export async function deleteLibraryFolder(
       [folderId],
       (parents) =>
         selectInBatches("library subfolder walk", parents, (batch) =>
-          selectAllPages<{ id: string }>("library subfolder walk", (after, limit) => {
-            let query = inWorkspace(
+          selectAllByKey<{ id: string }>("library subfolder walk", () =>
+            inWorkspace(
               db
                 .from("library_folders")
                 .select("id")
@@ -656,12 +656,8 @@ export async function deleteLibraryFolder(
                 .eq("library_kind", kind)
                 .in("parent_folder_id", batch),
               workspace,
-            )
-              .order("id", { ascending: true })
-              .limit(limit);
-            if (after) query = query.gt("id", after.id);
-            return query;
-          }),
+            ),
+          ),
         ),
       (child) => [child.id],
     );
@@ -669,22 +665,16 @@ export async function deleteLibraryFolder(
       "library folder documents",
       [folderId, ...children.map((child) => child.id)],
       (batch) =>
-        selectAllPages<{ id: string }>("library folder documents", (after, limit) => {
-          let query = db
+        selectAllByKey<{ id: string }>("library folder documents", () => {
+          const query = db
             .from("documents")
             .select("id")
             .eq("user_id", userId)
-            .is("project_id", null);
-          query =
-            kind === "file"
-              ? query.or("library_kind.eq.file,library_kind.is.null")
-              : query.eq("library_kind", kind);
-          query = query
-            .in("library_folder_id", batch)
-            .order("id", { ascending: true })
-            .limit(limit);
-          if (after) query = query.gt("id", after.id);
-          return query;
+            .is("project_id", null)
+            .in("library_folder_id", batch);
+          return kind === "file"
+            ? query.or("library_kind.eq.file,library_kind.is.null")
+            : query.eq("library_kind", kind);
         }),
     );
     docIds = docs.map((doc) => doc.id);

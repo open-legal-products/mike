@@ -6,7 +6,7 @@
 
 import { recordAudit } from "../../lib/audit";
 import { chunkArray } from "../../lib/arrays";
-import { mutateInBatches, selectAllPages, selectInBatches } from "../../lib/batchedQuery";
+import { mutateInBatches, selectAllByKey, selectInBatches } from "../../lib/batchedQuery";
 import { walkFolderGraph } from "../../lib/folderTree";
 import type { TabularReviewHistoryStatus } from "@mike/contracts";
 import {
@@ -431,19 +431,11 @@ export async function syncCellsForReviewRows(
 ): Promise<void> {
     // Both reads are paged: a truncated cell read made every cell past the
     // first max_rows look missing, and the insert below then duplicated it.
-    const rows = await selectAllPages<{ id: string; document_id: string | null }>(
-        "review rows",
-        (after, limit) => {
-            let query = db
+    const rows = await selectAllByKey<{ id: string; document_id: string | null }>("review rows", () =>
+              db
                 .from("tabular_review_rows")
                 .select("id,document_id")
-                .eq("review_id", reviewId)
-                .order("id", { ascending: true })
-                .limit(limit);
-            if (after) query = query.gt("id", after.id);
-            return query;
-        },
-    );
+                .eq("review_id", reviewId));
     const cells = await loadReviewCells<{ id: string; row_id: string; column_index: number }>(
         db,
         reviewId,

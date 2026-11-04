@@ -14,7 +14,7 @@ import {
 } from "../documents/documents.service";
 import { deleteProjectsByIds } from "../user/user.service";
 import { chunkArray } from "../../lib/arrays";
-import { mutateInBatches, selectAllPages, selectInBatches } from "../../lib/batchedQuery";
+import { mutateInBatches, selectAllByKey, selectInBatches } from "../../lib/batchedQuery";
 import { dbJobsEnabled } from "../../lib/dbq/runner";
 import { deleteFilesBestEffort } from "../../lib/storage";
 import type { Db } from "../../lib/supabase";
@@ -264,17 +264,12 @@ export async function deleteOrgMemories(db: Db, orgId: string): Promise<void> {
     // these too, so that nothing learned in it is left anywhere.
     const memberFiles = await (async () => {
         try {
-            return await selectAllPages<{ id: string }>("organization member memory", (after, limit) => {
-                let query = db
+            return await selectAllByKey<{ id: string }>("organization member memory", () =>
+                  db
                     .from("memory_files")
                     .select("id")
                     .eq("scope", "user")
-                    .eq("org_id", orgId)
-                    .order("id", { ascending: true })
-                    .limit(limit);
-                if (after) query = query.gt("id", after.id);
-                return query;
-            });
+                    .eq("org_id", orgId));
         } catch (error) {
             // 42703: a database from before memory was per workspace has none.
             const code = (error as { cause?: { code?: string } }).cause?.code;

@@ -8,7 +8,7 @@ import {
 } from "../../lib/documentVersions";
 import { checkProjectAccess, createDocumentAccessChecker } from "../../lib/access";
 import { mapWithConcurrency } from "../../lib/concurrency";
-import { BatchedQueryError, selectAllPages, selectInBatches } from "../../lib/batchedQuery";
+import { BatchedQueryError, selectAllByKey, selectInBatches } from "../../lib/batchedQuery";
 import { zipExportLimitDetail } from "../../lib/zipExport";
 import {
     loadDocumentDisplay,
@@ -170,16 +170,11 @@ export async function resolveZipExportDocuments(
     type FolderRow = { id: string; project_id?: string; library_kind?: string; parent_folder_id: string | null };
     const documentsWhereIn = (column: "id" | "folder_id" | "library_folder_id", ids: string[]) =>
         selectInBatches<DownloadDocumentRow>("download documents", ids, (batch) =>
-            selectAllPages<DownloadDocumentRow>("download documents", (after, limit) => {
-                let query = db
+            selectAllByKey<DownloadDocumentRow>("download documents", () =>
+                  db
                     .from("documents")
                     .select(DOCUMENT_COLUMNS)
-                    .in(column, batch)
-                    .order("id", { ascending: true })
-                    .limit(limit);
-                if (after) query = query.gt("id", after.id);
-                return query;
-            }),
+                    .in(column, batch)),
         );
     try {
         for (const doc of await documentsWhereIn("id", documentIds))
@@ -224,29 +219,19 @@ export async function resolveZipExportDocuments(
 
             const [projectFolders, libraryFolders] = await Promise.all([
                 selectInBatches<FolderRow>("download project subtree", accessibleProjectIds, (batch) =>
-                    selectAllPages<FolderRow>("download project subtree", (after, limit) => {
-                        let query = db
+                    selectAllByKey<FolderRow>("download project subtree", () =>
+                          db
                             .from("project_subfolders")
                             .select("id, project_id, parent_folder_id")
-                            .in("project_id", batch)
-                            .order("id", { ascending: true })
-                            .limit(limit);
-                        if (after) query = query.gt("id", after.id);
-                        return query;
-                    }),
+                            .in("project_id", batch)),
                 ),
                 libraryKinds.length > 0
-                    ? selectAllPages<FolderRow>("download library subtree", (after, limit) => {
-                          let query = db
+                    ? selectAllByKey<FolderRow>("download library subtree", () =>
+                            db
                               .from("library_folders")
                               .select("id, user_id, library_kind, parent_folder_id")
                               .eq("user_id", userId)
-                              .in("library_kind", libraryKinds)
-                              .order("id", { ascending: true })
-                              .limit(limit);
-                          if (after) query = query.gt("id", after.id);
-                          return query;
-                      })
+                              .in("library_kind", libraryKinds))
                     : [],
             ]);
 

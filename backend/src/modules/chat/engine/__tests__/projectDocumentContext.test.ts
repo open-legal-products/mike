@@ -145,9 +145,13 @@ describe("project chat document context", () => {
         files: [{ filename: "project.pdf", document_id: "project-doc" }],
       },
     ]);
-    expect(
-      from.mock.calls.filter(([table]) => table === "documents"),
-    ).toHaveLength(1);
+    // Only the paged project listing reads documents; no query looks the
+    // attachment up by id.
+    const documentQueries = from.mock.calls
+      .map(([table], i) => [table, from.mock.results[i].value] as const)
+      .filter(([table]) => table === "documents");
+    expect(documentQueries.length).toBeGreaterThan(0);
+    expect(documentQueries.every(([, query]) => query.in.mock.calls.length === 0)).toBe(true);
   });
 });
 

@@ -3,7 +3,7 @@
 
 import { parseFolderPath, validateFolderMove, walkFolderGraph } from "../../lib/folderTree";
 import { chunkArray } from "../../lib/arrays";
-import { ID_FILTER_BATCH_SIZE, selectAllPages, selectInBatches } from "../../lib/batchedQuery";
+import { ID_FILTER_BATCH_SIZE, selectAllByKey, selectInBatches } from "../../lib/batchedQuery";
 import { checkProjectAccess, creatorScopedAllowed } from "../../lib/access";
 import { can, DOCS_ORGANIZE_FORBIDDEN } from "../../lib/permissions";
 import {
@@ -169,17 +169,12 @@ export async function deleteProjectFolder(
       [folderId],
       (parents) =>
         selectInBatches("project subfolder walk", parents, (batch) =>
-          selectAllPages<{ id: string }>("project subfolder walk", (after, limit) => {
-            let query = db
+          selectAllByKey<{ id: string }>("project subfolder walk", () =>
+            db
               .from("project_subfolders")
               .select("id")
               .eq("project_id", projectId)
-              .in("parent_folder_id", batch)
-              .order("id", { ascending: true })
-              .limit(limit);
-            if (after) query = query.gt("id", after.id);
-            return query;
-          }),
+              .in("parent_folder_id", batch)),
         ),
       (child) => [child.id],
     );
@@ -187,17 +182,12 @@ export async function deleteProjectFolder(
       "folder documents",
       [folderId, ...children.map((child) => child.id)],
       (batch) =>
-        selectAllPages<{ id: string; user_id: string | null }>("folder documents", (after, limit) => {
-          let query = db
+        selectAllByKey<{ id: string; user_id: string | null }>("folder documents", () =>
+          db
             .from("documents")
             .select("id, user_id")
             .eq("project_id", projectId)
-            .in("folder_id", batch)
-            .order("id", { ascending: true })
-            .limit(limit);
-          if (after) query = query.gt("id", after.id);
-          return query;
-        }),
+            .in("folder_id", batch)),
     );
   } catch (error) {
     return { ok: false, kind: "db_error", error };

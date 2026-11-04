@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { selectAllPages, selectInBatches } from "./batchedQuery";
+import { selectAllByKey, selectInBatches } from "./batchedQuery";
 import type { Db } from "./supabase";
 
 type Supa = Db;
@@ -249,19 +249,14 @@ export async function attachLatestVersionNumbers<T extends DocRow>(
         "latest version lookup",
         docs.map((d) => d.id),
         (batch) =>
-            selectAllPages<EditVersion>("latest version lookup", (after, limit) => {
-                let query = db
+            selectAllByKey<EditVersion>("latest version lookup", () =>
+                  db
                     .from("document_versions")
                     .select("id, document_id, version_number")
                     .in("document_id", batch)
                     .eq("source", "assistant_edit")
                     .is("deleted_at", null)
-                    .not("version_number", "is", null)
-                    .order("id", { ascending: true })
-                    .limit(limit);
-                if (after) query = query.gt("id", after.id);
-                return query;
-            }),
+                    .not("version_number", "is", null)),
     );
 
     const latestByDoc = new Map<string, number>();

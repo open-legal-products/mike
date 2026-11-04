@@ -260,7 +260,10 @@ describe("run-view reconcile poll", () => {
             await vi.advanceTimersByTimeAsync(3_000);
             expect(writes.some((w) => w.includes('"row_id":"row-39"'))).toBe(true);
             expect(writes.at(-1)).toBe("data: [DONE]\n\n");
-            expect(fake.calls.map((c) => c.returned)).toEqual([2]);
+            // Only the pending row's finished cells travel: no read of the
+            // whole review, whatever number of pages the poll takes.
+            expect(fake.calls.reduce((rows, c) => rows + c.returned, 0)).toBe(2);
+            expect(fake.calls.every((c) => c.inSizes[0] === 1)).toBe(true);
         } finally {
             vi.useRealTimers();
         }

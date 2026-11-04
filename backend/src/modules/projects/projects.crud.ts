@@ -2,6 +2,7 @@
 // delete, and the tamper-evident export manifest.
 
 import { chunkArray } from "../../lib/arrays";
+import { queryFailureCause, selectAllByKey, selectInBatches } from "../../lib/batchedQuery";
 import {
   attachActiveVersionPaths,
   attachLatestVersionNumbers,
@@ -191,19 +192,15 @@ export async function getProjectsOverview(
 type DirectoryChild = { id: string; project_id?: string | null; user_id?: string | null; current_version_id?: string | null; [key: string]: unknown };
 /** Bound request URLs and use keyset pages so gateway row caps cannot truncate a directory. */
 export async function loadProjectDirectoryChildren(db: Db, table: "documents" | "project_subfolders", projectIds: string[]) {
-  const data: DirectoryChild[] = [];
-  for (const ids of chunkArray(projectIds, 50)) {
-    let after: string | null = null;
-    for (;;) {
-      let query = db.from(table).select("*").in("project_id", ids).order("id", { ascending: true }).limit(100);
-      if (after) query = query.gt("id", after);
-      const result = await query;
-      if (result.error) return { data: [], error: result.error };
-      const page = (result.data ?? []) as DirectoryChild[];
-      if (!page.length) break;
-      data.push(...page);
-      after = page[page.length - 1].id;
-    }
+  let data: DirectoryChild[];
+  try {
+    data = await selectInBatches<DirectoryChild>(`project ${table}`, projectIds, (ids) =>
+      selectAllByKey<DirectoryChild>(`project ${table}`, () =>
+        db.from(table).select("*").in("project_id", ids),
+      ),
+    );
+  } catch (error) {
+    return { data: [] as DirectoryChild[], error: queryFailureCause(error) };
   }
   data.sort((a, b) => String(a.created_at ?? "").localeCompare(String(b.created_at ?? "")) || a.id.localeCompare(b.id));
   return { data, error: null };

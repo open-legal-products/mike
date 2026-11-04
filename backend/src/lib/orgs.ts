@@ -31,7 +31,7 @@
 import type { OrgMemberHandover } from "@mike/contracts";
 import { listOrgPrivateContentAccess } from "./orgPrivateContent";
 import type { Db } from "./supabase";
-import { selectAllPages, selectInBatches } from "./batchedQuery";
+import { selectAllByKey, selectInBatches } from "./batchedQuery";
 import { INTERNAL_ERROR_MESSAGE } from "./httpError";
 import { safeError } from "./safeError";
 import { recordAudit } from "./audit";
@@ -326,21 +326,8 @@ export async function listOrgResources(
     // so an organization past 1000 projects or workflows silently lost the
     // rest (or, for the override tables, the grants that admit a member).
     type Row = { id?: unknown; user_id?: unknown; visibility?: unknown; created_at?: unknown };
-    const pageBy = <T extends Record<string, unknown>>(
-        label: string,
-        key: string,
-        build: () => {
-            order(column: string, options: { ascending: boolean }): {
-                limit(count: number): PromiseLike<{ data: unknown; error: unknown }> & {
-                    gt(column: string, value: unknown): PromiseLike<{ data: unknown; error: unknown }>;
-                };
-            };
-        },
-    ) =>
-        selectAllPages<T>(label, (after, limit) => {
-            const query = build().order(key, { ascending: true }).limit(limit);
-            return (after ? query.gt(key, after[key]) : query) as PromiseLike<{ data: T[] | null; error: unknown }>;
-        });
+    const pageBy = <T extends Record<string, unknown>>(label: string, key: string, build: () => unknown) =>
+        selectAllByKey<T>(label, build, key);
     let projectRows: Row[];
     let workflowRows: Row[];
     let projectOverrideRows: Record<string, unknown>[];
@@ -349,14 +336,14 @@ export async function listOrgResources(
         [projectRows, workflowRows, projectOverrideRows, workflowOverrideRows] =
             await Promise.all([
                 pageBy<Row & Record<string, unknown>>("org projects", "id", () =>
-                    db
+                      db
                         .from("projects")
                         .select("id, user_id, org_id, visibility, name, cm_number, practice, created_at, updated_at")
                         .eq("org_id", params.orgId)
                         .is("archived_at", null),
                 ),
                 pageBy<Row & Record<string, unknown>>("org workflows", "id", () =>
-                    db
+                      db
                         .from("workflows")
                         .select(
                             "id, user_id, org_id, visibility, title, type, practice, created_at",
@@ -365,14 +352,14 @@ export async function listOrgResources(
                         .is("archived_at", null),
                 ),
                 pageBy("project overrides", "project_id", () =>
-                    db
+                      db
                         .from("project_org_access_overrides")
                         .select("project_id, role")
                         .eq("org_id", params.orgId)
                         .eq("user_id", params.userId),
                 ),
                 pageBy("workflow overrides", "workflow_id", () =>
-                    db
+                      db
                         .from("workflow_org_access_overrides")
                         .select("workflow_id, role")
                         .eq("org_id", params.orgId)

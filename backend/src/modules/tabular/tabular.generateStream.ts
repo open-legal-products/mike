@@ -47,7 +47,7 @@ import { AppError } from "../../lib/appError";
 import { reportError } from "../../lib/observability/sentry";
 import { extractRowColumns, finalizeCell } from "./tabular.extractRow";
 import { type ReviewRow } from "./tabular.rows";
-import { mutateInBatches, selectAllPages, selectInBatches } from "../../lib/batchedQuery";
+import { mutateInBatches, selectAllByKey, selectInBatches } from "../../lib/batchedQuery";
 import {
     finishGeneration,
     parseCellContent,
@@ -309,18 +309,13 @@ async function tailTabularRun(args: {
                 "reconcile poll",
                 [...pending].map((key) => key.slice(0, key.lastIndexOf(":"))),
                 (batch) =>
-                    selectAllPages<PolledCell>("reconcile poll", (after, limit) => {
-                        let query = db
+                    selectAllByKey<PolledCell>("reconcile poll", () =>
+                          db
                             .from("tabular_cells")
                             .select("id, row_id, column_index, status, content")
                             .eq("review_id", reviewId)
                             .in("row_id", batch)
-                            .in("status", ["done", "error"])
-                            .order("id", { ascending: true })
-                            .limit(limit);
-                        if (after) query = query.gt("id", after.id);
-                        return query;
-                    }),
+                            .in("status", ["done", "error"])),
             );
             for (const c of cells) {
                 const key = cellKey(c.row_id, c.column_index);

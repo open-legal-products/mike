@@ -9,7 +9,7 @@ import { listWorkspaceWorkflows } from "../../../lib/workflowWorkspace";
 import { teamOrgIdOf } from "../../../lib/personalOrgs";
 import { ensureDocAccess } from "../../../lib/access";
 import { attachActiveVersionPaths } from "../../../lib/documentVersions";
-import { selectAllPages, selectInBatches } from "../../../lib/batchedQuery";
+import { selectAllByKey, selectInBatches } from "../../../lib/batchedQuery";
 import {
   type DocStore,
   type DocIndex,
@@ -1537,27 +1537,17 @@ export async function buildProjectDocContext(
   type ProjectDocRow = { id: string; created_at?: string | null };
   type ProjectFolderRow = { id: string; name: string; parent_folder_id: string | null };
   const [docs, folders] = await Promise.all([
-    selectAllPages<ProjectDocRow>("project chat documents", (after, limit) => {
-      let query = db
+    selectAllByKey<ProjectDocRow>("project chat documents", () =>
+      db
         .from("documents")
         .select("id, current_version_id, status, folder_id, created_at")
         .eq("project_id", projectId)
-        .eq("status", "ready")
-        .order("id", { ascending: true })
-        .limit(limit);
-      if (after) query = query.gt("id", after.id);
-      return query;
-    }),
-    selectAllPages<ProjectFolderRow>("project chat folders", (after, limit) => {
-      let query = db
+        .eq("status", "ready")),
+    selectAllByKey<ProjectFolderRow>("project chat folders", () =>
+      db
         .from("project_subfolders")
         .select("id, name, parent_folder_id")
-        .eq("project_id", projectId)
-        .order("id", { ascending: true })
-        .limit(limit);
-      if (after) query = query.gt("id", after.id);
-      return query;
-    }),
+        .eq("project_id", projectId)),
   ]);
   docs.sort(
     (a, b) =>
@@ -1717,16 +1707,11 @@ export async function buildWorkflowStore(
       "workflow asset lookup",
       databaseWorkflowIds,
       (batch) =>
-        selectAllPages<AssetRow>("workflow asset lookup", (after, limit) => {
-          let query = db
+        selectAllByKey<AssetRow>("workflow asset lookup", () =>
+          db
             .from("documents")
             .select("id, workflow_id, current_version_id, created_at")
-            .in("workflow_id", batch)
-            .order("id", { ascending: true })
-            .limit(limit);
-          if (after) query = query.gt("id", after.id);
-          return query;
-        }),
+            .in("workflow_id", batch)),
     );
     // Asset handles are numbered by position; keep it upload order.
     assetDocuments.sort(

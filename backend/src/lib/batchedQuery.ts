@@ -22,10 +22,9 @@ import { chunkArray } from "./arrays";
 
 export const ID_FILTER_BATCH_SIZE = 50;
 /**
- * Must not exceed the gateway's max_rows (1000 in supabase/config.toml): a
- * page shorter than this ends the loop, so a deployment that lowers max_rows
- * below it must lower this too. (loadProjectDirectoryChildren instead reads
- * until an empty page, trading one extra round trip for cap-independence.)
+ * Rows requested per page: the gateway's max_rows (1000 in
+ * supabase/config.toml). A lower cap only makes pages shorter; the page loop
+ * reads until an empty page, so nothing is lost either way.
  */
 export const ROW_PAGE_SIZE = 1000;
 /** Guards a runaway loop (a cursor that does not advance), not a product limit. */
@@ -91,8 +90,14 @@ export async function mutateInBatches(
  * Read every row of a query in pages. `page(after, limit, offset)` must order
  * by a unique key and either apply the keyset cursor (rows strictly after
  * `after`, the last row of the previous page; `null` for the first page)
- * with `.limit(limit)` — preferred — or, for a composite key PostgREST
- * cannot express as one comparison, `.range(offset, offset + limit - 1)`.
+ * with `.limit(limit)` — preferred, see {@link selectAllByKey} — or, for a
+ * composite key PostgREST cannot express as one comparison,
+ * `.range(offset, offset + limit - 1)`.
+ *
+ * The loop ends on an EMPTY page, not on a short one: a gateway configured
+ * with a lower max_rows than `pageSize` returns short pages that are not the
+ * end, and stopping there would recreate the silent truncation this helper
+ * exists to prevent. The price is one extra (empty, indexed) round trip.
  */
 export async function selectAllPages<T>(
   label: string,
@@ -105,9 +110,50 @@ export async function selectAllPages<T>(
     const { data, error } = await page(after, pageSize, rows.length);
     if (error) throw new BatchedQueryError(label, error);
     const batch = data ?? [];
+    if (batch.length === 0) return rows;
     rows.push(...batch);
-    if (batch.length < pageSize) return rows;
     after = batch[batch.length - 1];
   }
   throw new BatchedQueryError(label, new Error("page limit exceeded"));
+}
+
+/** The chainable part of a PostgREST filter builder that keyset paging needs. */
+type KeysetQuery<T> = PromiseLike<RowsResult<T>> & {
+  order(column: string, options: { ascending: boolean }): KeysetQuery<T>;
+  limit(count: number): KeysetQuery<T>;
+  gt(column: string, value: unknown): KeysetQuery<T>;
+};
+
+/**
+ * Every row of a filtered query, keyset-paged on a unique `key` (the primary
+ * key unless the filter makes another column unique). `build` returns the
+ * filtered builder — `db.from(t).select(cols).eq(…)` — without order or
+ * limit; this adds `.order(key).limit(n)` and `.gt(key, last[key])`.
+ * Rows come back in key order; callers that promised another order sort.
+ */
+export function selectAllByKey<T extends Record<string, unknown>>(
+  label: string,
+  build: () => unknown,
+  key = "id",
+  pageSize = ROW_PAGE_SIZE,
+): Promise<T[]> {
+  return selectAllPages<T>(
+    label,
+    async (after, limit) => {
+      const query = (build() as KeysetQuery<T>).order(key, { ascending: true }).limit(limit);
+      const page = await (after ? query.gt(key, after[key]) : query);
+      // A page that does not move past the cursor (a builder that dropped
+      // the `.gt`) would repeat forever; treat it as the end, not as rows.
+      const rows = page.data ?? [];
+      if (after && rows.length && rows[rows.length - 1][key] === after[key])
+        return { data: [], error: page.error };
+      return page;
+    },
+    pageSize,
+  );
+}
+
+/** The database error behind a batched-query failure, for result types that carry one. */
+export function queryFailureCause(error: unknown): unknown {
+  return error instanceof BatchedQueryError ? error.cause : error;
 }

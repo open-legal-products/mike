@@ -1,7 +1,7 @@
 // Project chat service functions: list a project's assistant chats.
 
 import { checkProjectAccess } from "../../lib/access";
-import { BatchedQueryError, selectAllPages } from "../../lib/batchedQuery";
+import { BatchedQueryError, selectAllByKey } from "../../lib/batchedQuery";
 import { type ProjectRole } from "../../lib/permissions";
 import { type Db, attachChatCreatorLabels } from "./projects.shared";
 
@@ -22,19 +22,11 @@ export async function listProjectChats(
   // max_rows, so a project's oldest-active chats past 1000 disappeared.
   let chats: { id: string; user_id?: string | null; updated_at?: string | null }[];
   try {
-    chats = await selectAllPages<{ id: string; user_id?: string | null; updated_at?: string | null }>(
-      "project chats",
-      (after, limit) => {
-        let query = db
+    chats = await selectAllByKey<{ id: string; user_id?: string | null; updated_at?: string | null }>("project chats", () =>
+        db
           .from("chats")
           .select("*")
-          .eq("project_id", projectId)
-          .order("id", { ascending: true })
-          .limit(limit);
-        if (after) query = query.gt("id", after.id);
-        return query;
-      },
-    );
+          .eq("project_id", projectId));
   } catch (error) {
     return { ok: false, kind: "db_error", error: error instanceof BatchedQueryError ? error.cause : error };
   }
