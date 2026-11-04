@@ -38,6 +38,14 @@ describe("Word directory index", () => {
     expect(buildDirectoryIndex([...folders], docs, new Set(), () => true).summaries.get("0")?.selected).toBe(0);
     expect(parents).toBe(2 * n);
   });
+  it("reuses the structure when one side is a fresh empty array", () => {
+    let parents = 0;
+    const docs = Array.from({ length: 50 }, (_, i) => ({ id: `${i}`, get folder_id() { parents++; return null; } }));
+    buildDirectoryIndex([], docs, new Set(), () => true);
+    const toggled = buildDirectoryIndex([], docs, new Set(["3"]), () => true);
+    expect(parents).toBe(50);
+    expect(toggled.directDocuments.get(null)).toHaveLength(50);
+  });
   it("does not mark a cyclic imported tree as completely loaded", () => {
     const index = buildDirectoryIndex([{ id: "a", parent_folder_id: "b" }, { id: "b", parent_folder_id: "a" }], [], new Set(), () => true);
     expect(index.summaries.get("a")?.loaded).toBe(false);

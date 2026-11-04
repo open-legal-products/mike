@@ -22,6 +22,17 @@ interface DirectoryStructure<F, D> {
  */
 const structures = new WeakMap<readonly object[], WeakMap<readonly object[], DirectoryStructure<never, never>>>();
 
+/**
+ * One cache key for every empty array. Callers build their inputs with
+ * `items ?? []`, which mints a new empty array per render, so a project
+ * with folders but no documents (or the reverse) would otherwise miss the
+ * cache on every checkbox toggle. Structure over an empty array never
+ * depends on which empty array it was.
+ */
+const EMPTY_KEY: readonly object[] = Object.freeze([]);
+const cacheKey = (items: readonly object[]): readonly object[] =>
+  items.length === 0 ? EMPTY_KEY : items;
+
 function buildStructure<
   F extends { id: string; parent_folder_id?: string | null },
   D extends { id: string; folder_id?: string | null; library_folder_id?: string | null },
@@ -103,12 +114,12 @@ export function buildDirectoryIndex<
   F extends { id: string; parent_folder_id?: string | null },
   D extends { id: string; folder_id?: string | null; library_folder_id?: string | null },
 >(folders: readonly F[], documents: readonly D[], selected: ReadonlySet<string>, levelLoaded: (id: string) => boolean) {
-  let byDocuments = structures.get(folders);
-  if (!byDocuments) structures.set(folders, byDocuments = new WeakMap());
-  let structure = byDocuments.get(documents) as DirectoryStructure<F, D> | undefined;
+  let byDocuments = structures.get(cacheKey(folders));
+  if (!byDocuments) structures.set(cacheKey(folders), byDocuments = new WeakMap());
+  let structure = byDocuments.get(cacheKey(documents)) as DirectoryStructure<F, D> | undefined;
   if (!structure) {
     structure = buildStructure(folders, documents);
-    byDocuments.set(documents, structure as DirectoryStructure<never, never>);
+    byDocuments.set(cacheKey(documents), structure as DirectoryStructure<never, never>);
   }
   const summaries = new Map<string, { count: number; selected: number; loaded: boolean }>();
   for (const node of structure.order) {
