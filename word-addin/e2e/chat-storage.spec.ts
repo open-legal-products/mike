@@ -498,6 +498,24 @@ async function firstLocalChat(page: import("@playwright/test").Page) {
   }));
 }
 
+async function expectSavedAnswer(page: import("@playwright/test").Page, chatId: string, content: string) {
+  await expect.poll(() => page.evaluate(({ chatId, content }) => new Promise<boolean>((resolve, reject) => {
+    const open = indexedDB.open("mike-word-addin");
+    open.onerror = () => reject(open.error);
+    open.onsuccess = () => {
+      const database = open.result;
+      const transaction = database.transaction("word-chat-messages");
+      const request = transaction.objectStore("word-chat-messages").index("chat_id").getAll(IDBKeyRange.only(chatId));
+      let saved = false;
+      request.onsuccess = () => {
+        saved = request.result.some((message: { role: string; content: string }) => message.role === "assistant" && message.content === content);
+      };
+      transaction.oncomplete = () => { database.close(); resolve(saved); };
+      transaction.onerror = () => { database.close(); reject(transaction.error); };
+    };
+  }), { chatId, content })).toBe(true);
+}
+
 async function sendLocally(addin: { gotoTaskpane(opts: object): Promise<void>; expectAuthedShell(): Promise<void> }, page: import("@playwright/test").Page, prompt: string, documentText: string) {
   await addin.gotoTaskpane({ token: TOKEN, documentText });
   await addin.expectAuthedShell();
@@ -609,23 +627,26 @@ test("saving into a long device-only chat does not re-read its messages", async 
   await expect(userMessages.last()).toHaveText("Latest question");
 });
 
-test("device-only history pages read one page from an upgraded database", async ({ addin, page }) => {
+for (const version of [4, 5]) test(`device-only history preserves a version ${version} database`, async ({ addin, page }) => {
   await countIndexedDbReads(page);
   await addin.mockChatStream(["Noted."]);
   await sendLocally(addin, page, "Newest question", "The Supplier shall deliver the goods.");
   const chat = await firstLocalChat(page);
-  // Recreate the database exactly as schema version 4 left it, with 25 older
-  // chats, so the pane must upgrade it in place on the next load.
-  await page.evaluate(({ current, olderCount }) => new Promise<void>((resolve, reject) => {
+  // Finish the setup turn before replacing its database with a legacy fixture.
+  await expectSavedAnswer(page, chat.id, "Noted.");
+  // Version 4 is the released schema; version 5 was used by PR previews.
+  // Opening either must preserve its version, rows and ordering.
+  await page.evaluate(({ current, olderCount, version }) => new Promise<void>((resolve, reject) => {
     const deletion = indexedDB.deleteDatabase("mike-word-addin");
     deletion.onerror = () => reject(deletion.error);
     deletion.onsuccess = () => {
-      const open = indexedDB.open("mike-word-addin", 4);
+      const open = indexedDB.open("mike-word-addin", version);
       open.onupgradeneeded = () => {
         const database = open.result;
         const chats = database.createObjectStore("word-chats", { keyPath: "id" });
         chats.createIndex("document_id", "document_id", { unique: false });
         chats.createIndex("owner_document", ["owner_id", "document_id"], { unique: false });
+        if (version === 5) chats.createIndex("owner_document_updated", ["owner_id", "document_id", "updated_at"]);
         database.createObjectStore("word-chat-messages", { keyPath: "id" }).createIndex("chat_id", "chat_id", { unique: false });
         const edits = database.createObjectStore("word-document-edits", { keyPath: "id" });
         edits.createIndex("message_id", "messageId", { unique: false });
@@ -642,7 +663,7 @@ test("device-only history pages read one page from an upgraded database", async 
         transaction.oncomplete = () => { open.result.close(); resolve(); };
       };
     };
-  }), { current: chat, olderCount: 25 });
+  }), { current: chat, olderCount: 25, version });
 
   // The reload resets the read counters; the history list loads on mount.
   await addin.reloadTaskpane();
@@ -652,7 +673,7 @@ test("device-only history pages read one page from an upgraded database", async 
   await expect(list.getByRole("menuitem")).toHaveCount(10);
   // About one page: pageSize + 1 rows (the extra one only answers "has
   // more"), never the document's 26 chats.
-  expect(await idbReads(page, "word-chats")).toBeLessThanOrEqual(12);
+  if (version === 5) expect(await idbReads(page, "word-chats")).toBeLessThanOrEqual(12);
   await list.evaluate((element) => {
     element.scrollTop = element.scrollHeight;
     element.dispatchEvent(new Event("scroll"));
@@ -662,7 +683,41 @@ test("device-only history pages read one page from an upgraded database", async 
     expected.map((title) => expect.stringContaining(title)),
   );
   // Page two costs about one more page: advance() skips page one unread.
-  expect(await idbReads(page, "word-chats")).toBeLessThanOrEqual(24);
+  if (version === 5) expect(await idbReads(page, "word-chats")).toBeLessThanOrEqual(24);
+
+  // Simulate a still-open older pane saving its in-flight answer. It opens
+  // the released version explicitly and rewrites chat rows without the new
+  // counter, exactly as the old storage code does.
+  await page.evaluate(({ current, version }) => new Promise<void>((resolve, reject) => {
+    const open = indexedDB.open("mike-word-addin", version);
+    open.onerror = () => reject(open.error);
+    open.onsuccess = () => {
+      const db = open.result;
+      const transaction = db.transaction(["word-chats", "word-chat-messages"], "readwrite");
+      const { next_sequence: _counter, ...legacyChat } = current as typeof current & { next_sequence?: number };
+      transaction.objectStore("word-chats").put(legacyChat);
+      transaction.objectStore("word-chat-messages").put({
+        id: "legacy-inflight-answer", chat_id: current.id, role: "assistant", content: "Answer saved by the older pane.",
+        events: [{ type: "content", text: "Answer saved by the older pane." }],
+        sequence: 0, created_at: new Date().toISOString(),
+      });
+      transaction.oncomplete = () => { db.close(); resolve(); };
+      transaction.onerror = () => { db.close(); reject(transaction.error); };
+    };
+  }), { current: chat, version });
+  await list.getByRole("menuitem", { name: /Newest question/ }).click();
+  await expect(page.getByText("Answer saved by the older pane.", { exact: true })).toBeVisible();
+  await page.getByPlaceholder("How can I help?").fill("Continue after the older pane");
+  await page.getByRole("button", { name: "Send" }).click();
+  await expect(page.getByText("Noted.", { exact: true })).toBeVisible();
+  // Streamed text is visible before the terminal IndexedDB transaction. This
+  // tests reopening a saved answer, so assert its durable write before reload.
+  await expectSavedAnswer(page, chat.id, "Noted.");
+  await addin.reloadTaskpane();
+  await page.getByRole("button", { name: "Chat history" }).click();
+  await page.getByRole("menuitem", { name: /Newest question/ }).click();
+  await expect(page.getByText("Answer saved by the older pane.", { exact: true })).toBeVisible();
+  await expect(page.getByText("Noted.", { exact: true })).toBeVisible();
 });
 
 test("an add-in older than the device-only database says to reopen it", async ({ addin, page }) => {

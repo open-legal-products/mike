@@ -8,8 +8,13 @@ export const OUTDATED_ADDIN_MESSAGE =
   "A newer version of Mike updated this device's chats. Close and reopen the add-in to load them.";
 
 const DATABASE_NAME = "mike-word-addin";
-// 5: word-chats gains the recency index history pages walk.
-const DATABASE_VERSION = 5;
+// Keep the released version: an existing pane opens version 4 explicitly,
+// so upgrading it would prevent that pane from saving an in-flight answer.
+// Fresh databases can have the optional recency index without a version bump.
+const DATABASE_VERSION = 4;
+// PR previews created version 5 with only an extra index. Read those in place;
+// never delete/recreate a user's database in an attempt to downgrade it.
+const READABLE_PREVIEW_VERSION = 5;
 const CHAT_STORE = "word-chats";
 const MESSAGE_STORE = "word-chat-messages";
 const EDIT_STORE = "word-document-edits";
@@ -70,9 +75,9 @@ function transactionDone(transaction: IDBTransaction): Promise<void> {
   });
 }
 
-function openDatabase(): Promise<IDBDatabase> {
+function openDatabase(readPreviewVersion = false): Promise<IDBDatabase> {
   return new Promise((resolve, reject) => {
-    const request = indexedDB.open(DATABASE_NAME, DATABASE_VERSION);
+    const request = indexedDB.open(DATABASE_NAME, readPreviewVersion ? undefined : DATABASE_VERSION);
     request.onupgradeneeded = () => {
       const database = request.result;
       if (!database.objectStoreNames.contains(CHAT_STORE)) {
@@ -122,6 +127,11 @@ function openDatabase(): Promise<IDBDatabase> {
     };
     request.onsuccess = () => {
       const database = request.result;
+      if (database.version > READABLE_PREVIEW_VERSION) {
+        database.close();
+        reject(new UserVisibleError(OUTDATED_ADDIN_MESSAGE));
+        return;
+      }
       // A newer add-in build (another pane, another tab) upgrading the
       // schema must not wait on this connection: close it and let the next
       // operation reopen at the new version.
@@ -129,15 +139,10 @@ function openDatabase(): Promise<IDBDatabase> {
       resolve(database);
     };
     request.onerror = () => {
-      // An older bundle (a cached pane) opening a database a newer build
-      // already upgraded cannot read it at all. Say what fixes it instead
-      // of a history pane that fails on every retry.
-      if (request.error?.name === "VersionError") {
-        reject(
-          new UserVisibleError(OUTDATED_ADDIN_MESSAGE, {
-            cause: request.error,
-          }),
-        );
+      // An installed PR preview may already have added the version-5 index.
+      // Open its current version, then refuse unknown future schemas above.
+      if (!readPreviewVersion && request.error?.name === "VersionError") {
+        resolve(openDatabase(true));
         return;
       }
       reject(
@@ -455,7 +460,19 @@ export async function listLocalWordChats(
   const database = await openDatabase();
   try {
     const transaction = database.transaction(CHAT_STORE, "readonly");
-    const index = transaction.objectStore(CHAT_STORE).index(CHAT_RECENCY_INDEX);
+    const chats = transaction.objectStore(CHAT_STORE);
+    if (!chats.indexNames.contains(CHAT_RECENCY_INDEX)) {
+      // Existing v4 databases cannot gain an index without locking out older
+      // panes. Retain their released listing behavior; new v4 databases and
+      // v5 previews use the indexed path below. Only chat metadata is read.
+      const rows = (await requestResult(
+        chats.index("owner_document").getAll(IDBKeyRange.only([ownerId, documentId])),
+      )) as LocalChatRow[];
+      await transactionDone(transaction);
+      return rows.sort((left, right) => right.updated_at.localeCompare(left.updated_at))
+        .slice(offset, offset + Math.max(0, limit));
+    }
+    const index = chats.index(CHAT_RECENCY_INDEX);
     // Walk this document's chats newest first and read only the page:
     // advance() skips earlier pages without cloning them. Loading and
     // sorting every chat per page made scrolling the history O(C^2 / page).
