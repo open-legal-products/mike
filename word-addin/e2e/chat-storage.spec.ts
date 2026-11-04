@@ -559,16 +559,21 @@ test("opening a device-only chat reads only that chat's edits", async ({ addin, 
   }))).toEqual([0, 0, 0]);
 });
 
+const SEEDED_TURNS = 20;
+
 test("saving into a long device-only chat does not re-read its messages", async ({ addin, page }) => {
   await countIndexedDbReads(page);
   await addin.mockChatStream(["Noted."]);
   await sendLocally(addin, page, "Start the thread", "The Supplier shall deliver the goods.");
   await expect(page.getByText("Noted.")).toHaveCount(1);
-  // A chat written before the sequence counter existed, with 200 more turns.
+  // A chat written before the sequence counter existed, with 20 more turns,
+  // seeded straight into IndexedDB. Any size fails without the counter (the
+  // assertion below is exactly 0 rows); a small one keeps the reopened
+  // transcript cheap to render under the development-stress CPU throttle.
   const { next_sequence: _counter, ...chat } = (await firstLocalChat(page)) as { id: string; owner_id: string; document_id: string; next_sequence?: number };
   await seedLocalRows(page, {
     "word-chats": [chat],
-    "word-chat-messages": Array.from({ length: 200 }, (_, i) => ({
+    "word-chat-messages": Array.from({ length: SEEDED_TURNS }, (_, i) => ({
       id: `earlier-${i}`, chat_id: chat.id, role: i % 2 ? "assistant" : "user", content: `Earlier turn ${i}`,
       created_at: "2020-01-01T00:00:00.000Z", sequence: i + 2,
     })),
@@ -584,19 +589,24 @@ test("saving into a long device-only chat does not re-read its messages", async 
   await addin.reloadTaskpane();
   await page.getByRole("button", { name: "Chat history" }).click();
   await page.getByRole("menu").getByRole("menuitem", { name: /Start the thread/ }).click();
-  await expect(page.getByText("Earlier turn 198", { exact: true })).toBeVisible();
+  await expect(page.getByText(`Earlier turn ${SEEDED_TURNS - 2}`, { exact: true })).toBeVisible();
   const before = await idbReads(page, "word-chat-messages");
   await page.getByPlaceholder("How can I help?").fill("Latest question");
   await page.getByRole("button", { name: "Send" }).click();
   await expect(page.getByText("Noted.")).toHaveCount(2);
-  await expect.poll(countMessages).toBe(204);
+  await expect.poll(countMessages).toBe(SEEDED_TURNS + 4);
   // Two saves (question, answer); each probes its own id, which is new.
   expect(await idbReads(page, "word-chat-messages") - before).toBe(0);
 
   await addin.reloadTaskpane();
   await page.getByRole("button", { name: "Chat history" }).click();
   await page.getByRole("menu").getByRole("menuitem", { name: /Start the thread/ }).click();
-  await expect(page.getByTestId("user-message-content").last()).toHaveText("Latest question");
+  // Wait for every user message of the reopened transcript (the first one,
+  // the 10 seeded, the latest) before reading the last, so the assertion
+  // checks ordering rather than racing the render.
+  const userMessages = page.getByTestId("user-message-content");
+  await expect(userMessages).toHaveCount(2 + SEEDED_TURNS / 2);
+  await expect(userMessages.last()).toHaveText("Latest question");
 });
 
 test("device-only history pages read one page from an upgraded database", async ({ addin, page }) => {
