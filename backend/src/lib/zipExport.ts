@@ -22,7 +22,8 @@ export function uniqueArchiveFilename(
 ): string {
   // Callers supply document leaf names. Match individual downloads before
   // reserving names, so renamed separators cannot become ZIP path aliases.
-  const filename = normalizeDownloadFilename(requestedName);
+  // JSZip also resolves bare dot segments to the empty path when reopening.
+  const filename = normalizeDownloadFilename(requestedName).replace(/^\.{1,2}$/, "_");
   if (!usedNames.has(filename)) {
     usedNames.add(filename);
     return filename;
