@@ -19,6 +19,7 @@ import {
     LIQUID_GLASS_HOVER_CLASS,
     LIQUID_GLASS_SELECTED_CLASS,
 } from "@/app/components/ui/liquid-surface";
+import { sortByNewest } from "@/app/lib/sortByNewest";
 
 /** How many more of a project's chats and reviews each "See more" shows. */
 export const PROJECT_RECENT_ITEM_PAGE_SIZE = 5;
@@ -44,7 +45,7 @@ export function mergeProjectRecentItems(
     chats: Chat[],
     reviews: TabularReview[],
 ): ProjectRecentItem[] {
-    return [
+    const items = [
         ...chats.map(
             (chat): ProjectRecentItem => ({
                 kind: "chat",
@@ -63,9 +64,8 @@ export function mergeProjectRecentItems(
                 activityAt: review.updated_at ?? review.created_at,
             }),
         ),
-    ].sort(
-        (a, b) => Date.parse(b.activityAt) - Date.parse(a.activityAt),
-    );
+    ];
+    return sortByNewest(items, (item) => Date.parse(item.activityAt));
 }
 
 type ProjectItemsData = {
