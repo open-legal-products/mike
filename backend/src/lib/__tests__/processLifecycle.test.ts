@@ -188,6 +188,40 @@ describe("listenOrFail (MIKE-BACKEND-7 root cause)", () => {
     }
   });
 
+  // MIKE-BACKEND-80: 36 fatal events from one developer's restart loop.
+  it("exits without reporting when the port is taken in a development build", async () => {
+    const holder = http.createServer();
+    await new Promise<void>((resolve) => holder.listen(0, resolve));
+    const port = (holder.address() as AddressInfo).port;
+    const effects = { ...fakeEffects(), buildMode: "development" };
+    try {
+      listenOrFail(express(), port, vi.fn(), effects);
+      await vi.waitFor(() => expect(effects.exit).toHaveBeenCalledWith(1));
+      expect(effects.report).not.toHaveBeenCalled();
+      expect(effects.logError).not.toHaveBeenCalled();
+      expect(effects.logInfo).toHaveBeenCalledWith(expect.stringContaining("EADDRINUSE"));
+    } finally {
+      await new Promise((resolve) => holder.close(resolve));
+    }
+  });
+
+  it("still reports a taken port as fatal in a production build", async () => {
+    const holder = http.createServer();
+    await new Promise<void>((resolve) => holder.listen(0, resolve));
+    const port = (holder.address() as AddressInfo).port;
+    const effects = { ...fakeEffects(), buildMode: "production" };
+    try {
+      listenOrFail(express(), port, vi.fn(), effects);
+      await vi.waitFor(() => expect(effects.exit).toHaveBeenCalledWith(1));
+      expect(effects.report).toHaveBeenCalledWith(
+        expect.objectContaining({ code: "EADDRINUSE" }),
+        { tags: { component: "boot", stage: "listen" }, level: "fatal" },
+      );
+    } finally {
+      await new Promise((resolve) => holder.close(resolve));
+    }
+  });
+
   it("calls back once the port is bound", async () => {
     const effects = fakeEffects();
     const onListening = vi.fn();

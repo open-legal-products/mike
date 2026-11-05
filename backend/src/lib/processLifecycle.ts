@@ -13,6 +13,8 @@ export interface LifecycleEffects {
   logInfo: (...args: unknown[]) => void;
   flush: () => Promise<void>;
   exit: (code: number) => void;
+  /** NODE_ENV, as the `build_mode` tag reports it. */
+  buildMode?: string;
 }
 
 export const processEffects: LifecycleEffects = {
@@ -21,6 +23,7 @@ export const processEffects: LifecycleEffects = {
   logInfo: (...args) => console.log(...args),
   flush: flushSentry,
   exit: (code) => process.exit(code),
+  buildMode: process.env.NODE_ENV,
 };
 
 /**
@@ -70,6 +73,21 @@ export function listenOrFail(
 ): Server {
   const onListen = (error?: Error) => {
     if (error) {
+      if (
+        effects.buildMode === "development" &&
+        (error as NodeJS.ErrnoException).code === "EADDRINUSE"
+      ) {
+        // A developer's second `npm run dev` (or a tsx watch restart racing
+        // the old process) is not a deployment failure: MIKE-BACKEND-80 was
+        // 36 fatal events from one restart loop. Say so locally and exit
+        // without reporting; a production bind failure is still fatal.
+        effects.logInfo(
+          `Mike backend could not start: port ${port} is already in use (EADDRINUSE). ` +
+            "Stop the other process or set PORT.",
+        );
+        effects.exit(1);
+        return;
+      }
       void failBoot(error, "listen", effects);
       return;
     }
