@@ -150,11 +150,32 @@ however many users hit it.
   body and the `X-Request-ID` header (exposed to cross-origin scripts). A handler that
   writes its own 5xx body is caught by the response sanitizer and reported as
   a message.
-- Model streams that fail after the response has started (the 500 path never
-  sees these). Deliberate, explained refusals (`UserFacingError`: missing API
-  key, disallowed model) are not bugs and are not reported.
+- Model calls that fail: chat and project-chat streams after the response
+  has started (the 500 path never sees these), chat titles, tabular cells and
+  rows, and the memory curator. One rule, `providerFailureLevel` in
+  `backend/src/lib/llm/providerErrors.ts`, applied by `reportModelFailure`,
+  decides the level from what the provider did:
+
+  | Provider condition | `error_kind` | Reported as |
+  |---|---|---|
+  | 429, or retries exhausted on a 429 | `chat.provider_rate_limited` | warning |
+  | 5xx, a stalled stream, a dropped or timed-out connection (`UND_ERR_SOCKET`, `UND_ERR_BODY_TIMEOUT`, `ECONNRESET`, `fetch failed`, also under a `RetryError`) | `chat.provider_unavailable` | warning |
+  | rejected key (`InvalidApiKeyError`, 401, 403) or no credit (402), when the **deployment's** environment key was sent | `chat.provider_rejected` / `chat.provider_out_of_credits` | warning |
+  | the same, when the **user's own** (BYOK) key was sent | same | not reported; the server log keeps a `console.warn` line |
+  | anything unexplained, including a 400 | `chat.stream_failed` | error |
+
+  A caller may only make that level quieter (a `UserFacingError` the user is
+  shown, such as a missing key or a disallowed model, is a warning), never
+  louder. A self-hosted install whose users bring their own keys therefore
+  sees nothing in Sentry when one of those keys is revoked; the operator's
+  log is the only record, and the user is told to check the key.
 - Background jobs: every failed attempt of a `db_jobs` job (warning while
-  retries remain, error when exhausted), failure-hook crashes, unknown job
+  retries remain, error when exhausted). A handler that throws
+  `NonRetryableJobError` ends the job at once with that error's
+  `reportLevel`: `"error"` by default, or `null`, which sends nothing and
+  logs a warning (the memory curator uses it for a user's key the provider
+  refused, so one revoked key is not one event per retry). Also reported:
+  failure-hook crashes, unknown job
   kinds, claim/tick/retention failures, BullMQ conversion/extraction/delivery
   failures, upload-session processing and conversion failures, worker
   heartbeat and loop failures, and the maintenance sweeps.
@@ -283,6 +304,13 @@ the backend, Next server/edge, browser, and all Word add-in entries.
   aggregate causes and AI SDK `lastError` are inspected locally with bounded
   traversal. Known provider error classes become a finite `provider_error`
   category; response bodies, prompts and credentials are never retained.
+  Two more fixed vocabularies name a provider's refusal without its text:
+  `provider_error_type` is the protocol's own `error.type` value (for example
+  `rate_limit_error`, `overloaded_error`, `invalid_request_error`), and
+  `provider_reason` is a reason matched locally against the provider's
+  message (`prompt_too_long`, `invalid_image`, `invalid_tool_schema`); only
+  the enum value leaves the process. Both join the title, and the
+  fingerprint only when present.
   Browser fetch failures include only `network_state` (online/offline/unknown)
   and `request_origin` (same-origin/cross-origin/unknown), never the hostname.
   Online means the browser reports connectivity, not that a server is reachable. Arbitrary
@@ -656,7 +684,11 @@ For example, an API issue with method `POST`, status `500`, and route `/projects
 identifies the user-visible symptom. Its `request_id` links to the backend
 exception and stack, which explain the cause. An Office issue uses `stage`
 and `office_code` to identify the failing Word operation. Retryable job
-attempts are warnings; exhausted attempts are errors. These fields make an
+attempts are warnings; exhausted attempts are errors. A failure no retry can
+change throws `NonRetryableJobError` with the `reportLevel` it deserves
+(`null` sends nothing). A failed model call goes through
+`reportModelFailure` so its level follows the provider's condition (see
+"What gets reported"). These fields make an
 issue useful even when its exception title is a generic provider message.
 
 The transport keeps a restricted set of fields. Application labels are
