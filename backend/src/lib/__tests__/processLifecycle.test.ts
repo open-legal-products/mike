@@ -193,7 +193,7 @@ describe("listenOrFail (MIKE-BACKEND-7 root cause)", () => {
     const holder = http.createServer();
     await new Promise<void>((resolve) => holder.listen(0, resolve));
     const port = (holder.address() as AddressInfo).port;
-    const effects = { ...fakeEffects(), buildMode: "development" };
+    const effects = { ...fakeEffects(), developmentBuild: true };
     try {
       listenOrFail(express(), port, vi.fn(), effects);
       await vi.waitFor(() => expect(effects.exit).toHaveBeenCalledWith(1));
@@ -205,13 +205,24 @@ describe("listenOrFail (MIKE-BACKEND-7 root cause)", () => {
     }
   });
 
-  it("still reports a taken port as fatal in a production build", async () => {
+  // Compose (NODE_ENV=${NODE_ENV:-development}), backend/.env.example and
+  // the desktop app all run compiled code under NODE_ENV=development. The
+  // default effects must call that an install, so a port clash still reports.
+  it("still reports a taken port as fatal for compiled code under NODE_ENV=development", async () => {
     const holder = http.createServer();
     await new Promise<void>((resolve) => holder.listen(0, resolve));
     const port = (holder.address() as AddressInfo).port;
-    const effects = { ...fakeEffects(), buildMode: "production" };
+    const argv = process.argv;
+    vi.stubEnv("NODE_ENV", "development");
+    process.argv = [argv[0], "/app/dist/index.js"];
+    vi.resetModules();
+    const fresh = await import("../processLifecycle.js");
+    process.argv = argv;
+    vi.unstubAllEnvs();
+    expect(fresh.processEffects.developmentBuild).toBe(false);
+    const effects = { ...fresh.processEffects, ...fakeEffects() };
     try {
-      listenOrFail(express(), port, vi.fn(), effects);
+      fresh.listenOrFail(express(), port, vi.fn(), effects);
       await vi.waitFor(() => expect(effects.exit).toHaveBeenCalledWith(1));
       expect(effects.report).toHaveBeenCalledWith(
         expect.objectContaining({ code: "EADDRINUSE" }),
