@@ -82,18 +82,27 @@ export function guardUpstreamBody(
     onError: (error: unknown) => void,
 ): ReadableStream<Uint8Array> {
     const reader = body.getReader();
+    // Set when the consumer cancels (the browser went away). A read pending
+    // at that moment then resolves as done, and the controller is already
+    // closed: nothing failed upstream, so nothing is reported.
+    let cancelled = false;
     return new ReadableStream<Uint8Array>({
         async pull(controller) {
+            let chunk: ReadableStreamReadResult<Uint8Array>;
             try {
-                const { done, value } = await reader.read();
-                if (done) controller.close();
-                else controller.enqueue(value);
+                chunk = await reader.read();
             } catch (error) {
+                if (cancelled) return;
                 onError(error);
                 controller.error(new DOMException("The upstream response failed.", "AbortError"));
+                return;
             }
+            if (cancelled) return;
+            if (chunk.done) controller.close();
+            else controller.enqueue(chunk.value);
         },
         cancel(reason) {
+            cancelled = true;
             return reader.cancel(reason);
         },
     });
