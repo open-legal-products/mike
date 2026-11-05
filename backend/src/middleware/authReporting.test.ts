@@ -99,19 +99,6 @@ describe("auth middleware failure reporting", () => {
     );
   });
 
-  it("answers a session GoTrue refused with a 401 and cleared cookies, not a reported 500", async () => {
-    const { AuthApiError } = await import("@supabase/supabase-js");
-    const refused = new AuthApiError("Invalid Refresh Token: Already Used", 400, "refresh_token_already_used");
-    mocks.createRequestSupabase.mockReturnValue({ auth: { getUser: vi.fn().mockRejectedValue(refused) } });
-
-    const res = await request(appWith(requireAuth)).get(ROUTE);
-
-    expect(res.status).toBe(401);
-    expect(res.body).toEqual({ code: "session_expired", detail: "Invalid or expired session" });
-    expect(mocks.clearRequestAuthCookies).toHaveBeenCalledOnce();
-    expect(mocks.reportError).not.toHaveBeenCalled();
-  });
-
   it("reports a missing admin client as auth.supabase_unavailable instead of a bare 500", async () => {
     const cause = new Error("missing SUPABASE_SECRET_KEY");
     mocks.createServerSupabase.mockImplementation(() => {

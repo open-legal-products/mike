@@ -1,51 +1,123 @@
 // A page load fans out many requests that carry one expired cookie session.
-// Real requireAuth and @supabase/ssr against a stand-in GoTrue that rotates
-// refresh tokens strictly: a token that has been used is refused.
+// Real requireAuth and @supabase/ssr against a stand-in GoTrue that behaves
+// like GoTrue v2.189 on refresh: a token whose refresh is still running is
+// refused with 409 "Too many concurrent token refresh requests"
+// (MIKE-BACKEND-8D), a token that has been used is refused with 400
+// refresh_token_already_used, and some tokens make it fail the way an outage
+// or a GoTrue bug would. The outage and GoTrue-500 cases use a live access
+// token, so the failure comes from /user: on the refresh path auth-js retries
+// a retryable failure with backoff for up to 30 s before giving up.
 import http from "node:http";
 import type { AddressInfo } from "node:net";
 import express from "express";
 import rateLimit from "express-rate-limit";
 import request from "supertest";
-import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
+import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("../../lib/log", () => ({ devLog: vi.fn(), isDev: false }));
 
-function jwt(exp: number): string {
+function jwt(exp: number, signature = "signature"): string {
   const part = (value: object) => Buffer.from(JSON.stringify(value)).toString("base64url");
-  return `${part({ alg: "HS256", typ: "JWT" })}.${part({ sub: "u1", exp, aud: "authenticated", role: "authenticated", session_id: "s1" })}.signature`;
+  return `${part({ alg: "HS256", typ: "JWT" })}.${part({ sub: "u1", exp, aud: "authenticated", role: "authenticated", session_id: "s1" })}.${signature}`;
 }
 const user = {
   id: "u1", aud: "authenticated", role: "authenticated", email: "fan-out@example.test",
   email_confirmed_at: "2026-01-01T00:00:00Z", app_metadata: {}, user_metadata: {}, created_at: "2026-01-01T00:00:00Z",
 };
 
+// How long the stand-in takes to rotate a token: long enough that a page
+// load's parallel requests all arrive while the first refresh is running.
+const REFRESH_LATENCY_MS = 100;
+
 let refreshCalls = 0;
+const refreshAnswers: number[] = [];
+const refreshing = new Set<string>();
 const usedRefreshTokens = new Set<string>();
 const gotrue = http.createServer((req, res) => {
   let body = "";
   req.on("data", (chunk) => { body += chunk; });
   req.on("end", () => {
     res.setHeader("content-type", "application/json");
+    const answer = (status: number, payload: object) => {
+      refreshAnswers.push(status);
+      res.statusCode = status;
+      res.end(JSON.stringify(payload));
+    };
     if (req.url?.startsWith("/auth/v1/token")) {
       refreshCalls++;
       const { refresh_token: token } = JSON.parse(body) as { refresh_token: string };
-      if (usedRefreshTokens.has(token)) {
-        res.statusCode = 400;
-        res.end(JSON.stringify({ code: "refresh_token_already_used", error_code: "refresh_token_already_used", msg: "Invalid Refresh Token: Already Used" }));
+      if (refreshing.has(token)) {
+        answer(409, { code: "conflict", error_code: "conflict", msg: "Too many concurrent token refresh requests on the same session or refresh token" });
         return;
       }
-      usedRefreshTokens.add(token);
-      const exp = Math.floor(Date.now() / 1000) + 3600;
-      res.end(JSON.stringify({ access_token: jwt(exp), refresh_token: `rotated-${refreshCalls}`, expires_in: 3600, expires_at: exp, token_type: "bearer", user }));
+      if (usedRefreshTokens.has(token)) {
+        answer(400, { code: "refresh_token_already_used", error_code: "refresh_token_already_used", msg: "Invalid Refresh Token: Already Used" });
+        return;
+      }
+      refreshing.add(token);
+      const rotated = `rotated-${refreshCalls}`;
+      setTimeout(() => {
+        refreshing.delete(token);
+        usedRefreshTokens.add(token);
+        const exp = Math.floor(Date.now() / 1000) + 3600;
+        answer(200, { access_token: jwt(exp), refresh_token: rotated, expires_in: 3600, expires_at: exp, token_type: "bearer", user });
+      }, REFRESH_LATENCY_MS);
       return;
     }
     if (req.url?.startsWith("/auth/v1/user")) {
+      const authorization = req.headers.authorization ?? "";
+      if (authorization.endsWith(".outage")) {
+        res.statusCode = 503;
+        res.end(JSON.stringify({ msg: "upstream connect error" }));
+        return;
+      }
+      if (authorization.endsWith(".broken")) {
+        res.statusCode = 500;
+        res.end(JSON.stringify({ code: 500, msg: "Database error querying schema" }));
+        return;
+      }
       res.end(JSON.stringify(user));
       return;
     }
     res.end("[]"); // PostgREST: no profile row, so no deletion and no login MFA
   });
 });
+
+/**
+ * One API process: its own module graph, so its own requireAuth, cookie
+ * client factory and refresh single-flight. Two of these are two replicas
+ * behind a load balancer.
+ */
+async function apiProcess(): Promise<express.Express> {
+  vi.resetModules();
+  const { requireAuth } = await import("../../middleware/auth.js");
+  const server = express();
+  // Mirrors app.ts, where the general limiter runs ahead of every
+  // authenticated route. Its ceiling is far above this test's requests, so
+  // it never fires; it is here so the stack matches production.
+  server.use(rateLimit({ windowMs: 60_000, max: 10_000, validate: false }));
+  server.get("/projects", requireAuth, (_req, res) => { res.json({ ok: true }); });
+  return server;
+}
+
+function expiredSessionCookie(refreshToken: string): string {
+  const expired = Math.floor(Date.now() / 1000) - 60;
+  const session = { access_token: jwt(expired), refresh_token: refreshToken, expires_in: 3600, expires_at: expired, token_type: "bearer", user };
+  return `mike-session=base64-${Buffer.from(JSON.stringify(session)).toString("base64url")}`;
+}
+
+function liveSessionCookie(signature: string): string {
+  const exp = Math.floor(Date.now() / 1000) + 3600;
+  const session = { access_token: jwt(exp, signature), refresh_token: "live-token", expires_in: 3600, expires_at: exp, token_type: "bearer", user };
+  return `mike-session=base64-${Buffer.from(JSON.stringify(session)).toString("base64url")}`;
+}
+
+function writtenCookies(res: request.Response): string[] {
+  return (res.headers["set-cookie"] as unknown as string[] | undefined) ?? [];
+}
+
+const pageLoad = (server: express.Express, cookie: string, count: number) =>
+  Promise.all(Array.from({ length: count }, () => request(server).get("/projects").set("Cookie", cookie)));
 
 let app: express.Express;
 beforeAll(async () => {
@@ -54,37 +126,79 @@ beforeAll(async () => {
   vi.stubEnv("SUPABASE_PUBLISHABLE_KEY", "publishable-test-key");
   vi.stubEnv("SUPABASE_SECRET_KEY", "secret-test-key");
   vi.stubEnv("NODE_ENV", "development");
-  const { requireAuth } = await import("../../middleware/auth.js");
-  app = express();
-  // Mirrors app.ts, where the general limiter runs ahead of every
-  // authenticated route. Its ceiling is far above this test's six requests,
-  // so it never fires; it is here so the stack matches production.
-  app.use(rateLimit({ windowMs: 60_000, max: 10_000, validate: false }));
-  app.get("/projects", requireAuth, (_req, res) => { res.json({ ok: true }); });
+  app = await apiProcess();
 });
 afterAll(async () => {
   vi.unstubAllEnvs();
   await new Promise<void>((resolve) => gotrue.close(() => resolve()));
 });
+beforeEach(() => {
+  refreshCalls = 0;
+  refreshAnswers.length = 0;
+  // sendInternalError logs the 5xx cases; keep the output readable.
+  vi.spyOn(console, "error").mockImplementation(() => undefined);
+});
 
 describe("page-load fan-out with an expired cookie session", () => {
   it("refreshes once and authenticates every parallel request", async () => {
-    vi.spyOn(console, "error").mockImplementation(() => undefined);
-    const expired = Math.floor(Date.now() / 1000) - 60;
-    const session = { access_token: jwt(expired), refresh_token: "page-load-token", expires_in: 3600, expires_at: expired, token_type: "bearer", user };
-    const cookie = `mike-session=base64-${Buffer.from(JSON.stringify(session)).toString("base64url")}`;
-
-    const responses = await Promise.all(
-      Array.from({ length: 6 }, () => request(app).get("/projects").set("Cookie", cookie)),
-    );
+    const responses = await pageLoad(app, expiredSessionCookie("page-load-token"), 6);
 
     expect(responses.map((res) => res.status)).toEqual([200, 200, 200, 200, 200, 200]);
     expect(refreshCalls).toBe(1);
     // Every response carries the one rotated session, none a cleared cookie.
     for (const res of responses) {
-      const [written] = res.headers["set-cookie"] as unknown as string[];
+      const [written] = writtenCookies(res);
       expect(written).toMatch(/^mike-session=base64-/);
       expect(written).not.toContain("Max-Age=0");
     }
+  });
+
+  it("answers two replicas sharing one session with 200 or a clean 401, never a 500", async () => {
+    const replicaA = await apiProcess();
+    const replicaB = await apiProcess();
+    const cookie = expiredSessionCookie("two-replica-token");
+
+    const [onA, onB] = await Promise.all([pageLoad(replicaA, cookie, 3), pageLoad(replicaB, cookie, 3)]);
+
+    // Each process refreshes once. GoTrue rotates for whichever arrives
+    // first and refuses the other while that is still running (409).
+    expect(refreshCalls).toBe(2);
+    expect([...refreshAnswers].sort()).toEqual([200, 409]);
+    const outcomes = [onA, onB].map((responses) => responses.map((res) => res.status));
+    expect(outcomes).toContainEqual([200, 200, 200]);
+    expect(outcomes).toContainEqual([401, 401, 401]);
+    for (const res of [...onA, ...onB]) {
+      if (res.status === 401) {
+        expect(res.body).toEqual({ code: "session_expired", detail: "Invalid or expired session" });
+      }
+    }
+  });
+});
+
+describe("a cookie session GoTrue cannot vouch for", () => {
+  it("answers a refused refresh token 401 session_expired and clears the cookie", async () => {
+    usedRefreshTokens.add("revoked-token");
+
+    const res = await request(app).get("/projects").set("Cookie", expiredSessionCookie("revoked-token"));
+
+    expect(refreshAnswers).toEqual([400]);
+    expect(res.status).toBe(401);
+    expect(res.body).toEqual({ code: "session_expired", detail: "Invalid or expired session" });
+    expect(writtenCookies(res).some((cookie) => cookie.startsWith("mike-session=") && cookie.includes("Max-Age=0"))).toBe(true);
+  });
+
+  it("answers GoTrue being unreachable 503 and keeps the session cookie", async () => {
+    const res = await request(app).get("/projects").set("Cookie", liveSessionCookie("outage"));
+
+    expect(res.status).toBe(503);
+    expect(writtenCookies(res).join("\n")).not.toContain("Max-Age=0");
+  });
+
+  it("answers a GoTrue 500 as a server failure, not a sign-out", async () => {
+    const res = await request(app).get("/projects").set("Cookie", liveSessionCookie("broken"));
+
+    expect(res.status).toBe(500);
+    expect(res.body).toMatchObject({ code: "internal_error" });
+    expect(writtenCookies(res).join("\n")).not.toContain("Max-Age=0");
   });
 });
