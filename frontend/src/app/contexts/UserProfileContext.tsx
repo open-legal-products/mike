@@ -180,8 +180,17 @@ function emptyApiKeys(): ApiKeyState {
     };
 }
 
-/** Normalizes the API profile into client defaults, including nullable photos and provider-key state. */
-function toProfile(data: ApiUserProfile): UserProfile {
+/**
+ * Normalizes the API profile into client defaults, including nullable photos
+ * and provider-key state. `previous` is the profile a save response replaces:
+ * only GET /user/profile decides `instanceAdmin` (from MIKE_ADMIN_EMAILS), so
+ * a save response that leaves it out keeps the access already shown instead
+ * of reading the gap as "not an admin".
+ */
+function toProfile(
+    data: ApiUserProfile,
+    previous?: UserProfile | null,
+): UserProfile {
     const { apiKeyStatus, ...profile } = data;
     const apiKeys = apiKeyStateFromStatus(apiKeyStatus);
 
@@ -205,7 +214,10 @@ function toProfile(data: ApiUserProfile): UserProfile {
             profile.lastSelectedReasoningLevel ?? "high",
         mfaOnLogin: profile.mfaOnLogin === true,
         courtlistenerBulkData: profile.courtlistenerBulkData === true,
-        instanceAdmin: profile.instanceAdmin === true,
+        instanceAdmin:
+            typeof profile.instanceAdmin === "boolean"
+                ? profile.instanceAdmin
+                : previous?.instanceAdmin === true,
         responseDetailsVisible: profile.responseDetailsVisible === true,
         projectMemoryDefault: profile.projectMemoryDefault !== false,
         ...routerProfileLists(profile),
@@ -366,7 +378,7 @@ export function UserProfileProvider({ children }: { children: ReactNode }) {
             try {
                 const updated = await updateUserProfile({ displayName });
                 setProfile((prev) =>
-                    prev ? { ...prev, ...toProfile(updated) } : null,
+                    prev ? { ...prev, ...toProfile(updated, prev) } : null,
                 );
                 return true;
             } catch (error) {
@@ -385,7 +397,7 @@ export function UserProfileProvider({ children }: { children: ReactNode }) {
             try {
                 const updated = await updateUserProfile({ organisation });
                 setProfile((prev) =>
-                    prev ? { ...prev, ...toProfile(updated) } : null,
+                    prev ? { ...prev, ...toProfile(updated, prev) } : null,
                 );
                 return true;
             } catch (error) {
@@ -406,7 +418,7 @@ export function UserProfileProvider({ children }: { children: ReactNode }) {
             if (!user) return false;
             try {
                 const updated = await completeUserOnboarding(details);
-                setProfile(toProfile(updated));
+                setProfile((prev) => toProfile(updated, prev));
                 return true;
             } catch (error) {
                 reportFailure(error, "save your practice details", () => {
@@ -423,7 +435,7 @@ export function UserProfileProvider({ children }: { children: ReactNode }) {
             if (!user) return false;
             try {
                 const updated = await updateUserProfile(details);
-                setProfile(toProfile(updated));
+                setProfile((prev) => toProfile(updated, prev));
                 return true;
             } catch (error) {
                 reportFailure(
@@ -443,7 +455,7 @@ export function UserProfileProvider({ children }: { children: ReactNode }) {
         if (!user) return false;
         try {
             const updated = await syncUserPasswordSet();
-            setProfile(toProfile(updated));
+            setProfile((prev) => toProfile(updated, prev));
             return true;
         } catch (error) {
             reportFailure(error, "refresh your password status", () => {
@@ -464,7 +476,7 @@ export function UserProfileProvider({ children }: { children: ReactNode }) {
                     [field]: value,
                 });
                 setProfile((prev) =>
-                    prev ? { ...prev, ...toProfile(updated) } : null,
+                    prev ? { ...prev, ...toProfile(updated, prev) } : null,
                 );
                 return true;
             } catch (error) {
@@ -577,7 +589,7 @@ export function UserProfileProvider({ children }: { children: ReactNode }) {
             try {
                 const updated = await updateUserMfaOnLogin(enabled);
                 setProfile((prev) =>
-                    prev ? { ...prev, ...toProfile(updated) } : null,
+                    prev ? { ...prev, ...toProfile(updated, prev) } : null,
                 );
                 return true;
             } catch (error) {
@@ -604,7 +616,7 @@ export function UserProfileProvider({ children }: { children: ReactNode }) {
                     quickActionsVisible: visible,
                 });
                 setProfile((prev) =>
-                    prev ? { ...prev, ...toProfile(updated) } : null,
+                    prev ? { ...prev, ...toProfile(updated, prev) } : null,
                 );
                 return true;
             } catch (error) {
@@ -625,7 +637,7 @@ export function UserProfileProvider({ children }: { children: ReactNode }) {
                     responseDetailsVisible: visible,
                 });
                 setProfile((prev) =>
-                    prev ? { ...prev, ...toProfile(updated) } : null,
+                    prev ? { ...prev, ...toProfile(updated, prev) } : null,
                 );
                 return true;
             } catch (error) {
@@ -646,7 +658,7 @@ export function UserProfileProvider({ children }: { children: ReactNode }) {
                     [ROUTER_PROFILE_FIELDS[router]]: models,
                 });
                 setProfile((prev) =>
-                    prev ? { ...prev, ...toProfile(updated) } : null,
+                    prev ? { ...prev, ...toProfile(updated, prev) } : null,
                 );
                 return true;
             } catch (error) {
@@ -666,9 +678,10 @@ export function UserProfileProvider({ children }: { children: ReactNode }) {
             applyDarkMode(enabled);
             try {
                 const updated = await updateUserProfile({ darkMode: enabled });
-                const normalized = toProfile(updated);
                 setProfile((prev) =>
-                    prev ? { ...prev, ...normalized, darkMode: enabled } : null,
+                    prev
+                        ? { ...prev, ...toProfile(updated, prev), darkMode: enabled }
+                        : null,
                 );
             } catch (error) {
                 applyDarkMode(previous);
@@ -686,10 +699,13 @@ export function UserProfileProvider({ children }: { children: ReactNode }) {
             const updated = await updateUserProfile({
                 projectMemoryDefault: enabled,
             });
-            const normalized = toProfile(updated);
             setProfile((prev) =>
                 prev
-                    ? { ...prev, ...normalized, projectMemoryDefault: enabled }
+                    ? {
+                          ...prev,
+                          ...toProfile(updated, prev),
+                          projectMemoryDefault: enabled,
+                      }
                     : null,
             );
         },

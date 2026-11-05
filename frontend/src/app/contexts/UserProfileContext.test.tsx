@@ -272,6 +272,40 @@ it("saves one router's Model Selections under that router's profile field", asyn
     });
 });
 
+it("keeps instance admin access when a profile save's response omits it", async () => {
+    // Review finding on #722: only GET /user/profile decides instanceAdmin;
+    // the save endpoints return the profile without it, and reading the
+    // missing field as false hid the Admin area until the next reload.
+    function AdminFlag() {
+        const { profile, updateDisplayName } = useUserProfile();
+        if (!profile) return null;
+        return (
+            <>
+                <span data-testid="name">{profile.displayName}</span>
+                <span data-testid="admin">{String(profile.instanceAdmin)}</span>
+                <button onClick={() => void updateDisplayName("Ada Lovelace")}>
+                    Save name
+                </button>
+            </>
+        );
+    }
+    getUserProfile.mockResolvedValue({ ...apiProfile(false), instanceAdmin: true });
+    updateUserProfile.mockResolvedValueOnce({
+        ...apiProfile(false),
+        displayName: "Ada Lovelace",
+    });
+    render(<UserProfileProvider><AdminFlag /></UserProfileProvider>);
+    await waitFor(() =>
+        expect(screen.getByTestId("admin")).toHaveTextContent("true"),
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Save name" }));
+    await waitFor(() =>
+        expect(screen.getByTestId("name")).toHaveTextContent("Ada Lovelace"),
+    );
+    expect(screen.getByTestId("admin")).toHaveTextContent("true");
+});
+
 describe("UserProfileProvider dark mode", () => {
     it("switches from dark to light and back to dark", async () => {
         render(
