@@ -17,8 +17,8 @@
 //      into an event so nothing is silently dropped. Errors already reported
 //      explicitly are remembered so the bridge does not double-report them.
 
-import * as Sentry from "@sentry/node";
 import { isDevelopmentBuild } from "../buildMode";
+import * as Sentry from "@sentry/node";
 import { retainExceptionTypes, diagnosticRoute, diagnosticErrorTags, privacyBoundaryIntegration, type Operation, type Stage } from "./sentryPrivacy";
 
 export type SentryRole = "api" | "worker" | "worker-thread" | "job";
