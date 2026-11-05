@@ -36,7 +36,9 @@ Resolution order, per runtime: `*_SENTRY_DISABLED=true` → off;
 built-in Mike project DSN. A development build is `next dev` (the Next
 server's `NODE_ENV=development`), the backend run from its TypeScript source
 (`tsx watch src/index.ts`, `npm run dev`; the compiled image is never one,
-whatever `NODE_ENV` compose sets), and the add-in's webpack dev server. It
+whatever `NODE_ENV` compose sets; the rule is `backend/src/lib/buildMode.ts`,
+and the backend's `build_mode` tag follows it rather than `NODE_ENV`), and the
+add-in's webpack dev server. It
 never falls back to the Mike project, and `*_SENTRY_DISABLED=false` does not
 change that; to see a development build's events, point its DSN at your own
 project or at `node scripts/sentry-sink.mjs`. For the
