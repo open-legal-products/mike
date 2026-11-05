@@ -156,8 +156,11 @@ export function SpreadsheetWorkbook({
             onSessionSave({
                 sourceSheets: sheets,
                 // status chooses the initial sheet; zoomRatio is already part of the sheet data.
-                sheets: workbook.getAllSheets().map((sheet) => ({
+                // Fortune-sheet only reads cells from celldata when it mounts and
+                // replaces whatever data matrix the sheet carried, so convert it back.
+                sheets: workbook.getAllSheets().map(({ data, ...sheet }) => ({
                     ...sheet,
+                    celldata: workbook.dataToCelldata(data),
                     status: sheet.id === currentSheetRef.current ? 1 : 0,
                 })),
                 scrollLeft:
