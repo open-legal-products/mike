@@ -69,6 +69,15 @@ export function logChatTitleFailure(
     error: unknown,
     replyFailure: unknown = null,
 ): void {
+    // The 15 s title deadline (generateAssistantChatTitle) firing is the
+    // fallback working: the chat keeps its placeholder title. console.warn,
+    // which the console bridge does not forward; console.error filed every
+    // slow provider as "TimeoutError: Failure in application"
+    // (MIKE-BACKEND-E).
+    if (isTitleTimeout(error)) {
+        console.warn(label, error);
+        return;
+    }
     const titleClass = providerFailureClass(error);
     // A rejected key or an empty account is not reported anywhere (see
     // providerFailureLevel): the reply's failure tells the user what to fix.
@@ -92,6 +101,19 @@ export function logChatTitleFailure(
         tags: { component: "chat-title", operation: "chat.title" },
     });
     console.warn(label, error);
+}
+
+/**
+ * True when `error` is (or wraps) a deadline: the title's own 15 s timer, or
+ * a provider deadline that fired first. Either way the title is auxiliary
+ * and the placeholder stands, so the name alone is enough — the AI SDK
+ * rethrows the abort reason, which is how the DOMException arrives here.
+ */
+function isTitleTimeout(error: unknown): boolean {
+    for (const link of causeChain(error)) {
+        if ((link as { name?: unknown }).name === "TimeoutError") return true;
+    }
+    return false;
 }
 
 const TITLE_FALLBACK = "Misc. Query";

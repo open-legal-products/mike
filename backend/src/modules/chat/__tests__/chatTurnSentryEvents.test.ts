@@ -248,6 +248,20 @@ describe("one failed chat turn in Sentry", () => {
         expect(sent.map((event) => event.level)).toEqual(["error"]);
     });
 
+    it("logs the title's own deadline as a warning, never an event", async () => {
+        // MIKE-BACKEND-E: the 15 s title timer firing is the fallback working.
+        const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+        logChatTitleFailure(
+            "[chat/stream] failed to generate chat title",
+            new DOMException("Chat title timed out", "TimeoutError"),
+            null,
+        );
+        await Sentry.flush(2000);
+        expect(sent).toEqual([]);
+        expect(warn).toHaveBeenCalledTimes(1);
+        warn.mockRestore();
+    });
+
     // MIKE-BACKEND-88: undici's SocketError under the SDK's exhausted
     // retries was "chat.stream_failed" at error level, and the title's copy
     // of the same dropped connection was filed again by the console bridge.
