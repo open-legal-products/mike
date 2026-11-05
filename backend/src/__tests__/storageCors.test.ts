@@ -4,11 +4,11 @@
 // listed localhost. MIKE-FRONTEND-28/3D/2Z, MIKE-WORD-ADDIN-9:
 // every compose install opened from a real host had its storage PUTs refused
 // by CORS. See docs/deployment.md "Object-storage CORS for direct uploads".
-import { readFileSync } from "node:fs";
+import { copyFileSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { spawnSync } from "node:child_process";
 import os from "node:os";
 import path from "node:path";
-import { describe, expect, it } from "vitest";
+import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { parse as parseYaml } from "yaml";
 
 const repoRoot = path.resolve(__dirname, "../../..");
@@ -127,6 +127,62 @@ describe("docker/storage-cors.mjs", () => {
       "https://localhost:3200",
     ]);
     expect(stderr).toMatch(/cannot load the backend's origins module/);
+  });
+
+  // Compose does not run origins.ts: it imports the image's tsc output,
+  // /app/dist/lib/origins.js, which is CommonJS because backend/package.json
+  // has no "type". Build that file with the backend's own tsconfig and run
+  // the script against it exactly as the container does (no strip-types).
+  describe("against the compiled dist/lib/origins.js", () => {
+    let appDir = "";
+    beforeAll(() => {
+      appDir = mkdtempSync(path.join(os.tmpdir(), "storage-cors-"));
+      const backendDir = path.join(repoRoot, "backend");
+      copyFileSync(path.join(backendDir, "package.json"), path.join(appDir, "package.json"));
+      const tsconfig = path.join(appDir, "tsconfig.json");
+      writeFileSync(
+        tsconfig,
+        JSON.stringify({
+          extends: path.join(backendDir, "tsconfig.json"),
+          include: [],
+          files: [path.join(backendDir, "src/lib/origins.ts")],
+          compilerOptions: {
+            rootDir: path.join(backendDir, "src"),
+            outDir: path.join(appDir, "dist"),
+            typeRoots: [path.join(backendDir, "node_modules/@types")],
+            types: ["node"],
+            sourceMap: false,
+          },
+        }),
+      );
+      const build = spawnSync(path.join(backendDir, "node_modules/.bin/tsc"), ["-p", tsconfig], {
+        encoding: "utf8",
+      });
+      if (build.status !== 0) throw new Error(`tsc failed: ${build.stdout}${build.stderr}`);
+    }, 60_000);
+    afterAll(() => {
+      if (appDir) rmSync(appDir, { recursive: true, force: true });
+    });
+
+    it("emits CommonJS and the script reads the policy from it", () => {
+      const compiled = path.join(appDir, "dist/lib/origins.js");
+      expect(readFileSync(compiled, "utf8")).toMatch(/exports\.configuredAllowedOrigins/);
+      const { status, stdout, stderr } = corsPolicy(
+        {
+          FRONTEND_URL: "https://mike.firm.example",
+          ALLOWED_ORIGINS: "https://word.firm.example",
+          NODE_ENV: "production",
+          MIKE_ORIGINS_MODULE: compiled,
+        },
+        [],
+      );
+      expect(stderr).toBe("");
+      expect(status).toBe(0);
+      expect(JSON.parse(stdout).CORSRules[0].AllowedOrigins).toEqual([
+        "https://mike.firm.example",
+        "https://word.firm.example",
+      ]);
+    });
   });
 
   it("is what compose installs, generated from exactly the backend's origin inputs", () => {
