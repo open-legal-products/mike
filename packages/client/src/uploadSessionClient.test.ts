@@ -47,11 +47,14 @@ describe("storageFailureReport", () => {
         expect(status?.tags).toMatchObject({ http_status: 503, storage_target: "cross_origin" });
     });
 
-    it.each([400, 404, 411, 413])("does not report a %i: the file or request, not the deployment", (code) => {
-        expect(storageFailureReport({ error: new Error(), status: code })).toBeNull();
-    });
-
-    it("still reports a 403: a signed URL the store refuses is a deployment fault", () => {
-        expect(storageFailureReport({ error: new Error(), status: 403 })).not.toBeNull();
+    // A signed PUT for a file the backend already accepted fails only
+    // because of the deployment: 403 a refused signature, 404 a missing bucket
+    // or proxy route, 405 a proxy sending it to the web app, 413 a proxy body
+    // limit. Nothing else reports them, so none may be dropped.
+    it.each([403, 404, 405, 413])("reports a %i with its status", (code) => {
+        expect(storageFailureReport({ error: new Error(), status: code })).toMatchObject({
+            tags: { http_status: code },
+            fingerprint: ["upload-storage-put"],
+        });
     });
 });

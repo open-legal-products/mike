@@ -277,21 +277,24 @@ type StorageFailure = {
 
 /**
  * The one reporting rule for a storage PUT whose retries are exhausted,
- * shared by the web app and the Word add-in. Returns null when there is
- * nothing to report: a 4xx other than 403 is about the file or the request
- * the user made (413: the file is larger than the bucket accepts,
- * MIKE-FRONTEND-3Q) and the per-file outcome already says so. A 403 stays:
- * a signed URL the store refuses is a deployment fault (clock skew, a proxy
- * rewriting the signed Host header), not something the user can fix.
+ * shared by the web app and the Word add-in. Every non-2xx is reported, with
+ * its status: the PUT goes to a URL the backend signed a moment ago for a
+ * file it already accepted (size and type are checked when the session is
+ * created), so a refusal is the deployment's storage or proxy, not the
+ * user's file. 403 is a signature the store refuses (clock skew, a proxy
+ * rewriting the signed Host header); 404 a missing bucket or a proxy route
+ * miss; 405 a proxy sending the PUT to the web app; 413 a proxy body limit
+ * (nginx's default is 1 MiB, far below the upload cap). Nothing else reports
+ * these: the backend only records `direct_upload_failed` on the file.
  *
  * Every failure groups as ONE issue (`upload-storage-put`), split only by
  * component and failure code at the privacy boundary: the URL, the file and
  * the calling screen differ per event but the cause is the deployment's
- * storage configuration, and `storage_target` says which part of it.
+ * storage configuration, and `storage_target` and `http_status` say which
+ * part of it.
  */
-export function storageFailureReport(failure: StorageFailure): StorageFailureReport | null {
+export function storageFailureReport(failure: StorageFailure): StorageFailureReport {
     const { status, network, target } = failure;
-    if (status !== undefined && status >= 400 && status < 500 && status !== 403) return null;
     return {
         ...(network ? { level: "warning" as const } : {}),
         tags: {
@@ -311,9 +314,8 @@ type UploadSessionTransport = {
     fetchStorage: typeof fetch;
     shouldRetryControlRequest(error: unknown): boolean;
     /**
-     * Called once, only after storage retries are exhausted and only when
-     * `storageFailureReport` says the failure is reportable. Never receives
-     * URLs or files.
+     * Called once, only after storage retries are exhausted, with the report
+     * `storageFailureReport` builds. Never receives URLs or files.
      */
     reportStorageFailure?(error: unknown, report: StorageFailureReport): void;
 };
@@ -664,10 +666,10 @@ async function runUploadSession<T>(args: {
                 }
                 if (storageFailure) {
                     try {
-                        const report = storageFailureReport(storageFailure);
-                        if (report) {
-                            args.transport.reportStorageFailure?.(storageFailure.error, report);
-                        }
+                        args.transport.reportStorageFailure?.(
+                            storageFailure.error,
+                            storageFailureReport(storageFailure),
+                        );
                     } catch {
                         // Telemetry must not change the per-file failure accounting.
                     }
