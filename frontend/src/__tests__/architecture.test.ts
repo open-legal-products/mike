@@ -27,6 +27,12 @@
 //      too, and a `.d.ts` has no runtime exports: a `react/jsx-runtime` alias
 //      to @types once compiled every JSX call to `(void 0)(...)`, and the
 //      built app rendered only its error page with no build error.
+//   5. The shared packages keep the boundary their READMEs state: a package's
+//      relative imports stay inside it; `@mike/client` is framework-free and
+//      never imports `@mike/ui` or an application; `@mike/ui` imports only
+//      `@mike/client` and its declared peer dependencies; and application
+//      code reaches a package only through its bare name, never a file path,
+//      so a file `index.ts` does not re-export stays internal.
 //
 // Test files may import shared fixtures and add-in sources from outside
 // `frontend/`; rule 3 is what keeps them out of the image. The faithful check
@@ -195,6 +201,57 @@ describe("frontend build boundaries", () => {
                 "applies these aliases to runtime imports, so the bundle gets a module " +
                 "with no exports. Point it at the runtime package (types come from " +
                 "`typeRoots`), or drop it.",
+        ).toEqual([]);
+    });
+
+    it("rule 5: the shared packages keep their stated import boundary", () => {
+        const PACKAGES = resolve(REPO, "packages");
+        const WORD_ADDIN = resolve(REPO, "word-addin");
+        const readJson = (file: string) => JSON.parse(readFileSync(file, "utf8")) as { peerDependencies?: Record<string, string> };
+        // What each package may import by bare name: its declared peers (the
+        // consuming app supplies them) plus Node built-ins; `@mike/client` may
+        // reach React for types only.
+        const allowed: Record<string, Set<string>> = {
+            client: new Set(Object.keys(readJson(join(PACKAGES, "client/package.json")).peerDependencies ?? {})),
+            ui: new Set(Object.keys(readJson(join(PACKAGES, "ui/package.json")).peerDependencies ?? {})),
+        };
+        allowed.client.add("react");
+        const bareName = (spec: string) => (spec.startsWith("@") ? spec.split("/").slice(0, 2).join("/") : spec.split("/")[0]);
+        const violations: string[] = [];
+        for (const file of full.fileNames) {
+            const rel = toPosix(relative(REPO, file));
+            if (isTestOnly(relToFrontend(file)) || /\.stories\.tsx?$/.test(rel)) continue;
+            const pkg = /^packages\/(ui|client)\//.exec(rel)?.[1];
+            const source = readFileSync(file, "utf8");
+            for (const spec of importSpecifiers(file)) {
+                if (pkg) {
+                    if (spec.startsWith(".")) {
+                        if (!isInside(join(PACKAGES, pkg), resolve(dirname(file), spec)))
+                            violations.push(`${rel} -> ${spec} (leaves packages/${pkg})`);
+                        continue;
+                    }
+                    if (spec.startsWith("node:")) continue;
+                    const name = bareName(spec);
+                    if (name === "@mike/client" && pkg === "client")
+                        violations.push(`${rel} -> ${spec} (a package does not import its own barrel)`);
+                    else if (name === "@mike/ui")
+                        violations.push(`${rel} -> ${spec} (${pkg === "client" ? "@mike/client never imports @mike/ui" : "a package does not import its own barrel"})`);
+                    else if (!allowed[pkg].has(name))
+                        violations.push(`${rel} -> ${spec} (not a declared peer dependency of @mike/${pkg})`);
+                    else if (pkg === "client" && name === "react" && !new RegExp(`import\\s+type\\s[^;]*from\\s+["']${spec}["']`).test(source))
+                        violations.push(`${rel} -> ${spec} (@mike/client is framework-free: React for types only)`);
+                } else {
+                    // Application code: packages by bare name only.
+                    const target = spec.startsWith(".") ? resolve(dirname(file), spec) : null;
+                    if (/^@mike\/(ui|client)\//.test(spec) || (target && isInside(PACKAGES, target) && !isInside(WORD_ADDIN, target)))
+                        violations.push(`${rel} -> ${spec} (import @mike/ui or @mike/client by name, not a file inside it)`);
+                }
+            }
+        }
+        expect(
+            violations,
+            "packages/ui/README.md and packages/client/README.md state these rules; " +
+                "an import crossed the boundary they describe.",
         ).toEqual([]);
     });
 });
