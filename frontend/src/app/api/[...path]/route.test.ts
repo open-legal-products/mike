@@ -194,7 +194,9 @@ describe("same-origin API gateway", () => {
             });
         };
 
-        it("reports one pinned warning and ends an event stream cleanly", async () => {
+        // An event stream errors too: the chat client resumes a turn only
+        // when its read fails, so a clean end would leave the answer partial.
+        it("reports one pinned warning and errors an event stream so the client resumes", async () => {
             const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
             const failure = socketClosed();
             fetchMock.mockResolvedValue(
@@ -204,7 +206,9 @@ describe("same-origin API gateway", () => {
 
             const response = await POST(request, context(["chat"]));
 
-            await expect(readBody(response)).resolves.toBe("data: first\n\n");
+            const reader = response.body!.getReader();
+            expect(new TextDecoder().decode((await reader.read()).value)).toBe("data: first\n\n");
+            await expect(reader.read()).rejects.toMatchObject({ name: "AbortError" });
             expect(reportError).toHaveBeenCalledTimes(1);
             expect(reportError).toHaveBeenCalledWith(failure, {
                 level: "warning",

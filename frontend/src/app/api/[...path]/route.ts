@@ -68,11 +68,9 @@ async function proxy(request: NextRequest, context: RouteContext) {
         responseHeaders.delete("content-length");
 
         const body = upstream.body
-            ? guardUpstreamBody(upstream.body, {
-                  closeCleanly: (upstream.headers.get("content-type") ?? "").startsWith("text/event-stream"),
-                  onError: (error) =>
-                      reportStreamFailure(error, request, requestPath, requestId, upstream.status),
-              })
+            ? guardUpstreamBody(upstream.body, (error) =>
+                  reportStreamFailure(error, request, requestPath, requestId, upstream.status),
+              )
             : null;
         return new Response(body, {
             status: upstream.status,

@@ -68,15 +68,18 @@ export function forwardableRequestHeaders(incoming: Headers): Headers {
  * and Next filed it as a context-free "Failure in application"
  * (MIKE-FRONTEND-2C, -2V, -Y, -4E).
  *
- * An event stream is closed cleanly: SSE clients already treat the end of
- * the stream as "reconnect and resume". Any other body (a file, a JSON
- * document) is aborted instead, so the browser sees an incomplete response
- * rather than a truncated file that looks complete. Next treats an
- * AbortError as a client disconnect and does not report it again.
+ * The guarded stream is then errored, never closed, whatever the body is.
+ * Next terminates the chunked response without its final chunk, so the
+ * browser's body read rejects (a network TypeError, not an AbortError):
+ * a truncated file never looks complete, and the chat client's
+ * readAssistantTurn sees the failure and resumes the turn from the last
+ * frame it received. A clean close would read as a finished answer and
+ * leave it partial. The error is an AbortError so that Next treats it as a
+ * client disconnect and does not report it a second time.
  */
 export function guardUpstreamBody(
     body: ReadableStream<Uint8Array>,
-    options: { closeCleanly: boolean; onError: (error: unknown) => void },
+    onError: (error: unknown) => void,
 ): ReadableStream<Uint8Array> {
     const reader = body.getReader();
     return new ReadableStream<Uint8Array>({
@@ -86,9 +89,8 @@ export function guardUpstreamBody(
                 if (done) controller.close();
                 else controller.enqueue(value);
             } catch (error) {
-                options.onError(error);
-                if (options.closeCleanly) controller.close();
-                else controller.error(new DOMException("The upstream response failed.", "AbortError"));
+                onError(error);
+                controller.error(new DOMException("The upstream response failed.", "AbortError"));
             }
         },
         cancel(reason) {
