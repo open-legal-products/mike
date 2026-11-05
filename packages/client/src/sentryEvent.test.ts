@@ -436,24 +436,48 @@ describe("automatic captures of an already-reported error", () => {
     });
 });
 
-// MIKE-FRONTEND-X (409), 1A (429), 1C (404), 11 (401): a refusal the screen
+// MIKE-FRONTEND-X (409), 2S/1A (429), 3Q (413): a refusal the screen
 // already showed, re-filed at error level by the global unhandled handler or
 // the console bridge. A cancellation is not a failure at all.
 describe("automatic captures of a handled outcome", () => {
     const unhandled = { exception: { values: [{ mechanism: { type: "onunhandledrejection", handled: false } }] } };
-    const refusal = (status: number) => Object.assign(new Error(`API error: ${status}`), { status });
+    const refusal = (status: number, code?: string) =>
+        Object.assign(new Error(`API error: ${status}`), { status, code: code ?? null });
 
-    it("drops an unhandled AbortError and an unhandled 4xx, keeps an unhandled 5xx", () => {
+    it("drops an unhandled AbortError and a Mike refusal carrying a known code, keeps an unhandled 5xx", () => {
         const { scrubEvent } = createEventScrubber({ install: "official" });
         const abort = Object.assign(new Error("The user aborted a request."), { name: "AbortError" });
         expect(scrubEvent(structuredClone(unhandled), { originalException: abort })).toBeNull();
-        expect(scrubEvent(structuredClone(unhandled), { originalException: refusal(409) })).toBeNull();
-        expect(scrubEvent(structuredClone(unhandled), { originalException: refusal(500) })).not.toBeNull();
+        expect(scrubEvent(structuredClone(unhandled), { originalException: refusal(409, "turn_in_progress") })).toBeNull();
+        expect(scrubEvent(structuredClone(unhandled), { originalException: refusal(429, "rate_limited") })).toBeNull();
+        expect(scrubEvent(structuredClone(unhandled), { originalException: refusal(413, "request_too_large") })).toBeNull();
+        expect(scrubEvent(structuredClone(unhandled), { originalException: refusal(500, "internal_error") })).not.toBeNull();
+    });
+
+    // Review of #775: duck-typing on `status` alone dropped any 4xx, including
+    // a third-party SDK's error that happens to carry one.
+    it("keeps a 4xx that carries no code, or a code no Mike server sends", () => {
+        const { scrubEvent } = createEventScrubber({ install: "official" });
+        expect(scrubEvent(structuredClone(unhandled), { originalException: refusal(409) })).not.toBeNull();
+        expect(scrubEvent(structuredClone(unhandled), { originalException: refusal(404, "NoSuchKey") })).not.toBeNull();
+    });
+
+    // MIKE-FRONTEND-1X (400) is undiagnosed and 11 (401) waits on #779: a
+    // 400, 401 or 422 is still sent, at warning level, even with a known code.
+    it.each([
+        [400, "invalid_request"],
+        [401, "session_expired"],
+        [422, "missing_api_key"],
+    ])("keeps an unhandled %i (%s) at warning level", (status, code) => {
+        const { scrubEvent } = createEventScrubber({ install: "official" });
+        const kept = scrubEvent(structuredClone(unhandled) as ScrubbableEvent, { originalException: refusal(status, code) });
+        expect(kept).not.toBeNull();
+        expect(kept?.level).toBe("warning");
     });
 
     it("drops a console.error of a nested 429", () => {
         const { scrubEvent } = createEventScrubber({ install: "official" });
-        const args = ["[chat] failed", { error: refusal(429) }];
+        const args = ["[chat] failed", { error: refusal(429, "rate_limited") }];
         expect(scrubEvent(
             { logger: "console", message: "[chat] failed [object Object]" },
             { captureContext: { extra: { arguments: args } } },
@@ -464,7 +488,7 @@ describe("automatic captures of a handled outcome", () => {
         const { scrubEvent } = createEventScrubber({ install: "official" });
         expect(scrubEvent(
             { exception: { values: [{ mechanism: { type: "generic", handled: true } }] } },
-            { originalException: refusal(409) },
+            { originalException: refusal(409, "turn_in_progress") },
         )).not.toBeNull();
     });
 });

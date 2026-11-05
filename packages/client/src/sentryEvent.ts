@@ -1,4 +1,5 @@
 import { retainExceptionTypes, diagnosticErrorTags } from "./sentryPrivacy";
+import { CODE_KINDS } from "./userError";
 
 /**
  * Sentry event hygiene shared by the web app (browser + Next server) and the
@@ -483,6 +484,7 @@ export function minimiseForCommunity<T extends CommunityEvent>(event: T): T {
 export type ScrubbableEvent = {
     /** Set to "console" by the console bridge on every event it creates. */
     logger?: string;
+    level?: string;
     message?: string;
     server_name?: string;
     fingerprint?: string[];
@@ -647,30 +649,72 @@ function isDevToolchainNoise(event: ScrubbableEvent, automatic: boolean): boolea
 }
 
 /**
+ * The 4xx statuses that are still reported, at warning level, even when the
+ * server attached a code: they say the CLIENT built a request the server
+ * could not accept, so each one is a defect in this code until shown
+ * otherwise.
+ *
+ * - 400 and 422: request-shape validation ("Invalid chat cursor", a
+ *   malformed model or message list). MIKE-FRONTEND-1X is a live, still
+ *   undiagnosed 400 on chat turns from a dozen users; this is its only
+ *   signal.
+ * - 401: the session-refresh race #779 fixes. It stays visible until that
+ *   fix is verified in production; then it can join the dropped refusals.
+ */
+const UNEXPLAINED_REFUSAL_STATUSES: ReadonlySet<number> = new Set([400, 401, 422]);
+
+function readOwn(original: unknown): { name?: unknown; status?: unknown; code?: unknown } | null {
+    if (!original || typeof original !== "object") return null;
+    try {
+        const { name, status, code } = original as { name?: unknown; status?: unknown; code?: unknown };
+        return { name, status, code };
+    } catch {
+        // Exotic objects with throwing accessors are kept, not dropped.
+        return null;
+    }
+}
+
+/**
+ * A 4xx this client should not have caused (see UNEXPLAINED_REFUSAL_STATUSES).
+ * Callers that build the request (the chat hook) report it at warning level;
+ * the scrubber downgrades an automatic copy of it to warning.
+ */
+export function isUnexplainedRefusal(original: unknown): boolean {
+    const status = readOwn(original)?.status;
+    return typeof status === "number" && UNEXPLAINED_REFUSAL_STATUSES.has(status);
+}
+
+/**
  * An outcome the code that saw it already handles, so an AUTOMATIC copy of
  * it (console bridge, global unhandled handler) is not a defect report:
  *
  * - a cancellation (`AbortError`): the user stopped a stream or left a
  *   screen; and
- * - an HTTP refusal: an error carrying its own `status` in 400–499 (the
- *   API client's `MikeApiError`, `AuthApiError`, a chat request refused
- *   before streaming). A 409 `turn_in_progress` or a 429 is the server's
- *   deliberate answer; the screen shows it, and nothing in the frontend can
- *   fix it (MIKE-FRONTEND-X, 2N, 2S, 3Q, 11, 1C, 1A, G).
+ * - a deliberate refusal from a Mike server: an error carrying its own
+ *   `status` in 400–499 AND a `code` listed in CODE_KINDS, such as 409
+ *   `turn_in_progress`, 429 `rate_limited` or 413 `request_too_large`.
+ *   The screen shows it and nothing in the frontend can fix it.
  *
- * Only the original error's own fields are read: a 5xx whose cause chain
- * happens to contain a 4xx is still a server fault.
+ * A bare `status` is not enough: a third-party SDK's error with a 4xx
+ * `status` is not Mike's answer and is kept. Neither is a 400, 401 or 422
+ * (see UNEXPLAINED_REFUSAL_STATUSES). Only the original error's own fields
+ * are read: a 5xx whose cause chain happens to contain a 4xx is still a
+ * server fault.
  */
 function isHandledOutcome(original: unknown): boolean {
-    if (!original || typeof original !== "object") return false;
-    try {
-        const { name, status } = original as { name?: unknown; status?: unknown };
-        if (name === "AbortError") return true;
-        return typeof status === "number" && Number.isInteger(status) && status >= 400 && status <= 499;
-    } catch {
-        // Exotic objects with throwing accessors are kept, not dropped.
-        return false;
-    }
+    const own = readOwn(original);
+    if (!own) return false;
+    if (own.name === "AbortError") return true;
+    const { status, code } = own;
+    return (
+        typeof status === "number" &&
+        Number.isInteger(status) &&
+        status >= 400 &&
+        status <= 499 &&
+        !UNEXPLAINED_REFUSAL_STATUSES.has(status) &&
+        typeof code === "string" &&
+        Object.hasOwn(CODE_KINDS, code)
+    );
 }
 
 const DEFAULT_MAX_EVENTS_PER_ISSUE_PER_MINUTE = 10;
@@ -754,6 +798,9 @@ export function createEventScrubber(options?: {
             mechanism === CONSOLE_CAPTURE_MECHANISM || event.logger === "console";
         if ((automatic || consoleCapture) && isHandledOutcome(original)) {
             return null;
+        }
+        if ((automatic || consoleCapture) && isUnexplainedRefusal(original)) {
+            event.level = "warning";
         }
 
         // console.error("[label] failed", { jobId, error }) — the common shape
