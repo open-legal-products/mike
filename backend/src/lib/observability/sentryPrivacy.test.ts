@@ -237,6 +237,10 @@ it('separates diagnostic probes and allowlists configuration field names', () =>
 });
 
 
+it('keeps the missing key-encryption secret as a configuration field name', () => {
+  expect(diagnosticErrorTags({ configurationFields: ['USER_API_KEYS_ENCRYPTION_SECRET'] })).toEqual({ configuration_fields: 'USER_API_KEYS_ENCRYPTION_SECRET' });
+});
+
 it('retains a known storage operation and its dependency cause without object keys', () => {
   const error = { name: 'StorageOperationError', operation: 'HEAD', key: 'private-document', cause: { name: 'AccessDenied', $metadata: { httpStatusCode: 403 } } };
   expect(diagnosticErrorTags(error)).toEqual({ storage_operation: 'HEAD', failure_code: 'AccessDenied', dependency_status: 403 });

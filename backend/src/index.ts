@@ -7,6 +7,7 @@ import { app } from "./app";
 import { enforceDocumentLifecycleMigration } from "./lib/dbq/lifecycleGuard";
 import { manifestPublicKey } from "./lib/manifestSigning";
 import { validateRuntimeConfiguration } from "./lib/runtimeConfig";
+import { reportMissingEncryptionSecret } from "./lib/providerCredentials";
 import {
   startAllWorkers,
   stopAllWorkers,
@@ -129,6 +130,9 @@ async function main(): Promise<void> {
   // provably absent and only warns when the answer is unavailable, so the
   // cost of gating is one round trip of boot latency, never a crash loop.
   await enforceDocumentLifecycleMigration();
+  // Not awaited: a missing key-encryption secret is reported once, but it
+  // does not gate the boot (environment keys keep working). See secretCheck.
+  void reportMissingEncryptionSecret();
 
   server = listenOrFail(
     app,
