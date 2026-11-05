@@ -18,6 +18,7 @@
 //      explicitly are remembered so the bridge does not double-report them.
 
 import * as Sentry from "@sentry/node";
+import { isDevelopmentBuild } from "../buildMode";
 import { retainExceptionTypes, diagnosticRoute, diagnosticErrorTags, privacyBoundaryIntegration, type Operation, type Stage } from "./sentryPrivacy";
 
 export type SentryRole = "api" | "worker" | "worker-thread" | "job";
@@ -618,17 +619,9 @@ function parseRate(raw: string | undefined, fallback: number): number {
   return Math.min(Math.max(parsed, 0), 1);
 }
 
-/**
- * True when this process runs the TypeScript source (`tsx watch
- * src/index.ts`, `npm run dev`), i.e. a contributor's checkout. Every
- * install runs compiled JavaScript (`node dist/index.js`, the image's
- * `npm start`, `node dist/jobs/...`). NODE_ENV cannot tell the two apart:
- * docker compose runs the compiled image with NODE_ENV=development by
- * default. Worker threads share the parent's argv, so they agree with it.
- */
-export function isDevelopmentBuild(argv: readonly string[] = process.argv): boolean {
-  return /\.[cm]?tsx?$/.test(argv[1] ?? "");
-}
+// The rule lives in lib/buildMode.ts so non-Sentry code (boot, process
+// lifecycle) uses the same definition; re-exported for existing callers.
+export { isDevelopmentBuild };
 
 export function sentryConfiguration(
   env: NodeJS.ProcessEnv = process.env,
