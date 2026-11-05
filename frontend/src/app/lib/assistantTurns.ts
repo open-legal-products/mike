@@ -194,7 +194,11 @@ export function withLiveTurn(
   if (!turn) return messages;
   const { assistant, userMessage } = turn;
   if (assistant.id) {
-    const index = messages.findIndex(
+    // This runs once per streamed token, and the live row is the last or
+    // nearly the last message, so search from the end: a forward search
+    // walked the whole transcript for every token. Stored ids are unique,
+    // so the match is the same one either way.
+    const index = messages.findLastIndex(
       (message) => message.role === "assistant" && message.id === assistant.id,
     );
     if (index >= 0) {

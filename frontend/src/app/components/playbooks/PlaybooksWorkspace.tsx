@@ -116,6 +116,7 @@ import { AddDocumentsModal } from "@/app/components/modals/AddDocumentsModal";
 import { AccessModal } from "@/app/components/modals/AccessModal";
 import { useAuth } from "@/app/contexts/AuthContext";
 import { userFacingApiError } from "@/app/lib/userFacingError";
+import { settleBulkRequests } from "@/app/lib/bulkRequests";
 import type {
   ContentVisibility,
   Document,
@@ -509,19 +510,27 @@ function PlaybooksWorkspace() {
     if (!targets.length) return;
     setBusy("delete-runs");
     try {
-      for (const target of targets) {
-        await deletePlaybookRun(target.id);
+      const { succeeded, failed, firstError } = await settleBulkRequests(
+        targets,
+        (target) => deletePlaybookRun(target.id),
+        // As before: a failure ends the batch and is reported; whatever
+        // was not deleted stays selected for a retry.
+        { stopAfterFailure: true },
+      );
+      const deleted = new Set(succeeded.map((target) => target.id));
+      if (deleted.size) {
         // A retry after a partial failure covers only the runs left.
         setRunDeleteTargets(
-          (current) => current?.filter((item) => item.id !== target.id) ?? null,
+          (current) => current?.filter((item) => !deleted.has(item.id)) ?? null,
         );
         setAllRuns((items) =>
-          (items ?? []).filter((item) => item.id !== target.id),
+          (items ?? []).filter((item) => !deleted.has(item.id)),
         );
         setSelectedRunIds(
-          (ids) => new Set([...ids].filter((id) => id !== target.id)),
+          (ids) => new Set([...ids].filter((id) => !deleted.has(id))),
         );
       }
+      if (failed.length) throw firstError;
       setRunDeleteTargets(null);
     } catch (err) {
       notifyError(err, {
@@ -870,13 +879,21 @@ function PlaybooksWorkspace() {
     setBusy("delete");
     try {
       if (!(await autosave.flush())) return;
-      for (const target of targets) {
-        await deletePlaybook(target.id);
-        setPlaybooks((items) => items.filter((item) => item.id !== target.id));
+      const { succeeded, failed, firstError } = await settleBulkRequests(
+        targets,
+        (target) => deletePlaybook(target.id),
+        // As before: a failure ends the batch and is reported; whatever
+        // was not deleted stays selected for a retry.
+        { stopAfterFailure: true },
+      );
+      const deleted = new Set(succeeded.map((target) => target.id));
+      if (deleted.size) {
+        setPlaybooks((items) => items.filter((item) => !deleted.has(item.id)));
         setSelectedIds(
-          (ids) => new Set([...ids].filter((id) => id !== target.id)),
+          (ids) => new Set([...ids].filter((id) => !deleted.has(id))),
         );
       }
+      if (failed.length) throw firstError;
       if (selected) openPlaybook(null, { replace: true });
       setDeleteOpen(false);
       setDeleteTargetId(null);

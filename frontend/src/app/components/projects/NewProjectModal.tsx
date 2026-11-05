@@ -32,6 +32,7 @@ import {
     type PendingOrgOverride,
 } from "../modals/CreateAccessStep";
 import { AccessVisibilityField } from "../modals/AccessVisibilityField";
+import { settleBulkRequests } from "@/app/lib/bulkRequests";
 
 const PERSONAL_WORKSPACE = "__personal__";
 
@@ -309,21 +310,15 @@ export function NewProjectModal({ open, onClose, onCreated }: Props) {
             const documentsToLink = selectedDocuments.filter(
                 (document) => !linkedDocumentIdsRef.current.has(document.id),
             );
-            const linkResults = await Promise.all(
-                documentsToLink.map((document) =>
-                    addDocumentToProject(project.id, document.id).then(
-                        () => true,
-                        () => false,
-                    ),
-                ),
+            const links = await settleBulkRequests(documentsToLink, (document) =>
+                addDocumentToProject(project.id, document.id),
             );
-            documentsToLink.forEach((document, index) => {
-                if (linkResults[index])
-                    linkedDocumentIdsRef.current.add(document.id);
-            });
-            const failedLinkNames = documentsToLink
-                .filter((_, index) => !linkResults[index])
-                .map((document) => document.filename);
+            links.succeeded.forEach((document) =>
+                linkedDocumentIdsRef.current.add(document.id),
+            );
+            const failedLinkNames = links.failed.map(
+                (document) => document.filename,
+            );
 
             // Same for uploads, tracked by File identity through the client id
             // each one is sent under — the outcome's `filename` is the

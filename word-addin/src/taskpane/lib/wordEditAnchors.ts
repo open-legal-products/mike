@@ -136,67 +136,109 @@ export function listAppliedWordEditIds(): ReadonlySet<string> {
  * Best effort: failing to persist the marker only costs idempotency on a
  * later retry, never the edit itself, so callers do not surface a failure.
  */
-export async function markWordEditApplied(
-  stableEditId: string,
-): Promise<void> {
-  const settings = Office.context.document.settings;
-  const existing = readAppliedEditIds(settings);
-  if (existing.includes(stableEditId)) return;
-  const ids = rememberAppliedEditId(existing, stableEditId);
-  settings.set(WORD_APPLIED_EDITS_SETTING, { version: 1, ids });
-  await saveSettings(settings);
+export async function markWordEditApplied(stableEditId: string): Promise<void> {
+  await persistWordEditState([], [stableEditId]);
 }
 
-export function getWordEditAnchor(stableEditId: string): WordEditAnchor | null {
+/** Read/validate once when restoring a whole conversation. */
+export function getWordEditAnchors(): Readonly<Record<string, WordEditAnchor>> {
+  return readRegistry(Office.context.document.settings).anchors;
+}
+
+/** Commit the anchors and replay markers for one serialized Word mutation together. */
+export async function persistWordEditState(
+  anchors: readonly { stableEditId: string; bookmarkName: string }[],
+  appliedIds: readonly string[],
+): Promise<void> {
+  // Validate the complete input before changing the Office settings working copy.
+  for (const anchor of anchors) {
+    if (anchor.bookmarkName !== bookmarkNameForEdit(anchor.stableEditId)) {
+      throw new Error("Word edit anchor name does not match its stable edit ID.");
+    }
+  }
   const settings = Office.context.document.settings;
-  const anchor = readRegistry(settings).anchors[stableEditId];
-  return anchor ? { ...anchor } : null;
+  let changed = false;
+  if (anchors.length) {
+    const registry = readRegistry(settings);
+    const createdAt = new Date().toISOString();
+    for (const anchor of anchors) registry.anchors[anchor.stableEditId] = {
+      bookmarkName: anchor.bookmarkName, createdAt,
+    };
+    settings.set(WORD_EDIT_ANCHORS_SETTING, registry);
+    changed = true;
+  }
+  if (appliedIds.length) {
+    let ids = readAppliedEditIds(settings);
+    const known = new Set(ids);
+    for (const id of appliedIds) {
+      if (known.has(id)) continue;
+      known.add(id);
+      ids = rememberAppliedEditId(ids, id);
+      changed = true;
+    }
+    if (changed) settings.set(WORD_APPLIED_EDITS_SETTING, { version: 1, ids });
+  }
+  if (changed) await saveSettings(settings);
 }
 
 /**
- * Registered stable edit IDs starting with `prefix`. A replace-all edit
- * persists one anchor per applied occurrence under `${cardKey}#${pass}`, and
- * this is how a reloaded pane discovers how many passes were applied.
+ * One anchor, validated on its own. Entries are validated independently, so
+ * this matches readRegistry(...).anchors[id] without hashing every other
+ * entry of a registry that grows with the document's history.
  */
-export function listWordEditAnchorIds(prefix: string): string[] {
-  const settings = Office.context.document.settings;
-  return Object.keys(readRegistry(settings).anchors).filter((id) =>
-    id.startsWith(prefix),
-  );
+export function getWordEditAnchor(stableEditId: string): WordEditAnchor | null {
+  const value = Office.context.document.settings.get(WORD_EDIT_ANCHORS_SETTING) as unknown;
+  if (!isPlainObject(value) || value.version !== 1 || !isPlainObject(value.anchors)) return null;
+  if (!Object.prototype.hasOwnProperty.call(value.anchors, stableEditId)) return null;
+  const candidate = value.anchors[stableEditId];
+  return isPlainObject(candidate) &&
+    candidate.bookmarkName === bookmarkNameForEdit(stableEditId) &&
+    typeof candidate.createdAt === "string"
+    ? { bookmarkName: candidate.bookmarkName, createdAt: candidate.createdAt }
+    : null;
 }
 
-export async function persistWordEditAnchor(
-  stableEditId: string,
-  bookmarkName: string
-): Promise<void> {
-  if (bookmarkName !== bookmarkNameForEdit(stableEditId)) {
-    throw new Error("Word edit anchor name does not match its stable edit ID.");
+/**
+ * Registered replace-all pass IDs grouped by card key. A replace-all edit
+ * persists one anchor per applied occurrence under `${cardKey}#${pass}`, and
+ * this is how a reloaded pane discovers how many passes were applied. One
+ * registry read serves a whole restored conversation.
+ */
+export function groupWordEditAnchorPassIds(): Map<string, string[]> {
+  const byCard = new Map<string, string[]>();
+  for (const id of Object.keys(getWordEditAnchors())) {
+    const separator = id.indexOf("#");
+    if (separator < 0) continue;
+    const cardKey = id.slice(0, separator);
+    const ids = byCard.get(cardKey);
+    if (ids) ids.push(id);
+    else byCard.set(cardKey, [id]);
   }
-  const settings = Office.context.document.settings;
-  const registry = readRegistry(settings);
-  registry.anchors[stableEditId] = {
-    bookmarkName,
-    createdAt: new Date().toISOString(),
-  };
-  settings.set(WORD_EDIT_ANCHORS_SETTING, registry);
-  await saveSettings(settings);
+  return byCard;
+}
+
+export async function persistWordEditAnchor(stableEditId: string, bookmarkName: string): Promise<void> {
+  await persistWordEditState([{ stableEditId, bookmarkName }], []);
 }
 
 export async function removeWordEditAnchor(stableEditId: string): Promise<void> {
-  const settings = Office.context.document.settings;
-  const rawRegistry = settings.get(WORD_EDIT_ANCHORS_SETTING) as unknown;
-  const rawContainsAnchor =
-    isPlainObject(rawRegistry) &&
-    isPlainObject(rawRegistry.anchors) &&
-    Object.prototype.hasOwnProperty.call(rawRegistry.anchors, stableEditId);
-  const registry = readRegistry(settings);
-  if (!registry.anchors[stableEditId] && !rawContainsAnchor) return;
+  await removeWordEditAnchors([stableEditId]);
+}
 
-  delete registry.anchors[stableEditId];
-  if (Object.keys(registry.anchors).length === 0) {
-    settings.remove(WORD_EDIT_ANCHORS_SETTING);
-  } else {
-    settings.set(WORD_EDIT_ANCHORS_SETTING, registry);
+/** Remove a whole resolved/restored batch with one registry traversal and save. */
+export async function removeWordEditAnchors(stableEditIds: readonly string[]): Promise<void> {
+  if (!stableEditIds.length) return;
+  const settings = Office.context.document.settings;
+  const raw = settings.get(WORD_EDIT_ANCHORS_SETTING) as unknown;
+  const rawAnchors = isPlainObject(raw) && isPlainObject(raw.anchors) ? raw.anchors : {};
+  const registry = readRegistry(settings);
+  let changed = false;
+  for (const id of stableEditIds) {
+    changed = Object.prototype.hasOwnProperty.call(rawAnchors, id) || changed;
+    delete registry.anchors[id];
   }
+  if (!changed) return;
+  if (Object.keys(registry.anchors).length) settings.set(WORD_EDIT_ANCHORS_SETTING, registry);
+  else settings.remove(WORD_EDIT_ANCHORS_SETTING);
   await saveSettings(settings);
 }

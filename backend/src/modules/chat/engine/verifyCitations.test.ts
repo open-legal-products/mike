@@ -11,6 +11,7 @@ vi.mock("../../../lib/storage", () => ({ downloadFile: vi.fn() }));
 import {
   locateQuote,
   verifyQuoteAgainstSource,
+  caseSourceCache,
   verifyCaseCitationAnnotation,
   verifyDocumentCitationAnnotation,
   verifyCitations,
@@ -345,7 +346,7 @@ describe("verifyCaseCitationAnnotation", () => {
 
     const verified = (await verifyCaseCitationAnnotation(
       annotation,
-      opinions,
+      caseSourceCache(opinions),
     )) as Record<string, unknown>;
     expect(verified.verified).toBe(true);
     const quotes = verified.quotes as {
@@ -379,7 +380,7 @@ describe("verifyCaseCitationAnnotation", () => {
           },
         ],
       },
-      opinions,
+      caseSourceCache(opinions),
     )) as Record<string, unknown>;
     expect(verified.verified).toBe(false);
   });
@@ -420,5 +421,41 @@ describe("verifyCitations (batch)", () => {
       async () => [{ opinion_id: 3, text: "Binding case text" }],
     );
     expect(out[0]).toMatchObject({ verified: true });
+  });
+});
+
+describe("shared quote normalization", () => {
+  it("normalizes each source at most twice across an entire citation batch", async () => {
+    const operations = await import("./tools/documentOps.js");
+    const normalize = vi.spyOn(operations, "normalizeWithMap");
+    const source = "A long source without the requested phrase. ".repeat(500);
+    try {
+      const annotations = Array.from({ length: 200 }, (_, ref) => ({ ...docAnnotation([{ page: 1, quote: `missing phrase ${ref}` }]), ref }));
+      const result = await verifyCitations(annotations, async () => source, async () => []);
+      expect(result).toHaveLength(200);
+      expect(normalize.mock.calls.filter(([text]) => text === source)).toHaveLength(2);
+    } finally { normalize.mockRestore(); }
+  });
+
+  it("loads and joins a cited case's opinions once per verification batch", async () => {
+    const getCaseOpinions = vi.fn(async () => [
+      { opinion_id: 1, text: "Majority text." },
+      { opinion_id: 2, text: "Dissent text." },
+    ]);
+    const annotations = Array.from({ length: 20 }, (_, ref) => ({
+      type: "citation_data", kind: "case", ref, cluster_id: 42,
+      quotes: [{ quote: "Majority text. Dissent text." }],
+    }));
+    const result = await verifyCitations(annotations, async () => "", getCaseOpinions);
+    expect(result.every((value) => (value as { verified: boolean }).verified)).toBe(true);
+    expect(getCaseOpinions).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not reuse stale normalized text between verification batches", async () => {
+    const annotation = docAnnotation([{ page: 1, quote: "new words" }]);
+    const old = await verifyCitations([annotation], async () => "OLD WORDS", async () => []);
+    const current = await verifyCitations([annotation], async () => "NEW WORDS", async () => []);
+    expect(old[0]).toMatchObject({ verified: false });
+    expect(current[0]).toMatchObject({ verified: true, quote: "NEW WORDS" });
   });
 });

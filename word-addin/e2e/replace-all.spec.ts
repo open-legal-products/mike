@@ -245,3 +245,51 @@ test("a replace-all card survives a task-pane reload and still resolves all occu
     WRITE,
   ]);
 });
+
+
+test("replace-all keeps reverse host order, saves once per pass, and stops at fifty", async ({ addin, page }) => {
+  const text = Array.from({ length: 51 }, () => "Acme Corp").join(". ");
+  await addin.mockChatStream([REPLACE_ALL_BLOCK]);
+  await addin.gotoTaskpane({ documentText: text });
+  await addin.expectAuthedShell();
+  await page.getByPlaceholder("How can I help?").fill("Rename the company everywhere");
+  await page.getByRole("button", { name: "Send" }).click();
+  await expect(page.getByRole("button", { name: "Apply", exact: true })).toBeVisible();
+  const savesBefore = (await addin.wordCalls()).settingsSaves;
+  await applyReviewProposal(page);
+  await expect(page.getByText(/Applied 50 of 51 occurrences/)).toBeVisible();
+  const calls = await addin.wordCalls();
+  expect(calls.replacementPositions).toEqual(Array.from({ length: 50 }, (_, i) => `Acme Corp#${50 - i}`));
+  expect(calls.trackedChanges).toHaveLength(50);
+  // Document-local durable markers still survive each host call; batching
+  // anchors and replay IDs removes the old second whole-settings save.
+  expect(calls.settingsSaves - savesBefore).toBeLessThanOrEqual(50);
+  expect(calls.acceptedChanges).toEqual([]);
+});
+
+test("restoring many replace-all cards reads the anchor registry once", async ({ addin, page }) => {
+  const companies = Array.from({ length: 6 }, (_, i) => `Company ${i}`);
+  await addin.mockApiJson("GET", "**/word-chat?*", [CHAT]);
+  await addin.mockApiJson("GET", `**/word-chat/${CHAT_ID}?*`, {
+    chat: CHAT,
+    messages: [{
+      id: ASSISTANT_MESSAGE_ID, chat_id: CHAT_ID, role: "assistant", created_at: "2026-08-19T00:00:01Z",
+      content: companies.map((_, i) => ({ type: "word_edit_ref", edit_id: `edit-${i}` })),
+      edits: companies.map((company, i) => ({
+        id: `edit-${i}`, word_chat_message_id: ASSISTANT_MESSAGE_ID, block_index: i, original_text: company,
+        replacement_text: `${company} Ltd`, formats: [], occurrence: "all", apply_mode: "approval",
+        apply_status: "applied", resolution_status: null, matched_occurrences: 1, applied_occurrences: 1,
+      })),
+    }],
+  });
+  await addin.gotoTaskpane({ documentText: companies.join(". ") });
+  await addin.expectAuthedShell();
+  await page.getByRole("button", { name: "Chat history" }).click();
+  const before = (await addin.wordCalls()).anchorRegistryReads;
+  await page.getByRole("menu").getByRole("menuitem", { name: /Replace all occurrences/ }).click();
+  await expect(page.locator("[data-edit-status]")).toHaveCount(6);
+  await expect(page.locator('[data-edit-status="restoring"]')).toHaveCount(0);
+  // Pass discovery, the batched restore, and its stale-anchor prune (which
+  // reads the raw and validated registry) -- constant, not one per card.
+  expect((await addin.wordCalls()).anchorRegistryReads - before).toBeLessThanOrEqual(5);
+});

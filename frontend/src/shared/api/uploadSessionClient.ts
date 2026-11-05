@@ -42,11 +42,28 @@ export type UploadProgress<T = unknown> = Omit<UploadOutcome<T>, "status"> & {
  */
 export class UploadBatchError extends Error {
     readonly outcomes: UploadOutcome[];
+    /**
+     * Set when `message` is written for the user: a file the server refused
+     * for its content. The shared classifier then shows it verbatim as a
+     * validation failure, with no Retry, no support offer and no report.
+     */
+    readonly userVisible?: true;
+    readonly kind?: "validation";
+    readonly retryable?: false;
 
-    constructor(message: string, outcomes: UploadOutcome[]) {
+    constructor(
+        message: string,
+        outcomes: UploadOutcome[],
+        options: { userVisible?: boolean } = {},
+    ) {
         super(message);
         this.name = "UploadBatchError";
         this.outcomes = outcomes;
+        if (options.userVisible) {
+            this.userVisible = true;
+            this.kind = "validation";
+            this.retryable = false;
+        }
     }
 }
 
@@ -76,8 +93,39 @@ export const UPLOAD_LIMIT_MESSAGES: Record<string, string> = {
 };
 
 /**
+ * Codes the server gives a file whose bytes are wrong, not the batch or the
+ * connection. Trying again sends the same bytes, so the message names the
+ * file and the reason instead of asking for a retry.
+ */
+const UPLOAD_FILE_CONTENT_MESSAGES: Record<
+    string,
+    (filenames: string[]) => string
+> = {
+    invalid_pdf_file: (filenames) =>
+        filenames.length === 1
+            ? `${filenames[0]} is not a valid PDF file.`
+            : `${filenames.join(", ")} are not valid PDF files.`,
+};
+
+/**
+ * Whether a Retry should send this outcome's file again: it did not land, and
+ * nothing about its bytes says it would fail the same way. A file the server
+ * refused for its content is left out, so a batch of only such files offers
+ * no Retry at all.
+ */
+export function uploadOutcomeNeedsRetry(
+    outcome: Pick<UploadOutcome, "status" | "errorCode">,
+): boolean {
+    return (
+        outcome.status !== "completed" &&
+        !(outcome.errorCode !== null && outcome.errorCode in UPLOAD_FILE_CONTENT_MESSAGES)
+    );
+}
+
+/**
  * Prefer the actionable reason over a filename list: when every failure shares
- * one validation code, the limit itself is what the user has to act on.
+ * one validation code, the limit (or the file fault) itself is what the user
+ * has to act on.
  *
  * Known layering compromise: user-facing copy lives in this shared client
  * because both the web app and the add-in already call it for exactly this
@@ -90,11 +138,14 @@ export function failedUploadMessage<T>(
     const failures = outcomes.filter((outcome) => outcome.status === "error");
     if (failures.length === 0) return fallback;
     const codes = new Set(failures.map((outcome) => outcome.errorCode));
-    if (codes.size === 1) {
-        const limitMessage = UPLOAD_LIMIT_MESSAGES[[...codes][0] ?? ""];
-        if (limitMessage) return limitMessage;
-    }
     const filenames = failures.map((outcome) => outcome.filename);
+    if (codes.size === 1) {
+        const code = [...codes][0] ?? "";
+        const limitMessage = UPLOAD_LIMIT_MESSAGES[code];
+        if (limitMessage) return limitMessage;
+        const contentMessage = UPLOAD_FILE_CONTENT_MESSAGES[code];
+        if (contentMessage) return contentMessage(filenames);
+    }
     if (filenames.length === 1) {
         return `${filenames[0]} could not be uploaded. Please try again.`;
     }
@@ -109,7 +160,20 @@ export function failedUploadMessage<T>(
 export function firstUploadResult<T>(outcomes: UploadOutcome<T>[]): T {
     const first = outcomes[0];
     if (!first || first.status !== "completed" || !first.result) {
-        throw new UploadBatchError("The file could not be processed.", outcomes);
+        // A file refused for its content is the user's to fix: name it and
+        // the reason instead of the generic line. Everything else keeps the
+        // generic line so the notifier classifies the real cause.
+        const refused =
+            first !== undefined &&
+            first.status === "error" &&
+            !uploadOutcomeNeedsRetry(first);
+        throw new UploadBatchError(
+            refused
+                ? failedUploadMessage(outcomes)
+                : "The file could not be processed.",
+            outcomes,
+            { userVisible: refused },
+        );
     }
     return first.result;
 }

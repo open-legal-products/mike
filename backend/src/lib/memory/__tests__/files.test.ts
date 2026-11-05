@@ -14,6 +14,7 @@ import {
   wipeMemoryFile,
   writeMemoryFile,
   type MemoryFileRow,
+  wipeMemoryFiles,
 } from "../files";
 
 const file: MemoryFileRow = {
@@ -429,5 +430,28 @@ describe("direct memory file writes", () => {
       source: "settings",
       status: "idle",
     });
+  });
+});
+
+describe("wipeMemoryFiles", () => {
+  it("wipes in batches and, when a batch is refused, keeps the old one-by-one progress", async () => {
+    const calls: Array<[string, unknown]> = [];
+    const db = {
+      rpc: async (name: string, args: Record<string, unknown>) => {
+        calls.push([name, name === "wipe_memory_files" ? (args.p_ids as string[]).length : args.p_memory_file_id]);
+        // The second batch names a file deleted meanwhile: the batch RPC
+        // rolls back as a whole, and so does that file's single wipe.
+        if (name === "wipe_memory_files" && (args.p_ids as string[]).includes("m55"))
+          return { data: null, error: { code: "P0002" } };
+        if (name === "wipe_memory_file" && args.p_memory_file_id === "m55")
+          return { data: null, error: { code: "P0002" } };
+        return { data: [], error: null };
+      },
+    };
+    const ids = Array.from({ length: 70 }, (_, i) => `m${i}`);
+    await expect(wipeMemoryFiles(db as never, ids, { enabled: null })).rejects.toThrow("Failed to wipe memory");
+    expect(calls.slice(0, 2)).toEqual([["wipe_memory_files", 50], ["wipe_memory_files", 20]]);
+    // m50..m54 were still wiped individually before m55 stopped the cleanup.
+    expect(calls.slice(2).map(([, id]) => id)).toEqual(["m50", "m51", "m52", "m53", "m54", "m55"]);
   });
 });
