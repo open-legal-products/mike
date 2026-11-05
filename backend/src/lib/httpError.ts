@@ -1,5 +1,6 @@
 import type { Response } from "express";
 import { reportError, requestRoutePattern } from "./observability/sentry";
+import { shouldReportUpstreamFailure } from "./upstreamOutage";
 
 export const INTERNAL_ERROR_CODE = "internal_error";
 export const RATE_LIMITED_CODE = "rate_limited";
@@ -133,11 +134,22 @@ export interface PublicFailure {
   detail: string;
 }
 
+/** How sendInternalError reports, when a caller needs other than the default. */
+interface ReportPolicy {
+  /** False: the failure is a known repeat; log it, do not send it. */
+  report: boolean;
+  /** Names the flow when the request's handler has not set one yet. */
+  operation?: string;
+  /** Groups the event under a pinned condition instead of the route. */
+  fingerprint?: string[];
+}
+
 export function sendInternalError(
   res: Response,
   error: unknown,
   status = 500,
   answer?: PublicFailure,
+  policy: ReportPolicy = { report: true },
 ): Response {
   const requestId =
     typeof res.locals.requestId === "string" ? res.locals.requestId : null;
@@ -157,17 +169,23 @@ export function sendInternalError(
   // same one the client gets in the response body, so a user report ("I got
   // request_id X") finds the exact event. Report before logging: the console
   // bridge then knows this error is already accounted for.
-  reportError(error, {
-    tags: {
-      component: "http",
-      http_status: status,
-      request_id: requestId,
-      http_method: res.req?.method,
-      // The mounted route pattern, not the URL: /projects/:projectId groups
-      // as one issue instead of one per project.
-      http_route: requestRoutePattern(res.req),
-    },
-  });
+  if (policy.report) {
+    reportError(error, {
+      tags: {
+        component: "http",
+        http_status: status,
+        request_id: requestId,
+        http_method: res.req?.method,
+        // The mounted route pattern, not the URL: /projects/:projectId groups
+        // as one issue instead of one per project.
+        http_route: requestRoutePattern(res.req),
+        ...(policy.operation ? { operation: policy.operation } : {}),
+      },
+      ...(policy.fingerprint ? { fingerprint: policy.fingerprint } : {}),
+    });
+  }
+  // Set for a known repeat too: the response sanitizer must neither report
+  // it nor rewrite its public code.
   res.locals[FAILURE_REPORTED] = true;
 
   if (schemaCode) {
@@ -181,12 +199,14 @@ export function sendInternalError(
         "See docs/deployment.md.",
     );
   }
-  console.error("[http/internal-error]", {
-    requestId,
-    method: res.req?.method,
-    path: res.req?.originalUrl?.split("?")[0],
-    error: error,
-  });
+  if (policy.report) {
+    console.error("[http/internal-error]", {
+      requestId,
+      method: res.req?.method,
+      path: res.req?.originalUrl?.split("?")[0],
+      error: error,
+    });
+  }
 
   const body: PublicFailure = schemaCode
     ? { code: SCHEMA_OUT_OF_DATE_CODE, detail: SCHEMA_OUT_OF_DATE_MESSAGE }
@@ -199,13 +219,27 @@ export function sendInternalError(
 
 /**
  * A dependency (GoTrue, today) could not be reached: 503
- * `upstream_unavailable`, reported once like any other 5xx. Use it only for
- * failures the user can wait out (lib/authUpstream.ts decides that for
- * auth-js errors); a dependency answering with its own bug stays a 500.
+ * `upstream_unavailable`. Use it only for failures the user can wait out
+ * (lib/authUpstream.ts decides that for auth-js errors); a dependency
+ * answering with its own bug stays a 500.
+ *
+ * Every request fails this way for as long as the outage lasts, so the
+ * report is gated per process (lib/upstreamOutage.ts): the first failure of
+ * a class is one event, pinned to one `upstream-unavailable` issue whatever
+ * route tripped it; repeats are a counted console.warn. `operation` names
+ * the flow when the handler that would set it has not run (requireAuth).
  */
-export function sendUpstreamUnavailable(res: Response, error: unknown): Response {
-  return sendInternalError(res, error, 503, {
-    code: UPSTREAM_UNAVAILABLE_CODE,
-    detail: UPSTREAM_UNAVAILABLE_MESSAGE,
-  });
+export function sendUpstreamUnavailable(
+  res: Response,
+  error: unknown,
+  options: { operation?: string } = {},
+): Response {
+  const report = shouldReportUpstreamFailure(error);
+  return sendInternalError(
+    res,
+    error,
+    503,
+    { code: UPSTREAM_UNAVAILABLE_CODE, detail: UPSTREAM_UNAVAILABLE_MESSAGE },
+    { report, operation: options.operation, fingerprint: ["upstream-unavailable"] },
+  );
 }

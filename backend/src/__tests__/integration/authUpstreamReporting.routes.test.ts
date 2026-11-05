@@ -15,6 +15,7 @@ import { privacyBoundaryIntegration } from "../../lib/observability/sentryPrivac
 import { requireAuth } from "../../middleware/auth";
 import { protectInternalErrorResponses } from "../../middleware/internalErrorResponse";
 import { authRouter } from "../../modules/auth/auth.routes";
+import { resetUpstreamOutagesForTests } from "../../lib/upstreamOutage";
 
 const origin = "https://app.example.test";
 const saved: Record<string, string | undefined> = {};
@@ -36,8 +37,20 @@ const brokenGoTrue = http.createServer((_req, res) => {
   res.end(JSON.stringify({ code: 500, msg: "Database error saving new user" }));
 });
 
+// A GoTrue (and PostgREST) that is back: it knows the bearer token's user,
+// and every table read finds nothing.
+const healthySupabase = http.createServer((req, res) => {
+  res.writeHead(200, { "content-type": "application/json" });
+  if (req.url?.startsWith("/auth/v1/user")) {
+    res.end(JSON.stringify({ id: "u1", aud: "authenticated", email: "lawyer@example.test" }));
+  } else {
+    res.end("[]");
+  }
+});
+
 beforeAll(async () => {
   await new Promise<void>((resolve) => brokenGoTrue.listen(0, "127.0.0.1", resolve));
+  await new Promise<void>((resolve) => healthySupabase.listen(0, "127.0.0.1", resolve));
   for (const [key, value] of Object.entries(ENV)) {
     saved[key] = process.env[key];
     process.env[key] = value;
@@ -45,6 +58,7 @@ beforeAll(async () => {
 });
 afterAll(async () => {
   await new Promise<void>((resolve) => brokenGoTrue.close(() => resolve()));
+  await new Promise<void>((resolve) => healthySupabase.close(() => resolve()));
   for (const [key, value] of Object.entries(saved)) {
     if (value === undefined) delete process.env[key];
     else process.env[key] = value;
@@ -53,6 +67,7 @@ afterAll(async () => {
 
 beforeEach(() => {
   events.length = 0;
+  resetUpstreamOutagesForTests();
   resetSentryForTests("community", { initialized: true });
   Sentry.init({
     dsn: "https://test@sentry.invalid/1",
@@ -179,5 +194,54 @@ describe("requireAuth with GoTrue unreachable", () => {
       http_status: 503,
     });
     expect(events.filter((event) => event.logger === "console")).toHaveLength(0);
+  });
+
+  it("files one event per outage, not one per request, and reports the next outage after a recovery", async () => {
+    const warn = vi.mocked(console.warn);
+    const outageEvents = () =>
+      events.filter(
+        (event) =>
+          event.logger !== "console" &&
+          event.tags?.error_kind === "auth.supabase_unavailable",
+      );
+    const bearer = (req: request.Test) => req.set("Authorization", `Bearer ${jwt(exp)}`);
+
+    for (let i = 0; i < 3; i++) {
+      const res = await bearer(request(app()).get("/projects"));
+      expect(res.status).toBe(503);
+      expect(res.body.code).toBe("upstream_unavailable");
+    }
+    const session = await bearer(request(app()).get("/auth/session"));
+    expect(session.status).toBe(503);
+    expect(session.body.code).toBe("upstream_unavailable");
+    await Sentry.flush(2000);
+
+    expect(outageEvents()).toHaveLength(1);
+    expect(outageEvents()[0]!.tags).toMatchObject({
+      operation: "auth.session",
+      http_status: 503,
+    });
+    expect(outageEvents()[0]!.fingerprint?.[0]).toBe("upstream-unavailable");
+    // The quiet repeats are counted in the log instead.
+    expect(
+      warn.mock.calls.some(([line]) => String(line).startsWith("[upstream-unavailable] still failing (gotrue:0)")),
+    ).toBe(true);
+    expect(events.filter((event) => event.logger === "console")).toHaveLength(0);
+
+    // GoTrue comes back and a request authenticates.
+    const { port } = healthySupabase.address() as AddressInfo;
+    process.env.SUPABASE_URL = `http://127.0.0.1:${port}`;
+    try {
+      const ok = await bearer(request(app()).get("/projects"));
+      expect(ok.status).not.toBe(503);
+    } finally {
+      process.env.SUPABASE_URL = ENV.SUPABASE_URL;
+    }
+
+    // The next outage is news again.
+    const again = await bearer(request(app()).get("/projects"));
+    expect(again.status).toBe(503);
+    await Sentry.flush(2000);
+    expect(outageEvents()).toHaveLength(2);
   });
 });

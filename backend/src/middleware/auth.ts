@@ -4,6 +4,7 @@ import { createServerSupabase, type Db } from "../lib/supabase";
 import { syncProfileEmail } from "../lib/userLookup";
 import { sendInternalError, sendUpstreamUnavailable } from "../lib/httpError";
 import { isAuthUpstreamFailure } from "../lib/authUpstream";
+import { noteUpstreamReachable } from "../lib/upstreamOutage";
 import { createRequestSupabase } from "../lib/authSession";
 import { requestOriginIsTrusted } from "../lib/origins";
 import { devLog, isDev } from "../lib/log";
@@ -233,14 +234,19 @@ export async function requireAuth(
     // GoTrue could not be reached, so nobody could say whether the session
     // is valid. A 401 here would make the web app sign the user out of a
     // session that is fine; 503 upstream_unavailable tells it to wait.
+    // The handler that would name this request's flow never runs, so the
+    // event is named after what failed: the session lookup.
     sendUpstreamUnavailable(
       res,
       new AppError("auth.supabase_unavailable", "session lookup could not reach GoTrue", {
         cause: lookupError,
       }),
+      { operation: "auth.session" },
     );
     return;
   }
+  // GoTrue answered: an outage reported earlier is over.
+  if (user) noteUpstreamReachable();
 
   if (!user || !token) {
     res.status(401).json({ detail: "Invalid or expired session" });
