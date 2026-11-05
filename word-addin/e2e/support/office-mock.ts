@@ -56,6 +56,11 @@ export interface OfficeSeed {
    */
   outsideOffice?: boolean;
   /**
+   * With `outsideOffice`: Office.context.diagnostics is still present, the
+   * contradiction only a real (misdetected) Office client can produce.
+   */
+  outsideOfficeDiagnostics?: boolean;
+  /**
    * Structured description of the document body for the markdown document
    * context: when present, body.paragraphs/body.tables exist and describe
    * these blocks; when absent (every pre-existing spec), those collections
@@ -454,6 +459,9 @@ export function installOfficeMock(seed: OfficeSeed): void {
     context: {
       document: officeDocument,
       ui: officeUi,
+      ...(seed.outsideOffice && seed.outsideOfficeDiagnostics
+        ? { diagnostics: { host: null, platform: "Mac", version: "16.99" } }
+        : {}),
       // WordApi (incl. 1.3's Range.compareLocationWith) is mocked below; the
       // WordApiDesktop sets stay unsupported so the app keeps exercising the
       // getTrackedChanges code paths, like Word on the web.

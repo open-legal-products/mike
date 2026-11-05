@@ -8,6 +8,7 @@ import {
   ErrorBoundary,
   initAddinErrorReporting,
   reportError,
+  reportHostlessOfficeClient,
   tagOfficeHost,
 } from "./lib/errorReporting";
 import { PaneErrorFallback } from "./components/shell/PaneErrorFallback";
@@ -48,6 +49,9 @@ Office.onReady((info) => {
   // produced "Something went wrong" and two Sentry faults (MIKE-WORD-ADDIN-6
   // and -7, mostly crawlers and link previews opening the page).
   if (info.host == null) {
+    // Crawlers stay silent; a real Office client that resolved without a
+    // host does not (see reportHostlessOfficeClient).
+    reportHostlessOfficeClient();
     root.render(
       <div className={PANE_CLASS}>
         <OutsideOfficeNotice />

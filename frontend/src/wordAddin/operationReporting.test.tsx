@@ -48,6 +48,7 @@ import {
     isReported,
     reportApiFailure,
     reportError,
+    reportHostlessOfficeClient,
     reportNetworkFailure,
     reportWordFailure,
 } from "../../../word-addin/src/taskpane/lib/errorReporting";
@@ -83,6 +84,34 @@ describe("the add-in's operations", () => {
     it("are all values the privacy boundary keeps", () => {
         expect(diagnosticEvent({ tags: { operation: "word.new_operation" } }).tags)
             .toEqual({ operation: "word.new_operation" });
+    });
+});
+
+// Review of #789: the pane shows a static notice when Office.onReady has no
+// host. A crawler (MIKE-WORD-ADDIN-6/7) has no Office diagnostics and must
+// stay silent; a real Office client misdetected as hostless must not.
+describe("reportHostlessOfficeClient", () => {
+    it("sends nothing for a plain browser tab, which has no Office diagnostics", () => {
+        vi.stubGlobal("Office", { context: {} });
+        reportHostlessOfficeClient();
+        vi.stubGlobal("Office", undefined);
+        reportHostlessOfficeClient();
+        expect(Sentry.captureMessage).not.toHaveBeenCalled();
+    });
+
+    it("sends one warning when an Office client reports diagnostics but no host", () => {
+        vi.stubGlobal("Office", {
+            context: { diagnostics: { host: null, platform: "Mac", version: "16.99" } },
+        });
+        reportHostlessOfficeClient();
+        expect(Sentry.captureMessage).toHaveBeenCalledTimes(1);
+        expect(Sentry.captureMessage).toHaveBeenCalledWith(
+            "office host null inside an Office client",
+            {
+                level: "warning",
+                tags: { operation: "office.on_ready", error_kind: "office_host_null" },
+            },
+        );
     });
 });
 

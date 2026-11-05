@@ -129,15 +129,7 @@ export function initAddinErrorReporting(surface: AddinSurface): boolean {
  */
 export function tagOfficeHost(): void {
   if (!Sentry.isEnabled()) return;
-  const diagnostics = (
-    globalThis as {
-      Office?: {
-        context?: {
-          diagnostics?: { host?: unknown; platform?: unknown; version?: unknown };
-        };
-      };
-    }
-  ).Office?.context?.diagnostics;
+  const diagnostics = officeDiagnostics();
   if (!diagnostics) return;
   const scope = Sentry.getCurrentScope();
   if (diagnostics.host != null) scope.setTag("office_host", String(diagnostics.host));
@@ -147,6 +139,40 @@ export function tagOfficeHost(): void {
   if (diagnostics.version != null) {
     scope.setTag("office_version", String(diagnostics.version));
   }
+}
+
+/** What an Office client says about itself; absent outside one. */
+function officeDiagnostics():
+  | { host?: unknown; platform?: unknown; version?: unknown }
+  | undefined {
+  return (
+    globalThis as {
+      Office?: {
+        context?: {
+          diagnostics?: { host?: unknown; platform?: unknown; version?: unknown };
+        };
+      };
+    }
+  ).Office?.context?.diagnostics;
+}
+
+/**
+ * Office.onReady resolved with no host, so the pane shows the "open Mike in
+ * Word" notice instead of the app. A plain browser tab (a crawler, a link
+ * preview, a pasted URL) has no Office diagnostics either, and stays silent.
+ * Diagnostics WITH a null host is a contradiction only a real Office client
+ * can produce: if a Word build is ever misdetected as hostless, its users
+ * are locked out of the pane, so that case sends one warning, titled
+ * "Failure in office.on_ready" with error_kind=office_host_null (the
+ * office_* tags set by tagOfficeHost say which build).
+ */
+export function reportHostlessOfficeClient(): void {
+  if (!officeDiagnostics()) return;
+  // The privacy boundary drops message text, so the tags are what name it.
+  Sentry.captureMessage("office host null inside an Office client", {
+    level: "warning",
+    tags: { operation: "office.on_ready", error_kind: "office_host_null" },
+  });
 }
 
 function applyContext(scope: Sentry.Scope, context: ReportContext): void {
