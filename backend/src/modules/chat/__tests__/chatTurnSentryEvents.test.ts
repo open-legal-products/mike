@@ -38,6 +38,20 @@ function geminiRejectsKey(): Response {
     );
 }
 
+/**
+ * Gemini answering `status` with `message` — the shape of its error body.
+ * `retry-after-ms` keeps the AI SDK's retries of a 429/5xx instant.
+ */
+function geminiAnswers(status: number, message: string): Response {
+    return new Response(
+        JSON.stringify({ error: { code: status, message, status: "UNAVAILABLE" } }),
+        {
+            status,
+            headers: { "Content-Type": "application/json", "retry-after-ms": "1" },
+        },
+    );
+}
+
 // Supabase stand-in: thenable chain; nothing in this turn needs rows.
 function emptyDb() {
     const chain: Record<string, unknown> = {};
@@ -130,7 +144,7 @@ async function failedChatTurn() {
 }
 
 describe("one failed chat turn in Sentry", () => {
-    it("files a rejected API key once, tagged, and keeps the user-facing error", async () => {
+    it("files nothing for a rejected API key, and keeps the user-facing error", async () => {
         const streamError = await failedChatTurn();
         await Sentry.flush(2000);
 
@@ -143,28 +157,56 @@ describe("one failed chat turn in Sentry", () => {
             code: "invalid_api_key",
         });
 
-        // Before the fix: FOUR console-bridge events at level error — the
-        // title's raw APICallError (D), streamText's default onError log of
-        // the same (C), the classified InvalidApiKeyError (E) and the route's
-        // AssistantStreamError wrapper (B).
+        // Once FOUR console-bridge events at level error — the title's raw
+        // APICallError (D), streamText's default onError log of the same
+        // (C), the classified InvalidApiKeyError (E) and the route's
+        // AssistantStreamError wrapper (B) — then one warning (MIKE-BACKEND-
+        // 5B, -76, -85, -16). The user is told to fix the key; nothing in
+        // Mike can, so nothing is sent, and no later log of the turn's
+        // failure (the route's console.error above) files it either.
+        expect(sent).toEqual([]);
+    });
+
+    // MIK-89: a provider that is busy or down is not Mike's bug. One event
+    // per turn, as a warning, named by what the provider did.
+    it.each([
+        [429, "Resource has been exhausted (e.g. check quota).", "chat.provider_rate_limited"],
+        [503, "The model is overloaded. Please try again later.", "chat.provider_unavailable"],
+    ])("files a provider %i once, as a warning", async (status, message, kind) => {
+        vi.stubGlobal("fetch", vi.fn(async () => geminiAnswers(status, message)));
+        await failedChatTurn();
+        await Sentry.flush(2000);
+
         expect(
-            sent.map((event) => [
-                event.tags?.component ?? "(untagged)",
-                event.tags?.capture_source,
-                event.level,
-            ]),
-        ).toEqual([["chat-stream", "exception", "warning"]]);
+            sent.map((event) => [event.tags?.component, event.level, event.tags?.error_kind]),
+        ).toEqual([["chat-stream", "warning", kind]]);
         expect(sent[0]?.tags).toMatchObject({
-            provider_error: "invalid_api_key",
-            dependency_status: 400,
-            // What the provider did, read off the AppError that wraps it.
-            error_kind: "chat.provider_rejected",
+            provider_error: "retry_exhausted",
+            dependency_status: status,
         });
+    });
+
+    // The one this must not quieten: a failure nothing explains may be ours.
+    it("still files an unexplained provider failure at error level", async () => {
+        vi.stubGlobal(
+            "fetch",
+            vi.fn(async () => geminiAnswers(400, "Request contains an invalid argument.")),
+        );
+        await failedChatTurn();
+        await Sentry.flush(2000);
+
+        expect(
+            sent.map((event) => [event.tags?.component, event.level, event.tags?.error_kind]),
+        ).toEqual([["chat-stream", "error", "chat.stream_failed"]]);
     });
 
     // The title may run on another model or provider, or hit a rate limit the
     // reply did not. With the reply succeeding, nothing else reports it.
     it("files a title-only provider failure once, as a warning, when the reply succeeded", async () => {
+        vi.stubGlobal(
+            "fetch",
+            vi.fn(async () => geminiAnswers(429, "Resource has been exhausted (e.g. check quota).")),
+        );
         let titleFailure: unknown;
         await generateAssistantChatTitle({
             model: titleModelForChat(MODEL, null),
@@ -189,7 +231,7 @@ describe("one failed chat turn in Sentry", () => {
             ]),
         ).toEqual([["chat-title", "exception", "warning"]]);
         expect(sent[0]?.tags).toMatchObject({
-            dependency_status: 400,
+            dependency_status: 429,
             operation: "chat.title",
         });
     });
@@ -202,6 +244,35 @@ describe("one failed chat turn in Sentry", () => {
             new Error("connection terminated"),
         );
         await Sentry.flush(2000);
-        expect(sent).toHaveLength(2);
+        // The rejected key files nothing; the unrelated failure still does.
+        expect(sent.map((event) => event.level)).toEqual(["error"]);
     });
+
+    // MIKE-BACKEND-88: undici's SocketError under the SDK's exhausted
+    // retries was "chat.stream_failed" at error level, and the title's copy
+    // of the same dropped connection was filed again by the console bridge.
+    it("files a dropped connection once, as a warning, under provider_unavailable", async () => {
+        vi.stubGlobal(
+            "fetch",
+            vi.fn(async () => {
+                throw new TypeError("terminated", {
+                    cause: Object.assign(new Error("other side closed"), {
+                        name: "SocketError",
+                        code: "UND_ERR_SOCKET",
+                    }),
+                });
+            }),
+        );
+        await failedChatTurn();
+        await Sentry.flush(2000);
+
+        // Last in the file: the SDK's retries of the stubbed fetch leave a
+        // process warning (MaxListenersExceededWarning) that may land during
+        // or after this test; it is its own issue, not this turn's failure.
+        const turnEvents = sent.filter((event) => event.tags?.component !== "runtime-warning");
+        expect(
+            turnEvents.map((event) => [event.tags?.component, event.level, event.tags?.error_kind]),
+        ).toEqual([["chat-stream", "warning", "chat.provider_unavailable"]]);
+        expect(turnEvents[0]?.tags).toMatchObject({ failure_code: "UND_ERR_SOCKET" });
+    }, 20_000);
 });

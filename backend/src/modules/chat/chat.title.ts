@@ -1,6 +1,10 @@
 import { abortable } from "../../lib/abortable";
 import { completeText, type UserApiKeys } from "../../lib/llm";
-import { providerFailureStatus } from "../../lib/llm/providerErrors";
+import {
+    providerFailureKind,
+    providerFailureLevel,
+    providerFailureStatus,
+} from "../../lib/llm/providerErrors";
 import { reportError } from "../../lib/observability/sentry";
 import { UserFacingError } from "../../lib/userFacingError";
 
@@ -24,15 +28,20 @@ function* causeChain(error: unknown): Generator<unknown> {
 
 /**
  * How a model call failed, reduced to what makes two failures "the same":
- * the provider's HTTP status when the provider answered, or "config" for our
- * own refusal (missing key, model not allowed). Null for anything else — a
- * bug, a failed title write, a database error.
+ * the provider's HTTP status when the provider answered, "unavailable" when
+ * it never answered (a dropped socket, a stall), or "config" for our own
+ * refusal (missing key, model not allowed). Null for anything else — a bug,
+ * a failed title write, a database error.
  */
-function providerFailureClass(error: unknown): number | "config" | null {
+function providerFailureClass(error: unknown): number | "unavailable" | "config" | null {
     for (const link of causeChain(error)) {
         const status = providerFailureStatus(link);
         if (status !== null) return status;
     }
+    // Without this, a provider that dropped the connection made the title's
+    // failure look like our bug: console.error, filed by the console bridge
+    // at error level beside the reply's own report.
+    if (providerFailureKind(error) === "chat.provider_unavailable") return "unavailable";
     for (const link of causeChain(error)) {
         if (link instanceof UserFacingError) return "config";
     }
@@ -61,6 +70,12 @@ export function logChatTitleFailure(
     replyFailure: unknown = null,
 ): void {
     const titleClass = providerFailureClass(error);
+    // A rejected key or an empty account is not reported anywhere (see
+    // providerFailureLevel): the reply's failure tells the user what to fix.
+    if (titleClass !== null && providerFailureLevel(error) === null) {
+        console.warn(label, error);
+        return;
+    }
     if (titleClass === null) {
         console.error(label, error);
         return;
