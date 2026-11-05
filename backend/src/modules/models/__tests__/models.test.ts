@@ -294,8 +294,34 @@ describe("GET /models/openrouter", () => {
         ]);
         expect(fetchMock).toHaveBeenCalledWith(
             expect.stringContaining("https://openrouter.ai/api/v1/models?"),
-            { headers: { Authorization: "Bearer or-user-key" } },
+            expect.objectContaining({
+                headers: { Authorization: "Bearer or-user-key" },
+                signal: expect.any(AbortSignal),
+            }),
         );
+    });
+
+    it("gives up on a catalog endpoint that never answers after 15 seconds", async () => {
+        // A provider that accepts the connection and then stalls used to hold
+        // the request handler forever; the catalog fetch now carries a
+        // 15-second abort signal, like the Bedrock and compatible adapters.
+        const timeoutSpy = vi.spyOn(AbortSignal, "timeout");
+        vi.stubGlobal(
+            "fetch",
+            vi.fn().mockRejectedValue(
+                new DOMException("The operation was aborted due to timeout", "TimeoutError"),
+            ),
+        );
+        const response = await request(app).get("/models/openrouter");
+        expect(timeoutSpy).toHaveBeenCalledWith(15_000);
+        // The abort rejects the fetch, which the route renders as the generic
+        // internal error (a thrown fetch, not an upstream status).
+        expect(response.status).toBe(500);
+        expect(response.body).toEqual({
+            code: INTERNAL_ERROR_CODE,
+            detail: INTERNAL_ERROR_MESSAGE,
+        });
+        timeoutSpy.mockRestore();
     });
 
     it("does not expose upstream authentication failures as a success", async () => {
@@ -417,6 +443,7 @@ describe("GET /models/vercel", () => {
         ]);
         expect(fetch).toHaveBeenCalledWith(
             "https://ai-gateway.vercel.sh/v1/models",
+            expect.objectContaining({ signal: expect.any(AbortSignal) }),
         );
     });
 });
@@ -484,7 +511,10 @@ describe("GET /models/opencode-go", () => {
         ]);
         expect(fetchMock).toHaveBeenCalledWith(
             "https://opencode.ai/zen/go/v1/models",
-            { headers: { Authorization: "Bearer oc-user-key" } },
+            expect.objectContaining({
+                headers: { Authorization: "Bearer oc-user-key" },
+                signal: expect.any(AbortSignal),
+            }),
         );
         // The user's key must never reach the browser.
         expect(JSON.stringify(response.body)).not.toContain("oc-user-key");
