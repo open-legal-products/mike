@@ -565,13 +565,29 @@ function findNested(
 const DEV_TOOLCHAIN_FRAME =
     /(?:^|\/)node_modules\/(?:next\/dist|react-dom|react|scheduler)\/|(?:^|\/)_next\/static\/chunks\/(?:node_modules_(?:next_dist|react-dom|react|scheduler)_|(?:\[|%5B)turbopack(?:\]|%5D)_)/i;
 /**
- * The `next dev` compile pipeline itself. A frame here means the event was
- * raised by the dev server compiling the developer's edits (MIKE-FRONTEND-2Y:
- * hot-reloader-turbopack → next-dev-server → base-server, ending at the
- * edited `src/…` file). Production builds never run these modules, so one
- * such frame is enough, whatever other frames the stack carries.
+ * Modules that only run while `next dev` COMPILES the developer's edits, one
+ * row per bundler. A frame in one of them means the event is a compile error
+ * of the edited file, not a runtime fault: MIKE-FRONTEND-2Y and 2T were
+ * Turbopack's `getCompilationErrors` (base-server → next-dev-server →
+ * dev-bundler-service → hot-reloader-turbopack, ending at the edited
+ * `src/…` file). Production builds never run these modules, so one such
+ * frame is enough, whatever other frames the stack carries.
+ *
+ * The dev server's REQUEST path (`next-dev-server.js`, `base-server.js`,
+ * `router-server.js`, `dev-bundler-service.js`) is deliberately absent: it
+ * is on the stack of every error thrown while a route module loads or
+ * renders in development (a top-level throw, a failing import), and those
+ * are real application failures a developer pointing their own DSN at
+ * `next dev` must still see.
  */
-const DEV_COMPILE_FRAME = /(?:^|\/)next\/dist\/server\/dev\/(?:hot-reloader-turbopack|next-dev-server)\.js$/i;
+const DEV_COMPILE_FRAMES: readonly RegExp[] = [
+    // Turbopack (the default `next dev` bundler).
+    /(?:^|\/)next\/dist\/server\/dev\/hot-reloader-turbopack\.js$/i,
+    // webpack (`next dev --webpack`).
+    /(?:^|\/)next\/dist\/server\/dev\/hot-reloader-webpack\.js$/i,
+    // Rspack (`next dev` with the Rspack plugin).
+    /(?:^|\/)next\/dist\/server\/dev\/hot-reloader-rspack\.js$/i,
+];
 
 /**
  * The file of a V8/JSC stack line ("    at fn (file:12:5)" or "file:12:5"):
@@ -626,7 +642,7 @@ function isDevToolchainNoise(event: ScrubbableEvent, automatic: boolean): boolea
     const known = locations.filter(
         (location) => location !== "<anonymous>" && location !== "native",
     );
-    if (known.some((location) => DEV_COMPILE_FRAME.test(location))) return true;
+    if (known.some((location) => DEV_COMPILE_FRAMES.some((row) => row.test(location)))) return true;
     return known.length > 0 && known.every((location) => DEV_TOOLCHAIN_FRAME.test(location));
 }
 

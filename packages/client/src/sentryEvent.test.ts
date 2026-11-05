@@ -632,6 +632,60 @@ describe("next dev toolchain noise", () => {
         expect(scrubEvent(event)).toBeNull();
     });
 
+    // One row per DEV_COMPILE_FRAMES entry: a compile error raised by that
+    // bundler's hot reloader and ending in the edited file is dropped.
+    it.each(["hot-reloader-turbopack", "hot-reloader-webpack", "hot-reloader-rspack"])(
+        "drops a compile error raised by next/dist/server/dev/%s.js",
+        (module) => {
+            const { scrubEvent } = createEventScrubber();
+            const next = "frontend/node_modules/next/dist/server";
+            const event: ScrubbableEvent = {
+                tags: { ...devTags },
+                exception: { values: [{
+                    type: "Error",
+                    mechanism: { type: "generic", handled: false },
+                    stacktrace: { frames: [
+                        { filename: `${next}/dev/next-dev-server.js` },
+                        { filename: `${next}/dev/${module}.js` },
+                        { filename: "src/app/components/intake/IntakeInbox.tsx" },
+                    ] },
+                }] },
+            };
+            expect(scrubEvent(event)).toBeNull();
+        },
+    );
+
+    // Review of #775: the dev server's request path is on the stack of every
+    // error thrown while a route module loads in development. Frames below
+    // are the ones `next dev` (16.4.3, Turbopack) sent for a route whose top
+    // level throws `new Error("boom")`.
+    it("keeps a route module's top-level throw that passed through next-dev-server", () => {
+        const { scrubEvent } = createEventScrubber();
+        const next = "frontend/node_modules/next/dist";
+        const event: ScrubbableEvent = {
+            tags: { build_mode: "development", runtime: "server" },
+            exception: { values: [{
+                type: "Error",
+                value: "boom",
+                mechanism: { type: "generic", handled: false },
+                stacktrace: { frames: [
+                    { filename: `${next}/server/lib/start-server.js` },
+                    { filename: `${next}/server/lib/router-server.js` },
+                    { filename: `${next}/server/dev/next-dev-server.js` },
+                    { filename: `${next}/trace/trace.js` },
+                    { filename: `${next}/server/dev/next-dev-server.js` },
+                    { filename: `${next}/server/base-server.js` },
+                    { filename: `${next}/server/next-server.js` },
+                    { filename: "_next/dev/server/chunks/19xk_1irc3812d24zk._.js" },
+                    { filename: `${next}/compiled/next-server/app-route-turbo.runtime.dev.js` },
+                    { filename: "_next/dev/server/chunks/[turbopack]_runtime.js" },
+                    { filename: "src/app/zz-boom/route.ts" },
+                ] },
+            }] },
+        };
+        expect(scrubEvent(event)).not.toBeNull();
+    });
+
     it("keeps a genuine app error in development", () => {
         const { scrubEvent } = createEventScrubber();
         const appFrame = { filename: `${origin}/_next/static/chunks/src_app_components_chat_ChatView_tsx_1a2b3c._.js` };
