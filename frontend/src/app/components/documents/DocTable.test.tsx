@@ -1,5 +1,5 @@
-import { useState, type ComponentProps } from "react";
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { Profiler, useState, type ComponentProps } from "react";
+import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { ToastViewportUI, clearToasts } from "@/shared/ui/ToastUI";
@@ -188,6 +188,80 @@ describe("DocTable remove-from-folder failures", () => {
             ),
         ).toBeInTheDocument();
         expect(tableOperations.refreshCollection).toHaveBeenCalledOnce();
+    });
+
+    it("limits a large move to five active requests and eventually completes every row", async () => {
+        let active = 0, peak = 0;
+        const release: (() => void)[] = [];
+        const move = vi.fn((id: string) => new Promise<Document>(resolve => {
+            active++; peak = Math.max(peak, active);
+            release.push(() => { active--; resolve({ ...document(id, `${id}.pdf`), folder_id: null }); });
+        }));
+        const docs = Array.from({length: 12}, (_, i) => document(String(i), `${i}.pdf`));
+        render(<Harness initialDocuments={docs} tableOperations={operations(move)} />);
+        const user = userEvent.setup();
+        for (const doc of docs) await user.click(screen.getByLabelText(`Select ${doc.filename}`));
+        await user.click(screen.getByRole("button", {name:"Actions"}));
+        await user.click(screen.getByRole("menuitem", {name:"Remove from subfolder"}));
+        expect(move).toHaveBeenCalledTimes(5);
+        while (release.length) await act(async () => { release.shift()!(); await Promise.resolve(); });
+        expect(move).toHaveBeenCalledTimes(12);
+        expect(peak).toBe(5);
+        expect(JSON.parse(screen.getByTestId("documents-state").textContent!).every((d: Document) => d.folder_id === null)).toBe(true);
+    });
+
+    it("applies a burst of per-file upload progress as one table update", async () => {
+        // Frames are stepped by hand; the transfers still finish on real timers.
+        vi.useFakeTimers({ toFake: ["requestAnimationFrame", "cancelAnimationFrame"] });
+        try {
+            const files = Array.from({ length: 20 }, (_, i) =>
+                new File(["%PDF"], `Upload ${i}.pdf`, { type: "application/pdf" }),
+            );
+            let reported = 0;
+            let finishBatch!: () => void;
+            const batchHeld = new Promise<void>((resolve) => { finishBatch = resolve; });
+            const uploadDocuments = vi.fn(async (
+                inputs: Array<{ file: File; clientId: string }>,
+                options?: { onProgress?: (progress: never) => void },
+            ) => {
+                // Each file finishes in its own task, as separate transfers do.
+                const outcomes = await Promise.all(inputs.map(async ({ file, clientId }, i) => {
+                    await new Promise((resolve) => setTimeout(resolve, 0));
+                    const outcome = {
+                        clientId, filename: file.name, status: "completed" as const,
+                        result: document(`up-${i}`, file.name), errorCode: null,
+                    };
+                    options?.onProgress?.(outcome as never);
+                    reported++;
+                    return outcome;
+                }));
+                await batchHeld;
+                return outcomes;
+            });
+            let commits = 0;
+            const { container } = render(
+                <Profiler id="table" onRender={() => { commits++; }}>
+                    <Harness
+                        initialDocuments={[]}
+                        tableOperations={{ ...operations(vi.fn()), uploadDocuments }}
+                    />
+                </Profiler>,
+            );
+            const input = container.querySelectorAll<HTMLInputElement>('input[type="file"]')[1];
+            commits = 0;
+            fireEvent.change(input, { target: { files } });
+            await waitFor(() => expect(reported).toBe(20));
+            act(() => { vi.advanceTimersToNextFrame(); });
+
+            // All twenty completions land in that one frame: the upload's
+            // start plus one frame's update, not two renders of the whole
+            // table per file (41 for these 20 files).
+            expect(JSON.parse(screen.getByTestId("documents-state").textContent!)).toHaveLength(20);
+            expect(commits).toBeLessThanOrEqual(3);
+            await act(async () => { finishBatch(); });
+        } finally {
+            vi.useRealTimers();
+        }
     });
 
     it("warns on partial bulk failure and merges successful server rows", async () => {

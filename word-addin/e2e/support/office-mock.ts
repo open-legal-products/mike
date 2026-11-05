@@ -33,6 +33,24 @@ export interface OfficeSeed {
   /** Let this many tracked-edit syncs succeed before that failure fires. */
   trackedMutationSyncFailureAfter?: number;
   /**
+   * Make Word refuse this many insertBookmark commands when their batch
+   * syncs (the failure surfaces at sync, as on a real host, and fails the
+   * whole batch); no bookmark is created by a refused command.
+   */
+  bookmarkSyncFailures?: number;
+  /**
+   * Word for Mac: WordApiDesktop's document.revisions surface is available,
+   * and every pending Delete revision reads as empty text through both
+   * surfaces (office-js#5188). A Delete revision's range is adjacent to the
+   * Insert revision of the same edit, and unrelated to every other.
+   */
+  macDesktopRevisions?: boolean;
+  /**
+   * Make Word reject this many batches that untrack a range: the failure
+   * surfaces at that batch's sync, as a stale proxy does on a real host.
+   */
+  untrackSyncFailures?: number;
+  /**
    * Structured description of the document body for the markdown document
    * context: when present, body.paragraphs/body.tables exist and describe
    * these blocks; when absent (every pre-existing spec), those collections
@@ -64,6 +82,20 @@ export interface WordCalls {
   trackedChanges: WordCall[];
   changeTrackingMode: string;
   searches: number;
+  bodyRevisionReads: number;
+  /** Word.run batches started; each is at least one host round trip. */
+  runs: number;
+  /** context.sync() round trips, across every batch. */
+  syncs: number;
+  /**
+   * Request contexts that switched change tracking to TrackAll: one per
+   * apply batch. Proxies an apply batch tracks share that context.
+   */
+  trackAllContexts: number;
+  replacementPositions: string[];
+  settingsSaves: number;
+  /** Reads of the edit-anchor registry setting (each one re-validates it). */
+  anchorRegistryReads: number;
   acceptedChanges: WordCall[];
   rejectedChanges: WordCall[];
   revealedChanges: WordCall[];
@@ -225,6 +257,13 @@ export function installOfficeMock(seed: OfficeSeed): void {
     trackedChanges: [],
     changeTrackingMode: "Off",
     searches: 0,
+    bodyRevisionReads: 0,
+    runs: 0,
+    syncs: 0,
+    trackAllContexts: 0,
+    replacementPositions: [],
+    settingsSaves: 0,
+    anchorRegistryReads: 0,
     acceptedChanges: [],
     rejectedChanges: [],
     revealedChanges: [],
@@ -326,7 +365,10 @@ export function installOfficeMock(seed: OfficeSeed): void {
   // that writes it into the mock Word document.
   let settingsWorkingCopy = clone(documentState.settings);
   const settings = {
-    get: (key: string) => clone(settingsWorkingCopy[key]),
+    get: (key: string) => {
+      if (key === "mike.wordEditAnchors.v1") wordCalls.anchorRegistryReads++;
+      return clone(settingsWorkingCopy[key]);
+    },
     set: (key: string, value: unknown) => {
       settingsWorkingCopy[key] = clone(value);
     },
@@ -334,6 +376,7 @@ export function installOfficeMock(seed: OfficeSeed): void {
       delete settingsWorkingCopy[key];
     },
     saveAsync: (callback?: (result: any) => void) => {
+      wordCalls.settingsSaves++;
       documentState.settings = clone(settingsWorkingCopy);
       persistDocumentState();
       callback?.({ status: AsyncResultStatus.Succeeded, value: undefined });
@@ -407,7 +450,9 @@ export function installOfficeMock(seed: OfficeSeed): void {
       // WordApiDesktop sets stay unsupported so the app keeps exercising the
       // getTrackedChanges code paths, like Word on the web.
       requirements: {
-        isSetSupported: (set: string, _version?: string) => set === "WordApi",
+        isSetSupported: (set: string, _version?: string) =>
+          set === "WordApi" ||
+          (!!seed.macDesktopRevisions && set === "WordApiDesktop"),
       },
     },
     AsyncResultStatus,
@@ -514,13 +559,27 @@ export function installOfficeMock(seed: OfficeSeed): void {
     },
   };
 
+  let bookmarkSyncFailures = seed.bookmarkSyncFailures ?? 0;
+  let untrackSyncFailures = seed.untrackSyncFailures ?? 0;
+
   function makeContext(): any {
     let mutationSyncPending = false;
+    let refusedBookmarkPending = false;
+    let refusedUntrackPending = false;
     let documentStateBeforeMutation: StoredDocumentState | null = null;
     let trackedCallsBeforeMutation = 0;
     const context: any = {
       document: null,
       sync: async () => {
+        wordCalls.syncs++;
+        if (refusedBookmarkPending) {
+          refusedBookmarkPending = false;
+          throw new Error("GeneralException: bookmark could not be inserted");
+        }
+        if (refusedUntrackPending) {
+          refusedUntrackPending = false;
+          throw new Error("InvalidObjectPath: tracked range is no longer valid");
+        }
         if (!mutationSyncPending || !trackedMutationSyncFailure) return;
         if (trackedMutationSyncsBeforeFailure > 0) {
           trackedMutationSyncsBeforeFailure -= 1;
@@ -538,8 +597,19 @@ export function installOfficeMock(seed: OfficeSeed): void {
         throw new Error("GeneralException: tracked mutation sync failed");
       },
     };
+    let trackingMode = ChangeTrackingMode.off;
+    let countedTrackAll = false;
     const doc: any = {
-      changeTrackingMode: ChangeTrackingMode.off,
+      get changeTrackingMode() {
+        return trackingMode;
+      },
+      set changeTrackingMode(mode: string) {
+        trackingMode = mode;
+        if (mode === ChangeTrackingMode.trackAll && !countedTrackAll) {
+          countedTrackAll = true;
+          wordCalls.trackAllContexts++;
+        }
+      },
       load: (_properties?: any) => undefined,
     };
 
@@ -626,7 +696,13 @@ export function installOfficeMock(seed: OfficeSeed): void {
         isNullObject: !!args.isNullObject,
         load: (_properties?: any) => undefined,
         track: () => range,
-        untrack: () => range,
+        untrack: () => {
+          if (untrackSyncFailures > 0 && !refusedUntrackPending) {
+            untrackSyncFailures--;
+            refusedUntrackPending = true;
+          }
+          return range;
+        },
         select: () => {
           if (args.cannotSelect || args.stale || args.isNullObject) {
             throw new Error("GeneralException");
@@ -686,6 +762,11 @@ export function installOfficeMock(seed: OfficeSeed): void {
         __locationIds: locationIds,
         insertBookmark: (name: string) => {
           if (args.isNullObject) throw new Error("ItemNotFound");
+          if (bookmarkSyncFailures > 0) {
+            bookmarkSyncFailures--;
+            refusedBookmarkPending = true;
+            return;
+          }
           const entry = args.entry();
           documentState.bookmarks[name] = {
             name,
@@ -713,7 +794,10 @@ export function installOfficeMock(seed: OfficeSeed): void {
         context,
         id: revision.id,
         type: revision.type,
-        text: revision.text,
+        text:
+          seed.macDesktopRevisions && revision.type === "Deleted"
+            ? ""
+            : revision.text,
         load: (_properties?: any) => undefined,
         track: () => change,
         untrack: () => change,
@@ -835,12 +919,14 @@ export function installOfficeMock(seed: OfficeSeed): void {
       load: (_properties?: any) => undefined,
       // Mirrors real Word: the document-level collection reliably reports
       // every pending revision even when range-scoped reads come up short.
-      getTrackedChanges: () =>
-        makeTrackedChangeCollection(
+      getTrackedChanges: () => {
+        wordCalls.bodyRevisionReads++;
+        return makeTrackedChangeCollection(
           Object.values(documentState.revisions)
             .filter((revision) => revision.resolution === null)
             .map((revision) => makeStoredTrackedChange(revision.id)),
-        ),
+        );
+      },
       search: (query: string, options?: any) => {
         wordCalls.searches++;
         const documentText: string = w.__OFFICE_SEED__.documentText || "";
@@ -952,6 +1038,7 @@ export function installOfficeMock(seed: OfficeSeed): void {
 
           const range = makeSearchRange("Select");
           range.insertText = (newText: string, location: string) => {
+            wordCalls.replacementPositions.push(positionKey);
             const entry = recordWrite(newText, location, query);
             lastWrite = entry;
             if (doc.changeTrackingMode === ChangeTrackingMode.trackAll) {
@@ -1121,6 +1208,41 @@ export function installOfficeMock(seed: OfficeSeed): void {
     }
 
     doc.body = body;
+    if (seed.macDesktopRevisions) {
+      const desktopType = { Added: "Insert", Deleted: "Delete", Formatted: "Property" } as const;
+      Object.defineProperty(doc, "revisions", {
+        get: () => {
+          const items = Object.values(documentState.revisions)
+            .filter((revision) => revision.resolution === null)
+            .map((revision) => {
+              const range: any = {
+                context,
+                text: revision.type === "Deleted" ? "" : revision.text,
+                load: (_properties?: any) => undefined,
+                __revisionId: revision.id,
+                __groupId: revision.groupId,
+                compareLocationWith: (other: any) => {
+                  const sameEdit =
+                    other?.__groupId === revision.groupId &&
+                    other?.__revisionId !== revision.id;
+                  const inside = ((other?.__locationIds?.() as string[] | undefined) ?? []).includes(revision.id);
+                  return {
+                    value: sameEdit ? "AdjacentBefore" : inside ? "Inside" : "Unrelated",
+                  };
+                },
+              };
+              return {
+                type: desktopType[revision.type],
+                range,
+                load: (_properties?: any) => undefined,
+                accept: () => resolveStoredRevision(revision.id, "accepted"),
+                reject: () => resolveStoredRevision(revision.id, "rejected"),
+              };
+            });
+          return { items, load: (_properties?: any) => undefined };
+        },
+      });
+    }
     doc.getBookmarkRangeOrNullObject = (name: string) => {
       wordCalls.bookmarkLookups.push(name);
       const bookmark = documentState.bookmarks[name];
@@ -1157,6 +1279,7 @@ export function installOfficeMock(seed: OfficeSeed): void {
       heading3: "Heading3",
     },
     run: (objectOrCallback: any, maybeCallback?: any) => {
+      wordCalls.runs++;
       const callback = maybeCallback ?? objectOrCallback;
       const target = Array.isArray(objectOrCallback)
         ? objectOrCallback[0]

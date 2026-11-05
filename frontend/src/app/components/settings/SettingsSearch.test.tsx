@@ -5,14 +5,17 @@ import { SETTINGS_SEARCH_ENTRIES } from "@/app/lib/settingsSearch";
 import { SettingsSearch } from "./SettingsSearch";
 
 const push = vi.fn();
+const navigation = vi.hoisted(() => ({ pathname: "/settings" }));
 
 vi.mock("next/navigation", () => ({
     useRouter: () => ({ push }),
+    usePathname: () => navigation.pathname,
 }));
 
 describe("SettingsSearch", () => {
     beforeEach(() => {
         vi.clearAllMocks();
+        navigation.pathname = "/settings";
     });
 
     afterEach(() => {
@@ -69,7 +72,7 @@ describe("SettingsSearch", () => {
         expect(push).toHaveBeenCalledWith("/settings#danger-zone");
     });
 
-    it("scrolls to the section once its heading exists", async () => {
+    it("focuses a section even when navigation takes longer than the former three-second deadline", async () => {
         vi.useFakeTimers({ shouldAdvanceTime: true });
         const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
         const scrollIntoView = vi.fn();
@@ -79,25 +82,21 @@ describe("SettingsSearch", () => {
         await user.click(screen.getByRole("button", { name: /^Password/ }));
         expect(push).toHaveBeenCalledWith("/settings/security#password");
 
-        // The page draws its heading a moment after navigation.
+        // A cold route or slow request has not mounted the heading after five seconds.
         const heading = document.createElement("h2");
         heading.id = "password";
         act(() => {
-            vi.advanceTimersByTime(250);
+            vi.advanceTimersByTime(5_000);
         });
-        document.body.appendChild(heading);
-        act(() => {
-            vi.advanceTimersByTime(250);
-        });
+        await act(async () => { document.body.appendChild(heading); });
         expect(scrollIntoView).toHaveBeenCalledTimes(1);
         expect(heading).toHaveFocus();
         heading.remove();
     });
 
     it("stops looking for the section when the box goes away first", async () => {
-        // A page is torn down (or the person leaves Settings) while the poll
-        // for the chosen heading is still running; it must not keep touching
-        // the document, as it did in CI after the test's DOM was gone.
+        // An unmounted search must not steal focus when a later page mounts
+        // a heading with the same id.
         vi.useFakeTimers({ shouldAdvanceTime: true });
         const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
         const lookups = vi.spyOn(document, "getElementById");
@@ -108,11 +107,27 @@ describe("SettingsSearch", () => {
 
         unmount();
         const before = lookups.mock.calls.length;
-        act(() => {
-            vi.advanceTimersByTime(5_000);
-        });
+        const heading = document.createElement("h2");
+        heading.id = "danger-zone";
+        await act(async () => { document.body.appendChild(heading); });
         expect(lookups.mock.calls.length).toBe(before);
+        expect(heading).not.toHaveFocus();
+        heading.remove();
         lookups.mockRestore();
+    });
+
+    it("cancels a pending heading when navigation goes somewhere else", async () => {
+        const user = userEvent.setup();
+        const view = render(<SettingsSearch entries={SETTINGS_SEARCH_ENTRIES} />);
+        await user.type(screen.getByRole("searchbox"), "password");
+        await user.keyboard("{Enter}");
+        navigation.pathname = "/settings/appearance";
+        view.rerender(<SettingsSearch entries={SETTINGS_SEARCH_ENTRIES} />);
+        const heading = document.createElement("h2");
+        heading.id = "password";
+        await act(async () => { document.body.appendChild(heading); });
+        expect(heading).not.toHaveFocus();
+        heading.remove();
     });
 
     it("keeps focus in the box when the pointer presses inside the list", async () => {

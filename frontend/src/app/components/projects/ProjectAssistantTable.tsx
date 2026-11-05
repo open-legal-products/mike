@@ -49,6 +49,7 @@ import type { Chat } from "@/app/components/shared/types";
 import { can, roleFrom } from "@/app/lib/permissions";
 import type { OwnerGate } from "./ProjectWorkspace";
 import { formatDate } from "./ProjectPageParts";
+import { useIdSet } from "@/app/hooks/useIdSet";
 
 function creatorLabel(chat: Chat, currentUserId?: string | null) {
     if (currentUserId && chat.user_id === currentUserId) return "Me";
@@ -102,6 +103,7 @@ export function ProjectAssistantTable({
         direction: TableSortDirection;
     } | null>(null);
     const rowSelectionAnchorIdRef = useRef<string | null>(null);
+    const selectedChatIdSet = useIdSet(selectedChatIds);
     const [chatPendingDelete, setChatPendingDelete] = useState<Chat | null>(
         null,
     );
@@ -214,10 +216,10 @@ export function ProjectAssistantTable({
 
     const allVisibleChatsSelected =
         visibleChats.length > 0 &&
-        visibleChats.every((chat) => selectedChatIds.includes(chat.id));
+        visibleChats.every((chat) => selectedChatIdSet.has(chat.id));
     const someVisibleChatsSelected =
         !allVisibleChatsSelected &&
-        visibleChats.some((chat) => selectedChatIds.includes(chat.id));
+        visibleChats.some((chat) => selectedChatIdSet.has(chat.id));
     const nameSortDirection = sort?.key === "name" ? sort.direction : null;
     const createdSortDirection =
         sort?.key === "created" ? sort.direction : null;
@@ -331,7 +333,7 @@ export function ProjectAssistantTable({
                         return (
                         <TableRow
                             key={chat.id}
-                            selected={selectedChatIds.includes(chat.id)}
+                            selected={selectedChatIdSet.has(chat.id)}
                             rightClickDropdown={(close) => renderChatActions(chat, close)}
                             onClick={(event) => {
                                 if (renamingChatId === chat.id) return;
@@ -368,7 +370,7 @@ export function ProjectAssistantTable({
                             className="pr-8 md:pr-8"
                         >
                             <TablePrimaryCell
-                                selected={selectedChatIds.includes(chat.id)}
+                                selected={selectedChatIdSet.has(chat.id)}
                                 onSelectionChange={() =>
                                     setSelectedChatIds((prev) => {
                                         rowSelectionAnchorIdRef.current =

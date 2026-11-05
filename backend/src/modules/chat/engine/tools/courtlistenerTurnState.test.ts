@@ -24,6 +24,10 @@ describe("CourtListener turn state", () => {
     expect(getCachedCaseOpinionTexts(state, 123)).toMatchObject([
       { opinion_id: 1, text: "Complete opinion text" },
     ]);
+    // Stable entries let find_in_case reuse each opinion's search index.
+    expect(getCachedCaseOpinionTexts(state, 123)[0]).toBe(
+      getCachedCaseOpinionTexts(state, 123)[0],
+    );
   });
 
   it("normalizes HTML into text for citation verification", () => {

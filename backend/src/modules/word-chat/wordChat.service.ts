@@ -14,6 +14,7 @@ import { wordChatHasWorkspaceAttachments } from "../../lib/wordWorkspace";
 // chat-activity write (`recordWordChatActivity`) live here.
 
 import { randomUUID } from "node:crypto";
+import { queryFailureCause, selectAllByKey, selectInBatches } from "../../lib/batchedQuery";
 import type { Db } from "../../lib/supabase";
 import { resolveRequestTimeZone } from "../../lib/userTime";
 import {
@@ -29,6 +30,7 @@ import {
   buildWordChatSystemPrompt,
   buildWorkflowStore,
   attachPriorReasoning,
+  createAssistantHistoryLoader,
   enrichWithPriorEvents,
   loadUserMessageSentTimes,
   generateSpotlightNonce,
@@ -309,14 +311,31 @@ export async function getWordChatWithMessages(
   );
   const editsByMessage = new Map<string, Record<string, unknown>[]>();
   if (assistantMessageIds.length > 0) {
-    const { data: edits, error: editsError } = await db
-      .from("word_document_edits")
-      .select("*")
-      .in("word_chat_message_id", assistantMessageIds)
-      .order("block_index", { ascending: true });
-    if (editsError)
-      return serviceFailure("db.query_failed", "Word document edits load failed", editsError);
-    for (const edit of (edits ?? []) as Record<string, unknown>[]) {
+    let edits: Record<string, unknown>[];
+    try {
+      // Paged per batch: 50 long assistant turns can carry more edits than
+      // max_rows, and a truncated read dropped the rest from the transcript.
+      edits = await selectInBatches<Record<string, unknown>>(
+        "Word document edits load",
+        assistantMessageIds,
+        (batch) =>
+          selectAllByKey<Record<string, unknown>>("Word document edits load", () =>
+            db
+              .from("word_document_edits")
+              .select("*")
+              .in("word_chat_message_id", batch),
+          ),
+      );
+      // Grouped per message below; within a message, document order.
+      edits.sort(
+        (a, b) =>
+          Number(a.block_index ?? 0) - Number(b.block_index ?? 0) ||
+          String(a.id).localeCompare(String(b.id)),
+      );
+    } catch (editsError) {
+      return serviceFailure("db.query_failed", "Word document edits load failed", queryFailureCause(editsError));
+    }
+    for (const edit of edits) {
       const messageId = edit.word_chat_message_id;
       if (typeof messageId !== "string") continue;
       const current = editsByMessage.get(messageId) ?? [];
@@ -820,6 +839,7 @@ export async function prepareWordChatStream(
   // reservation taken above: the route's finally block only runs once this
   // function has returned it. Release on the way out instead.
   try {
+    const history = createAssistantHistoryLoader(db, persistChat ? chatId : null, "word_chat_messages");
     const { docIndex, docStore } = await buildDocContext(
       messages,
       userId,
@@ -827,6 +847,7 @@ export async function prepareWordChatStream(
       persistChat ? chatId : null,
       "word_chat_messages",
       userEmail,
+      history,
     );
     const activeDocumentText = args.documentContext;
     if (activeDocumentText !== undefined) {
@@ -859,6 +880,7 @@ export async function prepareWordChatStream(
           persistChat ? chatId : null,
           db,
           "word_chat_messages",
+          history,
         )
       : messages;
     const timeZone = resolveRequestTimeZone(args.requestedTimeZone);

@@ -43,6 +43,7 @@ export function database(
     let payload: Row = {};
     let upserts: Row[] = [];
     let conflict: string[] = [];
+    const orders: [string, boolean][] = [];
     const settle = () => {
       let result = (tables[table] ?? []).filter((row) =>
         predicates.every((test) => test(row)),
@@ -70,6 +71,16 @@ export function database(
           result = upserts;
         }
       }
+      // Keyset reads (lib/batchedQuery selectAllByKey) need the order.
+      if (op === "select")
+        result = [...result].sort((a, b) => {
+          for (const [key, ascending] of orders) {
+            const left = String(a[key]);
+            const right = String(b[key]);
+            if (left !== right) return (left < right ? -1 : 1) * (ascending ? 1 : -1);
+          }
+          return 0;
+        });
       return { data: result, error: null };
     };
     const query = {
@@ -91,13 +102,20 @@ export function database(
         predicates.push((row) => String(row[key]) < String(value));
         return query;
       },
+      gt: (key: string, value: unknown) => {
+        predicates.push((row) => String(row[key]) > String(value));
+        return query;
+      },
       contains: (key: string, values: unknown[]) => {
         predicates.push((row) =>
           values.every((value) => (row[key] as unknown[]).includes(value)),
         );
         return query;
       },
-      order: () => query,
+      order: (key: string, options?: { ascending?: boolean }) => {
+        orders.push([key, options?.ascending !== false]);
+        return query;
+      },
       limit: () => query,
       insert: (value: Row) => {
         op = "insert";

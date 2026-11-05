@@ -229,42 +229,88 @@ export function parseCitations(text: string): ParsedCitation[] {
   return parseCitationsWithDiagnostics(text).citations;
 }
 
-export function parsePartialCitationObjects(text: string): ParsedCitation[] {
-  const beforeClose = text.split(CITATIONS_CLOSE_TAG)[0] ?? text;
-  const arrayStart = beforeClose.indexOf("[");
-  if (arrayStart < 0) return [];
-
-  const parsed: ParsedCitation[] = [];
+/**
+ * Completed citation objects from a CITATIONS block that is still streaming.
+ *
+ * The parser keeps its scan state between `push` calls, so each delta costs
+ * work proportional to its own length: nothing already scanned is read,
+ * split or JSON-parsed again. `push` returns only the citations completed by
+ * that delta. Like the whole-buffer parse it replaces, it stops at the close
+ * tag (even one split across deltas) or at the array's closing `]`, and skips
+ * an object that does not parse as a citation.
+ */
+export function createPartialCitationParser(): {
+  push: (delta: string) => ParsedCitation[];
+} {
+  let finished = false;
+  let arrayStarted = false;
   let inString = false;
   let escaped = false;
   let depth = 0;
-  let objectStart = -1;
+  // Text of the object being read, from its `{` up to the end of the
+  // previous delta; the current delta's part is sliced once it closes.
+  let objectCarry: string | null = null;
+  // How many leading characters of CITATIONS_CLOSE_TAG the input has
+  // just matched. The tag's characters never change the JSON scan state,
+  // so the scan can run ahead before the tag is recognised.
+  let closeMatched = 0;
 
-  for (let i = arrayStart + 1; i < beforeClose.length; i += 1) {
-    const char = beforeClose[i];
-    if (escaped) { escaped = false; continue; }
-    if (char === "\\") { escaped = inString; continue; }
-    if (char === '"') { inString = !inString; continue; }
-    if (inString) continue;
-    if (char === "{") {
-      if (depth === 0) objectStart = i;
-      depth += 1;
-    } else if (char === "}") {
-      if (depth === 0) continue;
-      depth -= 1;
-      if (depth === 0 && objectStart >= 0) {
-        try {
-          const raw = JSON.parse(beforeClose.slice(objectStart, i + 1));
-          const citation = normalizeCitation(raw);
-          if (citation) parsed.push(citation);
-        } catch { /* ignore incomplete/malformed partial object */ }
-        objectStart = -1;
+  const push = (delta: string): ParsedCitation[] => {
+    const completed: ParsedCitation[] = [];
+    if (finished) return completed;
+    let objectStart = objectCarry === null ? -1 : 0;
+    for (let i = 0; i < delta.length; i += 1) {
+      const char = delta[i];
+      if (char === CITATIONS_CLOSE_TAG[closeMatched]) {
+        closeMatched += 1;
+        if (closeMatched === CITATIONS_CLOSE_TAG.length) {
+          finished = true;
+          break;
+        }
+      } else {
+        closeMatched = char === CITATIONS_CLOSE_TAG[0] ? 1 : 0;
       }
-    } else if (char === "]" && depth === 0) {
-      break;
+      if (!arrayStarted) {
+        if (char === "[") arrayStarted = true;
+        continue;
+      }
+      if (escaped) { escaped = false; continue; }
+      if (char === "\\") { escaped = inString; continue; }
+      if (char === '"') { inString = !inString; continue; }
+      if (inString) continue;
+      if (char === "{") {
+        if (depth === 0) {
+          objectStart = i;
+          objectCarry = "";
+        }
+        depth += 1;
+      } else if (char === "}") {
+        if (depth === 0) continue;
+        depth -= 1;
+        if (depth === 0 && objectCarry !== null) {
+          const raw = objectCarry + delta.slice(objectStart, i + 1);
+          objectCarry = null;
+          objectStart = -1;
+          try {
+            const citation = normalizeCitation(JSON.parse(raw));
+            if (citation) completed.push(citation);
+          } catch { /* ignore incomplete/malformed partial object */ }
+        }
+      } else if (char === "]" && depth === 0) {
+        finished = true;
+        break;
+      }
     }
-  }
-  return parsed;
+    if (!finished && objectCarry !== null) {
+      objectCarry += delta.slice(Math.max(objectStart, 0));
+    }
+    return completed;
+  };
+  return { push };
+}
+
+export function parsePartialCitationObjects(text: string): ParsedCitation[] {
+  return createPartialCitationParser().push(text);
 }
 
 type CasesByClusterId = Map<number, {

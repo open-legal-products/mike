@@ -72,6 +72,7 @@ import {
 import { userFacingApiError } from "@/app/lib/userFacingError";
 import { OrganizationDepartedMembers } from "./OrganizationDepartedMembers";
 import { InviteOrganizationMemberModal } from "./OrganizationModals";
+import { useIdSet } from "@/app/hooks/useIdSet";
 
 /** The roster's fixed order: who decides, who runs it, everybody else. */
 const ROLE_ORDER: Record<OrgRole, number> = { owner: 0, admin: 1, member: 2 };
@@ -164,6 +165,7 @@ export function OrganizationMembers({
   const [inviteOpen, setInviteOpen] = useState(false);
   const [busyMemberId, setBusyMemberId] = useState<string | null>(null);
   const [selectedMemberIds, setSelectedMemberIds] = useState<string[]>([]);
+  const selectedMemberIdSet = useIdSet(selectedMemberIds);
   const [search, setSearch] = useState("");
   const [rosterTab, setRosterTab] = useState<RosterTab>(initialTab);
   const [removeSelectedOpen, setRemoveSelectedOpen] = useState(false);
@@ -383,7 +385,7 @@ export function OrganizationMembers({
   function requestRemoveSelected() {
     if (!isAdmin || selectedMemberIds.length === 0) return;
     const selectedMembers = members.filter((member) =>
-      selectedMemberIds.includes(member.id),
+      selectedMemberIdSet.has(member.id),
     );
     if (selectedMembers.some((member) => member.user_id === user?.id)) {
       setActionError("Use Leave organization to remove yourself.");
@@ -403,14 +405,17 @@ export function OrganizationMembers({
   }
 
   function finishRemoveSelected(result: MemberDepartureResult) {
-    const removedIds = members
-      .filter((member) => result.removedUserIds.includes(member.user_id))
-      .map((member) => member.id);
+    const removedUserIds = new Set(result.removedUserIds);
+    const removedIds = new Set(
+      members
+        .filter((member) => removedUserIds.has(member.user_id))
+        .map((member) => member.id),
+    );
     setMembers((current) =>
-      current.filter((member) => !removedIds.includes(member.id)),
+      current.filter((member) => !removedIds.has(member.id)),
     );
     setSelectedMemberIds((current) =>
-      current.filter((id) => !removedIds.includes(id)),
+      current.filter((id) => !removedIds.has(id)),
     );
     if (result.error) {
       setActionError(
@@ -429,7 +434,7 @@ export function OrganizationMembers({
   ) {
     const appliesToSelection =
       member &&
-      selectedMemberIds.includes(member.id) &&
+      selectedMemberIdSet.has(member.id) &&
       selectedMemberIds.length > 1 &&
       isAdmin;
     if (!appliesToSelection && (!member || !canRemove(member))) return null;
@@ -604,7 +609,7 @@ export function OrganizationMembers({
         <MemberDepartureDialog
           orgId={orgId}
           departing={members.filter((member) =>
-            selectedMemberIds.includes(member.id),
+            selectedMemberIdSet.has(member.id),
           )}
           members={members}
           onCancel={() => setRemoveSelectedOpen(false)}
@@ -656,6 +661,7 @@ function PeopleTable({
   onRemove: (member: OrgMember) => void;
   renderActions: (member: OrgMember, close?: () => void) => ReactNode;
 }) {
+  const selectedMemberIdSet = useIdSet(selectedMemberIds);
   const [sort, setSort] = useState<{
     key: "name" | "email" | "added";
     direction: TableSortDirection;
@@ -712,10 +718,10 @@ function PeopleTable({
     }));
   const allSelected =
     visibleMembers.length > 0 &&
-    visibleMembers.every((member) => selectedMemberIds.includes(member.id));
+    visibleMembers.every((member) => selectedMemberIdSet.has(member.id));
   const someSelected =
     !allSelected &&
-    visibleMembers.some((member) => selectedMemberIds.includes(member.id));
+    visibleMembers.some((member) => selectedMemberIdSet.has(member.id));
 
   function setSortFor(
     key: "name" | "email" | "added",
@@ -727,9 +733,10 @@ function PeopleTable({
 
   function toggleAllVisible() {
     const visibleIds = visibleMembers.map((member) => member.id);
+    const visibleIdSet = new Set(visibleIds);
     onSelectedMemberIdsChange((current) =>
       allSelected
-        ? current.filter((id) => !visibleIds.includes(id))
+        ? current.filter((id) => !visibleIdSet.has(id))
         : [...new Set([...current, ...visibleIds])],
     );
   }
@@ -852,7 +859,7 @@ function PeopleTable({
             const assignableRoles = canManageOrgRole(viewerRole, member.role)
               ? ORG_ROLES.filter((role) => canManageOrgRole(viewerRole, role))
               : [];
-            const isSelected = selectedMemberIds.includes(member.id);
+            const isSelected = selectedMemberIdSet.has(member.id);
             return (
               <TableRow
                 key={member.id}

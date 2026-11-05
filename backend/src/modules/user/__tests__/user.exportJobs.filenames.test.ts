@@ -16,14 +16,23 @@ vi.mock("../../../lib/storage", async (importOriginal) => ({
     uploadFile: upload,
 }));
 vi.mock("../../../lib/access", () => ({
-    ensureDocAccess: async (doc: { id: string }) => ({ ok: !deniedIds.has(doc.id) }),
+    createDocumentAccessChecker: () => async (doc: { id: string }) => ({ ok: !deniedIds.has(doc.id) }),
 }));
 vi.mock("../../../lib/documentVersions", async (importOriginal) => ({
     ...(await importOriginal<typeof import("../../../lib/documentVersions")>()),
-    loadActiveVersion: async (id: string) => ({
-        storage_path: `${id}.docx`, filename: `${id}.docx`, version_number: 1,
-        source: "upload", ...filenames.get(id),
-    }),
+    attachActiveVersionPaths: async (_db: unknown, docs: Array<Record<string, unknown>>) => {
+        for (const doc of docs) {
+            const id = doc.id as string;
+            const version = filenames.get(id);
+            Object.assign(doc, {
+                storage_path: `${id}.docx`,
+                filename: version ? version.filename : `${id}.docx`,
+                active_version_number: version?.version_number ?? 1,
+                source: version?.source ?? "upload",
+            });
+        }
+        return docs;
+    },
 }));
 vi.mock("../../../lib/audit", () => ({ recordAudit: vi.fn() }));
 vi.mock("../../../lib/auditExport", () => ({ AUDIT_CSV_FILENAME: "audit.csv", buildAuditCsv: vi.fn() }));
@@ -96,7 +105,7 @@ describe("queued document ZIP filenames", () => {
             await expectArchive([
                 "Agreement (2).pdf", "Agreement.pdf", "Agreement (3).pdf",
                 "Agreement [Edited V3].pdf", "Agreement [Edited V3] (2).pdf",
-                "Untitled document.docx", "Untitled document (2).docx",
+                "Untitled document", "Untitled document (2)",
             ], ids, attempt);
         }
         expect(upload.mock.calls[0]![0]).toBe(upload.mock.calls[1]![0]);

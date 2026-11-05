@@ -16,8 +16,10 @@
 import { recordAudit } from "../../lib/audit";
 import { buildUserAccountExport, buildUserChatsExport, buildUserTabularReviewsExport, userExportFilename } from "./user.dataExport";
 import { AUDIT_CSV_FILENAME, buildAuditCsv, type AuditQuery } from "../../lib/auditExport";
-import { ensureDocAccess } from "../../lib/access";
-import { downloadFilenameForVersion, loadActiveVersion } from "../../lib/documentVersions";
+import { createDocumentAccessChecker } from "../../lib/access";
+import { selectInBatches } from "../../lib/batchedQuery";
+import { mapWithConcurrency } from "../../lib/concurrency";
+import { attachActiveVersionPaths, downloadFilenameForVersion } from "../../lib/documentVersions";
 import { downloadFile, uploadFile } from "../../lib/storage";
 import { type Db, type DbJob } from "../../lib/dbq/types";
 import { buildMemoryArchive } from "../../lib/memory/archive";
@@ -102,32 +104,54 @@ async function buildDocumentsZipExport(
     // both branches unreachable, so an org colleague's document and every
     // detached document were silently dropped from the zip. The sync route
     // already selects the full set.
-    const { data: rawDocs, error } = await db
-        .from("documents")
-        .select(
-            "id, current_version_id, user_id, project_id, org_id, workflow_id",
-        )
-        .in("id", documentIds as string[]);
-    if (error) throw new Error(`[export.build] ${error.message}`);
-
-    const JSZip = (await import("jszip")).default;
-    const zip = new JSZip();
-    const usedNames = new Set<string>();
-    let added = 0;
-    for (const doc of (rawDocs ?? []) as {
+    type ExportDocument = {
         id: string;
         user_id: string;
         project_id: string | null;
         org_id?: string | null;
         workflow_id?: string | null;
-    }[]) {
-        // Access is re-checked HERE, not at enqueue time: the payload's ids
-        // are stale by definition (a share can be revoked while the job
-        // waits), so a doc the user can no longer read is skipped.
-        const access = await ensureDocAccess(doc, userId, userEmail, db);
-        if (!access.ok) continue;
-        const active = await loadActiveVersion(doc.id, db);
-        if (!active) continue;
+        current_version_id?: string | null;
+        storage_path?: string | null;
+        filename?: string | null;
+        active_version_number?: number | null;
+        source?: string | null;
+    };
+    const rawDocs = await selectInBatches<ExportDocument>(
+        "export documents",
+        documentIds as string[],
+        (batch) =>
+            db
+                .from("documents")
+                .select(
+                    "id, current_version_id, user_id, project_id, org_id, workflow_id",
+                )
+                .in("id", batch),
+    );
+
+    // Access is re-checked HERE, not at enqueue time: the payload's ids are
+    // stale by definition (a share can be revoked while the job waits), so a
+    // doc the user can no longer read is skipped. One checker shares each
+    // project/workflow verdict across its documents, and the active
+    // versions are resolved in batches — 500 documents used to cost two
+    // sequential round trips each before the first download.
+    const check = createDocumentAccessChecker(userId, userEmail, db);
+    const readable = (
+        await mapWithConcurrency(rawDocs, 5, async (doc) => ((await check(doc)).ok ? doc : null))
+    ).filter((doc): doc is ExportDocument => doc !== null);
+    await attachActiveVersionPaths(db, readable);
+
+    const JSZip = (await import("jszip")).default;
+    const zip = new JSZip();
+    const usedNames = new Set<string>();
+    let added = 0;
+    for (const doc of readable) {
+        if (!doc.storage_path) continue;
+        const active = {
+            storage_path: doc.storage_path,
+            filename: doc.filename ?? "Untitled document",
+            version_number: doc.active_version_number ?? null,
+            source: doc.source ?? null,
+        };
         const raw = await downloadFile(active.storage_path);
         if (!raw) continue;
         // Sequential, unlike the sync route's Promise.all: this path exists
