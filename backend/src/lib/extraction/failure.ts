@@ -40,7 +40,13 @@ const ENVIRONMENT_KIND = /^(?:conversion\.|extraction\.failed$)/;
 // A parser's own verdict on the bytes: pdf.js's rejection classes, a ZIP
 // container (docx/pptx/xlsx) JSZip cannot read, an OOXML package missing its
 // main part, and the verdicts our parsers throw deliberately.
-const PARSER_REJECTION_NAMES = new Set(["InvalidPDFException", "PasswordException", "FormatError", "XRefParseException"]);
+//
+// Only the classes pdf.js's getDocument can actually surface: its message
+// handler (wrapReason in pdfjs-dist's pdf.mjs) passes InvalidPDFException and
+// PasswordException through and turns every other worker-side error —
+// FormatError, XRefParseException included — into UnknownErrorException,
+// which is not attributable to the bytes and keeps its retries.
+const PARSER_REJECTION_NAMES = new Set(["InvalidPDFException", "PasswordException"]);
 const PARSER_REJECTION_MESSAGE = new RegExp([
   "^Can't find end of central directory",
   "^(?:Bug or )?[Cc]orrupted zip",

@@ -19,8 +19,6 @@ const pdfUnreadable = (cause: unknown) => new AppError("extraction.pdf_parse_fai
 const CASES: Array<[label: string, error: unknown, rejected: boolean]> = [
   ["pdf.js: malformed PDF", pdfUnreadable(named("InvalidPDFException", "Invalid PDF structure.")), true],
   ["pdf.js: encrypted PDF", pdfUnreadable(named("PasswordException", "No password given")), true],
-  ["pdf.js: bad object", pdfUnreadable(named("FormatError", "Bad FCHECK in flate stream")), true],
-  ["pdf.js: broken xref", pdfUnreadable(named("XRefParseException")), true],
   ["JSZip: not a ZIP container", new Error("Can't find end of central directory : is this a zip file ?"), true],
   ["JSZip: CRC mismatch", new Error("Corrupted zip : CRC32 mismatch"), true],
   ["JSZip: truncated entry", new Error("Bug or corrupted zip : didn't get enough information from the central directory"), true],
@@ -49,6 +47,10 @@ const CASES: Array<[label: string, error: unknown, rejected: boolean]> = [
   ["environment wins over a rejection", pdfUnreadable(Object.assign(named("InvalidPDFException"), { cause: errno("ENOSPC") })), false],
   ["errno inside an AggregateError", new AggregateError([errno("EMFILE"), new Error("Corrupted zip : CRC32 mismatch")]), false],
   ["unattributed parser bug", new TypeError("Cannot read properties of undefined"), false],
+  // What getDocument rejects with for any worker-side error it does not pass
+  // through (a FormatError or XRefParseException in the worker arrives as
+  // this): not attributable to the bytes, so it keeps its retries.
+  ["pdf.js: unknown worker error", pdfUnreadable(named("UnknownErrorException", "Bad FCHECK in flate stream")), false],
   ["pdf_parse_failed with no recognised cause", pdfUnreadable(new Error("Setting up fake worker failed")), false],
   ["non-Error throw", "boom", false],
 ];
