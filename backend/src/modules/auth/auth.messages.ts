@@ -163,6 +163,23 @@ export function describeAuthProviderError(
 }
 
 /**
+ * True when the failure is GoTrue itself being down rather than a bug here:
+ * auth-js turns both "no response at all" (connection refused, DNS, reset;
+ * status 0) and a GoTrue 5xx into an AuthRetryableFetchError, and an
+ * AuthApiError can still carry a 5xx status. Duck-typed on auth-js's own
+ * markers (`__isAuthError`, `name`) because supabase-js does not re-export
+ * its type guards.
+ */
+export function isAuthUpstreamFailure(error: unknown): boolean {
+  if (!error || typeof error !== "object" || !("__isAuthError" in error)) {
+    return false;
+  }
+  const { name, status } = error as { name?: unknown; status?: unknown };
+  if (name === "AuthRetryableFetchError") return true;
+  return typeof status === "number" && status >= 500;
+}
+
+/**
  * Turn a zod issue list from the credentials/password schemas into a
  * specific message when the problem is something the user can fix.
  */

@@ -14,6 +14,16 @@ export function rateLimitedBody(detail: string): {
 export const INTERNAL_ERROR_MESSAGE =
   "Something went wrong. Please try again.";
 
+/**
+ * A dependency this server needs (GoTrue, today) is unreachable or answering
+ * 5xx. The same code the Next gateway sends when it cannot reach this server,
+ * so a client treats both alike: already reported server-side, show "try
+ * again shortly", do not report it again.
+ */
+export const UPSTREAM_UNAVAILABLE_CODE = "upstream_unavailable";
+export const UPSTREAM_UNAVAILABLE_MESSAGE =
+  "The server is temporarily unreachable. Please try again shortly.";
+
 export const SCHEMA_OUT_OF_DATE_CODE = "schema_out_of_date";
 export const SCHEMA_OUT_OF_DATE_MESSAGE =
   "The server's database needs an update before this can load. " +
@@ -99,10 +109,27 @@ export function asReportableError(
   return error;
 }
 
+// res.locals key set once a request's failure has been sent to Sentry, so
+// the response sanitizer (middleware/internalErrorResponse.ts) neither files
+// a second event for the same 5xx nor rewrites its fixed public code.
+const FAILURE_REPORTED = "failureReported";
+
+/** True when sendInternalError already reported this request's failure. */
+export function failureAlreadyReported(res: Response): boolean {
+  return res.locals?.[FAILURE_REPORTED] === true;
+}
+
+/** A public answer other than the default internal_error/schema pair. */
+export interface PublicFailure {
+  code: string;
+  detail: string;
+}
+
 export function sendInternalError(
   res: Response,
   error: unknown,
   status = 500,
+  answer?: PublicFailure,
 ): Response {
   const requestId =
     typeof res.locals.requestId === "string" ? res.locals.requestId : null;
@@ -133,6 +160,7 @@ export function sendInternalError(
       http_route: requestRoutePattern(res.req),
     },
   });
+  res.locals[FAILURE_REPORTED] = true;
 
   if (schemaCode) {
     // console.warn, not console.error: the Sentry console bridge files every
@@ -152,9 +180,11 @@ export function sendInternalError(
     error: error,
   });
 
+  const body: PublicFailure = schemaCode
+    ? { code: SCHEMA_OUT_OF_DATE_CODE, detail: SCHEMA_OUT_OF_DATE_MESSAGE }
+    : (answer ?? { code: INTERNAL_ERROR_CODE, detail: INTERNAL_ERROR_MESSAGE });
   return res.status(status).json({
-    code: schemaCode ? SCHEMA_OUT_OF_DATE_CODE : INTERNAL_ERROR_CODE,
-    detail: schemaCode ? SCHEMA_OUT_OF_DATE_MESSAGE : INTERNAL_ERROR_MESSAGE,
+    ...body,
     ...(requestId ? { request_id: requestId } : {}),
   });
 }
