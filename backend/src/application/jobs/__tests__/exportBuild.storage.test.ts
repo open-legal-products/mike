@@ -14,7 +14,7 @@ vi.mock("../../../lib/documentVersions", async (importOriginal) => ({
     return docs;
   },
 }));
-import { handleExportBuild } from "../user.exportJobs";
+import { handleExportBuild } from "../exportBuild";
 
 const download = vi.fn<(key: string) => Promise<ArrayBuffer | null>>();
 const upload = vi.fn<(key: string, bytes: ArrayBuffer, contentType: string) => Promise<void>>();

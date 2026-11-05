@@ -10,7 +10,7 @@ vi.mock("../../../lib/access", async (importOriginal) => ({
   ensureDocAccess: async () => (checks.count++, { ok: true }),
   createDocumentAccessChecker: () => async () => (checks.count++, { ok: true }),
 }));
-import { handleExportBuild } from "../user.exportJobs";
+import { handleExportBuild } from "../exportBuild";
 
 it("exports a 120-document selection with batched lookups instead of two reads per document", async () => {
   const ids = Array.from({ length: 120 }, (_, i) => `d${String(i).padStart(3, "0")}`);

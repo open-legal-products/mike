@@ -1,32 +1,45 @@
 export type Row = Record<string, unknown>;
 
-// Read-only fake supporting the query subset buildUserAccountExport uses
-// (select/range/eq/neq/in/order/filter + thenable).
+// Read-only fake supporting the query subset the exports use
+// (select/eq/neq/is/not/in/filter/order/limit/gt + thenable). Like a real
+// table, every row has an id (the paging key); like a real gateway, a
+// response is silently capped at `maxRows`.
 export function makeExportDb(
     tables: Record<string, Row[]>,
     errors: Record<string, { message: string }> = {},
+    { maxRows = 1000 }: { maxRows?: number } = {},
 ) {
     const reads: string[] = [];
     function query(table: string) {
-        let rows = [...(tables[table] ?? [])];
-        let from = 0;
-        let to = Infinity;
+        // Read at query time: a test may edit `tables` between exports.
+        let rows = (tables[table] ?? []).map((row, index) =>
+            row.id === undefined ? { id: `${table}-${index + 1}`, ...row } : row,
+        );
+        const orders: Array<[string, boolean]> = [];
+        let limit = Infinity;
         const error = errors[table] ?? null;
+        const compare = (left: unknown, right: unknown) =>
+            left === right ? 0 : String(left ?? "") < String(right ?? "") ? -1 : 1;
         const builder: any = {
             select: () => builder,
-            range: (start: number, end: number) => {
-                from = start;
-                to = end;
+            order: (col: string, options?: { ascending?: boolean }) => {
+                orders.push([col, options?.ascending !== false]);
                 return builder;
             },
-            order: () => builder,
-            limit: () => builder,
+            limit: (count: number) => {
+                limit = count;
+                return builder;
+            },
             eq: (col: string, val: unknown) => {
                 rows = rows.filter((r) => r[col] === val);
                 return builder;
             },
             neq: (col: string, val: unknown) => {
                 rows = rows.filter((r) => r[col] !== val);
+                return builder;
+            },
+            gt: (col: string, val: unknown) => {
+                rows = rows.filter((r) => compare(r[col], val) > 0);
                 return builder;
             },
             is: (col: string, val: unknown) => {
@@ -60,7 +73,17 @@ export function makeExportDb(
             then: (
                 resolve: (v: { data: Row[] | null; error: { message: string } | null }) => unknown,
                 reject?: (e: unknown) => unknown,
-            ) => Promise.resolve({ data: error ? null : rows.slice(from, to + 1), error }).then(resolve, reject),
+            ) => {
+                const sorted = [...rows].sort((a, b) => {
+                    for (const [col, ascending] of orders) {
+                        const result = compare(a[col], b[col]);
+                        if (result !== 0) return ascending ? result : -result;
+                    }
+                    return 0;
+                });
+                const data = sorted.slice(0, Math.min(limit, maxRows));
+                return Promise.resolve({ data: error ? null : data, error }).then(resolve, reject);
+            },
         };
         return builder;
     }

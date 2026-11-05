@@ -5,11 +5,11 @@ import {
     getUserApiKeys,
     getUserApiKeyStatus,
     saveUserApiKey,
-} from "../user.apiKeyStore";
+} from "./store";
 import {
     azureCredentials,
     bedrockCredentials,
-} from "../../../lib/llm/cloudProviders";
+} from "../llm/cloudProviders";
 
 describe("normalizeApiKeyProvider", () => {
     it('returns "claude" for "claude"', () => {

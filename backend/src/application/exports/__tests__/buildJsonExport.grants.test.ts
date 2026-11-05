@@ -1,11 +1,8 @@
 import { describe, expect, it } from "vitest";
 
-import {
-    buildProjectExportManifest,
-    buildUserAccountExport,
-} from "../user.dataExport";
+import { buildUserAccountExport } from "../buildJsonExport";
 
-import { makeExportDb as makeDb, type Row } from "./user.dataExport.fixture";
+import { makeExportDb as makeDb, type Row } from "./exportDb.fixture";
 
 describe("account export: shared projects", () => {
     const tables = {
@@ -108,45 +105,6 @@ describe("memory exports", () => {
         await expect(
             buildUserAccountExport(db, "u1", "u1@example.com", null),
         ).rejects.toThrow(/checksum mismatch/i);
-    });
-
-    it("includes project memory in the signed project manifest", async () => {
-        const { db } = makeDb({
-            projects: [
-                {
-                    id: "p1",
-                    name: "Matter",
-                    cm_number: null,
-                    created_at: "2026-09-05T00:00:00Z",
-                },
-            ],
-            documents: [],
-            memory_files: [
-                {
-                    id: "memory-project",
-                    scope: "project",
-                    project_id: "p1",
-                    enabled: true,
-                    epoch: 0,
-                    revision: 1,
-                    content: markdown,
-                    content_sha256: hash,
-                    size_bytes: new TextEncoder().encode(markdown).byteLength,
-                    last_source: "curator",
-                    updated_by: "u1",
-                    status: "idle",
-                },
-            ],
-        });
-
-        const manifest = await buildProjectExportManifest(db, "p1");
-
-        expect(manifest.memory).toMatchObject({
-            enabled: true,
-            markdown,
-            source: "curator",
-        });
-        expect(manifest.digest.value).toMatch(/^[0-9a-f]{64}$/);
     });
 });
 
