@@ -43,3 +43,7 @@ regexes = [
 [[allowlists]]
 description = "Sentry scrubber unit-test fixture: a fake AWS access key id (the letters A–P) used to prove redactText strips it from event text (backend/src/lib/observability/sentry.test.ts, packages/client/src/sentryEvent.test.ts)"
 regexes = ['''^AKIAABCDEFGHIJKLMNOP$''']
+
+[[allowlists]]
+description = "scripts/local-secrets.test.sh fixture (first committed as cae936e57 on fix/hoogvliets-hardening-stack): a fake 64-hex DOWNLOAD_SIGNING_SECRET used to prove a real operator value is left alone; the branch since uses a low-entropy fixture, but the old blob stays in history"
+regexes = ['''^0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef$''']
