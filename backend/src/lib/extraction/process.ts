@@ -1,7 +1,7 @@
 // Sequential requests reuse parser imports. No database or application boot.
 import { EXTRACTION_OPS, type ExtractionOp } from "./ops";
 import { EXTRACTION_MAX_TEXT_BYTES, ExtractionLimitError, isAllocationFailure } from "./limits";
-import { parseFailureToWire } from "./failure";
+import { extractionFailureToWire } from "./failure";
 
 process.on("message", (request: { op: ExtractionOp; bytes: ArrayBuffer; fileType: string }) => {
   void (async () => {
@@ -15,11 +15,12 @@ process.on("message", (request: { op: ExtractionOp; bytes: ArrayBuffer; fileType
       process.send?.({ ok: true, result });
     } catch (error) {
       const limited = error instanceof ExtractionLimitError || isAllocationFailure(error);
-      // A thrown Error does not survive IPC as itself; send its labels so the
-      // parent can rebuild the same kind and code.
+      // A thrown Error does not survive IPC as itself; send its labels, and
+      // whether the parser rejected the bytes, so the parent can rebuild the
+      // same kind and code and a job knows whether to retry.
       process.send?.(limited
         ? { ok: false, limited, message: "parser resource budget exceeded" }
-        : { ok: false, limited, ...parseFailureToWire(error) });
+        : { ok: false, limited, ...extractionFailureToWire(error) });
     }
   })();
 });

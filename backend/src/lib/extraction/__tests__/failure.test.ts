@@ -1,0 +1,91 @@
+import { describe, expect, it } from "vitest";
+import { AppError } from "../../appError";
+import { ConversionError } from "../../convert";
+import { diagnosticErrorTags } from "../../observability/sentryPrivacy";
+import {
+  ExtractionParseError,
+  asExtractionFailure,
+  extractionFailureFromWire,
+  extractionFailureToWire,
+  isByteRejection,
+} from "../failure";
+
+const named = (name: string, message = "detail") => Object.assign(new Error(message), { name });
+const errno = (code: string, message = `spawn soffice ${code}`) => Object.assign(new Error(message), { code });
+const pdfUnreadable = (cause: unknown) => new AppError("extraction.pdf_parse_failed", "document_text_pdf_unreadable", { cause });
+
+// A byte rejection fails the same way on every attempt, so its job stops.
+// Everything else keeps the retries it had before the kind crossed IPC.
+const CASES: Array<[label: string, error: unknown, rejected: boolean]> = [
+  ["pdf.js: malformed PDF", pdfUnreadable(named("InvalidPDFException", "Invalid PDF structure.")), true],
+  ["pdf.js: encrypted PDF", pdfUnreadable(named("PasswordException", "No password given")), true],
+  ["pdf.js: bad object", pdfUnreadable(named("FormatError", "Bad FCHECK in flate stream")), true],
+  ["pdf.js: broken xref", pdfUnreadable(named("XRefParseException")), true],
+  ["JSZip: not a ZIP container", new Error("Can't find end of central directory : is this a zip file ?"), true],
+  ["JSZip: CRC mismatch", new Error("Corrupted zip : CRC32 mismatch"), true],
+  ["JSZip: truncated entry", new Error("Bug or corrupted zip : didn't get enough information from the central directory"), true],
+  ["JSZip: encrypted container", new Error("Encrypted zip are not supported"), true],
+  ["mammoth: no main part", new Error("Could not find main document part. Are you sure this is a valid .docx file?"), true],
+  ["docx reader: no document.xml", new Error("document.xml missing from docx"), true],
+  ["unsupported format verdict", new Error("document_text_unsupported_format"), true],
+
+  ["soffice spawn ENOENT", new AppError("conversion.unavailable", "LibreOffice was not found", { cause: errno("ENOENT") }), false],
+  ["soffice spawn EACCES", new AppError("conversion.unavailable", "LibreOffice was not found", { cause: errno("EACCES") }), false],
+  ["no soffice on this host", new ConversionError("conversion.unavailable", "LibreOffice was not found"), false],
+  ["soffice spawn EAGAIN", new ConversionError("conversion.failed", "LibreOffice conversion failed", { cause: errno("EAGAIN") }), false],
+  ["soffice spawn EMFILE", new ConversionError("conversion.failed", "LibreOffice conversion failed", { cause: errno("EMFILE") }), false],
+  ["soffice killed", new ConversionError("conversion.failed", "LibreOffice conversion failed", { cause: Object.assign(new Error("Command failed"), { code: null, signal: "SIGKILL" }) }), false],
+  ["soffice timed out", new ConversionError("conversion.timeout", "LibreOffice conversion timed out"), false],
+  ["scratch dir full", errno("ENOSPC", "ENOSPC: no space left on device, write"), false],
+  ["out of file handles", errno("ENFILE"), false],
+  ["broken pipe", errno("EPIPE"), false],
+  ["reset connection", errno("ECONNRESET"), false],
+  ["timed-out socket", errno("ETIMEDOUT"), false],
+  ["Node runtime code", errno("ERR_STREAM_DESTROYED"), false],
+  ["aborted call", named("AbortError", "This operation was aborted"), false],
+  ["timed-out call", named("TimeoutError", "The operation timed out"), false],
+  ["pdf.js could not load", pdfUnreadable(new AppError("extraction.failed", "pdf.js could not be loaded", { cause: errno("ERR_MODULE_NOT_FOUND") })), false],
+  ["pdf.js crashed after opening", pdfUnreadable(new AppError("extraction.failed", "PDF text processing failed", { cause: new TypeError("x is undefined") })), false],
+  ["environment wins over a rejection", pdfUnreadable(Object.assign(named("InvalidPDFException"), { cause: errno("ENOSPC") })), false],
+  ["errno inside an AggregateError", new AggregateError([errno("EMFILE"), new Error("Corrupted zip : CRC32 mismatch")]), false],
+  ["unattributed parser bug", new TypeError("Cannot read properties of undefined"), false],
+  ["pdf_parse_failed with no recognised cause", pdfUnreadable(new Error("Setting up fake worker failed")), false],
+  ["non-Error throw", "boom", false],
+];
+
+describe("isByteRejection", () => {
+  it.each(CASES)("%s -> %s", (_label, error, rejected) => {
+    expect(isByteRejection(error)).toBe(rejected);
+  });
+});
+
+describe("extraction failures across the process boundary", () => {
+  it.each(CASES)("%s crosses as the same verdict", (_label, error, rejected) => {
+    const wire = extractionFailureToWire(error);
+    // Exactly what IPC's advanced serialization does to it.
+    const rebuilt = extractionFailureFromWire(structuredClone(wire));
+    expect(rebuilt instanceof ExtractionParseError).toBe(rejected);
+    expect(rebuilt).toBeInstanceOf(AppError);
+    // Only allowlisted labels cross; the kind and code read the same on both sides.
+    expect(Object.keys(wire).every((key) => ["message", "kind", "code", "name", "retryable"].includes(key))).toBe(true);
+    const { error_kind: _kind, ...before } = diagnosticErrorTags(error);
+    expect(diagnosticErrorTags(rebuilt)).toMatchObject(before);
+  });
+
+  it("names a retryable converter failure after its own kind and errno", () => {
+    const spawnFailure = new AppError("conversion.unavailable", "LibreOffice was not found", { cause: errno("ENOENT") });
+    const rebuilt = extractionFailureFromWire(structuredClone(extractionFailureToWire(spawnFailure)));
+    expect(rebuilt).not.toBeInstanceOf(ExtractionParseError);
+    expect(diagnosticErrorTags(rebuilt)).toEqual({ error_kind: "conversion.unavailable", failure_code: "ENOENT" });
+  });
+
+  it("classifies the in-process path the same way, keeping a retryable error as it was", () => {
+    const spawnFailure = new AppError("conversion.unavailable", "LibreOffice was not found", { cause: errno("ENOENT") });
+    expect(asExtractionFailure(spawnFailure)).toBe(spawnFailure);
+    const corrupt = new Error("Corrupted zip : CRC32 mismatch");
+    const parsed = asExtractionFailure(corrupt);
+    expect(parsed).toBeInstanceOf(ExtractionParseError);
+    expect((parsed as Error).cause).toBe(corrupt);
+    expect(diagnosticErrorTags(parsed)).toMatchObject({ error_kind: "extraction.parse_failed" });
+  });
+});
