@@ -118,6 +118,13 @@ const outageGate = createPollFailureGate({
 });
 const workerErrorGate = createWorkerErrorGate();
 
+// BullMQ forwards the shared connection's errors to every Worker built on it
+// (RedisConnection.handleClientError → QueueBase.emit), so one failed
+// reconnect arrives once on the connection and once per Worker as the SAME
+// Error object. Count it once, so the outage gate's "recovered after N
+// consecutive failure(s)" counts failed attempts, not listeners.
+const seen = new WeakSet<object>();
+
 /** Call when the shared consumer connection is ready again. */
 export function queueConnectionRecovered(): void {
     outageGate.success();
@@ -132,6 +139,10 @@ export function watchQueueErrors(
     source: "connection" | "worker",
 ): void {
     emitter.on("error", (error) => {
+        if (error && typeof error === "object") {
+            if (seen.has(error)) return;
+            seen.add(error);
+        }
         if (isQueueConnectionError(error)) {
             if (!outageGate.failure(error).report) return;
             reportError(
@@ -153,4 +164,3 @@ export function watchQueueErrors(
         console.warn(`[queue] ${source} error`, verdict.failureClass);
     });
 }
-

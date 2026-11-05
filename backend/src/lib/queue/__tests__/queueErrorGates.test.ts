@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
+import { EventEmitter } from "node:events";
 
 const mocks = vi.hoisted(() => ({ reportError: vi.fn() }));
 vi.mock("../../observability/sentry", async (load) => ({
@@ -9,7 +10,9 @@ vi.mock("../../observability/sentry", async (load) => ({
 import {
     createWorkerErrorGate,
     isQueueConnectionError,
+    queueConnectionRecovered,
     queueErrorClass,
+    watchQueueErrors,
 } from "../consumerErrors";
 
 const errno = (code: string) =>
@@ -59,5 +62,34 @@ describe("createWorkerErrorGate", () => {
         }
         expect(reports).toBe(96);
         expect(log.warn).toHaveBeenCalled();
+    });
+});
+
+describe("watchQueueErrors", () => {
+    it("counts a forwarded connection error once and keeps Worker defects out of the outage count", () => {
+        vi.spyOn(console, "warn").mockImplementation(() => {});
+        const log = vi.spyOn(console, "log").mockImplementation(() => {});
+        const connection = new EventEmitter();
+        const workerA = new EventEmitter();
+        const workerB = new EventEmitter();
+        watchQueueErrors(connection, "connection");
+        watchQueueErrors(workerA, "worker");
+        watchQueueErrors(workerB, "worker");
+
+        for (let attempt = 0; attempt < 3; attempt++) {
+            // BullMQ forwards the same Error object to every Worker.
+            const error = errno("ECONNREFUSED");
+            connection.emit("error", error);
+            workerA.emit("error", error);
+            workerB.emit("error", error);
+        }
+        workerA.emit("error", new Error("could not renew lock for job 1"));
+        queueConnectionRecovered();
+
+        expect(log).toHaveBeenCalledWith(
+            "[queue] redis consumer recovered after 3 consecutive failure(s)",
+        );
+        expect(mocks.reportError).toHaveBeenCalledTimes(2);
+        vi.restoreAllMocks();
     });
 });
