@@ -154,7 +154,9 @@ it.each([
     ...(code === "private-code" ? {} : { failure_code: code }),
   });
   expect(context.level).toBe(code === "57014" ? "warning" : undefined);
-  expect(warn).toHaveBeenCalledWith("[run_tools] find_documents failed", category);
+  expect(warn).toHaveBeenCalledWith("[run_tools] find_documents failed", {
+    category, ...(code === "private-code" ? {} : { failure_code: code }),
+  });
   expect(JSON.stringify({ frames, result, logs: warn.mock.calls })).not.toContain("private");
 });
 
