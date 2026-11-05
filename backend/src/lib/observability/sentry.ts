@@ -58,6 +58,24 @@ const NESTED_SEARCH_DEPTH = 2;
  */
 const NODE_WARNING_TEXT = /^\(node:\d+\) (?:\[[\w-]+\] )?[\w$]+: /;
 
+/**
+ * GoTrue answers 409 `conflict` ("Too many concurrent token refresh requests
+ * on the same session or refresh token") when parallel requests carrying the
+ * same expiring session cookie each refresh it. supabase-js logs that
+ * AuthApiError itself, through console.error from inside the request
+ * client's initial-session emission, so the console bridge filed it as
+ * "AuthApiError: Failure in application / 409" (MIKE-BACKEND-8D). It is an
+ * expected race, not a failure: the request whose access token is still
+ * valid is served, and one whose token has expired already answers 401
+ * through requireAuth. Only a 409 from the auth client is dropped; any other
+ * status it logs is still reported.
+ */
+function isGoTrueConflict(arg: unknown): boolean {
+  if (!arg || typeof arg !== "object") return false;
+  const error = arg as { __isAuthError?: unknown; status?: unknown };
+  return error.__isAuthError === true && error.status === 409;
+}
+
 function isNodeWarningText(args: unknown[]): boolean {
   return (
     args.length === 1 &&
@@ -796,6 +814,7 @@ export function scrubEvent(
     }
     // Node's own warning printer; reportProcessWarning() filed the object.
     if (isNodeWarningText(args)) return null;
+    if (args.some(isGoTrueConflict)) return null;
     // Positional payloads after the label are never titles or grouping keys.
     const label = typeof args[0] === "string" ? args[0].trim() : "Console error";
     const nestedError = args

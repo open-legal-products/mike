@@ -1062,6 +1062,34 @@ describe("Node process warnings", () => {
   });
 });
 
+describe("GoTrue refresh conflicts (MIKE-BACKEND-8D)", () => {
+  // supabase-js console.error()s the AuthApiError itself when GoTrue answers
+  // 409 to one of several concurrent refreshes of the same session.
+  const consoleEvent = (arg: unknown) =>
+    scrubEvent(
+      { logger: "console", message: "AuthApiError" } as unknown as Sentry.ErrorEvent,
+      { captureContext: { extra: { arguments: [arg] } } },
+    );
+
+  it("does not report the auth client's own log of a 409 conflict", async () => {
+    const { AuthApiError } = await import("@supabase/supabase-js");
+    expect(
+      consoleEvent(
+        new AuthApiError(
+          "Too many concurrent token refresh requests on the same session or refresh token",
+          409,
+          "conflict",
+        ),
+      ),
+    ).toBeNull();
+  });
+
+  it("still reports any other status the auth client logs", async () => {
+    const { AuthApiError } = await import("@supabase/supabase-js");
+    expect(consoleEvent(new AuthApiError("Database error", 500, "unexpected_failure"))).not.toBeNull();
+  });
+});
+
 describe("community install minimisation", () => {
   afterEach(() => resetSentryForTests());
 
