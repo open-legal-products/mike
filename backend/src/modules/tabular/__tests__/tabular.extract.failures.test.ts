@@ -37,6 +37,7 @@ vi.mock("../../../lib/convert", () => ({
 }));
 
 import { AppError } from "../../../lib/appError";
+import { withKeySource } from "../../../lib/llm/providerErrors";
 import { diagnosticErrorTags } from "../../../lib/observability/sentryPrivacy";
 import { queryTabularAllColumns, queryTabularCell } from "../tabular.extract";
 
@@ -109,6 +110,17 @@ describe("queryTabularCell", () => {
         warn.mockRestore();
     });
 
+    it("reports a rejected deployment key once, as a warning", async () => {
+        // No user key, so the call sent the deployment's env key: the
+        // operator has to hear that it was revoked.
+        completeText.mockRejectedValue(withKeySource(providerError(401), "deployment"));
+        await expect(
+            queryTabularCell("m", "Contract.pdf", "text", "p"),
+        ).resolves.toBeNull();
+        expect(reportError).toHaveBeenCalledTimes(1);
+        expect(reportError.mock.calls[0][1]).toMatchObject({ level: "warning" });
+    });
+
     it("reports nothing when the model answers", async () => {
         completeText.mockResolvedValue(
             '{"summary":"NY","flag":"green","reasoning":""}',
@@ -141,6 +153,21 @@ describe("queryTabularAllColumns", () => {
             "[queryTabularAllColumns] stream failed",
             reported,
         );
+    });
+
+    // The row stream applies the same rule as the cell call.
+    it.each([
+        [503, "warning"],
+        [429, "warning"],
+        [400, "error"],
+    ] as const)("reports a provider %i at %s level", async (status, level) => {
+        const cause = providerError(status);
+        streamChatWithTools.mockRejectedValue(cause);
+        await expect(
+            queryTabularAllColumns("m", "Contract.pdf", "text", COLUMNS, async () => {}),
+        ).rejects.toBe(cause);
+        expect(reportError).toHaveBeenCalledTimes(1);
+        expect(reportError.mock.calls[0][1]).toMatchObject({ level });
     });
 
     it("leaves reporting to the queue runner when requested", async () => {
