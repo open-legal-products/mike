@@ -876,7 +876,7 @@ export interface UserProfile extends RouterProfileLists {
     responseDetailsVisible?: boolean;
     darkMode: boolean;
     projectMemoryDefault: boolean;
-    /** Absent from older or forked servers; see `hasApiKeyStatus`. */
+    /** Absent only when a forked server or a proxy/misroute answers; see `hasApiKeyStatus`. */
     apiKeyStatus?: ApiKeyStatus;
 }
 
