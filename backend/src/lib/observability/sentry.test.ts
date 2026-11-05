@@ -991,6 +991,27 @@ describe("Node process warnings", () => {
     expect(scope.setTag).toHaveBeenCalledWith("warning_listener_count", 3);
   });
 
+  // MIKE-BACKEND-65: the AI SDK sends its call warnings through
+  // process.emitWarning unless AI_SDK_LOG_WARNINGS is a function.
+  it("turns AI SDK call warnings into a breadcrumb instead of an event", () => {
+    vi.spyOn(console, "log").mockImplementation(() => {});
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    initSentry("api", dsnEnv);
+    const logger = (globalThis as { AI_SDK_LOG_WARNINGS?: unknown }).AI_SDK_LOG_WARNINGS;
+    expect(typeof logger).toBe("function");
+
+    (logger as (options: unknown) => void)({
+      warnings: [{ type: "unsupported", feature: "temperature" }],
+      provider: "anthropic",
+      model: "claude",
+    });
+
+    expect(Sentry.captureException).not.toHaveBeenCalled();
+    expect(Sentry.addBreadcrumb).toHaveBeenCalledWith(
+      expect.objectContaining({ category: "mike.stage", message: "ai-sdk-warning.unsupported" }),
+    );
+    expect(warn).toHaveBeenCalled();
+  });
 
   it("drops the console bridge's copy of Node's printed warning, not application labels", () => {
     const consoleEvent = (text: string) =>

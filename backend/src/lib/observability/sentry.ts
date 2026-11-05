@@ -18,7 +18,7 @@
 //      explicitly are remembered so the bridge does not double-report them.
 
 import * as Sentry from "@sentry/node";
-import { retainExceptionTypes, diagnosticRoute, diagnosticErrorTags, privacyBoundaryIntegration, type Operation, type Stage } from "./sentryPrivacy";
+import { retainExceptionTypes, diagnosticRoute, diagnosticErrorTags, isDiagnosticLabel, privacyBoundaryIntegration, type Operation, type Stage } from "./sentryPrivacy";
 
 export type SentryRole = "api" | "worker" | "worker-thread" | "job";
 
@@ -959,6 +959,7 @@ export function initSentry(
   });
   initialized = true;
   installProcessWarningReporter(env);
+  installAiSdkWarningLogger();
   if (config.dsnSource === "default") {
     console.log(
       `[sentry] enabled for ${role} → Mike project Sentry (${config.install} install, ` +
@@ -1054,6 +1055,29 @@ function installProcessWarningReporter(env: NodeJS.ProcessEnv): void {
     /(?:^|\s)--no-warnings(?:\s|=|$)/.test(env.NODE_OPTIONS ?? "");
   if (silenced) return;
   process.on("warning", reportProcessWarning);
+}
+
+/**
+ * The AI SDK reports its own call warnings (an unsupported setting, a
+ * provider compatibility note) through process.emitWarning unless
+ * `globalThis.AI_SDK_LOG_WARNINGS` is a function. Through the hook above each
+ * one was filed as "Failure in chat.turn / runtime-warning / Warning"
+ * (MIKE-BACKEND-65): advice about a request, not a failure. They become a
+ * stage breadcrumb, so an event later in the same turn still shows that the
+ * SDK warned, plus a local console.warn (not forwarded) for the developer.
+ */
+type AiSdkWarnings = { warnings?: Array<{ type?: unknown }> };
+
+function logAiSdkWarnings(options: AiSdkWarnings): void {
+  for (const warning of options.warnings ?? []) {
+    const type = typeof warning?.type === "string" && isDiagnosticLabel(warning.type) ? warning.type : "other";
+    Sentry.addBreadcrumb({ category: "mike.stage", message: `ai-sdk-warning.${type}`, level: "warning" });
+    console.warn("[ai-sdk] warning", warning);
+  }
+}
+
+function installAiSdkWarningLogger(): void {
+  (globalThis as { AI_SDK_LOG_WARNINGS?: unknown }).AI_SDK_LOG_WARNINGS = logAiSdkWarnings;
 }
 
 /**
@@ -1238,6 +1262,7 @@ export function resetSentryForTests(
   // so reportError() and friends treat that client as ours.
   initialized = options.initialized ?? false;
   process.off("warning", reportProcessWarning);
+  delete (globalThis as { AI_SDK_LOG_WARNINGS?: unknown }).AI_SDK_LOG_WARNINGS;
   // Tests exercise the full event shape unless they opt into community mode.
   currentInstall = install;
   throttleBuckets.clear();
