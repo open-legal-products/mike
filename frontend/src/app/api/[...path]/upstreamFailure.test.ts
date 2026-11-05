@@ -27,6 +27,15 @@ describe("upstreamUnreachableCode", () => {
     });
 });
 
+// MIKE-FRONTEND-3B: the backend closing the socket while a request body is
+// still being written is the backend going away, not an application error.
+it("treats EPIPE as an unreachable backend", () => {
+    const failure = new TypeError("fetch failed", {
+        cause: Object.assign(new Error("write EPIPE"), { code: "EPIPE" }),
+    });
+    expect(upstreamUnreachableCode(failure)).toBe("EPIPE");
+});
+
 describe("createReportWindow", () => {
     it("allows one report per key per window", () => {
         let now = 1_000;

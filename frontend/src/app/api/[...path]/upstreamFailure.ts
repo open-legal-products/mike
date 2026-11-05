@@ -18,6 +18,9 @@ const UNREACHABLE_CODES = new Set([
     "ENETUNREACH",
     "UND_ERR_CONNECT_TIMEOUT",
     "UND_ERR_SOCKET",
+    // The backend closed the connection while the request body was still
+    // being written (a restart mid-upload, MIKE-FRONTEND-3B).
+    "EPIPE",
 ]);
 
 /** The pinned Sentry fingerprint shared by every unreachable-backend report. */
