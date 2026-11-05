@@ -4,7 +4,7 @@ import { useSelectedModel, useSelectedReasoning } from "./useSelectedModel";
 import {
     canonicalModelId,
     routerSelections as selectionsFromProfile,
-} from "@/shared/lib/modelCatalog";
+} from "@mike/client";
 import type { ApiKeyState } from "../lib/mikeApi";
 
 const keys: ApiKeyState = {

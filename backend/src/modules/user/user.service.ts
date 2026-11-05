@@ -1,40 +1,5 @@
-// Business logic + data-access for the user module.
-//
-// These functions are the service layer behind user.routes.ts. They take an
-// explicit Supabase client (`db`) plus request-derived primitives, perform the
-// profile / MFA / API-key / MCP / export / deletion orchestration, and RETURN
-// values or typed error results. They never touch req/res — the thin route
-// handlers map the results onto HTTP status codes, headers, and response
-// bodies.
-//
-// The implementation is split by concern across sibling files; this module is
-// the aggregate surface the routes (and tests) import from:
-//
-//   user.shared.ts   — shared types + helpers (Db, errorMessage, ...)
-//   user.profile.ts  — load/serialize/validate + bootstrap/read/update profile
-//   user.mfa.ts      — the MFA-on-login toggle (+ verified-TOTP factor lookup)
-//   user.apiKeys.ts  — BYO API-key status + save (over user.apiKeyStore.ts)
-//   user.apiKeyStore.ts — the encrypted per-user API-key store itself
-//   user.settings.ts — per-user model settings + last-selected model/reasoning
-//   user.mcp.ts      — MCP connector wrappers over lib/mcpConnectors
-//   user.courtlistener.ts — CourtListener connector status, switch and token
-//   user.account.ts  — destructive account/data deletion (args + ordering kept)
-//   user.export.ts   — the durable async export flow (enqueue / poll /
-//                      download artifact); user.exportJobs.ts builds it
-//
-// Security boundaries preserved across the split verbatim:
-//   - API-key crypto: writes funnel through saveUserApiKey (never reimplemented).
-//   - MFA: the requireMfaIfEnrolled guard stays in the route (HTTP layer); only
-//     the verified-TOTP factor lookup lives here.
-//   - Data deletion: the userDataCleanup helpers + auth-admin deleteUser call are
-//     invoked with identical args and ordering (destructive — exact preservation).
-//   - Exports: the payload builders run in the export job; the download
-//     route owns the Content-Type / Content-Disposition headers.
-//
-// The re-exports below are NAMED so intra-module helpers (e.g. the profile-row
-// loaders reused by user.mfa.ts) stay off this public surface — the routes and
-// tests import exactly the same names they always did.
-
+// User profile, personal settings and connector operations.
+// Cross-domain account/export workflows live in application/.
 export { errorMessage } from "./user.shared";
 
 export {
@@ -53,7 +18,7 @@ export {
 export { setUserProfilePhoto } from "./user.photo";
 
 export { setMfaOnLogin } from "./user.mfa";
-export { setApiKeyEnabled, setApiKeyEnabledFor } from "./user.apiKeyEnabled";
+export { setApiKeyEnabled } from "./user.apiKeys";
 
 export {
     getCustomInstructions,
@@ -73,11 +38,7 @@ export {
     validateWebSearchPayload,
 } from "./user.webSearch";
 
-export {
-    getApiKeyStatus,
-    saveApiKey,
-    saveApiKeyForOwner,
-} from "./user.apiKeys";
+export { getApiKeyStatus, saveApiKey } from "./user.apiKeys";
 
 export {
     listMcpConnectors,
@@ -96,22 +57,7 @@ export {
     setCourtListenerToken,
 } from "./user.courtlistener";
 
-export {
-    deletePrivateMemories,
-    deleteUserAccount,
-    deleteUserChats,
-    deleteUserProjectsData,
-    deleteUserTabularReviews,
-} from "./user.account";
-
-export {
-    validateExportRequest,
-    startUserExport,
-    getUserExportStatus,
-    loadUserExportArtifact,
-} from "./user.export";
-
-// Per-user settings and the API-key store are user-domain data that other
+// Per-user settings are user-domain data that other
 // modules (chat, project-chat, word-chat, tabular, models, source-documents)
 // read through this facade rather than reaching into the topic files.
 export {
@@ -120,25 +66,7 @@ export {
     persistLastSelectedReasoningLevel,
     type UserModelSettings,
 } from "./user.settings";
-export {
-    getUserApiKeys,
-    getEffectiveApiKeys,
-    getApiKeyStatusFor,
-    getEffectiveApiKeyStatus,
-    normalizeApiKeyProvider,
-    orgKeyOwner,
-    type ApiKeyProvider,
-    type ApiKeyStatus,
-} from "./user.apiKeyStore";
 
 export { resolveUserChatSelection } from "./user.chatSelection";
 
-export { handleAccountDelete } from "./user.accountJobs";
-export { handleExportBuild } from "./user.exportJobs";
 export { handleMcpRefreshToken, MCP_TOKEN_REFRESH_WINDOW_MS } from "./user.mcpJobs";
-export { MAX_ZIP_EXPORT_DOCUMENTS, isWorkspaceExportType } from "./user.exportContracts";
-
-export { deleteProjectsByIds } from "./user.dataCleanup";
-export { describeAccountDeletionBlockers } from "./user.account";
-
-export { projectManifestFilename, buildProjectExportManifest } from "./user.dataExport";

@@ -13,7 +13,7 @@ import {
   type LucideIcon,
 } from "lucide-react";
 import { RowActions } from "@/app/components/shared/RowActions";
-import { DropdownItem } from "@/shared/ui/dropdown";
+import { DropdownItem, PillButtonUI } from "@mike/ui";
 import { AccessScopeLabel } from "@/app/components/shared/AccessScopeLabel";
 import {
   CreatorLabel,
@@ -33,7 +33,6 @@ import {
   type TableFilterOption,
 } from "@/app/components/shared/TablePrimitive";
 import { EmptyState } from "@/app/components/ui/empty-state";
-import { PillButtonUI } from "@/shared/ui/PillButtonUI";
 import type { ResourceAccessScope } from "@/app/components/shared/types";
 import type { Playbook, PlaybookImport } from "@/app/lib/mikeApi";
 

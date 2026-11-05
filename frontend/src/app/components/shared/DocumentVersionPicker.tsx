@@ -9,8 +9,8 @@ import {
     DropdownRadioGroup,
     DropdownRadioItem,
     DropdownTrigger,
-} from "@/shared/ui/dropdown";
-import { TextButtonUI } from "@/shared/ui/TextButtonUI";
+    TextButtonUI,
+} from "@mike/ui";
 import { VersionChip } from "./VersionChip";
 
 export function DocumentVersionPicker({

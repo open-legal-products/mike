@@ -13,14 +13,12 @@ import {
     DropdownRadioGroup,
     DropdownRadioItem,
     DropdownTrigger,
-} from "@/shared/ui/dropdown";
-import { GlassIconButtonUI } from "@/shared/ui/GlassIconButtonUI";
-import { PillButtonUI } from "@/shared/ui/PillButtonUI";
-import { FieldLabel } from "@/app/components/ui/form-field";
-import {
+    GlassIconButtonUI,
+    PillButtonUI,
     LIQUID_GLASS_FLOAT_CLASS,
     LIQUID_GLASS_SUBTLE_CLASS,
-} from "@/shared/ui/LiquidGlassUI";
+} from "@mike/ui";
+import { FieldLabel } from "@/app/components/ui/form-field";
 
 // Liquid-glass field styling shared by the menu's inputs/controls, matching the
 // modal's glass treatment (translucent white over the light-gray panel).
