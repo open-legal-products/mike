@@ -142,6 +142,9 @@ describe("docker/storage-cors.mjs", () => {
       expect(generator.environment).toContain(line);
     }
     expect(generator.environment).toContain("MIKE_ORIGINS_MODULE=/app/dist/lib/origins.js");
+    // It receives the backend's whole env_file (secrets included) but only
+    // prints JSON, so it gets no network at all.
+    expect(generator.network_mode).toBe("none");
     expect(generator.volumes).toContain("./docker/storage-cors.mjs:/storage-cors.mjs:ro");
     expect(generator.command.join(" ")).toMatch(/node \/storage-cors\.mjs > \/cors\/storage-cors\.json/);
     expect(createbucket.depends_on["storage-cors"]).toEqual({

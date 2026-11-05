@@ -229,6 +229,9 @@ services:
       - storage_cors:/cors
     entrypoint: /bin/sh
     command: ["-c", "node /storage-cors.mjs > /cors/storage-cors.json"]
+    # It reads the backend's env_file (provider keys and signing secrets
+    # included) only to print a JSON policy, so it gets no network at all.
+    network_mode: none
     restart: "no"
 
   createbucket:
