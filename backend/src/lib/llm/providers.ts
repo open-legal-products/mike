@@ -112,7 +112,7 @@ function requiredKey(
       .find((value) => !!value) ||
     "";
   if (!key) {
-    throw new Error(
+    throw new UserFacingError(
       `${label} API key is not configured. Set ${environmentVariable} or add a user ${label} key.`,
     );
   }
@@ -143,7 +143,7 @@ function routerKey(provider: RouterProvider, apiKeys?: UserApiKeys): string {
   const key =
     routerUserKey(provider, apiKeys)?.trim() || routerEnvironmentKey(provider);
   if (!key) {
-    throw new Error(
+    throw new UserFacingError(
       `${ROUTER_LABELS[provider]} API key is not configured. Set ${ROUTER_KEY_ENV_HINTS[provider]} or add a user ${ROUTER_LABELS[provider]} key.`,
     );
   }
@@ -256,7 +256,7 @@ async function createBedrockAdapter(
 ): Promise<AiSdkAdapterConfig> {
   const credentials = bedrockCredentials(apiKeys);
   if (!credentials) {
-    throw new Error(
+    throw new UserFacingError(
       "Amazon Bedrock API key is not configured. Set AWS_BEARER_TOKEN_BEDROCK and BEDROCK_AWS_REGION or add a user Amazon Bedrock key and region.",
     );
   }
@@ -315,7 +315,7 @@ async function createAzureAdapter(
 ): Promise<AiSdkAdapterConfig> {
   const credentials = azureCredentials(apiKeys);
   if (!credentials) {
-    throw new Error(
+    throw new UserFacingError(
       "Azure OpenAI API key is not configured. Set AZURE_API_KEY and AZURE_OPENAI_ENDPOINT or add a user Azure OpenAI key and endpoint.",
     );
   }
@@ -343,7 +343,7 @@ async function createAzureFoundryAdapter(
 ): Promise<AiSdkAdapterConfig> {
   const credentials = azureFoundryCredentials(apiKeys);
   if (!credentials) {
-    throw new Error(
+    throw new UserFacingError(
       "Azure AI Foundry API key is not configured. Set AZURE_FOUNDRY_API_KEY and AZURE_FOUNDRY_ENDPOINT or add a user Azure AI Foundry key and endpoint.",
     );
   }
@@ -455,7 +455,7 @@ async function createCustomEndpointAdapter(
 ): Promise<AiSdkAdapterConfig> {
   const credentials = customEndpointCredentials(apiKeys);
   if (!credentials) {
-    throw new Error(
+    throw new UserFacingError(
       "OpenAI-compatible endpoint is not configured. Add an API key and base URL in Settings → Bring Your Own Keys.",
     );
   }

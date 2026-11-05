@@ -315,11 +315,12 @@ describe("xAI adapter", () => {
     expect(body.model).toBe("grok-4.3");
   });
 
-  it("reports a missing key", async () => {
+  it("reports a missing key as the user's configuration, not our failure", async () => {
     vi.stubEnv("XAI_API_KEY", "");
-    await expect(
-      completeWithProvider({ model: "xai/grok-4.3", user: "x" }),
-    ).rejects.toThrow(/xAI API key is not configured/);
+    const failure = completeWithProvider({ model: "xai/grok-4.3", user: "x" });
+    await expect(failure).rejects.toThrow(/xAI API key is not configured/);
+    // A plain Error read as a bug: "Failure in application" (MIKE-BACKEND-6M).
+    await expect(failure).rejects.toBeInstanceOf(UserFacingError);
   });
 });
 
