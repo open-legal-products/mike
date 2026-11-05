@@ -12,14 +12,27 @@ import { nodeVersionProblem, parseFloor } from "../../scripts/check-node-version
 // >=22.19.0) under a declared ">=22" crashed the API at boot on Node 22.14,
 // where zlib.createZstdDecompress does not exist (MIKE-BACKEND-3R, MIK-129).
 //
-// Two kinds of locked package are not held to this:
-//   - devDependencies: they never run in a deployment. (Frontend test
-//     tooling, jsdom and its CSS helpers, currently wants 22.22.2.)
+// Dev dependencies are held to it too: the 3R events came from `npm run dev`
+// (tsx), and next/typescript/tailwind run inside the frontend image's
+// `next build`. Two exceptions:
+//   - DEV_ONLY_ABOVE_FLOOR: frontend unit-test tooling (jsdom and its CSS and
+//     DOM helpers) that wants 22.22.2. It runs only under Vitest, never in a
+//     deployment or a build, so it may need more than the floor. Anything
+//     added here must be test-only, by name.
 //   - platform binaries (entries with `os` / `cpu`): npm skips them on every
 //     other platform, and their engines are often stale copies of the parent
 //     package's (sharp-win32-ia32 still says ^20.9.0).
 const repoRoot = path.resolve(__dirname, "../../..");
 const PACKAGES = [".", "backend", "frontend", "word-addin"];
+const DEV_ONLY_ABOVE_FLOOR = new Set([
+  "jsdom",
+  "w3c-xmlserializer",
+  "@asamuzakjp/css-color",
+  "@asamuzakjp/dom-selector",
+]);
+
+/** "node_modules/a/node_modules/@s/b" -> "@s/b" */
+const packageName = (lockPath: string) => lockPath.split("node_modules/").pop() ?? lockPath;
 
 type LockEntry = {
   dev?: boolean;
@@ -41,7 +54,7 @@ describe("Node engines floor", () => {
   });
 
   it.each(PACKAGES)(
-    "%s: the declared floor runs every runtime dependency in its lockfile",
+    "%s: the declared floor runs every dependency in its lockfile",
     (dir) => {
       const range = declaredRange(dir);
       const floor = range ? semver.minVersion(range)?.version : undefined;
@@ -52,7 +65,8 @@ describe("Node engines floor", () => {
       );
       const tooOld = Object.entries(lock.packages).flatMap(([name, entry]) => {
         const needs = Array.isArray(entry.engines) ? undefined : entry.engines?.node;
-        if (!name || !needs || entry.dev || entry.os || entry.cpu) return [];
+        if (!name || !needs || entry.os || entry.cpu) return [];
+        if (entry.dev && DEV_ONLY_ABOVE_FLOOR.has(packageName(name))) return [];
         if (!semver.validRange(needs)) return [];
         return semver.satisfies(floor!, needs) ? [] : [`${name} needs node ${needs}`];
       });
@@ -98,4 +112,3 @@ describe("backend refuses an unsupported Node", () => {
     else expect(problem).toMatch(new RegExp(`needs Node >=22\\.19\\.0 .* this is Node ${version.replace(/\./g, "\\.")}`));
   });
 });
-
