@@ -62,7 +62,7 @@ vi.mock("@/app/contexts/ChatHistoryContext", () => ({
     }),
 }));
 import { useAssistantChat } from "./useAssistantChat";
-import { clearToasts, useToasts, type ToastRecord } from "@/shared/ui/ToastUI";
+import { clearToasts, useToasts, type ToastRecord } from "@mike/ui";
 
 const fetchMock = vi.fn();
 

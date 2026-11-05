@@ -10,7 +10,11 @@ import {
   DropdownLabel,
   DropdownSeparator,
   DropdownTrigger,
-} from "@/shared/ui/dropdown";
+  REASONING_LEVELS,
+  REASONING_LEVEL_LABELS,
+  orderedModelGroups,
+  GlassCardUI,
+} from "@mike/ui";
 import {
   useUserProfile,
   type PreferenceField,
@@ -24,18 +28,12 @@ import {
   canonicalModelId,
   routerSelections,
   type ModelOption,
-} from "@/shared/lib/modelCatalog";
-import {
-  REASONING_LEVELS,
-  REASONING_LEVEL_LABELS,
-  orderedModelGroups,
-} from "@/shared/ui/ModelToggleUI";
+} from "@mike/client";
 import { isModelAvailable } from "@/app/lib/modelAvailability";
 import {
   SettingsDescription,
   SettingsLabel,
 } from "@/app/components/settings/SettingsText";
-import { GlassCardUI } from "@/shared/ui/GlassCardUI";
 import { SettingsHeading } from "@/app/components/settings/SettingsHeading";
 import { SettingsRow } from "@/app/components/settings/SettingsRow";
 import { SETTINGS_CONTROL_CLASS } from "@/app/components/settings/SettingsTextInput";

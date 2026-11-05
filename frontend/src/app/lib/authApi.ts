@@ -2,7 +2,7 @@ import {
     reportApiFailure,
     reportNetworkFailure,
 } from "@/app/lib/errorReporting";
-import { isAbortError } from "@/shared/lib/userError";
+import { isAbortError } from "@mike/client";
 
 export interface AuthUser {
     id: string;

@@ -8,11 +8,7 @@
 
 import { recordAudit, type AuditEventInput } from "../../lib/audit";
 import type { Db } from "../../lib/supabase";
-import type {
-  Playbook,
-  PlaybookImportWork,
-  PlaybookReviewWork,
-} from "./playbooks.operations";
+import type { Playbook, PlaybookImportWork, PlaybookReviewWork } from "./playbooks.types";
 
 export const PLAYBOOK_AUDIT_SURFACE = "playbooks";
 

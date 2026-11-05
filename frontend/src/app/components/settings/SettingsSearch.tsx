@@ -8,7 +8,7 @@ import {
     DROPDOWN_ROWS_CLASS,
     DropdownButton,
     DropdownSurface,
-} from "@/shared/ui/dropdown";
+} from "@mike/ui";
 import {
     searchSettings,
     type SettingsSearchEntry,

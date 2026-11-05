@@ -35,9 +35,13 @@ function stackPaths(app) {
     backendDir: app.isPackaged
       ? path.join(base, "app", "backend")
       : path.join(repoRoot, "backend"),
+    // Next traces the standalone server from the repository root (the
+    // Turbopack root in frontend/next.config.ts), so the server sits under a
+    // frontend/ directory inside the standalone output, beside the traced
+    // node_modules it resolves through.
     frontendStandalone: app.isPackaged
-      ? path.join(base, "app", "frontend")
-      : path.join(repoRoot, "frontend", ".next", "standalone"),
+      ? path.join(base, "app", "frontend", "frontend")
+      : path.join(repoRoot, "frontend", ".next", "standalone", "frontend"),
   };
 }
 

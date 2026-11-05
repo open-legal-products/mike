@@ -41,9 +41,9 @@ vi.mock("@sentry/react", () => ({
 }));
 
 import * as Sentry from "@sentry/react";
-import { diagnosticEvent } from "@/shared/lib/sentryPrivacy";
-import { clearToasts } from "@/shared/lib/toastStore";
-import { UserVisibleError } from "@/shared/lib/userError";
+import { diagnosticEvent } from "@mike/client";
+import { clearToasts } from "@mike/client";
+import { UserVisibleError } from "@mike/client";
 import {
     isReported,
     reportApiFailure,

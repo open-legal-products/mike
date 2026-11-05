@@ -22,13 +22,13 @@ import type { Db } from "../../lib/supabase";
 import {
     getApiKeyStatusFor,
     getEffectiveApiKeyStatus,
-    normalizeRouterModels,
     orgKeyOwner,
     saveApiKeyForOwner,
     setApiKeyEnabledFor,
     type ApiKeyProvider,
     type ApiKeyStatus,
-} from "../user/user.service";
+} from "../../lib/providerCredentials/index";
+import { normalizeRouterModels } from "../../lib/routerModelValidation";
 
 export type OrgApiKeySettings = {
     /** Which providers the organization has a usable key for. No secrets. */
