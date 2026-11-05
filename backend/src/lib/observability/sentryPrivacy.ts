@@ -51,7 +51,11 @@ export const DIAGNOSTIC_VOCABULARY: Record<string, ReadonlySet<string>> = Object
   diagnostics_version: '2',
   build_mode: 'development production test',
   failure_code: 'ECONNREFUSED ECONNRESET EADDRINUSE ETIMEDOUT ENOTFOUND EHOSTUNREACH ENETUNREACH EAI_AGAIN ENOENT EACCES EPERM ENOSPC EPIPE ERR_SERVER_NOT_RUNNING UND_ERR_CONNECT_TIMEOUT UND_ERR_HEADERS_TIMEOUT UND_ERR_SOCKET CERT_HAS_EXPIRED DEPTH_ZERO_SELF_SIGNED_CERT AccessDenied InvalidAccessKeyId SignatureDoesNotMatch NoSuchBucket NoSuchKey SlowDown ServiceUnavailable RequestTimeout 23505 23503 23514 22003 22P02 28P01 28000 42P10 42883 42501 42P01 42703 53300 57014 40001 40P01 55P03 53100 53200 57P01 57P03 08001 08003 08006 08P01 PGRST000 PGRST001 PGRST100 PGRST116 PGRST200 PGRST201 PGRST202 PGRST203 PGRST204 PGRST205 configuration_invalid signing_key_invalid conversion_unavailable conversion_timeout conversion_failed fetch_failed',
-  provider_error: 'invalid_api_key api_call retry_exhausted',
+  provider_error: 'invalid_api_key api_call retry_exhausted stream_provider',
+  // The `error.type` model providers put in an error body (Anthropic, OpenAI and the gateways that copy them).
+  provider_error_type: 'invalid_request_error authentication_error permission_error not_found_error request_too_large rate_limit_error api_error overloaded_error billing_error timeout_error insufficient_quota server_error',
+  // Why a provider refused a request, matched by PROVIDER_REASONS below; never the provider's text.
+  provider_reason: 'prompt_too_long invalid_image invalid_tool_schema',
   network_state: 'online offline unknown',
   request_origin: 'same-origin cross-origin unknown',
   file_type: 'pdf doc docx odt rtf ppt pptx xls xlsx csv txt html',
@@ -80,6 +84,19 @@ function isRepositoryFrame(filename: string): boolean {
 const LEVELS = new Set('fatal error warning info debug'.split(' '));
 /** Caller fingerprints that replace code-location grouping: one condition, one issue. */
 const PINNED_FINGERPRINTS = new Set(['upstream-unavailable', 'api-unreachable', 'runtime-warning']);
+
+/**
+ * Fixed reasons for a provider's refusal, matched against its error message
+ * locally. Only the reason name leaves the process; the message never does.
+ * A 400 from Anthropic or OpenAI is otherwise "invalid_request_error" for
+ * every cause, which put a prompt that outgrew the context window, a broken
+ * image and a malformed tool schema in one unexplained issue.
+ */
+const PROVIDER_REASONS: Array<[string, RegExp]> = [
+  ['prompt_too_long', /prompt is too long|context(?:[ _]length|[ _]window)|maximum context|too many (?:input )?tokens|input is too long|exceeds the maximum number of tokens/i],
+  ['invalid_image', /\bimage\b.*\b(?:invalid|could not|unable to|unsupported|not supported|not valid|exceeds|too large)|could not process image|invalid base64/i],
+  ['invalid_tool_schema', /\btools?\.\d+|input_schema|invalid schema for function|function parameters|tool[^.]*\bschema\b/i],
+];
 
 function record(value: unknown): RecordValue {
   return value !== null && typeof value === 'object' && !Array.isArray(value) ? value as RecordValue : {};
@@ -180,8 +197,16 @@ export function diagnosticErrorTags(error: unknown): Record<string, string | num
       }
       const providerError = item.name === 'InvalidApiKeyError' ? 'invalid_api_key'
         : item.name === 'AI_APICallError' ? 'api_call'
-          : item.name === 'AI_RetryError' ? 'retry_exhausted' : undefined;
+          : item.name === 'AI_RetryError' ? 'retry_exhausted'
+            : item.name === 'AI_StreamProviderError' ? 'stream_provider' : undefined;
       if (providerError && tags.provider_error === undefined) tags.provider_error = providerError;
+      if (item.name === 'AI_APICallError' || item.name === 'AI_StreamProviderError') {
+        // The SDK's parsed error body (`data.error.type`) or the stream error's own `type`; fixed protocol values only.
+        const providerType = record(record(item.data).error).type ?? item.type;
+        if (typeof providerType === 'string' && ENUMS.provider_error_type!.has(providerType) && tags.provider_error_type === undefined) tags.provider_error_type = providerType;
+        const reason = typeof item.message === 'string' ? PROVIDER_REASONS.find(([, pattern]) => pattern.test(item.message as string))?.[0] : undefined;
+        if (reason && tags.provider_reason === undefined) tags.provider_reason = reason;
+      }
       if (item.code === 'sentry_test') tags.diagnostic_test = 'true';
       // AppError identity: the thrower's own static label, never a dependency property.
       // The deepest kind wins: a wrapper names the operation that failed, the
@@ -265,7 +290,7 @@ export function diagnosticEvent(value: unknown): RecordValue {
   for (const key of ['release', 'environment']) {
     if (typeof event[key] === 'string' && /^[\w@.+/-]{1,100}$/.test(event[key])) out[key] = event[key];
   }
-  const description = [tags.operation, tags.component ?? 'application', tags.stage, tags.error_kind, tags.warning_name, tags.warning_code, tags.http_method, tags.http_route, tags.http_status, tags.error_code, tags.office_code, tags.failure_code, tags.storage_operation, tags.provider_error, tags.dependency_status].filter(v => v !== undefined).join(' / ');
+  const description = [tags.operation, tags.component ?? 'application', tags.stage, tags.error_kind, tags.warning_name, tags.warning_code, tags.http_method, tags.http_route, tags.http_status, tags.error_code, tags.office_code, tags.failure_code, tags.storage_operation, tags.provider_error, tags.provider_error_type, tags.provider_reason, tags.dependency_status].filter(v => v !== undefined).join(' / ');
   const values = record(event.exception).values;
   const exceptionValues = Array.isArray(values) ? values : [];
   // attachStacktrace gives captureMessage() a synthetic exception (mechanism
@@ -305,7 +330,9 @@ export function diagnosticEvent(value: unknown): RecordValue {
   // A process warning is one issue per name and code: the same deprecation
   // raised from two modules is one thing to fix, and the stack says where.
   out.fingerprint = pinned === 'runtime-warning' ? [pinned, String(tags.warning_name ?? ''), String(tags.warning_code ?? '')]
-    : pinned ? [pinned, String(tags.component ?? 'application'), String(tags.failure_code ?? '')] : ['{{ default }}', String(tags.operation ?? ''), String(tags.error_kind ?? ''), String(tags.job_kind ?? ''), String(tags.component ?? 'application'), String(tags.stage ?? ''), String(tags.http_route ?? ''), String(tags.http_status ?? ''), String(tags.failure_code ?? ''), String(tags.file_type ?? ''), String(tags.provider_error ?? ''), String(tags.dependency_status ?? ''), String(tags.warning_name ?? ''), String(tags.warning_code ?? '')];
+    : pinned ? [pinned, String(tags.component ?? 'application'), String(tags.failure_code ?? '')] : ['{{ default }}', String(tags.operation ?? ''), String(tags.error_kind ?? ''), String(tags.job_kind ?? ''), String(tags.component ?? 'application'), String(tags.stage ?? ''), String(tags.http_route ?? ''), String(tags.http_status ?? ''), String(tags.failure_code ?? ''), String(tags.file_type ?? ''), String(tags.provider_error ?? ''), String(tags.dependency_status ?? ''), String(tags.warning_name ?? ''), String(tags.warning_code ?? ''),
+      // Appended only when present, so every fingerprint without them (every existing issue) is unchanged.
+      ...[tags.provider_error_type, tags.provider_reason].filter(v => v !== undefined).map(String)];
   // The path the request took before it failed: stage names only (our
   // labels, pushed by markStage), newest last, never a message or data.
   const crumbs = Array.isArray(event.breadcrumbs) ? event.breadcrumbs : [];
