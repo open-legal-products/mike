@@ -56,7 +56,16 @@ vi.mock("@/app/lib/mikeApi", async (importOriginal) => ({
     saveApiKey: (...args: unknown[]) => saveApiKey(...args),
 }));
 
+vi.mock("@/app/hooks/useOllamaModels", () => ({ useOllamaModels: () => [] }));
+vi.mock("@/app/hooks/useConfiguredModels", async (importOriginal) => ({
+    ...(await importOriginal<typeof import("@/app/hooks/useConfiguredModels")>()),
+    useConfiguredModels: () => [],
+}));
+
+import { useState } from "react";
 import { UserProfileProvider, useUserProfile } from "./UserProfileContext";
+import { useModelApiKeys } from "@/app/hooks/useModelApiKeys";
+import { ModelToggle } from "@/app/components/assistant/ModelToggle";
 import { MikeApiError } from "@/app/lib/mikeApi";
 import { subscribeToTabularChatSettingsUpdates } from "@/app/lib/tabularChatSettingsEvents";
 
@@ -521,39 +530,76 @@ describe("UserProfileProvider failure reporting", () => {
 });
 
 function ProfileSummary() {
-    const { profile, loading, apiKeysDegraded } = useUserProfile();
+    const { profile, loading, apiKeysDegraded, reloadProfile, updateDisplayName } = useUserProfile();
+    const apiKeys = useModelApiKeys();
+    const [saved, setSaved] = useState<string>("");
     if (loading) return null;
     return (
         <>
             <span data-testid="loaded">yes</span>
             <span data-testid="name">{profile?.displayName ?? "none"}</span>
             <span data-testid="degraded">{String(apiKeysDegraded)}</span>
+            <span data-testid="keys">{apiKeys === undefined ? "unknown" : "known"}</span>
+            <span data-testid="saved">{saved}</span>
+            <button type="button" onClick={() => void reloadProfile()}>reload</button>
+            <button
+                type="button"
+                onClick={() => void updateDisplayName("Grace").then((ok) => setSaved(String(ok)))}
+            >
+                rename
+            </button>
+            <ModelToggle value="gemini-3.8-flash" onChange={() => {}} apiKeys={apiKeys} />
         </>
     );
 }
 
 describe("UserProfileProvider when the server omits apiKeyStatus", () => {
-    it("shows the real profile, treats key availability as unknown and reports nothing", async () => {
-        // Sentry MIKE-FRONTEND-4H: an older or forked backend answered 200
-        // without `apiKeyStatus`; normalising it threw, the throw was filed
-        // as a fault and the user got the placeholder profile.
-        const withoutKeyStatus: Partial<ReturnType<typeof apiProfile>> = apiProfile(false);
-        delete withoutKeyStatus.apiKeyStatus;
-        getUserProfile.mockResolvedValue(withoutKeyStatus);
+    // Sentry MIKE-FRONTEND-4H: a profile answered 200 without
+    // `apiKeyStatus`; normalising it threw, the throw was filed as a fault
+    // and the user got the placeholder profile. Every Mike backend sends the
+    // field, so the sender was a forked server or a proxy/misroute.
+    const withoutKeyStatus = () => {
+        const body: Partial<ReturnType<typeof apiProfile>> = apiProfile(false);
+        delete body.apiKeyStatus;
+        return body;
+    };
+    const renderProfile = () =>
         render(
             <UserProfileProvider>
                 <ProfileSummary />
                 <ToastViewportUI />
             </UserProfileProvider>,
         );
+    const missingKeyStatusWarning = [
+        expect.objectContaining({ message: "profile missing apiKeyStatus" }),
+        {
+            level: "warning",
+            tags: { component: "profile", error_kind: "missing_api_key_status" },
+        },
+    ];
+
+    it.each([
+        ["missing", withoutKeyStatus],
+        ["malformed", () => ({ ...apiProfile(false), apiKeyStatus: "enabled" })],
+    ])("shows the real profile when the key status is %s, fails open and warns Sentry once", async (_case, body) => {
+        getUserProfile.mockResolvedValue(body());
+        renderProfile();
 
         await screen.findByTestId("loaded");
-        expect(reportError).not.toHaveBeenCalled();
         expect(screen.queryByRole("alert")).toBeNull();
         expect(screen.getByTestId("name")).toHaveTextContent("Ada");
         // Pickers fail open, as after a failed fetch: a server that omits
         // the status cannot vouch for which providers have keys.
         expect(screen.getByTestId("degraded")).toHaveTextContent("true");
         expect(getUserProfile).toHaveBeenCalledTimes(1);
+        // One warning, no payload: the error is fixed text and the context
+        // carries only the level and two static tags.
+        expect(reportError).toHaveBeenCalledTimes(1);
+        expect(reportError).toHaveBeenCalledWith(...missingKeyStatusWarning);
+
+        // A reload on the same page does not report it again.
+        fireEvent.click(screen.getByRole("button", { name: "reload" }));
+        await waitFor(() => expect(getUserProfile).toHaveBeenCalledTimes(2));
+        expect(reportError).toHaveBeenCalledTimes(1);
     });
 });
