@@ -12,22 +12,24 @@ import { createHash } from "node:crypto";
  *
  * This fetch wrapper is installed on the per-request clients. It recognises
  * the refresh call (`POST /auth/v1/token?grant_type=refresh_token`) and lets
- * one network request through for each (GoTrue URL, request body). Every
- * concurrent caller, and any caller that arrives within REUSE_WINDOW_MS of a
- * successful refresh, receives its own copy of that one response: the same
- * rotated session, which every request then writes back as the same cookie.
- * A refused or failed refresh is shared only with callers already waiting.
- * Other requests pass through untouched.
+ * one network request through for each (GoTrue URL, request body) at a time.
+ * Every caller that arrives while that request is running receives its own
+ * copy of its response: the same rotated session, which every request then
+ * writes back as the same cookie, or the same refusal. Once it settles it is
+ * forgotten, so a caller that arrives later goes to GoTrue, which decides
+ * whether the old token is still good (its refresh-token reuse interval, its
+ * sign-out revocation). Nothing here serves a session from memory after the
+ * fact. Other requests pass through untouched.
  *
- * This is per process. Instances behind a load balancer each refresh once,
- * which GoTrue's refresh-token reuse interval absorbs.
+ * This is per process. Instances behind a load balancer each refresh once.
+ * GoTrue may refuse the second (409 while the first is still running), and
+ * that process's requests then end in a clean 401 session_expired.
  */
-const REUSE_WINDOW_MS = 10_000;
-
 type Outcome = { status: number; statusText: string; headers: [string, string][]; body: string };
 const inflight = new Map<string, Promise<Outcome>>();
 
-function refreshKey(input: Parameters<typeof fetch>[0], init?: RequestInit): string | null {
+/** The single-flight key for a refresh call, or null for any other request. */
+export function refreshKey(input: Parameters<typeof fetch>[0], init?: RequestInit): string | null {
   if (init?.method !== "POST" || typeof init.body !== "string") return null;
   const raw = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
   let url: URL;
@@ -58,13 +60,7 @@ export function singleFlightRefreshFetch(base?: typeof fetch): typeof fetch {
       }));
       inflight.set(key, outcome);
       const forget = () => { if (inflight.get(key) === outcome) inflight.delete(key); };
-      outcome.then(
-        (result) => {
-          if (result.status >= 200 && result.status < 300) setTimeout(forget, REUSE_WINDOW_MS).unref();
-          else forget();
-        },
-        forget,
-      );
+      outcome.then(forget, forget);
     }
     const result = await outcome;
     return new Response(result.body, { status: result.status, statusText: result.statusText, headers: result.headers });

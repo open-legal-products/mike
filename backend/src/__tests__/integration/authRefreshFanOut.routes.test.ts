@@ -153,6 +153,21 @@ describe("page-load fan-out with an expired cookie session", () => {
     }
   });
 
+  it("does not hand a finished refresh to a request that arrives later", async () => {
+    const cookie = expiredSessionCookie("late-straggler-token");
+    const [first] = await pageLoad(app, cookie, 1);
+    expect(first!.status).toBe(200);
+
+    // The same old token after the refresh has finished goes to GoTrue,
+    // which decides (this stand-in refuses it as already used; real GoTrue
+    // may still accept it inside its reuse interval). The process does not
+    // replay the rotated session from memory.
+    const late = await request(app).get("/projects").set("Cookie", cookie);
+    expect(refreshCalls).toBe(2);
+    expect(late.status).toBe(401);
+    expect(late.body).toEqual({ code: "session_expired", detail: "Invalid or expired session" });
+  });
+
   it("answers two replicas sharing one session with 200 or a clean 401, never a 500", async () => {
     const replicaA = await apiProcess();
     const replicaB = await apiProcess();
