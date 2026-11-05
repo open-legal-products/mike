@@ -42,9 +42,7 @@ import {
   isOrgOwner,
 } from "@/app/lib/permissions";
 import { userFacingApiError } from "@/app/lib/userFacingError";
-import { GlassCardUI } from "@/shared/ui/GlassCardUI";
-import { MikeIcon } from "@/shared/ui/MikeIconUI";
-import { PillButtonUI } from "@/shared/ui/PillButtonUI";
+import { GlassCardUI, MikeIcon, PillButtonUI } from "@mike/ui";
 import { OrganizationLogoModal } from "./OrganizationLogoModal";
 import { useOrganizationSettings } from "./OrganizationSettingsShell";
 

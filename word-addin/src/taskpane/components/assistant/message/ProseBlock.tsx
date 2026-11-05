@@ -1,5 +1,5 @@
 import React from "react";
-import { EXCERPT_SOURCE_PROPS } from "@mike/response-selection-menu-ui";
+import { EXCERPT_SOURCE_PROPS } from "@mike/ui";
 import { Markdown } from "../../../../shared/chat/Markdown";
 import { projectCitationMarkdown } from "../../../lib/citations";
 import { useMarkdownCheckpoint } from "../../../lib/markdownCheckpoint";

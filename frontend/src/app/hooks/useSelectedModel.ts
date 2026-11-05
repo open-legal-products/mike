@@ -7,7 +7,7 @@ import {
     isAllowedModelId,
     isRouterModelSelected,
     type RouterSelections,
-} from "@/shared/lib/modelCatalog";
+} from "@mike/client";
 import { isModelAvailable } from "../lib/modelAvailability";
 import type { ApiKeyState } from "../lib/mikeApi";
 

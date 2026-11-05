@@ -4,9 +4,9 @@ import {
     bedrockServiceUrl,
     envBedrockCredentials,
 } from "../../lib/llm/cloudProviders";
-import { getEffectiveApiKeys } from "../user/user.service";
+import { getEffectiveApiKeys } from "../../lib/providerCredentials/index";
 import { catalogFailureReason } from "./models.compatible";
-import type { CatalogModel, CatalogResult } from "./models.service";
+import type { CatalogModel, CatalogResult } from "./models.types";
 
 function modelId(value: unknown): value is string {
     return typeof value === "string" && value.length > 0 && value.length <= 200 && !/\s/.test(value);

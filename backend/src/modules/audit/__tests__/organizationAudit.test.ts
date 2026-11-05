@@ -5,7 +5,7 @@ import {
     loadUserExportArtifact,
     startUserExport,
     validateExportRequest,
-} from "../../user/user.export";
+} from "../../../application/exports/requestExport";
 
 const mocks = vi.hoisted(() => ({
     role: "admin" as string | null,

@@ -1,5 +1,5 @@
 import Link from "next/link";
-import { MikeIcon } from "@/shared/ui/MikeIconUI";
+import { MikeIcon } from "@mike/ui";
 
 interface SiteLogoProps {
     size?: "sm" | "md" | "lg" | "xl";
