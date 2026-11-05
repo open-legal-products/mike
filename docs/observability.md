@@ -318,7 +318,7 @@ add free-form text just to restore a more detailed exception message.
 Backend (`backend/.env`, read at process start):
 
 ```
-SENTRY_DISABLED=false                  # true = send nothing
+SENTRY_DISABLED=                       # empty = image default; true = off; false = explicitly on
 SENTRY_DSN=                            # your own Sentry; empty = image default, then Mike project
 SENTRY_INSTALL=                        # "official" only on Mike's own deployment
 SENTRY_ENVIRONMENT=production          # defaults to self-hosted
@@ -347,7 +347,7 @@ published images therefore need no build-time configuration at all:
 
 ```
 # root .env (Docker Compose); the Next server reads these at runtime
-SENTRY_DISABLED=false                  # true = nothing leaves, browser included
+SENTRY_DISABLED=                       # empty = image default; true = off; false = explicitly on
 FRONTEND_SENTRY_DSN=https://<key>@<org>.ingest.sentry.io/<project>
 SENTRY_ENVIRONMENT=production
 SENTRY_INSTALL=                        # "official" only on Mike's own deployment
@@ -362,7 +362,8 @@ Check which rule applied on a running deployment: the boot log line
 answers `{"reports":"disabled"|"runtime"|"build"|"default"}` (with
 `"disabledBy":"runtime"|"build"` when off) and never the DSN. An explicit
 runtime `SENTRY_DISABLED` (`true` or `false`) always wins over the image's baked
-default; the shipped `.env.example` sets `false`.
+default; the shipped `.env.example` leaves it empty to preserve that default,
+including a fork image's baked opt-out.
 
 The `/monitoring` route is not an open relay: the destination is the server's
 own configuration, the client's envelope header is overwritten with it, and a
@@ -397,8 +398,14 @@ Where the parts come from:
 valid but visibly not a release, and the backend warns about it at boot in
 production. Set `MIKE_VERSION` and `GIT_SHA` as build arguments for images you
 build yourself; leave them unset at runtime when using published images so
-the baked identity is preserved. `SENTRY_RELEASE` overrides the whole string
-when set; it must not contain customer information.
+the baked identity is preserved. Runtime `SENTRY_RELEASE` overrides the whole
+string for the backend and Next server only. In a pulled web image the browser
+keeps its build-time release (`NEXT_PUBLIC_SENTRY_RELEASE`, or the baked
+version and commit); the tunnel does not rewrite it. Changing the browser's
+release requires rebuilding with `NEXT_PUBLIC_SENTRY_RELEASE` (Compose passes
+`SENTRY_RELEASE` to that build argument). Leave runtime `SENTRY_RELEASE` unset
+on published images to keep all runtimes on their baked release. Release
+overrides must not contain customer information.
 
 Each release uses the original image digests. The workflow retains each build
 in GHCR as `mike-{backend,frontend}:build-<version>`, with the source commit and
@@ -407,7 +414,9 @@ the image is absent; authentication, network and unexpected registry errors
 stop the run. An existing version must match its saved build exactly.
 
 All refs share one workflow concurrency group so publications cannot interleave
-their `latest` or `main` updates. Only main-branch builds update `main`. After
+their `latest` or `main` updates. `queue: max` preserves up to 100 pending runs;
+additional runs beyond that limit are canceled and must be rerun. Only
+main-branch builds update `main`. After
 both builds succeed, publication attaches both immutable version tags, then
 the floating tags, then finalizes the Sentry release for both projects. Registry
 writes across repositories are not atomic: an interrupted publication can leave
@@ -569,7 +578,7 @@ fork publishes to `ghcr.io/<owner>/mike-*` with no setup, and:
 | --- | --- | --- |
 | `open-legal-products` | built-in Mike DSNs | required; missing configuration stops publication before building |
 | fork with `FORK_SENTRY_DSN_FRONTEND` and `FORK_SENTRY_DSN_BACKEND` variables | the fork's own projects (baked as defaults, overridable at runtime) | uploaded to the fork's org when its own secret and variables are set |
-| fork without them | reporting disabled in every runtime (`SENTRY_DISABLED=true` baked as the image default; an explicit runtime value wins, and the stock `.env.example` sets `SENTRY_DISABLED=false`, so a fork's operators set it to `true`) | none |
+| fork without them | reporting disabled in every runtime (`SENTRY_DISABLED=true` baked as the image default; the stock `.env.example` preserves it, while explicit runtime `false` re-enables reporting) | none |
 
 Self-hosted Sentry servers (`SENTRY_URL`) are not supported by the workflow.
 The Word add-in image is not published (its build bakes the deployment's
