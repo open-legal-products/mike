@@ -212,6 +212,30 @@ export function validateRuntimeConfiguration(
 
   if (session.url) parsedUrl(session.url, "SUPABASE_URL", errors);
 
+  // The .env.example templates contain placeholder values that satisfy a
+  // non-emptiness check. A deployment that copies the template verbatim then
+  // runs with publicly known secrets: DOWNLOAD_SIGNING_SECRET signs download
+  // and blob capability tokens, and USER_API_KEYS_ENCRYPTION_SECRET derives
+  // the AES-256-GCM key that protects user-supplied provider API keys at
+  // rest. Reject the exact placeholders and anything too short to be a real
+  // secret; leave unset values alone because the consuming code fails on
+  // first use and some local setups do not exercise those features.
+  const secretChecks: Array<[string, string]> = [
+    ["DOWNLOAD_SIGNING_SECRET", "replace-with-a-random-32-byte-hex-string"],
+    ["USER_API_KEYS_ENCRYPTION_SECRET", "your-long-random-secret"],
+  ];
+  for (const [name, placeholder] of secretChecks) {
+    const value = env[name]?.trim();
+    if (!value) continue;
+    if (value === placeholder) {
+      errors.push(
+        `${name} is still set to the .env.example placeholder; generate a unique value (openssl rand -hex 32)`,
+      );
+    } else if (value.length < 32) {
+      errors.push(`${name} must contain at least 32 characters`);
+    }
+  }
+
   if (env.AUTH_HANDOFF_ENCRYPTION_SECRET?.trim()) {
     if (env.AUTH_HANDOFF_ENCRYPTION_SECRET.trim().length < 32) {
       errors.push(
