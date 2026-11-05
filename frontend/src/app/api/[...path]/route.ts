@@ -4,6 +4,7 @@ import { diagnosticRoute } from "@mike/client";
 import type { NextRequest } from "next/server";
 import {
     UPSTREAM_UNAVAILABLE_FINGERPRINT,
+    forwardableRequestHeaders,
     upstreamReportWindow,
     upstreamUnreachableCode,
 } from "./upstreamFailure";
@@ -36,10 +37,7 @@ async function proxy(request: NextRequest, context: RouteContext) {
         const upstreamUrl = new URL(`${backendOrigin()}${requestPath}`);
         upstreamUrl.search = request.nextUrl.search;
 
-        const headers = new Headers(request.headers);
-        headers.delete("host");
-        headers.delete("connection");
-        headers.delete("content-length");
+        const headers = forwardableRequestHeaders(request.headers);
         headers.set("x-forwarded-host", request.nextUrl.host);
         headers.set(
             "x-forwarded-proto",

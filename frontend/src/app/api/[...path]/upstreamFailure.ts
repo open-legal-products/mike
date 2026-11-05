@@ -23,6 +23,43 @@ const UNREACHABLE_CODES = new Set([
     "EPIPE",
 ]);
 
+/**
+ * Hop-by-hop headers (RFC 9110 section 7.6.1) describe one connection, not
+ * the request, so a proxy must not forward them. undici also refuses some of
+ * them outright: a browser or client that sends `Expect: 100-continue` made
+ * every proxied request throw NotSupportedError, filed as a 502
+ * (MIKE-FRONTEND-3M). `host` and `content-length` are recomputed by fetch.
+ */
+const HOP_BY_HOP_HEADERS = [
+    "connection",
+    "keep-alive",
+    "proxy-authenticate",
+    "proxy-authorization",
+    "proxy-connection",
+    "te",
+    "trailer",
+    "transfer-encoding",
+    "upgrade",
+    "expect",
+    "host",
+    "content-length",
+];
+
+/** The client's headers minus everything that belongs to its connection. */
+export function forwardableRequestHeaders(incoming: Headers): Headers {
+    const headers = new Headers(incoming);
+    // Headers the client named in its own `Connection` header are hop-by-hop too.
+    const named = (incoming.get("connection") ?? "")
+        .split(",")
+        .map((name) => name.trim().toLowerCase())
+        .filter(Boolean);
+    for (const name of [...HOP_BY_HOP_HEADERS, ...named]) headers.delete(name);
+    for (const name of [...headers.keys()]) {
+        if (name.startsWith("proxy-")) headers.delete(name);
+    }
+    return headers;
+}
+
 /** The pinned Sentry fingerprint shared by every unreachable-backend report. */
 export const UPSTREAM_UNAVAILABLE_FINGERPRINT = "upstream-unavailable";
 
