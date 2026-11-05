@@ -1,6 +1,8 @@
 import { inspect } from "node:util";
 import { describe, expect, it, vi } from "vitest";
 import { diagnosticErrorTags } from "../../../lib/observability/sentryPrivacy";
+import { NonRetryableJobError } from "../../../lib/dbq/runner";
+import { InvalidApiKeyError } from "../../../lib/llm/apiKeyErrors";
 import type { StreamChatParams } from "../../../lib/llm";
 import {
   buildMemoryCuratorTranscript,
@@ -8,6 +10,7 @@ import {
   MEMORY_CURATOR_WRITE_TOOL,
   memoryCuratorModelForChat,
   matchesLatestConversationActivity,
+  memoryJobFailure,
   memoryScopeFailure,
   memoryScopeFailureCause,
   runMemoryCuratorScope,
@@ -766,6 +769,47 @@ describe("memoryScopeFailureCause", () => {
     expect(diagnosticErrorTags(failure)).toEqual({
       error_kind: "memory.consolidation_failed",
     });
+  });
+});
+
+describe("memoryJobFailure", () => {
+  const provider = (statusCode: number) =>
+    Object.assign(new Error("SECRET provider text"), { name: "AI_APICallError", statusCode });
+
+  it("stops retrying a rejected key and sends nothing (MIKE-BACKEND-1W)", () => {
+    // What runMemoryCuratorScope throws for a key the provider rejected: the
+    // scope failure keeps only the class name, not the InvalidApiKeyError.
+    const scopeFailure = memoryScopeFailure(new InvalidApiKeyError("Anthropic"));
+    const failure = memoryJobFailure(scopeFailure);
+    expect(failure).toBeInstanceOf(NonRetryableJobError);
+    expect((failure as NonRetryableJobError).reportLevel).toBeNull();
+    expect(diagnosticErrorTags(failure)).toMatchObject({
+      error_kind: "memory.consolidation_failed",
+      provider_error: "invalid_api_key",
+    });
+    expect(inspect(failure, { depth: 6 })).not.toContain("SECRET");
+  });
+
+  it.each([
+    [401, null],
+    [402, null],
+    [400, "error"],
+  ] as const)("stops retrying a provider %i, reported at %s", (status, level) => {
+    const failure = memoryJobFailure(memoryScopeFailure(provider(status)));
+    expect(failure).toBeInstanceOf(NonRetryableJobError);
+    expect((failure as NonRetryableJobError).reportLevel).toBe(level);
+  });
+
+  it.each([429, 503])("keeps a provider %i retryable", (status) => {
+    const failure = memoryJobFailure(memoryScopeFailure(provider(status)));
+    expect(failure).not.toBeInstanceOf(NonRetryableJobError);
+    expect(failure.message).toBe("Memory curator scope failed");
+  });
+
+  it("keeps a failure that is not the provider's retryable", () => {
+    expect(memoryJobFailure(memoryScopeFailure(new Error("db down")))).not.toBeInstanceOf(
+      NonRetryableJobError,
+    );
   });
 });
 

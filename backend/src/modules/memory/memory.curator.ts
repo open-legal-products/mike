@@ -15,6 +15,8 @@ import {
   type UserModelSettings,
 } from "../user/user.service";
 import { DbJobDeferredError, type Db, type DbJob } from "../../lib/dbq/types";
+import { NonRetryableJobError } from "../../lib/dbq/runner";
+import { providerFailureLevel, providerFailureResponse } from "../../lib/llm/providerErrors";
 import { AppError } from "../../lib/appError";
 import { setOperation } from "../../lib/observability/sentry";
 import { ensureMemoryFile, getMemoryCurrentForFile, MemoryConversationNotQuietError, MemoryDisabledError, MemoryEpochSupersededError, MemoryJobSupersededError, MemoryValidationError, writeMemoryFile, type MemoryFileRow, type MemoryScope, type MemorySurface } from "../../lib/memory/files";
@@ -752,6 +754,39 @@ export function memoryScopeFailure(error: unknown): Error {
   );
 }
 
+/** Provider answers a retry cannot change; 408, 409 and 429 can clear. */
+const RETRYABLE_CLIENT_STATUS = new Set([408, 409, 429]);
+
+/**
+ * The error a consolidation job ends with when a scope failed.
+ *
+ * A provider that refused the request itself — rejected the key (the
+ * scope failure keeps only the name `InvalidApiKeyError`), has no credit,
+ * forbids the model, or answered another 4xx — answers the same way on
+ * every one of the job's attempts. Retrying spent the whole backoff ladder
+ * and filed a warning per attempt (MIKE-BACKEND-1W, -2J, -89), so the job
+ * fails at once instead, at the level providerFailureLevel gives the
+ * provider's condition: not reported for the account's own state, an
+ * error for a 4xx nothing explains. Anything else stays retryable.
+ */
+export function memoryJobFailure(firstScopeFailure: unknown): Error {
+  const failure = memoryScopeFailure(firstScopeFailure);
+  let rejectedKey = false;
+  for (let current = failure.cause, depth = 0; current && depth < 4; depth++) {
+    if ((current as { name?: unknown }).name === "InvalidApiKeyError") rejectedKey = true;
+    current = (current as { cause?: unknown }).cause;
+  }
+  const status = providerFailureResponse(failure)?.status;
+  const refused =
+    rejectedKey ||
+    (status !== undefined && status >= 400 && status < 500 && !RETRYABLE_CLIENT_STATUS.has(status));
+  if (!refused) return failure;
+  return new NonRetryableJobError("Memory curator provider refused the request", {
+    cause: failure,
+    reportLevel: rejectedKey ? null : providerFailureLevel(failure),
+  });
+}
+
 /**
  * The `    at …` lines of the original stack, without its message line.
  * Our own wrappers (a scope failure wrapped again at the job level) hold the
@@ -1420,7 +1455,21 @@ export async function handleMemoryConsolidation(
     db,
     orgId: conversation.orgId,
   });
-  if (!resolved.ok) throw new Error("Memory curator has no available model");
+  if (!resolved.ok) {
+    // The actor has no model this curator may use (no key, every provider
+    // off). Their configuration, not a fault: retrying cannot change it and
+    // reporting it filed "Failure in dbq" with nothing to act on
+    // (MIKE-BACKEND-1Q). Not marked processed, so a later turn — once a model
+    // is available — schedules the conversation again.
+    await setStatus({
+      db,
+      stateId,
+      generation: requestedGeneration,
+      status: "idle",
+    });
+    await refreshJobFileStatuses({ db, job, state, status: "idle" });
+    return { skipped: "no_available_model" };
+  }
   const model = memoryCuratorModelForChat({
     chatModel: resolved.model,
     memoryCuratorModel: settings.memory_curator_model,
@@ -1512,7 +1561,7 @@ export async function handleMemoryConsolidation(
 
   if (scopeFailures > 0) {
     await refreshJobFileStatuses({ db, job, state, status: "scheduled" });
-    throw memoryScopeFailure(firstScopeFailure);
+    throw memoryJobFailure(firstScopeFailure);
   }
 
   const finalized = await setStatus({
