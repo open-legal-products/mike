@@ -934,9 +934,9 @@ describe("Node process warnings", () => {
     ...quietEnv,
     SENTRY_DSN: "https://key@o1.ingest.sentry.io/1",
   } as NodeJS.ProcessEnv;
-  const warning = Object.assign(new Error("The `punycode` module is deprecated"), {
+  const warning = Object.assign(new Error("Buffer() is deprecated due to security and usability issues"), {
     name: "DeprecationWarning",
-    code: "DEP0040",
+    code: "DEP0005",
   });
   // What node:internal/process/warning then hands to console.error.
   const printed =
@@ -955,12 +955,31 @@ describe("Node process warnings", () => {
     expect(scope.setLevel).toHaveBeenCalledWith("warning");
     expect(scope.setTag).toHaveBeenCalledWith("component", "runtime-warning");
     expect(scope.setTag).toHaveBeenCalledWith("warning_name", "DeprecationWarning");
-    expect(scope.setTag).toHaveBeenCalledWith("warning_code", "DEP0040");
+    expect(scope.setTag).toHaveBeenCalledWith("warning_code", "DEP0005");
     expect(scope.setFingerprint).toHaveBeenCalledWith([
       "runtime-warning",
       "DeprecationWarning",
-      "DEP0040",
+      "DEP0005",
     ]);
+  });
+
+  // MIKE-BACKEND-2H: the punycode deprecation comes from transitive
+  // dependencies on every boot and nothing here can act on it.
+  it("does not report the punycode deprecation (DEP0040)", () => {
+    vi.spyOn(console, "log").mockImplementation(() => {});
+    const stderr = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
+    initSentry("api", dsnEnv);
+
+    process.emit(
+      "warning",
+      Object.assign(new Error("The `punycode` module is deprecated"), {
+        name: "DeprecationWarning",
+        code: "DEP0040",
+      }),
+    );
+    stderr.mockRestore();
+
+    expect(Sentry.captureException).not.toHaveBeenCalled();
   });
 
   // MIKE-BACKEND-5F: the warning's stack is all node: frames, so only the

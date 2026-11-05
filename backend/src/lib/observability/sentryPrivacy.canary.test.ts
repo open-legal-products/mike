@@ -53,7 +53,7 @@ it.each(['community', 'official'] as const)('lets no planted client data reach t
   reportError(new JaneDoeNDAError('PRIVATE_PROMPT', { cause: named['Jane_Doe_NDA.pdf']() }), { tags: { component: 'http' } });
   // Process warnings with data in the text, the code and the name.
   reportProcessWarning(Object.assign(new Error('Jane_Doe_NDA.pdf is deprecated'), { name: 'DeprecationWarning', code: 'Jane_Doe_NDA.pdf' }));
-  reportProcessWarning(Object.assign(new Error('Acme Corp v. Doe'), { name: 'Jane_Doe_NDA.pdf', code: 'DEP0040' }));
+  reportProcessWarning(Object.assign(new Error('Acme Corp v. Doe'), { name: 'Jane_Doe_NDA.pdf', code: 'DEP0005', type: 'Jane_Doe_NDA.pdf', emitter: new (class JaneDoeNda {})() }));
   // The console bridge and a best-effort failure.
   console.error('[storage] Jane_Doe_NDA.pdf failed', { key: 'documents/u1/d1/source.pdf', error: new Error('jane@acme-law.example') });
   await bestEffort(Promise.reject(new Error('Acme Corp v. Doe')), { what: 'Jane_Doe_NDA.pdf', extra: { key: 'documents/u1/d1/source.pdf' } });

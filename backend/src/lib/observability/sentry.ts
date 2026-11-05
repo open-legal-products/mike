@@ -1003,6 +1003,10 @@ export function reportProcessWarning(warning: unknown): string | null {
   const name = typeof shaped?.name === "string" ? shaped.name : "Warning";
   const code = typeof shaped?.code === "string" ? shaped.code : undefined;
   if (name === "DeprecationWarning" && process.noDeprecation) return null;
+  // DEP0040 (the `punycode` builtin) is raised by transitive dependencies
+  // (whatwg-url via node-fetch, tr46) on every boot; nothing in this
+  // repository can act on it (MIKE-BACKEND-2H).
+  if (IGNORED_WARNING_CODES.has(code ?? "")) return null;
   return reportError(warning, {
     level: "warning",
     tags: {
@@ -1014,6 +1018,8 @@ export function reportProcessWarning(warning: unknown): string | null {
     fingerprint: ["runtime-warning", name, code ?? ""],
   });
 }
+
+const IGNORED_WARNING_CODES = new Set(["DEP0040"]);
 
 /**
  * A MaxListenersExceededWarning carries the emitter (EventEmitter) or target
