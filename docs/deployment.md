@@ -96,11 +96,14 @@ function, table or column fails. Requests answer `503` with code
 `schema_out_of_date` ("The server's database needs an update"), and the
 backend logs `[http/schema-out-of-date]` or `[schema-out-of-date]` warnings
 naming the PostgREST/SQLSTATE code (`PGRST202` function, `PGRST204` column,
-`PGRST205` table, `42P01` relation). With error reporting on, Sentry shows a
-warning titled `Failure in <operation> / … / schema_out_of_date / <code>`,
+`PGRST205` table, `42P01` relation). With error reporting on, Sentry shows an
+error titled `Failure in <operation> / … / schema_out_of_date / <code>`,
 for example `Failure in maintenance.document_text / stale-sweep /
-schema_out_of_date / PGRST202`; background sweeps report it once per process
-and operation, so its event count does not measure how often it happens. Run
+schema_out_of_date / PGRST202`. Background work (sweeps, upload-session
+deadline extension) sends that event once per process and operation, so its
+event count does not measure how often it happens; while the failures go on,
+the log repeats a `[schema-out-of-date] <operation>: still failing` line at
+most once an hour with the number of failures since the last line. Run
 `backend/scripts/migrate.sh status` to list what is pending, apply it with
 `backend/scripts/migrate.sh up`, reload the PostgREST schema cache (`notify
 pgrst, 'reload schema';`), and restart the backend.

@@ -140,7 +140,7 @@ function recordEvents(): Sentry.ErrorEvent[] {
 
 // MIK-94 / MIKE-BACKEND-3Z: an install whose database lacks a bundled
 // migration failed the same sweep on every run and filed an error each time.
-it("reports a missing database object once per operation, at warning, under schema_out_of_date, and keeps sweeping", async () => {
+it("reports a missing database object once per operation, at error, under schema_out_of_date, and keeps sweeping", async () => {
     const events = recordEvents();
     sweeps.text.mockRejectedValue({ code: "PGRST202", message: PRIVATE });
     sweeps.documents.mockResolvedValue(3);
@@ -153,7 +153,9 @@ it("reports a missing database object once per operation, at warning, under sche
     expect(sweeps.text).toHaveBeenCalledTimes(2);
     expect(sweeps.subagents).toHaveBeenCalledTimes(2);
     expect(events).toHaveLength(1);
-    expect(events[0]!.level).toBe("warning");
+    // Error, not warning: the org's per-project alert rule fires on a new
+    // high-priority issue, and this is the only event the process will send.
+    expect(events[0]!.level).toBe("error");
     expect(events[0]!.tags).toMatchObject({
         operation: "maintenance.document_text",
         component: "stale-sweep",
@@ -162,6 +164,37 @@ it("reports a missing database object once per operation, at warning, under sche
     });
     expect(JSON.stringify(events)).not.toContain(PRIVATE);
     expect(JSON.stringify(warnings)).not.toContain(PRIVATE);
+});
+
+it("keeps reminding in the log, at most once an hour, while the database stays behind", async () => {
+    const events = recordEvents();
+    vi.useFakeTimers({ toFake: ["Date"] });
+    try {
+        vi.setSystemTime(new Date("2026-11-05T09:00:00Z"));
+        sweeps.text.mockRejectedValue({ code: "PGRST202", message: PRIVATE });
+        const db = database();
+        const reminders = () =>
+            warnings.filter(([line]) => String(line).startsWith("[schema-out-of-date] maintenance.document_text: still failing"));
+
+        await runStaleWorkSweep(db as unknown as Db); // first failure: event + log line
+        vi.setSystemTime(new Date("2026-11-05T09:30:00Z"));
+        await runStaleWorkSweep(db as unknown as Db); // inside the hour: silent
+        expect(reminders()).toHaveLength(0);
+
+        vi.setSystemTime(new Date("2026-11-05T10:00:00Z"));
+        await runStaleWorkSweep(db as unknown as Db); // an hour on: one reminder
+        vi.setSystemTime(new Date("2026-11-05T10:10:00Z"));
+        await runStaleWorkSweep(db as unknown as Db); // silent again
+        await Sentry.flush(2000);
+
+        expect(reminders()).toHaveLength(1);
+        expect(String(reminders()[0]![0])).toContain("2 more failure(s)");
+        expect(String(reminders()[0]![0])).toContain("migrate.sh status");
+        expect(events).toHaveLength(1);
+        expect(JSON.stringify(warnings)).not.toContain(PRIVATE);
+    } finally {
+        vi.useRealTimers();
+    }
 });
 
 it("still reports any other sweep failure at error level on every run", async () => {
