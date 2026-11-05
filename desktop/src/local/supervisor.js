@@ -196,6 +196,24 @@ function findSoffice() {
 
 // --- The boot sequence ------------------------------------------------------
 
+/**
+ * The backend runs on Electron's bundled Node (ELECTRON_RUN_AS_NODE), not on
+ * a Node the user installs, so its engines floor is checked against that
+ * Node before the backend is spawned. Without this, an Electron downgrade or
+ * major change below backend/package.json's floor would crash the backend at boot
+ * inside undici (MIKE-BACKEND-3R). Uses the backend's own check script
+ * (staged next to its package.json), so the rule lives in one place.
+ */
+function assertBackendNodeSupported(backendDir, version = process.versions.node) {
+  const { backendNodeRange, nodeVersionProblem } = require(
+    path.join(backendDir, "scripts", "check-node-version.cjs"),
+  );
+  const problem = nodeVersionProblem(version, backendNodeRange(backendDir));
+  if (problem) {
+    throw new Error(`This build runs the backend on Electron's Node. ${problem}`);
+  }
+}
+
 async function startLocalStack(app, status = () => {}) {
   if (running) return { frontendUrl: FRONTEND_URL };
   if (booting) throw new Error("local stack is already starting");
@@ -310,6 +328,7 @@ async function startLocalStack(app, status = () => {}) {
     // 6. Backend — Electron's own binary in Node mode, so no separate
     // runtime ships with the app.
     status("Starting Mike services…");
+    assertBackendNodeSupported(paths.backendDir);
     const soffice = findSoffice();
     spawnService("backend", process.execPath,
       [path.join(paths.backendDir, "dist", "index.js")], {
@@ -419,6 +438,7 @@ function localStackActive() {
 }
 
 module.exports = {
+  assertBackendNodeSupported,
   startLocalStack,
   stopLocalStack,
   localStackRunning,
