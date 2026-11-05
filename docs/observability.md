@@ -160,9 +160,19 @@ however many users hit it.
   |---|---|---|
   | 429, or retries exhausted on a 429 | `chat.provider_rate_limited` | warning |
   | 5xx, a stalled stream, a dropped or timed-out connection (`UND_ERR_SOCKET`, `UND_ERR_BODY_TIMEOUT`, `ECONNRESET`, `fetch failed`, also under a `RetryError`) | `chat.provider_unavailable` | warning |
-  | rejected key (`InvalidApiKeyError`, 401, 403) or no credit (402), when the **deployment's** environment key was sent | `chat.provider_rejected` / `chat.provider_out_of_credits` | warning |
-  | the same, when the **user's own** (BYOK) key was sent | same | not reported; the server log keeps a `console.warn` line |
+  | rejected key (`InvalidApiKeyError`, 401, 403) or no credit (402), when the **deployment's** environment key was sent | `chat.provider_rejected` / `chat.provider_out_of_credits` | warning, **once per process per provider and condition** (later ones log a `console.warn` line) |
+  | the same, when the **user's own** (BYOK) or the organization's key was sent | same | not reported; the server log keeps a `console.warn` line |
   | anything unexplained, including a 400 | `chat.stream_failed` | error |
+
+  Whose key was sent is not read off the key itself: the credential store
+  (`getUserApiKeys` / `getEffectiveApiKeys`) starts from the environment's
+  keys and lays saved ones over them, so `apiKeys.claude` is often the
+  deployment's own key. The store records each key's origin in
+  `UserApiKeys.keySources` (`env`, `user`, `org`), and the adapters in
+  `backend/src/lib/llm/providers.ts` read it. A revoked deployment key fails
+  every turn, title, cell and curator run until it is replaced (a restart),
+  so `modelFailureReportLevel` in `providerFailureReport.ts` reports it once
+  and every surface asks it.
 
   A caller may only make that level quieter (a `UserFacingError` the user is
   shown, such as a missing key or a disallowed model, is a warning), never
@@ -174,7 +184,8 @@ however many users hit it.
   `NonRetryableJobError` ends the job at once with that error's
   `reportLevel`: `"error"` by default, or `null`, which sends nothing and
   logs a warning (the memory curator uses it for a user's key the provider
-  refused, so one revoked key is not one event per retry). Also reported:
+  refused, and for a deployment key already reported, so one revoked key is
+  not one event per retry or per run). Also reported:
   failure-hook crashes, unknown job
   kinds, claim/tick/retention failures, BullMQ conversion/extraction/delivery
   failures, upload-session processing and conversion failures, worker
