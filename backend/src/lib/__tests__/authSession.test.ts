@@ -114,7 +114,7 @@ describe("backend-managed auth cookies", () => {
     const append = vi.fn(() => {
       throw Object.assign(new Error("Cannot set headers after they are sent to the client"), { code: "ERR_HTTP_HEADERS_SENT" });
     });
-    const req = { headers: { cookie: "" }, get: vi.fn().mockReturnValue(undefined) } as never;
+    const req = { headers: { cookie: "" }, get: vi.fn().mockReturnValue(undefined), baseUrl: "/projects", route: { path: "/:id" } } as never;
     const res = { append, setHeader: append, headersSent: true } as never;
 
     createRequestSupabase(req, res);
@@ -125,6 +125,7 @@ describe("backend-managed auth cookies", () => {
     expect(() => options.cookies.setAll([{ name: "mike-session", value: "rotated", options: {} }], { "cache-control": "private" })).not.toThrow();
     expect(append).not.toHaveBeenCalled();
     expect(warn).toHaveBeenCalledOnce();
+    expect(warn.mock.calls[0]![1]).toEqual({ route: "/projects/:id" });
     warn.mockRestore();
   });
 

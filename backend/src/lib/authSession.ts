@@ -10,6 +10,7 @@ import { requestOriginIsWordAddin } from "./origins";
 import { supabaseSessionConfiguration } from "./runtimeConfig";
 import { singleFlightRefreshFetch } from "./authRefresh";
 import { AppError } from "./appError";
+import { requestRoutePattern } from "./observability/sentry";
 
 const AUTH_COOKIE_BASE_NAME = "mike-session";
 const refreshFetch = singleFlightRefreshFetch();
@@ -111,10 +112,16 @@ export function createRequestSupabase(
         // response has started. Writing then throws ERR_HTTP_HEADERS_SENT
         // inside GoTrue's subscriber loop, which rethrows it out of
         // getUser() as a 500. Nothing can still reach this response, so
-        // skip the write; the next request refreshes again.
+        // skip the write. The browser keeps the refresh token that was just
+        // rotated: its next request works only if GoTrue still accepts that
+        // token (inside its reuse interval) or joins a refresh in flight;
+        // after that GoTrue refuses it and the user signs in again. Still
+        // better than the 500 it replaces. The route is logged so operators
+        // can see how often a session is lost this way.
         if (res.headersSent) {
           console.warn(
             "[auth] session cookies changed after the response was sent",
+            { route: requestRoutePattern(req) },
             new AppError("auth.cookie_write_after_response", "session cookie write skipped: response already sent"),
           );
           return;
