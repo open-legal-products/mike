@@ -8,9 +8,9 @@ import { getChat, stopChatTurn, streamChatTurn } from "./mikeApi";
 import {
   createTurnCursor,
   createTurnEventSink,
-  isAbortError,
   readAssistantTurn,
 } from "./assistantTurnStream";
+import { isAbortError } from "@/shared/lib/userError";
 
 type TurnRecord = {
   chatId: string | undefined;
