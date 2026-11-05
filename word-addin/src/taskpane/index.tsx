@@ -11,6 +11,7 @@ import {
   tagOfficeHost,
 } from "./lib/errorReporting";
 import { PaneErrorFallback } from "./components/shell/PaneErrorFallback";
+import { OutsideOfficeNotice } from "./components/shell/OutsideOfficeNotice";
 
 // Before Office.onReady: an error while Office.js itself boots the pane is
 // still an error we want to hear about.
@@ -27,7 +28,13 @@ window.addEventListener("unhandledrejection", (event) => {
   });
 });
 
-Office.onReady(() => {
+// `@container` makes the whole pane a query container so descendants can
+// adapt spacing/type to the (resizable, usually narrow) task-pane width via
+// `@sm:`/`@md:` variants — viewport breakpoints never fire in a pane.
+const PANE_CLASS =
+  "@container h-full w-full bg-background text-foreground font-sans antialiased";
+
+Office.onReady((info) => {
   tagOfficeHost();
   const container = document.getElementById("root");
   if (!container) {
@@ -36,11 +43,20 @@ Office.onReady(() => {
     throw missingRoot;
   }
   const root = createRoot(container);
+  // Office.js resolves onReady outside Office too, with no host. There is no
+  // document to work on and no Office storage, so mounting the app there only
+  // produced "Something went wrong" and two Sentry faults (MIKE-WORD-ADDIN-6
+  // and -7, mostly crawlers and link previews opening the page).
+  if (info.host == null) {
+    root.render(
+      <div className={PANE_CLASS}>
+        <OutsideOfficeNotice />
+      </div>
+    );
+    return;
+  }
   root.render(
-    // `@container` makes the whole pane a query container so descendants can
-    // adapt spacing/type to the (resizable, usually narrow) task-pane width
-    // via `@sm:`/`@md:` variants — viewport breakpoints never fire in a pane.
-    <div className="@container h-full w-full bg-background text-foreground font-sans antialiased">
+    <div className={PANE_CLASS}>
       <ErrorBoundary
         fallback={({ resetError }) => (
           <PaneErrorFallback resetError={resetError} />
