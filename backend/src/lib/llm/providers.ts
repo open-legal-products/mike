@@ -44,6 +44,7 @@ import {
   tolerateTextToolCalls,
 } from "./registry";
 import type {
+  ApiKeyName,
   ConfiguredModel,
   Provider,
   ReasoningLevel,
@@ -131,13 +132,20 @@ function requiredKey(
 }
 
 /**
- * Whose key a call sends when `userKey` is the user's own value for the
- * provider: theirs if they set one, else the deployment's environment key
- * (the fallback requiredKey, routerKey and the cloud credential helpers all
- * take).
+ * Whose key a call for `provider` sends. The credential store lays saved
+ * keys over the environment's, so `apiKeys[provider]` is often the
+ * deployment's own key, and keySources says which (see UserApiKeys). An
+ * empty entry means requiredKey, routerKey or the cloud credential helpers
+ * fall back to the environment: the deployment's key too. A key without a
+ * recorded origin (built outside the store) counts as the user's, the quiet
+ * default: a refusal is then logged, never reported.
  */
-function keySourceFor(userKey?: string | null): ProviderKeySource {
-  return userKey?.trim() ? "user" : "deployment";
+function keySourceFor(
+  apiKeys: UserApiKeys | undefined,
+  provider: ApiKeyName,
+): ProviderKeySource {
+  if (!apiKeys?.[provider]?.trim()) return "deployment";
+  return apiKeys.keySources?.[provider] === "env" ? "deployment" : "user";
 }
 
 function routerEnvironmentKey(provider: RouterProvider): string | undefined {
@@ -211,7 +219,7 @@ async function createRouterAdapter(
     throw unsupportedOpenCodeGoModel(model);
   }
   const key = routerKey(provider, apiKeys);
-  const keySource = keySourceFor(routerUserKey(provider, apiKeys));
+  const keySource = keySourceFor(apiKeys, provider);
 
   if (provider === "openrouter") {
     const { createOpenRouter } = await import("@openrouter/ai-sdk-provider");
@@ -304,7 +312,7 @@ async function createBedrockAdapter(
     label: "Amazon Bedrock",
     model: bedrock(upstreamId),
     modelId: model,
-    keySource: keySourceFor(apiKeys?.bedrock),
+    keySource: keySourceFor(apiKeys, "bedrock"),
     bedrockCachePoint: isClaude,
     ...(isClaude
       ? { defaultMaxOutputTokens: await bedrockClaudeMaxOutputTokens(upstreamId) }
@@ -361,7 +369,7 @@ async function createAzureAdapter(
     // get reasoning controls and arbitrary names run without them.
     model: azure.responses(azureDeploymentName(model)),
     modelId: model,
-    keySource: keySourceFor(apiKeys?.azure),
+    keySource: keySourceFor(apiKeys, "azure"),
     courtlistenerCitationReminder: true,
   };
 }
@@ -378,7 +386,7 @@ async function createAzureFoundryAdapter(
     );
   }
   const deployment = azureFoundryDeploymentName(model);
-  const keySource = keySourceFor(apiKeys?.["azure-foundry"]);
+  const keySource = keySourceFor(apiKeys, "azure-foundry");
   if (isAzureFoundryClaudeDeployment(model)) {
     return createAnthropicAdapter({
       provider: "azure-foundry",
@@ -433,7 +441,7 @@ async function createVertexAdapter(
     provider: "vertex" as const,
     label: "Google Vertex AI",
     modelId: model,
-    keySource: keySourceFor(apiKeys?.vertex),
+    keySource: keySourceFor(apiKeys, "vertex"),
   };
   const protocol = vertexModelProtocol(model);
   if (protocol === "anthropic") {
@@ -583,8 +591,7 @@ function configuredModelKeySource(
   apiKeys?: UserApiKeys,
 ): ProviderKeySource {
   if (configured.apiKey?.trim() || !configured.apiKeyProvider) return "deployment";
-  const userKey = apiKeys?.[configured.apiKeyProvider];
-  return keySourceFor(typeof userKey === "string" ? userKey : null);
+  return keySourceFor(apiKeys, configured.apiKeyProvider);
 }
 
 function unsupportedOpenCodeGoModel(model: string): Error {
@@ -634,7 +641,7 @@ async function createProviderAdapter(
       label: "Claude",
       model,
       apiKey: requiredKey("Anthropic", "ANTHROPIC_API_KEY", apiKeys?.claude),
-      keySource: keySourceFor(apiKeys?.claude),
+      keySource: keySourceFor(apiKeys, "claude"),
       supportsReasoning: true,
     });
   }
@@ -650,7 +657,7 @@ async function createProviderAdapter(
       label: "Gemini",
       model: google(model),
       modelId: model,
-      keySource: keySourceFor(apiKeys?.gemini),
+      keySource: keySourceFor(apiKeys, "gemini"),
     };
   }
 
@@ -665,7 +672,7 @@ async function createProviderAdapter(
       label: "OpenAI",
       model: openai.responses(model),
       modelId: model,
-      keySource: keySourceFor(apiKeys?.openai),
+      keySource: keySourceFor(apiKeys, "openai"),
       courtlistenerCitationReminder: true,
       webSearchTool: () => openai.tools.webSearch({}),
     };
@@ -682,7 +689,7 @@ async function createProviderAdapter(
       label: "Mistral",
       model: mistral(model),
       modelId: model,
-      keySource: keySourceFor(apiKeys?.mistral),
+      keySource: keySourceFor(apiKeys, "mistral"),
     };
   }
 
@@ -697,7 +704,7 @@ async function createProviderAdapter(
         label: "OpenCode Go",
         model: openCodeGoModelId(model),
         apiKey: routerKey(provider, apiKeys),
-        keySource: keySourceFor(routerUserKey(provider, apiKeys)),
+        keySource: keySourceFor(apiKeys, provider),
         baseURL: OPENCODE_GO_BASE_URL,
         supportsReasoning: false,
       });
@@ -724,7 +731,7 @@ async function createProviderAdapter(
       label: "xAI",
       model: xai(xaiModelId(model)),
       modelId: model,
-      keySource: keySourceFor(apiKeys?.xai),
+      keySource: keySourceFor(apiKeys, "xai"),
     };
   }
 

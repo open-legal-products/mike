@@ -429,6 +429,10 @@ function envApiKeys(): UserApiKeys {
         vertex: envVertex ? { location: envVertex.location } : null,
         custom: null,
     };
+    apiKeys.keySources = {};
+    for (const provider of PROVIDERS) {
+        if (apiKeys[provider]) apiKeys.keySources[provider] = "env";
+    }
     return apiKeys;
 }
 
@@ -504,14 +508,20 @@ const without = <T,>(
  * Any earlier layer's verdict on the provider is cleared first: this owner's
  * row is the newer answer.
  */
-function overlayKeyRows(apiKeys: UserApiKeys, rows: EncryptedKeyRow[]): void {
+function overlayKeyRows(
+    apiKeys: UserApiKeys,
+    rows: EncryptedKeyRow[],
+    kind: ApiKeyOwner["kind"],
+): void {
     const providerSettings: ProviderSettings = (apiKeys.providerSettings ??=
         {});
+    const keySources = (apiKeys.keySources ??= {});
     for (const row of rows) {
         const provider = normalizeApiKeyProvider(row.provider);
         if (!provider) continue;
         if (row.enabled === false) {
             apiKeys[provider] = null;
+            delete keySources[provider];
             apiKeys.unusableProviders = without(
                 apiKeys.unusableProviders,
                 provider,
@@ -537,6 +547,7 @@ function overlayKeyRows(apiKeys: UserApiKeys, rows: EncryptedKeyRow[]): void {
                 // and mark the provider so cloudProviders.ts does not fall
                 // back to the deployment's credentials either.
                 apiKeys[provider] = null;
+                delete keySources[provider];
                 providerSettings[provider] = null;
                 apiKeys.unusableProviders = [
                     ...(apiKeys.unusableProviders ?? []),
@@ -547,6 +558,7 @@ function overlayKeyRows(apiKeys: UserApiKeys, rows: EncryptedKeyRow[]): void {
             Object.assign(providerSettings, settings);
         }
         apiKeys[provider] = savedKey;
+        keySources[provider] = kind;
     }
 }
 
@@ -555,7 +567,7 @@ export async function getUserApiKeys(
     db: Db = createServerSupabase(),
 ): Promise<UserApiKeys> {
     const apiKeys = envApiKeys();
-    overlayKeyRows(apiKeys, await loadKeyRows(userKeyOwner(userId), db));
+    overlayKeyRows(apiKeys, await loadKeyRows(userKeyOwner(userId), db), "user");
     overlayCourtListenerKey(
         apiKeys,
         await readCourtListenerConnection(personalConnectorOwner(userId), db),
@@ -596,7 +608,7 @@ export async function getEffectiveApiKeys(
         apiKeys,
         await readCourtListenerConnection({ userId, orgId }, db),
     );
-    overlayKeyRows(apiKeys, await loadKeyRows(orgKeyOwner(orgId), db));
+    overlayKeyRows(apiKeys, await loadKeyRows(orgKeyOwner(orgId), db), "org");
     return apiKeys;
 }
 
@@ -804,6 +816,9 @@ function overlayCourtListenerKey(
 ): void {
     if (connection === "unmigrated") return;
     apiKeys.courtlistener = connection.token;
+    const keySources = (apiKeys.keySources ??= {});
+    if (connection.token) keySources.courtlistener = "user";
+    else delete keySources.courtlistener;
 }
 
 function overlayCourtListenerStatus(

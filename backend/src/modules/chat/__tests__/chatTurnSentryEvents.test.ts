@@ -16,6 +16,7 @@ import { initSentry, resetSentryForTests } from "../../../lib/observability/sent
 import { AssistantStreamError, runLLMStream } from "../engine/streaming";
 import { generateAssistantChatTitle, logChatTitleFailure } from "../chat.title";
 import { titleModelForChat } from "../../../lib/modelSelection";
+import { getUserApiKeys, saveUserApiKey } from "../../../lib/providerCredentials/store";
 
 // What Gemini really answers for a bad key: 400, not 401, with the reason in
 // the body (see INVALID_KEY_TEXT in lib/llm/apiKeyErrors.ts).
@@ -115,8 +116,36 @@ afterEach(async () => {
     resetSentryForTests();
 });
 
+/**
+ * The user's keys as the chat route gets them: the real credential store's
+ * answer (the environment's keys with the user's saved rows laid over them)
+ * for a user with no saved key, or with `saved.gemini` saved.
+ */
+async function storeKeys(saved: { gemini?: string } = {}) {
+    const rows: Record<string, unknown>[] = [];
+    const db = {
+        from: (table: string) => {
+            const q: Record<string, unknown> = {};
+            for (const method of ["select", "eq", "filter"]) q[method] = () => q;
+            q.upsert = async (row: Record<string, unknown>) => {
+                rows.push(row);
+                return { error: null };
+            };
+            q.maybeSingle = async () => ({ data: null, error: null });
+            q.then = (resolve: (value: unknown) => unknown) =>
+                Promise.resolve({
+                    data: table === "user_api_keys" ? rows : [],
+                    error: null,
+                }).then(resolve);
+            return q;
+        },
+    };
+    if (saved.gemini) await saveUserApiKey("user-1", "gemini", saved.gemini, db as never);
+    return getUserApiKeys("user-1", db as never);
+}
+
 /** The failing half of POST /chat, in the route's order. */
-async function failedChatTurn(apiKeys: Record<string, string> = API_KEYS) {
+async function failedChatTurn(apiKeys: object = API_KEYS) {
     // chat.routes.ts starts the title in parallel with the model stream and
     // only records its failure; what it means is decided after the reply.
     const titleOutcome: { failure: { error: unknown } | null } = { failure: null };
@@ -181,14 +210,18 @@ describe("one failed chat turn in Sentry", () => {
         expect(sent).toEqual([]);
     });
 
-    // A revoked DEPLOYMENT key (no user key, so requiredKey fell back to
-    // GEMINI_API_KEY) fails every user's chat, and each is told to contact
-    // the administrator. The administrator hears about it once per turn, as
-    // a warning; the title's identical failure is not a second event.
+    // A revoked DEPLOYMENT key fails every user's chat, and each is told to
+    // contact the administrator. The administrator hears about it once per
+    // turn, as a warning; the title's identical failure is not a second
+    // event. The keys come from the real credential
+    // store with no saved row, so `apiKeys.gemini` IS the environment's key:
+    // the shape the live recording caught being read as the user's own.
     it("files a rejected deployment key once, as a warning", async () => {
         vi.stubEnv("GEMINI_API_KEY", "revoked-deployment-key");
         try {
-            const streamError = await failedChatTurn({});
+            const apiKeys = await storeKeys();
+            expect(apiKeys.gemini).toBe("revoked-deployment-key");
+            const streamError = await failedChatTurn(apiKeys);
             await Sentry.flush(2000);
 
             expect((streamError as AssistantStreamError).events.at(-1)).toMatchObject({
@@ -200,6 +233,22 @@ describe("one failed chat turn in Sentry", () => {
                 sent.map((event) => [event.tags?.component, event.level, event.tags?.error_kind]),
             ).toEqual([["chat-stream", "warning", "chat.provider_rejected"]]);
             expect(JSON.stringify(sent)).not.toContain("revoked-deployment-key");
+        } finally {
+            vi.unstubAllEnvs();
+        }
+    });
+
+    // The same store path with the user's own key saved over the
+    // environment's: their key, their fix, no event.
+    it("files nothing when the store's key is the user's saved one", async () => {
+        vi.stubEnv("GEMINI_API_KEY", "deployment-key");
+        vi.stubEnv("USER_API_KEYS_ENCRYPTION_SECRET", "test-secret");
+        try {
+            const apiKeys = await storeKeys({ gemini: "rejected-user-key" });
+            expect(apiKeys.gemini).toBe("rejected-user-key");
+            await failedChatTurn(apiKeys);
+            await Sentry.flush(2000);
+            expect(sent).toEqual([]);
         } finally {
             vi.unstubAllEnvs();
         }

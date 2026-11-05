@@ -363,6 +363,26 @@ describe("whose key a failed call sent", () => {
     expect(providerFailureStatus(error)).toBe(401);
     expect(providerFailureLevel(error)).toBe("warning");
   });
+
+  // The credential store's keys always hold the environment's key in the
+  // provider's own field when the user saved none; keySources says whose it
+  // is. Reading a non-empty field as "the user's" lost every deployment-key
+  // refusal in a real chat turn, title, cell or curator run.
+  it.each([
+    ["env", "warning"],
+    ["user", null],
+    ["org", null],
+  ] as const)("reads a store key whose origin is %s", async (origin, level) => {
+    vi.stubEnv("XAI_API_KEY", "xai-deployment-key");
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(rejected()));
+    const error = await completeWithProvider({
+      model: "xai/grok-4.3",
+      user: "x",
+      apiKeys: { xai: "xai-deployment-key", keySources: { xai: origin } },
+    }).catch((thrown: unknown) => thrown);
+    expect(providerFailureStatus(error)).toBe(401);
+    expect(providerFailureLevel(error)).toBe(level);
+  });
 });
 
 describe("custom OpenAI-compatible endpoint adapter", () => {
