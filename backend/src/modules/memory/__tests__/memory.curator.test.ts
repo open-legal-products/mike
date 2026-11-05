@@ -2,7 +2,7 @@ import { inspect } from "node:util";
 import { describe, expect, it, vi } from "vitest";
 import { diagnosticErrorTags } from "../../../lib/observability/sentryPrivacy";
 import { NonRetryableJobError } from "../../../lib/dbq/runner";
-import { InvalidApiKeyError } from "../../../lib/llm/apiKeyErrors";
+import { toProviderStreamError } from "../../../lib/llm/providerErrors";
 import type { StreamChatParams } from "../../../lib/llm";
 import {
   buildMemoryCuratorTranscript,
@@ -773,14 +773,36 @@ describe("memoryScopeFailureCause", () => {
 });
 
 describe("memoryJobFailure", () => {
-  const provider = (statusCode: number) =>
-    Object.assign(new Error("SECRET provider text"), { name: "AI_APICallError", statusCode });
+  // The provider's answer as the AI SDK raises it, converted exactly as
+  // streamAiSdk converts it (toProviderStreamError), then thrown out of the
+  // model call inside runMemoryCuratorScope: the real path a curator job's
+  // scope failure takes. A 402/403/404 becomes a UserFacingError around the
+  // APICallError there, which the flattened scope failure cannot see through.
+  async function scopeFailureFor(statusCode: number, responseBody = "{}"): Promise<unknown> {
+    // The SDK is ESM-only; this test file compiles as CommonJS.
+    const { APICallError } = await import("ai");
+    const apiError = new APICallError({
+      message: "SECRET provider text",
+      url: "https://api.example.test/v1/messages",
+      requestBodyValues: {},
+      statusCode,
+      responseBody,
+    });
+    const svc = services({
+      stream: vi.fn(async () => {
+        throw toProviderStreamError(apiError, { label: "Claude", modelId: "claude-test" });
+      }) as never,
+    });
+    return runMemoryCuratorScope(args(), svc).then(
+      () => expect.unreachable("the scope should fail"),
+      (error: unknown) => error,
+    );
+  }
 
-  it("stops retrying a rejected key and sends nothing (MIKE-BACKEND-1W)", () => {
-    // What runMemoryCuratorScope throws for a key the provider rejected: the
-    // scope failure keeps only the class name, not the InvalidApiKeyError.
-    const scopeFailure = memoryScopeFailure(new InvalidApiKeyError("Anthropic"));
-    const failure = memoryJobFailure(scopeFailure);
+  it("stops retrying a rejected key and sends nothing (MIKE-BACKEND-1W)", async () => {
+    const failure = memoryJobFailure(
+      await scopeFailureFor(401, '{"type":"error","error":{"type":"authentication_error"}}'),
+    );
     expect(failure).toBeInstanceOf(NonRetryableJobError);
     expect((failure as NonRetryableJobError).reportLevel).toBeNull();
     expect(diagnosticErrorTags(failure)).toMatchObject({
@@ -791,17 +813,19 @@ describe("memoryJobFailure", () => {
   });
 
   it.each([
-    [401, null],
     [402, null],
+    [403, null],
+    [404, "error"],
     [400, "error"],
-  ] as const)("stops retrying a provider %i, reported at %s", (status, level) => {
-    const failure = memoryJobFailure(memoryScopeFailure(provider(status)));
+  ] as const)("stops retrying a provider %i, reported at %s", async (status, level) => {
+    const failure = memoryJobFailure(await scopeFailureFor(status));
     expect(failure).toBeInstanceOf(NonRetryableJobError);
     expect((failure as NonRetryableJobError).reportLevel).toBe(level);
+    expect(inspect(failure, { depth: 6 })).not.toContain("SECRET");
   });
 
-  it.each([429, 503])("keeps a provider %i retryable", (status) => {
-    const failure = memoryJobFailure(memoryScopeFailure(provider(status)));
+  it.each([429, 503])("keeps a provider %i retryable", async (status) => {
+    const failure = memoryJobFailure(await scopeFailureFor(status));
     expect(failure).not.toBeInstanceOf(NonRetryableJobError);
     expect(failure.message).toBe("Memory curator scope failed");
   });
@@ -810,6 +834,31 @@ describe("memoryJobFailure", () => {
     expect(memoryJobFailure(memoryScopeFailure(new Error("db down")))).not.toBeInstanceOf(
       NonRetryableJobError,
     );
+  });
+
+  it("does not read a failed memory write as a provider refusal", async () => {
+    // Storage answers with HTTP-ish statuses too; a 400 from the write is
+    // not the provider refusing the request.
+    const svc = services({
+      write: vi.fn(async () => {
+        throw Object.assign(new Error("bad request"), { statusCode: 400 });
+      }),
+    });
+    svc.stream = vi.fn(async (params: StreamChatParams) => {
+      await params.runTools?.([
+        {
+          id: "call-1",
+          name: "write_memory_file",
+          input: { expectedRevision: 1, markdown: "# Updated", changeSummary: "Update" },
+        },
+      ]);
+      return { fullText: "" };
+    });
+    const error = await runMemoryCuratorScope(args(), svc).then(
+      () => expect.unreachable("the scope should fail"),
+      (thrown: unknown) => thrown,
+    );
+    expect(memoryJobFailure(error)).not.toBeInstanceOf(NonRetryableJobError);
   });
 });
 

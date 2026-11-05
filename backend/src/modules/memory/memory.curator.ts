@@ -16,7 +16,11 @@ import {
 } from "../user/user.service";
 import { DbJobDeferredError, type Db, type DbJob } from "../../lib/dbq/types";
 import { NonRetryableJobError } from "../../lib/dbq/runner";
-import { providerFailureLevel, providerFailureResponse } from "../../lib/llm/providerErrors";
+import {
+  providerFailureKind,
+  providerFailureLevel,
+  providerFailureResponse,
+} from "../../lib/llm/providerErrors";
 import { AppError } from "../../lib/appError";
 import { setOperation } from "../../lib/observability/sentry";
 import { ensureMemoryFile, getMemoryCurrentForFile, MemoryConversationNotQuietError, MemoryDisabledError, MemoryEpochSupersededError, MemoryJobSupersededError, MemoryValidationError, writeMemoryFile, type MemoryFileRow, type MemoryScope, type MemorySurface } from "../../lib/memory/files";
@@ -758,32 +762,54 @@ export function memoryScopeFailure(error: unknown): Error {
 const RETRYABLE_CLIENT_STATUS = new Set([408, 409, 429]);
 
 /**
+ * Scope failures whose model call the provider refused, with the level the
+ * job reports that refusal at. Kept beside the flattened error rather than
+ * on it: the flattened error is persisted and reported, and must carry
+ * nothing but its fixed classification.
+ */
+const providerRefusals = new WeakMap<Error, { reportLevel: "warning" | "error" | null }>();
+
+/**
+ * The scope failure for an error the curator's MODEL CALL threw, classified
+ * before memoryScopeFailure flattens it. The flattened cause keeps only the
+ * first named link, and for a 402/403/404 that is the UserFacingError
+ * toProviderStreamError wrapped around the provider's answer: no status, so
+ * a refusal read off the flattened error looked retryable and the job spent
+ * its whole backoff ladder on an answer that cannot change.
+ */
+export function memoryModelFailure(error: unknown): Error {
+  const failure = memoryScopeFailure(error);
+  const kind = providerFailureKind(error);
+  const status = providerFailureResponse(error)?.status;
+  const refused =
+    kind === "chat.provider_rejected" ||
+    kind === "chat.provider_out_of_credits" ||
+    (status !== undefined && status >= 400 && status < 500 && !RETRYABLE_CLIENT_STATUS.has(status));
+  if (refused) providerRefusals.set(failure, { reportLevel: providerFailureLevel(error) });
+  return failure;
+}
+
+/**
  * The error a consolidation job ends with when a scope failed.
  *
- * A provider that refused the request itself — rejected the key (the
- * scope failure keeps only the name `InvalidApiKeyError`), has no credit,
- * forbids the model, or answered another 4xx — answers the same way on
- * every one of the job's attempts. Retrying spent the whole backoff ladder
- * and filed a warning per attempt (MIKE-BACKEND-1W, -2J, -89), so the job
- * fails at once instead, at the level providerFailureLevel gives the
- * provider's condition: not reported for the account's own state, an
- * error for a 4xx nothing explains. Anything else stays retryable.
+ * A provider that refused the request itself — rejected the key, has no
+ * credit, forbids the model, or answered another 4xx — answers the same way
+ * on every one of the job's attempts. Retrying spent the whole backoff
+ * ladder and filed a warning per attempt (MIKE-BACKEND-1W, -2J, -89), so the
+ * job fails at once instead, at the level providerFailureLevel gives the
+ * provider's condition (classified by memoryModelFailure while the
+ * provider's answer was still there): not reported for a user's own key or
+ * account, one warning for the deployment's key, an error for a 4xx nothing
+ * explains. Anything else stays retryable.
  */
 export function memoryJobFailure(firstScopeFailure: unknown): Error {
+  const refusal =
+    firstScopeFailure instanceof Error ? providerRefusals.get(firstScopeFailure) : undefined;
   const failure = memoryScopeFailure(firstScopeFailure);
-  let rejectedKey = false;
-  for (let current = failure.cause, depth = 0; current && depth < 4; depth++) {
-    if ((current as { name?: unknown }).name === "InvalidApiKeyError") rejectedKey = true;
-    current = (current as { cause?: unknown }).cause;
-  }
-  const status = providerFailureResponse(failure)?.status;
-  const refused =
-    rejectedKey ||
-    (status !== undefined && status >= 400 && status < 500 && !RETRYABLE_CLIENT_STATUS.has(status));
-  if (!refused) return failure;
+  if (!refusal) return failure;
   return new NonRetryableJobError("Memory curator provider refused the request", {
     cause: failure,
-    reportLevel: rejectedKey ? null : providerFailureLevel(failure),
+    reportLevel: refusal.reportLevel,
   });
 }
 
@@ -1000,7 +1026,9 @@ export async function runMemoryCuratorScope(
     if (writeFailure instanceof MemoryConversationNotQuietError) {
       throw writeFailure;
     }
-    throw memoryScopeFailure(error);
+    // A failed write is storage, not the provider: only the model call's own
+    // failure is read for a provider refusal.
+    throw writeFailure === undefined ? memoryModelFailure(error) : memoryScopeFailure(error);
   }
   if (writeFailure instanceof MemoryConversationNotQuietError) {
     throw writeFailure;
