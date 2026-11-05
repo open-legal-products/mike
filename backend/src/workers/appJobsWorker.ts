@@ -71,7 +71,7 @@ export function createAppJobsWorker(): Worker<AppJobDelivery> {
             maxStalledCount: 2,
         },
     );
-    watchQueueErrors(worker, "queue.worker_error");
+    watchQueueErrors(worker, "worker");
     worker.on("failed", (job, err) => {
         // Only infrastructure errors land here (processClaimedJob contains
         // handler errors itself); the db_jobs row stays claimable.

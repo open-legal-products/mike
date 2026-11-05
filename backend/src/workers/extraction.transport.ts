@@ -41,7 +41,7 @@ export function createExtractionWorker(): Worker<ExtractionJobData> {
             maxStalledCount: 2,
         },
     );
-    watchQueueErrors(worker, "queue.worker_error");
+    watchQueueErrors(worker, "worker");
     worker.on("stalled", (jobId) => {
         console.warn(
             "[extraction-worker] job stalled; will be re-queued",

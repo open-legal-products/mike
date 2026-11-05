@@ -1,10 +1,7 @@
 import IORedis from "ioredis";
-import { AppError } from "../appError";
-import { reportError } from "../observability/sentry";
-import {
-    createPollFailureGate,
-    pollFailureClass,
-} from "../observability/pollFailureGate";
+import { queueConnectionRecovered, watchQueueErrors } from "./consumerErrors";
+
+export { watchQueueErrors };
 
 /** REDIS_URL points at the Redis instance backing BullMQ; defaults to
  *  localhost for bare-metal dev. Only ever dialled when the Redis driver is
@@ -51,46 +48,10 @@ export function getRedisConnection(): IORedis {
             maxRetriesPerRequest: null,
             enableReadyCheck: false,
         });
-        watchQueueErrors(connection, "queue.connection_lost");
-        connection.on("ready", () => consumerErrorGate.success());
+        watchQueueErrors(connection, "connection");
+        connection.on("ready", queueConnectionRecovered);
     }
     return connection;
-}
-
-/**
- * One gate for every consumer-side emitter (the shared connection and each
- * BullMQ Worker, whose duplicated blocking clients forward their errors to
- * the Worker). A Redis outage makes all of them fail with the same class
- * (ECONNREFUSED, ETIMEDOUT) on every reconnect attempt; the gate reports the
- * first one, then a new class, and logs repeats as a counted console.warn.
- * Delays are unused: ioredis owns the reconnect schedule.
- */
-const consumerErrorGate = createPollFailureGate({
-    label: "[queue] redis consumer",
-    baseDelayMs: 0,
-    maxDelayMs: 0,
-});
-
-/**
- * Give a consumer-side emitter an 'error' listener. Without one, ioredis
- * prints "[ioredis] Unhandled error event" and BullMQ's QueueBase.emit falls
- * back to console.error, and the Sentry console bridge files each as an
- * untyped "Failure in application" under a node_modules culprit. A lost
- * connection is the install's Redis, not a defect: warning level, once.
- */
-export function watchQueueErrors(
-    emitter: { on(event: "error", listener: (error: Error) => void): unknown },
-    kind: "queue.connection_lost" | "queue.worker_error",
-): void {
-    emitter.on("error", (error) => {
-        if (!consumerErrorGate.failure(error).report) return;
-        const failure = new AppError(kind, "Redis queue error", { cause: error });
-        reportError(failure, {
-            level: "warning",
-            tags: { component: "queue", stage: "connection" },
-        });
-        console.warn("[queue] redis consumer error", pollFailureClass(error));
-    });
 }
 
 /**
