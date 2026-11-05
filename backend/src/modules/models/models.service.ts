@@ -86,7 +86,10 @@ export async function listOllamaModels(): Promise<LocalModel[]> {
         process.env.OLLAMA_BASE_URL?.trim() || "http://localhost:11434/v1"
     ).replace(/\/$/, "");
     try {
-        const r = await fetch(`${base}/models`, { headers: authHeaders() });
+        const r = await fetch(`${base}/models`, {
+            headers: authHeaders(),
+            signal: AbortSignal.timeout(15_000),
+        });
         if (!r.ok) return [];
         const data = (await r.json()) as { data?: { id: string }[] };
         return (data.data ?? []).map((m) => ({
@@ -147,7 +150,10 @@ export async function listOpenRouterModels(
         ).replace(/\/+$/, "");
         const response = await fetch(
             `${baseUrl}/models?output_modalities=text&supported_parameters=tools&sort=most-popular&limit=1000`,
-            { headers: { Authorization: `Bearer ${key}` } },
+            {
+                headers: { Authorization: `Bearer ${key}` },
+                signal: AbortSignal.timeout(15_000),
+            },
         );
         if (!response.ok) return await upstreamFailure("OpenRouter", response);
 
@@ -206,7 +212,9 @@ export async function listVercelModels(
             process.env.VERCEL_AI_GATEWAY_BASE_URL?.trim() ||
             "https://ai-gateway.vercel.sh/v1"
         ).replace(/\/+$/, "");
-        const response = await fetch(`${baseUrl}/models`);
+        const response = await fetch(`${baseUrl}/models`, {
+            signal: AbortSignal.timeout(15_000),
+        });
         if (!response.ok) {
             return await upstreamFailure("Vercel AI Gateway", response);
         }
@@ -306,6 +314,7 @@ export async function listOpenCodeGoModels(
         ).replace(/\/+$/, "");
         const response = await fetch(`${baseUrl}/models`, {
             headers: { Authorization: `Bearer ${key}` },
+            signal: AbortSignal.timeout(15_000),
         });
         if (!response.ok) return await upstreamFailure("OpenCode Go", response);
 
