@@ -38,6 +38,7 @@ vi.mock("../../../lib/convert", () => ({
 
 import { AppError } from "../../../lib/appError";
 import { withKeySource } from "../../../lib/llm/providerErrors";
+import { resetDeploymentRefusalReportsForTests } from "../../../lib/llm/providerFailureReport";
 import { diagnosticErrorTags } from "../../../lib/observability/sentryPrivacy";
 import { queryTabularAllColumns, queryTabularCell } from "../tabular.extract";
 
@@ -110,10 +111,15 @@ describe("queryTabularCell", () => {
         warn.mockRestore();
     });
 
-    it("reports a rejected deployment key once, as a warning", async () => {
+    it("reports a rejected deployment key once per process, as a warning", async () => {
         // No user key, so the call sent the deployment's env key: the
         // operator has to hear that it was revoked.
-        completeText.mockRejectedValue(withKeySource(providerError(401), "deployment"));
+        // A review runs many cells on the same key: one report for all.
+        resetDeploymentRefusalReportsForTests();
+        completeText.mockRejectedValue(withKeySource(providerError(401), "deployment", "gemini"));
+        await expect(
+            queryTabularCell("m", "Contract.pdf", "text", "p"),
+        ).resolves.toBeNull();
         await expect(
             queryTabularCell("m", "Contract.pdf", "text", "p"),
         ).resolves.toBeNull();

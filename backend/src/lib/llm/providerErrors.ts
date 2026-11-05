@@ -8,15 +8,27 @@ import { asInvalidApiKeyError, InvalidApiKeyError } from "./apiKeyErrors";
  */
 export type ProviderKeySource = "user" | "deployment";
 
-type ProviderContext = { label: string; modelId: string; keySource?: ProviderKeySource };
+type ProviderContext = {
+  label: string;
+  modelId: string;
+  keySource?: ProviderKeySource;
+  /** The adapter's provider id ("claude", "openrouter", …). */
+  provider?: string;
+};
 
 /**
- * Record on a failed call's error whose key it sent, so the level rule can
- * tell the operator's revoked key from a user's. Non-enumerable: it is a
- * routing fact for providerFailureLevel, not something to serialize onto an
- * event or a log line. Errors that cannot take a property are left alone.
+ * Record on a failed call's error whose key it sent, and to which provider,
+ * so the level rule can tell the operator's revoked key from a user's and
+ * report it once per provider. Non-enumerable: routing facts for
+ * providerFailureLevel and reportModelFailure, not something to serialize
+ * onto an event or a log line. Errors that cannot take a property are left
+ * alone.
  */
-export function withKeySource<T>(error: T, keySource: ProviderKeySource | undefined): T {
+export function withKeySource<T>(
+  error: T,
+  keySource: ProviderKeySource | undefined,
+  provider?: string,
+): T {
   if (
     keySource &&
     error &&
@@ -29,6 +41,13 @@ export function withKeySource<T>(error: T, keySource: ProviderKeySource | undefi
       enumerable: false,
       configurable: true,
     });
+    if (provider) {
+      Object.defineProperty(error, "keyProvider", {
+        value: provider,
+        enumerable: false,
+        configurable: true,
+      });
+    }
   }
   return error;
 }
@@ -39,6 +58,25 @@ function providerKeySource(error: unknown): ProviderKeySource | undefined {
     if (source === "user" || source === "deployment") return source;
   }
   return undefined;
+}
+
+/**
+ * The provider whose DEPLOYMENT key the provider refused (a rejected key or
+ * an empty account), or null for any other failure. The once-per-process
+ * gate in reportModelFailure keys on it with the failure's kind.
+ */
+export function deploymentKeyRefusal(
+  error: unknown,
+): { provider: string; kind: ErrorKind } | null {
+  const kind = providerFailureKind(error);
+  if (kind !== "chat.provider_rejected" && kind !== "chat.provider_out_of_credits") return null;
+  for (const current of failureChain(error)) {
+    const { keySource, keyProvider } = current as { keySource?: unknown; keyProvider?: unknown };
+    if (keySource === undefined) continue;
+    if (keySource !== "deployment") return null;
+    return { provider: typeof keyProvider === "string" ? keyProvider : "unknown", kind };
+  }
+  return null;
 }
 
 type ApiCallErrorLike = Error & { statusCode: number; responseBody?: string };
@@ -252,7 +290,11 @@ export function toProviderStreamError(
   error: unknown,
   context: ProviderContext,
 ): Error {
-  return withKeySource(classifyProviderStreamError(error, context), context.keySource);
+  return withKeySource(
+    classifyProviderStreamError(error, context),
+    context.keySource,
+    context.provider,
+  );
 }
 
 function classifyProviderStreamError(error: unknown, context: ProviderContext): Error {

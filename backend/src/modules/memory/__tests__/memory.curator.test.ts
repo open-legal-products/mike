@@ -3,6 +3,7 @@ import { describe, expect, it, vi } from "vitest";
 import { diagnosticErrorTags } from "../../../lib/observability/sentryPrivacy";
 import { NonRetryableJobError } from "../../../lib/dbq/runner";
 import { toProviderStreamError } from "../../../lib/llm/providerErrors";
+import { resetDeploymentRefusalReportsForTests } from "../../../lib/llm/providerFailureReport";
 import type { StreamChatParams } from "../../../lib/llm";
 import {
   buildMemoryCuratorTranscript,
@@ -819,11 +820,23 @@ describe("memoryJobFailure", () => {
   it.each([401, 402])(
     "stops retrying a provider %i on the deployment's key, with one warning",
     async (status) => {
+      resetDeploymentRefusalReportsForTests();
       const failure = memoryJobFailure(await scopeFailureFor(status, "{}", "deployment"));
       expect(failure).toBeInstanceOf(NonRetryableJobError);
       expect((failure as NonRetryableJobError).reportLevel).toBe("warning");
     },
   );
+
+  // Every curator run on a revoked deployment key fails the same way; the
+  // first one's warning (or the chat turn's) already told the operator.
+  it("reports the deployment's rejected key once per process", async () => {
+    resetDeploymentRefusalReportsForTests();
+    const first = memoryJobFailure(await scopeFailureFor(401, "{}", "deployment"));
+    const second = memoryJobFailure(await scopeFailureFor(401, "{}", "deployment"));
+    expect((first as NonRetryableJobError).reportLevel).toBe("warning");
+    expect(second).toBeInstanceOf(NonRetryableJobError);
+    expect((second as NonRetryableJobError).reportLevel).toBeNull();
+  });
 
   it.each([
     [402, null],

@@ -2,9 +2,9 @@ import { abortable } from "../../lib/abortable";
 import { completeText, type UserApiKeys } from "../../lib/llm";
 import {
     providerFailureKind,
-    providerFailureLevel,
     providerFailureStatus,
 } from "../../lib/llm/providerErrors";
+import { modelFailureReportLevel } from "../../lib/llm/providerFailureReport";
 import { reportError } from "../../lib/observability/sentry";
 import { UserFacingError } from "../../lib/userFacingError";
 
@@ -81,8 +81,9 @@ export function logChatTitleFailure(
     const titleClass = providerFailureClass(error);
     // A user's own rejected key or empty account is not reported anywhere
     // (see providerFailureLevel): the reply's failure tells the user what
-    // to fix. The deployment's key falls through to the reply comparison.
-    if (titleClass !== null && providerFailureLevel(error) === null) {
+    // to fix. The deployment's key falls through to the reply comparison,
+    // unless this process already reported it (modelFailureReportLevel).
+    if (titleClass !== null && modelFailureReportLevel(error) === null) {
         console.warn(label, error);
         return;
     }

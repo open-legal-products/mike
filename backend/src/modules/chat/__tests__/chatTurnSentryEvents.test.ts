@@ -16,6 +16,7 @@ import { initSentry, resetSentryForTests } from "../../../lib/observability/sent
 import { AssistantStreamError, runLLMStream } from "../engine/streaming";
 import { generateAssistantChatTitle, logChatTitleFailure } from "../chat.title";
 import { titleModelForChat } from "../../../lib/modelSelection";
+import { resetDeploymentRefusalReportsForTests } from "../../../lib/llm/providerFailureReport";
 import { getUserApiKeys, saveUserApiKey } from "../../../lib/providerCredentials/store";
 
 // What Gemini really answers for a bad key: 400, not 401, with the reason in
@@ -88,6 +89,7 @@ afterAll(() => {
 
 beforeEach(() => {
     sent = [];
+    resetDeploymentRefusalReportsForTests();
     resetSentryForTests("community");
     // The production initialisation (integrations, beforeSend, install
     // shape). The DSN points at a closed local port; the envelope hook
@@ -212,8 +214,8 @@ describe("one failed chat turn in Sentry", () => {
 
     // A revoked DEPLOYMENT key fails every user's chat, and each is told to
     // contact the administrator. The administrator hears about it once per
-    // turn, as a warning; the title's identical failure is not a second
-    // event. The keys come from the real credential
+    // process, as a warning; the title's identical failure and the next
+    // turn's are not more events. The keys come from the real credential
     // store with no saved row, so `apiKeys.gemini` IS the environment's key:
     // the shape the live recording caught being read as the user's own.
     it("files a rejected deployment key once, as a warning", async () => {
@@ -222,6 +224,7 @@ describe("one failed chat turn in Sentry", () => {
             const apiKeys = await storeKeys();
             expect(apiKeys.gemini).toBe("revoked-deployment-key");
             const streamError = await failedChatTurn(apiKeys);
+            await failedChatTurn(apiKeys);
             await Sentry.flush(2000);
 
             expect((streamError as AssistantStreamError).events.at(-1)).toMatchObject({

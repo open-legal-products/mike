@@ -4,7 +4,7 @@ import {
   type ReportContext,
   type ReportLevel,
 } from "../observability/sentry";
-import { providerFailureLevel } from "./providerErrors";
+import { deploymentKeyRefusal, providerFailureLevel } from "./providerErrors";
 
 /**
  * Report a failed model call at the level its provider condition deserves
@@ -25,7 +25,7 @@ export function reportModelFailure(
   context: ReportContext,
   logLabel: string,
 ): void {
-  const level = providerFailureLevel(failure);
+  const level = modelFailureReportLevel(failure);
   if (level === null) {
     acknowledgeUnreported(failure);
     // console.warn: the console bridge forwards error level only, so the
@@ -35,6 +35,35 @@ export function reportModelFailure(
   }
   reportError(failure, { ...context, level: quieter(context.level, level) });
   console.error(logLabel, failure);
+}
+
+/** Deployment-key refusals already reported by this process. */
+const reportedDeploymentRefusals = new Set<string>();
+
+/**
+ * providerFailureLevel, with one more rule: the provider refusing the
+ * DEPLOYMENT'S key (rejected, or no credit) is reported once per process per
+ * provider and condition, and null after that. A revoked deployment key fails
+ * every turn, title, cell and curator run until the operator replaces it,
+ * and each would otherwise be another event against the monthly quota for
+ * the one thing the first already said. Replacing the key means a restart,
+ * which re-arms the report. Every surface that reports a model failure asks
+ * here, so they share the one report.
+ */
+export function modelFailureReportLevel(error: unknown): "warning" | "error" | null {
+  const level = providerFailureLevel(error);
+  if (level === null) return null;
+  const refusal = deploymentKeyRefusal(error);
+  if (!refusal) return level;
+  const key = `${refusal.provider}:${refusal.kind}`;
+  if (reportedDeploymentRefusals.has(key)) return null;
+  reportedDeploymentRefusals.add(key);
+  return level;
+}
+
+/** Test seam: forget which deployment-key refusals were reported. */
+export function resetDeploymentRefusalReportsForTests(): void {
+  reportedDeploymentRefusals.clear();
 }
 
 const LOUDNESS: Record<ReportLevel, number> = { warning: 0, error: 1, fatal: 2 };

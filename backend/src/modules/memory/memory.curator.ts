@@ -18,9 +18,9 @@ import { DbJobDeferredError, type Db, type DbJob } from "../../lib/dbq/types";
 import { NonRetryableJobError } from "../../lib/dbq/runner";
 import {
   providerFailureKind,
-  providerFailureLevel,
   providerFailureResponse,
 } from "../../lib/llm/providerErrors";
+import { modelFailureReportLevel } from "../../lib/llm/providerFailureReport";
 import { AppError } from "../../lib/appError";
 import { setOperation } from "../../lib/observability/sentry";
 import { ensureMemoryFile, getMemoryCurrentForFile, MemoryConversationNotQuietError, MemoryDisabledError, MemoryEpochSupersededError, MemoryJobSupersededError, MemoryValidationError, writeMemoryFile, type MemoryFileRow, type MemoryScope, type MemorySurface } from "../../lib/memory/files";
@@ -785,7 +785,7 @@ export function memoryModelFailure(error: unknown): Error {
     kind === "chat.provider_rejected" ||
     kind === "chat.provider_out_of_credits" ||
     (status !== undefined && status >= 400 && status < 500 && !RETRYABLE_CLIENT_STATUS.has(status));
-  if (refused) providerRefusals.set(failure, { reportLevel: providerFailureLevel(error) });
+  if (refused) providerRefusals.set(failure, { reportLevel: modelFailureReportLevel(error) });
   return failure;
 }
 
@@ -796,7 +796,7 @@ export function memoryModelFailure(error: unknown): Error {
  * credit, forbids the model, or answered another 4xx — answers the same way
  * on every one of the job's attempts. Retrying spent the whole backoff
  * ladder and filed a warning per attempt (MIKE-BACKEND-1W, -2J, -89), so the
- * job fails at once instead, at the level providerFailureLevel gives the
+ * job fails at once instead, at the level modelFailureReportLevel gives the
  * provider's condition (classified by memoryModelFailure while the
  * provider's answer was still there): not reported for a user's own key or
  * account, one warning for the deployment's key, an error for a 4xx nothing

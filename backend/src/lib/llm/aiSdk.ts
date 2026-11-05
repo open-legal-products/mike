@@ -846,7 +846,7 @@ export async function completeAiSdkText(
   } catch (error) {
     // The provider's own error, unconverted (callers classify it), with
     // whose key was sent recorded on it for the reporting level.
-    throw withKeySource(error, config.keySource);
+    throw withKeySource(error, config.keySource, config.provider);
   }
   return result.text;
 }
