@@ -2,14 +2,14 @@
 
 import { useState } from "react";
 import Link from "next/link";
-import { InputUI } from "@/shared/ui/InputUI";
-import { PillButtonUI } from "@/shared/ui/PillButtonUI";
-import { pillButtonUIClassName } from "@/shared/ui/PillButtonUI.styles";
-import { SiteLogo } from "@/app/components/site-logo";
 import {
+    InputUI,
+    PillButtonUI,
+    pillButtonUIClassName,
     authGlassCardUIClassName,
     authInputUIClassName,
-} from "@/shared/ui/AuthStylesUI";
+} from "@mike/ui";
+import { SiteLogo } from "@/app/components/site-logo";
 import { requestPasswordReset } from "@/app/lib/authApi";
 import { FieldLabel } from "@/app/components/ui/form-field";
 import {

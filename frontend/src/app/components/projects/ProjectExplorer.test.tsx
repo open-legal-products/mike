@@ -7,7 +7,7 @@ import {
     waitFor,
     within,
 } from "@testing-library/react";
-import { ToastViewportUI, clearToasts } from "@/shared/ui/ToastUI";
+import { ToastViewportUI, clearToasts } from "@mike/ui";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type {
     Document,
