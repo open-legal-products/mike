@@ -112,7 +112,7 @@ variables, and the [Sentry data audit](docs/sentry-data-audit.md).
 
 Mike's system assistant and tabular-review workflows are maintained in the
 [`Open-Legal-Products/mike-workflows`](https://github.com/Open-Legal-Products/mike-workflows)
-repository. See [Contributing](CONTRIBUTING.md#system-workflows) for how they are
+repository. See [Contributing](CONTRIBUTING.md#mike-workflows) for how they are
 packaged and synchronized with this application.
 
 ## License
