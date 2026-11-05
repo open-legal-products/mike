@@ -43,32 +43,40 @@ function renderSheet(sheetName: string, ws: XLSX.WorkSheet): string | null {
     mergeAnchors.set(XLSX.utils.encode_cell(m.s), XLSX.utils.encode_range(m));
   }
 
-  // Build a trimmed grid: capture formatted text for every cell in the used
-  // range, then drop trailing empty columns and fully empty rows so we don't
-  // emit oceans of blank cells.
-  const rows: { rowNumber: number; cells: string[] }[] = [];
-  let lastNonEmptyCol = -1;
-
-  for (let r = range.s.r; r <= range.e.r; r++) {
-    const cells: string[] = [];
-    let rowHasContent = false;
-    for (let c = range.s.c; c <= range.e.c; c++) {
-      const addr = XLSX.utils.encode_cell({ r, c });
-      let text = sanitizeCellText(cellDisplayText(ws[addr]));
-      const mergeRange = mergeAnchors.get(addr);
-      if (mergeRange) {
-        text = text
-          ? `${text} ⟨merged ${mergeRange}⟩`
-          : `⟨merged ${mergeRange}⟩`;
-      }
-      cells[c - range.s.c] = text;
-      if (text) {
-        rowHasContent = true;
-        if (c - range.s.c > lastNonEmptyCol) lastNonEmptyCol = c - range.s.c;
-      }
-    }
-    if (rowHasContent) rows.push({ rowNumber: r + 1, cells });
+  // Build a trimmed grid from the cells that actually exist. A sparse
+  // worksheet object only holds entries for real cells, while `!ref` is the
+  // declared used range — Excel inflates it to A1:XFD1048576 after whole-row
+  // formatting or one stray cell, so walking the rectangle cost rows × cols
+  // (1.7e10 probes) for a sheet with three values. Visiting the keys keeps
+  // the work proportional to the cells present; trailing empty columns and
+  // fully empty rows are dropped as before.
+  const grid = new Map<number, Map<number, string>>();
+  const addresses = new Set<string>(mergeAnchors.keys());
+  for (const key of Object.keys(ws)) {
+    if (!key.startsWith("!")) addresses.add(key);
   }
+  let lastNonEmptyCol = -1;
+  for (const addr of addresses) {
+    const { r, c } = XLSX.utils.decode_cell(addr);
+    if (r < range.s.r || r > range.e.r || c < range.s.c || c > range.e.c) {
+      continue;
+    }
+    let text = sanitizeCellText(cellDisplayText(ws[addr]));
+    const mergeRange = mergeAnchors.get(addr);
+    if (mergeRange) {
+      text = text
+        ? `${text} ⟨merged ${mergeRange}⟩`
+        : `⟨merged ${mergeRange}⟩`;
+    }
+    if (!text) continue;
+    let rowCells = grid.get(r);
+    if (!rowCells) grid.set(r, (rowCells = new Map()));
+    rowCells.set(c - range.s.c, text);
+    if (c - range.s.c > lastNonEmptyCol) lastNonEmptyCol = c - range.s.c;
+  }
+  const rows = [...grid.keys()]
+    .sort((a, b) => a - b)
+    .map((r) => ({ rowNumber: r + 1, cells: grid.get(r)! }));
 
   if (rows.length === 0 || lastNonEmptyCol < 0) return null;
 
@@ -82,7 +90,7 @@ function renderSheet(sheetName: string, ws: XLSX.WorkSheet): string | null {
   const separator = `| --- | ${colLetters.map(() => "---").join(" | ")} |`;
   const bodyRows = rows.map(({ rowNumber, cells }) => {
     const padded: string[] = [];
-    for (let c = 0; c <= lastNonEmptyCol; c++) padded.push(cells[c] ?? "");
+    for (let c = 0; c <= lastNonEmptyCol; c++) padded.push(cells.get(c) ?? "");
     return `| ${rowNumber} | ${padded.join(" | ")} |`;
   });
 

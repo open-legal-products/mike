@@ -67,6 +67,21 @@ function fixtures(): Record<string, Row[]> {
 }
 
 describe("exports enforce current read access", () => {
+    it("authorizes a project's chats with one project verdict, not one per chat", async () => {
+        const tables = fixtures();
+        tables.projects.push(resource("project-busy", { org_id: "current-org", user_id: "colleague", visibility: "organization" }));
+        const busy = Array.from({ length: 30 }, (_, i) =>
+            resource(`chat-busy-${i}`, { project_id: "project-busy", org_id: "current-org" }));
+        tables.chats.push(...busy);
+        const { db } = makeExportDb(tables);
+        const projectReads: string[] = [];
+        const counting = { ...db, from: (table: string) => (table === "projects" && projectReads.push(table), db.from(table)) };
+        const exported = await buildUserChatsExport(counting as never, userId, email, "current-org");
+        expect(ids(exported.assistant_chats.chats).filter((id) => String(id).startsWith("chat-busy-"))).toHaveLength(30);
+        // One verdict per distinct project, independent of how many chats it holds.
+        expect(projectReads.length).toBeLessThan(5);
+    });
+
     it("excludes departed, denied and archived content and its descendants from account exports", async () => {
         const { db } = makeExportDb(fixtures());
         const personal = await buildUserAccountExport(db, userId, email, null);

@@ -220,9 +220,8 @@ describe("createTabularReview", () => {
             columns_config: [],
             model: "claude-sonnet-5",
         });
-        expect(result).toMatchObject({ ok: false, kind: "status", status: 500 });
-        expect(result.ok === false && result.kind === "status" && result.body)
-            .toEqual({ detail: "rows exploded" });
+        // An internal failure: the database's message is not sent to the client.
+        expect(result).toMatchObject({ ok: false, kind: "error" });
         expect(callTo(calls, "tabular_reviews", 1)).toMatchObject({
             op: "delete",
             filters: { id: "rev-1" },
@@ -978,12 +977,11 @@ describe("updateTabularReview", () => {
         expect(calls.some(call => ["tabular_review_rows", "tabular_cells"].includes(call.table))).toBe(false);
     });
 
+    // A changed document set is applied row by row (tabular.rowSync.test.ts);
+    // only a grouping change rebuilds the whole grid.
     it.each([
-        { document_ids: ["d1", "d2", "d3"] },
-        { document_ids: ["d1"] },
-        { document_ids: ["d1", "d3"] },
         { document_grouping: "folder" },
-    ])("rebuilds rows for a changed document set or grouping: %j", async body => {
+    ])("rebuilds rows for a changed grouping: %j", async body => {
         filterAccessibleDocumentIds.mockResolvedValue(["d1", "d2", "d3"]);
         const { db, calls } = seeded({
             user_id: "user-1", document_ids: ["d1", "d1", "d2"], document_grouping: "document",

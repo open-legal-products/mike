@@ -33,7 +33,8 @@ type Row = Record<string, unknown>;
 /**
  * Stateful Supabase mock: deletes and updates mutate `tables`, so tests can
  * assert on exactly which rows survived a cleanup call. Supports the chains
- * userDataCleanup uses (select/delete/update + eq/in/not/order/filter-cs) and can
+ * userDataCleanup uses (select/delete/update + eq/in/not/order/filter-cs, and
+ * the gt + order keyset paging of lib/batchedQuery) and can
  * inject a delete error per table to exercise error propagation.
  */
 function makeDb(
@@ -219,6 +220,7 @@ function makeDb(
             let predicate: (row: Row) => boolean = () => true;
             let mode: "select" | "delete" | "update" = "select";
             let patch: Row = {};
+            const orders: Array<[string, boolean]> = [];
             const narrow = (next: (row: Row) => boolean) => {
                 const prev = predicate;
                 predicate = (row) => prev(row) && next(row);
@@ -242,8 +244,18 @@ function makeDb(
                     narrow((row) => value === null ? row[column] == null : row[column] === value);
                     return query;
                 },
+                // Keyset pages: rows strictly after the cursor, in key order.
+                // A limit is not needed to end the loop: the page after the
+                // last row is empty.
+                gt: (column: string, value: never) => {
+                    narrow((row) => (row[column] as never) > value);
+                    return query;
+                },
                 limit: () => query,
-                order: () => query,
+                order: (column: string, options?: { ascending?: boolean }) => {
+                    orders.push([column, options?.ascending !== false]);
+                    return query;
+                },
                 in: (column: string, values: unknown[]) => {
                     narrow((row) => values.includes(row[column]));
                     return query;
@@ -298,10 +310,16 @@ function makeDb(
                         }
                         result = { data: null, error: null };
                     } else {
-                        result = {
-                            data: rowsOf().filter(predicate).map((row) => ({ ...row })),
-                            error: null,
-                        };
+                        const rows = rowsOf().filter(predicate).map((row) => ({ ...row }));
+                        rows.sort((a, b) => {
+                            for (const [column, ascending] of orders) {
+                                const left = a[column] as string;
+                                const right = b[column] as string;
+                                if (left !== right) return (left < right ? -1 : 1) * (ascending ? 1 : -1);
+                            }
+                            return 0;
+                        });
+                        result = { data: rows, error: null };
                     }
                     return Promise.resolve(result).then(resolve, reject);
                 },

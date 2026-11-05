@@ -41,12 +41,10 @@ describe("assistant workspace boundaries", () => {
     const fake = scriptedDb([
       { table: "organizations", data: { kind: "team" } },
       { table: "mike_workflows", data: [{ workflow_key: "global", title: "Built-in", prompt_md: "Global" }] },
-      { rpc: "get_workflows_overview", data: [{ id: "allowed", title: "Here", prompt_md: "Local" }, { id: "denied", prompt_md: "Secret" }] },
-      { table: "workflows", data: { id: "allowed", org_id: "firm", user_id: "u" } },
-      { table: "org_members", data: { role: "member" } },
-      { table: "organizations", data: { kind: "team" } },
-      { table: "workflows", data: { id: "denied", org_id: "deleted", user_id: "u" } },
-      { table: "org_members", data: null },
+      // The catalog itself applies current authorization. The loader only
+      // normalizes workspace placement; execution still rechecks below.
+      { rpc: "get_workflows_overview", data: [{ id: "allowed", org_id: "firm", title: "Here", prompt_md: "Local" }] },
+      { table: "organizations", data: [{ id: "firm", kind: "team" }] },
       { rpc: "get_workflows_overview", data: [] },
       { table: "documents", data: [] },
     ]);
@@ -54,6 +52,23 @@ describe("assistant workspace boundaries", () => {
     expect([...store.keys()]).toEqual([catalogWorkflowId("global"), "allowed"]);
     expect(fake.calls[2].args).toMatchObject({ p_workspace: "firm" });
     expect(fake.calls.at(-1)?.filters).toContainEqual(["in", "workflow_id", ["allowed"]]);
+    fake.done();
+  });
+
+  it("loads only active catalog versions per turn and resolves a retired one on demand", async () => {
+    const fake = scriptedDb([
+      { table: "mike_workflows", data: [] },
+      { rpc: "get_workflows_overview", data: [] },
+      { table: "mike_workflows", data: { workflow_key: "retired", type: "assistant", title: "Old", prompt_md: "Old steps" } },
+    ]);
+    const store = await buildWorkflowStore("u", "u@example.com", fake.db);
+    // Retired versions are never deleted, so an unfiltered read grows with
+    // every catalog sync and ships every historical prompt each turn.
+    expect(fake.calls[0].filters).toContainEqual(["eq", "active", true]);
+    const id = catalogWorkflowId("retired");
+    const result = await runToolCalls([{ id: "call", function: { name: "read_workflow", arguments: JSON.stringify({ workflow_id: id }) } }], new Map(), "u", fake.db, vi.fn(), store);
+    expect(result.workflowsApplied).toEqual([{ workflow_id: id, title: "Old" }]);
+    expect(store.get(id)?.listed).toBe(false);
     fake.done();
   });
 

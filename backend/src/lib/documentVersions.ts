@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import { selectAllByKey, selectInBatches } from "./batchedQuery";
 import type { Db } from "./supabase";
 
 type Supa = Db;
@@ -47,6 +48,7 @@ interface VersionPathRow extends DocRow {
 }
 
 export interface ActiveVersion {
+    text_revision?: string;
     id: string;
     storage_path: string;
     pdf_storage_path: string | null;
@@ -86,7 +88,7 @@ export async function loadActiveVersion(
     const { data: v } = await db
         .from("document_versions")
         .select(
-            "id, document_id, storage_path, pdf_storage_path, version_number, filename, source, file_type, size_bytes, page_count, textless_page_count",
+            "id, document_id, storage_path, pdf_storage_path, version_number, filename, source, file_type, size_bytes, page_count, textless_page_count, text_revision",
         )
         .eq("id", targetVersionId)
         .is("deleted_at", null)
@@ -94,6 +96,7 @@ export async function loadActiveVersion(
     if (!v || v.document_id !== documentId || !v.storage_path) return null;
     return {
         id: v.id as string,
+        ...(typeof v.text_revision === "string" ? { text_revision: v.text_revision } : {}),
         storage_path: v.storage_path as string,
         pdf_storage_path: (v.pdf_storage_path as string | null) ?? null,
         version_number: (v.version_number as number | null) ?? null,
@@ -129,9 +132,10 @@ export function downloadFilenameForVersion(
 
 /**
  * For a list of documents, look up the active version for each and merge
- * `storage_path` + `pdf_storage_path` onto the row. One round-trip total
- * regardless of list size. Documents with no current_version_id retain
- * null paths.
+ * `storage_path` + `pdf_storage_path` onto the row. One round-trip per
+ * {@link ID_FILTER_BATCH_SIZE} versions; a failed lookup throws rather than
+ * silently nulling paths. Documents with no current_version_id retain null
+ * paths.
  */
 export async function attachActiveVersionPaths<T extends VersionPathRow>(
     db: Supa,
@@ -155,13 +159,20 @@ export async function attachActiveVersionPaths<T extends VersionPathRow>(
         }
         return docs;
     }
-    const { data: rows } = await db
-        .from("document_versions")
-        .select(
-            "id, storage_path, pdf_storage_path, version_number, filename, source, file_type, size_bytes, page_count, textless_page_count, content_sha256",
-        )
-        .in("id", versionIds)
-        .is("deleted_at", null);
+    // Batched: one unbounded `.in()` used to exceed the gateway's URL limit
+    // for large projects, and the ignored error left every storage_path null.
+    const rows = await selectInBatches(
+        "document version lookup",
+        versionIds,
+        (batch) =>
+            db
+                .from("document_versions")
+                .select(
+                    "id, storage_path, pdf_storage_path, version_number, filename, source, file_type, size_bytes, page_count, textless_page_count, content_sha256",
+                )
+                .in("id", batch)
+                .is("deleted_at", null),
+    );
     const byId = new Map<
         string,
         {
@@ -223,27 +234,33 @@ export async function attachActiveVersionPaths<T extends VersionPathRow>(
  * Given a list of document rows, attach `latest_version_number` — the
  * max `version_number` across all assistant_edit rows for that doc, or
  * null if none. Mutates rows in place and returns the same reference.
- * One extra query regardless of list size.
+ * One query per {@link ID_FILTER_BATCH_SIZE} documents.
  */
 export async function attachLatestVersionNumbers<T extends DocRow>(
     db: Supa,
     docs: T[],
 ): Promise<T[]> {
     if (docs.length === 0) return docs;
-    const ids = docs.map((d) => d.id);
-    const { data: rows } = await db
-        .from("document_versions")
-        .select("document_id, version_number")
-        .in("document_id", ids)
-        .eq("source", "assistant_edit")
-        .is("deleted_at", null)
-        .not("version_number", "is", null);
+    // A batch of 50 documents can hold more assistant edits than max_rows;
+    // a truncated read reported a stale maximum, so each batch is paged.
+    // Only (id, document_id, version_number) travel.
+    type EditVersion = { id: string; document_id: string; version_number: number | null };
+    const rows = await selectInBatches<EditVersion>(
+        "latest version lookup",
+        docs.map((d) => d.id),
+        (batch) =>
+            selectAllByKey<EditVersion>("latest version lookup", () =>
+                  db
+                    .from("document_versions")
+                    .select("id, document_id, version_number")
+                    .in("document_id", batch)
+                    .eq("source", "assistant_edit")
+                    .is("deleted_at", null)
+                    .not("version_number", "is", null)),
+    );
 
     const latestByDoc = new Map<string, number>();
-    for (const r of (rows ?? []) as {
-        document_id: string;
-        version_number: number | null;
-    }[]) {
+    for (const r of rows) {
         if (r.version_number == null) continue;
         const prev = latestByDoc.get(r.document_id) ?? 0;
         if (r.version_number > prev)

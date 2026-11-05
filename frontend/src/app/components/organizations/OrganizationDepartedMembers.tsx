@@ -64,6 +64,7 @@ import {
 import { notifySuccess, userFacingApiError } from "@/app/lib/userFacingError";
 import { cn } from "@/app/lib/utils";
 import { DropdownItem } from "@/shared/ui/dropdown";
+import { useIdSet } from "@/app/hooks/useIdSet";
 
 type Kind = OrgDepartureItem["kind"];
 
@@ -275,19 +276,21 @@ export function OrganizationDepartedMembers({
     () => departures.flatMap((departure) => departure.items.map((i) => i.id)),
     [departures],
   );
-  const selected = useMemo(
-    () => selectedIds.filter((id) => visibleIds.includes(id)),
-    [selectedIds, visibleIds],
-  );
+  const selected = useMemo(() => {
+    const visible = new Set(visibleIds);
+    return selectedIds.filter((id) => visible.has(id));
+  }, [selectedIds, visibleIds]);
+  const selectedSet = useIdSet(selected);
   const isSelected = (ids: string[]) =>
-    ids.length > 0 && ids.every((id) => selected.includes(id));
+    ids.length > 0 && ids.every((id) => selectedSet.has(id));
   const isPartlySelected = (ids: string[]) =>
-    !isSelected(ids) && ids.some((id) => selected.includes(id));
+    !isSelected(ids) && ids.some((id) => selectedSet.has(id));
 
   function toggle(ids: string[]) {
+    const toggled = new Set(ids);
     setSelectedIds(
       isSelected(ids)
-        ? selected.filter((id) => !ids.includes(id))
+        ? selected.filter((id) => !toggled.has(id))
         : [...new Set([...selected, ...ids])],
     );
   }
@@ -717,7 +720,7 @@ export function OrganizationDepartedMembers({
                                 ids: [item.id],
                                 label: item.title,
                               };
-                              const itemSelected = selected.includes(item.id);
+                              const itemSelected = selectedSet.has(item.id);
                               return (
                                 <TableRow
                                   key={item.id}

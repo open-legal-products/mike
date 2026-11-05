@@ -13,6 +13,14 @@ vi.mock("../../../../lib/mcpConnectors", () => ({
   buildUserMcpTools: vi.fn(async () => []),
 }));
 vi.mock("../tools/toolDispatcher", () => ({ runToolCalls: vi.fn() }));
+vi.mock("../../../../lib/integrations/googleDrive", () => ({ buildGoogleDriveTools: async () => [] }));
+vi.mock("../../../../lib/integrations/googleWorkspace", () => ({ buildGoogleWorkspaceTools: async () => [] }));
+vi.mock("../../../../lib/documentVersions", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../../../lib/documentVersions")>()),
+  loadActiveVersion: async () => ({
+    id: "version-1", version_number: 1, storage_path: "synthetic/agreement.txt",
+  }),
+}));
 
 import { runLLMStream } from "../streaming";
 

@@ -347,6 +347,8 @@ const USER_SIDE_UPLOAD_CODES: ReadonlySet<string> = new Set([
     "document_changed",
     "upload_target_busy",
     "direct_upload_failed",
+    // The bytes were never a PDF (a renamed file); only the user can fix that.
+    "invalid_pdf_file",
 ]);
 
 /**

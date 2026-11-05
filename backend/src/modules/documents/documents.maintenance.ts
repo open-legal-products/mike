@@ -33,9 +33,20 @@ import { createServerSupabase, type Db } from "../../lib/supabase";
 import { getConversionQueue, conversionJobId } from "../../lib/queue/conversionQueue";
 import { withRedisTimeout } from "../../lib/queue/connection";
 import { redisEnabled } from "../../lib/dbq/driver";
-import { liveDbJobExists } from "../../lib/dbq/enqueue";
+import { liveDbJobDedupeKeys } from "../../lib/dbq/enqueue";
+import { chunkArray } from "../../lib/arrays";
+import { ID_FILTER_BATCH_SIZE, selectInBatches } from "../../lib/batchedQuery";
+import { mapWithConcurrency } from "../../lib/concurrency";
 
 const DEFAULT_DOC_STALE_MS = 30 * 60 * 1000;
+/** Documents judged per sweep; a larger backlog is visited over later sweeps. */
+const STALE_DOC_SWEEP_LIMIT = 500;
+/**
+ * Where the next sweep resumes: the last document id the previous sweep
+ * judged (null = start of a pass). Process-local by design: a restart only
+ * starts a new pass from the beginning, and each process cycles on its own.
+ */
+let staleDocCursor: string | null = null;
 
 function docStaleMs(): number {
     const raw = Number(process.env.STALE_DOC_PROCESSING_MS);
@@ -50,11 +61,30 @@ export async function sweepStaleProcessingDocuments(
     db: Db = createServerSupabase(),
 ): Promise<number> {
     const cutoff = new Date(Date.now() - docStaleMs()).toISOString();
-    const { data: docs, error } = await db
-        .from("documents")
-        .select("id, current_version_id")
-        .eq("status", "processing")
-        .lt("updated_at", cutoff);
+    // Bounded per sweep, and fair: a keyset scan on the unique id that
+    // resumes where the last sweep stopped. Re-reading the oldest page every
+    // time would park an orphan forever behind a page of documents whose
+    // conversions are still live (they stay "processing" and keep their
+    // place). Every candidate is judged once per pass of
+    // ceil(candidates / STALE_DOC_SWEEP_LIMIT) sweeps; a document that turns
+    // stale mid-pass is reached by the next pass at the latest.
+    const page = (after: string | null) => {
+        let query = db
+            .from("documents")
+            .select("id, current_version_id")
+            .eq("status", "processing")
+            .lt("updated_at", cutoff);
+        if (after) query = query.gt("id", after);
+        return query.order("id", { ascending: true }).limit(STALE_DOC_SWEEP_LIMIT);
+    };
+    let { data: docs, error } = await page(staleDocCursor);
+    if (!error && staleDocCursor && !docs?.length) {
+        // The pass is over: wrap around and start the next one now. (Only an
+        // EMPTY page ends a pass; a gateway max_rows below the limit returns
+        // short pages that are not the end.)
+        staleDocCursor = null;
+        ({ data: docs, error } = await page(null));
+    }
     if (error) {
         console.error("[stale-sweep] documents query failed", error);
         return 0;
@@ -72,59 +102,79 @@ export async function sweepStaleProcessingDocuments(
     // storage key can no longer finalize this document — the worker's write is
     // fenced on the version's current storage_path — so it must not count as
     // the owner keeping the document alive.
-    const storagePathByVersion = new Map<string, string>();
-    const versionIds = queueOn
-        ? rows
-              .map((d) => d.current_version_id)
-              .filter((id): id is string => !!id)
-        : [];
-    if (versionIds.length) {
-        const { data: versions } = await db
-            .from("document_versions")
-            .select("id, storage_path")
-            .in("id", versionIds);
-        for (const v of (versions ?? []) as {
-            id: string;
-            storage_path?: string | null;
-        }[])
-            if (v.storage_path) storagePathByVersion.set(v.id, v.storage_path);
+    let stale: string[];
+    try {
+        const storagePathByVersion = new Map<string, string>();
+        if (queueOn) {
+            const versions = await selectInBatches<{ id: string; storage_path?: string | null }>(
+                "stale document versions",
+                rows.map((d) => d.current_version_id),
+                (batch) => db.from("document_versions").select("id, storage_path").in("id", batch),
+            );
+            for (const v of versions)
+                if (v.storage_path) storagePathByVersion.set(v.id, v.storage_path);
+        }
+        const jobIdByDoc = new Map<string, string>();
+        for (const doc of rows) {
+            const storagePath = doc.current_version_id
+                ? storagePathByVersion.get(doc.current_version_id)
+                : undefined;
+            if (queueOn && doc.current_version_id && storagePath)
+                jobIdByDoc.set(doc.id, conversionJobId(doc.current_version_id, storagePath));
+        }
+        // A job that still exists (waiting/active/delayed) owns its document;
+        // terminal jobs are removed immediately (BullMQ) or freed from the
+        // dedupe index (DB queue), so existence is the liveness signal on
+        // either driver. Asked for the whole page at once (DB queue: one
+        // query per 50 keys) or a few at a time (BullMQ), not serially.
+        const jobIds = [...jobIdByDoc.values()];
+        const live = new Set<string>();
+        if (redisEnabled()) {
+            const found = await mapWithConcurrency(jobIds, 8, async (jobId) =>
+                (await withRedisTimeout("conversion job lookup", () =>
+                    getConversionQueue().getJob(jobId),
+                ))
+                    ? jobId
+                    : null,
+            );
+            for (const jobId of found) if (jobId) live.add(jobId);
+        } else {
+            for (const batch of chunkArray(jobIds, ID_FILTER_BATCH_SIZE))
+                for (const key of await liveDbJobDedupeKeys(db, batch)) live.add(key);
+        }
+        stale = rows
+            .filter((doc) => !live.has(jobIdByDoc.get(doc.id) ?? ""))
+            .map((doc) => doc.id);
+    } catch (lookupError) {
+        console.error("[stale-sweep] liveness lookup failed", lookupError);
+        return 0;
     }
+    // Judged: the next sweep resumes after this page (a failed lookup above
+    // retries the same page).
+    staleDocCursor = rows.length ? rows[rows.length - 1].id : null;
 
     let flipped = 0;
-    for (const doc of rows) {
-        const storagePath = doc.current_version_id
-            ? storagePathByVersion.get(doc.current_version_id)
-            : undefined;
-        if (queueOn && doc.current_version_id && storagePath) {
-            // A job that still exists (waiting/active/delayed) owns this
-            // document; terminal jobs are removed immediately (BullMQ) or
-            // freed from the dedupe index (DB queue), so existence is the
-            // liveness signal on either driver.
-            const jobId = conversionJobId(doc.current_version_id, storagePath);
-            const live = redisEnabled()
-                ? !!(await withRedisTimeout("conversion job lookup", () =>
-                      getConversionQueue().getJob(jobId),
-                  ))
-                : await liveDbJobExists(db, jobId);
-            if (live) continue;
-        }
-        const { error: updateErr } = await db
+    for (const batch of chunkArray(stale, ID_FILTER_BATCH_SIZE)) {
+        const { data: updated, error: updateErr } = await db
             .from("documents")
             .update({ status: "error", updated_at: new Date().toISOString() })
-            .eq("id", doc.id)
-            .eq("status", "processing");
+            .in("id", batch)
+            .eq("status", "processing")
+            .select("id");
         if (updateErr) {
             console.error("[stale-sweep] document flip failed", {
-                documentId: doc.id,
+                documentIds: batch.length,
                 error: updateErr,
             });
             continue;
         }
-        flipped += 1;
-        console.warn(
-            "[stale-sweep] stale processing document flipped to error",
-            { documentId: doc.id },
-        );
+        for (const row of (updated ?? []) as { id: string }[]) {
+            flipped += 1;
+            console.warn(
+                "[stale-sweep] stale processing document flipped to error",
+                { documentId: row.id },
+            );
+        }
     }
     return flipped;
 }

@@ -70,6 +70,8 @@ import {
   TableStickyCell,
 } from "../shared/TablePrimitive";
 import { AccessScopeLabel } from "../shared/AccessScopeLabel";
+import { settleBulkRequests } from "@/app/lib/bulkRequests";
+import { useIdSet } from "@/app/hooks/useIdSet";
 
 type WorkflowListTab = "all" | "assistant" | "tabular" | "addons";
 
@@ -143,6 +145,7 @@ export function WorkflowList({
     null,
   );
   const [selectedAddonIds, setSelectedAddonIds] = useState<string[]>([]);
+  const selectedAddonIdSet = useIdSet(selectedAddonIds);
   const [workflowActionsOpen, setWorkflowActionsOpen] = useState(false);
   const [pendingDeleteWorkflows, setPendingDeleteWorkflows] = useState<
     Workflow[]
@@ -153,6 +156,7 @@ export function WorkflowList({
   >("idle");
   const [importingAddonId, setImportingAddonId] = useState<string | null>(null);
   const [importedAddonIds, setImportedAddonIds] = useState<string[]>([]);
+  const importedAddonIdSet = useIdSet(importedAddonIds);
   const [bulkImportingAddonIds, setBulkImportingAddonIds] = useState<string[]>([]);
   const bulkImportingAddons = bulkImportingAddonIds.length > 0;
   const [addonsError, setAddonsError] = useState("");
@@ -318,7 +322,7 @@ export function WorkflowList({
   }
 
   async function importAddon(addon: WorkflowAddon) {
-    if (bulkImportingAddons || importingAddonId || importedAddonIds.includes(addon.id)) return;
+    if (bulkImportingAddons || importingAddonId || importedAddonIdSet.has(addon.id)) return;
     setImportingAddonId(addon.id);
     setActionError("");
     try {
@@ -338,32 +342,25 @@ export function WorkflowList({
 
   function importSelectedAddons() {
     return importAddons(
-      addons.filter((addon) => selectedAddonIds.includes(addon.id)),
+      addons.filter((addon) => selectedAddonIdSet.has(addon.id)),
     );
   }
 
   async function importAddons(selectedAddons: WorkflowAddon[]) {
     if (bulkImportingAddons || importingAddonId) return;
-    const targets = selectedAddons.filter((addon) => !importedAddonIds.includes(addon.id));
+    const targets = selectedAddons.filter((addon) => !importedAddonIdSet.has(addon.id));
     if (targets.length === 0) return;
     setBulkImportingAddonIds(targets.map((addon) => addon.id));
     setActionError("");
     try {
-      const results = await Promise.allSettled(
-        targets.map((addon) => importWorkflowAddon(addon.id)),
-      );
-      const imported = results.flatMap((result) =>
-        result.status === "fulfilled" ? [result.value] : [],
+      const { succeeded, values: imported } = await settleBulkRequests(
+        targets,
+        (addon) => importWorkflowAddon(addon.id),
       );
       if (imported.length > 0) {
         setWorkflows((current) => [...imported, ...current]);
         setImportedAddonIds((current) => [
-          ...new Set([
-            ...current,
-            ...targets.flatMap((addon, index) =>
-              results[index]?.status === "fulfilled" ? [addon.id] : [],
-            ),
-          ]),
+          ...new Set([...current, ...succeeded.map((addon) => addon.id)]),
         ]);
       }
       setSelectedAddonIds([]);
@@ -390,15 +387,17 @@ export function WorkflowList({
     if (ids.length === 0) return;
     setDeleteStatus("loading");
     const snapshot = workflows;
+    const deletingIds = new Set(ids);
     setWorkflows((current) =>
-      current.filter((workflow) => !ids.includes(workflow.id)),
+      current.filter((workflow) => !deletingIds.has(workflow.id)),
     );
     const { deletedIds, failedIds } = await deleteTabularReviewsWithConcurrency(
       ids,
       deleteWorkflow,
     );
+    const deletedIdSet = new Set(deletedIds);
     setSelectedWorkflowIds((current) =>
-      current.filter((id) => !deletedIds.includes(id)),
+      current.filter((id) => !deletedIdSet.has(id)),
     );
     if (failedIds.length > 0) {
       setWorkflows((current) =>
@@ -439,11 +438,13 @@ export function WorkflowList({
         editDetailsLabel="Edit"
         onDelete={
           appliesToSelection || !workflow
-            ? () =>
+            ? () => {
+                const targetIds = new Set(actionIds);
                 requestWorkflowDeletion(
-                  workflows.filter((item) => actionIds.includes(item.id)),
+                  workflows.filter((item) => targetIds.has(item.id)),
                   actionIds,
-                )
+                );
+              }
             : canManage
               ? () => requestWorkflowDeletion([workflow])
               : undefined
@@ -734,6 +735,7 @@ function WorkflowTable({
   onLoadMore: () => void;
 }) {
   const rowSelectionAnchorIdRef = useRef<string | null>(null);
+  const selectedIdSet = useIdSet(selectedIds);
   const typeOptions = useMemo<TableFilterOption<string>[]>(
     () => [
       { value: "assistant", label: "Assistant" },
@@ -759,9 +761,9 @@ function WorkflowTable({
     .map((workflow) => workflow.id);
   const allSelected =
     selectableIds.length > 0 &&
-    selectableIds.every((id) => selectedIds.includes(id));
+    selectableIds.every((id) => selectedIdSet.has(id));
   const someSelected =
-    !allSelected && selectableIds.some((id) => selectedIds.includes(id));
+    !allSelected && selectableIds.some((id) => selectedIdSet.has(id));
 
   function toggleAll() {
     rowSelectionAnchorIdRef.current = null;
@@ -775,7 +777,7 @@ function WorkflowTable({
   function toggleOne(id: string) {
     rowSelectionAnchorIdRef.current = id;
     onSelectedIdsChange(
-      selectedIds.includes(id)
+      selectedIdSet.has(id)
         ? selectedIds.filter((selectedId) => selectedId !== id)
         : [...selectedIds, id],
     );
@@ -974,7 +976,7 @@ function WorkflowTable({
                   : ChatSkeuoIcon;
               const canManage = workflow.is_owner !== false;
               const canDelete = canManage;
-              const isSelected = selectedIds.includes(workflow.id);
+              const isSelected = selectedIdSet.has(workflow.id);
               return (
                 <TableRow
                   key={workflow.id}
@@ -1124,6 +1126,8 @@ function AddonTable({
     () => new Set(),
   );
   const rowSelectionAnchorIdRef = useRef<string | null>(null);
+  const selectedIdSet = useIdSet(selectedIds);
+  const importedAddonIdSet = useIdSet(importedAddonIds);
   const packs = useMemo(() => {
     const grouped = new Map<
       string,
@@ -1159,9 +1163,9 @@ function AddonTable({
     : packs.length === 0 && standaloneAddons.length === 0;
   const addonIds = (activePack?.addons ?? addons).map((addon) => addon.id);
   const allSelected =
-    addonIds.length > 0 && addonIds.every((id) => selectedIds.includes(id));
+    addonIds.length > 0 && addonIds.every((id) => selectedIdSet.has(id));
   const someSelected =
-    !allSelected && addonIds.some((id) => selectedIds.includes(id));
+    !allSelected && addonIds.some((id) => selectedIdSet.has(id));
 
   function toggleAll() {
     rowSelectionAnchorIdRef.current = null;
@@ -1171,7 +1175,7 @@ function AddonTable({
   function toggleOne(addonId: string) {
     rowSelectionAnchorIdRef.current = addonId;
     onSelectedIdsChange(
-      selectedIds.includes(addonId)
+      selectedIdSet.has(addonId)
         ? selectedIds.filter((id) => id !== addonId)
         : [...selectedIds, addonId],
     );
@@ -1179,11 +1183,12 @@ function AddonTable({
 
   function togglePackSelection(packAddons: WorkflowAddon[]) {
     const packIds = packAddons.map((addon) => addon.id);
+    const packIdSet = new Set(packIds);
     rowSelectionAnchorIdRef.current = packIds[0] ?? null;
-    const packSelected = packIds.every((id) => selectedIds.includes(id));
+    const packSelected = packIds.every((id) => selectedIdSet.has(id));
     onSelectedIdsChange(
       packSelected
-        ? selectedIds.filter((id) => !packIds.includes(id))
+        ? selectedIds.filter((id) => !packIdSet.has(id))
         : [...new Set([...selectedIds, ...packIds])],
     );
   }
@@ -1207,12 +1212,12 @@ function AddonTable({
   ) {
     const rowSelected =
       rowAddons.length > 0 &&
-      rowAddons.every((addon) => selectedIds.includes(addon.id));
+      rowAddons.every((addon) => selectedIdSet.has(addon.id));
     const targets = (
       rowSelected
-        ? addons.filter((addon) => selectedIds.includes(addon.id))
+        ? addons.filter((addon) => selectedIdSet.has(addon.id))
         : rowAddons
-    ).filter((addon) => !importedAddonIds.includes(addon.id));
+    ).filter((addon) => !importedAddonIdSet.has(addon.id));
     const importDisabled = bulkImporting || importingAddonId !== null;
     return (
       <RowActionMenuItems
@@ -1233,7 +1238,7 @@ function AddonTable({
   }
 
   function renderImportButton(rowAddons: WorkflowAddon[]) {
-    const targets = rowAddons.filter((addon) => !importedAddonIds.includes(addon.id));
+    const targets = rowAddons.filter((addon) => !importedAddonIdSet.has(addon.id));
     const imported = targets.length === 0;
     const importing = rowAddons.some((addon) =>
       importingAddonId === addon.id || bulkImportingIds.includes(addon.id),
@@ -1274,7 +1279,7 @@ function AddonTable({
     return (
       <TableRow
         key={addon.id}
-        selected={selectedIds.includes(addon.id)}
+        selected={selectedIdSet.has(addon.id)}
         onClick={(event) => {
           if (event.shiftKey) {
             event.preventDefault();
@@ -1307,7 +1312,7 @@ function AddonTable({
         <TablePrimaryCell
           style={nested ? tableTreeCellStyle(1) : undefined}
           label={addon.title}
-          selected={selectedIds.includes(addon.id)}
+          selected={selectedIdSet.has(addon.id)}
           onSelectionChange={() => toggleOne(addon.id)}
         />
         <TableCell className="ml-auto w-28">
@@ -1409,11 +1414,11 @@ function AddonTable({
               {packs.map((pack) => {
                 const expanded = expandedPackKeys.has(pack.key);
                 const packSelected = pack.addons.every((addon) =>
-                  selectedIds.includes(addon.id),
+                  selectedIdSet.has(addon.id),
                 );
                 const packPartiallySelected =
                   !packSelected &&
-                  pack.addons.some((addon) => selectedIds.includes(addon.id));
+                  pack.addons.some((addon) => selectedIdSet.has(addon.id));
                 return [
                   <TableRow
                     key={`${pack.key}:folder`}

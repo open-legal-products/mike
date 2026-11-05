@@ -2,14 +2,18 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import {
     getTabularReview,
+    getTabularReviewHistoryStatuses,
+    regenerateTabularCell,
     stopTabularGeneration,
     streamTabularGeneration,
     streamTabularGenerationResume,
 } from "@/app/lib/mikeApi";
 import type {
+    TabularCell,
     TabularReview,
     TabularReviewRow,
 } from "@/app/components/shared/types";
+import type { ReviewCellStore } from "./reviewCellStore";
 import { TRView } from "./TabularReviewView";
 
 const { apiKeyState } = vi.hoisted(() => ({
@@ -50,6 +54,7 @@ vi.mock("@/app/lib/mikeApi", () => ({
     clearTabularCells: vi.fn(),
     deleteTabularReview: vi.fn(),
     getTabularReview: vi.fn(),
+    getTabularReviewHistoryStatuses: vi.fn(),
     getProject: vi.fn(),
     getTabularReviewPeople: vi.fn(async () => ({ owner: null, members: [] })),
     getOllamaModels: vi.fn(async () => []),
@@ -83,8 +88,35 @@ vi.mock("../assistant/ModelToggle", async (importOriginal) => ({
     ...(await importOriginal<typeof import("../assistant/ModelToggle")>()),
     ModelToggle: () => null,
 }));
-vi.mock("./TRTable", () => ({ TRTable: () => <div /> }));
-vi.mock("./TRSidePanel", () => ({ TRSidePanel: () => null }));
+// The grid as TRView hands it over: the published cell list (whose identity
+// changes only on a structural update) and the per-cell store.
+const table = vi.hoisted(() => ({
+    cells: null as TabularCell[] | null,
+    store: null as ReviewCellStore | null,
+}));
+vi.mock("./TRTable", () => ({
+    TRTable: (props: {
+        cells: TabularCell[];
+        cellStore: ReviewCellStore;
+        onExpand: (cell: TabularCell) => void;
+    }) => {
+        table.cells = props.cells;
+        table.store = props.cellStore;
+        return (
+            <button type="button" onClick={() => props.onExpand(props.cells[0])}>
+                Open first cell
+            </button>
+        );
+    },
+}));
+vi.mock("./TRSidePanel", () => ({
+    TRSidePanel: (props: { onRegenerate?: () => void }) =>
+        props.onRegenerate ? (
+            <button type="button" onClick={props.onRegenerate}>
+                Regenerate cell
+            </button>
+        ) : null,
+}));
 vi.mock("./TRChatPanel", () => ({ TRChatPanel: () => null }));
 vi.mock("./AddColumnModal", () => ({ AddColumnModal: () => null }));
 vi.mock("./TRWorkflowModal", () => ({ TRWorkflowModal: () => null }));
@@ -366,5 +398,84 @@ describe("TabularReviewView server-owned generation", () => {
             ),
         );
         resumed.done();
+    });
+});
+
+describe("TabularReviewView single-cell regeneration", () => {
+    const CELL = {
+        id: "cell-1",
+        review_id: "r1",
+        row_id: "row-1",
+        document_id: "doc-1",
+        column_index: 0,
+        content: { summary: "Old" },
+        status: "done",
+        created_at: "2026-01-01T00:00:00Z",
+    } as TabularCell;
+
+    // A review whose run reports "running" for the next `requests` reads of
+    // either its full detail or its status snapshot.
+    function serverRunsFor(requests: number) {
+        let remaining = requests;
+        const running = () => remaining-- > 0;
+        vi.mocked(getTabularReview).mockImplementation(async () => ({
+            review: review({ is_running: running() } as Partial<TabularReview>),
+            cells: [CELL],
+            rows: [ROW],
+            documents: [],
+            active_generation: null,
+        }));
+        vi.mocked(getTabularReviewHistoryStatuses).mockImplementation(
+            async () =>
+                [{ id: "r1", is_running: running(), is_complete: false }] as never,
+        );
+    }
+
+    beforeEach(() => {
+        vi.clearAllMocks();
+        vi.mocked(getTabularReview).mockResolvedValue({
+            review: review(),
+            cells: [CELL],
+            rows: [ROW],
+            documents: [],
+            active_generation: null,
+        });
+    });
+
+    async function openCell() {
+        render(<TRView reviewId="r1" />);
+        fireEvent.click(await screen.findByRole("button", { name: "Open first cell" }));
+        return screen.findByRole("button", { name: "Regenerate cell" });
+    }
+
+    it("updates only that cell instead of republishing the grid", async () => {
+        const regenerate = await openCell();
+        const published = table.cells;
+        let finish!: (content: TabularCell["content"]) => void;
+        vi.mocked(regenerateTabularCell).mockReturnValue(
+            new Promise((resolve) => { finish = resolve as never; }),
+        );
+        fireEvent.click(regenerate);
+        await waitFor(() =>
+            expect(table.store?.get("row-1", 0)?.status).toBe("generating"),
+        );
+        expect(table.cells).toBe(published);
+        serverRunsFor(0);
+        finish({ summary: "New" });
+        await waitFor(() => expect(getTabularReview).toHaveBeenCalledTimes(2));
+    });
+
+    it("polls the run's status, not the whole review, until the run ends", async () => {
+        const regenerate = await openCell();
+        vi.mocked(regenerateTabularCell).mockResolvedValue({ summary: "New" } as never);
+        serverRunsFor(3);
+        fireEvent.click(regenerate);
+        await waitFor(
+            () => expect(getTabularReviewHistoryStatuses).toHaveBeenCalledTimes(3),
+            { timeout: 3000 },
+        );
+        // The initial load, the first read after the cell, and the one after
+        // the run ended: never one full read per poll.
+        await waitFor(() => expect(getTabularReview).toHaveBeenCalledTimes(3));
     });
 });

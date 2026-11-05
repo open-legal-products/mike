@@ -5,6 +5,7 @@ import { NonRetryableJobError } from "../../lib/dbq/runner";
 import { removeGrantsForEmail } from "../../lib/projectAccess";
 import { removeContentGrantsForEmail } from "../../lib/contentAccess";
 import { chunkArray } from "../../lib/arrays";
+import { wipeMemoryFiles } from "../../lib/memory/files";
 import { listPersonalOrgIds } from "../../lib/personalOrgs";
 import { deleteOrgContent } from "../orgs/orgs.service";
 import { throwIfError, uniqueStrings } from "./user.shared";
@@ -41,15 +42,13 @@ async function wipeMemoryForOwners(
             .in(ownerColumn, ownerBatch);
         await throwIfError(error, `Failed to load ${scope} memory files`);
 
-        for (const row of (data ?? []) as { id?: unknown }[]) {
-            if (typeof row.id !== "string" || !row.id) continue;
-            const result = await db.rpc("wipe_memory_file", {
-                p_memory_file_id: row.id,
-                p_enabled: false,
-                p_updated_by: null,
-                p_source: "wipe",
-            });
-            await throwIfError(result.error, `Failed to purge ${scope} memory`);
+        const ids = ((data ?? []) as { id?: unknown }[]).flatMap((row) =>
+            typeof row.id === "string" && row.id ? [row.id] : [],
+        );
+        try {
+            await wipeMemoryFiles(db, ids, { enabled: false });
+        } catch (error) {
+            throw new Error(`Failed to purge ${scope} memory`, { cause: error });
         }
     }
 }

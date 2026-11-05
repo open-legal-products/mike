@@ -23,6 +23,7 @@ import {
   type InvitableOrgRole,
 } from "@/app/lib/permissions";
 import { userFacingApiError } from "@/app/lib/userFacingError";
+import { settleBulkRequests } from "@/app/lib/bulkRequests";
 
 function friendlyError(error: unknown, fallback: string) {
   return userFacingApiError(error, fallback);
@@ -96,12 +97,10 @@ export function CreateOrganizationModal({
         onCreated(org);
         return;
       }
-      const results = await Promise.allSettled(
-        memberEmails.map((email) =>
-          createOrgInvitation(org.id, email, "member"),
-        ),
+      const invitations = await settleBulkRequests(memberEmails, (email) =>
+        createOrgInvitation(org.id, email, "member"),
       );
-      if (results.some((result) => result.status === "rejected")) {
+      if (invitations.failed.length > 0) {
         setCreatedOrg(org);
         setError(
           "Organization created, but some invitations could not be sent. You can add them later.",

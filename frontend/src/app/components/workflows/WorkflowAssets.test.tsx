@@ -192,6 +192,20 @@ describe("WorkflowAssets", () => {
         expect(alert).toHaveTextContent("Couldn't upload this file");
         expect(alert).not.toHaveTextContent("Failed to fetch");
     });
+    it("reports a file refused as not a PDF, without a Retry that would resend it", async () => {
+        const refused = new File(["plain text"], "Notes.pdf", { type: "application/pdf" });
+        uploadWorkflowAssets.mockResolvedValueOnce([
+          {clientId: "1", filename: refused.name, status: "error", result: null, errorCode: "invalid_pdf_file"},
+        ]);
+        const ref = createRef<WorkflowAssetsHandle>();
+        render(<><WorkflowAssets ref={ref} workflowId="workflow-1" readOnly={false}/><ToastViewportUI/></>);
+        await screen.findByText("Precedent.docx");
+        act(() => { ref.current?.uploadFiles([refused]); });
+        const alert = await screen.findByRole("alert");
+        expect(alert).toHaveTextContent("Notes.pdf is not a valid PDF file.");
+        expect(screen.queryByRole("button", {name: "Retry"})).toBeNull();
+        expect(uploadWorkflowAssets).toHaveBeenCalledTimes(1);
+    });
     it("retry does not resend the successful same-name file", async () => {
         const user = userEvent.setup();
         const good = new File(["good"], "Contract.pdf", { type: "application/pdf" });

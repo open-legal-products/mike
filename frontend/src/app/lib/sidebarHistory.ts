@@ -1,6 +1,7 @@
 import type { Chat, TabularReview } from "@/app/components/shared/types";
 import type { PlaybookRunHistoryItem } from "./mikeApi";
 import { chatActivityAt } from "./chatActivity";
+import { parsedTime, sortByNewest } from "./sortByNewest";
 
 export type SidebarHistoryItem =
     | { kind: "chat"; item: Chat }
@@ -11,8 +12,8 @@ type HistorySource = Chat | TabularReview | PlaybookRunHistoryItem;
 
 function activityTime(item: HistorySource): number {
     // A run is listed, and paged, by when it started.
-    if ("startedAt" in item) return Date.parse(item.startedAt) || 0;
-    return Date.parse(chatActivityAt(item) ?? "") || 0;
+    if ("startedAt" in item) return parsedTime(item.startedAt);
+    return parsedTime(chatActivityAt(item));
 }
 
 /** Only show the portion for which every paginated source has been read. */
@@ -38,8 +39,9 @@ export function mergeSidebarHistory(
         ...reviews.map((item): SidebarHistoryItem => ({ kind: "review", item })),
         ...runs.map((item): SidebarHistoryItem => ({ kind: "playbookRun", item })),
     ];
-    return entries
-        .filter(({ item }) => activityTime(item) >= cutoff)
-        .sort((a, b) => activityTime(b.item) - activityTime(a.item)
-            || `${a.kind}:${a.item.id}`.localeCompare(`${b.kind}:${b.item.id}`));
+    return sortByNewest(
+        entries.filter(({ item }) => activityTime(item) >= cutoff),
+        (entry) => activityTime(entry.item),
+        (a, b) => `${a.kind}:${a.item.id}`.localeCompare(`${b.kind}:${b.item.id}`),
+    );
 }
