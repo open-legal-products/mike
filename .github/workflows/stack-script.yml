@@ -17,11 +17,17 @@ on:
     paths:
       - scripts/stack.sh
       - scripts/stack.test.sh
+      - scripts/e2e-local-stack.sh
+      - scripts/lib/local-secrets.sh
+      - scripts/local-secrets.test.sh
       - .github/workflows/stack-script.yml
   pull_request:
     paths:
       - scripts/stack.sh
       - scripts/stack.test.sh
+      - scripts/e2e-local-stack.sh
+      - scripts/lib/local-secrets.sh
+      - scripts/local-secrets.test.sh
       - .github/workflows/stack-script.yml
   workflow_dispatch:
 
@@ -42,3 +48,6 @@ jobs:
 
       - name: Run the fixture test
         run: bash scripts/stack.test.sh
+
+      - name: Run the local-secrets test
+        run: bash scripts/local-secrets.test.sh
