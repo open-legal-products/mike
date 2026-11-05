@@ -602,4 +602,30 @@ describe("UserProfileProvider when the server omits apiKeyStatus", () => {
         await waitFor(() => expect(getUserProfile).toHaveBeenCalledTimes(2));
         expect(reportError).toHaveBeenCalledTimes(1);
     });
+
+    it("leaves key state unknown, so the model picker offers models instead of No Models", async () => {
+        getUserProfile.mockResolvedValue(withoutKeyStatus());
+        renderProfile();
+
+        await screen.findByTestId("loaded");
+        expect(screen.getByTestId("keys")).toHaveTextContent("unknown");
+        expect(screen.queryByText("No Models")).toBeNull();
+        expect(screen.getByText("Gemini 3.8 Flash")).toBeInTheDocument();
+    });
+
+    it("applies a save whose response also lacks the key status, without a notice", async () => {
+        getUserProfile.mockResolvedValue(withoutKeyStatus());
+        updateUserProfile.mockResolvedValue({ ...withoutKeyStatus(), displayName: "Grace" });
+        renderProfile();
+
+        await screen.findByTestId("loaded");
+        fireEvent.click(screen.getByRole("button", { name: "rename" }));
+
+        await waitFor(() => expect(screen.getByTestId("saved")).toHaveTextContent("true"));
+        expect(screen.getByTestId("name")).toHaveTextContent("Grace");
+        expect(screen.getByTestId("keys")).toHaveTextContent("unknown");
+        expect(screen.queryByRole("alert")).toBeNull();
+        // Only the load's warning; the save is not reported as a failure.
+        expect(reportError).toHaveBeenCalledTimes(1);
+    });
 });
