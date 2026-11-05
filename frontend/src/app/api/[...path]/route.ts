@@ -136,11 +136,15 @@ async function proxy(request: NextRequest, context: RouteContext) {
 }
 
 /**
- * The backend's response failed after its headers were forwarded. Reported
- * once per cause per minute as a warning under the same pinned fingerprint
- * as an unreachable backend: either way the backend went away (or went
- * silent for the 300 s body timeout), and every open stream fails the same
- * way at the same moment. A client that disconnected first is not a failure.
+ * The backend's response failed after its headers were forwarded. Split the
+ * same way as a failed fetch. A connection-level code (the backend went away
+ * mid-stream: UND_ERR_SOCKET, ECONNRESET) is the same fact as an unreachable
+ * backend, so it is one pinned warning per cause per minute under that
+ * fingerprint; every open stream fails the same way at the same moment.
+ * Anything else, including undici's 300 s body timeout (the backend is up but
+ * held the stream silent: a hang, not an outage) and a code we do not know,
+ * keeps an error-level report with default grouping, still at most once per
+ * cause per minute. A client that disconnected first is not a failure.
  */
 function reportStreamFailure(
     error: unknown,
@@ -152,20 +156,26 @@ function reportStreamFailure(
     if (request.signal.aborted) return;
     const code = diagnosticErrorTags(error).failure_code;
     const failureCode = typeof code === "string" ? code : undefined;
+    const unreachable = upstreamUnreachableCode(error);
     if (upstreamReportWindow.allow(`gateway-stream:${failureCode ?? "unknown"}`)) {
-        reportError(error, {
-            level: "warning",
-            fingerprint: [UPSTREAM_UNAVAILABLE_FINGERPRINT],
-            tags: {
-                component: "api-gateway",
-                stage: "gateway-stream",
-                http_method: request.method,
-                http_route: diagnosticRoute(requestPath),
-                http_status: status,
-                request_id: requestId,
-                failure_code: failureCode,
-            },
-        });
+        const tags = {
+            component: "api-gateway",
+            stage: "gateway-stream",
+            http_method: request.method,
+            http_route: diagnosticRoute(requestPath),
+            http_status: status,
+            request_id: requestId,
+            failure_code: failureCode,
+        };
+        if (unreachable) {
+            reportError(error, {
+                level: "warning",
+                fingerprint: [UPSTREAM_UNAVAILABLE_FINGERPRINT],
+                tags,
+            });
+        } else {
+            reportError(error, { tags });
+        }
     }
     // console.warn: the operator's log keeps the cause; the Sentry console
     // bridge only forwards console.error.

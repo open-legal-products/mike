@@ -224,6 +224,40 @@ describe("same-origin API gateway", () => {
             expect(warn).toHaveBeenCalledWith("[api-gateway] upstream response stream failed", failure, expect.any(Object));
         });
 
+        // A body timeout means the backend is up but held the stream silent
+        // for 300 s: a hang, not an outage. Like an unrecognised code it keeps
+        // an error-level report with default grouping (MIKE-FRONTEND-2C).
+        it("keeps a body timeout or an unknown failure at error level, once a minute", async () => {
+            vi.spyOn(console, "warn").mockImplementation(() => {});
+            const bodyTimeout = () =>
+                new TypeError("terminated", {
+                    cause: Object.assign(new Error("Body Timeout Error"), {
+                        name: "BodyTimeoutError",
+                        code: "UND_ERR_BODY_TIMEOUT",
+                    }),
+                });
+            for (const failure of [bodyTimeout(), bodyTimeout(), new TypeError("terminated")]) {
+                fetchMock.mockResolvedValueOnce(
+                    new Response(failingBody(failure), { headers: { "content-type": "text/event-stream" } }),
+                );
+                const response = await POST(
+                    new NextRequest("https://app.example.test/api/chat", { method: "POST", body: "{}" }),
+                    context(["chat"]),
+                );
+                await expect(readBody(response)).rejects.toMatchObject({ name: "AbortError" });
+            }
+
+            expect(reportError).toHaveBeenCalledTimes(2);
+            for (const [, options] of vi.mocked(reportError).mock.calls) {
+                expect(options).not.toHaveProperty("level");
+                expect(options).not.toHaveProperty("fingerprint");
+                expect(options).toMatchObject({ tags: { component: "api-gateway", stage: "gateway-stream" } });
+            }
+            expect(vi.mocked(reportError).mock.calls[0][1]).toMatchObject({
+                tags: { failure_code: "UND_ERR_BODY_TIMEOUT" },
+            });
+        });
+
         it("aborts any other body so a truncated download never looks complete", async () => {
             vi.spyOn(console, "warn").mockImplementation(() => {});
             fetchMock.mockResolvedValue(
