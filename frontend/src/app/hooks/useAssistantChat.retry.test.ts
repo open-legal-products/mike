@@ -476,10 +476,12 @@ describe("useAssistantChat retry", () => {
 
 /**
  * Which turn failures reach Sentry. A refusal is the server's deliberate
- * answer (MIKE-FRONTEND-12: 409 turn_in_progress; 1X, 3V: 400/403/404), a
+ * answer (MIKE-FRONTEND-12: 409 turn_in_progress; 3V, 2A: 403/404), a
  * connection that never got a response was already reported by the API
- * client, and a fault already on file must not be filed twice. Only a
- * server fault nothing has reported yet is sent, exactly once.
+ * client, and a fault already on file must not be filed twice. A server
+ * fault nothing has reported yet is sent exactly once. A 400, 401 or 422
+ * means this client sent something the server could not take (1X is still
+ * undiagnosed; 401 is #779's refresh race), so it is sent at warning level.
  */
 describe("useAssistantChat turn-failure reporting", () => {
     const refusal = (status: number, code: string) =>
@@ -496,7 +498,6 @@ describe("useAssistantChat turn-failure reporting", () => {
     };
 
     it.each([
-        [400, "validation_failed"],
         [403, "forbidden"],
         [404, "turn_not_found"],
         [409, "turn_in_progress"],
@@ -514,11 +515,44 @@ describe("useAssistantChat turn-failure reporting", () => {
         expect(reportErrorMock).not.toHaveBeenCalled();
     });
 
+    // Review of #775: these must stay visible, and under the component the
+    // existing issues (1X, 12, 3V, 2X, 2A, G) and saved searches use.
+    it.each([
+        [400, "validation_failed"],
+        [401, "session_expired"],
+        [422, "missing_api_key"],
+    ])("reports a %i refusal once, at warning level", async (status, code) => {
+        fetchMock.mockResolvedValueOnce(refusal(status, code));
+        await failTurn();
+        expect(reportErrorMock).toHaveBeenCalledTimes(1);
+        expect(reportErrorMock.mock.calls[0]?.[0]).toMatchObject({ status, code });
+        expect(reportErrorMock.mock.calls[0]?.[1]).toMatchObject({
+            level: "warning",
+            tags: { component: "assistant-chat", operation: "chat.turn", project: false, error_code: code, request_id: "r1" },
+        });
+    });
+
     it("reports an unreported 500 exactly once, with its request id", async () => {
         fetchMock.mockResolvedValueOnce(refusal(500, "internal_error"));
         await failTurn();
         expect(reportErrorMock).toHaveBeenCalledTimes(1);
         expect(reportErrorMock.mock.calls[0]?.[0]).toMatchObject({ status: 500, requestId: "r1" });
+        expect(reportErrorMock.mock.calls[0]?.[1]).toMatchObject({
+            tags: { component: "assistant-chat", operation: "chat.turn", project: false },
+        });
+        expect(reportErrorMock.mock.calls[0]?.[1]?.level).toBeUndefined();
+    });
+
+    it("tags a project chat's fault with project: true", async () => {
+        fetchMock.mockResolvedValueOnce(refusal(500, "internal_error"));
+        const { result } = renderHook(() => useAssistantChat({ chatId: "chat-1", projectId: "project-1" }));
+        await act(async () => {
+            await result.current.handleChat(userMessage());
+        });
+        expect(reportErrorMock).toHaveBeenCalledTimes(1);
+        expect(reportErrorMock.mock.calls[0]?.[1]).toMatchObject({
+            tags: { component: "assistant-chat", project: true },
+        });
     });
 
     it("does not re-report a failure that is already on file", async () => {

@@ -73,6 +73,7 @@ import {
     type UserFacingError,
     createErrorNotifier,
     type NotifyErrorOptions as SharedNotifyErrorOptions,
+    isUnexplainedRefusal,
 } from "@mike/client";
 import { isReported, reportError } from "@/app/lib/errorReporting";
 
@@ -153,12 +154,17 @@ function reportRealFault(
     error: unknown,
     described: UserFacingError,
     action: string | undefined,
-    operation: Operation | undefined,
+    identity: FaultReportIdentity,
 ): void {
-    const isFault =
-        !isReported(error) &&
-        (described.kind === "unknown" || described.kind === "server");
-    if (!isFault) return;
+    if (isReported(error)) return;
+    const isFault = described.kind === "unknown" || described.kind === "server";
+    // A 400/401/422 the flow's own request provoked: still a client defect
+    // until shown otherwise, so it goes out at warning level.
+    const unexplained =
+        !isFault &&
+        identity.reportUnexplainedRefusals === true &&
+        isUnexplainedRefusal(error);
+    if (!isFault && !unexplained) return;
     // The server's own code and request id are what let this event be
     // matched to the backend's half of the failure; `action` is free text
     // for the toast and is dropped at the privacy boundary.
@@ -168,7 +174,35 @@ function reportRealFault(
     // A request id only correlates events. Suppress a client report only
     // when the stream protocol explicitly assigns reporting to the backend.
     if (shaped?.reportingOwner === "backend") return;
-    reportError(error, { tags: { component: "notify", action, error_code: code, request_id: requestId, operation } });
+    reportError(error, {
+        level: unexplained ? "warning" : undefined,
+        tags: {
+            component: identity.component ?? "notify",
+            action,
+            error_code: code,
+            request_id: requestId,
+            operation: identity.operation,
+            project: identity.project,
+        },
+    });
+}
+
+/**
+ * Who reports a fault, for a flow with its own Sentry identity (the
+ * assistant chat). Plain screens use FaultIdentity and the `notify`
+ * component.
+ */
+export interface FaultReportIdentity extends FaultIdentity {
+    /** Which client layer saw it; `notify` unless the caller says. */
+    component?: "notify" | "assistant-chat";
+    /** Whether the flow ran inside a project. */
+    project?: boolean;
+    /**
+     * Also report a 400, 401 or 422 (isUnexplainedRefusal) at warning
+     * level. For flows that build the request themselves, where such a
+     * refusal means the client sent something the server could not take.
+     */
+    reportUnexplainedRefusals?: boolean;
 }
 
 /**
@@ -180,11 +214,16 @@ function reportRealFault(
  */
 export function reportFault(
     error: unknown,
-    options: DescribeErrorOptions & FaultIdentity,
+    options: DescribeErrorOptions & FaultReportIdentity,
 ): UserFacingError {
-    const { operation, ...describeOptions } = options;
+    const { operation, component, project, reportUnexplainedRefusals, ...describeOptions } = options;
     const described = describeError(error, describeOptions);
-    reportRealFault(error, described, describeOptions.action, operation);
+    reportRealFault(error, described, describeOptions.action, {
+        operation,
+        component,
+        project,
+        reportUnexplainedRefusals,
+    });
     return described;
 }
 
@@ -276,7 +315,7 @@ export function describeError(
 export const notifyError = createErrorNotifier<NotifyErrorOptions>({
     describeOptions: withReportedUpstreamMessage,
     beforeShow: (error, described, options) => {
-        reportRealFault(error, described, options.action, options.operation);
+        reportRealFault(error, described, options.action, { operation: options.operation });
         return false;
     },
     present: (described, options, wantsSupport) => {
