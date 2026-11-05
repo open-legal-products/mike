@@ -34,8 +34,7 @@ import { PAGE_HEADER_TITLE_CLASS } from "@/app/components/shared/pageHeaderStyle
 import { SubfolderSvgIcon } from "@/app/components/shared/FolderSvgIcon";
 import { EmptyState } from "@/app/components/ui/empty-state";
 import { LIQUID_GLASS_HOVER_CLASS } from "@/app/components/ui/liquid-surface";
-import { PillButtonUI } from "@/shared/ui/PillButtonUI";
-import { TabPillButtonUI } from "@/shared/ui/TabPillButtonUI";
+import { PillButtonUI, TabPillButtonUI } from "@mike/ui";
 import {
   ChatSkeuoIcon,
   TabularReviewSkeuoIcon,

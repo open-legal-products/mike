@@ -1,3 +1,19 @@
+import type {
+    CatalogPricing,
+    CatalogModel,
+    LocalModel,
+    ConfiguredCatalogModel,
+    CatalogFailure,
+    CatalogResult,
+} from "./models.types";
+export type {
+    CatalogPricing,
+    CatalogModel,
+    LocalModel,
+    ConfiguredCatalogModel,
+    CatalogFailure,
+    CatalogResult,
+} from "./models.types";
 // Business logic + data-access for the models module.
 //
 // Service layer behind models.routes.ts. Each function takes an explicit
@@ -14,36 +30,7 @@ import type { Db } from "../../lib/supabase";
 import { ollamaAuthHeaders as authHeaders } from "../../lib/llm/providers";
 import { isSupportedOpenCodeGoModel } from "../../lib/llm/models";
 import { configuredEndpointSummaries } from "../../lib/llm/registry";
-import { getEffectiveApiKeys, getUserApiKeys } from "../user/user.service";
-
-export type CatalogPricing = {
-    input?: string;
-    output?: string;
-    variesByProvider?: true;
-    tiered?: true;
-};
-
-export type CatalogModel = {
-    id: string;
-    label: string;
-    pricing?: CatalogPricing;
-};
-
-export type LocalModel = { id: string; label: string; group: string };
-
-export type ConfiguredCatalogModel = LocalModel & {
-    location: "cloud" | "local";
-    source: "Configured";
-};
-
-export type CatalogFailure =
-    | { ok: false; kind: "missing_api_key"; code: string; detail: string }
-    | { ok: false; kind: "upstream"; error: Error }
-    | { ok: false; kind: "error"; error: unknown };
-
-export type CatalogResult =
-    | { ok: true; models: CatalogModel[] }
-    | CatalogFailure;
+import { getEffectiveApiKeys, getUserApiKeys } from "../../lib/providerCredentials/index";
 
 function catalogPrice(value: unknown): string | undefined {
     if (typeof value !== "string" && typeof value !== "number") {

@@ -6,7 +6,7 @@ import {
   DropdownContent,
   DropdownItem,
   DropdownTrigger,
-} from "@mike/dropdown-ui";
+} from "@mike/ui";
 
 interface ApplyModeOption {
   mode: WordEditApplyMode;

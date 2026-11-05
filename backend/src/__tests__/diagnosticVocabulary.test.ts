@@ -122,8 +122,8 @@ describe("diagnostic source contract", () => {
     'Object.defineProperty(handler, "name", {value: clientName})',
     'const actions = {[clientName]() { throw new Error("Failed"); }}',
   ])("rejects runtime diagnostic identity: %s", source => expect(violations(source).length).toBeGreaterThan(0));
-  it("checks production source in the backend, web app and Word add-in", () => {
-    const paths = ["backend/src", "frontend/src", "word-addin/src"].flatMap(root => files(join(ROOT, root)));
+  it("checks production source in the applications and shared client packages", () => {
+    const paths = ["backend/src", "frontend/src", "word-addin/src", "packages/client/src", "packages/ui/src"].flatMap(root => files(join(ROOT, root)));
     expect(paths.length).toBeGreaterThan(500);
     const failures = paths.flatMap(path => violations(readFileSync(path, "utf8"), path).map(problem => `${relative(ROOT, path)}:${problem}`));
     expect(failures).toEqual([]);
