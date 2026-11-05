@@ -123,7 +123,13 @@ export function getRedisProducerConnection(): IORedis {
         // ioredis emits 'error' on every failed reconnect attempt. Without a
         // listener that is an unhandled 'error' event, which crashes the
         // process — the precise opposite of best-effort.
+        // The Queues built on this client receive the same errors and
+        // report them (watchQueueErrors, source "producer"); this listener
+        // only keeps a client with no Queue yet from crashing.
         producerConnection.on("error", () => {});
+        // A process that only produces (no Worker, so no consumer
+        // connection) must still close the outage when Redis is back.
+        producerConnection.on("ready", queueConnectionRecovered);
     }
     return producerConnection;
 }

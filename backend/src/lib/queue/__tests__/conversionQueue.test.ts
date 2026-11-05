@@ -45,6 +45,7 @@ vi.mock("../connection", () => ({
     getRedisConnection: () => ({}),
     getRedisProducerConnection: () => fakeProducerConnection,
     withRedisTimeout: <T,>(_label: string, run: () => Promise<T>) => run(),
+    watchQueueErrors: () => {},
 }));
 
 const add = vi.fn();

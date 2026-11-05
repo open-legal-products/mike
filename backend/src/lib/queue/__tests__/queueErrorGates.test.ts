@@ -87,7 +87,7 @@ describe("watchQueueErrors", () => {
         queueConnectionRecovered();
 
         expect(log).toHaveBeenCalledWith(
-            "[queue] redis consumer recovered after 3 consecutive failure(s)",
+            "[queue] redis recovered after 3 consecutive failure(s)",
         );
         expect(mocks.reportError).toHaveBeenCalledTimes(2);
         vi.restoreAllMocks();

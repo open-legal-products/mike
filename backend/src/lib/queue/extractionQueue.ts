@@ -1,6 +1,6 @@
 import { Queue } from "bullmq";
 import type IORedis from "ioredis";
-import { getRedisProducerConnection, withRedisTimeout } from "./connection";
+import { getRedisProducerConnection, withRedisTimeout, watchQueueErrors } from "./connection";
 import { redisEnabled } from "../dbq/driver";
 import { enqueueDbJob } from "../dbq/enqueue";
 import { createServerSupabase } from "../supabase";
@@ -71,6 +71,7 @@ export function getExtractionQueue(): Queue<ExtractionJobData> {
     }
     if (!queue) {
         queue = new Queue<ExtractionJobData>(EXTRACTION_QUEUE, { connection });
+        watchQueueErrors(queue, "producer", EXTRACTION_QUEUE);
         queueConnection = connection;
     }
     return queue;

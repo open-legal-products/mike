@@ -7,9 +7,9 @@ import {
 } from "../observability/pollFailureGate";
 
 /**
- * Error listeners for the BullMQ consumer side (the shared connection and
- * each Worker). Without one, ioredis prints "[ioredis] Unhandled error event"
- * and BullMQ's QueueBase.emit falls back to console.error, and the Sentry
+ * Error listeners for BullMQ: the shared consumer connection, each Worker,
+ * and each producer Queue. Without one, ioredis prints "[ioredis] Unhandled
+ * error event" and BullMQ's QueueBase.emit falls back to console.error, and the Sentry
  * console bridge files each line as an untyped "Failure in application" under
  * a node_modules culprit (MIK-91).
  *
@@ -108,11 +108,11 @@ export function createWorkerErrorGate(options: {
 }
 
 /**
- * The outage gate shared by every consumer-side emitter. Delays are unused:
- * ioredis owns the reconnect schedule.
+ * The outage gate shared by every queue-side emitter, consumer and producer.
+ * Delays are unused: ioredis owns the reconnect schedule.
  */
 const outageGate = createPollFailureGate({
-    label: "[queue] redis consumer",
+    label: "[queue] redis",
     baseDelayMs: 0,
     maxDelayMs: 0,
 });
@@ -125,19 +125,41 @@ const workerErrorGate = createWorkerErrorGate();
 // consecutive failure(s)" counts failed attempts, not listeners.
 const seen = new WeakSet<object>();
 
-/** Call when the shared consumer connection is ready again. */
+/** Call when a shared Redis connection (consumer or producer) is ready again. */
 export function queueConnectionRecovered(): void {
     outageGate.success();
 }
 
+type ErrorSource = "connection" | "worker" | "producer";
+
+const DEFECT_KIND: Record<ErrorSource, string> = {
+    connection: "queue.redis_error",
+    worker: "queue.worker_error",
+    producer: "queue.producer_error",
+};
+
 /**
- * Give a consumer-side emitter an 'error' listener. `source` is "connection"
- * for the shared ioredis client and "worker" for a BullMQ Worker.
+ * Give a queue-side emitter an 'error' listener. `source` is "connection"
+ * for the shared consumer ioredis client, "worker" for a BullMQ Worker and
+ * "producer" for a BullMQ Queue (pass its name as `queue`).
+ *
+ * A producer Queue needs one as much as a Worker does: BullMQ wraps the
+ * producer connection and forwards its reconnect errors to every Queue built
+ * on it, and a Queue with no listener prints each one through
+ * QueueBase.emit's console.error fallback. The stale-cell sweep's job lookup
+ * builds the extraction Queue, so during an outage its raw ECONNREFUSED
+ * blocks reached the console bridge as "Failure in maintenance.cells /
+ * application / ECONNREFUSED" (MIKE-BACKEND-42). Producer and consumer share
+ * the one outage gate: a Redis outage is one warning whichever side saw it.
  */
 export function watchQueueErrors(
     emitter: { on(event: "error", listener: (error: Error) => void): unknown },
-    source: "connection" | "worker",
+    source: ErrorSource,
+    queue?: string,
 ): void {
+    const tags = (stage: string): Record<string, string> =>
+        queue ? { component: "queue", stage, queue } : { component: "queue", stage };
+    const where = queue ? ` (${queue})` : "";
     emitter.on("error", (error) => {
         if (error && typeof error === "object") {
             if (seen.has(error)) return;
@@ -149,18 +171,20 @@ export function watchQueueErrors(
                 new AppError("queue.connection_lost", "Redis queue connection lost", {
                     cause: error,
                 }),
-                { level: "warning", tags: { component: "queue", stage: "connection" } },
+                { level: "warning", tags: tags("connection") },
             );
-            console.warn("[queue] redis consumer error", pollFailureClass(error));
+            console.warn(
+                `[queue] redis ${source === "producer" ? "producer" : "consumer"} error${where}`,
+                pollFailureClass(error),
+            );
             return;
         }
         const verdict = workerErrorGate.failure(error);
         if (!verdict.report) return;
-        const kind = source === "worker" ? "queue.worker_error" : "queue.redis_error";
-        reportError(new AppError(kind, "Redis queue error", { cause: error }), {
+        reportError(new AppError(DEFECT_KIND[source], "Redis queue error", { cause: error }), {
             level: "error",
-            tags: { component: "queue", stage: source },
+            tags: tags(source),
         });
-        console.warn(`[queue] ${source} error`, verdict.failureClass);
+        console.warn(`[queue] ${source} error${where}`, verdict.failureClass);
     });
 }
