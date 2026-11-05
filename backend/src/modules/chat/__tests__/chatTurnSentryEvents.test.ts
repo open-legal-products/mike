@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import * as Sentry from "@sentry/node";
 
 // MIKE-BACKEND-B/-C/-D/-E: one chat turn whose provider rejected the API key
@@ -71,6 +71,20 @@ const API_KEYS = { gemini: "rejected-key" };
 
 let sent: Sentry.Event[] = [];
 
+// Every initSentry() below adds one process "beforeExit" listener that
+// Sentry's ProcessSession integration never removes. Production initialises
+// once; this file initialises per test, so the 11th test tripped Node's
+// MaxListenersExceededWarning, which the runtime-warning bridge then filed
+// as an event inside whichever test was running.
+let maxListeners = 0;
+beforeAll(() => {
+    maxListeners = process.getMaxListeners();
+    process.setMaxListeners(maxListeners + 20);
+});
+afterAll(() => {
+    process.setMaxListeners(maxListeners);
+});
+
 beforeEach(() => {
     sent = [];
     resetSentryForTests("community");
@@ -102,14 +116,14 @@ afterEach(async () => {
 });
 
 /** The failing half of POST /chat, in the route's order. */
-async function failedChatTurn() {
+async function failedChatTurn(apiKeys: Record<string, string> = API_KEYS) {
     // chat.routes.ts starts the title in parallel with the model stream and
     // only records its failure; what it means is decided after the reply.
     const titleOutcome: { failure: { error: unknown } | null } = { failure: null };
     const titlePromise = generateAssistantChatTitle({
         model: titleModelForChat(MODEL, null),
         message: "Summarise the indemnity clause",
-        apiKeys: API_KEYS,
+        apiKeys,
     }).catch((error) => {
         titleOutcome.failure = { error };
     });
@@ -123,7 +137,7 @@ async function failedChatTurn() {
             db: emptyDb() as never,
             write: vi.fn(),
             model: MODEL,
-            apiKeys: API_KEYS as never,
+            apiKeys: apiKeys as never,
             emitDone: false,
         });
     } catch (err) {
@@ -165,6 +179,30 @@ describe("one failed chat turn in Sentry", () => {
         // Mike can, so nothing is sent, and no later log of the turn's
         // failure (the route's console.error above) files it either.
         expect(sent).toEqual([]);
+    });
+
+    // A revoked DEPLOYMENT key (no user key, so requiredKey fell back to
+    // GEMINI_API_KEY) fails every user's chat, and each is told to contact
+    // the administrator. The administrator hears about it once per turn, as
+    // a warning; the title's identical failure is not a second event.
+    it("files a rejected deployment key once, as a warning", async () => {
+        vi.stubEnv("GEMINI_API_KEY", "revoked-deployment-key");
+        try {
+            const streamError = await failedChatTurn({});
+            await Sentry.flush(2000);
+
+            expect((streamError as AssistantStreamError).events.at(-1)).toMatchObject({
+                type: "error",
+                safe_to_display: true,
+                code: "invalid_api_key",
+            });
+            expect(
+                sent.map((event) => [event.tags?.component, event.level, event.tags?.error_kind]),
+            ).toEqual([["chat-stream", "warning", "chat.provider_rejected"]]);
+            expect(JSON.stringify(sent)).not.toContain("revoked-deployment-key");
+        } finally {
+            vi.unstubAllEnvs();
+        }
     });
 
     // MIK-89: a provider that is busy or down is not Mike's bug. One event

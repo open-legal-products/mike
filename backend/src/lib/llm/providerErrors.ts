@@ -2,7 +2,44 @@ import type { ErrorKind } from "../appError";
 import { UserFacingError } from "../userFacingError";
 import { asInvalidApiKeyError, InvalidApiKeyError } from "./apiKeyErrors";
 
-type ProviderContext = { label: string; modelId: string };
+/**
+ * Whose key a model call sent: the user's own (Bring Your Own Keys) or the
+ * deployment's environment key, which requiredKey() and friends fall back to.
+ */
+export type ProviderKeySource = "user" | "deployment";
+
+type ProviderContext = { label: string; modelId: string; keySource?: ProviderKeySource };
+
+/**
+ * Record on a failed call's error whose key it sent, so the level rule can
+ * tell the operator's revoked key from a user's. Non-enumerable: it is a
+ * routing fact for providerFailureLevel, not something to serialize onto an
+ * event or a log line. Errors that cannot take a property are left alone.
+ */
+export function withKeySource<T>(error: T, keySource: ProviderKeySource | undefined): T {
+  if (
+    keySource &&
+    error &&
+    typeof error === "object" &&
+    Object.isExtensible(error) &&
+    !Object.prototype.hasOwnProperty.call(error, "keySource")
+  ) {
+    Object.defineProperty(error, "keySource", {
+      value: keySource,
+      enumerable: false,
+      configurable: true,
+    });
+  }
+  return error;
+}
+
+function providerKeySource(error: unknown): ProviderKeySource | undefined {
+  for (const current of failureChain(error)) {
+    const source = (current as { keySource?: unknown }).keySource;
+    if (source === "user" || source === "deployment") return source;
+  }
+  return undefined;
+}
 
 type ApiCallErrorLike = Error & { statusCode: number; responseBody?: string };
 
@@ -120,24 +157,30 @@ export function providerFailureKind(error: unknown): ErrorKind {
  * How loudly a failed model call is reported, decided once for every surface
  * that calls a model (chat turns, titles, tabular cells, the memory curator):
  *
- * - `null`, not reported: the provider refused the ACCOUNT — a rejected or
- *   revoked key, a forbidden model, no credit left. The user is already told
- *   exactly what to change (the `invalid_api_key` prompt, the out-of-credits
- *   message), the operator's log keeps a warning line, and nothing in Mike's
- *   code can fix someone else's account. Every event also spends the
- *   project's monthly quota.
- * - `"warning"`: the provider was busy or down — rate limited, 5xx, a stalled
- *   stream, a dropped socket. Not our bug, but a burst across installs is how
- *   a provider incident or a retired model shows up, so it stays visible
- *   without paging anyone.
+ * - `null`, not reported: the provider refused a USER'S OWN key or account —
+ *   a rejected or revoked BYOK key, a forbidden model, no credit left. The
+ *   user is already told exactly what to change (the `invalid_api_key`
+ *   prompt, the out-of-credits message), the operator's log keeps a warning
+ *   line, and nothing in Mike's code can fix someone else's account. Every
+ *   event also spends the project's monthly quota.
+ * - `"warning"`: the provider refused the DEPLOYMENT'S key (the environment
+ *   key requiredKey() fell back to), or was busy or down — rate limited,
+ *   5xx, a stalled stream, a dropped socket. A revoked deployment key fails
+ *   every user's chat, and its users are told to contact the administrator,
+ *   so the administrator has to hear about it; an outage is not our bug, but
+ *   a burst across installs is how a provider incident or a retired model
+ *   shows up. Visible either way, without paging anyone.
  * - `"error"`: everything else, including a 4xx the provider did not explain
  *   (`chat.stream_failed`). A 400 is usually a request WE built wrong.
+ *
+ * An account refusal whose key source was not recorded is treated as a
+ * user's: the quieter choice, and every provider adapter records one.
  */
 export function providerFailureLevel(error: unknown): "warning" | "error" | null {
   switch (providerFailureKind(error)) {
     case "chat.provider_rejected":
     case "chat.provider_out_of_credits":
-      return null;
+      return providerKeySource(error) === "deployment" ? "warning" : null;
     case "chat.provider_rate_limited":
     case "chat.provider_unavailable":
       return "warning";
@@ -199,12 +242,17 @@ export function asProviderStallError(
  * Key and access failures become `UserFacingError`s so the user is told what
  * to change rather than to "try again". Classification has to happen here,
  * before the error is flattened: the status code and response body live on
- * the AI SDK's `APICallError`.
+ * the AI SDK's `APICallError`. The result also records whose key was sent
+ * (context.keySource), which decides whether a refusal is reported.
  */
 export function toProviderStreamError(
   error: unknown,
   context: ProviderContext,
 ): Error {
+  return withKeySource(classifyProviderStreamError(error, context), context.keySource);
+}
+
+function classifyProviderStreamError(error: unknown, context: ProviderContext): Error {
   const stalled = asProviderStallError(error, context);
   if (stalled) return stalled;
   const apiError = findApiCallError(error);

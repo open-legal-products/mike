@@ -58,7 +58,8 @@ The "summary" field must contain only the extracted value with inline citations 
             { cause: err },
         );
         // At the level the provider's condition deserves: a rate limit or
-        // outage is a warning, a rejected key is not reported at all.
+        // outage is a warning, a user's rejected key is not reported at all
+        // (the deployment's is one warning).
         reportModelFailure(failure, {}, "[queryTabularCell] completion failed");
         return null;
     }

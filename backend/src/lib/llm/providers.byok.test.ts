@@ -12,6 +12,7 @@ vi.mock("../mcp/client", () => ({ guardedFetch }));
 
 import { completeWithProvider } from "./providers";
 import { UserFacingError } from "../userFacingError";
+import { providerFailureLevel, providerFailureStatus } from "./providerErrors";
 
 const SERVICE_ACCOUNT = JSON.stringify({
   type: "service_account",
@@ -321,6 +322,38 @@ describe("xAI adapter", () => {
     await expect(failure).rejects.toThrow(/xAI API key is not configured/);
     // A plain Error read as a bug: "Failure in application" (MIKE-BACKEND-6M).
     await expect(failure).rejects.toBeInstanceOf(UserFacingError);
+  });
+});
+
+describe("whose key a failed call sent", () => {
+  // providerFailureLevel reports a refusal of the deployment's env key (one
+  // warning, the operator must act) but not of a user's own key.
+  const rejected = () =>
+    Response.json(
+      { error: { message: "Incorrect API key provided", code: "invalid_api_key" } },
+      { status: 401 },
+    );
+
+  it("records the user's own key on the provider's refusal", async () => {
+    vi.stubEnv("XAI_API_KEY", "xai-deployment-key");
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(rejected()));
+    const error = await completeWithProvider({
+      model: "xai/grok-4.3",
+      user: "x",
+      apiKeys: { xai: "xai-user-key" },
+    }).catch((thrown: unknown) => thrown);
+    expect(providerFailureStatus(error)).toBe(401);
+    expect(providerFailureLevel(error)).toBeNull();
+  });
+
+  it("records the deployment's key when the user has none", async () => {
+    vi.stubEnv("XAI_API_KEY", "xai-deployment-key");
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(rejected()));
+    const error = await completeWithProvider({ model: "xai/grok-4.3", user: "x" }).catch(
+      (thrown: unknown) => thrown,
+    );
+    expect(providerFailureStatus(error)).toBe(401);
+    expect(providerFailureLevel(error)).toBe("warning");
   });
 });
 

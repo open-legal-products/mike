@@ -15,7 +15,13 @@ import type {
 } from "./types";
 import type { WebSource } from "@mike/contracts";
 import { providerDeadlines } from "./providerDeadlines";
-import { asProviderStallError, streamErrorMessage, toProviderStreamError } from "./providerErrors";
+import {
+  asProviderStallError,
+  streamErrorMessage,
+  toProviderStreamError,
+  withKeySource,
+  type ProviderKeySource,
+} from "./providerErrors";
 import { createRawLlmStreamRecorder, logRawLlmStream } from "./rawStreamLog";
 
 /**
@@ -221,6 +227,12 @@ export type AiSdkAdapterConfig = {
   label: string;
   model: Exclude<LanguageModel, string>;
   modelId: string;
+  /**
+   * Whose key this adapter sends: a user's own, or the deployment's
+   * environment key. Recorded on a failure so a refusal of the operator's
+   * key is reported and a user's is not (providerFailureLevel).
+   */
+  keySource?: ProviderKeySource;
   /** Some protocol-compatible gateways reject reasoning request fields. */
   supportsReasoning?: boolean;
   /** OpenAI's CourtListener tools require an extra instruction after use. */
@@ -811,24 +823,31 @@ export async function completeAiSdkText(
       ? undefined
       : normalizeReasoningLevelForModel(config.modelId, "none");
   const requested = params.maxTokens ?? 512;
-  const result = await generateText({
-    model: config.model,
-    system: params.systemPrompt,
-    prompt: params.user,
-    abortSignal: params.abortSignal,
-    // Some models cannot turn thinking off ("none" is normalized to the
-    // lowest level they accept), and thinking is output too. Without
-    // headroom a short call — a 64-token title — can spend its whole
-    // allowance thinking and return no text. The cap is only a ceiling, so
-    // the headroom costs nothing unless the model actually uses it.
-    maxOutputTokens:
-      reasoning && reasoning !== "none"
-        ? requested + COMPLETION_REASONING_HEADROOM_TOKENS
-        : requested,
-    reasoning: reasoning as
-      | Exclude<NonNullable<StreamChatParams["reasoning"]>, "max">
-      | undefined,
-  });
+  let result: Awaited<ReturnType<typeof generateText>>;
+  try {
+    result = await generateText({
+      model: config.model,
+      system: params.systemPrompt,
+      prompt: params.user,
+      abortSignal: params.abortSignal,
+      // Some models cannot turn thinking off ("none" is normalized to the
+      // lowest level they accept), and thinking is output too. Without
+      // headroom a short call — a 64-token title — can spend its whole
+      // allowance thinking and return no text. The cap is only a ceiling, so
+      // the headroom costs nothing unless the model actually uses it.
+      maxOutputTokens:
+        reasoning && reasoning !== "none"
+          ? requested + COMPLETION_REASONING_HEADROOM_TOKENS
+          : requested,
+      reasoning: reasoning as
+        | Exclude<NonNullable<StreamChatParams["reasoning"]>, "max">
+        | undefined,
+    });
+  } catch (error) {
+    // The provider's own error, unconverted (callers classify it), with
+    // whose key was sent recorded on it for the reporting level.
+    throw withKeySource(error, config.keySource);
+  }
   return result.text;
 }
 

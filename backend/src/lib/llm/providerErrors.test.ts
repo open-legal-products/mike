@@ -8,6 +8,7 @@ import {
   providerFailureKind,
   providerFailureLevel,
   toProviderStreamError,
+  withKeySource,
 } from "./providerErrors";
 
 const gemini = { label: "Gemini", modelId: "gemini-2.5-pro" };
@@ -225,6 +226,39 @@ describe("providerFailureLevel", () => {
     ["an unexplained failure", new Error("something else"), "error"],
   ] as const)("reports %s at %s", (_name, error, level) => {
     expect(providerFailureLevel(error)).toBe(level);
+  });
+
+  // A refusal of the DEPLOYMENT'S key (the env fallback) fails every user
+  // and is the operator's to fix, so it is one warning; a user's own key
+  // stays unreported, as does one whose source nobody recorded.
+  it.each([
+    ["a rejected key", () => toProviderStreamError(apiCallError(401), gemini)],
+    ["a forbidden model", () => toProviderStreamError(apiCallError(403), gemini)],
+    ["an account out of credits", () => toProviderStreamError(apiCallError(402), gemini)],
+  ])("reports %s by the deployment's key as a warning, by a user's key not at all", (_name, refusal) => {
+    const deployment = toProviderStreamError(refusal(), { ...gemini, keySource: "deployment" });
+    const user = toProviderStreamError(refusal(), { ...gemini, keySource: "user" });
+    expect(providerFailureLevel(deployment)).toBe("warning");
+    expect(providerFailureLevel(user)).toBeNull();
+    expect(providerFailureLevel(refusal())).toBeNull();
+    // Through the flow's own wrapper, as chat and tabular report it.
+    expect(
+      providerFailureLevel(new AppError("chat.provider_rejected", "Model stream failed", { cause: deployment })),
+    ).toBe("warning");
+  });
+
+  it("records the key source on a raw provider error without serializing it", () => {
+    const raw = withKeySource(apiCallError(401), "deployment");
+    expect(providerFailureLevel(raw)).toBe("warning");
+    expect(Object.keys(raw)).not.toContain("keySource");
+    expect(JSON.stringify(raw)).not.toContain("deployment");
+    // A later conversion keeps the first answer.
+    expect(providerFailureLevel(withKeySource(raw, "user"))).toBe("warning");
+  });
+
+  it("does not raise a busy provider's level for the deployment's key", () => {
+    expect(providerFailureLevel(withKeySource(apiCallError(503), "deployment"))).toBe("warning");
+    expect(providerFailureLevel(withKeySource(apiCallError(400), "deployment"))).toBe("error");
   });
 
   it("reads the condition through the AppError that names the flow", () => {

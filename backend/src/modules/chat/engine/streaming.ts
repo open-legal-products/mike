@@ -1134,8 +1134,9 @@ export async function runLLMStream(params: {
           : new AppError(providerFailureKind(err), "Model stream failed", {
               cause: err,
             });
-      // How loud is decided once, in reportModelFailure: a rejected key or
-      // an empty account is not reported (the user is told what to change),
+      // How loud is decided once, in reportModelFailure: a user's rejected
+      // key or empty account is not reported (the user is told what to
+      // change; the deployment's own key is one warning for the operator),
       // a rate limit or outage is a warning, an unexplained failure stays an
       // error. A UserFacingError that is still reported (a missing key, a
       // model not allowed) is the user's configuration rather than our bug:

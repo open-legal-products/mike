@@ -778,7 +778,11 @@ describe("memoryJobFailure", () => {
   // model call inside runMemoryCuratorScope: the real path a curator job's
   // scope failure takes. A 402/403/404 becomes a UserFacingError around the
   // APICallError there, which the flattened scope failure cannot see through.
-  async function scopeFailureFor(statusCode: number, responseBody = "{}"): Promise<unknown> {
+  async function scopeFailureFor(
+    statusCode: number,
+    responseBody = "{}",
+    keySource: "user" | "deployment" = "user",
+  ): Promise<unknown> {
     // The SDK is ESM-only; this test file compiles as CommonJS.
     const { APICallError } = await import("ai");
     const apiError = new APICallError({
@@ -790,7 +794,7 @@ describe("memoryJobFailure", () => {
     });
     const svc = services({
       stream: vi.fn(async () => {
-        throw toProviderStreamError(apiError, { label: "Claude", modelId: "claude-test" });
+        throw toProviderStreamError(apiError, { label: "Claude", modelId: "claude-test", keySource });
       }) as never,
     });
     return runMemoryCuratorScope(args(), svc).then(
@@ -811,6 +815,15 @@ describe("memoryJobFailure", () => {
     });
     expect(inspect(failure, { depth: 6 })).not.toContain("SECRET");
   });
+
+  it.each([401, 402])(
+    "stops retrying a provider %i on the deployment's key, with one warning",
+    async (status) => {
+      const failure = memoryJobFailure(await scopeFailureFor(status, "{}", "deployment"));
+      expect(failure).toBeInstanceOf(NonRetryableJobError);
+      expect((failure as NonRetryableJobError).reportLevel).toBe("warning");
+    },
+  );
 
   it.each([
     [402, null],

@@ -79,8 +79,9 @@ export function logChatTitleFailure(
         return;
     }
     const titleClass = providerFailureClass(error);
-    // A rejected key or an empty account is not reported anywhere (see
-    // providerFailureLevel): the reply's failure tells the user what to fix.
+    // A user's own rejected key or empty account is not reported anywhere
+    // (see providerFailureLevel): the reply's failure tells the user what
+    // to fix. The deployment's key falls through to the reply comparison.
     if (titleClass !== null && providerFailureLevel(error) === null) {
         console.warn(label, error);
         return;

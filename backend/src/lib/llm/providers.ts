@@ -17,7 +17,7 @@ import {
 import { guardedFetch } from "../mcp/client";
 import { isBlockedDestinationError } from "../blockedDestination";
 import { localModelToleranceMiddleware } from "./localModelMiddleware";
-import { providerFailureResponse } from "./providerErrors";
+import { providerFailureResponse, type ProviderKeySource } from "./providerErrors";
 import {
   ACCOUNT_MODEL_LABELS,
   accountModelPrefix,
@@ -119,6 +119,16 @@ function requiredKey(
   return key;
 }
 
+/**
+ * Whose key a call sends when `userKey` is the user's own value for the
+ * provider: theirs if they set one, else the deployment's environment key
+ * (the fallback requiredKey, routerKey and the cloud credential helpers all
+ * take).
+ */
+function keySourceFor(userKey?: string | null): ProviderKeySource {
+  return userKey?.trim() ? "user" : "deployment";
+}
+
 function routerEnvironmentKey(provider: RouterProvider): string | undefined {
   if (provider === "vercel") {
     return (
@@ -155,6 +165,7 @@ async function createAnthropicAdapter(args: {
   label: string;
   model: string;
   apiKey: string;
+  keySource: ProviderKeySource;
   baseURL?: string;
   supportsReasoning: boolean;
 }): Promise<AiSdkAdapterConfig> {
@@ -170,6 +181,7 @@ async function createAnthropicAdapter(args: {
     label: args.label,
     model: anthropic(args.model),
     modelId: args.model,
+    keySource: args.keySource,
     supportsReasoning: args.supportsReasoning,
     // Only Anthropic itself runs the search; compatible gateways do not.
     ...(args.provider === "claude"
@@ -190,6 +202,7 @@ async function createRouterAdapter(
     throw unsupportedOpenCodeGoModel(model);
   }
   const key = routerKey(provider, apiKeys);
+  const keySource = keySourceFor(routerUserKey(provider, apiKeys));
 
   if (provider === "openrouter") {
     const { createOpenRouter } = await import("@openrouter/ai-sdk-provider");
@@ -206,6 +219,7 @@ async function createRouterAdapter(
       label: ROUTER_LABELS[provider],
       model: openrouter.chat(openRouterModelId(model)),
       modelId: model,
+      keySource,
     };
   }
 
@@ -221,6 +235,7 @@ async function createRouterAdapter(
       label: ROUTER_LABELS[provider],
       model: gateway.chat(vercelModelId(model)),
       modelId: model,
+      keySource,
     };
   }
 
@@ -236,6 +251,7 @@ async function createRouterAdapter(
     label: ROUTER_LABELS[provider],
     model: openCodeGo(openCodeGoModelId(model)),
     modelId: model,
+    keySource,
     supportsReasoning: false,
   };
 }
@@ -278,6 +294,7 @@ async function createBedrockAdapter(
     label: "Amazon Bedrock",
     model: bedrock(upstreamId),
     modelId: model,
+    keySource: keySourceFor(apiKeys?.bedrock),
     bedrockCachePoint: isClaude,
     ...(isClaude
       ? { defaultMaxOutputTokens: await bedrockClaudeMaxOutputTokens(upstreamId) }
@@ -333,6 +350,7 @@ async function createAzureAdapter(
     // get reasoning controls and arbitrary names run without them.
     model: azure.responses(azureDeploymentName(model)),
     modelId: model,
+    keySource: keySourceFor(apiKeys?.azure),
     courtlistenerCitationReminder: true,
   };
 }
@@ -348,12 +366,14 @@ async function createAzureFoundryAdapter(
     );
   }
   const deployment = azureFoundryDeploymentName(model);
+  const keySource = keySourceFor(apiKeys?.["azure-foundry"]);
   if (isAzureFoundryClaudeDeployment(model)) {
     return createAnthropicAdapter({
       provider: "azure-foundry",
       label: "Azure AI Foundry",
       model: deployment,
       apiKey: credentials.apiKey,
+      keySource,
       baseURL: `${credentials.endpoint}/anthropic/v1`,
       supportsReasoning: true,
     });
@@ -373,6 +393,7 @@ async function createAzureFoundryAdapter(
     label: "Azure AI Foundry",
     model: foundry(deployment),
     modelId: model,
+    keySource,
     supportsReasoning: false,
   };
 }
@@ -396,7 +417,12 @@ async function createVertexAdapter(
     fetch: aiSdkFetch,
   };
   const upstreamId = vertexModelId(model);
-  const base = { provider: "vertex" as const, label: "Google Vertex AI", modelId: model };
+  const base = {
+    provider: "vertex" as const,
+    label: "Google Vertex AI",
+    modelId: model,
+    keySource: keySourceFor(apiKeys?.vertex),
+  };
   const protocol = vertexModelProtocol(model);
   if (protocol === "anthropic") {
     const { createVertexAnthropic } = await import(
@@ -471,6 +497,8 @@ async function createCustomEndpointAdapter(
     label: "OpenAI-compatible endpoint",
     model: client(customEndpointModelId(model)),
     modelId: model,
+    // No environment fallback: always the user's own endpoint and key.
+    keySource: "user",
     supportsReasoning: false,
   };
 }
@@ -527,9 +555,24 @@ async function createConfiguredAdapter(
         })
       : base,
     modelId: configured.id,
+    keySource: configuredModelKeySource(configured, apiKeys),
     supportsReasoning: false,
     replayReasoning: configured.replayReasoning === true,
   };
+}
+
+/**
+ * Whose key a declared model sends, in apiKeyForConfiguredModel's order: a
+ * key written into the declaration is the deployment's, then the user's own
+ * key for apiKeyProvider, then the deployment's apiKeyEnv.
+ */
+function configuredModelKeySource(
+  configured: ConfiguredModel,
+  apiKeys?: UserApiKeys,
+): ProviderKeySource {
+  if (configured.apiKey?.trim() || !configured.apiKeyProvider) return "deployment";
+  const userKey = apiKeys?.[configured.apiKeyProvider];
+  return keySourceFor(typeof userKey === "string" ? userKey : null);
 }
 
 function unsupportedOpenCodeGoModel(model: string): Error {
@@ -579,6 +622,7 @@ async function createProviderAdapter(
       label: "Claude",
       model,
       apiKey: requiredKey("Anthropic", "ANTHROPIC_API_KEY", apiKeys?.claude),
+      keySource: keySourceFor(apiKeys?.claude),
       supportsReasoning: true,
     });
   }
@@ -589,7 +633,13 @@ async function createProviderAdapter(
       apiKey: requiredKey("Gemini", "GEMINI_API_KEY", apiKeys?.gemini),
       fetch: aiSdkFetch,
     });
-    return { provider, label: "Gemini", model: google(model), modelId: model };
+    return {
+      provider,
+      label: "Gemini",
+      model: google(model),
+      modelId: model,
+      keySource: keySourceFor(apiKeys?.gemini),
+    };
   }
 
   if (provider === "openai") {
@@ -603,6 +653,7 @@ async function createProviderAdapter(
       label: "OpenAI",
       model: openai.responses(model),
       modelId: model,
+      keySource: keySourceFor(apiKeys?.openai),
       courtlistenerCitationReminder: true,
       webSearchTool: () => openai.tools.webSearch({}),
     };
@@ -614,7 +665,13 @@ async function createProviderAdapter(
       apiKey: requiredKey("Mistral", "MISTRAL_API_KEY", apiKeys?.mistral),
       fetch: aiSdkFetch,
     });
-    return { provider, label: "Mistral", model: mistral(model), modelId: model };
+    return {
+      provider,
+      label: "Mistral",
+      model: mistral(model),
+      modelId: model,
+      keySource: keySourceFor(apiKeys?.mistral),
+    };
   }
 
   if (provider === "openrouter" || provider === "vercel") {
@@ -628,6 +685,7 @@ async function createProviderAdapter(
         label: "OpenCode Go",
         model: openCodeGoModelId(model),
         apiKey: routerKey(provider, apiKeys),
+        keySource: keySourceFor(routerUserKey(provider, apiKeys)),
         baseURL: OPENCODE_GO_BASE_URL,
         supportsReasoning: false,
       });
@@ -654,6 +712,7 @@ async function createProviderAdapter(
       label: "xAI",
       model: xai(xaiModelId(model)),
       modelId: model,
+      keySource: keySourceFor(apiKeys?.xai),
     };
   }
 
@@ -673,6 +732,8 @@ async function createProviderAdapter(
     label: "Ollama",
     model: ollama(ollamaModelName(model)),
     modelId: model,
+    // OLLAMA_API_KEY, when set, is the deployment's.
+    keySource: "deployment",
     supportsReasoning: false,
   };
 }
