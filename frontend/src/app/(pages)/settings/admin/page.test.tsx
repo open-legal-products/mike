@@ -195,6 +195,91 @@ describe("AdminPage", () => {
         ).toBeInTheDocument();
     });
 
+    it("frees Look up when an override is saved while a lookup is pending", async () => {
+        // Review finding on #722: the lookup and the save shared one request
+        // counter, so a save started mid-lookup made the lookup's settle path
+        // think it was stale and never clear the busy state.
+        let finishLookup!: (found: AdminUserFeatureFlags) => void;
+        vi.mocked(getAdminUserFeatureFlags)
+            .mockResolvedValueOnce(PAT)
+            .mockImplementationOnce(
+                () => new Promise((resolve) => (finishLookup = resolve)),
+            );
+        vi.mocked(setAdminUserFeatureFlag).mockResolvedValue({
+            ...PAT,
+            flags: [PAT.flags[0], { key: "gmail-read", override: true, enabled: true }],
+        });
+        const user = userEvent.setup();
+        render(<AdminPage />);
+        await screen.findByRole("switch", { name: "Google Drive default" });
+        const email = screen.getByLabelText("Email address");
+        await user.type(email, "pat@example.com");
+        await user.click(screen.getByRole("button", { name: "Look up" }));
+        await screen.findByText("Pat");
+
+        await user.clear(email);
+        await user.type(email, "sam@example.com");
+        await user.click(screen.getByRole("button", { name: "Look up" }));
+        expect(screen.getByRole("button", { name: "Look up" })).toHaveAttribute(
+            "aria-busy",
+            "true",
+        );
+        await user.click(screen.getByRole("button", { name: "Gmail: read" }));
+        await user.click(await screen.findByRole("menuitemradio", { name: /^On/ }));
+        expect(await screen.findByText("On for this account.")).toBeInTheDocument();
+
+        finishLookup({ ...PAT, userId: "sam", email: "sam@example.com", displayName: "Sam" });
+        await waitFor(() =>
+            expect(screen.getByRole("button", { name: "Look up" })).toBeEnabled(),
+        );
+        expect(screen.getByRole("button", { name: "Look up" })).toHaveAttribute(
+            "aria-busy",
+            "false",
+        );
+    });
+
+    it("settles an override save that a newer lookup overtook", async () => {
+        let finishSave!: (saved: AdminUserFeatureFlags) => void;
+        vi.mocked(getAdminUserFeatureFlags)
+            .mockResolvedValueOnce(PAT)
+            .mockResolvedValueOnce({
+                ...PAT,
+                userId: "sam",
+                email: "sam@example.com",
+                displayName: "Sam",
+            });
+        vi.mocked(setAdminUserFeatureFlag).mockImplementationOnce(
+            () => new Promise((resolve) => (finishSave = resolve)),
+        );
+        const user = userEvent.setup();
+        render(<AdminPage />);
+        await screen.findByRole("switch", { name: "Google Drive default" });
+        const email = screen.getByLabelText("Email address");
+        await user.type(email, "pat@example.com");
+        await user.click(screen.getByRole("button", { name: "Look up" }));
+        await screen.findByText("Pat");
+
+        await user.click(screen.getByRole("button", { name: "Gmail: read" }));
+        await user.click(await screen.findByRole("menuitemradio", { name: /^On/ }));
+        await user.clear(email);
+        await user.type(email, "sam@example.com");
+        await user.click(screen.getByRole("button", { name: "Look up" }));
+        await screen.findByText("Sam");
+
+        // The newer lookup owns the shown account; the late save is dropped
+        // but must still release the row it was holding.
+        finishSave({
+            ...PAT,
+            flags: [PAT.flags[0], { key: "gmail-read", override: true, enabled: true }],
+        });
+        await waitFor(() =>
+            expect(screen.getByRole("button", { name: "Gmail: read" })).toHaveTextContent(
+                "Default (off)",
+            ),
+        );
+        expect(screen.getByText("Sam")).toBeInTheDocument();
+    });
+
     it("says in place when no account has the address", async () => {
         vi.mocked(getAdminUserFeatureFlags).mockRejectedValue(
             Object.assign(new Error("No account has that email address."), {

@@ -229,20 +229,28 @@ function UserOverrides({ flags }: { flags: FeatureFlagSummary[] }) {
   const [lookupError, setLookupError] = useState<string | null>(null);
   const [user, setUser] = useState<AdminUserFeatureFlags | null>(null);
   const [busyKey, setBusyKey] = useState<FeatureFlagKey | null>(null);
-  const requestRef = useRef(0);
+  // Lookups and saves both write the shown account, and the newest of either
+  // wins it (userRequestRef). Each busy flag is cleared by its own kind's
+  // newest request instead: had they shared one counter, a save started
+  // during a lookup would leave "Look up" disabled for good, and a lookup
+  // started during a save would leave that row loading for good.
+  const userRequestRef = useRef(0);
+  const lookupRequestRef = useRef(0);
+  const saveRequestRef = useRef(0);
 
   const lookUp = async (event: FormEvent) => {
     event.preventDefault();
     const trimmed = email.trim();
     if (!trimmed) return;
-    const request = ++requestRef.current;
+    const request = ++userRequestRef.current;
+    const lookup = ++lookupRequestRef.current;
     setLookingUp(true);
     setLookupError(null);
     try {
       const found = await getAdminUserFeatureFlags(trimmed);
-      if (request === requestRef.current) setUser(found);
+      if (request === userRequestRef.current) setUser(found);
     } catch (error) {
-      if (request !== requestRef.current) return;
+      if (request !== userRequestRef.current) return;
       setUser(null);
       // "No account has that email address." is the ordinary outcome here,
       // so it is shown in place rather than as a warning.
@@ -253,24 +261,25 @@ function UserOverrides({ flags }: { flags: FeatureFlagSummary[] }) {
           : described.message,
       );
     } finally {
-      if (request === requestRef.current) setLookingUp(false);
+      if (lookup === lookupRequestRef.current) setLookingUp(false);
     }
   };
 
   const save = useCallback(
     async (userId: string, key: FeatureFlagKey, enabled: boolean | null) => {
-      const request = ++requestRef.current;
+      const request = ++userRequestRef.current;
+      const saveRequest = ++saveRequestRef.current;
       setBusyKey(key);
       try {
         const saved = await setAdminUserFeatureFlag(userId, key, enabled);
-        if (request === requestRef.current) setUser(saved);
+        if (request === userRequestRef.current) setUser(saved);
       } catch (error) {
         notifyError(error, {
           action: "change the feature flag for this user",
           onRetry: () => void save(userId, key, enabled),
         });
       } finally {
-        if (request === requestRef.current) setBusyKey(null);
+        if (saveRequest === saveRequestRef.current) setBusyKey(null);
       }
     },
     [],
