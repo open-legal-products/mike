@@ -10,7 +10,7 @@ import {
   createTurnEventSink,
   readAssistantTurn,
 } from "./assistantTurnStream";
-import { isAbortError } from "@/shared/lib/userError";
+import { isAbortError } from "@mike/client";
 
 type TurnRecord = {
   chatId: string | undefined;

@@ -17,7 +17,7 @@ import {
   createTurnEventSink,
   readAssistantTurn,
 } from "@/app/lib/assistantTurnStream";
-import { isAbortError } from "@/shared/lib/userError";
+import { isAbortError } from "@mike/client";
 import {
   beginAssistantTurn,
   cancelAssistantTurn,
