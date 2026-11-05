@@ -132,6 +132,11 @@ it.each([
   }, "ECONNREFUSED", "search_unavailable", "temporarily unavailable"],
   // The same with no usable cause code: the fixed fetch message alone.
   ["a failed fetch with no code", { message: "TypeError: fetch failed" }, "fetch_failed", "search_unavailable", "temporarily unavailable"],
+  // A SUPABASE_URL host that does not resolve.
+  ["an unresolvable gateway host", {
+    code: "", message: "TypeError: fetch failed", hint: "",
+    details: "TypeError: fetch failed\n\nCaused by: Error: getaddrinfo ENOTFOUND private.host (ENOTFOUND)",
+  }, "ENOTFOUND", "search_unavailable", "temporarily unavailable"],
   ["private-code", postgrestError("private-code"), undefined, "internal_error", "could not be completed"],
 ])("preserves the safe reason for database failure %s in logs, events and the tool result", async (_label, error, failureCode, category, message) => {
   const fake = scriptedDb([{ rpc: "find_document_text", error }]);

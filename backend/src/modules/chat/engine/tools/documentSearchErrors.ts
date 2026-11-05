@@ -33,7 +33,10 @@ export function documentSearchFailure(failure: ServiceFailure) {
     if (schemaOutOfDateCode(failure.error)) return documentSearchError("schema_out_of_date");
     const { failure_code } = diagnosticErrorTags(failure.error);
     if (failure_code === "57014") return documentSearchError("search_timeout");
-    if (["ECONNREFUSED", "ECONNRESET", "ETIMEDOUT", "EHOSTUNREACH", "ENETUNREACH", "EAI_AGAIN", "08006", "53300", "fetch_failed"].includes(String(failure_code))) {
+    // ENOTFOUND: the database gateway's host does not resolve (a DNS outage
+    // or a misconfigured SUPABASE_URL). Not the user's search, and nothing
+    // they can change, so the same answer as any unreachable gateway.
+    if (["ECONNREFUSED", "ECONNRESET", "ETIMEDOUT", "EHOSTUNREACH", "ENETUNREACH", "EAI_AGAIN", "ENOTFOUND", "08006", "53300", "fetch_failed"].includes(String(failure_code))) {
       return documentSearchError("search_unavailable");
     }
   }
