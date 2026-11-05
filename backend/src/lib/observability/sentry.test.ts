@@ -1118,6 +1118,24 @@ describe("development builds", () => {
     });
   });
 
+  // The build_mode tag follows the same rule, not NODE_ENV: compose and the
+  // desktop app run the compiled image under NODE_ENV=development, and those
+  // installs must not be tagged as laptops.
+  it("tag build_mode from the entry point, not NODE_ENV", () => {
+    vi.spyOn(console, "log").mockImplementation(() => {});
+    const compose = { NODE_ENV: "development", SENTRY_DSN: "https://key@o1.ingest.sentry.io/1" } as NodeJS.ProcessEnv;
+    expect(initSentry("api", compose, false)).toBe(true);
+    expect(vi.mocked(Sentry.init).mock.calls[0][0]!.initialScope).toMatchObject({
+      tags: { build_mode: "production" },
+    });
+
+    resetSentryForTests();
+    expect(initSentry("api", { ...compose, NODE_ENV: "production" } as NodeJS.ProcessEnv, true)).toBe(true);
+    expect(vi.mocked(Sentry.init).mock.calls[1][0]!.initialScope).toMatchObject({
+      tags: { build_mode: "development" },
+    });
+  });
+
   it("report as environment development to a DSN set on purpose, unless SENTRY_ENVIRONMENT says otherwise", () => {
     const dsn = "http://mike@localhost:9999/1";
     expect(sentryConfiguration({ SENTRY_DSN: dsn } as NodeJS.ProcessEnv, true)).toMatchObject({

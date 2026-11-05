@@ -623,6 +623,20 @@ function parseRate(raw: string | undefined, fallback: number): number {
 // lifecycle) uses the same definition; re-exported for existing callers.
 export { isDevelopmentBuild };
 
+/**
+ * The `build_mode` tag: whether this process is a development build by the
+ * same rule that picks its destination, not NODE_ENV. Compose and the desktop
+ * app run the compiled image under NODE_ENV=development, so a NODE_ENV tag
+ * labelled every install "development". A test process keeps "test".
+ */
+export function backendBuildMode(
+  env: NodeJS.ProcessEnv,
+  development: boolean,
+): "development" | "production" | "test" {
+  if (env.NODE_ENV === "test") return "test";
+  return development ? "development" : "production";
+}
+
 export function sentryConfiguration(
   env: NodeJS.ProcessEnv = process.env,
   development: boolean = isDevelopmentBuild(),
@@ -936,9 +950,10 @@ export function scrubEvent(
 export function initSentry(
   role: SentryRole,
   env: NodeJS.ProcessEnv = process.env,
+  development: boolean = isDevelopmentBuild(),
 ): boolean {
   if (initialized) return true;
-  const config = sentryConfiguration(env);
+  const config = sentryConfiguration(env, development);
   if (!config.enabled) {
     if (env.NODE_ENV !== "test") {
       console.log(
@@ -991,7 +1006,7 @@ export function initSentry(
       Sentry.onUnhandledRejectionIntegration({ mode: "strict" }),
     ],
     initialScope: {
-      tags: { service: "mike-backend", role, install: config.install, build_mode: env.NODE_ENV, diagnostics_version: "2" },
+      tags: { service: "mike-backend", role, install: config.install, build_mode: backendBuildMode(env, development), diagnostics_version: "2" },
     },
     beforeSend: scrubEvent,
   });
