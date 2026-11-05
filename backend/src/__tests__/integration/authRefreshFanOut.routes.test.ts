@@ -4,6 +4,7 @@
 import http from "node:http";
 import type { AddressInfo } from "node:net";
 import express from "express";
+import rateLimit from "express-rate-limit";
 import request from "supertest";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 
@@ -53,8 +54,12 @@ beforeAll(async () => {
   vi.stubEnv("SUPABASE_PUBLISHABLE_KEY", "publishable-test-key");
   vi.stubEnv("SUPABASE_SECRET_KEY", "secret-test-key");
   vi.stubEnv("NODE_ENV", "development");
-  const { requireAuth } = await import("../../middleware/auth");
+  const { requireAuth } = await import("../../middleware/auth.js");
   app = express();
+  // Mirrors app.ts, where the general limiter runs ahead of every
+  // authenticated route. Its ceiling is far above this test's six requests,
+  // so it never fires; it is here so the stack matches production.
+  app.use(rateLimit({ windowMs: 60_000, max: 10_000, validate: false }));
   app.get("/projects", requireAuth, (_req, res) => { res.json({ ok: true }); });
 });
 afterAll(async () => {
