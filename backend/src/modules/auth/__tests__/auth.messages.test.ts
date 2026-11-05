@@ -4,7 +4,6 @@ import {
   PASSWORD_TOO_SHORT_DETAIL,
   describeAuthProviderError,
   describeAuthValidationIssues,
-  isAuthUpstreamFailure,
 } from "../auth.messages";
 
 const fallback = "Authentication could not be completed.";
@@ -126,21 +125,5 @@ describe("describeAuthValidationIssues", () => {
       code: "invalid_request",
       detail: "The authentication request is invalid.",
     });
-  });
-});
-
-describe("isAuthUpstreamFailure", () => {
-  const authError = (name: string, status: number) =>
-    Object.assign(new Error("x"), { __isAuthError: true, name, status });
-
-  it.each([
-    ["GoTrue unreachable (auth-js status 0)", authError("AuthRetryableFetchError", 0), true],
-    ["GoTrue 503", authError("AuthRetryableFetchError", 503), true],
-    ["GoTrue API 500", authError("AuthApiError", 500), true],
-    ["wrong password", authError("AuthApiError", 400), false],
-    ["a bug in our code", new TypeError("x is undefined"), false],
-    ["no error at all", null, false],
-  ])("%s -> %s", (_label, error, expected) => {
-    expect(isAuthUpstreamFailure(error)).toBe(expected);
   });
 });

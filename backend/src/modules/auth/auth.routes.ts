@@ -15,10 +15,10 @@ import {
 } from "../../lib/authSession";
 import { ssoConfiguration, ssoDomainSchema } from "../../lib/ssoConfig";
 import {
-  UPSTREAM_UNAVAILABLE_CODE,
-  UPSTREAM_UNAVAILABLE_MESSAGE,
   sendInternalError,
+  sendUpstreamUnavailable,
 } from "../../lib/httpError";
+import { isAuthUpstreamFailure } from "../../lib/authUpstream";
 import { AppError } from "../../lib/appError";
 import { reportError, setOperation } from "../../lib/observability/sentry";
 import { requestOriginIsWordAddin } from "../../lib/origins";
@@ -61,7 +61,6 @@ import {
 import {
   describeAuthProviderError,
   describeAuthValidationIssues,
-  isAuthUpstreamFailure,
 } from "./auth.messages";
 
 export const authRouter = Router();
@@ -96,21 +95,16 @@ function authError(
   }
   // A server-side failure goes through sendInternalError, the one place a
   // 5xx becomes a Sentry event: reported once, logged, and marked so the
-  // response sanitizer does not file it again. GoTrue being unreachable or
-  // answering 5xx is an outage the user can only wait out, so it is a 503
-  // with the same `upstream_unavailable` code the gateway uses; clients show
-  // "try again shortly" and do not report it a second time.
+  // response sanitizer does not file it again. GoTrue being unreachable (no
+  // answer, or a gateway 502/503/504) is an outage the user can only wait
+  // out: 503 upstream_unavailable. A GoTrue 500 is GoTrue failing on
+  // something of ours, so it stays a 500.
   const failure = new AppError(
     "auth.supabase_unavailable",
     "unexpected server-side authentication failure",
     { cause: error },
   );
-  if (isAuthUpstreamFailure(error)) {
-    return sendInternalError(res, failure, 503, {
-      code: UPSTREAM_UNAVAILABLE_CODE,
-      detail: UPSTREAM_UNAVAILABLE_MESSAGE,
-    });
-  }
+  if (isAuthUpstreamFailure(error)) return sendUpstreamUnavailable(res, failure);
   return sendInternalError(res, failure);
 }
 

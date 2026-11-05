@@ -4,6 +4,8 @@
 // real auth router behind the real sanitizer, with a real Supabase client
 // pointed at a closed port and a real Sentry client whose transport records
 // every event, so each of the three paths is counted where it is produced.
+import http from "node:http";
+import type { AddressInfo } from "node:net";
 import express from "express";
 import request from "supertest";
 import * as Sentry from "@sentry/node";
@@ -25,13 +27,22 @@ const ENV = {
 
 const events: Sentry.ErrorEvent[] = [];
 
-beforeAll(() => {
+// A GoTrue that is up and failing on something of ours, the way a broken
+// auth.users trigger or a missing migration makes it answer sign-up.
+const brokenGoTrue = http.createServer((_req, res) => {
+  res.writeHead(500, { "content-type": "application/json" });
+  res.end(JSON.stringify({ code: 500, msg: "Database error saving new user" }));
+});
+
+beforeAll(async () => {
+  await new Promise<void>((resolve) => brokenGoTrue.listen(0, "127.0.0.1", resolve));
   for (const [key, value] of Object.entries(ENV)) {
     saved[key] = process.env[key];
     process.env[key] = value;
   }
 });
-afterAll(() => {
+afterAll(async () => {
+  await new Promise<void>((resolve) => brokenGoTrue.close(() => resolve()));
   for (const [key, value] of Object.entries(saved)) {
     if (value === undefined) delete process.env[key];
     else process.env[key] = value;
@@ -105,4 +116,28 @@ it("answers an unreachable GoTrue with 503 upstream_unavailable and files exactl
     error_kind: "auth.supabase_unavailable",
     http_status: 503,
   });
+});
+
+it("keeps a GoTrue 500 a reported 500, not an outage the user should wait out", async () => {
+  const { port } = brokenGoTrue.address() as AddressInfo;
+  process.env.SUPABASE_URL = `http://127.0.0.1:${port}`;
+  try {
+    const res = await request(app())
+      .post("/auth/login")
+      .set("Origin", origin)
+      .send({ email: "lawyer@example.test", password: "correct horse battery" });
+    await Sentry.flush(2000);
+
+    expect(res.status).toBe(500);
+    expect(res.body).toMatchObject({ code: "internal_error", request_id: "req-auth-outage" });
+    const reported = events.filter((event) => event.logger !== "console");
+    expect(reported).toHaveLength(1);
+    expect(reported[0]!.tags).toMatchObject({
+      error_kind: "auth.supabase_unavailable",
+      http_status: 500,
+    });
+    expect(events.filter((event) => event.logger === "console")).toHaveLength(0);
+  } finally {
+    process.env.SUPABASE_URL = ENV.SUPABASE_URL;
+  }
 });

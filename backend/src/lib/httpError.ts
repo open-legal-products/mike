@@ -15,8 +15,8 @@ export const INTERNAL_ERROR_MESSAGE =
   "Something went wrong. Please try again.";
 
 /**
- * A dependency this server needs (GoTrue, today) is unreachable or answering
- * 5xx. The same code the Next gateway sends when it cannot reach this server,
+ * A dependency this server needs (GoTrue, today) is unreachable: no answer,
+ * or a gateway 502/503/504 in front of it. The same code the Next gateway sends when it cannot reach this server,
  * so a client treats both alike: already reported server-side, show "try
  * again shortly", do not report it again.
  */
@@ -194,5 +194,18 @@ export function sendInternalError(
   return res.status(status).json({
     ...body,
     ...(requestId ? { request_id: requestId } : {}),
+  });
+}
+
+/**
+ * A dependency (GoTrue, today) could not be reached: 503
+ * `upstream_unavailable`, reported once like any other 5xx. Use it only for
+ * failures the user can wait out (lib/authUpstream.ts decides that for
+ * auth-js errors); a dependency answering with its own bug stays a 500.
+ */
+export function sendUpstreamUnavailable(res: Response, error: unknown): Response {
+  return sendInternalError(res, error, 503, {
+    code: UPSTREAM_UNAVAILABLE_CODE,
+    detail: UPSTREAM_UNAVAILABLE_MESSAGE,
   });
 }
