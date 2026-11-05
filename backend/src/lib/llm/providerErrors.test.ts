@@ -219,6 +219,7 @@ describe("providerFailureLevel", () => {
     ["an outage", apiCallError(503), "warning"],
     ["a stalled stream", new Error("first chunk timeout of 30000ms exceeded"), "warning"],
     ["an unreachable provider", new TypeError("fetch failed", { cause: Object.assign(new Error("connect"), { code: "ECONNRESET" }) }), "warning"],
+    ["a body that stopped mid-stream", new TypeError("terminated", { cause: Object.assign(new Error("Body Timeout Error"), { name: "BodyTimeoutError", code: "UND_ERR_BODY_TIMEOUT" }) }), "warning"],
     ["a rejected key", new InvalidApiKeyError("Anthropic"), null],
     ["a forbidden model", apiCallError(403), null],
     ["an account out of credits", apiCallError(402), null],

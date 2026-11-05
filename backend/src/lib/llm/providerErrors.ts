@@ -93,6 +93,9 @@ const NETWORK_FAILURE_CODES = new Set([
   "EPIPE",
   "UND_ERR_CONNECT_TIMEOUT",
   "UND_ERR_HEADERS_TIMEOUT",
+  // The provider stopped sending mid-body (undici's bodyTimeout): an outage,
+  // like a dropped socket, not an unexplained stream failure.
+  "UND_ERR_BODY_TIMEOUT",
   "UND_ERR_SOCKET",
 ]);
 
