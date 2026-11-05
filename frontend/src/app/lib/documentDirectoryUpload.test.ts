@@ -6,6 +6,7 @@ import {
     documentUploadEntriesFromFiles,
     documentUploadFolderSegments,
     folderUploadProgressLabel,
+    groupUploadFilesByTopFolder,
     documentUploadPathSegments,
     documentUploadProgressEntries,
     MAX_DOCUMENTS_PER_DIRECTORY_UPLOAD,
@@ -348,5 +349,30 @@ describe("document directory upload paths", () => {
 
         expect(result).toBeNull();
         expect(resolveFolderPath).toHaveBeenCalledTimes(1);
+    });
+});
+
+describe("groupUploadFilesByTopFolder", () => {
+    it("separates direct files from each top-level folder's files", () => {
+        const entry = (relativePath: string) => ({ entry: { relativePath, file: new File([], "x") } });
+        const files = [entry("a.pdf"), entry("One/b.pdf"), entry("One/Sub/c.pdf"), entry("Two/d.pdf")];
+        const grouped = groupUploadFilesByTopFolder(files);
+        expect(grouped.direct).toEqual([files[0]]);
+        expect(grouped.inFolder("One")).toEqual([files[1], files[2]]);
+        expect(grouped.inFolder("Two")).toEqual([files[3]]);
+        expect(grouped.inFolder("Missing")).toEqual([]);
+    });
+
+    it.each([20, 40])("parses each path once for %i dropped folders", (folders) => {
+        let reads = 0;
+        const files = Array.from({ length: folders * 10 }, (_, i) => ({
+            entry: {
+                get relativePath() { reads++; return `Folder ${i % folders}/file ${i}.pdf`; },
+                file: new File([], `file ${i}.pdf`),
+            },
+        }));
+        const grouped = groupUploadFilesByTopFolder(files);
+        for (let f = 0; f < folders; f++) expect(grouped.inFolder(`Folder ${f}`)).toHaveLength(10);
+        expect(reads).toBeLessThanOrEqual(files.length);
     });
 });

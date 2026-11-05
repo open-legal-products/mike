@@ -13,7 +13,7 @@ import type {
   WordThinkingEvent,
 } from "../types";
 import type { WordAssistantMessage, WordChatMessage } from "./wordChatTypes";
-import { projectRedlineStream } from "./redline";
+import { createRedlineStreamProjector, projectRedlineStream } from "./redline";
 import { isToolEditBlockIndex } from "./wordTrackedEditKeys";
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -420,6 +420,19 @@ export function assistantError(
   return undefined;
 }
 
+const contentProjectors = new WeakMap<WordContentEvent, ReturnType<typeof createRedlineStreamProjector>>();
+
+/** Event identity is the cache key; historical events are parsed only on first use. */
+export function projectWordContentEvent(event: WordContentEvent) {
+  let projector = contentProjectors.get(event);
+  if (!projector) {
+    projector = createRedlineStreamProjector();
+    projector.append(event.text);
+    contentProjectors.set(event, projector);
+  }
+  return projector.projection;
+}
+
 /** Append a delta to the current content segment, or start one after activity. */
 export function appendAssistantContent(
   events: WordAssistantEvent[],
@@ -430,12 +443,19 @@ export function appendAssistantContent(
   );
   const last = current[current.length - 1];
   if (last && isWordContentEvent(last)) {
-    return [
-      ...current.slice(0, -1),
-      { ...last, type: "content", text: last.text + text },
-    ];
+    const next: WordContentEvent = { ...last, type: "content", text: last.text + text };
+    let projector = contentProjectors.get(last);
+    if (!projector) { projector = createRedlineStreamProjector(); projector.append(last.text); }
+    projector.append(text);
+    contentProjectors.set(next, projector);
+    // Old immutable events retain their projection, not the advancing parser.
+    contentProjectors.delete(last);
+    return [...current.slice(0, -1), next];
   }
-  return [...current, { type: "content", text, key: nextEventKey() }];
+  const next: WordContentEvent = { type: "content", text, key: nextEventKey() };
+  const projector = createRedlineStreamProjector(); projector.append(text);
+  contentProjectors.set(next, projector);
+  return [...current, next];
 }
 
 function finalizeTrailingReasoning(

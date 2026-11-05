@@ -1,3 +1,4 @@
+import { mapWithConcurrency } from "./concurrency";
 import type { Db } from "./supabase";
 import { chunkArray } from "./arrays";
 import {
@@ -700,6 +701,62 @@ export async function ensureDocAccess(
         : { ok: false };
 }
 
+/** Reuse only shared container/membership verdicts within one authorized batch. */
+export function createDocumentAccessChecker(userId: string, userEmail: string | null | undefined, db: Db) {
+    const shared = new Map<string, Promise<ResourceAccess>>();
+    return async (doc: Parameters<typeof ensureDocAccess>[0]): Promise<ResourceAccess> => {
+        const key = doc.project_id ? `project:${doc.project_id}`
+            : doc.workflow_id ? `workflow:${doc.workflow_id}`
+            : doc.user_id === userId && doc.org_id ? `creator-org:${doc.org_id}` : null;
+        if (!key) return ensureDocAccess(doc, userId, userEmail, db);
+        let pending = shared.get(key);
+        if (!pending) { pending = ensureDocAccess(doc, userId, userEmail, db); shared.set(key, pending); }
+        const access = await pending;
+        // A shared role never shares the uploader's provenance.
+        return access.ok ? { ...access, isCreator: !!doc.user_id && doc.user_id === userId } : access;
+    };
+}
+
+/**
+ * The review/chat twin of createDocumentAccessChecker, for callers that
+ * authorize many rows at once (data exports). A project child's verdict is
+ * its project's, so each project is checked once; a creator's own
+ * standalone rows depend only on their organization membership, so that is
+ * resolved once per organization. Anything else (a non-creator's standalone
+ * row, reached through a per-row grant) is still checked row by row.
+ */
+export function createSharedRowAccessChecker(
+    kind: "tabular_review" | "chat",
+    userId: string,
+    userEmail: string | null | undefined,
+    db: Db,
+) {
+    const projects = new Map<string, ReturnType<typeof checkProjectAccess>>();
+    const creatorOrgs = new Map<string, Promise<ResourceAccess>>();
+    return async (row: Parameters<typeof ensureSharedRowAccess>[1]): Promise<ResourceAccess> => {
+        const isCreator = !!row.user_id && row.user_id === userId;
+        if (row.project_id) {
+            let pending = projects.get(row.project_id);
+            if (!pending) {
+                pending = checkProjectAccess(row.project_id, userId, userEmail, db);
+                projects.set(row.project_id, pending);
+            }
+            const access = await pending;
+            return access.ok
+                ? resourceAccessFor(access.projectRole, access.orgRole, isCreator)
+                : { ok: false };
+        }
+        if (!isCreator) return ensureSharedRowAccess(kind, row, userId, userEmail, db);
+        const key = row.org_id ?? "";
+        let pending = creatorOrgs.get(key);
+        if (!pending) {
+            pending = ensureSharedRowAccess(kind, row, userId, userEmail, db);
+            creatorOrgs.set(key, pending);
+        }
+        return pending;
+    };
+}
+
 /**
  * Shared derivation for tabular reviews and assistant chats. Project children
  * inherit the project role exactly.
@@ -833,21 +890,7 @@ export async function filterAccessibleDocumentIds(
         org_id?: string | null;
     };
     const accessibleIds: string[] = [];
-    // Cache only within this lookup, and only container visibility. Standalone
-    // documents can have independent private-access grants.
-    const containerChecks = new Map<string, Promise<boolean>>();
-    /** Reuse container visibility without sharing standalone document grants. */
-    const readable = (doc: DocumentAccessRow): Promise<boolean> => {
-        const key = doc.project_id ? `project:${doc.project_id}`
-            : doc.workflow_id ? `workflow:${doc.workflow_id}` : null;
-        if (!key) return ensureDocAccess(doc, userId, userEmail, db).then((access) => access.ok);
-        let check = containerChecks.get(key);
-        if (!check) {
-            check = ensureDocAccess(doc, userId, userEmail, db).then((access) => access.ok);
-            containerChecks.set(key, check);
-        }
-        return check;
-    };
+    const check = createDocumentAccessChecker(userId, userEmail, db);
     // Keep UUID filters below the gateway's request/header limits, as in the
     // add-on asset lookup. A failed batch is not an empty permissions verdict.
     for (const batch of chunkArray([...new Set(documentIds)], 50)) {
@@ -858,11 +901,11 @@ export async function filterAccessibleDocumentIds(
         if (error) {
             throw new Error("Document access lookup failed", { cause: error });
         }
-        const verdicts = await Promise.all(
-            ((data ?? []) as DocumentAccessRow[]).map(async (doc) => ({
+        const verdicts = await mapWithConcurrency(
+            (data ?? []) as DocumentAccessRow[], 5, async (doc) => ({
                 id: doc.id,
-                readable: await readable(doc),
-            })),
+                readable: (await check(doc)).ok,
+            }),
         );
         accessibleIds.push(
             ...verdicts.filter((entry) => entry.readable).map((entry) => entry.id),

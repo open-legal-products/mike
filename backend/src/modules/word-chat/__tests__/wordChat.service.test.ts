@@ -7,6 +7,7 @@
 import { beforeEach, afterEach, describe, expect, it, vi } from "vitest";
 import type { Db } from "../../../lib/supabase";
 import { AppError } from "../../../lib/appError";
+import { tableDb } from "../../../__tests__/helpers/tableDb";
 
 const mocks = vi.hoisted(() => ({
   reportError: vi.fn((..._args: unknown[]) => "event-1"),
@@ -203,5 +204,23 @@ describe("word chat service failures", () => {
       "[word-chat] failed to update chat activity",
       failure,
     );
+  });
+});
+
+describe("word chat transcript", () => {
+  it("returns every edit of a long transcript past max_rows, in document order", async () => {
+    const edits = Array.from({ length: 1200 }, (_, i) => ({
+      id: `e-${String(i).padStart(4, "0")}`, word_chat_message_id: MESSAGE_ID, block_index: 1199 - i,
+    }));
+    const fake = tableDb({
+      word_documents: [{ id: "doc-row-1", user_id: "u1", client_document_id: DOCUMENT_ID }],
+      word_chats: [{ id: CHAT_ID, word_document_id: "doc-row-1", user_id: "u1" }],
+      word_chat_messages: [{ id: MESSAGE_ID, chat_id: CHAT_ID, role: "assistant", content: "x", created_at: "2026-10-01" }],
+      word_document_edits: edits,
+    });
+    const result = await getWordChatWithMessages(fake.db, { userId: "u1", clientDocumentId: DOCUMENT_ID, chatId: CHAT_ID });
+    const loaded = result.ok ? (result.messages[0].edits as { block_index: number }[]) : [];
+    expect(loaded).toHaveLength(1200);
+    expect(loaded[0].block_index).toBe(0);
   });
 });

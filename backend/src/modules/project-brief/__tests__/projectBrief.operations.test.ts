@@ -95,6 +95,38 @@ it.each([false, true])("preserves production-adapter timeout rejection during re
     expect(completeText).toHaveBeenCalledTimes(repair ? 2 : 1); expect(st.uploads).toHaveLength(0); expect(st.proposal).toBeNull();
     expect(st.calls.some(c => c.job || c.name === "project_brief_save_proposal")).toBe(false);
 });
+it.each([false, true])("aborts the production adapter at its shared 120-second deadline during repair=%s", async repair => {
+    vi.useFakeTimers();
+    const timeout = vi.spyOn(AbortSignal, "timeout").mockImplementation(milliseconds => {
+        const controller = new AbortController();
+        setTimeout(() => controller.abort(new DOMException("Completion deadline exceeded", "TimeoutError")), milliseconds);
+        return controller.signal;
+    });
+    try {
+        vi.mocked(getEffectiveApiKeys).mockResolvedValueOnce({ claude: "fictional-test-key" });
+        vi.mocked(completeText).mockReset();
+        if (repair) vi.mocked(completeText).mockResolvedValueOnce("{invalid model JSON");
+        vi.mocked(completeText).mockImplementationOnce(({ abortSignal }) => new Promise((_resolve, reject) => {
+            abortSignal!.addEventListener("abort", () => reject(abortSignal!.reason), { once: true });
+        }));
+        const pending = proposeBrief(db, actor, { sourceIds: ["m1", "m2"], model: "claude-sonnet-5-5" });
+        await vi.waitFor(() => expect(completeText).toHaveBeenCalledTimes(repair ? 2 : 1));
+        expect(timeout).toHaveBeenCalledExactlyOnceWith(120000);
+        const signal = vi.mocked(completeText).mock.calls.at(-1)![0].abortSignal!;
+        if (repair) expect(vi.mocked(completeText).mock.calls[0][0].abortSignal).toBe(signal);
+        await vi.advanceTimersByTimeAsync(119000);
+        expect(signal.aborted).toBe(false);
+        await vi.advanceTimersByTimeAsync(1000);
+        expect(signal.aborted).toBe(true);
+        const result = await pending;
+        expect(result).toEqual({ ok: false, kind: "error", error: signal.reason });
+        expect(st.uploads).toHaveLength(0); expect(st.proposal).toBeNull();
+        expect(st.calls.some(c => c.job || c.name === "project_brief_save_proposal")).toBe(false);
+        expect(completeText).toHaveBeenCalledTimes(repair ? 2 : 1);
+    } finally {
+        timeout.mockRestore(); vi.useRealTimers();
+    }
+});
 it("keeps twice-invalid model JSON on the validation path", async () => {
     const generate = vi.fn<BriefGenerator>().mockResolvedValue("{invalid model JSON");
     const result = await proposeBrief(db, actor, { sourceIds: ["m1", "m2"], model: "mock" }, generate);
