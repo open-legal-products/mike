@@ -99,6 +99,19 @@ const ENVIRONMENT_KEY_ALIASES: Record<string, string[]> = {
   ANTHROPIC_API_KEY: ["CLAUDE_API_KEY"],
 };
 
+/**
+ * A provider with no key: neither the user's own nor the deployment's. The
+ * user is told where THEY can fix it; the environment variables that would
+ * fix it are the operator's configuration, so they go to the server log,
+ * never into a message every user of a hosted deployment can read.
+ */
+function keyNotConfigured(label: string, operatorHint: string): UserFacingError {
+  console.warn(`[llm] ${label} API key is not configured. ${operatorHint}`);
+  return new UserFacingError(
+    `The ${label} API key is not configured. Add your own key in Settings → Bring Your Own Keys or contact your administrator.`,
+  );
+}
+
 function requiredKey(
   label: string,
   environmentVariable: string,
@@ -112,9 +125,7 @@ function requiredKey(
       .find((value) => !!value) ||
     "";
   if (!key) {
-    throw new UserFacingError(
-      `${label} API key is not configured. Set ${environmentVariable} or add a user ${label} key.`,
-    );
+    throw keyNotConfigured(label, `Set ${environmentVariable}.`);
   }
   return key;
 }
@@ -153,9 +164,7 @@ function routerKey(provider: RouterProvider, apiKeys?: UserApiKeys): string {
   const key =
     routerUserKey(provider, apiKeys)?.trim() || routerEnvironmentKey(provider);
   if (!key) {
-    throw new UserFacingError(
-      `${ROUTER_LABELS[provider]} API key is not configured. Set ${ROUTER_KEY_ENV_HINTS[provider]} or add a user ${ROUTER_LABELS[provider]} key.`,
-    );
+    throw keyNotConfigured(ROUTER_LABELS[provider], `Set ${ROUTER_KEY_ENV_HINTS[provider]}.`);
   }
   return key;
 }
@@ -272,8 +281,9 @@ async function createBedrockAdapter(
 ): Promise<AiSdkAdapterConfig> {
   const credentials = bedrockCredentials(apiKeys);
   if (!credentials) {
-    throw new UserFacingError(
-      "Amazon Bedrock API key is not configured. Set AWS_BEARER_TOKEN_BEDROCK and BEDROCK_AWS_REGION or add a user Amazon Bedrock key and region.",
+    throw keyNotConfigured(
+      "Amazon Bedrock",
+      "Set AWS_BEARER_TOKEN_BEDROCK and BEDROCK_AWS_REGION, or the user adds a key and region.",
     );
   }
   const { createAmazonBedrock } = await import("@ai-sdk/amazon-bedrock");
@@ -332,8 +342,9 @@ async function createAzureAdapter(
 ): Promise<AiSdkAdapterConfig> {
   const credentials = azureCredentials(apiKeys);
   if (!credentials) {
-    throw new UserFacingError(
-      "Azure OpenAI API key is not configured. Set AZURE_API_KEY and AZURE_OPENAI_ENDPOINT or add a user Azure OpenAI key and endpoint.",
+    throw keyNotConfigured(
+      "Azure OpenAI",
+      "Set AZURE_API_KEY and AZURE_OPENAI_ENDPOINT, or the user adds a key and endpoint.",
     );
   }
   const { createAzure } = await import("@ai-sdk/azure");
@@ -361,8 +372,9 @@ async function createAzureFoundryAdapter(
 ): Promise<AiSdkAdapterConfig> {
   const credentials = azureFoundryCredentials(apiKeys);
   if (!credentials) {
-    throw new UserFacingError(
-      "Azure AI Foundry API key is not configured. Set AZURE_FOUNDRY_API_KEY and AZURE_FOUNDRY_ENDPOINT or add a user Azure AI Foundry key and endpoint.",
+    throw keyNotConfigured(
+      "Azure AI Foundry",
+      "Set AZURE_FOUNDRY_API_KEY and AZURE_FOUNDRY_ENDPOINT, or the user adds a key and endpoint.",
     );
   }
   const deployment = azureFoundryDeploymentName(model);

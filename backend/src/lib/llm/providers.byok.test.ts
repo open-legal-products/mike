@@ -318,10 +318,18 @@ describe("xAI adapter", () => {
 
   it("reports a missing key as the user's configuration, not our failure", async () => {
     vi.stubEnv("XAI_API_KEY", "");
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
     const failure = completeWithProvider({ model: "xai/grok-4.3", user: "x" });
     await expect(failure).rejects.toThrow(/xAI API key is not configured/);
     // A plain Error read as a bug: "Failure in application" (MIKE-BACKEND-6M).
     await expect(failure).rejects.toBeInstanceOf(UserFacingError);
+    // The user reads this message (safe_to_display), so it says where THEY
+    // can fix it; the env variable is the operator's and goes to the log.
+    const message = await failure.catch((error: Error) => error.message);
+    expect(message).toContain("Settings → Bring Your Own Keys");
+    expect(message).not.toContain("XAI_API_KEY");
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining("Set XAI_API_KEY."));
+    warn.mockRestore();
   });
 });
 
