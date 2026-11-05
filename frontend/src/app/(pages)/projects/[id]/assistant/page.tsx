@@ -144,8 +144,9 @@ export default function ProjectAssistantPage({ params }: Props) {
         // the chat reappeared on the next load.
         const { deletedIds, failedIds } =
             await deleteTabularReviewsWithConcurrency(deletable, deleteChat);
+        const deletedIdSet = new Set(deletedIds);
         setProjectChats((prev) =>
-            (prev ?? []).filter((chat) => !deletedIds.includes(chat.id)),
+            (prev ?? []).filter((chat) => !deletedIdSet.has(chat.id)),
         );
         // Anything that failed stays selected, so "try again" is one click.
         setSelectedChatIds(failedIds);

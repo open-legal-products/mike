@@ -1,5 +1,6 @@
 "use client";
 
+import { indexFolderDirectory } from "../shared/folderDirectoryIndex";
 import { isProjectItemDrag } from "@/app/lib/projectDragTypes";
 import { setRowDragPreview } from "@/app/lib/rowDragPreview";
 import {
@@ -7,6 +8,7 @@ import {
     useEffect,
     useImperativeHandle,
     useRef,
+    useMemo,
     useState,
 } from "react";
 import {
@@ -94,6 +96,9 @@ export const ProjectExplorer = forwardRef<ProjectExplorerHandle, Props>(function
     onMoveFolder,
     uploadingDocuments = [],
 }: Props, ref) {
+    const directory = useMemo(() => indexFolderDirectory(
+        folders, documents, document => document.folder_id ?? null,
+    ), [folders, documents]);
     const [expandedIds, setExpandedIds] = useState<Set<string>>(new Set());
     const [contextMenu, setContextMenu] = useState<ContextMenuState | null>(null);
     const [creatingIn, setCreatingIn] = useState<string | null | undefined>(undefined);
@@ -235,10 +240,9 @@ export const ProjectExplorer = forwardRef<ProjectExplorerHandle, Props>(function
 
     function renderLevel(parentId: string | null, depth: number): React.ReactNode {
         const basePadding = 8 + (depth - 1) * 16;
-        const childFolders = folders
-            .filter((f) => f.parent_folder_id === parentId)
+        const childFolders = [...(directory.children.get(parentId) ?? [])]
             .sort((a, b) => a.name.localeCompare(b.name));
-        const childDocs = documents.filter((d) => (d.folder_id ?? null) === parentId);
+        const childDocs = directory.direct.get(parentId) ?? [];
 
         return (
             <>

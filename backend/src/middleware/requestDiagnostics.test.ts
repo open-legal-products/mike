@@ -4,7 +4,7 @@ import request from "supertest";
 import * as Sentry from "@sentry/node";
 import { AppError } from "../lib/appError";
 import { resetSentryForTests, scrubEvent, setOperation } from "../lib/observability/sentry";
-import { privacyBoundaryIntegration } from "../lib/observability/sentryPrivacy";
+import { diagnosticEvent, privacyBoundaryIntegration } from "../lib/observability/sentryPrivacy";
 import { requestDiagnostics } from "./requestDiagnostics";
 
 type Frame = { filename?: string; lineno?: number; colno?: number };
@@ -104,4 +104,26 @@ it.each(["community", "official"] as const)("gives console captures private-free
   for (const privateValue of [PRIVATE_FILE, PRIVATE_EMAIL, "PRIVATE_TOKEN"]) expect(wire).not.toContain(privateValue);
   expect(wire).not.toContain("Failure in application");
   expect(Sentry.getIsolationScope().getScopeData().tags.request_id).toBeUndefined();
+});
+
+
+it.each([
+  "    at /Users/Private Person/Client Files/mike/backend/src/operation.ts:42:7",
+  "    at work (/Users/Private Person/Client Files/mike/backend/src/operation.ts:42:7)",
+  "    at work (file:///Users/Private Person/Client Files/mike/backend/src/operation.ts:42:7)",
+])("retains nested error locations from paths containing spaces: %s", frame => {
+  resetSentryForTests("community");
+  const error = new Error(PRIVATE_FILE);
+  error.stack = `Error: ${PRIVATE_FILE}\n${frame}`;
+  const scrubbed = scrubEvent({
+    type: undefined,
+    logger: "console",
+    message: PRIVATE_FILE,
+    exception: { values: [{ type: "Error", value: PRIVATE_FILE, mechanism: { synthetic: true, type: "auto.core.capture_console" },
+      stacktrace: { frames: [{ filename: "backend/src/logger.ts", lineno: 100, colno: 2 }] } }] },
+  }, { captureContext: { extra: { arguments: [PRIVATE_FILE, { error }] } } });
+  const output = diagnosticEvent(scrubbed) as WireEvent;
+  expect(frames(output)).toContainEqual(expect.objectContaining({ filename: "backend/src/operation.ts", lineno: 42, colno: 7 }));
+  const wire = JSON.stringify(output);
+  for (const secret of [PRIVATE_FILE, "/Users/", "Private Person", "Client Files"]) expect(wire).not.toContain(secret);
 });

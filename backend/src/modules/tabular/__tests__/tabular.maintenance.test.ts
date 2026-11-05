@@ -7,7 +7,6 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 
 vi.mock("../tabular.service", () => ({
-    finalizeCell: vi.fn(),
     finishGenerationIfIdle: vi.fn(),
 }));
 vi.mock("../../../lib/queue/extractionQueue", () => ({
@@ -18,7 +17,7 @@ vi.mock("../../../lib/queue/connection", () => ({
     withRedisTimeout: vi.fn(),
 }));
 vi.mock("../../../lib/dbq/driver", () => ({ redisEnabled: () => false }));
-vi.mock("../../../lib/dbq/enqueue", () => ({ liveDbJobExists: vi.fn() }));
+vi.mock("../../../lib/dbq/enqueue", () => ({ liveDbJobDedupeKeys: vi.fn(async () => new Set()) }));
 vi.mock("../../../lib/supabase", () => ({ createServerSupabase: () => ({}) }));
 const reportError = vi.hoisted(() => vi.fn());
 vi.mock("../../../lib/observability/sentry", async (importOriginal) => ({

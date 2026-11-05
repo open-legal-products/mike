@@ -40,7 +40,22 @@ vi.mock("../../supabase", () => ({
 // One stable object per mock: the real getter returns the SAME instance
 // until a wedge replaces it, and the queue getters rebuild on identity
 // change — a fresh {} per call would look like a replacement every time.
-const fakeProducerConnection = {};
+// `pipeline()` answers EXISTS for the job keys; `liveKeys` null = every key exists.
+const redis = vi.hoisted(() => ({ liveKeys: null as Set<string> | null, execs: 0, exists: [] as string[] }));
+const fakeProducerConnection = {
+    pipeline: () => {
+        const keys: string[] = [];
+        const pipe = {
+            exists: (key: string) => (keys.push(key), pipe),
+            exec: async () => {
+                redis.execs++;
+                redis.exists.push(...keys);
+                return keys.map((key) => [null, !redis.liveKeys || redis.liveKeys.has(key) ? 1 : 0]);
+            },
+        };
+        return pipe;
+    },
+};
 vi.mock("../connection", () => ({
     getRedisConnection: () => ({}),
     getRedisProducerConnection: () => fakeProducerConnection,
@@ -53,6 +68,7 @@ vi.mock("bullmq", () => ({
     Queue: class {
         add = add;
         getJob = getJob;
+        toKey = (id: string) => `bull:extraction:${id}`;
     },
 }));
 
@@ -72,6 +88,9 @@ const DATA: ExtractionJobData = {
 beforeEach(() => {
     add.mockReset();
     getJob.mockReset();
+    redis.liveKeys = null;
+    redis.execs = 0;
+    redis.exists = [];
 });
 
 describe("extractionJobId", () => {
@@ -137,14 +156,26 @@ describe("removeQueuedExtractionJobs", () => {
 
         await removeQueuedExtractionJobs("rev-1", ["row-1", "row-2"], [0, 2]);
 
-        expect(getJob.mock.calls.map((c) => c[0])).toEqual([
+        expect(redis.exists).toEqual([
             "extract_rev-1_row-1",
             "extract_rev-1_row-1_0",
             "extract_rev-1_row-1_2",
             "extract_rev-1_row-2",
             "extract_rev-1_row-2_0",
             "extract_rev-1_row-2_2",
-        ]);
+        ].map((id) => `bull:extraction:${id}`));
+    });
+
+    it("checks every candidate job in one pipelined round trip and fetches only live ones", async () => {
+        const rows = Array.from({ length: 500 }, (_, i) => `row-${i}`);
+        redis.liveKeys = new Set(["bull:extraction:extract_rev-1_row-7"]);
+        getJob.mockResolvedValue(fakeJob("waiting"));
+
+        const out = await removeQueuedExtractionJobs("rev-1", rows, Array.from({ length: 10 }, (_, i) => i));
+
+        expect(redis.execs).toBe(1);
+        expect(getJob.mock.calls.map((c) => c[0])).toEqual(["extract_rev-1_row-7"]);
+        expect(out).toEqual({ removed: 1, canceled: 0 });
     });
 
     it("removes waiting jobs; active jobs get a PERSISTED canceled marker", async () => {

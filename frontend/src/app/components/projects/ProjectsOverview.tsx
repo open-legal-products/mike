@@ -81,6 +81,8 @@ import { EmptyState } from "@/app/components/ui/empty-state";
 import { PillButtonUI } from "@/shared/ui/PillButtonUI";
 import { useQueryParamTab } from "@/app/hooks/useQueryParamTab";
 import { AccessScopeLabel } from "@/app/components/shared/AccessScopeLabel";
+import { useIdSet } from "@/app/hooks/useIdSet";
+import { indexById } from "@/app/lib/idCollections";
 
 function formatDate(iso: string) {
     return new Date(iso).toLocaleDateString(undefined, {
@@ -200,6 +202,7 @@ export function ProjectsOverview() {
         ownerUserIdFilter: ownerFilter,
         sort,
     });
+    const selectedIdSet = useIdSet(selectedIds);
     const loadError = loadErrorObj ? "Could not load projects." : null;
     const effectiveLoading = loading && !previewEmptyStates;
     const visibleProjects = useMemo(
@@ -246,9 +249,9 @@ export function ProjectsOverview() {
 
     const allSelected =
         visibleProjects.length > 0 &&
-        visibleProjects.every((p) => selectedIds.includes(p.id));
+        visibleProjects.every((p) => selectedIdSet.has(p.id));
     const someSelected =
-        !allSelected && visibleProjects.some((p) => selectedIds.includes(p.id));
+        !allSelected && visibleProjects.some((p) => selectedIdSet.has(p.id));
 
     function toggleAll() {
         rowSelectionAnchorIdRef.current = null;
@@ -435,8 +438,9 @@ export function ProjectsOverview() {
         if (ids.length === 0) return;
         const snapshot = projects;
         setSelectedIds([]);
+        const deletingIds = new Set(ids);
         setProjects((current) =>
-            current.filter((project) => !ids.includes(project.id)),
+            current.filter((project) => !deletingIds.has(project.id)),
         );
         const { failedIds } = await deleteTabularReviewsWithConcurrency(
             ids,
@@ -447,8 +451,9 @@ export function ProjectsOverview() {
             restoreOptimisticallyDeletedRows(current, snapshot, failedIds),
         );
         setSelectedIds(failedIds);
+        const failedIdSet = new Set(failedIds);
         const failedNames = snapshot
-            .filter((project) => failedIds.includes(project.id))
+            .filter((project) => failedIdSet.has(project.id))
             .map((project) => project.name);
         const named = failedNames.length
             ? ` (${failedNames.slice(0, 3).join(", ")}${
@@ -515,6 +520,7 @@ export function ProjectsOverview() {
         // toggled them across filters — or if select-all-matching pulled in
         // ids that were never paged in, which is why creator identity is the
         // fallback when the row itself is not loaded.
+        const projectById = indexById(projects);
         const roleById = new Map(
             projects.map((p) => [p.id, roleFrom(p)] as const),
         );
@@ -532,6 +538,7 @@ export function ProjectsOverview() {
             return !!creatorId && !!user?.id && creatorId === user.id;
         });
         const blocked = ids.length - deletable.length;
+        const deletableIds = new Set(deletable);
         // Unchanged from before this action was extracted: the whole
         // selection is cleared even when every row was refused.
         setSelectedIds([]);
@@ -541,8 +548,8 @@ export function ProjectsOverview() {
             // rather than a refusal that names nobody.
             const blockedContacts = mergeAccessContacts(
                 ids
-                    .filter((id) => !deletable.includes(id))
-                    .map((id) => projects.find((p) => p.id === id))
+                    .filter((id) => !deletableIds.has(id))
+                    .map((id) => projectById.get(id))
                     .map((project) => project?.admin_contacts),
             );
             setOwnerOnlyAction({
@@ -812,7 +819,7 @@ export function ProjectsOverview() {
                             return (
                                 <TableRow
                                     key={project.id}
-                                    selected={selectedIds.includes(project.id)}
+                                    selected={selectedIdSet.has(project.id)}
                                     rightClickDropdown={(close) => renderProjectActions(project, close)}
                                     onClick={(event) => {
                                         if (event.shiftKey) {
@@ -857,9 +864,7 @@ export function ProjectsOverview() {
                                 >
                                     {/* Project Name */}
                                     <TablePrimaryCell
-                                        selected={selectedIds.includes(
-                                            project.id,
-                                        )}
+                                        selected={selectedIdSet.has(project.id)}
                                         onSelectionChange={() =>
                                             toggleOne(project.id)
                                         }

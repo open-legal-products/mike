@@ -1,7 +1,8 @@
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, vi } from "vitest";
 import {
     resolveDoc,
     resolveDocLabel,
+    createDocLabelResolver,
     type DocIndex,
     type DocStore,
 } from "../types";
@@ -77,5 +78,28 @@ describe("resolveDocLabel", () => {
         // "nda.pdf" is a label here, and it IS in the store, so it should
         // be returned directly without the filename-fallback loop.
         expect(resolveDocLabel("nda.pdf", storeWithCrossMatch)).toBe("nda.pdf");
+    });
+});
+
+describe("createDocLabelResolver", () => {
+    it("indexes the store once for a batch and keeps first-match order", () => {
+        const store: DocStore = new Map();
+        const index: DocIndex = {};
+        for (let i = 0; i < 500; i++) {
+            store.set(`doc-${i}`, { storage_path: `p${i}`, file_type: "pdf", filename: i === 7 ? "dup.pdf" : `f${i}.pdf` });
+            index[`doc-${i}`] = { document_id: `uuid-${i}`, filename: `f${i}.pdf` };
+        }
+        store.set("doc-500", { storage_path: "p", file_type: "pdf", filename: "dup.pdf" });
+        const entries = vi.spyOn(Object, "entries");
+        try {
+            const labelFor = createDocLabelResolver(store, index);
+            const ids = Array.from({ length: 100 }, (_, i) => `uuid-${499 - i}`);
+            expect(ids.map(labelFor)).toEqual(ids.map((id) => id.replace("uuid", "doc")));
+            expect(entries).toHaveBeenCalledTimes(1);
+            expect(labelFor("dup.pdf")).toBe("doc-7");
+            expect(labelFor("doc-3")).toBe("doc-3");
+        } finally {
+            entries.mockRestore();
+        }
     });
 });

@@ -187,6 +187,27 @@ maybeDescribe("Supabase projects-overview pagination", () => {
         expect([...firstIds, ...secondIds]).toEqual([...myProjectIds].sort());
     });
 
+    it.each([undefined, "personal"])("resolves the participation RPC and preserves filtered pages in workspace %s", async (workspace) => {
+        // Exercise PostgREST's named/default-argument resolution, including
+        // supplying the final argument while omitting the workspace default.
+        const result = await admin.rpc("get_projects_overview", {
+            p_user_id: ownerId,
+            p_user_email: ownerEmail,
+            p_scope: "shared",
+            p_limit: 2,
+            p_offset: 2,
+            p_search_term: "needle",
+            p_sort_key: "name",
+            p_sort_direction: "asc",
+            p_practice: "Corporate",
+            p_owner_user_id: otherUserId,
+            ...(workspace ? { p_workspace: workspace } : {}),
+            p_participating_only: true,
+        });
+        expect(result.error).toBeNull();
+        expect((result.data as OverviewRow[]).map(row => row.id)).toEqual([...sharedProjectIds].sort().slice(2, 4));
+    });
+
     it("filters by scope: mine vs shared", async () => {
         const mine = await admin.rpc("get_projects_overview", {
             p_user_id: ownerId,

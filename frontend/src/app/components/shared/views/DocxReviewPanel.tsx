@@ -22,6 +22,7 @@ import {
 import { X } from "lucide-react";
 import { TextButtonUI } from "@/shared/ui/TextButtonUI";
 import { DocxCommentComposer } from "./DocxCommentComposer";
+import { groupCommentThreads } from "./commentThreads";
 import { DocxReviewActions } from "./DocxReviewActions";
 import { DocxCommentCard } from "./DocxCommentCard";
 import { openReviewPane, useRequestedReviewPane } from "./docxReviewPane";
@@ -168,24 +169,7 @@ function CommentColumn({
         };
     }, [editor]);
     // Replies stay in their parent thread, not separate bubbles.
-    const byId = new Map(items.map((item) => [item.id, item]));
-    const rootKey = (item: ReviewCommentPlacement) => {
-        const visited = new Set<string>();
-        while (
-            item.parentId &&
-            byId.has(item.parentId) &&
-            !visited.has(item.key)
-        ) {
-            visited.add(item.key);
-            item = byId.get(item.parentId)!;
-        }
-        return item.key;
-    };
-    const threads = items
-        .filter((item) => rootKey(item) === item.key)
-        .sort((a, b) => (a.anchorY ?? Infinity) - (b.anchorY ?? Infinity));
-    const active = items.find((item) => item.isActive);
-    const activeThread = active ? rootKey(active) : undefined;
+    const { threads, replies, activeThread } = groupCommentThreads(items);
     useEffect(() => {
         // Follow selection in the document without moving the page itself.
         if (!activeThread) return;
@@ -249,11 +233,7 @@ function CommentColumn({
                         key={item.key}
                         editor={editor}
                         thread={item}
-                        replies={items.filter(
-                            (reply) =>
-                                reply.key !== item.key &&
-                                rootKey(reply) === item.key,
-                        )}
+                        replies={replies.get(item.key) ?? []}
                         items={items}
                         author={author}
                         replyKey={replyKey}
