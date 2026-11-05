@@ -88,6 +88,23 @@ from public.schema_migrations
 order by filename;
 ```
 
+### Install is behind on migrations
+
+A backend started against a database that is missing some of
+`backend/migrations/` keeps running, but anything that needs a missing
+function, table or column fails. Requests answer `503` with code
+`schema_out_of_date` ("The server's database needs an update"), and the
+backend logs `[http/schema-out-of-date]` or `[schema-out-of-date]` warnings
+naming the PostgREST/SQLSTATE code (`PGRST202` function, `PGRST204` column,
+`PGRST205` table, `42P01` relation). With error reporting on, Sentry shows a
+warning titled `Failure in <operation> / … / schema_out_of_date / <code>`,
+for example `Failure in maintenance.document_text / stale-sweep /
+schema_out_of_date / PGRST202`; background sweeps report it once per process
+and operation, so its event count does not measure how often it happens. Run
+`backend/scripts/migrate.sh status` to list what is pending, apply it with
+`backend/scripts/migrate.sh up`, reload the PostgREST schema cache (`notify
+pgrst, 'reload schema';`), and restart the backend.
+
 ### Upgrade order and rollback
 
 For the SQL/backend/web/Word performance changes in PR #749, upgrade an

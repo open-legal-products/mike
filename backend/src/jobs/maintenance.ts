@@ -1,6 +1,7 @@
 import { createServerSupabase, type Db } from "../lib/supabase";
 import { safeError } from "../lib/safeError";
 import { withKind } from "../lib/appError";
+import { reportSchemaOutOfDateOnce } from "../lib/schemaOutOfDate";
 import { runIsolated } from "../lib/dbq/jobScope";
 import { reportError, setOperation } from "../lib/observability/sentry";
 import type { Operation } from "../lib/observability/sentryPrivacy";
@@ -16,6 +17,12 @@ function runSweep<T>(operation: Operation, work: () => Promise<T>): Promise<T | 
         try {
             return await work();
         } catch (cause) {
+            // A database behind this build fails the same way on every sweep
+            // until someone migrates it: one warning per operation per
+            // process, not one error per run. The other sweeps still run.
+            if (reportSchemaOutOfDateOnce(cause, { key: operation, tags: { component: "stale-sweep" } })) {
+                return undefined;
+            }
             reportError(withKind(cause, "maintenance.sweep_failed", "Maintenance sweep failed"), {
                 tags: { component: "stale-sweep" },
             });

@@ -45,17 +45,20 @@ const SCHEMA_OUT_OF_DATE_CODES = new Set([
 ]);
 
 /**
- * The schema-drift code in an error's cause chain, if any. Reads only the
- * structured `code` of each link (a supabase-js error object, or the Error
- * asReportableError wrapped around one), never message text.
+ * The link of an error's cause chain that carries a schema-drift code, and
+ * that code. Reads only the structured `code` of each link (a supabase-js
+ * error object, or the Error asReportableError wrapped around one), never
+ * message text.
  */
-export function schemaOutOfDateCode(error: unknown): string | null {
+export function schemaOutOfDateLink(
+  error: unknown,
+): { code: string; link: object } | null {
   let current: unknown = error;
   for (let depth = 0; depth < 5 && current && typeof current === "object"; depth++) {
     try {
       const code = (current as { code?: unknown }).code;
       if (typeof code === "string" && SCHEMA_OUT_OF_DATE_CODES.has(code)) {
-        return code;
+        return { code, link: current };
       }
       current = (current as { cause?: unknown }).cause;
     } catch {
@@ -63,6 +66,11 @@ export function schemaOutOfDateCode(error: unknown): string | null {
     }
   }
   return null;
+}
+
+/** The schema-drift code in an error's cause chain, if any. */
+export function schemaOutOfDateCode(error: unknown): string | null {
+  return schemaOutOfDateLink(error)?.code ?? null;
 }
 
 // SQLSTATE (42P01), PostgREST (PGRST205) and errno-style (ECONNREFUSED)
