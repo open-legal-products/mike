@@ -14,6 +14,8 @@ import {
 } from "../documents/documents.service";
 import { deleteProjectsByIds } from "../user/user.service";
 import { chunkArray } from "../../lib/arrays";
+import { selectAllByKey, selectInBatches } from "../../lib/batchedQuery";
+import { wipeMemoryFiles as wipeMemoryFilesBatch } from "../../lib/memory/files";
 import { dbJobsEnabled } from "../../lib/dbq/runner";
 import { deleteFilesBestEffort } from "../../lib/storage";
 import type { Db } from "../../lib/supabase";
@@ -86,17 +88,17 @@ export async function deleteOrgProjects(db: Db, orgId: string): Promise<number> 
 
 /** Every workflow the organization owns, with its attached documents. */
 export async function deleteOrgWorkflows(db: Db, orgId: string): Promise<number> {
+    // One capture, one delete and one cleanup hand-off per page of (at most
+    // BATCH_SIZE) workflows, not three round trips per workflow.
     return purgeOrgTable(db, "workflows", orgId, async (ids) => {
-        for (const workflowId of ids) {
-            const keys = await captureInlineDocumentCleanup(db, { workflowId });
-            const { error } = await db
-                .from("workflows")
-                .delete()
-                .eq("id", workflowId)
-                .eq("org_id", orgId);
-            if (error) fail("Failed to delete organization workflows");
-            await completeInlineDocumentCleanup(db, keys);
-        }
+        const keys = await captureInlineDocumentCleanup(db, { workflowIds: ids });
+        const { error } = await db
+            .from("workflows")
+            .delete()
+            .in("id", ids)
+            .eq("org_id", orgId);
+        if (error) fail("Failed to delete organization workflows");
+        await completeInlineDocumentCleanup(db, keys);
     });
 }
 
@@ -261,44 +263,48 @@ export async function deleteOrgMemories(db: Db, orgId: string): Promise<void> {
     // Each member's own memory for this organization. It is private to them
     // and nobody here reads it; clearing the organization's memory clears
     // these too, so that nothing learned in it is left anywhere.
-    const { data: memberFiles, error: memberError } = await db
-        .from("memory_files")
-        .select("id")
-        .eq("scope", "user")
-        .eq("org_id", orgId);
-    // 42703: a database from before memory was per workspace has none.
-    if (memberError && memberError.code !== "42703" && memberError.code !== "PGRST204")
-        fail("Failed to load organization memory");
-    for (const row of (memberFiles ?? []) as { id?: unknown }[]) {
-        if (typeof row.id !== "string" || !row.id) continue;
-        const result = await db.rpc("wipe_memory_file", {
-            p_memory_file_id: row.id,
-            p_enabled: null,
-            p_updated_by: null,
-            p_source: "wipe",
-        });
-        if (result.error) fail("Failed to delete organization memory");
-    }
+    const memberFiles = await (async () => {
+        try {
+            return await selectAllByKey<{ id: string }>("organization member memory", () =>
+                  db
+                    .from("memory_files")
+                    .select("id")
+                    .eq("scope", "user")
+                    .eq("org_id", orgId));
+        } catch (error) {
+            // 42703: a database from before memory was per workspace has none.
+            const code = (error as { cause?: { code?: string } }).cause?.code;
+            if (code === "42703" || code === "PGRST204") return [];
+            return fail("Failed to load organization memory");
+        }
+    })();
+    await wipeMemoryFiles(db, memberFiles.map((row) => row.id));
 
     const projectIds = await allOrgIds(db, "projects", orgId);
-    for (const batch of chunkArray(projectIds, BATCH_SIZE)) {
-        const { data, error } = await db
-            .from("memory_files")
-            .select("id")
-            .eq("scope", "project")
-            .in("project_id", batch);
-        if (error) fail("Failed to load organization memory");
-        for (const row of (data ?? []) as { id?: unknown }[]) {
-            if (typeof row.id !== "string" || !row.id) continue;
-            const result = await db.rpc("wipe_memory_file", {
-                p_memory_file_id: row.id,
-                // null keeps whatever "enabled" resolves to under the lock.
-                p_enabled: null,
-                p_updated_by: null,
-                p_source: "wipe",
-            });
-            if (result.error) fail("Failed to delete organization memory");
-        }
+    let projectFiles: { id: string }[];
+    try {
+        projectFiles = await selectInBatches<{ id: string }>(
+            "organization project memory",
+            projectIds,
+            (batch) =>
+                db
+                    .from("memory_files")
+                    .select("id")
+                    .eq("scope", "project")
+                    .in("project_id", batch),
+        );
+    } catch {
+        return fail("Failed to load organization memory");
+    }
+    await wipeMemoryFiles(db, projectFiles.map((row) => row.id));
+}
+
+/** Empty the files (keeping each one's enabled setting under its lock). */
+async function wipeMemoryFiles(db: Db, ids: string[]): Promise<void> {
+    try {
+        await wipeMemoryFilesBatch(db, ids, { enabled: null });
+    } catch {
+        fail("Failed to delete organization memory");
     }
 }
 

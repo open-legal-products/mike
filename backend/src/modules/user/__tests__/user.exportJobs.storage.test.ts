@@ -5,11 +5,14 @@ import type { DbJob } from "../../../lib/dbq/types";
 
 vi.mock("../../../lib/access", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../../lib/access")>()),
-  ensureDocAccess: async () => ({ ok: true }),
+  createDocumentAccessChecker: () => async () => ({ ok: true }),
 }));
 vi.mock("../../../lib/documentVersions", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../../lib/documentVersions")>()),
-  loadActiveVersion: async (id: string) => ({ storage_path: `${id}.docx`, filename: `${id}.docx`, version_number: 1, source: "upload" }),
+  attachActiveVersionPaths: async (_db: unknown, docs: Array<Record<string, unknown>>) => {
+    for (const doc of docs) Object.assign(doc, { storage_path: `${doc.id}.docx`, filename: `${doc.id}.docx`, active_version_number: 1, source: "upload" });
+    return docs;
+  },
 }));
 import { handleExportBuild } from "../user.exportJobs";
 

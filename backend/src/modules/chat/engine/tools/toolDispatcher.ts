@@ -10,7 +10,7 @@ import {
   PlaybookRequestError,
   reviewWithPlaybook,
 } from "../../../playbooks/playbooks.service";
-import { catalogKeyFromWorkflowId } from "../../../../lib/workflowCatalog";
+import { catalogKeyFromWorkflowId, findCatalogWorkflow } from "../../../../lib/workflowCatalog";
 import { teamOrgIdOf } from "../../../../lib/personalOrgs";
 import type { ConnectorOwner } from "../../../../lib/connectorOwner";
 import {
@@ -54,6 +54,7 @@ import {
   type AskInputsEvent,
   devLog,
   resolveDocLabel,
+  createDocLabelResolver,
 } from "../types";
 import { downloadFile, downloadFileIfAvailable, storageKey, uploadFile } from "../../../../lib/storage";
 import { convertedPdfKey, docxToPdf } from "../../../../lib/convert";
@@ -76,6 +77,7 @@ import {
   readDocumentContent,
   findInDocumentContent,
   findTextMatches,
+  normalizedTextFor,
   runEditDocument,
   safeGeneratedFilename,
   type DocEditedResult,
@@ -103,6 +105,7 @@ import {
   type CourtlistenerTurnState,
 } from "./courtlistenerTurnState";
 import type { Db } from "../../../../lib/supabase";
+import { renderTableCells } from "./tableCells";
 
 /**
  * Report a server-side tool's failure and return what to log for it. The
@@ -310,6 +313,32 @@ function cachedCaseNotFetchedResult(clusterId: number | null) {
     error:
       "Case has not been fetched in this turn. Call courtlistener_get_cases first.",
   };
+}
+
+/**
+ * read_workflow's access verdict, once per workflow per turn. The store is
+ * built afresh for every turn, so it is the turn's identity: the first
+ * read_workflow of a workflow re-checks access (the store's list may be a
+ * few seconds old), and a model that reads the same workflow again in that
+ * turn reuses the answer instead of repeating the full access check.
+ */
+const turnWorkflowVerdicts = new WeakMap<WorkflowStore, Map<string, Promise<boolean>>>();
+function workflowVerdictForTurn(
+  store: WorkflowStore,
+  workflowId: string,
+  check: () => Promise<boolean>,
+): Promise<boolean> {
+  let verdicts = turnWorkflowVerdicts.get(store);
+  if (!verdicts) {
+    verdicts = new Map();
+    turnWorkflowVerdicts.set(store, verdicts);
+  }
+  let verdict = verdicts.get(workflowId);
+  if (!verdict) {
+    verdict = check();
+    verdicts.set(workflowId, verdict);
+  }
+  return verdict;
 }
 
 export async function runToolCalls(
@@ -857,9 +886,8 @@ export async function runToolCalls(
       });
     } else if (tc.function.name === "fetch_documents") {
       const rawDocIds = (args.doc_ids as string[]) ?? [];
-      const docIds = rawDocIds.map(
-        (id) => resolveDocLabel(id, docStore, docIndex) ?? id,
-      );
+      const labelFor = createDocLabelResolver(docStore, docIndex);
+      const docIds = rawDocIds.map((id) => labelFor(id) ?? id);
       const parts: string[] = [];
       for (const docId of docIds) {
         const readIdentity = await getTurnReadIdentity({
@@ -1084,12 +1112,22 @@ export async function runToolCalls(
       });
     } else if (tc.function.name === "read_workflow") {
       const wfId = args.workflow_id as string;
+      // Turn setup loads only active catalog versions; a historical chat
+      // can still name a retired one, which is looked up on demand.
+      if (workflowStore && !workflowStore.has(wfId) && catalogKeyFromWorkflowId(wfId)) {
+        const retired = await findCatalogWorkflow(wfId, db).catch(() => null);
+        if (retired?.type === "assistant" && retired.prompt_md) {
+          workflowStore.set(wfId, { title: retired.title, skill_md: retired.prompt_md, listed: false });
+        }
+      }
       const candidate = workflowStore?.get(wfId);
       const allowed = candidate && (
         catalogKeyFromWorkflowId(wfId) !== null ||
-        await canUseWorkflowInWorkspace(
-          db, wfId, userId, options.userEmail,
-          (await teamOrgIdOf(db, options.orgId)) ?? "personal",
+        await workflowVerdictForTurn(workflowStore!, wfId, async () =>
+          canUseWorkflowInWorkspace(
+            db, wfId, userId, options.userEmail,
+            (await teamOrgIdOf(db, options.orgId)) ?? "personal",
+          ),
         )
       );
       const wf = allowed ? candidate : undefined;
@@ -1138,45 +1176,14 @@ export async function runToolCalls(
         content: `${instructions}${assetNotice}`,
       });
     } else if (tc.function.name === "read_table_cells" && tabularStore) {
-      const colIndices = args.col_indices as number[] | undefined;
-      const rowIndices = args.row_indices as number[] | undefined;
-
-      const filteredCols = colIndices?.length
-        ? tabularStore.columns.filter((_, i) => colIndices.includes(i))
-        : tabularStore.columns;
-      const filteredDocs = rowIndices?.length
-        ? tabularStore.documents.filter((_, i) => rowIndices.includes(i))
-        : tabularStore.documents;
-
-      const label = `${filteredCols.length} ${filteredCols.length === 1 ? "column" : "columns"} × ${filteredDocs.length} ${filteredDocs.length === 1 ? "row" : "rows"}`;
+      const { label, content } = renderTableCells(
+        tabularStore,
+        args.col_indices as number[] | undefined,
+        args.row_indices as number[] | undefined,
+      );
       write(
         `data: ${JSON.stringify({ type: "doc_read_start", filename: label })}\n\n`,
       );
-
-      const lines: string[] = [];
-      for (const col of filteredCols) {
-        const colPos = tabularStore.columns.findIndex(
-          (c) => c.index === col.index,
-        );
-        for (const doc of filteredDocs) {
-          const rowPos = tabularStore.documents.findIndex(
-            (d) => d.id === doc.id,
-          );
-          const cell = tabularStore.cells.get(`${col.index}:${doc.id}`);
-          lines.push(
-            `[COL:${colPos} "${col.name}" | ROW:${rowPos} "${doc.filename}"]`,
-          );
-          if (cell?.summary) {
-            lines.push(`Summary: ${cell.summary}`);
-            if (cell.flag) lines.push(`Flag: ${cell.flag}`);
-            if (cell.reasoning) lines.push(`Reasoning: ${cell.reasoning}`);
-          } else {
-            lines.push(`(not yet generated)`);
-          }
-          lines.push("");
-        }
-      }
-
       write(
         `data: ${JSON.stringify({ type: "doc_read", filename: label })}\n\n`,
       );
@@ -1184,7 +1191,7 @@ export async function runToolCalls(
       toolResults.push({
         role: "tool",
         tool_call_id: tc.id,
-        content: lines.join("\n") || "No cells found.",
+        content,
       });
     } else if (tc.function.name === COURTLISTENER_TOOL_NAMES.searchCaseLaw) {
       const query = typeof args.query === "string" ? args.query : "";
@@ -1475,6 +1482,7 @@ export async function runToolCalls(
           maxResults: remaining,
           contextChars,
           startIndex: hits.length,
+          normalized: normalizedTextFor(opinion, opinion.text),
         });
         totalMatches += result.totalMatches;
         hits.push(

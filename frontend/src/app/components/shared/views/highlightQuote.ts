@@ -1,3 +1,4 @@
+import { normalizePdfQuoteText } from "./pdfQuoteSearch";
 let pdfjsLib: typeof import("pdfjs-dist") | null = null;
 
 export async function getPdfJs() {
@@ -18,7 +19,7 @@ const ORIGINAL_TEXT_ATTR = "data-original-text";
 
 // Strip everything except alphanumerics (a-z A-Z 0-9) for robust matching
 function onlyLetters(s: string): string {
-    return s.replace(/[^a-zA-Z0-9]/g, "").toLowerCase();
+    return normalizePdfQuoteText(s);
 }
 
 function escapeHtml(str: string): string {
@@ -41,14 +42,33 @@ function strippedPosToOriginal(original: string, strippedPos: number): number {
     return original.length;
 }
 
+const highlightedDivs = new WeakMap<HTMLElement[], Set<HTMLElement>>();
 export function clearHighlights(textDivs: HTMLElement[]) {
-    for (const div of textDivs) {
-        if (div.hasAttribute(ORIGINAL_TEXT_ATTR)) {
-            div.textContent = div.getAttribute(ORIGINAL_TEXT_ATTR)!;
-            div.removeAttribute(ORIGINAL_TEXT_ATTR);
-        }
+    for (const div of highlightedDivs.get(textDivs) ?? []) {
+        div.textContent = div.getAttribute(ORIGINAL_TEXT_ATTR)!;
+        div.removeAttribute(ORIGINAL_TEXT_ATTR);
     }
+    highlightedDivs.delete(textDivs);
 }
+
+function buildTextIndex(textDivs: HTMLElement[], order?: readonly number[]) {
+    const divOrigTexts = new Array<string>(textDivs.length).fill("");
+    const divStripped = new Array<string>(textDivs.length).fill("");
+    const divStartInFull = new Array<number>(textDivs.length).fill(0);
+    const readingOrder = order ?? textDivs.map((_, index) => index);
+    const parts: string[] = [];
+    let length = 0;
+    for (const i of readingOrder) {
+        const original = textDivs[i]?.getAttribute(ORIGINAL_TEXT_ATTR) ?? textDivs[i]?.textContent ?? "";
+        divOrigTexts[i] = original;
+        divStripped[i] = onlyLetters(original);
+        divStartInFull[i] = length;
+        parts.push(divStripped[i]);
+        length += divStripped[i].length;
+    }
+    return {order, readingOrder, divOrigTexts, divStripped, divStartInFull, fullStripped:parts.join("")};
+}
+const indexes = new WeakMap<HTMLElement[], ReturnType<typeof buildTextIndex>>();
 
 /**
  * Wrap the part of the text layer matching `quote` in a highlight span.
@@ -74,25 +94,12 @@ export async function highlightQuote(
         .map((s) => onlyLetters(s))
         .filter((s) => s.length > 0);
 
-    // Build the stripped full text and track each div's start position within
-    // it, keeping the original div texts for display. These are indexed by
-    // position in `textDivs` but filled and scanned in reading order. Divs
-    // missing from `order` (empty spans, which the extractor drops before
-    // clustering) keep their defaults and simply never match.
-    const divOrigTexts: string[] = new Array(textDivs.length).fill("");
-    const divStripped: string[] = new Array(textDivs.length).fill("");
-    const divStartInFull: number[] = new Array(textDivs.length).fill(0);
-    const readingOrder = order ?? textDivs.map((_, index) => index);
-    let fullStripped = "";
-
-    for (const i of readingOrder) {
-        const orig = textDivs[i]?.textContent ?? "";
-        divOrigTexts[i] = orig;
-        const stripped = onlyLetters(orig);
-        divStripped[i] = stripped;
-        divStartInFull[i] = fullStripped.length;
-        fullStripped += stripped;
+    let indexed = indexes.get(textDivs);
+    if (!indexed || indexed.order !== order) {
+        indexed = buildTextIndex(textDivs, order);
+        indexes.set(textDivs, indexed);
     }
+    const { readingOrder, divOrigTexts, divStripped, divStartInFull, fullStripped } = indexed;
 
     // Map: divIndex -> [strippedLocalStart, strippedLocalEnd]
     const divHighlightRanges = new Map<number, [number, number]>();
@@ -105,10 +112,21 @@ export async function highlightQuote(
         }
         const matchEnd = matchPos + segment.length;
 
-        for (const i of readingOrder) {
+        // Binary-search the first intersecting span instead of scanning all
+        // spans for every quote segment.
+        let low = 0, high = readingOrder.length;
+        while (low < high) {
+            const middle = (low + high) >>> 1;
+            const i = readingOrder[middle];
+            if (divStartInFull[i] + divStripped[i].length <= matchPos) low = middle + 1;
+            else high = middle;
+        }
+        for (let position = low; position < readingOrder.length; position++) {
+            const i = readingOrder[position];
             const divStart = divStartInFull[i];
             const divEnd = divStart + divStripped[i].length;
-            if (matchPos >= divEnd || matchEnd <= divStart) continue;
+            if (matchEnd <= divStart) break;
+            if (matchPos >= divEnd) continue;
 
             const localStart = Math.max(0, matchPos - divStart);
             const localEnd = Math.min(
@@ -121,6 +139,8 @@ export async function highlightQuote(
 
     if (divHighlightRanges.size === 0) return false;
 
+    const changed = new Set<HTMLElement>();
+    highlightedDivs.set(textDivs, changed);
     for (const [idx, [strStart, strEnd]] of divHighlightRanges) {
         const div = textDivs[idx];
         const orig = divOrigTexts[idx];
@@ -129,6 +149,7 @@ export async function highlightQuote(
         const origStart = strippedPosToOriginal(orig, strStart);
         const origEnd = strippedPosToOriginal(orig, strEnd);
 
+        changed.add(div);
         div.setAttribute(ORIGINAL_TEXT_ATTR, orig);
         div.innerHTML =
             escapeHtml(orig.slice(0, origStart)) +

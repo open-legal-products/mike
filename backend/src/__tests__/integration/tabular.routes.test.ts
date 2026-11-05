@@ -610,7 +610,7 @@ describe("tabular.routes", () => {
                 error: null,
             };
             supabaseState.tables.project_subfolders = {
-                data: [{ id: "f1", name: "Contracts", parent_folder_id: null }],
+                data: [{ id: "f1", name: "Contracts", parent_folder_id: null, project_id: "p1" }],
                 error: null,
             };
             supabaseState.tables.tabular_review_rows = {

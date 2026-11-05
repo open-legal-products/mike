@@ -37,6 +37,12 @@ export default defineConfig({
                 find: /^react$/,
                 replacement: resolvePath("./node_modules/react/index.js"),
             },
+            // JSX compilation adds these imports even when source imports only
+            // React. Resolve both runtimes beside the same frontend React copy.
+            {
+                find: /^react\/(jsx-runtime|jsx-dev-runtime)$/,
+                replacement: resolvePath("./node_modules/react/$1.js"),
+            },
             {
                 find: /^@sentry\/react$/,
                 replacement: resolvePath("./node_modules/@sentry/react/build/esm/index.js"),
@@ -84,6 +90,10 @@ export default defineConfig({
             {
                 find: "@mike/error-notifier",
                 replacement: resolvePath("./src/shared/lib/errorNotifier.ts"),
+            },
+            {
+                find: "@mike/response-selection-menu-ui",
+                replacement: resolvePath("./src/shared/ui/ResponseSelectionMenuUI.tsx"),
             },
             {
                 find: "@mike/toast-ui",

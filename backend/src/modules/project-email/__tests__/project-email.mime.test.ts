@@ -160,6 +160,14 @@ describe("bounded, inert Gmail MIME import", () => {
     expect(() => parseEmail(message({ filename: "forwarded.eml", mimeType: "message/rfc822", body: { size: 10 }, parts: [nested] }))).toThrow("MIME");
     expect(() => parseEmail(message({ filename: "forwarded.eml", mimeType: "message/rfc822", body: { size: 10 }, parts: Array.from({ length: EMAIL_LIMITS.parts }, () => plain("nested")) }))).toThrow("MIME");
   });
+  it("accepts exactly the MIME node budget and rejects the next node beneath skipped attachments", () => {
+    const payload = {
+      filename: "forwarded.eml", mimeType: "message/rfc822", body: { size: 10 },
+      parts: Array.from({ length: EMAIL_LIMITS.parts - 1 }, () => plain("nested")),
+    };
+    expect(parseEmail(message(payload)).parts).toHaveLength(1);
+    expect(() => parseEmail(message({ ...payload, parts: [...payload.parts, plain("one too many")] }))).toThrow("MIME");
+  });
   it("preserves a literal HTML limit phrase without confusing it with converter truncation", () => {
     const payload = message({ mimeType: "text/html", body: { data: b64("<p>[Email HTML structure exceeds the import limit]</p>") } });
     const first = parseEmail(payload), second = parseEmail(payload);

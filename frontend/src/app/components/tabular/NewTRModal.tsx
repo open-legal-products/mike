@@ -48,6 +48,7 @@ import {
     type PendingOrgOverride,
 } from "../modals/CreateAccessStep";
 import { useConfiguredModels } from "@/app/hooks/useConfiguredModels";
+import { appendMissingById } from "@/app/lib/idCollections";
 
 const isDev = process.env.NODE_ENV !== "production";
 const devLog = (...args: Parameters<typeof console.log>) => {
@@ -435,13 +436,7 @@ function NewTRModalForWorkspace({
             } else {
                 setExtraStandaloneDocs((prev) => [...uploaded, ...prev]);
             }
-            setSelectedDocuments((prev) => [
-                ...prev,
-                ...uploaded.filter(
-                    (document) =>
-                        !prev.some((selected) => selected.id === document.id),
-                ),
-            ]);
+            setSelectedDocuments((prev) => appendMissingById(prev, uploaded));
             // Files that never became documents cannot be attached to the
             // review, so say which ones instead of leaving the picker looking
             // as though the upload simply produced nothing.

@@ -26,13 +26,16 @@ matrix:
    production ordering so the default and add-on catalog exists before startup;
 6. serves the production build (`next build` / `next start`) in one job and
    the development renderer (`next dev`) in another. The development job warms
-   static routes, sets `REACT_STRESS=1` for 4x Chromium CPU pressure, and fails
-   on React/observer loop diagnostics. Development overlays remain observable;
+   static and dynamic page routes, then probes `/api/auth/session` through Next
+   and requires an anonymous 401 response to warm the catch-all API gateway and
+   confirm the backend roundtrip. It sets `REACT_STRESS=1` for 4x Chromium CPU
+   pressure and fails on React/observer loop diagnostics. Development overlays remain observable;
    they are not suppressed to make selectors pass. Both jobs use the backend
    API (`:3001`) and web server (`:3000`) with isolated disposable services;
-7. runs `npx playwright test --project=chromium` on three parallel workers and
-   uploads the HTML report + traces as an artifact (`playwright-report-production` /
-   `playwright-report-development`) on pass, fail, or timeout.
+7. runs `npx playwright test --project=chromium` on three production workers
+   or two development workers and uploads the HTML report + traces as an artifact
+   (`playwright-report-production` / `playwright-report-development`) on pass,
+   fail, or timeout.
 
 ### Test users and parallel workers
 
@@ -49,9 +52,14 @@ file still run in order. `e2e/auth.setup.ts` only creates the dedicated logout
 user, whose global sign-out must never revoke a shared session. No login secret
 is needed.
 
-`E2E_WORKERS` sets the worker count (CI sets 3; the default is 1, because
-`next dev` compiles routes on demand). A spec that needs a specific user's
-details takes the `e2eAccount` fixture instead of hardcoding an email.
+`E2E_WORKERS` sets the worker count (CI sets 3 for production and 2 for
+development; the default is 1, because `next dev` compiles routes on demand).
+The development job shares its four CPUs with Next, the API and Postgres.
+Three browsers at 4x CPU throttle caused unrelated page commits to miss their
+assertion deadlines even after successful API and route responses. Two workers
+keep the deliberate per-browser throttle, zero retries, and unchanged assertions
+while reducing runner contention. A spec that needs a specific user's details
+takes the `e2eAccount` fixture instead of hardcoding an email.
 
 ### Synthetic specs
 

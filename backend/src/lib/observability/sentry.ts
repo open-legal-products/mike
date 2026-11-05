@@ -35,6 +35,17 @@ export type ReportContext = {
 };
 
 const CONSOLE_MECHANISM = "auto.core.capture_console";
+/**
+ * The mechanism of the events Sentry's Vercel AI integration files itself.
+ * It subscribes to the AI SDK's `ai:telemetry` diagnostics channel and calls
+ * captureException(…, { handled: false }) for EVERY `tool-error` a tool step
+ * produces (`captureToolError` in @sentry/server-utils). For Mike that is
+ * never a fresh report: a tool failure ends the turn and is reported once,
+ * typed, by its owner (chat-stream's `reportError`, the job runner for the
+ * memory curator), and the ask_inputs / approval pause is control flow that
+ * travels the same `tool-error` path and is not a failure at all.
+ */
+const VERCEL_AI_TOOL_ERROR_MECHANISM = "auto.vercelai.channel";
 const NESTED_SEARCH_DEPTH = 2;
 
 /**
@@ -642,6 +653,8 @@ const DEFAULT_MAX_EVENTS_PER_ISSUE_PER_MINUTE = 10;
 const THROTTLE_WINDOW_MS = 60_000;
 type ThrottleBucket = { windowStart: number; sent: number; suppressed: number };
 const throttleBuckets = new Map<string, ThrottleBucket>();
+/** Distinct issues tracked at once; past it the oldest bucket is evicted. */
+const MAX_THROTTLE_KEYS = 1_000;
 let maxEventsPerIssuePerMinute = DEFAULT_MAX_EVENTS_PER_ISSUE_PER_MINUTE;
 
 function issueKey(event: Sentry.ErrorEvent): string {
@@ -668,14 +681,24 @@ export function withinIssueBudget(
       );
     }
     bucket = { windowStart: now, sent: 0, suppressed: 0 };
+    // Re-inserting moves the key to the end, so the Map's insertion order is
+    // window-start order and the oldest bucket is always the first entry.
+    throttleBuckets.delete(key);
     throttleBuckets.set(key, bucket);
-    // Keep the map bounded on a long-running process.
-    if (throttleBuckets.size > 1_000) {
-      for (const [otherKey, other] of throttleBuckets) {
-        if (now - other.windowStart >= THROTTLE_WINDOW_MS) {
-          throttleBuckets.delete(otherKey);
-        }
+    // Keep the map bounded on a long-running process: drop expired windows
+    // from the front, and past the cap evict the oldest live bucket too. Each
+    // key is evicted at most once per insert, so this is amortised O(1).
+    // (The old sweep scanned every key on every new key once 1,000 were
+    // live, and evicted nothing while they all stayed inside the window.)
+    for (const [oldestKey, oldest] of throttleBuckets) {
+      const expired = now - oldest.windowStart >= THROTTLE_WINDOW_MS;
+      if (!expired && throttleBuckets.size <= MAX_THROTTLE_KEYS) break;
+      if (oldest.suppressed) {
+        console.warn(
+          `[sentry] suppressed ${oldest.suppressed} further event(s) for: ${oldestKey.slice(0, 120)}`,
+        );
       }
+      throttleBuckets.delete(oldestKey);
     }
   }
   if (bucket.sent < maxEventsPerIssuePerMinute) {
@@ -684,6 +707,11 @@ export function withinIssueBudget(
   }
   bucket.suppressed += 1;
   return false;
+}
+
+/** Number of issue buckets the throttle currently holds (tests only). */
+export function issueThrottleKeyCountForTests(): number {
+  return throttleBuckets.size;
 }
 
 /** True once init() ran with a DSN in this process (or thread). */
@@ -719,6 +747,15 @@ function consoleArguments(hint: Sentry.EventHint): unknown[] | null {
   return Array.isArray(args) ? args : null;
 }
 
+/** Preserve complete code locations before free-text path redaction splits on spaces. */
+function consoleErrorStack(stack: string | undefined): string | undefined {
+  return stack?.replace(
+    /^(\s*at (?:.*? \()?)(?:file:\/\/)?((?:\/|[A-Za-z]:\\)[^\n]*):(\d+):(\d+)(\)?)$/gm,
+    (_line, prefix: string, path: string, line: string, column: string, closing: string) =>
+      `${prefix}${repoRelativePath(path)}:${line}:${column}${closing}`,
+  );
+}
+
 /**
  * Strip everything a legal-platform event must never carry, then drop
  * console-bridge duplicates of errors that were reported explicitly.
@@ -738,6 +775,11 @@ export function scrubEvent(
     mechanism === CONSOLE_MECHANISM || mechanismInfo?.handled === false;
   const original = hint.originalException;
   if (automatic && isReported(original)) {
+    return null;
+  }
+  // handled:false made these read as unhandled rejections (MIKE-BACKEND-4,
+  // -3Q, -5N, -7D, -1K); see VERCEL_AI_TOOL_ERROR_MECHANISM.
+  if (mechanism === VERCEL_AI_TOOL_ERROR_MECHANISM) {
     return null;
   }
 
@@ -766,7 +808,7 @@ export function scrubEvent(
     if (nestedError) {
       event.message = `${label ? `${label}: ` : ""}${nestedError.name}: ${nestedError.message}`;
       event.fingerprint = ["console", label, nestedError.name];
-      event.extra = { ...(event.extra ?? {}), error_stack: nestedError.stack };
+      event.extra = { ...(event.extra ?? {}), error_stack: consoleErrorStack(nestedError.stack) };
     } else if (!event.exception?.values?.length || mechanismInfo?.synthetic) {
       // SDK v11 attaches a synthetic exception to console messages by default.
       // Its value is the joined arguments, so strip positional payloads there too.

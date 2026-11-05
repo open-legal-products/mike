@@ -88,6 +88,48 @@ from public.schema_migrations
 order by filename;
 ```
 
+### Upgrade order and rollback
+
+For the SQL/backend/web/Word performance changes in PR #749, upgrade an
+existing installation in this order:
+
+1. Back up the database and retain the currently deployed image tags or Git
+   commit. Let active assistant turns finish before restarting their backend;
+   their resumable stream buffers live in that process.
+2. Apply the new checkout's pending migrations with `migrate.sh up` above,
+   then run `migrate.sh status` and require no pending files. Do not substitute
+   `schema.sql` for this upgrade. The new project-directory search requires
+   `search_project_directory`, and paginated participation requires the new
+   `get_projects_overview` argument. Starting the new backend before these
+   migrations makes those requests fail.
+3. Reload the PostgREST schema cache after the migrations (`notify pgrst,
+   'reload schema';` in SQL), run the workflow sync release job described
+   below, and deploy the backend and any separate workers.
+4. Deploy the frontend and Word add-in. Check project-directory search,
+   document conversion completion, and reopening an existing Word chat.
+
+Compose's `db-init` and `workflow-sync` dependencies perform the database and
+catalog steps before starting the backend. Manual or independently hosted
+components need the same ordering. A new frontend can poll an older backend
+using individual document reads when its batch endpoint is unavailable.
+Older API clients can still request `/projects?include=documents` without
+pagination; new clients should send `limit` and `offset` explicitly.
+
+The migrations in this release retain the previous backend's project RPC
+call shapes. A backend rollback leaves the migration ledger and schema in
+place; do not delete ledger rows or replay old migrations to undo an
+application deployment. Validate a rollback against a copy of the database
+before using it on a deployment that has accepted new writes.
+
+Word's released device-only database remains at IndexedDB version 4, so an
+older pane can still save an answer after another pane loads the new code.
+Existing v4 databases retain their history-listing path; fresh v4 databases
+include the optional recency index. PR preview builds used version 5: the
+new add-in can read those databases in place, but a rollback to a released
+v4-only bundle cannot. Keep a compatible add-in build for those devices.
+Do not clear browser/add-in storage to resolve a version error: device-only
+chats have no durable server copy.
+
 ### Adopting the ledger on an older deployment
 
 Deployments upgraded before `20261009_03_schema_migrations.sql` have no

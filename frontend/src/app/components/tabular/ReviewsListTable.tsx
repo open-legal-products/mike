@@ -46,6 +46,7 @@ import type {
     TabularReviewSortDirection,
     TabularReviewSortKey,
 } from "@/app/hooks/usePaginatedTabularReviews";
+import { useIdSet } from "@/app/hooks/useIdSet";
 
 /**
  * The tabular reviews list. Pass `projectColumn` on surfaces that list reviews
@@ -133,6 +134,7 @@ export function ReviewsListTable({
     loading?: boolean;
     renderToolbar?: (actions: ReactNode) => ReactNode;
 }) {
+    const selectedReviewIdSet = useIdSet(selectedReviewIds);
     function clearSelection() {
         setSelectedReviewIds([]);
     }
@@ -176,10 +178,10 @@ export function ReviewsListTable({
 
     const allVisibleReviewsSelected =
         reviews.length > 0 &&
-        reviews.every((review) => selectedReviewIds.includes(review.id));
+        reviews.every((review) => selectedReviewIdSet.has(review.id));
     const someVisibleReviewsSelected =
         !allVisibleReviewsSelected &&
-        reviews.some((review) => selectedReviewIds.includes(review.id));
+        reviews.some((review) => selectedReviewIdSet.has(review.id));
     const projectNameById = new Map(
         projectColumn?.projects.map((project) => [project.id, project.name]),
     );
@@ -393,7 +395,7 @@ export function ReviewsListTable({
                                 interactive={!deleting}
                                 selected={
                                     !deleting &&
-                                    selectedReviewIds.includes(review.id)
+                                    selectedReviewIdSet.has(review.id)
                                 }
                                 rightClickDropdown={deleting ? undefined : (close) => renderReviewActions(review, close)}
                                 onClick={
@@ -410,7 +412,7 @@ export function ReviewsListTable({
                                 <TablePrimaryCell
                                     selected={
                                         !deleting &&
-                                        selectedReviewIds.includes(review.id)
+                                        selectedReviewIdSet.has(review.id)
                                     }
                                     selectionIndicator={
                                         deleting ? (
