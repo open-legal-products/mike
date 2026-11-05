@@ -144,6 +144,98 @@ describe("same-origin API gateway", () => {
         expect(forwarded.get("content-type")).toBe("application/json");
     });
 
+    it("aborts the backend request when the client goes away", async () => {
+        fetchMock.mockResolvedValue(new Response(null, { status: 204 }));
+        const request = new NextRequest("https://app.example.test/api/health");
+
+        await GET(request, context(["health"]));
+
+        expect((fetchMock.mock.calls[0][1] as RequestInit).signal).toBe(request.signal);
+    });
+
+    it("does not report a backend request the client aborted", async () => {
+        const client = new AbortController();
+        fetchMock.mockImplementation(async () => {
+            client.abort();
+            throw new DOMException("This operation was aborted", "AbortError");
+        });
+        const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+        const request = new NextRequest("https://app.example.test/api/health", { signal: client.signal });
+
+        await GET(request, context(["health"]));
+
+        expect(reportError).not.toHaveBeenCalled();
+        expect(errorSpy).not.toHaveBeenCalled();
+    });
+
+    // MIKE-FRONTEND-2C/-2V/-Y/-4E: the backend's body failed after the route
+    // returned (undici's body timeout, a backend restart mid-stream), so the
+    // handler's try/catch had exited and Next filed a context-free
+    // "Failure in application".
+    describe("an upstream body that fails mid-stream", () => {
+        const socketClosed = () =>
+            new TypeError("terminated", {
+                cause: Object.assign(new Error("other side closed"), {
+                    name: "SocketError",
+                    code: "UND_ERR_SOCKET",
+                }),
+            });
+        const failingBody = (error: unknown) => {
+            let sent = false;
+            return new ReadableStream<Uint8Array>({
+                pull(controller) {
+                    if (!sent) {
+                        sent = true;
+                        controller.enqueue(new TextEncoder().encode("data: first\n\n"));
+                        return;
+                    }
+                    controller.error(error);
+                },
+            });
+        };
+
+        it("reports one pinned warning and ends an event stream cleanly", async () => {
+            const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+            const failure = socketClosed();
+            fetchMock.mockResolvedValue(
+                new Response(failingBody(failure), { headers: { "content-type": "text/event-stream" } }),
+            );
+            const request = new NextRequest("https://app.example.test/api/chat", { method: "POST", body: "{}" });
+
+            const response = await POST(request, context(["chat"]));
+
+            await expect(readBody(response)).resolves.toBe("data: first\n\n");
+            expect(reportError).toHaveBeenCalledTimes(1);
+            expect(reportError).toHaveBeenCalledWith(failure, {
+                level: "warning",
+                fingerprint: ["upstream-unavailable"],
+                tags: expect.objectContaining({
+                    component: "api-gateway",
+                    stage: "gateway-stream",
+                    http_route: "/chat",
+                    http_status: 200,
+                    failure_code: "UND_ERR_SOCKET",
+                }),
+            });
+            expect(warn).toHaveBeenCalledWith("[api-gateway] upstream response stream failed", failure, expect.any(Object));
+        });
+
+        it("aborts any other body so a truncated download never looks complete", async () => {
+            vi.spyOn(console, "warn").mockImplementation(() => {});
+            fetchMock.mockResolvedValue(
+                new Response(failingBody(socketClosed()), { headers: { "content-type": "application/pdf" } }),
+            );
+
+            const response = await GET(
+                new NextRequest("https://app.example.test/api/single-documents/doc/file"),
+                context(["single-documents", "doc", "file"]),
+            );
+
+            await expect(readBody(response)).rejects.toMatchObject({ name: "AbortError" });
+            expect(reportError).toHaveBeenCalledTimes(1);
+        });
+    });
+
     it("returns a sanitized 502 when the backend is unavailable", async () => {
         vi.spyOn(console, "error").mockImplementation(() => {});
         fetchMock.mockRejectedValue(new Error("connect ECONNREFUSED backend"));

@@ -1,10 +1,11 @@
 import { randomUUID } from "node:crypto";
 import { reportError } from "@/app/lib/errorReporting";
-import { diagnosticRoute } from "@mike/client";
+import { diagnosticErrorTags, diagnosticRoute } from "@mike/client";
 import type { NextRequest } from "next/server";
 import {
     UPSTREAM_UNAVAILABLE_FINGERPRINT,
     forwardableRequestHeaders,
+    guardUpstreamBody,
     upstreamReportWindow,
     upstreamUnreachableCode,
 } from "./upstreamFailure";
@@ -49,6 +50,9 @@ async function proxy(request: NextRequest, context: RouteContext) {
             headers,
             cache: "no-store",
             redirect: "manual",
+            // A client that goes away aborts the backend request too, instead
+            // of leaving it to run until undici's body timeout.
+            signal: request.signal,
         };
         if (request.method !== "GET" && request.method !== "HEAD") {
             init.body = request.body;
@@ -63,12 +67,25 @@ async function proxy(request: NextRequest, context: RouteContext) {
         responseHeaders.delete("content-encoding");
         responseHeaders.delete("content-length");
 
-        return new Response(upstream.body, {
+        const body = upstream.body
+            ? guardUpstreamBody(upstream.body, {
+                  closeCleanly: (upstream.headers.get("content-type") ?? "").startsWith("text/event-stream"),
+                  onError: (error) =>
+                      reportStreamFailure(error, request, requestPath, requestId, upstream.status),
+              })
+            : null;
+        return new Response(body, {
             status: upstream.status,
             statusText: upstream.statusText,
             headers: responseHeaders,
         });
     } catch (error) {
+        // The client went away before the backend answered; the forwarded
+        // signal aborted the backend request. Nobody is waiting for a
+        // response and nothing failed.
+        if (request.signal.aborted && stage === "gateway-fetch") {
+            return new Response(null, { status: 499, headers: { "x-request-id": requestId } });
+        }
         // A connection-level failure (ECONNREFUSED, DNS, reset, connect
         // timeout) means the backend is down or misaddressed: an operator
         // condition, not an application bug, and every request fails the
@@ -118,6 +135,43 @@ async function proxy(request: NextRequest, context: RouteContext) {
             },
         );
     }
+}
+
+/**
+ * The backend's response failed after its headers were forwarded. Reported
+ * once per cause per minute as a warning under the same pinned fingerprint
+ * as an unreachable backend: either way the backend went away (or went
+ * silent for the 300 s body timeout), and every open stream fails the same
+ * way at the same moment. A client that disconnected first is not a failure.
+ */
+function reportStreamFailure(
+    error: unknown,
+    request: NextRequest,
+    requestPath: string,
+    requestId: string,
+    status: number,
+): void {
+    if (request.signal.aborted) return;
+    const code = diagnosticErrorTags(error).failure_code;
+    const failureCode = typeof code === "string" ? code : undefined;
+    if (upstreamReportWindow.allow(`gateway-stream:${failureCode ?? "unknown"}`)) {
+        reportError(error, {
+            level: "warning",
+            fingerprint: [UPSTREAM_UNAVAILABLE_FINGERPRINT],
+            tags: {
+                component: "api-gateway",
+                stage: "gateway-stream",
+                http_method: request.method,
+                http_route: diagnosticRoute(requestPath),
+                http_status: status,
+                request_id: requestId,
+                failure_code: failureCode,
+            },
+        });
+    }
+    // console.warn: the operator's log keeps the cause; the Sentry console
+    // bridge only forwards console.error.
+    console.warn("[api-gateway] upstream response stream failed", error, { requestId });
 }
 
 export const GET = proxy;

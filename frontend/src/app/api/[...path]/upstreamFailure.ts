@@ -60,6 +60,43 @@ export function forwardableRequestHeaders(incoming: Headers): Headers {
     return headers;
 }
 
+/**
+ * Pass `body` through, calling `onError` once if it fails after the
+ * response has started. Without this the failure (undici's 300 s body
+ * timeout, a backend restart mid-stream: UND_ERR_SOCKET, ECONNRESET)
+ * surfaced after the route handler had returned, outside its try/catch,
+ * and Next filed it as a context-free "Failure in application"
+ * (MIKE-FRONTEND-2C, -2V, -Y, -4E).
+ *
+ * An event stream is closed cleanly: SSE clients already treat the end of
+ * the stream as "reconnect and resume". Any other body (a file, a JSON
+ * document) is aborted instead, so the browser sees an incomplete response
+ * rather than a truncated file that looks complete. Next treats an
+ * AbortError as a client disconnect and does not report it again.
+ */
+export function guardUpstreamBody(
+    body: ReadableStream<Uint8Array>,
+    options: { closeCleanly: boolean; onError: (error: unknown) => void },
+): ReadableStream<Uint8Array> {
+    const reader = body.getReader();
+    return new ReadableStream<Uint8Array>({
+        async pull(controller) {
+            try {
+                const { done, value } = await reader.read();
+                if (done) controller.close();
+                else controller.enqueue(value);
+            } catch (error) {
+                options.onError(error);
+                if (options.closeCleanly) controller.close();
+                else controller.error(new DOMException("The upstream response failed.", "AbortError"));
+            }
+        },
+        cancel(reason) {
+            return reader.cancel(reason);
+        },
+    });
+}
+
 /** The pinned Sentry fingerprint shared by every unreachable-backend report. */
 export const UPSTREAM_UNAVAILABLE_FINGERPRINT = "upstream-unavailable";
 
