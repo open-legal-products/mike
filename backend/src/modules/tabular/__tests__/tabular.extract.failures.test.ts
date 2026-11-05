@@ -41,10 +41,10 @@ import { diagnosticErrorTags } from "../../../lib/observability/sentryPrivacy";
 import { queryTabularAllColumns, queryTabularCell } from "../tabular.extract";
 
 /** The AI SDK's provider failure, as the privacy boundary classifies it. */
-function providerError(): Error {
-    return Object.assign(new Error("401 invalid x-api-key sk-abc"), {
+function providerError(statusCode = 503): Error {
+    return Object.assign(new Error(`${statusCode} provider said sk-abc`), {
         name: "AI_APICallError",
-        statusCode: 401,
+        statusCode,
     });
 }
 
@@ -75,7 +75,7 @@ describe("queryTabularCell", () => {
         expect(diagnosticErrorTags(reported)).toEqual({
             error_kind: "tabular.generation_failed",
             provider_error: "api_call",
-            dependency_status: 401,
+            dependency_status: 503,
         });
         // The log carries the reported object, not the raw error: the console
         // bridge recognises it and files nothing.
@@ -83,6 +83,30 @@ describe("queryTabularCell", () => {
             "[queryTabularCell] completion failed",
             reported,
         );
+    });
+
+    // MIK-89: the level follows the provider's condition, as in chat.
+    it.each([
+        [503, "warning"],
+        [429, "warning"],
+        [400, "error"],
+    ] as const)("reports a provider %i at %s level", async (status, level) => {
+        completeText.mockRejectedValue(providerError(status));
+        await queryTabularCell("m", "Contract.pdf", "text", "p");
+        expect(reportError).toHaveBeenCalledTimes(1);
+        expect(reportError.mock.calls[0][1]).toMatchObject({ level });
+    });
+
+    it("reports nothing for a rejected key, and logs it as a warning", async () => {
+        const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+        completeText.mockRejectedValue(providerError(401));
+        await expect(
+            queryTabularCell("m", "Contract.pdf", "text", "p"),
+        ).resolves.toBeNull();
+        expect(reportError).not.toHaveBeenCalled();
+        expect(consoleError).not.toHaveBeenCalled();
+        expect(warn).toHaveBeenCalledTimes(1);
+        warn.mockRestore();
     });
 
     it("reports nothing when the model answers", async () => {
