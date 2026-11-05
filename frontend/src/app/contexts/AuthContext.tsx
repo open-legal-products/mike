@@ -45,6 +45,26 @@ const SESSION_ERROR_MESSAGE =
 /** One toast for the session, however many background checks fail. */
 const SESSION_TOAST_KEY = "auth-session";
 const EXPIRED_SESSION_MESSAGE = "Your session expired. Please log in again.";
+/** Retry delays for a session check the server could not answer. */
+const SESSION_RETRY_BASE_MS = 1_000;
+const SESSION_RETRY_MAX_MS = 30_000;
+
+/**
+ * Did the session check fail because the server could not answer (a 5xx such
+ * as 503 upstream_unavailable while GoTrue or the API is down, or no response
+ * at all), rather than answer "no session"? Then nobody knows whether the
+ * user is signed in, and treating them as signed out would send a working
+ * session to the login page. A 401 never gets here: getAuthSession answers
+ * null for it.
+ */
+function isTransientSessionFailure(error: unknown): boolean {
+    // An AuthApiError carries the HTTP status (read by shape, so a test that
+    // mocks the auth client needs no class).
+    const status = (error as { status?: unknown } | null)?.status;
+    if (typeof status === "number") return status >= 500;
+    // fetch rejects with a TypeError when no response arrives.
+    return error instanceof TypeError;
+}
 
 type AuthSyncMessage = {
     state: "signed-in" | "signed-out";
@@ -110,30 +130,72 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     // Background session checks (focus, tab visibility, another tab signing
     // in) have no screen of their own: without this the user sees a silently
     // stale session, so the failure gets a toast with a real Retry.
-    const reportSessionFailureRef = useRef<(error: unknown) => void>(() => {});
-    const reportSessionFailure = useCallback(
-        (error: unknown) => {
-            setAuthError(SESSION_ERROR_MESSAGE);
-            // Sign-in screens show `authError` themselves, with their own
-            // Retry; a toast there repeated it and then contradicted the
-            // form's next error.
-            if (isOnAuthRoute()) return;
-            notifyError(error, {
-                action: "check your session",
-                dedupeKey: SESSION_TOAST_KEY,
-                onRetry: () => {
-                    void fetchAndApplySession().catch((retryError: unknown) =>
-                        reportSessionFailureRef.current(retryError),
+    const checkSessionRef = useRef<(notify: boolean) => Promise<void>>(
+        async () => {},
+    );
+    const reportSessionFailure = useCallback((error: unknown) => {
+        setAuthError(SESSION_ERROR_MESSAGE);
+        // Sign-in screens show `authError` themselves, with their own
+        // Retry; a toast there repeated it and then contradicted the
+        // form's next error.
+        if (isOnAuthRoute()) return;
+        notifyError(error, {
+            action: "check your session",
+            dedupeKey: SESSION_TOAST_KEY,
+            onRetry: () => void checkSessionRef.current(true),
+        });
+    }, []);
+
+    // A check the server could not answer keeps the auth state it had (the
+    // signed-in user, or "still loading" on a fresh page load, which keeps
+    // the app's loader up instead of redirecting to the login page) and is
+    // retried with backoff until the server answers. One notice per failing
+    // streak: the retries update it silently.
+    const retryTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+    const retryAttemptRef = useRef(0);
+    const checkSession = useCallback(
+        async (notify: boolean) => {
+            if (retryTimerRef.current !== null) {
+                clearTimeout(retryTimerRef.current);
+                retryTimerRef.current = null;
+            }
+            try {
+                await fetchAndApplySession();
+                retryAttemptRef.current = 0;
+                setAuthLoading(false);
+            } catch (error) {
+                const firstOfStreak = retryAttemptRef.current === 0;
+                if (isTransientSessionFailure(error)) {
+                    const delay = Math.min(
+                        SESSION_RETRY_MAX_MS,
+                        SESSION_RETRY_BASE_MS * 2 ** retryAttemptRef.current,
                     );
-                },
-            });
+                    retryAttemptRef.current += 1;
+                    retryTimerRef.current = setTimeout(() => {
+                        retryTimerRef.current = null;
+                        void checkSessionRef.current(false);
+                    }, delay);
+                } else {
+                    retryAttemptRef.current = 0;
+                    setAuthLoading(false);
+                }
+                if (notify || firstOfStreak) reportSessionFailure(error);
+                else setAuthError(SESSION_ERROR_MESSAGE);
+            }
         },
-        [fetchAndApplySession],
+        [fetchAndApplySession, reportSessionFailure],
     );
 
     useEffect(() => {
-        reportSessionFailureRef.current = reportSessionFailure;
-    }, [reportSessionFailure]);
+        checkSessionRef.current = checkSession;
+    }, [checkSession]);
+
+    useEffect(
+        () => () => {
+            if (retryTimerRef.current !== null) clearTimeout(retryTimerRef.current);
+        },
+        [],
+    );
 
     useEffect(() => {
         clearLegacyBrowserAuthStorage();
@@ -152,7 +214,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
                 return;
             }
 
-            void fetchAndApplySession().catch(reportSessionFailure);
+            void checkSession(true);
         };
 
         const onChannelMessage = (event: MessageEvent<AuthSyncMessage>) => {
@@ -185,10 +247,10 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         };
         const onVisibilityChange = () => {
             if (document.visibilityState !== "visible") return;
-            void fetchAndApplySession().catch(reportSessionFailure);
+            void checkSession(false);
         };
         const onFocus = () => {
-            void fetchAndApplySession().catch(reportSessionFailure);
+            void checkSession(false);
         };
 
         channel?.addEventListener("message", onChannelMessage);
@@ -197,9 +259,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         window.addEventListener("focus", onFocus);
         document.addEventListener("visibilitychange", onVisibilityChange);
 
-        void fetchAndApplySession()
-            .catch(reportSessionFailure)
-            .finally(() => setAuthLoading(false));
+        // Through the ref (assigned by the effect above, which runs first):
+        // the check only sets state after its request settles.
+        void checkSessionRef.current(true);
 
         return () => {
             channel?.removeEventListener("message", onChannelMessage);
@@ -216,7 +278,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
                 onVisibilityChange,
             );
         };
-    }, [applySessionUser, broadcastAuthState, fetchAndApplySession, reportSessionFailure]);
+    }, [applySessionUser, broadcastAuthState, checkSession]);
 
     const refreshSession = useCallback(async () => {
         try {
