@@ -225,8 +225,11 @@ export function validateRuntimeConfiguration(
     ["USER_API_KEYS_ENCRYPTION_SECRET", "your-long-random-secret"],
   ];
   for (const [name, placeholder] of secretChecks) {
-    const value = env[name]?.trim();
-    if (!value) continue;
+    const rawValue = env[name];
+    if (!rawValue) continue;
+    // Consumers use the raw value, so whitespace-only values are configured
+    // secrets, not the absent/empty values they reject on first use.
+    const value = rawValue.trim();
     if (value === placeholder) {
       errors.push(
         `${name} is still set to the .env.example placeholder; generate a unique value (openssl rand -hex 32)`,

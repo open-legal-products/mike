@@ -92,8 +92,9 @@ order by filename;
 
 The backend refuses to start when `DOWNLOAD_SIGNING_SECRET` or
 `USER_API_KEYS_ENCRYPTION_SECRET` still holds the `backend/.env.example`
-placeholder, or any value shorter than 32 characters. A deployment that copied
-the template verbatim was running with publicly known secrets: download and
+placeholder, a whitespace-only value, or a value shorter than 32 characters
+after trimming whitespace. A deployment that copied the template verbatim
+was running with publicly known secrets: download and
 blob tokens could be forged, and user-supplied provider API keys were
 encrypted under a key derived from a public string. The startup error names
 the variable; generate a real value for each and restart:
@@ -103,9 +104,23 @@ openssl rand -hex 32   # once per variable
 ```
 
 Both variables may also be left unset: the download and API-key features then
-fail on first use, as before. Changing `USER_API_KEYS_ENCRYPTION_SECRET` on an
-install that already stored user API keys makes those keys unreadable, so
-users will have to enter them again.
+fail on first use, as before. Plan for these effects when replacing existing
+secrets; changing the environment does not re-encrypt stored credentials:
+
+- Changing `USER_API_KEYS_ENCRYPTION_SECRET` makes stored personal and
+  organization provider credentials unreadable. Users must re-enter their
+  personal API keys, and organization admins must replace their organization's
+  saved provider credentials.
+- When `MCP_CONNECTORS_ENCRYPTION_SECRET` is unset or empty, MCP connectors
+  also use `USER_API_KEYS_ENCRYPTION_SECRET`. Rotating it then makes stored
+  connector authentication configurations and OAuth tokens unreadable.
+  Re-enter connector authentication credentials and reconnect OAuth connectors
+  to authorize them again. A separately configured, unchanged
+  `MCP_CONNECTORS_ENCRYPTION_SECRET` keeps those connector credentials usable.
+- Changing `DOWNLOAD_SIGNING_SECRET` invalidates existing download links and
+  blob capability URLs signed with the old secret, including persistent links
+  in chat history. Request fresh download links from the application and
+  replace any previously shared links; restarting does not re-sign old URLs.
 
 ### Upgrade order and rollback
 
