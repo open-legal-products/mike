@@ -57,14 +57,14 @@
     "zod": "^4.6.7"
   },
   "devDependencies": {
-    "@babel/parser": "^8.0.8",
+    "@babel/parser": "^8.0.10",
     "@babel/types": "^8.0.8",
     "@stryker-mutator/core": "^10.1.1",
     "@stryker-mutator/vitest-runner": "^10.1.1",
     "@types/cors": "^2.8.17",
     "@types/express": "^5.0.6",
     "@types/html-to-text": "9.0.4",
-    "@types/node": "^26.6.5",
+    "@types/node": "^26.6.6",
     "@types/supertest": "^7.2.1",
     "@vitest/coverage-v8": "^5.0.5",
     "supertest": "^7.3.1",
