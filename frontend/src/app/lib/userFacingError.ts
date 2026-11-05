@@ -4,7 +4,7 @@ import {
     reportedUpstreamMessage,
     type UploadOutcome,
 } from "./mikeApi";
-import type { Operation } from "@/shared/lib/sentryPrivacy";
+import type { Operation } from "@mike/client";
 
 export type { Operation };
 
@@ -71,11 +71,9 @@ import {
     describeError as describeSharedError,
     type DescribeErrorOptions,
     type UserFacingError,
-} from "@/shared/lib/userError";
-import {
     createErrorNotifier,
     type NotifyErrorOptions as SharedNotifyErrorOptions,
-} from "@/shared/lib/errorNotifier";
+} from "@mike/client";
 import { isReported, reportError } from "@/app/lib/errorReporting";
 
 export {
@@ -85,9 +83,9 @@ export {
     isNetworkError,
     type UserErrorKind,
     type UserFacingError,
-} from "@/shared/lib/userError";
+} from "@mike/client";
 
-export { notifyInfo, notifySuccess } from "@/shared/lib/errorNotifier";
+export { notifyInfo, notifySuccess } from "@mike/client";
 
 /** The shared toast options plus the web app's Sentry identity. */
 export interface NotifyErrorOptions
@@ -271,7 +269,7 @@ export function describeError(
  * also render it inline, or `null` when the failure is a cancellation the
  * user caused and does not need to hear about.
  *
- * The shared notifier (`@/shared/lib/errorNotifier`) owns the toast, the
+ * The shared notifier (`createErrorNotifier` in `@mike/client`) owns the toast, the
  * Retry and the cancellation rule; the web app adds its upstream copy, its
  * Sentry reporting, "Sign in", and a `mailto:` support link.
  */
@@ -347,6 +345,8 @@ const USER_SIDE_UPLOAD_CODES: ReadonlySet<string> = new Set([
     "document_changed",
     "upload_target_busy",
     "direct_upload_failed",
+    // The bytes were never a PDF (a renamed file); only the user can fix that.
+    "invalid_pdf_file",
 ]);
 
 /**

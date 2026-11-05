@@ -16,8 +16,15 @@ const service = vi.hoisted(() => ({
     renewGeneration: vi.fn(),
     validateSelectedModel: vi.fn(),
 }));
-vi.mock("../tabular.service", () => ({
-    ...service,
+vi.mock("../tabular.extractRow", () => ({
+    extractRowColumns: service.extractRowColumns,
+    finalizeCell: service.finalizeCell,
+}));
+vi.mock("../tabular.rows", () => ({ loadReviewRow: service.loadReviewRow }));
+vi.mock("../tabular.shared", () => ({
+    finishGenerationIfIdle: service.finishGenerationIfIdle,
+    renewGeneration: service.renewGeneration,
+    validateSelectedModel: service.validateSelectedModel,
     TABULAR_GENERATION_HEARTBEAT_MS: 1_000,
 }));
 vi.mock("../../chat/chat.service", () => ({

@@ -15,7 +15,7 @@ import {
 } from "./highlightQuote";
 import { createPdfQuoteMatcher, normalizePdfQuoteText } from "./pdfQuoteSearch";
 import { orderTextItemLines, type TextItemGeometry } from "./pdfTextOrder";
-import { LIQUID_GLASS_TRANSLUCENT_CLASS } from "@/shared/ui/LiquidGlassUI";
+import { LIQUID_GLASS_TRANSLUCENT_CLASS } from "@mike/ui";
 import { viewRoundingClass, type ViewRounding } from "./viewRounding";
 
 interface Props {

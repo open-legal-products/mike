@@ -9,7 +9,7 @@ import type {
     Citation,
     PanelDocument,
 } from "../../shared/types";
-import { CitationPillUI } from "@/shared/ui/CitationPillUI";
+import { CitationPillUI, EXCERPT_SOURCE_PROPS } from "@mike/ui";
 import { withoutMarkdownNode } from "./messageStyles";
 import { citationTooltip } from "./CitationSources";
 import {
@@ -17,7 +17,6 @@ import {
     citationVerificationPillClassName,
 } from "./citationVerification";
 import { internalCaseHref } from "./citationUtils";
-import { EXCERPT_SOURCE_PROPS } from "@/shared/ui/ResponseSelectionMenuUI";
 
 function isSameOrigin(url: string): boolean {
     if (typeof window === "undefined") return false;

@@ -10,8 +10,8 @@
  * reports them.
  */
 import * as Sentry from "@sentry/react";
-import { privacyBoundaryIntegration } from "@mike/sentry-event";
 import {
+  privacyBoundaryIntegration,
   MIKE_SENTRY_DSN,
   createEventScrubber,
   installKind,
@@ -19,7 +19,7 @@ import {
   parseSampleRate,
   releaseName,
   resolveDsn,
-} from "@mike/sentry-event";
+} from "@mike/client";
 
 export type ReportLevel = "fatal" | "error" | "warning";
 

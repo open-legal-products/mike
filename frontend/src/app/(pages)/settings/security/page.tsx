@@ -17,10 +17,8 @@ import {
   unenrollMfa,
   verifyMfa,
 } from "@/app/lib/authApi";
-import { PillButtonUI } from "@/shared/ui/PillButtonUI";
-import { ToggleSwitchUI } from "@/shared/ui/ToggleSwitchUI";
+import { PillButtonUI, ToggleSwitchUI, GlassCardUI } from "@mike/ui";
 import { PasswordSettingsSection } from "@/app/components/settings/PasswordSettingsSection";
-import { GlassCardUI } from "@/shared/ui/GlassCardUI";
 import { SettingsHeading } from "@/app/components/settings/SettingsHeading";
 import { SettingsRow } from "@/app/components/settings/SettingsRow";
 import {

@@ -11,7 +11,7 @@ import {
     FormTextInput,
 } from "@/app/components/ui/form-field";
 import { userFacingApiError } from "@/app/lib/userFacingError";
-import { LIQUID_GLASS_FLAT_CLASS } from "@/shared/ui/LiquidGlassUI";
+import { LIQUID_GLASS_FLAT_CLASS } from "@mike/ui";
 
 type OpenSourceContributorMode = "named" | "anonymous";
 type OpenSourceStatus = "idle" | "loading" | "complete";
