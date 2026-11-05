@@ -10,36 +10,17 @@
  * are only marked handled, everything else is reported as before.
  */
 import { markErrorHandled, reportApiFailure } from "@/app/lib/errorReporting";
+import { reportedUpstreamMessage } from "@mike/client";
 
-/**
- * The backend's answer when its database is missing a migration (PGRST202/
- * 204/205, 42P01). Unlike other 5xx it tells the user something actionable
- * — contact whoever runs the server — so it is shown instead of the generic
- * fallback (see userFacingApiError).
- */
-export const SCHEMA_OUT_OF_DATE_CODE = "schema_out_of_date";
-export const SCHEMA_OUT_OF_DATE_MESSAGE =
-    "The server's database needs an update before this can load. Please contact your administrator.";
-/**
- * A dependency is unreachable: the gateway cannot reach the backend, or the
- * backend cannot reach GoTrue (503). Whoever saw it reports it once per
- * outage; the user can only wait and retry.
- */
-export const UPSTREAM_UNAVAILABLE_CODE = "upstream_unavailable";
-export const UPSTREAM_UNAVAILABLE_MESSAGE =
-    "The server is temporarily unreachable. Please try again shortly.";
-
-const REPORTED_UPSTREAM_MESSAGES: Readonly<Record<string, string>> = {
-    [SCHEMA_OUT_OF_DATE_CODE]: SCHEMA_OUT_OF_DATE_MESSAGE,
-    [UPSTREAM_UNAVAILABLE_CODE]: UPSTREAM_UNAVAILABLE_MESSAGE,
-};
-
-/** The fixed user-facing message for a server-reported code, or null. */
-export function reportedUpstreamMessage(code: string): string | null {
-    return Object.hasOwn(REPORTED_UPSTREAM_MESSAGES, code)
-        ? REPORTED_UPSTREAM_MESSAGES[code]
-        : null;
-}
+// The code table is shared with the Word add-in (packages/client); it is
+// re-exported here so web callers keep one import.
+export {
+    SCHEMA_OUT_OF_DATE_CODE,
+    SCHEMA_OUT_OF_DATE_MESSAGE,
+    UPSTREAM_UNAVAILABLE_CODE,
+    UPSTREAM_UNAVAILABLE_MESSAGE,
+    reportedUpstreamMessage,
+} from "@mike/client";
 
 /**
  * Report a 5xx seen by the browser, unless the server side already did.
@@ -49,7 +30,7 @@ export function reportedUpstreamMessage(code: string): string | null {
 export function reportServerFailure(
     failure: Parameters<typeof reportApiFailure>[0],
 ): void {
-    if (failure.code && reportedUpstreamMessage(failure.code)) {
+    if (reportedUpstreamMessage(failure.code)) {
         markErrorHandled(failure.error);
         return;
     }
