@@ -26,7 +26,7 @@ import {
     TableRow,
 } from "../shared/TablePrimitive";
 import { EmptyState } from "@/app/components/ui/empty-state";
-import { PillButtonUI } from "@/shared/ui/PillButtonUI";
+import { PillButtonUI } from "@mike/ui";
 import { TabularReviewSkeuoIcon } from "@/app/components/shared/AppSidebarSkeuoIcons";
 import type { ReviewCellStore } from "./reviewCellStore";
 import { indexReviewCells } from "./reviewCellIndex";

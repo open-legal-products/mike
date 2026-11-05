@@ -1,7 +1,7 @@
 "use client";
 
 import { useState } from "react";
-import { authInputUIClassName } from "@/shared/ui/AuthStylesUI";
+import { authInputUIClassName, InputUI, PillButtonUI, GlassCardUI } from "@mike/ui";
 import {
   MIN_PASSWORD_LENGTH,
   isPasswordTooLong,
@@ -13,8 +13,6 @@ import {
   authMessages,
 } from "@/app/lib/authMessages";
 import { Modal } from "@/app/components/modals/Modal";
-import { InputUI } from "@/shared/ui/InputUI";
-import { PillButtonUI } from "@/shared/ui/PillButtonUI";
 import { useAuth } from "@/app/contexts/AuthContext";
 import { useUserProfile } from "@/app/contexts/UserProfileContext";
 import { requestPasswordReset } from "@/app/lib/authApi";
@@ -24,7 +22,6 @@ import {
   supportMailtoFor,
   type UserFacingError,
 } from "@/app/lib/userFacingError";
-import { GlassCardUI } from "@/shared/ui/GlassCardUI";
 import { SettingsHeading } from "./SettingsHeading";
 import { SettingsRow } from "./SettingsRow";
 import { SettingsDescription, SettingsLabel } from "./SettingsText";

@@ -12,7 +12,7 @@ import {
     type TRChat,
 } from "@/app/lib/mikeApi";
 import { TRChatPanel } from "./TRChatPanel";
-import { ToastViewportUI, clearToasts } from "@/shared/ui/ToastUI";
+import { ToastViewportUI, clearToasts } from "@mike/ui";
 
 vi.mock("next/navigation", () => ({
     useRouter: () => ({ push: vi.fn() }),

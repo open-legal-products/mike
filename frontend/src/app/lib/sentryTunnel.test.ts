@@ -1,6 +1,6 @@
 // @vitest-environment node
 import { describe, expect, it } from "vitest";
-import { MIKE_SENTRY_DSN } from "@/shared/lib/sentryEvent";
+import { MIKE_SENTRY_DSN } from "@mike/client";
 import { rewriteEnvelope, tunnelDecision } from "./sentryTunnel";
 
 const encoder = new TextEncoder();

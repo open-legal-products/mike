@@ -1,4 +1,4 @@
-import { diagnosticErrorTags } from "@/shared/lib/sentryPrivacy";
+import { diagnosticErrorTags } from "@mike/client";
 
 /**
  * Connection-level failures: the Next server could not reach the backend at

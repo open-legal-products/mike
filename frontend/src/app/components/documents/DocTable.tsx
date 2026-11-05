@@ -26,6 +26,7 @@ import {
     copyDocumentVersionFromDocument,
     deleteDocumentVersion,
     failedUploadMessage,
+    uploadOutcomeNeedsRetry,
     renameDocumentVersion,
     type DocumentVersion,
     type UploadOutcome,
@@ -47,7 +48,7 @@ import {
     type RowAddStatus,
 } from "@/app/components/shared/RowActions";
 import { SubfolderSvgIcon } from "@/app/components/shared/FolderSvgIcon";
-import { DropdownAtPoint } from "@/shared/ui/dropdown";
+import { DropdownAtPoint, PillButtonUI } from "@mike/ui";
 import { useAuth } from "@/app/contexts/AuthContext";
 import { useOptionalUserProfile } from "@/app/contexts/UserProfileContext";
 import {
@@ -96,7 +97,7 @@ import {
     type DocumentUploadFolderPathResolution,
     type DocumentUploadProgressEntry,
 } from "@/app/lib/documentDirectoryUpload";
-import { settleWithConcurrency } from "@/shared/lib/settleWithConcurrency";
+import { settleWithConcurrency } from "@mike/client";
 import { appendMissingById, indexById } from "@/app/lib/idCollections";
 import { createFrameBatcher } from "@/app/lib/frameBatcher";
 import {
@@ -125,7 +126,6 @@ import { DocumentSidePanel } from "@/app/components/shared/DocumentSidePanel";
 import { TableLoadMoreRow } from "@/app/components/shared/TableLoadMoreRow";
 import { LibrarySkeuoIcon } from "@/app/components/shared/AppSidebarSkeuoIcons";
 import { EmptyState } from "@/app/components/ui/empty-state";
-import { PillButtonUI } from "@/shared/ui/PillButtonUI";
 import {
     LIQUID_GLASS_SELECTED_CLASS,
     LIQUID_GLASS_GROUP_HOVER_CLASS,
@@ -1684,11 +1684,13 @@ export function DocTable({
             status: "pending" as UploadProgressStatus,
         }));
         // What a Retry re-sends: only the entries whose upload did not
-        // complete, so the files already stored are not uploaded twice.
+        // complete, so the files already stored are not uploaded twice, and
+        // not the ones the server refused for their content, which would
+        // fail the same way again.
         const entriesThatDidNotLand = (outcomes: UploadOutcome<unknown>[]) => {
             const failedClientIds = new Set(
                 outcomes
-                    .filter((outcome) => outcome.status !== "completed")
+                    .filter(uploadOutcomeNeedsRetry)
                     .map((outcome) => outcome.clientId),
             );
             return progressFiles

@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { describeError } from "@/shared/lib/userError";
+import { describeError } from "@mike/client";
 import {
     AuthApiError,
     challengeAndVerifyMfa,

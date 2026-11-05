@@ -25,9 +25,8 @@ import {
     listBedrockModels,
     listCustomEndpointModels,
     listXaiModels,
-    type CatalogFailure,
-    type CatalogResult,
 } from "./models.service";
+import { type CatalogFailure, type CatalogResult } from "./models.types";
 
 export const modelsRouter = Router();
 

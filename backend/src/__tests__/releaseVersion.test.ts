@@ -15,7 +15,7 @@ const repoRoot = path.resolve(__dirname, "../../..");
 const read = (relative: string) => readFileSync(path.join(repoRoot, relative), "utf8");
 
 // Semver core with an optional prerelease; the commit is the build metadata,
-// never part of VERSION (frontend/src/shared/lib/releaseName.cjs).
+// never part of VERSION (packages/client/src/releaseName.cjs).
 const SEMVER = /^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/;
 
 // Execute the workflow's actual shell script with synthetic configuration;
