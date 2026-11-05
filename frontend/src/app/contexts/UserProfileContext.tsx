@@ -37,7 +37,7 @@ import {
     updateLastSelectedChatSettings,
     parseTabularChatSelectionKey,
 } from "@/app/lib/mikeApi";
-import { apiKeyStateFromStatus } from "@/app/lib/apiKeyState";
+import { apiKeyStateFromStatus, hasApiKeyStatus } from "@/app/lib/apiKeyState";
 import type { Message } from "@/app/components/shared/types";
 import { applyDarkMode } from "@/app/lib/theme";
 import { notifyError } from "@/app/lib/userFacingError";
@@ -103,13 +103,18 @@ interface UserProfileContextType {
     profile: UserProfile | null;
     loading: boolean;
     /**
-     * True when the profile fetch failed (after a retry) and `profile` holds
-     * the local fallback. Every field on it is a placeholder, not an answer:
-     * apiKeys say "nothing configured" and the router model lists are empty
-     * only because the truth is unknown. Consumers must distinguish this from
-     * a real profile that loaded with the same values — key-gated UI fails
-     * open, and destructive normalization (e.g. resetting a saved composer
-     * selection that is absent from the router lists) must not run at all.
+     * True when the server did not say which provider keys are configured.
+     * Two cases:
+     * - the fetch failed (after a retry) and `profile` holds the local
+     *   fallback. Every field on it is a placeholder, not an answer: apiKeys
+     *   say "nothing configured" and the router model lists are empty only
+     *   because the truth is unknown;
+     * - the profile loaded but without `apiKeyStatus` (an older or forked
+     *   server). The profile is real; only its `apiKeys` are placeholders.
+     * Consumers must distinguish this from a real profile that loaded with
+     * the same values — key-gated UI fails open, and destructive
+     * normalization (e.g. resetting a saved composer selection that is
+     * absent from the router lists) must not run at all.
      */
     apiKeysDegraded: boolean;
     updateProfilePhoto: (photo: string | null) => Promise<void>;
@@ -207,7 +212,7 @@ function toProfile(data: ApiUserProfile): UserProfile {
         projectMemoryDefault: profile.projectMemoryDefault !== false,
         ...routerProfileLists(profile),
         apiKeys,
-        apiKeySettings: apiKeyStatus.settings ?? {},
+        apiKeySettings: apiKeyStatus?.settings ?? {},
     };
 }
 
@@ -258,7 +263,10 @@ export function UserProfileProvider({ children }: { children: ReactNode }) {
                 profileData = await getUserProfile();
             }
             setProfile(toProfile(profileData));
-            setApiKeysDegraded(false);
+            // A server that answered without a key status cannot vouch for
+            // which providers have keys, so the pickers fail open exactly as
+            // they do after a failed fetch. The rest of the profile is real.
+            setApiKeysDegraded(!hasApiKeyStatus(profileData.apiKeyStatus));
         } catch (error) {
             console.warn(
                 "[profile] fetch failed after retry; API key availability is unknown and fails open",

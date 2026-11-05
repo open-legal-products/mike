@@ -28,6 +28,12 @@ const {
     updateLastSelectedChatSettings: vi.fn(),
 }));
 
+const reportError = vi.hoisted(() => vi.fn(() => null));
+vi.mock("@/app/lib/errorReporting", async (importOriginal) => ({
+    ...(await importOriginal<typeof import("@/app/lib/errorReporting")>()),
+    reportError,
+}));
+
 vi.mock("@/app/contexts/AuthContext", () => ({
     useAuth: () => ({
         user: { id: "u1" },
@@ -511,5 +517,43 @@ describe("UserProfileProvider failure reporting", () => {
 
         const alert = await screen.findByRole("alert", {}, { timeout: 4000 });
         expect(alert).toHaveTextContent("Couldn't load your profile");
+    });
+});
+
+function ProfileSummary() {
+    const { profile, loading, apiKeysDegraded } = useUserProfile();
+    if (loading) return null;
+    return (
+        <>
+            <span data-testid="loaded">yes</span>
+            <span data-testid="name">{profile?.displayName ?? "none"}</span>
+            <span data-testid="degraded">{String(apiKeysDegraded)}</span>
+        </>
+    );
+}
+
+describe("UserProfileProvider when the server omits apiKeyStatus", () => {
+    it("shows the real profile, treats key availability as unknown and reports nothing", async () => {
+        // Sentry MIKE-FRONTEND-4H: an older or forked backend answered 200
+        // without `apiKeyStatus`; normalising it threw, the throw was filed
+        // as a fault and the user got the placeholder profile.
+        const withoutKeyStatus: Partial<ReturnType<typeof apiProfile>> = apiProfile(false);
+        delete withoutKeyStatus.apiKeyStatus;
+        getUserProfile.mockResolvedValue(withoutKeyStatus);
+        render(
+            <UserProfileProvider>
+                <ProfileSummary />
+                <ToastViewportUI />
+            </UserProfileProvider>,
+        );
+
+        await screen.findByTestId("loaded");
+        expect(reportError).not.toHaveBeenCalled();
+        expect(screen.queryByRole("alert")).toBeNull();
+        expect(screen.getByTestId("name")).toHaveTextContent("Ada");
+        // Pickers fail open, as after a failed fetch: a server that omits
+        // the status cannot vouch for which providers have keys.
+        expect(screen.getByTestId("degraded")).toHaveTextContent("true");
+        expect(getUserProfile).toHaveBeenCalledTimes(1);
     });
 });
