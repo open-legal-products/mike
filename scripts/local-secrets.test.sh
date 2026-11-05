@@ -36,9 +36,9 @@ fill_placeholder_secrets "$WORK/.env"
 [ "$(grep -c '^DOWNLOAD_SIGNING_SECRET=' "$WORK/.env")" = "1" ] || fail "placeholder was appended instead of replaced"
 
 # 3. A real value is kept, and an empty assignment counts as missing.
-printf 'DOWNLOAD_SIGNING_SECRET=0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef\nUSER_API_KEYS_ENCRYPTION_SECRET=\n' >"$WORK/.env"
+printf 'DOWNLOAD_SIGNING_SECRET=operator-set-value-left-alone\nUSER_API_KEYS_ENCRYPTION_SECRET=\n' >"$WORK/.env"
 fill_placeholder_secrets "$WORK/.env"
-[ "$(value_of DOWNLOAD_SIGNING_SECRET)" = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef" ] \
+[ "$(value_of DOWNLOAD_SIGNING_SECRET)" = "operator-set-value-left-alone" ] \
     || fail "a real DOWNLOAD_SIGNING_SECRET was overwritten"
 [ "$(value_of USER_API_KEYS_ENCRYPTION_SECRET)" = "ci-user-api-keys-encryption-secret-0123456789abcdef" ] \
     || fail "empty USER_API_KEYS_ENCRYPTION_SECRET was not filled"
