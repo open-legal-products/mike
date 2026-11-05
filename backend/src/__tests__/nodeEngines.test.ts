@@ -2,6 +2,8 @@ import { describe, expect, it } from "vitest";
 import { readFileSync } from "node:fs";
 import path from "node:path";
 import semver from "semver";
+// The script the backend's predev/prestart run (plain CommonJS, no deps).
+import { nodeVersionProblem, parseFloor } from "../../scripts/check-node-version.cjs";
 
 // The engines floor each package declares must be a Node version that every
 // package its lockfile installs at run time supports. When it is not, an
@@ -58,3 +60,42 @@ describe("Node engines floor", () => {
     },
   );
 });
+
+// Declaring the floor only makes npm warn, and `npm run dev` / `npm start`
+// never check it, so on 22.14 the API still crashed inside undici with no
+// hint (the MIKE-BACKEND-3R events came from `tsx watch`). Installs and
+// starts must refuse an unsupported Node with a message naming the cause.
+describe("backend refuses an unsupported Node", () => {
+  const backend = readJson<{ scripts: Record<string, string>; engines: { node: string } }>(
+    "backend/package.json",
+  );
+
+  it("fails npm install/ci instead of warning (engine-strict)", () => {
+    const npmrc = readFileSync(path.join(repoRoot, "backend/.npmrc"), "utf8");
+    expect(npmrc).toMatch(/^engine-strict=true$/m);
+  });
+
+  it("checks the running Node before dev and start", () => {
+    expect(backend.scripts.predev).toBe("node scripts/check-node-version.cjs");
+    expect(backend.scripts.prestart).toBe("node scripts/check-node-version.cjs");
+  });
+
+  it("reads the declared floor the same way semver does", () => {
+    expect(parseFloor(backend.engines.node).join(".")).toBe(
+      semver.minVersion(backend.engines.node)?.version,
+    );
+  });
+
+  it.each([
+    ["22.14.0", false],
+    ["22.18.9", false],
+    ["22.19.0", true],
+    ["22.22.2", true],
+    ["24.0.0", true],
+  ])("Node %s can run it: %s", (version, ok) => {
+    const problem = nodeVersionProblem(version, backend.engines.node);
+    if (ok) expect(problem).toBeNull();
+    else expect(problem).toMatch(new RegExp(`needs Node >=22\\.19\\.0 .* this is Node ${version.replace(/\./g, "\\.")}`));
+  });
+});
+

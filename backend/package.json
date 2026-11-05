@@ -6,10 +6,12 @@
     "node": ">=22.19.0"
   },
   "scripts": {
+    "predev": "node scripts/check-node-version.cjs",
     "dev": "tsx watch src/index.ts",
     "build": "tsc",
     "typecheck:test": "tsc -p tsconfig.test.json",
     "typecheck:contracts": "tsc -p ../packages/contracts/tsconfig.json",
+    "prestart": "node scripts/check-node-version.cjs",
     "start": "node --enable-source-maps dist/index.js",
     "sync:workflows": "node dist/jobs/syncWorkflows.js",
     "test": "vitest run",
