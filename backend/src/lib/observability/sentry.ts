@@ -991,15 +991,55 @@ export function initSentry(
  * Not an application failure: level "warning", one issue per name and code.
  */
 export function reportProcessWarning(warning: unknown): string | null {
-  const shaped = warning as { name?: unknown; code?: unknown } | null;
+  const shaped = warning as {
+    name?: unknown;
+    code?: unknown;
+    emitter?: unknown;
+    target?: unknown;
+    type?: unknown;
+    count?: unknown;
+  } | null;
   const name = typeof shaped?.name === "string" ? shaped.name : "Warning";
   const code = typeof shaped?.code === "string" ? shaped.code : undefined;
   if (name === "DeprecationWarning" && process.noDeprecation) return null;
   return reportError(warning, {
     level: "warning",
-    tags: { component: "runtime-warning", warning_name: name, warning_code: code },
+    tags: {
+      component: "runtime-warning",
+      warning_name: name,
+      warning_code: code,
+      ...listenerLeakTags(shaped),
+    },
     fingerprint: ["runtime-warning", name, code ?? ""],
   });
+}
+
+/**
+ * A MaxListenersExceededWarning carries the emitter (EventEmitter) or target
+ * (EventTarget, e.g. an AbortSignal), the event name and the listener count.
+ * Its stack is all node: frames (MIKE-BACKEND-5F pointed at
+ * node:stream/promises and nothing else), so these three are what says WHICH
+ * object leaks. The constructor name and event name are identifiers from
+ * code, never data; the privacy boundary re-checks their shape.
+ */
+function listenerLeakTags(
+  warning: { emitter?: unknown; target?: unknown; type?: unknown; count?: unknown } | null,
+): Record<string, string | number> {
+  const tags: Record<string, string | number> = {};
+  const owner = warning?.emitter ?? warning?.target;
+  if (owner && typeof owner === "object") {
+    try {
+      const constructorName = (owner as { constructor?: { name?: unknown } }).constructor?.name;
+      if (typeof constructorName === "string" && constructorName) {
+        tags.warning_emitter = constructorName;
+      }
+    } catch {
+      // A proxy or host object must not break reporting.
+    }
+  }
+  if (typeof warning?.type === "string") tags.warning_event = warning.type;
+  if (typeof warning?.count === "number") tags.warning_listener_count = warning.count;
+  return tags;
 }
 
 /**

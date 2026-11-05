@@ -963,6 +963,35 @@ describe("Node process warnings", () => {
     ]);
   });
 
+  // MIKE-BACKEND-5F: the warning's stack is all node: frames, so only the
+  // warning's own fields can say which object is leaking listeners.
+  it("names the emitter, event and listener count of a MaxListenersExceededWarning", async () => {
+    vi.spyOn(console, "log").mockImplementation(() => {});
+    const stderr = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
+    initSentry("api", dsnEnv);
+    const { EventEmitter } = await import("node:events");
+    class LeakySocket extends EventEmitter {}
+    const leaky = new LeakySocket();
+    leaky.setMaxListeners(2);
+    const raised = new Promise((resolve) => process.once("warning", resolve));
+
+    for (let i = 0; i < 3; i++) leaky.on("close", () => {});
+    await raised;
+    stderr.mockRestore();
+
+    // Another process warning (an import's deprecation) may land first.
+    const scope = scopes.find((candidate) =>
+      candidate.setTag.mock.calls.some(
+        ([key, value]) => key === "warning_name" && value === "MaxListenersExceededWarning",
+      ),
+    )!;
+    expect(scope).toBeDefined();
+    expect(scope.setTag).toHaveBeenCalledWith("warning_emitter", "LeakySocket");
+    expect(scope.setTag).toHaveBeenCalledWith("warning_event", "close");
+    expect(scope.setTag).toHaveBeenCalledWith("warning_listener_count", 3);
+  });
+
+
   it("drops the console bridge's copy of Node's printed warning, not application labels", () => {
     const consoleEvent = (text: string) =>
       scrubEvent({ logger: "console", message: text } as unknown as Sentry.ErrorEvent, {

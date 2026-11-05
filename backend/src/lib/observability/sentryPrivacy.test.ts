@@ -241,6 +241,13 @@ it('keeps the missing key-encryption secret as a configuration field name', () =
   expect(diagnosticErrorTags({ configurationFields: ['USER_API_KEYS_ENCRYPTION_SECRET'] })).toEqual({ configuration_fields: 'USER_API_KEYS_ENCRYPTION_SECRET' });
 });
 
+it('keeps the leaking emitter, event name and listener count of a runtime warning, and only identifier shapes', () => {
+  expect(diagnosticEvent({ tags: { component: 'runtime-warning', warning_emitter: 'ServerResponse', warning_event: 'close', warning_listener_count: 11 } }).tags)
+    .toEqual({ component: 'runtime-warning', warning_emitter: 'ServerResponse', warning_event: 'close', warning_listener_count: 11 });
+  expect(diagnosticEvent({ tags: { warning_emitter: 'Contract draft.docx', warning_event: 'a b@c.d', warning_listener_count: 'eleven' } }).tags).toEqual({});
+});
+
+
 it('retains a known storage operation and its dependency cause without object keys', () => {
   const error = { name: 'StorageOperationError', operation: 'HEAD', key: 'private-document', cause: { name: 'AccessDenied', $metadata: { httpStatusCode: 403 } } };
   expect(diagnosticErrorTags(error)).toEqual({ storage_operation: 'HEAD', failure_code: 'AccessDenied', dependency_status: 403 });

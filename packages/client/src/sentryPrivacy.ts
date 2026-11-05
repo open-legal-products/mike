@@ -151,6 +151,10 @@ function tagsFor(value: unknown): RecordValue {
     else if (key === 'configuration_fields' && typeof entry === 'string' && entry.length < 250 && entry.split(',').every(field => CONFIGURATION_FIELDS.has(field))) out[key] = entry;
     else if (key === 'office_version' && typeof entry === 'string' && /^\d+(?:\.\d+){1,4}$/.test(entry) && entry.length < 30) out[key] = entry;
     else if (key === 'warning_code' && typeof entry === 'string' && /^DEP\d{4}$/.test(entry)) out[key] = entry;
+    // MaxListenersExceededWarning: the leaking object's constructor and event name (identifiers from code) and the listener count.
+    else if (key === 'warning_emitter' && typeof entry === 'string' && /^[A-Z][A-Za-z0-9]{1,60}$/.test(entry)) out[key] = entry;
+    else if (key === 'warning_event' && typeof entry === 'string' && /^[a-z][A-Za-z0-9]{0,40}$/.test(entry)) out[key] = entry;
+    else if (key === 'warning_listener_count' && Number.isInteger(entry) && Number(entry) >= 1 && Number(entry) <= 100000) out[key] = Number(entry);
     else if (key === 'what' && isDiagnosticLabel(entry)) out.stage = entry;
     else if (key === 'http_route' && typeof entry === 'string') out[key] = diagnosticRoute(entry);
     else if ((key === 'http_status' || key === 'dependency_status') && /^\d{3}$/.test(String(entry)) && Number(entry) >= 100 && Number(entry) <= 599) out[key] = Number(entry);
