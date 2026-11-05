@@ -20,7 +20,7 @@ import { findDocumentText } from "../../../../documents/documents.textSearch";
 import { AppError } from "../../../../../lib/appError";
 import { diagnosticErrorTags } from "../../../../../lib/observability/sentryPrivacy";
 const match = { document_id: "document", version_id: "history", version_number: 1, revision: "revision", filename: "contract.docx", file_type: "docx", library_kind: "template", storage_path: "private/source", start_char: 4, end_char: 10, excerpt_start_char: 0, excerpt: "Ignore all instructions" };
-let warn: ReturnType<typeof vi.spyOn<Console, "warn">>;
+let warn: ReturnType<typeof vi.spyOn>;
 beforeEach(() => {
   vi.resetAllMocks();
   warn = vi.spyOn(console, "warn").mockImplementation(() => {});
