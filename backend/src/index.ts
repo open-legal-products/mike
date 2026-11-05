@@ -76,8 +76,10 @@ function spawnWorkerThread(role: WorkerRole): void {
     __dirname,
     isTs ? "workerThread.ts" : "workerThread.js",
   );
+  // Compiled mode inherits the parent's flags, including --enable-source-maps.
+  // Explicit process.execArgv would reject V8 flags such as --max-old-space-size.
   const workerThread = new ThreadWorker(entry, {
-    execArgv: isTs ? ["--require", "tsx/cjs"] : [],
+    ...(isTs ? { execArgv: ["--require", "tsx/cjs"] } : {}),
     workerData: { role },
   });
   workerThreads.set(role, workerThread);

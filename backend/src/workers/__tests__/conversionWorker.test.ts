@@ -22,6 +22,18 @@ vi.mock("../../lib/convert", () => ({
     convertedPdfKey: (userId: string, docId: string) =>
         `converted-pdfs/${userId}/${docId}.pdf`,
 }));
+const sentry = vi.hoisted(() => ({
+    reportError: vi.fn(),
+    setOperation: vi.fn(),
+    markStage: vi.fn(),
+}));
+vi.mock("../../lib/observability/sentry", async (importOriginal) => {
+    const actual =
+        await importOriginal<typeof import("../../lib/observability/sentry")>();
+    sentry.reportError.mockImplementation(actual.reportError);
+    return { ...actual, ...sentry };
+});
+import { diagnosticErrorTags } from "../../lib/observability/sentryPrivacy";
 
 import {
     runConversionJob,
@@ -94,6 +106,9 @@ beforeEach(() => {
     downloadFile.mockReset();
     uploadFile.mockReset();
     docxToPdf.mockReset();
+    sentry.reportError.mockClear();
+    sentry.setOperation.mockClear();
+    sentry.markStage.mockClear();
 });
 
 describe("runConversionJob", () => {
@@ -122,6 +137,29 @@ describe("runConversionJob", () => {
         });
         const docUpdate = db.calls.find((c) => c.table === "documents");
         expect(docUpdate?.update.status).toBe("ready");
+        // Every event this job produces is tagged with the flow and the
+        // stage it reached, on either transport (BullMQ or db_jobs).
+        expect(sentry.setOperation).toHaveBeenCalledWith("documents.convert");
+        expect(sentry.markStage).toHaveBeenCalledWith("docx-to-pdf");
+    });
+
+    it("reports a non-fatal conversion failure with the converter's own kind", async () => {
+        const { AppError } = await import("../../lib/appError.js");
+        downloadFile.mockResolvedValue(new ArrayBuffer(8));
+        docxToPdf.mockRejectedValue(
+            new AppError("conversion.failed", "LibreOffice exited 1: PRIVATE.docx"),
+        );
+        vi.spyOn(console, "error").mockImplementation(() => {});
+
+        await runConversionJob(JOB, makeDb() as never);
+
+        expect(sentry.reportError).toHaveBeenCalledOnce();
+        const [reported, context] = sentry.reportError.mock.calls[0]!;
+        expect(diagnosticErrorTags(reported)).toEqual({
+            error_kind: "conversion.failed",
+        });
+        expect(JSON.stringify(context)).not.toContain("PRIVATE");
+        vi.restoreAllMocks();
     });
 
     it("queues late output for cleanup when its version was deleted or replaced", async () => {

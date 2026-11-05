@@ -1,12 +1,15 @@
 // Extraction for the tabular-review module: the LLM cell-extraction helpers
 // and document (PDF/DOCX/Office) text extraction.
 
+import { cachedTextForModel } from "../../lib/documentTextCache";
 import { runIsolatedExtraction } from "../../lib/extraction/isolated";
 import {
     completeText,
     streamChatWithTools,
     type UserApiKeys,
 } from "../../lib/llm";
+import { AppError } from "../../lib/appError";
+import { reportError } from "../../lib/observability/sentry";
 import { formatPromptSuffix } from "./tabular.prompt";
 import { type CellResult, type Column } from "./tabular.shared";
 
@@ -43,7 +46,19 @@ The "summary" field must contain only the extracted value with inline citations 
             apiKeys,
         });
     } catch (err) {
-        console.error("[queryTabularCell] completion failed", err);
+        // Reported once, here, under the kind that names the failure; the
+        // provider's own error is the cause, so its class and HTTP status
+        // reach Sentry as provider_error / dependency_status. The caller
+        // answers its existing 500 and must not report again. Logging the
+        // reported object (not the raw one) keeps the console bridge from
+        // filing a second event.
+        const failure = new AppError(
+            "tabular.generation_failed",
+            "Tabular cell completion failed",
+            { cause: err },
+        );
+        reportError(failure);
+        console.error("[queryTabularCell] completion failed", failure);
         return null;
     }
     try {
@@ -117,6 +132,7 @@ export async function queryTabularAllColumns(
     apiKeys?: UserApiKeys,
     abortSignal?: AbortSignal,
     onActivity?: () => void,
+    reportFailure = true,
 ): Promise<void> {
     const columnsDesc = columns
         .map((col) => {
@@ -203,8 +219,20 @@ Rules:
         });
     } catch (err) {
         streamError = err;
-        if (!abortSignal?.aborted) {
-            console.error("[queryTabularAllColumns] stream failed", err);
+        if (!abortSignal?.aborted && reportFailure) {
+            // Inline callers report here; queue callers let the runner own
+            // retries and severity. Reported once, here, under the kind that names the failure, with
+            // the provider's error as the cause (provider_error and
+            // dependency_status come from it). The raw error is still what is
+            // rethrown: the row orchestrator classifies it for the grid, and
+            // its own log of it is a warning, not a second event.
+            const failure = new AppError(
+                "tabular.generation_failed",
+                "Tabular row completion stream failed",
+                { cause: err },
+            );
+            reportError(failure);
+            console.error("[queryTabularAllColumns] stream failed", failure);
         }
     }
 
@@ -223,14 +251,19 @@ export {
 } from "../../lib/extraction/documentMarkdown";
 
 /**
- * Markdown for a source document, parsed in the isolated extraction worker so
- * a huge file times out on its own instead of stalling this thread.
+ * Canonical accepted-view source text, matching the durable search index.
+ * Keep the historical name for callers; Markdown decoration must not depend
+ * on whether indexing finished. Parsing stays in the bounded worker.
  */
-export function extractDocumentMarkdown(
+export async function extractDocumentMarkdown(
     loadSource: () => Promise<ArrayBuffer | null>,
     fileType: string | null | undefined,
 ): Promise<string> {
-    return runIsolatedExtraction("documentMarkdown", loadSource, {
+    const extracted = await runIsolatedExtraction("documentText", loadSource, {
         fileType: fileType ?? "",
+    });
+    return cachedTextForModel({
+        revision: "", text: extracted.text,
+        textlessPageCount: extracted.textlessPageCount ?? 0,
     });
 }

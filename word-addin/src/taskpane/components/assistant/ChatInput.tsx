@@ -6,13 +6,21 @@ import React, {
   useState,
 } from "react";
 import { Library, X } from "lucide-react";
-import { ExcerptModalUI } from "@mike/excerpt-modal-ui";
-import { ExcerptPillUI } from "@mike/excerpt-pill-ui";
-import { PlaybookPillUI } from "@mike/playbook-pill-ui";
+import {
+  ExcerptModalUI,
+  ExcerptPillUI,
+  PlaybookPillUI,
+  slashCommandQueryFromValue,
+  withoutSlashCommand,
+  workflowSlashCommandFromTitle,
+} from "@mike/ui";
 import {
   serializeExcerpts,
   type MessageExcerpt,
-} from "@mike/message-excerpts";
+  NO_MODELS_MESSAGES,
+  routerSelections as routerSelectionsFromProfile,
+  type RouterSelections,
+} from "@mike/client";
 import { WorkflowModal } from "../workflows/WorkflowModal";
 import { PlaybookModal, playbookTitle } from "../playbooks/PlaybookModal";
 import { ChatInput as ChatInputShell } from "../../../shared/chat/ChatInput";
@@ -47,22 +55,12 @@ import type {
   WordChatSubmitOptions,
 } from "../../lib/wordChatTypes";
 import {
-  NO_MODELS_MESSAGES,
-  routerSelections as routerSelectionsFromProfile,
-  type RouterSelections,
-} from "@mike/model-catalog";
-import {
   isModelAvailable,
   noModelsReason,
   unavailableModelMessage,
 } from "../../lib/modelCatalog";
-import { notifyError, userMessage } from "../../lib/notify";
+import { reportFault, notifyError } from "../../lib/notify";
 import { loadWithRetry } from "../../lib/composerPreflight";
-import {
-  slashCommandQueryFromValue,
-  withoutSlashCommand,
-  workflowSlashCommandFromTitle,
-} from "@mike/workflow-slash-command-ui";
 import {
   WORD_WORKFLOW_SLASH_MENU_ID,
   WorkflowSlashMenu,
@@ -248,6 +246,7 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(
             action: "load your workflows",
             dedupeKey: "slash-workflows",
             page: "Assistant",
+            operation: "word_chat.turn",
             onRetry: () => {
               setSlashWorkflows(null);
             },
@@ -285,6 +284,7 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(
               action: "load your models",
               dedupeKey: "model-preflight",
               page: "Assistant",
+              operation: "word_chat.turn",
               onRetry: () => {
                 setKeyStatusLoading(true);
                 setPreflightAttempt((count) => count + 1);
@@ -424,9 +424,10 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(
           );
         } else {
           setDocumentUploadError(
-            userMessage(reason, {
+            reportFault(reason, {
               fallback: "Documents could not be uploaded. Try again.",
-            }),
+              operation: "documents.upload",
+            }).message,
           );
         }
       } finally {

@@ -1,5 +1,6 @@
+import type { ErrorKind } from "../appError";
 import { UserFacingError } from "../userFacingError";
-import { asInvalidApiKeyError } from "./apiKeyErrors";
+import { asInvalidApiKeyError, InvalidApiKeyError } from "./apiKeyErrors";
 
 type ProviderContext = { label: string; modelId: string };
 
@@ -42,6 +43,62 @@ export function providerFailureResponse(
  */
 export function providerFailureStatus(error: unknown): number | null {
   return findApiCallError(error)?.statusCode ?? null;
+}
+
+const NETWORK_FAILURE_CODES = new Set([
+  "ECONNREFUSED",
+  "ECONNRESET",
+  "ETIMEDOUT",
+  "ENOTFOUND",
+  "EHOSTUNREACH",
+  "ENETUNREACH",
+  "EAI_AGAIN",
+  "EPIPE",
+  "UND_ERR_CONNECT_TIMEOUT",
+  "UND_ERR_HEADERS_TIMEOUT",
+  "UND_ERR_SOCKET",
+]);
+
+function isNetworkFailure(error: unknown): boolean {
+  let current = error;
+  for (let depth = 0; depth < 8 && current && typeof current === "object"; depth++) {
+    const { code, message } = current as { code?: unknown; message?: unknown };
+    if (typeof code === "string" && NETWORK_FAILURE_CODES.has(code)) return true;
+    if (message === "fetch failed") return true;
+    current = (current as { cause?: unknown }).cause;
+  }
+  return false;
+}
+
+/**
+ * The `error_kind` a failed model call reports under: what the provider did,
+ * not what we did with it. Rejected key or forbidden model, rate limit,
+ * outage or unreachable (5xx, a stalled stream, a network failure), else the
+ * generic stream failure. Read off the cause chain, so the error returned by
+ * toProviderStreamError (a UserFacingError around the API error) classifies
+ * the same as the API error itself.
+ */
+export function providerFailureKind(error: unknown): ErrorKind {
+  for (let current = error, depth = 0; current && depth < 8; depth++) {
+    if (current instanceof InvalidApiKeyError) return "chat.provider_rejected";
+    current = (current as { cause?: unknown }).cause;
+  }
+  const response = providerFailureResponse(error);
+  if (response) {
+    if (response.status === 401 || response.status === 403) return "chat.provider_rejected";
+    if (response.status === 429) return "chat.provider_rate_limited";
+    if (response.status >= 500) return "chat.provider_unavailable";
+    return "chat.stream_failed";
+  }
+  // A stall or a network failure may arrive wrapped (toProviderStreamError
+  // around the first-chunk timeout); look down the chain for it.
+  for (let current = error, depth = 0; current && depth < 8; depth++) {
+    if (asProviderStallError(current, { label: "", modelId: "" }) || isNetworkFailure(current)) {
+      return "chat.provider_unavailable";
+    }
+    current = (current as { cause?: unknown }).cause;
+  }
+  return "chat.stream_failed";
 }
 
 // "The" rather than "your" key: requiredKey() may fall back to the

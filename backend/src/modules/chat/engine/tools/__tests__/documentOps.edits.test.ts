@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { scriptedDb } from "../../../../../__tests__/helpers/scriptedDb";
 import type { Db } from "../../../../../lib/supabase";
 const mocks = vi.hoisted(() => ({
+  reportError: vi.fn(),
   active: vi.fn(),
   downloadFile: vi.fn(),
   uploadFile: vi.fn(),
@@ -11,6 +12,10 @@ const mocks = vi.hoisted(() => ({
 }));
 // Only the verdict is stubbed; `can` stays real so the role policy under test
 // is the production one.
+vi.mock("../../../../../lib/observability/sentry", async original => ({
+  ...(await original<typeof import("../../../../../lib/observability/sentry")>()),
+  reportError: mocks.reportError,
+}));
 vi.mock("../../../../../lib/access", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../../../../lib/access")>()),
   ensureDocAccess: mocks.docAccess,
@@ -205,6 +210,17 @@ describe("assistant document-edit lifecycle", () => {
     });
     expect(result).toMatchObject({ ok: false, error: expect.stringMatching(/document changed/i) });
     expect(mocks.downloadFile).not.toHaveBeenCalled();
+    expect(mocks.apply).not.toHaveBeenCalled();
+    expect(mocks.uploadFile).not.toHaveBeenCalled();
+    fake.done();
+  });
+
+  it("reports a failed storage read and returns the existing edit failure without writing", async () => {
+    const fake = scriptedDb([{ table: "documents", data: { id: "doc", user_id: "u", project_id: null } }]);
+    const cause = new Error("private storage details");
+    mocks.downloadFile.mockRejectedValueOnce(cause);
+    await expect(run(fake.db)).resolves.toEqual({ ok: false, error: "Could not load document bytes." });
+    expect(mocks.reportError).toHaveBeenCalledWith(cause, { tags: { component: "documents", operation: "documents.edit" } });
     expect(mocks.apply).not.toHaveBeenCalled();
     expect(mocks.uploadFile).not.toHaveBeenCalled();
     fake.done();

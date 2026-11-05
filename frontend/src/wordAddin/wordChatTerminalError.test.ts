@@ -8,7 +8,7 @@
  * a key only the user can fix.
  */
 import { describe, expect, it } from "vitest";
-import { describeError } from "@/shared/lib/userError";
+import { describeError } from "@mike/client";
 import { terminalErrorFromFrame } from "../../../word-addin/src/taskpane/lib/wordChatTerminalError";
 
 describe("terminalErrorFromFrame", () => {
@@ -61,4 +61,12 @@ describe("terminalErrorFromFrame", () => {
         );
         expect(error.retryable).toBe(true);
     });
+});
+
+
+it("preserves explicit reporting ownership, never inferring it from an id", () => {
+    expect(terminalErrorFromFrame({ reporting_owner: "backend", request_id: "request-1" }))
+        .toMatchObject({ reportingOwner: "backend", requestId: "request-1" });
+    expect(terminalErrorFromFrame({ request_id: "request-1" }).reportingOwner).toBeUndefined();
+    expect(terminalErrorFromFrame({ reporting_owner: "unexpected" }).reportingOwner).toBeUndefined();
 });

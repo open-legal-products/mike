@@ -8,10 +8,12 @@ import type {
 } from "@mike/contracts";
 import { filterAccessibleDocumentIds } from "../../../../lib/access";
 import type { NormalizedToolCall } from "../../../../lib/llm";
+import { AppError } from "../../../../lib/appError";
+import { reportError } from "../../../../lib/observability/sentry";
 import { safeError } from "../../../../lib/safeError";
 import type { Db } from "../../../../lib/supabase";
 import { loadAssistantMessage } from "../contextBuilders";
-import { resolveDocLabel, type DocIndex, type DocStore } from "../types";
+import { createDocLabelResolver, type DocIndex, type DocStore } from "../types";
 
 type DocumentRef = { document_id: string; version_id: string | null };
 
@@ -80,10 +82,11 @@ export function toolRecord(
         call.name === "find_documents" && call.input.scope !== "document"
             ? []
             : [call.input.doc_id, ...(Array.isArray(call.input.doc_ids) ? call.input.doc_ids : [])];
+    const labelFor = createDocLabelResolver(docStore, docIndex);
     const documents = named
         .filter((id) => id !== undefined)
         .map((id) => {
-            const label = typeof id === "string" ? resolveDocLabel(id, docStore, docIndex) : null;
+            const label = typeof id === "string" ? labelFor(id) : null;
             const doc = label ? docIndex[label] : undefined;
             return doc && { document_id: doc.document_id, version_id: doc.version_id ?? null };
         });
@@ -234,7 +237,16 @@ export function createSubagentRunStore(scope: {
                 const { error } = await db.from(TABLE).insert(rows);
                 if (error) throw error;
             } catch (error) {
-                console.error("[subagents] run save failed", safeError(error));
+                // The wrapper carries the kind and the database's own code to
+                // Sentry; the log keeps its redacted category (warn: the
+                // console bridge forwards error-level lines only).
+                reportError(
+                    new AppError("chat.subagent_failed", "Subagent run save failed", {
+                        cause: error,
+                    }),
+                    { tags: { component: "chat-stream", operation: "chat.subagent" } },
+                );
+                console.warn("[subagents] run save failed", safeError(error));
             }
         },
         async load(delegationId) {
@@ -267,7 +279,13 @@ export function createSubagentRunStore(scope: {
                 }
                 return resumed;
             } catch (error) {
-                console.error("[subagents] run load failed", safeError(error));
+                reportError(
+                    new AppError("chat.subagent_failed", "Subagent run load failed", {
+                        cause: error,
+                    }),
+                    { tags: { component: "chat-stream", operation: "chat.subagent" } },
+                );
+                console.warn("[subagents] run load failed", safeError(error));
                 return null;
             }
         },

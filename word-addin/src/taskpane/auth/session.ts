@@ -1,7 +1,8 @@
 /// <reference types="office-js" />
 import { networkFailure } from "../lib/networkError";
 import { responseError } from "../api/client";
-import { notifyError, userMessage } from "../lib/notify";
+import { reportNetworkFailure } from "../lib/errorReporting";
+import { notifyError, reportFault } from "../lib/notify";
 import { parseGoogleOAuthDialogMessage } from "./oauthProtocol";
 
 const LEGACY_ACCESS_KEY = "mike_token";
@@ -58,6 +59,20 @@ async function clearLegacyTokenStorage(): Promise<void> {
 // so `responseError` (api/client) is reused: the backend's 4xx `detail` is
 // kept because it is written for the user, a 5xx body never is, and the
 // status/code/request id ride along for `describeError` and support.
+//
+// Every failure here is filed under operation word.session: a 5xx by
+// `responseError`, an unreachable backend by `sessionFetchFailure`, and
+// anything else (a body that does not parse, a host error) by the screen
+// that shows it or, for the silent refresh, by `refreshSession` itself.
+
+/** The transport failed before the backend answered: report it, then wrap it. */
+function sessionFetchFailure(
+  error: unknown,
+  request: { method: "GET" | "POST"; url: string },
+): Error {
+  reportNetworkFailure(error, { ...request, operation: "word.session" });
+  return networkFailure(error, request);
+}
 
 async function requestSession(): Promise<AddinAuthUser | null> {
   const url = `${API_BASE}/auth/session`;
@@ -68,10 +83,12 @@ async function requestSession(): Promise<AddinAuthUser | null> {
       cache: "no-store",
     });
   } catch (error) {
-    throw networkFailure(error, { method: "GET", url });
+    throw sessionFetchFailure(error, { method: "GET", url });
   }
   if (response.status === 401) return null;
-  if (!response.ok) throw await responseError(response);
+  if (!response.ok) {
+    throw await responseError(response, undefined, "GET", "word.session");
+  }
   const body = (await response.json()) as { user: AddinAuthUser };
   return body.user;
 }
@@ -90,18 +107,29 @@ async function redeemAuthHandoff(
       body: JSON.stringify({ ticket, requestId }),
     });
   } catch (error) {
-    throw networkFailure(error, { method: "POST", url });
+    throw sessionFetchFailure(error, { method: "POST", url });
   }
-  if (!response.ok) throw await responseError(response);
+  if (!response.ok) {
+    throw await responseError(response, undefined, "POST", "word.session");
+  }
   const body = (await response.json()) as { user: AddinAuthUser };
   return body.user;
 }
 
 export function refreshSession(): Promise<AddinAuthUser | null> {
   if (!_sessionPromise) {
-    _sessionPromise = requestSession().finally(() => {
-      _sessionPromise = null;
-    });
+    _sessionPromise = requestSession()
+      .catch((error: unknown) => {
+        // The 401 handler (lib/sessionRefresh) classifies this throw as
+        // "unreachable" and shows a connection notice, never the error
+        // itself, so a fault behind it (a 5xx is already filed above; this
+        // catches an unparseable body or a host error) is filed here.
+        reportFault(error, { operation: "word.session" });
+        throw error;
+      })
+      .finally(() => {
+        _sessionPromise = null;
+      });
   }
   return _sessionPromise.then((user) => {
     _user = user;
@@ -135,10 +163,11 @@ export function initialize(): void {
     .then(() => refreshSession())
     .catch((error: unknown) => {
       _user = null;
-      _error = userMessage(error, {
+      _error = reportFault(error, {
         action: "sign in",
         fallback: "Mike couldn't sign you in. Try again.",
-      });
+        operation: "word.session",
+      }).message;
     })
     .finally(() => {
       _loading = false;
@@ -163,22 +192,25 @@ export async function signIn(email: string, password: string): Promise<void> {
         body: JSON.stringify({ email, password }),
       });
     } catch (error) {
-      throw networkFailure(error, { method: "POST", url });
+      throw sessionFetchFailure(error, { method: "POST", url });
     }
-    if (!response.ok) throw await responseError(response);
+    if (!response.ok) {
+      throw await responseError(response, undefined, "POST", "word.session");
+    }
     const body = (await response.json()) as { user: AddinAuthUser };
     if (generation !== _sessionGeneration) return;
     _user = body.user;
   } catch (error) {
     if (generation !== _sessionGeneration) return;
     _user = null;
-    _error = userMessage(error, {
+    _error = reportFault(error, {
       action: "sign in",
       fallback: "Mike couldn't sign you in. Try again.",
+      operation: "word.session",
       codeMessages: {
         invalid_credentials: "That email and password don't match an account.",
       },
-    });
+    }).message;
   } finally {
     if (generation === _sessionGeneration) {
       _loading = false;
@@ -268,10 +300,11 @@ export async function signInWithGoogle(): Promise<void> {
                 })
                 .catch((error: unknown) => {
                   if (generation === _sessionGeneration) {
-                    _error = userMessage(error, {
+                    _error = reportFault(error, {
                       action: "complete Google sign-in",
                       fallback: "Mike couldn't complete Google sign-in.",
-                    });
+                      operation: "word.session",
+                    }).message;
                   }
                 })
                 .finally(() => {
@@ -299,9 +332,10 @@ export async function signInWithGoogle(): Promise<void> {
       // Office.js throws host text here ("The dialog box has been directed
       // to a URL..."), which means nothing to a user.
       fail(
-        userMessage(error, {
+        reportFault(error, {
           fallback: "Mike couldn't open Google sign-in. Try again.",
-        }),
+          operation: "word.session",
+        }).message,
       );
     }
   }).finally(() => {
@@ -326,9 +360,11 @@ export async function signOut(): Promise<void> {
         body: JSON.stringify({ scope: "local" }),
       });
     } catch (error) {
-      throw networkFailure(error, { method: "POST", url });
+      throw sessionFetchFailure(error, { method: "POST", url });
     }
-    if (!response.ok) throw await responseError(response);
+    if (!response.ok) {
+      throw await responseError(response, undefined, "POST", "word.session");
+    }
     _user = null;
     await clearLegacyTokenStorage();
   } catch (error) {
@@ -338,6 +374,7 @@ export async function signOut(): Promise<void> {
       action: "sign out",
       fallback: "Mike couldn't sign you out. Try again.",
       dedupeKey: "sign-out",
+      operation: "word.session",
       onRetry: signOut,
     });
   }

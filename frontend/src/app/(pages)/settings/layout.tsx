@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect } from "react";
+import { useEffect, useMemo } from "react";
 import { usePathname, useRouter } from "next/navigation";
 import { Loader2 } from "lucide-react";
 import { useAuth } from "@/app/contexts/AuthContext";
@@ -11,6 +11,8 @@ import {
     SettingsShell,
     type SettingsShellTab,
 } from "@/app/components/settings/SettingsShell";
+import { SettingsSearch } from "@/app/components/settings/SettingsSearch";
+import { SETTINGS_SEARCH_ENTRIES } from "@/app/lib/settingsSearch";
 
 const TABS: SettingsShellTab[] = [
     { id: "account", label: "Account", href: "/settings" },
@@ -70,6 +72,23 @@ export default function SettingsLayout({
     // Optional: the layout also renders where no profile provider is mounted
     // (component tests), and then simply lists no Admin tab.
     const hideAdmin = useOptionalUserProfile()?.profile?.instanceAdmin !== true;
+    const visibleTabs = useMemo(
+        () =>
+            TABS.filter(
+                (tab) =>
+                    !(hidePrivacyData && tab.id === "privacy-data") &&
+                    !(hideAdmin && tab.id === "admin"),
+            ),
+        [hidePrivacyData, hideAdmin],
+    );
+    // Search only what is listed: an entry on a hidden tab would open a page
+    // the person is not offered.
+    const searchEntries = useMemo(() => {
+        const visibleTabIds = new Set(visibleTabs.map((tab) => tab.id));
+        return SETTINGS_SEARCH_ENTRIES.filter((entry) =>
+            visibleTabIds.has(entry.tabId),
+        );
+    }, [visibleTabs]);
 
     useEffect(() => {
         if (!authLoading && !isAuthenticated) {
@@ -98,11 +117,8 @@ export default function SettingsLayout({
         <SettingsShell
             title="Settings"
             navLabel="Settings"
-            tabs={TABS.filter(
-                (tab) =>
-                    !(hidePrivacyData && tab.id === "privacy-data") &&
-                    !(hideAdmin && tab.id === "admin"),
-            ).map((tab) =>
+            search={<SettingsSearch entries={searchEntries} />}
+            tabs={visibleTabs.map((tab) =>
                 tab.id === "organizations" && invitationCount > 0
                     ? {
                           ...tab,

@@ -18,7 +18,7 @@
 //      explicitly are remembered so the bridge does not double-report them.
 
 import * as Sentry from "@sentry/node";
-import { diagnosticErrorTags, privacyBoundaryIntegration } from "./sentryPrivacy";
+import { retainExceptionTypes, diagnosticRoute, diagnosticErrorTags, privacyBoundaryIntegration, type Operation, type Stage } from "./sentryPrivacy";
 
 export type SentryRole = "api" | "worker" | "worker-thread" | "job";
 
@@ -35,6 +35,17 @@ export type ReportContext = {
 };
 
 const CONSOLE_MECHANISM = "auto.core.capture_console";
+/**
+ * The mechanism of the events Sentry's Vercel AI integration files itself.
+ * It subscribes to the AI SDK's `ai:telemetry` diagnostics channel and calls
+ * captureException(…, { handled: false }) for EVERY `tool-error` a tool step
+ * produces (`captureToolError` in @sentry/server-utils). For Mike that is
+ * never a fresh report: a tool failure ends the turn and is reported once,
+ * typed, by its owner (chat-stream's `reportError`, the job runner for the
+ * memory curator), and the ask_inputs / approval pause is control flow that
+ * travels the same `tool-error` path and is not a failure at all.
+ */
+const VERCEL_AI_TOOL_ERROR_MECHANISM = "auto.vercelai.channel";
 const NESTED_SEARCH_DEPTH = 2;
 
 /**
@@ -58,7 +69,7 @@ function isNodeWarningText(args: unknown[]): boolean {
 // BEGIN shared-redaction
 // This block is the privacy control for every runtime. It is authored once
 // and mirrored, indentation aside, between backend/src/lib/observability/
-// sentry.ts and frontend/src/shared/lib/sentryEvent.ts (the backend cannot
+// sentry.ts and packages/client/src/sentryEvent.ts (the backend cannot
 // import the frontend tree at build time). sentryEvent.sync.test.ts fails
 // the moment the two copies differ, so edit both or neither.
 const SENSITIVE_HEADERS = new Set([
@@ -210,7 +221,6 @@ const EXTRA_KEY_ALLOWLIST = new Set([
   "kind",
   "message",
   "name",
-  "path",
   "playbook_id",
   "request_id",
   "requestId",
@@ -437,7 +447,14 @@ function mapStringLeaves(
 export function minimiseForCommunity<T extends CommunityEvent>(event: T): T {
   delete event.server_name;
   delete event.user;
-  delete event.breadcrumbs;
+  // Breadcrumbs are request history; only our own stage trail stays
+  // (category mike.stage, message a stage name), the privacy boundary
+  // checks each one against the diagnostic label format.
+  const trail = Array.isArray(event.breadcrumbs)
+    ? event.breadcrumbs.filter((crumb) => (crumb as { category?: unknown })?.category === "mike.stage")
+    : [];
+  if (trail.length) event.breadcrumbs = trail;
+  else delete event.breadcrumbs;
   if (event.tags) {
     delete event.tags.server_name;
     delete event.tags.url;
@@ -503,6 +520,34 @@ export function minimiseForCommunity<T extends CommunityEvent>(event: T): T {
 }
 // END shared-redaction
 
+/** Marks a build that did not come from the release workflow. */
+export const UNVERSIONED = "0.0.0";
+const VERSION_PATTERN = /^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/;
+
+/** `MIKE_VERSION` as a semver string, or 0.0.0 when unset or malformed. */
+export function normalizeVersion(raw: string | undefined): string {
+  const trimmed = (raw ?? "").trim().replace(/^v/, "");
+  return VERSION_PATTERN.test(trimmed) ? trimmed : UNVERSIONED;
+}
+
+/**
+ * `mike@<version>+<sha12>`: the release every runtime tags events with. Same
+ * rule as packages/client/src/sentryEvent.ts (this module cannot import
+ * it). An explicit SENTRY_RELEASE wins; a build without MIKE_VERSION is
+ * `mike@0.0.0...`, valid and visibly not a release.
+ */
+export function releaseName(
+  explicit: string | undefined,
+  version: string | undefined,
+  gitSha: string | undefined,
+): string {
+  const named = explicit?.trim();
+  if (named) return named;
+  const sha = gitSha?.trim().slice(0, 12);
+  const base = `mike@${normalizeVersion(version)}`;
+  return sha ? `${base}+${sha}` : base;
+}
+
 /** Errors already sent via reportError(); the console bridge skips them. */
 const reportedErrors = new WeakSet<object>();
 
@@ -554,8 +599,8 @@ export function sentryConfiguration(env: NodeJS.ProcessEnv = process.env) {
   // to the Mike project's Sentry as a community install (see the README's
   // Telemetry section). Only Mike's own deployment sets SENTRY_INSTALL.
   const resolved = resolveDsn({
-    disabled: env.SENTRY_DISABLED,
-    dsn: env.SENTRY_DSN,
+    disabled: env.SENTRY_DISABLED?.trim() || env.MIKE_BUILD_SENTRY_DISABLED,
+    dsn: env.SENTRY_DSN?.trim() || env.MIKE_BUILD_SENTRY_DSN,
     fallback: MIKE_SENTRY_DSN.backend,
   });
   const dsn = resolved.dsn;
@@ -572,12 +617,10 @@ export function sentryConfiguration(env: NodeJS.ProcessEnv = process.env) {
       dsn.length > 0 &&
       (!isTestProcess || env.SENTRY_ALLOW_IN_TESTS === "true"),
     environment: env.SENTRY_ENVIRONMENT?.trim() || "self-hosted",
-    // An explicit SENTRY_RELEASE wins; otherwise the git commit the image
-    // was built from (GIT_SHA, a Dockerfile build arg) — what lets Sentry
-    // say "regressed in this deploy" and resolve an issue until the next.
-    release:
-      env.SENTRY_RELEASE?.trim() ||
-      (env.GIT_SHA?.trim() ? `mike@${env.GIT_SHA.trim().slice(0, 12)}` : undefined),
+    // An explicit SENTRY_RELEASE wins; otherwise mike@<version>+<sha12> from
+    // the MIKE_VERSION and GIT_SHA build arguments — what lets Sentry say
+    // "regressed in this release" and resolve an issue until the next.
+    release: releaseName(env.SENTRY_RELEASE, env.MIKE_VERSION, env.GIT_SHA),
     // Performance tracing is opt-in: error tracking is the goal of this
     // integration and traces cost quota. 0 keeps the OpenTelemetry request
     // instrumentation (needed for request context on errors) without
@@ -610,6 +653,8 @@ const DEFAULT_MAX_EVENTS_PER_ISSUE_PER_MINUTE = 10;
 const THROTTLE_WINDOW_MS = 60_000;
 type ThrottleBucket = { windowStart: number; sent: number; suppressed: number };
 const throttleBuckets = new Map<string, ThrottleBucket>();
+/** Distinct issues tracked at once; past it the oldest bucket is evicted. */
+const MAX_THROTTLE_KEYS = 1_000;
 let maxEventsPerIssuePerMinute = DEFAULT_MAX_EVENTS_PER_ISSUE_PER_MINUTE;
 
 function issueKey(event: Sentry.ErrorEvent): string {
@@ -636,14 +681,24 @@ export function withinIssueBudget(
       );
     }
     bucket = { windowStart: now, sent: 0, suppressed: 0 };
+    // Re-inserting moves the key to the end, so the Map's insertion order is
+    // window-start order and the oldest bucket is always the first entry.
+    throttleBuckets.delete(key);
     throttleBuckets.set(key, bucket);
-    // Keep the map bounded on a long-running process.
-    if (throttleBuckets.size > 1_000) {
-      for (const [otherKey, other] of throttleBuckets) {
-        if (now - other.windowStart >= THROTTLE_WINDOW_MS) {
-          throttleBuckets.delete(otherKey);
-        }
+    // Keep the map bounded on a long-running process: drop expired windows
+    // from the front, and past the cap evict the oldest live bucket too. Each
+    // key is evicted at most once per insert, so this is amortised O(1).
+    // (The old sweep scanned every key on every new key once 1,000 were
+    // live, and evicted nothing while they all stayed inside the window.)
+    for (const [oldestKey, oldest] of throttleBuckets) {
+      const expired = now - oldest.windowStart >= THROTTLE_WINDOW_MS;
+      if (!expired && throttleBuckets.size <= MAX_THROTTLE_KEYS) break;
+      if (oldest.suppressed) {
+        console.warn(
+          `[sentry] suppressed ${oldest.suppressed} further event(s) for: ${oldestKey.slice(0, 120)}`,
+        );
       }
+      throttleBuckets.delete(oldestKey);
     }
   }
   if (bucket.sent < maxEventsPerIssuePerMinute) {
@@ -652,6 +707,11 @@ export function withinIssueBudget(
   }
   bucket.suppressed += 1;
   return false;
+}
+
+/** Number of issue buckets the throttle currently holds (tests only). */
+export function issueThrottleKeyCountForTests(): number {
+  return throttleBuckets.size;
 }
 
 /** True once init() ran with a DSN in this process (or thread). */
@@ -687,6 +747,15 @@ function consoleArguments(hint: Sentry.EventHint): unknown[] | null {
   return Array.isArray(args) ? args : null;
 }
 
+/** Preserve complete code locations before free-text path redaction splits on spaces. */
+function consoleErrorStack(stack: string | undefined): string | undefined {
+  return stack?.replace(
+    /^(\s*at (?:.*? \()?)(?:file:\/\/)?((?:\/|[A-Za-z]:\\)[^\n]*):(\d+):(\d+)(\)?)$/gm,
+    (_line, prefix: string, path: string, line: string, column: string, closing: string) =>
+      `${prefix}${repoRelativePath(path)}:${line}:${column}${closing}`,
+  );
+}
+
 /**
  * Strip everything a legal-platform event must never carry, then drop
  * console-bridge duplicates of errors that were reported explicitly.
@@ -706,6 +775,11 @@ export function scrubEvent(
     mechanism === CONSOLE_MECHANISM || mechanismInfo?.handled === false;
   const original = hint.originalException;
   if (automatic && isReported(original)) {
+    return null;
+  }
+  // handled:false made these read as unhandled rejections (MIKE-BACKEND-4,
+  // -3Q, -5N, -7D, -1K); see VERCEL_AI_TOOL_ERROR_MECHANISM.
+  if (mechanism === VERCEL_AI_TOOL_ERROR_MECHANISM) {
     return null;
   }
 
@@ -734,7 +808,7 @@ export function scrubEvent(
     if (nestedError) {
       event.message = `${label ? `${label}: ` : ""}${nestedError.name}: ${nestedError.message}`;
       event.fingerprint = ["console", label, nestedError.name];
-      event.extra = { ...(event.extra ?? {}), error_stack: nestedError.stack };
+      event.extra = { ...(event.extra ?? {}), error_stack: consoleErrorStack(nestedError.stack) };
     } else if (!event.exception?.values?.length || mechanismInfo?.synthetic) {
       // SDK v11 attaches a synthetic exception to console messages by default.
       // Its value is the joined arguments, so strip positional payloads there too.
@@ -754,6 +828,8 @@ export function scrubEvent(
     const nested = findNested(arg, c => c instanceof Error || 'code' in c);
     Object.assign(event.tags, diagnosticErrorTags(nested));
   }
+
+  retainExceptionTypes(event.exception?.values, [original, ...(args ?? [])], event.tags?.warning_name);
 
   // The title and the exception text are free text from libraries that
   // happily quote emails, tokens, and URLs (Postgres "Key (email)=(…)",
@@ -885,13 +961,21 @@ export function initSentry(
   installProcessWarningReporter(env);
   if (config.dsnSource === "default") {
     console.log(
-      `[sentry] enabled for ${role} → Mike project Sentry (${config.install} install). ` +
+      `[sentry] enabled for ${role} → Mike project Sentry (${config.install} install, ` +
+        `release ${config.release}). ` +
         "Opt out with SENTRY_DISABLED=true or point SENTRY_DSN at your own project.",
     );
   } else {
     console.log(
       `[sentry] enabled for ${role} (environment ${config.environment}` +
-        `${config.release ? `, release ${config.release}` : ""})`,
+        `, release ${config.release})`,
+    );
+  }
+  if (config.release.startsWith(`mike@${UNVERSIONED}`) && env.NODE_ENV === "production") {
+    // An unversioned release cannot be told apart from any other local build;
+    // the images get MIKE_VERSION and GIT_SHA as build args (docs/observability.md).
+    console.warn(
+      "[sentry] unversioned release: build the images with MIKE_VERSION=$(cat VERSION) GIT_SHA=$(git rev-parse HEAD) or set SENTRY_RELEASE",
     );
   }
   return true;
@@ -1038,10 +1122,46 @@ export function bestEffort<T>(
   });
 }
 
-/** Attach the request id to every event captured during this request. */
-export function tagCurrentRequest(requestId: string): void {
+/**
+ * Name the flow this request or job belongs to. Set once at the entry
+ * (route handler, job handler) and every event captured until it finishes
+ * carries `operation`, which leads the issue title and the fingerprint.
+ * Default stack grouping still distinguishes different failure sites.
+ */
+export function setOperation(operation: Operation): void {
   if (!initialized) return;
-  Sentry.getIsolationScope().setTag("request_id", requestId);
+  Sentry.getIsolationScope().setTag("operation", operation);
+}
+
+/**
+ * Record that the current request or job reached a stage. The stages a
+ * failed operation passed through arrive on its event as breadcrumbs, so a
+ * failure in `seal-recover` is distinguishable from the same throw reached
+ * via `copy-rollback`. Only the static, source-authored stage label travels,
+ * never runtime data or a free-form message.
+ */
+export function markStage(stage: Stage): void {
+  if (!initialized) return;
+  Sentry.addBreadcrumb({ category: "mike.stage", message: stage, level: "info" });
+}
+
+/** Baseline identity for all request captures, including middleware/console errors. */
+export function tagCurrentRequest(
+  requestId: string,
+  request?: { method: string; originalUrl: string },
+): void {
+  if (!initialized) return;
+  const scope = Sentry.getIsolationScope();
+  scope.setTag("request_id", requestId);
+  if (request) {
+    // Never put a concrete URL, query, resource name or id on the scope.
+    // This fallback exists before Express selects a route; setOperation in
+    // a domain handler replaces it with the more specific business flow.
+    scope.setTag("component", "http");
+    scope.setTag("operation", "http.request");
+    scope.setTag("http_method", request.method);
+    scope.setTag("http_route", diagnosticRoute(request.originalUrl));
+  }
 }
 
 /** Attach the authenticated user's id (never the email) to this request. */

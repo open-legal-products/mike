@@ -18,7 +18,7 @@ import {
     listQuickActions,
     streamWordChat,
 } from "../../../word-addin/src/taskpane/api/client";
-import { describeError } from "@/shared/lib/userError";
+import { describeError } from "@mike/client";
 
 const fetchMock = vi.fn<typeof fetch>();
 const payload = {
@@ -83,6 +83,7 @@ describe("Word API transport cancellation", () => {
         expect(reportNetworkFailure).toHaveBeenCalledExactlyOnceWith(error, {
             method: "POST",
             url: "https://api.example.test/word-chat",
+            operation: "word_chat.turn",
         });
     });
 
@@ -95,6 +96,7 @@ describe("Word API transport cancellation", () => {
         expect(reportNetworkFailure).toHaveBeenCalledExactlyOnceWith(error, {
             method: "GET",
             url: "https://api.example.test/projects?view=summary&workspace=personal",
+            operation: "projects.manage",
         });
     });
 });

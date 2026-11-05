@@ -162,8 +162,23 @@ jobs:
       - name: Document text search and backfill transactions
         run: psql "$SUPABASE_TEST_DB_URL" -X --set ON_ERROR_STOP=1 -f backend/src/modules/documents/__tests__/documents.textSearch.sql
 
+      - name: Chat list timeout reproduction and fix confirmation (MIKE-BACKEND-F)
+        run: psql "$SUPABASE_TEST_DB_URL" -X --set ON_ERROR_STOP=1 -f backend/src/modules/chat/__tests__/chat.overview.repro.sql
+
+      - name: Chat list parity with the per-chat access verdict
+        run: psql "$SUPABASE_TEST_DB_URL" -X --set ON_ERROR_STOP=1 -f backend/src/modules/chat/__tests__/chat.overview.sql
+
       - name: Concurrent document lifecycle operations
         run: node backend/scripts/test-document-lifecycle-concurrency.mjs
+
+      - name: Algorithmic performance and authorization regressions
+        run: |
+          for test in backend/src/__tests__/sql/performance.*.sql; do
+            psql "$SUPABASE_TEST_DB_URL" -X --set ON_ERROR_STOP=1 -f "$test"
+          done
+
+      - name: Concurrent organization departure locking
+        run: node backend/scripts/test-org-departure-locks.mjs
 
       - name: Compare fingerprints
         run: |

@@ -24,11 +24,15 @@ const mocks = vi.hoisted(() => ({
   enqueueStorageCleanup: vi.fn(),
   requestDocumentCleanupDelivery: vi.fn(),
   reportError: vi.fn((_error: unknown, _context?: unknown) => null),
+  setOperation: vi.fn(),
+  markStage: vi.fn(),
 }));
 
 vi.mock("../../../lib/observability/sentry", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../../lib/observability/sentry")>()),
   reportError: mocks.reportError,
+  setOperation: mocks.setOperation,
+  markStage: mocks.markStage,
 }));
 
 vi.mock("../../../lib/storage", async (importOriginal) => {
@@ -221,6 +225,28 @@ function scriptedDb(results: QueryResult[]) {
   };
 }
 
+const pdfBytes = Buffer.from("%PDF-1.7\n");
+
+/** The smallest PDF pdf.js opens: one empty page, a cross-reference table, a trailer. */
+function buildOnePagePdf(): Buffer {
+  const objects = [
+    "<< /Type /Catalog /Pages 2 0 R >>",
+    "<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
+    "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] >>",
+  ];
+  let pdf = "%PDF-1.7\n";
+  const offsets: number[] = [];
+  for (const [index, object] of objects.entries()) {
+    offsets.push(Buffer.byteLength(pdf));
+    pdf += `${index + 1} 0 obj\n${object}\nendobj\n`;
+  }
+  const xrefOffset = Buffer.byteLength(pdf);
+  pdf += `xref\n0 ${objects.length + 1}\n0000000000 65535 f \n`;
+  for (const offset of offsets) pdf += `${String(offset).padStart(10, "0")} 00000 n \n`;
+  pdf += `trailer\n<< /Size ${objects.length + 1} /Root 1 0 R >>\nstartxref\n${xrefOffset}\n%%EOF\n`;
+  return Buffer.from(pdf, "binary");
+}
+
 const baseFile = {
   id: "22222222-2222-4222-8222-222222222222",
   session_id: "11111111-1111-4111-8111-111111111111",
@@ -229,7 +255,7 @@ const baseFile = {
   filename: "contract.pdf",
   file_type: "pdf",
   content_type: "application/pdf",
-  expected_size_bytes: 4,
+  expected_size_bytes: pdfBytes.length,
   sealed_storage_path: "upload-sessions/user/session/file/sealed",
   target_folder_id: null,
   status: "uploaded",
@@ -260,7 +286,7 @@ describe("upload processing", () => {
     processingTempRoot = await mkdtemp(join(tmpdir(), "mike-upload-test-"));
     process.env.UPLOAD_PROCESSING_TEMP_DIR = processingTempRoot;
     mocks.createFileReadStream.mockImplementation(() =>
-      Readable.from([Buffer.from([1, 2, 3, 4])]),
+      Readable.from([pdfBytes]),
     );
     mocks.copyFile.mockResolvedValue(undefined);
     mocks.officeFileToPdf.mockResolvedValue("/tmp/converted.pdf");
@@ -312,9 +338,103 @@ describe("upload processing", () => {
     });
   });
 
+  it.each([
+    ["nothing", pdfBytes],
+    ["whitespace", Buffer.concat([Buffer.from(" \t\r\n\f"), pdfBytes])],
+    ["a UTF-8 BOM", Buffer.concat([Buffer.from("\uFEFF"), pdfBytes])],
+    ["whitespace and a BOM", Buffer.concat([Buffer.from(" \n\uFEFF\t"), pdfBytes])],
+    // pdf.js accepts a header anywhere in the first 1024 bytes, so a
+    // preamble that ends exactly there must still pass.
+    ["a short binary preamble", Buffer.concat([Buffer.from("junk"), pdfBytes])],
+    ["a preamble that fills the window", Buffer.concat([Buffer.from("x".repeat(1024 - "%PDF-".length)), pdfBytes])],
+    // Past the window the signature search misses, but pdf.js still opens
+    // the file by rebuilding its cross-reference table, so it must pass too.
+    ["a preamble longer than the window, on a file pdf.js can parse", Buffer.concat([Buffer.from("x".repeat(1020)), buildOnePagePdf()])],
+  ])(
+    "accepts a PDF preceded by %s",
+    async (_label, bytes) => {
+      mocks.createFileReadStream.mockImplementation(() => Readable.from([bytes]));
+      const db = fakeDb({ documents: [{ data: { id: baseFile.resource_id } }] });
+      await processUploadFile(db as never, baseSession, {
+        ...baseFile, expected_size_bytes: bytes.length,
+      });
+      expect(mocks.copyFile).toHaveBeenCalledOnce();
+      expect(mocks.officeFileToPdf).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each([
+    ["an empty file", ""],
+    ["a renamed text file", "plain text"],
+    ["a ZIP container", "PK\u0003\u0004Office bytes"],
+    ["a signature missing its dash", "%PDF"],
+    ["whitespace only", " \uFEFF\n"],
+    // The signature search misses and pdf.js has nothing to parse either.
+    ["a bare header past 1024 bytes with no document behind it", "x".repeat(1024 - "%PDF-".length + 1) + "%PDF-1.7"],
+  ])(
+    "rejects %s before destination writes and removes the artifact",
+    async (_label, content) => {
+      const bytes = Buffer.from(content);
+      mocks.createFileReadStream.mockImplementation(() => Readable.from([bytes]));
+      const db = fakeDb();
+      await expect(processUploadFile(db as never, baseSession, {
+        ...baseFile, expected_size_bytes: bytes.length,
+      })).rejects.toThrow("invalid_pdf_file");
+      expect(db.from).not.toHaveBeenCalled();
+      expect(db.rpc).not.toHaveBeenCalled();
+      expect(mocks.copyFile).not.toHaveBeenCalled();
+      expect(mocks.uploadFileFromPath).not.toHaveBeenCalled();
+      expect(mocks.officeFileToPdf).not.toHaveBeenCalled();
+      expect(await readdir(processingTempRoot)).toEqual([]);
+    },
+  );
+
+  it.each([false, true])("keeps invalid PDFs terminal when already failed=%s", async (alreadyFailed) => {
+    const bytes = Buffer.from("not a PDF");
+    mocks.createFileReadStream.mockImplementation(() => Readable.from([bytes]));
+    const db = scriptedDb([
+      { data: { id: "job-1", session_id: baseSession.id, file_id: baseFile.id, attempts: 1, locked_by: "worker-1" } },
+      { data: baseSession },
+      { data: { ...baseFile, expected_size_bytes: bytes.length,
+        ...(alreadyFailed ? { status: "error", error_code: "invalid_pdf_file" } : {}),
+      } },
+      ...(!alreadyFailed ? [
+        { data: { id: "job-1" } }, // Initial heartbeat.
+        { error: null }, // Processing status.
+        { data: { id: "job-1" } }, // Failure heartbeat.
+        { error: null }, // File error.
+        { error: null }, // Document error.
+        { data: { id: "job-1" } }, // Final heartbeat.
+        { error: null }, // Remove failed document.
+      ] : []),
+      { data: [{ sealed_storage_path: baseFile.sealed_storage_path }] },
+      { data: { id: "job-1" } },
+    ]);
+    await processUploadJob(db as never, "job-1", "worker-1");
+    if (alreadyFailed) {
+      expect(mocks.createFileReadStream).not.toHaveBeenCalled();
+    } else {
+      expect(db.calls).toContainEqual(expect.objectContaining({
+        table: "upload_session_files", operation: "update",
+        payload: expect.objectContaining({ status: "error", error_code: "invalid_pdf_file" }),
+      }));
+    }
+    expect(db.calls.some((call) => (call.payload as { status?: string })?.status === "queued")).toBe(false);
+    expect(db.calls).toContainEqual(expect.objectContaining({
+      table: "upload_processing_jobs", operation: "update",
+      payload: expect.objectContaining({ status: "completed", error_code: "partial_failure" }),
+    }));
+    expect(mocks.deleteFile).toHaveBeenCalledWith(baseFile.sealed_storage_path);
+    expect(mocks.copyFile).not.toHaveBeenCalled();
+    expect(db.remaining).toHaveLength(0);
+  });
+
   it("converts Office files from temporary paths and streams the PDF upload", async () => {
+    const officeBytes = Buffer.from([1, 2, 3, 4]);
+    mocks.createFileReadStream.mockImplementation(() => Readable.from([officeBytes]));
     const officeFile = {
       ...baseFile,
+      expected_size_bytes: officeBytes.length,
       filename: "contract.docx",
       file_type: "docx",
       content_type:
@@ -330,7 +450,7 @@ describe("upload processing", () => {
     mocks.officeFileToPdf.mockImplementation(
       async (inputPath: string, outputDirectory: string) => {
         expect(inputPath).toBe(join(outputDirectory, "source.docx"));
-        expect(await readFile(inputPath)).toEqual(Buffer.from([1, 2, 3, 4]));
+        expect(await readFile(inputPath)).toEqual(officeBytes);
         return join(outputDirectory, "source.pdf");
       },
     );
@@ -347,8 +467,11 @@ describe("upload processing", () => {
 
   it("keeps the upload and reports a missing LibreOffice once, as a warning grouped by file type", async () => {
     // MIKE-BACKEND-9: the worker on a host without soffice.
+    const officeBytes = Buffer.from([1, 2, 3, 4]);
+    mocks.createFileReadStream.mockImplementation(() => Readable.from([officeBytes]));
     const officeFile = {
       ...baseFile,
+      expected_size_bytes: officeBytes.length,
       filename: "PRIVATE_NAME.docx",
       file_type: "docx",
       content_type:
@@ -504,6 +627,8 @@ describe("upload processing", () => {
   });
 
   it.each([false, undefined])("replaces DOCX bytes with generate_pdf=%s and invalidates obsolete renditions", async (generatePdf) => {
+    const officeBytes = Buffer.from([1, 2, 3, 4]);
+    mocks.createFileReadStream.mockImplementation(() => Readable.from([officeBytes]));
     const db = scriptedDb([
       { data: { id: "v", storage_path: "old/source.docx", pdf_storage_path: "old/rendition.pdf", content_sha256: "a".repeat(64) } },
       { data: { id: "v" } },
@@ -515,7 +640,13 @@ describe("upload processing", () => {
         document_id: "doc", version_id: "v", expected_content_sha256: "a".repeat(64),
         ...(generatePdf === undefined ? {} : { generate_pdf: generatePdf }),
       },
-    }, { ...baseFile, filename: "edited.docx", file_type: "docx" })).toEqual({ id: "v" });
+    }, {
+      ...baseFile,
+      filename: "edited.docx",
+      file_type: "docx",
+      content_type: "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+      expected_size_bytes: officeBytes.length,
+    })).toEqual({ id: "v" });
 
     expect(mocks.copyFile).toHaveBeenCalledOnce();
     expect(mocks.officeFileToPdf).toHaveBeenCalledTimes(generatePdf === false ? 0 : 1);
@@ -525,7 +656,7 @@ describe("upload processing", () => {
       payload: expect.objectContaining({
         storage_path: expect.stringMatching(/\/versions\/[^/]+\.docx$/),
         filename: "edited.docx",
-        content_sha256: createHash("sha256").update(Buffer.from([1, 2, 3, 4])).digest("hex"),
+        content_sha256: createHash("sha256").update(officeBytes).digest("hex"),
         pdf_storage_path: generatePdf === false ? null : expect.stringContaining("converted-pdfs/"),
         page_count: null,
       }),
@@ -556,7 +687,7 @@ describe("upload processing", () => {
   });
 
   it("treats an already-committed editor save as a successful retry", async () => {
-    const current = { id: "v", storage_path: "saved/key", content_sha256: createHash("sha256").update(Buffer.from([1, 2, 3, 4])).digest("hex") };
+    const current = { id: "v", storage_path: "saved/key", content_sha256: createHash("sha256").update(pdfBytes).digest("hex") };
     const db = fakeDb({ document_versions: [{ data: current }] });
     expect(await processUploadFile(db as never, {
       ...baseSession, purpose: "document_version_replace",
@@ -570,10 +701,13 @@ describe("upload processing", () => {
       { data: { id: "v", storage_path: "old/key", content_sha256: "a".repeat(64) } },
       { data: null, error: null },
     ] });
-    await expect(processUploadFile(db as never, {
+    const thrown = await processUploadFile(db as never, {
       ...baseSession, purpose: "document_version_replace",
       destination: { document_id: "doc", version_id: "v", expected_content_sha256: "a".repeat(64) },
-    }, baseFile)).rejects.toMatchObject({ message: "document_changed", orphanedKeys: expect.arrayContaining([expect.stringContaining("doc")]) });
+    }, baseFile).catch((error: unknown) => error);
+    expect(thrown).toMatchObject({ message: "document_changed", orphanedKeys: expect.arrayContaining([expect.stringContaining("doc")]) });
+    // Named for Sentry: the kind, not the message, is what leaves the process.
+    expect(diagnosticErrorTags(thrown)).toEqual({ error_kind: "upload.document_changed" });
   });
 
   it("hashes legacy stored bytes when the version has no recorded checksum", async () => {
@@ -581,7 +715,7 @@ describe("upload processing", () => {
       { data: { id: "v", storage_path: "old/key", content_sha256: null } },
       { data: { id: "v" } },
     ] });
-    const expected = createHash("sha256").update(Buffer.from([1, 2, 3, 4])).digest("hex");
+    const expected = createHash("sha256").update(pdfBytes).digest("hex");
     expect(await processUploadFile(db as never, {
       ...baseSession, purpose: "document_version_replace",
       destination: { document_id: "doc", version_id: "v", expected_content_sha256: expected },
@@ -595,9 +729,13 @@ describe("upload processing", () => {
   it("refuses to recreate a document deleted while the upload was processing", async () => {
     const db = scriptedDb([{ data: null, error: null }]);
 
-    await expect(
-      processUploadFile(db as never, baseSession, createdFile),
-    ).rejects.toThrow(/document_deleted/);
+    const thrown = await processUploadFile(
+      db as never,
+      baseSession,
+      createdFile,
+    ).catch((error: unknown) => error);
+    expect(thrown).toMatchObject({ message: expect.stringMatching(/document_deleted/) });
+    expect(diagnosticErrorTags(thrown)).toEqual({ error_kind: "upload.document_deleted" });
 
     expect(db.calls.some((call) => call.operation === "upsert")).toBe(false);
     expect(db.rpc).not.toHaveBeenCalled();
@@ -665,6 +803,33 @@ describe("upload processing", () => {
     expect(stamped).toBe(false);
   });
 
+  it("names a sealed object the store cannot serve as upload.sealed_missing", async () => {
+    const { StorageOperationError } = await import("../../../lib/storage.js");
+    const storageError = new StorageOperationError("download", {
+      cause: Object.assign(new Error("gone"), { name: "NoSuchKey" }),
+    });
+    mocks.createFileReadStream.mockImplementation(() =>
+      Readable.from(
+        (async function* () {
+          throw storageError;
+        })(),
+      ),
+    );
+    const db = fakeDb();
+
+    const thrown = await processUploadFile(db as never, baseSession, baseFile)
+      .catch((error: unknown) => error);
+
+    expect(thrown).toMatchObject({ message: "sealed_upload_not_found", kind: "upload.sealed_missing", cause: storageError });
+    // The deepest kind on the chain is the one reported: the store's own
+    // answer, with its code; the wrapper's kind stays on the thrown object.
+    expect(diagnosticErrorTags(thrown)).toEqual({
+      error_kind: "storage.download_failed",
+      storage_operation: "download",
+      failure_code: "NoSuchKey",
+    });
+  });
+
   it("marks a failed created document and safely queues the job for retry", async () => {
     mocks.createFileReadStream.mockImplementation(() =>
       Readable.from(
@@ -697,6 +862,15 @@ describe("upload processing", () => {
     ]);
 
     await processUploadJob(db as never, "job-1", "worker-1");
+
+    // The job names its flow once and marks the stages it passes, so the
+    // failure above arrives in Sentry under documents.upload.complete with
+    // the path it took (claimed, then failed inside process-file).
+    expect(mocks.setOperation).toHaveBeenCalledWith("documents.upload.complete");
+    expect(mocks.markStage.mock.calls.map(([stage]) => stage)).toEqual([
+      "claim",
+      "process-file",
+    ]);
 
     expect(db.calls).toEqual(
       expect.arrayContaining([
@@ -776,6 +950,50 @@ describe("upload processing", () => {
       db,
       expect.arrayContaining([expect.stringContaining(baseFile.resource_id)]),
     );
+  });
+
+  it("names a job, session or file row that is no longer there (MIKE-BACKEND-M)", async () => {
+    const job = {
+      id: "job-1",
+      session_id: baseSession.id,
+      file_id: baseFile.id,
+      attempts: 1,
+      locked_by: "worker-1",
+    };
+    const cases: Array<{ results: QueryResult[]; kind: string; message: string }> = [
+      { results: [{ data: null, error: null }], kind: "upload.job_missing", message: "upload_job_not_found" },
+      {
+        results: [{ data: job, error: null }, { data: null, error: null }],
+        kind: "upload.session_missing",
+        message: "upload_session_not_found",
+      },
+      {
+        results: [{ data: job, error: null }, { data: baseSession, error: null }, { data: null, error: null }],
+        kind: "upload.file_missing",
+        message: "upload_session_file_not_found",
+      },
+    ];
+    for (const { results, kind, message } of cases) {
+      const db = scriptedDb(results);
+      const thrown = await processUploadJob(db as never, "job-1", "worker-1").then(
+        () => null,
+        (error: unknown) => error,
+      );
+      expect(thrown).toBeInstanceOf(Error);
+      expect((thrown as Error).message).toBe(message);
+      expect(diagnosticErrorTags(thrown).error_kind).toBe(kind);
+    }
+    expect(mocks.createFileReadStream).not.toHaveBeenCalled();
+  });
+
+  it("keeps a database failure on the lookup as the failure, with its code", async () => {
+    const db = scriptedDb([{ data: null, error: { code: "57014", message: "canceling statement" } }]);
+    const thrown = await processUploadJob(db as never, "job-1", "worker-1").then(
+      () => null,
+      (error: unknown) => error,
+    );
+    expect(diagnosticErrorTags(thrown).failure_code).toBe("57014");
+    expect(diagnosticErrorTags(thrown).error_kind).toBeUndefined();
   });
 
   it("stops before processing when the database lease has been lost", async () => {
@@ -926,9 +1144,22 @@ describe("upload processing", () => {
         expect.stringMatching(/^\[upload-worker\] iteration recovered after \d+ consecutive failure/),
       );
 
+      // The same failure returning minutes after it was reported is a flap,
+      // not news: one event per class per window, however often it recurs.
       claimError = missingRpc;
       await vi.advanceTimersByTimeAsync(2_000);
+      expect(reports()).toHaveLength(1);
+      expect(consoleWarn).toHaveBeenCalledWith(
+        expect.stringMatching(/^\[upload-worker\] iteration failing again \(Error:PGRST202\)/),
+      );
+
+      // A different failure class is reported at once.
+      claimError = null;
+      await vi.advanceTimersByTimeAsync(31_000);
+      claimError = { ...missingRpc, code: "40P01", message: "deadlock detected" };
+      await vi.advanceTimersByTimeAsync(2_000);
       expect(reports()).toHaveLength(2);
+      expect(diagnosticErrorTags(reports()[1][0]).failure_code).toBe("40P01");
     } finally {
       stop();
       vi.useRealTimers();

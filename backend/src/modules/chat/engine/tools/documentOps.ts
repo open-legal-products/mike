@@ -1,19 +1,16 @@
+import { loadVersionTextState, cachedTextForModel } from "../../../../lib/documentTextCache";
 import {
   applyTrackedEditsToDocument,
   createDocumentVersion,
   loadCurrentVersionBytes,
   readStoredDocumentText,
+  storedDocumentTextCurrent,
 } from "../../../documents/documents.service";
 
 // Tracked-change editing lives in the documents module; the tool dispatcher
 // keeps calling it by its tool-facing name.
 export { applyTrackedEditsToDocument as runEditDocument, loadCurrentVersionBytes };
-import {
-  downloadFile,
-  extractedTextKey,
-  generatedDocKey,
-  uploadFile,
-} from "../../../../lib/storage";
+import { downloadFileIfAvailable, extractedTextKey, generatedDocKey, uploadFile } from "../../../../lib/storage";
 import { convertedPdfKey, docxToPdf } from "../../../../lib/convert";
 import { enqueueConversion } from "../../../../lib/queue/conversionQueue";
 import { enqueueDbJob } from "../../../../lib/dbq/enqueue";
@@ -1137,7 +1134,7 @@ export async function getTurnReadIdentity(params: {
     if (active?.storage_path) {
       return {
         // A reused version keeps its id but moves to a new file.
-        key: `${documentId}:${active.id}:${active.storage_path}`,
+        key: `${documentId}:${active.id}:${active.storage_path}:${active.text_revision ?? ""}`,
         docLabel,
         filename: docInfo.filename,
         documentId,
@@ -1194,6 +1191,9 @@ export function clearTurnReadsForDocument(
   }
 }
 
+// Lifetime is one turn's DocStore; retain only the latest read per label.
+const turnDocumentTexts = new WeakMap<DocStore, Map<string, { key: string; text: string }>>();
+
 export async function readDocumentContent(
   docLabel: string,
   docStore: DocStore,
@@ -1222,9 +1222,7 @@ export async function readDocumentContent(
   const documentId = docIndex?.[docLabel]?.document_id;
   const readIdentity =
     opts?.readIdentity ??
-    (emitEvents
-      ? await getTurnReadIdentity({ docLabel, docStore, docIndex, db })
-      : null);
+    await getTurnReadIdentity({ docLabel, docStore, docIndex, db });
   const versionId =
     readIdentity?.versionId ?? docIndex?.[docLabel]?.version_id ?? null;
   const versionNumber =
@@ -1264,6 +1262,16 @@ export async function readDocumentContent(
       return docInfo.inline_text;
     }
 
+    const cached = turnDocumentTexts.get(docStore)?.get(docLabel);
+    const remember = (text: string) => {
+      if (readIdentity) {
+        const texts = turnDocumentTexts.get(docStore) ?? new Map();
+        texts.set(docLabel, { key: readIdentity.key, text });
+        turnDocumentTexts.set(docStore, texts);
+      }
+      return text;
+    };
+
     // Search results are bound to a content revision, not just a mutable
     // version id. Recheck access before serving persisted text or any bytes.
     if (docInfo.search_source) {
@@ -1271,10 +1279,21 @@ export async function readDocumentContent(
         emitDocRead();
         return "Document could not be read.";
       }
-      const stored = await readStoredDocumentText(db, {
+      const actor = {
         userId: docInfo.search_source.userId, userEmail: docInfo.search_source.userEmail,
         documentId, versionId,
-      });
+      };
+      // A repeat read in the same turn rechecks access and revision, but does
+      // not transfer the (up to 16 MB) text again: the ready text for an
+      // unchanged revision is the text already held.
+      if (readIdentity && cached?.key === readIdentity.key) {
+        const current = await storedDocumentTextCurrent(db, {
+          ...actor, revision: docInfo.search_source.revision,
+        });
+        emitDocRead();
+        return current ? cached.text : "Document could not be read.";
+      }
+      const stored = await readStoredDocumentText(db, actor);
       if (!stored || stored.revision !== docInfo.search_source.revision || stored.status !== "ready") {
         emitDocRead();
         return "Document could not be read.";
@@ -1283,7 +1302,19 @@ export async function readDocumentContent(
       const notice = stored.textless_page_count
         ? `[${stored.textless_page_count} page(s) have no text layer and need OCR. Search coverage is incomplete.]\n\n`
         : "";
-      return notice + (stored.text ?? "");
+      return remember(notice + (stored.text ?? ""));
+    }
+
+    if (readIdentity && cached?.key === readIdentity.key) {
+      emitDocRead();
+      return cached.text;
+    }
+    if (db && documentId && versionId) {
+      const stored = await loadVersionTextState(db, documentId, versionId, readIdentity?.storagePath);
+      if (stored?.text !== null && stored?.text !== undefined) {
+        emitDocRead();
+        return remember(cachedTextForModel(stored));
+      }
     }
 
     return await withExtractionRequest(async (extract) => {
@@ -1309,7 +1340,7 @@ export async function readDocumentContent(
         }
       }
       if (!raw) {
-        raw = await downloadFile(docInfo.storage_path);
+        raw = await downloadFileIfAvailable(docInfo.storage_path);
         if (raw) {
           devLog(
             `[read_document] fallback download from storage_path="${docInfo.storage_path}" (bytes=${raw.byteLength})`,
@@ -1385,7 +1416,7 @@ export async function readDocumentContent(
           versionId && requiresLibreOfficeTextExtraction(fileType)
             ? extractedTextKey(versionId)
             : null;
-        const cached = cacheKey ? await downloadFile(cacheKey) : null;
+        const cached = cacheKey ? await downloadFileIfAvailable(cacheKey) : null;
         if (cached) {
           text = Buffer.from(cached).toString("utf8");
           devLog(
@@ -1426,7 +1457,7 @@ export async function readDocumentContent(
         `[read_document] DONE filename="${docInfo.filename}" finalTextLength=${text.length} firstChars=${JSON.stringify(text.slice(0, 120))}`,
       );
       emitDocRead();
-      return text;
+      return remember(text);
     });
   } catch (err) {
     devLog(
@@ -1498,6 +1529,23 @@ export function normalizeWithMap(
   return { norm: norm.join(""), origIdx };
 }
 
+type NormalizedText = ReturnType<typeof normalizeWithMap>;
+const normalizedByHolder = new WeakMap<object, { text: string; value: NormalizedText }>();
+
+/**
+ * The search form of `text`, built once per holder object and reused while
+ * the holder still carries the same text. Holders are turn-scoped (a DocStore
+ * entry, a cached case opinion), so nothing outlives the turn or crosses
+ * users; a changed text (an edit mid-turn) rebuilds it.
+ */
+export function normalizedTextFor(holder: object, text: string): NormalizedText {
+  const cached = normalizedByHolder.get(holder);
+  if (cached && cached.text === text) return cached.value;
+  const value = normalizeWithMap(text);
+  normalizedByHolder.set(holder, { text, value });
+  return value;
+}
+
 function normalizeQuery(q: string): string {
   return q.trim().replace(/\s+/g, " ").toLowerCase();
 }
@@ -1514,9 +1562,11 @@ export function findTextMatches(params: {
   maxResults: number;
   contextChars: number;
   startIndex?: number;
+  /** Precomputed `normalizeWithMap(text)`, e.g. from `normalizedTextFor`. */
+  normalized?: NormalizedText;
 }): { hits: TextMatch[]; totalMatches: number } {
   const { text, query, maxResults, contextChars, startIndex = 0 } = params;
-  const { norm, origIdx } = normalizeWithMap(text);
+  const { norm, origIdx } = params.normalized ?? normalizeWithMap(text);
   const needle = normalizeQuery(query);
   const hits: TextMatch[] = [];
   let totalMatches = 0;
@@ -1646,11 +1696,13 @@ export async function findInDocumentContent(params: {
     });
   }
 
+  // Probes are short and many by design; normalize the text once per turn.
   const { hits, totalMatches } = findTextMatches({
     text,
     query,
     maxResults,
     contextChars,
+    normalized: normalizedTextFor(docInfo, text),
   });
 
   write(

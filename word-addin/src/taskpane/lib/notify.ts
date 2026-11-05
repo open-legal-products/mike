@@ -9,7 +9,7 @@
  * Word, which is why it is an action and not an anchor.
  *
  * The toast, the Retry and the cancellation rule are the web app's own
- * (`@mike/error-notifier`), so a failure reads the same in Word as it does in
+ * (`createErrorNotifier` in `@mike/client`), so a failure reads the same in Word as it does in
  * the browser; this file adds only what differs in the pane. Screens must
  * never render a raw `error.message` from the API, a stream, or Office.js.
  */
@@ -18,14 +18,13 @@ import {
   describeError,
   type DescribeErrorOptions,
   type UserFacingError,
-} from "@mike/user-error";
-import { retryToastAction, showToast } from "@mike/toast-store";
-import {
+  retryToastAction,
+  showToast,
   createErrorNotifier,
   notifyInfo,
   notifySuccess,
   type NotifyErrorOptions as SharedNotifyErrorOptions,
-} from "@mike/error-notifier";
+} from "@mike/client";
 import {
   isSessionHandledError,
   retryWhenSessionRecovers,
@@ -34,6 +33,11 @@ import {
   SESSION_EXPIRED_MESSAGE,
 } from "./sessionRefresh";
 import { openExternalUrl } from "./openExternalUrl";
+import {
+  isReported,
+  reportError,
+  type AddinOperation,
+} from "./errorReporting";
 import {
   buildSupportDiagnostics,
   supportHandoffResult,
@@ -49,8 +53,8 @@ export {
   isNetworkError,
   type UserErrorKind,
   type UserFacingError,
-} from "@mike/user-error";
-export { notifyInfo, notifySuccess } from "@mike/error-notifier";
+} from "@mike/client";
+export { notifyInfo, notifySuccess } from "@mike/client";
 
 /** Which client the support email came from. */
 export const SUPPORT_PRODUCT = "word-addin";
@@ -58,6 +62,55 @@ export const SUPPORT_PRODUCT = "word-addin";
 export interface NotifyErrorOptions extends SharedNotifyErrorOptions {
   /** Short screen name, e.g. "Workflows". Falls back to the pane URL. */
   page?: string;
+  /**
+   * Static label for the user-level flow, used in the Sentry title and
+   * grouping of a reported fault. New labels need no registration.
+   */
+  operation?: AddinOperation;
+}
+
+export type UserMessageOptions = DescribeErrorOptions;
+
+/**
+ * A server or unclassifiable failure shown to the user is a fault worth an
+ * event, under the same rules as the web app's notice layer: a 4xx, a
+ * cancellation and a transport failure are not (the transport was already
+ * reported under component mike-api), and an error the API client or
+ * `reportWordFailure` already sent — or a wrapper around one, such as the
+ * "outcome unknown" sentence a failed turn is rephrased into — is not sent
+ * again. The server's own code and request id let the event be matched to
+ * the backend's half of the failure; the operation names the flow.
+ */
+function reportRealFault(
+  error: unknown,
+  described: UserFacingError,
+  operation: AddinOperation | undefined,
+): void {
+  if (described.kind !== "unknown" && described.kind !== "server") return;
+  if (isReported(error)) return;
+  if (error && typeof error === "object" && "reportingOwner" in error && error.reportingOwner === "backend") return;
+  reportError(error, {
+    tags: {
+      component: "notify",
+      operation,
+      error_code: described.code ?? undefined,
+      request_id: described.requestId ?? undefined,
+    },
+  });
+}
+
+/**
+ * Report a failure that a screen swallows without showing (a session
+ * re-check, a background load) under the same fault rules as a notice.
+ */
+export function reportFault(
+  error: unknown,
+  options: DescribeErrorOptions & { operation: AddinOperation },
+): UserFacingError {
+  const { operation, ...describeOptions } = options;
+  const described = describeError(error, describeOptions);
+  reportRealFault(error, described, operation);
+  return described;
 }
 
 /** Where a failure was seen: the screen name, else the pane URL. */
@@ -149,7 +202,8 @@ export const notifyError = createErrorNotifier<NotifyErrorOptions>({
   // the request's raw "Not authenticated". After an unreachable check the
   // screen's Retry runs once the check succeeds again; an expired session
   // queues nothing, since the sign-out already dropped that session's work.
-  beforeShow: (_error, described, options) => {
+  beforeShow: (error, described, options) => {
+    reportRealFault(error, described, options.operation);
     if (!isSessionHandledError(described)) return false;
     if (options.onRetry && described.code === SESSION_ERROR_CODES.unreachable) {
       retryWhenSessionRecovers(options.onRetry);
@@ -211,13 +265,7 @@ export function notifySessionCheckFailed(
   });
 }
 
-/**
- * The user-facing sentence for a failure, with nothing shown on screen.
- * Use where a screen already has a place to put an inline message.
- */
-export function userMessage(
-  error: unknown,
-  options: DescribeErrorOptions = {},
-): string {
+/** Pure user-facing sentence for an inline failure; use reportFault to report it. */
+export function userMessage(error: unknown, options: UserMessageOptions = {}): string {
   return describeError(error, options).message;
 }

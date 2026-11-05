@@ -3,11 +3,10 @@ import { pipeline } from "node:stream/promises";
 import { Router, type Response } from "express";
 import { requireAuth, requireMfaIfEnrolled } from "../../middleware/auth";
 import { sendInternalError } from "../../lib/httpError";
-import { safeError } from "../../lib/safeError";
+import { setOperation } from "../../lib/observability/sentry";
 import {
   buildContentDisposition,
   createFileReadStream,
-  deleteFile,
   getSignedUploadUrl,
   headFile,
   storageEnabled,
@@ -28,6 +27,7 @@ import {
   revokePlaybookShare,
   getPlaybookSourceFile,
   addPlaybookSourceFromUpload,
+  removePlaybookObjects,
   addPlaybookSourceFromDocument,
   deletePlaybookSource,
   playbookSourceFileType,
@@ -57,7 +57,22 @@ const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 export const playbooksRouter = Router();
 playbooksRouter.use(requireAuth);
 
+// A malformed id reached Postgres as `uuid = 'not-a-uuid'` (22P02) and
+// surfaced as a 500. An id that cannot exist is not found, before any query.
+playbooksRouter.param("playbookId", (_req, res, next, value: string) => {
+  if (!UUID.test(value))
+    return void res.status(404).json({ detail: "Playbook not found." });
+  next();
+});
+
 const UPLOAD_URL_TTL_SECONDS = 900;
+
+// An optional body id that is present must be a string. Coercing null, a
+// number or an object to "not supplied" would let it skip the uuid check below
+// and change what the request does. Only an omitted id means not supplied.
+function isWrongTypeBodyId(value: unknown): boolean {
+  return value !== undefined && typeof value !== "string";
+}
 
 function sendError(res: Response, error: unknown): void {
   if (error instanceof PlaybookImportError) {
@@ -213,6 +228,7 @@ playbooksRouter.get("/runs", async (req, res) => {
  * buffers the file.
  */
 playbooksRouter.post("/", requireMfaIfEnrolled, async (req, res) => {
+  setOperation("playbooks.save");
   try {
     const body = req.body ?? {};
     res.status(201).json(
@@ -271,12 +287,19 @@ playbooksRouter.post(
         res.locals.userId as string,
       )}${crypto.randomUUID()}.${fileType}`;
       const contentType = PLAYBOOK_IMPORT_CONTENT_TYPES[fileType];
-      const uploadUrl = await getSignedUploadUrl(
-        storageKey,
-        contentType,
-        sizeBytes,
-        UPLOAD_URL_TTL_SECONDS,
-      );
+      let uploadUrl: string | null;
+      try {
+        uploadUrl = await getSignedUploadUrl(
+          storageKey,
+          contentType,
+          sizeBytes,
+          UPLOAD_URL_TTL_SECONDS,
+        );
+      } catch (error) {
+        // Signing failed (credentials, endpoint): reported once with the
+        // store's code, answered as the same 503 as an unconfigured store.
+        return void sendInternalError(res, error, 503);
+      }
       if (!uploadUrl) {
         return void res
           .status(503)
@@ -295,22 +318,41 @@ playbooksRouter.post(
 );
 
 playbooksRouter.post("/import", requireMfaIfEnrolled, async (req, res) => {
+  setOperation("playbooks.import");
   const userId = res.locals.userId as string;
   // A playbookId replaces that playbook's content instead of adding a new
   // playbook. Ownership is checked inside the import.
+  if (isWrongTypeBodyId(req.body?.playbookId)) {
+    return void res.status(400).json({ detail: "playbookId must be a UUID" });
+  }
+  if (isWrongTypeBodyId(req.body?.documentId)) {
+    return void res.status(400).json({ detail: "documentId must be a UUID" });
+  }
   const playbookId =
     typeof req.body?.playbookId === "string" && req.body.playbookId.trim()
       ? req.body.playbookId.trim()
       : undefined;
+  // Body ids are request input. A value that cannot be a uuid is a 400,
+  // matching how chat and word-chat reject a malformed id, before any query.
+  if (playbookId !== undefined && !UUID.test(playbookId)) {
+    return void res.status(400).json({ detail: "playbookId must be a UUID" });
+  }
   const model = typeof req.body?.model === "string" ? req.body.model : "";
   const name = typeof req.body?.name === "string" ? req.body.name : undefined;
+  const documentId =
+    typeof req.body?.documentId === "string" && req.body.documentId
+      ? req.body.documentId
+      : undefined;
+  if (documentId !== undefined && !UUID.test(documentId)) {
+    return void res.status(400).json({ detail: "documentId must be a UUID" });
+  }
   // A saved document is read where it is stored; access is checked there.
-  if (typeof req.body?.documentId === "string" && req.body.documentId) {
+  if (documentId) {
     try {
       const attempt = await queuePlaybookImport({
         userId,
         userEmail: res.locals.userEmail,
-        source: { documentId: req.body.documentId },
+        source: { documentId },
         name,
         model,
         playbookId,
@@ -368,14 +410,9 @@ playbooksRouter.post("/import", requireMfaIfEnrolled, async (req, res) => {
   } catch (error) {
     sendError(res, error);
   } finally {
-    if (staged) {
-      await deleteFile(storageKey).catch((error) => {
-        console.error("[playbooks] staged upload cleanup failed", {
-          storageKey,
-          error: safeError(error),
-        });
-      });
-    }
+    // Only the staged object no job will read; a reported warning, never a
+    // failed response.
+    if (staged) await removePlaybookObjects([storageKey], { stage: "import.cleanup" });
   }
 });
 
@@ -549,12 +586,19 @@ playbooksRouter.post(
       const storageKey = `${playbookSourceUploadPrefix(
         res.locals.userId as string,
       )}${crypto.randomUUID()}.${fileType}`;
-      const uploadUrl = await getSignedUploadUrl(
-        storageKey,
-        contentType,
-        sizeBytes,
-        UPLOAD_URL_TTL_SECONDS,
-      );
+      let uploadUrl: string | null;
+      try {
+        uploadUrl = await getSignedUploadUrl(
+          storageKey,
+          contentType,
+          sizeBytes,
+          UPLOAD_URL_TTL_SECONDS,
+        );
+      } catch (error) {
+        // Signing failed (credentials, endpoint): reported once with the
+        // store's code, answered as the same 503 as an unconfigured store.
+        return void sendInternalError(res, error, 503);
+      }
       if (!uploadUrl) {
         return void res
           .status(503)
@@ -618,14 +662,10 @@ playbooksRouter.post(
     } finally {
       // The playbook keeps its own copy, so the staged object is redundant
       // whatever happened. Only a key minted for this caller is ever touched.
-      if (isStagedPlaybookSourceKey(userId, storageKey)) {
-        await deleteFile(storageKey).catch((error) => {
-          console.error("[playbooks] staged source cleanup failed", {
-            storageKey,
-            error: safeError(error),
-          });
+      if (isStagedPlaybookSourceKey(userId, storageKey))
+        await removePlaybookObjects([storageKey], {
+          ids: { playbook_id: req.params.playbookId },
         });
-      }
     }
   },
 );
@@ -682,6 +722,7 @@ playbooksRouter.delete(
 );
 
 playbooksRouter.put("/:playbookId", requireMfaIfEnrolled, async (req, res) => {
+  setOperation("playbooks.save");
   try {
     res.json(
       await updatePlaybookContent(
@@ -700,6 +741,7 @@ playbooksRouter.put("/:playbookId", requireMfaIfEnrolled, async (req, res) => {
 });
 
 playbooksRouter.post("/:playbookId/review", async (req, res) => {
+  setOperation("playbooks.review");
   try {
     const text =
       typeof req.body?.documentText === "string" ? req.body.documentText : "";
@@ -720,16 +762,23 @@ playbooksRouter.post("/:playbookId/review", async (req, res) => {
       req.body?.reviewScope === "issues"
         ? ("issues" as const)
         : ("full" as const);
+    if (isWrongTypeBodyId(req.body?.documentId)) {
+      return void res.status(400).json({ detail: "documentId must be a UUID" });
+    }
+    const documentId =
+      typeof req.body?.documentId === "string" && req.body.documentId
+        ? req.body.documentId
+        : undefined;
+    if (documentId !== undefined && !UUID.test(documentId)) {
+      return void res.status(400).json({ detail: "documentId must be a UUID" });
+    }
     const run = await queuePlaybookReview({
       userId: res.locals.userId as string,
       userEmail: res.locals.userEmail,
       playbookId: req.params.playbookId,
       documentText: text,
       documentName,
-      documentId:
-        typeof req.body?.documentId === "string" && req.body.documentId
-          ? req.body.documentId
-          : undefined,
+      documentId,
       instructions,
       model,
       reviewMode,

@@ -67,12 +67,10 @@ import {
   startMcpConnectorOAuth,
   updateMcpConnector,
 } from "@/app/lib/mikeApi";
-import { describeError } from "@/app/lib/userFacingError";
+import { reportFault } from "@/app/lib/userFacingError";
 import { SettingsDescription } from "@/app/components/settings/SettingsText";
 import { SettingsHeading } from "@/app/components/settings/SettingsHeading";
-import { PillButtonUI } from "@/shared/ui/PillButtonUI";
-import { LIQUID_GLASS_SUBTLE_CLASS } from "@/shared/ui/LiquidGlassUI";
-import { ToggleSwitchUI } from "@/shared/ui/ToggleSwitchUI";
+import { PillButtonUI, LIQUID_GLASS_SUBTLE_CLASS, ToggleSwitchUI } from "@mike/ui";
 
 /** What the user was doing, for "Couldn't ..." and honest retry text. */
 const CONNECTOR_ACTION_LABELS = {
@@ -97,9 +95,10 @@ const CONNECTOR_ACTION_LABELS = {
  * by re-running the authorization, never shown.
  */
 function connectorMessage(error: unknown, action: string): string {
-  return describeError(error, {
+  return reportFault(error, {
     action,
     fallback: `Mike couldn't ${action}. Try again.`,
+    operation: "settings.connectors",
   }).message;
 }
 

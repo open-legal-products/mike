@@ -19,4 +19,4 @@ export {
 export { handleExtractionExtract, markExtractionJobFailed } from "./tabular.extractionJobs";
 export { sweepStaleGeneratingCells } from "./tabular.maintenance";
 
-export { runExtractionJob, markExtractionFailed } from "./tabular.extraction";
+export { runExtractionJob, markExtractionFailed, extractionJobOperation } from "./tabular.extraction";

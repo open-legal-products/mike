@@ -19,15 +19,17 @@
  *   The backend's comment on that payload says exactly this: flattening it
  *   to "try again" sends the user to retry something that cannot succeed.
  */
-import { UserVisibleError } from "@mike/user-error";
+import { UserVisibleError } from "@mike/client";
 
 export class WordChatTerminalError extends UserVisibleError {
   /** Backend error code, e.g. `invalid_api_key`, when the frame carried one. */
   readonly code: string | null;
+  readonly requestId: string | null;
+  readonly reportingOwner?: "backend";
 
   constructor(
     message: string,
-    frame: { safeToDisplay?: boolean; code?: string | null } = {},
+    frame: { safeToDisplay?: boolean; code?: string | null; requestId?: string | null; reportingOwner?: "backend" } = {},
   ) {
     const usersOwnSetup = frame.safeToDisplay === true;
     super(message, {
@@ -36,6 +38,8 @@ export class WordChatTerminalError extends UserVisibleError {
     });
     this.name = "WordChatTerminalError";
     this.code = frame.code ?? null;
+    this.requestId = frame.requestId ?? null;
+    this.reportingOwner = frame.reportingOwner;
   }
 }
 
@@ -52,6 +56,8 @@ export function terminalErrorFromFrame(
     {
       safeToDisplay: frame.safe_to_display === true,
       code: typeof frame.code === "string" ? frame.code : null,
+      requestId: typeof frame.request_id === "string" ? frame.request_id : null,
+      reportingOwner: frame.reporting_owner === "backend" ? "backend" : undefined,
     },
   );
 }

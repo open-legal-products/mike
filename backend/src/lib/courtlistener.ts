@@ -1,4 +1,4 @@
-import { downloadFile, listFiles } from "./storage";
+import { downloadFileIfAvailable, listFiles } from "./storage";
 import { devLog } from "./log";
 import type { Db } from "./supabase";
 
@@ -828,7 +828,7 @@ async function getBulkCourtlistenerCaseOpinions(args: {
                     clusterId: args.clusterId,
                     key,
                 });
-                const bytes = await downloadFile(key);
+                const bytes = await downloadFileIfAvailable(key);
                 if (!bytes) {
                     devLog("[courtlistener/r2-opinions] download missing", {
                         clusterId: args.clusterId,

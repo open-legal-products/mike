@@ -55,21 +55,15 @@ import {
   type PlaybookSourcesHandle,
 } from "@/app/components/playbooks/PlaybookSources";
 import { createPlaybookRule } from "@/app/components/playbooks/playbookRules";
-import { HeaderButtonUI } from "@/shared/ui/HeaderButtonsUI";
+import { HeaderButtonUI, Dropdown, DropdownContent, DropdownItem, DropdownTrigger } from "@mike/ui";
 import { ConfirmPopup } from "@/app/components/popups/ConfirmPopup";
-import { describeError, notifyError } from "@/app/lib/userFacingError";
+import { reportFault, notifyError } from "@/app/lib/userFacingError";
 import { PageHeader } from "@/app/components/shared/PageHeader";
 import { Modal } from "@/app/components/modals/Modal";
 import { ModalFieldLabel } from "@/app/components/modals/ModalFieldLabel";
 import { ModalSelect } from "@/app/components/modals/ModalSelect";
 import { ModalTextInput } from "@/app/components/modals/ModalTextInput";
-import {
-  Dropdown,
-  DropdownContent,
-  DropdownItem,
-  DropdownTrigger,
-} from "@/shared/ui/dropdown";
-import { modelDisplayName, SETTINGS_MODELS } from "@/shared/lib/modelCatalog";
+import { modelDisplayName, SETTINGS_MODELS } from "@mike/client";
 import { useOllamaModels } from "@/app/hooks/useOllamaModels";
 import { useModelApiKeys } from "@/app/hooks/useModelApiKeys";
 import { buildPlaybookModelOptions } from "@/app/components/playbooks/playbookModelOptions";
@@ -116,6 +110,7 @@ import { AddDocumentsModal } from "@/app/components/modals/AddDocumentsModal";
 import { AccessModal } from "@/app/components/modals/AccessModal";
 import { useAuth } from "@/app/contexts/AuthContext";
 import { userFacingApiError } from "@/app/lib/userFacingError";
+import { settleBulkRequests } from "@/app/lib/bulkRequests";
 import type {
   ContentVisibility,
   Document,
@@ -409,11 +404,9 @@ function PlaybooksWorkspace() {
         ),
       );
     } catch (error) {
+      reportFault(error, { operation: "playbooks.save" });
       setSharesError(
-        userFacingApiError(
-          error,
-          "The change was saved, but this list could not be reloaded. Reopen People to see the current one.",
-        ),
+        userFacingApiError(error, "The change was saved, but this list could not be reloaded. Reopen People to see the current one."),
       );
     }
   }, []);
@@ -468,7 +461,10 @@ function PlaybooksWorkspace() {
       (err) => {
         if (!current) return;
         setAllRunsError(
-          describeError(err, { action: "load the runs" }).message,
+          reportFault(err, {
+            action: "load the runs",
+            operation: "playbooks.review",
+          }).message,
         );
         setAllRuns([]);
       },
@@ -508,22 +504,33 @@ function PlaybooksWorkspace() {
     if (!targets.length) return;
     setBusy("delete-runs");
     try {
-      for (const target of targets) {
-        await deletePlaybookRun(target.id);
+      const { succeeded, failed, firstError } = await settleBulkRequests(
+        targets,
+        (target) => deletePlaybookRun(target.id),
+        // As before: a failure ends the batch and is reported; whatever
+        // was not deleted stays selected for a retry.
+        { stopAfterFailure: true },
+      );
+      const deleted = new Set(succeeded.map((target) => target.id));
+      if (deleted.size) {
         // A retry after a partial failure covers only the runs left.
         setRunDeleteTargets(
-          (current) => current?.filter((item) => item.id !== target.id) ?? null,
+          (current) => current?.filter((item) => !deleted.has(item.id)) ?? null,
         );
         setAllRuns((items) =>
-          (items ?? []).filter((item) => item.id !== target.id),
+          (items ?? []).filter((item) => !deleted.has(item.id)),
         );
         setSelectedRunIds(
-          (ids) => new Set([...ids].filter((id) => id !== target.id)),
+          (ids) => new Set([...ids].filter((id) => !deleted.has(id))),
         );
       }
+      if (failed.length) throw firstError;
       setRunDeleteTargets(null);
     } catch (err) {
-      notifyError(err, { action: "delete the run" });
+      notifyError(err, {
+        action: "delete the run",
+        operation: "playbooks.review",
+      });
     } finally {
       // History drops what was deleted, including on a partial failure.
       notifyPlaybookRunsChanged();
@@ -560,7 +567,12 @@ function PlaybooksWorkspace() {
         current && items.some((item) => item.id === current) ? current : null,
       );
     } catch (err) {
-      setError(describeError(err, { action: "load playbooks" }).message);
+      setError(
+        reportFault(err, {
+          action: "load playbooks",
+          operation: "playbooks.save",
+        }).message,
+      );
     } finally {
       setLoading(false);
     }
@@ -634,7 +646,10 @@ function PlaybooksWorkspace() {
       openPlaybook(created.id);
       return true;
     } catch (err) {
-      notifyError(err, { action: "create the playbook" });
+      notifyError(err, {
+        action: "create the playbook",
+        operation: "playbooks.save",
+      });
       return false;
     } finally {
       setBusy(null);
@@ -686,7 +701,10 @@ function PlaybooksWorkspace() {
       setFollowedImportId(started.id);
     } catch (err) {
       setImportError(
-        describeError(err, { action: "import the playbook" }).message,
+        reportFault(err, {
+          action: "import the playbook",
+          operation: "playbooks.import",
+        }).message,
       );
     } finally {
       setBusy(null);
@@ -751,7 +769,10 @@ function PlaybooksWorkspace() {
     try {
       saved = await getPlaybook(attempt.playbookId);
     } catch (err) {
-      notifyError(err, { action: "open the imported playbook" });
+      notifyError(err, {
+        action: "open the imported playbook",
+        operation: "playbooks.import",
+      });
       if (followed) closeImport();
       return;
     }
@@ -852,18 +873,29 @@ function PlaybooksWorkspace() {
     setBusy("delete");
     try {
       if (!(await autosave.flush())) return;
-      for (const target of targets) {
-        await deletePlaybook(target.id);
-        setPlaybooks((items) => items.filter((item) => item.id !== target.id));
+      const { succeeded, failed, firstError } = await settleBulkRequests(
+        targets,
+        (target) => deletePlaybook(target.id),
+        // As before: a failure ends the batch and is reported; whatever
+        // was not deleted stays selected for a retry.
+        { stopAfterFailure: true },
+      );
+      const deleted = new Set(succeeded.map((target) => target.id));
+      if (deleted.size) {
+        setPlaybooks((items) => items.filter((item) => !deleted.has(item.id)));
         setSelectedIds(
-          (ids) => new Set([...ids].filter((id) => id !== target.id)),
+          (ids) => new Set([...ids].filter((id) => !deleted.has(id))),
         );
       }
+      if (failed.length) throw firstError;
       if (selected) openPlaybook(null, { replace: true });
       setDeleteOpen(false);
       setDeleteTargetId(null);
     } catch (err) {
-      notifyError(err, { action: "delete the playbook" });
+      notifyError(err, {
+        action: "delete the playbook",
+        operation: "playbooks.save",
+      });
     } finally {
       setBusy(null);
     }
@@ -975,8 +1007,9 @@ function PlaybooksWorkspace() {
           );
         } catch (err) {
           failed = true;
-          const error = describeError(err, {
+          const error = reportFault(err, {
             action: "review the document",
+            operation: "playbooks.review",
           }).message;
           setReviewDocuments((items) =>
             items.map((document) =>

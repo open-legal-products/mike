@@ -30,6 +30,8 @@ import { asyncRoute, routerErrorHandler } from "../../middleware/asyncRoute";
 import { createServerSupabase } from "../../lib/supabase";
 import { recordAudit } from "../../lib/audit";
 import { sendInternalError } from "../../lib/httpError";
+import { reportError, setOperation } from "../../lib/observability/sentry";
+import { AppError } from "../../lib/appError";
 import { sendServiceFailure } from "../../lib/serviceResult";
 import {
     AssistantStreamError,
@@ -406,6 +408,7 @@ tabularRouter.post(
     "/:reviewId/regenerate-cell",
     requireAuth,
     asyncRoute(async (req, res) => {
+        setOperation("tabular.cell");
         const { row_id, column_index } = req.body as {
             row_id?: string;
             column_index: number;
@@ -430,6 +433,7 @@ tabularRouter.post(
 
 // POST /tabular-review/:reviewId/generate
 tabularRouter.post("/:reviewId/generate", requireAuth, asyncRoute(async (req, res) => {
+    setOperation("tabular.run");
     const userId = res.locals.userId as string;
     const userEmail = res.locals.userEmail as string | undefined;
     const { reviewId } = req.params;
@@ -723,6 +727,7 @@ tabularRouter.post(
     "/:reviewId/generate/stop",
     requireAuth,
     asyncRoute(async (req, res) => {
+        setOperation("tabular.run");
         const { reviewId } = req.params;
         // Edit standing only — not a usable model or keys for the caller, who
         // may not be the collaborator who started the run.
@@ -761,6 +766,7 @@ tabularRouter.get(
     "/:reviewId/generate/stream",
     requireAuth,
     asyncRoute(async (req, res) => {
+        setOperation("tabular.run");
         const { reviewId } = req.params;
         const db = createServerSupabase();
         const view = await prepareTabularRunView(db, {
@@ -826,6 +832,7 @@ tabularRouter.get(
     "/:reviewId/chats/:chatId/turn/:turnId/stream",
     requireAuth,
     asyncRoute(async (req, res) => {
+        setOperation("tabular.chat");
         const { reviewId, chatId, turnId } = req.params;
         const gate = await ensureReviewChatReadAccess(
             createServerSupabase(),
@@ -858,6 +865,7 @@ tabularRouter.post(
     "/:reviewId/chats/:chatId/turn/:turnId/stop",
     requireAuth,
     asyncRoute(async (req, res) => {
+        setOperation("tabular.chat");
         const { reviewId, chatId, turnId } = req.params;
         const gate = await ensureReviewChatWriteAccess(
             createServerSupabase(),
@@ -944,6 +952,7 @@ tabularRouter.get(
 
 // POST /tabular-review/:reviewId/chat
 tabularRouter.post("/:reviewId/chat", requireAuth, asyncRoute(async (req, res) => {
+    setOperation("tabular.chat");
     const userId = res.locals.userId as string;
     const userEmail = res.locals.userEmail as string | undefined;
     const { reviewId } = req.params;
@@ -1027,7 +1036,17 @@ tabularRouter.post("/:reviewId/chat", requireAuth, asyncRoute(async (req, res) =
                 conversationId: chatId as string,
                 turn: memoryTurn,
             });
-        } catch {
+        } catch (error) {
+            // The lease lapses on its own; the turn is answered either way.
+            // Reported as a warning, with the database's error as the cause.
+            reportError(
+                new AppError(
+                    "memory.consolidation_failed",
+                    "Memory activity lease could not be released",
+                    { cause: error },
+                ),
+                { level: "warning" },
+            );
             console.warn("[memory] tabular activity release failed", {
                 chatId,
             });

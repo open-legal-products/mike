@@ -21,6 +21,11 @@ vi.mock("../../../lib/pdfText", () => ({
 vi.mock("../../../lib/dbq/enqueue", () => ({
   enqueueDbJob: mocks.enqueueDbJob,
 }));
+const sentry = vi.hoisted(() => ({ setOperation: vi.fn() }));
+vi.mock("../../../lib/observability/sentry", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../../lib/observability/sentry")>()),
+  setOperation: sentry.setOperation,
+}));
 import { handleDocumentPrecomputeText } from "../documents.textJobs";
 const job = {
   payload: { versionId: "v", storagePath: "old-source", fileType: "doc" },
@@ -57,6 +62,12 @@ it("retires output if the version was deleted or replaced during extraction", as
   await handleDocumentPrecomputeText(fake.db, job);
   expect(mocks.uploadFile).toHaveBeenCalledOnce();
   expect(mocks.enqueueDbJob).toHaveBeenCalledOnce();
+  fake.done();
+});
+it("names its operation before any work, so a failure anywhere in it is tagged", async () => {
+  const fake = scriptedDb([{ table: "document_versions", data: null }]);
+  await handleDocumentPrecomputeText(fake.db, job);
+  expect(sentry.setOperation).toHaveBeenCalledWith("documents.precompute_text");
   fake.done();
 });
 it("does not write when it cannot establish version liveness", async () => {

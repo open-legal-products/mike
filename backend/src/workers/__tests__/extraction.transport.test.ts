@@ -15,6 +15,7 @@ vi.mock("bullmq", async (importOriginal) => ({
 vi.mock("../../lib/queue/connection", () => ({ getRedisConnection: () => ({}) }));
 vi.mock("../../lib/observability/sentry", () => ({ reportError: vi.fn() }));
 vi.mock("../../modules/tabular/tabular.service", () => ({
+    extractionJobOperation: () => "tabular.row",
     runExtractionJob: mocks.run,
     markExtractionFailed: mocks.failed,
 }));

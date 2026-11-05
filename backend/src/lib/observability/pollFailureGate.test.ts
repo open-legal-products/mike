@@ -1,13 +1,18 @@
 import { describe, expect, it, vi } from "vitest";
 import { createPollFailureGate, pollFailureClass } from "./pollFailureGate";
 
-function gate(now: { t: number }, summaryIntervalMs = 60_000) {
+function gate(
+  now: { t: number },
+  summaryIntervalMs = 60_000,
+  repeatReportIntervalMs?: number,
+) {
   const log = { warn: vi.fn(), log: vi.fn() };
   const g = createPollFailureGate({
     label: "[loop]",
     baseDelayMs: 1_000,
     maxDelayMs: 30_000,
     summaryIntervalMs,
+    repeatReportIntervalMs,
     now: () => now.t,
     log,
   });
@@ -79,7 +84,7 @@ describe("createPollFailureGate", () => {
     );
   });
 
-  it("logs recovery once, resets the backoff, and reports the next failure", () => {
+  it("logs recovery once, resets the backoff, and reports a new class after it", () => {
     const now = { t: 0 };
     const { g, log } = gate(now);
     g.failure(coded("PGRST202"));
@@ -93,8 +98,62 @@ describe("createPollFailureGate", () => {
     );
     expect(g.ready()).toBe(true);
     expect(g.failing).toBe(false);
-    const next = g.failure(coded("PGRST202"));
+    const next = g.failure(coded("ECONNREFUSED"));
     expect(next).toEqual({ report: true, delayMs: 1_000, consecutive: 1 });
+  });
+
+  it("does not re-report a class that flaps back within the repeat window (MIKE-BACKEND-M)", () => {
+    const now = { t: 0 };
+    const { g, log } = gate(now, 60_000, 15 * 60_000);
+    expect(g.failure(coded("40P01")).report).toBe(true);
+    // Fail once, succeed for a while, fail the same way again: 64 of these an
+    // hour were 64 Sentry events saying the same thing.
+    const reported: boolean[] = [];
+    for (let flap = 0; flap < 64; flap++) {
+      now.t += 10_000;
+      g.success();
+      now.t += 1_000;
+      reported.push(g.failure(coded("40P01")).report);
+    }
+    expect(reported).not.toContain(true);
+    expect(g.failing).toBe(true);
+    // The flapping is still visible in the log, at the summary cadence.
+    const flapLines = log.warn.mock.calls.filter(([line]) =>
+      String(line).startsWith("[loop] failing again (Error:40P01)"),
+    );
+    expect(flapLines.length).toBeGreaterThanOrEqual(10);
+    expect(flapLines.length).toBeLessThan(64);
+    expect(String(flapLines[0][0])).toMatch(/not re-reported; next attempt in 1s$/);
+    // Backoff still applies to the first retry after each flap.
+    expect(g.ready()).toBe(false);
+    // Another class is news even mid-flap.
+    now.t += 1_000;
+    g.success();
+    expect(g.failure(coded("PGRST202")).report).toBe(true);
+    // Once the window has passed, the original class is reported again.
+    now.t += 15 * 60_000;
+    g.success();
+    expect(g.failure(coded("40P01")).report).toBe(true);
+  });
+
+  it("remembers the report time of every class, not only the last one", () => {
+    const now = { t: 0 };
+    const { g } = gate(now, 60_000, 15 * 60_000);
+    expect(g.failure(coded("40P01")).report).toBe(true);
+    now.t += 60_000;
+    g.success();
+    expect(g.failure(coded("ECONNREFUSED")).report).toBe(true);
+    // A, then B, then A again inside the window: A is still a repeat.
+    now.t += 60_000;
+    g.success();
+    expect(g.failure(coded("40P01")).report).toBe(false);
+    // B's own window is measured from B's report (t = 60 s), not from A's.
+    now.t = 60_000 + 14 * 60_000;
+    g.success();
+    expect(g.failure(coded("ECONNREFUSED")).report).toBe(false);
+    now.t = 60_000 + 15 * 60_000;
+    g.success();
+    expect(g.failure(coded("ECONNREFUSED")).report).toBe(true);
   });
 
   it("gates ticks until the backed-off retry time", () => {

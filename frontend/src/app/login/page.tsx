@@ -4,24 +4,24 @@ import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import { AuthApiError, login, signup } from "@/app/lib/authApi";
 import { completeUserOnboarding, getUserProfile } from "@/app/lib/mikeApi";
-import { InputUI } from "@/shared/ui/InputUI";
-import { PillButtonUI } from "@/shared/ui/PillButtonUI";
+import {
+    InputUI,
+    PillButtonUI,
+    authGlassCardUIClassName,
+    authInputUIClassName,
+    AuthDividerUI,
+    noticeActionClassName,
+} from "@mike/ui";
 import Link from "next/link";
 import { SiteLogo } from "@/app/components/site-logo";
 import { useAuth } from "@/app/contexts/AuthContext";
 import { cn } from "@/app/lib/utils";
-import {
-    authGlassCardUIClassName,
-    authInputUIClassName,
-} from "@/shared/ui/AuthStylesUI";
-import { AuthDividerUI } from "@/shared/ui/AuthDividerUI";
 import { SsoAuthButton } from "@/app/components/auth/SsoAuthButton";
 import { GoogleAuthButton } from "@/app/components/auth/GoogleAuthButton";
 import { FieldLabel } from "@/app/components/ui/form-field";
 import { WarningPopup } from "@/app/components/popups/WarningPopup";
-import { noticeActionClassName } from "@/shared/ui/NoticeCardUI";
 import {
-    describeError,
+    reportFault,
     supportMailtoFor,
     type UserFacingError,
 } from "@/app/lib/userFacingError";
@@ -54,10 +54,11 @@ const SESSION_WARNING_TITLE = "Couldn't check your session";
 
 /** Classify a login failure into text a person can act on. */
 function describeLoginError(error: unknown): UserFacingError {
-    const described = describeError(error, {
+    const described = reportFault(error, {
         action: "log in",
         codeMessages: LOGIN_ERROR_MESSAGES,
         fallback: "Unable to log in right now. Try again.",
+        operation: "auth.signin",
     });
     // A 429 without a GoTrue code still means "you tried too often".
     return described.kind === "rate_limited"
@@ -157,9 +158,10 @@ export default function LoginPage() {
             // The Retry button failing silently is what made the original
             // session error look permanent; say so instead.
             setSessionError(
-                describeError(caught, {
+                reportFault(caught, {
                     action: "restore your session",
                     fallback: "Unable to restore your session. Try again.",
+                    operation: "auth.session",
                 }),
             );
             setSessionWarningDismissed(false);
@@ -210,10 +212,11 @@ export default function LoginPage() {
             router.push("/assistant");
         } catch (error: unknown) {
             setError(
-                describeError(error, {
+                reportFault(error, {
                     action: "open your local workspace",
                     codeMessages: LOGIN_ERROR_MESSAGES,
                     fallback: "Unable to continue as guest right now. Please try again.",
+                    operation: "auth.signin",
                 }),
             );
         } finally {

@@ -37,6 +37,8 @@ describe("Mike's web search", () => {
 
         await expect(search("s172", { account: null })).rejects.toMatchObject({
             code: "not_configured",
+            // The kind Sentry files it under, carried by the error itself.
+            kind: "web_search.not_configured",
         });
         expect(fetch).not.toHaveBeenCalled();
     });
@@ -95,7 +97,12 @@ describe("Mike's web search", () => {
 
         await expect(
             search("q", { account: { backend, apiKey: "key" } }),
-        ).rejects.toMatchObject({ code });
+        ).rejects.toMatchObject({
+            code,
+            kind: `web_search.${code}`,
+            // The API's status rides on the cause as dependency_status.
+            cause: { kind: "web_search.api_error", status },
+        });
     });
 
     it("spaces out parallel requests made with the same key", async () => {

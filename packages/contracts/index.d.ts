@@ -521,6 +521,14 @@ export type AssistantEvent =
        * "invalid_api_key": the provider rejected the caller's key.
        */
       code?: AssistantErrorCode;
+      /**
+       * The server's request id for the turn that failed (also the
+       * X-Request-ID header), so a user can quote it to support. Only on the
+       * terminal error frame a route writes; never on a persisted event.
+       */
+      request_id?: string;
+      /** Reporting responsibility, not confirmation of telemetry delivery. Absent on older servers. */
+      reporting_owner?: "backend";
     };
 
 export type AssistantErrorCode = "invalid_api_key";

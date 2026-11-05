@@ -685,12 +685,34 @@ describe("scope-bound memory curator tool", () => {
     expect(thrown).toBeInstanceOf(Error);
     const failure = thrown as Error;
     expect(failure.message).toBe("Memory curator scope failed");
-    expect(failure.cause).toEqual({ name: "AI_APICallError", statusCode: 401 });
+    // The cause keeps the classification and the frames of the provider's
+    // stack under a fixed message, so the event says where it failed too.
+    expect(failure.cause).toBeInstanceOf(Error);
+    expect(failure.cause).toMatchObject({
+      name: "AI_APICallError",
+      statusCode: 401,
+      message: "Memory curator scope dependency failed",
+    });
+    expect((failure.cause as Error).stack).toMatch(
+      /^AI_APICallError: Memory curator scope dependency failed\n    at /,
+    );
     expect(diagnosticErrorTags(failure)).toMatchObject({
+      error_kind: "memory.consolidation_failed",
       provider_error: "api_call",
       dependency_status: 401,
     });
     expect(inspect(failure, { depth: 6 })).not.toContain("SECRET");
+  });
+});
+
+describe("memoryScopeFailure frames", () => {
+  it("keeps the dependency's frames when a scope failure is wrapped again at the job level", () => {
+    const provider = Object.assign(new Error("secret"), { name: "InvalidApiKeyError" });
+    provider.stack = "InvalidApiKeyError: secret\n    at callProvider (backend/src/lib/llm/providers.ts:10:5)";
+    const outer = memoryScopeFailure(memoryScopeFailure(provider));
+    const stack = (outer.cause as Error).stack ?? "";
+    expect(stack).toContain("callProvider (backend/src/lib/llm/providers.ts:10:5)");
+    expect(stack).not.toContain("secret");
   });
 });
 
@@ -727,7 +749,23 @@ describe("memoryScopeFailureCause", () => {
     expect(memoryScopeFailureCause(undefined)).toBeUndefined();
     expect(memoryScopeFailureCause("string error")).toBeUndefined();
     expect(memoryScopeFailureCause(new Error("plain"))).toBeUndefined();
-    expect(memoryScopeFailure(new Error("plain")).cause).toBeUndefined();
+    expect(memoryScopeFailure(undefined).cause).toBeUndefined();
+    expect(memoryScopeFailure("string error").cause).toBeUndefined();
+  });
+
+  it("keeps an unclassified failure's frames, never its message", () => {
+    // A plain Error says nothing Sentry can tag, but its stack still says
+    // where the dependency failed; the message line is the one part of a
+    // stack that is text, so it is replaced.
+    const failure = memoryScopeFailure(new Error("plain secret text"));
+    expect(failure.cause).toBeInstanceOf(Error);
+    expect((failure.cause as Error).stack).toMatch(
+      /^Error: Memory curator scope dependency failed\n    at /,
+    );
+    expect(inspect(failure, { depth: 6 })).not.toContain("plain secret text");
+    expect(diagnosticErrorTags(failure)).toEqual({
+      error_kind: "memory.consolidation_failed",
+    });
   });
 });
 

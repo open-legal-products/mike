@@ -1,6 +1,8 @@
 import { describe, expect, it, vi } from "vitest";
 import {
+    collectionRowKeysInVisualOrder,
     collectionSelectAllState,
+    folderAncestorIds,
     folderSelectionRootIds,
     folderTreeIds,
     MULTI_DOCUMENT_DRAG_TYPE,
@@ -8,6 +10,7 @@ import {
     SINGLE_DOCUMENT_DRAG_TYPE,
     writeDocumentDragPayload,
 } from "./docTableSelection";
+import { indexById } from "./idCollections";
 
 describe("DocTable folder selection", () => {
     const folders = [
@@ -175,5 +178,63 @@ describe("DocTable document drag payload", () => {
                     type === SINGLE_DOCUMENT_DRAG_TYPE ? "legacy" : "",
             }),
         ).toEqual(["legacy"]);
+    });
+});
+
+describe("collectionRowKeysInVisualOrder", () => {
+    function rowsAt(tops: number[]) {
+        const measured = { count: 0 };
+        const table = document.createElement("div");
+        const rows = tops.map((top, index) => {
+            const row = table.appendChild(document.createElement("div"));
+            row.dataset.collectionRowKey = `document:${index}`;
+            row.getBoundingClientRect = () => {
+                measured.count++;
+                return { top } as DOMRect;
+            };
+            return row;
+        });
+        return { rows, measured };
+    }
+
+    it("orders by on-screen top, keeping document order on ties", () => {
+        const { rows } = rowsAt([30, 10, 30, 0]);
+        expect(collectionRowKeysInVisualOrder(rows)).toEqual([
+            "document:3", "document:1", "document:0", "document:2",
+        ]);
+    });
+
+    it.each([100, 400])("measures each of %i rows once", (n) => {
+        const { rows, measured } = rowsAt(
+            Array.from({ length: n }, (_, i) => (i * 7919) % n),
+        );
+        expect(collectionRowKeysInVisualOrder(rows)).toHaveLength(n);
+        expect(measured.count).toBe(n);
+    });
+});
+
+describe("folderAncestorIds", () => {
+    it("collects each start folder and its ancestors, ignoring roots and cycles", () => {
+        const folders = indexById([
+            { id: "root", parent_folder_id: null },
+            { id: "mid", parent_folder_id: "root" },
+            { id: "leaf", parent_folder_id: "mid" },
+            { id: "a", parent_folder_id: "b" },
+            { id: "b", parent_folder_id: "a" },
+        ]);
+        expect([...folderAncestorIds(["leaf", null, undefined], folders)]).toEqual(["leaf", "mid", "root"]);
+        expect([...folderAncestorIds(["a"], folders)]).toEqual(["a", "b"]);
+    });
+
+    it.each([100, 400])("walks a %i-deep chain for every document in it with linear id reads", (n) => {
+        let reads = 0;
+        const folders = Array.from({ length: n }, (_, i) => ({
+            get id() { reads++; return `f${i}`; },
+            parent_folder_id: i ? `f${i - 1}` : null,
+        }));
+        // One selected document in every folder, deepest first.
+        const startIds = folders.map((_, i) => `f${n - 1 - i}`);
+        expect(folderAncestorIds(startIds, indexById(folders)).size).toBe(n);
+        expect(reads).toBeLessThanOrEqual(n);
     });
 });

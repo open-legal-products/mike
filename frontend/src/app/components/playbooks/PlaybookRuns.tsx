@@ -26,16 +26,14 @@ import {
   type PlaybookFinding,
   type PlaybookRun,
 } from "@/app/lib/mikeApi";
-import { describeError } from "@/app/lib/userFacingError";
+import { reportFault } from "@/app/lib/userFacingError";
 import {
   notifyPlaybookRunsChanged,
   setViewedPlaybookRun,
 } from "@/app/lib/playbookRunActivity";
 import { diffWords } from "@/app/lib/wordDiff";
-import { modelDisplayName } from "@/shared/lib/modelCatalog";
-import { PillButtonUI } from "@/shared/ui/PillButtonUI";
-import { TextButtonUI } from "@/shared/ui/TextButtonUI";
-import { TextSlabUI } from "@/shared/ui/TextSlabUI";
+import { modelDisplayName } from "@mike/client";
+import { PillButtonUI, TextButtonUI, TextSlabUI } from "@mike/ui";
 import { ModalSegmentedToggle } from "@/app/components/modals/ModalSegmentedToggle";
 import { PlaybookPanels } from "./PlaybookPanels";
 import {
@@ -175,7 +173,12 @@ export function PlaybookRuns({
       },
       (err) => {
         if (!current) return;
-        setError(describeError(err, { action: "load the runs" }).message);
+        setError(
+          reportFault(err, {
+            action: "load the runs",
+            operation: "playbooks.review",
+          }).message,
+        );
         // A failed poll keeps the runs already loaded, so polling goes on.
         setRuns((existing) => existing ?? []);
       },

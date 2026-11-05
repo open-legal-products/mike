@@ -1,5 +1,6 @@
-import { useEffect, useRef, useState, type ReactNode } from "react";
-import { useReasoningDisclosure } from "@/shared/hooks/useReasoningDisclosure";
+import { useMarkdownCheckpoint } from "./markdownCheckpoint";
+import { memo, useEffect, useRef, useState, type ReactNode } from "react";
+import { useReasoningDisclosure, DocEditBlockUI, DocFindBlockUI, DocReadBlockUI } from "@mike/ui";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { Download, Loader2 } from "lucide-react";
@@ -13,11 +14,6 @@ import { API_BASE } from "@/app/lib/mikeApi";
 import { authenticatedFetch } from "@/app/lib/authEvents";
 import type { AssistantEvent } from "../../shared/types";
 import { FileTypeIcon } from "../../shared/FileTypeIcon";
-import {
-    DocEditBlockUI,
-    DocFindBlockUI,
-    DocReadBlockUI,
-} from "@/shared/ui/DocumentEventBlocksUI";
 import { RESPONSE_GLASS_SURFACE, withoutMarkdownNode } from "./messageStyles";
 
 const THINKING_PHRASES = [
@@ -81,10 +77,13 @@ export function EventBlock({
 export function ReasoningContent({
     text,
     label = "Thought process",
+    streaming = false,
 }: {
     text: string;
     label?: string;
+    streaming?: boolean;
 }) {
+    const {richText, plainTail} = useMarkdownCheckpoint(text, streaming);
     const viewportRef = useRef<HTMLDivElement>(null);
     const contentRef = useRef<HTMLDivElement>(null);
     const [hasMoreBelow, setHasMoreBelow] = useState(false);
@@ -140,19 +139,8 @@ export function ReasoningContent({
                     ref={contentRef}
                     className="text-sm font-serif text-gray-400 prose prose-sm max-w-none [&>*]:text-gray-400 [&>*]:text-sm"
                 >
-                    <ReactMarkdown
-                        remarkPlugins={[remarkGfm]}
-                        components={{
-                            code: (props) => (
-                                <code
-                                    className="font-serif text-gray-600"
-                                    {...withoutMarkdownNode(props)}
-                                />
-                            ),
-                        }}
-                    >
-                        {text}
-                    </ReactMarkdown>
+                    <ReasoningMarkdown text={richText} />
+                    {plainTail && <span className="whitespace-pre-wrap">{plainTail}</span>}
                 </div>
             </div>
             {hasMoreBelow && (
@@ -165,6 +153,22 @@ export function ReasoningContent({
         </div>
     );
 }
+
+const ReasoningMarkdown = memo(function ReasoningMarkdown({text}: {text: string}) {
+    return (<ReactMarkdown
+                        remarkPlugins={[remarkGfm]}
+                        components={{
+                            code: (props) => (
+                                <code
+                                    className="font-serif text-gray-600"
+                                    {...withoutMarkdownNode(props)}
+                                />
+                            ),
+                        }}
+                    >
+                        {text}
+                    </ReactMarkdown>);
+});
 
 export function ReasoningBlock({
     text,
@@ -201,7 +205,7 @@ export function ReasoningBlock({
                         : "Thought process"
                 }
             />
-            {isContentOpen && <ReasoningContent text={text} />}
+            {isContentOpen && <ReasoningContent text={text} streaming={isStreaming} />}
         </EventBlock>
     );
 }

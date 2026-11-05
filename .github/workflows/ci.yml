@@ -50,6 +50,9 @@ jobs:
       - name: Validate package.json and lockfile parse
         run: node -e "for (const f of ['package.json','package-lock.json']) JSON.parse(require('fs').readFileSync(f, 'utf8'))"
 
+      - name: Image publication recovery tests
+        run: node --test ../scripts/publish-images.test.mjs
+
       - run: npm ci
 
       # Runs the suite WITH the coverage-ratchet floors from

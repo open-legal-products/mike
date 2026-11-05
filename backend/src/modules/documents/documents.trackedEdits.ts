@@ -10,6 +10,7 @@ import { applyTrackedEdits, type EditInput } from "../../lib/docxTrackedChanges"
 import { contentSha256, loadActiveVersion } from "../../lib/documentVersions";
 import { buildDownloadUrl } from "../../lib/downloadTokens";
 import { deleteFileBestEffort, downloadFile, uploadFile } from "../../lib/storage";
+import { reportError } from "../../lib/observability/sentry";
 import type { Db } from "../../lib/supabase";
 import { profileAttributionName } from "../../lib/userLookup";
 import {
@@ -116,7 +117,13 @@ export async function applyTrackedEditsToDocument(params: {
   let versionFilename =
     activeVersion?.filename?.trim() || "Untitled document";
 
-  const raw = activeVersion ? await downloadFile(activeVersion.storage_path) : null;
+  let raw: ArrayBuffer | null;
+  try {
+    raw = activeVersion ? await downloadFile(activeVersion.storage_path) : null;
+  } catch (error) {
+    reportError(error, { tags: { component: "documents", operation: "documents.edit" } });
+    return { ok: false, error: "Could not load document bytes." };
+  }
   if (!raw || !activeVersion) return { ok: false, error: "Could not load document bytes." };
   const current = { bytes: Buffer.from(raw), storage_path: activeVersion.storage_path };
 

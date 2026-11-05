@@ -37,47 +37,99 @@ import { withRedisTimeout } from "../../lib/queue/connection";
 // tabular module. Import them ONLY through the module's service facade; do
 // not add further lib -> modules edges (a follow-up will move this sweep's
 // tabular half into the module instead).
-import { finalizeCell, finishGenerationIfIdle } from "./tabular.service";
+import { finishGenerationIfIdle } from "./tabular.shared";
 import { redisEnabled } from "../../lib/dbq/driver";
-import { liveDbJobExists } from "../../lib/dbq/enqueue";
+import { liveDbJobDedupeKeys } from "../../lib/dbq/enqueue";
+import { chunkArray } from "../../lib/arrays";
+import { ID_FILTER_BATCH_SIZE, mutateInBatches, selectInBatches } from "../../lib/batchedQuery";
+import { mapWithConcurrency } from "../../lib/concurrency";
+import { AppError } from "../../lib/appError";
+import { reportError } from "../../lib/observability/sentry";
+
+/**
+ * A sweep query the database refused. supabase-js resolves these as plain
+ * objects, which the console bridge files with no stack and no code; wrapped,
+ * the SQLSTATE rides along as failure_code under one kind. Returns the
+ * reported object so the caller logs that and the bridge files nothing twice.
+ */
+function reportSweepQueryFailure(message: string, cause: unknown): AppError {
+    const failure = new AppError("db.query_failed", message, { cause });
+    reportError(failure, { tags: { component: "stale-sweep" } });
+    return failure;
+}
 
 // Cap one sweep's working set: the query is unbounded otherwise, and each cell
 // costs a Redis lookup. Anything left over is picked up by the next sweep.
 const MAX_GENERATING_CELLS_PER_SWEEP = 500;
 
 /**
- * Is some holder still alive for this review's generation?
+ * Which of these reviews still have a live holder for their generation?
  *
  * The lease is the authoritative liveness signal for tabular work: a running
  * request or worker renews it well inside its window, so an unexpired lease
  * means someone owns the review's "generating" cells and will write their
- * terminal state. Fails SAFE — a lookup error reports "owned" rather than let
- * the sweep stomp a live run.
+ * terminal state. Fails SAFE — a lookup error reports every review as
+ * "owned" rather than let the sweep stomp a live run.
  */
-async function hasActiveGenerationLease(
-    db: Db,
-    reviewId: string,
-): Promise<boolean> {
-    const { data, error } = await db
-        .from("tabular_reviews")
-        .select("active_generation_id, generation_lease_expires_at")
-        .eq("id", reviewId)
-        .maybeSingle();
-    if (error) {
-        console.error("[stale-sweep] review lease lookup failed", {
-            reviewId,
-            error,
-        });
-        return true;
-    }
-    const review = data as {
+async function reviewLeasesHeld(db: Db, reviewIds: string[]): Promise<Set<string>> {
+    type LeaseRow = {
+        id: string;
         active_generation_id?: string | null;
         generation_lease_expires_at?: string | null;
-    } | null;
-    if (!review?.active_generation_id || !review.generation_lease_expires_at)
-        return false;
-    const expiresAt = Date.parse(String(review.generation_lease_expires_at));
-    return Number.isFinite(expiresAt) && expiresAt > Date.now();
+    };
+    let reviews: LeaseRow[];
+    try {
+        reviews = await selectInBatches<LeaseRow>("review lease lookup", reviewIds, (batch) =>
+            db
+                .from("tabular_reviews")
+                .select("id, active_generation_id, generation_lease_expires_at")
+                .in("id", batch),
+        );
+    } catch (error) {
+        console.error("[stale-sweep] review lease lookup failed", {
+            reviews: reviewIds.length,
+            error: reportSweepQueryFailure("Stale-sweep review lease lookup failed", error),
+        });
+        return new Set(reviewIds);
+    }
+    const held = new Set<string>();
+    for (const review of reviews) {
+        if (!review.active_generation_id || !review.generation_lease_expires_at) continue;
+        const expiresAt = Date.parse(String(review.generation_lease_expires_at));
+        if (Number.isFinite(expiresAt) && expiresAt > Date.now()) held.add(review.id);
+    }
+    return held;
+}
+
+/**
+ * Which of these extraction job ids still exist (waiting/active/delayed):
+ * one DB query per 50 ids on the Postgres queue, a few concurrent
+ * lookups on BullMQ. Fails SAFE — an unanswerable lookup counts as live.
+ */
+async function liveExtractionJobs(db: Db, jobIds: string[]): Promise<Set<string>> {
+    const live = new Set<string>();
+    try {
+        if (redisEnabled()) {
+            const found = await mapWithConcurrency(jobIds, 8, async (jobId) =>
+                (await withRedisTimeout("extraction job lookup", () =>
+                    getExtractionQueue().getJob(jobId),
+                ))
+                    ? jobId
+                    : null,
+            );
+            for (const jobId of found) if (jobId) live.add(jobId);
+        } else {
+            for (const batch of chunkArray(jobIds, ID_FILTER_BATCH_SIZE))
+                for (const key of await liveDbJobDedupeKeys(db, batch)) live.add(key);
+        }
+    } catch (error) {
+        console.error("[stale-sweep] extraction job lookup failed", {
+            jobs: jobIds.length,
+            error: reportSweepQueryFailure("Stale-sweep job lookup failed", error),
+        });
+        return new Set(jobIds);
+    }
+    return live;
 }
 
 /**
@@ -97,75 +149,74 @@ export async function sweepStaleGeneratingCells(
         .eq("status", "generating")
         .limit(MAX_GENERATING_CELLS_PER_SWEEP);
     if (error) {
-        console.error("[stale-sweep] cells query failed", error);
+        console.error(
+            "[stale-sweep] cells query failed",
+            reportSweepQueryFailure("Stale-sweep cells query failed", error),
+        );
         return 0;
     }
 
-    const useRedis = redisEnabled();
-    const jobLive = (jobId: string) =>
-        useRedis
-            ? withRedisTimeout("extraction job lookup", () =>
-                  getExtractionQueue().getJob(jobId),
-              ).then((j) => !!j)
-            : liveDbJobExists(db, jobId);
-    // One liveness lookup per (review, row) — full-row jobs cover every cell
-    // of their row; single-cell jobs are checked individually.
-    const rowJobLive = new Map<string, boolean>();
-    // One lease lookup per review.
-    const leaseHeld = new Map<string, boolean>();
-    // Generations we un-stamped a cell of, so their lease can be released.
-    const touchedGenerations = new Map<string, string>();
-    let flipped = 0;
-    for (const cell of (cells ?? []) as {
+    type GeneratingCell = {
         id: string;
         review_id: string;
         row_id: string;
         column_index: number;
         generation_id?: string | null;
-    }[]) {
-        if (!leaseHeld.has(cell.review_id))
-            leaseHeld.set(
-                cell.review_id,
-                await hasActiveGenerationLease(db, cell.review_id),
-            );
-        if (leaseHeld.get(cell.review_id)) continue;
+    };
+    const rows = (cells ?? []) as GeneratingCell[];
 
-        const rowKey = `${cell.review_id}:${cell.row_id}`;
-        if (!rowJobLive.has(rowKey)) {
-            rowJobLive.set(
-                rowKey,
-                await jobLive(extractionJobId(cell.review_id, cell.row_id)),
-            );
-        }
-        if (rowJobLive.get(rowKey)) continue;
-        if (
-            await jobLive(
-                extractionJobId(
-                    cell.review_id,
-                    cell.row_id,
-                    cell.column_index,
-                ),
-            )
-        )
+    // Every question is asked for the whole page at once: the leases of the
+    // page's reviews, then the liveness of every candidate job (each row's
+    // full-row job and each cell's single-cell job), then one guarded write
+    // per generation. Per cell, the old loop paid up to three sequential
+    // lookups plus its own write.
+    const leaseHeld = await reviewLeasesHeld(db, rows.map((cell) => cell.review_id));
+    const candidates = rows.filter((cell) => !leaseHeld.has(cell.review_id));
+    const rowJob = (cell: GeneratingCell) => extractionJobId(cell.review_id, cell.row_id);
+    const cellJob = (cell: GeneratingCell) =>
+        extractionJobId(cell.review_id, cell.row_id, cell.column_index);
+    const live = await liveExtractionJobs(db, [
+        ...new Set(candidates.flatMap((cell) => [rowJob(cell), cellJob(cell)])),
+    ]);
+    const orphaned = candidates.filter(
+        (cell) => !live.has(rowJob(cell)) && !live.has(cellJob(cell)),
+    );
+
+    // The guarded terminal write, batched: clears the stamp, and for a
+    // stamped cell only matches while it still carries the stamp we read.
+    const byGeneration = new Map<string | null, GeneratingCell[]>();
+    for (const cell of orphaned) {
+        const key = cell.generation_id ?? null;
+        byGeneration.set(key, [...(byGeneration.get(key) ?? []), cell]);
+    }
+    // Generations we un-stamped a cell of, so their lease can be released.
+    const touchedGenerations = new Map<string, string>();
+    let flipped = 0;
+    for (const [generationId, group] of byGeneration) {
+        try {
+            await mutateInBatches("stale cell flip", group.map((cell) => cell.id), (batch) => {
+                const query = db
+                    .from("tabular_cells")
+                    .update({ status: "error", content: null, generation_id: null })
+                    .in("id", batch);
+                return generationId ? query.eq("generation_id", generationId) : query;
+            });
+        } catch (flipError) {
+            console.error("[stale-sweep] cell flip failed", {
+                cells: group.length,
+                error: reportSweepQueryFailure("Stale-sweep cell flip failed", flipError),
+            });
             continue;
-
-        // The one guarded terminal writer: clears the stamp, and for a stamped
-        // cell only matches while it still carries the stamp we read.
-        await finalizeCell(db, {
-            reviewId: cell.review_id,
-            rowId: cell.row_id,
-            columnIndex: cell.column_index,
-            status: "error",
-            generationId: cell.generation_id ?? undefined,
-        });
-        if (cell.generation_id)
-            touchedGenerations.set(cell.generation_id, cell.review_id);
-        flipped += 1;
-        console.warn("[stale-sweep] orphaned generating cell flipped to error", {
-            reviewId: cell.review_id,
-            rowId: cell.row_id,
-            columnIndex: cell.column_index,
-        });
+        }
+        for (const cell of group) {
+            if (generationId) touchedGenerations.set(generationId, cell.review_id);
+            flipped += 1;
+            console.warn("[stale-sweep] orphaned generating cell flipped to error", {
+                reviewId: cell.review_id,
+                rowId: cell.row_id,
+                columnIndex: cell.column_index,
+            });
+        }
     }
 
     // Finishing work for a dead generation includes releasing its lease, once

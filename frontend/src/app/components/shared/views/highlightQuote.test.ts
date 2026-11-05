@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { highlightQuote } from "./highlightQuote";
 
 const HIGHLIGHT = ".pdf-text-highlight";
@@ -66,6 +66,16 @@ describe("highlightQuote", () => {
         // Trailing whitespace rides along: the match is computed on stripped
         // text, and the end position maps back past the space.
         expect(highlighted(container)).toEqual(["quick ", "brown "]);
+    });
+
+    it("normalizes immutable page spans once across repeated quote focuses", async () => {
+        const {textDivs, readingOrder} = columnDrawnTable();
+        const reads = textDivs.map(div => vi.spyOn(div, "textContent", "get"));
+        await highlightQuote(textDivs, "Alice $100", readingOrder);
+        reads.forEach(read => read.mockClear());
+        await highlightQuote(textDivs, "Bob $200", readingOrder);
+        expect(reads.every(read => read.mock.calls.length === 0)).toBe(true);
+        reads.forEach(read => read.mockRestore());
     });
 
     it("clears previous highlights before matching again", async () => {

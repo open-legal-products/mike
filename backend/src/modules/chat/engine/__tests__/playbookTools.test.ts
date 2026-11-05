@@ -5,6 +5,11 @@ const playbooks = vi.hoisted(() => ({
   listPlaybooks: vi.fn(),
   reviewWithPlaybook: vi.fn(),
 }));
+const { reportError } = vi.hoisted(() => ({ reportError: vi.fn(() => null) }));
+vi.mock("../../../../lib/observability/sentry", async (importOriginal) => ({
+  ...(await importOriginal<Record<string, unknown>>()),
+  reportError,
+}));
 vi.mock("../../../playbooks/playbooks.service", async (original) => ({
   ...(await original<typeof import("../../../playbooks/playbooks.service")>()),
   ...playbooks,
@@ -244,4 +249,27 @@ it("refuses a document that is not attached, and a turn without a model", async 
     JSON.parse((noModel.toolResults[0] as { content: string }).content).error,
   ).toMatch(/model/i);
   expect(playbooks.reviewWithPlaybook).not.toHaveBeenCalled();
+});
+
+it("reports a tool that failed under chat.tool_failed, with the cause and no tool name in the tags", async () => {
+  const cause = Object.assign(new Error("relation does not exist"), { code: "42P01" });
+  playbooks.listPlaybooks.mockRejectedValue(cause);
+  const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+  const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+
+  const result = await dispatch([call("list_playbooks")]);
+
+  expect((result.toolResults[0] as { content: string }).content).not.toContain(
+    "relation does not exist",
+  );
+  expect(reportError).toHaveBeenCalledTimes(1);
+  expect(reportError).toHaveBeenCalledWith(
+    expect.objectContaining({ kind: "chat.tool_failed", cause }),
+    { tags: { component: "chat-stream", operation: "chat.tool" } },
+  );
+  // The report is the Sentry event; the log keeps its redacted category.
+  expect(warnSpy).toHaveBeenCalledWith("[run_tools] list_playbooks failed", expect.anything());
+  expect(errorSpy).not.toHaveBeenCalled();
+  warnSpy.mockRestore();
+  errorSpy.mockRestore();
 });

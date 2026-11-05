@@ -2,13 +2,14 @@ import { createHash } from "node:crypto";
 import { downloadFile } from "../../lib/storage";
 import { EXTRACTION_MAX_BYTES, ExtractionLimitError, ExtractionBusyError, withBackgroundExtraction } from "../../lib/extraction/isolated";
 import { DbJobDeferredError, type Db, type DbJob } from "../../lib/dbq/types";
-import { safeError } from "../../lib/safeError";
-import { logError } from "../../lib/log";
+import { AppError } from "../../lib/appError";
+import { reportError, setOperation } from "../../lib/observability/sentry";
 
 export { extractDocumentText } from "../../lib/extraction/documentText";
 
 /** Extract and publish only while the queued version revision still matches. */
 export async function handleDocumentExtractText(db: Db, job: DbJob): Promise<void> {
+  setOperation("documents.extract");
   const { versionId, revision } = job.payload;
   if (typeof versionId !== "string" || typeof revision !== "string") return;
   try {
@@ -87,7 +88,17 @@ export async function processDocumentTextInline(db: Db, versionIds?: string[]) {
       const { error: failedError } = await db.from("db_jobs").update({ status: "failed", last_error: "extraction_failed", finished_at: new Date().toISOString() })
         .eq("id", job.id).eq("status", "pending");
       if (failedError) throw failedError;
-      logError("document-text-inline", safeError(err));
+      // No runner reports this path: name the job and the kind here, keep the
+      // real error as the cause (its code reaches failure_code), and log the
+      // same object so the console bridge files no second event.
+      const failure = err instanceof AppError
+        ? err
+        : new AppError("extraction.failed", "document text extraction failed", { cause: err });
+      reportError(failure, {
+        tags: { job_kind: "document.extract_text" },
+        extra: { job_id: job.id },
+      });
+      console.error("[document-text-inline] extraction failed", failure);
     }
   }
 }

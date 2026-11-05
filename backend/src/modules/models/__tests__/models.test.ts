@@ -50,7 +50,7 @@ vi.mock("../../../lib/supabase", () => ({
     })),
 }));
 
-vi.mock("../../user/user.apiKeyStore", () => ({
+vi.mock("../../../lib/providerCredentials/index", () => ({
     getUserApiKeys: (...args: unknown[]) => getUserApiKeys(...args),
     // Personal work runs on the caller's own keys; an organization's on its.
     getEffectiveApiKeys: (userId: string, orgId: unknown, db: unknown) =>
@@ -538,6 +538,34 @@ describe("GET /models/bedrock", () => {
         getUserApiKeys.mockResolvedValue({ bedrock: "private-key", providerSettings: { bedrock: { region: "us-east-1" } } });
     });
     afterEach(() => { vi.unstubAllGlobals(); vi.clearAllMocks(); });
+
+    it("matches inference profiles to text models without rescanning the catalog per profile", async () => {
+        const summaries = Array.from({ length: 300 }, (_, i) => ({
+            modelId: `test.chat-v${i}`, modelArn: arn.replace("chat-v1", `chat-v${i}`), modelName: `Chat ${i}`,
+            outputModalities: ["TEXT"], inferenceTypesSupported: ["PROVISIONED"],
+        }));
+        const profiles = Array.from({ length: 300 }, (_, i) => ({
+            inferenceProfileId: `us.chat-${i}`, inferenceProfileName: `Chat ${i}`, status: "ACTIVE",
+            models: [{ modelArn: arn.replace("us-east-1", "us-west-2").replace("chat-v1", `chat-v${i}`) }],
+        }));
+        fetchMock
+            .mockResolvedValueOnce(Response.json({ modelSummaries: summaries }))
+            .mockResolvedValueOnce(Response.json({ inferenceProfileSummaries: profiles }));
+        const split = vi.spyOn(String.prototype, "split");
+        let response;
+        let splits: number;
+        try {
+            response = await request(app).get("/models/bedrock");
+        } finally {
+            // Read before restoring: mockRestore also clears the recorded calls.
+            splits = split.mock.calls.length;
+            split.mockRestore();
+        }
+        expect(response.body.models).toHaveLength(300);
+        // Linear in models + profiles (the old scan split ~2 ARNs per model
+        // per profile: tens of thousands here).
+        expect(splits).toBeLessThan(5_000);
+    });
 
     it("uses the user's key and region, filters non-text models and paginates profiles", async () => {
         fetchMock.mockResolvedValueOnce(Response.json({ modelSummaries: [

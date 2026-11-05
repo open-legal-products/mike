@@ -19,7 +19,19 @@ vi.mock("../../observability/sentry", async (importOriginal) => {
 
 import { scrubEvent } from "../../observability/sentry";
 import { diagnosticErrorTags } from "../../observability/sentryPrivacy";
-import { createDbJobClaimGate, processClaimedJob, runDbJobTick } from "../runner";
+import { createDbJobClaimGate, createDbJobPool, processClaimedJob } from "../runner";
+/** One claim through the production pool, then wait for the claimed jobs. */
+async function claimAndRun(
+    db: unknown,
+    handlers: Parameters<typeof createDbJobPool>[1],
+    failureHooks: Parameters<typeof createDbJobPool>[2] = {},
+    claimGate = createDbJobClaimGate(),
+) {
+    const pool = createDbJobPool(db as never, handlers, failureHooks, { claimGate });
+    await pool.fill();
+    await pool.drain();
+}
+
 import { DbJobDeferredError, type DbJob } from "../types";
 
 const MISSING_RPC = {
@@ -98,10 +110,10 @@ afterEach(() => {
     vi.useRealTimers();
 });
 
-describe("runDbJobTick claim failure reporting", () => {
+describe("job pool claim failure reporting", () => {
     it("reports the PostgREST code (PGRST202) instead of a code-less re-wrapped message", async () => {
         const db = makeDb(async () => ({ data: null, error: MISSING_RPC }));
-        await runDbJobTick(db as never, {}, {}, createDbJobClaimGate());
+        await claimAndRun(db, {});
 
         expect(claimReports()).toHaveLength(1);
         const reported = claimReports()[0][0];
@@ -113,7 +125,7 @@ describe("runDbJobTick claim failure reporting", () => {
 
     it("logs the reported Error object, so the console bridge drops its copy", async () => {
         const db = makeDb(async () => ({ data: null, error: MISSING_RPC }));
-        await runDbJobTick(db as never, {}, {}, createDbJobClaimGate());
+        await claimAndRun(db, {});
 
         const logged = consoleError.mock.calls.find(
             ([label]) => label === "[dbq] claim failed",
@@ -133,7 +145,7 @@ describe("runDbJobTick claim failure reporting", () => {
         for (let elapsed = 0; elapsed < 10 * 60_000; elapsed += 5_000) {
             if (gate.ready()) {
                 ticks += 1;
-                await runDbJobTick(db as never, {}, {}, gate);
+                await claimAndRun(db, {}, {}, gate);
             }
             await vi.advanceTimersByTimeAsync(5_000);
         }
@@ -150,27 +162,46 @@ describe("runDbJobTick claim failure reporting", () => {
         expect(lines.length).toBeLessThanOrEqual(10);
     });
 
-    it("reports again when the failure class changes, and after a recovery", async () => {
+    it("reports again when the failure class changes, but not when a reported class flaps back", async () => {
+        vi.useFakeTimers();
         const gate = createDbJobClaimGate();
         let error: unknown = MISSING_RPC;
+        // The pool honours the gate's backoff, so each claim here waits out
+        // the longest backoff first, as the poll interval eventually would.
+        const tick = async () => {
+            await vi.advanceTimersByTimeAsync(61_000);
+            await claimAndRun(db, {}, {}, gate);
+        };
         const db = makeDb(async () => ({ data: error ? null : [], error }));
 
-        await runDbJobTick(db as never, {}, {}, gate);
-        await runDbJobTick(db as never, {}, {}, gate);
+        await tick();
+        await tick();
         expect(claimReports()).toHaveLength(1);
 
         error = { code: "ECONNREFUSED", message: "connect ECONNREFUSED" };
-        await runDbJobTick(db as never, {}, {}, gate);
+        await tick();
         expect(claimReports()).toHaveLength(2);
 
         error = null;
-        await runDbJobTick(db as never, {}, {}, gate);
+        await tick();
         expect(consoleLog).toHaveBeenCalledWith(
             expect.stringContaining("[dbq] claim recovered after 3 consecutive failure(s)"),
         );
 
+        // The same class minutes after it was reported is a flap, not news
+        // (MIKE-BACKEND-M): one log line, no second event.
         error = { code: "ECONNREFUSED", message: "connect ECONNREFUSED" };
-        await runDbJobTick(db as never, {}, {}, gate);
+        await tick();
+        expect(claimReports()).toHaveLength(2);
+        expect(consoleWarn).toHaveBeenCalledWith(
+            expect.stringMatching(/^\[dbq\] claim failing again \(Error:ECONNREFUSED\)/),
+        );
+
+        // A class not reported within the window is still news.
+        error = null;
+        await tick();
+        error = { code: "ETIMEDOUT", message: "connect ETIMEDOUT" };
+        await tick();
         expect(claimReports()).toHaveLength(3);
     });
 });

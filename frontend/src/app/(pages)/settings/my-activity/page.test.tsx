@@ -685,7 +685,11 @@ describe("MyActivitySettingsPage", () => {
     await waitFor(() =>
       expect(mockedGetUserExportStatus).toHaveBeenCalledTimes(2),
     );
-    expect(mockedDownloadUserExport).toHaveBeenCalledWith("export-1");
+    // The download starts after the second status call resolves, a tick
+    // later than the call itself; asserting it synchronously raced on CI.
+    await waitFor(() =>
+      expect(mockedDownloadUserExport).toHaveBeenCalledWith("export-1"),
+    );
   });
 
   it("keeps the export modal open with a retryable error when the job fails", async () => {

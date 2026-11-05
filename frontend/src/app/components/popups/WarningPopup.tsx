@@ -2,9 +2,7 @@
 
 import { createPortal } from "react-dom";
 import { useEffect, type ReactNode } from "react";
-import { PillButtonUI } from "@/shared/ui/PillButtonUI";
-import { NoticeCardUI } from "@/shared/ui/NoticeCardUI";
-import { useNoticeStackSlot } from "@/shared/ui/ToastUI";
+import { PillButtonUI, NoticeCardUI, useNoticeStackSlot } from "@mike/ui";
 
 /**
  * A single warning that the calling component opens and closes itself.

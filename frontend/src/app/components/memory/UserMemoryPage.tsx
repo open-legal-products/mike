@@ -5,12 +5,10 @@ import { useUserProfile } from "@/app/contexts/UserProfileContext";
 import { useWorkspace } from "@/app/contexts/WorkspaceContext";
 import { useHasMultipleWorkspaces } from "@/app/hooks/useHasMultipleWorkspaces";
 import { ConfirmPopup } from "@/app/components/popups/ConfirmPopup";
-import { GlassCardUI } from "@/shared/ui/GlassCardUI";
+import { GlassCardUI, PillButtonUI, ToggleSwitchUI } from "@mike/ui";
 import { SettingsHeading } from "@/app/components/settings/SettingsHeading";
 import { SettingsRow } from "@/app/components/settings/SettingsRow";
 import { MarkdownEditor } from "@/app/components/ui/markdown-editor";
-import { PillButtonUI } from "@/shared/ui/PillButtonUI";
-import { ToggleSwitchUI } from "@/shared/ui/ToggleSwitchUI";
 import {
   SettingsDescription,
   SettingsLabel,

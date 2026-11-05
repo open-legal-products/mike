@@ -1,3 +1,5 @@
+import { loadVersionTextState, cachedTextForModel } from "../../lib/documentTextCache";
+import { createTextExtractionCache, type TextExtractionCache } from "../../lib/textExtractionCache";
 // Row loading for the tabular-review module.
 //
 // A review's grid is made of ROWS (tabular_review_rows): a row is either one
@@ -9,8 +11,11 @@
 import { ExtractionBusyError, ExtractionLimitError } from "../../lib/extraction/isolated";
 import { downloadFile } from "../../lib/storage";
 import { attachActiveVersionPaths } from "../../lib/documentVersions";
+import { selectAllByKey, selectAllPages, selectInBatches } from "../../lib/batchedQuery";
 import { filterAccessibleDocumentIds } from "../../lib/access";
 import { extractDocumentMarkdown } from "./tabular.extract";
+import { AppError } from "../../lib/appError";
+import { reportError } from "../../lib/observability/sentry";
 import { type Db } from "./tabular.shared";
 
 export type ReviewRow = {
@@ -40,14 +45,15 @@ export async function fetchSourceDocuments(
     documentIds: string[],
 ): Promise<SourceDocument[]> {
     if (documentIds.length === 0) return [];
-    const { data, error } = await db
-        .from("documents")
-        .select(
-            "id, current_version_id, project_id, folder_id, library_folder_id",
-        )
-        .in("id", documentIds);
-    if (error) throw new Error(error.message);
-    const docs = (data ?? []) as (Omit<
+    const data = await selectInBatches("source documents", documentIds, (batch) =>
+        db
+            .from("documents")
+            .select(
+                "id, current_version_id, project_id, folder_id, library_folder_id",
+            )
+            .in("id", batch),
+    );
+    const docs = data as (Omit<
         SourceDocument,
         "filename" | "file_type"
     > & {
@@ -100,30 +106,52 @@ export async function filterReadableReviewRows(
     };
 }
 
+/**
+ * Every row of a review, sources resolved. Paged and batched: a review can
+ * hold more rows (and far more row sources) than PostgREST's max_rows, and a
+ * truncated read here would silently drop rows from the grid, the generation
+ * snapshot and the review chat.
+ */
 export async function loadReviewRows(
     db: Db,
     reviewId: string,
 ): Promise<ReviewRow[]> {
-    const { data, error } = await db
-        .from("tabular_review_rows")
-        .select("*")
-        .eq("review_id", reviewId)
-        .order("sort_index", { ascending: true });
-    if (error) throw new Error(error.message);
-    const rows = (data ?? []) as ReviewRow[];
+    const rows = await selectAllByKey<ReviewRow>("review rows", () =>
+          db
+            .from("tabular_review_rows")
+            .select("*")
+            .eq("review_id", reviewId));
     if (!rows.length) return rows;
-    const { data: sources, error: sourceError } = await db
-        .from("tabular_review_row_sources")
-        .select("row_id, document_id")
-        .in("row_id", rows.map((row) => row.id))
-        .order("sort_index", { ascending: true });
-    if (sourceError) throw new Error(sourceError.message);
+    rows.sort((a, b) => a.sort_index - b.sort_index || a.id.localeCompare(b.id));
+    type Source = { row_id: string; document_id: string; sort_index: number };
+    // (row_id, document_id) is the primary key: a unique order to page by.
+    const sources = await selectInBatches<Source>(
+        "review row sources",
+        rows.map((row) => row.id),
+        (batch) =>
+            selectAllPages<Source>("review row sources", (_after, limit, offset) =>
+                db
+                    .from("tabular_review_row_sources")
+                    .select("row_id, document_id, sort_index")
+                    .in("row_id", batch)
+                    .order("row_id", { ascending: true })
+                    .order("document_id", { ascending: true })
+                    .range(offset, offset + limit - 1),
+            ),
+    );
+    sources.sort((a, b) => a.sort_index - b.sort_index);
     const byRow = new Map<string, string[]>();
-    for (const source of sources ?? []) {
-        byRow.set(source.row_id, [
-            ...(byRow.get(source.row_id) ?? []),
-            source.document_id,
-        ]);
+    // Offset pages can overlap when a source is inserted between two page
+    // reads (every later row shifts by one), so a (row, document) pair —
+    // the primary key — is taken once.
+    const seen = new Set<string>();
+    for (const source of sources) {
+        const key = `${source.row_id}:${source.document_id}`;
+        if (seen.has(key)) continue;
+        seen.add(key);
+        const ids = byRow.get(source.row_id) ?? [];
+        ids.push(source.document_id);
+        byRow.set(source.row_id, ids);
     }
     return rows.map((row) => ({
         ...row,
@@ -132,19 +160,54 @@ export async function loadReviewRows(
     }));
 }
 
+/**
+ * Every cell of a review (only `columns`, which must include `id`), paged by
+ * id so a review past max_rows cells is read completely instead of as a
+ * plausible-looking prefix.
+ */
+export async function loadReviewCells<T extends Record<string, unknown> & { id: string } = Record<string, unknown> & { id: string }>(
+    db: Db,
+    reviewId: string,
+    columns = "*",
+): Promise<T[]> {
+    return selectAllByKey<T>("review cells", () =>
+        db.from("tabular_cells").select(columns).eq("review_id", reviewId),
+    );
+}
+
 /** Load one row of a review (with its source ids resolved), or null. */
 export async function loadReviewRow(
     db: Db,
     reviewId: string,
     rowId: string,
 ): Promise<ReviewRow | null> {
-    const rows = await loadReviewRows(db, reviewId);
-    return rows.find((row) => row.id === rowId) ?? null;
+    const { data, error } = await db
+        .from("tabular_review_rows")
+        .select("*")
+        .eq("review_id", reviewId)
+        .eq("id", rowId)
+        .maybeSingle();
+    if (error) throw new Error(error.message);
+    if (!data) return null;
+    const row = data as ReviewRow;
+    const { data: sources, error: sourceError } = await db
+        .from("tabular_review_row_sources")
+        .select("document_id")
+        .eq("row_id", rowId)
+        .order("sort_index", { ascending: true });
+    if (sourceError) throw new Error(sourceError.message);
+    return {
+        ...row,
+        source_document_ids: sources?.length
+            ? sources.map((source) => source.document_id)
+            : row.document_id ? [row.document_id] : [],
+    };
 }
 
 export async function loadRowDocumentText(
     db: Db,
     row: ReviewRow,
+    textCache: TextExtractionCache = createTextExtractionCache(),
 ): Promise<string> {
     const sourceIds =
         row.source_document_ids ?? (row.document_id ? [row.document_id] : []);
@@ -156,16 +219,33 @@ export async function loadRowDocumentText(
         let markdown = "";
         if (storagePath) {
             try {
-                markdown = await extractDocumentMarkdown(
-                    () => downloadFile(storagePath),
-                    doc.file_type,
-                );
+                const stored = doc.current_version_id
+                    ? await loadVersionTextState(db, doc.id, doc.current_version_id, storagePath) : null;
+                if (stored?.text !== null && stored?.text !== undefined) {
+                    markdown = cachedTextForModel(stored);
+                } else {
+                    const load = () => extractDocumentMarkdown(() => downloadFile(storagePath), doc.file_type);
+                    // Without a revision we cannot safely reuse a mutable path.
+                    markdown = stored
+                        ? await textCache(`${doc.id}:${doc.current_version_id}:${stored.revision}:${storagePath}`, load)
+                        : await load();
+                }
             } catch (error) {
                 // Do not ask the model to fill cells from a source we refused.
                 if (error instanceof ExtractionBusyError || error instanceof ExtractionLimitError) throw error;
+                // The row goes on with an empty source section; the
+                // parser's or converter's error is the cause, so its
+                // class and code say what failed. Logging the reported
+                // object keeps the console bridge from filing it twice.
+                const failure = new AppError(
+                    "extraction.failed",
+                    "Tabular source document text extraction failed",
+                    { cause: error },
+                );
+                reportError(failure, { extra: { document_id: doc.id } });
                 console.error(
                     `[tabular] extraction error doc=${doc.id}`,
-                    error,
+                    failure,
                 );
             }
         }

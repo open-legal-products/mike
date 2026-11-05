@@ -4,14 +4,15 @@
 // callers recognise it by its code (it may arrive wrapped, e.g. as the cause
 // of undici's "fetch failed") and phrase their own user-facing message.
 
+import { AppError } from "./appError";
+
 export const BLOCKED_DESTINATION_CODE = "ERR_BLOCKED_DESTINATION";
 
-export class BlockedDestinationError extends Error {
+export class BlockedDestinationError extends AppError {
     readonly code = BLOCKED_DESTINATION_CODE;
 
     constructor(message: string, options?: ErrorOptions) {
-        super(message, options);
-        this.name = "BlockedDestinationError";
+        super("mcp.blocked_destination", message, { cause: options?.cause });
     }
 }
 

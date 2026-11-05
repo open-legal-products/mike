@@ -88,6 +88,48 @@ from public.schema_migrations
 order by filename;
 ```
 
+### Upgrade order and rollback
+
+For the SQL/backend/web/Word performance changes in PR #749, upgrade an
+existing installation in this order:
+
+1. Back up the database and retain the currently deployed image tags or Git
+   commit. Let active assistant turns finish before restarting their backend;
+   their resumable stream buffers live in that process.
+2. Apply the new checkout's pending migrations with `migrate.sh up` above,
+   then run `migrate.sh status` and require no pending files. Do not substitute
+   `schema.sql` for this upgrade. The new project-directory search requires
+   `search_project_directory`, and paginated participation requires the new
+   `get_projects_overview` argument. Starting the new backend before these
+   migrations makes those requests fail.
+3. Reload the PostgREST schema cache after the migrations (`notify pgrst,
+   'reload schema';` in SQL), run the workflow sync release job described
+   below, and deploy the backend and any separate workers.
+4. Deploy the frontend and Word add-in. Check project-directory search,
+   document conversion completion, and reopening an existing Word chat.
+
+Compose's `db-init` and `workflow-sync` dependencies perform the database and
+catalog steps before starting the backend. Manual or independently hosted
+components need the same ordering. A new frontend can poll an older backend
+using individual document reads when its batch endpoint is unavailable.
+Older API clients can still request `/projects?include=documents` without
+pagination; new clients should send `limit` and `offset` explicitly.
+
+The migrations in this release retain the previous backend's project RPC
+call shapes. A backend rollback leaves the migration ledger and schema in
+place; do not delete ledger rows or replay old migrations to undo an
+application deployment. Validate a rollback against a copy of the database
+before using it on a deployment that has accepted new writes.
+
+Word's released device-only database remains at IndexedDB version 4, so an
+older pane can still save an answer after another pane loads the new code.
+Existing v4 databases retain their history-listing path; fresh v4 databases
+include the optional recency index. PR preview builds used version 5: the
+new add-in can read those databases in place, but a rollback to a released
+v4-only bundle cannot. Keep a compatible add-in build for those devices.
+Do not clear browser/add-in storage to resolve a version error: device-only
+chats have no durable server copy.
+
 ### Adopting the ledger on an older deployment
 
 Deployments upgraded before `20261009_03_schema_migrations.sql` have no
@@ -363,15 +405,19 @@ and other non-error payloads are blocked. The same boundary applies to
 community and official installations. See the [observability guide](observability.md)
 for the exact policy, source-map behavior, and limitations.
 To opt out, set `SENTRY_DISABLED=true`
-(`NEXT_PUBLIC_SENTRY_DISABLED=true` / `REACT_APP_SENTRY_DISABLED=true` for the
-browser and add-in builds); to use your own Sentry instead, set the matching
-`*_SENTRY_DSN`.
+(`REACT_APP_SENTRY_DISABLED=true` for the add-in build). The web image's
+`NEXT_PUBLIC_SENTRY_DISABLED` is a default for the server and browser tunnel;
+an explicit runtime `SENTRY_DISABLED` overrides it. To use your own Sentry
+instead, set the matching `*_SENTRY_DSN`.
 
 For the compose stack that is `SENTRY_DISABLED=true` in the root `.env`
-(the backend reads it through `env_file`; the frontend build and the Next
-server receive it from compose). To report to your own Sentry instead, set
-`SENTRY_DSN` (backend) and `FRONTEND_SENTRY_DSN` (web app). What is reported,
-what is scrubbed, and how to verify are in [observability.md](observability.md).
+(the backend reads it through `env_file`; the Next server receives it from
+compose and applies it to the browser's reports as well, which all pass
+through it). It therefore works for the published images without a rebuild.
+To report to your own Sentry instead, set `SENTRY_DSN` (backend) and
+`FRONTEND_SENTRY_DSN` (web app; the Next server forwards browser reports
+there at runtime). What is reported, what is scrubbed, and how to verify are
+in [observability.md](observability.md).
 
 ## Authentication email
 
@@ -558,6 +604,47 @@ and [provider administration](https://github.com/supabase/auth/blob/v2.189.0/int
 
 ## Install and run
 
+### Running the published images
+
+Every push to `main` and every `v*` tag builds the backend and web-app images
+once in CI and publishes them to GitHub Container Registry
+(`.github/workflows/publish-images.yml`):
+
+| Image | Tags |
+| --- | --- |
+| `ghcr.io/open-legal-products/mike-backend` | `<version>`, `latest` (releases); `<version>-dev.<run>`, `main` (every commit on main) |
+| `ghcr.io/open-legal-products/mike-frontend` | same |
+
+Pin a version in the compose-root `.env` and pull instead of building. The
+default tag is the version in `/VERSION` of the checkout you run compose from,
+so images and the database migrations they apply always belong together:
+
+```bash
+MIKE_IMAGE_TAG=2.1.0
+docker compose pull
+docker compose up --no-build -d
+```
+
+What you get that a local build does not: Sentry source maps for exactly
+these bundles, so browser errors are readable, and the release
+`mike@<version>+<sha12>` on every event (see
+[observability.md](observability.md#releases)). `latest` and `main` are
+convenience tags for trying things out; production deployments pin a version,
+and a published version is never rebuilt (a fix is a new patch version).
+`docker compose up --build` still builds from the checkout for development and
+for anyone who patches the code; those images report as `mike@0.0.0...` unless
+you pass `MIKE_VERSION` and `GIT_SHA`. The Word add-in image is not published:
+its production build bakes in the deployment's web-app URL, so build it as
+described under [Building the Word add-in image](#building-the-word-add-in-image).
+
+`db-init` (schema and migrations) runs from the backend image rather than from
+files in the checkout, so pulling a newer image and running `docker compose up`
+applies that image's migrations. Forks publish to their own namespace: set
+`MIKE_IMAGE_REPO=ghcr.io/<owner>` to run a fork's images. Only `linux/amd64`
+is published; other architectures build from source. Disconnected sites can
+`docker pull` by digest on a connected machine, `docker save`/`docker load`,
+and run with `SENTRY_DISABLED=true`.
+
 Install dependencies:
 
 ```bash
@@ -613,9 +700,15 @@ To try the image on your own machine over plain `http`, pass
 settings are missing, the fatal startup message lists each variable and
 repeats this choice.
 
+### Building the Word add-in image
+
 The repository includes Dockerfiles for the backend, frontend, and Word add-in.
-Build and run the production add-in host with its public URLs baked into the
-static bundle and its private backend origin supplied only at runtime:
+The add-in image is not published (see "Running the published images"): its
+production build bakes the deployment's public URLs into the static bundle, so
+build it yourself, with its private backend origin supplied only at runtime.
+Pass `MIKE_VERSION=$(cat VERSION)` and `GIT_SHA=$(git rev-parse HEAD)` as
+build arguments too so its Sentry events carry the same release as the images
+it runs beside ([observability.md](observability.md#releases)):
 
 ```bash
 docker build -t mike-word-addin \
@@ -672,8 +765,9 @@ can compile against `packages/contracts`. For a manual backend image build use
 `docker build -f backend/Dockerfile -t mike-backend .` from the root.
 
 Each image reads only what its Dockerfile copies: the frontend image contains
-`frontend/` and `packages/contracts`; the add-in image adds `frontend/src/shared`
-and `frontend/public/icons`, which its bundle includes. In the frontend image
+`frontend/`, `packages/contracts`, `packages/ui` and `packages/client`; the
+add-in image holds `word-addin/`, the same three packages and
+`frontend/public/icons`, which its bundle includes. In the frontend image
 `next build` type-checks `frontend/tsconfig.build.json`, which excludes test
 files, so test fixtures and sibling applications never become build inputs. CI builds all three
 images on every pull request (`.github/workflows/docker-images.yml`), so a

@@ -216,10 +216,26 @@ export function courtlistenerFetchedCaseMetadata(
   };
 }
 
+// Keyed by the opinions array: upserts replace it rather than mutate it, so
+// identity means the same opinions. Returning the same entries lets callers
+// memoize per-opinion work (normalizedTextFor) across tool calls in a turn.
+const opinionTextsByOpinions = new WeakMap<unknown[], CachedCaseOpinionText[]>();
+
 export function cachedCaseOpinionTexts(
   record: CourtlistenerCaseRecord,
 ): CachedCaseOpinionText[] {
-  return (record.opinions ?? [])
+  const raw = record.opinions;
+  if (!raw) return [];
+  let texts = opinionTextsByOpinions.get(raw);
+  if (!texts) {
+    texts = buildCaseOpinionTexts(raw);
+    opinionTextsByOpinions.set(raw, texts);
+  }
+  return texts;
+}
+
+function buildCaseOpinionTexts(opinions: unknown[]): CachedCaseOpinionText[] {
+  return opinions
     .map((raw) => {
       const opinion = recordFromUnknown(raw);
       if (!opinion) return null;

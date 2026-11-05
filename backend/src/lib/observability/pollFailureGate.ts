@@ -15,7 +15,12 @@
 //   - stay quiet for repeats, logging a one-line count at most once per
 //     summary interval (console.warn: breadcrumb, never a Sentry event);
 //   - back the poll interval off exponentially, bounded;
-//   - on the first success after failures, log recovery once and reset.
+//   - on the first success after failures, log recovery once and reset;
+//   - after a recovery, stay quiet about a class that was reported within the
+//     repeat window. A loop that alternates one failed tick with successful
+//     ones (a lease lost on every long job, a deadlocked claim every few
+//     minutes) is flapping, not newly broken: re-reporting it on every flap
+//     filed MIKE-BACKEND-M dozens of times per hour with no new information.
 //
 // The class key is the error's name plus an allowlist-shaped `code` found on
 // the error or its cause chain (PostgREST, SQLSTATE, errno). An error with no
@@ -84,6 +89,11 @@ export type PollFailureGateOptions = {
   maxDelayMs: number;
   /** Minimum spacing of the "still failing" line. Default 60 s. */
   summaryIntervalMs?: number;
+  /**
+   * How long after a class was reported the same class, returning after a
+   * recovery, is treated as a repeat rather than news. Default 15 min.
+   */
+  repeatReportIntervalMs?: number;
   now?: () => number;
   log?: Pick<Console, "warn" | "log">;
 };
@@ -102,6 +112,7 @@ export function createPollFailureGate(
   const now = options.now ?? Date.now;
   const log = options.log ?? console;
   const summaryIntervalMs = options.summaryIntervalMs ?? 60_000;
+  const repeatReportIntervalMs = options.repeatReportIntervalMs ?? 15 * 60_000;
   const baseDelay = () =>
     typeof options.baseDelayMs === "function"
       ? options.baseDelayMs()
@@ -109,9 +120,35 @@ export function createPollFailureGate(
 
   let currentClass: string | null = null;
   let consecutive = 0;
-  let quietSinceSummary = 0;
-  let lastSummaryAt = 0;
   let retryAt = 0;
+  // Failures kept out of Sentry are counted into one log line per summary
+  // interval. A persisting class and a class flapping back keep their own
+  // count and cadence: the first flap after a report is worth a line at once,
+  // the first repeat of a persisting class is not.
+  const quiet = {
+    persisting: { suppressed: 0, lineAt: 0 },
+    flapping: { suppressed: 0, lineAt: 0 },
+  };
+  // Survives success(): when each class was last sent to Sentry, so a flap
+  // back into it is a repeat even with other classes reported in between.
+  // Entries outside the window are dropped on every failure, so the map holds
+  // at most the classes seen within one window.
+  const reportedAt = new Map<string, number>();
+
+  const suppress = (
+    track: { suppressed: number; lineAt: number },
+    at: number,
+    delayMs: number,
+    line: (suppressed: number) => string,
+  ): PollFailureVerdict => {
+    track.suppressed += 1;
+    if (at - track.lineAt >= summaryIntervalMs) {
+      log.warn(line(track.suppressed));
+      track.lineAt = at;
+      track.suppressed = 0;
+    }
+    return { report: false, delayMs, consecutive };
+  };
 
   return {
     failure(error) {
@@ -125,22 +162,28 @@ export function createPollFailureGate(
         base * 2 ** Math.min(consecutive - 1, 20),
       );
       retryAt = at + delayMs;
-      if (failureClass !== currentClass) {
-        currentClass = failureClass;
-        quietSinceSummary = 0;
-        lastSummaryAt = at;
-        return { report: true, delayMs, consecutive };
-      }
-      quietSinceSummary += 1;
-      if (at - lastSummaryAt >= summaryIntervalMs) {
-        log.warn(
+      const seconds = (ms: number) => Math.round(ms / 1000);
+      if (failureClass === currentClass) {
+        return suppress(quiet.persisting, at, delayMs, (n) =>
           `${options.label} still failing (${failureClass}): ${consecutive} consecutive failures, ` +
-            `${quietSinceSummary} not re-reported since the last line; next attempt in ${Math.round(delayMs / 1000)}s`,
+            `${n} not re-reported since the last line; next attempt in ${seconds(delayMs)}s`,
         );
-        lastSummaryAt = at;
-        quietSinceSummary = 0;
       }
-      return { report: false, delayMs, consecutive };
+      currentClass = failureClass;
+      quiet.persisting.suppressed = 0;
+      quiet.persisting.lineAt = at;
+      for (const [reportedClass, when] of reportedAt) {
+        if (at - when >= repeatReportIntervalMs) reportedAt.delete(reportedClass);
+      }
+      const lastReport = reportedAt.get(failureClass);
+      if (lastReport !== undefined) {
+        return suppress(quiet.flapping, at, delayMs, (n) =>
+          `${options.label} failing again (${failureClass}) ${seconds(at - lastReport)}s after it was reported; ` +
+            `${n} recurrence(s) not re-reported; next attempt in ${seconds(delayMs)}s`,
+        );
+      }
+      reportedAt.set(failureClass, at);
+      return { report: true, delayMs, consecutive };
     },
     success() {
       if (currentClass !== null) {
@@ -150,7 +193,7 @@ export function createPollFailureGate(
       }
       currentClass = null;
       consecutive = 0;
-      quietSinceSummary = 0;
+      quiet.persisting.suppressed = 0;
       retryAt = 0;
     },
     ready() {

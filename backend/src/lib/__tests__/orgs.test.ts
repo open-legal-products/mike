@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import { ownerlessRpcResult } from "../../__tests__/helpers/ownerlessRpc";
 import { handoverRpcResult } from "../../__tests__/helpers/handoverRpc";
+import { tableDb } from "../../__tests__/helpers/tableDb";
 import {
     acceptInvitation,
     cancelInvitation,
@@ -34,7 +35,7 @@ function makeDb(initial: Record<string, Row[]>) {
 
     function query(table: string) {
         const filters: (
-            | { type: "eq" | "is"; col: string; val: unknown }
+            | { type: "eq" | "is" | "gt"; col: string; val: unknown }
             | { type: "in"; col: string; vals: unknown[] }
         )[] = [];
         let op: "select" | "insert" | "update" | "delete" = "select";
@@ -49,7 +50,9 @@ function makeDb(initial: Record<string, Row[]>) {
                 filters.every((f) =>
                     f.type === "in"
                         ? f.vals.includes(r[f.col])
-                        : f.type === "is"
+                        : f.type === "gt"
+                          ? String(r[f.col]) > String(f.val)
+                          : f.type === "is"
                           ? (r[f.col] ?? null) === f.val
                           : r[f.col] === f.val,
                 ),
@@ -104,6 +107,10 @@ function makeDb(initial: Record<string, Row[]>) {
             },
             in: (col: string, vals: unknown[]) => {
                 filters.push({ type: "in", col, vals });
+                return builder;
+            },
+            gt: (col: string, val: unknown) => {
+                filters.push({ type: "gt", col, val });
                 return builder;
             },
             order: (col: string, opts?: { ascending?: boolean }) => {
@@ -424,7 +431,8 @@ describe("organization resources", () => {
             ok: true,
             workflows: [{ id: "workflow1" }],
         });
-        expect(db._selects.workflows).toEqual([
+        // Every page asks for the same columns.
+        expect([...new Set(db._selects.workflows)]).toEqual([
             "id, user_id, org_id, visibility, title, type, practice, created_at",
         ]);
     });
@@ -849,6 +857,32 @@ describe("handing over a departing member's work", () => {
         });
     });
 
+    it("retries a removal once when the departure fence deadlocks, then reports a retryable conflict", async () => {
+        const failing = (times: number) => {
+            const db = seed();
+            db._tables.projects = db._tables.projects.filter((row: Row) => row.visibility !== "organization");
+            db._tables.workflows = db._tables.workflows.filter((row: Row) => row.visibility !== "organization");
+            let left = times;
+            const rpc = db.rpc.bind(db);
+            const calls: string[] = [];
+            db.rpc = (name: string, args: unknown) => {
+                if (name === "remove_org_member") calls.push(name);
+                if (name === "remove_org_member" && left-- > 0)
+                    return Promise.resolve({ data: null, error: { code: "40P01", message: "deadlock detected" } });
+                return rpc(name, args);
+            };
+            return { db, calls };
+        };
+        const once = failing(1);
+        await expect(remove(once.db, "alex", "alex")).resolves.toEqual({ ok: true });
+        expect(once.calls).toHaveLength(2);
+        expect(isMember(once.db, "sam")).toBe(false);
+
+        const twice = failing(2);
+        await expect(remove(twice.db, "alex", "alex")).resolves.toMatchObject({ ok: false, kind: "conflict" });
+        expect(twice.calls).toHaveLength(2);
+    });
+
     it("needs no successor when only private work remains", async () => {
         const db = seed();
         db._tables.projects = db._tables.projects.filter((row: Row) => row.visibility !== "organization");
@@ -874,6 +908,19 @@ describe("handing over a departing member's work", () => {
         await expect(getMemberHandover(db, {
             actorId: "alex", orgId: "o1", targetUserId: "sam", departingUserIds: ["dana"],
         })).resolves.toMatchObject({ ok: false, kind: "owner_required" });
+    });
+
+    it("authorizes a bulk preview with one batched role read, not two lookups per person", async () => {
+        const db = seed();
+        const departing = Array.from({ length: 60 }, (_, i) => `member-${i}`);
+        db._tables.org_members.push(...departing.map((user_id) => ({ org_id: "o1", user_id, role: "member" })));
+        const tables: string[] = [];
+        const counting = { ...db, from: (table: string) => (tables.push(table), db.from(table)) };
+        await expect(getMemberHandover(counting, {
+            actorId: "alex", orgId: "o1", targetUserId: "sam", departingUserIds: departing,
+        })).resolves.toMatchObject({ ok: true });
+        // The actor once, then the 61 departing members in two batches.
+        expect(tables.filter((table) => table === "org_members").length).toBeLessThanOrEqual(3);
     });
 
     it("answers that question only to somebody who could remove them", async () => {
@@ -1756,5 +1803,20 @@ describe("owner and admin tiers", () => {
             }),
         ).resolves.toMatchObject({ ok: true, role: "admin" });
         expect(roleOf(db, "orgadmin1")).toBe("admin");
+    });
+});
+
+describe("listOrgResources at scale", () => {
+    it("lists every visible project of an organization past max_rows", async () => {
+        const fake = tableDb({
+            org_members: [{ org_id: "org", user_id: "me", role: "member" }],
+            projects: Array.from({ length: 1200 }, (_, i) => ({
+                id: `p-${String(i).padStart(4, "0")}`, user_id: "someone", org_id: "org",
+                visibility: "organization", archived_at: null, created_at: `2026-01-01T00:${String(i % 60).padStart(2, "0")}:00Z`,
+            })),
+            workflows: [], project_org_access_overrides: [], workflow_org_access_overrides: [],
+        });
+        const result = await listOrgResources(fake.db, { userId: "me", orgId: "org" });
+        expect(result.ok && result.projects.length).toBe(1200);
     });
 });

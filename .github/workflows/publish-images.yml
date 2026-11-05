@@ -1,0 +1,315 @@
+# Publish images: one build per release string, pushed to GHCR together with
+# its Sentry release and source maps.
+#
+# Why this exists: self-hosted installs build their own images, so no source
+# map the maintainers upload can ever match the bundle a self-hoster runs, and
+# nothing tags their events with a release. Publishing the exact bundles whose
+# maps were uploaded fixes both: run the official image and your browser
+# errors arrive readable and attributed to `mike@<version>+<sha12>`.
+# Operators who still build from source keep working as before.
+#
+# Identity. /VERSION is the version under development. A push to main builds
+# the prerelease `<VERSION>-dev.<run>`; a `v<VERSION>` tag builds the release
+# itself. Each image is retained under build-<version> with version/commit
+# labels. Reruns reuse that exact digest; conflicting existing versions and
+# registry lookup failures stop the run instead of permitting a rebuild.
+#
+# Recoverable publication. Version/floating tags and the Sentry release are
+# created only after every build succeeds. Registry writes across repositories
+# are not atomic: retries complete a partial publication from the saved builds.
+# The workflow-wide lock prevents releases on different refs interleaving.
+#
+# Source maps. The Sentry upload runs inside `next build`, behind the
+# Dockerfile's SENTRY_UPLOAD_ENABLED switch (which puts "uploads on" into the
+# cache key). Secret contents are not part of BuildKit's cache key, so the
+# frontend's `app` stage bypasses the cache for new builds (no-cache-filters).
+# Saved builds are reused on retries; their maps are checked via Sentry's API.
+# Upstream publication requires complete Sentry configuration before any
+# registry lookup or build, so a missing secret cannot create a mapless release.
+#
+# Forks. The image owner is the repository owner, so a fork publishes to its
+# own namespace with no setup. Where events go is decided together with where
+# maps go, never silently upstream: the upstream repository bakes the built-in
+# Mike DSNs; a fork that sets FORK_SENTRY_DSN_* variables bakes its own DSNs
+# (and uploads maps when SENTRY_ORG/SENTRY_PROJECT_*/SENTRY_AUTH_TOKEN are set
+# too); a fork that sets nothing publishes images with reporting off.
+#
+# Not here: pull requests (so forks and PRs never see secrets; the build-only
+# check is .github/workflows/docker-images.yml), the Word add-in image (its
+# production build bakes the deployment's web-app URL, so it is not a reusable
+# artifact yet), and linux/arm64 (next build under QEMU is impractically slow).
+#
+# Repository variables / secrets an admin sets (docs/observability.md):
+#   vars.SENTRY_ORG, vars.SENTRY_PROJECT_FRONTEND, vars.SENTRY_PROJECT_BACKEND,
+#   secrets.SENTRY_AUTH_TOKEN (org token, scope org:ci), and for a fork with
+#   its own Sentry: vars.FORK_SENTRY_DSN_FRONTEND, vars.FORK_SENTRY_DSN_BACKEND.
+name: Publish images
+
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  packages: write
+
+# Shared tags span all refs, and saved build discovery must also be serialized.
+concurrency:
+  group: publish-images
+  cancel-in-progress: false
+
+env:
+  REGISTRY: ghcr.io
+  UPSTREAM_OWNER: open-legal-products
+
+jobs:
+  identity:
+    name: Release identity
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      version: ${{ steps.identity.outputs.version }}
+      release: ${{ steps.identity.outputs.release }}
+      owner: ${{ steps.identity.outputs.owner }}
+      tags: ${{ steps.identity.outputs.tags }}
+      is_release: ${{ steps.identity.outputs.is_release }}
+      reporting: ${{ steps.identity.outputs.reporting }}
+      upload_maps: ${{ steps.identity.outputs.upload_maps }}
+    steps:
+      - uses: actions/checkout@v7
+
+      - id: identity
+        env:
+          REF_TYPE: ${{ github.ref_type }}
+          REF_NAME: ${{ github.ref_name }}
+          RUN_NUMBER: ${{ github.run_number }}
+          SHA: ${{ github.sha }}
+          OWNER: ${{ github.repository_owner }}
+          SENTRY_ORG: ${{ vars.SENTRY_ORG }}
+          SENTRY_PROJECT_FRONTEND: ${{ vars.SENTRY_PROJECT_FRONTEND }}
+          SENTRY_PROJECT_BACKEND: ${{ vars.SENTRY_PROJECT_BACKEND }}
+          HAS_TOKEN: ${{ secrets.SENTRY_AUTH_TOKEN != '' }}
+          FORK_DSN_FRONTEND: ${{ vars.FORK_SENTRY_DSN_FRONTEND }}
+          FORK_DSN_BACKEND: ${{ vars.FORK_SENTRY_DSN_BACKEND }}
+        run: |
+          set -euo pipefail
+          file_version="$(tr -d '[:space:]' < VERSION)"
+          if ! [[ "$file_version" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$ ]]; then
+            echo "::error file=VERSION::'$file_version' is not a semver version"; exit 1
+          fi
+          if [[ "$REF_TYPE" == "tag" ]]; then
+            if [[ "$REF_NAME" != "v$file_version" ]]; then
+              echo "::error::tag $REF_NAME does not match VERSION $file_version; bump VERSION first"; exit 1
+            fi
+            version="$file_version"; is_release=true
+            tags="$version"
+            [[ "$version" == *-* ]] || tags="$tags latest"
+          else
+            version="${file_version}-dev.${RUN_NUMBER}"; is_release=false
+            tags="$version"
+            if [[ "$REF_NAME" == "main" ]]; then tags="$tags main"; fi
+          fi
+          owner="$(echo "$OWNER" | tr '[:upper:]' '[:lower:]')"
+          release="mike@${version}+${SHA:0:12}"
+
+          # Where events go (baked into the images) and whether maps are uploaded.
+          if [[ "$owner" == "open-legal-products" ]]; then
+            reporting=upstream
+          elif [[ -n "$FORK_DSN_FRONTEND" && -n "$FORK_DSN_BACKEND" ]]; then
+            reporting=fork
+          else
+            reporting=off
+          fi
+          upload_maps=false
+          if [[ "$reporting" != "off" && -n "${SENTRY_ORG//[[:space:]]/}" \
+                && -n "${SENTRY_PROJECT_FRONTEND//[[:space:]]/}" \
+                && -n "${SENTRY_PROJECT_BACKEND//[[:space:]]/}" && "$HAS_TOKEN" == "true" ]]; then
+            upload_maps=true
+          fi
+          # Saved images are never rebuilt on retry. Refuse an upstream run
+          # before creating one without maps, even for main or manual builds.
+          if [[ "$reporting" == "upstream" && "$upload_maps" != "true" ]]; then
+            echo "::error::Upstream image publication requires secret SENTRY_AUTH_TOKEN and variables SENTRY_ORG, SENTRY_PROJECT_FRONTEND, SENTRY_PROJECT_BACKEND; refusing to publish without source maps"
+            exit 1
+          fi
+
+          {
+            echo "version=$version"; echo "release=$release"; echo "owner=$owner"
+            echo "tags=$tags"; echo "is_release=$is_release"
+            echo "reporting=$reporting"; echo "upload_maps=$upload_maps"
+          } >> "$GITHUB_OUTPUT"
+          echo "release $release -> tags [$tags] (reporting: $reporting, source maps: $upload_maps)"
+
+      - uses: actions/setup-node@v7.1.0
+        with:
+          node-version: 22
+
+      - name: Check existing releases and saved builds
+        env:
+          OWNER: ${{ steps.identity.outputs.owner }}
+          VERSION: ${{ steps.identity.outputs.version }}
+          SHA: ${{ github.sha }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: node scripts/publish-images.mjs prepare
+
+  build:
+    name: ${{ matrix.image }} image
+    needs: identity
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    strategy:
+      # A failed build leaves no release tags (see publish); let the
+      # other image finish so its log is available.
+      fail-fast: false
+      matrix:
+        include:
+          - image: frontend
+            dockerfile: frontend/Dockerfile
+            # New builds must execute `next build` and the upload, even on a cache hit.
+            no_cache_filters: app
+            sentry_project: ${{ vars.SENTRY_PROJECT_FRONTEND }}
+            # Browser settings are inlined at build time (docs/observability.md).
+            reporting_args: |
+              NEXT_PUBLIC_SENTRY_DISABLED=${{ needs.identity.outputs.reporting == 'off' && 'true' || '' }}
+              NEXT_PUBLIC_SENTRY_DSN=${{ needs.identity.outputs.reporting == 'fork' && vars.FORK_SENTRY_DSN_FRONTEND || '' }}
+          - image: backend
+            dockerfile: backend/Dockerfile
+            no_cache_filters: ""
+            sentry_project: ${{ vars.SENTRY_PROJECT_BACKEND }}
+            # Runtime defaults baked into the image; both stay overridable.
+            reporting_args: |
+              SENTRY_DISABLED=${{ needs.identity.outputs.reporting == 'off' && 'true' || '' }}
+              SENTRY_DSN=${{ needs.identity.outputs.reporting == 'fork' && vars.FORK_SENTRY_DSN_BACKEND || '' }}
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: docker/setup-buildx-action@v4
+
+      - uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - uses: actions/setup-node@v7.1.0
+        with:
+          node-version: 22
+
+      # Re-read here too: a failed-job-only retry does not rerun identity.
+      - name: Reuse an existing build on any retry
+        id: saved
+        env:
+          OWNER: ${{ needs.identity.outputs.owner }}
+          VERSION: ${{ needs.identity.outputs.version }}
+          SHA: ${{ github.sha }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: node scripts/publish-images.mjs prepare
+
+      - id: build
+        if: steps.saved.outputs[format('{0}_digest', matrix.image)] == ''
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          file: ${{ matrix.dockerfile }}
+          platforms: linux/amd64
+          # Retain the exact build independently of expiring Actions artifacts.
+          # Never rebuild/overwrite this tag when saved discovery found it.
+          push: true
+          tags: ${{ env.REGISTRY }}/${{ needs.identity.outputs.owner }}/mike-${{ matrix.image }}:build-${{ needs.identity.outputs.version }}
+          labels: |
+            org.opencontainers.image.version=${{ needs.identity.outputs.version }}
+            org.opencontainers.image.revision=${{ github.sha }}
+          build-args: |
+            MIKE_VERSION=${{ needs.identity.outputs.version }}
+            GIT_SHA=${{ github.sha }}
+            SENTRY_UPLOAD_ENABLED=${{ needs.identity.outputs.upload_maps == 'true' && '1' || '0' }}
+            SENTRY_ORG=${{ needs.identity.outputs.upload_maps == 'true' && vars.SENTRY_ORG || '' }}
+            SENTRY_PROJECT=${{ needs.identity.outputs.upload_maps == 'true' && matrix.sentry_project || '' }}
+            ${{ matrix.reporting_args }}
+          secrets: |
+            SENTRY_AUTH_TOKEN=${{ needs.identity.outputs.upload_maps == 'true' && secrets.SENTRY_AUTH_TOKEN || '' }}
+          no-cache-filters: ${{ matrix.no_cache_filters }}
+          # Own cache scope: never share layers with the token-less PR builds.
+          cache-from: type=gha,scope=publish-${{ matrix.image }}
+          cache-to: type=gha,mode=max,scope=publish-${{ matrix.image }}
+
+      - name: Check the source maps reached Sentry
+        if: matrix.image == 'frontend' && needs.identity.outputs.upload_maps == 'true'
+        env:
+          SENTRY_AUTH_TOKEN: ${{ secrets.SENTRY_AUTH_TOKEN }}
+          SENTRY_ORG: ${{ vars.SENTRY_ORG }}
+          SENTRY_PROJECT: ${{ matrix.sentry_project }}
+          RELEASE: ${{ needs.identity.outputs.release }}
+        run: |
+          set -euo pipefail
+          # Debug-ID bundles uploaded by the build plugin are listed per project
+          # with the release they were uploaded under.
+          url="https://sentry.io/api/0/projects/$SENTRY_ORG/$SENTRY_PROJECT/files/artifact-bundles/"
+          body="$(curl -sS --fail-with-body -H "Authorization: Bearer $SENTRY_AUTH_TOKEN" \
+            --get --data-urlencode "query=$RELEASE" "$url")" || {
+            echo "::error::Sentry did not list this project's source maps: $body"; exit 1; }
+          if ! echo "$body" | jq -e 'type == "array"' >/dev/null; then
+            echo "::error::unexpected response shape from $url; cannot verify the upload"; exit 1
+          fi
+          if ! echo "$body" | jq -e --arg r "$RELEASE" 'any(.[]; any(.associations[]?; .release == $r))' >/dev/null; then
+            echo "::error::no source-map bundle for $RELEASE in $SENTRY_ORG/$SENTRY_PROJECT; the build did not upload (check the plugin output above)"
+            exit 1
+          fi
+          echo "source maps present for $RELEASE"
+
+  publish:
+    name: Tag images and record the release
+    needs: [identity, build]
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-node@v7.1.0
+        with:
+          node-version: 22
+
+      - name: Complete publication from the saved digests
+        env:
+          OWNER: ${{ needs.identity.outputs.owner }}
+          VERSION: ${{ needs.identity.outputs.version }}
+          SHA: ${{ github.sha }}
+          TAGS: ${{ needs.identity.outputs.tags }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: node scripts/publish-images.mjs publish
+
+      - name: Create the Sentry release
+        if: needs.identity.outputs.upload_maps == 'true'
+        uses: getsentry/action-release@v3
+        env:
+          SENTRY_AUTH_TOKEN: ${{ secrets.SENTRY_AUTH_TOKEN }}
+          SENTRY_ORG: ${{ vars.SENTRY_ORG }}
+        with:
+          # The exact string the SDKs tag events with (releaseName.cjs).
+          release: ${{ needs.identity.outputs.release }}
+          projects: ${{ vars.SENTRY_PROJECT_FRONTEND }} ${{ vars.SENTRY_PROJECT_BACKEND }}
+          # Publishing an image is not deploying it, so no `environment` here;
+          # a deployment records its own deploy. Commits need the Sentry GitHub
+          # integration; until it is connected they are skipped, not failed.
+          set_commits: skip
+          finalize: true
+
+      - name: Summary
+        env:
+          OWNER: ${{ needs.identity.outputs.owner }}
+          TAGS: ${{ needs.identity.outputs.tags }}
+          RELEASE: ${{ needs.identity.outputs.release }}
+          REPORTING: ${{ needs.identity.outputs.reporting }}
+          UPLOAD_MAPS: ${{ needs.identity.outputs.upload_maps }}
+        run: |
+          {
+            echo "## Published $RELEASE"
+            echo
+            for image in backend frontend; do
+              echo "- \`$REGISTRY/$OWNER/mike-$image\` @ \`$(cat "digests/$image")\`: tags $TAGS"
+            done
+            echo
+            echo "Error reporting baked into the images: $REPORTING. Source maps uploaded: $UPLOAD_MAPS."
+          } >> "$GITHUB_STEP_SUMMARY"

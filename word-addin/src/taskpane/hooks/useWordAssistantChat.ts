@@ -1,3 +1,4 @@
+import { createRedlineStreamProjector } from "../lib/redline";
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import {
   resumeAssistant,
@@ -406,6 +407,7 @@ export function useWordAssistantChat({
         if (!requestIsCurrent()) return;
 
         let streamedContent = "";
+        const redlineProjector = createRedlineStreamProjector();
         let assistantCitations: SavedMessage["citations"];
         // Canonical rows for this turn's tool-proposed edits. A live turn
         // learns an edit exists when the call is forwarded, long before the
@@ -451,6 +453,7 @@ export function useWordAssistantChat({
                 messageId,
                 streamedContent,
                 assistantMessageHasStableId,
+                redlineProjector.projection,
               );
             }
           }
@@ -538,7 +541,11 @@ export function useWordAssistantChat({
                   (error instanceof Error && error.name === "AbortError");
                 if (!cancelled) {
                   reportError(error, {
-                    tags: { component: "word-chat", stage: "tool-result" },
+                    tags: {
+                      component: "word-chat",
+                      operation: "word_chat.turn",
+                      stage: "tool-result",
+                    },
                     extra: { tool_call_id: call.toolCallId, tool: call.name },
                   });
                 }
@@ -802,6 +809,7 @@ export function useWordAssistantChat({
           const onStreamText = (chunk: string): void => {
               if (!requestIsCurrent()) return;
               streamedContent += chunk;
+              redlineProjector.append(chunk);
               assistantEvents = appendAssistantContent(assistantEvents, chunk);
               redlineParsePending = true;
               publishAssistantEvents();
@@ -891,6 +899,7 @@ export function useWordAssistantChat({
               assistantMessageId,
               streamedContent,
               assistantMessageHasStableId,
+              redlineProjector.projection,
             );
             // A malformed block (e.g. no usable replacement or format) never
             // seals; settle its card on "incomplete" rather than leaving the
@@ -938,13 +947,23 @@ export function useWordAssistantChat({
           // state below always builds on the latest transcript.
           publishAssistantEventsNow();
           const sessionIsCurrent = sendIsCurrent();
-          if (!controller.signal.aborted) {
+          if (!controller.signal.aborted && !(error instanceof WordChatTerminalError && error.reportingOwner === "backend")) {
             // The stream failed for a reason other than the user stopping
             // it. The 5xx/network layers already reported transport-level
             // failures; this is the only report for mid-stream `error`
-            // frames and Office.js failures inside the turn.
+            // frames and Office.js failures inside the turn. A terminal
+            // frame's backend code (when it is one the privacy boundary
+            // knows) says which server-side failure ended the turn.
             reportError(error, {
-              tags: { component: "word-chat", storage: wordChatStorage },
+              tags: {
+                component: "word-chat",
+                operation: "word_chat.turn",
+                storage: wordChatStorage,
+                error_code:
+                  error instanceof WordChatTerminalError
+                    ? error.code ?? undefined
+                    : undefined,
+              },
             });
           }
           if (controller.signal.aborted) {
@@ -1031,6 +1050,7 @@ export function useWordAssistantChat({
             ...failureCopy,
             dedupeKey: "assistant-turn",
             page: "Assistant",
+            operation: "word_chat.turn",
             onRetry: retryInput
               ? async () => {
                   if (!sendIsCurrent()) {

@@ -16,7 +16,7 @@ import { REASONING_LEVELS, type ReasoningLevel } from "../../../../lib/llm/types
 import { DELEGATION_MODEL_TIERS, subagentModelFor } from "../../../../lib/modelSelection";
 import { CITATIONS_OPEN_TAG } from "../citations";
 import { spotlight, withDocumentList } from "../contextBuilders";
-import { resolveDocLabel, type DocIndex, type DocStore } from "../types";
+import { createDocLabelResolver, type DocIndex, type DocStore } from "../types";
 import {
     actionLabel,
     keepNewest,
@@ -415,7 +415,8 @@ function labelsOf(documentIds: string[], docIndex: DocIndex): string[] {
 function requestedDocuments(value: unknown, ctx: DelegateContext): string[] | string | undefined {
     if (!Array.isArray(value)) return undefined;
     const requested = value.map(String);
-    const labels = requested.map((id) => resolveDocLabel(id, ctx.docStore, ctx.docIndex));
+    const labelFor = createDocLabelResolver(ctx.docStore, ctx.docIndex);
+    const labels = requested.map(labelFor);
     const unknown = requested.filter((_, i) => !labels[i]);
     if (unknown.length) {
         return `Unknown documents: ${unknown.join(", ")}. Use doc_ids from your document list.`;

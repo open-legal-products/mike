@@ -19,7 +19,31 @@ import request from "supertest";
 // creator-scoped rule as DELETE .../versions/:versionId.
 // ---------------------------------------------------------------------------
 
-const { ensureDocAccess } = vi.hoisted(() => ({ ensureDocAccess: vi.fn() }));
+const { ensureDocAccess, sentry, versionCopy } = vi.hoisted(() => ({
+    ensureDocAccess: vi.fn(),
+    sentry: { reportError: vi.fn(), setOperation: vi.fn() },
+    /** When set, replaces the real createVersionFromDocument for one test. */
+    versionCopy: { override: null as null | (() => Promise<unknown>) },
+}));
+
+vi.mock("../../lib/observability/sentry", async (importOriginal) => {
+    const actual =
+        await importOriginal<typeof import("../../lib/observability/sentry")>();
+    sentry.reportError.mockImplementation(actual.reportError);
+    return { ...actual, reportError: sentry.reportError, setOperation: sentry.setOperation };
+});
+
+vi.mock("../../modules/documents/documents.versions", async (importOriginal) => {
+    const actual =
+        await importOriginal<typeof import("../../modules/documents/documents.versions")>();
+    return {
+        ...actual,
+        createVersionFromDocument: (...args: unknown[]) =>
+            versionCopy.override
+                ? versionCopy.override()
+                : (actual.createVersionFromDocument as (...a: unknown[]) => Promise<unknown>)(...args),
+    };
+});
 
 type Row = Record<string, unknown>;
 
@@ -145,6 +169,7 @@ vi.mock("../../middleware/auth", () => ({
 vi.mock("../../lib/access", async (importOriginal) => ({
     ...(await importOriginal<typeof import("../../lib/access")>()),
     ensureDocAccess: (...args: unknown[]) => ensureDocAccess(...args),
+    createDocumentAccessChecker: (...args: unknown[]) => (doc: unknown) => ensureDocAccess(doc, ...args),
 }));
 
 vi.mock("../../lib/dbq/enqueue", () => ({
@@ -157,6 +182,8 @@ vi.mock("../../lib/dbq/enqueue", () => ({
 }));
 
 import { app } from "../../app";
+import { AppError } from "../../lib/appError";
+import { diagnosticErrorTags } from "../../lib/observability/sentryPrivacy";
 
 const AUTH = ["Authorization", "Bearer test"] as const;
 const DOC = "11111111-1111-4111-8111-111111111111";
@@ -204,6 +231,31 @@ describe("GET /single-documents/:documentId", () => {
         const res = await request(app).get(`/single-documents/${DOC}`).set(...AUTH);
         expect(res.status).toBe(500);
         expect(JSON.stringify(res.body)).not.toContain("private database failure");
+    });
+});
+
+describe("POST /single-documents/status", () => {
+    beforeEach(() => {
+        errors = {};
+        rows = { documents: [{ id: DOC, user_id: "u2", status: "processing", project_id: "p1", org_id: "o1", archived_at: null }], document_versions: [] };
+        ensureDocAccess.mockResolvedValue(access("viewer", false));
+    });
+    it("returns batch metadata with the same viewer flags as detail", async () => {
+        const res = await request(app).post("/single-documents/status").set(...AUTH).send({ document_ids: [DOC] });
+        expect(res.status).toBe(200);
+        expect(res.body).toEqual([expect.objectContaining({ id: DOC, status: "processing", can_edit: false, can_delete: false })]);
+    });
+    it.each(["denied", "archived", "missing"])("omits %s documents without leaking metadata", async state => {
+        if (state === "denied") ensureDocAccess.mockResolvedValue({ ok: false });
+        if (state === "archived") rows.documents[0].archived_at = "2026-10-30T00:00:00Z";
+        if (state === "missing") rows.documents = [];
+        const res = await request(app).post("/single-documents/status").set(...AUTH).send({ document_ids: [DOC] });
+        expect(res.status).toBe(200);
+        expect(res.body).toEqual([]);
+    });
+    it("rejects malformed IDs at the batch boundary", async () => {
+        const res = await request(app).post("/single-documents/status").set(...AUTH).send({ document_ids: ["invalid"] });
+        expect(res.status).toBe(400);
     });
 });
 
@@ -444,6 +496,8 @@ describe("DELETE /single-documents/:documentId/versions/:versionId", () => {
         expect(rpcCalls.map((call) => call.name)).toEqual([
             "delete_document_version",
         ]);
+        // Every event this request produces is tagged with the version flow.
+        expect(sentry.setOperation).toHaveBeenCalledWith("documents.version");
     });
 });
 
@@ -499,5 +553,46 @@ describe("POST /single-documents/:documentId/versions/from-document", () => {
 
         expect(res.status).toBe(404);
         expect(res.body.detail).toBe("Document not found");
+    });
+
+    // An internal failure used to be console.error'd in the service AND
+    // answered as a bare 500 by the route: two context-free events. The
+    // service now hands the route one AppError with the cause, and the route
+    // reports it once through sendInternalError, kind and SQLSTATE attached.
+    it("reports an internal failure once, with its kind, and answers 500", async () => {
+        sentry.reportError.mockClear();
+        const rpcError = { code: "42501", message: "permission denied for function" };
+        versionCopy.override = async () => ({
+            ok: false,
+            kind: "version_insert",
+            detail: "Failed to record new version.",
+            error: new AppError("db.rpc_failed", "[versions/copy] insert failed", {
+                cause: rpcError,
+            }),
+        });
+        const log = vi.spyOn(console, "error").mockImplementation(() => undefined);
+        try {
+            const res = await request(app)
+                .post(`/single-documents/${DOC}/versions/from-document`)
+                .set(...AUTH)
+                .send({ source_document_id: SOURCE });
+
+            expect(res.status).toBe(500);
+            expect(res.body).toMatchObject({ code: "internal_error" });
+            expect(JSON.stringify(res.body)).not.toContain("permission denied");
+
+            expect(sentry.reportError).toHaveBeenCalledOnce();
+            const [reported, context] = sentry.reportError.mock.calls[0]!;
+            expect(diagnosticErrorTags(reported)).toEqual({
+                error_kind: "db.rpc_failed",
+                failure_code: "42501",
+            });
+            expect(context).toMatchObject({
+                tags: { component: "http", http_status: 500 },
+            });
+        } finally {
+            versionCopy.override = null;
+            log.mockRestore();
+        }
     });
 });

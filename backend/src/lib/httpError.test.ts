@@ -58,7 +58,8 @@ describe("sendInternalError", () => {
         // URL and not the router-relative "/:projectId".
         http_route: "/projects/:projectId",
       },
-      extra: { path: "/projects/p-123" },
+      // The concrete path (ids, filenames) is not offered to the event; the
+      // route pattern above is what identifies the endpoint.
     });
     expect(JSON.stringify(consoleError.mock.calls)).not.toContain("private-oauth");
     expect(JSON.stringify(reportError.mock.calls)).not.toContain("private-oauth");

@@ -44,7 +44,15 @@ and local email capture without requiring managed infrastructure.
 3. Add an Anthropic, Gemini, or OpenAI API key to `backend/.env`, unless you
    plan to use Ollama exclusively.
 
-4. Start the stack:
+4. Start the stack. Either run the published images (built once in CI, with
+   their Sentry source maps and release) by pinning a version in `.env`:
+
+   ```bash
+   echo "MIKE_IMAGE_TAG=$(cat VERSION)" >> .env
+   docker compose pull && docker compose up --no-build -d
+   ```
+
+   or build everything from this checkout:
 
    ```bash
    docker compose up --build
@@ -64,7 +72,9 @@ authentication behavior, Ollama setup, and first-run guidance.
 
 Mike sends scrubbed error reports (no document content, user identities, or
 request data) to the project's Sentry by default. Set `SENTRY_DISABLED=true` to
-opt out, or set `SENTRY_DSN` to use your own. See the
+opt out, or set `SENTRY_DSN` and `FRONTEND_SENTRY_DSN` to use your own. Both
+take effect at runtime for the published images as well, because browser
+reports travel through the Next server. See the
 [observability guide](docs/observability.md) for the exact policy, per-runtime
 variables, and the [Sentry data audit](docs/sentry-data-audit.md).
 

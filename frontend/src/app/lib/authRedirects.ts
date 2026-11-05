@@ -6,6 +6,7 @@ const AUTH_REDIRECT_PATHS = new Set([
     "/onboarding/profile",
     "/onboarding/practice",
     "/onboarding/invitations",
+    "/onboarding/models",
 ]);
 
 export function safeAuthNext(

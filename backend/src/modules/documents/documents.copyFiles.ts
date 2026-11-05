@@ -1,4 +1,4 @@
-import { copyFile, downloadFile, uploadFile } from "../../lib/storage";
+import { copyFile, downloadFile, downloadFileIfAvailable, uploadFile } from "../../lib/storage";
 import { contentTypeForDocumentType } from "../../lib/documentTypes";
 
 type CopySource = {
@@ -45,7 +45,9 @@ export async function copyDocumentVersionFiles(args: {
   if (pdf === args.source.storage_path)
     return { pdfStoragePath: args.storagePath };
   if (args.transport === "download" && args.rendition === "optional") {
-    const bytes = await downloadFile(pdf);
+    // The rendition is optional: a copy without it is still a copy, and the
+    // source has already been written. A failed read is reported, not thrown.
+    const bytes = await downloadFileIfAvailable(pdf);
     if (!bytes) return { pdfStoragePath: null };
     await transfer(pdf, args.pdfStoragePath, "application/pdf", bytes);
   } else {

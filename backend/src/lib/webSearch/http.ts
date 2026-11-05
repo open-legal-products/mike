@@ -1,13 +1,14 @@
+import { AppError } from "../appError";
 import type { SearchApiDeps } from "./types";
 
 const SEARCH_TIMEOUT_MS = 15_000;
 // A read waits for the service to fetch the page itself.
 export const READ_TIMEOUT_MS = 30_000;
 
-export class SearchApiError extends Error {
+/** The search API answered with an error status; `status` reaches Sentry as `dependency_status`. */
+export class SearchApiError extends AppError {
     constructor(readonly status: number) {
-        super(`The search API answered with HTTP ${status}`);
-        this.name = "SearchApiError";
+        super("web_search.api_error", `The search API answered with HTTP ${status}`);
     }
 }
 

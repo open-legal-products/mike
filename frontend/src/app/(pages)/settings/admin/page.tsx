@@ -14,10 +14,12 @@ import {
 } from "@/app/lib/mikeApi";
 import { describeError, notifyError } from "@/app/lib/userFacingError";
 import { useUserProfile } from "@/app/contexts/UserProfileContext";
-import { GlassCardUI } from "@/shared/ui/GlassCardUI";
-import { PillButtonUI } from "@/shared/ui/PillButtonUI";
-import { TextButtonUI } from "@/shared/ui/TextButtonUI";
-import { ToggleSwitchUI } from "@/shared/ui/ToggleSwitchUI";
+import {
+  GlassCardUI,
+  PillButtonUI,
+  TextButtonUI,
+  ToggleSwitchUI,
+} from "@mike/ui";
 import { SettingsHeading } from "@/app/components/settings/SettingsHeading";
 import { SettingsRow } from "@/app/components/settings/SettingsRow";
 import {

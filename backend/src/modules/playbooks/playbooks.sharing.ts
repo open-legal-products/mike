@@ -6,18 +6,14 @@
 import { createServerSupabase, type Db } from "../../lib/supabase";
 import {
   deleteOrgAccessOverride,
-  findAssignableOrgMember,
+  findAssignableOrgMembers,
   isOrgAssignableRole,
   listOrgAccessPeople,
   setOrgAccessOverrides,
 } from "../../lib/orgAccessOverrides";
 import { findMissingUserEmails, loadProfileUsersByEmail } from "../../lib/userLookup";
-import {
-  editablePlaybook,
-  getPlaybook,
-  PlaybookRequestError,
-  type Playbook,
-} from "./playbooks.operations";
+import { editablePlaybook, getPlaybook, PlaybookRequestError } from "./playbooks.operations";
+import { type Playbook } from "./playbooks.types";
 import type { PlaybookRole } from "./playbooks.access";
 
 /** Playbook-specific roster rules; see playbooks.access.ts. */
@@ -175,21 +171,18 @@ export async function sharePlaybook(
   if (playbook.orgId) {
     if (!isOrgAssignableRole(role))
       throw new PlaybookRequestError("Choose owner, editor, viewer or deny.");
-    const targets: string[] = [];
-    for (const email of emails) {
-      const target = await findAssignableOrgMember(
-        db,
-        playbook.orgId,
-        email,
-        playbook.userId,
-        playbook.visibility,
-      );
-      if (!target.ok) {
-        if (target.kind === "db_error") throw target.error;
-        throw new PlaybookRequestError(target.detail);
-      }
-      targets.push(target.member.userId);
+    const found = await findAssignableOrgMembers(
+      db,
+      playbook.orgId,
+      emails,
+      playbook.userId,
+      playbook.visibility,
+    );
+    if (!found.ok) {
+      if (found.kind === "db_error") throw found.error;
+      throw new PlaybookRequestError(found.detail);
     }
+    const targets = found.members.map((member) => member.userId);
     // One statement, so a refusal from the database trigger rolls back the
     // whole batch.
     const written = await setOrgAccessOverrides(db, {

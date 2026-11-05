@@ -1,4 +1,37 @@
+import {
+    playbookContentShape,
+    playbookContentSchema,
+    editablePlaybookSchema,
+    findingSchema,
+    reviewSchema,
+} from "./playbooks.schemas";
+export { playbookContentSchema, editablePlaybookSchema } from "./playbooks.schemas";
+import type {
+    PlaybookContent,
+    PlaybookFinding,
+    Playbook,
+    PlaybookImportStage,
+    PlaybookImport,
+    PlaybookImportRequest,
+    PlaybookImportWork,
+    PlaybookReviewRequest,
+    PlaybookReviewInput,
+    PlaybookReviewWork,
+} from "./playbooks.types";
+export type {
+    PlaybookContent,
+    PlaybookFinding,
+    Playbook,
+    PlaybookImportStage,
+    PlaybookImport,
+    PlaybookImportRequest,
+    PlaybookImportWork,
+    PlaybookReviewRequest,
+    PlaybookReviewInput,
+    PlaybookReviewWork,
+} from "./playbooks.types";
 import crypto from "node:crypto";
+import { AppError } from "../../lib/appError";
 import { safeError } from "../../lib/safeError";
 const { jsonrepair } = require("jsonrepair") as {
   jsonrepair: (text: string) => string;
@@ -10,7 +43,8 @@ import {
   parseContentVisibility,
   type OrgRole,
 } from "../../lib/access";
-import { resolveWorkspaceFilter, workspaceMatches } from "../../lib/workspace";
+import { PERSONAL_WORKSPACE, resolveWorkspaceFilter, workspaceMatches, type WorkspaceFilter } from "../../lib/workspace";
+import { selectAllByKey, selectInBatches } from "../../lib/batchedQuery";
 import type { EditAnnotation } from "@mike/contracts";
 import { extractDocxBodyText, type EditInput } from "../../lib/docxTrackedChanges";
 import { loadActiveVersion } from "../../lib/documentVersions";
@@ -34,8 +68,8 @@ import {
 } from "../../lib/llm/models";
 import type { Provider } from "../../lib/llm/types";
 import { hasApiKeyForModel } from "../../lib/modelSelection";
-import { getUserApiKeys, getEffectiveApiKeys } from "../user/user.service";
-import { deleteFile, uploadFile } from "../../lib/storage";
+import { getUserApiKeys, getEffectiveApiKeys } from "../../lib/providerCredentials/index";
+import { uploadFile } from "../../lib/storage";
 import { getFileStreamSource } from "../documents/documents.service";
 import { liveDbJobDedupeKeys } from "../../lib/dbq/enqueue";
 import {
@@ -67,9 +101,11 @@ import {
 import { UserFacingError } from "../../lib/userFacingError";
 import {
   importReportStage,
+  removePlaybookObjects,
   reportPlaybookFailure,
   type PlaybookReportStage,
 } from "./playbooks.reporting";
+import { markStage } from "../../lib/observability/sentry";
 
 type Db = ReturnType<typeof createServerSupabase>;
 
@@ -90,177 +126,11 @@ export function runFailureMessage(error: unknown): string {
   return "The review failed. Try again.";
 }
 
-const clauseSchema = z.object({
-  text: z.string().trim().min(1).max(20_000),
-  usage: z
-    .enum(["illustrative", "preferred", "verbatim", "accepted", "unacceptable"])
-    .default("illustrative"),
-  sourceRefs: z.array(z.string().trim().min(1).max(100)).max(30).default([]),
-});
-
-const positionSchema = z.object({
-  name: z.string().trim().min(1).max(200),
-  criteria: z.string().trim().min(1).max(20_000),
-  sampleClauses: z.array(clauseSchema).max(30).default([]),
-});
-
-const ruleSchema = z.object({
-  id: z.string().trim().min(1).max(100).optional(),
-  name: z.string().trim().min(1).max(300),
-  concept: z.string().trim().min(1).max(20_000),
-  scope: z.enum(["clause", "agreement"]).default("clause"),
-  required: z.boolean().default(false),
-  guidance: z.string().trim().max(20_000).default(""),
-  standard: positionSchema.nullable().default(null),
-  fallbacks: z.array(positionSchema).max(20).default([]),
-  unacceptable: z.array(positionSchema).max(20).default([]),
-  conditions: z.array(z.string().trim().min(1).max(2_000)).max(30).default([]),
-  actions: z
-    .array(
-      z.object({
-        scenario: z.string().trim().max(2_000).default(""),
-        instruction: z.string().trim().min(1).max(5_000),
-      }),
-    )
-    .max(20)
-    .default([]),
-  sourceRefs: z.array(z.string().trim().min(1).max(100)).max(50).default([]),
-});
-
-const topicSchema = z.object({
-  id: z.string().trim().min(1).max(100).optional(),
-  name: z.string().trim().min(1).max(300),
-  rules: z.array(ruleSchema).max(200),
-});
-
-const playbookContentShape = z.object({
-  name: z.string().trim().min(1).max(200),
-  description: z.string().trim().max(2_000).default(""),
-  representedParty: z.string().trim().max(300).default(""),
-  documentTypes: z.array(z.string().trim().min(1).max(200)).max(50).default([]),
-  jurisdictions: z.array(z.string().trim().min(1).max(200)).max(50).default([]),
-  rules: z.array(ruleSchema).max(200).default([]),
-  topics: z.array(topicSchema).max(200).default([]),
-});
-
-export const playbookContentSchema = playbookContentShape.refine(
-  (content) =>
-    content.rules.length > 0 ||
-    content.topics.some((topic) => topic.rules.length > 0),
-  {
-    message: "Add at least one rule before running a review.",
-    path: ["rules"],
-  },
-);
-
-// Autosave must accept an unfinished field or an empty topic. Compilation and
-// review still use the strict schema above; structural limits apply to both.
-const editableClauseSchema = clauseSchema.extend({
-  text: z.string().max(20_000),
-});
-const editablePositionSchema = positionSchema.extend({
-  name: z.string().max(200),
-  criteria: z.string().max(20_000),
-  sampleClauses: z.array(editableClauseSchema).max(30).default([]),
-});
-const editableRuleSchema = ruleSchema.extend({
-  name: z.string().max(300),
-  concept: z.string().max(20_000),
-  guidance: z.string().max(20_000).default(""),
-  standard: editablePositionSchema.nullable().default(null),
-  fallbacks: z.array(editablePositionSchema).max(20).default([]),
-  unacceptable: z.array(editablePositionSchema).max(20).default([]),
-});
-export const editablePlaybookSchema = playbookContentShape.extend({
-  name: z.string().max(200),
-  description: z.string().max(2_000).default(""),
-  representedParty: z.string().max(300).default(""),
-  rules: z.array(editableRuleSchema).max(200).default([]),
-  topics: z
-    .array(
-      topicSchema.extend({
-        name: z.string().max(300),
-        rules: z.array(editableRuleSchema).max(200),
-      }),
-    )
-    .max(200)
-    .default([]),
-});
-
-const findingSchema = z.object({
-  topicId: z.string().trim().max(100).nullable().default(null),
-  ruleId: z.string().trim().max(100).nullable().default(null),
-  ruleName: z.string().trim().min(1).max(300),
-  status: z.enum([
-    "not_applicable",
-    "acceptable",
-    "needs_review",
-    "unacceptable",
-    "missing_required",
-    "outside_scope",
-  ]),
-  quote: z.string().trim().max(30_000).default(""),
-  location: z.string().trim().max(500).default(""),
-  analysis: z.string().trim().min(1).max(20_000),
-  suggestedText: z.string().trim().max(30_000).default(""),
-  /** For missing_required: the end of the clause the new one follows. */
-  insertAfter: z.string().trim().max(5_000).default(""),
-});
-
-const reviewSchema = z.object({
-  summary: z.string().trim().min(1).max(10_000),
-  findings: z.array(findingSchema).max(1000),
-});
-
-export type PlaybookContent = z.infer<typeof playbookContentSchema>;
-export type PlaybookFinding = z.infer<typeof findingSchema> & {
-  id: string;
-  /** The tracked change made in the reviewed document, when one was. */
-  edit?: EditAnnotation | null;
-};
-
-export type Playbook = {
-  id: string;
-  userId: string;
-  name: string;
-  description: string;
-  orgId: string | null;
-  visibility: "private" | "organization";
-  /** The caller's role: viewer (view and run), editor, or owner. */
-  role: PlaybookRole;
-  isCreator: boolean;
-  /** Edit rules, details and sources: editor or owner. */
-  canEdit: boolean;
-  /** Share, change visibility and delete: owner. */
-  canManageAccess: boolean;
-  /** Who it is shared with, for its owners only; empty for everyone else. */
-  sharedWith: string[];
-  /** The creator's profile name and photo; null when they have not set one. */
-  creatorName: string | null;
-  creatorPhoto: string | null;
-  content: PlaybookContent;
-  sourceFilename: string | null;
-  importModel: string | null;
-  createdAt: string;
-  updatedAt: string;
-};
-
-export type PlaybookImportStage =
-  | "validating_file"
-  | "checking_model"
-  | "extracting_text"
-  | "compiling"
-  | "validating_output"
-  | "repairing_output"
-  | "storing_source"
-  | "saving_playbook"
-  | "completed";
-
 /**
  * A failure whose message is written for the user. The router forwards these
  * verbatim; every other error becomes a generic 500.
  */
-export class PlaybookRequestError extends Error {
+export class PlaybookRequestError extends AppError {
   readonly status: 400 | 403 | 404 | 409;
 
   constructor(
@@ -268,9 +138,8 @@ export class PlaybookRequestError extends Error {
     status: 400 | 403 | 404 | 409 = 400,
     options?: ErrorOptions,
   ) {
-    super(message, options);
+    super("playbooks.request_invalid", message, options);
     this.status = status;
-    this.name = "PlaybookRequestError";
   }
 }
 
@@ -298,7 +167,7 @@ export function isPlaybookRefusal(error: unknown): boolean {
   );
 }
 
-export class PlaybookImportError extends Error {
+export class PlaybookImportError extends AppError {
   readonly code = "PLAYBOOK_IMPORT_FAILED";
 
   constructor(
@@ -307,8 +176,7 @@ export class PlaybookImportError extends Error {
     readonly stage: PlaybookImportStage,
     options?: ErrorOptions,
   ) {
-    super(message, options);
-    this.name = "PlaybookImportError";
+    super("playbooks.import_failed", message, options);
   }
 }
 
@@ -809,12 +677,18 @@ async function creationScope(db: Db, userId: string, raw: unknown) {
     : null;
 }
 
-export async function listPlaybooks(
+/** Who the caller is in each organization, and the workspace a list is narrowed to. */
+type PlaybookListScope = {
+  workspace: WorkspaceFilter;
+  orgRoles: Map<string, OrgRole>;
+};
+
+async function playbookListScope(
   userId: string,
-  db: Db = createServerSupabase(),
-  options: { workspace?: unknown; email?: string | null } = {},
-): Promise<Playbook[]> {
-  const resolved = await resolveWorkspaceFilter(db, userId, options.workspace);
+  db: Db,
+  workspace: unknown,
+): Promise<PlaybookListScope> {
+  const resolved = await resolveWorkspaceFilter(db, userId, workspace);
   if (!resolved.ok)
     throw new PlaybookRequestError(
       "Workspace not found.",
@@ -829,40 +703,110 @@ export async function listPlaybooks(
   const orgRoles = new Map(
     (memberships ?? []).map((row) => [String(row.org_id), row.role as OrgRole]),
   );
-  const orgIds = [...orgRoles.keys()];
-  const granted = await grantedPlaybookIds(db, userId, options.email);
-  const results = await Promise.all([
-    db.from("playbooks").select("*").eq("user_id", userId),
-    orgIds.length
-      ? db
-          .from("playbooks")
-          .select("*")
-          .eq("visibility", "organization")
-          .in("org_id", orgIds)
-      : { data: [], error: null },
-    granted.length
-      ? db.from("playbooks").select("*").in("id", granted)
-      : { data: [], error: null },
-  ]);
-  const rows = new Map<string, Record<string, unknown>>();
-  for (const result of results) {
-    if (result.error) throw result.error;
-    for (const row of result.data ?? []) {
-      // Organization membership remains required, even for the creator.
-      if (row.org_id && !orgRoles.has(row.org_id)) continue;
-      if (workspaceMatches(resolved.workspace, row.org_id))
-        rows.set(row.id, row);
-    }
+  return { workspace: resolved.workspace, orgRoles };
+}
+
+/**
+ * Narrow a playbooks query to the active workspace in SQL, so a list of one
+ * workspace does not download every other workspace's playbooks only to
+ * discard them. authorizePlaybookRows still applies workspaceMatches.
+ */
+function inPlaybookWorkspace<Q>(query: Q, workspace: WorkspaceFilter): Q {
+  if (!workspace) return query;
+  // Typed loosely on purpose: the PostgREST builder's generics are too deep
+  // to thread through a helper, and both filters return the same builder.
+  const narrowable = query as unknown as {
+    is(column: string, value: null): Q;
+    eq(column: string, value: string): Q;
+  };
+  return workspace === PERSONAL_WORKSPACE
+    ? narrowable.is("org_id", null)
+    : narrowable.eq("org_id", workspace);
+}
+
+/** The rows the caller may open in the workspace, with their roles. */
+async function authorizePlaybookRows(
+  db: Db,
+  rows: Record<string, unknown>[],
+  userId: string,
+  email: string | null | undefined,
+  scope: PlaybookListScope,
+): Promise<{ visible: Record<string, unknown>[]; roles: Map<string, PlaybookRole> }> {
+  const candidates = new Map<string, Record<string, unknown>>();
+  for (const row of rows) {
+    const orgId = row.org_id ? String(row.org_id) : null;
+    // Organization membership remains required, even for the creator.
+    if (orgId && !scope.orgRoles.has(orgId)) continue;
+    if (workspaceMatches(scope.workspace, orgId)) candidates.set(String(row.id), row);
   }
-  const candidates = [...rows.values()];
   const roles = await resolvePlaybookRoles(
     db,
-    candidates as PlaybookAccessRow[],
+    [...candidates.values()] as PlaybookAccessRow[],
+    userId,
+    email,
+    scope.orgRoles,
+  );
+  return {
+    visible: [...candidates.values()].filter((row) => roles.has(String(row.id))),
+    roles,
+  };
+}
+
+/**
+ * The playbooks the caller may open in the workspace (`columns` of each, which
+ * must include the access columns), with their roles.
+ */
+async function readVisiblePlaybooks(
+  db: Db,
+  userId: string,
+  email: string | null | undefined,
+  scope: PlaybookListScope,
+  columns: string,
+): Promise<{ visible: Record<string, unknown>[]; roles: Map<string, PlaybookRole> }> {
+  const { workspace } = scope;
+  // Organization-visible playbooks only from organizations the workspace
+  // can show: none for Personal, just that one for an organization.
+  const orgIds = !workspace
+    ? [...scope.orgRoles.keys()]
+    : workspace !== PERSONAL_WORKSPACE && scope.orgRoles.has(workspace)
+      ? [workspace]
+      : [];
+  const granted = await grantedPlaybookIds(db, userId, email);
+  // Typed as `*` (untyped rows either way): a column-list variable defeats
+  // the builder's select-string parser.
+  const playbooks = () => db.from("playbooks").select(columns as "*");
+  // One user or organization can own more playbooks than max_rows: those
+  // two reads are paged in full (a truncated list would drop playbooks, and
+  // with them their runs from History). Granted ids are 50 per request.
+  const [own, shared, direct] = await Promise.all([
+    selectAllByKey<Record<string, unknown>>("own playbooks", () =>
+      inPlaybookWorkspace(playbooks().eq("user_id", userId), workspace),
+    ),
+    selectInBatches<Record<string, unknown>>("organization playbooks", orgIds, (batch) =>
+      selectAllByKey<Record<string, unknown>>("organization playbooks", () =>
+        playbooks().eq("visibility", "organization").in("org_id", batch),
+      ),
+    ),
+    selectInBatches<Record<string, unknown>>("granted playbooks", granted, (batch) =>
+      inPlaybookWorkspace(playbooks().in("id", batch), workspace),
+    ),
+  ]);
+  return authorizePlaybookRows(db, [...own, ...shared, ...direct], userId, email, scope);
+}
+
+export async function listPlaybooks(
+  userId: string,
+  db: Db = createServerSupabase(),
+  options: { workspace?: unknown; email?: string | null } = {},
+): Promise<Playbook[]> {
+  const scope = await playbookListScope(userId, db, options.workspace);
+  const { visible, roles } = await readVisiblePlaybooks(
+    db,
     userId,
     options.email,
-    orgRoles,
+    scope,
+    "*",
   );
-  const visible = candidates.filter((row) => roles.has(String(row.id)));
   const [creators, recipients] = await Promise.all([
     loadCreatorProfiles(db, visible),
     playbookRecipientEmails(
@@ -1174,20 +1118,6 @@ async function assertPlaybookNotBeingReplaced(
     throw new PlaybookRequestError(PLAYBOOK_BEING_REPLACED_ERROR, 409);
 }
 
-/** An import attempt as the page follows it. */
-export type PlaybookImport = {
-  id: string;
-  status: "running" | "completed" | "failed";
-  stage: string;
-  error: string | null;
-  filename: string;
-  name: string | null;
-  /** The playbook being replaced, or the one created once completed. */
-  playbookId: string | null;
-  startedAt: string;
-  completedAt: string | null;
-};
-
 /**
  * An import's state as readers should see it; `interrupted` holds the ids
  * interruptedPlaybookWork found will never finish.
@@ -1272,49 +1202,6 @@ export async function listRunningPlaybookImports(
     .map((row) => publicImport(row, interrupted))
     .filter((attempt) => attempt.status === "running");
 }
-
-/** What an import is asked to do, before its file is read. */
-export type PlaybookImportRequest = {
-  userId: string;
-  /** Needed to replace a personal playbook shared with the caller. */
-  userEmail?: string | null;
-  filename: string;
-  /** The file's size in bytes, known before it is read. */
-  size: number;
-  name?: string;
-  workspace?: unknown;
-  model: string;
-  /** Replace this playbook's content instead of creating a new playbook. */
-  playbookId?: string;
-  db?: Db;
-};
-
-/**
- * Everything compiling an import needs besides the file's bytes: its row's
- * columns, plus two ids the row cannot hold. The replace target is kept
- * apart because the row's playbook_id is set null if that playbook is
- * deleted, and a new playbook's id is chosen up front so a re-run of the
- * same import saves the same playbook instead of a second one.
- */
-export type PlaybookImportWork = {
-  attemptId: string;
-  userId: string;
-  userEmail: string | null;
-  filename: string;
-  name: string | null;
-  model: string;
-  orgId: string | null;
-  replacePlaybookId: string | null;
-  /**
-   * The replace target's updated_at when the import began. The compiled
-   * content is saved only if the playbook still has it, so an edit made in
-   * between fails the import instead of being overwritten. Absent only on a
-   * job queued before the column existed.
-   */
-  targetUpdatedAt?: string | null;
-  newPlaybookId: string;
-  startedAt: string;
-};
 
 /** An import whose file is already in memory. */
 type PlaybookImportArgs = Omit<PlaybookImportRequest, "size"> & {
@@ -1413,6 +1300,16 @@ export async function playbookImportDocument(
  * file type, an empty file, the replace target, the workspace, and the model.
  * Compiling is compilePlaybookImport's job, wherever it runs.
  */
+/**
+ * Enter an import stage: the stage the row records, and the breadcrumb a
+ * failure later in the import arrives with, so a throw in `saving_playbook`
+ * is told apart from the same throw reached from `storing_source`.
+ */
+function enterImportStage(stage: PlaybookImportStage): PlaybookImportStage {
+  markStage(importReportStage(stage));
+  return stage;
+}
+
 export async function beginPlaybookImport(
   args: PlaybookImportRequest,
 ): Promise<{ attempt: PlaybookImport; work: PlaybookImportWork }> {
@@ -1420,7 +1317,7 @@ export async function beginPlaybookImport(
   const now = new Date().toISOString();
   const attemptId = crypto.randomUUID();
   const model = args.model.trim();
-  let stage: PlaybookImportStage = "validating_file";
+  let stage: PlaybookImportStage = enterImportStage("validating_file");
   const row = {
     id: attemptId,
     user_id: args.userId,
@@ -1461,7 +1358,7 @@ export async function beginPlaybookImport(
     // is recorded, or detected when the import saves.
     const targetUpdatedAt = replacing?.updatedAt ?? null;
 
-    stage = "checking_model";
+    stage = enterImportStage("checking_model");
     row.stage = stage;
     await updateImportAttempt(db, attemptId, {
       stage,
@@ -1514,7 +1411,7 @@ export async function compilePlaybookImport(
 ): Promise<Playbook> {
   const { attemptId, userId, model } = work;
   const compilationTimeoutMs = playbookCompilationTimeoutMs();
-  let stage: PlaybookImportStage = "validating_file";
+  let stage: PlaybookImportStage = enterImportStage("validating_file");
   let uploadedStorageKey: string | null = null;
   const stopHeartbeat = keepPlaybookWorkAttended(
     db,
@@ -1528,7 +1425,7 @@ export async function compilePlaybookImport(
       throw new PlaybookRequestError(
         "Playbook import requires a .docx or .pdf file.",
       );
-    stage = "checking_model";
+    stage = enterImportStage("checking_model");
     // Checked again rather than trusted from the request: access to the
     // target, or the key for the model, can be lost while a job waits.
     const replacing = work.replacePlaybookId
@@ -1541,7 +1438,7 @@ export async function compilePlaybookImport(
       work.orgId,
     );
 
-    stage = "extracting_text";
+    stage = enterImportStage("extracting_text");
     await updateImportAttempt(db, attemptId, { stage });
     const structure =
       fileType === "pdf"
@@ -1561,7 +1458,7 @@ export async function compilePlaybookImport(
       work.filename.replace(/\.(docx|pdf)$/i, "").trim() || "Imported playbook";
     const name = work.name?.trim() || replacing?.name || fallbackName;
 
-    stage = "compiling";
+    stage = enterImportStage("compiling");
     await updateImportAttempt(db, attemptId, { stage });
     const runCompletion = dependencies.completeText ?? completeText;
     const raw = await withCompilationTimeout(
@@ -1576,13 +1473,13 @@ export async function compilePlaybookImport(
       compilationTimeoutMs,
     );
 
-    stage = "validating_output";
+    stage = enterImportStage("validating_output");
     await updateImportAttempt(db, attemptId, { stage });
     const content = await validatePlaybookCompilationWithRetry({
       raw,
       structure,
       retry: async (validationError) => {
-        stage = "repairing_output";
+        stage = enterImportStage("repairing_output");
         await updateImportAttempt(db, attemptId, { stage });
         const retried = await withCompilationTimeout(
           runCompletion({
@@ -1595,7 +1492,7 @@ export async function compilePlaybookImport(
           }),
           compilationTimeoutMs,
         );
-        stage = "validating_output";
+        stage = enterImportStage("validating_output");
         await updateImportAttempt(db, attemptId, { stage });
         return retried;
       },
@@ -1609,7 +1506,7 @@ export async function compilePlaybookImport(
       ? await playbookSourceStorageKey(db, id)
       : null;
 
-    stage = "storing_source";
+    stage = enterImportStage("storing_source");
     await updateImportAttempt(db, attemptId, { stage });
     await uploadFile(
       storageKey,
@@ -1621,7 +1518,7 @@ export async function compilePlaybookImport(
     );
     uploadedStorageKey = storageKey;
 
-    stage = "saving_playbook";
+    stage = enterImportStage("saving_playbook");
     await updateImportAttempt(db, attemptId, { stage });
     // Review runs retain their own content snapshot when the source changes.
     const { data: replaced, error } = replacing
@@ -1651,7 +1548,10 @@ export async function compilePlaybookImport(
     // this same import already saved it, under the same source key: the
     // playbook exists, so this run only has to record that.
     if (error && (replacing || error.code !== UNIQUE_VIOLATION)) {
-      await deleteFile(storageKey).catch(() => {});
+      await removePlaybookObjects([storageKey], {
+        stage: "import.cleanup",
+        ids: { import_id: attemptId, playbook_id: id },
+      });
       uploadedStorageKey = null;
       throw error;
     }
@@ -1672,14 +1572,12 @@ export async function compilePlaybookImport(
     // The row now points at the new object, so the superseded one is safe to
     // remove. Losing this cleanup must not fail the import.
     if (previousStorageKey && previousStorageKey !== storageKey)
-      await deleteFile(previousStorageKey).catch((cleanupError) => {
-        console.error("[playbooks] replaced source cleanup failed", {
-          storageKey: previousStorageKey,
-          error: safeError(cleanupError),
-        });
+      await removePlaybookObjects([previousStorageKey], {
+        stage: "import.cleanup",
+        ids: { import_id: attemptId, playbook_id: id },
       });
 
-    stage = "completed";
+    stage = enterImportStage("completed");
     // Not swallowed: an attempt left running after its playbook was saved
     // would read as interrupted, so a failed write here fails the run, and a
     // queued import runs again and lands on the unique-violation branch.
@@ -1694,7 +1592,11 @@ export async function compilePlaybookImport(
     if (recorded) await recordPlaybookImportAudit(db, work, { playbook });
     return playbook;
   } catch (error) {
-    if (uploadedStorageKey) await deleteFile(uploadedStorageKey).catch(() => {});
+    if (uploadedStorageKey)
+      await removePlaybookObjects([uploadedStorageKey], {
+        stage: "import.cleanup",
+        ids: { import_id: attemptId, playbook_id: work.replacePlaybookId },
+      });
     throw await recordImportFailure(db, attemptId, stage, error, {
       filename: work.filename,
       playbookId: work.replacePlaybookId,
@@ -2208,52 +2110,6 @@ export async function reviewWithPlaybook(args: PlaybookReviewRequest) {
   return done;
 }
 
-export type PlaybookReviewRequest = {
-  userId: string;
-  userEmail?: string | null;
-  playbookId: string;
-  /** Text extracted by the caller; a stored Word document is read instead. */
-  documentText?: string;
-  documentName?: string;
-  /** A stored document to review; a Word document also gets tracked changes. */
-  documentId?: string;
-  instructions?: string;
-  model: string;
-  reviewMode: "strict" | "permissive";
-  /** "issues" reports only what needs attention; the run records which. */
-  reviewScope?: "full" | "issues";
-  db?: Db;
-};
-
-/**
- * What a review needs that its run row does not record. The rules, model,
- * mode, scope, and document reference are all on the row; the text reviewed
- * and the document version the edits are made against are fixed here when the
- * review is requested, so a re-run reviews the same text and its edits are
- * refused, not doubled, if an earlier run already revised the document.
- */
-export type PlaybookReviewInput = {
-  runId: string;
-  /** Also what account erasure purges queued jobs by (payload.userId). */
-  userId: string;
-  documentText: string;
-  instructions: string | null;
-  userEmail: string | null;
-  expectedVersion: { id: string; storagePath: string } | null;
-};
-
-/** A review as runPlaybookReview performs it: its row plus its input. */
-export type PlaybookReviewWork = PlaybookReviewInput & {
-  playbookId: string;
-  content: PlaybookContent;
-  model: string;
-  reviewMode: "strict" | "permissive";
-  reviewScope: "full" | "issues";
-  documentId: string | null;
-  documentName: string | null;
-  startedAt: string;
-};
-
 /** A stored run and its input, as the review that fills it reads them. */
 export function playbookReviewWork(
   row: Record<string, unknown>,
@@ -2398,6 +2254,7 @@ export async function runPlaybookReview(
   const { runId } = work;
   const stopHeartbeat = keepPlaybookWorkAttended(db, "playbook_runs", runId);
   let stage: PlaybookReportStage = "review.model";
+  markStage(stage);
   try {
     // Checked again rather than trusted from the request: access to the
     // playbook can be lost while a job waits, as compilePlaybookImport
@@ -2450,6 +2307,7 @@ export async function runPlaybookReview(
         ? normalized.filter((finding) => ISSUE_STATUSES.has(finding.status))
         : normalized;
     stage = "review.apply_edits";
+    markStage(stage);
     const { findings, version } =
       work.documentId && work.expectedVersion
         ? await applyReviewEdits({
@@ -2464,6 +2322,7 @@ export async function runPlaybookReview(
     const versionId = version?.id ?? null;
     const completedAt = new Date().toISOString();
     stage = "review.save";
+    markStage(stage);
     const updated = await db
       .from("playbook_runs")
       .update({
@@ -2695,25 +2554,72 @@ export async function listAllPlaybookRuns(
   db: Db = createServerSupabase(),
   options: { workspace?: unknown; email?: string | null } = {},
 ) {
-  const playbooks = await listPlaybooks(userId, db, options);
-  if (!playbooks.length) return [];
-  const names = new Map(
-    playbooks.map((playbook) => [playbook.id, playbook.name]),
-  );
-  const { data, error } = await db
-    .from("playbook_runs")
-    .select("*")
-    .eq("user_id", userId)
-    .in("playbook_id", [...names.keys()])
-    .order("started_at", { ascending: false })
-    .limit(100);
-  if (error) throw error;
-  const rows = (data ?? []) as Record<string, unknown>[];
+  const { rows, names } = await readVisibleRuns(userId, db, options, {
+    columns: "*",
+    limit: 100,
+  });
   const interrupted = await interruptedRuns(db, rows);
   return rows.map((row) => ({
     ...publicRun(row, interrupted),
     playbookName: names.get(String(row.playbook_id)) ?? "",
   }));
+}
+
+/**
+ * The caller's newest runs (up to `limit`, before `before`) of playbooks they
+ * can still open in the workspace, with those playbooks' names.
+ *
+ * Eligibility comes BEFORE the limit: the playbooks the caller may open are
+ * listed first (only the access columns and the name, never content), and
+ * runs are read only for those, so the page holds the newest visible runs
+ * however many newer runs of other workspaces or revoked playbooks exist.
+ * Reading the caller's runs first and filtering afterwards could not tell
+ * "no more visible runs" from "a scan budget spent on hidden ones".
+ *
+ * The playbook ids go out in bounded `.in()` batches. Each batch's newest
+ * `limit` runs include every run of that batch that can make the page, so
+ * merging the batches newest first and keeping `limit` rows is exact.
+ */
+async function readVisibleRuns(
+  userId: string,
+  db: Db,
+  options: { workspace?: unknown; email?: string | null; before?: string },
+  read: { columns: string; limit: number },
+): Promise<{ rows: Record<string, unknown>[]; names: Map<string, string> }> {
+  const scope = await playbookListScope(userId, db, options.workspace);
+  const { visible } = await readVisiblePlaybooks(
+    db,
+    userId,
+    options.email,
+    scope,
+    "id, name, user_id, org_id, visibility",
+  );
+  const names = new Map(visible.map((row) => [String(row.id), String(row.name)]));
+  const runs = await selectInBatches<Record<string, unknown>>(
+    "visible playbook runs",
+    names.keys(),
+    (batch) => {
+      let query = db
+        .from("playbook_runs")
+        .select(read.columns as "*")
+        .eq("user_id", userId)
+        .in("playbook_id", batch);
+      if (options.before) query = query.lt("started_at", options.before);
+      return query
+        .order("started_at", { ascending: false })
+        .order("id", { ascending: false })
+        .limit(read.limit);
+    },
+  );
+  // Newest first by (started_at, id), so ties keep one order across batches.
+  const rows = runs
+    .sort(
+      (a, b) =>
+        String(b.started_at).localeCompare(String(a.started_at)) ||
+        String(b.id).localeCompare(String(a.id)),
+    )
+    .slice(0, read.limit);
+  return { rows, names };
 }
 
 /**
@@ -2730,24 +2636,11 @@ export async function listPlaybookRunHistory(
     before?: string;
   } = {},
 ) {
-  const playbooks = await listPlaybooks(userId, db, options);
-  if (!playbooks.length) return [];
-  const names = new Map(
-    playbooks.map((playbook) => [playbook.id, playbook.name]),
-  );
-  let query = db
-    .from("playbook_runs")
-    .select(
+  const { rows, names } = await readVisibleRuns(userId, db, options, {
+    columns:
       "id, playbook_id, document_name, status, error, started_at, updated_at, completed_at",
-    )
-    .eq("user_id", userId)
-    .in("playbook_id", [...names.keys()]);
-  if (options.before) query = query.lt("started_at", options.before);
-  const { data, error } = await query
-    .order("started_at", { ascending: false })
-    .limit(Math.min(Math.max(options.limit ?? 25, 1), 100));
-  if (error) throw error;
-  const rows = (data ?? []) as Record<string, unknown>[];
+    limit: Math.min(Math.max(options.limit ?? 25, 1), 100),
+  });
   const interrupted = await interruptedRuns(db, rows);
   return rows.map((row) => ({
     id: String(row.id),
@@ -2878,12 +2771,15 @@ export async function deletePlaybook(
     title: playbook.name,
     detail: { playbook_id: id },
   });
-  if (data.source_storage_key)
-    await deleteFile(String(data.source_storage_key)).catch(() => {});
   // Clear bytes promptly; the database also queues durable cleanup for failed
   // deletes and for cascades that do not pass through this request handler.
-  for (const source of sources)
-    await deleteFile(source.storageKey).catch(() => {});
+  await removePlaybookObjects(
+    [
+      data.source_storage_key ? String(data.source_storage_key) : null,
+      ...sources.map((source) => source.storageKey),
+    ],
+    { ids: { playbook_id: id } },
+  );
 }
 
 export async function playbookConfiguration(

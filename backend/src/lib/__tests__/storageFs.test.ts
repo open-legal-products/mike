@@ -289,10 +289,14 @@ describe("filesystem storage driver", () => {
         ).rejects.toThrow(/unsafe storage key|escapes STORAGE_FS_ROOT/);
         // Every fs entry point shares the one choke-point, so none of them
         // may act on the key — but each surfaces the refusal in its own
-        // driver-agnostic way. downloadFile reports "no such object" as null
-        // (its S3 branch does the same), deleteFile propagates anything that
+        // driver-agnostic way. downloadFile answers null only for an object
+        // that is not there; a refused key is a failure it throws (the
+        // caller's handler reports it), deleteFile propagates anything that
         // isn't a benign missing-file.
-        await expect(storage.downloadFile(key)).resolves.toBeNull();
+        await expect(storage.downloadFile(key)).rejects.toMatchObject({
+          kind: "storage.download_failed",
+          cause: expect.objectContaining({ message: expect.stringMatching(/unsafe storage key|escapes STORAGE_FS_ROOT/) }),
+        });
         await expect(storage.deleteFile(key)).rejects.toMatchObject({
           operation: "delete",
           cause: expect.objectContaining({ message: expect.stringMatching(/unsafe storage key|escapes STORAGE_FS_ROOT/) }),
@@ -327,7 +331,9 @@ describe("filesystem storage driver", () => {
       const traversal =
         "playbooks/attacker/imports/../../../documents/victim/d1/source.docx";
       await expect(storage.headFile(traversal)).rejects.toThrow();
-      await expect(storage.downloadFile(traversal)).resolves.toBeNull();
+      await expect(storage.downloadFile(traversal)).rejects.toMatchObject({
+        kind: "storage.download_failed",
+      });
       await expect(storage.deleteFile(traversal)).rejects.toThrow();
       const kept = await storage.downloadFile(victim);
       expect(Buffer.from(kept!).toString()).toBe("secret");

@@ -7,10 +7,9 @@ import {
   SettingsDescription,
   SettingsLabel,
 } from "@/app/components/settings/SettingsText";
-import { GlassCardUI } from "@/shared/ui/GlassCardUI";
+import { GlassCardUI, ToggleSwitchUI } from "@mike/ui";
 import { SettingsHeading } from "@/app/components/settings/SettingsHeading";
 import { SettingsRow } from "@/app/components/settings/SettingsRow";
-import { ToggleSwitchUI } from "@/shared/ui/ToggleSwitchUI";
 
 export default function AppearancePage() {
   const { profile, updateDarkMode } = useUserProfile();
@@ -39,7 +38,7 @@ export default function AppearancePage() {
 
   return (
     <section className="space-y-3">
-      <SettingsHeading>Appearance</SettingsHeading>
+      <SettingsHeading id="appearance">Appearance</SettingsHeading>
       <GlassCardUI>
         <SettingsRow>
           <div className="min-w-0 space-y-1">

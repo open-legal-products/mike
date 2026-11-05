@@ -1,6 +1,8 @@
 import { createHash } from "node:crypto";
 import { Queue } from "bullmq";
 import type IORedis from "ioredis";
+import { AppError } from "../appError";
+import { reportError } from "../observability/sentry";
 import { getRedisProducerConnection, withRedisTimeout } from "./connection";
 import { redisEnabled } from "../dbq/driver";
 import { enqueueDbJob } from "../dbq/enqueue";
@@ -132,10 +134,21 @@ export async function enqueueConversion(data: ConversionJobData) {
         // hat. The DB queue runs conversion.convert with the same handler in
         // every deployment, so the work still happens; it just waits for a
         // poll tick instead of arriving instantly.
-        console.error(
-            "[conversion] Redis enqueue failed; falling back to the DB queue:",
-            err instanceof Error ? err.message : err,
+        //
+        // Reported (the ioredis/BullMQ error is the cause, so its code
+        // survives) and logged as the same object: a message string alone
+        // reached Sentry through the console bridge with no stack and no code.
+        const failure = new AppError(
+            "queue.enqueue_failed",
+            "[conversion] Redis enqueue failed; falling back to the DB queue",
+            { cause: err },
         );
+        reportError(failure, {
+            level: "warning",
+            tags: { job_kind: "conversion.convert" },
+            extra: { document_id: data.documentId, version_id: data.versionId },
+        });
+        console.error(failure.message, failure);
         return dbEnqueue();
     }
 }

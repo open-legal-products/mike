@@ -2,13 +2,15 @@ import type { ConnectorApprovalItem, DocumentSearchEvent, TextCardEvent } from "
 import { textCardEvent } from "./textCard";
 import { internalFailure } from "../../../../lib/serviceResult";
 import { canUseWorkflowInWorkspace } from "../../../../lib/workflowWorkspace";
+import { AppError } from "../../../../lib/appError";
+import { reportError } from "../../../../lib/observability/sentry";
 import { safeError } from "../../../../lib/safeError";
 import {
   listPlaybooks,
   PlaybookRequestError,
   reviewWithPlaybook,
 } from "../../../playbooks/playbooks.service";
-import { catalogKeyFromWorkflowId } from "../../../../lib/workflowCatalog";
+import { catalogKeyFromWorkflowId, findCatalogWorkflow } from "../../../../lib/workflowCatalog";
 import { teamOrgIdOf } from "../../../../lib/personalOrgs";
 import type { ConnectorOwner } from "../../../../lib/connectorOwner";
 import {
@@ -52,8 +54,9 @@ import {
   type AskInputsEvent,
   devLog,
   resolveDocLabel,
+  createDocLabelResolver,
 } from "../types";
-import { downloadFile, storageKey, uploadFile } from "../../../../lib/storage";
+import { downloadFile, downloadFileIfAvailable, storageKey, uploadFile } from "../../../../lib/storage";
 import { convertedPdfKey, docxToPdf } from "../../../../lib/convert";
 import { enqueueConversion } from "../../../../lib/queue/conversionQueue";
 import {
@@ -74,6 +77,7 @@ import {
   readDocumentContent,
   findInDocumentContent,
   findTextMatches,
+  normalizedTextFor,
   runEditDocument,
   safeGeneratedFilename,
   type DocEditedResult,
@@ -101,6 +105,26 @@ import {
   type CourtlistenerTurnState,
 } from "./courtlistenerTurnState";
 import type { Db } from "../../../../lib/supabase";
+import { renderTableCells } from "./tableCells";
+
+/**
+ * Report a server-side tool's failure and return what to log for it. The
+ * kind is the one issue every tool failure files under; which tool fired is
+ * the function name on the frame, not a tag (tool names are not a closed
+ * vocabulary). The provider's or database's own error is the cause, so its
+ * code reaches Sentry. Log the returned wrapper where the raw error was
+ * logged before (the console bridge then recognises the line as already
+ * sent); where the log line was a safeError() category, keep it and log at
+ * warn level, which the bridge does not forward.
+ */
+function reportToolFailure(error: unknown): AppError {
+  const failure =
+    error instanceof AppError
+      ? error
+      : new AppError("chat.tool_failed", "Tool call failed", { cause: error });
+  reportError(failure, { tags: { component: "chat-stream", operation: "chat.tool" } });
+  return failure;
+}
 
 function sourceMaterialNotice(
   sourceKind: "document" | "library_template" | "workflow_asset" | undefined,
@@ -289,6 +313,32 @@ function cachedCaseNotFetchedResult(clusterId: number | null) {
     error:
       "Case has not been fetched in this turn. Call courtlistener_get_cases first.",
   };
+}
+
+/**
+ * read_workflow's access verdict, once per workflow per turn. The store is
+ * built afresh for every turn, so it is the turn's identity: the first
+ * read_workflow of a workflow re-checks access (the store's list may be a
+ * few seconds old), and a model that reads the same workflow again in that
+ * turn reuses the answer instead of repeating the full access check.
+ */
+const turnWorkflowVerdicts = new WeakMap<WorkflowStore, Map<string, Promise<boolean>>>();
+function workflowVerdictForTurn(
+  store: WorkflowStore,
+  workflowId: string,
+  check: () => Promise<boolean>,
+): Promise<boolean> {
+  let verdicts = turnWorkflowVerdicts.get(store);
+  if (!verdicts) {
+    verdicts = new Map();
+    turnWorkflowVerdicts.set(store, verdicts);
+  }
+  let verdict = verdicts.get(workflowId);
+  if (!verdict) {
+    verdict = check();
+    verdicts.set(workflowId, verdict);
+  }
+  return verdict;
 }
 
 export async function runToolCalls(
@@ -836,9 +886,8 @@ export async function runToolCalls(
       });
     } else if (tc.function.name === "fetch_documents") {
       const rawDocIds = (args.doc_ids as string[]) ?? [];
-      const docIds = rawDocIds.map(
-        (id) => resolveDocLabel(id, docStore, docIndex) ?? id,
-      );
+      const labelFor = createDocLabelResolver(docStore, docIndex);
+      const docIds = rawDocIds.map((id) => labelFor(id) ?? id);
       const parts: string[] = [];
       for (const docId of docIds) {
         const readIdentity = await getTurnReadIdentity({
@@ -917,7 +966,8 @@ export async function runToolCalls(
           ),
         });
       } catch (error) {
-        console.error("[run_tools] list_playbooks failed", safeError(error));
+        reportToolFailure(error);
+        console.warn("[run_tools] list_playbooks failed", safeError(error));
         toolResults.push({
           role: "tool",
           tool_call_id: tc.id,
@@ -1038,7 +1088,8 @@ export async function runToolCalls(
         } catch (error) {
           if (error instanceof PlaybookRequestError) fail(error.message);
           else {
-            console.error("[run_tools] run_playbook failed", safeError(error));
+            reportToolFailure(error);
+            console.warn("[run_tools] run_playbook failed", safeError(error));
             fail("The playbook review failed. Try again.");
           }
         } finally {
@@ -1061,12 +1112,22 @@ export async function runToolCalls(
       });
     } else if (tc.function.name === "read_workflow") {
       const wfId = args.workflow_id as string;
+      // Turn setup loads only active catalog versions; a historical chat
+      // can still name a retired one, which is looked up on demand.
+      if (workflowStore && !workflowStore.has(wfId) && catalogKeyFromWorkflowId(wfId)) {
+        const retired = await findCatalogWorkflow(wfId, db).catch(() => null);
+        if (retired?.type === "assistant" && retired.prompt_md) {
+          workflowStore.set(wfId, { title: retired.title, skill_md: retired.prompt_md, listed: false });
+        }
+      }
       const candidate = workflowStore?.get(wfId);
       const allowed = candidate && (
         catalogKeyFromWorkflowId(wfId) !== null ||
-        await canUseWorkflowInWorkspace(
-          db, wfId, userId, options.userEmail,
-          (await teamOrgIdOf(db, options.orgId)) ?? "personal",
+        await workflowVerdictForTurn(workflowStore!, wfId, async () =>
+          canUseWorkflowInWorkspace(
+            db, wfId, userId, options.userEmail,
+            (await teamOrgIdOf(db, options.orgId)) ?? "personal",
+          ),
         )
       );
       const wf = allowed ? candidate : undefined;
@@ -1115,45 +1176,14 @@ export async function runToolCalls(
         content: `${instructions}${assetNotice}`,
       });
     } else if (tc.function.name === "read_table_cells" && tabularStore) {
-      const colIndices = args.col_indices as number[] | undefined;
-      const rowIndices = args.row_indices as number[] | undefined;
-
-      const filteredCols = colIndices?.length
-        ? tabularStore.columns.filter((_, i) => colIndices.includes(i))
-        : tabularStore.columns;
-      const filteredDocs = rowIndices?.length
-        ? tabularStore.documents.filter((_, i) => rowIndices.includes(i))
-        : tabularStore.documents;
-
-      const label = `${filteredCols.length} ${filteredCols.length === 1 ? "column" : "columns"} × ${filteredDocs.length} ${filteredDocs.length === 1 ? "row" : "rows"}`;
+      const { label, content } = renderTableCells(
+        tabularStore,
+        args.col_indices as number[] | undefined,
+        args.row_indices as number[] | undefined,
+      );
       write(
         `data: ${JSON.stringify({ type: "doc_read_start", filename: label })}\n\n`,
       );
-
-      const lines: string[] = [];
-      for (const col of filteredCols) {
-        const colPos = tabularStore.columns.findIndex(
-          (c) => c.index === col.index,
-        );
-        for (const doc of filteredDocs) {
-          const rowPos = tabularStore.documents.findIndex(
-            (d) => d.id === doc.id,
-          );
-          const cell = tabularStore.cells.get(`${col.index}:${doc.id}`);
-          lines.push(
-            `[COL:${colPos} "${col.name}" | ROW:${rowPos} "${doc.filename}"]`,
-          );
-          if (cell?.summary) {
-            lines.push(`Summary: ${cell.summary}`);
-            if (cell.flag) lines.push(`Flag: ${cell.flag}`);
-            if (cell.reasoning) lines.push(`Reasoning: ${cell.reasoning}`);
-          } else {
-            lines.push(`(not yet generated)`);
-          }
-          lines.push("");
-        }
-      }
-
       write(
         `data: ${JSON.stringify({ type: "doc_read", filename: label })}\n\n`,
       );
@@ -1161,7 +1191,7 @@ export async function runToolCalls(
       toolResults.push({
         role: "tool",
         tool_call_id: tc.id,
-        content: lines.join("\n") || "No cells found.",
+        content,
       });
     } else if (tc.function.name === COURTLISTENER_TOOL_NAMES.searchCaseLaw) {
       const query = typeof args.query === "string" ? args.query : "";
@@ -1452,6 +1482,7 @@ export async function runToolCalls(
           maxResults: remaining,
           contextChars,
           startIndex: hits.length,
+          normalized: normalizedTextFor(opinion, opinion.text),
         });
         totalMatches += result.totalMatches;
         hits.push(
@@ -1974,7 +2005,7 @@ export async function runToolCalls(
           const sourcePdfPath = active?.pdf_storage_path ?? null;
           const raw = await downloadFile(sourcePath);
           let pdfBytes = sourcePdfPath
-            ? await downloadFile(sourcePdfPath)
+            ? await downloadFileIfAvailable(sourcePdfPath)
             : null;
           if (!raw) {
             fail("Could not read the source document's bytes from storage.");
@@ -2083,7 +2114,7 @@ export async function runToolCalls(
             ) {
               console.error(
                 "[replicate-document] failed to record documents",
-                docErr,
+                reportToolFailure(docErr ?? new Error("document insert returned a short result")),
               );
               fail("Failed to record replicated documents");
             } else {
@@ -2122,7 +2153,7 @@ export async function runToolCalls(
                   );
                 console.error(
                   "[replicate-document] failed to record document versions",
-                  verErr,
+                  reportToolFailure(verErr ?? new Error("version insert returned a short result")),
                 );
                 fail("Failed to record replicated document versions");
               } else {
@@ -2251,7 +2282,7 @@ export async function runToolCalls(
             }
           }
         } catch (e) {
-          console.error("[replicate-document] failed", e);
+          console.error("[replicate-document] failed", reportToolFailure(e));
           fail("replicate_document failed");
         }
       }
