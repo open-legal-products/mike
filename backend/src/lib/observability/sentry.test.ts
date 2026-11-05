@@ -1088,6 +1088,18 @@ describe("GoTrue refresh conflicts (MIKE-BACKEND-8D)", () => {
     const { AuthApiError } = await import("@supabase/supabase-js");
     expect(consoleEvent(new AuthApiError("Database error", 500, "unexpected_failure"))).not.toBeNull();
   });
+
+  it("still reports a 409 with any other code, and our own labelled log of a conflict", async () => {
+    const { AuthApiError } = await import("@supabase/supabase-js");
+    expect(consoleEvent(new AuthApiError("Email exists", 409, "email_exists"))).not.toBeNull();
+    const conflict = new AuthApiError("Too many concurrent token refresh requests", 409, "conflict");
+    expect(
+      scrubEvent(
+        { logger: "console", message: "[auth] admin update failed" } as unknown as Sentry.ErrorEvent,
+        { captureContext: { extra: { arguments: ["[auth] admin update failed", conflict] } } },
+      ),
+    ).not.toBeNull();
+  });
 });
 
 describe("community install minimisation", () => {

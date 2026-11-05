@@ -67,13 +67,19 @@ const NODE_WARNING_TEXT = /^\(node:\d+\) (?:\[[\w-]+\] )?[\w$]+: /;
  * "AuthApiError: Failure in application / 409" (MIKE-BACKEND-8D). It is an
  * expected race, not a failure: the request whose access token is still
  * valid is served, and one whose token has expired already answers 401
- * through requireAuth. Only a 409 from the auth client is dropped; any other
- * status it logs is still reported.
+ * through requireAuth. Only that exact log is dropped: auth-js's bare
+ * `console.error(err)` (one argument) of an auth error with status 409 and
+ * code `conflict`. Any other status or code, and our own
+ * `logError("[label] ...", authError)` of the same error, is still reported.
+ * This is a backstop for races across instances: #779 single-flights the
+ * refresh within one process, and this filter should not land without it.
  */
-function isGoTrueConflict(arg: unknown): boolean {
+function isGoTrueRefreshConflictLog(args: unknown[]): boolean {
+  if (args.length !== 1) return false;
+  const arg = args[0];
   if (!arg || typeof arg !== "object") return false;
-  const error = arg as { __isAuthError?: unknown; status?: unknown };
-  return error.__isAuthError === true && error.status === 409;
+  const error = arg as { __isAuthError?: unknown; status?: unknown; code?: unknown };
+  return error.__isAuthError === true && error.status === 409 && error.code === "conflict";
 }
 
 function isNodeWarningText(args: unknown[]): boolean {
@@ -814,7 +820,7 @@ export function scrubEvent(
     }
     // Node's own warning printer; reportProcessWarning() filed the object.
     if (isNodeWarningText(args)) return null;
-    if (args.some(isGoTrueConflict)) return null;
+    if (isGoTrueRefreshConflictLog(args)) return null;
     // Positional payloads after the label are never titles or grouping keys.
     const label = typeof args[0] === "string" ? args[0].trim() : "Console error";
     const nestedError = args
