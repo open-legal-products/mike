@@ -6,7 +6,7 @@
 import { act, render, screen } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ToastViewportUI, clearToasts } from "@mike/ui";
-import { describeError } from "@mike/client";
+import { MIKE_SENTRY_DSN, describeError } from "@mike/client";
 import {
     MikeApiError,
     parseApiErrorBody,
@@ -18,7 +18,6 @@ import {
     requestOrigin,
 } from "../../../word-addin/src/taskpane/lib/networkError";
 import { addinSentryOptions } from "../../../word-addin/src/taskpane/lib/errorReporting";
-import { MIKE_SENTRY_DSN } from "@/shared/lib/sentryEvent";
 import {
     notifyError,
     notifySessionCheckFailed,
