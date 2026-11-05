@@ -6,6 +6,7 @@
 // by CORS. See docs/deployment.md "Object-storage CORS for direct uploads".
 import { readFileSync } from "node:fs";
 import { spawnSync } from "node:child_process";
+import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { parse as parseYaml } from "yaml";
@@ -14,11 +15,11 @@ const repoRoot = path.resolve(__dirname, "../../..");
 
 // Run the script exactly as the storage-cors container does, with only the
 // variables under test (never the developer's own FRONTEND_URL).
-function corsPolicy(env: Record<string, string>) {
+function corsPolicy(env: Record<string, string>, nodeArgs = ["--experimental-strip-types"]) {
   const result = spawnSync(
     process.execPath,
     // The flag lets Node 22.6-22.17 load origins.ts too; later 22.x ignore it.
-    ["--experimental-strip-types", path.join(repoRoot, "docker/storage-cors.mjs")],
+    [...nodeArgs, path.join(repoRoot, "docker/storage-cors.mjs")],
     { env: { PATH: process.env.PATH ?? "", ...env }, encoding: "utf8" },
   );
   return { status: result.status, stderr: result.stderr, stdout: result.stdout };
@@ -83,11 +84,49 @@ describe("docker/storage-cors.mjs", () => {
     ]);
   });
 
-  it("refuses a value that would corrupt the policy", () => {
-    const { status, stdout, stderr } = corsPolicy({ FRONTEND_URL: 'https://a",b' });
-    expect(status).not.toBe(0);
-    expect(stdout).toBe("");
-    expect(stderr).toMatch(/not an absolute http\(s\) URL/);
+  // The stack waits for this script (createbucket, then the backend), so a
+  // bad input must never stop it: one clear line, and a policy that still
+  // allows the loopback development origins.
+  it.each([
+    ["a value that would corrupt the policy", 'https://a",b'],
+    ["a URL without a scheme", "mike.example"],
+    ["an underscore host no browser sends as an Origin", "http://mike_app:3000"],
+  ])("never puts %s in the policy, and still exits 0", (_, frontendUrl) => {
+    const { status, stdout, stderr } = corsPolicy({ FRONTEND_URL: frontendUrl, NODE_ENV: "production" });
+    expect(status).toBe(0);
+    expect(JSON.parse(stdout).CORSRules[0].AllowedOrigins).toEqual([
+      "http://localhost:3000",
+      "https://localhost:3200",
+    ]);
+    expect(stderr).toContain(`storage-cors: skipping ${JSON.stringify(frontendUrl)}`);
+    expect(stderr).toMatch(/adding the loopback development origins/);
+  });
+
+  it("keeps the valid origin when only the other URL is bad", () => {
+    const { status, stdout } = corsPolicy({
+      FRONTEND_URL: "https://mike.example.com",
+      WORD_ADDIN_URL: "word.example.com",
+      NODE_ENV: "production",
+    });
+    expect(status).toBe(0);
+    expect(JSON.parse(stdout).CORSRules[0].AllowedOrigins).toEqual([
+      "https://mike.example.com",
+      "http://localhost:3000",
+      "https://localhost:3200",
+    ]);
+  });
+
+  it("falls back, not fails, on an image built before origins.ts existed", () => {
+    const { status, stdout, stderr } = corsPolicy({
+      FRONTEND_URL: "https://mike.example.com",
+      MIKE_ORIGINS_MODULE: path.join(os.tmpdir(), "no-such-dir", "dist", "lib", "origins.js"),
+    });
+    expect(status).toBe(0);
+    expect(JSON.parse(stdout).CORSRules[0].AllowedOrigins).toEqual([
+      "http://localhost:3000",
+      "https://localhost:3200",
+    ]);
+    expect(stderr).toMatch(/cannot load the backend's origins module/);
   });
 
   it("is what compose installs, generated from exactly the backend's origin inputs", () => {
