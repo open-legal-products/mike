@@ -1,6 +1,7 @@
 // The bucket CORS policy for direct browser uploads is generated from the
-// deployment's own origins (docker/storage-cors.sh) instead of a checked-in
-// file that only listed localhost. MIKE-FRONTEND-28/3D/2Z, MIKE-WORD-ADDIN-9:
+// origins the backend trusts (docker/storage-cors.mjs, which calls the
+// backend's configuredAllowedOrigins) instead of a checked-in file that only
+// listed localhost. MIKE-FRONTEND-28/3D/2Z, MIKE-WORD-ADDIN-9:
 // every compose install opened from a real host had its storage PUTs refused
 // by CORS. See docs/deployment.md "Object-storage CORS for direct uploads".
 import { readFileSync } from "node:fs";
@@ -11,17 +12,19 @@ import { parse as parseYaml } from "yaml";
 
 const repoRoot = path.resolve(__dirname, "../../..");
 
-// Run the script exactly as the createbucket container does, with only the
+// Run the script exactly as the storage-cors container does, with only the
 // variables under test (never the developer's own FRONTEND_URL).
 function corsPolicy(env: Record<string, string>) {
-  const result = spawnSync("sh", [path.join(repoRoot, "docker/storage-cors.sh")], {
-    env: { PATH: process.env.PATH ?? "", ...env },
-    encoding: "utf8",
-  });
+  const result = spawnSync(
+    process.execPath,
+    // The flag lets Node 22.6-22.17 load origins.ts too; later 22.x ignore it.
+    ["--experimental-strip-types", path.join(repoRoot, "docker/storage-cors.mjs")],
+    { env: { PATH: process.env.PATH ?? "", ...env }, encoding: "utf8" },
+  );
   return { status: result.status, stderr: result.stderr, stdout: result.stdout };
 }
 
-describe("docker/storage-cors.sh", () => {
+describe("docker/storage-cors.mjs", () => {
   it("allows the configured public origins, not only localhost", () => {
     const { status, stdout } = corsPolicy({
       FRONTEND_URL: "https://mike.firm.example/",
@@ -41,6 +44,37 @@ describe("docker/storage-cors.sh", () => {
     });
   });
 
+  it("also allows every extra client origin the backend trusts (ALLOWED_ORIGINS)", () => {
+    const { status, stdout } = corsPolicy({
+      FRONTEND_URL: "https://mike.example.com",
+      ALLOWED_ORIGINS: "http://localhost:3000,https://word.example.com",
+    });
+    expect(status).toBe(0);
+    expect(JSON.parse(stdout).CORSRules[0].AllowedOrigins).toEqual(
+      expect.arrayContaining([
+        "https://mike.example.com",
+        "http://localhost:3000",
+        "https://word.example.com",
+      ]),
+    );
+    expect(JSON.parse(stdout).CORSRules[0].AllowedOrigins[0]).toBe("https://mike.example.com");
+  });
+
+  it("skips an ALLOWED_ORIGINS entry the backend's exact-match CORS could never match", () => {
+    const { status, stdout, stderr } = corsPolicy({
+      FRONTEND_URL: "https://mike.example.com",
+      NODE_ENV: "production",
+      ALLOWED_ORIGINS: "https://ok.example.com, https://app.example.com/path ,not a url",
+    });
+    expect(status).toBe(0);
+    expect(JSON.parse(stdout).CORSRules[0].AllowedOrigins).toEqual([
+      "https://mike.example.com",
+      "https://ok.example.com",
+    ]);
+    expect(stderr).toMatch(/skipping ALLOWED_ORIGINS entry .*app\.example\.com\/path/);
+    expect(stderr).toMatch(/skipping ALLOWED_ORIGINS entry .*not a url/);
+  });
+
   it("keeps the local-development origins when nothing is configured", () => {
     const { stdout } = corsPolicy({ FRONTEND_URL: "", WORD_ADDIN_URL: "" });
     expect(JSON.parse(stdout).CORSRules[0].AllowedOrigins).toEqual([
@@ -53,19 +87,27 @@ describe("docker/storage-cors.sh", () => {
     const { status, stdout, stderr } = corsPolicy({ FRONTEND_URL: 'https://a",b' });
     expect(status).not.toBe(0);
     expect(stdout).toBe("");
-    expect(stderr).toMatch(/invalid host/);
+    expect(stderr).toMatch(/not an absolute http\(s\) URL/);
   });
 
-  it("is what the compose createbucket job installs, fed the backend's FRONTEND_URL", () => {
+  it("is what compose installs, generated from exactly the backend's origin inputs", () => {
     const compose = parseYaml(readFileSync(path.join(repoRoot, "docker-compose.yml"), "utf8"));
-    const job = compose.services.createbucket;
-    expect(job.volumes).toContain("./docker/storage-cors.sh:/storage-cors.sh:ro");
-    expect(job.command).toMatch(/sh \/storage-cors\.sh > \/tmp\/storage-cors\.json/);
-    expect(job.command).toMatch(/--cors-configuration file:\/\/\/tmp\/storage-cors\.json/);
-    // Same interpolation as the backend service, so the two cannot disagree.
-    expect(job.environment.FRONTEND_URL).toBe("${FRONTEND_URL:-http://localhost:3000}");
-    expect(compose.services.backend.environment).toContain(
-      "FRONTEND_URL=${FRONTEND_URL:-http://localhost:3000}",
-    );
+    const { backend, createbucket } = compose.services;
+    const generator = compose.services["storage-cors"];
+    // Same image (so the same release's origins.ts) and the same inputs as
+    // the backend: its env_file list and its origin overrides.
+    expect(generator.image).toBe(backend.image);
+    expect(generator.env_file).toEqual(backend.env_file);
+    for (const name of ["NODE_ENV", "FRONTEND_URL"]) {
+      const line = backend.environment.find((e: string) => e.startsWith(`${name}=`));
+      expect(generator.environment).toContain(line);
+    }
+    expect(generator.environment).toContain("MIKE_ORIGINS_MODULE=/app/dist/lib/origins.js");
+    expect(generator.volumes).toContain("./docker/storage-cors.mjs:/storage-cors.mjs:ro");
+    expect(generator.command.join(" ")).toMatch(/node \/storage-cors\.mjs > \/cors\/storage-cors\.json/);
+    expect(createbucket.depends_on["storage-cors"]).toEqual({
+      condition: "service_completed_successfully",
+    });
+    expect(createbucket.command).toMatch(/--cors-configuration file:\/\/\/cors\/storage-cors\.json/);
   });
 });

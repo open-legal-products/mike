@@ -344,11 +344,23 @@ of the CORS cache.
 With Docker Compose, two settings in the compose-root `.env` decide whether
 browser uploads work from anywhere other than the machine running the stack:
 
-- `FRONTEND_URL` (and `WORD_ADDIN_URL`, when set) is the origin the bundled
-  storage bucket allows. The `createbucket` job generates the policy above
-  from them with `docker/storage-cors.sh` on every `docker compose up`, so
-  changing the public URL and re-running `up` updates the bucket. Unset, the
-  policy allows `http://localhost:3000` and `https://localhost:3200`.
+- `FRONTEND_URL`, `WORD_ADDIN_URL` and `ALLOWED_ORIGINS` decide which origins
+  the bundled storage bucket allows: exactly the origins the backend's own
+  CORS trusts. On every `docker compose up` the `storage-cors` job runs
+  `docker/storage-cors.mjs` in the backend image, with the backend's
+  `env_file`s and overrides, through the backend's own origin parser
+  (`backend/src/lib/origins.ts`), and `createbucket` installs the result. So
+  an extra trusted client listed in `ALLOWED_ORIGINS` (a second hostname, or a
+  developer's `http://localhost:3000` against a public deployment) can upload
+  as well as call the API, and changing any of them and re-running `up`
+  updates the bucket. `FRONTEND_URL` and `WORD_ADDIN_URL` are reduced to their
+  `scheme://host[:port]`, and the job fails if either is not an http(s) URL.
+  An `ALLOWED_ORIGINS` entry must be an exact origin such as
+  `https://review.example.com` (no path, lower-case host), because the
+  backend matches it byte for byte; any other entry is skipped with a warning
+  in the job's log. Outside `NODE_ENV=production` the backend also trusts
+  `http://localhost:3000` and `https://localhost:3200` when `FRONTEND_URL` or
+  `WORD_ADDIN_URL` is unset, and so does the bucket.
 - `R2_PUBLIC_ENDPOINT_URL` is the storage URL the backend signs for browsers.
   It defaults to `http://localhost:${STORAGE_PORT:-9000}`, which is correct
   only when the browser runs on the same machine. For any other host, set it
