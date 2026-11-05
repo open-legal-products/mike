@@ -309,7 +309,7 @@ Performance tracing settings do not bypass the error-only transport boundary;
 tracing is unsupported until a separate outbound policy is reviewed.
 
 The boundary is mirrored in `backend/src/lib/observability/sentryPrivacy.ts`
-and `frontend/src/shared/lib/sentryPrivacy.ts`, with a synchronization test.
+and `packages/client/src/sentryPrivacy.ts`, with a synchronization test.
 When adding diagnostics, extend reviewed enum/ID fields and their tests. Do not
 add free-form text just to restore a more detailed exception message.
 
@@ -379,9 +379,9 @@ resolve an issue "until the next release". The release is
 in Sentry's `package@version+build` form, so releases order by version (an old
 self-hosted install reporting late sorts where it belongs, not after the fix)
 while the build metadata still names the exact commit. The same string is
-produced by every runtime (`frontend/src/shared/lib/sentryEvent.ts`,
+produced by every runtime (`packages/client/src/sentryEvent.ts`,
 `backend/src/lib/observability/sentry.ts`) and by both source-map build plugins
-(`frontend/src/shared/lib/releaseName.cjs`), so uploaded maps attach to the
+(`packages/client/src/releaseName.cjs`), so uploaded maps attach to the
 release the events carry.
 
 Where the parts come from:

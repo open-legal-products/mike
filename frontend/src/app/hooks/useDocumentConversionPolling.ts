@@ -1,7 +1,7 @@
 import { useEffect, type Dispatch, type SetStateAction } from "react";
 import type { Document } from "../components/shared/types";
 import { getDocumentStatuses } from "../lib/mikeApi";
-import { settleWithConcurrency } from "@/shared/lib/settleWithConcurrency";
+import { settleWithConcurrency } from "@mike/client";
 
 export function useDocumentConversionPolling(documents: Document[], setDocuments: Dispatch<SetStateAction<Document[]>>) {
     const pendingKey = JSON.stringify(documents

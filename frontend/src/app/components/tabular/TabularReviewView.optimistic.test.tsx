@@ -32,7 +32,7 @@ import type {
     TabularReviewRow,
 } from "../shared/types";
 import { TRView } from "./TabularReviewView";
-import { ToastViewportUI, clearToasts } from "@/shared/ui/ToastUI";
+import { ToastViewportUI, clearToasts } from "@mike/ui";
 
 const { tableProps } = vi.hoisted(() => ({
     tableProps: {
