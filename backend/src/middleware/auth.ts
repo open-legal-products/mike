@@ -2,7 +2,8 @@ import { Request, Response, NextFunction } from "express";
 import type { ParamsFlatDictionary } from "express-serve-static-core";
 import { createServerSupabase, type Db } from "../lib/supabase";
 import { syncProfileEmail } from "../lib/userLookup";
-import { sendInternalError } from "../lib/httpError";
+import { sendInternalError, sendUpstreamUnavailable } from "../lib/httpError";
+import { isAuthUpstreamFailure } from "../lib/authUpstream";
 import { createRequestSupabase } from "../lib/authSession";
 import { requestOriginIsTrusted } from "../lib/origins";
 import { devLog, isDev } from "../lib/log";
@@ -182,6 +183,8 @@ export async function requireAuth(
   let token = "";
   let user: Awaited<ReturnType<typeof admin.auth.getUser>>["data"]["user"] =
     null;
+  // auth-js returns, rather than throws, the error behind a missing user.
+  let lookupError: unknown = null;
 
   if (auth.startsWith("Bearer ")) {
     // Temporary compatibility path for older Word add-ins, load tests, and
@@ -189,6 +192,7 @@ export async function requireAuth(
     token = auth.slice(7).trim();
     const result = await admin.auth.getUser(token);
     user = result.data.user;
+    lookupError = result.error;
   } else {
     if (
       !["GET", "HEAD", "OPTIONS"].includes(req.method) &&
@@ -205,6 +209,7 @@ export async function requireAuth(
       const authClient = createRequestSupabase(req, res);
       const result = await authClient.auth.getUser();
       user = result.data.user;
+      lookupError = result.error;
       if (user) {
         const sessionResult = await authClient.auth.getSession();
         token = sessionResult.data.session?.access_token ?? "";
@@ -222,6 +227,19 @@ export async function requireAuth(
       );
       return;
     }
+  }
+
+  if (!user && isAuthUpstreamFailure(lookupError)) {
+    // GoTrue could not be reached, so nobody could say whether the session
+    // is valid. A 401 here would make the web app sign the user out of a
+    // session that is fine; 503 upstream_unavailable tells it to wait.
+    sendUpstreamUnavailable(
+      res,
+      new AppError("auth.supabase_unavailable", "session lookup could not reach GoTrue", {
+        cause: lookupError,
+      }),
+    );
+    return;
   }
 
   if (!user || !token) {

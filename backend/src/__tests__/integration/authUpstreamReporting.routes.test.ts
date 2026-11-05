@@ -9,9 +9,10 @@ import type { AddressInfo } from "node:net";
 import express from "express";
 import request from "supertest";
 import * as Sentry from "@sentry/node";
-import { afterAll, afterEach, beforeAll, beforeEach, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { resetSentryForTests, scrubEvent } from "../../lib/observability/sentry";
 import { privacyBoundaryIntegration } from "../../lib/observability/sentryPrivacy";
+import { requireAuth } from "../../middleware/auth";
 import { protectInternalErrorResponses } from "../../middleware/internalErrorResponse";
 import { authRouter } from "../../modules/auth/auth.routes";
 
@@ -23,6 +24,7 @@ const ENV = {
   // ECONNREFUSED and turns it into an AuthRetryableFetchError (status 0).
   SUPABASE_URL: "http://127.0.0.1:9",
   SUPABASE_PUBLISHABLE_KEY: "test-publishable-key",
+  SUPABASE_SECRET_KEY: "test-secret-key",
 };
 
 const events: Sentry.ErrorEvent[] = [];
@@ -89,6 +91,9 @@ function app() {
   server.use(protectInternalErrorResponses);
   server.use(express.json());
   server.use("/auth", authRouter);
+  server.get("/projects", requireAuth, (_req, res) => {
+    res.json({ ok: true });
+  });
   return server;
 }
 
@@ -140,4 +145,39 @@ it("keeps a GoTrue 500 a reported 500, not an outage the user should wait out", 
   } finally {
     process.env.SUPABASE_URL = ENV.SUPABASE_URL;
   }
+});
+
+describe("requireAuth with GoTrue unreachable", () => {
+  function jwt(exp: number): string {
+    const part = (value: object) => Buffer.from(JSON.stringify(value)).toString("base64url");
+    return `${part({ alg: "HS256", typ: "JWT" })}.${part({ sub: "u1", exp, aud: "authenticated", role: "authenticated" })}.signature`;
+  }
+  const exp = Math.floor(Date.now() / 1000) + 3600;
+  const user = { id: "u1", aud: "authenticated", email: "lawyer@example.test" };
+  const session = { access_token: jwt(exp), refresh_token: "r1", expires_in: 3600, expires_at: exp, token_type: "bearer", user };
+  const cookie = `mike-session=base64-${Buffer.from(JSON.stringify(session)).toString("base64url")}`;
+
+  it.each([
+    ["a cookie session", (req: request.Test) => req.set("Cookie", cookie)],
+    ["a bearer token", (req: request.Test) => req.set("Authorization", `Bearer ${jwt(exp)}`)],
+  ])("answers %s 503 upstream_unavailable, not a 401 that signs the user out", async (_label, authenticate) => {
+    const res = await authenticate(request(app()).get("/projects"));
+    await Sentry.flush(2000);
+
+    expect(res.status).toBe(503);
+    expect(res.body).toEqual({
+      code: "upstream_unavailable",
+      detail: "The server is temporarily unreachable. Please try again shortly.",
+      request_id: "req-auth-outage",
+    });
+    // The session is kept: no cleared cookie on the way back.
+    expect(String(res.headers["set-cookie"] ?? "")).not.toContain("Max-Age=0");
+    const reported = events.filter((event) => event.logger !== "console");
+    expect(reported).toHaveLength(1);
+    expect(reported[0]!.tags).toMatchObject({
+      error_kind: "auth.supabase_unavailable",
+      http_status: 503,
+    });
+    expect(events.filter((event) => event.logger === "console")).toHaveLength(0);
+  });
 });
