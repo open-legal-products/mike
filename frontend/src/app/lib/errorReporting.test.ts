@@ -346,6 +346,12 @@ describe("development builds", () => {
         expect(reportingDestination(dev({ SENTRY_DSN: own }))).toEqual({ dsn: own, source: "runtime" });
     });
 
+    it("say at boot that reporting is off because this is a development build", () => {
+        expect(describeReportingDestination(reportingDestination(dev({})))).toBe(
+            "[sentry] web app reports: off (development build; set SENTRY_DSN to report to your own project), browser included",
+        );
+    });
+
     it("report as environment development unless SENTRY_ENVIRONMENT says otherwise", () => {
         expect(browserSentryOptions({ nodeEnv: "development" }).environment).toBe("development");
         expect(serverSentryOptions("server", dev({ SENTRY_DSN: own })).environment).toBe("development");
