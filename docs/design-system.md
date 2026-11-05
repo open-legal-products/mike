@@ -13,28 +13,33 @@ Everything below lives in `frontend/src/app/globals.css` unless stated otherwise
 | Location | What belongs there |
 | --- | --- |
 | `frontend/src/app/components/ui/` | Shared web primitives. Small, unopinionated, no data fetching, no feature knowledge. |
-| `frontend/src/shared/ui/` | Primitives shared by the web app **and** the Word add-in. Framework-light: React, `lucide-react`, `clsx`, `tailwind-merge` only. |
+| `packages/ui/` (`@mike/ui`) | Primitives shared by the web app **and** the Word add-in. Framework-light: React, `lucide-react`, `clsx`, `tailwind-merge`, the Radix dropdown, and `@mike/client` only. |
 | `frontend/src/app/components/shared/` | App-level building blocks that assume the app shell — the table layer (`TablePrimitive.tsx`, `TableToolbar.tsx`), page headers, sidebars. |
 | `frontend/src/app/components/<feature>/` | Feature components. Compose the above; do not restate their markup. |
 
-`src/shared/ui/` may not import from `src/app/`. It is compiled into the add-in
-build, which has no Next.js app directory. When you add a file there you must
-also register it for Tailwind class scanning in
-`word-addin/src/taskpane/styles.css`:
+`packages/ui/` may not import from either application (`frontend/src/app/`,
+`word-addin/src/`): it is compiled into the add-in build, which has no Next.js
+app directory, as well as into the web app. Both targets consume it by name
+through a `paths` alias (`frontend/tsconfig.json`, `word-addin/tsconfig.json`,
+`word-addin/webpack.config.js`), and both register the whole package for
+Tailwind class scanning with one `@source "../../../packages/ui/src"` entry, so
+a new file needs no per-file registration. What it does need is an export from
+`packages/ui/src/index.ts`, the package's public surface: a file that is not
+re-exported there is internal.
 
-```css
-@source "../../../frontend/src/shared/ui/YourThingUI.tsx";
-```
+Cross-target primitives use the `XxxUI.tsx` convention and are imported from
+`@mike/ui` by both targets, for example `import { PillButtonUI } from
+"@mike/ui"`. Do not add a web-only re-export whose only job is to rename
+`XxxUI`: it adds another file, test, and catalog entry without adding behavior.
+`GlassCardUI`, `PillButtonUI`, `GlassIconButtonUI`, `TabPillButtonUI`, and
+`ToggleSwitchUI` are the canonical implementations used by both targets. To
+style a link as a pill, apply `pillButtonUIClassName` (also from `@mike/ui`)
+directly to the link; this keeps the correct link semantics and is safe in
+server components.
 
-Cross-target primitives use the `XxxUI.tsx` convention and are imported
-directly from `@/shared/ui/XxxUI` by the web app. Do not add a web-only
-re-export whose only job is to rename `XxxUI`: it adds another file, test, and
-catalog entry without adding behavior. The dropdown is the one file named
-without the suffix: `@/shared/ui/dropdown`. `GlassCardUI`, `PillButtonUI`,
-`GlassIconButtonUI`, `TabPillButtonUI`, and `ToggleSwitchUI` are the canonical
-implementations used by both targets. To style a link as a pill, apply
-`pillButtonUIClassName` from `PillButtonUI.styles` directly to the link; this
-keeps the correct link semantics and is safe in server components.
+The package's colocated tests run with the frontend's Vitest (`npm test
+--prefix frontend` includes `packages/ui/src/**/*.test.tsx`), and its stories
+in `packages/ui/stories/` are part of the Ladle catalog.
 
 ## Icons
 
@@ -55,7 +60,7 @@ Two families coexist. Prefer a token over a raw Tailwind palette class whenever
 one exists; prefer either over a hex literal.
 
 Both families, and their `@theme inline` utility mappings, are declared once in
-`frontend/src/shared/ui/DesignTokensUI.css`. The web app's `globals.css` and the
+`packages/ui/styles/DesignTokensUI.css`. The web app's `globals.css` and the
 Word add-in's `word-addin/src/taskpane/styles.css` both import that file, so a
 token change reaches both targets. Do not redeclare one of these tokens in either
 entry stylesheet; `DesignTokensUI.test.ts` fails if you do.
@@ -80,7 +85,7 @@ modal-specific pair documented under elevation below.
 ### Component color roles
 
 Theme-sensitive colors that do not describe elevation live in
-`frontend/src/shared/ui/ThemeTokensUI.css`. This includes document tabs,
+`packages/ui/styles/ThemeTokensUI.css`. This includes document tabs,
 workflow-editor prose and tables, document/citation highlights, dropdown hover
 and selected states, chat fades and shimmers, and spreadsheet canvas overlays.
 The file is imported by both the web app and Word add-in and provides light and
@@ -314,8 +319,9 @@ one continuous plane. The float tier is also solid so menus and persistent
 chrome fully obscure content beneath them; subtle and overlay tiers retain
 their translucency where depth or underlying content matters.
 Elevation is centralized in
-`frontend/src/shared/ui/LiquidGlassUI.css`, with class-name constants in
-`LiquidGlassUI.ts`. Do not write a new `shadow-[...]` recipe for a general glass
+`packages/ui/styles/LiquidGlassUI.css`, with class-name constants exported
+from `@mike/ui` (`packages/ui/src/LiquidGlassUI.ts`). Do not write a new
+`shadow-[...]` recipe for a general glass
 surface.
 
 Use the lowest tier that communicates the required depth:
@@ -362,9 +368,9 @@ Compose the material classes through the established primitives and constants:
 ### Dropdowns
 
 Every menu a button or a right-click opens is built from
-`frontend/src/shared/ui/dropdown.tsx`. Web code imports it from
-`@/shared/ui/dropdown`; the Word add-in uses the `@mike/dropdown-ui` alias.
-There is no separate web wrapper. Do not hand-build a menu from a positioned
+`packages/ui/src/dropdown.tsx`, exported from `@mike/ui` for both the web app
+and the Word add-in. There is no separate web wrapper. Do not hand-build a menu
+from a positioned
 `div` and buttons: that loses keyboard navigation, menu roles, focus return,
 and viewport collision handling.
 
@@ -442,7 +448,7 @@ WarningPopup" below says what the notice looks like; this section says what
 goes in it and when.
 
 1. **Classify once.** `describeError` from `frontend/src/app/lib/userFacingError.ts`
-   (the shared classifier in `frontend/src/shared/lib/userError.ts` plus the
+   (the shared classifier in `packages/client/src/userError.ts` plus the
    web app's fixed sentences for server-reported codes such as
    `schema_out_of_date`) turns any thrown value into
    `{ kind, title, message, retryable, supportable, requestId }`. Pass

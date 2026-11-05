@@ -159,6 +159,29 @@ export function selectAllByKey<T extends Record<string, unknown>>(
   );
 }
 
+/**
+ * Rows in the order a caller promised (`created_at`, `sort_order`, …), with
+ * `id` as the final tie-break: {@link selectAllByKey} returns key order, and
+ * a batched read concatenates batches. Strings compare by code point (ISO
+ * timestamps sort chronologically that way), numbers numerically, missing
+ * values first.
+ */
+export function sortRows<T extends Record<string, unknown>>(rows: T[], ...columns: string[]): T[] {
+  const value = (row: T, column: string): string | number => {
+    const v = row[column];
+    return typeof v === "number" ? v : v == null ? "" : String(v);
+  };
+  return [...rows].sort((a, b) => {
+    for (const column of [...columns, "id"]) {
+      const left = value(a, column);
+      const right = value(b, column);
+      if (left === right) continue;
+      return left < right ? -1 : 1;
+    }
+    return 0;
+  });
+}
+
 /** The database error behind a batched-query failure, for result types that carry one. */
 export function queryFailureCause(error: unknown): unknown {
   return error instanceof BatchedQueryError ? error.cause : error;

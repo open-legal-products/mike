@@ -19,6 +19,7 @@ import { configureMikeApiClient, uploadStandaloneDocuments as uploadWordDocument
 import {
     UploadBatchError,
     failedUploadMessage,
+    uploadOutcomeNeedsRetry,
     replaceDocumentVersionFile,
     uploadDocumentVersion,
     uploadFilesWithSession,
@@ -30,7 +31,7 @@ import {
     uploadStandaloneDocuments,
     uploadWorkflowAssets,
 } from "./mikeApi";
-import { uploadProcessingPollDelayMs } from "@/shared/api/uploadSessionClient";
+import { uploadProcessingPollDelayMs } from "@mike/client";
 
 const fetchMock = vi.fn();
 const API_URL = "/api";
@@ -1309,5 +1310,57 @@ describe("upload session polling", () => {
         } finally {
             vi.useRealTimers();
         }
+    });
+});
+
+describe("failedUploadMessage for a file the worker refused", () => {
+    const refused = (filename: string, errorCode: string | null) => ({
+        clientId: filename,
+        filename,
+        status: "error" as const,
+        result: null,
+        errorCode,
+    });
+
+    it("names the file and the reason instead of asking for a retry", () => {
+        expect(failedUploadMessage([refused("notes.pdf", "invalid_pdf_file")])).toBe(
+            "notes.pdf is not a valid PDF file.",
+        );
+    });
+
+    it("lists every refused file when all share the reason", () => {
+        expect(
+            failedUploadMessage([
+                refused("a.pdf", "invalid_pdf_file"),
+                refused("b.pdf", "invalid_pdf_file"),
+            ]),
+        ).toBe("a.pdf, b.pdf are not valid PDF files.");
+    });
+
+    it("falls back to the generic line when the failures have mixed causes", () => {
+        expect(
+            failedUploadMessage([
+                refused("a.pdf", "invalid_pdf_file"),
+                refused("b.pdf", "processing_failed"),
+            ]),
+        ).toBe("a.pdf, b.pdf could not be uploaded. Please try again.");
+    });
+});
+
+describe("uploadOutcomeNeedsRetry", () => {
+    const outcome = (status: "completed" | "error", errorCode: string | null) => ({
+        status,
+        errorCode,
+    });
+
+    it("re-sends a file whose failure was not about its bytes", () => {
+        expect(uploadOutcomeNeedsRetry(outcome("error", "processing_failed"))).toBe(true);
+        expect(uploadOutcomeNeedsRetry(outcome("error", "direct_upload_failed"))).toBe(true);
+        expect(uploadOutcomeNeedsRetry(outcome("error", null))).toBe(true);
+    });
+
+    it("leaves out a file the server refused as not a PDF, and files that landed", () => {
+        expect(uploadOutcomeNeedsRetry(outcome("error", "invalid_pdf_file"))).toBe(false);
+        expect(uploadOutcomeNeedsRetry(outcome("completed", null))).toBe(false);
     });
 });
