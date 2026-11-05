@@ -26,9 +26,11 @@ const UNREACHABLE_CODES = new Set([
 /**
  * Hop-by-hop headers (RFC 9110 section 7.6.1) describe one connection, not
  * the request, so a proxy must not forward them. undici also refuses some of
- * them outright: a browser or client that sends `Expect: 100-continue` made
- * every proxied request throw NotSupportedError, filed as a 502
- * (MIKE-FRONTEND-3M). `host` and `content-length` are recomputed by fetch.
+ * them outright, and each refusal was filed as a 502: `Expect` throws
+ * NotSupportedError (MIKE-FRONTEND-3M), and `keep-alive`, `upgrade` and
+ * `transfer-encoding` throw InvalidArgumentError (MIKE-FRONTEND-4B, -4A;
+ * `connection` was already stripped on main). `host` and `content-length`
+ * are recomputed by fetch.
  */
 const HOP_BY_HOP_HEADERS = [
     "connection",

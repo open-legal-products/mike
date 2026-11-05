@@ -115,8 +115,10 @@ describe("same-origin API gateway", () => {
         );
     });
 
-    // MIKE-FRONTEND-3M: undici throws NotSupportedError on `Expect`, so a
-    // client that sent `Expect: 100-continue` got a 502 for every request.
+    // undici refuses some hop-by-hop request headers outright, and the
+    // gateway answered 502 for every such request: `Expect` throws
+    // NotSupportedError (MIKE-FRONTEND-3M), and `keep-alive`, `upgrade` and
+    // `transfer-encoding` throw InvalidArgumentError (MIKE-FRONTEND-4B, -4A).
     it("does not forward hop-by-hop headers", async () => {
         fetchMock.mockResolvedValue(new Response(null, { status: 204 }));
         const request = new NextRequest("https://app.example.test/api/documents", {
@@ -128,6 +130,7 @@ describe("same-origin API gateway", () => {
                 te: "trailers",
                 trailer: "x-checksum",
                 upgrade: "h2c",
+                "transfer-encoding": "chunked",
                 "proxy-authorization": "Basic cHJveHk6c2VjcmV0",
                 connection: "keep-alive, x-hop",
                 "x-hop": "1",
@@ -138,7 +141,7 @@ describe("same-origin API gateway", () => {
         await POST(request, context(["documents"]));
 
         const forwarded = new Headers((fetchMock.mock.calls[0][1] as RequestInit).headers);
-        for (const name of ["expect", "keep-alive", "te", "trailer", "upgrade", "proxy-authorization", "connection", "x-hop"]) {
+        for (const name of ["expect", "keep-alive", "te", "trailer", "upgrade", "transfer-encoding", "proxy-authorization", "connection", "x-hop"]) {
             expect(forwarded.has(name), name).toBe(false);
         }
         expect(forwarded.get("content-type")).toBe("application/json");
