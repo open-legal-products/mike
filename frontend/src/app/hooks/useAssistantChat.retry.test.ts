@@ -555,6 +555,27 @@ describe("useAssistantChat turn-failure reporting", () => {
         });
     });
 
+    // Review of #775: in an existing chat, a 5xx before the server named the
+    // turn is an uncertain delivery, and the toast wraps the error in a
+    // UserVisibleError (kind "unknown"). That wrapper must not be filed as a
+    // second, "unknown" fault: the 500 goes out once, and a 503 (the
+    // backend's own report) not at all.
+    it.each([
+        [500, "internal_error", 1],
+        [503, "upstream_unavailable", 0],
+    ])("files an uncertain-delivery %i at most once, not its toast wrapper", async (status, code, reports) => {
+        fetchMock.mockResolvedValueOnce(refusal(status, code));
+        const { result } = renderHook(() => ({ chat: useAssistantChat({ chatId: "chat-1" }), toasts: useToasts() }));
+        await act(async () => {
+            await result.current.chat.handleChat(userMessage());
+        });
+        const toast = result.current.toasts.at(-1);
+        expect(toast?.message).toContain("may still be running");
+        expect(toast?.actions?.map((a) => a.label)).toContain("Check chat");
+        expect(reportErrorMock).toHaveBeenCalledTimes(reports);
+        if (reports) expect(reportErrorMock.mock.calls[0]?.[0]).toMatchObject({ status });
+    });
+
     it("does not re-report a failure that is already on file", async () => {
         const filed = Object.assign(new Error("API error: 500"), { status: 500 });
         reported.add(filed);
