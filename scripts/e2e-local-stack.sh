@@ -79,19 +79,18 @@ SQL
 
 # Rewrite only the Supabase lines of the env files, preserving everything else
 # (API keys, R2 storage, …). Keep a one-time backup of the pre-local versions.
-set_kv() {
-    local file=$1 key=$2 value=$3
-    if grep -q "^${key}=" "$file" 2>/dev/null; then
-        awk -v k="$key" -v v="$value" \
-            'index($0, k"=") == 1 { print k "=" v; next } { print }' \
-            "$file" >"$file.tmp" && mv "$file.tmp" "$file"
-    else
-        echo "${key}=${value}" >>"$file"
-    fi
-}
+# set_kv and fill_placeholder_secrets live in scripts/lib/local-secrets.sh so
+# scripts/local-secrets.test.sh can exercise them without a stack.
+# shellcheck source=lib/local-secrets.sh
+. "$ROOT/scripts/lib/local-secrets.sh"
 
 [ -f .env ] || cp .env.example .env
 [ -f .env.hosted.bak ] || cp .env .env.hosted.bak
+# The template's placeholder secrets are refused at boot (runtimeConfig.ts), so
+# a fresh checkout gets the same throwaway values CI uses (.github/workflows/e2e.yml).
+# Real values already in .env are left alone; a key missing from an older
+# .env is filled rather than aborting the run.
+fill_placeholder_secrets .env
 set_kv .env SUPABASE_URL "$API_URL"
 set_kv .env SUPABASE_PUBLISHABLE_KEY "$ANON_KEY"
 set_kv .env SUPABASE_SECRET_KEY "$SERVICE_KEY"

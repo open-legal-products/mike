@@ -87,6 +87,39 @@ describe("success path is untouched", () => {
     ]);
   });
 
+  it("delivers a terminal notice separately from model text when the caller supports it", async () => {
+    const truncated = 'Answer [1].\n<CITATIONS>[{"ref":1,"quote":"cut';
+    const model = await makeModel([step(...text(truncated), finish("length"))]);
+    const callbacks = { onContentDelta: vi.fn(), onStopNotice: vi.fn() };
+
+    const result = await streamAiSdk({ ...base, callbacks }, config(model));
+
+    const notice = stopNotice(1, base.maxIterations, "length");
+    expect(callbacks.onContentDelta.mock.calls.map(([delta]) => delta).join("")).toBe(truncated);
+    expect(callbacks.onStopNotice).toHaveBeenCalledExactlyOnceWith(notice);
+    expect(result.fullText).toBe(truncated + notice);
+  });
+
+  it("still streams a length notice for callers without a separate notice callback", async () => {
+    const model = await makeModel([step(...text("Partial answer."), finish("length"))]);
+    const onContentDelta = vi.fn();
+
+    const result = await streamAiSdk({ ...base, callbacks: { onContentDelta } }, config(model));
+
+    expect(onContentDelta.mock.calls.map(([delta]) => delta).join("")).toBe(result.fullText);
+    expect(result.fullText).toContain("output limit");
+  });
+
+  it("does not report a stop notice for a normal completion", async () => {
+    const model = await makeModel([textStep("Finished answer.")]);
+    const callbacks = { onContentDelta: vi.fn(), onStopNotice: vi.fn() };
+
+    const result = await streamAiSdk({ ...base, callbacks }, config(model));
+
+    expect(result.fullText).toBe("Finished answer.");
+    expect(callbacks.onStopNotice).not.toHaveBeenCalled();
+  });
+
   it("forbids tool calls on the last step when asked to finish without them", async () => {
     const model = await makeModel([
       callStep("c1", "read_document", { doc_id: "doc-0" }),
