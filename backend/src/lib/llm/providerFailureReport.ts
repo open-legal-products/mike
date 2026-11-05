@@ -2,6 +2,7 @@ import {
   acknowledgeUnreported,
   reportError,
   type ReportContext,
+  type ReportLevel,
 } from "../observability/sentry";
 import { providerFailureLevel } from "./providerErrors";
 
@@ -14,9 +15,10 @@ import { providerFailureLevel } from "./providerErrors";
  * `failure` should be the error the caller will rethrow or log again (an
  * AppError naming the flow, with the provider's error as its cause): the
  * console bridge recognises it, and anything wrapping it, as handled.
- * `context.level` may only make a reported failure quieter-or-equal in
- * intent (a UserFacingError the user is already shown); it never brings an
- * unreported account condition back.
+ * `context.level` may only make a reported failure quieter (a
+ * UserFacingError the user is already shown): the quieter of it and the
+ * provider's level wins, so a caller can never raise a 429 to an error, and
+ * it never brings an unreported account condition back.
  */
 export function reportModelFailure(
   failure: Error,
@@ -31,6 +33,12 @@ export function reportModelFailure(
     console.warn(logLabel, failure);
     return;
   }
-  reportError(failure, { ...context, level: context.level ?? level });
+  reportError(failure, { ...context, level: quieter(context.level, level) });
   console.error(logLabel, failure);
+}
+
+const LOUDNESS: Record<ReportLevel, number> = { warning: 0, error: 1, fatal: 2 };
+
+function quieter(requested: ReportLevel | undefined, level: ReportLevel): ReportLevel {
+  return requested !== undefined && LOUDNESS[requested] < LOUDNESS[level] ? requested : level;
 }
