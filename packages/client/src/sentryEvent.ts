@@ -814,11 +814,6 @@ export function createEventScrubber(options?: {
             if (args.some((arg) => findNested(arg, isReported))) {
                 return null;
             }
-            // console.error("[chat] failed", { error }) where the error is a
-            // 4xx refusal or a cancellation: same rule as a top-level one.
-            if (args.some((arg) => findNested(arg, (c) => c instanceof Error && isHandledOutcome(c)))) {
-                return null;
-            }
             // Only the first argument is the logging label. Other strings
             // may be document/model output; never concatenate them into titles
             // or grouping keys. Raw arguments are removed by scrubFreeform.
@@ -830,6 +825,13 @@ export function createEventScrubber(options?: {
                         : findNested(arg, (c) => c instanceof Error),
                 )
                 .find((found): found is Error => found instanceof Error);
+            // console.error("[chat] failed", { error }) where the error is a
+            // deliberate refusal or a cancellation: same rule as a top-level
+            // one. Only the error this event is ABOUT (the first one found,
+            // the same one that names the event below) decides; a 4xx
+            // sitting next to it or inside one of its fields does not.
+            if (nestedError && isHandledOutcome(nestedError)) return null;
+            if (nestedError && isUnexplainedRefusal(nestedError)) event.level = "warning";
             if (nestedError) {
                 event.message = `${label ? `${label}: ` : ""}${nestedError.name}: ${nestedError.message}`;
                 event.fingerprint = ["console", label, nestedError.name];

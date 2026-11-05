@@ -484,6 +484,22 @@ describe("automatic captures of a handled outcome", () => {
         )).toBeNull();
     });
 
+    // Review of #775: the nested search used to match a 4xx at ANY depth, so
+    // a 5xx logged next to a 4xx (or holding one in a field) was dropped.
+    it("keeps a console.error whose first nested error is a 5xx, whatever 4xx sits beside or inside it", () => {
+        const { scrubEvent } = createEventScrubber({ install: "official" });
+        const beside = ["[x] failed", { error: refusal(500, "internal_error"), previous: refusal(409, "turn_in_progress") }];
+        expect(scrubEvent(
+            { logger: "console", message: "[x] failed [object Object]" },
+            { captureContext: { extra: { arguments: beside } } },
+        )).not.toBeNull();
+        const inside = ["[x] failed", { error: Object.assign(refusal(500, "internal_error"), { last: refusal(429, "rate_limited") }) }];
+        expect(scrubEvent(
+            { logger: "console", message: "[x] failed [object Object]" },
+            { captureContext: { extra: { arguments: inside } } },
+        )).not.toBeNull();
+    });
+
     it("keeps an explicit capture of the same 4xx", () => {
         const { scrubEvent } = createEventScrubber({ install: "official" });
         expect(scrubEvent(
