@@ -388,7 +388,13 @@ browser uploads work from anywhere other than the machine running the stack:
   developer's `http://localhost:3000` against a public deployment) can upload
   as well as call the API, and changing any of them and re-running `up`
   updates the bucket. `FRONTEND_URL` and `WORD_ADDIN_URL` are reduced to their
-  `scheme://host[:port]`, and the job fails if either is not an http(s) URL.
+  `scheme://host[:port]`. If either is not an absolute http(s) URL with a DNS
+  or IP host (no scheme, or an underscore host such as `mike_app`), or the
+  backend image predates `origins.ts`, the job does not stop the stack: it
+  logs a `storage-cors:` line naming the value and installs a policy that
+  allows only the loopback development origins (plus any valid ones), so
+  uploads from that origin are refused until it is fixed. Read it with
+  `docker compose logs storage-cors`.
   An `ALLOWED_ORIGINS` entry must be an exact origin such as
   `https://review.example.com` (no path, lower-case host), because the
   backend matches it byte for byte; any other entry is skipped with a warning
@@ -398,16 +404,22 @@ browser uploads work from anywhere other than the machine running the stack:
 - `R2_PUBLIC_ENDPOINT_URL` is the storage URL the backend signs for browsers.
   It defaults to `http://localhost:${STORAGE_PORT:-9000}`, which is correct
   only when the browser runs on the same machine. For any other host, set it
-  to a URL that reaches the storage service from users' browsers, typically
-  an https host or path on the reverse proxy in front of Mike that forwards to
-  `storage:9000` without rewriting the `Host` header (the signature covers
-  it). The storage port itself is bound to `127.0.0.1` because it carries the
+  to a URL that reaches the storage service from users' browsers: a
+  dedicated https host such as `https://storage.mike.example` on the reverse
+  proxy in front of Mike, forwarded to `storage:9000` with the `Host` header
+  preserved (the signature covers it). Do not use a path on the app's host
+  (`https://mike.example/storage`): the URL is signed path-style, so the
+  prefix is part of the signature, and a proxy that strips it breaks the
+  signature (403) while one that keeps it makes storage look for a bucket
+  named `storage` (404). The storage port itself is bound to `127.0.0.1` because it carries the
   default admin credentials; do not publish it directly.
 
 On boot the backend logs a `[storage]` warning when `FRONTEND_URL` is not a
 loopback address but the public storage endpoint is loopback, a bare service
 name such as `storage`, or `http` under an `https` front end. Each of those
-makes every upload fail in the browser with a bare network error. The backend still verifies the uploaded byte count and
+makes every upload fail in the browser with a bare network error.
+
+The backend still verifies the uploaded byte count and
 copies accepted bytes to a non-signed, sealed key before queuing processing.
 Each file is verified and queued as soon as its individual `PUT` completes;
 the remaining files in the same session may continue uploading while the

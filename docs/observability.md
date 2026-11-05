@@ -288,8 +288,9 @@ the backend, Next server/edge, browser, and all Word add-in entries.
   A browser's direct storage PUT that fails after its retries adds
   `storage_target` (loopback/mixed_content/cross_origin/same_origin: where
   the signed URL points relative to the page) and groups as one pinned
-  `upload-storage-put` issue; a 4xx other than 403 is the file's, not the
-  deployment's, and is not reported.
+  `upload-storage-put` issue with its `http_status`. Every non-2xx is
+  reported: the URL was just signed for a file the backend already accepted,
+  so 403/404/405/413 are the deployment's storage or proxy, not the file.
   Online means the browser reports connectivity, not that a server is reachable. Arbitrary
   codes/names/messages and dependency metadata are not transmitted.
 - Invalid configuration reports may name approved environment **fields**, never
