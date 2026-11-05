@@ -59,46 +59,91 @@ const NETWORK_FAILURE_CODES = new Set([
   "UND_ERR_SOCKET",
 ]);
 
-function isNetworkFailure(error: unknown): boolean {
-  let current = error;
-  for (let depth = 0; depth < 8 && current && typeof current === "object"; depth++) {
-    const { code, message } = current as { code?: unknown; message?: unknown };
-    if (typeof code === "string" && NETWORK_FAILURE_CODES.has(code)) return true;
-    if (message === "fetch failed") return true;
-    current = (current as { cause?: unknown }).cause;
+/**
+ * The error and what it wraps, breadth-first and bounded: `cause` for our
+ * own wrappers and undici's TypeError → SocketError, `lastError` for the AI
+ * SDK's RetryError. A network failure that exhausted the SDK's retries sits
+ * on `lastError.cause.cause`, which a `cause`-only walk never reached, so it
+ * was filed as an unexplained `chat.stream_failed` (MIKE-BACKEND-88).
+ */
+function* failureChain(error: unknown): Generator<object> {
+  const pending: unknown[] = [error];
+  const seen = new Set<object>();
+  for (let n = 0; pending.length && n < 12; n++) {
+    const current = pending.shift();
+    if (!current || typeof current !== "object" || seen.has(current)) continue;
+    seen.add(current);
+    yield current;
+    const { cause, lastError } = current as { cause?: unknown; lastError?: unknown };
+    pending.push(cause, lastError);
   }
-  return false;
+}
+
+function isNetworkFailure(error: object): boolean {
+  const { code, message } = error as { code?: unknown; message?: unknown };
+  return (typeof code === "string" && NETWORK_FAILURE_CODES.has(code)) || message === "fetch failed";
 }
 
 /**
  * The `error_kind` a failed model call reports under: what the provider did,
- * not what we did with it. Rejected key or forbidden model, rate limit,
- * outage or unreachable (5xx, a stalled stream, a network failure), else the
- * generic stream failure. Read off the cause chain, so the error returned by
- * toProviderStreamError (a UserFacingError around the API error) classifies
- * the same as the API error itself.
+ * not what we did with it. Rejected key or forbidden model, out of credits,
+ * rate limit, outage or unreachable (5xx, a stalled stream, a network
+ * failure), else the generic stream failure. Read off the cause chain, so the
+ * error returned by toProviderStreamError (a UserFacingError around the API
+ * error) classifies the same as the API error itself.
  */
 export function providerFailureKind(error: unknown): ErrorKind {
-  for (let current = error, depth = 0; current && depth < 8; depth++) {
+  for (const current of failureChain(error)) {
     if (current instanceof InvalidApiKeyError) return "chat.provider_rejected";
-    current = (current as { cause?: unknown }).cause;
   }
   const response = providerFailureResponse(error);
   if (response) {
     if (response.status === 401 || response.status === 403) return "chat.provider_rejected";
+    // OpenRouter (and other prepaid gateways) answer 402 when the account
+    // has no credit left: the account's state, like a rejected key.
+    if (response.status === 402) return "chat.provider_out_of_credits";
     if (response.status === 429) return "chat.provider_rate_limited";
     if (response.status >= 500) return "chat.provider_unavailable";
     return "chat.stream_failed";
   }
   // A stall or a network failure may arrive wrapped (toProviderStreamError
-  // around the first-chunk timeout); look down the chain for it.
-  for (let current = error, depth = 0; current && depth < 8; depth++) {
+  // around the first-chunk timeout, a RetryError around the socket error).
+  for (const current of failureChain(error)) {
     if (asProviderStallError(current, { label: "", modelId: "" }) || isNetworkFailure(current)) {
       return "chat.provider_unavailable";
     }
-    current = (current as { cause?: unknown }).cause;
   }
   return "chat.stream_failed";
+}
+
+/**
+ * How loudly a failed model call is reported, decided once for every surface
+ * that calls a model (chat turns, titles, tabular cells, the memory curator):
+ *
+ * - `null`, not reported: the provider refused the ACCOUNT — a rejected or
+ *   revoked key, a forbidden model, no credit left. The user is already told
+ *   exactly what to change (the `invalid_api_key` prompt, the out-of-credits
+ *   message), the operator's log keeps a warning line, and nothing in Mike's
+ *   code can fix someone else's account. Every event also spends the
+ *   project's monthly quota.
+ * - `"warning"`: the provider was busy or down — rate limited, 5xx, a stalled
+ *   stream, a dropped socket. Not our bug, but a burst across installs is how
+ *   a provider incident or a retired model shows up, so it stays visible
+ *   without paging anyone.
+ * - `"error"`: everything else, including a 4xx the provider did not explain
+ *   (`chat.stream_failed`). A 400 is usually a request WE built wrong.
+ */
+export function providerFailureLevel(error: unknown): "warning" | "error" | null {
+  switch (providerFailureKind(error)) {
+    case "chat.provider_rejected":
+    case "chat.provider_out_of_credits":
+      return null;
+    case "chat.provider_rate_limited":
+    case "chat.provider_unavailable":
+      return "warning";
+    default:
+      return "error";
+  }
 }
 
 // "The" rather than "your" key: requiredKey() may fall back to the
