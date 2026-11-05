@@ -1093,17 +1093,48 @@ function installProcessWarningReporter(env: NodeJS.ProcessEnv): void {
  * provider compatibility note) through process.emitWarning unless
  * `globalThis.AI_SDK_LOG_WARNINGS` is a function. Through the hook above each
  * one was filed as "Failure in chat.turn / runtime-warning / Warning"
- * (MIKE-BACKEND-65): advice about a request, not a failure. They become a
- * stage breadcrumb, so an event later in the same turn still shows that the
- * SDK warned, plus a local console.warn (not forwarded) for the developer.
+ * (MIKE-BACKEND-65): advice about a request, not a failure.
+ *
+ * A custom logger replaces the SDK's own once-per-code dedupe (ai's
+ * logWarnings: "Custom loggers receive every warning"), so it is rebuilt
+ * here:
+ * - every warning still becomes a stage breadcrumb on its call, so an event
+ *   later in the same turn shows that the SDK warned;
+ * - the local console.warn (not forwarded) is printed once per process per
+ *   distinct warning (type, feature or setting, provider), not on every turn;
+ * - a `deprecated` warning goes out once per setting and provider through
+ *   process.emitWarning as a DeprecationWarning, exactly as the SDK's default
+ *   logger does, so Node prints it and the process-warning reporter files it.
+ *   An SDK deprecation is something we must act on before an upgrade.
  */
-type AiSdkWarnings = { warnings?: Array<{ type?: unknown }> };
+type AiSdkWarning = {
+  type?: unknown;
+  feature?: unknown;
+  setting?: unknown;
+  message?: unknown;
+};
+type AiSdkWarnings = { warnings?: AiSdkWarning[]; provider?: unknown };
+
+const seenAiSdkWarnings = new Set<string>();
 
 function logAiSdkWarnings(options: AiSdkWarnings): void {
   for (const warning of options.warnings ?? []) {
     const type = typeof warning?.type === "string" && isDiagnosticLabel(warning.type) ? warning.type : "other";
     Sentry.addBreadcrumb({ category: "mike.stage", message: `ai-sdk-warning.${type}`, level: "warning" });
-    console.warn("[ai-sdk] warning", warning);
+    const subject = warning?.feature ?? warning?.setting ?? warning?.message;
+    const key = JSON.stringify([type, String(subject ?? ""), String(options.provider ?? "")]);
+    if (seenAiSdkWarnings.has(key)) continue;
+    seenAiSdkWarnings.add(key);
+    if (warning?.type === "deprecated") {
+      const setting = typeof warning.setting === "string" ? warning.setting : "unknown";
+      const detail = typeof warning.message === "string" ? ` ${warning.message}` : "";
+      process.emitWarning(`AI SDK Warning: Deprecated: "${setting}".${detail}`, {
+        type: "DeprecationWarning",
+        code: "AI_SDK_DEPRECATION",
+      });
+    } else {
+      console.warn("[ai-sdk] warning", warning);
+    }
   }
 }
 
@@ -1294,6 +1325,7 @@ export function resetSentryForTests(
   initialized = options.initialized ?? false;
   process.off("warning", reportProcessWarning);
   delete (globalThis as { AI_SDK_LOG_WARNINGS?: unknown }).AI_SDK_LOG_WARNINGS;
+  seenAiSdkWarnings.clear();
   // Tests exercise the full event shape unless they opt into community mode.
   currentInstall = install;
   throttleBuckets.clear();

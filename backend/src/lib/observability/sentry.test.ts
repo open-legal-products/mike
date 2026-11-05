@@ -1032,6 +1032,51 @@ describe("Node process warnings", () => {
     expect(warn).toHaveBeenCalled();
   });
 
+  // A custom AI_SDK_LOG_WARNINGS replaces the SDK's once-per-code dedupe and
+  // its DeprecationWarning output. Driven through real generateText calls.
+  it("dedupes AI SDK warnings across real calls and still files an SDK deprecation once", async () => {
+    vi.spyOn(console, "log").mockImplementation(() => {});
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const stderr = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
+    initSentry("api", dsnEnv);
+    const { generateText } = await import("ai");
+    const { MockLanguageModelV4 } = await import("ai/test");
+    const model = new MockLanguageModelV4({
+      doGenerate: async () => ({
+        content: [{ type: "text", text: "ok" }],
+        finishReason: { unified: "stop", raw: "stop" },
+        usage: {
+          inputTokens: { total: 1, noCache: 1, cacheRead: undefined, cacheWrite: undefined },
+          outputTokens: { total: 1, text: 1, reasoning: 0 },
+        },
+        warnings: [
+          { type: "unsupported", feature: "temperature" },
+          { type: "deprecated", setting: "maxTokens", message: "Use maxOutputTokens." },
+        ],
+      }),
+    });
+    try {
+      for (let turn = 0; turn < 3; turn += 1) {
+        await generateText({ model, prompt: "hi" });
+      }
+      // process.emitWarning dispatches on the next tick.
+      await new Promise((resolve) => setImmediate(resolve));
+    } finally {
+      stderr.mockRestore();
+    }
+
+    const crumbs = vi
+      .mocked(Sentry.addBreadcrumb)
+      .mock.calls.map(([crumb]) => crumb.message)
+      .filter((message) => message?.startsWith("ai-sdk-warning."));
+    expect(crumbs.filter((m) => m === "ai-sdk-warning.unsupported")).toHaveLength(3);
+    expect(crumbs.filter((m) => m === "ai-sdk-warning.deprecated")).toHaveLength(3);
+    expect(warn.mock.calls.filter(([label]) => label === "[ai-sdk] warning")).toHaveLength(1);
+    expect(Sentry.captureException).toHaveBeenCalledTimes(1);
+    const [reported] = vi.mocked(Sentry.captureException).mock.calls[0]!;
+    expect(reported).toMatchObject({ name: "DeprecationWarning", code: "AI_SDK_DEPRECATION" });
+  });
+
   it("drops the console bridge's copy of Node's printed warning, not application labels", () => {
     const consoleEvent = (text: string) =>
       scrubEvent({ logger: "console", message: text } as unknown as Sentry.ErrorEvent, {
