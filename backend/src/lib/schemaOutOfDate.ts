@@ -1,7 +1,8 @@
 import { AppError } from "./appError";
 import { reportError, type ReportContext } from "./observability/sentry";
 
-export const SCHEMA_OUT_OF_DATE_CODE = "schema_out_of_date";
+export { SCHEMA_OUT_OF_DATE_CODE } from "./reportedUpstreamCodes";
+import { SCHEMA_OUT_OF_DATE_CODE } from "./reportedUpstreamCodes";
 
 // Codes that mean "the database schema is behind this build": the code asked
 // for a function, table or column the database does not have. On a

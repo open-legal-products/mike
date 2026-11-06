@@ -7,9 +7,20 @@ import {
   schemaOutOfDateCode,
 } from "./schemaOutOfDate";
 
-// The schema-drift code lives with its detector and reporting gate
-// (schemaOutOfDate.ts); re-exported beside its public message.
-export { SCHEMA_OUT_OF_DATE_CODE } from "./schemaOutOfDate";
+// The codes and sentences a client recognises as "already reported server-side"
+// live in a dependency-free module (reportedUpstreamCodes.ts) so the frontend
+// parity test can import them; re-exported here for the callers that build 503s.
+export {
+  SCHEMA_OUT_OF_DATE_CODE,
+  SCHEMA_OUT_OF_DATE_MESSAGE,
+  UPSTREAM_UNAVAILABLE_CODE,
+  UPSTREAM_UNAVAILABLE_MESSAGE,
+} from "./reportedUpstreamCodes";
+import {
+  SCHEMA_OUT_OF_DATE_MESSAGE,
+  UPSTREAM_UNAVAILABLE_CODE,
+  UPSTREAM_UNAVAILABLE_MESSAGE,
+} from "./reportedUpstreamCodes";
 
 export const INTERNAL_ERROR_CODE = "internal_error";
 export const RATE_LIMITED_CODE = "rate_limited";
@@ -24,21 +35,9 @@ export function rateLimitedBody(detail: string): {
 export const INTERNAL_ERROR_MESSAGE =
   "Something went wrong. Please try again.";
 
-/**
- * A dependency this server needs (GoTrue, today) is unreachable: no answer,
- * or a gateway 502/503/504 in front of it. The same code the Next gateway sends when it cannot reach this server,
- * so a client treats both alike: already reported server-side, show "try
- * again shortly", do not report it again.
- */
-export const UPSTREAM_UNAVAILABLE_CODE = "upstream_unavailable";
-export const UPSTREAM_UNAVAILABLE_MESSAGE =
-  "The server is temporarily unreachable. Please try again shortly.";
 /** Retry-After (seconds) on that 503, as frontend/src/app/api/[...path]/route.ts sends it. */
 const UPSTREAM_RETRY_AFTER_SECONDS = "5";
 
-export const SCHEMA_OUT_OF_DATE_MESSAGE =
-  "The server's database needs an update before this can load. " +
-  "Please contact your administrator.";
 
 // SQLSTATE (42P01), PostgREST (PGRST205) and errno-style (ECONNREFUSED)
 // codes are fixed vocabulary, safe to put in a message. Anything else a
