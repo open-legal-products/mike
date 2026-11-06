@@ -132,7 +132,26 @@ export type UserApiKeys = {
      * key, so a user's key is never sent to the operator's endpoint.
      */
     providerSettings?: ProviderSettings;
+    /**
+     * Whose key each provider above holds: the deployment's environment
+     * ("env"), the person's own ("user") or their organization's ("org").
+     * The credential store starts from the environment and lays saved keys
+     * over it, so a non-empty key alone does not say whose it is; a rejected
+     * deployment key is the operator's to fix and is reported, a rejected
+     * saved key is the user's or their admin's and is not. Keys built
+     * anywhere else carry no entry and count as the user's.
+     */
+    keySources?: Partial<Record<ApiKeyName, ApiKeyOrigin>>;
 };
+
+/** Where a key in UserApiKeys came from (see UserApiKeys.keySources). */
+export type ApiKeyOrigin = "env" | "user" | "org";
+
+/** The UserApiKeys fields that hold a key. */
+export type ApiKeyName = Exclude<
+    keyof UserApiKeys,
+    "disabledProviders" | "unusableProviders" | "providerSettings" | "keySources"
+>;
 
 export type ProviderSettings = {
     bedrock?: { region: string } | null;
@@ -205,7 +224,7 @@ export type ConfiguredModel = {
     apiModel?: string;
     baseUrl: string;
     apiKeyEnv?: string;
-    apiKeyProvider?: keyof UserApiKeys;
+    apiKeyProvider?: ApiKeyName;
     apiKey?: string;
     /**
      * Local models frequently emit tool calls as prose rather than as
