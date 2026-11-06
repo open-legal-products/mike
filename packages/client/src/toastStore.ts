@@ -154,6 +154,13 @@ export function dismissToast(id: string) {
     emit();
 }
 
+/** Dismiss the toast(s) raised with this dedupeKey, if any are showing. */
+export function dismissToastsWithKey(dedupeKey: string) {
+    if (!toasts.some((toast) => toast.dedupeKey === dedupeKey)) return;
+    toasts = toasts.filter((toast) => toast.dedupeKey !== dedupeKey);
+    emit();
+}
+
 export function clearToasts() {
     if (toasts.length === 0) return;
     toasts = [];

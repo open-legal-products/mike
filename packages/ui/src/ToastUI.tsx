@@ -42,6 +42,7 @@ import {
 export {
     showToast,
     dismissToast,
+    dismissToastsWithKey,
     clearToasts,
     MAX_VISIBLE_TOASTS,
     type ToastAction,
