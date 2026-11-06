@@ -4,7 +4,6 @@ import { shouldReportUpstreamFailure } from "./upstreamOutage";
 import {
   SCHEMA_OUT_OF_DATE_CODE,
   gateSchemaOutOfDate,
-  schemaOutOfDateCode,
 } from "./schemaOutOfDate";
 
 // The codes and sentences a client recognises as "already reported server-side"
@@ -132,15 +131,12 @@ export function sendInternalError(
   // request to that route fails the same way until the operator migrates,
   // so the report goes through the same once-per-process gate as background
   // drift (lib/schemaOutOfDate.ts), keyed by method and route.
-  const schemaCode = schemaOutOfDateCode(error);
-  if (schemaCode && status === 500) status = 503;
   const method = res.req?.method;
   // The mounted route pattern, not the URL: /projects/:projectId groups as
   // one issue instead of one per project.
   const route = requestRoutePattern(res.req);
-  const drift = schemaCode
-    ? gateSchemaOutOfDate(error, { key: `http:${method ?? "?"} ${route ?? "?"}` })
-    : null;
+  const drift = gateSchemaOutOfDate(error, { key: `http:${method ?? "?"} ${route ?? "?"}` });
+  if (drift && status === 500) status = 503;
   const report = options.report !== false && (drift?.report ?? true);
 
   // Every unexpected 5xx the API returns passes through here, which makes it
@@ -185,7 +181,7 @@ export function sendInternalError(
   // it nor rewrite its public code.
   res.locals[FAILURE_REPORTED] = true;
 
-  const body: PublicFailure = schemaCode
+  const body: PublicFailure = drift
     ? { code: SCHEMA_OUT_OF_DATE_CODE, detail: SCHEMA_OUT_OF_DATE_MESSAGE }
     : (answer ?? { code: INTERNAL_ERROR_CODE, detail: INTERNAL_ERROR_MESSAGE });
   return res.status(status).json({
