@@ -287,11 +287,11 @@ type StorageFailure = {
  * (nginx's default is 1 MiB, far below the upload cap). Nothing else reports
  * these: the backend only records `direct_upload_failed` on the file.
  *
- * Every failure groups as ONE issue (`upload-storage-put`), split only by
- * component and failure code at the privacy boundary: the URL, the file and
- * the calling screen differ per event but the cause is the deployment's
- * storage configuration, and `storage_target` and `http_status` say which
- * part of it.
+ * Every failure is pinned to `upload-storage-put`, split at the privacy
+ * boundary only by component, failure code and HTTP status: the URL, the
+ * file and the calling screen differ per event, but a 403, a 404, a 5xx and
+ * a network failure are different storage faults. `storage_target` says
+ * which part of the configuration a network failure points at.
  */
 export function storageFailureReport(failure: StorageFailure): StorageFailureReport {
     const { status, network, target } = failure;

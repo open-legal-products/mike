@@ -287,8 +287,10 @@ the backend, Next server/edge, browser, and all Word add-in entries.
   and `request_origin` (same-origin/cross-origin/unknown), never the hostname.
   A browser's direct storage PUT that fails after its retries adds
   `storage_target` (loopback/mixed_content/cross_origin/same_origin: where
-  the signed URL points relative to the page) and groups as one pinned
-  `upload-storage-put` issue with its `http_status`. Every non-2xx is
+  the signed URL points relative to the page) and is pinned to
+  `upload-storage-put`, one issue per component, failure code and
+  `http_status` (a 403, a 404, a 5xx and a network failure are separate
+  issues). Every non-2xx is
   reported: the URL was just signed for a file the backend already accepted,
   so 403/404/405/413 are the deployment's storage or proxy, not the file.
   Online means the browser reports connectivity, not that a server is reachable. Arbitrary

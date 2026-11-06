@@ -304,9 +304,13 @@ it('groups a pinned unreachable-dependency condition as one issue per cause', ()
     .toMatchObject({ fingerprint: ['api-unreachable', 'mike-api', 'fetch_failed'], message: 'Failure in mike-api / api-unreachable / fetch_failed' });
   // A browser's direct storage PUT (MIKE-FRONTEND-28/3D/2Z): one issue per
   // deployment fault whatever screen, file or route; the target enum survives.
+  // A refused signature, a missing bucket, an outage and a network failure
+  // are different faults, so each status (or network code) is its own issue.
   const storagePut = (tags: Record<string, unknown>) => diagnosticEvent({ fingerprint: ['upload-storage-put'], tags: { component: 'mike-api', operation: 'upload_session.storage', http_method: 'PUT', ...tags } });
-  expect(storagePut({ network: true, storage_target: 'loopback', failure_code: 'fetch_failed' })).toMatchObject({ fingerprint: ['upload-storage-put', 'mike-api', 'fetch_failed'], tags: { storage_target: 'loopback' } });
-  expect(storagePut({ http_status: 503 }).fingerprint).toEqual(['upload-storage-put', 'mike-api', '']);
+  expect(storagePut({ network: true, storage_target: 'loopback', failure_code: 'fetch_failed' })).toMatchObject({ fingerprint: ['upload-storage-put', 'mike-api', 'fetch_failed', ''], tags: { storage_target: 'loopback' } });
+  expect(storagePut({ http_status: 403 }).fingerprint).toEqual(['upload-storage-put', 'mike-api', '', '403']);
+  expect(storagePut({ http_status: 404 }).fingerprint).toEqual(['upload-storage-put', 'mike-api', '', '404']);
+  expect(storagePut({ http_status: 503 }).fingerprint).toEqual(['upload-storage-put', 'mike-api', '', '503']);
   expect((storagePut({ storage_target: 'storage.firm.example' }).tags as Record<string, unknown>).storage_target).toBeUndefined();
   // Unknown caller fingerprints keep the default, code-location grouping.
   expect((diagnosticEvent({ fingerprint: ['PRIVATE_TEXT'], tags: { component: 'api-gateway' } }).fingerprint as string[])[0]).toBe('{{ default }}');

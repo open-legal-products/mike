@@ -319,6 +319,10 @@ export function diagnosticEvent(value: unknown): RecordValue {
     return [out];
   }).slice(-20);
   if (trail.length) out.breadcrumbs = trail;
+  // A browser's storage PUT also splits by HTTP status: a refused signature
+  // (403), a missing bucket (404) and a storage outage (5xx) are different
+  // deployment faults; a network failure keeps its failure code and no status.
+  if (pinned === 'upload-storage-put') (out.fingerprint as string[]).push(String(tags.http_status ?? ''));
   const extra: RecordValue = {};
   for (const [key, entry] of Object.entries(record(event.extra))) {
     if (ID_KEYS.has(key) && typeof entry === 'string' && UUID.test(entry)) extra[key] = entry;
