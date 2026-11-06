@@ -203,6 +203,10 @@ export const CODE_KINDS: Readonly<Record<string, UserErrorKind>> = {
     upload_target_busy: "conflict",
     access_inherited: "conflict",
     ask_inputs_stale: "conflict",
+    // An assistant turn: another one is still streaming in this chat, or
+    // the turn a resume asked for no longer exists.
+    turn_in_progress: "conflict",
+    turn_not_found: "not_found",
     // Ours, not theirs
     internal_error: "server",
     upstream_unavailable: "unavailable",

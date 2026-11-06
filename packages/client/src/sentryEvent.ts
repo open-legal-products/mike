@@ -1,4 +1,5 @@
 import { retainExceptionTypes, diagnosticErrorTags } from "./sentryPrivacy";
+import { CODE_KINDS } from "./userError";
 
 /**
  * Sentry event hygiene shared by the web app (browser + Next server) and the
@@ -507,6 +508,7 @@ export function minimiseForCommunity<T extends CommunityEvent>(event: T): T {
 export type ScrubbableEvent = {
     /** Set to "console" by the console bridge on every event it creates. */
     logger?: string;
+    level?: string;
     message?: string;
     server_name?: string;
     fingerprint?: string[];
@@ -588,6 +590,30 @@ function findNested(
  */
 const DEV_TOOLCHAIN_FRAME =
     /(?:^|\/)node_modules\/(?:next\/dist|react-dom|react|scheduler)\/|(?:^|\/)_next\/static\/chunks\/(?:node_modules_(?:next_dist|react-dom|react|scheduler)_|(?:\[|%5B)turbopack(?:\]|%5D)_)/i;
+/**
+ * Modules that only run while `next dev` COMPILES the developer's edits, one
+ * row per bundler. A frame in one of them means the event is a compile error
+ * of the edited file, not a runtime fault: MIKE-FRONTEND-2Y and 2T were
+ * Turbopack's `getCompilationErrors` (base-server → next-dev-server →
+ * dev-bundler-service → hot-reloader-turbopack, ending at the edited
+ * `src/…` file). Production builds never run these modules, so one such
+ * frame is enough, whatever other frames the stack carries.
+ *
+ * The dev server's REQUEST path (`next-dev-server.js`, `base-server.js`,
+ * `router-server.js`, `dev-bundler-service.js`) is deliberately absent: it
+ * is on the stack of every error thrown while a route module loads or
+ * renders in development (a top-level throw, a failing import), and those
+ * are real application failures a developer pointing their own DSN at
+ * `next dev` must still see.
+ */
+const DEV_COMPILE_FRAMES: readonly RegExp[] = [
+    // Turbopack (the default `next dev` bundler).
+    /(?:^|\/)next\/dist\/server\/dev\/hot-reloader-turbopack\.js$/i,
+    // webpack (`next dev --webpack`).
+    /(?:^|\/)next\/dist\/server\/dev\/hot-reloader-webpack\.js$/i,
+    // Rspack (`next dev` with the Rspack plugin).
+    /(?:^|\/)next\/dist\/server\/dev\/hot-reloader-rspack\.js$/i,
+];
 
 /**
  * The file of a V8/JSC stack line ("    at fn (file:12:5)" or "file:12:5"):
@@ -642,7 +668,77 @@ function isDevToolchainNoise(event: ScrubbableEvent, automatic: boolean): boolea
     const known = locations.filter(
         (location) => location !== "<anonymous>" && location !== "native",
     );
+    if (known.some((location) => DEV_COMPILE_FRAMES.some((row) => row.test(location)))) return true;
     return known.length > 0 && known.every((location) => DEV_TOOLCHAIN_FRAME.test(location));
+}
+
+/**
+ * The 4xx statuses that are still reported, at warning level, even when the
+ * server attached a code: they say the CLIENT built a request the server
+ * could not accept, so each one is a defect in this code until shown
+ * otherwise.
+ *
+ * - 400 and 422: request-shape validation ("Invalid chat cursor", a
+ *   malformed model or message list). MIKE-FRONTEND-1X is a live, still
+ *   undiagnosed 400 on chat turns from a dozen users; this is its only
+ *   signal.
+ * - 401: the session-refresh race #779 fixes. It stays visible until that
+ *   fix is verified in production; then it can join the dropped refusals.
+ */
+const UNEXPLAINED_REFUSAL_STATUSES: ReadonlySet<number> = new Set([400, 401, 422]);
+
+function readOwn(original: unknown): { name?: unknown; status?: unknown; code?: unknown } | null {
+    if (!original || typeof original !== "object") return null;
+    try {
+        const { name, status, code } = original as { name?: unknown; status?: unknown; code?: unknown };
+        return { name, status, code };
+    } catch {
+        // Exotic objects with throwing accessors are kept, not dropped.
+        return null;
+    }
+}
+
+/**
+ * A 4xx this client should not have caused (see UNEXPLAINED_REFUSAL_STATUSES).
+ * Callers that build the request (the chat hook) report it at warning level;
+ * the scrubber downgrades an automatic copy of it to warning.
+ */
+export function isUnexplainedRefusal(original: unknown): boolean {
+    const status = readOwn(original)?.status;
+    return typeof status === "number" && UNEXPLAINED_REFUSAL_STATUSES.has(status);
+}
+
+/**
+ * An outcome the code that saw it already handles, so an AUTOMATIC copy of
+ * it (console bridge, global unhandled handler) is not a defect report:
+ *
+ * - a cancellation (`AbortError`): the user stopped a stream or left a
+ *   screen; and
+ * - a deliberate refusal from a Mike server: an error carrying its own
+ *   `status` in 400–499 AND a `code` listed in CODE_KINDS, such as 409
+ *   `turn_in_progress`, 429 `rate_limited` or 413 `request_too_large`.
+ *   The screen shows it and nothing in the frontend can fix it.
+ *
+ * A bare `status` is not enough: a third-party SDK's error with a 4xx
+ * `status` is not Mike's answer and is kept. Neither is a 400, 401 or 422
+ * (see UNEXPLAINED_REFUSAL_STATUSES). Only the original error's own fields
+ * are read: a 5xx whose cause chain happens to contain a 4xx is still a
+ * server fault.
+ */
+function isHandledOutcome(original: unknown): boolean {
+    const own = readOwn(original);
+    if (!own) return false;
+    if (own.name === "AbortError") return true;
+    const { status, code } = own;
+    return (
+        typeof status === "number" &&
+        Number.isInteger(status) &&
+        status >= 400 &&
+        status <= 499 &&
+        !UNEXPLAINED_REFUSAL_STATUSES.has(status) &&
+        typeof code === "string" &&
+        Object.hasOwn(CODE_KINDS, code)
+    );
 }
 
 const DEFAULT_MAX_EVENTS_PER_ISSUE_PER_MINUTE = 10;
@@ -722,6 +818,14 @@ export function createEventScrubber(options?: {
         ) {
             return null;
         }
+        const consoleCapture =
+            mechanism === CONSOLE_CAPTURE_MECHANISM || event.logger === "console";
+        if ((automatic || consoleCapture) && isHandledOutcome(original)) {
+            return null;
+        }
+        if ((automatic || consoleCapture) && isUnexplainedRefusal(original)) {
+            event.level = "warning";
+        }
 
         // console.error("[label] failed", { jobId, error }) — the common shape
         // in this codebase. The bridge only recognises a top-level Error, so
@@ -745,6 +849,13 @@ export function createEventScrubber(options?: {
                         : findNested(arg, (c) => c instanceof Error),
                 )
                 .find((found): found is Error => found instanceof Error);
+            // console.error("[chat] failed", { error }) where the error is a
+            // deliberate refusal or a cancellation: same rule as a top-level
+            // one. Only the error this event is ABOUT (the first one found,
+            // the same one that names the event below) decides; a 4xx
+            // sitting next to it or inside one of its fields does not.
+            if (nestedError && isHandledOutcome(nestedError)) return null;
+            if (nestedError && isUnexplainedRefusal(nestedError)) event.level = "warning";
             if (nestedError) {
                 event.message = `${label ? `${label}: ` : ""}${nestedError.name}: ${nestedError.message}`;
                 event.fingerprint = ["console", label, nestedError.name];
@@ -757,8 +868,6 @@ export function createEventScrubber(options?: {
             }
         }
 
-        const consoleCapture =
-            mechanism === CONSOLE_CAPTURE_MECHANISM || event.logger === "console";
         if (isDevToolchainNoise(event, automatic || consoleCapture)) return null;
 
         event.tags = {
