@@ -39,18 +39,24 @@ const reported = new Map<string, KeyState>();
  */
 export function reportSchemaOutOfDateOnce(
   error: unknown,
-  options: { key: string; tags?: Record<string, string> },
+  options: {
+    key: string;
+    tags?: Record<string, string>;
+    /** What stays broken meanwhile, appended to both log lines. */
+    consequence?: string;
+  },
 ): boolean {
   const failure = schemaOutOfDateLink(error);
   if (!failure) return false;
   const { code, link } = failure;
+  const consequence = options.consequence ? `; ${options.consequence}` : "";
   const now = Date.now();
   const state = reported.get(options.key);
   if (state) {
     state.sinceLastLog++;
     if (now - state.lastLoggedAt >= REMINDER_INTERVAL_MS) {
       console.warn(
-        `[schema-out-of-date] ${options.key}: still failing (${code}); ` +
+        `[schema-out-of-date] ${options.key}: still failing (${code})${consequence}; ` +
           `${state.sinceLastLog} more failure(s) since the last log line. ${MIGRATE_HINT}`,
       );
       state.lastLoggedAt = now;
@@ -74,7 +80,7 @@ export function reportSchemaOutOfDateOnce(
   // console.warn: the console bridge forwards console.error only, and this
   // failure has just been reported.
   console.warn(
-    `[schema-out-of-date] ${options.key}: the database is missing an object this build needs (${code}). ` +
+    `[schema-out-of-date] ${options.key}: the database is missing an object this build needs (${code})${consequence}. ` +
       `${MIGRATE_HINT} Further failures of this kind are not reported to Sentry again until restart; ` +
       "this log line repeats at most once an hour while they continue.",
   );
