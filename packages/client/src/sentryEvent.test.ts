@@ -436,6 +436,79 @@ describe("automatic captures of an already-reported error", () => {
     });
 });
 
+// MIKE-FRONTEND-X (409), 2S/1A (429), 3Q (413): a refusal the screen
+// already showed, re-filed at error level by the global unhandled handler or
+// the console bridge. A cancellation is not a failure at all.
+describe("automatic captures of a handled outcome", () => {
+    const unhandled = { exception: { values: [{ mechanism: { type: "onunhandledrejection", handled: false } }] } };
+    const refusal = (status: number, code?: string) =>
+        Object.assign(new Error(`API error: ${status}`), { status, code: code ?? null });
+
+    it("drops an unhandled AbortError and a Mike refusal carrying a known code, keeps an unhandled 5xx", () => {
+        const { scrubEvent } = createEventScrubber({ install: "official" });
+        const abort = Object.assign(new Error("The user aborted a request."), { name: "AbortError" });
+        expect(scrubEvent(structuredClone(unhandled), { originalException: abort })).toBeNull();
+        expect(scrubEvent(structuredClone(unhandled), { originalException: refusal(409, "turn_in_progress") })).toBeNull();
+        expect(scrubEvent(structuredClone(unhandled), { originalException: refusal(429, "rate_limited") })).toBeNull();
+        expect(scrubEvent(structuredClone(unhandled), { originalException: refusal(413, "request_too_large") })).toBeNull();
+        expect(scrubEvent(structuredClone(unhandled), { originalException: refusal(500, "internal_error") })).not.toBeNull();
+    });
+
+    // Review of #775: duck-typing on `status` alone dropped any 4xx, including
+    // a third-party SDK's error that happens to carry one.
+    it("keeps a 4xx that carries no code, or a code no Mike server sends", () => {
+        const { scrubEvent } = createEventScrubber({ install: "official" });
+        expect(scrubEvent(structuredClone(unhandled), { originalException: refusal(409) })).not.toBeNull();
+        expect(scrubEvent(structuredClone(unhandled), { originalException: refusal(404, "NoSuchKey") })).not.toBeNull();
+    });
+
+    // MIKE-FRONTEND-1X (400) is undiagnosed and 11 (401) waits on #779: a
+    // 400, 401 or 422 is still sent, at warning level, even with a known code.
+    it.each([
+        [400, "invalid_request"],
+        [401, "session_expired"],
+        [422, "missing_api_key"],
+    ])("keeps an unhandled %i (%s) at warning level", (status, code) => {
+        const { scrubEvent } = createEventScrubber({ install: "official" });
+        const kept = scrubEvent(structuredClone(unhandled) as ScrubbableEvent, { originalException: refusal(status, code) });
+        expect(kept).not.toBeNull();
+        expect(kept?.level).toBe("warning");
+    });
+
+    it("drops a console.error of a nested 429", () => {
+        const { scrubEvent } = createEventScrubber({ install: "official" });
+        const args = ["[chat] failed", { error: refusal(429, "rate_limited") }];
+        expect(scrubEvent(
+            { logger: "console", message: "[chat] failed [object Object]" },
+            { captureContext: { extra: { arguments: args } } },
+        )).toBeNull();
+    });
+
+    // Review of #775: the nested search used to match a 4xx at ANY depth, so
+    // a 5xx logged next to a 4xx (or holding one in a field) was dropped.
+    it("keeps a console.error whose first nested error is a 5xx, whatever 4xx sits beside or inside it", () => {
+        const { scrubEvent } = createEventScrubber({ install: "official" });
+        const beside = ["[x] failed", { error: refusal(500, "internal_error"), previous: refusal(409, "turn_in_progress") }];
+        expect(scrubEvent(
+            { logger: "console", message: "[x] failed [object Object]" },
+            { captureContext: { extra: { arguments: beside } } },
+        )).not.toBeNull();
+        const inside = ["[x] failed", { error: Object.assign(refusal(500, "internal_error"), { last: refusal(429, "rate_limited") }) }];
+        expect(scrubEvent(
+            { logger: "console", message: "[x] failed [object Object]" },
+            { captureContext: { extra: { arguments: inside } } },
+        )).not.toBeNull();
+    });
+
+    it("keeps an explicit capture of the same 4xx", () => {
+        const { scrubEvent } = createEventScrubber({ install: "official" });
+        expect(scrubEvent(
+            { exception: { values: [{ mechanism: { type: "generic", handled: true } }] } },
+            { originalException: refusal(409, "turn_in_progress") },
+        )).not.toBeNull();
+    });
+});
+
 describe("resolveDsn", () => {
     it("is off when disabled, uses an explicit DSN, else the built-in Mike DSN", () => {
         expect(resolveDsn({ disabled: "true", dsn: "https://x@y/1", fallback: MIKE_SENTRY_DSN.frontend })).toEqual({ dsn: "", source: "disabled" });
@@ -577,6 +650,80 @@ describe("next dev toolchain noise", () => {
             ] },
         };
         expect(scrubEvent(event, { captureContext: { extra: { arguments: ["Build Error"] } } })).toBeNull();
+    });
+
+    it("drops a dev-server compile error whose last frame is the edited file (2Y)", () => {
+        const { scrubEvent } = createEventScrubber();
+        const next = "frontend/node_modules/next/dist/server";
+        const event: ScrubbableEvent = {
+            tags: { ...devTags },
+            exception: { values: [{
+                type: "Error",
+                mechanism: { type: "generic", handled: false },
+                stacktrace: { frames: [
+                    { filename: `${next}/base-server.js` },
+                    { filename: `${next}/dev/next-dev-server.js` },
+                    { filename: `${next}/lib/dev-bundler-service.js` },
+                    { filename: `${next}/dev/hot-reloader-turbopack.js` },
+                    { filename: "src/app/components/intake/IntakeInbox.tsx" },
+                ] },
+            }] },
+        };
+        expect(scrubEvent(event)).toBeNull();
+    });
+
+    // One row per DEV_COMPILE_FRAMES entry: a compile error raised by that
+    // bundler's hot reloader and ending in the edited file is dropped.
+    it.each(["hot-reloader-turbopack", "hot-reloader-webpack", "hot-reloader-rspack"])(
+        "drops a compile error raised by next/dist/server/dev/%s.js",
+        (module) => {
+            const { scrubEvent } = createEventScrubber();
+            const next = "frontend/node_modules/next/dist/server";
+            const event: ScrubbableEvent = {
+                tags: { ...devTags },
+                exception: { values: [{
+                    type: "Error",
+                    mechanism: { type: "generic", handled: false },
+                    stacktrace: { frames: [
+                        { filename: `${next}/dev/next-dev-server.js` },
+                        { filename: `${next}/dev/${module}.js` },
+                        { filename: "src/app/components/intake/IntakeInbox.tsx" },
+                    ] },
+                }] },
+            };
+            expect(scrubEvent(event)).toBeNull();
+        },
+    );
+
+    // Review of #775: the dev server's request path is on the stack of every
+    // error thrown while a route module loads in development. Frames below
+    // are the ones `next dev` (16.4.3, Turbopack) sent for a route whose top
+    // level throws `new Error("boom")`.
+    it("keeps a route module's top-level throw that passed through next-dev-server", () => {
+        const { scrubEvent } = createEventScrubber();
+        const next = "frontend/node_modules/next/dist";
+        const event: ScrubbableEvent = {
+            tags: { build_mode: "development", runtime: "server" },
+            exception: { values: [{
+                type: "Error",
+                value: "boom",
+                mechanism: { type: "generic", handled: false },
+                stacktrace: { frames: [
+                    { filename: `${next}/server/lib/start-server.js` },
+                    { filename: `${next}/server/lib/router-server.js` },
+                    { filename: `${next}/server/dev/next-dev-server.js` },
+                    { filename: `${next}/trace/trace.js` },
+                    { filename: `${next}/server/dev/next-dev-server.js` },
+                    { filename: `${next}/server/base-server.js` },
+                    { filename: `${next}/server/next-server.js` },
+                    { filename: "_next/dev/server/chunks/19xk_1irc3812d24zk._.js" },
+                    { filename: `${next}/compiled/next-server/app-route-turbo.runtime.dev.js` },
+                    { filename: "_next/dev/server/chunks/[turbopack]_runtime.js" },
+                    { filename: "src/app/zz-boom/route.ts" },
+                ] },
+            }] },
+        };
+        expect(scrubEvent(event)).not.toBeNull();
     });
 
     it("keeps a genuine app error in development", () => {
