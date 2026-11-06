@@ -30,6 +30,9 @@ it("reports a down Redis once, as a typed warning, across repeated reconnect err
     // Count the real reconnect failures without adding an 'error' listener
     // (which would hide the bug). ioredis routes every error through
     // silentEmit, which emits to listeners or else console.errors it.
+    // silentEmit is private ioredis API (Redis.prototype.silentEmit in
+    // ioredis 6.x, backend/package.json ^6.0.0); if a major bump removes it,
+    // this patch throws here rather than passing silently.
     const internal = connection as unknown as {
         silentEmit(event: string, arg: unknown): unknown;
     };
