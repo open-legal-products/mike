@@ -6,6 +6,7 @@ import {
     ToastViewportUI,
     clearToasts,
     dismissToast,
+    dismissToastsWithKey,
     showToast,
 } from "./ToastUI";
 
@@ -206,6 +207,20 @@ describe("ToastUI", () => {
             dismissToast(id);
         });
         expect(screen.queryByRole("status")).toBeNull();
+    });
+
+    it("dismissToastsWithKey removes only the toast raised with that key", () => {
+        render(<ToastViewportUI />);
+        act(() => {
+            showToast({ message: "session", dedupeKey: "auth-session" });
+            showToast({ message: "other" });
+        });
+        act(() => {
+            dismissToastsWithKey("auth-session");
+            dismissToastsWithKey("unknown");
+        });
+        expect(screen.queryByText("session")).toBeNull();
+        expect(screen.getByText("other")).toBeVisible();
     });
 
     it("labels the viewport as a region and leaves the live role to each toast", () => {
