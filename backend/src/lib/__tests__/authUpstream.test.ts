@@ -4,7 +4,7 @@
 // shows up here.
 import { AuthClient } from "@supabase/supabase-js";
 import { describe, expect, it } from "vitest";
-import { isAuthUpstreamFailure } from "../authUpstream";
+import { authErrorShape, isAuthUpstreamFailure } from "../authUpstream";
 
 function goTrue(answer: () => Promise<Response>) {
   return new AuthClient({
@@ -77,4 +77,10 @@ describe("isAuthUpstreamFailure", () => {
   ])("is false for %s", (_label, error) => {
     expect(isAuthUpstreamFailure(error)).toBe(false);
   });
+});
+
+it.each([undefined, null, "503"])("does not mistake a malformed auth status %s for an outage", (status) => {
+  const error = { __isAuthError: true, name: "AuthApiError", status };
+  expect(authErrorShape(error)).toEqual({ name: "AuthApiError", status: undefined });
+  expect(isAuthUpstreamFailure(error)).toBe(false);
 });
