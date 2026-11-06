@@ -12,7 +12,7 @@ vi.mock("bullmq", async (importOriginal) => ({
         close = vi.fn();
     },
 }));
-vi.mock("../../lib/queue/connection", () => ({ getRedisConnection: () => ({}) }));
+vi.mock("../../lib/queue/connection", () => ({ getRedisConnection: () => ({}), watchQueueErrors: vi.fn() }));
 vi.mock("../../lib/observability/sentry", () => ({ reportError: vi.fn() }));
 vi.mock("../../modules/tabular/tabular.service", () => ({
     extractionJobOperation: () => "tabular.row",
