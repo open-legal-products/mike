@@ -31,7 +31,7 @@ import {
     type DbJob,
     type DbJobHandlers,
 } from "./types";
-import { reportError, setOperation } from "../observability/sentry";
+import { acknowledgeUnreported, reportError, setOperation } from "../observability/sentry";
 import {
     createPollFailureGate,
     type PollFailureGate,
@@ -117,9 +117,20 @@ export type DbJobFailureHook = (db: Db, job: DbJob) => Promise<void>;
  * user's request in limbo far longer than it needs to be.
  */
 export class NonRetryableJobError extends AppError {
-    /** `cause` keeps the reason's own kind and code on the reported chain. */
-    constructor(message: string, options?: { cause?: unknown }) {
-        super("dbq.non_retryable", message, options);
+    /**
+     * How the terminal failure is reported: "error" by default (a refused
+     * job is worth knowing about), "warning", or null for a condition the
+     * user has already been told about and nothing in Mike can fix (a
+     * provider rejecting the user's own key) — logged, never sent.
+     */
+    readonly reportLevel: "error" | "warning" | null;
+
+    constructor(
+        message: string,
+        options: { cause?: unknown; reportLevel?: "error" | "warning" | null } = {},
+    ) {
+        super("dbq.non_retryable", message, { cause: options.cause });
+        this.reportLevel = options.reportLevel === undefined ? "error" : options.reportLevel;
     }
 }
 
@@ -311,9 +322,19 @@ async function runClaimedJob(
         // and keep its code on the cause chain (failure_code), as the claim
         // path does. Errors pass through unchanged.
         const reportable = asReportableError(err, processClaimedJob);
-        if (!deferred) {
+        // A handler may say its terminal failure is quieter than an error,
+        // or not worth sending at all (NonRetryableJobError.reportLevel).
+        const level =
+            err instanceof NonRetryableJobError
+                ? err.reportLevel
+                : spent
+                  ? "error"
+                  : "warning";
+        if (!deferred && level === null) {
+            acknowledgeUnreported(reportable);
+        } else if (!deferred && level !== null) {
             reportError(reportable, {
-                level: spent ? "error" : "warning",
+                level,
                 tags: {
                     component: "dbq",
                     job_kind: job.kind,
@@ -329,6 +350,9 @@ async function runClaimedJob(
             // Not a failure, and not reported: console.error would reach
             // Sentry through the console bridge as an error event.
             console.log("[dbq] job deferred", summary);
+        } else if (level === null) {
+            // Deliberately unreported; console.warn is not forwarded either.
+            console.warn("[dbq] job permanently failed", summary);
         } else {
             // The reported Error rides along so the console bridge recognises
             // it and files no second, context-free "Failure in application"
