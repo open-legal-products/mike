@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { spawnSync } from "node:child_process";
 import { readFileSync } from "node:fs";
 import path from "node:path";
 import semver from "semver";
@@ -111,6 +112,34 @@ describe("backend refuses an unsupported Node", () => {
   ])("Node %s can run it: %s", (version, ok) => {
     const problem = nodeVersionProblem(version, backend.engines.node);
     if (ok) expect(problem).toBeNull();
-    else expect(problem).toMatch(new RegExp(`needs Node >=22\\.19\\.0 .* this is Node ${version.replace(/\./g, "\\.")}`));
+    else {
+      expect(problem).toContain("needs Node >=22.19.0");
+      expect(problem).toContain(`this is Node ${version}.`);
+    }
+  });
+
+  // What `npm run dev` / `npm start` actually run, on a Node that reports
+  // the given version (process.versions is replaced before the script loads).
+  const runCheck = (version: string) =>
+    spawnSync(
+      process.execPath,
+      [
+        `--import=data:text/javascript,Object.defineProperty(process,"versions",{value:{...process.versions,node:"${version}"}})`,
+        path.join(repoRoot, "backend/scripts/check-node-version.cjs"),
+      ],
+      { encoding: "utf8" },
+    );
+
+  it("the predev/prestart script exits 1 on Node 22.14 and names the cause", () => {
+    const result = runCheck("22.14.0");
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain("needs Node >=22.19.0");
+    expect(result.stderr).toContain("this is Node 22.14.0.");
+  });
+
+  it("the predev/prestart script exits 0 on the floor", () => {
+    const result = runCheck("22.19.0");
+    expect(result.stderr).toBe("");
+    expect(result.status).toBe(0);
   });
 });
