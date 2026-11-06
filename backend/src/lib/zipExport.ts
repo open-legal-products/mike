@@ -1,3 +1,5 @@
+import { normalizeDownloadFilename } from "./storage";
+
 export const MAX_ZIP_EXPORT_DOCUMENTS = 200;
 export const MAX_ZIP_EXPORT_BYTES = 2 * 1024 * 1024 * 1024;
 
@@ -18,14 +20,18 @@ export function uniqueArchiveFilename(
   requestedName: string,
   usedNames: Set<string>,
 ): string {
-  if (!usedNames.has(requestedName)) {
-    usedNames.add(requestedName);
-    return requestedName;
+  // Callers supply document leaf names. Match individual downloads before
+  // reserving names, so renamed separators cannot become ZIP path aliases.
+  // JSZip also resolves bare dot segments to the empty path when reopening.
+  const filename = normalizeDownloadFilename(requestedName).replace(/^\.{1,2}$/, "_");
+  if (!usedNames.has(filename)) {
+    usedNames.add(filename);
+    return filename;
   }
 
-  const dot = requestedName.lastIndexOf(".");
-  const stem = dot > 0 ? requestedName.slice(0, dot) : requestedName;
-  const extension = dot > 0 ? requestedName.slice(dot) : "";
+  const dot = filename.lastIndexOf(".");
+  const stem = dot > 0 ? filename.slice(0, dot) : filename;
+  const extension = dot > 0 ? filename.slice(dot) : "";
   let copyNumber = 2;
   let candidate = `${stem} (${copyNumber})${extension}`;
   while (usedNames.has(candidate)) {

@@ -39,6 +39,52 @@ describe("ZIP export limits", () => {
     );
   });
 
+  it("preserves path-like and normalized-collision document names as distinct leaf entries", async () => {
+    const requested = [
+      "Agreement.pdf", "../Agreement.pdf", "./Agreement.pdf",
+      "folder/../Agreement.pdf", "folder\\..\\Agreement.pdf",
+      "folder_.._Agreement.pdf", " .._Agreement.pdf ",
+      "bad\u0000name.pdf", "bad_name.pdf",
+    ];
+    const expected = [
+      "Agreement.pdf", ".._Agreement.pdf", "._Agreement.pdf",
+      "folder_.._Agreement.pdf", "folder_.._Agreement (2).pdf",
+      "folder_.._Agreement (3).pdf", ".._Agreement (2).pdf",
+      "bad_name.pdf", "bad_name (2).pdf",
+    ];
+    const zip = new JSZip();
+    const usedNames = new Set<string>();
+    requested.forEach((name, index) => {
+      zip.file(uniqueArchiveFilename(name, usedNames), `original-${index}`);
+    });
+
+    const reopened = await JSZip.loadAsync(await zip.generateAsync({ type: "nodebuffer" }));
+
+    expect(Object.keys(reopened.files)).toEqual(expected);
+    expect(Object.values(reopened.files).every(entry => !entry.dir)).toBe(true);
+    for (const [index, name] of expected.entries()) {
+      expect(await reopened.file(name)!.async("string")).toBe(`original-${index}`);
+    }
+  });
+
+  it("preserves dot-only names and replacement-name collisions after reopening the archive", async () => {
+    const requested = [".", "..", " . ", " .. ", "_", "_ (2)", "...", ".env"];
+    const expected = ["_", "_ (2)", "_ (3)", "_ (4)", "_ (5)", "_ (2) (2)", "...", ".env"];
+    const zip = new JSZip();
+    const usedNames = new Set<string>();
+    requested.forEach((name, index) => {
+      zip.file(uniqueArchiveFilename(name, usedNames), `original-${index}`);
+    });
+
+    const reopened = await JSZip.loadAsync(await zip.generateAsync({ type: "nodebuffer" }));
+
+    expect(Object.keys(reopened.files)).toEqual(expected);
+    expect(Object.values(reopened.files).every(entry => !entry.dir)).toBe(true);
+    for (const [index, name] of expected.entries()) {
+      expect(await reopened.file(name)!.async("string")).toBe(`original-${index}`);
+    }
+  });
+
   it("consumes streamed ZIP entries one at a time", async () => {
     let firstStarted = false;
     let secondStarted = false;
