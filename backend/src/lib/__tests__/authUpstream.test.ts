@@ -53,6 +53,15 @@ describe("isAuthUpstreamFailure", () => {
     expect(isAuthUpstreamFailure(error)).toBe(false);
   });
 
+  // auth-js retries 500-504 and 520-530 alike; only 502/503/504 (and no
+  // answer) mean GoTrue is unreachable. A 501 or a Cloudflare 520/530 is an
+  // answer from something that is up, and 429 is GoTrue rate-limiting us.
+  it.each([500, 501, 520, 530, 429])("is false for a GoTrue %s", async (status) => {
+    const error = await getUserError(json(status, { msg: "answered" }));
+    expect(error).toMatchObject({ status });
+    expect(isAuthUpstreamFailure(error)).toBe(false);
+  });
+
   it("is false for a session GoTrue refused", async () => {
     const error = await getUserError(
       json(403, { code: "bad_jwt", msg: "invalid JWT" }),
