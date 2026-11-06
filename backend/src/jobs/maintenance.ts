@@ -18,8 +18,9 @@ function runSweep<T>(operation: Operation, work: () => Promise<T>): Promise<T | 
             return await work();
         } catch (cause) {
             // A database behind this build fails the same way on every sweep
-            // until someone migrates it: one warning per operation per
-            // process, not one error per run. The other sweeps still run.
+            // until someone migrates it: one error-level event per operation
+            // per process, then an hourly log reminder, not one event per
+            // run. The other sweeps still run.
             if (reportSchemaOutOfDateOnce(cause, { key: operation, tags: { component: "stale-sweep" } })) {
                 return undefined;
             }
