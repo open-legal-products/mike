@@ -613,6 +613,20 @@ describe("UserProfileProvider when the server omits apiKeyStatus", () => {
         expect(screen.getByText("Gemini 3.8 Flash")).toBeInTheDocument();
     });
 
+    it.each([true, false])("updates key availability when a save changes it (initially known: %s)", async (known) => {
+        getUserProfile.mockResolvedValue(known ? apiProfile(false) : withoutKeyStatus());
+        updateUserProfile.mockResolvedValue({
+            ...(known ? withoutKeyStatus() : apiProfile(false)), displayName: "Grace",
+        });
+        renderProfile();
+        await screen.findByTestId("loaded");
+        expect(screen.getByTestId("keys")).toHaveTextContent(known ? "known" : "unknown");
+        fireEvent.click(screen.getByRole("button", { name: "rename" }));
+        await waitFor(() => expect(screen.getByTestId("saved")).toHaveTextContent("true"));
+        expect(screen.getByTestId("keys")).toHaveTextContent(known ? "unknown" : "known");
+        expect(reportError).toHaveBeenCalledTimes(1);
+    });
+
     it("applies a save whose response also lacks the key status, without a notice", async () => {
         getUserProfile.mockResolvedValue(withoutKeyStatus());
         updateUserProfile.mockResolvedValue({ ...withoutKeyStatus(), displayName: "Grace" });

@@ -256,6 +256,24 @@ export function UserProfileProvider({ children }: { children: ReactNode }) {
         [],
     );
 
+    // Every full profile response carries the same key-availability state,
+    // whether it came from a load or a settings mutation.
+    const applyProfile = useCallback((data: ApiUserProfile, merge = false) => {
+        const normalized = toProfile(data);
+        setProfile((previous) => merge
+            ? previous && { ...previous, ...normalized }
+            : normalized);
+        const known = hasApiKeyStatus(data.apiKeyStatus);
+        setApiKeysDegraded(!known);
+        if (!known && !missingKeyStatusReported.current) {
+            missingKeyStatusReported.current = true;
+            reportError(new Error("profile missing apiKeyStatus"), {
+                level: "warning",
+                tags: { component: "profile", error_kind: "missing_api_key_status" },
+            });
+        }
+    }, []);
+
     const loadProfile = useCallback(async () => {
         try {
             let profileData: ApiUserProfile;
@@ -267,27 +285,7 @@ export function UserProfileProvider({ children }: { children: ReactNode }) {
                 await new Promise((resolve) => setTimeout(resolve, 750));
                 profileData = await getUserProfile();
             }
-            setProfile(toProfile(profileData));
-            // A server that answered without a key status cannot vouch for
-            // which providers have keys, so the pickers fail open exactly as
-            // they do after a failed fetch. The rest of the profile is real.
-            const keyStatusKnown = hasApiKeyStatus(profileData.apiKeyStatus);
-            setApiKeysDegraded(!keyStatusKnown);
-            // Every Mike backend since May 2026 sends the field, so a 200
-            // without it means a forked server, or a proxy or misrouted API
-            // URL answering with some other JSON (MIKE-FRONTEND-4H). Failing
-            // open hides that from the user, so say it once to Sentry: a
-            // warning, with no part of the payload attached.
-            if (!keyStatusKnown && !missingKeyStatusReported.current) {
-                missingKeyStatusReported.current = true;
-                reportError(new Error("profile missing apiKeyStatus"), {
-                    level: "warning",
-                    tags: {
-                        component: "profile",
-                        error_kind: "missing_api_key_status",
-                    },
-                });
-            }
+            applyProfile(profileData);
         } catch (error) {
             console.warn(
                 "[profile] fetch failed after retry; API key availability is unknown and fails open",
@@ -343,7 +341,7 @@ export function UserProfileProvider({ children }: { children: ReactNode }) {
         } finally {
             setLoading(false);
         }
-    }, []);
+    }, [applyProfile]);
 
     // A new signed-in user invalidates the shared model catalog. This runs as
     // a LAYOUT effect on purpose: React runs a component's passive effects
@@ -390,9 +388,7 @@ export function UserProfileProvider({ children }: { children: ReactNode }) {
 
             try {
                 const updated = await updateUserProfile({ displayName });
-                setProfile((prev) =>
-                    prev ? { ...prev, ...toProfile(updated) } : null,
-                );
+                applyProfile(updated, true);
                 return true;
             } catch (error) {
                 reportFailure(error, "save your name", () => {
@@ -401,7 +397,7 @@ export function UserProfileProvider({ children }: { children: ReactNode }) {
                 return false;
             }
         },
-        [reportFailure, user],
+        [reportFailure, user, applyProfile],
     );
 
     const updateOrganisation = useCallback(
@@ -409,9 +405,7 @@ export function UserProfileProvider({ children }: { children: ReactNode }) {
             if (!user) return false;
             try {
                 const updated = await updateUserProfile({ organisation });
-                setProfile((prev) =>
-                    prev ? { ...prev, ...toProfile(updated) } : null,
-                );
+                applyProfile(updated, true);
                 return true;
             } catch (error) {
                 // An MFA challenge is a step in the flow, not a failure: the
@@ -423,7 +417,7 @@ export function UserProfileProvider({ children }: { children: ReactNode }) {
                 return false;
             }
         },
-        [reportFailure, user],
+        [reportFailure, user, applyProfile],
     );
 
     const completeOnboarding = useCallback(
@@ -431,7 +425,7 @@ export function UserProfileProvider({ children }: { children: ReactNode }) {
             if (!user) return false;
             try {
                 const updated = await completeUserOnboarding(details);
-                setProfile(toProfile(updated));
+                applyProfile(updated);
                 return true;
             } catch (error) {
                 reportFailure(error, "save your practice details", () => {
@@ -440,7 +434,7 @@ export function UserProfileProvider({ children }: { children: ReactNode }) {
                 return false;
             }
         },
-        [reportFailure, user],
+        [reportFailure, user, applyProfile],
     );
 
     const updatePersonalisation = useCallback(
@@ -448,7 +442,7 @@ export function UserProfileProvider({ children }: { children: ReactNode }) {
             if (!user) return false;
             try {
                 const updated = await updateUserProfile(details);
-                setProfile(toProfile(updated));
+                applyProfile(updated);
                 return true;
             } catch (error) {
                 reportFailure(
@@ -461,14 +455,14 @@ export function UserProfileProvider({ children }: { children: ReactNode }) {
                 return false;
             }
         },
-        [reportFailure, user],
+        [reportFailure, user, applyProfile],
     );
 
     const syncPasswordSet = useCallback(async (): Promise<boolean> => {
         if (!user) return false;
         try {
             const updated = await syncUserPasswordSet();
-            setProfile(toProfile(updated));
+            applyProfile(updated);
             return true;
         } catch (error) {
             reportFailure(error, "refresh your password status", () => {
@@ -476,7 +470,7 @@ export function UserProfileProvider({ children }: { children: ReactNode }) {
             });
             return false;
         }
-    }, [reportFailure, user]);
+    }, [reportFailure, user, applyProfile]);
 
     const updateModelPreference = useCallback(
         async (
@@ -488,9 +482,7 @@ export function UserProfileProvider({ children }: { children: ReactNode }) {
                 const updated = await updateUserProfile({
                     [field]: value,
                 });
-                setProfile((prev) =>
-                    prev ? { ...prev, ...toProfile(updated) } : null,
-                );
+                applyProfile(updated, true);
                 return true;
             } catch (error) {
                 reportFailure(error, "save your model preference", () => {
@@ -499,7 +491,7 @@ export function UserProfileProvider({ children }: { children: ReactNode }) {
                 return false;
             }
         },
-        [reportFailure, user],
+        [reportFailure, user, applyProfile],
     );
 
     const persistChatModelSelection = useCallback(
@@ -601,9 +593,7 @@ export function UserProfileProvider({ children }: { children: ReactNode }) {
             if (!user) return false;
             try {
                 const updated = await updateUserMfaOnLogin(enabled);
-                setProfile((prev) =>
-                    prev ? { ...prev, ...toProfile(updated) } : null,
-                );
+                applyProfile(updated, true);
                 return true;
             } catch (error) {
                 // An MFA challenge is a step in the flow, not a failure.
@@ -618,7 +608,7 @@ export function UserProfileProvider({ children }: { children: ReactNode }) {
                 return false;
             }
         },
-        [reportFailure, user],
+        [reportFailure, user, applyProfile],
     );
 
     const updateQuickActionsVisible = useCallback(
@@ -628,9 +618,7 @@ export function UserProfileProvider({ children }: { children: ReactNode }) {
                 const updated = await updateUserProfile({
                     quickActionsVisible: visible,
                 });
-                setProfile((prev) =>
-                    prev ? { ...prev, ...toProfile(updated) } : null,
-                );
+                applyProfile(updated, true);
                 return true;
             } catch (error) {
                 reportFailure(error, "update your quick actions setting", () => {
@@ -639,7 +627,7 @@ export function UserProfileProvider({ children }: { children: ReactNode }) {
                 return false;
             }
         },
-        [reportFailure, user],
+        [reportFailure, user, applyProfile],
     );
 
     const updateResponseDetailsVisible = useCallback(
@@ -649,9 +637,7 @@ export function UserProfileProvider({ children }: { children: ReactNode }) {
                 const updated = await updateUserProfile({
                     responseDetailsVisible: visible,
                 });
-                setProfile((prev) =>
-                    prev ? { ...prev, ...toProfile(updated) } : null,
-                );
+                applyProfile(updated, true);
                 return true;
             } catch (error) {
                 reportFailure(error, "update your response details setting", () => {
@@ -660,7 +646,7 @@ export function UserProfileProvider({ children }: { children: ReactNode }) {
                 return false;
             }
         },
-        [reportFailure, user],
+        [reportFailure, user, applyProfile],
     );
 
     const updateRouterModels = useCallback(
@@ -670,9 +656,7 @@ export function UserProfileProvider({ children }: { children: ReactNode }) {
                 const updated = await updateUserProfile({
                     [ROUTER_PROFILE_FIELDS[router]]: models,
                 });
-                setProfile((prev) =>
-                    prev ? { ...prev, ...toProfile(updated) } : null,
-                );
+                applyProfile(updated, true);
                 return true;
             } catch (error) {
                 reportFailure(error, `save your ${router} models`, () => {
@@ -681,7 +665,7 @@ export function UserProfileProvider({ children }: { children: ReactNode }) {
                 return false;
             }
         },
-        [reportFailure, user],
+        [reportFailure, user, applyProfile],
     );
 
     const updateDarkMode = useCallback(
@@ -691,16 +675,13 @@ export function UserProfileProvider({ children }: { children: ReactNode }) {
             applyDarkMode(enabled);
             try {
                 const updated = await updateUserProfile({ darkMode: enabled });
-                const normalized = toProfile(updated);
-                setProfile((prev) =>
-                    prev ? { ...prev, ...normalized, darkMode: enabled } : null,
-                );
+                applyProfile({ ...updated, darkMode: enabled }, true);
             } catch (error) {
                 applyDarkMode(previous);
                 throw error;
             }
         },
-        [user, profile?.darkMode],
+        [user, profile?.darkMode, applyProfile],
     );
 
     const updateProjectMemoryDefault = useCallback(
@@ -711,14 +692,9 @@ export function UserProfileProvider({ children }: { children: ReactNode }) {
             const updated = await updateUserProfile({
                 projectMemoryDefault: enabled,
             });
-            const normalized = toProfile(updated);
-            setProfile((prev) =>
-                prev
-                    ? { ...prev, ...normalized, projectMemoryDefault: enabled }
-                    : null,
-            );
+            applyProfile({ ...updated, projectMemoryDefault: enabled }, true);
         },
-        [user],
+        [user, applyProfile],
     );
 
     const updateApiKey = useCallback(
