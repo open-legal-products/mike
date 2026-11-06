@@ -27,10 +27,14 @@
  */
 const UNREACHABLE_STATUSES: ReadonlySet<number> = new Set([0, 502, 503, 504]);
 
+/** Auth-js fields used by session handling and outage reporting, across SDK copies. */
+export function authErrorShape(error: unknown): { name: unknown; status: number | undefined } | null {
+  if (!error || typeof error !== "object" || !("__isAuthError" in error)) return null;
+  const { name, status } = error as { name?: unknown; status?: unknown };
+  return { name, status: typeof status === "number" ? status : undefined };
+}
+
 export function isAuthUpstreamFailure(error: unknown): boolean {
-  if (!error || typeof error !== "object" || !("__isAuthError" in error)) {
-    return false;
-  }
-  const { status } = error as { status?: unknown };
-  return typeof status === "number" && UNREACHABLE_STATUSES.has(status);
+  const status = authErrorShape(error)?.status;
+  return status !== undefined && UNREACHABLE_STATUSES.has(status);
 }
