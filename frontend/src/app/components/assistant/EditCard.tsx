@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { EditCardUI } from "@/shared/ui/EditCardUI";
+import { EditCardUI } from "@mike/ui";
 import { resolveDocumentEdit } from "@/app/lib/mikeApi";
 import type { EditAnnotation } from "../shared/types";
 import { RESPONSE_GLASS_SURFACE } from "./message/messageStyles";

@@ -91,7 +91,7 @@ const ROUTER_KEY_ENV_HINTS: Record<RouterProvider, string> = {
 };
 
 // Env aliases a provider also answers to. CLAUDE_API_KEY is accepted by
-// envApiKey("claude") in modules/user/user.apiKeyStore.ts, which decides
+// envApiKey("claude") in lib/providerCredentials/store.ts, which decides
 // whether Settings reports the key as configured — without the same alias here
 // a deployment that only sets CLAUDE_API_KEY showed a green key and then
 // failed every request with "not configured".

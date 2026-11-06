@@ -89,6 +89,9 @@ async function startParser(): Promise<Parser> {
   for (const name of ["PATH", "SystemRoot", "HOME", "LANG", "SOFFICE_BINARY_PATH", "LIBREOFFICE_BINARY_PATH", "LIBRE_OFFICE_EXE"]) {
     if (process.env[name] !== undefined) env[name] = process.env[name];
   }
+  // Packaged desktop backends run under Electron's Node mode. Its executable
+  // starts the GUI app again unless each parser child explicitly keeps Node mode.
+  if (process.versions.electron) env.ELECTRON_RUN_AS_NODE = "1";
   env.TMPDIR = env.TMP = env.TEMP = scratch;
   // Avoid glibc arena reservations exhausting RLIMIT_AS at low actual usage.
   env.MALLOC_ARENA_MAX = "2";

@@ -51,8 +51,8 @@ import {
     setReportingUser,
     trackPendingRequest,
 } from "./errorReporting";
-import { MIKE_SENTRY_DSN } from "@/shared/lib/sentryEvent";
-import { diagnosticEvent } from "@/shared/lib/sentryPrivacy";
+import { MIKE_SENTRY_DSN } from "@mike/client";
+import { diagnosticEvent } from "@mike/client";
 import { MikeApiError, downloadDocumentsZip, updateWorkflow } from "./mikeApi";
 import { notifyError } from "./userFacingError";
 
@@ -240,6 +240,20 @@ describe("reportApiFailure", () => {
         expect(scrubEvent(consoleCopy, { originalException: apiError })).toBeNull();
     });
 
+    it.each(["upstream_unavailable", "schema_out_of_date"])(
+        "only marks a %s 503 the server side already reported",
+        (code) => {
+            state.enabled = true;
+            const apiError = new Error("already reported");
+            expect(
+                reportApiFailure({ path: "/x", status: 503, code, error: apiError }),
+            ).toBeNull();
+            expect(Sentry.captureMessage).not.toHaveBeenCalled();
+            // Marked, so a screen's later notifyError does not file it either.
+            expect(isReported(apiError)).toBe(true);
+        },
+    );
+
     it("defaults the method to GET and omits absent tags", () => {
         state.enabled = true;
         reportApiFailure({ path: "/user/profile", status: 500 });
@@ -329,6 +343,34 @@ describe("browserSentryOptions", () => {
     it("defaults the environment to self-hosted, never to NODE_ENV", () => {
         expect(browserSentryOptions({}).environment).toBe("self-hosted");
         expect(browserSentryOptions({ nodeEnv: "production" }).environment).toBe("self-hosted");
+    });
+});
+
+// MIKE-FRONTEND-2, 9, N, S: `next dev` checkouts reported to the Mike
+// project as environment=self-hosted, indistinguishable from installs.
+describe("development builds", () => {
+    const own = "https://k@o9.ingest.sentry.io/9";
+    const dev = (env: Record<string, string>) => ({ NODE_ENV: "development", ...env }) as unknown as NodeJS.ProcessEnv;
+
+    it("do not fall back to the Mike project; a DSN set on purpose still reports", () => {
+        expect(reportingDestination(dev({}))).toEqual({ dsn: "", source: "development" });
+        // The shipped example .env.local sets these to false: not an opt-in.
+        expect(reportingDestination(dev({ SENTRY_DISABLED: "false", NEXT_PUBLIC_SENTRY_DISABLED: "false" })).dsn).toBe("");
+        expect(serverSentryOptions("server", dev({})).enabled).toBe(false);
+        expect(reportingDestination(dev({ SENTRY_DSN: own }))).toEqual({ dsn: own, source: "runtime" });
+    });
+
+    it("say at boot that reporting is off because this is a development build", () => {
+        expect(describeReportingDestination(reportingDestination(dev({})))).toBe(
+            "[sentry] web app reports: off (development build; set SENTRY_DSN to report to your own project), browser included",
+        );
+    });
+
+    it("report as environment development unless SENTRY_ENVIRONMENT says otherwise", () => {
+        expect(browserSentryOptions({ nodeEnv: "development" }).environment).toBe("development");
+        expect(serverSentryOptions("server", dev({ SENTRY_DSN: own })).environment).toBe("development");
+        expect(serverSentryOptions("server", dev({ SENTRY_DSN: own, SENTRY_ENVIRONMENT: "staging" })).environment).toBe("staging");
+        expect(browserSentryOptions({ nodeEnv: "development", environment: "staging" }).environment).toBe("staging");
     });
 });
 

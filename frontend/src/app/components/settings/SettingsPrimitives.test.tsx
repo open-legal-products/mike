@@ -1,6 +1,6 @@
 import { render, screen } from "@testing-library/react";
 import { describe, expect, it } from "vitest";
-import { GlassCardUI } from "@/shared/ui/GlassCardUI";
+import { GlassCardUI } from "@mike/ui";
 import { SettingsHeading } from "./SettingsHeading";
 import { SettingsRow } from "./SettingsRow";
 

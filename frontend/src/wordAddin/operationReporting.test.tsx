@@ -41,9 +41,9 @@ vi.mock("@sentry/react", () => ({
 }));
 
 import * as Sentry from "@sentry/react";
-import { diagnosticEvent } from "@/shared/lib/sentryPrivacy";
-import { clearToasts } from "@/shared/lib/toastStore";
-import { UserVisibleError } from "@/shared/lib/userError";
+import { diagnosticEvent } from "@mike/client";
+import { clearToasts } from "@mike/client";
+import { UserVisibleError } from "@mike/client";
 import {
     isReported,
     reportApiFailure,
@@ -119,12 +119,12 @@ describe("reportWordFailure", () => {
 
 describe("API and transport reports", () => {
     it("carry the operation the request belonged to", () => {
-        const failed = new MikeApiError({ status: 503, message: "x", requestId: "r-1" });
+        const failed = new MikeApiError({ status: 500, message: "x", requestId: "r-1" });
         reportApiFailure({
             path: "/auth/session",
             method: "GET",
-            status: 503,
-            code: "upstream_unavailable",
+            status: 500,
+            code: "internal_error",
             requestId: "r-1",
             operation: "word.session",
             error: failed,
@@ -132,8 +132,8 @@ describe("API and transport reports", () => {
         expect(tagsOf(state.scopes[0])).toMatchObject({
             component: "mike-api",
             operation: "word.session",
-            http_status: 503,
-            error_code: "upstream_unavailable",
+            http_status: 500,
+            error_code: "internal_error",
             request_id: "r-1",
         });
         expect(isReported(failed)).toBe(true);
@@ -147,6 +147,34 @@ describe("API and transport reports", () => {
         });
         expect(isReported(dead)).toBe(true);
     });
+
+    it.each(["upstream_unavailable", "schema_out_of_date"])(
+        "leave a %s answer to the server, which already filed it once",
+        (code) => {
+            // The backend files a GoTrue outage once per process (tagged
+            // operation=auth.session, fingerprint upstream-unavailable) and a
+            // missing migration once per key; the gateway files a backend
+            // outage. A pane copy per request would be a second issue for the
+            // same incident.
+            const failed = new MikeApiError({ status: 503, code, message: "x", requestId: "r-2" });
+            expect(
+                reportApiFailure({
+                    path: "/auth/session",
+                    method: "GET",
+                    status: 503,
+                    code,
+                    requestId: "r-2",
+                    operation: "word.session",
+                    error: failed,
+                }),
+            ).toBeNull();
+            expect(Sentry.captureException).not.toHaveBeenCalled();
+            expect(Sentry.captureMessage).not.toHaveBeenCalled();
+            expect(state.scopes).toHaveLength(0);
+            // Marked, so a later notice of the same error stays quiet too.
+            expect(isReported(failed)).toBe(true);
+        },
+    );
 });
 
 describe("what a notice reports", () => {

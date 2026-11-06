@@ -4,7 +4,7 @@ import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { DocTable, type DocTableFolder } from "./DocTable";
-import { ToastViewportUI, clearToasts } from "@/shared/ui/ToastUI";
+import { ToastViewportUI, clearToasts } from "@mike/ui";
 import type { Document } from "@/app/components/shared/types";
 import { MikeApiError } from "@/app/lib/mikeApi";
 

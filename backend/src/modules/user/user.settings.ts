@@ -4,7 +4,7 @@ import { type ReasoningLevel } from "../../lib/llm";
 import {
     getEffectiveApiKeys,
     loadCourtListenerConnection,
-} from "./user.apiKeyStore";
+} from "../../lib/providerCredentials/index";
 import { courtlistenerBulkDataEnabled } from "../../lib/courtlistener";
 import { loadCustomInstructions } from "./user.customInstructions";
 import {

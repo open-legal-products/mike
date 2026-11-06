@@ -10,16 +10,18 @@
  * reports them.
  */
 import * as Sentry from "@sentry/react";
-import { privacyBoundaryIntegration } from "@mike/sentry-event";
 import {
+  privacyBoundaryIntegration,
   MIKE_SENTRY_DSN,
   createEventScrubber,
   installKind,
   normalizeApiPath,
   parseSampleRate,
   releaseName,
+  reportedUpstreamMessage,
   resolveDsn,
-} from "@mike/sentry-event";
+  sentryEnvironment,
+} from "@mike/client";
 
 export type ReportLevel = "fatal" | "error" | "warning";
 
@@ -63,10 +65,14 @@ export function addinSentryOptions(
 ): Sentry.BrowserOptions {
   // ON BY DEFAULT: the Mike project's own DSN unless REACT_APP_SENTRY_DISABLED
   // or a DSN of your own is baked in at build time (README, "Telemetry").
+  // webpack sets NODE_ENV from --mode: the dev server is "development",
+  // `npm run build` (every image) is "production".
+  const development = env.nodeEnv === "development";
   const { dsn } = resolveDsn({
     disabled: env.disabled,
     dsn: env.dsn,
     fallback: MIKE_SENTRY_DSN.wordAddin,
+    development,
   });
   const dataCollection = {
             userInfo: false,
@@ -84,7 +90,7 @@ export function addinSentryOptions(
   return {
     dsn: dsn || undefined,
     enabled: dsn.length > 0,
-    environment: env.environment?.trim() || "self-hosted",
+    environment: sentryEnvironment(env.environment, development),
     release: releaseName(env.release, env.version, env.gitSha),
     tracesSampleRate: parseSampleRate(env.tracesSampleRate, 0),
     // No session replay: the pane sits next to a privileged document.
@@ -230,7 +236,13 @@ export function reportApiFailure(failure: {
     error?: unknown;
 }): string | null {
     if (isReported(failure.error)) return null;
+    // Marked even when not sent, so a later reportFault of the same error
+    // (a sign-in screen, a session re-check) does not send it either.
     markReported(failure.error);
+    // The backend or the gateway already reported this one (GoTrue or the
+    // backend unreachable, a database behind on migrations); a pane copy
+    // would be a second issue for the same incident.
+    if (reportedUpstreamMessage(failure.code)) return null;
     if (!Sentry.isEnabled()) return null;
     const route = normalizeApiPath(failure.path);
     const method = failure.method ?? "GET";

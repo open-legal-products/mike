@@ -6,7 +6,7 @@
 
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 
-vi.mock("../tabular.service", () => ({
+vi.mock("../tabular.shared", () => ({
     finishGenerationIfIdle: vi.fn(),
 }));
 vi.mock("../../../lib/queue/extractionQueue", () => ({

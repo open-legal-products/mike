@@ -1,4 +1,6 @@
 import type { RedlineStreamProjection } from "./redline";
+import type { ReasoningLevel } from "./modelSelectionTypes";
+export type { ReasoningLevel } from "./modelSelectionTypes";
 import type {
   Message as SavedMessage,
   WordAssistantEvent,
@@ -23,13 +25,6 @@ export type WordChatOpenHandler = (
   reasoningLevel: ReasoningLevel | null,
   activeTurnId?: string | null,
 ) => void;
-export type ReasoningLevel =
-  | "none"
-  | "low"
-  | "medium"
-  | "high"
-  | "xhigh"
-  | "max";
 export type EditDecision = "accept" | "reject";
 export type EditBusyAction =
   | "view"
