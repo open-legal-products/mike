@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { describeError } from "@mike/client";
+import { isReported } from "@/app/lib/errorReporting";
 import {
     AuthApiError,
     challengeAndVerifyMfa,
@@ -127,6 +128,29 @@ describe("cookie auth client", () => {
                 method: "GET",
                 url: "/api/auth/mfa/assurance",
             });
+        });
+
+        it("only marks a retry that never got a response, so the retry loop files nothing", async () => {
+            // AuthContext retries a session check with `report: false`: the
+            // first failure of the streak was already reported, and each
+            // retry must neither file a new event nor leave the error
+            // unmarked for a later notifyError to pick up.
+            const failure = new TypeError("Failed to fetch");
+            fetchMock.mockRejectedValue(failure);
+
+            await expect(getAuthSession({ report: false })).rejects.toBe(failure);
+
+            expect(reporting.reportNetworkFailure).not.toHaveBeenCalled();
+            expect(isReported(failure)).toBe(true);
+        });
+
+        it("does not report an aborted request: the caller cancelled it", async () => {
+            const abort = new DOMException("The operation was aborted.", "AbortError");
+            fetchMock.mockRejectedValue(abort);
+
+            await expect(getMfaAssurance()).rejects.toBe(abort);
+
+            expect(reporting.reportNetworkFailure).not.toHaveBeenCalled();
         });
     });
 
