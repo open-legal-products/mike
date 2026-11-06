@@ -14,7 +14,7 @@
 
 /**
  * The backend's answer when its database is missing a migration (PGRST202/
- * 204/205, 42P01). Unlike other 5xx it tells the user something actionable
+ * 203/204/205, 42P01, 42703). Unlike other 5xx it tells the user something actionable
  * (contact whoever runs the server).
  */
 export const SCHEMA_OUT_OF_DATE_CODE = "schema_out_of_date";

@@ -95,8 +95,8 @@ A backend started against a database that is missing some of
 function, table or column fails. Requests answer `503` with code
 `schema_out_of_date` ("The server's database needs an update"), and the
 backend logs `[http/schema-out-of-date]` or `[schema-out-of-date]` warnings
-naming the PostgREST/SQLSTATE code (`PGRST202` function, `PGRST204` column,
-`PGRST205` table, `42P01` relation). With error reporting on, Sentry shows an
+naming the PostgREST/SQLSTATE code (`PGRST202` function, `PGRST203` function
+signature, `PGRST204` or `42703` column, `PGRST205` table, `42P01` relation). With error reporting on, Sentry shows an
 error titled `Failure in <operation> / … / schema_out_of_date / <code>`,
 for example `Failure in maintenance.document_text / stale-sweep /
 schema_out_of_date / PGRST202`. Background work (sweeps, upload-session

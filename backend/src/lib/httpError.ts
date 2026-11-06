@@ -35,14 +35,23 @@ export const SCHEMA_OUT_OF_DATE_MESSAGE =
 // self-hosted install that is almost always migrations that were never
 // applied (or PostgREST's schema cache not reloaded after they were), not a
 // transient fault, so retrying cannot help and the operator, not the user,
-// has to act. Deliberately narrow: 42883 (also raised for operator/type
-// mismatches) and 42703 (a column typo in a query) can be code bugs and stay
-// ordinary 500s.
+// has to act.
+//
+// 42703 (undefined column) and PGRST203 (an RPC that matches more than one
+// overload) are included by maintainer decision: on a self-hosted install
+// they are almost always a column or a replaced function signature from a
+// migration that has not run (main's login-MFA preference lookup already
+// treated 42703 that way). A column typo would also land here, but it fails
+// every request in tests and CI long before an install sees it. 42883 stays
+// an ordinary 500: Postgres raises it for operator and type mismatches in a
+// query too, not only for a missing function.
 const SCHEMA_OUT_OF_DATE_CODES = new Set([
   "PGRST202", // function not found in the schema cache
+  "PGRST203", // ambiguous overloaded function (old and new signature both present)
   "PGRST204", // column not found in the schema cache
   "PGRST205", // table not found in the schema cache
   "42P01", // undefined_table
+  "42703", // undefined_column
 ]);
 
 /**
