@@ -25,10 +25,19 @@ import {
  *   at error level, stage=worker, through their own gate that reports a class
  *   again once its window has passed. A recurring defect therefore keeps
  *   reaching Sentry (once per window) instead of once per process.
+ *
+ * The outage warning alone does not page anyone: the org's high-priority
+ * alert matches level:error, and a self-hosted install whose Redis stays down
+ * has stalled uploads. So an outage that is still failing
+ * OUTAGE_ESCALATION_MS after its first error (no 'ready' in between) files
+ * ONE error-level event, queue.redis_outage_persisting, and nothing more
+ * until the connection recovers.
  */
 
 /** Spacing of re-reports of the same non-connection class. */
 export const WORKER_ERROR_REPORT_WINDOW_MS = 15 * 60_000;
+/** How long an outage keeps failing before it is reported at error level. */
+export const OUTAGE_ESCALATION_MS = 15 * 60_000;
 /** Spacing of the console line that counts suppressed repeats. */
 const SUMMARY_INTERVAL_MS = 60_000;
 
@@ -125,9 +134,25 @@ const workerErrorGate = createWorkerErrorGate();
 // consecutive failure(s)" counts failed attempts, not listeners.
 const seen = new WeakSet<object>();
 
+// The outage in progress: when its first connection error arrived, and
+// whether it has already been escalated. Cleared by a 'ready'.
+let outage: { since: number; escalated: boolean } | null = null;
+
 /** Call when a shared Redis connection (consumer or producer) is ready again. */
 export function queueConnectionRecovered(): void {
+    outage = null;
     outageGate.success();
+}
+
+/** True once per outage, on the first error OUTAGE_ESCALATION_MS after it began. */
+function outagePersisting(at: number): number | null {
+    if (!outage) {
+        outage = { since: at, escalated: false };
+        return null;
+    }
+    if (outage.escalated || at - outage.since < OUTAGE_ESCALATION_MS) return null;
+    outage.escalated = true;
+    return Math.floor((at - outage.since) / 60_000);
 }
 
 type ErrorSource = "connection" | "worker" | "producer";
@@ -166,6 +191,18 @@ export function watchQueueErrors(
             seen.add(error);
         }
         if (isQueueConnectionError(error)) {
+            const minutes = outagePersisting(Date.now());
+            if (minutes !== null) {
+                reportError(
+                    new AppError(
+                        "queue.redis_outage_persisting",
+                        `Redis queue connection still failing after ${minutes} minutes`,
+                        { cause: error },
+                    ),
+                    { level: "error", tags: { ...tags("connection"), outage_minutes: minutes } },
+                );
+                console.warn(`[queue] redis still unreachable after ${minutes} minutes`, pollFailureClass(error));
+            }
             if (!outageGate.failure(error).report) return;
             reportError(
                 new AppError("queue.connection_lost", "Redis queue connection lost", {

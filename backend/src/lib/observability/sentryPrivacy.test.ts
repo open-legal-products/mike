@@ -57,6 +57,13 @@ describe('outbound telemetry privacy boundary', () => {
     expect(diagnosticEvent({ tags: { office_host: 'Word', office_platform: 'Mac', office_version: '16.0.123', job_kind: 'extraction.extract' } }).tags).toEqual({ office_host: 'Word', office_platform: 'Mac', office_version: '16.0.123', job_kind: 'extraction.extract' });
   });
 
+  it('keeps a whole-number outage_minutes tag and drops anything else', () => {
+    expect(diagnosticEvent({ tags: { outage_minutes: 15 } }).tags).toEqual({ outage_minutes: 15 });
+    expect(diagnosticEvent({ tags: { outage_minutes: '15' } }).tags).toEqual({ outage_minutes: 15 });
+    expect(diagnosticEvent({ tags: { outage_minutes: '15 min' } }).tags).toEqual({});
+    expect(diagnosticEvent({ tags: { outage_minutes: -1 } }).tags).toEqual({});
+  });
+
   it('keeps a BullMQ queue name tag and drops one that is not a label', () => {
     expect(diagnosticEvent({ tags: { component: 'queue', stage: 'connection', queue: 'tabular-extraction' } }).tags).toEqual({ component: 'queue', stage: 'connection', queue: 'tabular-extraction' });
     expect(diagnosticEvent({ tags: { queue: 'Jane Doe NDA.pdf' } }).tags).toEqual({});
