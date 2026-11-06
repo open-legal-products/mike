@@ -6,6 +6,8 @@ import { InvalidApiKeyError } from "./apiKeyErrors";
 import {
   asProviderStallError,
   providerFailureKind,
+  providerFailureResponse,
+  providerFailureStatus,
   providerFailureLevel,
   toProviderStreamError,
   withKeySource,
@@ -289,5 +291,26 @@ describe("a classified provider failure at the privacy boundary", () => {
       provider_error: "api_call",
     });
     expect(JSON.stringify(tags)).not.toContain("private provider response");
+  });
+});
+
+
+describe("provider failure traversal", () => {
+  it("uses the same wrapped retry response for status, body and kind", () => {
+    const response = apiCallError(429, "quota");
+    const retry = Object.assign(new Error("retry"), { lastError: new Error("wrapper", { cause: response }) });
+    const error = new Error("outer", { cause: retry });
+    expect(providerFailureStatus(error)).toBe(429);
+    expect(providerFailureResponse(error)).toEqual({ status: 429, body: "quota" });
+    expect(providerFailureKind(error)).toBe("chat.provider_rate_limited");
+  });
+
+  it("terminates cyclic cause and retry chains", () => {
+    const error = Object.assign(new Error("cycle"), { lastError: null as unknown });
+    error.lastError = error;
+    error.cause = error;
+    expect(providerFailureStatus(error)).toBeNull();
+    expect(providerFailureResponse(error)).toBeNull();
+    expect(providerFailureKind(error)).toBe("chat.stream_failed");
   });
 });
