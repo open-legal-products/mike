@@ -17,7 +17,7 @@ import {
 } from "../../lib/observability/sentry";
 import { safeError } from "../../lib/safeError";
 import { deleteFile } from "../../lib/storage";
-import type { PlaybookImportStage } from "./playbooks.operations";
+import type { PlaybookImportStage } from "./playbooks.types";
 
 export type PlaybookJobKind = "playbook.review" | "playbook.import";
 

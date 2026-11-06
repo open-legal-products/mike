@@ -11,15 +11,28 @@
 //
 // The rules:
 //
-//   1. Every file in the production build program (`tsconfig.build.json`, the
-//      config `next build` uses) stays inside `frontend/`: no relative import
-//      may resolve to a path outside it.
+//   1. Every relative import in the production build program
+//      (`tsconfig.build.json`, the config `next build` uses) resolves to a
+//      file that is in the image: inside `frontend/`, or inside the same
+//      Dockerfile-copied directory as the importing file (the shared
+//      packages under `packages/` import their own files relatively).
 //   2. Production code reaches outside `frontend/` only through a `paths`
 //      alias, and every alias target outside `frontend/` must be copied by
 //      the Dockerfile to exactly the path the alias resolves to in the image.
 //   3. The build program excludes test-only files and nothing else. Every
 //      other file tsconfig.json sees must still be in the build, so an
 //      exclude pattern cannot quietly drop production code from type-checking.
+//   4. No `paths` alias targets a declaration file unless every import of it
+//      is type-only. Turbopack resolves runtime imports through these aliases
+//      too, and a `.d.ts` has no runtime exports: a `react/jsx-runtime` alias
+//      to @types once compiled every JSX call to `(void 0)(...)`, and the
+//      built app rendered only its error page with no build error.
+//   5. The shared packages keep the boundary their READMEs state: a package's
+//      relative imports stay inside it; `@mike/client` is framework-free and
+//      never imports `@mike/ui` or an application; `@mike/ui` imports only
+//      `@mike/client` and its declared peer dependencies; and application
+//      code reaches a package only through its bare name, never a file path,
+//      so a file `index.ts` does not re-export stays internal.
 //
 // Test files may import shared fixtures and add-in sources from outside
 // `frontend/`; rule 3 is what keeps them out of the image. The faithful check
@@ -99,22 +112,31 @@ describe("frontend build boundaries", () => {
     const build = loadProgram("tsconfig.build.json");
     const full = loadProgram("tsconfig.json");
 
-    it("rule 1: nothing in the production build program imports from outside frontend/", () => {
+    it("rule 1: every relative import in the production build program stays inside the image", () => {
+        // A directory the Dockerfile copies whole keeps its internal layout, so
+        // a relative import between two files under the same copied directory
+        // resolves in the image too.
+        const copiedDirs = readDockerfile()
+            .copies.map((c) => resolve(REPO, c.src))
+            .filter((dir) => !isInside(FRONTEND, dir));
+        const sameCopiedDir = (file: string, target: string) =>
+            copiedDirs.some((dir) => isInside(dir, file) && isInside(dir, target));
         const violations: string[] = [];
         for (const file of build.fileNames) {
             for (const spec of importSpecifiers(file)) {
                 if (!spec.startsWith("./") && !spec.startsWith("../")) continue;
                 const target = resolve(dirname(file), spec);
-                if (!isInside(FRONTEND, target)) {
+                if (!isInside(FRONTEND, target) && !sameCopiedDir(file, target)) {
                     violations.push(`${relToFrontend(file)} -> ${spec}`);
                 }
             }
         }
         expect(
             violations,
-            "A file `next build` type-checks reaches outside frontend/. The Docker " +
-                "image is built from an allowlisted context and will not contain the " +
-                "target. Import it through a tsconfig `paths` alias whose target the " +
+            "A file `next build` type-checks reaches outside frontend/ and outside " +
+                "the directory the Dockerfile copies it from. The Docker image is " +
+                "built from an allowlisted context and will not contain the target. " +
+                "Import it through a tsconfig `paths` alias whose target the " +
                 "Dockerfile copies, or, if it is a test, name it so " +
                 "tsconfig.build.json excludes it.",
         ).toEqual([]);
@@ -161,5 +183,75 @@ describe("frontend build boundaries", () => {
 
         const testsInBuild = build.fileNames.map(relToFrontend).filter(isTestOnly);
         expect(testsInBuild, "tsconfig.build.json must exclude every test-only file").toEqual([]);
+    });
+
+    it("rule 4: no tsconfig alias a runtime import can reach targets a declaration file", () => {
+        // @mike/contracts is declarations only and is imported with `import type`
+        // (AGENTS.md), which the bundler erases before resolving anything.
+        const TYPE_ONLY_ALIASES = new Set(["@mike/contracts"]);
+        const paths = build.options.paths ?? {};
+        const declarationTargets = Object.entries(paths)
+            .filter(([alias]) => !TYPE_ONLY_ALIASES.has(alias))
+            .flatMap(([alias, targets]) =>
+                targets.filter((t) => /\.d\.[cm]?ts$/.test(t)).map((t) => `${alias} -> ${t}`),
+            );
+        expect(
+            declarationTargets,
+            "A tsconfig `paths` alias maps a module to a declaration file. Turbopack " +
+                "applies these aliases to runtime imports, so the bundle gets a module " +
+                "with no exports. Point it at the runtime package (types come from " +
+                "`typeRoots`), or drop it.",
+        ).toEqual([]);
+    });
+
+    it("rule 5: the shared packages keep their stated import boundary", () => {
+        const PACKAGES = resolve(REPO, "packages");
+        const WORD_ADDIN = resolve(REPO, "word-addin");
+        const readJson = (file: string) => JSON.parse(readFileSync(file, "utf8")) as { peerDependencies?: Record<string, string> };
+        // What each package may import by bare name: its declared peers (the
+        // consuming app supplies them) plus Node built-ins; `@mike/client` may
+        // reach React for types only.
+        const allowed: Record<string, Set<string>> = {
+            client: new Set(Object.keys(readJson(join(PACKAGES, "client/package.json")).peerDependencies ?? {})),
+            ui: new Set(Object.keys(readJson(join(PACKAGES, "ui/package.json")).peerDependencies ?? {})),
+        };
+        allowed.client.add("react");
+        const bareName = (spec: string) => (spec.startsWith("@") ? spec.split("/").slice(0, 2).join("/") : spec.split("/")[0]);
+        const violations: string[] = [];
+        for (const file of full.fileNames) {
+            const rel = toPosix(relative(REPO, file));
+            if (isTestOnly(relToFrontend(file)) || /\.stories\.tsx?$/.test(rel)) continue;
+            const pkg = /^packages\/(ui|client)\//.exec(rel)?.[1];
+            const source = readFileSync(file, "utf8");
+            for (const spec of importSpecifiers(file)) {
+                if (pkg) {
+                    if (spec.startsWith(".")) {
+                        if (!isInside(join(PACKAGES, pkg), resolve(dirname(file), spec)))
+                            violations.push(`${rel} -> ${spec} (leaves packages/${pkg})`);
+                        continue;
+                    }
+                    if (spec.startsWith("node:")) continue;
+                    const name = bareName(spec);
+                    if (name === "@mike/client" && pkg === "client")
+                        violations.push(`${rel} -> ${spec} (a package does not import its own barrel)`);
+                    else if (name === "@mike/ui")
+                        violations.push(`${rel} -> ${spec} (${pkg === "client" ? "@mike/client never imports @mike/ui" : "a package does not import its own barrel"})`);
+                    else if (!allowed[pkg].has(name))
+                        violations.push(`${rel} -> ${spec} (not a declared peer dependency of @mike/${pkg})`);
+                    else if (pkg === "client" && name === "react" && !new RegExp(`import\\s+type\\s[^;]*from\\s+["']${spec}["']`).test(source))
+                        violations.push(`${rel} -> ${spec} (@mike/client is framework-free: React for types only)`);
+                } else {
+                    // Application code: packages by bare name only.
+                    const target = spec.startsWith(".") ? resolve(dirname(file), spec) : null;
+                    if (/^@mike\/(ui|client)\//.test(spec) || (target && isInside(PACKAGES, target) && !isInside(WORD_ADDIN, target)))
+                        violations.push(`${rel} -> ${spec} (import @mike/ui or @mike/client by name, not a file inside it)`);
+                }
+            }
+        }
+        expect(
+            violations,
+            "packages/ui/README.md and packages/client/README.md state these rules; " +
+                "an import crossed the boundary they describe.",
+        ).toEqual([]);
     });
 });

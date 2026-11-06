@@ -6,7 +6,8 @@ import { SidebarLogo } from "./SidebarLogo";
 const mocks = vi.hoisted(() => ({ getOrgLogo: vi.fn() }));
 
 vi.mock("@/app/lib/mikeApi", () => ({ getOrgLogo: mocks.getOrgLogo }));
-vi.mock("@/shared/ui/MikeIconUI", () => ({
+vi.mock("@mike/ui", async (importOriginal) => ({
+    ...(await importOriginal<typeof import("@mike/ui")>()),
     MikeIcon: () => <span data-testid="mike-icon" />,
 }));
 

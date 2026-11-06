@@ -3,7 +3,7 @@
 import { useLatestRef } from "@/app/hooks/useLatestRef";
 import { useMarkdownCheckpoint } from "./message/markdownCheckpoint";
 import { createCitationPreprocessor } from "./message/citationPreprocessor";
-import { TextCardUI } from "@/shared/ui/TextCardUI";
+import { TextCardUI } from "@mike/ui";
 import { memo, useMemo, useRef, useState, type ReactNode } from "react";
 import type { WebSource } from "@mike/contracts";
 import { Check, Copy } from "lucide-react";

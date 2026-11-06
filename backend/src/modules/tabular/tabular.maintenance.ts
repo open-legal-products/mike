@@ -37,7 +37,7 @@ import { withRedisTimeout } from "../../lib/queue/connection";
 // tabular module. Import them ONLY through the module's service facade; do
 // not add further lib -> modules edges (a follow-up will move this sweep's
 // tabular half into the module instead).
-import { finishGenerationIfIdle } from "./tabular.service";
+import { finishGenerationIfIdle } from "./tabular.shared";
 import { redisEnabled } from "../../lib/dbq/driver";
 import { liveDbJobDedupeKeys } from "../../lib/dbq/enqueue";
 import { chunkArray } from "../../lib/arrays";

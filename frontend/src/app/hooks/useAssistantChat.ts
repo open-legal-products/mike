@@ -15,9 +15,9 @@ import { stopChatTurn, streamChat, streamProjectChat } from "@/app/lib/mikeApi";
 import {
   createTurnCursor,
   createTurnEventSink,
-  isAbortError,
   readAssistantTurn,
 } from "@/app/lib/assistantTurnStream";
+import { isAbortError } from "@mike/client";
 import {
   beginAssistantTurn,
   cancelAssistantTurn,

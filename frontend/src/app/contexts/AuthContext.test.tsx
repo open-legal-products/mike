@@ -6,7 +6,7 @@ import {
     ToastViewportUI,
     clearToasts,
     showToast,
-} from "@/shared/ui/ToastUI";
+} from "@mike/ui";
 
 const {
     clearLegacyBrowserAuthStorage,

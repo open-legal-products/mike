@@ -2,12 +2,11 @@
 
 import { useState } from "react";
 import { Download, Trash2 } from "lucide-react";
-import { PillButtonUI } from "@/shared/ui/PillButtonUI";
+import { PillButtonUI, GlassCardUI } from "@mike/ui";
 import {
   SettingsDescription,
   SettingsLabel,
 } from "@/app/components/settings/SettingsText";
-import { GlassCardUI } from "@/shared/ui/GlassCardUI";
 import { SettingsHeading } from "@/app/components/settings/SettingsHeading";
 import { SettingsRow } from "@/app/components/settings/SettingsRow";
 import { useChatHistoryContext } from "@/app/contexts/ChatHistoryContext";

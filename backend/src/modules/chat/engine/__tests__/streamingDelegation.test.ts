@@ -462,6 +462,78 @@ describe("runDelegateCall", () => {
     ...overrides,
   });
 
+  it.each([undefined, "", " \t\n "])("uses a default title for a new task with title %j", async (title) => {
+    const spawn = vi.fn<DelegateContext["spawn"]>(async () => ({
+      fullText: "Receipt summary.", events: [], citations: [],
+    }));
+    const ctx = context({ spawn });
+    const input = title === undefined
+      ? { task: "Summarize the receipt." }
+      : { task: "Summarize the receipt.", title };
+
+    const result = await runDelegateCall({ id: "untitled", name: "delegate", input }, ctx);
+
+    expect(spawn).toHaveBeenCalledOnce();
+    expect(result.event).toMatchObject({ status: "completed", title: "Subagent" });
+    expect(ctx.runStore.save).toHaveBeenCalledWith(
+      result.event?.delegation_id, "completed", expect.objectContaining({ title: "Subagent" }),
+    );
+  });
+
+  it("preserves a supplied title after trimming", async () => {
+    const ctx = context({
+      spawn: async () => ({ fullText: "Receipt summary.", events: [], citations: [] }),
+    });
+
+    const result = await runDelegateCall(delegate("named", { title: "  Receipt review  " }), ctx);
+
+    expect(result.event).toMatchObject({ status: "completed", title: "Receipt review" });
+  });
+
+  it.each([undefined, " \t "])("inherits a continuation title when its title is %j", async (title) => {
+    const spawn = vi.fn<DelegateContext["spawn"]>(async () => ({
+      fullText: "Receipt summary.", events: [], citations: [],
+    }));
+    const ctx = context({ spawn });
+    const first = await runDelegateCall(delegate("first", { title: "Receipt review" }), ctx);
+    const input = {
+      continue: first.event!.delegation_id,
+      task: "Check the receipt date.",
+      ...(title === undefined ? {} : { title }),
+    };
+
+    const result = await runDelegateCall({ id: "continued", name: "delegate", input }, ctx);
+
+    expect(spawn).toHaveBeenCalledTimes(2);
+    expect(result.event).toMatchObject({
+      status: "completed", title: "Receipt review", continued_from: first.event?.delegation_id,
+    });
+  });
+
+  it.each([undefined, "", " \t\n "])("still refuses a missing or blank task %j", async (task) => {
+    const ctx = context();
+    const input = task === undefined ? {} : { task };
+
+    const result = await runDelegateCall({ id: "no-task", name: "delegate", input }, ctx);
+
+    expect(JSON.parse(result.content)).toEqual({ error: "A delegate call needs a task." });
+    expect(ctx.spawn).not.toHaveBeenCalled();
+    expect(ctx.state.started).toBe(0);
+  });
+
+  it("does not turn an unknown untitled continuation into a new task", async () => {
+    const ctx = context();
+
+    const result = await runDelegateCall({
+      id: "missing-continuation", name: "delegate",
+      input: { continue: "gone", task: "Check the receipt date." },
+    }, ctx);
+
+    expect(result.content).toContain("cannot be continued");
+    expect(ctx.spawn).not.toHaveBeenCalled();
+    expect(ctx.state.started).toBe(0);
+  });
+
   it("fences the brief, lists only the sources the subagent verified, and saves the run", async () => {
     const ctx = context({
       spawn: async () => ({

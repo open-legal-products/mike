@@ -594,7 +594,6 @@ describe("apiRequest plumbing (via thin wrappers)", () => {
         ["schema_out_of_date", SCHEMA_OUT_OF_DATE_MESSAGE, "The server's database needs an update before this can load. Please contact your administrator."],
         ["upstream_unavailable", UPSTREAM_UNAVAILABLE_MESSAGE, "The server is temporarily unreachable. Please try again shortly."],
     ])("shows the %s message and leaves the report to the server side", async (code, message, sentence) => {
-        markErrorHandled.mockClear();
         fetchMock.mockResolvedValue(
             jsonResponse(
                 {
@@ -609,8 +608,12 @@ describe("apiRequest plumbing (via thin wrappers)", () => {
         const error = await getUserProfile().catch((caught: unknown) => caught);
         expect(error).toMatchObject({ status: 503, code, requestId: "req-503-1", message });
         expect(userFacingApiError(error, "Fallback")).toBe(sentence);
-        expect(reportApiFailure).not.toHaveBeenCalled();
-        expect(markErrorHandled).toHaveBeenCalledExactlyOnceWith(error);
+        // reportApiFailure owns the "already reported upstream" rule (one
+        // rule for web and add-in; errorReporting.test.ts): it only marks
+        // these codes.
+        expect(reportApiFailure).toHaveBeenCalledExactlyOnceWith(
+            expect.objectContaining({ status: 503, code, error }),
+        );
     });
 
     it("reports a 5xx without a code and never reports a 4xx", async () => {

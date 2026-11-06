@@ -8,7 +8,7 @@ import {
 } from "@/app/lib/mikeApi";
 import type { Workflow } from "@/app/components/shared/types";
 import { WorkflowDetailPage } from "./WorkflowDetailPage";
-import { ToastViewportUI, clearToasts } from "@/shared/ui/ToastUI";
+import { ToastViewportUI, clearToasts } from "@mike/ui";
 
 vi.mock("next/navigation", () => ({
     useRouter: () => ({ push: vi.fn(), replace: vi.fn() }),

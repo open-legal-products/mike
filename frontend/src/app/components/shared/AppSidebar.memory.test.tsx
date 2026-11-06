@@ -3,7 +3,7 @@ import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { listProjectChats, listProjectsPage } from "@/app/lib/mikeApi";
 import { beginAssistantTurn } from "@/app/lib/assistantTurns";
-import { ToastViewportUI, clearToasts } from "@/shared/ui/ToastUI";
+import { ToastViewportUI, clearToasts } from "@mike/ui";
 import { AppSidebar } from "./AppSidebar";
 
 const state = vi.hoisted(() => ({
@@ -57,7 +57,8 @@ vi.mock("@/app/contexts/ChatHistoryContext", () => ({
   }),
 }));
 
-vi.mock("@/shared/ui/MikeIconUI", () => ({
+vi.mock("@mike/ui", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@mike/ui")>()),
   MikeIcon: () => <span aria-hidden="true" />,
 }));
 

@@ -86,7 +86,56 @@ describe("runtime authentication configuration", () => {
         ...validProduction,
         WORD_ADDIN_URL: "https://word.example.test",
       }),
-    ).toThrow(/AUTH_HANDOFF_ENCRYPTION_SECRET is required/);
+    ).toThrow(/AUTH_HANDOFF_ENCRYPTION_SECRET/);
+  });
+
+  it("rejects the .env.example placeholder download and key-encryption secrets", () => {
+    expect(() =>
+      validateRuntimeConfiguration({
+        ...validProduction,
+        DOWNLOAD_SIGNING_SECRET: "replace-with-a-random-32-byte-hex-string",
+        USER_API_KEYS_ENCRYPTION_SECRET: "your-long-random-secret",
+      }),
+    ).toThrow(/DOWNLOAD_SIGNING_SECRET[\s\S]*USER_API_KEYS_ENCRYPTION_SECRET/s);
+  });
+
+  it("rejects real secrets that are too short to be meaningful", () => {
+    expect(() =>
+      validateRuntimeConfiguration({
+        ...validProduction,
+        DOWNLOAD_SIGNING_SECRET: "too-short",
+        USER_API_KEYS_ENCRYPTION_SECRET: "also-short",
+      }),
+    ).toThrow(/DOWNLOAD_SIGNING_SECRET[\s\S]*USER_API_KEYS_ENCRYPTION_SECRET/s);
+  });
+
+  describe.each([
+    "DOWNLOAD_SIGNING_SECRET",
+    "USER_API_KEYS_ENCRYPTION_SECRET",
+  ])("%s", (name) => {
+    it.each([" ", "\t\r\n", " ".repeat(32)])(
+      "rejects a whitespace-only value %j",
+      (value) => {
+        expect(() =>
+          validateRuntimeConfiguration({ ...validProduction, [name]: value }),
+        ).toThrow(`${name} must contain at least 32 characters`);
+      },
+    );
+
+    it.each([undefined, ""])("allows an absent or empty value %j", (value) => {
+      expect(() =>
+        validateRuntimeConfiguration({ ...validProduction, [name]: value }),
+      ).not.toThrow();
+    });
+
+    it("accepts a value at the minimum length", () => {
+      expect(() =>
+        validateRuntimeConfiguration({
+          ...validProduction,
+          [name]: "a".repeat(32),
+        }),
+      ).not.toThrow();
+    });
   });
 
   it("accepts the legacy anon key name for the user-session client", () => {

@@ -5,7 +5,7 @@ import type { ProjectEmailPreview, ProjectEmailReceipt } from "@mike/contracts";
 import { Modal } from "@/app/components/modals/Modal";
 import { FormTextInput, FieldLabel } from "@/app/components/ui/form-field";
 import { TABLE_CHECKBOX_CLASS } from "@/app/components/shared/TablePrimitive";
-import { PillButtonUI } from "@/shared/ui/PillButtonUI";
+import { PillButtonUI } from "@mike/ui";
 import { previewProjectEmail, importProjectEmail, latestProjectEmail, getProjectEmailReceipt, getDocumentFileUrl } from "@/app/lib/mikeApi";
 import { notifyError } from "@/app/lib/userFacingError";
 
