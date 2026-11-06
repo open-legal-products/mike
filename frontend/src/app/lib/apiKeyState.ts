@@ -21,9 +21,9 @@ export const API_KEY_PROVIDERS: readonly ApiKeyProvider[] = [
 ];
 
 /**
- * Whether a server payload carries a key status at all. An older or forked
- * backend, or a proxy answering 200 with some other body, can leave it out;
- * then the client cannot tell which providers have keys.
+ * Whether a server payload carries a key status at all. A forked server, or
+ * a proxy or misrouted API URL answering 200 with some other body, can leave
+ * it out; then the client cannot tell which providers have keys.
  */
 export function hasApiKeyStatus(status: unknown): status is ApiKeyStatus {
     return typeof status === "object" && status !== null && !Array.isArray(status);
