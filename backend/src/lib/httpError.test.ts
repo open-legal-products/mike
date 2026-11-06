@@ -108,7 +108,7 @@ describe("sendInternalError", () => {
   // MIKE-BACKEND-H: GET /chat on an install whose migrations were never
   // applied (the list RPC does not exist, PGRST202) answered an opaque 500
   // internal_error, and the operator log said nothing about migrations.
-  it.each(["PGRST202", "PGRST204", "PGRST205", "42P01"])(
+  it.each(["PGRST202", "PGRST203", "PGRST204", "PGRST205", "42P01", "42703"])(
     "answers a schema-behind-code failure (%s) with an intentional 503, one report, and an operator hint",
     async (code) => {
       const consoleError = vi.spyOn(console, "error").mockImplementation(() => {});
@@ -152,7 +152,7 @@ describe("sendInternalError", () => {
     const wrapped = new Error("list failed", { cause: { code: "PGRST202" } });
     expect((await request(appThatFails(wrapped)).get("/projects/p-1")).status).toBe(503);
 
-    for (const code of ["42883", "42703", "23505"]) {
+    for (const code of ["42883", "23505"]) {
       const res = await request(appThatFails({ code })).get("/projects/p-1");
       expect(res.status).toBe(500);
       expect(res.body.code).toBe("internal_error");

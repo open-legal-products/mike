@@ -11,6 +11,7 @@
 export * from "./userError";
 export * from "./toastStore";
 export * from "./errorNotifier";
+export * from "./reportedUpstream";
 
 // Model catalog shared by both pickers
 export * from "./modelCatalog";

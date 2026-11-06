@@ -18,6 +18,7 @@ import {
   normalizeApiPath,
   parseSampleRate,
   releaseName,
+  reportedUpstreamMessage,
   resolveDsn,
 } from "@mike/client";
 
@@ -230,7 +231,13 @@ export function reportApiFailure(failure: {
     error?: unknown;
 }): string | null {
     if (isReported(failure.error)) return null;
+    // Marked even when not sent, so a later reportFault of the same error
+    // (a sign-in screen, a session re-check) does not send it either.
     markReported(failure.error);
+    // The backend or the gateway already reported this one (GoTrue or the
+    // backend unreachable, a database behind on migrations); a pane copy
+    // would be a second issue for the same incident.
+    if (reportedUpstreamMessage(failure.code)) return null;
     if (!Sentry.isEnabled()) return null;
     const route = normalizeApiPath(failure.path);
     const method = failure.method ?? "GET";

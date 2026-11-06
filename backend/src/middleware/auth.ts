@@ -2,8 +2,11 @@ import { Request, Response, NextFunction } from "express";
 import type { ParamsFlatDictionary } from "express-serve-static-core";
 import { createServerSupabase, type Db } from "../lib/supabase";
 import { syncProfileEmail } from "../lib/userLookup";
-import { sendInternalError } from "../lib/httpError";
+import { sendInternalError, sendUpstreamUnavailable } from "../lib/httpError";
+import { isAuthUpstreamFailure } from "../lib/authUpstream";
+import { noteUpstreamReachable } from "../lib/upstreamOutage";
 import { createRequestSupabase } from "../lib/authSession";
+import { reportSchemaOutOfDateOnce } from "../lib/schemaOutOfDate";
 import { requestOriginIsTrusted } from "../lib/origins";
 import { devLog, isDev } from "../lib/log";
 import { AppError } from "../lib/appError";
@@ -61,22 +64,17 @@ function isLoginMfaBootstrapRoute(req: Request) {
 
 // user_profiles.mfa_on_login missing (42703) means a deployment that has not
 // run the migration yet. Enforcement cannot apply without the preference, so
-// the request proceeds for compatibility — but it must not be silent: report
-// once per process so operators see that login MFA is not active until the
-// migration lands.
-let loginMfaColumnMissingReported = false;
-
+// the request proceeds for compatibility — but it must not be silent. 42703
+// is a schema-out-of-date code, so this goes through the same once-per-process
+// gate as every other missing migration (lib/schemaOutOfDate.ts): one
+// error-level schema_out_of_date event, then an hourly log reminder, and no
+// second once-flag that could report the same missing column again.
 function reportLoginMfaColumnMissing(error: { code?: string }) {
-  if (loginMfaColumnMissingReported) return;
-  loginMfaColumnMissingReported = true;
-  reportError(
-    new AppError(
-      "auth.login_mfa_column_missing",
-      "user_profiles.mfa_on_login is missing; login MFA enforcement is not active until the migration runs",
-      { cause: error },
-    ),
-    { level: "warning", tags: { component: "http" } },
-  );
+  reportSchemaOutOfDateOnce(error, {
+    key: "auth.login_mfa_preference",
+    tags: { component: "http" },
+    consequence: "login MFA enforcement is not active until the migration runs",
+  });
 }
 
 async function enforceLoginMfaIfEnabled(
@@ -182,6 +180,8 @@ export async function requireAuth(
   let token = "";
   let user: Awaited<ReturnType<typeof admin.auth.getUser>>["data"]["user"] =
     null;
+  // auth-js returns, rather than throws, the error behind a missing user.
+  let lookupError: unknown = null;
 
   if (auth.startsWith("Bearer ")) {
     // Temporary compatibility path for older Word add-ins, load tests, and
@@ -189,6 +189,7 @@ export async function requireAuth(
     token = auth.slice(7).trim();
     const result = await admin.auth.getUser(token);
     user = result.data.user;
+    lookupError = result.error;
   } else {
     if (
       !["GET", "HEAD", "OPTIONS"].includes(req.method) &&
@@ -205,6 +206,7 @@ export async function requireAuth(
       const authClient = createRequestSupabase(req, res);
       const result = await authClient.auth.getUser();
       user = result.data.user;
+      lookupError = result.error;
       if (user) {
         const sessionResult = await authClient.auth.getSession();
         token = sessionResult.data.session?.access_token ?? "";
@@ -223,6 +225,24 @@ export async function requireAuth(
       return;
     }
   }
+
+  if (!user && isAuthUpstreamFailure(lookupError)) {
+    // GoTrue could not be reached, so nobody could say whether the session
+    // is valid. A 401 here would make the web app sign the user out of a
+    // session that is fine; 503 upstream_unavailable tells it to wait.
+    // The handler that would name this request's flow never runs, so the
+    // event is named after what failed: the session lookup.
+    sendUpstreamUnavailable(
+      res,
+      new AppError("auth.supabase_unavailable", "session lookup could not reach GoTrue", {
+        cause: lookupError,
+      }),
+      { operation: "auth.session" },
+    );
+    return;
+  }
+  // GoTrue answered: an outage reported earlier is over.
+  if (user) noteUpstreamReachable();
 
   if (!user || !token) {
     res.status(401).json({ detail: "Invalid or expired session" });

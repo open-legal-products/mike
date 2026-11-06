@@ -1,5 +1,6 @@
 import type { Response } from "express";
 import { reportError, requestRoutePattern } from "./observability/sentry";
+import { shouldReportUpstreamFailure } from "./upstreamOutage";
 
 export const INTERNAL_ERROR_CODE = "internal_error";
 export const RATE_LIMITED_CODE = "rate_limited";
@@ -14,6 +15,16 @@ export function rateLimitedBody(detail: string): {
 export const INTERNAL_ERROR_MESSAGE =
   "Something went wrong. Please try again.";
 
+/**
+ * A dependency this server needs (GoTrue, today) is unreachable: no answer,
+ * or a gateway 502/503/504 in front of it. The same code the Next gateway sends when it cannot reach this server,
+ * so a client treats both alike: already reported server-side, show "try
+ * again shortly", do not report it again.
+ */
+export const UPSTREAM_UNAVAILABLE_CODE = "upstream_unavailable";
+export const UPSTREAM_UNAVAILABLE_MESSAGE =
+  "The server is temporarily unreachable. Please try again shortly.";
+
 export const SCHEMA_OUT_OF_DATE_CODE = "schema_out_of_date";
 export const SCHEMA_OUT_OF_DATE_MESSAGE =
   "The server's database needs an update before this can load. " +
@@ -24,28 +35,40 @@ export const SCHEMA_OUT_OF_DATE_MESSAGE =
 // self-hosted install that is almost always migrations that were never
 // applied (or PostgREST's schema cache not reloaded after they were), not a
 // transient fault, so retrying cannot help and the operator, not the user,
-// has to act. Deliberately narrow: 42883 (also raised for operator/type
-// mismatches) and 42703 (a column typo in a query) can be code bugs and stay
-// ordinary 500s.
+// has to act.
+//
+// 42703 (undefined column) and PGRST203 (an RPC that matches more than one
+// overload) are included by maintainer decision: on a self-hosted install
+// they are almost always a column or a replaced function signature from a
+// migration that has not run (main's login-MFA preference lookup already
+// treated 42703 that way). A column typo would also land here, but it fails
+// every request in tests and CI long before an install sees it. 42883 stays
+// an ordinary 500: Postgres raises it for operator and type mismatches in a
+// query too, not only for a missing function.
 const SCHEMA_OUT_OF_DATE_CODES = new Set([
   "PGRST202", // function not found in the schema cache
+  "PGRST203", // ambiguous overloaded function (old and new signature both present)
   "PGRST204", // column not found in the schema cache
   "PGRST205", // table not found in the schema cache
   "42P01", // undefined_table
+  "42703", // undefined_column
 ]);
 
 /**
- * The schema-drift code in an error's cause chain, if any. Reads only the
- * structured `code` of each link (a supabase-js error object, or the Error
- * asReportableError wrapped around one), never message text.
+ * The link of an error's cause chain that carries a schema-drift code, and
+ * that code. Reads only the structured `code` of each link (a supabase-js
+ * error object, or the Error asReportableError wrapped around one), never
+ * message text.
  */
-export function schemaOutOfDateCode(error: unknown): string | null {
+export function schemaOutOfDateLink(
+  error: unknown,
+): { code: string; link: object } | null {
   let current: unknown = error;
   for (let depth = 0; depth < 5 && current && typeof current === "object"; depth++) {
     try {
       const code = (current as { code?: unknown }).code;
       if (typeof code === "string" && SCHEMA_OUT_OF_DATE_CODES.has(code)) {
-        return code;
+        return { code, link: current };
       }
       current = (current as { cause?: unknown }).cause;
     } catch {
@@ -53,6 +76,11 @@ export function schemaOutOfDateCode(error: unknown): string | null {
     }
   }
   return null;
+}
+
+/** The schema-drift code in an error's cause chain, if any. */
+export function schemaOutOfDateCode(error: unknown): string | null {
+  return schemaOutOfDateLink(error)?.code ?? null;
 }
 
 // SQLSTATE (42P01), PostgREST (PGRST205) and errno-style (ECONNREFUSED)
@@ -99,10 +127,38 @@ export function asReportableError(
   return error;
 }
 
+// res.locals key set once a request's failure has been sent to Sentry, so
+// the response sanitizer (middleware/internalErrorResponse.ts) neither files
+// a second event for the same 5xx nor rewrites its fixed public code.
+const FAILURE_REPORTED = "failureReported";
+
+/** True when sendInternalError already reported this request's failure. */
+export function failureAlreadyReported(res: Response): boolean {
+  return res.locals?.[FAILURE_REPORTED] === true;
+}
+
+/** A public answer other than the default internal_error/schema pair. */
+export interface PublicFailure {
+  code: string;
+  detail: string;
+}
+
+/** How sendInternalError reports, when a caller needs other than the default. */
+interface ReportPolicy {
+  /** False: the failure is a known repeat; log it, do not send it. */
+  report: boolean;
+  /** Names the flow when the request's handler has not set one yet. */
+  operation?: string;
+  /** Groups the event under a pinned condition instead of the route. */
+  fingerprint?: string[];
+}
+
 export function sendInternalError(
   res: Response,
   error: unknown,
   status = 500,
+  answer?: PublicFailure,
+  policy: ReportPolicy = { report: true },
 ): Response {
   const requestId =
     typeof res.locals.requestId === "string" ? res.locals.requestId : null;
@@ -122,17 +178,24 @@ export function sendInternalError(
   // same one the client gets in the response body, so a user report ("I got
   // request_id X") finds the exact event. Report before logging: the console
   // bridge then knows this error is already accounted for.
-  reportError(error, {
-    tags: {
-      component: "http",
-      http_status: status,
-      request_id: requestId,
-      http_method: res.req?.method,
-      // The mounted route pattern, not the URL: /projects/:projectId groups
-      // as one issue instead of one per project.
-      http_route: requestRoutePattern(res.req),
-    },
-  });
+  if (policy.report) {
+    reportError(error, {
+      tags: {
+        component: "http",
+        http_status: status,
+        request_id: requestId,
+        http_method: res.req?.method,
+        // The mounted route pattern, not the URL: /projects/:projectId groups
+        // as one issue instead of one per project.
+        http_route: requestRoutePattern(res.req),
+        ...(policy.operation ? { operation: policy.operation } : {}),
+      },
+      ...(policy.fingerprint ? { fingerprint: policy.fingerprint } : {}),
+    });
+  }
+  // Set for a known repeat too: the response sanitizer must neither report
+  // it nor rewrite its public code.
+  res.locals[FAILURE_REPORTED] = true;
 
   if (schemaCode) {
     // console.warn, not console.error: the Sentry console bridge files every
@@ -145,16 +208,47 @@ export function sendInternalError(
         "See docs/deployment.md.",
     );
   }
-  console.error("[http/internal-error]", {
-    requestId,
-    method: res.req?.method,
-    path: res.req?.originalUrl?.split("?")[0],
-    error: error,
-  });
+  if (policy.report) {
+    console.error("[http/internal-error]", {
+      requestId,
+      method: res.req?.method,
+      path: res.req?.originalUrl?.split("?")[0],
+      error: error,
+    });
+  }
 
+  const body: PublicFailure = schemaCode
+    ? { code: SCHEMA_OUT_OF_DATE_CODE, detail: SCHEMA_OUT_OF_DATE_MESSAGE }
+    : (answer ?? { code: INTERNAL_ERROR_CODE, detail: INTERNAL_ERROR_MESSAGE });
   return res.status(status).json({
-    code: schemaCode ? SCHEMA_OUT_OF_DATE_CODE : INTERNAL_ERROR_CODE,
-    detail: schemaCode ? SCHEMA_OUT_OF_DATE_MESSAGE : INTERNAL_ERROR_MESSAGE,
+    ...body,
     ...(requestId ? { request_id: requestId } : {}),
   });
+}
+
+/**
+ * A dependency (GoTrue, today) could not be reached: 503
+ * `upstream_unavailable`. Use it only for failures the user can wait out
+ * (lib/authUpstream.ts decides that for auth-js errors); a dependency
+ * answering with its own bug stays a 500.
+ *
+ * Every request fails this way for as long as the outage lasts, so the
+ * report is gated per process (lib/upstreamOutage.ts): the first failure of
+ * a class is one event, pinned to one `upstream-unavailable` issue whatever
+ * route tripped it; repeats are a counted console.warn. `operation` names
+ * the flow when the handler that would set it has not run (requireAuth).
+ */
+export function sendUpstreamUnavailable(
+  res: Response,
+  error: unknown,
+  options: { operation?: string } = {},
+): Response {
+  const report = shouldReportUpstreamFailure(error);
+  return sendInternalError(
+    res,
+    error,
+    503,
+    { code: UPSTREAM_UNAVAILABLE_CODE, detail: UPSTREAM_UNAVAILABLE_MESSAGE },
+    { report, operation: options.operation, fingerprint: ["upstream-unavailable"] },
+  );
 }
