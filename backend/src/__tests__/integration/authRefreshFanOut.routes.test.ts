@@ -206,6 +206,8 @@ describe("a cookie session GoTrue cannot vouch for", () => {
     const res = await request(app).get("/projects").set("Cookie", liveSessionCookie("outage"));
 
     expect(res.status).toBe(503);
+    expect(res.body).toMatchObject({ code: "upstream_unavailable" });
+    expect(res.headers["retry-after"]).toBe("5");
     expect(writtenCookies(res).join("\n")).not.toContain("Max-Age=0");
   });
 
