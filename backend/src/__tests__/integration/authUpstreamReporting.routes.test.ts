@@ -200,8 +200,10 @@ describe("requireAuth with GoTrue unreachable", () => {
     expect(events.filter((event) => event.logger === "console")).toHaveLength(0);
   });
 
-  it("files one event per outage, not one per request, and reports the next outage after a recovery", async () => {
+  it("files one event per outage, not one per request, and reports the next outage after a quiet period", async () => {
     const warn = vi.mocked(console.warn);
+    let clock = 1_000_000;
+    resetUpstreamOutagesForTests(() => clock);
     const outageEvents = () =>
       events.filter(
         (event) =>
@@ -215,6 +217,8 @@ describe("requireAuth with GoTrue unreachable", () => {
       expect(res.status).toBe(503);
       expect(res.body.code).toBe("upstream_unavailable");
     }
+    // A minute on: the quiet repeats are due their counted log line.
+    clock += 60_000;
     const session = await bearer(request(app()).get("/auth/session"));
     expect(session.status).toBe(503);
     expect(session.body.code).toBe("upstream_unavailable");
@@ -242,7 +246,9 @@ describe("requireAuth with GoTrue unreachable", () => {
       process.env.SUPABASE_URL = ENV.SUPABASE_URL;
     }
 
-    // The next outage is news again.
+    // The next outage, more than the 15-minute window after the last report,
+    // is news again (one returning sooner is the same outage flapping).
+    clock += 15 * 60_000;
     const again = await bearer(request(app()).get("/projects"));
     expect(again.status).toBe(503);
     await Sentry.flush(2000);
