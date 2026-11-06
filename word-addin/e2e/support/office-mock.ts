@@ -51,6 +51,16 @@ export interface OfficeSeed {
    */
   untrackSyncFailures?: number;
   /**
+   * Office.js loaded outside an Office client (taskpane.html in a plain
+   * browser tab): onReady reports no host and OfficeRuntime is not defined.
+   */
+  outsideOffice?: boolean;
+  /**
+   * With `outsideOffice`: Office.context.diagnostics is still present, the
+   * contradiction only a real (misdetected) Office client can produce.
+   */
+  outsideOfficeDiagnostics?: boolean;
+  /**
    * Structured description of the document body for the markdown document
    * context: when present, body.paragraphs/body.tables exist and describe
    * these blocks; when absent (every pre-existing spec), those collections
@@ -358,6 +368,7 @@ export function installOfficeMock(seed: OfficeSeed): void {
       },
     },
   };
+  if (seed.outsideOffice) delete w.OfficeRuntime;
 
   const AsyncResultStatus = { Succeeded: "succeeded", Failed: "failed" };
 
@@ -439,13 +450,18 @@ export function installOfficeMock(seed: OfficeSeed): void {
 
   w.Office = {
     onReady: (callback?: any) => {
-      const info = { host: "Word", platform: "PC" };
+      const info = seed.outsideOffice
+        ? { host: null, platform: null }
+        : { host: "Word", platform: "PC" };
       callback?.(info);
       return Promise.resolve(info);
     },
     context: {
       document: officeDocument,
       ui: officeUi,
+      ...(seed.outsideOffice && seed.outsideOfficeDiagnostics
+        ? { diagnostics: { host: null, platform: "Mac", version: "16.99" } }
+        : {}),
       // WordApi (incl. 1.3's Range.compareLocationWith) is mocked below; the
       // WordApiDesktop sets stay unsupported so the app keeps exercising the
       // getTrackedChanges code paths, like Word on the web.
