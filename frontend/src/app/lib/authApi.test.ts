@@ -97,9 +97,11 @@ describe("cookie auth client", () => {
                 requestId: "req-2",
                 message: "The server is temporarily unreachable. Please try again shortly.",
             });
-            expect(reporting.reportApiFailure).not.toHaveBeenCalled();
-            // Marked, so a screen's notifyError does not file it either.
-            expect(isReported(error)).toBe(true);
+            // Through reportApiFailure, which only marks a code the server
+            // side already reported (errorReporting.test.ts).
+            expect(reporting.reportApiFailure).toHaveBeenCalledExactlyOnceWith(
+                expect.objectContaining({ status: 503, code: "upstream_unavailable", error }),
+            );
         });
 
         it("does not report a 4xx: it is the auth server's answer", async () => {
@@ -126,6 +128,29 @@ describe("cookie auth client", () => {
                 method: "GET",
                 url: "/api/auth/mfa/assurance",
             });
+        });
+
+        it("only marks a retry that never got a response, so the retry loop files nothing", async () => {
+            // AuthContext retries a session check with `report: false`: the
+            // first failure of the streak was already reported, and each
+            // retry must neither file a new event nor leave the error
+            // unmarked for a later notifyError to pick up.
+            const failure = new TypeError("Failed to fetch");
+            fetchMock.mockRejectedValue(failure);
+
+            await expect(getAuthSession({ report: false })).rejects.toBe(failure);
+
+            expect(reporting.reportNetworkFailure).not.toHaveBeenCalled();
+            expect(isReported(failure)).toBe(true);
+        });
+
+        it("does not report an aborted request: the caller cancelled it", async () => {
+            const abort = new DOMException("The operation was aborted.", "AbortError");
+            fetchMock.mockRejectedValue(abort);
+
+            await expect(getMfaAssurance()).rejects.toBe(abort);
+
+            expect(reporting.reportNetworkFailure).not.toHaveBeenCalled();
         });
     });
 

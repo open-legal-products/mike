@@ -1,6 +1,26 @@
 import type { Response } from "express";
 import { reportError, requestRoutePattern } from "./observability/sentry";
 import { shouldReportUpstreamFailure } from "./upstreamOutage";
+import {
+  SCHEMA_OUT_OF_DATE_CODE,
+  gateSchemaOutOfDate,
+  schemaOutOfDateCode,
+} from "./schemaOutOfDate";
+
+// The codes and sentences a client recognises as "already reported server-side"
+// live in a dependency-free module (reportedUpstreamCodes.ts) so the frontend
+// parity test can import them; re-exported here for the callers that build 503s.
+export {
+  SCHEMA_OUT_OF_DATE_CODE,
+  SCHEMA_OUT_OF_DATE_MESSAGE,
+  UPSTREAM_UNAVAILABLE_CODE,
+  UPSTREAM_UNAVAILABLE_MESSAGE,
+} from "./reportedUpstreamCodes";
+import {
+  SCHEMA_OUT_OF_DATE_MESSAGE,
+  UPSTREAM_UNAVAILABLE_CODE,
+  UPSTREAM_UNAVAILABLE_MESSAGE,
+} from "./reportedUpstreamCodes";
 
 export const INTERNAL_ERROR_CODE = "internal_error";
 export const RATE_LIMITED_CODE = "rate_limited";
@@ -15,73 +35,9 @@ export function rateLimitedBody(detail: string): {
 export const INTERNAL_ERROR_MESSAGE =
   "Something went wrong. Please try again.";
 
-/**
- * A dependency this server needs (GoTrue, today) is unreachable: no answer,
- * or a gateway 502/503/504 in front of it. The same code the Next gateway sends when it cannot reach this server,
- * so a client treats both alike: already reported server-side, show "try
- * again shortly", do not report it again.
- */
-export const UPSTREAM_UNAVAILABLE_CODE = "upstream_unavailable";
-export const UPSTREAM_UNAVAILABLE_MESSAGE =
-  "The server is temporarily unreachable. Please try again shortly.";
+/** Retry-After (seconds) on that 503, as frontend/src/app/api/[...path]/route.ts sends it. */
+const UPSTREAM_RETRY_AFTER_SECONDS = "5";
 
-export const SCHEMA_OUT_OF_DATE_CODE = "schema_out_of_date";
-export const SCHEMA_OUT_OF_DATE_MESSAGE =
-  "The server's database needs an update before this can load. " +
-  "Please contact your administrator.";
-
-// Codes that mean "the database schema is behind this build": the code asked
-// for a function, table or column the database does not have. On a
-// self-hosted install that is almost always migrations that were never
-// applied (or PostgREST's schema cache not reloaded after they were), not a
-// transient fault, so retrying cannot help and the operator, not the user,
-// has to act.
-//
-// 42703 (undefined column) and PGRST203 (an RPC that matches more than one
-// overload) are included by maintainer decision: on a self-hosted install
-// they are almost always a column or a replaced function signature from a
-// migration that has not run (main's login-MFA preference lookup already
-// treated 42703 that way). A column typo would also land here, but it fails
-// every request in tests and CI long before an install sees it. 42883 stays
-// an ordinary 500: Postgres raises it for operator and type mismatches in a
-// query too, not only for a missing function.
-const SCHEMA_OUT_OF_DATE_CODES = new Set([
-  "PGRST202", // function not found in the schema cache
-  "PGRST203", // ambiguous overloaded function (old and new signature both present)
-  "PGRST204", // column not found in the schema cache
-  "PGRST205", // table not found in the schema cache
-  "42P01", // undefined_table
-  "42703", // undefined_column
-]);
-
-/**
- * The link of an error's cause chain that carries a schema-drift code, and
- * that code. Reads only the structured `code` of each link (a supabase-js
- * error object, or the Error asReportableError wrapped around one), never
- * message text.
- */
-export function schemaOutOfDateLink(
-  error: unknown,
-): { code: string; link: object } | null {
-  let current: unknown = error;
-  for (let depth = 0; depth < 5 && current && typeof current === "object"; depth++) {
-    try {
-      const code = (current as { code?: unknown }).code;
-      if (typeof code === "string" && SCHEMA_OUT_OF_DATE_CODES.has(code)) {
-        return { code, link: current };
-      }
-      current = (current as { cause?: unknown }).cause;
-    } catch {
-      return null;
-    }
-  }
-  return null;
-}
-
-/** The schema-drift code in an error's cause chain, if any. */
-export function schemaOutOfDateCode(error: unknown): string | null {
-  return schemaOutOfDateLink(error)?.code ?? null;
-}
 
 // SQLSTATE (42P01), PostgREST (PGRST205) and errno-style (ECONNREFUSED)
 // codes are fixed vocabulary, safe to put in a message. Anything else a
@@ -143,10 +99,15 @@ export interface PublicFailure {
   detail: string;
 }
 
-/** How sendInternalError reports, when a caller needs other than the default. */
-interface ReportPolicy {
-  /** False: the failure is a known repeat; log it, do not send it. */
-  report: boolean;
+/** What sendInternalError answers and how it reports, when not the default. */
+export interface InternalErrorOptions {
+  /** The public body instead of internal_error (schema drift always wins). */
+  answer?: PublicFailure;
+  /**
+   * `false`: the failure is a known repeat; log it, do not send it. Read as
+   * `!== false`, so leaving it out (or passing undefined) reports.
+   */
+  report?: boolean;
   /** Names the flow when the request's handler has not set one yet. */
   operation?: string;
   /** Groups the event under a pinned condition instead of the route. */
@@ -157,9 +118,9 @@ export function sendInternalError(
   res: Response,
   error: unknown,
   status = 500,
-  answer?: PublicFailure,
-  policy: ReportPolicy = { report: true },
+  options: InternalErrorOptions = {},
 ): Response {
+  const { answer, operation, fingerprint } = options;
   const requestId =
     typeof res.locals.requestId === "string" ? res.locals.requestId : null;
   // A caller that passes a raw non-Error would otherwise have the reporter
@@ -167,55 +128,62 @@ export function sendInternalError(
   error = asReportableError(error, sendInternalError);
   // A schema behind the code is an install problem, not a bug in this
   // request: answer 503 with a code the client can recognise instead of an
-  // opaque 500, and tell the operator what to do in the server log. It is
-  // still reported once (same event, failure_code from the cause chain), so
-  // installs that skipped migrations remain visible.
+  // opaque 500, and tell the operator what to do in the server log. Every
+  // request to that route fails the same way until the operator migrates,
+  // so the report goes through the same once-per-process gate as background
+  // drift (lib/schemaOutOfDate.ts), keyed by method and route.
   const schemaCode = schemaOutOfDateCode(error);
   if (schemaCode && status === 500) status = 503;
+  const method = res.req?.method;
+  // The mounted route pattern, not the URL: /projects/:projectId groups as
+  // one issue instead of one per project.
+  const route = requestRoutePattern(res.req);
+  const drift = schemaCode
+    ? gateSchemaOutOfDate(error, { key: `http:${method ?? "?"} ${route ?? "?"}` })
+    : null;
+  const report = options.report !== false && (drift?.report ?? true);
 
   // Every unexpected 5xx the API returns passes through here, which makes it
   // THE place a backend bug becomes a Sentry issue. The request id is the
   // same one the client gets in the response body, so a user report ("I got
   // request_id X") finds the exact event. Report before logging: the console
   // bridge then knows this error is already accounted for.
-  if (policy.report) {
+  if (report) {
     reportError(error, {
       tags: {
         component: "http",
         http_status: status,
         request_id: requestId,
-        http_method: res.req?.method,
-        // The mounted route pattern, not the URL: /projects/:projectId groups
-        // as one issue instead of one per project.
-        http_route: requestRoutePattern(res.req),
-        ...(policy.operation ? { operation: policy.operation } : {}),
+        http_method: method,
+        http_route: route,
+        ...(operation ? { operation } : {}),
       },
-      ...(policy.fingerprint ? { fingerprint: policy.fingerprint } : {}),
+      ...(fingerprint ? { fingerprint } : {}),
+    });
+  }
+
+  if (drift && !drift.report) {
+    // The gate logged the first failure of this route with the operator's
+    // next step (MIGRATE_HINT) and repeats it hourly with a count; each
+    // repeat still leaves one line. console.warn, not console.error: the
+    // Sentry console bridge files every console.error it has not seen
+    // reported, and repeats are kept out of Sentry on purpose.
+    console.warn(
+      `[http/schema-out-of-date] ${method ?? "?"} ${route ?? "?"} answered 503 (${drift.code}); ` +
+        "already reported, see the [schema-out-of-date] line for what to do.",
+    );
+  }
+  if (report) {
+    console.error("[http/internal-error]", {
+      requestId,
+      method,
+      path: res.req?.originalUrl?.split("?")[0],
+      error: error,
     });
   }
   // Set for a known repeat too: the response sanitizer must neither report
   // it nor rewrite its public code.
   res.locals[FAILURE_REPORTED] = true;
-
-  if (schemaCode) {
-    // console.warn, not console.error: the Sentry console bridge files every
-    // console.error string as a new event, and this failure is already
-    // reported above.
-    console.warn(
-      `[http/schema-out-of-date] The database is missing an object this build needs (${schemaCode}). ` +
-        "Apply the SQL files in backend/migrations/ that are newer than this database, " +
-        "then reload the PostgREST schema cache (NOTIFY pgrst, 'reload schema'). " +
-        "See docs/deployment.md.",
-    );
-  }
-  if (policy.report) {
-    console.error("[http/internal-error]", {
-      requestId,
-      method: res.req?.method,
-      path: res.req?.originalUrl?.split("?")[0],
-      error: error,
-    });
-  }
 
   const body: PublicFailure = schemaCode
     ? { code: SCHEMA_OUT_OF_DATE_CODE, detail: SCHEMA_OUT_OF_DATE_MESSAGE }
@@ -244,11 +212,13 @@ export function sendUpstreamUnavailable(
   options: { operation?: string } = {},
 ): Response {
   const report = shouldReportUpstreamFailure(error);
-  return sendInternalError(
-    res,
-    error,
-    503,
-    { code: UPSTREAM_UNAVAILABLE_CODE, detail: UPSTREAM_UNAVAILABLE_MESSAGE },
-    { report, operation: options.operation, fingerprint: ["upstream-unavailable"] },
-  );
+  // The same hint the Next gateway sends with its upstream_unavailable 503:
+  // a client or proxy that honours it waits instead of retrying at once.
+  res.set("retry-after", UPSTREAM_RETRY_AFTER_SECONDS);
+  return sendInternalError(res, error, 503, {
+    answer: { code: UPSTREAM_UNAVAILABLE_CODE, detail: UPSTREAM_UNAVAILABLE_MESSAGE },
+    report,
+    operation: options.operation,
+    fingerprint: ["upstream-unavailable"],
+  });
 }

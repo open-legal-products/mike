@@ -96,7 +96,13 @@ describe("login MFA preference column missing (pre-migration database)", () => {
     // alert rule fires on it like on any other.
     expect(failure.kind).toBe("schema_out_of_date");
     expect(failure.cause).toBe(COLUMN_MISSING);
-    expect(options).toMatchObject({ level: "error", tags: { component: "http" } });
+    // The operation keeps the event's meaning (login MFA not enforced) in
+    // its Sentry title and tags; it is still the single schema_out_of_date
+    // event of the gate.
+    expect(options).toMatchObject({
+      level: "error",
+      tags: { component: "http", operation: "auth.login_mfa" },
+    });
     expect(String(vi.mocked(console.warn).mock.calls[0]?.[0])).toContain(
       "login MFA enforcement is not active",
     );

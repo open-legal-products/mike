@@ -167,4 +167,43 @@ describe("createPollFailureGate", () => {
     now.t += 1;
     expect(g.ready()).toBe(true);
   });
+
+  it("keys failures with a caller's classify instead of pollFailureClass", () => {
+    const now = { t: 0 };
+    const g = createPollFailureGate({
+      label: "[loop]",
+      baseDelayMs: 0,
+      maxDelayMs: 0,
+      classify: (error) => `status:${(error as { status?: number }).status}`,
+      now: () => now.t,
+      log: { warn: vi.fn(), log: vi.fn() },
+    });
+    // Same name, no code, different message: one class under the caller's key.
+    expect(g.failure(Object.assign(new Error("a"), { status: 0 })).report).toBe(true);
+    expect(g.failure(Object.assign(new Error("b"), { status: 0 })).report).toBe(false);
+    expect(g.failure(Object.assign(new Error("a"), { status: 503 })).report).toBe(true);
+  });
+
+  it("re-reports a persisting class once per repeatWhilePersistingMs, and never without it", () => {
+    const withRepeat = { t: 0 };
+    const repeating = createPollFailureGate({
+      label: "[loop]",
+      baseDelayMs: 0,
+      maxDelayMs: 0,
+      repeatWhilePersistingMs: 15 * 60_000,
+      now: () => withRepeat.t,
+      log: { warn: vi.fn(), log: vi.fn() },
+    });
+    const without = { t: 0 };
+    const { g: once } = gate(without);
+    const reports = { repeating: 0, once: 0 };
+    // One failure a second for an hour.
+    for (let second = 0; second < 3_600; second++) {
+      if (repeating.failure(coded("ECONNREFUSED")).report) reports.repeating += 1;
+      if (once.failure(coded("ECONNREFUSED")).report) reports.once += 1;
+      withRepeat.t += 1_000;
+      without.t += 1_000;
+    }
+    expect(reports).toEqual({ repeating: 4, once: 1 });
+  });
 });

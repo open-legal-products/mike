@@ -131,8 +131,12 @@ describe("AuthProvider during an auth outage", () => {
             await vi.advanceTimersByTimeAsync(60_000);
         });
         expect(sessionCalls()).toBe(3);
-        // The backend already reported upstream_unavailable.
-        expect(reporting.reportApiFailure).not.toHaveBeenCalled();
+        // The first failure goes to reportApiFailure, which only marks an
+        // upstream_unavailable the backend already reported; the retries are
+        // marked handled without it.
+        expect(reporting.reportApiFailure).toHaveBeenCalledExactlyOnceWith(
+            expect.objectContaining({ code: "upstream_unavailable" }),
+        );
     });
 
     it("still treats a 401 as signed out, without retrying", async () => {
@@ -158,5 +162,166 @@ describe("AuthProvider during an auth outage", () => {
             await vi.advanceTimersByTimeAsync(60_000);
         });
         expect(sessionCalls()).toBe(1);
+    });
+
+    function internalError(): Response {
+        return new Response(
+            JSON.stringify({
+                code: "internal_error",
+                detail: "Something went wrong. Please try again.",
+                request_id: "req-500",
+            }),
+            { status: 500, headers: { "content-type": "application/json" } },
+        );
+    }
+
+    async function advance(ms: number) {
+        await act(async () => {
+            await vi.advanceTimersByTimeAsync(ms);
+        });
+        await flush();
+    }
+
+    it("reports a persistent 500 once and does not retry it", async () => {
+        fetchMock.mockImplementation(async () => internalError());
+
+        render(
+            <AuthProvider>
+                <Consumer />
+                <ToastViewportUI />
+            </AuthProvider>,
+        );
+        await flush();
+        await advance(10 * 60_000);
+
+        // A retry cannot fix a bug: one request, one report, loader down.
+        expect(sessionCalls()).toBe(1);
+        expect(reporting.reportApiFailure).toHaveBeenCalledOnce();
+        expect(screen.getByTestId("loading")).toHaveTextContent("false");
+        expect(screen.getAllByText(/Couldn't check your session/)).toHaveLength(1);
+    });
+
+    it("does not retry a schema_out_of_date 503", async () => {
+        fetchMock.mockImplementation(
+            async () =>
+                new Response(
+                    JSON.stringify({ code: "schema_out_of_date", detail: "x" }),
+                    { status: 503, headers: { "content-type": "application/json" } },
+                ),
+        );
+
+        render(
+            <AuthProvider>
+                <Consumer />
+            </AuthProvider>,
+        );
+        await flush();
+        await advance(10 * 60_000);
+
+        expect(sessionCalls()).toBe(1);
+        expect(screen.getByTestId("loading")).toHaveTextContent("false");
+    });
+
+    it("reports a proxy outage once per streak, not once per retry", async () => {
+        // A non-JSON 502 from a proxy: no code the server side reported.
+        fetchMock.mockImplementation(
+            async () => new Response("<html>Bad Gateway</html>", { status: 502 }),
+        );
+
+        render(
+            <AuthProvider>
+                <Consumer />
+            </AuthProvider>,
+        );
+        await flush();
+        await advance(5 * 60_000);
+
+        expect(sessionCalls()).toBeGreaterThan(5);
+        expect(reporting.reportApiFailure).toHaveBeenCalledOnce();
+        expect(screen.getByTestId("loading")).toHaveTextContent("true");
+    });
+
+    it("keeps one retry chain when focus events arrive during an outage", async () => {
+        // Each answer takes half a second, so a focus event can land while a
+        // retry's request is still in flight.
+        fetchMock.mockImplementation(
+            () =>
+                new Promise<Response>((resolve) =>
+                    setTimeout(() => resolve(upstreamUnavailable()), 500),
+                ),
+        );
+
+        render(
+            <AuthProvider>
+                <Consumer />
+            </AuthProvider>,
+        );
+        await flush();
+        // For two minutes, focus the window right after each retry starts.
+        let seen = sessionCalls();
+        for (let elapsed = 0; elapsed < 2 * 60_000; elapsed += 100) {
+            await advance(100);
+            if (sessionCalls() > seen) {
+                act(() => {
+                    window.dispatchEvent(new Event("focus"));
+                });
+                seen = sessionCalls();
+            }
+        }
+
+        // Then five quiet minutes: one chain at the 30 s cap makes about ten
+        // calls; every chain orphaned by a focus adds its own.
+        const beforeQuiet = sessionCalls();
+        await advance(5 * 60_000);
+        expect(sessionCalls() - beforeQuiet).toBeLessThanOrEqual(11);
+    });
+
+    it("stops checking after the provider unmounts mid-request", async () => {
+        fetchMock.mockImplementation(
+            () =>
+                new Promise<Response>((resolve) =>
+                    setTimeout(() => resolve(upstreamUnavailable()), 1_000),
+                ),
+        );
+
+        const view = render(
+            <AuthProvider>
+                <Consumer />
+            </AuthProvider>,
+        );
+        await flush();
+        expect(sessionCalls()).toBe(1);
+        view.unmount();
+        await advance(10 * 60_000);
+
+        expect(sessionCalls()).toBe(1);
+    });
+
+    it("dismisses the session notice when a focus check recovers after retries", async () => {
+        fetchMock
+            .mockResolvedValueOnce(signedIn())
+            .mockResolvedValueOnce(upstreamUnavailable())
+            .mockResolvedValueOnce(signedIn());
+
+        render(
+            <AuthProvider>
+                <Consumer />
+                <ToastViewportUI />
+            </AuthProvider>,
+        );
+        await flush();
+        expect(screen.getByTestId("user")).toHaveTextContent(user.email);
+
+        act(() => {
+            window.dispatchEvent(new Event("focus"));
+        });
+        await flush();
+        expect(screen.getAllByText(/Couldn't check your session/)).toHaveLength(1);
+
+        // The retry finds the same user: the notice goes with the outage.
+        await advance(1_000);
+        expect(sessionCalls()).toBe(3);
+        expect(screen.getByTestId("user")).toHaveTextContent(user.email);
+        expect(screen.queryAllByText(/Couldn't check your session/)).toHaveLength(0);
     });
 });

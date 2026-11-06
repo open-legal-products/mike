@@ -5,7 +5,7 @@ import { syncProfileEmail } from "../lib/userLookup";
 import { sendInternalError, sendUpstreamUnavailable } from "../lib/httpError";
 import { isAuthUpstreamFailure } from "../lib/authUpstream";
 import { noteUpstreamReachable } from "../lib/upstreamOutage";
-import { createRequestSupabase } from "../lib/authSession";
+import { clearRequestAuthCookies, createRequestSupabase } from "../lib/authSession";
 import { reportSchemaOutOfDateOnce } from "../lib/schemaOutOfDate";
 import { requestOriginIsTrusted } from "../lib/origins";
 import { devLog, isDev } from "../lib/log";
@@ -72,7 +72,10 @@ function isLoginMfaBootstrapRoute(req: Request) {
 function reportLoginMfaColumnMissing(error: { code?: string }) {
   reportSchemaOutOfDateOnce(error, {
     key: "auth.login_mfa_preference",
-    tags: { component: "http" },
+    // requireAuth runs before any handler names the flow, so name it here:
+    // without it the event reads as any other missing column, not as login
+    // MFA silently not being enforced.
+    tags: { component: "http", operation: "auth.login_mfa" },
     consequence: "login MFA enforcement is not active until the migration runs",
   });
 }
@@ -168,6 +171,17 @@ function getAdminClient(res: Response) {
   }
 }
 
+/**
+ * The name and status of an auth-js error, or null for anything else.
+ * Duck-typed like lib/authUpstream.ts, on auth-js's `__isAuthError` marker,
+ * so it holds for any auth-js copy and for tests that stub supabase-js.
+ */
+function authErrorShape(error: unknown): { name: unknown; status: number } | null {
+  if (!error || typeof error !== "object" || !("__isAuthError" in error)) return null;
+  const { name, status } = error as { name?: unknown; status?: unknown };
+  return { name, status: typeof status === "number" ? status : 0 };
+}
+
 export async function requireAuth(
   req: Request<ParamsFlatDictionary>,
   res: Response,
@@ -226,20 +240,44 @@ export async function requireAuth(
     }
   }
 
-  if (!user && isAuthUpstreamFailure(lookupError)) {
-    // GoTrue could not be reached, so nobody could say whether the session
-    // is valid. A 401 here would make the web app sign the user out of a
-    // session that is fine; 503 upstream_unavailable tells it to wait.
-    // The handler that would name this request's flow never runs, so the
-    // event is named after what failed: the session lookup.
-    sendUpstreamUnavailable(
-      res,
-      new AppError("auth.supabase_unavailable", "session lookup could not reach GoTrue", {
-        cause: lookupError,
-      }),
-      { operation: "auth.session" },
-    );
-    return;
+  const failure = user ? null : authErrorShape(lookupError);
+  if (failure) {
+    if (isAuthUpstreamFailure(lookupError)) {
+      // GoTrue could not be reached, so nobody could say whether the session
+      // is valid. A 401 would sign the user out of a session that may be
+      // fine; a 503 tells the client to wait and retry.
+      // The handler that would name this request's flow never runs, so the
+      // event is named after what failed: the session lookup.
+      sendUpstreamUnavailable(
+        res,
+        new AppError("auth.supabase_unavailable", "session lookup could not reach GoTrue", {
+          cause: lookupError,
+        }),
+        { operation: "auth.session" },
+      );
+      return;
+    }
+    const { name, status } = failure;
+    if (name === "AuthApiError" && status >= 400 && status < 500) {
+      // GoTrue refused the session (a refresh token revoked or already used,
+      // a JWT for a session that no longer exists): the visitor must sign in
+      // again, which is a 401 the client already handles. Clear the dead
+      // cookies so the next request does not present them again.
+      if (!auth.startsWith("Bearer ")) clearRequestAuthCookies(req, res);
+      res.status(401).json({ code: "session_expired", detail: "Invalid or expired session" });
+      return;
+    }
+    if (status >= 500) {
+      // GoTrue answered, with a failure of its own (a 500 from its database,
+      // a malformed token response): our bug to fix, not a sign-out.
+      sendInternalError(
+        res,
+        new AppError("auth.supabase_unavailable", "session lookup failed in GoTrue", {
+          cause: lookupError,
+        }),
+      );
+      return;
+    }
   }
   // GoTrue answered: an outage reported earlier is over.
   if (user) noteUpstreamReachable();

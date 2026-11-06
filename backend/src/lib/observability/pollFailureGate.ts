@@ -21,6 +21,9 @@
 //     ones (a lease lost on every long job, a deadlocked claim every few
 //     minutes) is flapping, not newly broken: re-reporting it on every flap
 //     filed MIKE-BACKEND-M dozens of times per hour with no new information.
+//   - optionally (repeatWhilePersistingMs), report a class that keeps failing
+//     again once per that window, so a long outage stays on the issue's
+//     timeline. Off by default: a poll loop's backed-off line is enough.
 //
 // The class key is the error's name plus an allowlist-shaped `code` found on
 // the error or its cause chain (PostgREST, SQLSTATE, errno). An error with no
@@ -94,6 +97,13 @@ export type PollFailureGateOptions = {
    * recovery, is treated as a repeat rather than news. Default 15 min.
    */
   repeatReportIntervalMs?: number;
+  /**
+   * Re-report a class that has kept failing (persisting or flapping) once
+   * per this window since its last report. Default off: report once.
+   */
+  repeatWhilePersistingMs?: number;
+  /** The "same failure" key. Default pollFailureClass. */
+  classify?: (error: unknown) => string;
   now?: () => number;
   log?: Pick<Console, "warn" | "log">;
 };
@@ -113,6 +123,8 @@ export function createPollFailureGate(
   const log = options.log ?? console;
   const summaryIntervalMs = options.summaryIntervalMs ?? 60_000;
   const repeatReportIntervalMs = options.repeatReportIntervalMs ?? 15 * 60_000;
+  const repeatWhilePersistingMs = options.repeatWhilePersistingMs;
+  const classify = options.classify ?? pollFailureClass;
   const baseDelay = () =>
     typeof options.baseDelayMs === "function"
       ? options.baseDelayMs()
@@ -152,7 +164,7 @@ export function createPollFailureGate(
 
   return {
     failure(error) {
-      const failureClass = pollFailureClass(error);
+      const failureClass = classify(error);
       const at = now();
       consecutive += 1;
       const base = Math.max(0, baseDelay());
@@ -164,6 +176,16 @@ export function createPollFailureGate(
       retryAt = at + delayMs;
       const seconds = (ms: number) => Math.round(ms / 1000);
       if (failureClass === currentClass) {
+        const lastReport = reportedAt.get(failureClass);
+        if (
+          repeatWhilePersistingMs !== undefined &&
+          (lastReport === undefined || at - lastReport >= repeatWhilePersistingMs)
+        ) {
+          reportedAt.set(failureClass, at);
+          quiet.persisting.suppressed = 0;
+          quiet.persisting.lineAt = at;
+          return { report: true, delayMs, consecutive };
+        }
         return suppress(quiet.persisting, at, delayMs, (n) =>
           `${options.label} still failing (${failureClass}): ${consecutive} consecutive failures, ` +
             `${n} not re-reported since the last line; next attempt in ${seconds(delayMs)}s`,
