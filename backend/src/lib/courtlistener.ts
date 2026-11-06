@@ -75,14 +75,18 @@ async function courtlistenerFetch<T>(
         path: pathOrUrl,
         url,
     });
-    const response = await fetch(url, {
-        ...init,
-        signal: init?.signal ?? AbortSignal.timeout(15_000),
-        headers: {
-            ...courtlistenerHeaders(apiToken),
-            ...(init?.headers ?? {}),
+    const response = await guardedFetch(
+        url,
+        {
+            ...init,
+            signal: init?.signal ?? AbortSignal.timeout(15_000),
+            headers: {
+                ...courtlistenerHeaders(apiToken),
+                ...(init?.headers ?? {}),
+            },
         },
-    });
+        { label: "CourtListener URL" },
+    );
     devLog("[courtlistener/api] response", {
         method: init?.method ?? "GET",
         path: pathOrUrl,
@@ -94,6 +98,8 @@ async function courtlistenerFetch<T>(
     }
     return response.json() as Promise<T>;
 }
+
+import { guardedFetch } from "./mcp/client";
 
 function asString(value: unknown): string | null {
     return typeof value === "string" && value.trim() ? value : null;
