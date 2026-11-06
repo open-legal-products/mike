@@ -67,7 +67,7 @@ export const DIAGNOSTIC_VOCABULARY: Record<string, ReadonlySet<string>> = Object
 const ENUMS = DIAGNOSTIC_VOCABULARY;
 const ROUTE_PARTS = new Set(('word-chat orgs single-documents tabular-review quick-actions workflow-addons audit manifest-signing-key api auth login logout refresh session user users projects directory people access memory ids filter-options folder-paths resolve folder documents versions files folders upload uploads upload-sessions parts complete abort content download preview source text conversion chats chat messages stream cancel assistant tabular tabular-reviews reviews rows columns cells run results export workflows playbooks templates library models configured ollama openrouter vercel opencode-go bedrock azure azure-foundry vertex xai custom settings profile organizations members permissions shares keys api-keys health observability sentry-test').split(' '));
 const ID_KEYS = new Set(('request_id requestId document_id documentId file_id fileId job_id jobId review_id reviewId row_id rowId session_id sessionId version_id versionId run_id import_id playbook_id').split(' '));
-const CONFIGURATION_FIELDS = new Set('SUPABASE_URL SUPABASE_PUBLISHABLE_KEY SUPABASE_SECRET_KEY AUTH_HANDOFF_ENCRYPTION_SECRET FRONTEND_URL API_PUBLIC_URL WORD_ADDIN_URL'.split(' '));
+const CONFIGURATION_FIELDS = new Set('SUPABASE_URL SUPABASE_PUBLISHABLE_KEY SUPABASE_SECRET_KEY AUTH_HANDOFF_ENCRYPTION_SECRET FRONTEND_URL API_PUBLIC_URL WORD_ADDIN_URL USER_API_KEYS_ENCRYPTION_SECRET'.split(' '));
 /** Static exception identifiers are trusted under the source contract, not because of this syntax check. */
 const ERROR_TYPE = /^[A-Z][A-Za-z0-9]{1,60}(?:Error|Warning|Exception)$|^(?:Error|Warning)$/;
 /** A frame's function name as V8 prints it: dotted identifiers, optionally `async`/`new`, `[as x]`, `<anonymous>`. ASCII identifier characters only; a document name has spaces or an extension-like tail that this still admits, so names are kept only for frames in our own files (see framesFor). */
@@ -151,6 +151,10 @@ function tagsFor(value: unknown): RecordValue {
     else if (key === 'configuration_fields' && typeof entry === 'string' && entry.length < 250 && entry.split(',').every(field => CONFIGURATION_FIELDS.has(field))) out[key] = entry;
     else if (key === 'office_version' && typeof entry === 'string' && /^\d+(?:\.\d+){1,4}$/.test(entry) && entry.length < 30) out[key] = entry;
     else if (key === 'warning_code' && typeof entry === 'string' && /^DEP\d{4}$/.test(entry)) out[key] = entry;
+    // MaxListenersExceededWarning: the leaking object's constructor and event name (identifiers from code) and the listener count.
+    else if (key === 'warning_emitter' && typeof entry === 'string' && /^[A-Z][A-Za-z0-9]{1,60}$/.test(entry)) out[key] = entry;
+    else if (key === 'warning_event' && typeof entry === 'string' && /^[a-z][A-Za-z0-9]{0,40}$/.test(entry)) out[key] = entry;
+    else if (key === 'warning_listener_count' && Number.isInteger(entry) && Number(entry) >= 1 && Number(entry) <= 100000) out[key] = Number(entry);
     else if (key === 'what' && isDiagnosticLabel(entry)) out.stage = entry;
     else if (key === 'http_route' && typeof entry === 'string') out[key] = diagnosticRoute(entry);
     else if ((key === 'http_status' || key === 'dependency_status') && /^\d{3}$/.test(String(entry)) && Number(entry) >= 100 && Number(entry) <= 599) out[key] = Number(entry);

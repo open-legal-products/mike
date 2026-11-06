@@ -4,6 +4,7 @@
 // so cannot be exercised by a unit test.
 
 import type { Server } from "node:http";
+import { isDevelopmentBuild } from "./buildMode";
 import { flushSentry, reportError } from "./observability/sentry";
 
 export interface LifecycleEffects {
@@ -13,6 +14,12 @@ export interface LifecycleEffects {
   logInfo: (...args: unknown[]) => void;
   flush: () => Promise<void>;
   exit: (code: number) => void;
+  /**
+   * True for a contributor's source run (lib/buildMode.ts). Not NODE_ENV:
+   * compose, the example .env and the desktop app run compiled installs
+   * under NODE_ENV=development, and their port clashes must still report.
+   */
+  developmentBuild?: boolean;
 }
 
 export const processEffects: LifecycleEffects = {
@@ -21,6 +28,7 @@ export const processEffects: LifecycleEffects = {
   logInfo: (...args) => console.log(...args),
   flush: flushSentry,
   exit: (code) => process.exit(code),
+  developmentBuild: isDevelopmentBuild(),
 };
 
 /**
@@ -70,6 +78,22 @@ export function listenOrFail(
 ): Server {
   const onListen = (error?: Error) => {
     if (error) {
+      if (
+        effects.developmentBuild === true &&
+        (error as NodeJS.ErrnoException).code === "EADDRINUSE"
+      ) {
+        // A developer's second `npm run dev` (or a tsx watch restart racing
+        // the old process) is not a deployment failure: MIKE-BACKEND-80 was
+        // 36 fatal events from one restart loop. Say so locally and exit
+        // without reporting. A compiled install's bind failure is still
+        // fatal, whatever NODE_ENV says.
+        effects.logInfo(
+          `Mike backend could not start: port ${port} is already in use (EADDRINUSE). ` +
+            "Stop the other process or set PORT.",
+        );
+        effects.exit(1);
+        return;
+      }
       void failBoot(error, "listen", effects);
       return;
     }

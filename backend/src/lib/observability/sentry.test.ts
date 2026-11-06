@@ -954,9 +954,9 @@ describe("Node process warnings", () => {
     ...quietEnv,
     SENTRY_DSN: "https://key@o1.ingest.sentry.io/1",
   } as NodeJS.ProcessEnv;
-  const warning = Object.assign(new Error("The `punycode` module is deprecated"), {
+  const warning = Object.assign(new Error("Buffer() is deprecated due to security and usability issues"), {
     name: "DeprecationWarning",
-    code: "DEP0040",
+    code: "DEP0005",
   });
   // What node:internal/process/warning then hands to console.error.
   const printed =
@@ -975,12 +975,126 @@ describe("Node process warnings", () => {
     expect(scope.setLevel).toHaveBeenCalledWith("warning");
     expect(scope.setTag).toHaveBeenCalledWith("component", "runtime-warning");
     expect(scope.setTag).toHaveBeenCalledWith("warning_name", "DeprecationWarning");
-    expect(scope.setTag).toHaveBeenCalledWith("warning_code", "DEP0040");
+    expect(scope.setTag).toHaveBeenCalledWith("warning_code", "DEP0005");
     expect(scope.setFingerprint).toHaveBeenCalledWith([
       "runtime-warning",
       "DeprecationWarning",
-      "DEP0040",
+      "DEP0005",
     ]);
+  });
+
+  // MIKE-BACKEND-2H: the punycode deprecation comes from transitive
+  // dependencies on every boot and nothing here can act on it.
+  it("does not report the punycode deprecation (DEP0040)", () => {
+    vi.spyOn(console, "log").mockImplementation(() => {});
+    const stderr = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
+    initSentry("api", dsnEnv);
+
+    process.emit(
+      "warning",
+      Object.assign(new Error("The `punycode` module is deprecated"), {
+        name: "DeprecationWarning",
+        code: "DEP0040",
+      }),
+    );
+    stderr.mockRestore();
+
+    expect(Sentry.captureException).not.toHaveBeenCalled();
+  });
+
+  // MIKE-BACKEND-5F: the warning's stack is all node: frames, so only the
+  // warning's own fields can say which object is leaking listeners.
+  it("names the emitter, event and listener count of a MaxListenersExceededWarning", async () => {
+    vi.spyOn(console, "log").mockImplementation(() => {});
+    const stderr = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
+    initSentry("api", dsnEnv);
+    const { EventEmitter } = await import("node:events");
+    class LeakySocket extends EventEmitter {}
+    const leaky = new LeakySocket();
+    leaky.setMaxListeners(2);
+    const raised = new Promise((resolve) => process.once("warning", resolve));
+
+    for (let i = 0; i < 3; i++) leaky.on("close", () => {});
+    await raised;
+    stderr.mockRestore();
+
+    // Another process warning (an import's deprecation) may land first.
+    const scope = scopes.find((candidate) =>
+      candidate.setTag.mock.calls.some(
+        ([key, value]) => key === "warning_name" && value === "MaxListenersExceededWarning",
+      ),
+    )!;
+    expect(scope).toBeDefined();
+    expect(scope.setTag).toHaveBeenCalledWith("warning_emitter", "LeakySocket");
+    expect(scope.setTag).toHaveBeenCalledWith("warning_event", "close");
+    expect(scope.setTag).toHaveBeenCalledWith("warning_listener_count", 3);
+  });
+
+  // MIKE-BACKEND-65: the AI SDK sends its call warnings through
+  // process.emitWarning unless AI_SDK_LOG_WARNINGS is a function.
+  it("turns AI SDK call warnings into a breadcrumb instead of an event", () => {
+    vi.spyOn(console, "log").mockImplementation(() => {});
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    initSentry("api", dsnEnv);
+    const logger = (globalThis as { AI_SDK_LOG_WARNINGS?: unknown }).AI_SDK_LOG_WARNINGS;
+    expect(typeof logger).toBe("function");
+
+    (logger as (options: unknown) => void)({
+      warnings: [{ type: "unsupported", feature: "temperature" }],
+      provider: "anthropic",
+      model: "claude",
+    });
+
+    expect(Sentry.captureException).not.toHaveBeenCalled();
+    expect(Sentry.addBreadcrumb).toHaveBeenCalledWith(
+      expect.objectContaining({ category: "mike.stage", message: "ai-sdk-warning.unsupported" }),
+    );
+    expect(warn).toHaveBeenCalled();
+  });
+
+  // A custom AI_SDK_LOG_WARNINGS replaces the SDK's once-per-code dedupe and
+  // its DeprecationWarning output. Driven through real generateText calls.
+  it("dedupes AI SDK warnings across real calls and still files an SDK deprecation once", async () => {
+    vi.spyOn(console, "log").mockImplementation(() => {});
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const stderr = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
+    initSentry("api", dsnEnv);
+    const { generateText } = await import("ai");
+    const { MockLanguageModelV4 } = await import("ai/test");
+    const model = new MockLanguageModelV4({
+      doGenerate: async () => ({
+        content: [{ type: "text", text: "ok" }],
+        finishReason: { unified: "stop", raw: "stop" },
+        usage: {
+          inputTokens: { total: 1, noCache: 1, cacheRead: undefined, cacheWrite: undefined },
+          outputTokens: { total: 1, text: 1, reasoning: 0 },
+        },
+        warnings: [
+          { type: "unsupported", feature: "temperature" },
+          { type: "deprecated", setting: "maxTokens", message: "Use maxOutputTokens." },
+        ],
+      }),
+    });
+    try {
+      for (let turn = 0; turn < 3; turn += 1) {
+        await generateText({ model, prompt: "hi" });
+      }
+      // process.emitWarning dispatches on the next tick.
+      await new Promise((resolve) => setImmediate(resolve));
+    } finally {
+      stderr.mockRestore();
+    }
+
+    const crumbs = vi
+      .mocked(Sentry.addBreadcrumb)
+      .mock.calls.map(([crumb]) => crumb.message)
+      .filter((message) => message?.startsWith("ai-sdk-warning."));
+    expect(crumbs.filter((m) => m === "ai-sdk-warning.unsupported")).toHaveLength(3);
+    expect(crumbs.filter((m) => m === "ai-sdk-warning.deprecated")).toHaveLength(3);
+    expect(warn.mock.calls.filter(([label]) => label === "[ai-sdk] warning")).toHaveLength(1);
+    expect(Sentry.captureException).toHaveBeenCalledTimes(1);
+    const [reported] = vi.mocked(Sentry.captureException).mock.calls[0]!;
+    expect(reported).toMatchObject({ name: "DeprecationWarning", code: "AI_SDK_DEPRECATION" });
   });
 
   it("drops the console bridge's copy of Node's printed warning, not application labels", () => {
@@ -1010,6 +1124,46 @@ describe("Node process warnings", () => {
     process.emit("warning", warning);
     stderr.mockRestore();
     expect(Sentry.captureException).not.toHaveBeenCalled();
+  });
+});
+
+describe("GoTrue refresh conflicts (MIKE-BACKEND-8D)", () => {
+  // supabase-js console.error()s the AuthApiError itself when GoTrue answers
+  // 409 to one of several concurrent refreshes of the same session.
+  const consoleEvent = (arg: unknown) =>
+    scrubEvent(
+      { logger: "console", message: "AuthApiError" } as unknown as Sentry.ErrorEvent,
+      { captureContext: { extra: { arguments: [arg] } } },
+    );
+
+  it("does not report the auth client's own log of a 409 conflict", async () => {
+    const { AuthApiError } = await import("@supabase/supabase-js");
+    expect(
+      consoleEvent(
+        new AuthApiError(
+          "Too many concurrent token refresh requests on the same session or refresh token",
+          409,
+          "conflict",
+        ),
+      ),
+    ).toBeNull();
+  });
+
+  it("still reports any other status the auth client logs", async () => {
+    const { AuthApiError } = await import("@supabase/supabase-js");
+    expect(consoleEvent(new AuthApiError("Database error", 500, "unexpected_failure"))).not.toBeNull();
+  });
+
+  it("still reports a 409 with any other code, and our own labelled log of a conflict", async () => {
+    const { AuthApiError } = await import("@supabase/supabase-js");
+    expect(consoleEvent(new AuthApiError("Email exists", 409, "email_exists"))).not.toBeNull();
+    const conflict = new AuthApiError("Too many concurrent token refresh requests", 409, "conflict");
+    expect(
+      scrubEvent(
+        { logger: "console", message: "[auth] admin update failed" } as unknown as Sentry.ErrorEvent,
+        { captureContext: { extra: { arguments: ["[auth] admin update failed", conflict] } } },
+      ),
+    ).not.toBeNull();
   });
 });
 
