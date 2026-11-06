@@ -8,7 +8,7 @@
 // check only warns, and `npm run dev` / `npm start` skip it entirely.
 //
 // Runs as the backend's `predev` and `prestart` script, before any backend
-// module loads, and is also required by the desktop app's supervisor before
+// module loads, and is also run by the desktop app's supervisor before
 // it spawns the backend on Electron's Node. Plain CommonJS with no
 // dependencies, so it works from a production install (no semver) and from
 // the packaged app.
@@ -55,19 +55,26 @@ function backendNodeRange(backendDir = path.resolve(__dirname, "..")) {
 }
 
 /** null when `version` can run the backend, else the message to show. */
-function nodeVersionProblem(version, range) {
+function nodeVersionProblem(version, range, runtime = "source") {
   if (satisfiesFloor(version, range)) return null;
+  const recovery = runtime === "desktop"
+    ? "Install an updated Mike app. Mike uses Electron's bundled Node; changing your system Node will not fix this."
+    : runtime === "docker"
+      ? "Rebuild with `docker compose build --pull`, or `docker build --pull` for a custom image. If using published images, pull a newer Mike release. Changing the host's Node will not fix this."
+      : "Install a newer Node 22 (for example `nvm install 22`), then reinstall dependencies and run the command again.";
   return (
     `Mike's backend needs Node ${range} (package.json "engines"), but this is Node ${version}. ` +
-    "Older 22.x releases crash at boot inside undici. Install a newer Node 22 " +
-    "(for example `nvm install 22`) and run the command again."
+    recovery
   );
 }
 
 module.exports = { parseFloor, satisfiesFloor, backendNodeRange, nodeVersionProblem };
 
 if (require.main === module) {
-  const problem = nodeVersionProblem(process.versions.node, backendNodeRange());
+  // Desktop supplies the context explicitly; the Docker image sets it for
+  // both its build check and npm start. Neither changes the version rule.
+  const runtime = process.argv[2] || process.env.MIKE_NODE_RUNTIME || "source";
+  const problem = nodeVersionProblem(process.versions.node, backendNodeRange(), runtime);
   if (problem) {
     process.stderr.write(`${problem}\n`);
     process.exit(1);

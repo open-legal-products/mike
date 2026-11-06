@@ -155,6 +155,14 @@ runtime; browser requests use the frontend's same-origin `/api` gateway.
 The product uses the same web application and backend as the compose stack,
 with filesystem storage and explicit local runtime configuration.
 
+The app checks Electron's bundled Node against the backend's required version
+before creating a workspace, starting services, or applying migrations. An
+incompatible bundle asks the user to install an updated Mike app and leaves
+the workspace untouched. Installing Node or running `nvm` on the Mac does not
+change Electron's runtime. Developers building the app must use an Electron
+release whose bundled Node meets the backend's requirement. App updates remain
+user-initiated; this check does not download or install updates.
+
 Per-install secrets (JWT secret, anon/service keys, DB password, signing
 secrets and local guest credentials) are minted on first run into
 `userData/local/secrets.json`; no installation secrets ship in the build. The

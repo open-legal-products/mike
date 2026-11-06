@@ -211,7 +211,7 @@ function findSoffice() {
 function assertBackendNodeSupported(backendDir, env = {}) {
   const check = spawnSync(
     process.execPath,
-    [path.join(backendDir, "scripts", "check-node-version.cjs")],
+    [path.join(backendDir, "scripts", "check-node-version.cjs"), "desktop"],
     { cwd: backendDir, env: { ...process.env, ...env, ELECTRON_RUN_AS_NODE: "1" }, encoding: "utf8" },
   );
   if (check.status !== 0) {
@@ -224,6 +224,8 @@ async function startLocalStack(app, status = () => {}) {
   if (running) return { frontendUrl: FRONTEND_URL };
   if (booting) throw new Error("local stack is already starting");
   const paths = stackPaths(app);
+  // Fail before creating secrets, starting services or applying migrations.
+  assertBackendNodeSupported(paths.backendDir);
   const dirs = dataPaths(app);
   for (const d of [dirs.root, dirs.storage, dirs.logs]) {
     fs.mkdirSync(d, { recursive: true });
@@ -334,7 +336,6 @@ async function startLocalStack(app, status = () => {}) {
     // 6. Backend — Electron's own binary in Node mode, so no separate
     // runtime ships with the app.
     status("Starting Mike services…");
-    assertBackendNodeSupported(paths.backendDir);
     const soffice = findSoffice();
     spawnService("backend", process.execPath,
       [path.join(paths.backendDir, "dist", "index.js")], {

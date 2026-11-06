@@ -656,8 +656,7 @@ so images and the database migrations they apply always belong together:
 
 ```bash
 MIKE_IMAGE_TAG=2.1.0
-docker compose pull
-docker compose up --no-build -d
+docker compose pull && docker compose up --no-build -d
 ```
 
 What you get that a local build does not: Sentry source maps for exactly
@@ -668,12 +667,27 @@ convenience tags for trying things out; production deployments pin a version,
 and a published version is never rebuilt (a fix is a new patch version).
 `docker compose up --build` still builds from the checkout for development and
 for anyone who patches the code; those images report as `mike@0.0.0...` unless
-you pass `MIKE_VERSION` and `GIT_SHA`. A local build reuses whatever
-`node:22-slim` Docker has cached, and an old cached base can be older than
-the Node 22.19 the images need; run `docker compose build --pull` before `up` to
-refresh it. The backend image
-refuses a too-old base at `npm ci` (`EBADENGINE` / `notsup`) rather than
-building an image that crashes at boot. The Word add-in image is not published:
+you pass `MIKE_VERSION` and `GIT_SHA`. Compose's build configuration refreshes
+the Node base whenever you request a build, including through
+`npm run stack:up -- --build`. For an update, build first and replace the
+running containers only after the build succeeds:
+
+```bash
+docker compose build --pull && docker compose up --no-build -d
+```
+
+Keep the existing stack running during the build; there is no need to run
+`down` first. An unsuccessful build stops this command before `up`. The
+backend checks Node before installing dependencies and again at `npm start`;
+an old runtime gets Docker-specific recovery instructions. This refresh happens
+only during a requested build, not while containers are running. Builds require
+registry access; disconnected sites should transfer tested published images as
+described below and use `up --no-build`.
+
+Published images include their own Node. To update, set `MIKE_IMAGE_TAG` in
+the compose-root `.env` to the desired published release, then run the pull/up
+command above. Keeping an old tag keeps that release; updating Node on the host
+does not change a container's runtime. The Word add-in image is not published:
 its production build bakes in the deployment's web-app URL, so build it as
 described under [Building the Word add-in image](#building-the-word-add-in-image).
 
@@ -684,6 +698,18 @@ applies that image's migrations. Forks publish to their own namespace: set
 is published; other architectures build from source. Disconnected sites can
 `docker pull` by digest on a connected machine, `docker save`/`docker load`,
 and run with `SENTRY_DISABLED=true`.
+
+### Running from source
+
+Use Node 22.19 or newer (22.22.2 or newer for the frontend unit tests). If the
+backend reports `EBADENGINE` or an unsupported Node version, update the Node
+used by your shell or process manager, reinstall dependencies, and retry.
+For an nvm-managed development shell:
+
+```bash
+nvm install 22
+nvm use 22
+```
 
 Install dependencies:
 
@@ -727,7 +753,7 @@ which is why `docker compose up` works without TLS.
 The image contains no `.env` file. Pass the backend environment explicitly:
 
 ```bash
-docker build -t mike-backend -f backend/Dockerfile .
+docker build --pull -t mike-backend -f backend/Dockerfile .
 docker run --rm -p 3001:3001 --env-file backend/.env \
   -e NODE_ENV=production \
   -e FRONTEND_URL=https://app.example.com \
@@ -751,7 +777,7 @@ build arguments too so its Sentry events carry the same release as the images
 it runs beside ([observability.md](observability.md#releases)):
 
 ```bash
-docker build -t mike-word-addin \
+docker build --pull -t mike-word-addin \
   --build-arg REACT_APP_WEB_APP_URL=https://app.example.com \
   --build-arg WORD_ADDIN_PUBLIC_URL=https://word.example.com \
   -f word-addin/Dockerfile .
@@ -802,7 +828,7 @@ Keep failed cleanup rows as well as pending ones; upgraded workers reclaim them.
 
 Backend and frontend Docker build contexts are now the repository root, so both
 can compile against `packages/contracts`. For a manual backend image build use
-`docker build -f backend/Dockerfile -t mike-backend .` from the root.
+`docker build --pull -f backend/Dockerfile -t mike-backend .` from the root.
 
 Each image reads only what its Dockerfile copies: the frontend image contains
 `frontend/`, `packages/contracts`, `packages/ui` and `packages/client`; the

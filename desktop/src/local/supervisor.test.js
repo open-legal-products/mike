@@ -14,6 +14,17 @@ const {
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
+// Match the packaged layout with the real checker and a controlled requirement.
+function stageBackendCheck(resources, range = ">=22.19.0") {
+  const backend = path.join(resources, "local-stack", "app", "backend");
+  fs.mkdirSync(path.join(backend, "scripts"), { recursive: true });
+  fs.copyFileSync(
+    path.resolve(__dirname, "../../../backend/scripts/check-node-version.cjs"),
+    path.join(backend, "scripts", "check-node-version.cjs"),
+  );
+  fs.writeFileSync(path.join(backend, "package.json"), JSON.stringify({ engines: { node: range } }));
+}
+
 // The stop loop and the boot-time crash detector both ask "is this child
 // gone?". A process killed by a signal never gets an exit CODE — Node reports
 // exitCode === null and signalCode === "SIGTERM" — which is exactly how
@@ -50,8 +61,10 @@ test("a stop during boot ends the boot and leaves nothing running", async (t) =>
 
   const originalResources = process.resourcesPath;
   process.resourcesPath = path.join(tmp, "resources");
+  stageBackendCheck(process.resourcesPath);
   t.after(() => {
     process.resourcesPath = originalResources;
+    fs.rmSync(tmp, { recursive: true, force: true });
   });
   const app = { isPackaged: true, getPath: () => userData };
 
@@ -77,9 +90,48 @@ test("refuses to start the backend on an Electron whose Node is below the backen
   });
   assert.throws(
     () => assertBackendNodeSupported(backendDir, fakeNode("22.14.0")),
-    /Electron's Node\. Mike's backend needs Node >=22\.19\.0 .* this is Node 22\.14\.0/,
+    (error) => {
+      assert.match(error.message, /Electron's Node\. Mike's backend needs Node >=22\.19\.0 .* this is Node 22\.14\.0/);
+      assert.match(error.message, /Install an updated Mike app/);
+      assert.ok(!error.message.includes("nvm install"));
+      return true;
+    },
   );
   assert.doesNotThrow(() => assertBackendNodeSupported(backendDir, fakeNode("22.22.0")));
   // The Node this test runs on (the same floor applies to it).
   assert.doesNotThrow(() => assertBackendNodeSupported(backendDir));
 });
+
+for (const returning of [false, true]) {
+  test(`incompatible packaged runtime leaves ${returning ? "existing" : "new"} workspace untouched`, async (t) => {
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "mike-runtime-preflight-"));
+    t.after(() => fs.rmSync(tmp, { recursive: true, force: true }));
+    const resources = path.join(tmp, "resources");
+    // This simulates a backend requiring a newer Node than the bundled one.
+    stageBackendCheck(resources, ">=999.0.0");
+    const userData = path.join(tmp, "userData");
+    if (returning) {
+      fs.mkdirSync(path.join(userData, "local", "pgdata"), { recursive: true });
+      fs.writeFileSync(path.join(userData, "local", "pgdata", "PG_VERSION"), "16\n");
+      fs.writeFileSync(path.join(userData, "local", "secrets.json"), "existing secrets\n");
+    }
+    const originalResources = process.resourcesPath;
+    process.resourcesPath = resources;
+    t.after(() => { process.resourcesPath = originalResources; });
+    const statuses = [];
+    await assert.rejects(
+      startLocalStack({ isPackaged: true, getPath: () => userData }, (msg) => statuses.push(msg)),
+      /Install an updated Mike app/,
+    );
+    assert.deepEqual(statuses, [], "no service or migration stage starts");
+    assert.equal(localStackActive(), false);
+    if (returning) {
+      assert.deepEqual(fs.readdirSync(path.join(userData, "local")).sort(), ["pgdata", "secrets.json"]);
+      assert.deepEqual(fs.readdirSync(path.join(userData, "local", "pgdata")), ["PG_VERSION"]);
+      assert.equal(fs.readFileSync(path.join(userData, "local", "pgdata", "PG_VERSION"), "utf8"), "16\n");
+      assert.equal(fs.readFileSync(path.join(userData, "local", "secrets.json"), "utf8"), "existing secrets\n");
+    } else {
+      assert.equal(fs.existsSync(userData), false, "no workspace directories or secrets are created");
+    }
+  });
+}

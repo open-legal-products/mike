@@ -120,14 +120,15 @@ describe("backend refuses an unsupported Node", () => {
 
   // What `npm run dev` / `npm start` actually run, on a Node that reports
   // the given version (process.versions is replaced before the script loads).
-  const runCheck = (version: string) =>
+  const runCheck = (version: string, runtime = "source", args: string[] = []) =>
     spawnSync(
       process.execPath,
       [
         `--import=data:text/javascript,Object.defineProperty(process,"versions",{value:{...process.versions,node:"${version}"}})`,
         path.join(repoRoot, "backend/scripts/check-node-version.cjs"),
+        ...args,
       ],
-      { encoding: "utf8" },
+      { encoding: "utf8", env: { ...process.env, MIKE_NODE_RUNTIME: runtime } },
     );
 
   it("the predev/prestart script exits 1 on Node 22.14 and names the cause", () => {
@@ -135,10 +136,27 @@ describe("backend refuses an unsupported Node", () => {
     expect(result.status).toBe(1);
     expect(result.stderr).toContain("needs Node >=22.19.0");
     expect(result.stderr).toContain("this is Node 22.14.0.");
+    expect(result.stderr).toContain("nvm install 22");
   });
 
-  it("the predev/prestart script exits 0 on the floor", () => {
-    const result = runCheck("22.19.0");
+  it("gives Docker recovery instructions without asking users to change the host Node", () => {
+    const result = runCheck("22.14.0", "docker");
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain("docker compose build --pull");
+    expect(result.stderr).toContain("pull a newer Mike release");
+    expect(result.stderr).not.toContain("nvm install");
+  });
+
+  it("uses the desktop recovery instructions even when a different environment context is inherited", () => {
+    const result = runCheck("22.14.0", "docker", ["desktop"]);
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain("Install an updated Mike app");
+    expect(result.stderr).not.toContain("nvm install");
+    expect(result.stderr).not.toContain("docker compose");
+  });
+
+  it.each(["source", "docker", "desktop"])("the %s check exits 0 on the floor", (runtime) => {
+    const result = runCheck("22.19.0", runtime);
     expect(result.stderr).toBe("");
     expect(result.status).toBe(0);
   });

@@ -135,6 +135,8 @@ services:
     # keeps the two in step).
     build: &backend-build
       context: .
+      # Refresh the Node base only when the user requests a build.
+      pull: true
       dockerfile: backend/Dockerfile
       args:
         # Release identity for Sentry (docs/observability.md): build args, not
@@ -362,6 +364,7 @@ services:
 
   frontend:
     build:
+      pull: true
       # Repo-root context: the frontend's shared types import type-only
       # definitions from backend/src (see frontend/Dockerfile).
       context: .

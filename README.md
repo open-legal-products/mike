@@ -55,8 +55,12 @@ and local email capture without requiring managed infrastructure.
    or build everything from this checkout:
 
    ```bash
-   docker compose up --build
+   docker compose build --pull && docker compose up --no-build -d
    ```
+
+   Builds refresh the bundled Node base. If a build fails, the command stops
+   before replacing running containers. Published images already include Node;
+   you do not need to install it on the host.
 
 5. Open [http://localhost:3000](http://localhost:3000) and create an account.
 

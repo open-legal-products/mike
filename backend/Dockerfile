@@ -10,12 +10,12 @@ RUN apt-get update \
   && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
-# .npmrc sets engine-strict: on a stale cached node:22-slim older than the
-# engines floor, `npm ci` fails here with "notsup" instead of building an
-# image that crashes at boot (MIKE-BACKEND-3R). `docker compose build --pull`
-# refreshes the base.
+# Check before npm ci so a stale base gets Docker-specific recovery steps.
+# .npmrc also enforces dependency engine requirements during installation.
 COPY backend/package*.json backend/.npmrc ./
-RUN npm ci
+COPY backend/scripts/check-node-version.cjs ./scripts/check-node-version.cjs
+ENV MIKE_NODE_RUNTIME=docker
+RUN node scripts/check-node-version.cjs && npm ci
 COPY backend/ ./
 COPY packages/contracts /packages/contracts
 # The compose db-init step (schema.sql, migrations/, scripts/migrate.sh are

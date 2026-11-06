@@ -33,13 +33,21 @@ Docker Compose supplies the local Supabase and object-storage settings, so
 leave those values unchanged. Then start the stack:
 
 ```bash
-docker compose up --build
+docker compose build --pull && docker compose up --no-build -d
 ```
 
 Open [http://localhost:3000](http://localhost:3000) and sign up.
 
-`npm run stack:up -- --build` does the same thing but first sweeps stacks left
-behind by earlier checkouts, worktrees, and reviews (see "Stop and clean up").
+The build refreshes the Node base before replacing containers. If it fails,
+the command stops before `up`; an existing running stack can stay running
+while you fix the build. Node is bundled in the images, so the host does not
+need a separate Node installation.
+
+`npm run stack:up -- --build` builds and starts in the foreground, first
+sweeping stacks left behind by earlier checkouts, worktrees, and reviews
+(see "Stop and clean up"). Its Compose build also refreshes the Node base.
+Neither command schedules future updates. To restart already-built images
+without a build or base refresh, use `docker compose up --no-build -d`.
 
 ## Stop and clean up
 
