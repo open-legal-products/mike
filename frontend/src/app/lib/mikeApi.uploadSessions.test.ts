@@ -953,7 +953,9 @@ describe("direct upload sessions", () => {
                     operation: "upload_session.storage",
                     http_method: "PUT",
                     http_status: 503,
+                    storage_target: "cross_origin",
                 },
+                fingerprint: ["upload-storage-put"],
             });
             expect(JSON.stringify(context)).not.toMatch(/secret-deal|storage\.test/);
         }

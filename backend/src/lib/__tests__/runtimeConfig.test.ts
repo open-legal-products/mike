@@ -7,6 +7,7 @@ import {
   uploadConversionTimeoutMs,
   uploadJobWallClockMs,
   uploadProcessingConfiguration,
+  storagePublicEndpointWarnings,
   uploadSessionRateLimitConfiguration,
   validateRuntimeConfiguration,
 } from "../runtimeConfig";
@@ -282,4 +283,35 @@ it("identifies invalid configuration fields without sending their values", () =>
       "API_PUBLIC_URL,FRONTEND_URL,SUPABASE_PUBLISHABLE_KEY,SUPABASE_URL",
   });
   expect(JSON.stringify(event)).not.toContain("PRIVATE");
+});
+
+// MIKE-FRONTEND-28/3D/2Z: the compose default R2_PUBLIC_ENDPOINT_URL
+// (http://localhost:9000) on an install opened from a real host made every
+// browser upload fail with "Failed to fetch" and nothing at boot said why.
+describe("storagePublicEndpointWarnings", () => {
+  const at = (frontend: string, publicEndpoint: string, internal = "http://storage:9000") =>
+    storagePublicEndpointWarnings({
+      FRONTEND_URL: frontend,
+      R2_PUBLIC_ENDPOINT_URL: publicEndpoint,
+      R2_ENDPOINT_URL: internal,
+    } as NodeJS.ProcessEnv);
+
+  it.each([
+    ["https://mike.firm.example", "http://localhost:9000", /loopback/],
+    ["http://192.168.1.20:3000", "http://127.0.0.1:9000", /loopback/],
+    ["https://mike.firm.example", "", /internal service name/],
+    ["https://mike.firm.example", "http://storage.firm.example:9000", /mixed content/],
+  ])("warns for FRONTEND_URL %s with public storage %s", (frontend, endpoint, reason) => {
+    const warnings = at(frontend, endpoint);
+    expect(warnings).toHaveLength(1);
+    expect(warnings[0]).toMatch(reason);
+  });
+
+  it.each([
+    ["http://localhost:3000", "http://localhost:9000"],
+    ["https://mike.firm.example", "https://storage.firm.example"],
+    ["https://mike.firm.example", "https://mike.firm.example"],
+  ])("is quiet for FRONTEND_URL %s with public storage %s", (frontend, endpoint) => {
+    expect(at(frontend, endpoint)).toEqual([]);
+  });
 });
