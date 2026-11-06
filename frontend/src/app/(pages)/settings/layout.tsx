@@ -6,6 +6,7 @@ import { Loader2 } from "lucide-react";
 import { useAuth } from "@/app/contexts/AuthContext";
 import { useOrganizationInvitationCount } from "@/app/hooks/useOrganizationInvitationCount";
 import { useMemberDataActions } from "@/app/hooks/useMemberDataActions";
+import { useOptionalUserProfile } from "@/app/contexts/UserProfileContext";
 import {
     SettingsShell,
     type SettingsShellTab,
@@ -49,6 +50,8 @@ const TABS: SettingsShellTab[] = [
         label: "Organizations",
         href: "/settings/organizations",
     },
+    // Listed only for instance admins (the server's MIKE_ADMIN_EMAILS).
+    { id: "admin", label: "Admin", href: "/settings/admin" },
 ];
 
 export default function SettingsLayout({
@@ -66,12 +69,17 @@ export default function SettingsLayout({
     // owners allow neither exports nor bulk deletes, so it is not listed.
     const { canExport, canDelete } = useMemberDataActions();
     const hidePrivacyData = !canExport && !canDelete;
+    // Optional: the layout also renders where no profile provider is mounted
+    // (component tests), and then simply lists no Admin tab.
+    const hideAdmin = useOptionalUserProfile()?.profile?.instanceAdmin !== true;
     const visibleTabs = useMemo(
         () =>
             TABS.filter(
-                (tab) => !(hidePrivacyData && tab.id === "privacy-data"),
+                (tab) =>
+                    !(hidePrivacyData && tab.id === "privacy-data") &&
+                    !(hideAdmin && tab.id === "admin"),
             ),
-        [hidePrivacyData],
+        [hidePrivacyData, hideAdmin],
     );
     // Search only what is listed: an entry on a hidden tab would open a page
     // the person is not offered.

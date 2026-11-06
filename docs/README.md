@@ -20,6 +20,8 @@
   asynchronous learning, deletion, and operations
 - [Google Workspace](google-workspace.md) — Drive, Gmail, and Calendar
   connectors: setup, permissions, approvals, limits, and acceptance tests
+- [Feature flags and the admin panel](feature-flags.md) — instance admins,
+  deployment defaults and per-user overrides, the Google scope-bundle flags
 - [CourtListener integration](courtlistener.md) — live US case-law tools and
   optional bulk data
 - [Web search](web-search.md) — provider search and search services, page

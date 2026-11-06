@@ -12,11 +12,19 @@ export function driveDb(
 ) {
     const tokens: Row[] = options.tokenRow ? [options.tokenRow] : [];
     const states = options.states ?? [];
+    // Feature flags (lib/featureFlags.ts): empty means every code default applies.
+    const flags: Record<string, Row[]> = {
+        feature_flag_defaults: [],
+        user_feature_flags: [],
+    };
     const writes: { table: string; row: Row }[] = [];
     const failures = new Map<string, unknown>();
     const db = {
         from(table: string) {
-            const rows = table === "user_google_drive_tokens" ? tokens : states;
+            const rows =
+                table === "user_google_drive_tokens"
+                    ? tokens
+                    : (flags[table] ?? states);
             let action = "select";
             let patch: Row = {};
             let single = false;
@@ -146,5 +154,5 @@ export function driveDb(
             throw new Error(`Unexpected RPC ${name}`);
         },
     } as unknown as Db;
-    return { db, tokens, states, writes, failures };
+    return { db, tokens, states, flags, writes, failures };
 }
