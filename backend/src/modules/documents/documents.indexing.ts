@@ -43,7 +43,7 @@ export async function handleDocumentExtractText(db: Db, job: DbJob): Promise<voi
         // The source hash matched, so the parser saw the same bytes it will
         // see on every retry: an unreadable file fails once, not three times.
         // The runner's failure hook marks the text failed.
-        if (err instanceof ExtractionParseError) throw new NonRetryableJobError("document_text_unreadable", { cause: err });
+        if (err instanceof ExtractionParseError) throw new NonRetryableJobError("document_text_unreadable", { cause: err, reportLevel: "warning" });
         if (!(err instanceof ExtractionLimitError)) throw err;
         await markDocumentTextFailed(db, job, "too_large");
         return;

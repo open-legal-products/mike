@@ -160,6 +160,9 @@ describe("version text extraction", () => {
     expect(sentry.setOperation).toHaveBeenCalledWith("documents.extract");
     expect(sentry.reportError).toHaveBeenCalledOnce();
     expect(diagnosticErrorTags(sentry.reportError.mock.calls[0]![0])).toMatchObject({ error_kind: "extraction.parse_failed" });
+    // A corrupt upload is a handled outcome the user already sees, not an
+    // application defect: it files a warning, not an error.
+    expect(sentry.reportError.mock.calls[0]![1]).toMatchObject({ level: "warning" });
   });
   it.each(["xlsx", "xlsm", "xls"])("uses the full spreadsheet reader for %s", async (type) => {
     mocks.sheet.mockReturnValue("Sheet and cell addresses");
