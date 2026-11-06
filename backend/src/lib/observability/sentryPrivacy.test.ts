@@ -276,6 +276,34 @@ it('retains provider categories and retry status without response bodies or cred
   expect(diagnosticErrorTags(cyclic)).toEqual({});
 });
 
+it('names a provider refusal by its protocol type and a fixed reason, never its text', () => {
+  // MIK-89: every Anthropic/OpenAI 400 was "chat-stream / api_call / 400"
+  // (MIKE-BACKEND-G), whatever the provider said was wrong.
+  const refusal = (message: string, type = 'invalid_request_error') => ({
+    name: 'AI_APICallError', statusCode: 400, message,
+    data: { type: 'error', error: { type, message } },
+  });
+  expect(diagnosticErrorTags(refusal('prompt is too long: 215000 tokens > 200000 maximum PRIVATE_'))).toEqual({
+    provider_error: 'api_call', provider_error_type: 'invalid_request_error', provider_reason: 'prompt_too_long', dependency_status: 400,
+  });
+  expect(diagnosticErrorTags(refusal('messages.3.content.1.image.source.base64: image exceeds 5 MB maximum')).provider_reason).toBe('invalid_image');
+  expect(diagnosticErrorTags(refusal('tools.2.custom.input_schema: JSON schema is invalid')).provider_reason).toBe('invalid_tool_schema');
+  // An unknown reason or a type outside the protocol vocabulary says nothing.
+  expect(diagnosticErrorTags(refusal('PRIVATE_ something else', 'PRIVATE_type'))).toEqual({ provider_error: 'api_call', dependency_status: 400 });
+  // A stream error after the response started carries its type itself.
+  expect(diagnosticErrorTags({ name: 'AI_StreamProviderError', type: 'overloaded_error', statusCode: 503, message: 'Overloaded' }))
+    .toEqual({ provider_error: 'stream_provider', provider_error_type: 'overloaded_error', dependency_status: 503 });
+
+  const tags = { component: 'chat-stream', ...diagnosticErrorTags(refusal('prompt is too long PRIVATE_')) };
+  const event = diagnosticEvent({ tags, exception: { values: [{ type: 'Error', value: 'prompt is too long PRIVATE_' }] } });
+  expect((event.exception as { values: Array<{ value: string }> }).values[0]!.value)
+    .toBe('Failure in chat-stream / api_call / invalid_request_error / prompt_too_long / 400');
+  expect(JSON.stringify(event)).not.toContain('PRIVATE_');
+  // Appended only when present: an event without them groups as before.
+  expect(diagnosticEvent({ tags: { component: 'chat-stream', provider_error: 'api_call' } }).fingerprint).toHaveLength(14);
+  expect(event.fingerprint).toEqual(expect.arrayContaining(['invalid_request_error', 'prompt_too_long']));
+});
+
 it('allows only bounded network context and known model endpoints', () => {
   expect(diagnosticEvent({ tags: { network_state: 'offline', request_origin: 'cross-origin' } }).tags).toEqual({ network_state: 'offline', request_origin: 'cross-origin' });
   expect(diagnosticEvent({ tags: { network_state: 'private-network', request_origin: 'https://private.example', provider_error: 'private' } }).tags).toEqual({});

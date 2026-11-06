@@ -20,6 +20,7 @@ import { UserFacingError } from "../../../lib/userFacingError";
 import { InvalidApiKeyError } from "../../../lib/llm/apiKeyErrors";
 import { markStage, reportError } from "../../../lib/observability/sentry";
 import { providerFailureKind } from "../../../lib/llm/providerErrors";
+import { reportModelFailure } from "../../../lib/llm/providerFailureReport";
 import { safeError } from "../../../lib/safeError";
 import type { Db } from "../../../lib/supabase";
 import type { StreamRunWriteOptions } from "../../../lib/streamRuns";
@@ -1130,11 +1131,6 @@ export async function runLLMStream(params: {
       // any console.error, is what lets the console bridge recognise every
       // later log of it — this line's, and the route's log of the
       // AssistantStreamError below, whose `cause` is `err` — as already sent.
-      // A UserFacingError (rejected or missing API key, model not allowed)
-      // is the user's configuration rather than our bug: still one event, so
-      // operators see a rejected key with its provider_error tag, but a
-      // warning, not an error. (Left unreported, the console bridge filed it
-      // anyway, at error level, as MIKE-BACKEND-E.)
       // The kind says what the provider did (rejected the key, rate limited,
       // unavailable) so one cause is one issue; the provider's own error
       // stays underneath as the cause, where provider_error and
@@ -1146,16 +1142,27 @@ export async function runLLMStream(params: {
           : new AppError(providerFailureKind(err), "Model stream failed", {
               cause: err,
             });
+      // How loud is decided once, in reportModelFailure: a user's rejected
+      // key or empty account is not reported (the user is told what to
+      // change; the deployment's own key is one warning for the operator),
+      // a rate limit or outage is a warning, an unexplained failure stays an
+      // error. A UserFacingError that is still reported (a missing key, a
+      // model not allowed) is the user's configuration rather than our bug:
+      // a warning. (Left unreported, the console bridge filed those anyway,
+      // at error level, as MIKE-BACKEND-E.)
       // A subagent's run is its own flow inside the turn's request: name it
       // on the event so a failing delegate is not filed under the answer.
-      reportError(failure, {
-        tags: {
-          component: "chat-stream",
-          ...(isSubagent ? { operation: "chat.subagent" as const } : {}),
+      reportModelFailure(
+        failure,
+        {
+          tags: {
+            component: "chat-stream",
+            ...(isSubagent ? { operation: "chat.subagent" as const } : {}),
+          },
+          ...(safeToDisplay ? { level: "warning" as const } : {}),
         },
-        ...(safeToDisplay ? { level: "warning" as const } : {}),
-      });
-      console.error("[chat/stream] model stream failed", failure);
+        "[chat/stream] model stream failed",
+      );
       const message = safeToDisplay ? err.message : ASSISTANT_ERROR_MESSAGE;
       events.push({
         type: "error",

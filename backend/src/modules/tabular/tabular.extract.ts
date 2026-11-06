@@ -9,7 +9,7 @@ import {
     type UserApiKeys,
 } from "../../lib/llm";
 import { AppError } from "../../lib/appError";
-import { reportError } from "../../lib/observability/sentry";
+import { reportModelFailure } from "../../lib/llm/providerFailureReport";
 import { formatPromptSuffix } from "./tabular.prompt";
 import { type CellResult, type Column } from "./tabular.shared";
 
@@ -57,8 +57,10 @@ The "summary" field must contain only the extracted value with inline citations 
             "Tabular cell completion failed",
             { cause: err },
         );
-        reportError(failure);
-        console.error("[queryTabularCell] completion failed", failure);
+        // At the level the provider's condition deserves: a rate limit or
+        // outage is a warning, a user's rejected key is not reported at all
+        // (the deployment's is one warning).
+        reportModelFailure(failure, {}, "[queryTabularCell] completion failed");
         return null;
     }
     try {
@@ -231,8 +233,11 @@ Rules:
                 "Tabular row completion stream failed",
                 { cause: err },
             );
-            reportError(failure);
-            console.error("[queryTabularAllColumns] stream failed", failure);
+            reportModelFailure(
+                failure,
+                {},
+                "[queryTabularAllColumns] stream failed",
+            );
         }
     }
 
