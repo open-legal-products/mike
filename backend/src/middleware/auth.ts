@@ -72,7 +72,10 @@ function isLoginMfaBootstrapRoute(req: Request) {
 function reportLoginMfaColumnMissing(error: { code?: string }) {
   reportSchemaOutOfDateOnce(error, {
     key: "auth.login_mfa_preference",
-    tags: { component: "http" },
+    // requireAuth runs before any handler names the flow, so name it here:
+    // without it the event reads as any other missing column, not as login
+    // MFA silently not being enforced.
+    tags: { component: "http", operation: "auth.login_mfa" },
     consequence: "login MFA enforcement is not active until the migration runs",
   });
 }
