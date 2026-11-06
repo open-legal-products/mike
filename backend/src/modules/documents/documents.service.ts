@@ -55,6 +55,7 @@ export { handleConversionConvert, markConversionFailed } from "./documents.conve
 export { sweepStaleProcessingDocuments } from "./documents.maintenance";
 
 export { createDocumentVersion } from "./documents.lifecycle";
+export { commitEmailDocument } from "./documents.emailImport";
 export { handleDocumentCleanup } from "./documents.cleanupJobs";
 export { copyDocumentVersionFiles } from "./documents.copyFiles";
 export { captureInlineDocumentCleanup, completeInlineDocumentCleanup } from "./documents.cleanupJobs";
