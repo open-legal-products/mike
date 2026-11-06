@@ -4,6 +4,7 @@ import { tmpdir } from "os";
 import path from "path";
 import JSZip, { type JSZipObject } from "jszip";
 import { parse as parseYaml } from "yaml";
+import { defaultWorkflowByKey, loadDefaultWorkflows } from "./defaultWorkflows";
 
 const DEFAULT_REPOSITORY = "Open-Legal-Products/mike-workflows";
 const DEFAULT_REF = "main";
@@ -21,32 +22,6 @@ const DEFAULT_QUICK_ACTION_PROMPT =
   "Execute this workflow on the selected documents.";
 const DEFAULT_WORD_QUICK_ACTION_PROMPT =
   "Execute this workflow on this Word document.";
-const DEFAULT_WORKFLOWS = [
-  { key: "proofread", quickAction: true, wordQuickAction: true },
-  { key: "compare-documents", quickAction: true, wordQuickAction: false },
-  { key: "extract-key-terms", quickAction: true, wordQuickAction: true },
-  { key: "draft-from-template", quickAction: true, wordQuickAction: true },
-  {
-    key: "commercial-agreement-tabular-review",
-    quickAction: false,
-    wordQuickAction: false,
-  },
-] as const;
-const DEFAULT_WORKFLOW_BY_KEY = new Map<
-  string,
-  {
-    key: string;
-    quickAction: boolean;
-    wordQuickAction: boolean;
-    sortOrder: number;
-  }
->(
-  DEFAULT_WORKFLOWS.map((workflow, sortOrder) => [
-    workflow.key,
-    { ...workflow, sortOrder },
-  ]),
-);
-
 type UnknownRecord = Record<string, unknown>;
 
 export type WorkflowCatalogAssetSource = {
@@ -561,7 +536,7 @@ async function parseArchive(
       });
     }
 
-    const defaultConfig = DEFAULT_WORKFLOW_BY_KEY.get(workflowKey) ?? null;
+    const defaultConfig = defaultWorkflowByKey().get(workflowKey) ?? null;
     const jurisdictions = requiredString(
       metadata.jurisdictions,
       `${skillPath}.metadata.jurisdictions`,
@@ -630,7 +605,7 @@ async function parseArchive(
     });
   }
 
-  for (const workflow of DEFAULT_WORKFLOWS) {
+  for (const workflow of loadDefaultWorkflows()) {
     if (!seenKeys.has(workflow.key)) {
       throw new Error(
         `Workflow archive is missing required default '${workflow.key}'`,
