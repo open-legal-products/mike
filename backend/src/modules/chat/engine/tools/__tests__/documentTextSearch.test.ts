@@ -137,8 +137,8 @@ it.each([
     code: "", message: "TypeError: fetch failed", hint: "",
     details: "TypeError: fetch failed\n\nCaused by: Error: getaddrinfo ENOTFOUND private.host (ENOTFOUND)",
   }, "ENOTFOUND", "search_unavailable", "temporarily unavailable"],
-  ["private-code", postgrestError("private-code"), undefined, "internal_error", "could not be completed"],
-])("preserves the safe reason for database failure %s in logs, events and the tool result", async (_label, error, failureCode, category, message) => {
+  ["private-code", postgrestError("private-code"), "private-code", "internal_error", "could not be completed"],
+])("preserves the safe reason for database failure %s in logs, events and the tool result", async (_label, error, code, category, message) => {
   const fake = scriptedDb([{ rpc: "find_document_text", error }]);
   mocks.find.mockImplementationOnce(findDocumentText);
   const { frames, result } = await searchActivity(fake.db);
@@ -150,7 +150,7 @@ it.each([
     ok: false, error_code: category, error: frames[1].error,
   });
   expect(mocks.logError).toHaveBeenCalledWith("find_documents", {
-    category, ...(failureCode === undefined ? {} : { failure_code: failureCode }),
+    category, ...(code === "private-code" ? {} : { failure_code: code }),
   });
   expect(JSON.stringify({ frames, result, logs: mocks.logError.mock.calls })).not.toContain("private");
 });
