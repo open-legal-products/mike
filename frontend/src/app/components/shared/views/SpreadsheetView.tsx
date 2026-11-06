@@ -17,6 +17,13 @@ import { viewRoundingClass, type ViewRounding } from "./viewRounding";
 type HighlightRange = { row: [number, number]; column: [number, number] };
 type WorkbookComponent = typeof import("@fortune-sheet/react").Workbook;
 
+const PREVIEW_TIMEOUT_MS = 30_000;
+const PREVIEW_FAILURE_MESSAGE =
+    "This spreadsheet could not be displayed. Download the original, or try saving a new .xlsx copy.";
+// BIFF8 .xls and encrypted OOXML use an OLE container, not the ZIP package
+// LuckyExcel understands. Renaming the File to .xlsx cannot convert its bytes.
+const OLE_SIGNATURE = [0xd0, 0xcf, 0x11, 0xe0, 0xa1, 0xb1, 0x1a, 0xe1];
+
 /** A cell locator to highlight, e.g. { sheet: "Q3 Budget", cell: "B7" }. */
 export type HighlightCell = { sheet?: string; cell?: string };
 
@@ -236,15 +243,29 @@ function tintHeaderCell(
 
 /**
  * Renders an Excel workbook as a read-only grid using Fortune-sheet. It fetches
- * the document's raw `.xlsx`/`.xlsm`/`.xls` bytes itself (via /file) and
- * converts them to Fortune-sheet data with Luckyexcel, preserving the original
- * styling (fills, fonts, borders, merges).
+ * the document's raw bytes itself (via /file) and converts OOXML workbooks to
+ * Fortune-sheet data with Luckyexcel, preserving styling (fills, fonts,
+ * borders, merges). Legacy/encrypted OLE workbooks remain downloadable but
+ * cannot be previewed by this parser.
  *
  * Spreadsheet citations are highlighted by cell: `highlightCells` activates the
  * cited sheet tab and scrolls the A1 address/range into view, where a canvas
  * hook paints the highlight.
  */
-export function SpreadsheetView({
+export function SpreadsheetView(props: Props) {
+    // The byte-fetch hook retains its previous bytes while a replacement
+    // loads. A new source must start with fresh fetch/parser/session state,
+    // rather than display or settle the old source under a new version label.
+    const sourceKey = JSON.stringify([
+        props.documentId,
+        props.versionId ?? null,
+        props.displayUrl ?? null,
+        props.refetchKey ?? null,
+    ]);
+    return <SpreadsheetSourceView key={sourceKey} {...props} />;
+}
+
+function SpreadsheetSourceView({
     documentId,
     versionId,
     displayUrl,
@@ -304,32 +325,56 @@ export function SpreadsheetView({
     useEffect(() => {
         if (!bytes) return;
         let cancelled = false;
+        let settled = false;
         setSheets(null);
         setError(null);
+
+        const header = new Uint8Array(bytes, 0, Math.min(bytes.byteLength, OLE_SIGNATURE.length));
+        if (OLE_SIGNATURE.every((value, index) => header[index] === value)) {
+            setError("Legacy or encrypted Excel files cannot be previewed here. For preview, save an unencrypted .xlsx copy and upload it.");
+            return;
+        }
+
+        // LuckyExcel 1.0.1 logs some asynchronous ZIP errors without invoking
+        // its callback or returning a promise. Bound the pending UI and ignore
+        // any result arriving after timeout or source replacement.
+        const timer = window.setTimeout(fail, PREVIEW_TIMEOUT_MS);
+        function fail() {
+            if (cancelled || settled) return;
+            settled = true;
+            window.clearTimeout(timer);
+            setError(PREVIEW_FAILURE_MESSAGE);
+        }
 
         try {
             const file = new File([bytes], "spreadsheet.xlsx");
             LuckyExcel.transformExcelToLucky(file, (exportJson) => {
-                if (cancelled) return;
-                if (exportJson?.sheets?.length) {
+                if (cancelled || settled) return;
+                try {
+                    if (!Array.isArray(exportJson?.sheets) || !exportJson.sheets.length) {
+                        fail();
+                        return;
+                    }
                     applyMergeCells(exportJson.sheets);
                     applyExcelTextOverflow(exportJson.sheets);
                     for (const sheet of exportJson.sheets) {
                         sheet.images = normalizeSpreadsheetImages(sheet.images);
                     }
+                    settled = true;
+                    window.clearTimeout(timer);
                     setSheets(exportJson.sheets as unknown as Sheet[]);
                     setWorkbookGeneration((generation) => generation + 1);
-                } else {
-                    setError("This spreadsheet could not be displayed.");
+                } catch {
+                    fail();
                 }
             });
         } catch {
-            if (!cancelled)
-                setError("This spreadsheet could not be displayed.");
+            fail();
         }
 
         return () => {
             cancelled = true;
+            window.clearTimeout(timer);
         };
     }, [bytes]);
 
@@ -510,7 +555,7 @@ export function SpreadsheetView({
     if (message) {
         return (
             <div className={frameClass}>
-                <div className="flex h-full items-center justify-center px-6 text-center text-sm text-gray-500">
+                <div role="alert" className="flex h-full items-center justify-center px-6 text-center text-sm text-gray-500">
                     {message}
                 </div>
             </div>
