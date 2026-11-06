@@ -7,6 +7,7 @@
 import http from "node:http";
 import type { AddressInfo } from "node:net";
 import express from "express";
+import rateLimit from "express-rate-limit";
 import request from "supertest";
 import * as Sentry from "@sentry/node";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
@@ -106,7 +107,10 @@ function app() {
   server.use(protectInternalErrorResponses);
   server.use(express.json());
   server.use("/auth", authRouter);
-  server.get("/projects", requireAuth, (_req, res) => {
+  // The real app rate-limits every auth-guarded route (app.ts); CodeQL's
+  // js/missing-rate-limiting query expects the same in front of this one.
+  const limiter = rateLimit({ windowMs: 60_000, limit: 1_000 });
+  server.get("/projects", limiter, requireAuth, (_req, res) => {
     res.json({ ok: true });
   });
   return server;
