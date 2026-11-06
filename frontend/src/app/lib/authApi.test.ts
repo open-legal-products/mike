@@ -1,6 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { describeError } from "@mike/client";
-import { isReported } from "@/app/lib/errorReporting";
 import {
     AuthApiError,
     challengeAndVerifyMfa,
@@ -97,9 +96,11 @@ describe("cookie auth client", () => {
                 requestId: "req-2",
                 message: "The server is temporarily unreachable. Please try again shortly.",
             });
-            expect(reporting.reportApiFailure).not.toHaveBeenCalled();
-            // Marked, so a screen's notifyError does not file it either.
-            expect(isReported(error)).toBe(true);
+            // Through reportApiFailure, which only marks a code the server
+            // side already reported (errorReporting.test.ts).
+            expect(reporting.reportApiFailure).toHaveBeenCalledExactlyOnceWith(
+                expect.objectContaining({ status: 503, code: "upstream_unavailable", error }),
+            );
         });
 
         it("does not report a 4xx: it is the auth server's answer", async () => {

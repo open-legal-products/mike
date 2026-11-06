@@ -240,6 +240,20 @@ describe("reportApiFailure", () => {
         expect(scrubEvent(consoleCopy, { originalException: apiError })).toBeNull();
     });
 
+    it.each(["upstream_unavailable", "schema_out_of_date"])(
+        "only marks a %s 503 the server side already reported",
+        (code) => {
+            state.enabled = true;
+            const apiError = new Error("already reported");
+            expect(
+                reportApiFailure({ path: "/x", status: 503, code, error: apiError }),
+            ).toBeNull();
+            expect(Sentry.captureMessage).not.toHaveBeenCalled();
+            // Marked, so a screen's later notifyError does not file it either.
+            expect(isReported(apiError)).toBe(true);
+        },
+    );
+
     it("defaults the method to GET and omits absent tags", () => {
         state.enabled = true;
         reportApiFailure({ path: "/user/profile", status: 500 });

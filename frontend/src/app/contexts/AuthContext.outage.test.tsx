@@ -131,8 +131,12 @@ describe("AuthProvider during an auth outage", () => {
             await vi.advanceTimersByTimeAsync(60_000);
         });
         expect(sessionCalls()).toBe(3);
-        // The backend already reported upstream_unavailable.
-        expect(reporting.reportApiFailure).not.toHaveBeenCalled();
+        // The first failure goes to reportApiFailure, which only marks an
+        // upstream_unavailable the backend already reported; the retries are
+        // marked handled without it.
+        expect(reporting.reportApiFailure).toHaveBeenCalledExactlyOnceWith(
+            expect.objectContaining({ code: "upstream_unavailable" }),
+        );
     });
 
     it("still treats a 401 as signed out, without retrying", async () => {

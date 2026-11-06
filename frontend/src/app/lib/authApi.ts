@@ -1,9 +1,13 @@
-import { markErrorHandled, reportNetworkFailure } from "@/app/lib/errorReporting";
 import {
-    reportServerFailure,
+    markErrorHandled,
+    reportApiFailure,
+    reportNetworkFailure,
+} from "@/app/lib/errorReporting";
+import {
+    isAbortError,
     reportedUpstreamMessage,
-} from "@/app/lib/reportedUpstream";
-import { isAbortError, type Operation } from "@mike/client";
+    type Operation,
+} from "@mike/client";
 
 export interface AuthUser {
     id: string;
@@ -107,7 +111,7 @@ async function authRequest<T>(
         // the API is down, schema_out_of_date).
         if (!report) markErrorHandled(error);
         else if (response.status >= 500) {
-            reportServerFailure({
+            reportApiFailure({
                 operation,
                 path: url,
                 status: response.status,
