@@ -100,10 +100,15 @@ export interface PublicFailure {
   detail: string;
 }
 
-/** How sendInternalError reports, when a caller needs other than the default. */
-interface ReportPolicy {
-  /** False: the failure is a known repeat; log it, do not send it. */
-  report: boolean;
+/** What sendInternalError answers and how it reports, when not the default. */
+export interface InternalErrorOptions {
+  /** The public body instead of internal_error (schema drift always wins). */
+  answer?: PublicFailure;
+  /**
+   * `false`: the failure is a known repeat; log it, do not send it. Read as
+   * `!== false`, so leaving it out (or passing undefined) reports.
+   */
+  report?: boolean;
   /** Names the flow when the request's handler has not set one yet. */
   operation?: string;
   /** Groups the event under a pinned condition instead of the route. */
@@ -114,9 +119,9 @@ export function sendInternalError(
   res: Response,
   error: unknown,
   status = 500,
-  answer?: PublicFailure,
-  policy: ReportPolicy = { report: true },
+  options: InternalErrorOptions = {},
 ): Response {
+  const { answer, operation, fingerprint } = options;
   const requestId =
     typeof res.locals.requestId === "string" ? res.locals.requestId : null;
   // A caller that passes a raw non-Error would otherwise have the reporter
@@ -137,7 +142,7 @@ export function sendInternalError(
   const drift = schemaCode
     ? gateSchemaOutOfDate(error, { key: `http:${method ?? "?"} ${route ?? "?"}` })
     : null;
-  const report = policy.report && (drift?.report ?? true);
+  const report = options.report !== false && (drift?.report ?? true);
 
   // Every unexpected 5xx the API returns passes through here, which makes it
   // THE place a backend bug becomes a Sentry issue. The request id is the
@@ -152,9 +157,9 @@ export function sendInternalError(
         request_id: requestId,
         http_method: method,
         http_route: route,
-        ...(policy.operation ? { operation: policy.operation } : {}),
+        ...(operation ? { operation } : {}),
       },
-      ...(policy.fingerprint ? { fingerprint: policy.fingerprint } : {}),
+      ...(fingerprint ? { fingerprint } : {}),
     });
   }
 
@@ -211,11 +216,10 @@ export function sendUpstreamUnavailable(
   // The same hint the Next gateway sends with its upstream_unavailable 503:
   // a client or proxy that honours it waits instead of retrying at once.
   res.set("retry-after", UPSTREAM_RETRY_AFTER_SECONDS);
-  return sendInternalError(
-    res,
-    error,
-    503,
-    { code: UPSTREAM_UNAVAILABLE_CODE, detail: UPSTREAM_UNAVAILABLE_MESSAGE },
-    { report, operation: options.operation, fingerprint: ["upstream-unavailable"] },
-  );
+  return sendInternalError(res, error, 503, {
+    answer: { code: UPSTREAM_UNAVAILABLE_CODE, detail: UPSTREAM_UNAVAILABLE_MESSAGE },
+    report,
+    operation: options.operation,
+    fingerprint: ["upstream-unavailable"],
+  });
 }

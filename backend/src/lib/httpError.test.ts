@@ -149,6 +149,26 @@ describe("sendInternalError", () => {
     },
   );
 
+  it("reads options.report as !== false: omitted or undefined reports, false only logs", async () => {
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    const answer = { code: "custom_failure", detail: "Custom." };
+    const app = express();
+    app.get("/omitted", (_req, res) => void sendInternalError(res, new Error("a"), 502, { answer }));
+    app.get("/undefined", (_req, res) =>
+      void sendInternalError(res, new Error("b"), 502, { answer, report: undefined }),
+    );
+    app.get("/false", (_req, res) =>
+      void sendInternalError(res, new Error("c"), 502, { answer, report: false }),
+    );
+
+    for (const path of ["/omitted", "/undefined", "/false"]) {
+      const res = await request(app).get(path);
+      expect(res.status).toBe(502);
+      expect(res.body).toEqual(answer);
+    }
+    expect(reportError).toHaveBeenCalledTimes(2);
+  });
+
   it("reports schema drift once per route per process, and logs every repeat at warn", async () => {
     const consoleError = vi.spyOn(console, "error").mockImplementation(() => {});
     const consoleWarn = vi.spyOn(console, "warn").mockImplementation(() => {});
