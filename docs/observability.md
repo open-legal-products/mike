@@ -182,10 +182,12 @@ however many users hit it.
 - Background jobs: every failed attempt of a `db_jobs` job (warning while
   retries remain, error when exhausted). A handler that throws
   `NonRetryableJobError` ends the job at once with that error's
-  `reportLevel`: `"error"` by default, or `null`, which sends nothing and
-  logs a warning (the memory curator uses it for a user's key the provider
-  refused, and for a deployment key already reported, so one revoked key is
-  not one event per retry or per run). Also reported:
+  `reportLevel`: `"error"` by default, `"warning"`, or `null`, which sends
+  nothing and logs a warning. The memory curator passes the level
+  `modelFailureReportLevel` gives the provider's refusal: `"warning"` the
+  first time the deployment's key is refused, `null` for a user's or
+  organization's key and for a deployment key already reported, so one
+  revoked key is not one event per retry or per run. Also reported:
   failure-hook crashes, unknown job
   kinds, claim/tick/retention failures, BullMQ conversion/extraction/delivery
   failures, upload-session processing and conversion failures, worker
@@ -314,7 +316,10 @@ the backend, Next server/edge, browser, and all Word add-in entries.
   capture source, build mode and `diagnostics_version` remain. Wrapped and
   aggregate causes and AI SDK `lastError` are inspected locally with bounded
   traversal. Known provider error classes become a finite `provider_error`
-  category; response bodies, prompts and credentials are never retained.
+  category (`invalid_api_key`, `api_call`, `retry_exhausted`,
+  `stream_provider`); response bodies, prompts and credentials are never
+  retained. `provider_error` is an unconditional fingerprint slot, so adding
+  a value (as `stream_provider` was) regroups the events that now carry it.
   Two more fixed vocabularies name a provider's refusal without its text:
   `provider_error_type` is the protocol's own `error.type` value (for example
   `rate_limit_error`, `overloaded_error`, `invalid_request_error`), and
