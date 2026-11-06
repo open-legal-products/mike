@@ -4662,3 +4662,22 @@ export async function deletePlaybook(playbookId: string): Promise<void> {
         method: "DELETE",
     });
 }
+
+export function getMatterBrief(projectId: string) {
+    return apiRequest<import("@mike/contracts").MatterBriefState>("project_brief.resume", `/projects/${encodeURIComponent(projectId)}/brief`);
+}
+export function designateMatterBrief(projectId: string, documentId: string) {
+    return apiRequest<null>("project_brief.designate", `/projects/${encodeURIComponent(projectId)}/brief/designate`, {method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({documentId,confirmShared:true})});
+}
+export function proposeMatterBrief(projectId: string, sourceIds: string[], model: string) {
+    return apiRequest<import("@mike/contracts").MatterBriefProposal>("project_brief.propose", `/projects/${encodeURIComponent(projectId)}/brief/proposals`, {method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({sourceIds,model,confirmProvider:true})});
+}
+export function getMatterBriefProposal(projectId: string, id: string) {
+    return apiRequest<import("@mike/contracts").MatterBriefProposal>("project_brief.proposal", `/projects/${encodeURIComponent(projectId)}/brief/proposals/${encodeURIComponent(id)}`);
+}
+export function applyMatterBrief(projectId: string, id: string) {
+    return apiRequest<{versionId:string;replayed:boolean}>("project_brief.apply", `/projects/${encodeURIComponent(projectId)}/brief/proposals/${encodeURIComponent(id)}/apply`, {method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({confirmReviewed:true,confirmShared:true})});
+}
+export function matterBriefSourceUrl(projectId: string, source: import("@mike/contracts").BriefSourceIdentity) {
+    return `${API_BASE}/projects/${encodeURIComponent(projectId)}/brief/sources/${encodeURIComponent(source.documentId)}/${encodeURIComponent(source.versionId)}?hash=${encodeURIComponent(source.hash)}&revision=${encodeURIComponent(source.revision)}`;
+}

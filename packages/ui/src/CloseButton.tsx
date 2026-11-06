@@ -16,11 +16,13 @@ export function CloseButton({
     label = "Close",
     size = "sm",
     className,
+    disabled = false,
 }: {
     onClick: () => void;
     label?: string;
     size?: CloseButtonSize;
     className?: string;
+    disabled?: boolean;
 }) {
     const classes = sizeClasses[size];
     return (
@@ -28,6 +30,7 @@ export function CloseButton({
             tone="white"
             size="icon-xs"
             onClick={onClick}
+            disabled={disabled}
             aria-label={label}
             title={label}
             className={`${classes.button} shrink-0 ${className ?? ""}`}

@@ -7,6 +7,7 @@ import helmet from "helmet";
 import rateLimit, { ipKeyGenerator } from "express-rate-limit";
 import { chatRouter } from "./modules/chat/chat.routes";
 import { wordChatRouter } from "./modules/word-chat/wordChat.routes";
+import { projectBriefRouter } from "./modules/project-brief/projectBrief.routes";
 import { projectsRouter } from "./modules/projects/projects.routes";
 import { orgsRouter } from "./modules/orgs/orgs.routes";
 import { projectChatRouter } from "./modules/project-chat/projectChat.routes";
@@ -271,6 +272,7 @@ app.post("/word-chat", chatLimiter);
 // so the smaller limit wins for this path.
 app.post(TOOL_RESULT_PATH, toolResultLimiter, express.json({ limit: "2mb" }));
 app.post("/projects/:projectId/chat", chatLimiter);
+app.post("/projects/:projectId/brief/proposals", chatLimiter);
 app.post("/tabular-review/:reviewId/chat", chatLimiter);
 app.post("/tabular-review/:reviewId/generate", chatLimiter);
 // A playbook review is one large model call (or a tool loop when the playbook
@@ -329,6 +331,7 @@ app.use("/chat", chatRouter);
 app.use("/word-chat", wordChatRouter);
 app.use("/models", modelsRouter);
 app.use("/projects/:projectId/memory", projectMemoryRouter);
+app.use("/projects/:projectId/brief", projectBriefRouter);
 app.use("/projects", projectsRouter);
 app.use("/orgs", orgsRouter);
 app.use("/projects/:projectId/chat", projectChatRouter);

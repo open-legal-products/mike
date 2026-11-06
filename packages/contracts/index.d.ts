@@ -739,3 +739,54 @@ export interface AuditActorPage {
   users: AuditActor[];
   nextOffset: number | null;
 }
+
+/** Exact content identity; version IDs can be edited in place. */
+export interface BriefSourceIdentity {
+  documentId: string;
+  versionId: string;
+  revision: string;
+  hash: string;
+  /** Null while current text extraction is unavailable. */
+  textHash: string | null;
+  filename: string;
+  /** Stored version type or MIME; absent in legacy identities, null when unknown. */
+  fileType?: string | null;
+}
+export interface BriefCitation { source: number; quote: string }
+export interface BriefEntry {
+  text: string;
+  status: "source_assertion" | "uncertain" | "proposed_action";
+  citations: BriefCitation[];
+}
+export interface MatterBriefContent {
+  position: BriefEntry[];
+  awaiting: BriefEntry[];
+  uncertainties: BriefEntry[];
+  nextAction: BriefEntry[];
+}
+export interface MatterBriefSource extends BriefSourceIdentity {
+  ready: boolean;
+  reason: string | null;
+  reviewed: boolean;
+}
+export interface MatterBriefProposal {
+  id: string;
+  base: BriefSourceIdentity;
+  sources: BriefSourceIdentity[];
+  content: MatterBriefContent;
+  before: string;
+  gaps: { documentId: string; filename: string; reason: string }[];
+  expiresAt: string;
+  appliedVersionId: string | null;
+}
+export interface MatterBriefState {
+  pendingProposalId: string | null;
+  brief: BriefSourceIdentity | null;
+  acceptedVersionId: string | null;
+  acceptedAt: string | null;
+  acceptedContent: MatterBriefContent | null;
+  acceptedEvidence: BriefSourceIdentity[];
+  manualChanges: boolean;
+  sources: MatterBriefSource[];
+  canEdit: boolean;
+}

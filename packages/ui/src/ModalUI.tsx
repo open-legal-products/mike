@@ -18,6 +18,8 @@ export interface ModalUIProps {
     children: ReactNode;
     breadcrumbs?: ReactNode[];
     headerAction?: ReactNode;
+    /** Disables only the header button; the caller still guards Escape/backdrop dismissal. */
+    closeButtonDisabled?: boolean;
     size?: ModalUISize;
     className?: string;
     ariaLabel?: string;
@@ -41,6 +43,7 @@ export function ModalUI({
     children,
     breadcrumbs,
     headerAction,
+    closeButtonDisabled = false,
     size = "lg",
     className = "",
     ariaLabel,
@@ -171,7 +174,7 @@ export function ModalUI({
                             </div>
                             {headerAction}
                         </div>
-                        <CloseButton onClick={onClose} size="md" />
+                        <CloseButton onClick={onClose} size="md" disabled={closeButtonDisabled} />
                     </header>
                 )}
 
