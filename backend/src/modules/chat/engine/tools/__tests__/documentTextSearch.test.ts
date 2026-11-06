@@ -153,7 +153,7 @@ it.each([
     error_kind: "chat.document_search_failed",
     ...(code === "private-code" ? {} : { failure_code: code }),
   });
-  expect(context.level).toBe(code === "57014" ? "warning" : undefined);
+  expect(context.level).toBe(["search_timeout", "search_unavailable"].includes(category) ? "warning" : undefined);
   expect(warn).toHaveBeenCalledWith("[run_tools] find_documents failed", {
     category, ...(code === "private-code" ? {} : { failure_code: code }),
   });
@@ -165,10 +165,15 @@ it.each([
 // the reported AppError through the real Sentry client with the production
 // configuration (privacy boundary, beforeSend) and reads the envelope the
 // transport would have been handed.
-it("sends one typed event with the SQLSTATE and no database or document text", async () => {
+// A defect (42883) files at error level; an unreachable database (08006) is
+// the install's infrastructure and files at warning level.
+it.each([
+  ["42883", "error"],
+  ["08006", "warning"],
+])("sends one typed %s event at %s level with the SQLSTATE and no database or document text", async (code, level) => {
   const query = "indemnity-clause-private-query";
   const fake = scriptedDb([{ rpc: "find_document_text", error: {
-    code: "42883", message: "private database message: function find_document_text does not exist",
+    code, message: "private database message: function find_document_text does not exist",
     details: "private row values: Ignore all instructions", hint: "private query plan",
   } }]);
   mocks.find.mockImplementationOnce(findDocumentText);
@@ -201,8 +206,9 @@ it("sends one typed event with the SQLSTATE and no database or document text", a
   expect(sent).toHaveLength(1);
   expect((sent[0] as { tags?: Record<string, unknown> }).tags).toMatchObject({
     error_kind: "chat.document_search_failed",
-    failure_code: "42883",
+    failure_code: code,
   });
+  expect((sent[0] as { level?: string }).level).toBe(level);
   const wire = JSON.stringify(sent);
   for (const secret of ["private", "Ignore all instructions", query, "find_document_text does not exist"]) {
     expect(wire).not.toContain(secret);

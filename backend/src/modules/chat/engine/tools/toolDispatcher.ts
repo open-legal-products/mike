@@ -783,13 +783,19 @@ export async function runToolCalls(
         // answered in the tool result; the category is enough locally.
         if (result.kind === "error") {
           // The PostgREST error rides as the cause, so its SQLSTATE (57014 =
-          // statement timeout) reaches the event as failure_code. A timeout
-          // is the install's database load, not a defect: warning level.
+          // statement timeout) or network code reaches the event as
+          // failure_code. A timeout is the install's database load and an
+          // unreachable database (ECONNREFUSED, 08006, 53300, fetch_failed)
+          // is the install's infrastructure, not a defect in this code: both
+          // file at warning level, like the Redis, provider and auth-upstream
+          // outages. Everything else (internal_error) stays an error.
+          const infrastructure =
+            failure.error_code === "search_timeout" || failure.error_code === "search_unavailable";
           reportToolFailure(
             new AppError("chat.document_search_failed", "Document search failed", {
               cause: result.error,
             }),
-            failure.error_code === "search_timeout" ? "warning" : undefined,
+            infrastructure ? "warning" : undefined,
           );
         }
         // The category, plus the allowlisted failure_code (a SQLSTATE or
