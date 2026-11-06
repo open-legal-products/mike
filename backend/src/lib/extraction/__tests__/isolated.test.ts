@@ -1,5 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { existsSync } from "node:fs";
+import { chmodSync, existsSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import path from "node:path";
 import { spawn } from "node:child_process";
 import { Document, Packer, Paragraph } from "docx";
 import JSZip from "jszip";
@@ -10,6 +12,8 @@ import {
   runIsolatedExtraction,
   stopExtractionProcess,
 } from "../isolated";
+import { ExtractionParseError } from "../failure";
+import { diagnosticErrorTags } from "../../observability/sentryPrivacy";
 
 vi.mock("node:child_process", async (importOriginal) => {
   const actual = await importOriginal<typeof import("node:child_process")>();
@@ -78,6 +82,39 @@ describe("runIsolatedExtraction", () => {
     await expect(
       runIsolatedExtraction("documentText", async () => onePagePdf(), { fileType: "pdf" }),
     ).resolves.toMatchObject({ text: expect.stringContaining("24CV-1234"), textlessPageCount: 0 });
+  });
+
+  // A thrown Error crosses IPC as data. The parent used to rebuild it as a
+  // bare Error(message), so every unreadable PDF reached Sentry kindless
+  // and its job could not tell a corrupt file from a transient fault.
+  it("rebuilds a parser's typed failure, with its kind, on the parent side", async () => {
+    const corrupt = Uint8Array.from(Buffer.from("%PDF-1.7\nnot really a pdf")).buffer;
+    const error = await runIsolatedExtraction("documentText", async () => corrupt, { fileType: "pdf" })
+      .catch((caught: unknown) => caught);
+    expect(error).toBeInstanceOf(ExtractionParseError);
+    expect(diagnosticErrorTags(error)).toMatchObject({ error_kind: "extraction.pdf_parse_failed" });
+  });
+
+  // A converter that cannot be started says nothing about the bytes: the
+  // child sees spawn's ENOENT, and the parent must not call it a parse
+  // failure, or the job fails a valid .doc on its first attempt.
+  it.skipIf(process.platform === "win32")("keeps a converter that could not start retryable, with its errno", async () => {
+    const dir = mkdtempSync(path.join(tmpdir(), "mike-soffice-"));
+    try {
+      // Executable, so the access check passes; its interpreter is missing,
+      // so the exec itself fails with ENOENT, as a deleted binary would.
+      const soffice = path.join(dir, "soffice");
+      writeFileSync(soffice, "#!/nonexistent/interpreter\n");
+      chmodSync(soffice, 0o755);
+      vi.stubEnv("SOFFICE_BINARY_PATH", soffice);
+      const error = await runIsolatedExtraction("documentText", async () => Uint8Array.from(Buffer.from("legacy doc bytes")).buffer, { fileType: "doc" })
+        .catch((caught: unknown) => caught);
+      expect(error).toBeInstanceOf(Error);
+      expect(error).not.toBeInstanceOf(ExtractionParseError);
+      expect(diagnosticErrorTags(error)).toMatchObject({ error_kind: "conversion.unavailable", failure_code: "ENOENT" });
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 
   it.skipIf(!existsSync("/usr/bin/soffice"))("converts Office content using real LibreOffice inside the bounded process", async () => {

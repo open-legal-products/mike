@@ -1043,6 +1043,18 @@ export function reportError(
   });
 }
 
+/**
+ * Decide NOT to report `error`, and make that stick: the console bridge and
+ * the unhandled-rejection handler treat it (and anything wrapping it through
+ * `cause`) as already handled, exactly as they do after reportError(). For a
+ * failure that is deliberately unreported — a provider rejecting the user's
+ * own key — a later `console.error` of the route's wrapper would otherwise
+ * file it anyway, at error level.
+ */
+export function acknowledgeUnreported(error: unknown): void {
+  if (error && typeof error === "object") reportedErrors.add(error);
+}
+
 /** A message-only event (no Error object), for "this should never happen". */
 export function reportMessage(
   message: string,
