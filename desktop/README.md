@@ -369,11 +369,23 @@ start, with one deliberate exception:
 
 `npm run e2e:local` drives the **packaged** app (or `MIKE_E2E_DEV=1` for
 `electron .`) through the cold first run — initdb, signup, onboarding,
-project, upload, blob-token download, guest sign-in twice — then quits it for
-real (postgres fast shutdown) and relaunches on the same userData: the
-returning-user path must land in the product without a login, replay no
-migrations, and still show the project and document. Fresh-only suites never
-see that path, which is how the upgrade regression above shipped.
+project, upload, blob-token download, background text extraction, guest
+sign-in twice — then quits it for real (postgres fast shutdown) and relaunches
+on the same userData: the returning-user path must land in the product without
+a login, replay no migrations, and still show the project and document.
+Fresh-only suites never see that path, which is how the upgrade regression
+above shipped.
+
+The extraction step polls the local postgres (port 42810, password from
+`userData/local/secrets.json`) for up to 120 s until the uploaded PDF's
+`document_version_texts` row is `ready` with text and zero textless pages.
+Only the isolated parser child writes that row; the versions API's page counts
+are measured in-process at upload and stay correct even when every extraction
+fails. Before #799 the child's environment allowlist dropped
+`ELECTRON_RUN_AS_NODE`, so in the packaged app the child relaunched Mike
+instead of parsing, while this suite passed. A failure here names the document,
+the text row and job status, and points at that cause; the screenshot is
+`local-04b-extracted.png`. DOCX extraction through LibreOffice is not covered.
 
 CI (`.github/workflows/desktop.yml`) runs both on Apple Silicon runners: the
 unit job on every desktop/backend/frontend change, and the packaged job — the
