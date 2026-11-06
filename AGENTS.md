@@ -6,7 +6,7 @@ These instructions apply to the entire repository. Keep changes focused,
 preserve unrelated work in the tree, and follow the more detailed guidance in
 `CONTRIBUTING.md` and `docs/` when working in a documented subsystem.
 
-The repository requires Node.js 22 or newer and contains three applications:
+The repository requires Node.js 22.19 or newer and contains three applications:
 
 - `frontend/`: Next.js web application.
 - `backend/`: Express API, document processing, database access, and LLM

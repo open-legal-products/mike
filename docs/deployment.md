@@ -5,7 +5,8 @@ storage instead of the infrastructure bundled with Docker Compose.
 
 ## Prerequisites
 
-- Node.js 22 or newer
+- Node.js 22.19 or newer. The backend's HTTP client (undici 8) needs it;
+  an older 22.x crashes at boot inside `undici/lib/interceptor/decompress.js`.
 - npm and Git
 - A Supabase project
 - A Cloudflare R2, MinIO, or other S3-compatible bucket
@@ -720,7 +721,12 @@ convenience tags for trying things out; production deployments pin a version,
 and a published version is never rebuilt (a fix is a new patch version).
 `docker compose up --build` still builds from the checkout for development and
 for anyone who patches the code; those images report as `mike@0.0.0...` unless
-you pass `MIKE_VERSION` and `GIT_SHA`. The Word add-in image is not published:
+you pass `MIKE_VERSION` and `GIT_SHA`. A local build reuses whatever
+`node:22-slim` Docker has cached, and an old cached base can be older than
+the Node 22.19 the images need; run `docker compose build --pull` before `up` to
+refresh it. The backend image
+refuses a too-old base at `npm ci` (`EBADENGINE` / `notsup`) rather than
+building an image that crashes at boot. The Word add-in image is not published:
 its production build bakes in the deployment's web-app URL, so build it as
 described under [Building the Word add-in image](#building-the-word-add-in-image).
 
