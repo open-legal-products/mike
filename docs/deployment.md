@@ -473,6 +473,19 @@ To report to your own Sentry instead, set `SENTRY_DSN` (backend) and
 there at runtime). What is reported, what is scrubbed, and how to verify are
 in [observability.md](observability.md).
 
+Default reporting assumes an install runs built code. Run the built backend
+(`node dist/index.js` or `npm start`) and the web app with `next start` under
+`NODE_ENV=production`. A backend run from its TypeScript source (`tsx
+src/index.ts`, `bun src/index.ts`, under pm2, systemd or anything else) is a
+development build and does not report unless `SENTRY_DSN` is set or
+`SENTRY_SOURCE_RUN_IS_INSTALL=true` declares it an install (it then reports
+like the compiled image: Mike project by default, `environment=self-hosted`,
+`build_mode=production`). `next start`
+keeps an exported `NODE_ENV=development` (the root `.env.example` ships one),
+and the web app then counts as a development build and turns its reporting
+off. The web image sets `NODE_ENV=production`, so this only affects a
+non-Docker frontend started from that env.
+
 ## Authentication email
 
 Supabase Auth sends signup, email-change, and password-recovery messages.
