@@ -284,6 +284,27 @@ it('allows only bounded network context and known model endpoints', () => {
   }
 });
 
+// MIK-128: a backend that went away mid-response is a different moment from
+// one that refused the connection. It is its own pinned issue per code, the
+// connect-time fingerprint is unchanged, and a body timeout (a hang, not an
+// outage) is never pinned at all.
+it('splits a mid-stream gateway failure from a connect-time one and keeps body timeouts at default grouping', () => {
+  const gateway = (stage: string, code: string, pinned = true) => diagnosticEvent({
+    ...(pinned ? { fingerprint: ['upstream-unavailable'], level: 'warning' } : {}),
+    tags: { component: 'api-gateway', stage, http_method: 'POST', http_route: '/chat', http_status: 200, failure_code: code },
+    exception: { values: [{ type: 'TypeError', value: 'terminated' }] },
+  });
+  expect(gateway('gateway-fetch', 'ECONNREFUSED').fingerprint).toEqual(['upstream-unavailable', 'api-gateway', 'ECONNREFUSED']);
+  expect(gateway('gateway-stream', 'UND_ERR_SOCKET').fingerprint).toEqual(['upstream-unavailable', 'api-gateway', 'UND_ERR_SOCKET', 'gateway-stream']);
+  expect(gateway('gateway-stream', 'ECONNRESET').fingerprint).not.toEqual(gateway('gateway-fetch', 'ECONNRESET').fingerprint);
+  const timeout = gateway('gateway-stream', 'UND_ERR_BODY_TIMEOUT', false);
+  expect(timeout.fingerprint).toEqual(expect.arrayContaining(['{{ default }}', 'gateway-stream', 'UND_ERR_BODY_TIMEOUT']));
+  expect(timeout.fingerprint).not.toContain('upstream-unavailable');
+  // Other pinned conditions keep their fingerprint whatever their stage.
+  expect(diagnosticEvent({ fingerprint: ['api-unreachable'], tags: { component: 'mike-api', stage: 'api-unreachable', failure_code: 'fetch_failed' } }).fingerprint)
+    .toEqual(['api-unreachable', 'mike-api', 'fetch_failed']);
+});
+
 // MIKE-FRONTEND-J/4: an unreachable backend is one condition, not one issue
 // per route/method/stack. A pinned caller fingerprint from a fixed vocabulary
 // replaces code-location grouping; any other caller fingerprint is ignored.

@@ -139,8 +139,9 @@ async function proxy(request: NextRequest, context: RouteContext) {
  * The backend's response failed after its headers were forwarded. Split the
  * same way as a failed fetch. A connection-level code (the backend went away
  * mid-stream: UND_ERR_SOCKET, ECONNRESET) is the same fact as an unreachable
- * backend, so it is one pinned warning per cause per minute under that
- * fingerprint; every open stream fails the same way at the same moment.
+ * backend, so it is one pinned warning per cause per minute; every open
+ * stream fails the same way at the same moment. The stage tag keeps it a
+ * separate issue from a refused connection (see diagnosticEvent).
  * Anything else, including undici's 300 s body timeout (the backend is up but
  * held the stream silent: a hang, not an outage) and a code we do not know,
  * keeps an error-level report with default grouping, still at most once per

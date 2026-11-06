@@ -302,10 +302,15 @@ export function diagnosticEvent(value: unknown): RecordValue {
   // route, method or stack, split only by its controlled component and code.
   const pinned = Array.isArray(event.fingerprint) && typeof event.fingerprint[0] === 'string' && PINNED_FINGERPRINTS.has(event.fingerprint[0]) ? event.fingerprint[0]
     : tags.component === 'runtime-warning' ? 'runtime-warning' : undefined;
+  // The gateway's backend failing mid-response (stage gateway-stream: a
+  // restart cut an open stream) is a different moment from a refused
+  // connection, so it is its own issue per code. The connect stage adds
+  // nothing, so every connect-time issue keeps its existing fingerprint.
+  const pinnedStage = pinned === 'upstream-unavailable' && typeof tags.stage === 'string' && tags.stage !== 'gateway-fetch' ? [tags.stage] : [];
   // A process warning is one issue per name and code: the same deprecation
   // raised from two modules is one thing to fix, and the stack says where.
   out.fingerprint = pinned === 'runtime-warning' ? [pinned, String(tags.warning_name ?? ''), String(tags.warning_code ?? '')]
-    : pinned ? [pinned, String(tags.component ?? 'application'), String(tags.failure_code ?? '')] : ['{{ default }}', String(tags.operation ?? ''), String(tags.error_kind ?? ''), String(tags.job_kind ?? ''), String(tags.component ?? 'application'), String(tags.stage ?? ''), String(tags.http_route ?? ''), String(tags.http_status ?? ''), String(tags.failure_code ?? ''), String(tags.file_type ?? ''), String(tags.provider_error ?? ''), String(tags.dependency_status ?? ''), String(tags.warning_name ?? ''), String(tags.warning_code ?? '')];
+    : pinned ? [pinned, String(tags.component ?? 'application'), String(tags.failure_code ?? ''), ...pinnedStage] : ['{{ default }}', String(tags.operation ?? ''), String(tags.error_kind ?? ''), String(tags.job_kind ?? ''), String(tags.component ?? 'application'), String(tags.stage ?? ''), String(tags.http_route ?? ''), String(tags.http_status ?? ''), String(tags.failure_code ?? ''), String(tags.file_type ?? ''), String(tags.provider_error ?? ''), String(tags.dependency_status ?? ''), String(tags.warning_name ?? ''), String(tags.warning_code ?? '')];
   // The path the request took before it failed: stage names only (our
   // labels, pushed by markStage), newest last, never a message or data.
   const crumbs = Array.isArray(event.breadcrumbs) ? event.breadcrumbs : [];
