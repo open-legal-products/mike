@@ -24,6 +24,7 @@
 // State is per process (per replica), like the per-runtime budget in
 // sentry.ts.
 
+import { authErrorShape } from "./authUpstream";
 import { createPollFailureGate, pollFailureClass } from "./observability/pollFailureGate";
 
 const REPEAT_WINDOW_MS = 15 * 60_000;
@@ -38,10 +39,8 @@ export function upstreamFailureClass(error: unknown): string {
   let current: unknown = error;
   for (let depth = 0; depth < CAUSE_DEPTH; depth++) {
     if (!current || typeof current !== "object") break;
-    if ("__isAuthError" in current) {
-      const { status } = current as { status?: unknown };
-      if (typeof status === "number") return `gotrue:${status}`;
-    }
+    const status = authErrorShape(current)?.status;
+    if (status !== undefined) return `gotrue:${status}`;
     current = (current as { cause?: unknown }).cause;
   }
   return pollFailureClass(error);
