@@ -10,6 +10,7 @@ import express from "express";
 import request from "supertest";
 import { SCHEMA_OUT_OF_DATE_MESSAGE, sendInternalError, sendUpstreamUnavailable } from "./httpError";
 import { resetUpstreamOutagesForTests } from "./upstreamOutage";
+import { resetSchemaOutOfDateReportsForTests } from "./schemaOutOfDate";
 
 function appThatFails(error: unknown, status?: number) {
   const app = express();
@@ -32,6 +33,7 @@ describe("sendInternalError", () => {
   afterEach(() => {
     vi.clearAllMocks();
     vi.restoreAllMocks();
+    resetSchemaOutOfDateReportsForTests();
   });
 
   it("reports the error to Sentry with the request id and route pattern, then answers 500", async () => {
@@ -141,11 +143,40 @@ describe("sendInternalError", () => {
       // Operator-facing, and not on console.error (the Sentry bridge would
       // file a string there as a second event).
       expect(consoleWarn).toHaveBeenCalledOnce();
-      expect(String(consoleWarn.mock.calls[0]?.[0])).toContain("backend/migrations");
+      expect(String(consoleWarn.mock.calls[0]?.[0])).toContain("backend/scripts/migrate.sh status");
       expect(JSON.stringify(consoleWarn.mock.calls)).not.toContain("private");
       expect(consoleError).toHaveBeenCalledOnce();
     },
   );
+
+  it("reports schema drift once per route per process, and logs every repeat at warn", async () => {
+    const consoleError = vi.spyOn(console, "error").mockImplementation(() => {});
+    const consoleWarn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const pg = { code: "PGRST202", message: "private" };
+    const app = express();
+    app.use((_req, res, next) => {
+      res.locals.requestId = "req-abc";
+      next();
+    });
+    app.get("/chat", (_req, res) => void sendInternalError(res, pg));
+    app.get("/projects", (_req, res) => void sendInternalError(res, pg));
+
+    for (let i = 0; i < 5; i++) {
+      expect((await request(app).get("/chat")).status).toBe(503);
+    }
+    // One event for the route, however many requests hit the missing RPC.
+    expect(reportError).toHaveBeenCalledOnce();
+    expect(consoleError).toHaveBeenCalledOnce();
+    // The gate's first line, then one line per repeat.
+    expect(consoleWarn).toHaveBeenCalledTimes(5);
+    expect(String(consoleWarn.mock.calls[4]?.[0])).toContain(
+      "[http/schema-out-of-date] GET /chat answered 503 (PGRST202)",
+    );
+
+    // Another route is its own drift: one more event.
+    expect((await request(app).get("/projects")).status).toBe(503);
+    expect(reportError).toHaveBeenCalledTimes(2);
+  });
 
   it("finds the schema code on a wrapped Error's cause and leaves look-alike code bugs as 500", async () => {
     vi.spyOn(console, "error").mockImplementation(() => {});

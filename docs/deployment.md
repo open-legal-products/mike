@@ -94,19 +94,39 @@ A backend started against a database that is missing some of
 `backend/migrations/` keeps running, but anything that needs a missing
 function, table or column fails. Requests answer `503` with code
 `schema_out_of_date` ("The server's database needs an update"), and the
-backend logs `[http/schema-out-of-date]` or `[schema-out-of-date]` warnings
-naming the PostgREST/SQLSTATE code (`PGRST202` function, `PGRST203` function
-signature, `PGRST204` or `42703` column, `PGRST205` table, `42P01` relation). With error reporting on, Sentry shows an
-error titled `Failure in <operation> / … / schema_out_of_date / <code>`,
+backend logs `[schema-out-of-date]` warnings naming the PostgREST/SQLSTATE
+code (`PGRST202` function, `PGRST203` function signature, `PGRST204` or
+`42703` column, `PGRST205` table, `42P01` relation). With error reporting on,
+Sentry shows an error with `schema_out_of_date` and the code in its title,
 for example `Failure in maintenance.document_text / stale-sweep /
-schema_out_of_date / PGRST202`. Background work (sweeps, upload-session
-deadline extension) sends that event once per process and operation, so its
+schema_out_of_date / PGRST202`; a request's event also names its method,
+route and `503`. Each is sent once per process per request route or
+background operation (sweeps, upload-session deadline extension), so its
 event count does not measure how often it happens; while the failures go on,
-the log repeats a `[schema-out-of-date] <operation>: still failing` line at
-most once an hour with the number of failures since the last line. Run
+the log repeats a `[schema-out-of-date] <key>: still failing` line at most
+once an hour with the number of failures since the last line, and each
+failed request also logs an `[http/schema-out-of-date]` line. Run
 `backend/scripts/migrate.sh status` to list what is pending, apply it with
 `backend/scripts/migrate.sh up`, reload the PostgREST schema cache (`notify
-pgrst, 'reload schema';`), and restart the backend.
+pgrst, 'reload schema';`), and restart the backend. If `migrate.sh status`
+shows nothing pending, a `schema_out_of_date` event is a bug in Mike (a
+query naming a column that does not exist, or a migration that left an old
+function overload behind): report it.
+
+### Supabase Auth (GoTrue) unreachable
+
+When the backend cannot reach GoTrue (no answer, or a 502/503/504 from a
+gateway in front of it), signed-in requests answer `503` with code
+`upstream_unavailable` and `retry-after: 5` instead of signing anyone out;
+the web app keeps the session and retries. A GoTrue `500` is GoTrue failing
+on something of ours and stays a reported `500`. Sentry receives one
+`upstream-unavailable` event per process per failure class (no answer, 502,
+503, 504), again at most once per 15 minutes while that class keeps failing
+or keeps coming back, and a class that returns after a quiet 15 minutes is
+reported as a new outage. Every replica reports for itself, so the event
+count is replicas × classes × 15-minute windows, not the number of failed
+requests; the quiet repeats are counted in an `[upstream-unavailable] still
+failing` log line at most once a minute.
 
 ### Before upgrading: secrets copied from the template
 
