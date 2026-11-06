@@ -618,6 +618,7 @@ async function runUploadSession<T>(args: {
                         lastError = new Error("Upload URL is unavailable");
                         continue;
                     }
+                    const target = classifyStorageTarget(descriptor.upload.url, globalThis.location?.href);
                     let response: Response;
                     try {
                         response = await fetchStorage(descriptor.upload.url, {
@@ -634,10 +635,7 @@ async function runUploadSession<T>(args: {
                         storageFailure = {
                             error,
                             network: true,
-                            target: classifyStorageTarget(
-                                descriptor.upload.url,
-                                globalThis.location?.href,
-                            ),
+                            target,
                         };
                         continue;
                     }
@@ -658,10 +656,7 @@ async function runUploadSession<T>(args: {
                     storageFailure = {
                         error: lastError,
                         status: response.status,
-                        target: classifyStorageTarget(
-                            descriptor.upload.url,
-                            globalThis.location?.href,
-                        ),
+                        target,
                     };
                 }
                 if (storageFailure) {
