@@ -1,4 +1,4 @@
-import { settleWithConcurrency } from "@/shared/lib/settleWithConcurrency";
+import { settleWithConcurrency } from "@mike/client";
 
 /**
  * How many requests a bulk action keeps in flight. Enough to overlap

@@ -29,8 +29,6 @@ import {
     getOrg,
     updateOrg,
     deleteOrg,
-    deleteOrgData,
-    isOrgDataKind,
     listOrgResources,
     listMembers,
     updateMember,
@@ -54,7 +52,8 @@ import {
     resolveDepartureArchive,
     resolveDepartureArchives,
 } from "./orgs.service";
-import { normalizeApiKeyProvider } from "../user/user.service";
+import { deleteOrgData, isOrgDataKind } from "../../application/organizations/purgeContent";
+import { normalizeApiKeyProvider } from "../../lib/providerCredentials/index";
 
 export const orgsRouter = Router();
 

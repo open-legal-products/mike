@@ -2,8 +2,7 @@
  * E2E coverage for quoting a passage of an assistant response back into the
  * composer: the selection menu, the note bubble, the excerpt pills in the
  * composer and in the sent message, and the quoted text that reaches the
- * `/word-chat` request. The UI is the web app's, shared through
- * frontend/src/shared/ui.
+ * `/word-chat` request. The UI is shared with the web app through @mike/ui.
  */
 import { expect, test } from "./support/fixtures";
 import type { Page, Request } from "@playwright/test";

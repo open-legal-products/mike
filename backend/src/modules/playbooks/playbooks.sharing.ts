@@ -12,12 +12,8 @@ import {
   setOrgAccessOverrides,
 } from "../../lib/orgAccessOverrides";
 import { findMissingUserEmails, loadProfileUsersByEmail } from "../../lib/userLookup";
-import {
-  editablePlaybook,
-  getPlaybook,
-  PlaybookRequestError,
-  type Playbook,
-} from "./playbooks.operations";
+import { editablePlaybook, getPlaybook, PlaybookRequestError } from "./playbooks.operations";
+import { type Playbook } from "./playbooks.types";
 import type { PlaybookRole } from "./playbooks.access";
 
 /** Playbook-specific roster rules; see playbooks.access.ts. */

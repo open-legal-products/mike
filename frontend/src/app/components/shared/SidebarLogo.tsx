@@ -2,7 +2,7 @@
 
 import { useOrganizationLogo } from "@/app/hooks/useOrganizationLogo";
 import type { Org } from "@/app/lib/mikeApi";
-import { MikeIcon } from "@/shared/ui/MikeIconUI";
+import { MikeIcon } from "@mike/ui";
 
 /**
  * The mark at the top of the sidebar: the active organization's own logo

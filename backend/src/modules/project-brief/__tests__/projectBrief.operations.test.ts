@@ -2,7 +2,7 @@ import { beforeEach, expect, it, vi } from "vitest";
 import JSZip from "jszip";
 const st = vi.hoisted(() => ({ files: new Map<string, ArrayBuffer>(), uploads: [] as ArrayBuffer[], calls: [] as any[], bundle: null as any, proposal: null as any, error: null as any, deletedVersions: new Set<string>() }));
 vi.mock("../../../lib/storage", () => ({ downloadFile: vi.fn(async (k: string) => st.files.get(k) ?? null), uploadFile: vi.fn(async (k: string, b: ArrayBuffer) => { st.files.set(k, b); st.uploads.push(b); }), versionStorageKey: (_u: string, _d: string, v: string) => `fixture/${v}.docx` }));
-vi.mock("../../user/user.service", () => ({ getEffectiveApiKeys: vi.fn(() => { throw new Error("No real model configuration in fixture"); }) }));
+vi.mock("../../../lib/providerCredentials/index", () => ({ getEffectiveApiKeys: vi.fn(() => { throw new Error("No real model configuration in fixture"); }) }));
 vi.mock("../../../lib/llm", async importOriginal => ({ ...await importOriginal<typeof import("../../../lib/llm")>(), completeText: vi.fn() }));
 vi.mock("../../documents/documents.service", () => ({ applyReviewedBrief: vi.fn(async () => ({ data: { versionId: "new-version", replayed: false }, error: st.error })) }));
 import { extractDocxBodyText } from "../../../lib/docxTrackedChanges";
@@ -13,7 +13,7 @@ import type { BriefGenerator } from "../projectBrief.operations";
 import { proposeBrief, resumeBrief, applyBrief, readBriefSource, getBriefProposal, designateBrief } from "../projectBrief.operations";
 import { contentSha256 } from "../../../lib/documentVersions";
 import { completeText } from "../../../lib/llm";
-import { getEffectiveApiKeys } from "../../user/user.service";
+import { getEffectiveApiKeys } from "../../../lib/providerCredentials/index";
 const actor = { projectId: "p", userId: "a", userEmail: "fixture@example.invalid" };
 function source(id: string, text: string, ready = true) { const bytes = new TextEncoder().encode(text).buffer; st.files.set(id, bytes); return { documentId: id, versionId: id + "v", revision: id + "r", hash: contentSha256(bytes), textHash: hashText(text), storagePath: id, filename: id + ".docx", fileType: "docx", sizeBytes: bytes.byteLength, ready, reason: ready ? null : "Text extraction is not ready", reviewed: false, text }; }
 const row = (text: string, quote: string, index = 1) => ({ text, status: "source_assertion", citations: [{ source: index, quote }] });

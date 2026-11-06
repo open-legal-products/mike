@@ -12,8 +12,7 @@ import type {
 // parity tests) never pull this module, and its runtime imports, into
 // the web app's type-check graph.
 export type { ApiKeyStatus } from "../types";
-import type { RouterProfileLists } from "@mike/model-catalog";
-import { SERVER_FAILURE_MESSAGE } from "@mike/user-error";
+import type { RouterProfileLists } from "@mike/client";
 import { networkFailure } from "../lib/networkError";
 import { sessionHandledError } from "../lib/sessionRefresh";
 import {
@@ -24,21 +23,23 @@ import {
 } from "../lib/errorReporting";
 import type { ReasoningLevel } from "../lib/wordChatTypes";
 import {
+  SERVER_FAILURE_MESSAGE,
   createControlRequestRetryPolicy,
+  reportedUpstreamMessage,
   firstUploadResult,
   uploadFilesWithSessionCore,
   type UploadOutcome,
   type UploadProgress,
-} from "@mike/upload-session-client";
+} from "@mike/client";
 
 export {
   UploadBatchError,
   failedUploadMessage,
-} from "@mike/upload-session-client";
+} from "@mike/client";
 export type {
   UploadOutcome,
   UploadProgress,
-} from "@mike/upload-session-client";
+} from "@mike/client";
 
 type AuthHeaderProvider = () => Promise<Record<string, string>>;
 
@@ -140,8 +141,13 @@ export function parseApiErrorBody(args: {
 
   return {
     // 4xx detail is written for users by the backend. A 5xx body (a stack
-    // trace, a proxy's HTML, a provider's complaint) never is: replace it.
-    message: args.status >= 500 ? SERVER_FAILURE_MESSAGE : (detail ?? generic),
+    // trace, a proxy's HTML, a provider's complaint) never is: replace it,
+    // with the fixed sentence for a code that has one (an outage to wait
+    // out, a database the administrator must migrate).
+    message:
+      args.status >= 500
+        ? (reportedUpstreamMessage(code) ?? SERVER_FAILURE_MESSAGE)
+        : (detail ?? generic),
     code,
     requestId,
   };

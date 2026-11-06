@@ -109,6 +109,35 @@ test("a backend 5xx is reported with the operation, route, status, and request i
   expect(event).not.toHaveProperty("request.cookies");
 });
 
+test.describe("a 5xx the server side already reported is not reported again", () => {
+  for (const code of ["upstream_unavailable", "schema_out_of_date"]) {
+    test(code, async ({ addin, page }) => {
+      const sentry = captureEvents(page);
+      await sentry.ready;
+      addin.seedToken("seeded-jwt");
+      let answered = false;
+      await page.route("**/workflows**", (route) => {
+        answered = true;
+        return route.fulfill({
+          status: 503,
+          contentType: "application/json",
+          body: JSON.stringify({ code, detail: "already reported" }),
+        });
+      });
+      await addin.gotoTaskpane();
+      await addin.expectAuthedShell();
+
+      await page.getByRole("button", { name: "Open menu" }).click();
+      await page.getByRole("menuitem", { name: "Workflows" }).click();
+      await expect.poll(() => answered).toBe(true);
+
+      // Give a would-be envelope time to leave; none should.
+      await page.waitForTimeout(500);
+      expect(sentry.events).toHaveLength(0);
+    });
+  }
+});
+
 test("a transport failure is reported as a warning grouped by endpoint", async ({
   addin,
   page,

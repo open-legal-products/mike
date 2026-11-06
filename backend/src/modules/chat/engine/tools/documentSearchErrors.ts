@@ -1,5 +1,5 @@
 import type { DocumentSearchErrorCode } from "@mike/contracts";
-import { schemaOutOfDateCode } from "../../../../lib/httpError";
+import { schemaOutOfDateCode } from "../../../../lib/schemaOutOfDate";
 import { diagnosticErrorTags } from "../../../../lib/observability/sentryPrivacy";
 import type { ServiceFailure } from "../../../../lib/serviceResult";
 

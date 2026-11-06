@@ -4,8 +4,8 @@ import type { MatterBriefContent, MatterBriefProposal, MatterBriefState, BriefSo
 import { Modal } from "@/app/components/modals/Modal";
 import { FormTextInput } from "@/app/components/ui/form-field";
 import { TABLE_CHECKBOX_CLASS } from "@/app/components/shared/TablePrimitive";
-import { TextButtonUI } from "@/shared/ui/TextButtonUI";
-import { PillButtonUI } from "@/shared/ui/PillButtonUI";
+import { TextButtonUI } from "@mike/ui";
+import { PillButtonUI } from "@mike/ui";
 import { getMatterBrief, designateMatterBrief, proposeMatterBrief, getMatterBriefProposal, applyMatterBrief, matterBriefSourceUrl } from "@/app/lib/mikeApi";
 import { notifyError } from "@/app/lib/userFacingError";
 const titles = { position: "Current position", awaiting: "Awaiting whom", uncertainties: "Material uncertainties", nextAction: "Next action" };

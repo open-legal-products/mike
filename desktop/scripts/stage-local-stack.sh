@@ -11,7 +11,7 @@ cd "$(dirname "$0")/../.."
 test -x desktop/local-stack/bin/pg/bin/postgres || { echo "run local:fetch first"; exit 1; }
 test -f backend/dist/index.js || { echo "run local:build first"; exit 1; }
 test -f backend/dist/workflow-catalog/catalog.json || { echo "run local:build to bundle offline workflows"; exit 1; }
-test -f frontend/.next/standalone/server.js || { echo "run local:build first"; exit 1; }
+test -f frontend/.next/standalone/frontend/server.js || { echo "run local:build first"; exit 1; }
 
 APP="desktop/local-stack/app"
 rm -rf "$APP"
@@ -24,6 +24,9 @@ cp backend/package.json backend/package-lock.json backend/schema.sql "$APP/backe
 cp -R backend/migrations "$APP/backend/migrations"
 (cd "$APP/backend" && npm ci --omit=dev --no-audit --no-fund >/dev/null)
 
+# The standalone output is traced from the repository root, so it holds
+# frontend/server.js next to the node_modules it needs (see
+# desktop/src/local/config.js).
 echo "==> frontend (standalone server)"
 cp -R frontend/.next/standalone/. "$APP/frontend/"
 

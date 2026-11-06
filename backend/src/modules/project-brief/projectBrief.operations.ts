@@ -7,7 +7,7 @@ import { downloadFile, uploadFile, versionStorageKey } from "../../lib/storage";
 import { contentSha256 } from "../../lib/documentVersions";
 import { completeText } from "../../lib/llm";
 import { resolveEffectiveChatModel } from "../../lib/modelSelection";
-import { getEffectiveApiKeys } from "../user/user.service";
+import { getEffectiveApiKeys } from "../../lib/providerCredentials/index";
 import { applyReviewedBrief } from "../documents/documents.service";
 import { hashText, publicIdentity, contentSchema, proposalSystemPrompt, sections, generateValidatedContent, sourceExcerpts, resolveExcerptContent, type Evidence } from "./projectBrief.content";
 type Actor = {

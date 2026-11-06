@@ -10,12 +10,8 @@ import { removePlaybookObjects } from "./playbooks.reporting";
 import { extractDocxBodyText } from "../../lib/docxTrackedChanges";
 import { extractPdfTextForModel } from "../../lib/pdfText";
 import { getFileStreamSource } from "../documents/documents.service";
-import {
-  editablePlaybook,
-  getPlaybook,
-  PlaybookRequestError,
-  type Playbook,
-} from "./playbooks.operations";
+import { editablePlaybook, getPlaybook, PlaybookRequestError } from "./playbooks.operations";
+import { type Playbook } from "./playbooks.types";
 import {
   listPlaybookSourceRows,
   type PlaybookSourceFileType,

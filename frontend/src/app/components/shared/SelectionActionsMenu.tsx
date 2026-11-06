@@ -4,12 +4,7 @@ import { useRef, type ReactNode } from "react";
 import { cn } from "@/app/lib/utils";
 import { ROW_ACTION_MENU_CLASS } from "./RowActions";
 import { ChevronDown } from "lucide-react";
-import {
-    Dropdown,
-    DropdownContent,
-    DropdownTrigger,
-} from "@/shared/ui/dropdown";
-import { TabPillButtonUI } from "@/shared/ui/TabPillButtonUI";
+import { Dropdown, DropdownContent, DropdownTrigger, TabPillButtonUI } from "@mike/ui";
 
 function SelectionMenuContent({
     renderItems,
