@@ -72,12 +72,14 @@ test("a stop during boot ends the boot and leaves nothing running", async (t) =>
 // supervisor refuses to start the stack on one, naming the cause.
 test("refuses to start the backend on an Electron whose Node is below the backend's engines floor", () => {
   const backendDir = path.resolve(__dirname, "../../../backend");
+  const fakeNode = (version) => ({
+    NODE_OPTIONS: `--import="data:text/javascript,Object.defineProperty(process,'versions',{value:{...process.versions,node:'${version}'}})"`,
+  });
   assert.throws(
-    () => assertBackendNodeSupported(backendDir, "22.14.0"),
+    () => assertBackendNodeSupported(backendDir, fakeNode("22.14.0")),
     /Electron's Node\. Mike's backend needs Node >=22\.19\.0 .* this is Node 22\.14\.0/,
   );
-  assert.doesNotThrow(() => assertBackendNodeSupported(backendDir, "22.22.0"));
-  // The Node this Electron actually bundles (the test runs on the host Node,
-  // which the same floor applies to).
+  assert.doesNotThrow(() => assertBackendNodeSupported(backendDir, fakeNode("22.22.0")));
+  // The Node this test runs on (the same floor applies to it).
   assert.doesNotThrow(() => assertBackendNodeSupported(backendDir));
 });
