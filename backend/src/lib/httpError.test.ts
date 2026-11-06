@@ -8,7 +8,8 @@ vi.mock("./observability/sentry", async (importOriginal) => ({
 
 import express from "express";
 import request from "supertest";
-import { SCHEMA_OUT_OF_DATE_MESSAGE, sendInternalError } from "./httpError";
+import { SCHEMA_OUT_OF_DATE_MESSAGE, sendInternalError, sendUpstreamUnavailable } from "./httpError";
+import { resetUpstreamOutagesForTests } from "./upstreamOutage";
 
 function appThatFails(error: unknown, status?: number) {
   const app = express();
@@ -157,5 +158,32 @@ describe("sendInternalError", () => {
       expect(res.status).toBe(500);
       expect(res.body.code).toBe("internal_error");
     }
+  });
+});
+
+describe("sendUpstreamUnavailable", () => {
+  afterEach(() => {
+    vi.clearAllMocks();
+    vi.restoreAllMocks();
+    resetUpstreamOutagesForTests();
+  });
+
+  it("answers 503 upstream_unavailable with retry-after: 5, like the Next gateway", async () => {
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    resetUpstreamOutagesForTests();
+    const app = express();
+    app.get("/session", (_req, res) => {
+      const unreachable = Object.assign(new Error("fetch failed"), {
+        __isAuthError: true,
+        status: 0,
+      });
+      sendUpstreamUnavailable(res, unreachable, { operation: "auth.session" });
+    });
+
+    const res = await request(app).get("/session");
+
+    expect(res.status).toBe(503);
+    expect(res.headers["retry-after"]).toBe("5");
+    expect(res.body).toMatchObject({ code: "upstream_unavailable" });
   });
 });

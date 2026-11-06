@@ -24,6 +24,8 @@ export const INTERNAL_ERROR_MESSAGE =
 export const UPSTREAM_UNAVAILABLE_CODE = "upstream_unavailable";
 export const UPSTREAM_UNAVAILABLE_MESSAGE =
   "The server is temporarily unreachable. Please try again shortly.";
+/** Retry-After (seconds) on that 503, as frontend/src/app/api/[...path]/route.ts sends it. */
+const UPSTREAM_RETRY_AFTER_SECONDS = "5";
 
 export const SCHEMA_OUT_OF_DATE_CODE = "schema_out_of_date";
 export const SCHEMA_OUT_OF_DATE_MESSAGE =
@@ -244,6 +246,9 @@ export function sendUpstreamUnavailable(
   options: { operation?: string } = {},
 ): Response {
   const report = shouldReportUpstreamFailure(error);
+  // The same hint the Next gateway sends with its upstream_unavailable 503:
+  // a client or proxy that honours it waits instead of retrying at once.
+  res.set("retry-after", UPSTREAM_RETRY_AFTER_SECONDS);
   return sendInternalError(
     res,
     error,
