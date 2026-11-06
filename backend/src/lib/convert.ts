@@ -1,4 +1,4 @@
-import JSZip from "jszip";
+import JSZip, { type JSZipObject } from "jszip";
 import { spawn } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
@@ -153,6 +153,27 @@ async function getConvert() {
  * or conversion failures. Rewrite any such entries to the canonical
  * forward-slash form before handing the buffer off.
  */
+function archiveEntrySize(entry: JSZipObject): number | null {
+  const data = (
+    entry as JSZipObject & {
+      _data?: { uncompressedSize?: unknown };
+    }
+  )._data;
+  return typeof data?.uncompressedSize === "number"
+    ? data.uncompressedSize
+    : null;
+}
+
+// A DOCX is a ZIP: a small compressed file can expand enormously (zip bomb).
+// The heavy parsers run in an isolated child process with a memory ceiling,
+// but this normalization runs in the worker process itself, so it needs its
+// own bounds. The rewrite is a best-effort compatibility fix for Word
+// archives with backslash separators; if an entry exceeds the limits we
+// abandon the normalization and hand back the original buffer (conversion
+// may miss such entries but stays bounded) rather than trusting the archive.
+const MAX_REWRITE_ENTRY_BYTES = 100 * 1024 * 1024;
+const MAX_REWRITE_TOTAL_BYTES = 200 * 1024 * 1024;
+
 export async function normalizeDocxZipPaths(buffer: Buffer): Promise<Buffer> {
   let zip: JSZip;
   try {
@@ -167,10 +188,22 @@ export async function normalizeDocxZipPaths(buffer: Buffer): Promise<Buffer> {
     }
   });
   if (renames.length === 0) return buffer;
+  let extractedBytes = 0;
   for (const [oldPath, newPath] of renames) {
     const entry = zip.file(oldPath);
     if (!entry) continue;
+    const declared = archiveEntrySize(entry);
+    if (declared !== null && declared > MAX_REWRITE_ENTRY_BYTES) {
+      return buffer;
+    }
     const content = await entry.async("nodebuffer");
+    extractedBytes += content.byteLength;
+    if (
+      content.byteLength > MAX_REWRITE_ENTRY_BYTES ||
+      extractedBytes > MAX_REWRITE_TOTAL_BYTES
+    ) {
+      return buffer;
+    }
     zip.remove(oldPath);
     zip.file(newPath, content);
   }
