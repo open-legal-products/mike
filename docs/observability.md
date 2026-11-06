@@ -241,7 +241,10 @@ minified browser frames cannot promise an original TypeScript line without it.
 - Assistant chat streams that fail for a reason other than the user stopping
   them.
 - Server side: gateway failures to reach the backend, and render/route-handler
-  errors through Next's `onRequestError` hook.
+  errors through Next's `onRequestError` hook. An unreachable backend is one
+  warning issue per failure code (`upstream-unavailable`); a backend that drops
+  a response mid-stream is a separate issue per code (stage `gateway-stream`),
+  and a stream body timeout or unknown stream failure stays at error level.
 - Everything else that reaches `console.error`, deduplicated as above. An
   error reported explicitly is also not filed a second time if the same
   object then escapes to the browser's unhandled-error or rejection handler.
