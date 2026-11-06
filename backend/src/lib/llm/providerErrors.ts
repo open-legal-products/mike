@@ -85,12 +85,12 @@ type ApiCallErrorLike = Error & { statusCode: number; responseBody?: string };
 // APICallError / RetryError classes. Retried failures (e.g. 429s) arrive as a
 // RetryError whose status code lives on `lastError`.
 function findApiCallError(error: unknown): ApiCallErrorLike | null {
-  if (!(error instanceof Error)) return null;
-  if (typeof (error as Partial<ApiCallErrorLike>).statusCode === "number") {
-    return error as ApiCallErrorLike;
+  for (const current of failureChain(error)) {
+    if (current instanceof Error && typeof (current as Partial<ApiCallErrorLike>).statusCode === "number") {
+      return current as ApiCallErrorLike;
+    }
   }
-  const lastError = (error as { lastError?: unknown }).lastError;
-  return lastError === undefined ? null : findApiCallError(lastError);
+  return null;
 }
 
 /**
@@ -100,15 +100,8 @@ function findApiCallError(error: unknown): ApiCallErrorLike | null {
 export function providerFailureResponse(
   error: unknown,
 ): { status: number; body: string } | null {
-  let current = error;
-  while (current) {
-    const apiError = findApiCallError(current);
-    if (apiError) {
-      return { status: apiError.statusCode, body: apiError.responseBody ?? "" };
-    }
-    current = (current as { cause?: unknown }).cause;
-  }
-  return null;
+  const apiError = findApiCallError(error);
+  return apiError ? { status: apiError.statusCode, body: apiError.responseBody ?? "" } : null;
 }
 
 /**
@@ -147,7 +140,7 @@ const NETWORK_FAILURE_CODES = new Set([
 function* failureChain(error: unknown): Generator<object> {
   const pending: unknown[] = [error];
   const seen = new Set<object>();
-  for (let n = 0; pending.length && n < 12; n++) {
+  while (pending.length && seen.size < 12) {
     const current = pending.shift();
     if (!current || typeof current !== "object" || seen.has(current)) continue;
     seen.add(current);
