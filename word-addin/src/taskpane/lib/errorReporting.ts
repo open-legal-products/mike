@@ -18,8 +18,8 @@ import {
   normalizeApiPath,
   parseSampleRate,
   releaseName,
-  resolveDsn,
   reportedUpstreamMessage,
+  resolveDsn,
 } from "@mike/client";
 
 export type ReportLevel = "fatal" | "error" | "warning";
