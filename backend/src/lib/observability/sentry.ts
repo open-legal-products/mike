@@ -19,7 +19,7 @@
 
 import { isDevelopmentBuild } from "../buildMode";
 import * as Sentry from "@sentry/node";
-import { retainExceptionTypes, diagnosticRoute, diagnosticErrorTags, privacyBoundaryIntegration, type Operation, type Stage } from "./sentryPrivacy";
+import { retainExceptionTypes, diagnosticRoute, diagnosticErrorTags, isDiagnosticLabel, privacyBoundaryIntegration, type Operation, type Stage } from "./sentryPrivacy";
 
 export type SentryRole = "api" | "worker" | "worker-thread" | "job";
 
@@ -58,6 +58,30 @@ const NESTED_SEARCH_DEPTH = 2;
  * listener reports the warning object instead; this copy is dropped.
  */
 const NODE_WARNING_TEXT = /^\(node:\d+\) (?:\[[\w-]+\] )?[\w$]+: /;
+
+/**
+ * GoTrue answers 409 `conflict` ("Too many concurrent token refresh requests
+ * on the same session or refresh token") when parallel requests carrying the
+ * same expiring session cookie each refresh it. supabase-js logs that
+ * AuthApiError itself, through console.error from inside the request
+ * client's initial-session emission, so the console bridge filed it as
+ * "AuthApiError: Failure in application / 409" (MIKE-BACKEND-8D). It is an
+ * expected race, not a failure: the request whose access token is still
+ * valid is served, and one whose token has expired already answers 401
+ * through requireAuth. Only that exact log is dropped: auth-js's bare
+ * `console.error(err)` (one argument) of an auth error with status 409 and
+ * code `conflict`. Any other status or code, and our own
+ * `logError("[label] ...", authError)` of the same error, is still reported.
+ * This is a backstop for races across instances: #779 single-flights the
+ * refresh within one process, and this filter should not land without it.
+ */
+function isGoTrueRefreshConflictLog(args: unknown[]): boolean {
+  if (args.length !== 1) return false;
+  const arg = args[0];
+  if (!arg || typeof arg !== "object") return false;
+  const error = arg as { __isAuthError?: unknown; status?: unknown; code?: unknown };
+  return error.__isAuthError === true && error.status === 409 && error.code === "conflict";
+}
 
 function isNodeWarningText(args: unknown[]): boolean {
   return (
@@ -859,6 +883,7 @@ export function scrubEvent(
     }
     // Node's own warning printer; reportProcessWarning() filed the object.
     if (isNodeWarningText(args)) return null;
+    if (isGoTrueRefreshConflictLog(args)) return null;
     // Positional payloads after the label are never titles or grouping keys.
     const label = typeof args[0] === "string" ? args[0].trim() : "Console error";
     const nestedError = args
@@ -1027,6 +1052,7 @@ export function initSentry(
   });
   initialized = true;
   installProcessWarningReporter(env);
+  installAiSdkWarningLogger();
   if (config.dsnSource === "default") {
     console.log(
       `[sentry] enabled for ${role} → Mike project Sentry (${config.install} install, ` +
@@ -1059,15 +1085,61 @@ export function initSentry(
  * Not an application failure: level "warning", one issue per name and code.
  */
 export function reportProcessWarning(warning: unknown): string | null {
-  const shaped = warning as { name?: unknown; code?: unknown } | null;
+  const shaped = warning as {
+    name?: unknown;
+    code?: unknown;
+    emitter?: unknown;
+    target?: unknown;
+    type?: unknown;
+    count?: unknown;
+  } | null;
   const name = typeof shaped?.name === "string" ? shaped.name : "Warning";
   const code = typeof shaped?.code === "string" ? shaped.code : undefined;
   if (name === "DeprecationWarning" && process.noDeprecation) return null;
+  // DEP0040 (the `punycode` builtin) is raised by transitive dependencies
+  // (whatwg-url via node-fetch, tr46) on every boot; nothing in this
+  // repository can act on it (MIKE-BACKEND-2H).
+  if (IGNORED_WARNING_CODES.has(code ?? "")) return null;
   return reportError(warning, {
     level: "warning",
-    tags: { component: "runtime-warning", warning_name: name, warning_code: code },
+    tags: {
+      component: "runtime-warning",
+      warning_name: name,
+      warning_code: code,
+      ...listenerLeakTags(shaped),
+    },
     fingerprint: ["runtime-warning", name, code ?? ""],
   });
+}
+
+const IGNORED_WARNING_CODES = new Set(["DEP0040"]);
+
+/**
+ * A MaxListenersExceededWarning carries the emitter (EventEmitter) or target
+ * (EventTarget, e.g. an AbortSignal), the event name and the listener count.
+ * Its stack is all node: frames (MIKE-BACKEND-5F pointed at
+ * node:stream/promises and nothing else), so these three are what says WHICH
+ * object leaks. The constructor name and event name are identifiers from
+ * code, never data; the privacy boundary re-checks their shape.
+ */
+function listenerLeakTags(
+  warning: { emitter?: unknown; target?: unknown; type?: unknown; count?: unknown } | null,
+): Record<string, string | number> {
+  const tags: Record<string, string | number> = {};
+  const owner = warning?.emitter ?? warning?.target;
+  if (owner && typeof owner === "object") {
+    try {
+      const constructorName = (owner as { constructor?: { name?: unknown } }).constructor?.name;
+      if (typeof constructorName === "string" && constructorName) {
+        tags.warning_emitter = constructorName;
+      }
+    } catch {
+      // A proxy or host object must not break reporting.
+    }
+  }
+  if (typeof warning?.type === "string") tags.warning_event = warning.type;
+  if (typeof warning?.count === "number") tags.warning_listener_count = warning.count;
+  return tags;
 }
 
 /**
@@ -1082,6 +1154,60 @@ function installProcessWarningReporter(env: NodeJS.ProcessEnv): void {
     /(?:^|\s)--no-warnings(?:\s|=|$)/.test(env.NODE_OPTIONS ?? "");
   if (silenced) return;
   process.on("warning", reportProcessWarning);
+}
+
+/**
+ * The AI SDK reports its own call warnings (an unsupported setting, a
+ * provider compatibility note) through process.emitWarning unless
+ * `globalThis.AI_SDK_LOG_WARNINGS` is a function. Through the hook above each
+ * one was filed as "Failure in chat.turn / runtime-warning / Warning"
+ * (MIKE-BACKEND-65): advice about a request, not a failure.
+ *
+ * A custom logger replaces the SDK's own once-per-code dedupe (ai's
+ * logWarnings: "Custom loggers receive every warning"), so it is rebuilt
+ * here:
+ * - every warning still becomes a stage breadcrumb on its call, so an event
+ *   later in the same turn shows that the SDK warned;
+ * - the local console.warn (not forwarded) is printed once per process per
+ *   distinct warning (type, feature or setting, provider), not on every turn;
+ * - a `deprecated` warning goes out once per setting and provider through
+ *   process.emitWarning as a DeprecationWarning, exactly as the SDK's default
+ *   logger does, so Node prints it and the process-warning reporter files it.
+ *   An SDK deprecation is something we must act on before an upgrade.
+ */
+type AiSdkWarning = {
+  type?: unknown;
+  feature?: unknown;
+  setting?: unknown;
+  message?: unknown;
+};
+type AiSdkWarnings = { warnings?: AiSdkWarning[]; provider?: unknown };
+
+const seenAiSdkWarnings = new Set<string>();
+
+function logAiSdkWarnings(options: AiSdkWarnings): void {
+  for (const warning of options.warnings ?? []) {
+    const type = typeof warning?.type === "string" && isDiagnosticLabel(warning.type) ? warning.type : "other";
+    Sentry.addBreadcrumb({ category: "mike.stage", message: `ai-sdk-warning.${type}`, level: "warning" });
+    const subject = warning?.feature ?? warning?.setting ?? warning?.message;
+    const key = JSON.stringify([type, String(subject ?? ""), String(options.provider ?? "")]);
+    if (seenAiSdkWarnings.has(key)) continue;
+    seenAiSdkWarnings.add(key);
+    if (warning?.type === "deprecated") {
+      const setting = typeof warning.setting === "string" ? warning.setting : "unknown";
+      const detail = typeof warning.message === "string" ? ` ${warning.message}` : "";
+      process.emitWarning(`AI SDK Warning: Deprecated: "${setting}".${detail}`, {
+        type: "DeprecationWarning",
+        code: "AI_SDK_DEPRECATION",
+      });
+    } else {
+      console.warn("[ai-sdk] warning", warning);
+    }
+  }
+}
+
+function installAiSdkWarningLogger(): void {
+  (globalThis as { AI_SDK_LOG_WARNINGS?: unknown }).AI_SDK_LOG_WARNINGS = logAiSdkWarnings;
 }
 
 /**
@@ -1266,6 +1392,8 @@ export function resetSentryForTests(
   // so reportError() and friends treat that client as ours.
   initialized = options.initialized ?? false;
   process.off("warning", reportProcessWarning);
+  delete (globalThis as { AI_SDK_LOG_WARNINGS?: unknown }).AI_SDK_LOG_WARNINGS;
+  seenAiSdkWarnings.clear();
   // Tests exercise the full event shape unless they opt into community mode.
   currentInstall = install;
   throttleBuckets.clear();

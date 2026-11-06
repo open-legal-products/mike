@@ -210,7 +210,23 @@ function encrypt(value: string): Omit<EncryptedKeyRow, "provider"> {
     };
 }
 
+let warnedMissingSecret = false;
+
 function decrypt(row: EncryptedKeyRow): string | null {
+    // A deployment without the secret cannot read any stored key. That is a
+    // configuration fault, reported ONCE at boot by
+    // reportMissingEncryptionSecret (secretCheck.ts), not a failure of this
+    // read: reporting it here filed one context-free Sentry event per key
+    // read (MIKE-BACKEND-7K, -7E). console.warn is not forwarded to Sentry.
+    if (!process.env.USER_API_KEYS_ENCRYPTION_SECRET) {
+        if (!warnedMissingSecret) {
+            warnedMissingSecret = true;
+            console.warn(
+                "[user-api-keys] USER_API_KEYS_ENCRYPTION_SECRET is not configured; stored API keys are ignored",
+            );
+        }
+        return null;
+    }
     try {
         const decipher = crypto.createDecipheriv(
             "aes-256-gcm",

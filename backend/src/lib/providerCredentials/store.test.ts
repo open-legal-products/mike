@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, afterEach } from "vitest";
+import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import {
     normalizeApiKeyProvider,
     hasEnvApiKey,
@@ -477,5 +477,41 @@ describe("cloud-platform keys", () => {
             azure: false,
             sources: { bedrock: null, azure: null },
         });
+    });
+});
+
+describe("stored keys without USER_API_KEYS_ENCRYPTION_SECRET", () => {
+    afterEach(() => {
+        delete process.env.USER_API_KEYS_ENCRYPTION_SECRET;
+        vi.restoreAllMocks();
+    });
+
+    // MIKE-BACKEND-7K / -7E: every key read logged the missing secret through
+    // console.error, which the Sentry bridge files as an error. It is a boot
+    // configuration fault (secretCheck.ts), so a read only warns locally.
+    it("ignores the stored key with a local warning instead of an error per read", async () => {
+        process.env.USER_API_KEYS_ENCRYPTION_SECRET = "test-secret";
+        let savedRow: Record<string, unknown> | null = null;
+        const db = {
+            from: (table: string) => table === CONNECTIONS ? noConnection : ({
+                upsert: async (row: Record<string, unknown>) => {
+                    savedRow = { ...row, provider: "openai" };
+                    return { error: null };
+                },
+                select: () => ({
+                    eq: async () => ({ data: savedRow ? [savedRow] : [], error: null }),
+                }),
+            }),
+        };
+        await saveUserApiKey("user-1", "openai", "personal-key", db as never);
+        delete process.env.USER_API_KEYS_ENCRYPTION_SECRET;
+        const error = vi.spyOn(console, "error").mockImplementation(() => {});
+        const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+
+        await expect(getUserApiKeys("user-1", db as never)).resolves.toMatchObject({ openai: null });
+        await getUserApiKeys("user-1", db as never);
+
+        expect(error).not.toHaveBeenCalled();
+        expect(warn.mock.calls.flat().join(" ")).toMatch(/USER_API_KEYS_ENCRYPTION_SECRET is not configured/);
     });
 });

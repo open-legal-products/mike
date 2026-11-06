@@ -14,3 +14,4 @@ export { saveApiKeyForOwner, REENTER_KEY_FOR_ENDPOINT } from "./settings";
 export type { SaveApiKeyResult } from "./settings";
 export { setApiKeyEnabledFor } from "./enabled";
 export { loadCourtListenerConnection, saveCourtListenerConnection } from "./store";
+export { reportMissingEncryptionSecret } from "./secretCheck";
