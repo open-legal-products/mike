@@ -1136,6 +1136,20 @@ describe("development builds", () => {
     });
   });
 
+  // The opt-in for a self-hoster running the source in production: the run
+  // reports exactly like the compiled image. Without it, the same run is off.
+  it("report like an install when SENTRY_SOURCE_RUN_IS_INSTALL=true", () => {
+    vi.spyOn(console, "log").mockImplementation(() => {});
+    const env = { NODE_ENV: "production", SENTRY_DISABLED: "false" } as NodeJS.ProcessEnv;
+    expect(initSentry("api", env, true)).toBe(false);
+
+    resetSentryForTests();
+    expect(initSentry("api", { ...env, SENTRY_SOURCE_RUN_IS_INSTALL: "TRUE" } as NodeJS.ProcessEnv, true)).toBe(true);
+    const options = vi.mocked(Sentry.init).mock.calls[0][0]!;
+    expect(options).toMatchObject({ dsn: MIKE_SENTRY_DSN.backend, environment: "self-hosted" });
+    expect(options.initialScope).toMatchObject({ tags: { build_mode: "production" } });
+  });
+
   it("report as environment development to a DSN set on purpose, unless SENTRY_ENVIRONMENT says otherwise", () => {
     const dsn = "http://mike@localhost:9999/1";
     expect(sentryConfiguration({ SENTRY_DSN: dsn } as NodeJS.ProcessEnv, true)).toMatchObject({

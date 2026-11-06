@@ -637,14 +637,27 @@ export function backendBuildMode(
   return development ? "development" : "production";
 }
 
+/**
+ * SENTRY_SOURCE_RUN_IS_INSTALL=true: a self-hoster who runs the backend from
+ * its TypeScript source in production says "this source run is an install".
+ * It then reports like the compiled image (Mike project by default,
+ * environment self-hosted, build_mode production). Off unless exactly "true"
+ * (any case), and absent from every example value, so a contributor's
+ * checkout never turns it on by copying a file.
+ */
+export function sourceRunIsInstall(env: NodeJS.ProcessEnv): boolean {
+  return env.SENTRY_SOURCE_RUN_IS_INSTALL?.trim().toLowerCase() === "true";
+}
+
 export function sentryConfiguration(
   env: NodeJS.ProcessEnv = process.env,
-  development: boolean = isDevelopmentBuild(),
+  sourceRun: boolean = isDevelopmentBuild(),
 ) {
   // ON BY DEFAULT for installs: without SENTRY_DISABLED or a DSN of your own,
   // errors go to the Mike project's Sentry as a community install (see the
   // README's Telemetry section). A development build stays off unless a DSN
   // is set on purpose. Only Mike's own deployment sets SENTRY_INSTALL.
+  const development = sourceRun && !sourceRunIsInstall(env);
   const resolved = resolveDsn({
     disabled: env.SENTRY_DISABLED?.trim() || env.MIKE_BUILD_SENTRY_DISABLED,
     dsn: env.SENTRY_DSN?.trim() || env.MIKE_BUILD_SENTRY_DSN,
@@ -660,6 +673,8 @@ export function sentryConfiguration(
   return {
     dsn,
     dsnSource: resolved.source,
+    /** A development build for Sentry: a source run not declared an install. */
+    development,
     install: installKind(env.SENTRY_INSTALL),
     enabled:
       dsn.length > 0 &&
@@ -950,10 +965,10 @@ export function scrubEvent(
 export function initSentry(
   role: SentryRole,
   env: NodeJS.ProcessEnv = process.env,
-  development: boolean = isDevelopmentBuild(),
+  sourceRun: boolean = isDevelopmentBuild(),
 ): boolean {
   if (initialized) return true;
-  const config = sentryConfiguration(env, development);
+  const config = sentryConfiguration(env, sourceRun);
   if (!config.enabled) {
     if (env.NODE_ENV !== "test") {
       console.log(
@@ -961,7 +976,7 @@ export function initSentry(
           config.dsnSource === "disabled"
             ? "SENTRY_DISABLED=true"
             : config.dsnSource === "development"
-              ? "development build; set SENTRY_DSN to report to your own project"
+              ? "development build; set SENTRY_DSN to report to your own project, or SENTRY_SOURCE_RUN_IS_INSTALL=true if this source run is an install"
               : "test process"
         })`,
       );
@@ -1006,7 +1021,7 @@ export function initSentry(
       Sentry.onUnhandledRejectionIntegration({ mode: "strict" }),
     ],
     initialScope: {
-      tags: { service: "mike-backend", role, install: config.install, build_mode: backendBuildMode(env, development), diagnostics_version: "2" },
+      tags: { service: "mike-backend", role, install: config.install, build_mode: backendBuildMode(env, config.development), diagnostics_version: "2" },
     },
     beforeSend: scrubEvent,
   });
