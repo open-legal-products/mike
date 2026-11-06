@@ -38,8 +38,6 @@ import {
 export const WORKER_ERROR_REPORT_WINDOW_MS = 15 * 60_000;
 /** How long an outage keeps failing before it is reported at error level. */
 export const OUTAGE_ESCALATION_MS = 15 * 60_000;
-/** Spacing of the console line that counts suppressed repeats. */
-const SUMMARY_INTERVAL_MS = 60_000;
 
 const ERRNO = /^E[A-Z0-9_]{2,30}$/;
 
@@ -73,47 +71,23 @@ export function queueErrorClass(error: unknown): string {
     });
 }
 
-/**
- * Report-once-per-window gate for non-connection errors. Unlike the outage
- * gate it has no "still failing" state to reset: each class is reported when
- * it was not reported within the window, whatever else happened in between.
- */
+/** Reuse the poll gate's per-class reporting window, without retry delays. */
 export function createWorkerErrorGate(options: {
     windowMs?: number;
     now?: () => number;
-    log?: Pick<Console, "warn">;
-} = {}): { failure(error: unknown): { report: boolean; failureClass: string } } {
+    log?: Pick<Console, "warn" | "log">;
+} = {}) {
     const windowMs = options.windowMs ?? WORKER_ERROR_REPORT_WINDOW_MS;
-    const now = options.now ?? Date.now;
-    const log = options.log ?? console;
-    const classes = new Map<
-        string,
-        { reportedAt: number; suppressed: number; lineAt: number }
-    >();
-    return {
-        failure(error) {
-            const failureClass = queueErrorClass(error);
-            const at = now();
-            for (const [key, entry] of classes) {
-                if (at - entry.reportedAt >= windowMs) classes.delete(key);
-            }
-            const entry = classes.get(failureClass);
-            if (!entry) {
-                classes.set(failureClass, { reportedAt: at, suppressed: 0, lineAt: at });
-                return { report: true, failureClass };
-            }
-            entry.suppressed += 1;
-            if (at - entry.lineAt >= SUMMARY_INTERVAL_MS) {
-                log.warn(
-                    `[queue] worker error repeating (${failureClass}): ${entry.suppressed} not re-reported; ` +
-                        `next report after ${Math.round((entry.reportedAt + windowMs - at) / 1000)}s`,
-                );
-                entry.lineAt = at;
-                entry.suppressed = 0;
-            }
-            return { report: false, failureClass };
-        },
-    };
+    return createPollFailureGate({
+        label: "[queue] worker",
+        baseDelayMs: 0,
+        maxDelayMs: 0,
+        classify: queueErrorClass,
+        repeatReportIntervalMs: windowMs,
+        repeatWhilePersistingMs: windowMs,
+        now: options.now,
+        log: options.log,
+    });
 }
 
 /**
@@ -222,6 +196,6 @@ export function watchQueueErrors(
             level: "error",
             tags: tags(source),
         });
-        console.warn(`[queue] ${source} error${where}`, verdict.failureClass);
+        console.warn(`[queue] ${source} error${where}`, queueErrorClass(error));
     });
 }

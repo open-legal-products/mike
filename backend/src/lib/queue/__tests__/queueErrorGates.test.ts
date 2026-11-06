@@ -50,9 +50,27 @@ describe("queueErrorClass", () => {
 });
 
 describe("createWorkerErrorGate", () => {
+    it("keeps independent windows when defect classes alternate", () => {
+        let now = 0;
+        const gate = createWorkerErrorGate({ windowMs: 1000, now: () => now,
+            log: { warn: vi.fn(), log: vi.fn() } });
+        const a = new Error("could not renew lock for job 1");
+        const b = new Error("Missing lock for job 2. moveToFinished");
+        expect(gate.failure(a).report).toBe(true);
+        now = 100;
+        expect(gate.failure(b).report).toBe(true);
+        now = 999;
+        expect(gate.failure(a).report).toBe(false);
+        now = 1000;
+        expect(gate.failure(a).report).toBe(true);
+        expect(gate.failure(b).report).toBe(false);
+        now = 1100;
+        expect(gate.failure(b).report).toBe(true);
+    });
+
     it("re-reports a recurring class once its window has passed", () => {
         const clock = { t: 0 };
-        const log = { warn: vi.fn() };
+        const log = { warn: vi.fn(), log: vi.fn() };
         const gate = createWorkerErrorGate({ windowMs: 15 * 60_000, now: () => clock.t, log });
         const defect = () => new Error("stalled checker failed");
         let reports = 0;
