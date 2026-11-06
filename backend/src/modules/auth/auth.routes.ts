@@ -14,7 +14,11 @@ import {
   publicAuthUser,
 } from "../../lib/authSession";
 import { ssoConfiguration, ssoDomainSchema } from "../../lib/ssoConfig";
-import { sendInternalError } from "../../lib/httpError";
+import {
+  sendInternalError,
+  sendUpstreamUnavailable,
+} from "../../lib/httpError";
+import { isAuthUpstreamFailure } from "../../lib/authUpstream";
 import { AppError } from "../../lib/appError";
 import { reportError, setOperation } from "../../lib/observability/sentry";
 import { requestOriginIsWordAddin } from "../../lib/origins";
@@ -86,25 +90,22 @@ function authError(
   fallback = "Authentication could not be completed.",
 ) {
   const wire = describeAuthProviderError(error, fallback);
-  if (wire.status >= 500) {
-    // GoTrue answered with a server failure: an outage on the auth
-    // dependency, reported under its kind before the same object is logged
-    // (the console bridge knows it is already sent). The client gets the
-    // fixed sentence it always did.
-    const failure = new AppError(
-      "auth.supabase_unavailable",
-      "unexpected server-side authentication failure",
-      { cause: error },
-    );
-    reportError(failure, {
-      tags: { component: "http", http_status: wire.status },
-    });
-    console.error(
-      "[auth] unexpected server-side authentication failure",
-      failure,
-    );
+  if (wire.status < 500) {
+    return res.status(wire.status).json({ code: wire.code, detail: wire.detail });
   }
-  res.status(wire.status).json({ code: wire.code, detail: wire.detail });
+  // A server-side failure goes through sendInternalError, the one place a
+  // 5xx becomes a Sentry event: reported once, logged, and marked so the
+  // response sanitizer does not file it again. GoTrue being unreachable (no
+  // answer, or a gateway 502/503/504) is an outage the user can only wait
+  // out: 503 upstream_unavailable. A GoTrue 500 is GoTrue failing on
+  // something of ours, so it stays a 500.
+  const failure = new AppError(
+    "auth.supabase_unavailable",
+    "unexpected server-side authentication failure",
+    { cause: error },
+  );
+  if (isAuthUpstreamFailure(error)) return sendUpstreamUnavailable(res, failure);
+  return sendInternalError(res, failure);
 }
 
 function invalidBody(
