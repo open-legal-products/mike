@@ -14,8 +14,12 @@ import {
 import { googleDriveOAuthEnv } from "./googleDrive";
 import {
   googleServiceUnavailableMessage,
-  isGoogleServiceAvailable,
+  googleWriteUnavailableMessage,
 } from "./googleAvailability";
+import {
+  googleServiceAccess,
+  type GoogleServiceAccess,
+} from "./googleAccess";
 import { ConnectorSetupError } from "../mcp/errors";
 import { googleDriveRequest } from "./googleDriveHttp";
 import { AppError, type ErrorKind } from "../appError";
@@ -55,16 +59,33 @@ export class GoogleWorkspaceError extends AppError {
     super(options.kind ?? "google.api_failed", message, { cause: options.cause });
   }
 }
-/** The operator has switched this service off for the whole deployment. */
+/** This service (or its write bundle) is not offered to this user: see ./googleAccess. */
 export class GoogleWorkspaceUnavailableError extends GoogleWorkspaceError {}
-/** See GOOGLE_WORKSPACE_DISABLED_PROVIDERS in ./googleAvailability. */
-export function isWorkspaceProviderAvailable(provider: GoogleProvider): boolean {
-  return isGoogleServiceAvailable(provider);
-}
-export function assertWorkspaceProviderAvailable(provider: GoogleProvider): void {
-  if (!isWorkspaceProviderAvailable(provider))
+/**
+ * Refuses a service the user's feature flags do not offer (./googleAccess)
+ * and otherwise answers what they may do with it: `write` false means its
+ * write scope is never requested and its write tools are never offered, even
+ * over a grant that carries the scope.
+ */
+export async function assertWorkspaceProviderAvailable(
+  db: Db,
+  userId: string,
+  provider: GoogleProvider,
+): Promise<GoogleServiceAccess> {
+  const access = await googleServiceAccess(db, userId, provider);
+  if (!access.read)
     throw new GoogleWorkspaceUnavailableError(
       googleServiceUnavailableMessage(provider),
+    );
+  return access;
+}
+export function assertWorkspaceWriteAvailable(
+  provider: GoogleProvider,
+  access: GoogleServiceAccess,
+): void {
+  if (!access.write)
+    throw new GoogleWorkspaceUnavailableError(
+      googleWriteUnavailableMessage(provider),
     );
 }
 export function googleWorkspaceSetupInstructions(
@@ -94,13 +115,23 @@ export function googleWorkspaceEnv() {
   return googleDriveOAuthEnv();
 }
 /**
- * Mike asks for write access on every connect. Google lets the user untick
- * individual permissions and lets Workspace admins block them, so write access
- * is whatever Google actually granted — see `grantedWriteAccess`.
+ * Mike asks for write access on every connect for which the user's write
+ * flag is on. Google lets the user untick individual permissions and lets
+ * Workspace admins block them, so write access is whatever Google actually
+ * granted — see `grantedWriteAccess`. With the write flag off the write scope
+ * is not requested at all, so the consent screen shows only the read bundle.
  */
-export function requestedScopes(provider: GoogleProvider): string[] {
+export function requestedScopes(
+  provider: GoogleProvider,
+  access: GoogleServiceAccess = { read: true, write: true },
+): string[] {
   const config = GOOGLE_PROVIDERS[provider];
-  return ["openid", "email", ...config.read, ...config.write];
+  return [
+    "openid",
+    "email",
+    ...config.read,
+    ...(access.write ? config.write : []),
+  ];
 }
 /**
  * Broader scopes that cover narrower ones Mike checks for. gmail.modify was
@@ -180,6 +211,7 @@ export async function workspaceStatus(
 ): Promise<Omit<GoogleWorkspaceStatus, "redirectUri" | "tools">> {
   const env = googleWorkspaceEnv();
   const configured = !!(env.clientId && env.clientSecret);
+  const access = await googleServiceAccess(db, owner.userId, provider);
   try {
     const row = await loadWorkspaceGrant(db, owner, provider);
     const { error } = await db
@@ -192,7 +224,8 @@ export async function workspaceStatus(
     if (error) throw error;
     return {
       configured,
-      available: isWorkspaceProviderAvailable(provider),
+      available: access.read,
+      writeAvailable: access.write,
       schemaReady: true,
       connected: !!row,
       writeEnabled: row?.write_enabled === true,
@@ -207,7 +240,8 @@ export async function workspaceStatus(
     if (code === "PGRST205" || code === "42P01")
       return {
         configured,
-        available: isWorkspaceProviderAvailable(provider),
+        available: access.read,
+        writeAvailable: access.write,
         schemaReady: false,
         connected: false,
         writeEnabled: false,
@@ -275,6 +309,9 @@ export async function startWorkspaceOAuth(
   provider: GoogleProvider,
   redirectUri: string,
 ) {
+  // Refused before any state is written: a user the service is not offered
+  // to must not be able to start a consent flow for it.
+  const access = await assertWorkspaceProviderAvailable(db, owner.userId, provider);
   const env = googleWorkspaceEnv();
   if (!env.clientId || !env.clientSecret)
     throw new ConnectorSetupError(
@@ -303,7 +340,7 @@ export async function startWorkspaceOAuth(
     client_id: env.clientId,
     redirect_uri: redirectUri,
     response_type: "code",
-    scope: requestedScopes(provider).join(" "),
+    scope: requestedScopes(provider, access).join(" "),
     state,
     code_challenge: base64Url(
       crypto.createHash("sha256").update(verifier).digest(),
