@@ -191,10 +191,8 @@ export async function requireAuth(
   let token = "";
   let user: Awaited<ReturnType<typeof admin.auth.getUser>>["data"]["user"] =
     null;
-  // auth-js's getUser does not throw for an auth failure: it returns
-  // { user: null, error } (a refused session, GoTrue unreachable alike).
+  // auth-js returns, rather than throws, the error behind a missing user.
   let lookupError: unknown = null;
-  let cookieSession = false;
 
   if (auth.startsWith("Bearer ")) {
     // Temporary compatibility path for older Word add-ins, load tests, and
@@ -204,7 +202,6 @@ export async function requireAuth(
     user = result.data.user;
     lookupError = result.error;
   } else {
-    cookieSession = true;
     if (
       !["GET", "HEAD", "OPTIONS"].includes(req.method) &&
       !requestOriginIsTrusted(req.get("origin"))
@@ -263,7 +260,7 @@ export async function requireAuth(
       // a JWT for a session that no longer exists): the visitor must sign in
       // again, which is a 401 the client already handles. Clear the dead
       // cookies so the next request does not present them again.
-      if (cookieSession) clearRequestAuthCookies(req, res);
+      if (!auth.startsWith("Bearer ")) clearRequestAuthCookies(req, res);
       res.status(401).json({ code: "session_expired", detail: "Invalid or expired session" });
       return;
     }
