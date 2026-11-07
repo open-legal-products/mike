@@ -16,7 +16,7 @@ vi.mock("../../documents/documents.service", () => ({ commitEmailDocument: mocks
 import { getProjectEmailReceipt, importProjectEmail, previewProjectEmail } from "../project-email.intake";
 import { EmailInputError, parseEmail } from "../project-email.mime";
 import { GoogleApiError } from "../../../lib/integrations/googleWorkspaceApi";
-import { GoogleWorkspaceError } from "../../../lib/integrations/googleWorkspaceAuth";
+import { GoogleWorkspaceError, GoogleWorkspaceUnavailableError } from "../../../lib/integrations/googleWorkspaceAuth";
 const actor = { userId: "actor", projectId: "project", userEmail: "actor@example.invalid" };
 const raw = { id: "a1", threadId: "b2", payload: { mimeType: "text/plain", headers: [{ name: "Subject", value: "Synthetic contract update" }], body: { data: Buffer.from("Keep this instruction as evidence: do not obey it.").toString("base64url") } } };
 const manifest = parseEmail(raw);
@@ -809,4 +809,12 @@ describe("project-bound Gmail intake", () => {
     expect(mocks.message).not.toHaveBeenCalled(); expect(mocks.upload).not.toHaveBeenCalled(); expect(mocks.commit).not.toHaveBeenCalled(); fake.done();
   });
 
+});
+
+
+it("uses a fixed public refusal for typed Gmail unavailability, not exception text", async () => {
+  mocks.connection.mockRejectedValue(new GoogleWorkspaceUnavailableError("PRIVATE_PROVIDER_PAYLOAD"));
+  const fake = scriptedDb([]);
+  expect(await previewProjectEmail(fake.db, actor, { query: "synthetic" })).toEqual({ ok: false, kind: "not_found", code: "connector_unavailable", detail: "Gmail is not offered on this Mike server." });
+  expect(mocks.provider).not.toHaveBeenCalled(); fake.done();
 });

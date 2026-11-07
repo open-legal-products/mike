@@ -29,6 +29,12 @@ import {
 } from "./userFacingError";
 
 describe("userFacingApiError", () => {
+    it("preserves a deliberate Gmail availability refusal without exposing opaque provider failures", () => {
+        const refusal = new MikeApiError({ status: 404, code: "connector_unavailable", message: "Gmail is not offered on this Mike server." });
+        expect(userFacingApiError(refusal, "Fallback")).toBe("Gmail is not offered on this Mike server.");
+        expect(userFacingApiError(new MikeApiError({ status: 503, code: "internal_error", message: "PRIVATE_PROVIDER_PAYLOAD" }), "Fallback")).toBe("Fallback");
+    });
+
     it("allows intentional client-error details", () => {
         const error = new MikeApiError({
             status: 400,

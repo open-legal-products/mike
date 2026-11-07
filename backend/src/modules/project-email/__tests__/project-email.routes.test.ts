@@ -5,8 +5,9 @@ const mocks = vi.hoisted(() => ({ authorized: true, preview: vi.fn(), import: vi
 vi.mock("../../../middleware/auth", () => ({ requireAuth: (_req: express.Request, res: express.Response, next: express.NextFunction) => { if (!mocks.authorized) return res.status(401).json({ detail: "Sign in." }); res.locals.userId = "actor"; res.locals.userEmail = "fixture@example.invalid"; next(); } }));
 vi.mock("../../../lib/supabase", () => ({ createServerSupabase: () => ({}) }));
 vi.mock("../project-email.service", () => ({ previewProjectEmail: mocks.preview, importProjectEmail: mocks.import, getProjectEmailReceipt: mocks.receipt, latestProjectEmail: mocks.latest }));
+import { protectInternalErrorResponses } from "../../../middleware/internalErrorResponse";
 import { projectEmailRouter } from "../project-email.routes";
-const app = express(); app.use(express.json()); app.use("/project-email", projectEmailRouter);
+const app = express(); app.use(express.json()); app.use(protectInternalErrorResponses); app.use("/project-email", projectEmailRouter);
 const project = "00000000-0000-4000-8000-000000000001", preview = "00000000-0000-4000-8000-000000000002";
 beforeEach(() => { vi.clearAllMocks(); mocks.authorized = true; mocks.preview.mockResolvedValue({ ok: true, data: { id: preview } }); mocks.import.mockResolvedValue({ ok: true, data: { previewId: preview } }); });
 it("requires authentication before reading provider metadata", async () => {
@@ -26,4 +27,22 @@ it("maps an intentional authorization refusal without exposing private provider 
   mocks.preview.mockResolvedValue({ ok: false, kind: "not_found", detail: "Project not found." });
   const result = await request(app).post(`/project-email/${project}/preview`).send({ query: "fixture" });
   expect(result.status).toBe(404); expect(result.body).toEqual({ detail: "Project not found." });
+});
+
+
+it.each([
+  { ok: false, kind: "unavailable", detail: "PRIVATE_PROVIDER_PAYLOAD" },
+  { ok: false, kind: "error", error: new Error("PRIVATE_DATABASE_PAYLOAD") },
+])("keeps provider/server failures opaque through the real sanitizer", async failure => {
+  mocks.preview.mockResolvedValue(failure);
+  const result = await request(app).post(`/project-email/${project}/preview`).send({ query: "fixture" });
+  expect(result.status).toBe(failure.kind === "unavailable" ? 503 : 500);
+  expect(result.body).toEqual({ code: "internal_error", detail: "Something went wrong. Please try again." });
+});
+
+it("preserves the service's connector-disabled refusal through the sanitizer", async () => {
+  mocks.preview.mockResolvedValue({ ok: false, kind: "not_found", code: "connector_unavailable", detail: "Gmail is not offered on this Mike server." });
+  const result = await request(app).post(`/project-email/${project}/preview`).send({ query: "fixture" });
+  expect(result.status).toBe(404);
+  expect(result.body).toEqual({ code: "connector_unavailable", detail: "Gmail is not offered on this Mike server." });
 });

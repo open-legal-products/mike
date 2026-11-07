@@ -9,7 +9,8 @@ import type { Db } from "../../lib/supabase";
 import { checkProjectAccess } from "../../lib/access";
 import { can } from "../../lib/permissions";
 import { failure, internalFailure, ok, type ServiceResult } from "../../lib/serviceResult";
-import { GoogleWorkspaceError } from "../../lib/integrations/googleWorkspaceAuth";
+import { GoogleWorkspaceError, GoogleWorkspaceUnavailableError } from "../../lib/integrations/googleWorkspaceAuth";
+import { googleServiceUnavailableMessage } from "../../lib/integrations/googleAvailability";
 import { uploadFile, versionStorageKey } from "../../lib/storage";
 import { documentSuffix, contentTypeForDocumentType } from "../../lib/documentTypes";
 import { commitEmailDocument } from "../documents/documents.service";
@@ -37,6 +38,7 @@ async function authorize(db: Db, actor: Actor, folderId?: string | null) {
   return ok({ userId: actor.userId, orgId: access.project.org_id ?? null });
 }
 function caught(error: unknown) {
+  if (error instanceof GoogleWorkspaceUnavailableError) return failure("not_found", googleServiceUnavailableMessage("gmail"), "connector_unavailable");
   return error instanceof EmailInputError ? failure("validation", error.message) : error instanceof GoogleWorkspaceError ? failure("unavailable", error.message) : internalFailure(error);
 }
 async function load(db: Db, actor: Actor, id: string) {
