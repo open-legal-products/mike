@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { publicationRpc } from "./playbookTestDb";
 import type { Db } from "../../../lib/supabase";
 
 const {
@@ -39,7 +40,9 @@ vi.mock("../../../lib/storage", async (original) => ({
 }));
 vi.mock("../../../lib/pdfText", () => ({ extractPdfTextForModel }));
 vi.mock("../../../lib/docxTrackedChanges", () => ({ extractDocxBodyText }));
-vi.mock("../../documents/documents.service", () => ({ getFileStreamSource }));
+vi.mock("../../documents/documents.service", async (original) => ({
+  ...(await original<typeof import("../../documents/documents.service")>()), getFileStreamSource,
+}));
 
 import { blankPlaybookContent, reviewWithPlaybook } from "../playbooks.operations";
 import {
@@ -148,7 +151,7 @@ function database(tables: Record<string, Row[]>) {
     };
     return query;
   };
-  return { db: { from } as unknown as Db, tables: all };
+  return { db: { from, rpc: publicationRpc(all) } as unknown as Db, tables: all };
 }
 
 beforeEach(() => {

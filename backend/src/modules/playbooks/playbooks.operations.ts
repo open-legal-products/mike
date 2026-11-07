@@ -48,8 +48,11 @@ import { selectAllByKey, selectInBatches } from "../../lib/batchedQuery";
 import type { EditAnnotation } from "@mike/contracts";
 import { extractDocxBodyText, type EditInput } from "../../lib/docxTrackedChanges";
 import { loadActiveVersion } from "../../lib/documentVersions";
+import { buildDownloadUrl } from "../../lib/downloadTokens";
 import {
-  applyTrackedEditsToDocument,
+  prepareDocumentReviewEdits,
+  DocumentReviewRetryableError,
+  publishDocumentReview,
   loadCurrentVersionBytes,
 } from "../documents/documents.service";
 import { loadCreatorProfiles, type CreatorProfile } from "../../lib/userLookup";
@@ -1998,17 +2001,14 @@ async function loadReviewDocument(
  * set of tracked changes, and links every change to its finding. A finding
  * whose text cannot be located keeps its suggestion as text.
  */
-async function applyReviewEdits(args: {
+async function prepareReviewEdits(args: {
   db: Db;
   userId: string;
   userEmail?: string | null;
   documentId: string;
   expectedVersion: { id: string; storagePath: string };
   findings: PlaybookFinding[];
-}): Promise<{
-  findings: PlaybookFinding[];
-  version: { id: string; number: number; downloadUrl: string } | null;
-}> {
+}) {
   const planned: { index: number; edit: EditInput }[] = [];
   args.findings.forEach((finding, index) => {
     const suggestion = finding.suggestedText.trim();
@@ -2043,38 +2043,13 @@ async function applyReviewEdits(args: {
       });
     }
   });
-  if (!planned.length) return { findings: args.findings, version: null };
-  const result = await applyTrackedEditsToDocument({
+  return prepareDocumentReviewEdits(args.db, {
     documentId: args.documentId,
     userId: args.userId,
     userEmail: args.userEmail,
     expectedVersion: args.expectedVersion,
-    edits: planned.map((item) => item.edit),
-    db: args.db,
+    edits: planned.map(({ index, edit }) => ({ findingIndex: index, edit })),
   });
-  // A reader who cannot edit, or text that cannot be found, keeps the review
-  // as text alone.
-  if (!result.ok) return { findings: args.findings, version: null };
-  const failed = new Set(result.errors.map((error) => error.index));
-  const applied = planned.filter((_, index) => !failed.has(index));
-  const findings = [...args.findings];
-  // Each applied edit yields one change, in order; without that guarantee the
-  // changes stay in the document but are not tied to findings.
-  if (applied.length === result.annotations.length)
-    applied.forEach((item, position) => {
-      findings[item.index] = {
-        ...findings[item.index],
-        edit: result.annotations[position],
-      };
-    });
-  return {
-    findings,
-    version: {
-      id: result.version_id,
-      number: result.version_number,
-      downloadUrl: result.download_url,
-    },
-  };
 }
 
 export const INTERRUPTED_RUN_ERROR =
@@ -2308,64 +2283,62 @@ export async function runPlaybookReview(
         : normalized;
     stage = "review.apply_edits";
     markStage(stage);
-    const { findings, version } =
-      work.documentId && work.expectedVersion
-        ? await applyReviewEdits({
-            db,
-            userId: work.userId,
-            userEmail: work.userEmail,
-            documentId: work.documentId,
-            expectedVersion: work.expectedVersion,
-            findings: reviewed,
-          })
-        : { findings: reviewed, version: null };
-    const versionId = version?.id ?? null;
-    const completedAt = new Date().toISOString();
+    const prepared = work.documentId && work.expectedVersion
+      ? await prepareReviewEdits({
+          db, userId: work.userId, userEmail: work.userEmail,
+          documentId: work.documentId, expectedVersion: work.expectedVersion, findings: reviewed,
+        })
+      : null;
     stage = "review.save";
     markStage(stage);
-    const updated = await db
-      .from("playbook_runs")
-      .update({
-        status: "completed",
-        summary: parsed.summary,
-        findings_json: findings,
-        edited_version_id: versionId,
-        completed_at: completedAt,
-        updated_at: completedAt,
-      })
-      .eq("id", runId)
-      .eq("user_id", work.userId)
-      .eq("status", "running")
-      .select("id");
-    if (updated.error) throw updated.error;
-    // Only the claim whose write landed records the run in the audit log.
-    if (updated.data?.length)
-      await recordPlaybookRunAudit(db, work, { status: "completed", findings });
-    return {
-      id: runId,
-      playbookId: work.playbookId,
-      model: work.model,
-      documentName: work.documentName,
-      documentId: work.documentId,
-      editedVersionId: versionId,
-      /** For the response that made them; a stored run has only the id. */
-      editedVersionNumber: version?.number ?? null,
-      editedDownloadUrl: version?.downloadUrl ?? null,
-      reviewMode: work.reviewMode,
-      reviewScope: scope,
-      status: "completed" as const,
-      summary: parsed.summary,
-      findings,
-      error: null,
-      startedAt: work.startedAt,
-      completedAt,
-    };
+    const publication = await publishDocumentReview(db, {
+      runId, userId: work.userId, summary: parsed.summary, findings: reviewed, prepared,
+    });
+    const row = publication.run;
+    if (!row || row.status !== "completed")
+      throw new PlaybookRequestError("This review is no longer running.", 409);
+    const result = publicRun(row, new Set());
+    // Only a newly completed outcome owns the audit, including text-only
+    // source conflicts. Reconciliation cannot promise an exactly-once audit.
+    if (publication.disposition === "published" || publication.disposition === "source_changed") {
+      await recordPlaybookRunAudit(db, work, { status: "completed", findings: result.findings })
+        .catch((error) => reportPlaybookFailure(error, {
+          stage: "review.save", jobKind: "playbook.review",
+          ids: { run_id: runId, playbook_id: work.playbookId },
+        }));
+    }
+    let editedVersionNumber: number | null = null;
+    let editedDownloadUrl: string | null = null;
+    if (result.editedVersionId && result.documentId) {
+      // Display conveniences are outside the commit. A query/signing failure
+      // cannot turn a saved review into a failed one or lose its findings.
+      try {
+        const { data: version, error } = await db.from("document_versions")
+          .select("version_number, storage_path, filename")
+          .eq("id", result.editedVersionId).eq("document_id", result.documentId)
+          .is("deleted_at", null).maybeSingle();
+        if (error) throw error;
+        if (version) {
+          editedVersionNumber = version.version_number;
+          if (version.storage_path)
+            editedDownloadUrl = buildDownloadUrl(version.storage_path, version.filename?.trim() || "Untitled document.docx");
+        }
+      } catch (error) {
+        reportPlaybookFailure(error, { stage: "review.save", jobKind: "playbook.review",
+          ids: { run_id: runId, playbook_id: work.playbookId } });
+      }
+    }
+    return { ...result, status: "completed" as const, editedVersionNumber, editedDownloadUrl };
   } catch (error) {
     const report = {
       jobKind: "playbook.review" as const,
       ids: { run_id: runId, playbook_id: work.playbookId },
     };
     if (!isPlaybookRefusal(error)) reportPlaybookFailure(error, { ...report, stage });
+    // Preparation/publishing infrastructure errors remain retryable. In
+    // particular, a failed publication response is not proof of rollback:
+    // the transaction may still be in flight. Never stamp that run failed.
+    if (error instanceof DocumentReviewRetryableError) throw error;
     // Not console.error: see recordImportFailure.
     console.warn("[playbooks] review failed", { runId, error: safeError(error) });
     const completedAt = new Date().toISOString();

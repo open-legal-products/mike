@@ -204,6 +204,22 @@ v4-only bundle cannot. Keep a compatible add-in build for those devices.
 Do not clear browser/add-in storage to resolve a version error: device-only
 chats have no durable server copy.
 
+### Playbook review publication upgrade
+
+`20261107_01_playbook_review_publication.sql` adds atomic publication of a
+review's document version, tracked edits and saved findings. Before deploying
+its backend, stop accepting new playbook reviews and let old in-flight reviews
+finish. Apply the migration, reload the PostgREST schema cache, and replace
+**all** API and worker processes before accepting reviews again. The old
+publisher bypasses the new transaction, so a mixed-version rolling deployment
+does not provide this guarantee. Backend rollback restores that older behavior.
+
+The migration does not reconstruct edits orphaned by an older interrupted
+review: those versions lack the provenance needed to recover the exact findings.
+Uploads abandoned before publication may remain unreferenced objects. Never
+remove an object merely because a review row is missing after a timeout: history
+can be deleted after a successful publication while its document version stays.
+
 ### Adopting the ledger on an older deployment
 
 Deployments upgraded before `20261009_03_schema_migrations.sql` have no

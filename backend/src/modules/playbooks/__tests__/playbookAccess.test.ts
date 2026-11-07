@@ -10,14 +10,14 @@ vi.mock("../../../lib/llm", async (original) => ({
 }));
 vi.mock("../../../lib/providerCredentials/index", () => ({ getUserApiKeys }));
 const docs = vi.hoisted(() => ({
-  applyTrackedEditsToDocument: vi.fn(),
+  prepareDocumentReviewEdits: vi.fn(),
   loadCurrentVersionBytes: vi.fn(),
   loadActiveVersion: vi.fn(),
   extractDocxBodyText: vi.fn(),
 }));
 vi.mock("../../documents/documents.service", async (original) => ({
   ...(await original<typeof import("../../documents/documents.service")>()),
-  applyTrackedEditsToDocument: docs.applyTrackedEditsToDocument,
+  prepareDocumentReviewEdits: docs.prepareDocumentReviewEdits,
   loadCurrentVersionBytes: docs.loadCurrentVersionBytes,
 }));
 vi.mock("../../../lib/documentVersions", async (original) => ({
@@ -594,24 +594,18 @@ describe("playbook access and autosave", () => {
         { id: "law", name: "Governing law", concept: "The governing law.", required: true },
       ],
     };
-    const annotation = (id: string) => ({
-      kind: "edit",
-      edit_id: id,
-      document_id: "doc-1",
-      version_id: "v2",
-      version_number: 2,
-      change_id: `c-${id}`,
-      deleted_text: "",
-      inserted_text: "",
-      context_before: "",
-      context_after: "",
-      status: "pending",
+    const prepared = (ids: string[]) => ({
+      documentId: "doc-1", expectedVersion: { id: "v1", storagePath: "documents/doc-1.docx" },
+      version: { id: "v2", storage_path: "edited.docx", filename: "Supply.docx", source: "assistant_edit", file_type: "docx" },
+      edits: ids.map((id) => ({ id, finding_index: id === "e1" ? 0 : 1,
+        change_id: `c-${id}`, deleted_text: "", inserted_text: "", context_before: "", context_after: "" })),
     });
     function setup(fileType: "docx" | "pdf" = "docx") {
       const fixture = database([book({ content_json: content })]);
       fixture.tables.documents = [
-        { id: "doc-1", user_id: "owner", project_id: null, org_id: null, workflow_id: null },
+        { id: "doc-1", user_id: "owner", project_id: null, org_id: null, workflow_id: null, current_version_id: "v1" },
       ];
+      fixture.tables.document_versions = [{ id: "v1", document_id: "doc-1", storage_path: "documents/doc-1.docx" }];
       docs.loadActiveVersion.mockResolvedValue({
         id: "v1",
         storage_path: "documents/doc-1.docx",
@@ -663,33 +657,25 @@ describe("playbook access and autosave", () => {
 
     it("applies suggested language as tracked changes tied to each finding", async () => {
       const { db, writes } = setup();
-      docs.applyTrackedEditsToDocument.mockResolvedValue({
-        ok: true,
-        version_id: "v2",
-        version_number: 2,
-        storage_path: "edited.docx",
-        download_url: "/download",
-        annotations: [annotation("e1"), annotation("e2")],
-        errors: [],
-      });
+      docs.prepareDocumentReviewEdits.mockResolvedValue(prepared(["e1", "e2"]));
 
       const result = await review(db);
 
-      expect(docs.applyTrackedEditsToDocument).toHaveBeenCalledWith(
-        expect.objectContaining({
+      expect(docs.prepareDocumentReviewEdits).toHaveBeenCalledWith(
+        db, expect.objectContaining({
           documentId: "doc-1",
           expectedVersion: { id: "v1", storagePath: "documents/doc-1.docx" },
           edits: [
-            expect.objectContaining({
+            { findingIndex: 0, edit: expect.objectContaining({
               find: "Liability is unlimited.",
               replace: "Liability is capped at fees paid.",
-            }),
+            }) },
             // A missing clause goes in after the clause the model named.
-            expect.objectContaining({
+            { findingIndex: 1, edit: expect.objectContaining({
               find: "Payment is due in 30 days.",
               replace:
                 "Payment is due in 30 days.\n\nEnglish law governs this agreement.",
-            }),
+            }) },
           ],
         }),
       );
@@ -718,15 +704,7 @@ describe("playbook access and autosave", () => {
 
     it("keeps a suggestion that could not be located as text", async () => {
       const { db } = setup();
-      docs.applyTrackedEditsToDocument.mockResolvedValue({
-        ok: true,
-        version_id: "v2",
-        version_number: 2,
-        storage_path: "edited.docx",
-        download_url: "/download",
-        annotations: [annotation("e2")],
-        errors: [{ index: 0, reason: "Not found." }],
-      });
+      docs.prepareDocumentReviewEdits.mockResolvedValue(prepared(["e2"]));
 
       const result = await review(db);
 
@@ -740,7 +718,7 @@ describe("playbook access and autosave", () => {
 
       const result = await review(db, { documentText: "Liability is unlimited." });
 
-      expect(docs.applyTrackedEditsToDocument).not.toHaveBeenCalled();
+      expect(docs.prepareDocumentReviewEdits).not.toHaveBeenCalled();
       expect(result.editedVersionId).toBeNull();
       expect(result.status).toBe("completed");
     });
