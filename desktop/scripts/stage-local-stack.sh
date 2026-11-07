@@ -13,6 +13,10 @@ test -f backend/dist/index.js || { echo "run local:build first"; exit 1; }
 test -f backend/dist/workflow-catalog/catalog.json || { echo "run local:build to bundle offline workflows"; exit 1; }
 test -f frontend/.next/standalone/frontend/server.js || { echo "run local:build first"; exit 1; }
 
+# Also cover cached fetch output when staging directly. This must precede
+# electron-builder signing; rewriting a signed release invalidates its seal.
+node desktop/scripts/relocate-postgrest.mjs desktop/local-stack/bin
+
 APP="desktop/local-stack/app"
 rm -rf "$APP"
 mkdir -p "$APP/backend" "$APP/frontend"
