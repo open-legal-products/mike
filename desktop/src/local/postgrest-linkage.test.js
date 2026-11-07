@@ -1,6 +1,7 @@
 const { test } = require('node:test');
 const assert = require('node:assert/strict');
-const { cpSync, mkdtempSync, renameSync, rmSync, readFileSync, writeFileSync } = require('node:fs');
+const { cpSync, mkdirSync, mkdtempSync, readlinkSync, realpathSync, renameSync,
+  rmSync, readFileSync, symlinkSync, writeFileSync } = require('node:fs');
 const { tmpdir } = require('node:os');
 const path = require('node:path');
 const { execFileSync } = require('node:child_process');
@@ -10,6 +11,32 @@ const { execFileSync } = require('node:child_process');
 const nativeOptions = { skip: process.platform !== 'darwin' || !process.env.MIKE_NATIVE_BIN };
 const original = '/opt/homebrew/opt/libpq/lib/libpq.5.dylib';
 const bundled = '@loader_path/pg/lib/libpq.5.dylib';
+
+/** Copy a Postgres test fixture without redirecting its relative symlinks. */
+function copyPostgresBundle(source, destination) {
+  cpSync(source, destination, { recursive: true, verbatimSymlinks: true });
+}
+
+test('Postgres test copy preserves relative links after moving without its source', () => {
+  const temp = mkdtempSync(path.join(tmpdir(), 'mike-linkage-copy-'));
+  try {
+    const source = path.join(temp, 'source/pg');
+    const copy = path.join(temp, 'copy/pg');
+    mkdirSync(path.join(source, 'lib'), { recursive: true });
+    writeFileSync(path.join(source, 'lib/libpq.5.dylib'), 'synthetic library');
+    symlinkSync('libpq.5.dylib', path.join(source, 'lib/libpq.dylib'));
+    copyPostgresBundle(source, copy);
+    rmSync(path.join(temp, 'source'), { recursive: true, force: true });
+    renameSync(path.join(temp, 'copy'), path.join(temp, 'Moved package with spaces'));
+    const moved = path.join(temp, 'Moved package with spaces/pg');
+    const link = path.join(moved, 'lib/libpq.dylib');
+    assert.equal(readlinkSync(link), 'libpq.5.dylib');
+    assert.equal(realpathSync(link), path.join(realpathSync(moved), 'lib/libpq.5.dylib'));
+    assert.equal(readFileSync(link, 'utf8'), 'synthetic library');
+  } finally {
+    rmSync(temp, { recursive: true, force: true });
+  }
+});
 
 test('actual PostgREST input has only bundled dependencies', nativeOptions, async () => {
   const { auditDependencies, dependencies } = await import('../../scripts/relocate-postgrest.mjs');
@@ -26,7 +53,7 @@ test('PostgREST uses only bundled libraries after moving the package', nativeOpt
   const temp = mkdtempSync(path.join(tmpdir(), 'mike-linkage-'));
   try {
     const bin = path.join(temp, 'original/bin');
-    cpSync(process.env.MIKE_NATIVE_BIN + '/pg', bin + '/pg', { recursive: true });
+    copyPostgresBundle(process.env.MIKE_NATIVE_BIN + '/pg', bin + '/pg');
     cpSync(process.env.MIKE_NATIVE_BIN + '/postgrest', bin + '/postgrest');
     // Recreate the pinned upstream load command even from already-relocated
     // fetched input, so CI always exercises the repair and rejection paths.

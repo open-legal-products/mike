@@ -9,6 +9,12 @@ const original = '/opt/homebrew/opt/libpq/lib/libpq.5.dylib';
 const bundled = '@loader_path/pg/lib/libpq.5.dylib';
 const run = (command, args) => execFileSync(command, args, { encoding: 'utf8' });
 
+/**
+ * Read unique dependency load paths from a Mach-O file, excluding its dylib ID.
+ * @param {string} file Path to the native binary or library to inspect.
+ * @returns {string[]} Load paths reported by otool.
+ * @throws {Error} If otool cannot inspect the file.
+ */
 export function dependencies(file) {
   // Read load commands, not otool -L's dylib ID (which is not a dependency).
   const commands = run('/usr/bin/otool', ['-l', file]).split(/\nLoad command \d+\n/);
@@ -16,9 +22,17 @@ export function dependencies(file) {
     .map(c => c.match(/\n\s+name (.+) \(offset \d+\)/)?.[1]).filter(Boolean))];
 }
 
+/**
+ * Audit PostgREST's transitive dependencies without modifying the bundle.
+ * @param {string} bin Native bin directory containing postgrest and pg/lib.
+ * @returns {string[]} Canonical paths of the bundled Mach-O dependency closure.
+ * @throws {Error} If a non-system dependency is missing, non-relocatable or
+ * resolves outside bin, or a native inspection command fails.
+ */
 export function auditDependencies(bin) {
   const root = realpathSync(bin);
   const visited = new Set();
+  /** Follow one bundled dependency, rejecting escapes and avoiding cycles. */
   function visit(file) {
     file = realpathSync(file);
     if (!file.startsWith(root + path.sep)) throw new Error(`Dependency escapes bundle: ${file}`);
@@ -34,6 +48,15 @@ export function auditDependencies(bin) {
   return [...visited];
 }
 
+/**
+ * Relocate the pinned PostgREST libpq load path in a pre-signing build cache.
+ * Audit the closure before repairing an ad-hoc signature; keep valid signatures.
+ * Never use this helper on an installed or release-signed application.
+ * @param {string} bin Native bin directory containing postgrest and pg/lib.
+ * @returns {string[]} Canonical paths verified by the dependency audit.
+ * @throws {Error} If linkage is unexpected, dependencies fail the audit, or a
+ * native edit/signature command fails. A failed run may leave the cache edited.
+ */
 export function relocatePostgrest(bin) {
   const file = path.resolve(bin, 'postgrest');
   const deps = dependencies(file);
