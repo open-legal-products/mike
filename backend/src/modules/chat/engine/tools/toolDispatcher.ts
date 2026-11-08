@@ -551,10 +551,15 @@ export async function runToolCalls(
     args.scope === "document" &&
     !!resolveDocLabel(String(args.doc_id ?? ""), docStore, docIndex);
 
+  // Checked before each call and again right before a write that first awaits
+  // something (a document lock held by another call of the answer, connector
+  // planning, a source download): a turn stopped during that wait must not
+  // start the write after its readers were told it is over. runLLMStream
+  // throws its abort as soon as this returns.
+  const stopped = () => options.signal?.aborted === true;
   let connectorOwner: ConnectorOwner | undefined;
   for (const tc of toolCalls) {
-    // runLLMStream throws its abort as soon as this returns.
-    if (options.signal?.aborted) break;
+    if (stopped()) break;
     let args: Record<string, unknown> = {};
     try {
       args = JSON.parse(tc.function.arguments || "{}");
@@ -579,6 +584,7 @@ export async function runToolCalls(
         args,
         db,
       );
+      if (stopped()) break;
       if (plan.type === "approval" && options.connectorApprovals) {
         // Nothing runs now. The turn pauses on this item, and the user's
         // decision continues it (see connectorApprovals.ts).
@@ -1042,6 +1048,8 @@ export async function runToolCalls(
             : await readDocumentContent(docId, docStore, write, docIndex, db, {
                 emitEvents: false,
               });
+          // The review saves its suggestions as a new version.
+          if (stopped()) break;
           const run = await reviewWithPlaybook({
             userId,
             userEmail: options.userEmail,
@@ -1879,6 +1887,7 @@ export async function runToolCalls(
           }),
         );
         const result = await documentLocks.run(indexed.document_id, async () => {
+          if (stopped()) return null;
           const edited = await runEditDocument({
             documentId: indexed.document_id,
             userId,
@@ -1896,6 +1905,7 @@ export async function runToolCalls(
           }
           return edited;
         });
+        if (!result) break;
 
         if (result.ok) {
           clearTurnReadsForDocument(turnReadState, indexed.document_id);
@@ -2105,6 +2115,8 @@ export async function runToolCalls(
               sourceInfo.file_type,
             );
 
+            // Nothing is written before this point.
+            if (stopped()) break;
             // Parallel uploads: the doc bytes (and PDF
             // rendition if any) for every new copy.
             const uploadJobs: Promise<unknown>[] = [];

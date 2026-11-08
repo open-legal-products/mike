@@ -175,9 +175,12 @@ so local tool execution is governed by its own timeout and the run limits.
 Model output refreshes idle even while tabular JSON is buffered; transport
 keep-alives do not. Deadline errors are preserved in history and replay, while
 an explicit Stop remains a cancellation. Once a turn's signal fires, the tool
-dispatcher starts none of the batch's remaining server tools, and a chat or
-project-chat route whose `runLLMStream` returns anyway (a provider or tool that
-ignored the abort) takes its stop path: the turn is stored with its stop
+dispatcher starts none of the batch's remaining server tools (and no write
+that was still waiting on a document lock, connector planning or a source
+download), tools that already finished keep their events in the stored turn,
+and a chat or project-chat route whose `runLLMStream` returns anyway (a
+provider or tool that ignored the abort) takes its stop path: the turn is
+stored with its stop
 outcome, and is neither saved as a completed answer, given a fallback title,
 nor scheduled for memory curation. A route that unwinds after the grace period
 has already ended the run writes no more frames, because the run is finished.

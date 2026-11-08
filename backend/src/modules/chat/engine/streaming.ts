@@ -1007,7 +1007,6 @@ export async function runLLMStream(params: {
         // A failure after this point happened with tool results in hand; the
         // breadcrumb tells it apart from one in the first model call.
         markStage("tool-result");
-        throwIfAborted(signal);
         for (const r of docsRead) {
           events.push({
             type: "doc_read",
@@ -1075,6 +1074,10 @@ export async function runLLMStream(params: {
         for (const event of caseCitationEvents) {
           events.push(event);
         }
+        // Checked only now: a tool that finished before the stop (an edit
+        // that saved a new version, a created document) keeps its event in
+        // the stopped turn the route stores.
+        throwIfAborted(signal);
 
         const delegated = await delegating;
         // Once the answer has stopped or failed, its catch records these.
