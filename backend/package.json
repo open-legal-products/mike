@@ -57,7 +57,7 @@
     "zod": "^4.6.7"
   },
   "devDependencies": {
-    "@babel/parser": "^8.0.10",
+    "@babel/parser": "^8.1.0",
     "@babel/types": "^8.0.8",
     "@stryker-mutator/core": "^10.1.1",
     "@stryker-mutator/vitest-runner": "^10.1.1",
@@ -66,7 +66,7 @@
     "@types/html-to-text": "9.0.4",
     "@types/node": "^26.6.6",
     "@types/supertest": "^7.2.1",
-    "@vitest/coverage-v8": "^5.0.5",
+    "@vitest/coverage-v8": "^5.1.0",
     "supertest": "^7.3.1",
     "tsx": "^4.23.15",
     "typescript": "^7.0.2",
