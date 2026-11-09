@@ -1909,7 +1909,10 @@ export async function runToolCalls(
               edits,
               db,
               reuseVersion: turnEditState?.get(indexed.document_id),
+              signal: options.signal,
             });
+            // Stopped while the source downloaded: nothing was written.
+            if (!edited.ok && stopped()) return null;
             if (edited.ok) {
               turnEditState?.set(indexed.document_id, {
                 versionId: edited.version_id,
