@@ -215,6 +215,28 @@ describe("assistant document-edit lifecycle", () => {
     fake.done();
   });
 
+  it("writes nothing when the turn stops while the source downloads", async () => {
+    const fake = scriptedDb(initial());
+    const controller = new AbortController();
+    mocks.downloadFile.mockImplementationOnce(async () => {
+      controller.abort();
+      return new ArrayBuffer(4);
+    });
+    const rpc = vi.fn();
+    const result = await runEditDocument({
+      db: { ...fake.db, rpc } as unknown as Db,
+      documentId: "doc",
+      userId: "actor",
+      userEmail: "actor@example.com",
+      edits: [],
+      signal: controller.signal,
+    });
+    expect(result).toMatchObject({ ok: false });
+    expect(mocks.uploadFile).not.toHaveBeenCalled();
+    expect(rpc).not.toHaveBeenCalled();
+    fake.done();
+  });
+
   it("reports a failed storage read and returns the existing edit failure without writing", async () => {
     const fake = scriptedDb([{ table: "documents", data: { id: "doc", user_id: "u", project_id: null } }]);
     const cause = new Error("private storage details");
