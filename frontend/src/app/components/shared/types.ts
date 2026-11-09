@@ -283,6 +283,8 @@ export type AssistantEvent =
       version_id?: string;
       version_number?: number | null;
       isStreaming?: boolean;
+      /** Client-only: the turn ended before this step reported a result. */
+      interrupted?: boolean;
     })
   | WireActivity<"doc_download">
   | (Omit<

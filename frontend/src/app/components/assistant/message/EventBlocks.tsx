@@ -269,22 +269,29 @@ export function DocCreatedBlock({
     filename,
     showConnector,
     isStreaming,
+    interrupted,
     onClick,
 }: {
     filename: string;
     showConnector?: boolean;
     isStreaming?: boolean;
+    /** The turn ended before the document was reported as created. */
+    interrupted?: boolean;
     onClick?: () => void;
 }) {
     return (
         <EventBlock
             showConnector={showConnector}
             isStreaming={isStreaming}
-            dotColor="green"
+            dotColor={interrupted ? "gray" : "green"}
         >
             <div className="flex min-w-0 items-center gap-1.5">
                 <EventLabel className="shrink-0">
-                    {isStreaming ? "Creating" : "Created"}
+                    {isStreaming
+                        ? "Creating"
+                        : interrupted
+                          ? "Creation stopped"
+                          : "Created"}
                 </EventLabel>
                 {isStreaming || !onClick ? (
                     <span className="flex min-w-0 items-center gap-1.5">
@@ -348,11 +355,13 @@ export function DocReplicatedBlock({
 }) {
     const label = isStreaming
         ? "Replicating"
-        : interrupted
-          ? "Replication stopped"
-          : "Replicated";
+        : hasError
+          ? "Replication failed"
+          : interrupted
+            ? "Replication stopped"
+            : "Replicated";
     const suffix =
-        !isStreaming && !interrupted && count > 1
+        !isStreaming && !hasError && !interrupted && count > 1
             ? ` ${count} times`
             : isStreaming
               ? "..."
