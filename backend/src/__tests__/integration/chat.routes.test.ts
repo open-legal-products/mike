@@ -3784,6 +3784,30 @@ describe("server-owned turns: resume, stop, concurrency", () => {
             },
         );
 
+        it("ends a turn stopped during a save that then fails as stopped, not as a save error", async () => {
+            const { getAssistantTurnRun } =
+                await import("../../lib/assistantTurnRuns.js");
+            // The answer's three save attempts fail; the stop path's save succeeds.
+            dbControl.terminalUpdateFailures = 3;
+            const { response, id } = await turnInSave();
+
+            getAssistantTurnRun(id)!.stop();
+            releaseSave();
+            const text = (await response).text;
+
+            expect(text).toContain('"type":"cancelled"');
+            expect(text).not.toContain("could not be saved");
+            expect(
+                dbUpdates.filter(({ table }) => table === "chat_messages").at(-1)?.value,
+            ).toMatchObject({
+                content: [
+                    { type: "content", text: "Done" },
+                    { type: "content", text: "Cancelled by user." },
+                ],
+            });
+            expect(scheduleMemoryConsolidation).not.toHaveBeenCalled();
+        });
+
         it("gives a turn stopped during its save no fallback title", async () => {
             const { generateAssistantChatTitle } =
                 await import("../../modules/chat/chat.title.js");

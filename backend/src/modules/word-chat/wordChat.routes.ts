@@ -818,6 +818,14 @@ wordChatRouter.post("/", requireAuth, asyncRoute(async (req, res) => {
     });
     if (nextTitle) chatTitle = nextTitle;
   };
+  // The answer's events once normalized (its Word edits persisted). A stop
+  // seen after that point reuses them with the stop label instead of
+  // persisting the same edits a second time.
+  let normalizedAnswer: {
+    events: unknown[];
+    rawCount: number;
+    citations: unknown[];
+  } | null = null;
 
   try {
     write(
@@ -871,9 +879,13 @@ wordChatRouter.post("/", requireAuth, asyncRoute(async (req, res) => {
     // provider or tool that ignored the abort) must not be saved as a
     // completed answer: the abort handler below stores the stop outcome.
     throwIfTurnStopped(stream.signal, { fullText, events });
-    const persistedEvents = await normalizeAssistantEvents(
-      stripTransientAssistantEvents(events),
-    );
+    const answerEvents = stripTransientAssistantEvents(events);
+    const persistedEvents = await normalizeAssistantEvents(answerEvents);
+    normalizedAnswer = {
+      events: persistedEvents,
+      rawCount: answerEvents.length,
+      citations,
+    };
     const saveError = await updateAssistantMessage(
       persistedEvents.length ? persistedEvents : null,
       citations.length ? citations : null,
@@ -886,6 +898,9 @@ wordChatRouter.post("/", requireAuth, asyncRoute(async (req, res) => {
         cause: saveError,
         component: "word-chat",
       });
+      // A turn stopped while the save was pending ends as stopped, not as a
+      // save failure (the stop path saves it again).
+      throwIfTurnStopped(stream.signal, { fullText, events });
       write(
         `data: ${JSON.stringify({
           type: "error",
@@ -898,6 +913,10 @@ wordChatRouter.post("/", requireAuth, asyncRoute(async (req, res) => {
       write("data: [DONE]\n\n");
       return;
     }
+    // The answer is saved, but the turn may have been stopped while it was
+    // being saved. A stop seen here still ends it as stopped: no memory
+    // consolidation, and the stored answer gets the stop label.
+    throwIfTurnStopped(stream.signal, { fullText, events });
       // Local Word chats deliberately have no durable transcript. Only a cloud
       // turn can be curated later, once its reserved assistant row is complete.
       if (
@@ -971,10 +990,20 @@ wordChatRouter.post("/", requireAuth, asyncRoute(async (req, res) => {
           buildCitations: (fullText) =>
             extractCitations(fullText, docIndex, docStore),
         });
-        const partialEvents = await normalizeAssistantEvents(partial.events);
+        // Once the answer was normalized, keep those events and add only the
+        // stop label; normalizing again would persist its Word edits twice.
+        const partialEvents = normalizedAnswer
+          ? [
+              ...normalizedAnswer.events,
+              ...partial.events.slice(normalizedAnswer.rawCount),
+            ]
+          : await normalizeAssistantEvents(partial.events);
+        const partialCitations = normalizedAnswer
+          ? normalizedAnswer.citations
+          : partial.citations;
         const saveError = await updateAssistantMessage(
           partialEvents.length ? partialEvents : null,
-          partial.citations.length ? partial.citations : null,
+          partialCitations.length ? partialCitations : null,
         );
         if (saveError) {
           logAssistantMessageFailure({

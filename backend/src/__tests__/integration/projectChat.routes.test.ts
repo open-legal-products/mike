@@ -39,7 +39,11 @@ const {
   dbUpdates: [] as { table: string; value: unknown }[],
   dbRpcCalls: [] as { name: string; args: unknown }[],
   // Holds the insert of the assistant's answer open until a test releases it.
-  dbControl: { assistantInsertGate: null as Promise<void> | null },
+  dbControl: {
+    assistantInsertGate: null as Promise<void> | null,
+    // Fails this many assistant inserts before letting one through.
+    assistantInsertFailures: 0,
+  },
 }));
 
 function makeQuery(table: string) {
@@ -89,7 +93,13 @@ function makeQuery(table: string) {
   ) => {
     const gate = assistantInsert ? dbControl.assistantInsertGate : null;
     return (gate ?? Promise.resolve())
-      .then(() => result)
+      .then(() => {
+        if (assistantInsert && dbControl.assistantInsertFailures > 0) {
+          dbControl.assistantInsertFailures -= 1;
+          return { data: null, error: { message: "insert failed" } };
+        }
+        return result;
+      })
       .then(resolve, reject);
   };
     return q;
@@ -241,6 +251,7 @@ describe("POST /projects/:projectId/chat", () => {
     dbUpdates.length = 0;
     dbRpcCalls.length = 0;
     dbControl.assistantInsertGate = null;
+    dbControl.assistantInsertFailures = 0;
         buildMessages.mockReturnValue([]);
         buildProjectDocContext.mockResolvedValue({
             docIndex: {},
@@ -395,6 +406,48 @@ describe("POST /projects/:projectId/chat", () => {
             expect(scheduleMemoryConsolidation).not.toHaveBeenCalled();
         },
     );
+
+    it("ends a turn stopped during an insert that then fails as stopped, not as a save error", async () => {
+            const { getAssistantTurnRun } =
+                await import("../../lib/assistantTurnRuns.js");
+            let releaseSave!: () => void;
+            dbControl.assistantInsertGate = new Promise<void>((resolve) => {
+                releaseSave = resolve;
+            });
+            dbControl.assistantInsertFailures = 1;
+            runLLMStream.mockResolvedValue({
+                fullText: "Done",
+                events: [{ type: "content", text: "Done" }],
+                citations: [],
+            });
+            const assistantInserts = () =>
+                dbInserts.filter(
+                    ({ table, value }) =>
+                        table === "chat_messages" &&
+                        (value as { role?: string }).role === "assistant",
+                );
+            const response = request(app)
+                .post("/projects/p1/chat")
+                .set("Authorization", "Bearer test")
+                .send(VALID_BODY)
+                .then((res) => res);
+            await vi.waitFor(() => {
+                expect(assistantInserts()).toHaveLength(1);
+            });
+            getAssistantTurnRun(getActiveAssistantTurn("chat-1")!.id)!.stop();
+            releaseSave();
+            const text = (await response).text;
+
+            expect(text).toContain('"type":"cancelled"');
+            expect(text).not.toContain("could not be saved");
+            expect(assistantInserts().at(-1)?.value).toMatchObject({
+                content: [
+                    { type: "content", text: "Done" },
+                    { type: "content", text: "Cancelled by user." },
+                ],
+            });
+            expect(scheduleMemoryConsolidation).not.toHaveBeenCalled();
+    });
 
     it("gives a turn stopped during its save no fallback title", async () => {
             const { generateAssistantChatTitle } =
