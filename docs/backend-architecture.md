@@ -180,7 +180,7 @@ that was still waiting on a document lock, connector planning or a source
 download), tools that already finished keep their events in the stored turn
 (also when a later call of the batch rejects; a rejection after the stop ends
 the turn as stopped),
-and a chat, project-chat or Word chat route whose `runLLMStream` returns anyway (a
+and a chat, project-chat, Word chat or tabular chat route whose `runLLMStream` returns anyway (a
 provider or tool that ignored the abort) takes its stop path: the turn is
 stored with its stop
 outcome, and is neither saved as a completed answer, given a fallback title,
