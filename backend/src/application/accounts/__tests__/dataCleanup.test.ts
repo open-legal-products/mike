@@ -35,11 +35,12 @@ type Row = Record<string, unknown>;
  * assert on exactly which rows survived a cleanup call. Supports the chains
  * userDataCleanup uses (select/delete/update + eq/in/not/order/filter-cs, and
  * the gt + order keyset paging of lib/batchedQuery) and can
- * inject a delete error per table to exercise error propagation.
+ * inject a delete error per table to exercise error propagation. `maxRows`
+ * caps every select the way PostgREST's max_rows does: silently, no error.
  */
 function makeDb(
     initialTables: Record<string, Row[]>,
-    options: { deleteErrors?: Record<string, string> } = {},
+    options: { deleteErrors?: Record<string, string>; maxRows?: number } = {},
 ) {
     const tables: Record<string, Row[]> = {};
     for (const [name, rows] of Object.entries(initialTables)) {
@@ -220,6 +221,7 @@ function makeDb(
             let predicate: (row: Row) => boolean = () => true;
             let mode: "select" | "delete" | "update" = "select";
             let patch: Row = {};
+            let limitCount = Infinity;
             const orders: Array<[string, boolean]> = [];
             const narrow = (next: (row: Row) => boolean) => {
                 const prev = predicate;
@@ -251,7 +253,10 @@ function makeDb(
                     narrow((row) => (row[column] as never) > value);
                     return query;
                 },
-                limit: () => query,
+                limit: (count: number) => {
+                    limitCount = count;
+                    return query;
+                },
                 order: (column: string, options?: { ascending?: boolean }) => {
                     orders.push([column, options?.ascending !== false]);
                     return query;
@@ -319,7 +324,10 @@ function makeDb(
                             }
                             return 0;
                         });
-                        result = { data: rows, error: null };
+                        result = {
+                            data: rows.slice(0, Math.min(limitCount, options.maxRows ?? Infinity)),
+                            error: null,
+                        };
                     }
                     return Promise.resolve(result).then(resolve, reject);
                 },
@@ -1234,5 +1242,97 @@ describe("deleteUserAccountData organization retention", () => {
             "workflow-references/u1/w-personal/wr-personal/def.pdf",
         );
         expect(deleted).toContain("documents/u1/interrupted-upload.bin");
+    });
+});
+
+// ---------------------------------------------------------------------------
+// More rows than PostgREST returns from one select
+// ---------------------------------------------------------------------------
+
+describe("cleanup past PostgREST's max_rows", () => {
+    // supabase/config.toml caps a response at 1000 rows without an error. Ids
+    // sort in key order, so the rows past the cap are the ones a single
+    // select used to miss.
+    const MAX_ROWS = 1000;
+    const many = (prefix: string, count: number, row: Row) =>
+        Array.from({ length: count }, (_, i) => ({
+            id: `${prefix}-${String(i).padStart(4, "0")}`,
+            ...row,
+        }));
+
+    it("deletes every tabular review in the workspace, not the first 1000", async () => {
+        const { db, tables } = makeDb(
+            { tabular_reviews: many("r", 1201, { user_id: "u1", org_id: null }) },
+            { maxRows: MAX_ROWS },
+        );
+        await expect(deleteAllUserTabularReviews(db, "u1", null)).resolves.toBe(1201);
+        expect(tables.tabular_reviews).toEqual([]);
+    });
+
+    it("deletes every project the user created, not the first 1000", async () => {
+        const { db, tables } = makeDb(
+            { projects: many("p", 1201, { user_id: "u1", org_id: null }) },
+            { maxRows: MAX_ROWS },
+        );
+        await deleteUserProjects(db, "u1", null);
+        expect(tables.projects).toEqual([]);
+    });
+
+    it("deletes every review chat in the workspace, not the first 1000", async () => {
+        const { db, tables } = makeDb(
+            {
+                tabular_reviews: [{ id: "r1", user_id: "u2", org_id: null }],
+                tabular_review_chats: many("rc", 1201, { user_id: "u1", review_id: "r1" }),
+            },
+            { maxRows: MAX_ROWS },
+        );
+        await deleteAllUserChats(db, "u1", null);
+        expect(tables.tabular_review_chats).toEqual([]);
+    });
+
+    it("keeps content in an organization project found past the first 1000 rows", async () => {
+        // 1000 personal chats come first in key order; the chat in a
+        // colleague's org project is row 1001. Missing it meant the project
+        // was not recognised as holding the leaver's content, and the
+        // by-user chat delete then took the firm's chat with the account.
+        const { db, tables } = makeDb(
+            {
+                projects: [
+                    { id: "p-personal", user_id: "u1", org_id: null },
+                    { id: "p-colleague", user_id: "u2", org_id: "org-1" },
+                ],
+                chats: [
+                    ...many("ch", 1000, { user_id: "u1", project_id: "p-personal" }),
+                    { id: "zz-colleague", user_id: "u1", project_id: "p-colleague" },
+                ],
+            },
+            { maxRows: MAX_ROWS },
+        );
+        await deleteUserAccountData(db, "u1", null);
+
+        expect(tables.chats).toEqual([
+            { id: "zz-colleague", user_id: null, project_id: "p-colleague" },
+        ]);
+    });
+
+    it("keeps a review chat on a surviving org review found past the first 1000 rows", async () => {
+        const { db, tables } = makeDb(
+            {
+                tabular_reviews: [
+                    { id: "r-personal", user_id: "u1", org_id: null },
+                    { id: "r-org", user_id: "u1", org_id: "org-1" },
+                ],
+                tabular_review_chats: [
+                    ...many("rc", 1000, { user_id: "u1", review_id: "r-personal" }),
+                    { id: "zz-org", user_id: "u1", review_id: "r-org" },
+                ],
+            },
+            { maxRows: MAX_ROWS },
+        );
+        await deleteUserAccountData(db, "u1", null);
+
+        expect(tables.tabular_review_chats).toEqual([
+            { id: "zz-org", user_id: null, review_id: "r-org" },
+        ]);
     });
 });
