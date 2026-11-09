@@ -847,6 +847,9 @@ chatRouter.post("/", requireAuth, asyncRoute(async (req, res) => {
                         cause: saveError,
                         component: "chat-stream",
                     });
+                    // A turn stopped while the save was pending ends as stopped,
+                    // not as a save failure (the stop path saves it again).
+                    throwIfTurnStopped(stream.signal, { fullText, events });
                     write(
                         `data: ${JSON.stringify({
                             type: "error",

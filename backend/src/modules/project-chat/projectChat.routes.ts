@@ -327,6 +327,9 @@ projectChatRouter.post("/", requireAuth, asyncRoute(async (req, res) => {
                         cause: saved.error,
                         component: "assistant-chat",
                     });
+                    // A turn stopped while the save was pending ends as stopped,
+                    // not as a save failure (the stop path saves it again).
+                    throwIfTurnStopped(stream.signal, { fullText, events });
                     write(
                         `data: ${JSON.stringify({
                             type: "error",
