@@ -397,6 +397,44 @@ describe("POST /projects/:projectId/chat", () => {
         },
     );
 
+    it("gives a turn stopped during its save no fallback title", async () => {
+            const { generateAssistantChatTitle } =
+                await import("../../modules/chat/chat.title.js");
+            // The title is still generating, so only the fallback could name it.
+            vi.mocked(generateAssistantChatTitle).mockImplementationOnce(
+                () => new Promise<string>(() => {}),
+            );
+            const { getAssistantTurnRun } =
+                await import("../../lib/assistantTurnRuns.js");
+            let releaseSave!: () => void;
+            dbControl.assistantInsertGate = new Promise<void>((resolve) => {
+                releaseSave = resolve;
+            });
+            runLLMStream.mockResolvedValue({
+                fullText: "Done",
+                events: [{ type: "content", text: "Done" }],
+                citations: [],
+            });
+            const response = request(app)
+                .post("/projects/p1/chat")
+                .set("Authorization", "Bearer test")
+                .send(VALID_BODY)
+                .then((res) => res);
+            await vi.waitFor(() => {
+                expect(
+                    dbInserts.some(
+                        ({ table, value }) =>
+                            table === "chat_messages" &&
+                            (value as { role?: string }).role === "assistant",
+                    ),
+                ).toBe(true);
+            });
+            getAssistantTurnRun(getActiveAssistantTurn("chat-1")!.id)!.stop();
+            releaseSave();
+            expect((await response).text).toContain('"type":"cancelled"');
+            expect(dbUpdates.filter(({ table }) => table === "chats")).toEqual([]);
+    });
+
     describe("stream deadline", () => {
         const IDLE_MS = 30_000;
         const occurrences = (text: string, needle: string) =>

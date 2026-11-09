@@ -357,6 +357,12 @@ projectChatRouter.post("/", requireAuth, asyncRoute(async (req, res) => {
                 );
             }
 
+            // The answer is saved, but the turn may have been stopped while it was
+            // being saved (or while the title was awaited). A stop seen here
+            // still ends it as stopped: no fallback title, no memory
+            // consolidation, and the stored answer gets the stop label.
+            throwIfTurnStopped(stream.signal, { fullText, events });
+
             if (!chatTitle && lastUser?.content) {
                 const title = lastUser.content.slice(0, 120);
                 await updateChatTitle(db, { chatId, title });
@@ -367,12 +373,6 @@ projectChatRouter.post("/", requireAuth, asyncRoute(async (req, res) => {
                     );
                 }
             }
-
-            // The answer is saved, but the turn may have been stopped while it was
-            // being saved (or while the title was awaited). Past this point the
-            // turn completes, so a stop seen here still ends it as stopped: no
-            // memory consolidation, and the stored answer gets the stop label.
-            throwIfTurnStopped(stream.signal, { fullText, events });
 
             // A completed, durable assistant turn is the debounce trigger for the
             // asynchronous memory curator. ask_inputs is a pause, so continuations

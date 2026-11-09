@@ -3788,6 +3788,25 @@ describe("server-owned turns: resume, stop, concurrency", () => {
             },
         );
 
+        it("gives a turn stopped during its save no fallback title", async () => {
+            const { generateAssistantChatTitle } =
+                await import("../../modules/chat/chat.title.js");
+            // The title is still generating, so only the fallback could name it.
+            vi.mocked(generateAssistantChatTitle).mockImplementationOnce(
+                () => new Promise<string>(() => {}),
+            );
+            const { getAssistantTurnRun } =
+                await import("../../lib/assistantTurnRuns.js");
+            const { response, id } = await turnInSave();
+
+            getAssistantTurnRun(id)!.stop();
+            releaseSave();
+            expect((await response).text).toContain('"type":"cancelled"');
+            expect(
+                dbUpdates.filter(({ table }) => table === "chats"),
+            ).toEqual([]);
+        });
+
         it("adds only the stop label to a continuation whose answer was already appended", async () => {
             const { getAssistantTurnRun, getActiveAssistantTurn } =
                 await import("../../lib/assistantTurnRuns.js");

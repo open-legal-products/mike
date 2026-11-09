@@ -877,6 +877,12 @@ chatRouter.post("/", requireAuth, asyncRoute(async (req, res) => {
                 );
             }
 
+            // The answer is saved, but the turn may have been stopped while it was
+            // being saved (or while the title was awaited). A stop seen here
+            // still ends it as stopped: no fallback title, no memory
+            // consolidation, and the stored answer gets the stop label.
+            throwIfTurnStopped(stream.signal, { fullText, events });
+
             if (!chatTitle && lastUser?.content) {
                 const title = lastUser.content.slice(0, 120);
                 // The SSE response is already streaming, so a failure here
@@ -901,12 +907,6 @@ chatRouter.post("/", requireAuth, asyncRoute(async (req, res) => {
                     }
                 }
             }
-
-            // The answer is saved, but the turn may have been stopped while it was
-            // being saved (or while the title was awaited). Past this point the
-            // turn completes, so a stop seen here still ends it as stopped: no
-            // memory consolidation, and the stored answer gets the stop label.
-            throwIfTurnStopped(stream.signal, { fullText, events });
 
             // ask_inputs is an intentional pause, not a completed conversation.
             // A continuation reuses the preceding assistant row, so resolve that
