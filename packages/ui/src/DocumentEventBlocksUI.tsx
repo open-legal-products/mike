@@ -54,12 +54,15 @@ export function DocReadBlockUI({
     onClick,
     showConnector,
     isStreaming,
+    interrupted,
 }: {
     filename?: string;
     fileIcon?: ReactNode;
     onClick?: () => void;
     showConnector?: boolean;
     isStreaming?: boolean;
+    /** The turn ended before the read reported its result. */
+    interrupted?: boolean;
 }) {
     const file = filename ? (
         <>
@@ -77,11 +80,11 @@ export function DocReadBlockUI({
         <DocumentEventBlockUI
             showConnector={showConnector}
             isStreaming={isStreaming}
-            dotColor="green"
+            dotColor={interrupted ? "gray" : "green"}
         >
             <div className="flex min-w-0 items-center gap-1.5">
                 <span className="shrink-0 font-medium">
-                    {isStreaming ? "Reading" : "Read"}
+                    {isStreaming ? "Reading" : interrupted ? "Read stopped" : "Read"}
                 </span>
                 {!isStreaming && onClick ? (
                     <button
@@ -106,6 +109,7 @@ export function DocFindBlockUI({
     query,
     totalMatches,
     isStreaming,
+    interrupted,
     showConnector,
     onClick,
 }: {
@@ -113,21 +117,25 @@ export function DocFindBlockUI({
     query: string;
     totalMatches: number;
     isStreaming?: boolean;
+    /** The turn ended before the find reported its matches. */
+    interrupted?: boolean;
     showConnector?: boolean;
     onClick?: () => void;
 }) {
-    const matchSuffix = isStreaming
-        ? ""
-        : ` (${totalMatches} ${totalMatches === 1 ? "match" : "matches"})`;
+    // A find that never reported has no match count, not zero matches.
+    const matchSuffix =
+        isStreaming || interrupted
+            ? ""
+            : ` (${totalMatches} ${totalMatches === 1 ? "match" : "matches"})`;
 
     return (
         <DocumentEventBlockUI
             showConnector={showConnector}
             isStreaming={isStreaming}
-            dotColor={totalMatches > 0 ? "green" : "gray"}
+            dotColor={!interrupted && totalMatches > 0 ? "green" : "gray"}
         >
             <span className="font-medium">
-                {isStreaming ? "Finding" : "Found"}
+                {isStreaming ? "Finding" : interrupted ? "Find stopped" : "Found"}
             </span>{" "}
             <span>
                 &ldquo;{query}&rdquo;{matchSuffix}

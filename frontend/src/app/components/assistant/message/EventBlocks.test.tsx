@@ -7,6 +7,8 @@ import {
     DocCreatedBlock,
     DocDownloadBlock,
     DocEditBlock,
+    DocFindBlock,
+    DocReadBlock,
     DocReplicatedBlock,
     ReasoningBlock,
 } from "./EventBlocks";
@@ -185,6 +187,35 @@ describe("document step labels", () => {
         render(block);
         expect(screen.getByText(stopped)).toBeInTheDocument();
         expect(screen.queryByText(done)).not.toBeInTheDocument();
+    });
+});
+
+describe("stopped reads, finds and CourtListener calls", () => {
+    it("labels a stopped document read as stopped", () => {
+        render(<DocReadBlock filename="brief.docx" interrupted />);
+        expect(screen.getByText("Read stopped")).toBeInTheDocument();
+        expect(screen.queryByText("Read")).not.toBeInTheDocument();
+    });
+
+    it("labels a stopped document find as stopped, without a match count", () => {
+        render(<DocFindBlock filename="brief.docx" query="term" totalMatches={0} interrupted />);
+        expect(screen.getByText("Find stopped")).toBeInTheDocument();
+        expect(screen.queryByText(/0 matches/)).not.toBeInTheDocument();
+    });
+
+    it("keeps the match count on a find that finished", () => {
+        render(<DocFindBlock filename="brief.docx" query="term" totalMatches={2} />);
+        expect(screen.getByText("Found")).toBeInTheDocument();
+        expect(screen.getByText(/2 matches/)).toBeInTheDocument();
+    });
+
+    it("gives a stopped CourtListener call a gray dot, not a green one", () => {
+        const { container } = render(
+            <CourtListenerBlock label="Case law search stopped" interrupted />,
+        );
+        expect(screen.getByText("Case law search stopped")).toBeInTheDocument();
+        expect(container.querySelector(".bg-gray-500")).not.toBeNull();
+        expect(container.querySelector(".bg-green-400")).toBeNull();
     });
 });
 

@@ -272,6 +272,8 @@ export function SubagentGroup({
     const selected = delegations.find((d) => d.delegation_id === selectedId);
     const running = delegations.some((d) => d.isStreaming);
     const allDone = delegations.every((d) => d.status === "completed");
+    // Every subagent was still running when the turn ended.
+    const allStopped = delegations.every((d) => d.interrupted);
     const count = delegations.length;
     return (
         <>
@@ -311,7 +313,11 @@ export function SubagentGroup({
                     showConnector={showConnectorAfter}
                 >
                     <EventLabel>
-                        {count === 1 ? "Subagent finished" : `${count} subagents finished`}
+                        {count === 1
+                            ? allStopped
+                                ? "Subagent stopped"
+                                : "Subagent finished"
+                            : `${count} subagents ${allStopped ? "stopped" : "finished"}`}
                     </EventLabel>
                 </EventBlock>
             )}

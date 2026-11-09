@@ -20,6 +20,13 @@ describe("document search disclosure", () => {
         expect(screen.queryByText(text)).not.toBeInTheDocument();
     });
 
+    it("labels a stopped search as stopped, with no match count to reveal", () => {
+        render(<DocSearchBlock event={event} interrupted />);
+        expect(screen.getByText("Search stopped in project documents for “change of control”")).toBeInTheDocument();
+        expect(screen.queryByRole("button")).not.toBeInTheDocument();
+        expect(screen.queryByText("0 matches")).not.toBeInTheDocument();
+    });
+
     it("does not show a zero count while streaming or after failure", () => {
         const { rerender } = render(<DocSearchBlock event={event} isStreaming />);
         fireEvent.click(screen.getByRole("button", { name: "Searching project documents for “change of control”..." }));

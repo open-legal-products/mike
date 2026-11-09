@@ -298,16 +298,14 @@ export function createTurnEventSink(
         if (!("isStreaming" in event) || !event.isStreaming) return event;
         const rest = { ...event };
         delete (rest as { isStreaming?: boolean }).isStreaming;
-        // A document step that never reported its result may or may not have
-        // happened: show it as stopped, not as done.
-        if (
-          rest.type === "doc_created" ||
-          rest.type === "doc_edited" ||
-          rest.type === "doc_replicated"
-        ) {
-          return { ...rest, interrupted: true };
+        // Text that stopped streaming is simply finished. Every other step
+        // that never reported its result (a document change, a read or
+        // search, a connector or CourtListener call, a subagent) may or may
+        // not have happened: show it as stopped, not as done.
+        if (rest.type === "content" || rest.type === "reasoning") {
+          return rest as AssistantEvent;
         }
-        return rest as AssistantEvent;
+        return { ...rest, interrupted: true } as AssistantEvent;
       });
 
   // Stop may reach the record twice: from the control itself and from the
