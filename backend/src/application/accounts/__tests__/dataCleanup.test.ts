@@ -37,10 +37,17 @@ type Row = Record<string, unknown>;
  * the gt + order keyset paging of lib/batchedQuery) and can
  * inject a delete error per table to exercise error propagation. `maxRows`
  * caps every select the way PostgREST's max_rows does: silently, no error.
+ * `maxInIds` fails a request whose `.in()` list is longer, as the gateway
+ * refuses an over-long URL; `selectErrors` fails every select of a table.
  */
 function makeDb(
     initialTables: Record<string, Row[]>,
-    options: { deleteErrors?: Record<string, string>; maxRows?: number } = {},
+    options: {
+        deleteErrors?: Record<string, string>;
+        selectErrors?: Record<string, string>;
+        maxRows?: number;
+        maxInIds?: number;
+    } = {},
 ) {
     const tables: Record<string, Row[]> = {};
     for (const [name, rows] of Object.entries(initialTables)) {
@@ -222,6 +229,7 @@ function makeDb(
             let mode: "select" | "delete" | "update" = "select";
             let patch: Row = {};
             let limitCount = Infinity;
+            let uriTooLong = false;
             const orders: Array<[string, boolean]> = [];
             const narrow = (next: (row: Row) => boolean) => {
                 const prev = predicate;
@@ -262,6 +270,7 @@ function makeDb(
                     return query;
                 },
                 in: (column: string, values: unknown[]) => {
+                    if (options.maxInIds && values.length > options.maxInIds) uriTooLong = true;
                     narrow((row) => values.includes(row[column]));
                     return query;
                 },
@@ -294,7 +303,14 @@ function makeDb(
                     reject?: (reason: unknown) => unknown,
                 ) => {
                     let result: { data: Row[] | null; error: unknown };
-                    if (mode === "delete") {
+                    if (uriTooLong) {
+                        result = { data: null, error: { message: "414 Request-URI Too Large" } };
+                    } else if (mode === "select" && options.selectErrors?.[table]) {
+                        result = {
+                            data: null,
+                            error: { message: options.selectErrors[table], code: "XX000" },
+                        };
+                    } else if (mode === "delete") {
                         const message = options.deleteErrors?.[table];
                         if (message) {
                             result = { data: null, error: { message } };
@@ -1276,6 +1292,42 @@ describe("cleanup past PostgREST's max_rows", () => {
         );
         await deleteUserProjects(db, "u1", null);
         expect(tables.projects).toEqual([]);
+    });
+
+    it("keeps the cause of a failed paged read", async () => {
+        const { db } = makeDb(
+            { tabular_reviews: [{ id: "r1", user_id: "u1", org_id: null }] },
+            { selectErrors: { tabular_reviews: "connection reset" } },
+        );
+        const failure = await deleteAllUserTabularReviews(db, "u1", null).catch(
+            (error: unknown) => error,
+        );
+        expect(failure).toBeInstanceOf(Error);
+        expect((failure as Error).message).toBe(
+            "Failed to load tabular reviews: connection reset",
+        );
+        expect((failure as Error).cause).toBeDefined();
+    });
+
+    it("keeps the content of many org projects without an over-long request", async () => {
+        // About 208 project ids already pass the gateway's URL limit; every
+        // id list goes out in batches of 50.
+        const projects = many("p", 120, { user_id: "u2", org_id: "org-1" });
+        const { db, tables } = makeDb(
+            {
+                projects,
+                documents: projects.map((project) => ({
+                    id: `d-${project.id}`,
+                    user_id: "u1",
+                    project_id: project.id,
+                    org_id: "org-1",
+                })),
+            },
+            { maxInIds: 50 },
+        );
+        await deleteUserAccountData(db, "u1", null);
+        expect(tables.documents).toHaveLength(120);
+        expect(tables.documents.every((row) => row.user_id === null)).toBe(true);
     });
 
     it("deletes every review chat in the workspace, not the first 1000", async () => {

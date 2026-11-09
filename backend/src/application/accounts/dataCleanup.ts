@@ -13,9 +13,17 @@ import { wipeMemoryFiles } from "../../lib/memory/files";
 import { listPersonalOrgIds } from "../../lib/personalOrgs";
 import { deleteOrgContent } from "../organizations/purgeContent";
 import { throwIfError } from "../../lib/serviceData";
-import { queryFailureCause, selectAllByKey, uniqueIds } from "../../lib/batchedQuery";
+import {
+    ID_FILTER_BATCH_SIZE,
+    queryFailureCause,
+    selectAllByKey,
+    uniqueIds,
+} from "../../lib/batchedQuery";
 
-const DELETE_BATCH_SIZE = 500;
+// Every `.in()` id list travels in the request URL, for reads, updates and
+// deletes alike. 500 UUIDs is about 18 KB of URL, past the gateway's limit;
+// batches of ID_FILTER_BATCH_SIZE stay under it (as lib/access.ts does).
+const DELETE_BATCH_SIZE = ID_FILTER_BATCH_SIZE;
 
 async function deleteByIds(db: Db, table: string, ids: string[]) {
     for (const batch of chunkArray(ids, DELETE_BATCH_SIZE)) {
@@ -38,10 +46,24 @@ async function selectEveryRow<T extends Record<string, unknown>>(
     try {
         return await selectAllByKey<T>(context, build);
     } catch (error) {
-        const cause = queryFailureCause(error) as { message?: string } | null;
-        await throwIfError(cause ?? {}, context);
-        throw error;
+        const failure = queryFailureCause(error) as { message?: string } | null;
+        throw new Error(`${context}: ${failure?.message ?? "unknown error"}`, {
+            cause: error,
+        });
     }
+}
+
+/** {@link selectEveryRow} for a filter on many ids, one URL-safe batch at a time. */
+async function selectEveryRowIn<T extends Record<string, unknown>>(
+    context: string,
+    ids: string[],
+    build: (batch: string[]) => unknown,
+): Promise<T[]> {
+    const rows: T[] = [];
+    for (const batch of chunkArray(ids, DELETE_BATCH_SIZE)) {
+        rows.push(...(await selectEveryRow<T>(context, () => build(batch))));
+    }
+    return rows;
 }
 
 /**
@@ -184,24 +206,21 @@ async function getDocumentIdsForAccountDeletion(
         selectEveryRow<DocRow>("Failed to load user documents", () =>
             db.from("documents").select("id, org_id, workflow_id").eq("user_id", userId),
         ),
-        personalProjectIds.length > 0
-            ? selectEveryRow<DocRow>("Failed to load project documents", () =>
-                  db
-                      .from("documents")
-                      .select("id, org_id, workflow_id")
-                      .in("project_id", personalProjectIds),
-              )
-            : Promise.resolve([] as DocRow[]),
-        orgProjectIds.length > 0
-            ? selectEveryRow<DocRow>(
-                  "Failed to load organization project documents",
-                  () =>
-                      db
-                          .from("documents")
-                          .select("id, org_id")
-                          .in("project_id", orgProjectIds),
-              )
-            : Promise.resolve([] as DocRow[]),
+        selectEveryRowIn<DocRow>(
+            "Failed to load project documents",
+            personalProjectIds,
+            (batch) =>
+                db
+                    .from("documents")
+                    .select("id, org_id, workflow_id")
+                    .in("project_id", batch),
+        ),
+        selectEveryRowIn<DocRow>(
+            "Failed to load organization project documents",
+            orgProjectIds,
+            (batch) =>
+                db.from("documents").select("id, org_id").in("project_id", batch),
+        ),
     ]);
 
     const candidates = [...ownedDocs, ...projectDocs];
