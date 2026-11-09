@@ -272,9 +272,20 @@ export function SubagentGroup({
     const selected = delegations.find((d) => d.delegation_id === selectedId);
     const running = delegations.some((d) => d.isStreaming);
     const allDone = delegations.every((d) => d.status === "completed");
-    // Every subagent was still running when the turn ended.
-    const allStopped = delegations.every((d) => d.interrupted);
     const count = delegations.length;
+    // Subagents still running when the turn ended.
+    const stoppedCount = delegations.filter((d) => d.interrupted).length;
+    const finishedCount = count - stoppedCount;
+    const summary =
+        count === 1
+            ? stoppedCount
+                ? "Subagent stopped"
+                : "Subagent finished"
+            : stoppedCount === 0
+              ? `${count} subagents finished`
+              : finishedCount === 0
+                ? `${count} subagents stopped`
+                : `${finishedCount} ${finishedCount === 1 ? "subagent" : "subagents"} finished, ${stoppedCount} stopped`;
     return (
         <>
             {/* The pills sit in this step's content column, so Mike's line
@@ -312,13 +323,7 @@ export function SubagentGroup({
                     dotColor={allDone ? "green" : "gray"}
                     showConnector={showConnectorAfter}
                 >
-                    <EventLabel>
-                        {count === 1
-                            ? allStopped
-                                ? "Subagent stopped"
-                                : "Subagent finished"
-                            : `${count} subagents ${allStopped ? "stopped" : "finished"}`}
-                    </EventLabel>
+                    <EventLabel>{summary}</EventLabel>
                 </EventBlock>
             )}
         </>

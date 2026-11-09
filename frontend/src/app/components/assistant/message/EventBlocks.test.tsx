@@ -219,6 +219,25 @@ describe("stopped reads, finds and CourtListener calls", () => {
     });
 });
 
+describe("CourtListenerBlock searches", () => {
+    const items = [
+        { caseName: "Roe v. Doe", citation: null, query: "damages", totalMatches: 2 },
+    ];
+
+    it("names the searches of a stopped call without claiming they ran", () => {
+        render(<CourtListenerBlock label="Stopped 1 search in 1 case" interrupted items={items} />);
+        fireEvent.click(screen.getByRole("button", { name: /Stopped 1 search in 1 case/ }));
+        expect(screen.getByText(/Search for "damages" in Roe v\. Doe/)).toBeInTheDocument();
+        expect(screen.queryByText(/Searched for/)).not.toBeInTheDocument();
+    });
+
+    it("keeps the completed wording for searches that reported", () => {
+        render(<CourtListenerBlock label="Ran 1 search in 1 case" items={items} />);
+        fireEvent.click(screen.getByRole("button", { name: /Ran 1 search in 1 case/ }));
+        expect(screen.getByText(/Searched for "damages" in Roe v\. Doe \(2 matches\)/)).toBeInTheDocument();
+    });
+});
+
 describe("AskInputsBlock", () => {
     it("collapses completed input details and toggles them from the label", () => {
         render(

@@ -736,8 +736,10 @@ export function CourtListenerBlock({
                             .filter(Boolean)
                             .join(", ");
                         const primary = label || item.url || "Unknown case";
+                        // A stopped call never reported these searches, so
+                        // they are named, not claimed as done.
                         const searchText = item.query
-                            ? `Searched for "${item.query}" in ${primary}${
+                            ? `${interrupted ? "Search for" : "Searched for"} "${item.query}" in ${primary}${
                                   typeof item.totalMatches === "number"
                                       ? ` (${item.totalMatches} ${
                                             item.totalMatches === 1

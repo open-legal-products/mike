@@ -560,6 +560,17 @@ describe("AssistantMessage stopped steps", () => {
         expect(screen.getByText("Subagent stopped")).toBeInTheDocument();
         expect(screen.queryByText("Subagent finished")).not.toBeInTheDocument();
     });
+
+    it("counts finished and stopped subagents apart in a mixed group", () => {
+        render(<AssistantMessage isStreaming events={[
+            { type: "delegation", delegation_id: "d1", title: "Research", task: "Find cases",
+                events: [], status: "completed" },
+            { type: "delegation", delegation_id: "d2", title: "Summary", task: "Summarize",
+                events: [], interrupted: true },
+        ]} />);
+        expect(screen.getByText("1 subagent finished, 1 stopped")).toBeInTheDocument();
+        expect(screen.queryByText("2 subagents finished")).not.toBeInTheDocument();
+    });
 });
 
 describe("AssistantMessage response details", () => {
