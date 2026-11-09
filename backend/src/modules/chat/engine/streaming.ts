@@ -1143,7 +1143,10 @@ export async function runLLMStream(params: {
       // The ask_inputs event has already been emitted and persisted in `events`.
       // Stop this assistant turn here so the model does not add redundant
       // prose telling the user to answer the picker or attach documents.
-    } else if (isAbortError(err)) {
+    } else if (isAbortError(err) || signal?.aborted) {
+      // Any failure after the turn's signal fired (a client tool or a tool
+      // call that rejects once the stop reached it) ends the turn as
+      // stopped: that is the outcome its readers were given.
       await recordDelegations().catch(() => {});
       flushPartialTurn({ emit: false });
       throw new AssistantStreamAbortError(

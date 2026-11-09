@@ -65,6 +65,7 @@ import {
   runLLMStream,
 } from "../streaming";
 import { createKeyedLock } from "../tools/documentLocks";
+import { emptyToolCallBatchResult } from "../tools/toolBatchResult";
 import { runToolCalls } from "../tools/toolDispatcher";
 
 const cardCall = (id: string) => ({
@@ -308,6 +309,81 @@ describe("a batch where a later call rejects", () => {
     expect(editEvents(outcome)).toEqual([
       expect.objectContaining({ document_id: "d1", version_id: "v2" }),
     ]);
+  });
+});
+
+describe("grouped case searches before a rejecting call", () => {
+  it("keeps the searches that finished in the batch result, once", async () => {
+    planConnectorToolCall.mockRejectedValueOnce(new Error("connector planning failed"));
+    const results = emptyToolCallBatchResult();
+    const { docStore, docIndex } = lease();
+    const outcome = await runToolCalls(
+      [
+        { id: "find-1", function: { name: "courtlistener_find_in_case", arguments: JSON.stringify({ cluster_id: 1, query: "damages" }) } },
+        { id: "find-2", function: { name: "courtlistener_find_in_case", arguments: JSON.stringify({ cluster_id: 2, query: "damages" }) } },
+        { id: "mcp-1", function: { name: "mcp_crm_update_record", arguments: JSON.stringify({ id: "r1" }) } },
+      ],
+      docStore,
+      "user-1",
+      {} as never,
+      vi.fn(),
+      undefined,
+      undefined,
+      docIndex,
+      new Map(),
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      { results },
+    ).then(
+      () => null,
+      (error: unknown) => error,
+    );
+
+    expect(outcome).toBeInstanceOf(Error);
+    const groups = results.courtlistenerEvents.filter(
+      (event) => event.type === "courtlistener_find_in_case",
+    );
+    expect(groups).toHaveLength(1);
+    expect(groups[0]).toMatchObject({ cluster_id: null });
+    expect((groups[0] as { searches?: unknown[] }).searches).toHaveLength(2);
+  });
+});
+
+describe("a client tool that fails as the turn stops", () => {
+  it("ends the turn as stopped, not as failed", async () => {
+    const controller = new AbortController();
+    streamChatWithTools.mockImplementationOnce(async ({ runTools }) => {
+      await runTools([{ id: "client-1", name: "word_read_selection", input: {} }]);
+      return { fullText: "" };
+    });
+
+    const outcome = await runLLMStream({
+      model: "gemini-3.8-flash",
+      apiMessages: [{ role: "user", content: "Read my selection." }],
+      ...lease(),
+      userId: "user-1",
+      db: {} as never,
+      write: vi.fn(),
+      includeAskInputs: false,
+      clientTools: {
+        schemas: [],
+        owns: (name) => name === "word_read_selection",
+        // The pane stops the turn, then its pending call fails plainly.
+        execute: async () => {
+          controller.abort();
+          throw new Error("the task pane went away");
+        },
+      },
+      signal: controller.signal,
+    }).then(
+      () => null,
+      (error: unknown) => error,
+    );
+
+    expect(outcome).toBeInstanceOf(AssistantStreamAbortError);
   });
 });
 

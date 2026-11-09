@@ -444,6 +444,35 @@ export async function runToolCalls(
     CourtlistenerToolEvent,
     { type: "courtlistener_find_in_case" }
   >[] = [];
+  // The grouped searches' summary. Kept current in the batch result as each
+  // search completes, so a later call's rejection still leaves the finished
+  // searches there; at the end of the batch it moves last and is streamed.
+  let groupedFindInCaseSummary: CourtlistenerToolEvent | null = null;
+  const summarizeGroupedFindInCase = (): CourtlistenerToolEvent => {
+    const errors = groupedFindInCaseEvents
+      .map((event) => event.error)
+      .filter((error): error is string => !!error);
+    const summary: CourtlistenerToolEvent = {
+      type: "courtlistener_find_in_case",
+      cluster_id: null,
+      query: "",
+      total_matches: groupedFindInCaseEvents.reduce(
+        (sum, event) => sum + event.total_matches,
+        0,
+      ),
+      searches: groupedFindInCaseEvents.map(findInCaseSearchSummary),
+      ...(errors.length ? { error: errors.join("; ") } : {}),
+    };
+    if (groupedFindInCaseSummary) {
+      courtlistenerEvents.splice(
+        courtlistenerEvents.indexOf(groupedFindInCaseSummary),
+        1,
+      );
+    }
+    courtlistenerEvents.push(summary);
+    groupedFindInCaseSummary = summary;
+    return summary;
+  };
 
   const registerGeneratedDocument = (
     tc: ToolCall,
@@ -1476,6 +1505,7 @@ export async function runToolCalls(
         };
         if (shouldGroupFindInCase) {
           groupedFindInCaseEvents.push(event);
+          summarizeGroupedFindInCase();
         } else {
           write(`data: ${JSON.stringify(event)}\n\n`);
           courtlistenerEvents.push(event);
@@ -1530,6 +1560,7 @@ export async function runToolCalls(
       };
       if (shouldGroupFindInCase) {
         groupedFindInCaseEvents.push(event);
+        summarizeGroupedFindInCase();
       } else {
         write(`data: ${JSON.stringify(event)}\n\n`);
         courtlistenerEvents.push(event);
@@ -2398,22 +2429,9 @@ export async function runToolCalls(
   }
 
   if (shouldGroupFindInCase && groupedFindInCaseEvents.length > 0) {
-    const errors = groupedFindInCaseEvents
-      .map((event) => event.error)
-      .filter((error): error is string => !!error);
-    const groupEvent: CourtlistenerToolEvent = {
-      type: "courtlistener_find_in_case",
-      cluster_id: null,
-      query: "",
-      total_matches: groupedFindInCaseEvents.reduce(
-        (sum, event) => sum + event.total_matches,
-        0,
-      ),
-      searches: groupedFindInCaseEvents.map(findInCaseSearchSummary),
-      ...(errors.length ? { error: errors.join("; ") } : {}),
-    };
-    write(`data: ${JSON.stringify(groupEvent)}\n\n`);
-    courtlistenerEvents.push(groupEvent);
+    // Moves the summary after the batch's other CourtListener events.
+    const summary = summarizeGroupedFindInCase();
+    write(`data: ${JSON.stringify(summary)}\n\n`);
   }
 
   addApprovalItems(askInputsEvents, approvalItems);
