@@ -476,6 +476,35 @@ describe("error frames", () => {
     turn.finish();
   });
 
+  it("ends tool steps still in progress, as a deadline's error ends the turn", async () => {
+    expect(
+      await eventsOf([
+        { type: "doc_replicate_start", filename: "answer.docx", count: 2 },
+        { type: "doc_edited_start", filename: "brief.docx" },
+        {
+          type: "error",
+          message: "The request timed out because it stopped responding. Please try again.",
+          safe_to_display: true,
+        },
+      ]),
+    ).toEqual([
+      { type: "doc_replicated", filename: "answer.docx", count: 2 },
+      {
+        type: "doc_edited",
+        filename: "brief.docx",
+        document_id: "",
+        version_id: "",
+        download_url: "",
+        annotations: [],
+      },
+      {
+        type: "error",
+        message: "The request timed out because it stopped responding. Please try again.",
+        safe_to_display: true,
+      },
+    ]);
+  });
+
   it("finalizes an in-flight content block before appending the error", async () => {
     expect(
       await eventsOf([

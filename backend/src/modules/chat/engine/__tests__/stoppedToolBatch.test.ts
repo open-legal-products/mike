@@ -269,17 +269,21 @@ describe("a write that waited past the turn's stop", () => {
     const release = await documentLocks.acquire("d1");
     setTimeout(release, WAIT);
     runEditDocument.mockResolvedValue(editedVersion);
+    const write = vi.fn();
 
     const pending = runOne(
       "edit_document",
       { doc_id: "doc-0", edits: [{ find: "a", replace: "b" }] },
       { signal: stopDuringWait(), documentLocks },
+      write,
     );
     await vi.advanceTimersByTimeAsync(WAIT);
     const result = await pending;
 
     expect(runEditDocument).not.toHaveBeenCalled();
     expect(result.docsEdited).toEqual([]);
+    // No "Editing" card is opened for an edit that never ran.
+    expect(framesOfType(write, "doc_edited_start")).toEqual([]);
   });
 
   it("does not start a playbook review whose document lock frees after the stop", async () => {

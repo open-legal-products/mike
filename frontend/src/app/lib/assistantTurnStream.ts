@@ -314,9 +314,10 @@ export function createTurnEventSink(
     publish();
   };
 
-  // A turn that failed outside an error frame (the request was refused, or
-  // the connection broke for good): nothing is still running, so no
-  // "Thinking…" line or in-progress step may keep spinning beside the error.
+  // A turn that failed: an error frame (which always ends the turn, including
+  // the one a deadline writes), a refused request, or a connection that broke
+  // for good. Nothing is still running, so no "Thinking…" line or in-progress
+  // step (an edit, a replication, …) may keep spinning beside the error.
   const endStreamingAfterFailure = () => {
     eventsRef.current = cancelStreamingEvents(eventsRef.current);
     publish();
@@ -402,6 +403,7 @@ export async function consumeAssistantTurnStream(
     finalizeStreamingContent,
     finalizeStreamingReasoning,
     clearStreamingPlaceholders,
+    endStreamingAfterFailure,
     pushThinkingPlaceholder,
     pushEvent,
     updateMatchingEvent,
@@ -463,9 +465,7 @@ export async function consumeAssistantTurnStream(
           // signal the surface can turn into "go fix your key" rather than
           // leaving it as one more line of failed-response text.
           if (data.code === "invalid_api_key") hooks.onRejectedApiKey?.();
-          clearStreamingPlaceholders();
-          finalizeStreamingContent();
-          finalizeStreamingReasoning();
+          endStreamingAfterFailure();
           eventsRef.current = [
             ...eventsRef.current,
             {
