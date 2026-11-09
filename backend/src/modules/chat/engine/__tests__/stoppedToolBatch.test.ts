@@ -60,6 +60,7 @@ vi.mock("../../../../lib/documentVersions", async (original) => ({
 
 import {
   AssistantStreamAbortError,
+  AssistantStreamError,
   isAbortError,
   runLLMStream,
 } from "../streaming";
@@ -238,6 +239,75 @@ describe("a stopped turn's tool batch", () => {
         version_id: "v2",
       }),
     );
+  });
+});
+
+describe("a batch where a later call rejects", () => {
+  const editThenConnector = () =>
+    streamChatWithTools.mockImplementationOnce(async ({ runTools }) => {
+      await runTools([
+        {
+          id: "edit-1",
+          name: "edit_document",
+          input: { doc_id: "doc-0", edits: [{ find: "a", replace: "b" }] },
+        },
+        { id: "mcp-1", name: "mcp_crm_update_record", input: { id: "r1" } },
+      ]);
+      return { fullText: "" };
+    });
+
+  const run = (signal?: AbortSignal) =>
+    runLLMStream({
+      model: "gemini-3.8-flash",
+      apiMessages: [{ role: "user", content: "Edit the lease, then log it." }],
+      ...lease(),
+      userId: "user-1",
+      db: {} as never,
+      write: vi.fn(),
+      includeAskInputs: false,
+      allowDocumentMutation: true,
+      ...(signal ? { signal } : {}),
+    }).then(
+      () => null,
+      (error: unknown) => error,
+    );
+
+  const editEvents = (outcome: unknown) =>
+    (outcome as AssistantStreamError).events.filter(
+      (event) => event.type === "doc_edited",
+    );
+
+  it("keeps the edit that saved a version in the failed turn", async () => {
+    runEditDocument.mockResolvedValueOnce(editedVersion);
+    planConnectorToolCall.mockRejectedValueOnce(new Error("connector planning failed"));
+    editThenConnector();
+
+    const outcome = await run();
+
+    expect(outcome).toBeInstanceOf(AssistantStreamError);
+    expect(isAbortError(outcome)).toBe(false);
+    expect(editEvents(outcome)).toEqual([
+      expect.objectContaining({ document_id: "d1", version_id: "v2" }),
+    ]);
+  });
+
+  it("keeps the edit, and ends the turn as stopped, when the rejection comes after a stop", async () => {
+    const controller = new AbortController();
+    runEditDocument.mockResolvedValueOnce(editedVersion);
+    // The turn is stopped while the connector's plan is pending, and the plan
+    // then rejects.
+    planConnectorToolCall.mockImplementationOnce(async () => {
+      controller.abort();
+      throw new Error("connector planning failed");
+    });
+    editThenConnector();
+
+    const outcome = await run(controller.signal);
+
+    expect(outcome).toBeInstanceOf(AssistantStreamAbortError);
+    expect(editEvents(outcome)).toEqual([
+      expect.objectContaining({ document_id: "d1", version_id: "v2" }),
+    ]);
   });
 });
 

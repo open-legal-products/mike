@@ -76,6 +76,10 @@ import {
   CITATIONS_OPEN_TAG,
 } from "./citations";
 import { runToolCalls } from "./tools/toolDispatcher";
+import {
+  emptyToolCallBatchResult,
+  type ToolCallBatchResult,
+} from "./tools/toolBatchResult";
 import { addApprovalItems } from "./tools/connectorApprovals";
 import { createKeyedLock, type KeyedLock } from "./tools/documentLocks";
 import type { SubagentRunStore } from "./tools/delegateRuns";
@@ -965,115 +969,121 @@ export async function runLLMStream(params: {
             arguments: JSON.stringify(c.input),
           },
         }));
-        const {
-          toolResults,
-          docsRead,
-          docsFound,
-          documentSearchEvents,
-          docsCreated,
-          docsReplicated,
-          workflowsApplied,
-          docsEdited,
-          askInputsEvents,
-          textCardEvents,
-          courtlistenerEvents,
-          caseCitationEvents,
-          mcpEvents,
-        } = await runToolCalls(
-          toolCalls,
-          docStore,
-          userId,
-          db,
-          write,
-          workflowStore,
-          tabularStore,
-          docIndex,
-          turnEditState,
-          turnReadState,
-          projectId,
-          courtlistenerTurnState,
-          apiKeys,
-          nonce,
-          {
-            connectorApprovals: canPauseForApproval,
-            userEmail,
-            orgId,
-            model: selectedModel,
-            documentLocks,
-            documentsScoped: subagentRun?.documentsScoped,
-            signal,
-          },
-        );
+        // Events of the calls that completed, in the order this turn shows
+        // tool results.
+        const recordBatchEvents = (completed: ToolCallBatchResult) => {
+          for (const r of completed.docsRead) {
+            events.push({
+              type: "doc_read",
+              filename: r.filename,
+              document_id: r.document_id,
+              version_id: r.version_id,
+              version_number: r.version_number,
+            });
+          }
+          for (const f of completed.docsFound) {
+            events.push({
+              type: "doc_find",
+              filename: f.filename,
+              document_id: f.document_id,
+              version_id: f.version_id,
+              version_number: f.version_number,
+              query: f.query,
+              total_matches: f.total_matches,
+            });
+          }
+          events.push(...(completed.documentSearchEvents ?? []));
+          events.push(...(completed.textCardEvents ?? []));
+          for (const dl of completed.docsCreated) {
+            events.push({
+              type: "doc_created",
+              filename: dl.filename,
+              download_url: dl.download_url,
+              document_id: dl.document_id,
+              version_id: dl.version_id,
+              version_number: dl.version_number ?? null,
+            });
+          }
+          for (const r of completed.docsReplicated) {
+            events.push({
+              type: "doc_replicated",
+              filename: r.filename,
+              count: r.count,
+              copies: r.copies,
+            });
+          }
+          for (const wf of completed.workflowsApplied) {
+            events.push({
+              type: "workflow_applied",
+              workflow_id: wf.workflow_id,
+              title: wf.title,
+            });
+          }
+          for (const e of completed.docsEdited) {
+            events.push({
+              type: "doc_edited",
+              filename: e.filename,
+              document_id: e.document_id,
+              version_id: e.version_id,
+              version_number: e.version_number,
+              download_url: e.download_url,
+              annotations: e.annotations,
+            });
+          }
+          for (const event of completed.courtlistenerEvents) {
+            events.push(event);
+          }
+          for (const event of completed.mcpEvents) {
+            events.push(event);
+          }
+          for (const event of completed.caseCitationEvents) {
+            events.push(event);
+          }
+        };
+        const batch = emptyToolCallBatchResult();
+        let completed: ToolCallBatchResult;
+        try {
+          completed = await runToolCalls(
+            toolCalls,
+            docStore,
+            userId,
+            db,
+            write,
+            workflowStore,
+            tabularStore,
+            docIndex,
+            turnEditState,
+            turnReadState,
+            projectId,
+            courtlistenerTurnState,
+            apiKeys,
+            nonce,
+            {
+              connectorApprovals: canPauseForApproval,
+              userEmail,
+              orgId,
+              model: selectedModel,
+              documentLocks,
+              documentsScoped: subagentRun?.documentsScoped,
+              signal,
+              results: batch,
+            },
+          );
+        } catch (error) {
+          // A later call rejected, but the ones before it ran: an edit that
+          // saved a new version, a created document. Keep their events in the
+          // turn the route stores as failed or stopped.
+          recordBatchEvents(batch);
+          // A call that rejects after the turn was stopped ends it as stopped,
+          // the outcome its readers were already told.
+          throwIfAborted(signal);
+          throw error;
+        }
+        const { toolResults, askInputsEvents } = completed;
         // A failure after this point happened with tool results in hand; the
         // breadcrumb tells it apart from one in the first model call.
         markStage("tool-result");
-        for (const r of docsRead) {
-          events.push({
-            type: "doc_read",
-            filename: r.filename,
-            document_id: r.document_id,
-            version_id: r.version_id,
-            version_number: r.version_number,
-          });
-        }
-        for (const f of docsFound) {
-          events.push({
-            type: "doc_find",
-            filename: f.filename,
-            document_id: f.document_id,
-            version_id: f.version_id,
-            version_number: f.version_number,
-            query: f.query,
-            total_matches: f.total_matches,
-          });
-        }
-        events.push(...(documentSearchEvents ?? []));
-        events.push(...(textCardEvents ?? []));
-        for (const dl of docsCreated) {
-          events.push({
-            type: "doc_created",
-            filename: dl.filename,
-            download_url: dl.download_url,
-            document_id: dl.document_id,
-            version_id: dl.version_id,
-            version_number: dl.version_number ?? null,
-          });
-        }
-        for (const r of docsReplicated) {
-          events.push({
-            type: "doc_replicated",
-            filename: r.filename,
-            count: r.count,
-            copies: r.copies,
-          });
-        }
-        for (const wf of workflowsApplied) {
-          events.push({
-            type: "workflow_applied",
-            workflow_id: wf.workflow_id,
-            title: wf.title,
-          });
-        }
-        for (const e of docsEdited) {
-          events.push({
-            type: "doc_edited",
-            filename: e.filename,
-            document_id: e.document_id,
-            version_id: e.version_id,
-            version_number: e.version_number,
-            download_url: e.download_url,
-            annotations: e.annotations,
-          });
-        }
-        for (const event of courtlistenerEvents) {
-          events.push(event);
-        }
-        for (const event of mcpEvents) {
-          events.push(event);
-        }
-        for (const event of caseCitationEvents) {
-          events.push(event);
-        }
+        recordBatchEvents(completed);
         // Checked only now: a tool that finished before the stop (an edit
         // that saved a new version, a created document) keeps its event in
         // the stopped turn the route stores.
