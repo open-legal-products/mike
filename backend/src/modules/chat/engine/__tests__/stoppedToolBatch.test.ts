@@ -286,6 +286,28 @@ describe("a write that waited past the turn's stop", () => {
     expect(framesOfType(write, "doc_edited_start")).toEqual([]);
   });
 
+  it("stops an edit waiting behind a lock that is held past the stop", async () => {
+    const documentLocks = createKeyedLock();
+    // The holder keeps the document for the whole test.
+    const release = await documentLocks.acquire("d1");
+    let settled = false;
+
+    const pending = runOne(
+      "edit_document",
+      { doc_id: "doc-0", edits: [{ find: "a", replace: "b" }] },
+      { signal: stopDuringWait(), documentLocks },
+    ).then((result) => {
+      settled = true;
+      return result;
+    });
+    await vi.advanceTimersByTimeAsync(STOP_AT);
+
+    expect(settled).toBe(true);
+    expect((await pending).docsEdited).toEqual([]);
+    expect(runEditDocument).not.toHaveBeenCalled();
+    release();
+  });
+
   it("does not start a playbook review whose document lock frees after the stop", async () => {
     const documentLocks = createKeyedLock();
     const release = await documentLocks.acquire("d1");

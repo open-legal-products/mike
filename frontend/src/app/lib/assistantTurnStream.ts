@@ -298,6 +298,11 @@ export function createTurnEventSink(
         if (!("isStreaming" in event) || !event.isStreaming) return event;
         const rest = { ...event };
         delete (rest as { isStreaming?: boolean }).isStreaming;
+        // An edit or replication that never reported its result may or may
+        // not have happened: show it as stopped, not as done.
+        if (rest.type === "doc_edited" || rest.type === "doc_replicated") {
+          return { ...rest, interrupted: true };
+        }
         return rest as AssistantEvent;
       });
 
