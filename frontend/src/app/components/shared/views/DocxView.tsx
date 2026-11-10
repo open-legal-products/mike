@@ -67,7 +67,7 @@ function focusHighlights(surface: DocxSurface, props: Props): boolean {
     surface.clearRevisionHighlight?.();
     const text = edit?.inserted_text || edit?.deleted_text;
     if (text && surface.selectText?.(text)) return true;
-    // Native selection holds one contiguous range. Select the first matching
+    // One citation is highlighted at a time. Highlight the first matching
     // quote segment, including when its page has not been painted yet.
     for (const quote of props.quotes ?? []) {
         for (const segment of quote.quote.split(/\[\[PAGE_BREAK\]\]|\.{3}|…/)) {
