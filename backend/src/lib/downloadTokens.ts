@@ -21,17 +21,11 @@ function getSecret(): string {
 }
 
 function b64urlEncode(buf: Buffer): string {
-    return buf
-        .toString("base64")
-        .replace(/\+/g, "-")
-        .replace(/\//g, "_")
-        .replace(/=+$/g, "");
+    return buf.toString("base64url");
 }
 
 function b64urlDecode(s: string): Buffer {
-    let t = s.replace(/-/g, "+").replace(/_/g, "/");
-    while (t.length % 4) t += "=";
-    return Buffer.from(t, "base64");
+    return Buffer.from(s, "base64url");
 }
 
 function timingSafeEqStr(a: string, b: string): boolean {

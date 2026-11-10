@@ -30,6 +30,9 @@ import {
   executeWorkspaceAction,
   WORKSPACE_TOOLS,
 } from "../googleWorkspaceApi";
+import { personalConnectorOwner } from "../../connectorOwner";
+import * as sentry from "../../observability/sentry";
+import { diagnosticErrorTags } from "../../observability/sentryPrivacy";
 
 const json = (v: unknown, status = 200) =>
   new Response(status === 204 ? null : JSON.stringify(v), { status });
@@ -39,6 +42,8 @@ beforeEach(() => {
   vi.stubEnv("GOOGLE_WORKSPACE_OAUTH_CLIENT_SECRET", "test-secret");
   vi.stubEnv("MCP_CONNECTORS_ENCRYPTION_SECRET", "test-encryption-key");
   vi.spyOn(console, "error").mockImplementation(() => {});
+  vi.spyOn(console, "warn").mockImplementation(() => {});
+  vi.spyOn(sentry, "reportError").mockReturnValue(null);
   fetchMock = vi.fn<typeof fetch>();
   vi.stubGlobal("fetch", fetchMock);
 });
@@ -62,7 +67,7 @@ async function connected(
   const store = workspaceDb();
   const { authorizationUrl } = await startWorkspaceOAuth(
     store.db,
-    "u1",
+    personalConnectorOwner("u1"),
     provider,
     "http://localhost:3000/api/callback",
   );
@@ -99,7 +104,7 @@ const email = {
 };
 async function approvalFor(store: ReturnType<typeof workspaceDb>) {
   store.tables.user_google_workspace_tokens[0].require_write_approval = true;
-  const plan = await planGoogleWorkspaceCall("u1", "gmail_send", email, store.db);
+  const plan = await planGoogleWorkspaceCall(personalConnectorOwner("u1"), "gmail_send", email, store.db);
   if (plan.type !== "approval") throw new Error(`expected approval: ${plan.type}`);
   return { ...plan.item, id: "approval-1" } as ConnectorApprovalItem;
 }
@@ -107,11 +112,11 @@ async function approvalFor(store: ReturnType<typeof workspaceDb>) {
 describe("Google Workspace opt-in and OAuth", () => {
   it("starts disconnected without deriving a grant from the signed-in user", async () => {
     const store = workspaceDb();
-    expect(await workspaceStatus(store.db, "sso-user", "gmail")).toMatchObject({
+    expect(await workspaceStatus(store.db, personalConnectorOwner("sso-user"), "gmail")).toMatchObject({
       connected: false,
       writeEnabled: false,
     });
-    expect(await buildGoogleWorkspaceTools("sso-user", store.db)).toEqual([]);
+    expect(await buildGoogleWorkspaceTools(personalConnectorOwner("sso-user"), store.db)).toEqual([]);
     expect(fetchMock).not.toHaveBeenCalled();
   });
   it.each(["gmail", "google-calendar"] as const)(
@@ -120,7 +125,7 @@ describe("Google Workspace opt-in and OAuth", () => {
       const store = workspaceDb();
       const { authorizationUrl } = await startWorkspaceOAuth(
         store.db,
-        "u1",
+        personalConnectorOwner("u1"),
         provider,
         "https://mike.test/callback",
       );
@@ -140,16 +145,24 @@ describe("Google Workspace opt-in and OAuth", () => {
       );
     },
   );
+  it("requests only the least-privilege Gmail scopes", () => {
+    expect(requestedScopes("gmail")).toEqual([
+      "openid",
+      "email",
+      "https://www.googleapis.com/auth/gmail.readonly",
+      "https://www.googleapis.com/auth/gmail.compose",
+    ]);
+  });
   it("stores selected account identity separately from the Mike identity and encrypts secrets", async () => {
     const s = await connected();
-    const status = await workspaceStatus(s.db, "u1", "gmail");
+    const status = await workspaceStatus(s.db, personalConnectorOwner("u1"), "gmail");
     expect(status.accountEmail).toBe("different-google-account@example.com");
     expect(JSON.stringify(status)).not.toContain("access-secret");
     expect(JSON.stringify(s.tables)).not.toContain("refresh-secret");
-    expect(await workspaceStatus(s.db, "u2", "gmail")).toMatchObject({
+    expect(await workspaceStatus(s.db, personalConnectorOwner("u2"), "gmail")).toMatchObject({
       connected: false,
     });
-    expect(await workspaceStatus(s.db, "u1", "google-calendar")).toMatchObject({
+    expect(await workspaceStatus(s.db, personalConnectorOwner("u1"), "google-calendar")).toMatchObject({
       connected: false,
     });
   });
@@ -158,7 +171,7 @@ describe("Google Workspace opt-in and OAuth", () => {
     vi.stubEnv("GOOGLE_DRIVE_OAUTH_CLIENT_SECRET", "other-secret");
     const started = startWorkspaceOAuth(
       workspaceDb().db,
-      "u",
+      personalConnectorOwner("u"),
       "gmail",
       "https://mike.test/callback",
     );
@@ -171,7 +184,7 @@ describe("Google Workspace opt-in and OAuth", () => {
     const s = workspaceDb();
     const start = await startWorkspaceOAuth(
       s.db,
-      "u1",
+      personalConnectorOwner("u1"),
       "gmail",
       "https://mike.test",
     );
@@ -179,9 +192,9 @@ describe("Google Workspace opt-in and OAuth", () => {
     await expect(
       completeWorkspaceOAuth(s.db, "u1", "google-calendar", state, "code"),
     ).rejects.toThrow("expired");
-    await cancelWorkspaceOAuth(s.db, "u2", "gmail", state);
+    await cancelWorkspaceOAuth(s.db, personalConnectorOwner("u2"), "gmail", state);
     expect(s.tables.google_workspace_oauth_states).toHaveLength(1);
-    await cancelWorkspaceOAuth(s.db, "u1", "gmail", state);
+    await cancelWorkspaceOAuth(s.db, personalConnectorOwner("u1"), "gmail", state);
     await expect(
       completeWorkspaceOAuth(s.db, "u1", "gmail", state, "code"),
     ).rejects.toThrow("expired");
@@ -193,7 +206,7 @@ describe("Google Workspace opt-in and OAuth", () => {
       const s = workspaceDb();
       const { authorizationUrl } = await startWorkspaceOAuth(
         s.db,
-        "attacker",
+        personalConnectorOwner("attacker"),
         provider,
         "https://mike.test/api/callback",
       );
@@ -210,7 +223,7 @@ describe("Google Workspace opt-in and OAuth", () => {
     "connects %s read-only when Google withholds write access",
     async (provider) => {
       const s = await connected(false, provider);
-      expect(await workspaceStatus(s.db, "u1", provider)).toMatchObject({
+      expect(await workspaceStatus(s.db, personalConnectorOwner("u1"), provider)).toMatchObject({
         connected: true,
         writeEnabled: false,
       });
@@ -220,7 +233,7 @@ describe("Google Workspace opt-in and OAuth", () => {
     const s = workspaceDb();
     const start = await startWorkspaceOAuth(
       s.db,
-      "u1",
+      personalConnectorOwner("u1"),
       "google-calendar",
       "https://mike.test",
     );
@@ -247,13 +260,13 @@ describe("Google Workspace opt-in and OAuth", () => {
     const s = workspaceDb();
     const start = await startWorkspaceOAuth(
       s.db,
-      "u1",
+      personalConnectorOwner("u1"),
       "gmail",
       "https://mike.test",
     );
     fetchMock
       .mockImplementationOnce(async () => {
-        await disconnectWorkspace(s.db, "u1", "gmail");
+        await disconnectWorkspace(s.db, personalConnectorOwner("u1"), "gmail");
         return json({
           access_token: "a",
           refresh_token: "r",
@@ -282,14 +295,14 @@ describe("Google Workspace opt-in and OAuth", () => {
     fetchMock.mockResolvedValueOnce(
       json({ access_token: "fresh", expires_in: 3600 }),
     );
-    expect(await workspaceAccessToken(s.db, "u1", "gmail")).toBe("fresh");
+    expect(await workspaceAccessToken(s.db, personalConnectorOwner("u1"), "gmail")).toBe("fresh");
     expect(decryptFields(row, "refresh_token")).toBe("refresh-secret");
     row.expires_at = "2000-01-01";
     fetchMock.mockImplementationOnce(async () => {
-      await disconnectWorkspace(s.db, "u1", "gmail");
+      await disconnectWorkspace(s.db, personalConnectorOwner("u1"), "gmail");
       return json({ access_token: "late", expires_in: 3600 });
     });
-    await expect(workspaceAccessToken(s.db, "u1", "gmail")).rejects.toThrow(
+    await expect(workspaceAccessToken(s.db, personalConnectorOwner("u1"), "gmail")).rejects.toThrow(
       "changed",
     );
     expect(s.tables.user_google_workspace_tokens).toHaveLength(0);
@@ -306,10 +319,40 @@ describe("Google Workspace opt-in and OAuth", () => {
         400,
       ),
     );
-    await expect(workspaceAccessToken(s.db, "u1", "gmail")).rejects.toThrow(
+    await expect(workspaceAccessToken(s.db, personalConnectorOwner("u1"), "gmail")).rejects.toThrow(
       "Reconnect",
     );
     expect(s.tables.user_google_workspace_tokens).toHaveLength(0);
+  });
+});
+
+describe.each(["gmail", "google-calendar"] as const)("%s OAuth error classification", (provider) => {
+  it.each([401, 503])("classifies token-exchange HTTP %i without losing the status", async (status) => {
+    const store = workspaceDb();
+    const start = await startWorkspaceOAuth(store.db, personalConnectorOwner("u1"), provider, "https://mike.test/callback");
+    fetchMock.mockResolvedValueOnce(json({ error: "provider failure" }, status));
+    await expect(completeWorkspaceOAuth(store.db, "u1", provider, new URL(start.authorizationUrl).searchParams.get("state")!, "code"))
+      .rejects.toMatchObject({ kind: status >= 500 ? "google.api_failed" : "google.auth_failed", cause: { status } });
+    expect(store.tables.user_google_workspace_tokens).toHaveLength(0);
+  });
+
+  it.each([401, 503])("classifies userinfo HTTP %i without losing the status", async (status) => {
+    const store = workspaceDb();
+    const start = await startWorkspaceOAuth(store.db, personalConnectorOwner("u1"), provider, "https://mike.test/callback");
+    fetchMock.mockResolvedValueOnce(json({ access_token: "access", refresh_token: "refresh", expires_in: 3600, scope: grantedScope(provider, false) }))
+      .mockResolvedValueOnce(json({ error: "provider failure" }, status));
+    await expect(completeWorkspaceOAuth(store.db, "u1", provider, new URL(start.authorizationUrl).searchParams.get("state")!, "code"))
+      .rejects.toMatchObject({ kind: status >= 500 ? "google.api_failed" : "google.auth_failed", cause: { status } });
+    expect(store.tables.user_google_workspace_tokens).toHaveLength(0);
+  });
+
+  it.each([401, 503])("classifies refresh HTTP %i and keeps the existing grant", async (status) => {
+    const store = await connected(false, provider);
+    store.tables.user_google_workspace_tokens[0].expires_at = "2000-01-01";
+    fetchMock.mockResolvedValueOnce(json({ error: "provider failure" }, status));
+    await expect(workspaceAccessToken(store.db, personalConnectorOwner("u1"), provider))
+      .rejects.toMatchObject({ kind: status >= 500 ? "google.api_failed" : "google.auth_failed", cause: { status } });
+    expect(store.tables.user_google_workspace_tokens).toHaveLength(1);
   });
 });
 
@@ -319,17 +362,17 @@ describe("Google connector settings", () => {
     const definitions = WORKSPACE_TOOLS.filter(t => t.provider === provider);
     const write = definitions.find(t => t.write)!;
     const read = definitions.find(t => !t.write)!;
-    await setWorkspaceToolEnabled(s.db, "u1", provider, write.name, false);
-    await updateWorkspaceSettings(s.db, "u1", provider, { readOnly: true });
-    const status = await workspaceConnectorStatus(s.db, "u1", provider);
+    await setWorkspaceToolEnabled(s.db, personalConnectorOwner("u1"), provider, write.name, false);
+    await updateWorkspaceSettings(s.db, personalConnectorOwner("u1"), provider, { readOnly: true });
+    const status = await workspaceConnectorStatus(s.db, personalConnectorOwner("u1"), provider);
     expect(status.readOnly).toBe(true);
     expect(status.tools.filter(t => t.write).every(t => !t.enabled)).toBe(true);
     expect(status.tools.find(t => t.name === read.name)?.enabled).toBe(true);
-    const names = JSON.stringify(await buildGoogleWorkspaceTools("u1", s.db));
+    const names = JSON.stringify(await buildGoogleWorkspaceTools(personalConnectorOwner("u1"), s.db));
     expect(names).toContain(read.name);
     for (const t of definitions.filter(t => t.write)) expect(names).not.toContain(t.name);
-    await updateWorkspaceSettings(s.db, "u1", provider, { readOnly: false });
-    const restored = await workspaceConnectorStatus(s.db, "u1", provider);
+    await updateWorkspaceSettings(s.db, personalConnectorOwner("u1"), provider, { readOnly: false });
+    const restored = await workspaceConnectorStatus(s.db, personalConnectorOwner("u1"), provider);
     expect(restored.readOnly).toBe(false);
     expect(restored.tools.find(t => t.name === write.name)?.enabled).toBe(false);
     expect(restored.tools.some(t => t.write && t.enabled)).toBe(true);
@@ -337,9 +380,9 @@ describe("Google connector settings", () => {
   });
   it("blocks direct Gmail writes when read-only is set", async () => {
     const s = await connected(true);
-    await updateWorkspaceSettings(s.db, "u1", "gmail", { readOnly: true });
-    expect((await planGoogleWorkspaceCall("u1", "gmail_send", email, s.db)).type).toBe("result");
-    const result = await executeGoogleWorkspaceToolCall("u1", "gmail_send", email, s.db);
+    await updateWorkspaceSettings(s.db, personalConnectorOwner("u1"), "gmail", { readOnly: true });
+    expect((await planGoogleWorkspaceCall(personalConnectorOwner("u1"), "gmail_send", email, s.db)).type).toBe("result");
+    const result = await executeGoogleWorkspaceToolCall(personalConnectorOwner("u1"), "gmail_send", email, s.db);
     expect(result.event.status).toBe("error");
     expect(result.content).toContain("read-only");
     expect(fetchMock).not.toHaveBeenCalled();
@@ -347,8 +390,8 @@ describe("Google connector settings", () => {
 
   it("lists every tool with its write flag and on/off state", async () => {
     const s = await connected(true);
-    await setWorkspaceToolEnabled(s.db, "u1", "gmail", "gmail_send", false);
-    const status = await workspaceConnectorStatus(s.db, "u1", "gmail");
+    await setWorkspaceToolEnabled(s.db, personalConnectorOwner("u1"), "gmail", "gmail_send", false);
+    const status = await workspaceConnectorStatus(s.db, personalConnectorOwner("u1"), "gmail");
     expect(status).toMatchObject({ enabled: true, requireWriteApproval: false });
     expect(status.tools.find((t) => t.name === "gmail_send")).toMatchObject({
       title: "Send email",
@@ -363,22 +406,55 @@ describe("Google connector settings", () => {
       true,
     );
   });
+  it("offers nothing for a service the operator switched off, even to a user who connected it", async () => {
+    const s = await connected(true);
+    expect(JSON.stringify(await buildGoogleWorkspaceTools(personalConnectorOwner("u1"), s.db))).toContain(
+      "gmail_search",
+    );
+    vi.stubEnv("GOOGLE_WORKSPACE_DISABLED_PROVIDERS", " gmail , not-a-service");
+    expect(await buildGoogleWorkspaceTools(personalConnectorOwner("u1"), s.db)).toEqual([]);
+    expect(console.error).toHaveBeenCalledWith(
+      expect.stringContaining("unknown provider ids"),
+      expect.objectContaining({ unknown: ["not-a-service"] }),
+    );
+    const refused = await executeGoogleWorkspaceToolCall(
+      personalConnectorOwner("u1"),
+      "gmail_search",
+      { query: "x" },
+      s.db,
+    );
+    expect(refused.event.status).toBe("error");
+    expect(refused.content).toContain("Gmail is not offered on this Mike server.");
+    expect(
+      (await planGoogleWorkspaceCall(personalConnectorOwner("u1"), "gmail_send", email, s.db)).type,
+    ).toBe("result");
+    expect(fetchMock).not.toHaveBeenCalled();
+    // Status still describes the grant so Settings can show and delete it.
+    const gmail = await workspaceStatus(s.db, personalConnectorOwner("u1"), "gmail");
+    expect(gmail).toMatchObject({ available: false, connected: true });
+    expect(await workspaceStatus(s.db, personalConnectorOwner("u1"), "google-calendar")).toMatchObject({
+      available: true,
+      connected: false,
+    });
+    await disconnectWorkspace(s.db, personalConnectorOwner("u1"), "gmail");
+    expect((await workspaceStatus(s.db, personalConnectorOwner("u1"), "gmail")).connected).toBe(false);
+  });
   it("hides and refuses a turned-off connection or tool", async () => {
     const s = await connected(true);
-    await setWorkspaceToolEnabled(s.db, "u1", "gmail", "gmail_send", false);
-    const names = JSON.stringify(await buildGoogleWorkspaceTools("u1", s.db));
+    await setWorkspaceToolEnabled(s.db, personalConnectorOwner("u1"), "gmail", "gmail_send", false);
+    const names = JSON.stringify(await buildGoogleWorkspaceTools(personalConnectorOwner("u1"), s.db));
     expect(names).not.toContain("gmail_send");
     expect(names).toContain("gmail_search");
     expect(
-      (await executeGoogleWorkspaceToolCall("u1", "gmail_send", email, s.db))
+      (await executeGoogleWorkspaceToolCall(personalConnectorOwner("u1"), "gmail_send", email, s.db))
         .event.status,
     ).toBe("error");
-    await updateWorkspaceSettings(s.db, "u1", "gmail", { enabled: false });
-    expect(await buildGoogleWorkspaceTools("u1", s.db)).toEqual([]);
+    await updateWorkspaceSettings(s.db, personalConnectorOwner("u1"), "gmail", { enabled: false });
+    expect(await buildGoogleWorkspaceTools(personalConnectorOwner("u1"), s.db)).toEqual([]);
     expect(
       (
         await executeGoogleWorkspaceToolCall(
-          "u1",
+          personalConnectorOwner("u1"),
           "gmail_search",
           { query: "x" },
           s.db,
@@ -393,7 +469,7 @@ describe("Google connector settings", () => {
       s.tables.user_google_workspace_tokens[0].read_only = true;
       return json({ id: "event-1", etag: '"v1"', summary: "Before", start: { date: "2026-10-03" }, end: { date: "2026-10-04" } });
     });
-    const result = await executeGoogleWorkspaceToolCall("u1", "google_calendar_update_event", {
+    const result = await executeGoogleWorkspaceToolCall(personalConnectorOwner("u1"), "google_calendar_update_event", {
       event_id: "event-1", summary: "After", start: { date: "2026-10-03" }, end: { date: "2026-10-04" },
     }, s.db);
     expect(result.event.status).toBe("error");
@@ -403,7 +479,7 @@ describe("Google connector settings", () => {
   });
   it("requires a connection before saving settings", async () => {
     await expect(
-      updateWorkspaceSettings(workspaceDb().db, "u1", "gmail", {
+      updateWorkspaceSettings(workspaceDb().db, personalConnectorOwner("u1"), "gmail", {
         enabled: false,
       }),
     ).rejects.toThrow("Connect Gmail first");
@@ -420,7 +496,7 @@ describe("Google write access", () => {
     "advertises accurate permission guidance for %s (writes: %s)",
     async (provider, write) => {
       const s = await connected(write, provider);
-      const tools = (await buildGoogleWorkspaceTools("u1", s.db)) as Array<{
+      const tools = (await buildGoogleWorkspaceTools(personalConnectorOwner("u1"), s.db)) as Array<{
         function: { name: string; description: string };
       }>;
       expect(tools.length).toBeGreaterThan(0);
@@ -445,10 +521,10 @@ describe("Google write access", () => {
   );
   it("hides write tools on a read-only grant and rejects fabricated direct calls including a model approval flag", async () => {
     const s = await connected();
-    const tools = await buildGoogleWorkspaceTools("u1", s.db);
+    const tools = await buildGoogleWorkspaceTools(personalConnectorOwner("u1"), s.db);
     expect(JSON.stringify(tools)).not.toContain("gmail_send");
     const result = await executeGoogleWorkspaceToolCall(
-      "u1",
+      personalConnectorOwner("u1"),
       "gmail_send",
       email,
       s.db,
@@ -463,11 +539,11 @@ describe("Google write access", () => {
   it("runs a write directly when the connection does not ask for permission", async () => {
     const s = await connected(true);
     expect(
-      await planGoogleWorkspaceCall("u1", "gmail_send", email, s.db),
+      await planGoogleWorkspaceCall(personalConnectorOwner("u1"), "gmail_send", email, s.db),
     ).toEqual({ type: "run" });
     fetchMock.mockResolvedValueOnce(json({ id: "sent-id" }));
     const result = await executeGoogleWorkspaceToolCall(
-      "u1",
+      personalConnectorOwner("u1"),
       "gmail_send",
       email,
       s.db,
@@ -498,10 +574,10 @@ describe("Google write access", () => {
     });
     // Reads never wait for approval.
     expect(
-      await planGoogleWorkspaceCall("u1", "gmail_search", { query: "x" }, s.db),
+      await planGoogleWorkspaceCall(personalConnectorOwner("u1"), "gmail_search", { query: "x" }, s.db),
     ).toEqual({ type: "run" });
     fetchMock.mockResolvedValueOnce(json({ id: "sent-id" }));
-    const result = await executeApprovedGoogleWorkspaceCall("u1", item, s.db);
+    const result = await executeApprovedGoogleWorkspaceCall(personalConnectorOwner("u1"), item, s.db);
     expect(result.event).toMatchObject({ status: "ok", approval_id: "approval-1" });
     expect(fetchMock).toHaveBeenCalledTimes(1);
     const raw = JSON.parse(String(fetchMock.mock.calls[0][1]?.body)).raw;
@@ -515,13 +591,13 @@ describe("Google write access", () => {
       const s = await connected(true);
       const item = await approvalFor(s);
       const grant = s.tables.user_google_workspace_tokens[0];
-      if (kind === "disconnected") await disconnectWorkspace(s.db, "u1", "gmail");
+      if (kind === "disconnected") await disconnectWorkspace(s.db, personalConnectorOwner("u1"), "gmail");
       if (kind === "replaced") grant.grant_id = "new";
       if (kind === "read-only") grant.write_enabled = false;
       if (kind === "read-only-mode") grant.read_only = true;
       if (kind === "tool-off") grant.disabled_tools = ["gmail_send"];
       const result = await executeApprovedGoogleWorkspaceCall(
-        kind === "wrong-user" ? "u2" : "u1",
+        personalConnectorOwner(kind === "wrong-user" ? "u2" : "u1"),
         item,
         s.db,
       );
@@ -531,11 +607,10 @@ describe("Google write access", () => {
   );
   it("reports an uncertain send instead of retrying it or leaking provider text", async () => {
     const s = await connected(true);
-    fetchMock.mockRejectedValueOnce(
-      new Error("provider response lost with secret"),
-    );
+    const cause = new Error("provider response lost with secret");
+    fetchMock.mockRejectedValueOnce(cause);
     const result = await executeGoogleWorkspaceToolCall(
-      "u1",
+      personalConnectorOwner("u1"),
       "gmail_send",
       email,
       s.db,
@@ -544,7 +619,51 @@ describe("Google write access", () => {
     expect(result.event.error).toContain("uncertain");
     expect(result.content).not.toContain("provider response lost");
     expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(sentry.reportError).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({ cause: expect.objectContaining({ cause }) }),
+      { level: "warning" },
+    );
   });
+  it.each([401, 403, 429, 503])(
+    "reports uncertain HTTP %i writes while keeping definite rejections quiet",
+    async (status) => {
+      const s = await connected(true);
+      fetchMock.mockResolvedValueOnce(json({ error: "private upstream details" }, status));
+      const result = await executeGoogleWorkspaceToolCall(
+        personalConnectorOwner("u1"),
+        "gmail_send",
+        email,
+        s.db,
+      );
+      expect(result.event.status).toBe("error");
+      expect(result.content).not.toContain("private upstream details");
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+      if (status === 503) {
+        expect(result.event.error).toContain("outcome is uncertain");
+        expect(sentry.reportError).toHaveBeenCalledExactlyOnceWith(
+          expect.objectContaining({ cause: expect.objectContaining({ status }) }),
+          { level: "warning" },
+        );
+        const [error] = vi.mocked(sentry.reportError).mock.calls[0];
+        expect(diagnosticErrorTags(error)).toMatchObject({
+          error_kind: "google.api_failed",
+          dependency_status: 503,
+        });
+        expect(console.error).toHaveBeenCalledWith(
+          "[google-workspace] tool failed",
+          expect.objectContaining({ error }),
+        );
+      } else {
+        expect(result.event.error).not.toContain("uncertain");
+        expect(sentry.reportError).not.toHaveBeenCalled();
+        expect(console.error).not.toHaveBeenCalled();
+        expect(console.warn).toHaveBeenCalledWith(
+          "[google-workspace] tool failed",
+          expect.objectContaining({ error: expect.any(Error) }),
+        );
+      }
+    },
+  );
 });
 
 describe("Gmail and Calendar API behavior", () => {
@@ -720,15 +839,12 @@ describe("Gmail and Calendar API behavior", () => {
     ).rejects.toThrow("Invalid");
     expect(fetchMock).not.toHaveBeenCalled();
   });
-  it("uses trash rather than permanent message deletion", async () => {
-    fetchMock.mockResolvedValueOnce(json({ id: "m" }));
-    await executeWorkspaceAction(
-      "gmail",
-      { tool: "gmail_trash", args: { message_id: "m" } },
-      "t",
-    );
-    expect(String(fetchMock.mock.calls[0][0])).toContain("/messages/m/trash");
-    expect(fetchMock.mock.calls[0][1]?.method).toBe("POST");
+  it("limits Gmail writes to sending and drafts, which gmail.compose covers", () => {
+    expect(
+      WORKSPACE_TOOLS.filter((t) => t.provider === "gmail" && t.write).map(
+        (t) => t.name,
+      ),
+    ).toEqual(["gmail_send", "gmail_save_draft", "gmail_delete_draft"]);
   });
   it("all tools produce provider-compatible JSON schemas", () => {
     expect(WORKSPACE_TOOLS.length).toBeGreaterThan(10);
@@ -736,22 +852,27 @@ describe("Gmail and Calendar API behavior", () => {
 });
 
 describe("additional Google service regression coverage", () => {
-  it("records write access from the scopes Google granted", async () => {
+  const gmailScope = (name: string) =>
+    `https://www.googleapis.com/auth/gmail.${name}`;
+  it.each([
+    ["a legacy gmail.modify grant", gmailScope("modify"), true],
+    [
+      "gmail.readonly with gmail.compose",
+      `${gmailScope("readonly")} ${gmailScope("compose")}`,
+      true,
+    ],
+    ["gmail.readonly alone", gmailScope("readonly"), false],
+  ])("records write access from %s", async (_label, scope, writeEnabled) => {
     const s = workspaceDb();
     const start = await startWorkspaceOAuth(
       s.db,
-      "u1",
+      personalConnectorOwner("u1"),
       "gmail",
       "https://mike.test",
     );
     fetchMock
       .mockResolvedValueOnce(
-        json({
-          access_token: "a",
-          refresh_token: "r",
-          expires_in: 3600,
-          scope: "https://www.googleapis.com/auth/gmail.modify",
-        }),
+        json({ access_token: "a", refresh_token: "r", expires_in: 3600, scope }),
       )
       .mockResolvedValueOnce(
         json({
@@ -767,18 +888,20 @@ describe("additional Google service regression coverage", () => {
       new URL(start.authorizationUrl).searchParams.get("state")!,
       "code",
     );
-    expect((await workspaceStatus(s.db, "u1", "gmail")).writeEnabled).toBe(
-      true,
+    expect((await workspaceStatus(s.db, personalConnectorOwner("u1"), "gmail")).writeEnabled).toBe(
+      writeEnabled,
     );
     expect(
-      JSON.stringify(await buildGoogleWorkspaceTools("u1", s.db)),
-    ).toContain("gmail_send");
+      JSON.stringify(await buildGoogleWorkspaceTools(personalConnectorOwner("u1"), s.db)).includes(
+        "gmail_send",
+      ),
+    ).toBe(writeEnabled);
   });
   it("uses the exact encrypted PKCE verifier and redirect, and rejects an unverified account", async () => {
     const s = workspaceDb();
     const started = await startWorkspaceOAuth(
       s.db,
-      "u1",
+      personalConnectorOwner("u1"),
       "gmail",
       "https://mike.test/api/callback",
     );
@@ -819,7 +942,7 @@ describe("additional Google service regression coverage", () => {
   it("reports a missing migration separately from a disconnected account", async () => {
     const s = workspaceDb();
     s.failures.set("user_google_workspace_tokens:select", { code: "PGRST205" });
-    expect(await workspaceStatus(s.db, "u1", "gmail")).toMatchObject({
+    expect(await workspaceStatus(s.db, personalConnectorOwner("u1"), "gmail")).toMatchObject({
       schemaReady: false,
       connected: false,
       configured: true,
@@ -974,13 +1097,6 @@ describe("additional Google service regression coverage", () => {
   it.each([
     ["gmail", "gmail_save_draft", email, "POST", "/drafts"],
     [
-      "gmail",
-      "gmail_modify_labels",
-      { message_id: "m", add_label_ids: ["UNREAD"], remove_label_ids: [] },
-      "POST",
-      "/messages/m/modify",
-    ],
-    [
       "google-calendar",
       "google_calendar_create_event",
       {
@@ -1019,29 +1135,6 @@ describe("additional Google service regression coverage", () => {
       expect(fetchMock.mock.calls[0][1]?.method).toBe(method);
     },
   );
-  it("rejects special mail-state label manipulation and overlapping label changes", async () => {
-    fetchMock.mockImplementation(async () => json({ id: "m" }));
-    await expect(
-      prepareWorkspaceAction(
-        "gmail",
-        "gmail_modify_labels",
-        { message_id: "m", add_label_ids: ["TRASH"], remove_label_ids: [] },
-        "t",
-      ),
-    ).rejects.toThrow("gmail_trash");
-    await expect(
-      prepareWorkspaceAction(
-        "gmail",
-        "gmail_modify_labels",
-        {
-          message_id: "m",
-          add_label_ids: ["INBOX"],
-          remove_label_ids: ["INBOX"],
-        },
-        "t",
-      ),
-    ).rejects.toThrow("non-overlapping");
-  });
   it("includes the selected sender and folds long Unicode subjects into valid MIME words", async () => {
     fetchMock.mockResolvedValueOnce(json({ id: "sent" }));
     await executeWorkspaceAction(

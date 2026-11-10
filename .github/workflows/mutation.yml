@@ -35,6 +35,10 @@ on:
     # tab, they block nothing.
     - cron: "17 6 3 * *"
 
+permissions:
+  contents: read
+
+
 jobs:
   mutation:
     name: Backend mutation testing (security libs)
@@ -43,7 +47,7 @@ jobs:
       run:
         working-directory: backend
     steps:
-      - uses: actions/checkout@v7.0.1
+      - uses: actions/checkout@v7
 
       - uses: actions/setup-node@v7.1.0
         with:

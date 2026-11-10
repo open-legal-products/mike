@@ -20,6 +20,7 @@ import {
   terminalErrorFromFrame,
 } from "../lib/wordChatTerminalError";
 import type { ReasoningLevel } from "../lib/wordChatTypes";
+import type { TextCardEvent } from "@mike/contracts";
 
 export interface WordChatDocumentReadEvent {
   type: "doc_read_start" | "doc_read";
@@ -58,6 +59,8 @@ export { WordChatTerminalError };
 
 /** Everything a turn's frames are routed to, whichever response carries them. */
 export interface WordTurnHandlers {
+  /** Copy-ready text placed at this point in the response timeline. */
+  onTextCard?: (event: TextCardEvent) => void;
   /**
    * The turn's identity as the server reports it. `turnId` is what the pane
    * stops and what it reattaches to.
@@ -160,6 +163,18 @@ async function consumeTurnStream(
               : {},
         });
       } else if (
+        d.type === "text_card" &&
+        typeof d.card_id === "string" &&
+        typeof d.title === "string" &&
+        typeof d.text === "string"
+      ) {
+        params.onTextCard?.({
+          type: "text_card",
+          card_id: d.card_id,
+          title: d.title,
+          text: d.text,
+        });
+      } else if (
         (d.type === "doc_read_start" || d.type === "doc_read") &&
         typeof d.filename === "string" &&
         d.filename
@@ -227,6 +242,8 @@ export async function streamAssistant(
       // Workflow runs travel as a reference — the backend resolves the body
       // server-side (inside the <workflow-instructions> fence), same as the web.
       workflow?: { id: string; title: string };
+      // A playbook travels the same way; the engine tells the model to run it.
+      playbook?: { id: string; title: string };
     }[];
     documentContext?: string;
     model: string;

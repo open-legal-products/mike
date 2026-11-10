@@ -87,8 +87,8 @@ export function AssistantChatDivider({
             <div className="absolute inset-y-0 -left-1.5 -right-1.5" />
             <div
                 className={cn(
-                    "pointer-events-none absolute inset-y-0 -left-px -right-px transition-colors group-hover:bg-blue-400/70 group-focus-visible:bg-blue-500",
-                    dragging && "bg-blue-500",
+                    "pointer-events-none absolute inset-y-0 -left-px -right-px transition-colors group-focus-visible:bg-blue-600",
+                    dragging ? "bg-blue-600" : "group-hover:bg-blue-600/60",
                 )}
             />
         </div>

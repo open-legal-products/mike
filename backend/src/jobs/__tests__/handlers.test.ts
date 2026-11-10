@@ -25,7 +25,7 @@ const deleteUserAccountData =
         (db: Db, userId: string, userEmail?: string | null) => Promise<void>
     >(async () => {});
 const listOrgsBlockingAccountDeletion = vi.fn(async () => [] as unknown[]);
-vi.mock("../../modules/user/user.dataCleanup", () => ({
+vi.mock("../../application/accounts/dataCleanup", () => ({
     deleteUserAccountData: (
         db: Db,
         userId: string,
@@ -42,9 +42,9 @@ const buildUserAccountExport =
             userEmail?: string | null,
         ) => Promise<{ hello: string }>
     >(async () => ({ hello: "world" }));
-vi.mock("../../modules/user/user.dataExport", async (importOriginal) => {
+vi.mock("../../application/exports/buildJsonExport", async (importOriginal) => {
     const actual =
-        await importOriginal<typeof import("../../modules/user/user.dataExport")>();
+        await importOriginal<typeof import("../../application/exports/buildJsonExport")>();
     return {
         ...actual,
         buildUserAccountExport: (
@@ -69,6 +69,12 @@ vi.mock("../../lib/auditExport", async (importOriginal) => {
 const buildMemoryArchive = vi.fn(async (..._a: unknown[]) =>
     Buffer.from("memory-zip"),
 );
+// Whether the organization lets this member export; settled per test.
+const memberDataActionAllowed = vi.fn(async (..._a: unknown[]) => true);
+vi.mock("../../modules/orgs/orgs.service", async (importOriginal) => ({
+    ...(await importOriginal<typeof import("../../modules/orgs/orgs.service")>()),
+    memberDataActionAllowed: (...a: unknown[]) => memberDataActionAllowed(...a),
+}));
 vi.mock("../../lib/memory/archive", () => ({
     buildMemoryArchive: (...a: unknown[]) => buildMemoryArchive(...a),
 }));
@@ -89,17 +95,33 @@ const ensureDocAccess = vi.fn(async (..._a: unknown[]) => ({ ok: true }));
 vi.mock("../../lib/access", async (importOriginal) => ({
     ...(await importOriginal<typeof import("../../lib/access")>()),
     ensureDocAccess: (...a: unknown[]) => ensureDocAccess(...a),
+    // The export shares verdicts through the checker; route it to the spy.
+    createDocumentAccessChecker:
+        (userId: string, email: string | null, db: unknown) => (doc: unknown) =>
+            ensureDocAccess(doc, userId, email, db),
 }));
 
-const loadActiveVersion = vi.fn(
-    async (..._a: unknown[]) => ACTIVE_VERSION as typeof ACTIVE_VERSION | null,
+// The export resolves active versions in one batched call over the readable
+// documents; the spy records which documents it was asked about.
+const attachActiveVersionPaths = vi.fn(
+    async (_db: unknown, docs: Array<Record<string, unknown>>) => {
+        for (const doc of docs)
+            Object.assign(doc, {
+                storage_path: ACTIVE_VERSION.storage_path,
+                filename: ACTIVE_VERSION.filename,
+                active_version_number: ACTIVE_VERSION.version_number,
+                source: ACTIVE_VERSION.source,
+            });
+        return docs;
+    },
 );
 vi.mock("../../lib/documentVersions", async (importOriginal) => {
     const actual =
         await importOriginal<typeof import("../../lib/documentVersions")>();
     return {
         ...actual,
-        loadActiveVersion: (...a: unknown[]) => loadActiveVersion(...a),
+        attachActiveVersionPaths: (db: unknown, docs: Array<Record<string, unknown>>) =>
+            attachActiveVersionPaths(db, docs),
     };
 });
 
@@ -119,6 +141,7 @@ vi.mock("../../lib/storage", () => ({
     deleteFile: (key: string) => deleteFile(key),
     listFiles: (prefix: string) => listFiles(prefix),
     downloadFile: (...a: unknown[]) => downloadFile(...a),
+    downloadFileIfAvailable: (...a: unknown[]) => downloadFile(...a),
 }));
 
 import {
@@ -231,7 +254,7 @@ beforeEach(() => {
         .mockResolvedValue("created_at,user\n2026-01-01,a@b.test");
     buildMemoryArchive.mockReset().mockResolvedValue(Buffer.from("memory-zip"));
     ensureDocAccess.mockReset().mockResolvedValue({ ok: true });
-    loadActiveVersion.mockReset().mockResolvedValue(ACTIVE_VERSION);
+    attachActiveVersionPaths.mockClear();
 });
 
 describe("handleChatTurnAudit", () => {
@@ -482,10 +505,12 @@ describe("handleExportBuild", () => {
             }),
         );
 
+        // No workspace in the payload is Personal, never every workspace.
         expect(buildMemoryArchive).toHaveBeenCalledWith(
             db,
             "u1",
             "u@x.test",
+            null,
         );
         const [path, , contentType] = uploadFile.mock.calls[0];
         expect(path).toBe(
@@ -497,6 +522,38 @@ describe("handleExportBuild", () => {
             db,
             expect.objectContaining({ action: "export.memory" }),
         );
+    });
+
+    it("builds an organization's export when its owners still allow it", async () => {
+        memberDataActionAllowed.mockResolvedValueOnce(true);
+        const db = makeDb();
+        const out = await handleExportBuild(
+            db as never,
+            JOB("export.build", {
+                userId: "u1",
+                userEmail: "u@x.test",
+                type: "memory-zip",
+                orgId: "org-1",
+            }),
+        );
+
+        expect(memberDataActionAllowed).toHaveBeenCalledWith(db, "u1", "org-1", "export");
+        expect(buildMemoryArchive).toHaveBeenCalledWith(db, "u1", "u@x.test", "org-1");
+        expect(out.filename).toBe("mike-memory-export-org-1.zip");
+    });
+
+    it("fails an organization's export, without retrying, once its owners turn exports off", async () => {
+        memberDataActionAllowed.mockResolvedValueOnce(false);
+        buildUserAccountExport.mockClear();
+
+        await expect(
+            handleExportBuild(
+                makeDb() as never,
+                JOB("export.build", { userId: "u1", type: "account", orgId: "org-1" }),
+            ),
+        ).rejects.toMatchObject({ name: "NonRetryableJobError" });
+        expect(buildUserAccountExport).not.toHaveBeenCalled();
+        expect(uploadFile).not.toHaveBeenCalled();
     });
 
     it("builds the My Activity CSV from the job's stored filters", async () => {
@@ -555,7 +612,9 @@ describe("handleExportBuild", () => {
         );
 
         expect(ensureDocAccess).toHaveBeenCalledTimes(2);
-        expect(loadActiveVersion.mock.calls.map((c) => c[0])).toEqual(["d1"]);
+        expect(
+            attachActiveVersionPaths.mock.calls.map(([, docs]) => docs.map((doc) => doc.id)),
+        ).toEqual([["d1"]]);
         const [path, , contentType] = uploadFile.mock.calls[0];
         expect(path).toBe("exports/u1/job-1-documents.zip");
         expect(contentType).toBe("application/zip");

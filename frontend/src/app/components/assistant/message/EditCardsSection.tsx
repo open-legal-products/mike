@@ -1,6 +1,5 @@
 import { useState, type ReactNode } from "react";
-import { EditCardsSectionUI } from "@/shared/ui/EditCardsSectionUI";
-import { PillButtonUI } from "@/shared/ui/PillButtonUI";
+import { EditCardsSectionUI, PillButtonUI } from "@mike/ui";
 import { RESPONSE_GLASS_SURFACE } from "./messageStyles";
 import { resolveDocumentEdit } from "@/app/lib/mikeApi";
 import type { EditAnnotation } from "../../shared/types";

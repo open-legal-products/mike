@@ -3,11 +3,16 @@ import { describe, it, expect, vi } from "vitest";
 vi.mock("../../supabase", () => ({ createServerSupabase: vi.fn() }));
 vi.mock("../../storage", () => ({ deleteFile: vi.fn() }));
 
+import { createServerSupabase } from "../../supabase";
+
 import {
     NonRetryableJobError,
     processClaimedJob,
     retryDelayMs,
-    runDbJobTick,
+    createDbJobPool,
+    createDbJobClaimGate,
+    startDbJobRunner,
+    stopDbJobRunner,
     runDbJobRetentionSweep,
 } from "../runner";
 import { DbJobDeferredError, type DbJob } from "../types";
@@ -23,6 +28,8 @@ type Update = {
 function makeDb(opts?: {
     rpc?: () => Promise<{ data: unknown; error: { message: string } | null }>;
     selectData?: unknown[];
+    /** Rows served by id-keyset pages (`gt id`, `limit`), like PostgREST. */
+    keysetRows?: { id: string }[];
 }) {
     const updates: Update[] = [];
     const deletes: Record<string, unknown>[] = [];
@@ -64,7 +71,19 @@ function makeDb(opts?: {
                 state.filters[`lt:${col}`] = val;
                 return b;
             },
-            limit() {
+            in(col: string, vals: unknown[]) {
+                state.filters[col] = vals;
+                return b;
+            },
+            order() {
+                return b;
+            },
+            gt(col: string, val: unknown) {
+                state.filters[`gt:${col}`] = val;
+                return b;
+            },
+            limit(n: number) {
+                state.filters.limit = n;
                 return b;
             },
             then(onF: (v: unknown) => unknown) {
@@ -77,9 +96,13 @@ function makeDb(opts?: {
                     });
                 if (state.op === "delete")
                     deletes.push({ table, ...state.filters });
+                const after = state.filters["gt:id"] as string | undefined;
+                const page = opts?.keysetRows
+                    ?.filter((row) => !after || row.id > after)
+                    .slice(0, state.filters.limit as number);
                 const value =
                     state.op === "select"
-                        ? { data: opts?.selectData ?? [], error: null }
+                        ? { data: page ?? opts?.selectData ?? [], error: null }
                         : { data: null, error: null };
                 return Promise.resolve(value).then(onF);
             },
@@ -112,6 +135,19 @@ const JOB = (over: Partial<DbJob> = {}): DbJob => ({
     created_at: "2026-08-21T00:00:00Z",
     ...over,
 });
+
+
+/** One claim through the production pool, then wait for the claimed jobs. */
+async function claimAndRun(
+    db: unknown,
+    handlers: Parameters<typeof createDbJobPool>[1],
+    failureHooks: Parameters<typeof createDbJobPool>[2] = {},
+    claimGate = createDbJobClaimGate(),
+) {
+    const pool = createDbJobPool(db as never, handlers, failureHooks, { claimGate });
+    await pool.fill();
+    await pool.drain();
+}
 
 describe("retryDelayMs", () => {
     it("backs off exponentially and caps at 30 minutes", () => {
@@ -241,6 +277,17 @@ describe("processClaimedJob", () => {
         expect(runAt - Date.now()).toBeLessThan(35_000);
     });
 
+    it("retries export.build when a required document read fails", async () => {
+        const db = makeDb();
+        await processClaimedJob(
+            db as never,
+            { "export.build": async () => { throw new Error("Object storage download failed"); } },
+            JOB({ kind: "export.build" }),
+        );
+        expect(db.updates[0].payload).toMatchObject({ status: "pending", last_error: "Object storage download failed" });
+        expect(db.updates[0].payload.finished_at).toBeUndefined();
+    });
+
     it("defers a quiet-period job without consuming its retry attempt", async () => {
         const db = makeDb();
         const runAt = new Date(Date.now() + 120_000).toISOString();
@@ -317,7 +364,7 @@ describe("processClaimedJob", () => {
     });
 });
 
-describe("runDbJobTick", () => {
+describe("job pool claim and run", () => {
     it("survives a claim failure (e.g. migration not applied) without throwing", async () => {
         const db = makeDb({
             rpc: async () => ({
@@ -325,14 +372,14 @@ describe("runDbJobTick", () => {
                 error: { message: "relation db_jobs does not exist" },
             }),
         });
-        await expect(runDbJobTick(db as never, {})).resolves.toBe(0);
+        await expect(claimAndRun(db, {})).resolves.toBeUndefined();
     });
 
     it("processes every claimed job even when one handler rejects unexpectedly", async () => {
         const jobs = [JOB({ id: "a" }), JOB({ id: "b" })];
         const db = makeDb({ rpc: async () => ({ data: jobs, error: null }) });
         const seen: string[] = [];
-        await runDbJobTick(db as never, {
+        await claimAndRun(db, {
             "test.kind": async (_db, job) => {
                 seen.push(job.id);
                 if (job.id === "a") throw new Error("boom");
@@ -341,6 +388,43 @@ describe("runDbJobTick", () => {
         expect(seen.sort()).toEqual(["a", "b"]);
     });
 });
+
+describe("startDbJobRunner", () => {
+    it("starts new work while a slow job still holds its slot", async () => {
+        vi.useFakeTimers();
+        vi.stubEnv("DB_JOBS_POLL_MS", "600000");
+        let releaseSlow!: () => void;
+        const slow = new Promise<void>((resolve) => (releaseSlow = resolve));
+        const queue = [JOB({ id: "slow" }), JOB({ id: "fast-1" }), JOB({ id: "fast-2" })];
+        vi.mocked(createServerSupabase).mockReturnValue(
+            makeDb({ rpc: async () => ({ data: queue.splice(0, 2), error: null }) }) as never,
+        );
+        const started: string[] = [];
+        try {
+            startDbJobRunner({
+                "test.kind": async (_db, job) => {
+                    started.push(job.id);
+                    if (job.id === "slow") await slow;
+                },
+            });
+            await vi.advanceTimersByTimeAsync(1_000);
+            // fast-1 finishing frees its slot; fast-2 must not wait for "slow".
+            expect(started).toEqual(["slow", "fast-1", "fast-2"]);
+        } finally {
+            releaseSlow();
+            await stopDbJobRunner();
+            vi.unstubAllEnvs();
+            vi.useRealTimers();
+        }
+    });
+});
+
+/** Row ids the sweep deleted, whether one by one or as a batch. */
+function deletedIds(deletes: Record<string, unknown>[]): string[] {
+    return deletes.flatMap((d) =>
+        Array.isArray(d.id) ? (d.id as string[]) : typeof d.id === "string" ? [d.id] : [],
+    );
+}
 
 describe("runDbJobRetentionSweep", () => {
     it("deletes an expired export's storage object BEFORE dropping its row", async () => {
@@ -357,7 +441,7 @@ describe("runDbJobRetentionSweep", () => {
             },
         });
         expect(order).toEqual(["file:exports/u/e1.json"]);
-        expect(origThen.some((d) => d.id === "e1")).toBe(true);
+        expect(deletedIds(origThen)).toContain("e1");
     });
 
     it("keeps the row when the artifact delete fails, so the next sweep retries", async () => {
@@ -371,7 +455,7 @@ describe("runDbJobRetentionSweep", () => {
                 throw new Error("storage down");
             },
         });
-        expect(db.deletes.some((d) => d.id === "e1")).toBe(false);
+        expect(deletedIds(db.deletes)).not.toContain("e1");
     });
 
     // The keep-to-retry promise above is only real if no OTHER deleter can
@@ -397,6 +481,42 @@ describe("runDbJobRetentionSweep", () => {
         expect(donePurge?.["neq:kind"]).toBe("export.build");
     });
 
+    it("drains an export backlog larger than one batch in a single sweep", async () => {
+        const keysetRows = Array.from({ length: 250 }, (_, i) => ({
+            id: `e${String(i).padStart(3, "0")}`,
+            result: { storage_path: `exports/u/${i}.json` },
+        }));
+        const db = makeDb({ keysetRows });
+        const deleted: string[] = [];
+        await runDbJobRetentionSweep(db as never, {
+            deleteStoredFile: async (path) => {
+                deleted.push(path);
+            },
+        });
+        expect(deleted).toHaveLength(250);
+        expect(deletedIds(db.deletes)).toHaveLength(250);
+    });
+
+    it("removes a batch's artifacts concurrently and their rows together", async () => {
+        const keysetRows = Array.from({ length: 40 }, (_, i) => ({
+            id: `e${String(i).padStart(3, "0")}`,
+            result: { storage_path: `exports/u/${i}.json` },
+        }));
+        const db = makeDb({ keysetRows });
+        let inFlight = 0;
+        let peak = 0;
+        await runDbJobRetentionSweep(db as never, {
+            deleteStoredFile: async () => {
+                peak = Math.max(peak, ++inFlight);
+                await new Promise((resolve) => setTimeout(resolve, 1));
+                inFlight--;
+            },
+        });
+        expect(peak).toBeGreaterThan(1);
+        expect(peak).toBeLessThanOrEqual(8);
+        expect(db.deletes.filter((d) => Array.isArray(d.id))).toHaveLength(1);
+    });
+
     it("never sweeps failed cleanup rows that own private object pointers", async () => {
         const db = makeDb();
         await runDbJobRetentionSweep(db as never);
@@ -416,7 +536,7 @@ describe("explicit failure hooks", () => {
             expect(seenJob).toBe(job);
             expect(db.updates[0].payload.status).toBe("failed");
         });
-        await runDbJobTick(db as never, { "test.kind": async () => { throw new Error("terminal"); } }, { "test.kind": hook });
+        await claimAndRun(db, { "test.kind": async () => { throw new Error("terminal"); } }, { "test.kind": hook });
         expect(hook).toHaveBeenCalledOnce();
     });
     it("does not call terminal hooks for retryable or deferred work", async () => {
@@ -431,7 +551,7 @@ describe("explicit failure hooks", () => {
     it("contains a hook failure without abandoning later batch jobs", async () => {
         const db = makeDb({ rpc: async () => ({ data: [JOB({ attempts: 3 }), JOB({ id: "next", kind: "success" })], error: null }) });
         const hook = vi.fn(async () => { throw new Error("hook unavailable"); });
-        await runDbJobTick(db as never, { "test.kind": async () => { throw new Error("terminal"); }, success: async () => {} }, { "test.kind": hook });
+        await claimAndRun(db, { "test.kind": async () => { throw new Error("terminal"); }, success: async () => {} }, { "test.kind": hook });
         expect(hook).toHaveBeenCalledOnce();
         expect(db.updates.find(row => row.id === "next")?.payload.status).toBe("done");
     });

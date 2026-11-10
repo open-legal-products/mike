@@ -1,15 +1,16 @@
 import React from "react";
 import { LoaderCircle } from "lucide-react";
-import { Markdown } from "../../../shared/chat/Markdown";
+import { ProseBlock } from "./message/ProseBlock";
 import { projectRedlineStream } from "../../lib/redline";
 import type { StreamingRedlineEdit } from "../../lib/redline";
 import type {
   WordDocumentReadEvent,
   WordReasoningEvent,
   WordThinkingEvent,
+  WordTextCardEvent,
 } from "../../types";
-import { PillButtonUI as PillButton } from "@mike/pill-button-ui";
-import { EXCERPT_SOURCE_PROPS } from "@mike/response-selection-menu-ui";
+import { PillButtonUI as PillButton } from "@mike/ui";
+import { TextCardUI } from "@mike/ui";
 import { EditCard } from "./EditCard";
 import { PreResponseWrapper } from "./PreResponseWrapper";
 import { EditCardsSection } from "./message/EditCardsSection";
@@ -21,6 +22,7 @@ import {
 import { ResponseStatus, type StatusState } from "./message/ResponseStatus";
 import {
   assistantContent,
+  projectWordContentEvent,
   assistantError,
   isWordContentEvent,
   isWordDocumentReadEvent,
@@ -28,11 +30,11 @@ import {
   isWordEditReferenceEvent,
   isWordReasoningEvent,
   isWordThinkingEvent,
+  isWordTextCardEvent,
 } from "../../lib/wordChatEvents";
 import { getEditKey } from "../../lib/wordTrackedEditKeys";
 import {
   decodeCitationHref,
-  projectCitationMarkdown,
 } from "../../lib/citations";
 import type {
   EditCardStatus,
@@ -67,6 +69,7 @@ type EventGroup =
       indices: number[];
     }
   | { kind: "prose"; text: string; key: string }
+  | { kind: "text_card"; event: WordTextCardEvent }
   | { kind: "edits"; blockIndexes: number[]; key: string };
 
 function normalizedEditToStreaming(
@@ -105,6 +108,7 @@ function persistedEditStatus(
   if (edit.errorCode === "not-found") return "skipped";
   return "error";
 }
+
 
 function AssistantMessageImpl({
   message,
@@ -145,8 +149,11 @@ function AssistantMessageImpl({
   // Re-projecting the full answer is linear in its length; memoize so edit
   // runtime updates (editStateByKey) do not re-parse an unchanged transcript.
   const streamProjection = React.useMemo(
-    () => projectRedlineStream(content),
-    [content],
+    () => {
+      const contentEvents = message.events.filter(isWordContentEvent);
+      return contentEvents.length === 1 ? projectWordContentEvent(contentEvents[0]!) : projectRedlineStream(content);
+    },
+    [content, message.events],
   );
   const edits: StreamingRedlineEdit[] = React.useMemo(
     () =>
@@ -155,12 +162,11 @@ function AssistantMessageImpl({
         : streamProjection.edits,
     [streamProjection.edits, message.edits],
   );
+  const storedByIndex = React.useMemo(() => new Map(message.edits?.map(edit => [edit.blockIndex, edit])), [message.edits]);
   const editRows = edits.map((edit, editIndex) => {
     const key = getEditKey(message.id, edit.blockIndex);
     const runtime = editStateByKey[key];
-    const stored = message.edits?.find(
-      (candidate) => candidate.blockIndex === edit.blockIndex,
-    );
+    const stored = storedByIndex.get(edit.blockIndex);
     const status: EditCardStatus =
       runtime?.status ??
       persistedEditStatus(stored) ??
@@ -208,9 +214,14 @@ function AssistantMessageImpl({
     };
 
     message.events.forEach((event, eventIndex) => {
+      if (isWordTextCardEvent(event)) {
+        flushPre();
+        result.push({ kind: "text_card", event });
+        return;
+      }
       if (isWordContentEvent(event)) {
         flushPre();
-        const projection = projectRedlineStream(event.text);
+        const projection = projectWordContentEvent(event);
         for (const [segmentIndex, segment] of projection.segments.entries()) {
           if (segment.kind === "prose") {
             result.push({
@@ -260,12 +271,16 @@ function AssistantMessageImpl({
   const hasContentAfter = (groupIndex: number): boolean =>
     groups
       .slice(groupIndex + 1)
-      .some((group) => group.kind === "prose" && group.text.length > 0);
+      .some((group) =>
+        group.kind === "text_card" ||
+        (group.kind === "prose" && group.text.length > 0),
+      );
 
+  const rowsByIndex = new Map(editRows.map(row => [row.edit.blockIndex, row]));
   const renderEditGroup = (blockIndexes: number[]): React.ReactNode => {
     const rows = blockIndexes
       .map((blockIndex) =>
-        editRows.find((row) => row.edit.blockIndex === blockIndex),
+        rowsByIndex.get(blockIndex),
       )
       .filter((row): row is (typeof editRows)[number] => !!row)
       .filter(
@@ -382,6 +397,15 @@ function AssistantMessageImpl({
       <ResponseStatus status={responseStatus} />
       <div className="mt-2 flex flex-col gap-3">
         {groups.map((group, groupIndex) => {
+          if (group.kind === "text_card") {
+            return (
+              <TextCardUI
+                key={`card-${group.event.card_id}`}
+                title={group.event.title}
+                text={group.event.text}
+              />
+            );
+          }
           if (group.kind === "prose") {
             const holdForEdit =
               hasProjectedEdits &&
@@ -391,15 +415,7 @@ function AssistantMessageImpl({
             return (
               <React.Fragment key={group.key}>
                 {group.text && !holdForEdit && (
-                  <div
-                    {...EXCERPT_SOURCE_PROPS}
-                    className="font-serif text-base leading-7 text-gray-900"
-                    onClick={handleCitationClick}
-                  >
-                    <Markdown className="text-base leading-7">
-                      {projectCitationMarkdown(group.text, message.citations)}
-                    </Markdown>
-                  </div>
+                  <ProseBlock isStreaming={isStreaming && groupIndex === groups.length - 1} text={group.text} citations={message.citations} onClick={handleCitationClick} />
                 )}
               </React.Fragment>
             );

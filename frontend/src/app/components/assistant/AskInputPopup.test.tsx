@@ -255,6 +255,22 @@ describe("AskInputPopup", () => {
         );
     });
 
+    it("names the subagent that requested an action", () => {
+        render(
+            <AskInputPopup
+                assistantMessageId="assistant-1"
+                event={{
+                    type: "ask_inputs",
+                    event_id: "ask-1",
+                    items: [{ ...sendEmail, requested_by: "Notify counsel" }],
+                }}
+                onSubmit={vi.fn()}
+            />,
+        );
+
+        expect(screen.getByText(/Notify counsel/)).toBeInTheDocument();
+    });
+
     it("collects a decision for every pending action before submitting", async () => {
         const onSubmit = vi.fn();
         render(

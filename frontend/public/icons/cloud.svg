@@ -1,0 +1,25 @@
+<svg viewBox="0 0 64 64" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Saved documents">
+  <defs>
+    <linearGradient id="cloudFill" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#BAE6FD"/>
+      <stop offset="0.5" stop-color="#38BDF8"/>
+      <stop offset="1" stop-color="#0284C7"/>
+    </linearGradient>
+    <linearGradient id="cloudRim" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#FFFFFF" stop-opacity="0.9"/>
+      <stop offset="0.5" stop-color="#FFFFFF" stop-opacity="0.16"/>
+      <stop offset="1" stop-color="#082F49" stop-opacity="0.6"/>
+    </linearGradient>
+    <radialGradient id="cloudSheen" cx="0.35" cy="0.2" r="0.7">
+      <stop offset="0" stop-color="#FFFFFF" stop-opacity="0.75"/>
+      <stop offset="0.45" stop-color="#FFFFFF" stop-opacity="0.25"/>
+      <stop offset="1" stop-color="#FFFFFF" stop-opacity="0"/>
+    </radialGradient>
+  </defs>
+
+  <ellipse cx="32" cy="56" rx="24" ry="3.2" fill="#0F172A" opacity="0.18"/>
+  <g transform="translate(32 31) scale(1.15) translate(-32 -31)">
+    <path d="M17 47 C10.4 47 6 42.6 6 37 C6 31.6 10.2 27.4 15.5 27.1 C17.3 19.6 23.9 14 32 14 C39.8 14 46.3 19.2 48.1 26.3 C54 26.9 58 31.6 58 37 C58 42.6 53.6 47 48 47 Z" fill="url(#cloudFill)" stroke="url(#cloudRim)" stroke-width="1.8" stroke-linejoin="round"/>
+    <path d="M17 47 C10.4 47 6 42.6 6 37 C6 31.6 10.2 27.4 15.5 27.1 C17.3 19.6 23.9 14 32 14 C39.8 14 46.3 19.2 48.1 26.3 C54 26.9 58 31.6 58 37 C58 42.6 53.6 47 48 47 Z" fill="url(#cloudSheen)"/>
+  </g>
+</svg>

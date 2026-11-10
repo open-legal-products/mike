@@ -20,12 +20,10 @@ import {
     DropdownContent,
     DropdownItem,
     DropdownTrigger,
-} from "@/shared/ui/dropdown";
-import {
     LIQUID_GLASS_FLOAT_CLASS,
     LIQUID_GLASS_HOVER_CLASS,
     LIQUID_GLASS_MODAL_ROW_HOVER_CLASS,
-} from "@/shared/ui/LiquidGlassUI";
+} from "@mike/ui";
 
 export type AccessScope = "direct" | "project";
 
@@ -473,6 +471,7 @@ export function OrganizationAccessEditor({
     currentUserId,
     currentUserEmail,
     visibility = "private",
+    publicMemberRole = "editor",
     onAssign,
     onRemove,
 }: {
@@ -504,6 +503,12 @@ export function OrganizationAccessEditor({
     currentUserEmail?: string | null;
     /** Set on the item's details, and only read here. */
     visibility?: ContentVisibility;
+    /**
+     * What every member holds on a public item. Projects and workflows give
+     * Editor, so only ownership is left to hand out; playbooks give Viewer,
+     * so editing is handed out person by person as on a private item.
+     */
+    publicMemberRole?: "editor" | "viewer";
     onAssign: (
         member: AccessRow,
         role: AccessAssignmentRole,
@@ -513,6 +518,9 @@ export function OrganizationAccessEditor({
     ) => Promise<unknown> | unknown;
 }) {
     const isPublic = visibility === "organization";
+    // A public item everyone can already edit: what is left to give is
+    // ownership. Otherwise people are added as Editors, public or not.
+    const pickOwners = isPublic && publicMemberRole === "editor";
     const assignedKeys = new Set(
         assignments.map(
             (assignment) =>
@@ -584,7 +592,9 @@ export function OrganizationAccessEditor({
             ? "workflow"
             : "project");
     const organizationLabel = organizationName || "the organisation";
-    const peopleDescription = `Share this ${resourceNoun} with members of ${organizationLabel}. They are added as Editors; change a person's role in the list below. It cannot be shared outside the organisation.`;
+    const peopleDescription = isPublic
+        ? `Everyone in ${organizationLabel} can already open and run this ${resourceNoun}. Add members who should edit or own it; they are added as Editors, and you can change a person's role in the list below.`
+        : `Share this ${resourceNoun} with members of ${organizationLabel}. They are added as Editors; change a person's role in the list below. It cannot be shared outside the organisation.`;
     // Everyone can already open and edit a public item, so the only standing
     // left to hand out is ownership of it.
     const ownerDescription = `Add ${organizationLabel} members as owners with rights to manage access, settings and delete the ${resourceNoun}. Everyone in ${organizationLabel} can already open and edit it.`;
@@ -600,7 +610,7 @@ export function OrganizationAccessEditor({
             className="flex min-h-0 flex-1 flex-col gap-4 pb-1"
         >
             <section className="space-y-2">
-                {isPublic ? (
+                {pickOwners ? (
                     <OrganizationMemberPicker
                         id="organization-owner-picker"
                         label={ownerLabel}
@@ -626,13 +636,15 @@ export function OrganizationAccessEditor({
                 )}
                 <OrganizationAssignmentList
                     label={
-                        isPublic ? `${ownerLabel} list` : "People with access"
+                        pickOwners ? `${ownerLabel} list` : "People with access"
                     }
                     assignments={sharedAssignments}
                     emptyMessage={
-                        isPublic
+                        pickOwners
                             ? "No additional Owners added."
-                            : "Not shared with anyone yet."
+                            : isPublic
+                              ? "Nobody has been given more than view access."
+                              : "Not shared with anyone yet."
                     }
                     loading={loading}
                     disabled={disabled}
@@ -641,7 +653,7 @@ export function OrganizationAccessEditor({
                         onAssign(assignment, role)
                     }
                     // A public item's list is its owners.
-                    ownerRoleImplied={isPublic}
+                    ownerRoleImplied={pickOwners}
                 />
             </section>
 

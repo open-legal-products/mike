@@ -32,8 +32,12 @@ export function useDocumentPermissions(documentIds: string[], enabled: boolean) 
             void Promise.resolve().then(() => getDocument(id)).then((document): Permissions => ({
                 canEdit: document.can_edit === true,
                 canDelete: document.can_delete === true,
-            })).catch(() => READ_ONLY).then((permissions) => {
+            })).then((permissions) => {
                 if (current.active) setCache((previous) => ({ ...previous, rights: { ...previous.rights, [id]: permissions } }));
+            }).catch(() => {
+                // Fail closed, but let opening/revisiting tabs retry a transient
+                // failure. Only successful permissions belong in the cache.
+                current.requested.delete(id);
             });
         }
     }, [key, enabled]);

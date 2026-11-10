@@ -150,27 +150,6 @@ describe("NoModelsWarningPopup", () => {
             ).toBeInTheDocument();
         });
 
-        it("offers the member's own keys when the organization allows them in its place", async () => {
-            const user = userEvent.setup();
-            render(
-                <NoModelsWarningPopup
-                    reason="org-api-keys-or-own"
-                    onClose={vi.fn()}
-                />,
-            );
-
-            expect(
-                screen.getByText(
-                    "Your organization has not set up a model provider yet. Ask an organization admin to add one in Organization, or add your own API key in Bring Your Own Keys.",
-                ),
-            ).toBeInTheDocument();
-            // The step the member can take themselves.
-            await user.click(
-                screen.getByRole("button", { name: "Open Bring Your Own Keys" }),
-            );
-            expect(mocks.push).toHaveBeenCalledExactlyOnceWith("/settings/byok");
-        });
-
         it("still sends a personal cause to the caller's own keys", () => {
             render(
                 <NoModelsWarningPopup reason="router-models" onClose={vi.fn()} />,

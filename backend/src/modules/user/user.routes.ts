@@ -1,4 +1,4 @@
-import { GoogleWorkspaceError, startWorkspaceOAuth, completeWorkspaceOAuth, cancelWorkspaceOAuth, disconnectWorkspace, updateWorkspaceSettings, setWorkspaceToolEnabled } from "../../lib/integrations/googleWorkspaceAuth";
+import { GoogleWorkspaceError, GoogleWorkspaceUnavailableError, assertWorkspaceProviderAvailable, startWorkspaceOAuth, completeWorkspaceOAuth, cancelWorkspaceOAuth, disconnectWorkspace, updateWorkspaceSettings, setWorkspaceToolEnabled } from "../../lib/integrations/googleWorkspaceAuth";
 import { workspaceConnectorStatus, workspaceToolList } from "../../lib/integrations/googleWorkspace";
 // HTTP layer for the user module. Handlers parse params/query/body, call the
 // service functions behind user.service.ts, and map their typed results onto
@@ -7,27 +7,33 @@ import { workspaceConnectorStatus, workspaceToolList } from "../../lib/integrati
 // mutating /user route so the service layer never has to know about MFA.
 
 import { safeError } from "../../lib/safeError";
+import { AppError, withKind, type ErrorKind } from "../../lib/appError";
+import { reportError, setOperation } from "../../lib/observability/sentry";
 import {
     cancelGoogleDriveOAuth,
     completeGoogleDriveOAuth,
+    createGoogleDrivePickerSession,
     disconnectGoogleDrive,
+    GoogleDrivePickerUnavailableError,
+    GoogleDriveUnavailableError,
     getGoogleDriveStatus,
     setGoogleDriveToolEnabled,
     startGoogleDriveOAuth,
     updateGoogleDriveSettings,
 } from "../../lib/integrations/googleDrive";
+import { GoogleDriveUserError } from "../../lib/integrations/googleDriveHttp";
 import { ConnectorSetupError } from "../../lib/mcp/errors";
 
 import crypto from "crypto";
-import { Router } from "express";
+import { Router, type Request, type Response } from "express";
 import { requireAuth, requireMfaIfEnrolled } from "../../middleware/auth";
 import { asyncRoute, routerErrorHandler } from "../../middleware/asyncRoute";
-import { createServerSupabase } from "../../lib/supabase";
+import { createServerSupabase, type Db } from "../../lib/supabase";
 import { sendInternalError } from "../../lib/httpError";
 import { sendServiceFailure } from "../../lib/serviceResult";
 import { dbJobsEnabled } from "../../lib/dbq/runner";
 import { buildContentDisposition } from "../../lib/storage";
-import { normalizeApiKeyProvider } from "./user.apiKeyStore";
+import { normalizeApiKeyProvider } from "../../lib/providerCredentials/index";
 import { completeUserMcpConnectorOAuth } from "../../lib/mcpConnectors";
 import { conciseMcpErrorMessage } from "../../lib/mcp/errors";
 import {
@@ -37,49 +43,95 @@ import {
 } from "../../lib/orgs";
 import { sendOrgFailure } from "../../lib/orgFailure";
 import { configuredApiPublicUrl } from "../../lib/runtimeConfig";
+import { isWebSearchBackend } from "../../lib/webSearch";
+import type { ConnectorOwner } from "../../lib/connectorOwner";
+import {
+    PERSONAL_WORKSPACE,
+    resolveWorkspaceFilter,
+    sendWorkspaceFailure,
+} from "../../lib/workspace";
+import {
+    memberDataActionAllowed,
+    type MemberDataAction,
+} from "../orgs/orgs.service";
 import {
     setUserProfilePhoto,
     bootstrapUserProfile,
     completeUserOnboarding,
     createMcpConnector,
     deleteMcpConnector,
-    deletePrivateMemories,
-    deleteUserAccount,
-    describeAccountDeletionBlockers,
-    deleteUserChats,
-    deleteUserProjectsData,
-    deleteUserTabularReviews,
-    errorMessage,
-    getApiKeyStatus,
     getCustomInstructions,
     getResponseStyle,
     getMcpConnector,
-    getUserExportStatus,
     getUserProfile,
-    loadUserExportArtifact,
     lookupUserByEmail,
     listMcpConnectors,
     readBooleanBodyField,
     recordPasswordSet,
     refreshMcpConnectorTools,
-    saveApiKey,
-    setApiKeyEnabled,
     setMcpToolEnabled,
     setMfaOnLogin,
     startMcpConnectorOAuth,
-    startUserExport,
     updateMcpConnector,
     updateUserProfile,
-    validateExportRequest,
     validateOnboardingPayload,
     validateProfilePayload,
     validateCustomInstructionsPayload,
     saveCustomInstructions,
     validateResponseStylePayload,
     saveResponseStyle,
+    getWebSearchSettings,
+    validateWebSearchPayload,
+    saveWebSearchSettings,
+    courtListenerConnectorStatus,
+    setCourtListenerEnabled,
+    setCourtListenerToken,
 } from "./user.service";
+import {
+    deletePrivateMemories,
+    deleteUserChats,
+    deleteUserProjectsData,
+    deleteUserTabularReviews,
+} from "../../application/accounts/clearAccountData";
+import { deleteUserAccount, describeAccountDeletionBlockers } from "../../application/accounts/deleteAccount";
+import {
+    getUserExportStatus,
+    loadUserExportArtifact,
+    startUserExport,
+    validateExportRequest,
+} from "../../application/exports/requestExport";
+import { isWorkspaceExportType } from "../../application/exports/exportContracts";
+import { getApiKeyStatus, saveApiKey, setApiKeyEnabled } from "./user.service";
 
 export const userRouter = Router();
+
+// Connectors are per workspace. `?workspace=` names the one a connector
+// request reads or changes — "personal", or a team organization the caller
+// belongs to — and its absence means Personal, as before each workspace had
+// its own. Sends the failure and answers null when the workspace is not the
+// caller's.
+async function connectorOwner(
+    req: Request,
+    res: Response,
+): Promise<ConnectorOwner | null> {
+    const userId = res.locals.userId as string;
+    const resolved = await resolveWorkspaceFilter(
+        createServerSupabase(),
+        userId,
+        req.query.workspace,
+    );
+    if (!resolved.ok) {
+        sendWorkspaceFailure(res, resolved);
+        return null;
+    }
+    return {
+        userId,
+        orgId:
+            resolved.workspace && resolved.workspace !== PERSONAL_WORKSPACE
+                ? resolved.workspace
+                : null,
+    };
+}
 
 function backendPublicUrl(req: {
     protocol: string;
@@ -181,6 +233,31 @@ function mcpOAuthPopupHeaders(nonce: string) {
         // anything beyond its inline postMessage script.
         "Cross-Origin-Opener-Policy": "unsafe-none",
     };
+}
+
+/**
+ * A Google route that answers 4xx with fixed text for a failure that may
+ * still be ours (a query or crypto failure behind "try again"): reported as
+ * a warning unless it is one of the integration's own user-facing answers.
+ * These calls carry credentials, so the log keeps the redacted category
+ * only; console.warn, because the event (when there is one) is already sent.
+ */
+function warnGoogleRoute(
+    label: string,
+    error: unknown,
+    kind: ErrorKind,
+    context: Record<string, unknown> = {},
+): void {
+    if (
+        !(error instanceof GoogleDriveUserError) &&
+        !(error instanceof GoogleWorkspaceError)
+    ) {
+        reportError(withKind(error, kind, label), {
+            level: "warning",
+            tags: { component: "http" },
+        });
+    }
+    console.warn(label, { ...context, error: safeError(error) });
 }
 
 // POST /user/profile
@@ -353,6 +430,31 @@ userRouter.put("/response-style", requireAuth, asyncRoute(async (req, res) => {
     res.json(result.data);
 }));
 
+// GET /user/web-search
+userRouter.get("/web-search", requireAuth, asyncRoute(async (_req, res) => {
+    const userId = res.locals.userId as string;
+    const result = await getWebSearchSettings(createServerSupabase(), userId);
+    if (!result.ok) return void sendServiceFailure(res, result);
+    res.setHeader("Cache-Control", "private, no-store");
+    res.json(result.data);
+}));
+
+// PUT /user/web-search
+userRouter.put("/web-search", requireAuth, asyncRoute(async (req, res) => {
+    const parsed = validateWebSearchPayload(req.body);
+    if (!parsed.ok) return void res.status(400).json({ detail: parsed.detail });
+
+    const userId = res.locals.userId as string;
+    const result = await saveWebSearchSettings(
+        createServerSupabase(),
+        userId,
+        parsed.update,
+    );
+    if (!result.ok) return void sendServiceFailure(res, result);
+    res.setHeader("Cache-Control", "private, no-store");
+    res.json(result.data);
+}));
+
 // POST /user/onboarding
 userRouter.post("/onboarding", requireAuth, asyncRoute(async (req, res) => {
     const parsed = validateOnboardingPayload(req.body);
@@ -361,7 +463,7 @@ userRouter.post("/onboarding", requireAuth, asyncRoute(async (req, res) => {
     const userId = res.locals.userId as string;
     const db = createServerSupabase();
     const result = await completeUserOnboarding(db, userId, parsed.update);
-    if (!result.ok) return void res.status(500).json({ detail: result.detail });
+    if (!result.ok) return void sendInternalError(res, result.error);
     res.json(result.body);
 }));
 
@@ -374,7 +476,7 @@ userRouter.post("/security/password-set", requireAuth, asyncRoute(async (_req, r
     if (!result.ok) {
         if (result.kind === "not_recorded")
             return void res.status(409).json({ detail: result.detail });
-        return void res.status(500).json({ detail: result.detail });
+        return void sendInternalError(res, result.error);
     }
     res.json(result.body);
 }));
@@ -403,6 +505,7 @@ userRouter.patch(
 
 // GET /user/api-keys
 userRouter.get("/api-keys", requireAuth, asyncRoute(async (_req, res) => {
+    setOperation("settings.keys");
     const userId = res.locals.userId as string;
     const db = createServerSupabase();
     const status = await getApiKeyStatus(db, userId);
@@ -415,12 +518,18 @@ userRouter.put(
     requireAuth,
     requireMfaIfEnrolled,
     asyncRoute(async (req, res) => {
+        setOperation("settings.keys");
         const userId = res.locals.userId as string;
         const provider = normalizeApiKeyProvider(req.params.provider);
         if (!provider)
             return void res
                 .status(400)
                 .json({ detail: "Unsupported provider" });
+        // A connector, with a token per workspace: see /integrations/courtlistener.
+        if (provider === "courtlistener")
+            return void res.status(400).json({
+                detail: "Manage CourtListener in Settings → Connectors.",
+            });
 
         const apiKey =
             typeof req.body?.api_key === "string" ? req.body.api_key : null;
@@ -451,8 +560,14 @@ userRouter.patch(
     requireAuth,
     requireMfaIfEnrolled,
     asyncRoute(async (req, res) => {
+        setOperation("settings.keys");
         const provider = normalizeApiKeyProvider(req.params.provider);
-        if (!provider || provider === "courtlistener" || typeof req.body?.enabled !== "boolean") {
+        if (
+            !provider ||
+            provider === "courtlistener" ||
+            isWebSearchBackend(provider) ||
+            typeof req.body?.enabled !== "boolean"
+        ) {
             return void res.status(400).json({ detail: "A supported provider and boolean enabled value are required." });
         }
         const result = await setApiKeyEnabled(
@@ -467,10 +582,12 @@ userRouter.patch(
 );
 
 // GET /user/mcp-connectors
-userRouter.get("/mcp-connectors", requireAuth, asyncRoute(async (_req, res) => {
-    const userId = res.locals.userId as string;
+userRouter.get("/mcp-connectors", requireAuth, asyncRoute(async (req, res) => {
+    setOperation("settings.connectors");
+    const owner = await connectorOwner(req, res);
+    if (!owner) return;
     const db = createServerSupabase();
-    const result = await listMcpConnectors(db, userId);
+    const result = await listMcpConnectors(db, owner);
     if (!result.ok) return void sendInternalError(res, result.error);
     res.json(result.connectors);
 }));
@@ -480,6 +597,7 @@ userRouter.get(
     "/mcp-connectors/:connectorId",
     requireAuth,
     asyncRoute(async (req, res) => {
+        setOperation("settings.connectors");
         const userId = res.locals.userId as string;
         const db = createServerSupabase();
         const result = await getMcpConnector(
@@ -501,7 +619,9 @@ userRouter.post(
     requireAuth,
     requireMfaIfEnrolled,
     asyncRoute(async (req, res) => {
-        const userId = res.locals.userId as string;
+        setOperation("mcp.connect");
+        const owner = await connectorOwner(req, res);
+        if (!owner) return;
         const name = typeof req.body?.name === "string" ? req.body.name : "";
         const serverUrl =
             typeof req.body?.serverUrl === "string" ? req.body.serverUrl : "";
@@ -516,7 +636,7 @@ userRouter.post(
                 ? (req.body.headers as Record<string, unknown>)
                 : undefined;
         const db = createServerSupabase();
-        const result = await createMcpConnector(db, userId, {
+        const result = await createMcpConnector(db, owner, {
             name,
             serverUrl,
             bearerToken,
@@ -551,6 +671,7 @@ userRouter.patch(
     requireAuth,
     requireMfaIfEnrolled,
     asyncRoute(async (req, res) => {
+        setOperation("settings.connectors");
         const userId = res.locals.userId as string;
         const db = createServerSupabase();
         const body = req.body ?? {};
@@ -606,6 +727,7 @@ userRouter.delete(
     requireAuth,
     requireMfaIfEnrolled,
     asyncRoute(async (req, res) => {
+        setOperation("settings.connectors");
         const userId = res.locals.userId as string;
         const db = createServerSupabase();
         const result = await deleteMcpConnector(
@@ -624,6 +746,7 @@ userRouter.post(
     requireAuth,
     requireMfaIfEnrolled,
     asyncRoute(async (req, res) => {
+        setOperation("mcp.connect");
         const userId = res.locals.userId as string;
         const db = createServerSupabase();
         const redirectUri = `${backendPublicUrl(req)}/user/mcp-connectors/oauth/callback`;
@@ -651,6 +774,7 @@ userRouter.post(
 
 // GET /user/mcp-connectors/oauth/callback
 userRouter.get("/mcp-connectors/oauth/callback", asyncRoute(async (req, res) => {
+    setOperation("mcp.connect");
     const nonce = crypto.randomBytes(16).toString("base64");
     const state = typeof req.query.state === "string" ? req.query.state : "";
     const code = typeof req.query.code === "string" ? req.query.code : "";
@@ -678,8 +802,17 @@ userRouter.get("/mcp-connectors/oauth/callback", asyncRoute(async (req, res) => 
         // gets both the raw message and the concise diagnostic — the SDK
         // embeds entire server response bodies, including HTML error pages,
         // in its messages, so the concise form is what is actually readable.
-        console.error("[user/mcp-connectors] oauth callback failed", {
-            error: errorMessage(err),
+        // A consent the user denied (`error` in the query) is theirs, not an
+        // event; everything else is reported once, under its kind, and the
+        // console bridge knows the logged object is already sent.
+        const failure = new AppError(
+            "mcp.setup_failed",
+            "connector OAuth callback failed",
+            { cause: err },
+        );
+        if (!error) reportError(failure, { level: "warning", tags: { component: "http" } });
+        (error ? console.warn : console.error)("[user/mcp-connectors] oauth callback failed", {
+            error: failure,
             diagnostic: conciseMcpErrorMessage(err),
             stateHash: shortHash(state),
             hasCode: !!code,
@@ -714,7 +847,9 @@ userRouter.get("/mcp-connectors/oauth/callback", asyncRoute(async (req, res) => 
 
 // GET /user/integrations/google-drive
 userRouter.get("/integrations/google-drive", requireAuth, async (req, res) => {
-    const userId = res.locals.userId as string;
+    setOperation("google.drive");
+    const owner = await connectorOwner(req, res);
+    if (!owner) return;
     try {
         // The card shows the exact redirect URI to register while the client
         // is not configured yet, so the operator never has to guess it. In
@@ -727,15 +862,14 @@ userRouter.get("/integrations/google-drive", requireAuth, async (req, res) => {
             redirectUri = null;
         }
         res.json({
-            ...(await getGoogleDriveStatus(userId, createServerSupabase())),
+            ...(await getGoogleDriveStatus(owner, createServerSupabase())),
             redirectUri,
         });
     } catch (err) {
-        console.error("[google-drive] status failed", {
-            userId,
-            error: safeError(err),
-        });
-        res.status(500).json({ detail: "Failed to load Google Drive status." });
+        sendInternalError(
+            res,
+            withKind(err, "db.query_failed", "Google Drive status could not be loaded"),
+        );
     }
 });
 
@@ -745,20 +879,24 @@ userRouter.post(
     requireAuth,
     requireMfaIfEnrolled,
     async (req, res) => {
-        const userId = res.locals.userId as string;
+        setOperation("google.drive");
+        const owner = await connectorOwner(req, res);
+        if (!owner) return;
         try {
             const redirectUri = `${backendPublicUrl(req)}/user/integrations/google-drive/oauth/callback`;
             const result = await startGoogleDriveOAuth(
-                userId,
+                owner,
                 redirectUri,
                 createServerSupabase(),
             );
             res.json(result);
         } catch (err) {
-            console.error("[google-drive] oauth start failed", {
-                userId,
-                error: safeError(err),
-            });
+            // A service the operator switched off is not a setup problem
+            // the user can fix: say so, with no consent URL to open.
+            if (err instanceof GoogleDriveUnavailableError)
+                return void res
+                    .status(404)
+                    .json({ code: err.code, detail: err.message });
             // Same allowlist as the MCP start route: only the repo-authored
             // setup instructions reach the browser verbatim. A DB or crypto
             // failure here must not echo its message to the client.
@@ -767,6 +905,7 @@ userRouter.post(
                     .status(400)
                     .json({ code: err.code, detail: err.message });
             }
+            warnGoogleRoute("[google-drive] oauth start failed", err, "google.auth_failed", { userId: owner.userId });
             res.status(400).json({
                 detail: "Google Drive authorization could not be started.",
             });
@@ -803,6 +942,7 @@ userRouter.get(
     requireAuth,
     requireMfaIfEnrolled,
     async (req, res) => {
+        setOperation("google.drive");
         const nonce = crypto.randomBytes(16).toString("base64");
         const state =
             typeof req.query.state === "string" ? req.query.state : "";
@@ -825,10 +965,12 @@ userRouter.get(
                     ),
                 );
         } catch (err) {
-            console.error("[google-drive] oauth callback failed", {
-                error: safeError(err),
-                hasCode: !!code,
-            });
+            // A consent the user denied is theirs, not an event.
+            if (!error)
+                warnGoogleRoute("[google-drive] oauth callback failed", err, "google.auth_failed", {
+                    hasCode: !!code,
+                });
+            else console.warn("[google-drive] oauth callback denied", { hasCode: !!code });
             res.status(400)
                 .set(mcpOAuthPopupHeaders(nonce))
                 .type("html")
@@ -850,21 +992,66 @@ userRouter.delete(
     "/integrations/google-drive",
     requireAuth,
     requireMfaIfEnrolled,
-    async (_req, res) => {
-        const userId = res.locals.userId as string;
+    async (req, res) => {
+        setOperation("google.drive");
+        const owner = await connectorOwner(req, res);
+        if (!owner) return;
         try {
-            await disconnectGoogleDrive(userId, createServerSupabase());
+            await disconnectGoogleDrive(owner, createServerSupabase());
             res.status(204).end();
         } catch (err) {
-            console.error("[google-drive] disconnect failed", {
-                userId,
-                error: safeError(err),
-            });
-            res.status(500).json({
-                detail: "Failed to disconnect Google Drive.",
-            });
+            sendInternalError(
+                res,
+                withKind(err, "db.query_failed", "Google Drive could not be disconnected"),
+            );
         }
     },
+);
+
+// POST /user/integrations/google-drive/picker-session — a short-lived access
+// token plus the Picker's browser key and app id. no-store: the token must not
+// sit in any cache.
+userRouter.post(
+    "/integrations/google-drive/picker-session",
+    requireAuth,
+    requireMfaIfEnrolled,
+    asyncRoute(async (req, res) => {
+        setOperation("google.drive");
+        res.set("Cache-Control", "no-store");
+        const owner = await connectorOwner(req, res);
+        if (!owner) return;
+        try {
+            res.json(
+                await createGoogleDrivePickerSession(
+                    owner,
+                    createServerSupabase(),
+                ),
+            );
+        } catch (err) {
+            // Repo-authored messages: not set up or switched off by the
+            // operator (404), or not connected, turned off or revoked (409).
+            if (err instanceof GoogleDriveUserError) {
+                return void res
+                    .status(
+                        err instanceof GoogleDrivePickerUnavailableError ||
+                            err instanceof GoogleDriveUnavailableError
+                            ? 404
+                            : 409,
+                    )
+                    .json({
+                        ...(err.code ? { code: err.code } : {}),
+                        detail: err.message,
+                    });
+            }
+            // Token refresh talks to Google with credentials: the event
+            // carries the kind and Google's status, never the provider's
+            // message.
+            sendInternalError(
+                res,
+                withKind(err, "google.api_failed", "Google Drive Picker session failed"),
+            );
+        }
+    }),
 );
 
 // PATCH /user/integrations/google-drive — { enabled?, requireWriteApproval? }
@@ -873,24 +1060,24 @@ userRouter.patch(
     requireAuth,
     requireMfaIfEnrolled,
     asyncRoute(async (req, res) => {
+        setOperation("google.drive");
         const userId = res.locals.userId as string;
         for (const key of ["enabled", "requireWriteApproval", "readOnly"]) {
             if (req.body?.[key] !== undefined && typeof req.body[key] !== "boolean")
                 return void res.status(400).json({ detail: `${key} must be a boolean.` });
         }
+        const owner = await connectorOwner(req, res);
+        if (!owner) return;
         const db = createServerSupabase();
         try {
             await updateGoogleDriveSettings(
-                userId,
+                owner,
                 { enabled: req.body?.enabled, requireWriteApproval: req.body?.requireWriteApproval, readOnly: req.body?.readOnly },
                 db,
             );
-            res.json(await getGoogleDriveStatus(userId, db));
+            res.json(await getGoogleDriveStatus(owner, db));
         } catch (err) {
-            console.error("[google-drive] settings update failed", {
-                userId,
-                error: safeError(err),
-            });
+            warnGoogleRoute("[google-drive] settings update failed", err, "db.query_failed", { userId });
             res.status(409).json({
                 detail: "Google Drive settings could not be saved. Reload and try again.",
             });
@@ -904,25 +1091,25 @@ userRouter.patch(
     requireAuth,
     requireMfaIfEnrolled,
     asyncRoute(async (req, res) => {
+        setOperation("google.drive");
         const userId = res.locals.userId as string;
         if (typeof req.body?.enabled !== "boolean")
             return void res
                 .status(400)
                 .json({ detail: "enabled must be a boolean." });
+        const owner = await connectorOwner(req, res);
+        if (!owner) return;
         const db = createServerSupabase();
         try {
             await setGoogleDriveToolEnabled(
-                userId,
+                owner,
                 String(req.params.toolName),
                 req.body.enabled,
                 db,
             );
-            res.json(await getGoogleDriveStatus(userId, db));
+            res.json(await getGoogleDriveStatus(owner, db));
         } catch (err) {
-            console.error("[google-drive] tool update failed", {
-                userId,
-                error: safeError(err),
-            });
+            warnGoogleRoute("[google-drive] tool update failed", err, "db.query_failed", { userId });
             res.status(409).json({
                 detail: "Google Drive tool settings could not be saved. Reload and try again.",
             });
@@ -936,6 +1123,7 @@ userRouter.post(
     requireAuth,
     requireMfaIfEnrolled,
     asyncRoute(async (req, res) => {
+        setOperation("google.drive");
         const state = req.body?.state;
         if (typeof state !== "string" || !/^[A-Za-z0-9_-]{32}$/.test(state)) {
             return void res
@@ -944,58 +1132,67 @@ userRouter.post(
                     detail: "Invalid Google Drive authorization attempt.",
                 });
         }
+        const owner = await connectorOwner(req, res);
+        if (!owner) return;
         try {
             await cancelGoogleDriveOAuth(
-                res.locals.userId as string,
+                owner,
                 state,
                 createServerSupabase(),
             );
             res.status(204).end();
         } catch (error) {
-            console.error(
-                "[google-drive] cancellation failed",
-                safeError(error),
+            sendInternalError(
+                res,
+                withKind(error, "db.query_failed", "Google Drive authorization could not be cancelled"),
             );
-            res.status(500).json({
-                detail: "Google Drive authorization could not be cancelled. Close the Google window and try again.",
-            });
         }
     }),
 );
-
 
 // Gmail and Calendar are explicit integrations, independent of sign-in.
 for (const provider of ["gmail", "google-calendar"] as const) {
     const path = `/integrations/${provider}`;
     const callback = (req: Parameters<typeof backendPublicUrl>[0]) =>
         `${backendPublicUrl(req)}/user${path}/oauth/callback`;
-    const report = (error: unknown) => {
-        console.error("[google-workspace] request failed", safeError(error));
-        return error instanceof GoogleWorkspaceError
+    const operation = provider === "gmail" ? "google.gmail" : "google.calendar";
+    /** The user's answer: the integration's own fixed text, or a generic one. */
+    const message = (error: unknown) =>
+        error instanceof GoogleWorkspaceError
             ? error.message
             : "Google integration request failed. Please try again.";
+    /** A 4xx answer whose cause may still be ours: reported as a warning. */
+    const report = (error: unknown, kind: ErrorKind) => {
+        warnGoogleRoute("[google-workspace] request failed", error, kind, { provider });
+        return message(error);
     };
     userRouter.get(
         path,
         requireAuth,
         asyncRoute(async (req, res) => {
+            setOperation(operation);
             let redirectUri: string | null = null;
             try {
                 redirectUri = callback(req);
             } catch {
                 /* deployment config absent */
             }
+            const owner = await connectorOwner(req, res);
+            if (!owner) return;
             try {
                 res.json({
                     ...(await workspaceConnectorStatus(
                         createServerSupabase(),
-                        res.locals.userId,
+                        owner,
                         provider,
                     )),
                     redirectUri,
                 });
             } catch (error) {
-                res.status(500).json({ detail: report(error) });
+                sendInternalError(
+                    res,
+                    withKind(error, "db.query_failed", "Google connector status could not be loaded"),
+                );
             }
         }),
     );
@@ -1004,27 +1201,38 @@ for (const provider of ["gmail", "google-calendar"] as const) {
         requireAuth,
         requireMfaIfEnrolled,
         asyncRoute(async (req, res) => {
+            setOperation(operation);
+            const owner = await connectorOwner(req, res);
+            if (!owner) return;
             try {
+                assertWorkspaceProviderAvailable(provider);
                 res.json(
                     await startWorkspaceOAuth(
                         createServerSupabase(),
-                        res.locals.userId,
+                        owner,
                         provider,
                         callback(req),
                     ),
                 );
             } catch (error) {
+                // A service the operator switched off is not a setup problem
+                // the user can fix: say so, with no consent URL to open.
+                if (error instanceof GoogleWorkspaceUnavailableError)
+                    return void res
+                        .status(404)
+                        .json({ code: "connector_unavailable", detail: error.message });
                 // As for Slack and Drive: only repo-authored setup steps reach
                 // the browser verbatim, under their machine-readable code.
                 if (error instanceof ConnectorSetupError) {
-                    console.error("[google-workspace] setup required", {
+                    // Operator setup, not a fault: a log line, never an event.
+                    console.warn("[google-workspace] setup required", {
                         provider,
                     });
                     return void res
                         .status(400)
                         .json({ code: error.code, detail: error.message });
                 }
-                res.status(400).json({ detail: report(error) });
+                res.status(400).json({ detail: report(error, "google.auth_failed") });
             }
         }),
     );
@@ -1033,6 +1241,7 @@ for (const provider of ["gmail", "google-calendar"] as const) {
         requireAuth,
         requireMfaIfEnrolled,
         asyncRoute(async (req, res) => {
+            setOperation(operation);
             const nonce = crypto.randomBytes(16).toString("base64");
             res.set(mcpOAuthPopupHeaders(nonce)).type(
                 "html",
@@ -1060,7 +1269,7 @@ for (const provider of ["gmail", "google-calendar"] as const) {
                     ),
                 );
             } catch (error) {
-                report(error);
+                report(error, "google.auth_failed");
                 res.status(400).send(
                     mcpOAuthPopupHtml(
                         {
@@ -1078,6 +1287,7 @@ for (const provider of ["gmail", "google-calendar"] as const) {
         requireAuth,
         requireMfaIfEnrolled,
         asyncRoute(async (req, res) => {
+            setOperation(operation);
             if (
                 typeof req.body?.state !== "string" ||
                 !/^[A-Za-z0-9_-]{32}$/.test(req.body.state)
@@ -1085,16 +1295,21 @@ for (const provider of ["gmail", "google-calendar"] as const) {
                 return void res
                     .status(400)
                     .json({ detail: "Invalid authorization attempt." });
+            const owner = await connectorOwner(req, res);
+            if (!owner) return;
             try {
                 await cancelWorkspaceOAuth(
                     createServerSupabase(),
-                    res.locals.userId,
+                    owner,
                     provider,
                     req.body.state,
                 );
                 res.status(204).end();
             } catch (error) {
-                res.status(500).json({ detail: report(error) });
+                sendInternalError(
+                    res,
+                    withKind(error, "db.query_failed", "Google authorization could not be cancelled"),
+                );
             }
         }),
     );
@@ -1104,6 +1319,7 @@ for (const provider of ["gmail", "google-calendar"] as const) {
         requireAuth,
         requireMfaIfEnrolled,
         asyncRoute(async (req, res) => {
+            setOperation(operation);
             const body = req.body ?? {};
             for (const key of ["enabled", "requireWriteApproval", "readOnly"]) {
                 if (body[key] !== undefined && typeof body[key] !== "boolean")
@@ -1111,22 +1327,20 @@ for (const provider of ["gmail", "google-calendar"] as const) {
                         .status(400)
                         .json({ detail: `${key} must be a boolean.` });
             }
+            const owner = await connectorOwner(req, res);
+            if (!owner) return;
             const db = createServerSupabase();
             try {
-                await updateWorkspaceSettings(db, res.locals.userId, provider, {
+                await updateWorkspaceSettings(db, owner, provider, {
                     enabled: body.enabled,
                     requireWriteApproval: body.requireWriteApproval,
                     readOnly: body.readOnly,
                 });
                 res.json(
-                    await workspaceConnectorStatus(
-                        db,
-                        res.locals.userId,
-                        provider,
-                    ),
+                    await workspaceConnectorStatus(db, owner, provider),
                 );
             } catch (error) {
-                res.status(409).json({ detail: report(error) });
+                res.status(409).json({ detail: report(error, "db.query_failed") });
             }
         }),
     );
@@ -1136,6 +1350,7 @@ for (const provider of ["gmail", "google-calendar"] as const) {
         requireAuth,
         requireMfaIfEnrolled,
         asyncRoute(async (req, res) => {
+            setOperation(operation);
             const toolName = String(req.params.toolName);
             if (typeof req.body?.enabled !== "boolean")
                 return void res
@@ -1143,24 +1358,22 @@ for (const provider of ["gmail", "google-calendar"] as const) {
                     .json({ detail: "enabled must be a boolean." });
             if (!workspaceToolList(provider, null).some((t) => t.name === toolName))
                 return void res.status(404).json({ detail: "Unknown tool." });
+            const owner = await connectorOwner(req, res);
+            if (!owner) return;
             const db = createServerSupabase();
             try {
                 await setWorkspaceToolEnabled(
                     db,
-                    res.locals.userId,
+                    owner,
                     provider,
                     toolName,
                     req.body.enabled,
                 );
                 res.json(
-                    await workspaceConnectorStatus(
-                        db,
-                        res.locals.userId,
-                        provider,
-                    ),
+                    await workspaceConnectorStatus(db, owner, provider),
                 );
             } catch (error) {
-                res.status(409).json({ detail: report(error) });
+                res.status(409).json({ detail: report(error, "db.query_failed") });
             }
         }),
     );
@@ -1168,26 +1381,106 @@ for (const provider of ["gmail", "google-calendar"] as const) {
         path,
         requireAuth,
         requireMfaIfEnrolled,
-        asyncRoute(async (_req, res) => {
+        asyncRoute(async (req, res) => {
+            setOperation(operation);
+            const owner = await connectorOwner(req, res);
+            if (!owner) return;
             try {
                 await disconnectWorkspace(
                     createServerSupabase(),
-                    res.locals.userId,
+                    owner,
                     provider,
                 );
                 res.status(204).end();
             } catch (error) {
-                res.status(500).json({ detail: report(error) });
+                sendInternalError(
+                    res,
+                    withKind(error, "db.query_failed", "Google connector could not be disconnected"),
+                );
             }
         }),
     );
 }
+// ---------------------------------------------------------------------------
+// CourtListener: the switch and the user's own token for one workspace. An
+// organization's token is managed by its admins with its other API keys.
+// ---------------------------------------------------------------------------
+
+// GET /user/integrations/courtlistener
+userRouter.get(
+    "/integrations/courtlistener",
+    requireAuth,
+    asyncRoute(async (req, res) => {
+        const owner = await connectorOwner(req, res);
+        if (!owner) return;
+        res.json(
+            await courtListenerConnectorStatus(createServerSupabase(), owner),
+        );
+    }),
+);
+
+// PATCH /user/integrations/courtlistener — { enabled }
+userRouter.patch(
+    "/integrations/courtlistener",
+    requireAuth,
+    requireMfaIfEnrolled,
+    asyncRoute(async (req, res) => {
+        const parsed = readBooleanBodyField(req.body, "enabled");
+        if (!parsed.ok)
+            return void res.status(400).json({ detail: parsed.detail });
+        const owner = await connectorOwner(req, res);
+        if (!owner) return;
+        res.json(
+            await setCourtListenerEnabled(
+                createServerSupabase(),
+                owner,
+                parsed.value,
+            ),
+        );
+    }),
+);
+
+// PUT /user/integrations/courtlistener/token — { token }
+userRouter.put(
+    "/integrations/courtlistener/token",
+    requireAuth,
+    requireMfaIfEnrolled,
+    asyncRoute(async (req, res) => {
+        const token =
+            typeof req.body?.token === "string" ? req.body.token.trim() : "";
+        if (!token || token.length > 512)
+            return void res
+                .status(400)
+                .json({ detail: "A CourtListener API token is required." });
+        const owner = await connectorOwner(req, res);
+        if (!owner) return;
+        res.json(
+            await setCourtListenerToken(createServerSupabase(), owner, token),
+        );
+    }),
+);
+
+// DELETE /user/integrations/courtlistener/token
+userRouter.delete(
+    "/integrations/courtlistener/token",
+    requireAuth,
+    requireMfaIfEnrolled,
+    asyncRoute(async (req, res) => {
+        const owner = await connectorOwner(req, res);
+        if (!owner) return;
+        res.json(
+            await setCourtListenerToken(createServerSupabase(), owner, null),
+        );
+    }),
+);
+
 // POST /user/mcp-connectors/:connectorId/refresh-tools
 userRouter.post(
     "/mcp-connectors/:connectorId/refresh-tools",
     requireAuth,
     requireMfaIfEnrolled,
     asyncRoute(async (req, res) => {
+        setOperation("mcp.refresh");
         const userId = res.locals.userId as string;
         const db = createServerSupabase();
         const result = await refreshMcpConnectorTools(
@@ -1221,6 +1514,7 @@ userRouter.patch(
     requireAuth,
     requireMfaIfEnrolled,
     asyncRoute(async (req, res) => {
+        setOperation("settings.connectors");
         const userId = res.locals.userId as string;
         const parsed = readBooleanBodyField(req.body, "enabled");
         if (!parsed.ok)
@@ -1248,6 +1542,7 @@ userRouter.delete(
     requireAuth,
     requireMfaIfEnrolled,
     asyncRoute(async (_req, res) => {
+        setOperation("account.delete");
         const userId = res.locals.userId as string;
         const userEmail = res.locals.userEmail as string | undefined;
         const token = res.locals.token as string | undefined;
@@ -1266,59 +1561,104 @@ userRouter.delete(
     }),
 );
 
-// DELETE /user/chats
+// Settings' "Delete all" actions and exports work on one workspace:
+// `workspace` names it, "personal" or an organization the caller belongs to.
+// Absent means Personal, as for the caller's memory, so a client that
+// predates the parameter never reaches beyond it. In an organization the
+// action must also be one its owners allow members (owners always may).
+// Answers for an unknown workspace or a refused action itself and returns
+// null.
+async function dataActionWorkspace(
+    db: Db,
+    userId: string,
+    raw: unknown,
+    action: MemberDataAction,
+    res: Response,
+): Promise<{ orgId: string | null } | null> {
+    const resolved = await resolveWorkspaceFilter(db, userId, raw);
+    if (!resolved.ok) {
+        sendWorkspaceFailure(res, resolved);
+        return null;
+    }
+    const orgId =
+        resolved.workspace && resolved.workspace !== PERSONAL_WORKSPACE
+            ? resolved.workspace
+            : null;
+    if (orgId && !(await memberDataActionAllowed(db, userId, orgId, action))) {
+        res.status(403).json({
+            detail:
+                action === "export"
+                    ? "This organization's owners have not allowed members to export their data."
+                    : "This organization's owners have not allowed members to delete their data in bulk.",
+            code: "member_data_action_disabled",
+        });
+        return null;
+    }
+    return { orgId };
+}
+
+// DELETE /user/chats?workspace=
 userRouter.delete(
     "/chats",
     requireAuth,
     requireMfaIfEnrolled,
-    asyncRoute(async (_req, res) => {
+    asyncRoute(async (req, res) => {
         const userId = res.locals.userId as string;
         const db = createServerSupabase();
-        const result = await deleteUserChats(db, userId);
+        const workspace = await dataActionWorkspace(db, userId, req.query.workspace, "delete", res);
+        if (!workspace) return;
+        const result = await deleteUserChats(db, userId, workspace.orgId);
         if (!result.ok) return void sendInternalError(res, result.error);
         res.status(204).send();
     }),
 );
 
-// DELETE /user/projects
+// DELETE /user/projects?workspace=
 userRouter.delete(
     "/projects",
     requireAuth,
     requireMfaIfEnrolled,
-    asyncRoute(async (_req, res) => {
+    asyncRoute(async (req, res) => {
         const userId = res.locals.userId as string;
         const db = createServerSupabase();
-        const result = await deleteUserProjectsData(db, userId);
+        const workspace = await dataActionWorkspace(db, userId, req.query.workspace, "delete", res);
+        if (!workspace) return;
+        const result = await deleteUserProjectsData(db, userId, workspace.orgId);
         if (!result.ok) return void sendInternalError(res, result.error);
         res.status(204).send();
     }),
 );
 
-// DELETE /user/tabular-reviews
+// DELETE /user/tabular-reviews?workspace=
 userRouter.delete(
     "/tabular-reviews",
     requireAuth,
     requireMfaIfEnrolled,
-    asyncRoute(async (_req, res) => {
+    asyncRoute(async (req, res) => {
         const userId = res.locals.userId as string;
         const db = createServerSupabase();
-        const result = await deleteUserTabularReviews(db, userId);
+        const workspace = await dataActionWorkspace(db, userId, req.query.workspace, "delete", res);
+        if (!workspace) return;
+        const result = await deleteUserTabularReviews(db, userId, workspace.orgId);
         if (!result.ok) return void sendInternalError(res, result.error);
         res.status(204).send();
     }),
 );
 
-// DELETE /user/memories
-// Wipes the user's app memory and memories belonging to private projects they
-// created. Organization and merely shared projects are intentionally outside
-// this account-level destructive action.
+// DELETE /user/memories?workspace=
+// Wipes the user's own memory for the workspace and, in Personal, memories
+// belonging to private projects they created. Organization and merely
+// shared projects are intentionally outside this destructive action.
 userRouter.delete(
     "/memories",
     requireAuth,
     requireMfaIfEnrolled,
-    asyncRoute(async (_req, res) => {
+    asyncRoute(async (req, res) => {
         const userId = res.locals.userId as string;
-        const result = await deletePrivateMemories(createServerSupabase(), userId);
+        const db = createServerSupabase();
+        const workspace = await dataActionWorkspace(db, userId, req.query.workspace, "delete", res);
+        if (!workspace) return;
+        const result = await deletePrivateMemories(db, userId, workspace.orgId);
         if (!result.ok) return void sendInternalError(res, result.error);
         res.status(204).send();
     }),
@@ -1338,6 +1678,7 @@ userRouter.post(
     requireAuth,
     requireMfaIfEnrolled,
     asyncRoute(async (req, res) => {
+        setOperation("export.build");
         const userId = res.locals.userId as string;
         const userEmail = res.locals.userEmail as string | undefined;
         const body = (req.body ?? {}) as {
@@ -1363,13 +1704,29 @@ userRouter.post(
             });
 
         const db = createServerSupabase();
+        // Settings' exports cover one workspace, `params.workspace`.
+        let payload = parsed.payload;
+        if (isWorkspaceExportType(parsed.type)) {
+            const workspace = await dataActionWorkspace(
+                db,
+                userId,
+                body.params?.workspace,
+                "export",
+                res,
+            );
+            if (!workspace) return;
+            payload = { ...payload, orgId: workspace.orgId };
+        }
         const result = await startUserExport(db, {
             userId,
             type: parsed.type,
-            payload: parsed.payload,
+            payload,
         });
-        if (!result.ok)
-            return void res.status(result.forbidden ? 403 : 500).json({ detail: result.detail });
+        if (!result.ok) {
+            if (result.forbidden)
+                return void res.status(403).json({ detail: result.detail });
+            return void sendInternalError(res, result.error);
+        }
         res.status(202).json({ export_id: result.exportId });
     }),
 );
@@ -1381,6 +1738,7 @@ userRouter.get(
     requireAuth,
     requireMfaIfEnrolled,
     asyncRoute(async (req, res) => {
+        setOperation("export.build");
         const userId = res.locals.userId as string;
         const db = createServerSupabase();
         const result = await getUserExportStatus(
@@ -1403,6 +1761,7 @@ userRouter.get(
     requireAuth,
     requireMfaIfEnrolled,
     asyncRoute(async (req, res) => {
+        setOperation("export.build");
         const userId = res.locals.userId as string;
         const db = createServerSupabase();
         const result = await loadUserExportArtifact(

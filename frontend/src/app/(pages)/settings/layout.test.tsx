@@ -24,11 +24,46 @@ vi.mock("@/app/lib/mikeApi", () => ({
     listMyOrgInvitations: vi.fn(),
 }));
 
+// What Privacy & Data may do in the active workspace; everything unless a
+// test says otherwise.
+const dataActions = vi.hoisted(() => ({ canExport: true, canDelete: true }));
+vi.mock("@/app/hooks/useMemberDataActions", () => ({
+    useMemberDataActions: () => dataActions,
+}));
+
 describe("SettingsLayout", () => {
     beforeEach(() => {
         vi.clearAllMocks();
         pathname = "/settings/memory";
         vi.mocked(listMyOrgInvitations).mockResolvedValue([]);
+        dataActions.canExport = true;
+        dataActions.canDelete = true;
+    });
+
+    it("lists Privacy & Data while it has an export or a delete to offer", () => {
+        dataActions.canDelete = false;
+        render(
+            <SettingsLayout>
+                <div />
+            </SettingsLayout>,
+        );
+        expect(
+            screen.getByRole("button", { name: "Privacy & Data" }),
+        ).toBeInTheDocument();
+    });
+
+    it("does not list Privacy & Data when the organization allows members neither", () => {
+        dataActions.canExport = false;
+        dataActions.canDelete = false;
+        render(
+            <SettingsLayout>
+                <div />
+            </SettingsLayout>,
+        );
+        expect(
+            screen.queryByRole("button", { name: "Privacy & Data" }),
+        ).toBeNull();
+        expect(screen.getByRole("button", { name: "Memory" })).toBeInTheDocument();
     });
 
     it("exposes Memory as a dedicated settings page and marks it current", async () => {

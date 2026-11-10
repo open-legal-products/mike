@@ -10,7 +10,8 @@ storage instead of the infrastructure bundled with Docker Compose.
 - A Supabase project
 - A Cloudflare R2, MinIO, or other S3-compatible bucket
 - At least one supported model-provider API key, or an accessible Ollama server
-- Optional: a CourtListener API token for case-law tools
+- Optional: CourtListener bulk data for case-law tools without a token (each
+  user can instead add their own CourtListener token in Settings > Connectors)
 - LibreOffice when DOC/DOCX-to-PDF conversion is required
 
 ## Database setup
@@ -86,6 +87,122 @@ select filename, applied_at, checksum is not null as run_by_migrate_sh
 from public.schema_migrations
 order by filename;
 ```
+
+### Install is behind on migrations
+
+A backend started against a database that is missing some of
+`backend/migrations/` keeps running, but anything that needs a missing
+function, table or column fails. Requests answer `503` with code
+`schema_out_of_date` ("The server's database needs an update"), and the
+backend logs `[schema-out-of-date]` warnings naming the PostgREST/SQLSTATE
+code (`PGRST202` function, `PGRST203` function signature, `PGRST204` or
+`42703` column, `PGRST205` table, `42P01` relation). With error reporting on,
+Sentry shows an error with `schema_out_of_date` and the code in its title,
+for example `Failure in maintenance.document_text / stale-sweep /
+schema_out_of_date / PGRST202`; a request's event also names its method,
+route and `503`. Each is sent once per process per request route or
+background operation (sweeps, upload-session deadline extension), so its
+event count does not measure how often it happens; while the failures go on,
+the log repeats a `[schema-out-of-date] <key>: still failing` line at most
+once an hour with the number of failures since the last line, and each
+failed request also logs an `[http/schema-out-of-date]` line. Run
+`backend/scripts/migrate.sh status` to list what is pending, apply it with
+`backend/scripts/migrate.sh up`, reload the PostgREST schema cache (`notify
+pgrst, 'reload schema';`), and restart the backend. If `migrate.sh status`
+shows nothing pending, a `schema_out_of_date` event is a bug in Mike (a
+query naming a column that does not exist, or a migration that left an old
+function overload behind): report it.
+
+### Supabase Auth (GoTrue) unreachable
+
+When the backend cannot reach GoTrue (no answer, or a 502/503/504 from a
+gateway in front of it), signed-in requests answer `503` with code
+`upstream_unavailable` and `retry-after: 5` instead of signing anyone out;
+the web app keeps the session and retries. A GoTrue `500` is GoTrue failing
+on something of ours and stays a reported `500`. Sentry receives one
+`upstream-unavailable` event per process per failure class (no answer, 502,
+503, 504), again at most once per 15 minutes while that class keeps failing
+or keeps coming back, and a class that returns after a quiet 15 minutes is
+reported as a new outage. Every replica reports for itself, so the event
+count is replicas × classes × 15-minute windows, not the number of failed
+requests; the quiet repeats are counted in an `[upstream-unavailable] still
+failing` log line at most once a minute.
+
+### Before upgrading: secrets copied from the template
+
+The backend refuses to start when `DOWNLOAD_SIGNING_SECRET` or
+`USER_API_KEYS_ENCRYPTION_SECRET` still holds the `backend/.env.example`
+placeholder, a whitespace-only value, or a value shorter than 32 characters
+after trimming whitespace. A deployment that copied the template verbatim
+was running with publicly known secrets: download and
+blob tokens could be forged, and user-supplied provider API keys were
+encrypted under a key derived from a public string. The startup error names
+the variable; generate a real value for each and restart:
+
+```bash
+openssl rand -hex 32   # once per variable
+```
+
+Both variables may also be left unset: the download and API-key features then
+fail on first use, as before. Plan for these effects when replacing existing
+secrets; changing the environment does not re-encrypt stored credentials:
+
+- Changing `USER_API_KEYS_ENCRYPTION_SECRET` makes stored personal and
+  organization provider credentials unreadable. Users must re-enter their
+  personal API keys, and organization admins must replace their organization's
+  saved provider credentials.
+- When `MCP_CONNECTORS_ENCRYPTION_SECRET` is unset or empty, MCP connectors
+  also use `USER_API_KEYS_ENCRYPTION_SECRET`. Rotating it then makes stored
+  connector authentication configurations and OAuth tokens unreadable.
+  Re-enter connector authentication credentials and reconnect OAuth connectors
+  to authorize them again. A separately configured, unchanged
+  `MCP_CONNECTORS_ENCRYPTION_SECRET` keeps those connector credentials usable.
+- Changing `DOWNLOAD_SIGNING_SECRET` invalidates existing download links and
+  blob capability URLs signed with the old secret, including persistent links
+  in chat history. Request fresh download links from the application and
+  replace any previously shared links; restarting does not re-sign old URLs.
+
+### Upgrade order and rollback
+
+For the SQL/backend/web/Word performance changes in PR #749, upgrade an
+existing installation in this order:
+
+1. Back up the database and retain the currently deployed image tags or Git
+   commit. Let active assistant turns finish before restarting their backend;
+   their resumable stream buffers live in that process.
+2. Apply the new checkout's pending migrations with `migrate.sh up` above,
+   then run `migrate.sh status` and require no pending files. Do not substitute
+   `schema.sql` for this upgrade. The new project-directory search requires
+   `search_project_directory`, and paginated participation requires the new
+   `get_projects_overview` argument. Starting the new backend before these
+   migrations makes those requests fail.
+3. Reload the PostgREST schema cache after the migrations (`notify pgrst,
+   'reload schema';` in SQL), run the workflow sync release job described
+   below, and deploy the backend and any separate workers.
+4. Deploy the frontend and Word add-in. Check project-directory search,
+   document conversion completion, and reopening an existing Word chat.
+
+Compose's `db-init` and `workflow-sync` dependencies perform the database and
+catalog steps before starting the backend. Manual or independently hosted
+components need the same ordering. A new frontend can poll an older backend
+using individual document reads when its batch endpoint is unavailable.
+Older API clients can still request `/projects?include=documents` without
+pagination; new clients should send `limit` and `offset` explicitly.
+
+The migrations in this release retain the previous backend's project RPC
+call shapes. A backend rollback leaves the migration ledger and schema in
+place; do not delete ledger rows or replay old migrations to undo an
+application deployment. Validate a rollback against a copy of the database
+before using it on a deployment that has accepted new writes.
+
+Word's released device-only database remains at IndexedDB version 4, so an
+older pane can still save an answer after another pane loads the new code.
+Existing v4 databases retain their history-listing path; fresh v4 databases
+include the optional recency index. PR preview builds used version 5: the
+new add-in can read those databases in place, but a rollback to a released
+v4-only bundle cannot. Keep a compatible add-in build for those devices.
+Do not clear browser/add-in storage to resolve a version error: device-only
+chats have no durable server copy.
 
 ### Adopting the ledger on an older deployment
 
@@ -180,6 +297,48 @@ configured S3-compatible storage, and transactionally replaces the active
 job exits. Run this as a release job before directing traffic to the new
 backend; backend startup itself only reads the database. Docker Compose runs
 this sequence automatically for local/self-hosted deployments.
+
+## Document parsing resources
+
+Indexing, chat reads, tabular sources, and legacy text precomputation share one
+parser process per calling thread. It stays warm between files and recycles
+after 200 files or 60 seconds idle, matching #721's worker reuse. Failures and
+timeouts also retire it. On POSIX, retirement kills the process group, including
+LibreOffice descendants, and removes its temporary directory.
+
+Background jobs share one source-loading slot and wait at most 60 seconds total
+for admission and parsing capacity; longer waits defer to Postgres for 30 seconds
+without spending retries. Parsing is capped at five minutes, below the ten-minute
+claim lease. Inline indexing waits for capacity when the queue runner is disabled.
+Interactive requests can download three sources concurrently, matching tabular
+row concurrency, and take priority over queued background parses. Background I/O
+does not occupy the parser or the interactive admission queue (eight waiters).
+Only parsing is serial; its deadline starts when parsing starts, as in #721.
+Source downloads from S3-compatible storage abort after
+`STORAGE_DOWNLOAD_TIMEOUT_MS` (default 120000), so a stalled read releases its
+admission slot instead of holding it indefinitely.
+Generic job concurrency does not create more parser slots.
+
+Linux requires `prlimit` (util-linux), installed by Docker and Nixpacks. Missing
+`prlimit` fails extraction. Defaults:
+
+| Limit | Setting |
+| --- | --- |
+| Parser time | `EXTRACTION_TIMEOUT_MS=180000`, capped at 300000 |
+| Writable data, including native buffers | `EXTRACTION_MAX_MEMORY_MB=1024` MiB |
+| Virtual address space | Data budget + 1024 MiB for runtime reservations |
+| Source / returned text | 150 MiB / 16 MiB |
+
+The JS heap keeps the configured memory budget (1024 MiB by default); glibc uses two malloc arenas to
+avoid excessive virtual reservations. OS limits apply **per process**, including
+conversion children, not to their aggregate usage. Set container/cgroup limits
+for the whole service. macOS/Windows retain heap, input/output and time bounds,
+but lack the Linux OS-memory guarantee. Decompression is covered by parser
+memory/time limits; there is no separate ZIP preflight.
+
+The deadline covers parsing, not storage/database I/O. No new migration is
+needed beyond #721's `20261027_01_document_text_failed_jobs.sql`.
+`EXTRACTION_ISOLATION=off` bypasses subprocess protection for tests/emergencies.
 
 ## Environment
 
@@ -296,10 +455,15 @@ Deployments must therefore run `backend/src/index.ts`
 (the normal `npm start` entry point), rather than importing the Express app
 without starting its worker.
 
-Model-provider keys and the CourtListener token can be configured globally in
-`backend/.env` or per user under **Settings > API Keys**. A personal key takes
-precedence over the matching globally configured key; removing the personal
-key restores the global key as the fallback.
+Model-provider keys can be configured globally in `backend/.env` or per user
+under **Settings > API Keys**. CourtListener tokens are never read from
+`backend/.env`: each user saves their own under **Settings > Connectors**, or an
+organization admin saves one for its members; see
+[CourtListener](courtlistener.md). In a user's Personal workspace, a personal
+key takes precedence over the matching globally configured key; removing the
+personal key restores the global key as the fallback. Work in an organization
+never uses personal keys: it runs on the organization's key for a provider,
+and otherwise on the globally configured key.
 
 ### Error tracking
 
@@ -315,15 +479,32 @@ and other non-error payloads are blocked. The same boundary applies to
 community and official installations. See the [observability guide](observability.md)
 for the exact policy, source-map behavior, and limitations.
 To opt out, set `SENTRY_DISABLED=true`
-(`NEXT_PUBLIC_SENTRY_DISABLED=true` / `REACT_APP_SENTRY_DISABLED=true` for the
-browser and add-in builds); to use your own Sentry instead, set the matching
-`*_SENTRY_DSN`.
+(`REACT_APP_SENTRY_DISABLED=true` for the add-in build). The web image's
+`NEXT_PUBLIC_SENTRY_DISABLED` is a default for the server and browser tunnel;
+an explicit runtime `SENTRY_DISABLED` overrides it. To use your own Sentry
+instead, set the matching `*_SENTRY_DSN`.
 
 For the compose stack that is `SENTRY_DISABLED=true` in the root `.env`
-(the backend reads it through `env_file`; the frontend build and the Next
-server receive it from compose). To report to your own Sentry instead, set
-`SENTRY_DSN` (backend) and `FRONTEND_SENTRY_DSN` (web app). What is reported,
-what is scrubbed, and how to verify are in [observability.md](observability.md).
+(the backend reads it through `env_file`; the Next server receives it from
+compose and applies it to the browser's reports as well, which all pass
+through it). It therefore works for the published images without a rebuild.
+To report to your own Sentry instead, set `SENTRY_DSN` (backend) and
+`FRONTEND_SENTRY_DSN` (web app; the Next server forwards browser reports
+there at runtime). What is reported, what is scrubbed, and how to verify are
+in [observability.md](observability.md).
+
+Default reporting assumes an install runs built code. Run the built backend
+(`node dist/index.js` or `npm start`) and the web app with `next start` under
+`NODE_ENV=production`. A backend run from its TypeScript source (`tsx
+src/index.ts`, `bun src/index.ts`, under pm2, systemd or anything else) is a
+development build and does not report unless `SENTRY_DSN` is set or
+`SENTRY_SOURCE_RUN_IS_INSTALL=true` declares it an install (it then reports
+like the compiled image: Mike project by default, `environment=self-hosted`,
+`build_mode=production`). `next start`
+keeps an exported `NODE_ENV=development` (the root `.env.example` ships one),
+and the web app then counts as a development build and turns its reporting
+off. The web image sets `NODE_ENV=production`, so this only affects a
+non-Docker frontend started from that env.
 
 ## Authentication email
 
@@ -510,6 +691,47 @@ and [provider administration](https://github.com/supabase/auth/blob/v2.189.0/int
 
 ## Install and run
 
+### Running the published images
+
+Every push to `main` and every `v*` tag builds the backend and web-app images
+once in CI and publishes them to GitHub Container Registry
+(`.github/workflows/publish-images.yml`):
+
+| Image | Tags |
+| --- | --- |
+| `ghcr.io/open-legal-products/mike-backend` | `<version>`, `latest` (releases); `<version>-dev.<run>`, `main` (every commit on main) |
+| `ghcr.io/open-legal-products/mike-frontend` | same |
+
+Pin a version in the compose-root `.env` and pull instead of building. The
+default tag is the version in `/VERSION` of the checkout you run compose from,
+so images and the database migrations they apply always belong together:
+
+```bash
+MIKE_IMAGE_TAG=2.1.0
+docker compose pull
+docker compose up --no-build -d
+```
+
+What you get that a local build does not: Sentry source maps for exactly
+these bundles, so browser errors are readable, and the release
+`mike@<version>+<sha12>` on every event (see
+[observability.md](observability.md#releases)). `latest` and `main` are
+convenience tags for trying things out; production deployments pin a version,
+and a published version is never rebuilt (a fix is a new patch version).
+`docker compose up --build` still builds from the checkout for development and
+for anyone who patches the code; those images report as `mike@0.0.0...` unless
+you pass `MIKE_VERSION` and `GIT_SHA`. The Word add-in image is not published:
+its production build bakes in the deployment's web-app URL, so build it as
+described under [Building the Word add-in image](#building-the-word-add-in-image).
+
+`db-init` (schema and migrations) runs from the backend image rather than from
+files in the checkout, so pulling a newer image and running `docker compose up`
+applies that image's migrations. Forks publish to their own namespace: set
+`MIKE_IMAGE_REPO=ghcr.io/<owner>` to run a fork's images. Only `linux/amd64`
+is published; other architectures build from source. Disconnected sites can
+`docker pull` by digest on a connected machine, `docker save`/`docker load`,
+and run with `SENTRY_DISABLED=true`.
+
 Install dependencies:
 
 ```bash
@@ -565,9 +787,15 @@ To try the image on your own machine over plain `http`, pass
 settings are missing, the fatal startup message lists each variable and
 repeats this choice.
 
+### Building the Word add-in image
+
 The repository includes Dockerfiles for the backend, frontend, and Word add-in.
-Build and run the production add-in host with its public URLs baked into the
-static bundle and its private backend origin supplied only at runtime:
+The add-in image is not published (see "Running the published images"): its
+production build bakes the deployment's public URLs into the static bundle, so
+build it yourself, with its private backend origin supplied only at runtime.
+Pass `MIKE_VERSION=$(cat VERSION)` and `GIT_SHA=$(git rev-parse HEAD)` as
+build arguments too so its Sentry events carry the same release as the images
+it runs beside ([observability.md](observability.md#releases)):
 
 ```bash
 docker build -t mike-word-addin \
@@ -624,8 +852,9 @@ can compile against `packages/contracts`. For a manual backend image build use
 `docker build -f backend/Dockerfile -t mike-backend .` from the root.
 
 Each image reads only what its Dockerfile copies: the frontend image contains
-`frontend/` and `packages/contracts`; the add-in image adds `frontend/src/shared`
-and `frontend/public/icons`, which its bundle includes. In the frontend image
+`frontend/`, `packages/contracts`, `packages/ui` and `packages/client`; the
+add-in image holds `word-addin/`, the same three packages and
+`frontend/public/icons`, which its bundle includes. In the frontend image
 `next build` type-checks `frontend/tsconfig.build.json`, which excludes test
 files, so test fixtures and sibling applications never become build inputs. CI builds all three
 images on every pull request (`.github/workflows/docker-images.yml`), so a

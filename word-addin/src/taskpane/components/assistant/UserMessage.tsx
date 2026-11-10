@@ -1,8 +1,7 @@
 import React, { useLayoutEffect, useRef, useState } from "react";
 import { ChevronDown, ChevronUp, FileText, Waypoints } from "lucide-react";
-import { ExcerptModalUI } from "@mike/excerpt-modal-ui";
-import { ExcerptPillUI } from "@mike/excerpt-pill-ui";
-import { parseExcerpts, type MessageExcerpt } from "@mike/message-excerpts";
+import { ExcerptModalUI, ExcerptPillUI, PlaybookPillUI } from "@mike/ui";
+import { parseExcerpts, type MessageExcerpt } from "@mike/client";
 
 const COLLAPSED_CONTENT_HEIGHT = 144;
 
@@ -15,10 +14,13 @@ function UserMessageImpl({
   content,
   files,
   workflow,
+  playbook,
 }: {
   content: string;
   files?: { filename: string; document_id?: string }[];
   workflow?: { id: string; title: string };
+  /** The playbook this message ran, as the web thread shows it. */
+  playbook?: { id: string; title: string };
 }): React.ReactElement {
   const contentRef = useRef<HTMLParagraphElement>(null);
   const [canExpand, setCanExpand] = useState(false);
@@ -103,7 +105,10 @@ function UserMessageImpl({
             )}
           </div>
         )}
-        {(workflow || (files && files.length > 0) || excerpts.length > 0) && (
+        {(workflow ||
+          playbook ||
+          (files && files.length > 0) ||
+          excerpts.length > 0) && (
           <div
             className={`flex flex-wrap justify-end gap-1.5 ${body ? "mt-3" : ""}`}
           >
@@ -120,6 +125,7 @@ function UserMessageImpl({
                 <span className="max-w-[140px] truncate">{workflow.title}</span>
               </div>
             )}
+            {playbook && <PlaybookPillUI title={playbook.title} />}
             {files?.map((file) => (
               <div
                 key={`${file.document_id ?? file.filename}-${file.filename}`}

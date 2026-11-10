@@ -115,11 +115,14 @@ export type DriveWriteAction = {
 };
 
 class DriveWriteHttpError extends GoogleDriveUserError {
-  constructor(public status: number) {
+  declare status: number;
+  constructor(status: number) {
+    const base = googleDriveHttpError(status);
     super(
       status === 412
         ? "This Drive file changed after it was reviewed. Read it again and review a new action."
-        : googleDriveHttpError(status).message,
+        : base.message,
+      { kind: status === 412 ? "google.user_error" : base.kind, status },
     );
   }
 }
@@ -326,6 +329,7 @@ async function sendDriveWrite(
     // completed write. Never repeat the mutation automatically.
     throw new GoogleDriveUserError(
       "The outcome is uncertain. Check Google Drive before trying again; Mike will not retry this action.",
+      { kind: "google.api_failed", cause: error },
     );
   }
 }

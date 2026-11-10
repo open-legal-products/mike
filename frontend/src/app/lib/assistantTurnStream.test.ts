@@ -45,6 +45,38 @@ afterEach(() => {
 });
 
 describe("consumeAssistantTurnStream", () => {
+  it("keeps text cards between prose segments and ignores malformed cards", async () => {
+    const turn = begin();
+    const card = { type: "text_card" as const, card_id: "card-1", title: "Draft", text: "First paragraph.\n\nSecond paragraph." };
+    await consumeAssistantTurnStream(sseResponse([
+      frame(1, { type: "content_delta", text: "Before." }),
+      frame(2, card),
+      frame(3, { type: "content_delta", text: "After." }),
+      frame(4, { type: "text_card", title: "Incomplete" }),
+      "data: [DONE]\n\n",
+    ]), { turn, sink: createTurnEventSink(turn, []), cursor: createTurnCursor("chat-a") });
+    expect(turn.turn.assistant.events).toEqual([
+      { type: "content", text: "Before." }, card, { type: "content", text: "After.", isStreaming: true },
+    ]);
+    turn.finish();
+  });
+  it("records what the answer ran on and drops malformed details", async () => {
+    const turn = begin();
+    await consumeAssistantTurnStream(sseResponse([
+      frame(1, { type: "response_details", model: "gpt-6-luna", reasoning: "medium", usage: { input_tokens: 1200, output_tokens: 80 } }),
+      frame(2, { type: "response_details", reasoning: "high" }),
+      frame(3, { type: "response_details", model: "gpt-6-luna", usage: { input_tokens: "lots" } }),
+      frame(4, { type: "response_details", model: "gpt-6-luna" }),
+      "data: [DONE]\n\n",
+    ]), { turn, sink: createTurnEventSink(turn, []), cursor: createTurnCursor("chat-a") });
+    expect(turn.turn.assistant.events).toEqual([
+      { type: "response_details", model: "gpt-6-luna", reasoning: "medium", usage: { input_tokens: 1200, output_tokens: 80 } },
+      { type: "response_details", model: "gpt-6-luna" },
+      { type: "response_details", model: "gpt-6-luna" },
+    ]);
+    turn.finish();
+  });
+
   it("tracks the chat, turn and last sequence number from the frames", async () => {
     const turn = begin();
     const sink = createTurnEventSink(turn, []);
@@ -387,6 +419,23 @@ describe("error frames", () => {
     ]);
   });
 
+  it("hands the error frame's code and request id to the hook, and tolerates their absence", async () => {
+    const onErrorFrame = vi.fn();
+    const run = (data: object) =>
+      consumeAssistantTurnStream(sseResponse([frame(1, data), "data: [DONE]\n\n"]), {
+        turn: begin(),
+        sink: createTurnEventSink(begin(), []),
+        cursor: createTurnCursor("chat-a"),
+        hooks: { onErrorFrame },
+      });
+    await run({ type: "error", message: "x", code: "internal_error", request_id: "req-1", reporting_owner: "backend" });
+    await run({ type: "error", message: "x", request_id: 42 });
+    expect(onErrorFrame.mock.calls.map(([f]) => [f.code, f.requestId, f.reportingOwner])).toEqual([
+      ["internal_error", "req-1", "backend"],
+      [null, null, undefined],
+    ]);
+  });
+
   it("raises a rejected key as its own signal and stops the citation spinner", async () => {
     const turn = begin();
     const sink = createTurnEventSink(turn, []);
@@ -412,6 +461,8 @@ describe("error frames", () => {
     expect(onErrorFrame).toHaveBeenCalledWith({
       message: expect.any(String),
       safeToDisplay: expect.any(Boolean),
+      code: "invalid_api_key",
+      requestId: null,
     });
     expect(turn.turn.loadingCitations).toBe(false);
     expect(turn.turn.assistant.events).toEqual([
@@ -622,6 +673,19 @@ describe("MCP tool frames", () => {
       },
       thinking,
     ]);
+  });
+
+  it("keeps a tool's title only when the result names one", async () => {
+    const titled = await eventsOf([
+      { type: "mcp_tool_start", name: "drive__search" },
+      { type: "mcp_tool_result", name: "drive__search", connector_name: "Drive", tool_name: "search", tool_title: "Search Drive", status: "ok" },
+    ]);
+    expect(titled?.[0]).toMatchObject({ type: "mcp_tool_call", tool_title: "Search Drive" });
+    const untitled = await eventsOf([
+      { type: "mcp_tool_start", name: "drive__search" },
+      { type: "mcp_tool_result", name: "drive__search", connector_name: "Drive", tool_name: "search", tool_title: "", status: "ok" },
+    ]);
+    expect((untitled?.[0] as { tool_title?: string } | undefined)?.tool_title).toBeUndefined();
   });
 
   it("keeps the approval id a result names, so the timeline can tie it to its decision", async () => {
@@ -1716,4 +1780,201 @@ it.each(["search_id", "scope", "query", "offset"])("ignores malformed search fra
   const event: Record<string, unknown> = { type: "doc_search", search_id: "id", scope: "project", query: "clause", offset: 0, match_count: 2 };
   delete event[key];
   expect(await eventsOf([event])).toEqual([]);
+});
+
+describe("web activity", () => {
+  const web = (events: AssistantEvent[] | undefined) =>
+    events!.filter((e) => e.type.startsWith("web_"));
+
+  it("keeps live activity and completes searches by ID without losing their query", async () => {
+    const starts = [
+      { type: "web_search_start", search_id: "ws-1", query: "late payment interest" },
+      { type: "web_search_start", search_id: "ws-2", query: "directors duties" },
+      { type: "web_read_start", read_id: "wr-1", url: "https://law.example/act", title: "Act" },
+    ];
+    const live = web(await eventsOf([...starts, starts[0], starts[2]]));
+    expect(live).toEqual([
+      { type: "web_search", search_id: "ws-1", query: "late payment interest", results: [], isStreaming: true },
+      { type: "web_search", search_id: "ws-2", query: "directors duties", results: [], isStreaming: true },
+      { type: "web_read", read_id: "wr-1", url: "https://law.example/act", title: "Act", isStreaming: true },
+    ]);
+
+    expect(web(await eventsOf([
+      { type: "web_search", search_id: "ws-2", error: "Search timed out." },
+    ], live))).toEqual([
+      live[0],
+      { type: "web_search", search_id: "ws-2", query: "directors duties", results: [], error: "Search timed out.", isStreaming: false },
+      live[2],
+    ]);
+  });
+
+  it("keeps completion frames received without starts after reconnecting", async () => {
+    expect(await eventsOf([
+      { type: "web_search", search_id: "ws-1", query: 42, results: [] },
+      { type: "web_read", read_id: "wr-1", url: "https://law.example/act", title: "Act" },
+    ])).toEqual([
+      { type: "web_search", search_id: "ws-1", query: "", results: [], isStreaming: false },
+      { type: "web_read", read_id: "wr-1", url: "https://law.example/act", title: "Act", isStreaming: false },
+      thinking,
+    ]);
+  });
+
+  it.each([
+    { type: "web_search_start" },
+    { type: "web_search", search_id: 1 },
+    { type: "web_read_start", url: "https://law.example/act" },
+    { type: "web_read", read_id: 1, url: "https://law.example/act" },
+    { type: "web_read_start", read_id: "wr-1" },
+    { type: "web_read", read_id: "wr-1", url: 1 },
+  ])("ignores malformed web activity: %j", async (event) => {
+    expect(await eventsOf([event])).toEqual([]);
+  });
+
+  it.each([undefined, "", 42])("ignores an unusable error or page title: %j", async (value) => {
+    expect(web(await eventsOf([
+      { type: "web_search", search_id: "ws-1", query: "law", error: value },
+      { type: "web_read", read_id: "wr-1", url: "https://law.example/act", title: value, error: value },
+    ]))).toEqual([
+      { type: "web_search", search_id: "ws-1", query: "law", results: [], isStreaming: false },
+      { type: "web_read", read_id: "wr-1", url: "https://law.example/act", isStreaming: false },
+    ]);
+  });
+
+  it("keeps valid cited sources and search results while discarding malformed entries", async () => {
+    const sources = [
+      null, {}, "not a source", { url: 42 }, { url: "" },
+      { url: "https://law.example/act", title: "Act" },
+      { url: "https://law.example/order" },
+      { url: "https://law.example/rules", title: "" },
+      { url: "https://law.example/case", title: 42 },
+    ];
+    const valid = [
+      { url: "https://law.example/act", title: "Act" },
+      { url: "https://law.example/order" },
+      { url: "https://law.example/rules" },
+      { url: "https://law.example/case" },
+    ];
+    expect(web(await eventsOf([
+      { type: "web_search", search_id: "ws-1", query: "law", results: sources },
+      { type: "web_sources", sources },
+    ]))).toEqual([
+      { type: "web_search", search_id: "ws-1", query: "law", results: valid, isStreaming: false },
+      { type: "web_sources", sources: valid },
+    ]);
+  });
+
+  it.each([undefined, null, {}, [], [null, { url: "" }]])("omits empty or malformed source lists: %j", async (sources) => {
+    expect(await eventsOf([{ type: "web_sources", sources }])).toEqual([]);
+  });
+
+  it("completes a search and a read from their start frames", async () => {
+    const events = await eventsOf([
+      { type: "web_search_start", search_id: "ws-1", query: "late payment interest" },
+      {
+        type: "web_search",
+        search_id: "ws-1",
+        query: "late payment interest",
+        results: [{ url: "https://www.legislation.gov.uk/ukpga/1998/20", title: "Late Payment Act" }],
+      },
+      { type: "web_read_start", read_id: "wr-1", url: "https://b.example/page" },
+      {
+        type: "web_read", read_id: "wr-1", url: "https://b.example/moved",
+        error: "This page could not be read.", error_code: "unreadable",
+      },
+    ]);
+    expect(web(events)).toEqual([
+      {
+        type: "web_search",
+        search_id: "ws-1",
+        query: "late payment interest",
+        results: [{ url: "https://www.legislation.gov.uk/ukpga/1998/20", title: "Late Payment Act" }],
+        isStreaming: false,
+      },
+      {
+        type: "web_read", read_id: "wr-1", url: "https://b.example/moved",
+        error: "This page could not be read.", isStreaming: false,
+      },
+    ]);
+  });
+});
+
+describe("delegation", () => {
+  const start = (id: string) => ({
+    type: "delegation_start", delegation_id: id, title: `Review ${id}`, task: "Summarise the lease.",
+  });
+  const running = (id: string) => ({
+    type: "delegation", delegation_id: id, title: `Review ${id}`, task: "Summarise the lease.",
+    events: [], isStreaming: true,
+  });
+  const finished = (id: string) => ({
+    type: "delegation", delegation_id: id, title: `Review ${id}`, task: "Summarise the lease.",
+    status: "completed", brief: "Rent is due monthly.", events: [{ type: "doc_read", filename: "lease.pdf" }],
+    model: "claude-haiku-4-5", effort: "standard",
+  });
+
+  it("retains the source run when a continued task omits its display labels", async () => {
+    expect(await eventsOf([
+      { type: "delegation_start", delegation_id: "d2", continued_from: "d1", title: null, task: 42 },
+    ])).toEqual([
+      { type: "delegation", delegation_id: "d2", continued_from: "d1", title: "", task: "", events: [], isStreaming: true },
+    ]);
+  });
+
+  it.each([
+    { type: "delegation_start" },
+    { type: "delegation_start", delegation_id: 42 },
+    { type: "delegation" },
+    { type: "delegation", delegation_id: 42 },
+  ])("ignores a delegation without a usable ID: %j", async (event) => {
+    expect(await eventsOf([event])).toEqual([]);
+  });
+
+  it("ignores orphan activity and clears missing activity only on the matching task", async () => {
+    expect(await eventsOf([
+      { type: "delegation_activity", delegation_id: "missing", name: "read_document" },
+      start("d1"),
+      start("d2"),
+      { type: "delegation_activity", delegation_id: "d1", name: "web_search" },
+      { type: "delegation_activity", delegation_id: "d2", name: "read_document" },
+      { type: "delegation_activity", delegation_id: "d1" },
+    ])).toEqual([
+      { ...running("d1"), activity: "" },
+      { ...running("d2"), activity: "read_document" },
+    ]);
+  });
+
+  it("retains a completed delegation received without its start after reconnecting", async () => {
+    expect(await eventsOf([
+      { type: "content_delta", text: "Earlier findings." },
+      finished("d1"),
+    ])).toEqual([
+      { type: "content", text: "Earlier findings." },
+      finished("d1"),
+      thinking,
+    ]);
+  });
+
+  it("shows the running step, then the persisted result", async () => {
+    expect(await eventsOf([
+      { type: "tool_call_start", name: "delegate" },
+      start("d1"),
+      { type: "delegation_activity", delegation_id: "d1", name: "web_search" },
+    ])).toEqual([{ ...running("d1"), activity: "web_search" }]);
+
+    expect(await eventsOf([start("d1"), finished("d1")])).toEqual([finished("d1"), thinking]);
+  });
+
+  it("keeps parallel delegations apart and waits for the last before thinking", async () => {
+    expect(await eventsOf([start("d1"), start("d2"), finished("d1")]))
+      .toEqual([finished("d1"), running("d2")]);
+    expect(await eventsOf([start("d1"), start("d2"), finished("d1"), finished("d2")]))
+      .toEqual([finished("d1"), finished("d2"), thinking]);
+  });
+
+  it("stops a running delegation on Stop", async () => {
+    expect(await eventsOf([start("d1"), { type: "cancelled" }])).toEqual([
+      { ...running("d1"), isStreaming: undefined },
+      { type: "content", text: "Cancelled by user." },
+    ]);
+  });
 });

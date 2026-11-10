@@ -80,10 +80,34 @@ async function runMcpTokenRefreshSweep(): Promise<void> {
 }
 let started = false;
 
-/** Start every background worker (idempotent). */
-export function startAllWorkers(): void {
+/**
+ * Background work splits into two roles so the thread deployment can give each
+ * its own thread: a slow job can then never stop uploads from being processed,
+ * and a burst of uploads never delays the job queue.
+ *   "uploads" — upload-session processing and its own stale-session cleanup.
+ *   "jobs"    — everything else: queue workers, the DB-job runner, sweeps.
+ */
+export type WorkerRole = "jobs" | "uploads";
+export const WORKER_ROLES: readonly WorkerRole[] = ["jobs", "uploads"];
+
+/** Start the background workers for the given roles (idempotent). */
+export function startAllWorkers(
+    roles: readonly WorkerRole[] = WORKER_ROLES,
+): void {
     if (started) return;
     started = true;
+
+    if (roles.includes("uploads")) {
+        // Lease-based claims over Postgres, so any number of runtimes can
+        // poll concurrently without double-processing.
+        const uploadProcessing = uploadProcessingConfiguration();
+        stopUploadWorker = startUploadProcessingWorkers(uploadProcessing);
+        console.log(
+            `Upload processing started with ${uploadProcessing.concurrency} workers ` +
+                `and a ${uploadProcessing.maxRunningPerUser}-job per-user cap`,
+        );
+    }
+    if (!roles.includes("jobs")) return;
 
     // BullMQ workers: conversion/extraction when their flags are on, plus
     // the app-jobs delivery worker — all only when the Redis driver is
@@ -95,15 +119,6 @@ export function startAllWorkers(): void {
     // The DB queue runs in every deployment (fast delivery when Redis is
     // up, poll-driven otherwise) — see lib/dbq/runner.ts.
     startDbJobRunner(DB_JOB_HANDLERS, DB_JOB_FAILURE_HOOKS);
-
-    // Upload-session processing: lease-based claims over Postgres, so any
-    // number of runtimes can poll concurrently without double-processing.
-    const uploadProcessing = uploadProcessingConfiguration();
-    stopUploadWorker = startUploadProcessingWorkers(uploadProcessing);
-    console.log(
-        `Upload processing started with ${uploadProcessing.concurrency} workers ` +
-            `and a ${uploadProcessing.maxRunningPerUser}-job per-user cap`,
-    );
 
     // Stale-work reaper: a crash between "status = processing/generating"
     // and the finalizing write strands rows in a transient state forever —

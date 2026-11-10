@@ -33,7 +33,7 @@ export interface Chat {
   user_id: string;
   title: string | null;
   model?: string | null;
-  reasoning_level?: import("./lib/wordChatTypes").ReasoningLevel | null;
+  reasoning_level?: import("./lib/modelSelectionTypes").ReasoningLevel | null;
   created_at: string;
   /**
    * A turn the server is still generating into this chat, so a pane opening
@@ -86,6 +86,11 @@ export type WordDocumentReadEvent = {
   key?: string;
 };
 
+export type WordTextCardEvent = Extract<
+  WireAssistantEvent,
+  { type: "text_card" }
+> & { key?: string };
+
 export type WordErrorEvent = Extract<WireAssistantEvent, { type: "error" }> & {
   key?: string;
 };
@@ -134,6 +139,7 @@ export type WordAssistantEvent =
   | WordThinkingEvent
   | WordReasoningEvent
   | WordContentEvent
+  | WordTextCardEvent
   | WordDocumentReadEvent
   | WordErrorEvent
   | WordEditReferenceEvent
@@ -161,6 +167,8 @@ export interface Message {
   content: string;
   files?: { filename: string; document_id?: string }[];
   workflow?: { id: string; title: string };
+  /** The playbook the user attached to this message, shown as a pill. */
+  playbook?: { id: string; title: string };
   /** Assistant turns preserve their content and activity in event order. */
   events?: WordAssistantEvent[];
   /** Canonical normalized edits for this assistant message. */
@@ -183,6 +191,17 @@ export interface Workflow {
   is_default?: boolean;
   default_key?: string | null;
   allow_edit?: boolean;
+}
+
+/**
+ * The fields of GET /playbooks the composer's picker reads. The full shape
+ * is frontend/src/app/lib/mikeApi.ts `Playbook`.
+ */
+export interface Playbook {
+  id: string;
+  name: string;
+  description: string;
+  content: { documentTypes: string[] };
 }
 
 export interface QuickAction {
@@ -219,7 +238,10 @@ export type ApiKeyProvider =
   | "vertex"
   | "xai"
   | "custom"
-  | "courtlistener";
+  | "courtlistener"
+  | "brave"
+  | "tavily"
+  | "deepseek";
 
 /**
  * GET /user/api-keys: whether each provider has a usable key (false for a

@@ -15,6 +15,15 @@ audio, embedding, or restricted-access models.
 Main chat still requires an explicit model selection. Internal Gemini fallbacks
 use 3.8 Flash. A saved title-model override continues to take precedence.
 
+## Onboarding
+
+The last onboarding step, Connect a model, shows the same Saved and
+Available provider grids as Settings → Bring Your Own Keys and saves through
+the same dialog, so a key added there is validated and stored exactly as one
+added later. The step can be finished without a key: when the deployment
+provides models, or the person has just joined an organization that has them,
+the step says so instead of asking for a key.
+
 ## Provider switches
 
 Each provider card in Model Providers shows an on/off switch once a personal
@@ -219,7 +228,7 @@ mappings.
 ## Catalog maintenance
 
 Keep `backend/src/lib/llm/models.ts` and the client catalog
-`frontend/src/shared/lib/modelCatalog.ts` (used by both the web app and the
+`packages/client/src/modelCatalog.ts` (used by both the web app and the
 Word add-in) synchronized, including legacy mappings;
 `frontend/src/wordAddin/catalogParity.test.ts` compares them. Update
 reasoning capabilities in the backend and shared `ModelToggleUI.tsx` together.

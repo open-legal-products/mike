@@ -28,14 +28,27 @@ export const CHAT_CHANGED_MESSAGE =
 export function errorFrameFailure(
     message: unknown,
     safeToDisplay: boolean,
+    frame: { code?: unknown; requestId?: unknown; reportingOwner?: unknown } = {},
 ): UserVisibleError {
     const verbatim =
         safeToDisplay && typeof message === "string" && message.trim()
             ? message.trim()
             : null;
-    return new UserVisibleError(verbatim ?? TURN_FAILED_MESSAGE, {
+    const failure = new UserVisibleError(verbatim ?? TURN_FAILED_MESSAGE, {
         kind: "server",
         retryable: !verbatim,
+    });
+    // The frame's code and request id ride on the error the way they ride on
+    // a MikeApiError, so the report of this failure carries them as tags and
+    // the support email can quote the id. Neither is ever rendered.
+    return Object.assign(failure, {
+        ...(frame.reportingOwner === "backend" ? { reportingOwner: "backend" as const } : {}),
+        ...(typeof frame.code === "string" && frame.code
+            ? { code: frame.code }
+            : {}),
+        ...(typeof frame.requestId === "string" && frame.requestId
+            ? { requestId: frame.requestId }
+            : {}),
     });
 }
 

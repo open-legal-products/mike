@@ -9,6 +9,10 @@
 // is delicate. Only the pre-stream preparation lives here.
 
 import type { Db } from "../../lib/supabase";
+import {
+    webSearchPlanFor,
+    type WebSearchPlan,
+} from "../../lib/webSearch";
 import { resolveRequestTimeZone } from "../../lib/userTime";
 import type { McpToolEvent } from "@mike/contracts";
 import {
@@ -27,6 +31,7 @@ import {
     type AssistantEvent,
     type ChatDocumentReference,
     type ChatMessage,
+    type SubagentDefaults,
 } from "../chat/chat.service";
 import { getUserModelSettings, resolveUserChatSelection } from "../user/user.service";
 import {
@@ -127,10 +132,12 @@ export type PreparedProjectChatStream = {
     apiMessages: ReturnType<typeof buildMessages>;
     workflowStore: Awaited<ReturnType<typeof buildWorkflowStore>>;
     legalResearchUs: boolean;
+    webSearch: WebSearchPlan | null;
     apiKeys: Awaited<ReturnType<typeof getUserModelSettings>>["api_keys"];
     /** The organization the chat belongs to, whose keys and model lists apply. */
     orgId: string | null;
     titleModel: Awaited<ReturnType<typeof getUserModelSettings>>["title_model"];
+    subagentDefaults: SubagentDefaults;
     selectedModel: string;
     selectedReasoningLevel: ReturnType<
         typeof resolveEffectiveReasoningLevel
@@ -138,6 +145,7 @@ export type PreparedProjectChatStream = {
     nonce: ReturnType<typeof generateSpotlightNonce>;
 };
 
+/** Authorize a project chat turn and assemble its caller-scoped document context. */
 export async function prepareProjectChatStream(
     db: Db,
     args: {
@@ -455,6 +463,7 @@ export async function prepareProjectChatStream(
             userId,
             db,
             messages,
+            userEmail,
         );
         const docAvailability = Object.entries(docIndex).map(([doc_id, info]) => ({
             doc_id,
@@ -577,9 +586,18 @@ export async function prepareProjectChatStream(
                 apiMessages,
                 workflowStore,
                 legalResearchUs,
+                webSearch: webSearchPlanFor(
+                    modelSettings.web_search,
+                    selectedModel,
+                    apiKeys,
+                ),
                 apiKeys,
                 orgId: projectAccess.project.org_id ?? null,
                 titleModel,
+                subagentDefaults: {
+                    model: modelSettings.subagent_model,
+                    reasoning: modelSettings.subagent_reasoning,
+                },
                 selectedModel,
                 selectedReasoningLevel,
                 nonce,

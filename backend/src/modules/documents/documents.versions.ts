@@ -11,6 +11,8 @@ import { createDocumentVersion } from "./documents.lifecycle";
 // direct object-storage upload-session protocol (modules/uploads), and the
 // former multipart endpoints answer 410.
 
+import { AppError } from "../../lib/appError";
+import { reportError } from "../../lib/observability/sentry";
 import {
     downloadFile,
     uploadFile,
@@ -92,11 +94,17 @@ export async function createVersionFromDocument(
               | "source_not_owner"
               | "source_no_active"
               | "source_bytes"
-              | "storage_write"
-              | "version_insert"
-              | "doc_update"
-              | "source_delete";
+              | "source_bytes";
           detail: string;
+      }
+    // Internal failures carry the cause as an AppError: the route hands it to
+    // sendInternalError, which reports it once with the kind and the code
+    // (a failed RPC's SQLSTATE, a storage SDK's error) on the event.
+    | {
+          ok: false;
+          kind: "storage_write" | "version_insert" | "source_delete";
+          detail: string;
+          error: AppError;
       }
 > {
     const {
@@ -199,11 +207,18 @@ export async function createVersionFromDocument(
             sourceBytes: bytes,
         }));
     } catch (e) {
-        console.error("[versions/copy] storage write failed", e);
         return {
             ok: false,
             kind: "storage_write",
             detail: "Failed to create new version.",
+            error:
+                e instanceof AppError
+                    ? e
+                    : new AppError(
+                          "storage.copy_failed",
+                          "[versions/copy] storage write failed",
+                          { cause: e },
+                      ),
         };
     }
 
@@ -230,10 +245,18 @@ export async function createVersionFromDocument(
                 );
                 pdfStoragePath = pdfKey;
             } catch (err) {
+                // Non-fatal: the version keeps its source without a rendition.
+                // docxToPdf throws a conversion.* AppError, so the report
+                // names the kind; the same object is logged so the console
+                // bridge files no second event.
+                reportError(err, {
+                    level: "warning",
+                    tags: { stage: "docx-to-pdf" },
+                    extra: { document_id: documentId },
+                });
                 console.error(
                     "[versions/copy] Office→PDF conversion failed",
-                    { filename },
-                    err,
+                    { error: err },
                 );
             }
         }
@@ -256,11 +279,15 @@ export async function createVersionFromDocument(
         },
     );
     if (verErr || !versionRow) {
-        console.error("[versions/copy] insert failed", verErr);
         return {
             ok: false,
             kind: "version_insert",
             detail: "Failed to record new version.",
+            error: new AppError(
+                "db.rpc_failed",
+                "[versions/copy] insert failed",
+                { cause: verErr ?? new Error("version_insert_returned_no_data") },
+            ),
         };
     }
 
@@ -282,14 +309,15 @@ export async function createVersionFromDocument(
             sourceDocumentId,
         );
         if (deleteErr) {
-            console.error(
-                "[versions/copy] source document delete failed",
-                deleteErr,
-            );
             return {
                 ok: false,
                 kind: "source_delete",
                 detail: "Failed to delete source document.",
+                error: new AppError(
+                    "db.query_failed",
+                    "[versions/copy] source document delete failed",
+                    { cause: deleteErr },
+                ),
             };
         }
     }

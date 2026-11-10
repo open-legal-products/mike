@@ -1,4 +1,7 @@
+import { AppError } from "../../../lib/appError";
+import { reportError } from "../../../lib/observability/sentry";
 import { responseLanguageName } from "../../../lib/responseLanguages";
+import { folderPathResolver } from "../../../lib/folderTree";
 import { deadlineMessage, type StreamStopReason } from "../../../lib/streamRuns";
 import crypto from "crypto";
 import type { Db } from "../../../lib/supabase";
@@ -6,6 +9,7 @@ import { listWorkspaceWorkflows } from "../../../lib/workflowWorkspace";
 import { teamOrgIdOf } from "../../../lib/personalOrgs";
 import { ensureDocAccess } from "../../../lib/access";
 import { attachActiveVersionPaths } from "../../../lib/documentVersions";
+import { selectAllByKey, selectInBatches } from "../../../lib/batchedQuery";
 import {
   type DocStore,
   type DocIndex,
@@ -26,7 +30,7 @@ import {
 } from "../../../lib/userTime";
 import { ACTIVE_WORD_DOCUMENT_LIVE_FILENAME } from "./wordPrompt";
 import { parseCitations, createCitation } from "./citations";
-import type { AssistantEvent } from "./streaming";
+import type { AssistantEvent } from "@mike/contracts";
 import { catalogWorkflowId, ensureDefaultWorkflows } from "../../../lib/workflowCatalog";
 
 // ---------------------------------------------------------------------------
@@ -274,6 +278,18 @@ export const MAX_REPLAYED_REASONING_CHARS = 12_000;
  */
 export const MAX_REPLAYED_REASONING_TOTAL_CHARS = 36_000;
 
+const MAX_REPLAYED_BRIEF_CHARS = 4_000;
+
+/** One lazy history read shared by the context builders for a single turn. */
+export function createAssistantHistoryLoader(db: Db, chatId: string | null | undefined, messageTable = "chat_messages") {
+  let pending: Promise<{ data: { content?: unknown }[] | null; error: unknown }> | undefined;
+  return () => pending ??= chatId ? Promise.resolve(db.from(messageTable)
+    .select("content").eq("chat_id", chatId).eq("role", "assistant")
+    .not("content", "is", null).order("created_at", { ascending: true }))
+    : Promise.resolve({ data: [], error: null });
+}
+type AssistantHistoryLoader = ReturnType<typeof createAssistantHistoryLoader>;
+
 /**
  * Attaches each earlier assistant turn's stored reasoning to the matching
  * message in `messages`, for models that opt into reasoning replay
@@ -289,17 +305,18 @@ export async function attachPriorReasoning(
   chatId: string | null | undefined,
   db: Db,
   messageTable = "chat_messages",
+  history?: AssistantHistoryLoader,
 ): Promise<ChatMessage[]> {
   if (!chatId || !messages.some((m) => m.role === "assistant")) {
     return messages;
   }
-  const { data: rows, error } = await db
+  const { data: rows, error } = await (history ? history() : db
     .from(messageTable)
     .select("content")
     .eq("chat_id", chatId)
     .eq("role", "assistant")
     .not("content", "is", null)
-    .order("created_at", { ascending: true });
+    .order("created_at", { ascending: true }));
   // Replay is an optimisation: a failed read degrades to text-only history.
   if (error || !rows?.length) return messages;
 
@@ -366,6 +383,17 @@ export async function attachPriorReasoning(
   });
 }
 
+/** An answer's events with each delegation's own events after it. */
+export function withDelegationEvents<T extends { type?: unknown; events?: unknown }>(
+  events: T[],
+): T[] {
+  return events.flatMap((event) =>
+    event?.type === "delegation" && Array.isArray(event.events)
+      ? [event, ...(event.events as T[])]
+      : [event],
+  );
+}
+
 export async function enrichWithPriorEvents(
   messages: ChatMessage[],
   chatId: string | null | undefined,
@@ -418,13 +446,46 @@ export async function enrichWithPriorEvents(
   const approvedIds: string[] = [];
   const approvalOutcomes = new Set<string>();
   let rejectedApprovalSeen = false;
-  for (const ev of content as Record<string, unknown>[]) {
+  const documentLines = (ev: Record<string, unknown>): string[] | null => {
     if (ev?.type === "doc_created") {
-      lines.push(
-        `- generated_document → ${refFor(ev.document_id, ev.filename)}`,
-      );
-    } else if (ev?.type === "doc_edited") {
-      lines.push(`- edit_document → ${refFor(ev.document_id, ev.filename)}`);
+      return [`- generated_document → ${refFor(ev.document_id, ev.filename)}`];
+    }
+    if (ev?.type === "doc_edited") {
+      return [`- edit_document → ${refFor(ev.document_id, ev.filename)}`];
+    }
+    if (ev?.type !== "doc_replicated") return null;
+    // The model needs to know what each copy resolved to so it
+    // can call edit_document / read_document on them. Emit one
+    // line per copy, all attributed back to the same source.
+    const srcLabel =
+      typeof ev.filename === "string" ? untrustedRef(ev.filename) : "";
+    const copies = Array.isArray(ev.copies)
+      ? (ev.copies as {
+          new_filename?: unknown;
+          document_id?: unknown;
+        }[])
+      : [];
+    return copies.map((c) => {
+      const ref = refFor(c.document_id, c.new_filename);
+      return srcLabel
+        ? `- replicate_document → ${ref} (copy of ${srcLabel})`
+        : `- replicate_document → ${ref}`;
+    });
+  };
+  // A subagent's connector calls that ran without waiting on an approval.
+  const subagentConnectorLines = (ev: Record<string, unknown>): string[] => {
+    if (ev?.type !== "mcp_tool_call") return [];
+    const label = `${untrustedRef(ev.tool_name)} on ${untrustedRef(ev.connector_name)}`;
+    return [
+      ev.status === "error"
+        ? `- ${label} failed: ${untrustedRef(ev.error)}`
+        : `- ran ${label}`,
+    ];
+  };
+  for (const ev of content as Record<string, unknown>[]) {
+    const docLines = documentLines(ev);
+    if (docLines) {
+      lines.push(...docLines);
     } else if (ev?.type === "doc_read") {
       // Live Word reads have no doc_id and belong to a different tool;
       // labeling them read_document would name a handle that doesn't exist.
@@ -433,28 +494,40 @@ export async function enrichWithPriorEvents(
       } else {
         lines.push(`- read_document → ${refFor(ev.document_id, ev.filename)}`);
       }
-    } else if (ev?.type === "doc_replicated") {
-      // The model needs to know what each copy resolved to so it
-      // can call edit_document / read_document on them. Emit one
-      // line per copy, all attributed back to the same source.
-      const srcLabel =
-        typeof ev.filename === "string" ? untrustedRef(ev.filename) : "";
-      const copies = Array.isArray(ev.copies)
-        ? (ev.copies as {
-            new_filename?: unknown;
-            document_id?: unknown;
-          }[])
-        : [];
-      for (const c of copies) {
-        const ref = refFor(c.document_id, c.new_filename);
-        lines.push(
-          srcLabel
-            ? `- replicate_document → ${ref} (copy of ${srcLabel})`
-            : `- replicate_document → ${ref}`,
-        );
-      }
     } else if (ev?.type === "workflow_applied") {
       lines.push(`- applied workflow: ${untrustedRef(ev.title)}`);
+    } else if (ev?.type === "web_search" && !ev.error) {
+      const count = Array.isArray(ev.results) ? ev.results.length : 0;
+      lines.push(
+        `- web_search ${untrustedRef(ev.query)} → ${count} result${count === 1 ? "" : "s"}`,
+      );
+    } else if (ev?.type === "web_read" && !ev.error) {
+      lines.push(`- read_webpage → ${untrustedRef(ev.url)}`);
+    } else if (ev?.type === "web_sources" && Array.isArray(ev.sources)) {
+      for (const source of ev.sources as { url?: unknown }[]) {
+        lines.push(`- cited web page → ${untrustedRef(source.url)}`);
+      }
+    } else if (ev?.type === "delegation") {
+      const question =
+        typeof ev.question === "string"
+          ? `; question: ${untrustedRef(ev.question)}`
+          : "";
+      const brief =
+        typeof ev.brief === "string"
+          ? `; brief: ${untrustedRef(ev.brief.slice(0, MAX_REPLAYED_BRIEF_CHARS))}`
+          : "";
+      const awaitingApproval = Array.isArray(ev.approval_ids)
+        ? " (waiting on the user's approval)"
+        : "";
+      lines.push(
+        `- delegated ${untrustedRef(ev.title)} (id: ${String(ev.delegation_id)}) → ${String(ev.status)}${awaitingApproval}${question}${brief}`,
+        ...(Array.isArray(ev.events)
+          ? (ev.events as Record<string, unknown>[]).flatMap(
+              (nested) =>
+                documentLines(nested) ?? subagentConnectorLines(nested),
+            )
+          : []),
+      );
     } else if (ev?.type === "ask_inputs") {
       const items = (Array.isArray(ev.items) ? ev.items : []) as Record<
         string,
@@ -612,6 +685,41 @@ export function parseOptionalDocumentContext(
   };
 }
 
+const DOCUMENT_LIST_HEADING = "\n\n---\nAVAILABLE DOCUMENTS:\n";
+
+function documentListPrompt(
+  docs: { doc_id: string; filename: string; folder_path?: string }[],
+  nonce?: string,
+): string {
+  if (!docs.length) return "";
+  let section = DOCUMENT_LIST_HEADING;
+  for (const doc of docs) {
+    // Filenames are user-controlled and may contain injected text.
+    // Wrap in the spotlight fence so the LLM treats them as data.
+    const rawLabel = doc.folder_path
+      ? `${doc.folder_path} / ${doc.filename}`
+      : doc.filename;
+    const label = spotlightFilename(rawLabel, nonce);
+    section += `- ${doc.doc_id}: ${label}\n`;
+  }
+  section +=
+    "\nYou do NOT retain document content between conversation turns. You MUST call read_document (or fetch_documents) once at the start of every response that involves a document's content, even if you have read it in a previous turn. Within the same response, do not call read_document or fetch_documents again for a document/version that has already been read; use the prior tool result, find_in_document for targeted checks, or proceed to the next required tool. Failure to read once per turn will result in hallucinated or stale content.\n---\n";
+  return section;
+}
+
+export function withDocumentList(
+  systemPrompt: string,
+  docStore: DocStore,
+  nonce?: string,
+): string {
+  // buildMessages ends the system prompt with its document list.
+  const listStart = systemPrompt.indexOf(DOCUMENT_LIST_HEADING);
+  const withoutList =
+    listStart < 0 ? systemPrompt : systemPrompt.slice(0, listStart);
+  const docs = [...docStore].map(([doc_id, { filename }]) => ({ doc_id, filename }));
+  return withoutList + documentListPrompt(docs, nonce);
+}
+
 export function buildMessages(
   messages: ChatMessage[],
   docAvailability: {
@@ -639,20 +747,7 @@ export function buildMessages(
     systemContent += `\n\n${MESSAGE_TIME_PROMPT}`;
   }
 
-  if (docAvailability.length) {
-    systemContent += "\n\n---\nAVAILABLE DOCUMENTS:\n";
-    for (const doc of docAvailability) {
-      // Filenames are user-controlled and may contain injected text.
-      // Wrap in the spotlight fence so the LLM treats them as data.
-      const rawLabel = doc.folder_path
-        ? `${doc.folder_path} / ${doc.filename}`
-        : doc.filename;
-      const label = spotlightFilename(rawLabel, nonce);
-      systemContent += `- ${doc.doc_id}: ${label}\n`;
-    }
-    systemContent +=
-      "\nYou do NOT retain document content between conversation turns. You MUST call read_document (or fetch_documents) once at the start of every response that involves a document's content, even if you have read it in a previous turn. Within the same response, do not call read_document or fetch_documents again for a document/version that has already been read; use the prior tool result, find_in_document for targeted checks, or proceed to the next required tool. Failure to read once per turn will result in hallucinated or stale content.\n---\n";
-  }
+  systemContent += documentListPrompt(docAvailability, nonce);
   formatted.push({ role: "system", content: systemContent });
 
   // Map document_id (UUID) → current-turn doc_id slug, so when we
@@ -674,6 +769,13 @@ export function buildMessages(
         ? spotlight(msg.workflow.title, nonce)
         : msg.workflow.title;
       content = `[Workflow: ${title} (id: ${msg.workflow.id})]\n\n${content}`;
+    }
+    if (msg.role === "user" && msg.playbook) {
+      // Playbook names are user-controlled; spotlight them.
+      const title = nonce
+        ? spotlight(msg.playbook.title, nonce)
+        : msg.playbook.title;
+      content = `[Playbook: ${title} (id: ${msg.playbook.id}). Review the attached document with run_playbook using this playbook id, unless the user asks for something else.]\n\n${content}`;
     }
     if (msg.role === "user" && msg.files?.length) {
       const lines = msg.files.map((f) => {
@@ -765,19 +867,28 @@ export async function loadUserMessageSentTimes(
   const userCount = messages.filter((m) => m.role === "user").length;
   const times: (string | null)[] = new Array(userCount).fill(null);
   if (!chatId || userCount === 0) return times;
-  const { data, error } = await db
-    .from(messageTable)
-    .select("created_at")
-    .eq("chat_id", chatId)
-    .eq("role", "user")
-    .order("created_at", { ascending: true });
-  if (error || !Array.isArray(data)) return times;
-  const stored = (data as { created_at?: unknown }[]).map((row) =>
-    typeof row.created_at === "string" ? row.created_at : null,
-  );
   const savedCount = latestUnsaved ? userCount - 1 : userCount;
+  const stored: (string | null)[] = [];
+  // Read only the context window, newest first, in pages below PostgREST's
+  // row cap. An oldest-first capped query mislabels long conversations.
+  for (let offset = 0; offset < savedCount; offset += 500) {
+    const count = Math.min(500, savedCount - offset);
+    const { data, error } = await db
+      .from(messageTable)
+      .select("created_at")
+      .eq("chat_id", chatId)
+      .eq("role", "user")
+      .order("created_at", { ascending: false })
+      .order("id", { ascending: false })
+      .range(offset, offset + count - 1);
+    if (error || !Array.isArray(data)) return times;
+    stored.push(...data.map((row: { created_at?: unknown }) =>
+      typeof row.created_at === "string" ? row.created_at : null,
+    ));
+    if (data.length < count) break;
+  }
   for (let k = 1; k <= Math.min(savedCount, stored.length); k++) {
-    times[savedCount - k] = stored[stored.length - k];
+    times[savedCount - k] = stored[k - 1];
   }
   return times;
 }
@@ -800,6 +911,7 @@ export function stripTransientAssistantEvents(events: AssistantEvent[]) {
 // therefore produces a type error until its textless-turn behavior is chosen
 // deliberately, instead of silently dropping an otherwise useful response.
 const COMPLETES_TEXTLESS_TURN = {
+  text_card: true,
   reasoning: false,
   ask_inputs: true,
   ask_inputs_response: false,
@@ -818,6 +930,11 @@ const COMPLETES_TEXTLESS_TURN = {
   courtlistener_read_case: false,
   courtlistener_verify_citations: false,
   mcp_tool_call: false,
+  web_search: false,
+  web_read: false,
+  web_sources: false,
+  delegation: false,
+  response_details: false,
   case_opinions: false,
   content: false,
   word_edit_block: false,
@@ -961,9 +1078,18 @@ export async function loadAssistantMessage(
     .maybeSingle();
   if (selectError || !row) {
     if (selectError) {
+      const failure = new AppError(
+        "chat.context_failed",
+        "Failed to load the assistant message",
+        { cause: selectError },
+      );
+      reportError(failure, {
+        level: "warning",
+        tags: { component: "chat-stream" },
+      });
       console.error(
         "[assistant-events] failed to load assistant message",
-        selectError,
+        failure,
       );
     }
     return null;
@@ -989,9 +1115,17 @@ export async function appendAssistantEventsToMessage(
     p_citations: citations ?? [],
   });
   if (error || data !== "appended") {
+    // The RPC's error (or its unexpected verdict) is the cause; the caller
+    // falls back, so the report is the only record that events were lost.
+    const failure = new AppError(
+      "chat.message_save_failed",
+      "Failed to append assistant events",
+      { cause: error ?? { result: data } },
+    );
+    reportError(failure, { tags: { component: "chat-stream" } });
     console.error(
       "[assistant-events] failed to update assistant message",
-      error ?? { result: data },
+      failure,
     );
     return false;
   }
@@ -1149,9 +1283,15 @@ export async function appendAskInputsResponseToAssistantMessage(
     p_response: storedResponse,
   });
   if (error) {
+    const failure = new AppError(
+      "chat.message_save_failed",
+      "Failed to append the ask-inputs response",
+      { cause: error },
+    );
+    reportError(failure, { tags: { component: "chat-stream" } });
     console.error(
       "[assistant-events] failed to append ask-input response",
-      error,
+      failure,
     );
     return "failed";
   }
@@ -1212,6 +1352,7 @@ export async function buildDocContext(
   chatId?: string | null,
   messageTable = "chat_messages",
   userEmail?: string | null,
+  history?: AssistantHistoryLoader,
 ): Promise<{ docIndex: DocIndex; docStore: DocStore }> {
   const docIndex: DocIndex = {};
   const docStore: DocStore = new Map();
@@ -1230,15 +1371,15 @@ export async function buildDocContext(
   // the model loses access to generated docs after the turn that created
   // them, and can't call edit_document / read_document on them.
   if (chatId) {
-    const { data: rows } = await db
+    const { data: rows } = await (history ? history() : db
       .from(messageTable)
       .select("content")
       .eq("chat_id", chatId)
-      .eq("role", "assistant");
+      .eq("role", "assistant"));
     for (const row of rows ?? []) {
       const content = (row as { content?: unknown }).content;
       if (!Array.isArray(content)) continue;
-      for (const ev of content as Record<string, unknown>[]) {
+      for (const ev of withDelegationEvents(content as Record<string, unknown>[])) {
         if (
           (ev?.type === "doc_created" || ev?.type === "doc_edited") &&
           typeof ev.document_id === "string"
@@ -1269,15 +1410,18 @@ export async function buildDocContext(
     // answered "I can't see that document" about a file the caller has full
     // access to. The verdict is per document, not per chat: being cited in a
     // readable chat never grants access to the cited file.
-    const { data: docs } = await db
-      .from("documents")
-      .select(
-        "id, current_version_id, status, library_kind, user_id, project_id, org_id, workflow_id",
-      )
-      .in("id", ids)
-      .eq("status", "ready");
+    // Batched: ids come from the whole conversation history, unbounded.
+    const docs = await selectInBatches("chat document context", ids, (batch) =>
+      db
+        .from("documents")
+        .select(
+          "id, current_version_id, status, library_kind, user_id, project_id, org_id, workflow_id",
+        )
+        .in("id", batch)
+        .eq("status", "ready"),
+    );
 
-    const candidates = (docs ?? []) as unknown as {
+    const candidates = docs as unknown as {
       id: string;
       filename?: string | null;
       file_type?: string | null;
@@ -1373,11 +1517,13 @@ export async function buildDocContext(
   return { docIndex, docStore };
 }
 
+/** Build project context and resolve message attachments with the caller's identity. */
 export async function buildProjectDocContext(
   projectId: string,
   userId: string,
   db: Db,
   messages: ChatMessage[] = [],
+  userEmail?: string | null,
 ): Promise<{
   docIndex: DocIndex;
   docStore: DocStore;
@@ -1386,19 +1532,29 @@ export async function buildProjectDocContext(
   const docIndex: DocIndex = {};
   const docStore: DocStore = new Map();
 
-  const [{ data: docs }, { data: folders }] = await Promise.all([
-    db
-      .from("documents")
-      .select("id, current_version_id, status, folder_id")
-      .eq("project_id", projectId)
-      .eq("status", "ready")
-      .order("created_at", { ascending: true }),
-    db
-      .from("project_subfolders")
-      .select("id, name, parent_folder_id")
-      .eq("project_id", projectId),
+  // Paged: past max_rows an unpaged read silently hid the rest of the
+  // project from the model. Labels (doc-N) follow created_at order as before.
+  type ProjectDocRow = { id: string; created_at?: string | null };
+  type ProjectFolderRow = { id: string; name: string; parent_folder_id: string | null };
+  const [docs, folders] = await Promise.all([
+    selectAllByKey<ProjectDocRow>("project chat documents", () =>
+      db
+        .from("documents")
+        .select("id, current_version_id, status, folder_id, created_at")
+        .eq("project_id", projectId)
+        .eq("status", "ready")),
+    selectAllByKey<ProjectFolderRow>("project chat folders", () =>
+      db
+        .from("project_subfolders")
+        .select("id, name, parent_folder_id")
+        .eq("project_id", projectId)),
   ]);
-  const docList = (docs ?? []) as unknown as {
+  docs.sort(
+    (a, b) =>
+      String(a.created_at ?? "").localeCompare(String(b.created_at ?? "")) ||
+      a.id.localeCompare(b.id),
+  );
+  const docList = docs as unknown as {
     id: string;
     filename?: string | null;
     file_type?: string | null;
@@ -1409,29 +1565,7 @@ export async function buildProjectDocContext(
   }[];
   await attachActiveVersionPaths(db, docList);
 
-  // Build folder id → full path map
-  const folderMap = new Map<
-    string,
-    { name: string; parent_folder_id: string | null }
-  >();
-  for (const f of folders ?? [])
-    folderMap.set(f.id, {
-      name: f.name,
-      parent_folder_id: f.parent_folder_id,
-    });
-
-  function resolvePath(folderId: string | null): string {
-    if (!folderId) return "";
-    const parts: string[] = [];
-    let cur: string | null = folderId;
-    while (cur) {
-      const f = folderMap.get(cur);
-      if (!f) break;
-      parts.unshift(f.name);
-      cur = f.parent_folder_id;
-    }
-    return parts.join(" / ");
-  }
+  const resolvePath = folderPathResolver(folders);
 
   const folderPaths = new Map<string, string>(); // doc label → folder path
 
@@ -1468,7 +1602,7 @@ export async function buildProjectDocContext(
     ),
   }));
   if (attachmentMessages.some((message) => message.files?.length)) {
-    const attachments = await buildDocContext(attachmentMessages, userId, db);
+    const attachments = await buildDocContext(attachmentMessages, userId, db, undefined, "chat_messages", userEmail);
     for (const [label, document] of Object.entries(attachments.docIndex)) {
       const attachmentLabel = `attachment-${label}`;
       docIndex[attachmentLabel] = document;
@@ -1502,22 +1636,43 @@ export async function buildWorkflowStore(
   try {
     await ensureDefaultWorkflows(userId, db);
   } catch (err) {
-    console.error("[buildWorkflowStore] ensureDefaultWorkflows failed:", err);
+    const failure = new AppError(
+      "workflows.default_install_failed",
+      "Default workflow installation failed",
+      { cause: err },
+    );
+    reportError(failure, {
+      level: "warning",
+      tags: { component: "chat-stream" },
+    });
+    console.error("[buildWorkflowStore] ensureDefaultWorkflows failed:", failure);
   }
 
   // Keep catalog IDs readable for historical chat attachments, but do not
-  // expose them through list_workflows. Active versions sort first; inactive
-  // content-addressed versions remain available as a fallback.
+  // expose them through list_workflows. Only active versions are loaded per
+  // turn: replace_mike_workflows retires versions (active = false) without
+  // deleting them, so the full history — every prompt_md ever shipped —
+  // grows with each catalog sync. read_workflow resolves a retired id on
+  // demand (findCatalogWorkflow), the rare case that needs one.
   const { data: catalogWorkflows, error: catalogError } = await db
     .from("mike_workflows")
-    .select("workflow_key, title, prompt_md, active, updated_at")
+    .select("workflow_key, title, prompt_md, updated_at")
     .eq("type", "assistant")
-    .order("active", { ascending: false })
+    .eq("active", true)
     .order("updated_at", { ascending: false });
   if (catalogError) {
+    const failure = new AppError(
+      "chat.context_failed",
+      "Workflow catalog lookup failed",
+      { cause: catalogError },
+    );
+    reportError(failure, {
+      level: "warning",
+      tags: { component: "chat-stream" },
+    });
     console.error(
       "[buildWorkflowStore] workflow catalog lookup failed",
-      catalogError,
+      failure,
     );
   } else {
     for (const workflow of catalogWorkflows ?? []) {
@@ -1547,11 +1702,24 @@ export async function buildWorkflowStore(
     .filter(([, workflow]) => workflow.listed !== false)
     .map(([id]) => id);
   if (databaseWorkflowIds.length > 0) {
-    const { data: assetDocuments } = await db
-      .from("documents")
-      .select("id, workflow_id, current_version_id")
-      .in("workflow_id", databaseWorkflowIds);
-    const documents = (assetDocuments ?? []) as {
+    type AssetRow = { id: string; workflow_id: string; current_version_id: string | null; created_at?: string | null };
+    const assetDocuments = await selectInBatches<AssetRow>(
+      "workflow asset lookup",
+      databaseWorkflowIds,
+      (batch) =>
+        selectAllByKey<AssetRow>("workflow asset lookup", () =>
+          db
+            .from("documents")
+            .select("id, workflow_id, current_version_id, created_at")
+            .in("workflow_id", batch)),
+    );
+    // Asset handles are numbered by position; keep it upload order.
+    assetDocuments.sort(
+      (a, b) =>
+        String(a.created_at ?? "").localeCompare(String(b.created_at ?? "")) ||
+        a.id.localeCompare(b.id),
+    );
+    const documents = assetDocuments as {
       id: string;
       workflow_id: string;
       current_version_id: string | null;

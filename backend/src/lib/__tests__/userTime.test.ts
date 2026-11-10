@@ -191,7 +191,8 @@ describe("message time stamps", () => {
         const query = {
             select: () => query,
             eq: () => query,
-            order: () => Promise.resolve({ data: rows, error: null }),
+            order: () => query,
+            range: (from: number, to: number) => Promise.resolve({ data: [...rows].reverse().slice(from, to + 1), error: null }),
         };
         const db = { from: vi.fn(() => query) } as unknown as Db;
         expect(
@@ -210,7 +211,8 @@ describe("message time stamps", () => {
         const query = {
             select: () => query,
             eq: () => query,
-            order: () => Promise.resolve({ data: rows, error: null }),
+            order: () => query,
+            range: (from: number, to: number) => Promise.resolve({ data: [...rows].reverse().slice(from, to + 1), error: null }),
         };
         const db = { from: vi.fn(() => query) } as unknown as Db;
         const continued = [
@@ -242,4 +244,21 @@ describe("resolveRequestTimeZone", () => {
             expect(resolveRequestTimeZone(requested)).toBe("UTC");
         },
     );
+});
+
+it("loads the newest context timestamps across capped pages in a long chat", async () => {
+    const rows = Array.from({ length: 1503 }, (_, i) => ({ created_at: `time-${i}` }));
+    const query = {
+        select: () => query, eq: () => query,
+        order: vi.fn(() => query),
+        range: vi.fn(async (from: number, to: number) => ({
+            data: [...rows].reverse().slice(from, Math.min(to + 1, from + 1000)), error: null,
+        })),
+    };
+    const db = { from: () => query } as unknown as Db;
+    const messages = Array.from({ length: 1002 }, () => ({ role: "user" as const, content: "text" }));
+    expect(await loadUserMessageSentTimes(db, "chat_messages", "chat", messages))
+        .toEqual(rows.slice(-1002).map(row => row.created_at));
+    expect(query.range.mock.calls).toEqual([[0, 499], [500, 999], [1000, 1001]]);
+    expect(query.order).toHaveBeenCalledWith("created_at", { ascending: false });
 });

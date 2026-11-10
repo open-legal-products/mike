@@ -54,6 +54,16 @@ describe("Word Personal boundary", () => {
     fake.done();
   });
 
+  it("rejects an organization playbook, and ignores an id that cannot name one", async () => {
+    const playbookId = "5d0c1c7e-8f0e-4c55-9a43-3c1d2f9f6b10";
+    const fake = scriptedDb([{ table: "playbooks", data: [{ id: playbookId, org_id: "firm" }] }, organizations]);
+    expect(await wordChatHasWorkspaceAttachments(fake.db, [
+      { playbook: { id: playbookId } },
+      { playbook: { id: "not-a-uuid" } },
+    ])).toBe(true);
+    fake.done();
+  });
+
   it("fails closed on a stored-history lookup failure", async () => {
     const fake = scriptedDb([{ table: "word_chat_messages", error: { message: "offline" } }]);
     await expect(wordChatHasWorkspaceAttachments(fake.db, [], "chat")).rejects.toThrow();

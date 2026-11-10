@@ -11,3 +11,5 @@ export * from "./requestValidation";
 export * from "./wordPrompt";
 export * from "./routeStreaming";
 export * from "./tools/wordClientTools";
+export { createSubagentRunStore, purgeExpiredSubagentRuns } from "./tools/delegateRuns";
+export type { SubagentDefaults } from "./tools/delegateTools";

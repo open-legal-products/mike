@@ -29,10 +29,14 @@ on:
   schedule:
     - cron: "47 3 * * *"
 
+permissions:
+  contents: read
+
+
 # Don't pile up runs on rapid pushes to the same PR.
 concurrency:
-  group: e2e-${{ github.ref }}
-  cancel-in-progress: true
+  group: e2e-${{ github.event_name }}-${{ github.event_name == 'push' && github.sha || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 # Development stress (the `next dev` renderer) is 3-4x slower than the
 # production suite — ~25-35 min against ~7 — and was the last check to finish
@@ -71,7 +75,7 @@ jobs:
       NEXT_PUBLIC_SENTRY_DISABLED: "true"
       E2E_WORKERS: "2"
     steps:
-      - uses: actions/checkout@v7.0.1
+      - uses: actions/checkout@v7
       - uses: actions/setup-node@v7.1.0
         with:
           node-version: 22
@@ -141,15 +145,17 @@ jobs:
       # Login credentials come from e2e/users.ts; pin only the browser origin.
       PLAYWRIGHT_BASE_URL: http://localhost:3000
       REACT_STRESS: ${{ matrix.renderer == 'development' && '1' || '0' }}
-      # Parallel Playwright workers, each with its own account (e2e/users.ts).
-      # The runner has 4 vCPUs shared with Postgres, the API and Next.
-      E2E_WORKERS: "3"
+      # The 4-vCPU runner also hosts Postgres, the API and Next. Three
+      # development browsers at 4x CPU throttle starved unrelated route commits
+      # even after successful API/RSC responses. Keep per-browser stress and
+      # zero retries; limit contention instead of extending assertion deadlines.
+      E2E_WORKERS: ${{ matrix.renderer == 'development' && '2' || '3' }}
       # Dummy key enables model selection; the SDK's existing endpoint override
       # sends every Anthropic request to the loopback fixture, never a provider.
       ANTHROPIC_API_KEY: e2e-local-key
       ANTHROPIC_BASE_URL: http://127.0.0.1:4141/v1
     steps:
-      - uses: actions/checkout@v7.0.1
+      - uses: actions/checkout@v7
 
       - uses: actions/setup-node@v7.1.0
         with:
@@ -392,6 +398,16 @@ jobs:
             curl --silent --max-time 180 --output /dev/null "http://localhost:3000/$route" &
           done
           wait
+          # HTML warmup does not compile the catch-all API gateway. The first
+          # invalid-login test otherwise spends its warning assertion waiting
+          # for cold session/login requests. An anonymous 401 proves the Next
+          # gateway and backend have both answered before browser tests start.
+          status=$(curl --silent --show-error --max-time 120 --output /dev/null \
+            --write-out '%{http_code}' http://localhost:3000/api/auth/session)
+          if [ "$status" != "401" ]; then
+            echo "Expected anonymous API session probe to return 401; received $status" >&2
+            exit 1
+          fi
 
       # playwright.config.ts sets webServer to undefined when CI=true, so the job
       # is responsible for the servers above; Playwright just drives them.

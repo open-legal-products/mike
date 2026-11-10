@@ -15,6 +15,7 @@
 // person who has been removed from an organization is told their workspace is
 // gone instead of being shown a list that is silently empty.
 
+import { UUID_PATTERN } from "./uuid";
 import { type Response } from "express";
 import type { Db } from "./supabase";
 import { isPersonalOrg } from "./personalOrgs";
@@ -23,9 +24,6 @@ export const PERSONAL_WORKSPACE = "personal";
 
 /** `null` means "do not narrow". */
 export type WorkspaceFilter = string | null;
-
-const UUID_PATTERN =
-    /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 export type WorkspaceResolution =
     | { ok: true; workspace: WorkspaceFilter }

@@ -8,6 +8,7 @@ import { defineConfig, devices } from "@playwright/test";
 const SYNTHETIC_SPECS = [
     /assistant-streaming\.spec\.ts/,
     /tabular-chat-lifecycle\.spec\.ts/,
+    /settings-search-latency\.spec\.ts/,
 ];
 
 export default defineConfig({
@@ -90,6 +91,9 @@ export default defineConfig({
                   command:
                       "bash ../scripts/e2e-local-stack.sh --setup-only && npm run dev",
                   cwd: "backend",
+                  // Failures a browser test provokes are not community bug
+                  // reports; CI sets the same (see .github/workflows/e2e.yml).
+                  env: { ...process.env, SENTRY_DISABLED: "true" },
                   url: "http://localhost:3001/health",
                   reuseExistingServer: true,
                   timeout: 120_000,
@@ -97,6 +101,11 @@ export default defineConfig({
               {
                   command: "npm run dev",
                   cwd: "frontend",
+                  env: {
+                      ...process.env,
+                      SENTRY_DISABLED: "true",
+                      NEXT_PUBLIC_SENTRY_DISABLED: "true",
+                  },
                   url: "http://localhost:3000",
                   reuseExistingServer: true,
                   timeout: 120_000,

@@ -2,7 +2,7 @@
 
 import { useWorkspaceIdentity } from "@/app/hooks/useWorkspaceIdentity";
 import { useCallback, useEffect, useRef, useState } from "react";
-import type { MessageExcerpt } from "@/shared/lib/messageExcerpts";
+import type { MessageExcerpt } from "@mike/client";
 import { useChatHistoryContext } from "@/app/contexts/ChatHistoryContext";
 import { useChatRoute } from "@/app/hooks/useChatRoute";
 import { AssistantChatPane } from "@/app/components/assistant/AssistantChatPane";

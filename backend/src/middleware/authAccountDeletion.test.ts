@@ -18,5 +18,8 @@ it.each([
     const next = vi.fn();
     await requireAuth(req as never, res as unknown as Response, next);
     expect(res.status).toHaveBeenCalledWith(status); expect(next).not.toHaveBeenCalled();
-    expect(mocks.sync).not.toHaveBeenCalled(); expect(res.locals).toEqual({});
+    expect(mocks.sync).not.toHaveBeenCalled();
+    // No identity is attached; a 500 only records that sendInternalError
+    // already reported it (so the response sanitizer does not again).
+    expect(res.locals).toEqual(status === 500 ? { failureReported: true } : {});
 });

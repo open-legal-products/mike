@@ -69,8 +69,9 @@ const WorkspaceContext = createContext<WorkspaceContextValue>({
 
 // A convenience remembered per account and per browser: it can come back
 // empty or throw (private windows, blocked site data), and the app must work
-// the same without it.
-function readStoredWorkspace(userId: string | undefined): string {
+// the same without it. Exported for onboarding, which runs outside the
+// provider and wants to know which organization the person just joined.
+export function readStoredWorkspace(userId: string | undefined): string {
     if (!userId) return PERSONAL_WORKSPACE;
     try {
         return (

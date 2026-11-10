@@ -81,6 +81,36 @@ async function dispatchDocumentTool(
     );
 }
 
+it("refuses a scoped subagent's search across the project", async () => {
+    const result = await runToolCalls(
+        [
+            {
+                id: "call-1",
+                function: {
+                    name: "find_documents",
+                    arguments: JSON.stringify({ scope: "project", query: "indemnity" }),
+                },
+            },
+        ],
+        DOC_STORE,
+        "user-1",
+        {} as never,
+        () => undefined,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        "project-1",
+        undefined,
+        undefined,
+        NONCE,
+        { documentsScoped: true },
+    );
+
+    expect(firstToolContent(result)).toContain("only the documents you were given");
+});
+
 function firstToolContent(result: Awaited<ReturnType<typeof runToolCalls>>) {
     return (result.toolResults[0] as { content: string }).content;
 }

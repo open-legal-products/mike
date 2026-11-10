@@ -67,7 +67,7 @@ function focusHighlights(surface: DocxSurface, props: Props): boolean {
     surface.clearRevisionHighlight?.();
     const text = edit?.inserted_text || edit?.deleted_text;
     if (text && surface.selectText?.(text)) return true;
-    // Native selection holds one contiguous range. Select the first matching
+    // One citation is highlighted at a time. Highlight the first matching
     // quote segment, including when its page has not been painted yet.
     for (const quote of props.quotes ?? []) {
         for (const segment of quote.quote.split(/\[\[PAGE_BREAK\]\]|\.{3}|…/)) {
@@ -85,6 +85,7 @@ export function DocxView(props: Props) {
     return <DocxViewContent key={JSON.stringify([props.documentId, props.versionId, props.displayUrl])} {...props} />;
 }
 
+/** Manage the mounted document editor and its unsaved-change close guard. */
 function DocxViewContent(props: Props) {
     const {
         documentId, versionId, displayUrl, refetchKey, cacheBytes = true,
@@ -126,10 +127,11 @@ function DocxViewContent(props: Props) {
         }
     }, [fetched.bytes, editedBytes, adoptSnapshot]);
     const { dirty, status, error: saveError, hasUnsavedChanges, prepareClose, discard } = autosave;
+    const { onCloseGuardReady } = props;
     useEffect(() => {
-        props.onCloseGuardReady?.({ hasUnsavedChanges, prepareClose, discard });
-        return () => props.onCloseGuardReady?.(null);
-    }, [props.onCloseGuardReady, hasUnsavedChanges, prepareClose, discard]);
+        onCloseGuardReady?.({ hasUnsavedChanges, prepareClose, discard });
+        return () => onCloseGuardReady?.(null);
+    }, [onCloseGuardReady, hasUnsavedChanges, prepareClose, discard]);
     const saveReady = !!bytes && !error && !displayUrl && readyKey === renderKey && failedKey !== renderKey;
     useEffect(() => {
         onSaveStateChange?.(documentId, { ready: saveReady, dirty, status, error: saveError });

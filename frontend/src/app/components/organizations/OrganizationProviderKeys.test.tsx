@@ -8,7 +8,6 @@ const mocks = vi.hoisted(() => ({
   getOrgApiKeys: vi.fn(),
   saveOrgApiKey: vi.fn(),
   setOrgApiKeyEnabled: vi.fn(),
-  setOrgPersonalApiKeysAllowed: vi.fn(),
   saveOrgRouterModels: vi.fn(),
   refreshOrgApiKeys: vi.fn(async () => {}),
   updateApiKey: vi.fn(async () => true),
@@ -86,7 +85,6 @@ vi.mock("@/app/lib/mikeApi", async (importOriginal) => ({
   getOrgApiKeys: mocks.getOrgApiKeys,
   saveOrgApiKey: mocks.saveOrgApiKey,
   setOrgApiKeyEnabled: mocks.setOrgApiKeyEnabled,
-  setOrgPersonalApiKeysAllowed: mocks.setOrgPersonalApiKeysAllowed,
   saveOrgRouterModels: mocks.saveOrgRouterModels,
 }));
 
@@ -122,7 +120,6 @@ function orgSettings(
     effective: status,
     router_models: routerModels,
     effective_router_models: routerModels,
-    allow_personal_api_keys: true,
     can_manage: true,
     ...overrides,
   } as OrgApiKeySettings;
@@ -377,34 +374,23 @@ describe("an owner or admin", () => {
     expect(mocks.refreshOrgApiKeys).toHaveBeenCalledTimes(1);
   });
 
-  it("stops members' own keys being used", async () => {
-    const user = userEvent.setup();
-    mocks.setOrgPersonalApiKeysAllowed.mockResolvedValue(
-      orgSettings({}, { allow_personal_api_keys: false }),
-    );
+  it("says members' own keys are never used", async () => {
     renderTab();
 
-    const toggle = await screen.findByRole("switch", {
-      name: "Allow members' own keys",
-    });
-    expect(toggle).toBeChecked();
-    await user.click(toggle);
-
-    expect(mocks.setOrgPersonalApiKeysAllowed).toHaveBeenCalledExactlyOnceWith(
-      "org-1",
-      false,
-    );
-    await waitFor(() => expect(toggle).not.toBeChecked());
     expect(
-      screen.getByText(
-        "A member's own keys are never used for work in this organization.",
+      await within(savedSection()).findByText(
+        "Members\u2019 own keys are never used for work in this organization.",
       ),
     ).toBeInTheDocument();
+    expect(
+      screen.queryByRole("switch", { name: "Allow members' own keys" }),
+    ).not.toBeInTheDocument();
   });
 
   it("asks for MFA and then carries out the change", async () => {
     const user = userEvent.setup();
-    mocks.setOrgPersonalApiKeysAllowed
+    mocks.getOrgApiKeys.mockResolvedValue(orgSettings({ openai: {} }));
+    mocks.setOrgApiKeyEnabled
       .mockRejectedValueOnce(
         new MikeApiError({
           message: "MFA required",
@@ -412,22 +398,25 @@ describe("an owner or admin", () => {
           code: "mfa_verification_required",
         }),
       )
-      .mockResolvedValueOnce(
-        orgSettings({}, { allow_personal_api_keys: false }),
-      );
+      .mockResolvedValueOnce(orgSettings({ openai: { enabled: false } }));
     renderTab();
 
     await user.click(
-      await screen.findByRole("switch", { name: "Allow members' own keys" }),
+      await screen.findByRole("switch", { name: "OpenAI provider" }),
     );
     await user.click(await screen.findByRole("button", { name: "Verify MFA" }));
 
     await waitFor(() =>
-      expect(mocks.setOrgPersonalApiKeysAllowed).toHaveBeenCalledTimes(2),
+      expect(mocks.setOrgApiKeyEnabled).toHaveBeenCalledTimes(2),
+    );
+    expect(mocks.setOrgApiKeyEnabled).toHaveBeenLastCalledWith(
+      "org-1",
+      "openai",
+      false,
     );
     await waitFor(() =>
       expect(
-        screen.getByRole("switch", { name: "Allow members' own keys" }),
+        screen.getByRole("switch", { name: "OpenAI provider" }),
       ).not.toBeChecked(),
     );
   });
@@ -455,16 +444,13 @@ describe("an owner or admin", () => {
 });
 
 describe("a member who cannot manage the organization", () => {
-  const asMember = (saved: Saved, allowPersonal = true) =>
+  const asMember = (saved: Saved) =>
     mocks.getOrgApiKeys.mockResolvedValue(
-      orgSettings(saved, {
-        can_manage: false,
-        allow_personal_api_keys: allowPersonal,
-      }),
+      orgSettings(saved, { can_manage: false }),
     );
 
   it("sees what is set up and can change none of it", async () => {
-    asMember({ openai: {}, claude: { enabled: false } }, false);
+    asMember({ openai: {}, claude: { enabled: false } });
     renderTab();
 
     const saved = savedSection();
@@ -481,11 +467,6 @@ describe("a member who cannot manage the organization", () => {
     expect(
       screen.queryByRole("region", { name: "Available Providers" }),
     ).not.toBeInTheDocument();
-    expect(
-      screen.getByText(
-        "A member's own keys are never used for work in this organization.",
-      ),
-    ).toBeInTheDocument();
   });
 
   it("is told when nothing has been set up", async () => {
@@ -495,11 +476,6 @@ describe("a member who cannot manage the organization", () => {
     expect(
       await screen.findByText(
         "This organization has not set up a model provider yet.",
-      ),
-    ).toBeInTheDocument();
-    expect(
-      screen.getByText(
-        "A member's own key is used for a provider the organization has not set up.",
       ),
     ).toBeInTheDocument();
   });

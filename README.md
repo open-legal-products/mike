@@ -44,7 +44,15 @@ and local email capture without requiring managed infrastructure.
 3. Add an Anthropic, Gemini, or OpenAI API key to `backend/.env`, unless you
    plan to use Ollama exclusively.
 
-4. Start the stack:
+4. Start the stack. Either run the published images (built once in CI, with
+   their Sentry source maps and release) by pinning a version in `.env`:
+
+   ```bash
+   echo "MIKE_IMAGE_TAG=$(cat VERSION)" >> .env
+   docker compose pull && docker compose up --no-build -d
+   ```
+
+   or build everything from this checkout:
 
    ```bash
    docker compose up --build
@@ -63,8 +71,12 @@ authentication behavior, Ollama setup, and first-run guidance.
 ### Telemetry
 
 Mike sends scrubbed error reports (no document content, user identities, or
-request data) to the project's Sentry by default. Set `SENTRY_DISABLED=true` to
-opt out, or set `SENTRY_DSN` to use your own. See the
+request data) to the project's Sentry by default. Development builds (`next dev`,
+the backend run from source, the add-in's dev server) send nothing unless you
+set a DSN yourself. Set `SENTRY_DISABLED=true` to
+opt out, or set `SENTRY_DSN` and `FRONTEND_SENTRY_DSN` to use your own. Both
+take effect at runtime for the published images as well, because browser
+reports travel through the Next server. See the
 [observability guide](docs/observability.md) for the exact policy, per-runtime
 variables, and the [Sentry data audit](docs/sentry-data-audit.md).
 
@@ -87,7 +99,7 @@ variables, and the [Sentry data audit](docs/sentry-data-audit.md).
 - [Manual and production deployment](docs/deployment.md)
 - [Troubleshooting](docs/troubleshooting.md)
 - [MCP connectors](docs/connectors.md)
-- [Google Drive integration](docs/google-drive.md)
+- [Google Workspace: Drive, Gmail, and Calendar](docs/google-workspace.md)
 - [CourtListener integration](docs/courtlistener.md)
 - [Microsoft Word add-in](word-addin/README.md)
 - [Tamper-evident exports](docs/tamper-evident-exports.md)
@@ -102,7 +114,7 @@ variables, and the [Sentry data audit](docs/sentry-data-audit.md).
 
 Mike's system assistant and tabular-review workflows are maintained in the
 [`Open-Legal-Products/mike-workflows`](https://github.com/Open-Legal-Products/mike-workflows)
-repository. See [Contributing](CONTRIBUTING.md#system-workflows) for how they are
+repository. See [Contributing](CONTRIBUTING.md#mike-workflows) for how they are
 packaged and synchronized with this application.
 
 ## License
@@ -110,12 +122,3 @@ packaged and synchronized with this application.
 Mike is available under the [GNU Affero General Public License v3.0](LICENSE).
 Bundled [public contract templates](docs/preset-templates.md#maintaining-the-catalog)
 retain their publishers' separate licenses and notices.
-
-## Gmail and Google Calendar
-
-Gmail and Calendar are separate, optional connections in **Settings → Connectors**.
-Google SSO never connects them automatically. Choose any permitted Google account
-for each service, including a different account from your Mike login. Read access
-is the default; write permissions require a separate consent flow, and every
-send/edit/delete proposal requires explicit approval of its exact contents.
-See [setup, technical approach, limits, and manual acceptance tests](docs/google-workspace.md).

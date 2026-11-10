@@ -46,6 +46,11 @@ export interface AccessControls {
      */
     visibility?: ContentVisibility;
     /**
+     * What every organization member holds on a public item; see
+     * OrganizationAccessEditor. Playbooks pass "viewer".
+     */
+    publicMemberRole?: "editor" | "viewer";
+    /**
      * A failure the owner of this modal wants shown beside the roster rather
      * than in place of it — a refused grants fetch, say, which leaves the
      * people list perfectly loadable but management impossible. It shares the
@@ -422,6 +427,7 @@ export function AccessModal({
                         disabled={!canManage || busy}
                         error={error ?? access.error ?? grantsError}
                         visibility={access.visibility ?? "private"}
+                        publicMemberRole={access.publicMemberRole}
                         onAssign={(member, role) =>
                             changeRole(member, role)
                         }

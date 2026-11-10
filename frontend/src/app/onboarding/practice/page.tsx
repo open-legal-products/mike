@@ -8,7 +8,7 @@ import {
     personalisationInitialValues,
     usePersonalisationFields,
 } from "@/app/components/settings/PersonalisationFields";
-import { PillButtonUI } from "@/shared/ui/PillButtonUI";
+import { PillButtonUI } from "@mike/ui";
 import { FullScreenLoader } from "@/app/components/shared/FullScreenLoader";
 import { useAuth } from "@/app/contexts/AuthContext";
 import { useUserProfile } from "@/app/contexts/UserProfileContext";
@@ -86,7 +86,7 @@ function PracticeDetailsForm({
 
     return (
         <OnboardingShell
-            step="Step 2 of 3"
+            step="Step 2 of 4"
             title="Your legal practice"
             description="Optionally add your professional setting, primary jurisdiction, and the areas you work in."
         >

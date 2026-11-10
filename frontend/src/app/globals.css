@@ -1,8 +1,12 @@
 @import "tailwindcss";
 @import "tw-animate-css";
-@import "../shared/ui/LiquidGlassUI.css";
-@import "../shared/ui/ThemeTokensUI.css";
-@import "../shared/ui/DesignTokensUI.css";
+@import "../../../packages/ui/styles/LiquidGlassUI.css";
+@import "../../../packages/ui/styles/ThemeTokensUI.css";
+@import "../../../packages/ui/styles/DesignTokensUI.css";
+
+/* Tailwind v4 scans this application's sources automatically; the shared
+   primitives in @mike/ui live outside it and are registered here. */
+@source "../../../packages/ui/src";
 
 /* Table surfaces are transparent. Sticky layers retain an opaque page-color
    backing so content scrolling beneath them never shows through. */

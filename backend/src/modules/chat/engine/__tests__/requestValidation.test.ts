@@ -16,6 +16,32 @@ const ASK_RESPONSE_IDS = {
 };
 
 describe("chat request validation", () => {
+  it("keeps the playbook a user picked, and refuses a malformed one", () => {
+    expect(
+      parseChatMessages([
+        {
+          role: "user",
+          content: "Review this",
+          playbook: { id: " pb-1 ", title: " NDA playbook " },
+        },
+      ]),
+    ).toEqual({
+      ok: true,
+      value: [
+        {
+          role: "user",
+          content: "Review this",
+          playbook: { id: "pb-1", title: "NDA playbook" },
+        },
+      ],
+    });
+    expect(
+      parseChatMessages([{ role: "user", content: "x", playbook: { id: "pb-1" } }]),
+    ).toEqual({
+      ok: false,
+      detail: "messages[0].playbook.title must be a non-empty string",
+    });
+  });
   it("normalizes valid messages and their nested metadata", () => {
     expect(
             parseChatMessages([

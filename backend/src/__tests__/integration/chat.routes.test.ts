@@ -403,6 +403,7 @@ vi.mock("../../modules/chat/engine/index", async (importOriginal) => {
 vi.mock("../../modules/user/user.settings", () => ({
     getUserModelSettings: vi.fn(async () => ({
         legal_research_us: false,
+        web_search: DEFAULT_WEB_SEARCH_SETTINGS,
         title_model: "test-model",
         tabular_model: "test-model",
         last_selected_chat_model: null,
@@ -434,6 +435,7 @@ vi.mock("../../lib/llm", async (importOriginal) => {
 import { app } from "../../app";
 import { resetAssistantTurnRunsForTests } from "../../lib/assistantTurnRuns";
 import { createServerSupabase } from "../../lib/supabase";
+import { DEFAULT_WEB_SEARCH_SETTINGS } from "../../lib/webSearch";
 
 const VALID_BODY = {
     messages: [{ role: "user", content: "hello" }],
@@ -694,8 +696,11 @@ describe("POST /chat — streaming endpoint", () => {
         const userSettings = await import("../../modules/user/user.settings.js");
         vi.mocked(userSettings.getUserModelSettings).mockResolvedValueOnce({
             legal_research_us: false,
+            web_search: DEFAULT_WEB_SEARCH_SETTINGS,
             title_model: null,
             memory_curator_model: null,
+            subagent_model: null,
+            subagent_reasoning: null,
             last_selected_reasoning_level: null,
             tabular_model: null,
             last_selected_chat_model: "gpt-6-luna",
@@ -1258,8 +1263,11 @@ describe("POST /chat — streaming endpoint", () => {
         const userSettings = await import("../../modules/user/user.settings.js");
         vi.mocked(userSettings.getUserModelSettings).mockResolvedValueOnce({
             legal_research_us: false,
+            web_search: DEFAULT_WEB_SEARCH_SETTINGS,
             title_model: null,
             memory_curator_model: null,
+            subagent_model: null,
+            subagent_reasoning: null,
             last_selected_reasoning_level: null,
             tabular_model: null,
             last_selected_chat_model: "gpt-6-luna",
@@ -1408,12 +1416,24 @@ describe("POST /chat — streaming endpoint", () => {
         const doneIndex = res.text.indexOf("data: [DONE]");
         expect(errorIndex).toBeGreaterThanOrEqual(0);
         expect(doneIndex).toBeGreaterThan(errorIndex);
+        // The database's error is logged wrapped in the AppError that names
+        // the kind (and was reported first), not as a bare PostgREST object.
         expect(errorSpy).toHaveBeenCalledWith(
             "[chat/stream] failed to save assistant response",
             expect.objectContaining({
-                message: "terminal update failed (attempt 3)",
+                kind: "chat.message_save_failed",
+                cause: expect.objectContaining({
+                    message: "terminal update failed (attempt 3)",
+                }),
             }),
         );
+        const errorFrame = JSON.parse(
+            res.text
+                .split("\n")
+                .find((line) => line.includes("could not be saved"))!
+                .replace(/^data:\s*/, ""),
+        ) as { request_id?: string };
+        expect(errorFrame.request_id).toBe(res.headers["x-request-id"]);
     expect(scheduleMemoryConsolidation).not.toHaveBeenCalled();
         errorSpy.mockRestore();
     });
@@ -1444,7 +1464,10 @@ describe("POST /chat — streaming endpoint", () => {
         expect(errorSpy).toHaveBeenCalledWith(
             "[chat/stream] failed to reserve assistant message",
             expect.objectContaining({
-                message: "assistant reservation failed",
+                kind: "chat.message_reserve_failed",
+                cause: expect.objectContaining({
+                    message: "assistant reservation failed",
+                }),
             }),
         );
         errorSpy.mockRestore();
@@ -1463,6 +1486,18 @@ describe("POST /chat — streaming endpoint", () => {
         expect(res.status).toBe(200);
         expect(res.text).toContain('"type":"error"');
         expect(res.text).toContain("[DONE]");
+        // The terminal frame carries the request id (the X-Request-ID header)
+        // so the user can quote the one handle that finds this failure.
+        const errorFrame = JSON.parse(
+            res.text
+                .split("\n")
+                .filter((line) => line.includes('"type":"error"'))
+                .at(-1)!
+                .replace(/^data:\s*/, ""),
+        ) as { message: string; request_id?: string; safe_to_display?: boolean };
+        expect(errorFrame.request_id).toBe(res.headers["x-request-id"]);
+        expect(errorFrame.request_id).toMatch(/^[0-9a-f-]{36}$/);
+        expect(errorFrame.safe_to_display).toBeUndefined();
 
         const metadata = JSON.parse(
             res.text
@@ -1613,7 +1648,7 @@ describe("POST /chat — streaming endpoint", () => {
             }));
             if (decision === "approve") {
                 expect(execute).toHaveBeenCalledExactlyOnceWith(
-                    "u1", approval, expect.anything(),
+                    { userId: "u1", orgId: null }, approval, expect.anything(),
                 );
                 expect(row.content).toContainEqual(expect.objectContaining({
                     type: "mcp_tool_call", approval_id: approval.id, status: "ok",
@@ -1898,10 +1933,13 @@ describe("POST /chat — streaming endpoint", () => {
         vi.mocked(userSettings.getUserModelSettings).mockResolvedValueOnce({
             title_model: "test-model",
             memory_curator_model: null,
+            subagent_model: null,
+            subagent_reasoning: null,
             last_selected_reasoning_level: null,
             tabular_model: "test-model",
             last_selected_chat_model: null,
             legal_research_us: true,
+            web_search: DEFAULT_WEB_SEARCH_SETTINGS,
             api_keys: {
                 gemini: "test-key",
                 courtlistener: "configured-but-unused",
@@ -2284,8 +2322,11 @@ async function seedResolvableModel() {
     const userSettings = await import("../../modules/user/user.settings.js");
     vi.mocked(userSettings.getUserModelSettings).mockResolvedValueOnce({
         legal_research_us: false,
+        web_search: DEFAULT_WEB_SEARCH_SETTINGS,
         title_model: null,
         memory_curator_model: null,
+        subagent_model: null,
+        subagent_reasoning: null,
         last_selected_reasoning_level: null,
         tabular_model: null,
         last_selected_chat_model: "gpt-6-luna",
@@ -3083,6 +3124,12 @@ describe("chat grants, deletion and roster", () => {
         ]);
     });
 
+    it("lets an editor delete their own project chat", async () => {
+        mockedCreate.mockImplementation(() => makeRbacDb("member", "u1") as never);
+        const res = await request(app).delete("/chat/chat-1").set("Authorization", "Bearer test");
+        expect(res.status).toBe(204);
+    });
+
     it("403s an org member deleting a colleague's chat", async () => {
         // container.delete is the admin rung: a member may write in the chat
         // and rename it, but erasing a colleague's container is not theirs.
@@ -3528,6 +3575,8 @@ describe("server-owned turns: resume, stop, concurrency", () => {
             code: "turn_in_progress",
             detail: "A response is already being generated for this chat.",
         });
+        expect(dbInserts.filter(entry => entry.table === "chat_messages" &&
+            (entry.value as { role?: string }).role === "user")).toHaveLength(1);
         held.release();
         expect((await firstDone).text).toContain("data: [DONE]");
         expect(runLLMStream).toHaveBeenCalledTimes(1);

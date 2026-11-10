@@ -186,7 +186,11 @@ describe("runApprovedConnectorActions", () => {
     });
 
     expect(mocks.google).toHaveBeenCalledOnce();
-    expect(mocks.google).toHaveBeenCalledWith("user-1", gmailItem, db);
+    expect(mocks.google).toHaveBeenCalledWith(
+      { userId: "user-1", orgId: null },
+      gmailItem,
+      db,
+    );
     expect(mocks.mcp).not.toHaveBeenCalled();
     expect(events).toHaveLength(1);
     expect(events[0]).toMatchObject({
@@ -199,6 +203,49 @@ describe("runApprovedConnectorActions", () => {
       "append_chat_assistant_events",
     ]);
     expect(row.content.at(-1)).toMatchObject({ approval_id: "approve-gmail" });
+  });
+
+  it("runs an approval in an organization on that workspace's connections", async () => {
+    const { db } = messageDb([askEvent]);
+    await appendAskInputsResponseToAssistantMessage(
+      db,
+      "chat-1",
+      {
+        assistant_message_id: "assistant-1",
+        ask_event_id: "ask-1",
+        responses: [
+          { id: "approve-gmail", kind: "approval", decision: "reject" },
+          { id: "approve-slack", kind: "approval", decision: "approve" },
+        ],
+      },
+      "user-1",
+    );
+    mocks.mcp.mockResolvedValue({
+      content: "{}",
+      event: {
+        type: "mcp_tool_call",
+        connector_id: "c1",
+        connector_name: "Slack",
+        tool_name: "post",
+        openai_tool_name: "mcp_slack_post",
+        status: "ok",
+      },
+    });
+
+    await runApprovedConnectorActions({
+      db,
+      chatId: "chat-1",
+      messageId: "assistant-1",
+      askEventId: "ask-1",
+      userId: "user-1",
+      orgId: "firm",
+    });
+
+    expect(mocks.mcp).toHaveBeenCalledWith(
+      { userId: "user-1", orgId: "firm" },
+      slackItem,
+      db,
+    );
   });
 
   it("stores and returns a fixed message in place of a connector's raw error", async () => {

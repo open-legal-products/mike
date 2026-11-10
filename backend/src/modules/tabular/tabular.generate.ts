@@ -20,9 +20,11 @@
 import { type UserApiKeys } from "../../lib/llm";
 import { ensureReviewAccess } from "../../lib/access";
 import { can } from "../../lib/permissions";
+import { queryFailureCause } from "../../lib/batchedQuery";
 import { failure, internalFailure } from "../../lib/serviceResult";
 import {
     filterReadableReviewRows,
+    loadReviewCells,
     loadReviewRows,
     type ReviewRow,
 } from "./tabular.rows";
@@ -155,30 +157,36 @@ export type TabularGenerateWork = {
     cellMap: Map<string, Record<string, unknown>>;
 };
 
+/** Load the post-lease work snapshot, distinguishing lookup errors from access denials. */
 export async function loadTabularGenerateWork(
     db: Db,
     args: { reviewId: string; userId: string; userEmail: string | undefined },
 ): Promise<
     | { ok: true; data: TabularGenerateWork }
     | { ok: false; kind: "cells_error"; error: unknown }
+    | { ok: false; kind: "error"; error: unknown }
 > {
     const { reviewId, userId, userEmail } = args;
 
     let rows = await loadReviewRows(db, reviewId);
 
-    const { data: cells, error: cellsError } = await db
-        .from("tabular_cells")
-        .select("*")
-        .eq("review_id", reviewId);
-    if (cellsError)
-        return { ok: false, kind: "cells_error", error: cellsError };
+    let cells: Record<string, unknown>[];
+    try {
+        cells = await loadReviewCells(db, reviewId);
+    } catch (cellsError) {
+        return { ok: false, kind: "cells_error", error: queryFailureCause(cellsError) };
+    }
     const cellMap = new Map<string, Record<string, unknown>>();
-    for (const cell of cells ?? [])
+    for (const cell of cells)
         cellMap.set(`${cell.row_id}:${cell.column_index}`, cell);
 
     // A row is only extractable if the requester can access every source
     // document feeding it; drop rows containing anything they cannot see.
-    ({ rows } = await filterReadableReviewRows(db, rows, [], userId, userEmail));
+    try {
+        ({ rows } = await filterReadableReviewRows(db, rows, [], userId, userEmail));
+    } catch (error) {
+        return { ok: false, kind: "error", error };
+    }
 
     return { ok: true, data: { rows, cellMap } };
 }

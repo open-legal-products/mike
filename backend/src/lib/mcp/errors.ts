@@ -1,3 +1,4 @@
+import { AppError } from "../appError";
 import { mcpOAuthProviderFor } from "./providers";
 
 const MAX_MCP_ERROR_MESSAGE_CHARS = 2_000;
@@ -240,10 +241,9 @@ export function sanitizeMcpToolErrorResult(result: unknown): UnknownRecord {
  * remote server or the SDK produced. Routes may therefore allowlist this class
  * and return `message` verbatim without weakening the rule for everything else.
  */
-export class ConnectorSetupError extends Error {
+export class ConnectorSetupError extends AppError {
     readonly code = "connector_setup_required";
     constructor(message: string) {
-        super(message);
-        this.name = "ConnectorSetupError";
+        super("mcp.setup_failed", message);
     }
 }

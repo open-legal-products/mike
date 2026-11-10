@@ -60,7 +60,7 @@ jobs:
       run:
         working-directory: desktop
     steps:
-      - uses: actions/checkout@v7.0.1
+      - uses: actions/checkout@v7
         with:
           # upgrade.test.js reads the baseline schema straight out of git
           # (`git show <BASELINE_REF>:backend/schema.sql`), like schema-drift.yml.
@@ -100,7 +100,7 @@ jobs:
     runs-on: macos-15
     timeout-minutes: 45
     steps:
-      - uses: actions/checkout@v7.0.1
+      - uses: actions/checkout@v7
         with:
           persist-credentials: false
 

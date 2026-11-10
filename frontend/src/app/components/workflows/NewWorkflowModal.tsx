@@ -20,14 +20,16 @@ import { Modal } from "../modals/Modal";
 import { ModalSegmentedToggle } from "../modals/ModalSegmentedToggle";
 import { ModalSelect } from "../modals/ModalSelect";
 import { FieldLabel, FormTextInput } from "../ui/form-field";
-import { WorkflowSlashCommandUI } from "@/shared/ui/WorkflowSlashCommandUI";
+import { WorkflowSlashCommandUI } from "@mike/ui";
 import {
     ChatSkeuoIcon,
     TabularReviewSkeuoIcon,
 } from "../shared/AppSidebarSkeuoIcons";
 import {
+    CANADA_PROVINCE_OPTIONS,
     COUNTRY_OPTIONS,
     OTHER_JURISDICTION_OPTION,
+    US_STATE_OPTIONS,
 } from "@/app/onboarding/options";
 import { useAuth } from "@/app/contexts/AuthContext";
 import { useUserProfile } from "@/app/contexts/UserProfileContext";
@@ -91,74 +93,6 @@ const LANGUAGE_OPTIONS = [
 const JURISDICTION_OPTIONS = [
     ...COUNTRY_OPTIONS,
     OTHER_JURISDICTION_OPTION,
-] as const;
-const US_STATE_OPTIONS = [
-    "Alabama",
-    "Alaska",
-    "Arizona",
-    "Arkansas",
-    "California",
-    "Colorado",
-    "Connecticut",
-    "Delaware",
-    "Florida",
-    "Georgia",
-    "Hawaii",
-    "Idaho",
-    "Illinois",
-    "Indiana",
-    "Iowa",
-    "Kansas",
-    "Kentucky",
-    "Louisiana",
-    "Maine",
-    "Maryland",
-    "Massachusetts",
-    "Michigan",
-    "Minnesota",
-    "Mississippi",
-    "Missouri",
-    "Montana",
-    "Nebraska",
-    "Nevada",
-    "New Hampshire",
-    "New Jersey",
-    "New Mexico",
-    "New York",
-    "North Carolina",
-    "North Dakota",
-    "Ohio",
-    "Oklahoma",
-    "Oregon",
-    "Pennsylvania",
-    "Rhode Island",
-    "South Carolina",
-    "South Dakota",
-    "Tennessee",
-    "Texas",
-    "Utah",
-    "Vermont",
-    "Virginia",
-    "Washington",
-    "West Virginia",
-    "Wisconsin",
-    "Wyoming",
-    "District of Columbia",
-] as const;
-const CANADA_PROVINCE_OPTIONS = [
-    "Alberta",
-    "British Columbia",
-    "Manitoba",
-    "New Brunswick",
-    "Newfoundland and Labrador",
-    "Northwest Territories",
-    "Nova Scotia",
-    "Nunavut",
-    "Ontario",
-    "Prince Edward Island",
-    "Quebec",
-    "Saskatchewan",
-    "Yukon",
 ] as const;
 
 interface Props {

@@ -1,7 +1,10 @@
 // Project subfolder service functions: create, rename/move (with cycle
 // check), recursive delete, and moving documents between folders.
 
-import { parseFolderPath, validateFolderMove, collectFolderSubtree } from "../../lib/folderTree";
+import { parseFolderPath, validateFolderMove } from "../../lib/folderTree";
+import { readFolderSubtree } from "../../lib/folderSubtree";
+import { chunkArray } from "../../lib/arrays";
+import { ID_FILTER_BATCH_SIZE, queryFailureCause } from "../../lib/batchedQuery";
 import { checkProjectAccess, creatorScopedAllowed } from "../../lib/access";
 import { can, DOCS_ORGANIZE_FORBIDDEN } from "../../lib/permissions";
 import {
@@ -15,16 +18,18 @@ export type CreateFolderResult =
   | { ok: true; folder: unknown }
   | { ok: false; kind: "forbidden" }
   | RoleForbidden
+  | { ok: false; kind: "validation"; detail: string }
   | { ok: false; kind: "parent_not_found" }
   | { ok: false; kind: "db_error"; error: unknown };
 
+/** Create a named project folder after checking organize rights and its parent. */
 export async function createProjectFolder(
   db: Db,
   args: {
     projectId: string;
     userId: string;
     userEmail?: string;
-    name: string;
+    name: unknown;
     parent_folder_id?: string | null;
   },
 ): Promise<CreateFolderResult> {
@@ -34,6 +39,9 @@ export async function createProjectFolder(
   if (!access.ok) return { ok: false, kind: "forbidden" };
   if (!can(access.projectRole, "docs.organize"))
     return { ok: false, kind: "role_forbidden", detail: DOCS_ORGANIZE_FORBIDDEN };
+
+  if (typeof name !== "string" || !name.trim())
+    return { ok: false, kind: "validation", detail: "name must be a non-empty string" };
 
   // Verify parent folder belongs to this project
   if (parent_folder_id) {
@@ -55,10 +63,12 @@ export type UpdateFolderResult =
   | { ok: true; folder: unknown }
   | { ok: false; kind: "forbidden" }
   | RoleForbidden
+  | { ok: false; kind: "validation"; detail: string }
   | { ok: false; kind: "parent_not_found" }
   | { ok: false; kind: "cycle" }
   | { ok: false; kind: "not_found" };
 
+/** Rename or reparent a project folder while enforcing access and preventing cycles. */
 export async function updateProjectFolder(
   db: Db,
   args: {
@@ -66,7 +76,7 @@ export async function updateProjectFolder(
     folderId: string;
     userId: string;
     userEmail?: string;
-    body: { name?: string; parent_folder_id?: string | null };
+    body: { name?: unknown; parent_folder_id?: string | null };
   },
 ): Promise<UpdateFolderResult> {
   const { projectId, folderId, userId, userEmail, body } = args;
@@ -79,7 +89,11 @@ export async function updateProjectFolder(
     return { ok: false, kind: "role_forbidden", detail: DOCS_ORGANIZE_FORBIDDEN };
 
   const updates: Record<string, unknown> = { updated_at: new Date().toISOString() };
-  if (body.name != null) updates.name = body.name.trim();
+  if ("name" in body) {
+    if (typeof body.name !== "string" || !body.name.trim())
+      return { ok: false, kind: "validation", detail: "name must be a non-empty string" };
+    updates.name = body.name.trim();
+  }
   if ("parent_folder_id" in body) {
     // Cycle check: walk up the tree from the proposed parent to ensure folderId is not an ancestor
     if (body.parent_folder_id) {
@@ -136,26 +150,44 @@ export async function deleteProjectFolder(
   if (!can(access.projectRole, "docs.organize"))
     return { ok: false, kind: "role_forbidden", detail: DOCS_ORGANIZE_FORBIDDEN };
 
-  const { data: allFolders, error: foldersError } = await db
+  const { data: root, error: rootError } = await db
     .from("project_subfolders")
-    .select("id, parent_folder_id")
-    .eq("project_id", projectId);
-  if (foldersError)
-    return { ok: false, kind: "db_error", error: foldersError };
-  if (!(allFolders ?? []).some((f) => f.id === folderId))
-    return { ok: false, kind: "not_found" };
-
-  const folderIds = collectFolderSubtree(folderId, allFolders ?? []);
-
-  const { data: docs, error: docsError } = await db
-    .from("documents")
-    .select("id, user_id")
+    .select("id")
+    .eq("id", folderId)
     .eq("project_id", projectId)
-    .in("folder_id", [...folderIds]);
-  if (docsError) return { ok: false, kind: "db_error", error: docsError };
+    .maybeSingle();
+  if (rootError) return { ok: false, kind: "db_error", error: rootError };
+  if (!root) return { ok: false, kind: "not_found" };
+
+  // Walk down from the folder one level per round trip instead of loading
+  // every folder in the project, then read the subtree's documents in full:
+  // an unpaged read stopped at max_rows, so past 1000 documents the rest
+  // escaped both the permission check below and the delete (documents
+  // .folder_id is ON DELETE SET NULL, so they silently moved to the root).
+  let docs: { id: string; user_id: string | null }[];
+  try {
+    ({ documents: docs } = await readFolderSubtree<{ id: string; user_id: string | null }>({
+      label: "project folder subtree",
+      rootId: folderId,
+      childrenOf: (parents) =>
+        db
+          .from("project_subfolders")
+          .select("id")
+          .eq("project_id", projectId)
+          .in("parent_folder_id", parents),
+      documentsIn: (folders) =>
+        db
+          .from("documents")
+          .select("id, user_id")
+          .eq("project_id", projectId)
+          .in("folder_id", folders),
+    }));
+  } catch (error) {
+    return { ok: false, kind: "db_error", error: queryFailureCause(error) };
+  }
 
   if (!can(access.projectRole, "container.delete")) {
-    const foreign = (docs ?? []).some((d) => {
+    const foreign = docs.some((d) => {
       const creatorId = (d.user_id as string | null) ?? null;
       return !creatorScopedAllowed(
         { isCreator: !!creatorId && creatorId === userId, projectRole: access.projectRole },
@@ -170,14 +202,15 @@ export async function deleteProjectFolder(
       };
   }
 
-  const docIds = (docs ?? []).map((d) => d.id as string);
-  const deleteDocsError = await deleteProjectDocumentsAndVersionFiles(
-    db,
-    projectId,
-    docIds,
-  );
-  if (deleteDocsError)
-    return { ok: false, kind: "db_error", error: deleteDocsError };
+  for (const batch of chunkArray(docs.map((d) => d.id), ID_FILTER_BATCH_SIZE)) {
+    const deleteDocsError = await deleteProjectDocumentsAndVersionFiles(
+      db,
+      projectId,
+      batch,
+    );
+    if (deleteDocsError)
+      return { ok: false, kind: "db_error", error: deleteDocsError };
+  }
 
   const { error } = await db.from("project_subfolders")
     .delete().eq("id", folderId).eq("project_id", projectId);

@@ -12,9 +12,16 @@
 // its ordering is delicate. Only the NON-streaming logic and the pre-stream
 // DB preparation live here. `prepareChatStream` returns the prepared data the
 // route needs to run the stream; it does not stream.
+import { AppError } from "../../lib/appError";
+import { getActiveAssistantTurn } from "../../lib/assistantTurnRuns";
+import { reportError } from "../../lib/observability/sentry";
 import { type Db } from "../../lib/supabase";
+import {
+    webSearchPlanFor,
+    type WebSearchPlan,
+} from "../../lib/webSearch";
 import { resolveRequestTimeZone } from "../../lib/userTime";
-import { attachPriorReasoning, buildDocContext, buildMessages, buildUserPersonalisationPrompt, devLog, enrichWithPriorEvents, loadUserMessageSentTimes, buildWorkflowStore, appendAskInputsResponseToAssistantMessage, runApprovedConnectorActions, generateSpotlightNonce, type AskInputsResponseRequest, type ChatMessage } from "./engine/index";
+import { createAssistantHistoryLoader, attachPriorReasoning, buildDocContext, buildMessages, buildUserPersonalisationPrompt, devLog, enrichWithPriorEvents, loadUserMessageSentTimes, buildWorkflowStore, appendAskInputsResponseToAssistantMessage, runApprovedConnectorActions, generateSpotlightNonce, type AskInputsResponseRequest, type ChatMessage, type SubagentDefaults } from "./engine/index";
 import type { McpToolEvent } from "@mike/contracts";
 import { getUserModelSettings, resolveUserChatSelection } from "../user/user.service";
 import {
@@ -74,12 +81,14 @@ export type PreparedChatStream = {
     apiMessages: ReturnType<typeof buildMessages>;
     workflowStore: Awaited<ReturnType<typeof buildWorkflowStore>>;
     legalResearchUs: boolean;
+    webSearch: WebSearchPlan | null;
     apiKeys: Awaited<ReturnType<typeof getUserModelSettings>>["api_keys"];
     /** The organization the chat belongs to, whose keys and model lists apply. */
     orgId: string | null;
     titleModel: Awaited<
         ReturnType<typeof getUserModelSettings>
     >["title_model"];
+    subagentDefaults: SubagentDefaults;
     selectedModel: string;
     selectedReasoningLevel: ReturnType<
         typeof resolveEffectiveReasoningLevel
@@ -87,6 +96,7 @@ export type PreparedChatStream = {
     nonce: ReturnType<typeof generateSpotlightNonce>;
 };
 
+/** Authorize and prepare a chat turn, refusing active turns before saving input. */
 export async function prepareChatStream(
     db: Db,
     args: {
@@ -349,7 +359,16 @@ export async function prepareChatStream(
             .select("id, title")
             .single();
         if (error || !newChat) {
-            console.error("[chat/stream] failed to create chat", error);
+            // The route answers 500 without throwing, so this is the one
+            // report; the PostgREST error is the cause (its code reaches
+            // Sentry), the same wrapper is logged so the bridge skips it.
+            const failure = new AppError(
+                "db.query_failed",
+                "Failed to create chat",
+                { cause: error ?? { result: newChat } },
+            );
+            reportError(failure, { tags: { component: "chat-stream" } });
+            console.error("[chat/stream] failed to create chat", failure);
             return { ok: false, status: 500, detail: "Failed to create chat" };
         }
         chatId = newChat.id as string;
@@ -361,6 +380,13 @@ export async function prepareChatStream(
             ok: false,
             status: 500,
             detail: "Failed to initialize chat",
+        };
+    }
+
+    if (getActiveAssistantTurn(chatId)) {
+        return {
+            ok: false, status: 409, code: "turn_in_progress",
+            detail: "A response is already being generated for this chat.",
         };
     }
 
@@ -425,6 +451,7 @@ export async function prepareChatStream(
                 content: lastUser.content,
                 files: lastUser.files ?? null,
                 workflow: lastUser.workflow ?? null,
+                playbook: lastUser.playbook ?? null,
                 author_user_id: userId,
             });
         if (userMessageError) {
@@ -449,6 +476,7 @@ export async function prepareChatStream(
     // the conversation turn opened above: the route's finally block only runs
     // once this function has returned it. Release on the way out instead.
     try {
+        const history = createAssistantHistoryLoader(db, chatId);
         const { docIndex, docStore } = await buildDocContext(
             messages,
             userId,
@@ -456,6 +484,7 @@ export async function prepareChatStream(
             chatId,
             "chat_messages",
             userEmail,
+            history,
         );
         const docAvailability = Object.entries(docIndex).map(([doc_id, info]) => ({
             doc_id,
@@ -465,7 +494,7 @@ export async function prepareChatStream(
         // and workflow titles replayed from earlier turns are fenced as well.
         const nonce = generateSpotlightNonce(chatId);
         const historyMessages = replaysReasoning(selectedModel)
-            ? await attachPriorReasoning(messages, chatId, db)
+            ? await attachPriorReasoning(messages, chatId, db, "chat_messages", history)
             : messages;
         const timeZone = resolveRequestTimeZone(args.requestedTimeZone);
         const enrichedMessages = await enrichWithPriorEvents(
@@ -526,9 +555,18 @@ export async function prepareChatStream(
                 apiMessages,
                 workflowStore,
                 legalResearchUs,
+                webSearch: webSearchPlanFor(
+                    modelSettings.web_search,
+                    selectedModel,
+                    apiKeys,
+                ),
                 apiKeys,
                 orgId: contentOrgId,
                 titleModel,
+                subagentDefaults: {
+                    model: modelSettings.subagent_model,
+                    reasoning: modelSettings.subagent_reasoning,
+                },
                 selectedModel,
                 selectedReasoningLevel,
                 nonce,

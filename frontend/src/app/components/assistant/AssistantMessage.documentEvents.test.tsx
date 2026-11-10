@@ -203,6 +203,61 @@ describe("AssistantMessage document events", () => {
             1,
         );
     });
+
+    it("offers the edits and documents a subagent made", () => {
+        render(
+            <AssistantMessage
+                events={[
+                    {
+                        type: "delegation",
+                        delegation_id: "d1",
+                        title: "Tidy the lease",
+                        task: "Fix the defined terms in lease.docx.",
+                        status: "completed",
+                        model: "claude-haiku-4-5",
+                        effort: "standard",
+                        events: [
+                            {
+                                type: "doc_edited",
+                                filename: "lease.docx",
+                                document_id: "document-1",
+                                version_id: "version-2",
+                                version_number: 2,
+                                download_url: "/documents/document-1/download",
+                                annotations: [
+                                    {
+                                        edit_id: "edit-1",
+                                        document_id: "document-1",
+                                        version_id: "version-2",
+                                        version_number: 2,
+                                        change_id: "change-1",
+                                        deleted_text: "Lessee",
+                                        inserted_text: "Tenant",
+                                        status: "pending",
+                                    },
+                                ],
+                            },
+                            {
+                                type: "doc_created",
+                                filename: "summary.docx",
+                                document_id: "document-2",
+                                download_url: "/documents/document-2/download",
+                            },
+                        ],
+                    },
+                    { type: "content", text: "Done." },
+                ]}
+            />,
+        );
+
+        expect(screen.getByText("Tenant")).toBeInTheDocument();
+        expect(
+            screen.getByRole("button", { name: "Download lease.docx" }),
+        ).toBeInTheDocument();
+        expect(
+            screen.getByRole("button", { name: "Download summary.docx" }),
+        ).toBeInTheDocument();
+    });
 });
 
 it("renders a saved document search in the pre-response timeline", () => {

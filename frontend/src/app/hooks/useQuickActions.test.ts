@@ -75,3 +75,15 @@ it("hides previous actions immediately and ignores delayed loads after workspace
     rerender();
     expect(result.current.quickActions).toEqual([]);
 });
+
+ it("keeps server actions when browser storage is blocked", async () => {
+    scope.accountId = "storage-blocked"; scope.workspace = "personal";
+    listQuickActions.mockResolvedValue([proofread]);
+    const storage = vi.spyOn(Storage.prototype, "getItem").mockImplementation(() => {
+        throw new DOMException("Blocked", "SecurityError");
+    });
+    try {
+        const { result } = renderHook(() => useQuickActions());
+        await waitFor(() => expect(result.current.quickActions).toEqual([proofread]));
+    } finally { storage.mockRestore(); }
+});

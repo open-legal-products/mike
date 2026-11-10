@@ -439,3 +439,24 @@ describe("guardedFetch caller label", () => {
         ).rejects.toThrow("MCP server URL resolves to a blocked network address.");
     });
 });
+
+describe("guardedFetch for public web pages", () => {
+    const fetchSpy = vi.mocked(undiciFetch);
+
+    beforeEach(() => {
+        fetchSpy.mockReset();
+    });
+
+    it("allows plain http only when asked to", async () => {
+        resolvesTo("93.184.216.34");
+        fetchSpy.mockResolvedValue(new Response("ok") as never);
+
+        await expect(guardedFetch("http://public.example.com/page")).rejects.toThrow(/HTTPS/);
+        expect(fetchSpy).not.toHaveBeenCalled();
+
+        const res = await guardedFetch("http://public.example.com/page", undefined, {
+            allowHttp: true,
+        });
+        expect(res.status).toBe(200);
+    });
+});

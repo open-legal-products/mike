@@ -18,6 +18,10 @@ on:
   # Include stacked PRs whose base is another feature branch.
   pull_request:
 
+permissions:
+  contents: read
+
+
 # Don't pile up runs on rapid pushes to the same PR: a new push cancels the
 # superseded run so it stops holding job slots (the org's concurrent-job cap is
 # shared by every workflow). Pushes to main each get their own group (keyed by
@@ -34,7 +38,7 @@ jobs:
       run:
         working-directory: backend
     steps:
-      - uses: actions/checkout@v7.0.1
+      - uses: actions/checkout@v7
 
       - uses: actions/setup-node@v7.1.0
         with:
@@ -49,6 +53,9 @@ jobs:
       # reason instead.
       - name: Validate package.json and lockfile parse
         run: node -e "for (const f of ['package.json','package-lock.json']) JSON.parse(require('fs').readFileSync(f, 'utf8'))"
+
+      - name: Image publication recovery tests
+        run: node --test ../scripts/publish-images.test.mjs
 
       - run: npm ci
 
@@ -80,7 +87,7 @@ jobs:
       run:
         working-directory: frontend
     steps:
-      - uses: actions/checkout@v7.0.1
+      - uses: actions/checkout@v7
 
       - uses: actions/setup-node@v7.1.0
         with:

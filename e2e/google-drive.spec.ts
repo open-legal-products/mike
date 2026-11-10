@@ -63,13 +63,14 @@ test("Google Drive add, cancel and delete work like Slack", async ({
                 json: {
                     connected,
                     scope: connected
-                        ? "https://www.googleapis.com/auth/drive"
+                        ? "https://www.googleapis.com/auth/drive.file"
                         : null,
                     configured: true,
                     schemaReady: true,
                     enabled: true,
                     writeEnabled: connected,
                     requireWriteApproval: false,
+                    pickerAvailable: false,
                     tools: [
                         {
                             name: "google_drive_search",

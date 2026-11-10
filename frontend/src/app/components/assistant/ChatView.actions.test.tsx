@@ -18,6 +18,8 @@ import {
     renameLibraryDocument,
     deleteDocument,
     getDocumentFile,
+    getPlaybook,
+    type Playbook,
 } from "@/app/lib/mikeApi";
 import { PageChromeContext } from "@/app/contexts/PageChromeContext";
 
@@ -32,6 +34,7 @@ const { push, renameChat, deleteChat, leaveChat, setCurrentChatId, setNewChatMes
     }));
 
 const addDoc = vi.hoisted(() => vi.fn());
+const attachPlaybook = vi.hoisted(() => vi.fn());
 
 const activeChat: Chat = {
     id: "chat-1",
@@ -85,7 +88,7 @@ vi.mock("./ChatInput", () => ({
         onDocumentClick?: (document: Document) => void;
         ref?: Ref<ChatInputHandle>;
     }) => {
-        useImperativeHandle(ref, () => ({ addDoc, addFiles: vi.fn(), addExcerpt: vi.fn(), startWorkflow: vi.fn(), startWorkflowDocumentSelection: vi.fn() }));
+        useImperativeHandle(ref, () => ({ addDoc, addFiles: vi.fn(), addExcerpt: vi.fn(), startWorkflow: vi.fn(), startWorkflowDocumentSelection: vi.fn(), attachPlaybook }));
         return <button onClick={() => onDocumentClick?.(spreadsheet)}>
             Open Budget.xlsx
         </button>;
@@ -105,6 +108,7 @@ vi.mock("@/app/lib/mikeApi", async (importOriginal) => ({
     renameLibraryDocument: vi.fn(),
     deleteDocument: vi.fn(),
     getDocumentFile: vi.fn(),
+    getPlaybook: vi.fn(),
     listQuickActions: vi.fn().mockResolvedValue([]),
 }));
 vi.mock("../shared/views/SpreadsheetView", () => ({
@@ -1054,5 +1058,29 @@ describe("assistant document tab actions", () => {
             ).toBeNull(),
         );
         expect(deleteDocument).toHaveBeenCalledWith("excel-1");
+    });
+});
+
+describe("ChatView opened from a playbook", () => {
+    afterEach(() => window.history.replaceState(null, "", "/"));
+
+    it("attaches the playbook named in the URL once, then drops it from the URL", async () => {
+        vi.mocked(getPlaybook).mockResolvedValue({
+            id: "pb-1",
+            name: "Supply terms",
+        } as Playbook);
+        window.history.replaceState(null, "", "/assistant?playbook=pb-1&side=");
+        renderView();
+
+        await waitFor(() =>
+            expect(attachPlaybook).toHaveBeenCalledWith({
+                id: "pb-1",
+                title: "Supply terms",
+            }),
+        );
+        expect(getPlaybook).toHaveBeenCalledTimes(1);
+        expect(getPlaybook).toHaveBeenCalledWith("pb-1");
+        // Other parameters, such as an open side chat, are kept.
+        expect(window.location.search).toBe("?side=");
     });
 });

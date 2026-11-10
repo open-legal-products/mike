@@ -18,8 +18,14 @@
   redirect URIs, and Slack/Google deployment setup
 - [Scoped memory](memory.md) — app and project Markdown memory, permissions,
   asynchronous learning, deletion, and operations
+- [Google Workspace](google-workspace.md) — Drive, Gmail, and Calendar
+  connectors: setup, permissions, approvals, limits, and acceptance tests
 - [CourtListener integration](courtlistener.md) — live US case-law tools and
   optional bulk data
+- [Web search](web-search.md) — provider search and search services, page
+  reading, keys, and safety
+- [Subagents](subagents.md) — delegated tasks, what they may do, approvals,
+  and limits
 - [Microsoft Word add-in](../word-addin/README.md) — concise setup and command
   reference
 - [Word add-in development and deployment](word-addin-development.md) — manual

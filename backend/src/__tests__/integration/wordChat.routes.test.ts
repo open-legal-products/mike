@@ -129,6 +129,14 @@ vi.mock("../../lib/supabase", () => ({
   createServerSupabase: vi.fn(() => mockSupabase()),
 }));
 
+const { getPlaybook } = vi.hoisted(() => ({ getPlaybook: vi.fn() }));
+vi.mock("../../modules/playbooks/playbooks.service", async (importOriginal) => ({
+  ...(await importOriginal<
+    typeof import("../../modules/playbooks/playbooks.service")
+  >()),
+  getPlaybook: (...args: unknown[]) => getPlaybook(...args),
+}));
+
 vi.mock("../../lib/memory/schedule", () => ({
   beginMemoryConversationTurn: (...args: unknown[]) =>
     beginMemoryConversationTurn(...args),
@@ -635,7 +643,101 @@ describe("POST /word-chat — local storage", () => {
       turn: { activityId: "activity-1" },
     });
     expect(scheduleMemoryConsolidation).not.toHaveBeenCalled();
+    // The terminal error frame names the request so the pane can show an id
+    // a user can quote; it is the X-Request-ID header of this response.
+    const errorFrame = JSON.parse(
+      res.text
+        .split("\n")
+        .filter((line) => line.includes('"type":"error"'))
+        .at(-1)!
+        .replace(/^data:\s*/, ""),
+    ) as { request_id?: string };
+    expect(errorFrame.request_id).toBe(res.headers["x-request-id"]);
     errorSpy.mockRestore();
+  });
+});
+
+describe("POST /word-chat — attached playbook", () => {
+  const PLAYBOOK = {
+    id: "5d0c1c7e-8f0e-4c55-9a43-3c1d2f9f6b10",
+    title: "NDA review",
+  };
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    recordedQueries.length = 0;
+    resetDbState();
+    runLLMStream.mockResolvedValue({
+      events: [{ type: "content", text: "Response" }],
+      citations: [],
+    });
+  });
+
+  function send(playbook: unknown) {
+    return request(app)
+      .post("/word-chat")
+      .set(...AUTH)
+      .send({
+        messages: [{ role: "user", content: "Review this", playbook }],
+        document_id: DOCUMENT_ID,
+        document_name: "Contract.docx",
+        storage: "cloud",
+        model: "gemini-3-flash-preview",
+      });
+  }
+
+  it("checks access, stores the playbook on the user message, and hands it to the engine", async () => {
+    const chatLib = await import("../../modules/chat/engine/index.js");
+    dbState.chatDetail = {
+      data: { id: CHAT_ID, title: null, user_id: "u1" },
+      error: null,
+    };
+    getPlaybook.mockResolvedValue({ id: PLAYBOOK.id, orgId: null });
+
+    const res = await send(PLAYBOOK);
+
+    expect(res.status).toBe(200);
+    expect(getPlaybook).toHaveBeenCalledWith(
+      "u1",
+      PLAYBOOK.id,
+      expect.anything(),
+      "u1@test.local",
+    );
+    const userInsert = recordedQueries.find(
+      ({ table, payload }) =>
+        table === "word_chat_messages" &&
+        (payload as { role?: unknown } | undefined)?.role === "user",
+    );
+    expect(userInsert?.payload).toMatchObject({ playbook: PLAYBOOK });
+    // The engine's message builder is what turns the attachment into the
+    // run_playbook instruction, for the web and Word alike.
+    const [builtMessages] = vi.mocked(chatLib.buildMessages).mock.calls[0];
+    expect(builtMessages.at(-1)).toMatchObject({ playbook: PLAYBOOK });
+    expect(runLLMStream).toHaveBeenCalledTimes(1);
+  });
+
+  it("answers 404, as GET /playbooks/:id does, for a playbook the user cannot open", async () => {
+    const { PlaybookRequestError } = await import(
+      "../../modules/playbooks/playbooks.service.js"
+    );
+    getPlaybook.mockRejectedValue(
+      new PlaybookRequestError("Playbook not found.", 404),
+    );
+
+    const res = await send(PLAYBOOK);
+
+    expect(res.status).toBe(404);
+    expect(res.body).toEqual({ detail: "Playbook not found." });
+    expect(runLLMStream).not.toHaveBeenCalled();
+    expect(recordedQueries.some(({ op }) => op === "insert")).toBe(false);
+  });
+
+  it("answers 404 without a lookup for an id that cannot name a playbook", async () => {
+    const res = await send({ id: "not-a-uuid", title: "NDA review" });
+
+    expect(res.status).toBe(404);
+    expect(res.body).toEqual({ detail: "Playbook not found." });
+    expect(getPlaybook).not.toHaveBeenCalled();
   });
 });
 

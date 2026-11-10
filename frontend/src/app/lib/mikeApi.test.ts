@@ -1,7 +1,8 @@
 import { listOrgPrivateContent, setOrgPrivateContentPermission, openOrgPrivateContent, closeOrgPrivateContent } from "./mikeApi";
 import { setUserProfilePhoto, listDeletedOrganizations, restoreOrganization } from "./mikeApi";
 import { listOrgDepartures, reassignOrgDepartureArchives, deleteOrgDepartureArchives } from "./mikeApi";
-import { getGoogleWorkspaceStatus, startGoogleWorkspaceOAuth, cancelGoogleWorkspaceOAuth, disconnectGoogleWorkspace, updateGoogleWorkspaceSettings, setGoogleWorkspaceToolEnabled, updateGoogleDriveSettings, setGoogleDriveToolEnabled } from "./mikeApi";
+import { getGoogleWorkspaceStatus, startGoogleWorkspaceOAuth, cancelGoogleWorkspaceOAuth, disconnectGoogleWorkspace, updateGoogleWorkspaceSettings, setGoogleWorkspaceToolEnabled, updateGoogleDriveSettings, setGoogleDriveToolEnabled, createGoogleDrivePickerSession } from "./mikeApi";
+import { getCourtListenerConnector, setCourtListenerConnectorEnabled, saveCourtListenerConnectorToken, deleteCourtListenerConnectorToken } from "./mikeApi";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { AssistantEvent, Chat } from "@/app/components/shared/types";
 import { subscribeTabularReviewChanges } from "./tabularReviewChanges";
@@ -41,6 +42,7 @@ import {
     deleteAccount,
     deleteAllChats,
     deleteAllMemories,
+    setOrgMemberDataPolicy,
     deleteAllProjects,
     deleteAllTabularReviews,
     deleteChat,
@@ -68,6 +70,7 @@ import {
     getAuditActors,
     getPanelDocument,
     getDocument,
+    getDocumentStatuses,
     getDocumentFile,
     getDocumentFileUrl,
     getDocumentUrl,
@@ -99,6 +102,7 @@ import {
     getUserExportStatus,
     getCustomInstructions,
     getResponseStyle,
+    getWebSearchSettings,
     getUserMemory,
     getUserProfile,
     getWorkflow,
@@ -119,7 +123,6 @@ import {
     saveOrgApiKey,
     saveOrgRouterModels,
     setOrgApiKeyEnabled,
-    setOrgPersonalApiKeysAllowed,
     getOrgMemberHandover,
     declineOrgInvitation,
     getOrg,
@@ -217,6 +220,7 @@ import {
     updateQuickAction,
     updateCustomInstructions,
     updateResponseStyle,
+    updateWebSearchSettings,
     updateUserMemory,
     importWorkflowAddon,
     listQuickActions,
@@ -278,6 +282,68 @@ afterEach(() => {
 
 // Chat requests carry the browser's IANA time zone for the assistant.
 const BROWSER_TIME_ZONE = Intl.DateTimeFormat().resolvedOptions().timeZone;
+
+describe("document status polling across backend versions", () => {
+    it.each([404, 405])("uses individual document reads when the batch endpoint returns %s", async (status) => {
+        fetchMock.mockImplementation(async (url: string) => {
+            if (url.endsWith("/status")) return jsonResponse({}, { status });
+            if (url.endsWith("/missing")) return jsonResponse({}, { status: 404 });
+            return jsonResponse({ id: url.split("/").at(-1), status: "ready" });
+        });
+        const controller = new AbortController();
+        await expect(getDocumentStatuses(["d1", "missing", "d2"], controller.signal)).resolves.toEqual([
+            { id: "d1", status: "ready" }, { id: "d2", status: "ready" },
+        ]);
+        expect(fetchMock.mock.calls.map(([url]) => url)).toEqual([
+            "/api/single-documents/status", "/api/single-documents/d1", "/api/single-documents/missing", "/api/single-documents/d2",
+        ]);
+        expect(fetchMock.mock.calls.every(([, init]) => init.signal === controller.signal)).toBe(true);
+    });
+
+    it.each([401, 403, 500])("does not turn a batch %s into individual reads", async (status) => {
+        fetchMock.mockResolvedValue(jsonResponse({}, { status }));
+        await expect(getDocumentStatuses(["d1"])).rejects.toMatchObject({ status });
+        expect(fetchMock).toHaveBeenCalledTimes(1);
+    });
+
+    it("does not start fallback reads after cancellation", async () => {
+        const controller = new AbortController();
+        fetchMock.mockImplementation(async () => {
+            controller.abort();
+            return jsonResponse({}, { status: 404 });
+        });
+        await expect(getDocumentStatuses(["d1"], controller.signal)).rejects.toBeDefined();
+        expect(fetchMock).toHaveBeenCalledTimes(1);
+    });
+
+    it("bounds legacy reads and propagates individual failures", async () => {
+        let active = 0;
+        let peak = 0;
+        fetchMock.mockImplementation(async (url: string) => {
+            if (url.endsWith("/status")) return jsonResponse({}, { status: 404 });
+            peak = Math.max(peak, ++active);
+            await new Promise(resolve => setTimeout(resolve, 1));
+            active--;
+            return jsonResponse({ id: url.split("/").at(-1), status: "ready" });
+        });
+        const ids = Array.from({ length: 8 }, (_, i) => `d${i}`);
+        await expect(getDocumentStatuses(ids)).resolves.toHaveLength(8);
+        expect(peak).toBe(2);
+        fetchMock.mockImplementation(async (url: string) => jsonResponse({}, { status: url.endsWith("/status") ? 404 : 500 }));
+        await expect(getDocumentStatuses(["d1"])).rejects.toMatchObject({ status: 500 });
+    });
+
+    it("stops queued legacy reads when the view unmounts", async () => {
+        const controller = new AbortController();
+        fetchMock.mockImplementation(async (url: string) => {
+            if (url.endsWith("/status")) return jsonResponse({}, { status: 404 });
+            controller.abort();
+            return jsonResponse({ id: "d1", status: "ready" });
+        });
+        await expect(getDocumentStatuses(["d1", "d2", "d3"], controller.signal)).rejects.toMatchObject({ name: "AbortError" });
+        expect(fetchMock).toHaveBeenCalledTimes(2);
+    });
+});
 
 describe("MikeApiError / isMfaRequiredError", () => {
     it("carries status and code, defaulting code to null", () => {
@@ -355,15 +421,15 @@ describe("apiRequest plumbing (via thin wrappers)", () => {
 
         await listProjects({ includeDocuments: true });
 
-        expect(lastFetchCall().url).toBe("/api/projects?include=documents");
+        expect(lastFetchCall().url).toBe("/api/projects?include=documents&limit=100&offset=0");
     });
 
-    it("requests actual project participation for the IDE without enabling pagination", async () => {
+    it("paginates document-rich participation requests while preserving metadata-only listing", async () => {
         fetchMock.mockImplementation(async () => jsonResponse([]));
         await listProjects({ participatingOnly: true });
         expect(lastFetchCall().url).toBe("/api/projects?participating=true");
         await listProjects({ includeDocuments: true, participatingOnly: true });
-        expect(lastFetchCall().url).toBe("/api/projects?include=documents&participating=true");
+        expect(lastFetchCall().url).toBe("/api/projects?include=documents&participating=true&limit=100&offset=0");
     });
 
     it("fetches every project-choice page within the requested workspace", async () => {
@@ -377,6 +443,14 @@ describe("apiRequest plumbing (via thin wrappers)", () => {
             "/api/projects?workspace=org-1&limit=100&offset=0",
             "/api/projects?workspace=org-1&limit=100&offset=100",
         ]);
+    });
+
+    it("loads all pages when documents are requested, including participating projects", async () => {
+        const first = Array.from({length:100}, (_, i) => ({id:`p${i}`, documents:[]}));
+        fetchMock.mockResolvedValueOnce(jsonResponse(first)).mockResolvedValueOnce(jsonResponse([{id:"last",documents:[]}])) ;
+        const projects = await listProjects({includeDocuments:true,participatingOnly:true});
+        expect(projects).toHaveLength(101);
+        expect(lastFetchCall().url).toBe("/api/projects?include=documents&participating=true&limit=100&offset=100");
     });
 
     // Regression guard: legacy tabular-review project pickers call
@@ -498,6 +572,7 @@ describe("apiRequest plumbing (via thin wrappers)", () => {
         });
         expect(reportApiFailure).toHaveBeenCalledWith({
             path: "/user/profile",
+            operation: "settings.profile",
             method: "GET",
             status: 500,
             code: "internal_error",
@@ -518,7 +593,6 @@ describe("apiRequest plumbing (via thin wrappers)", () => {
         ["schema_out_of_date", SCHEMA_OUT_OF_DATE_MESSAGE, "The server's database needs an update before this can load. Please contact your administrator."],
         ["upstream_unavailable", UPSTREAM_UNAVAILABLE_MESSAGE, "The server is temporarily unreachable. Please try again shortly."],
     ])("shows the %s message and leaves the report to the server side", async (code, message, sentence) => {
-        markErrorHandled.mockClear();
         fetchMock.mockResolvedValue(
             jsonResponse(
                 {
@@ -533,8 +607,12 @@ describe("apiRequest plumbing (via thin wrappers)", () => {
         const error = await getUserProfile().catch((caught: unknown) => caught);
         expect(error).toMatchObject({ status: 503, code, requestId: "req-503-1", message });
         expect(userFacingApiError(error, "Fallback")).toBe(sentence);
-        expect(reportApiFailure).not.toHaveBeenCalled();
-        expect(markErrorHandled).toHaveBeenCalledExactlyOnceWith(error);
+        // reportApiFailure owns the "already reported upstream" rule (one
+        // rule for web and add-in; errorReporting.test.ts): it only marks
+        // these codes.
+        expect(reportApiFailure).toHaveBeenCalledExactlyOnceWith(
+            expect.objectContaining({ status: 503, code, error }),
+        );
     });
 
     it("reports a 5xx without a code and never reports a 4xx", async () => {
@@ -624,6 +702,7 @@ describe("apiRequest plumbing (via thin wrappers)", () => {
         expect(reportNetworkFailure).toHaveBeenCalledWith(failure, {
             method: "POST",
             url: "/api/projects",
+            operation: "projects.manage",
         });
         expect(reportApiFailure).not.toHaveBeenCalled();
     });
@@ -713,6 +792,9 @@ describe("audit history", () => {
         fetchMock.mockResolvedValueOnce(jsonResponse(result));
         expect(await getAuditActors({ orgId: "org-1", search: "Alex & Pat", offset: 20 })).toEqual(result);
         expect(lastFetchCall().url).toBe("/api/audit/actors?org_id=org-1&q=Alex+%26+Pat&offset=20");
+        fetchMock.mockResolvedValueOnce(jsonResponse(result));
+        expect(await getAuditActors({ orgId: "org-1" })).toEqual(result);
+        expect(lastFetchCall().url).toBe("/api/audit/actors?org_id=org-1");
         fetchMock.mockResolvedValueOnce(jsonResponse({ events: [], total: 0, page: 1, pageSize: 50 }));
         await getAuditHistory({ orgId: "org-1", actorUserId: "actor-1" });
         expect(lastFetchCall().url).toBe("/api/audit?org_id=org-1&actor_user_id=actor-1");
@@ -1065,6 +1147,7 @@ describe("API transport cancellation", () => {
         expect(reportNetworkFailure).toHaveBeenCalledExactlyOnceWith(error, {
             method: "POST",
             url: "/api/chat",
+            operation: "chat.turn",
         });
     });
 });
@@ -2428,6 +2511,41 @@ describe("thin endpoint wrappers", () => {
             method: "DELETE",
         },
         {
+            name: "deleteAllChats in an organization workspace",
+            call: () => deleteAllChats("org-1"),
+            url: "/user/chats?workspace=org-1",
+            method: "DELETE",
+        },
+        {
+            name: "deleteAllProjects in Personal",
+            call: () => deleteAllProjects("personal"),
+            url: "/user/projects?workspace=personal",
+            method: "DELETE",
+        },
+        {
+            name: "deleteAllTabularReviews in an organization workspace",
+            call: () => deleteAllTabularReviews("org-1"),
+            url: "/user/tabular-reviews?workspace=org-1",
+            method: "DELETE",
+        },
+        {
+            name: "deleteAllMemories in an organization workspace",
+            call: () => deleteAllMemories("org-1"),
+            url: "/user/memories?workspace=org-1",
+            method: "DELETE",
+        },
+        {
+            name: "setOrgMemberDataPolicy",
+            call: () =>
+                setOrgMemberDataPolicy("org-1", {
+                    allow_member_exports: true,
+                    allow_member_deletes: false,
+                }),
+            url: "/orgs/org-1/member-data-policy",
+            method: "PUT",
+            body: { allow_member_exports: true, allow_member_deletes: false },
+        },
+        {
             name: "getUserMemory",
             call: () => getUserMemory(),
             url: "/user/memory",
@@ -2462,6 +2580,18 @@ describe("thin endpoint wrappers", () => {
             url: "/user/response-style",
             method: "PUT",
             body: { verbosity: "concise" },
+        },
+        {
+            name: "getWebSearchSettings",
+            call: () => getWebSearchSettings(),
+            url: "/user/web-search",
+        },
+        {
+            name: "updateWebSearchSettings",
+            call: () => updateWebSearchSettings({ enabled: true }),
+            url: "/user/web-search",
+            method: "PUT",
+            body: { enabled: true },
         },
         {
             name: "setUserMemoryEnabled",
@@ -2665,6 +2795,35 @@ describe("thin endpoint wrappers", () => {
         { name: "setGoogleWorkspaceToolEnabled", call: () => setGoogleWorkspaceToolEnabled("google-calendar", "google_calendar_create_event", false), url: "/user/integrations/google-calendar/tools/google_calendar_create_event", method: "PATCH", body: { enabled: false } },
         { name: "updateGoogleDriveSettings", call: () => updateGoogleDriveSettings({ enabled: false }), url: "/user/integrations/google-drive", method: "PATCH", body: { enabled: false } },
         { name: "setGoogleDriveToolEnabled", call: () => setGoogleDriveToolEnabled("google_drive_read_file", true), url: "/user/integrations/google-drive/tools/google_drive_read_file", method: "PATCH", body: { enabled: true } },
+        { name: "createGoogleDrivePickerSession", call: () => createGoogleDrivePickerSession(), url: "/user/integrations/google-drive/picker-session", method: "POST" },
+        // Connections are per workspace: each call names the one it is in.
+        { name: "listMcpConnectors (workspace)", call: () => listMcpConnectors("org-1"), url: "/user/mcp-connectors?workspace=org-1" },
+        {
+            name: "createMcpConnector (workspace)",
+            call: () => createMcpConnector({ name: "Slack", serverUrl: "https://mcp.slack.com/mcp" }, "org-1"),
+            url: "/user/mcp-connectors?workspace=org-1",
+            method: "POST",
+            body: { name: "Slack", serverUrl: "https://mcp.slack.com/mcp" },
+        },
+        { name: "getGoogleDriveStatus (workspace)", call: () => getGoogleDriveStatus("org-1"), url: "/user/integrations/google-drive?workspace=org-1" },
+        { name: "startGoogleDriveOAuth (workspace)", call: () => startGoogleDriveOAuth("personal"), url: "/user/integrations/google-drive/oauth/start?workspace=personal", method: "POST" },
+        { name: "cancelGoogleDriveOAuth (workspace)", call: () => cancelGoogleDriveOAuth("state", "org-1"), url: "/user/integrations/google-drive/oauth/cancel?workspace=org-1", method: "POST", body: { state: "state" } },
+        { name: "disconnectGoogleDrive (workspace)", call: () => disconnectGoogleDrive("org-1"), url: "/user/integrations/google-drive?workspace=org-1", method: "DELETE" },
+        { name: "updateGoogleDriveSettings (workspace)", call: () => updateGoogleDriveSettings({ readOnly: true }, "org-1"), url: "/user/integrations/google-drive?workspace=org-1", method: "PATCH", body: { readOnly: true } },
+        { name: "setGoogleDriveToolEnabled (workspace)", call: () => setGoogleDriveToolEnabled("google_drive_read_file", false, "org-1"), url: "/user/integrations/google-drive/tools/google_drive_read_file?workspace=org-1", method: "PATCH", body: { enabled: false } },
+        { name: "createGoogleDrivePickerSession (workspace)", call: () => createGoogleDrivePickerSession("org-1"), url: "/user/integrations/google-drive/picker-session?workspace=org-1", method: "POST" },
+        { name: "getGoogleWorkspaceStatus (workspace)", call: () => getGoogleWorkspaceStatus("gmail", "org-1"), url: "/user/integrations/gmail?workspace=org-1" },
+        { name: "startGoogleWorkspaceOAuth (workspace)", call: () => startGoogleWorkspaceOAuth("google-calendar", "org-1"), url: "/user/integrations/google-calendar/oauth/start?workspace=org-1", method: "POST" },
+        { name: "cancelGoogleWorkspaceOAuth (workspace)", call: () => cancelGoogleWorkspaceOAuth("gmail", "state", "org-1"), url: "/user/integrations/gmail/oauth/cancel?workspace=org-1", method: "POST", body: { state: "state" } },
+        { name: "disconnectGoogleWorkspace (workspace)", call: () => disconnectGoogleWorkspace("gmail", "org-1"), url: "/user/integrations/gmail?workspace=org-1", method: "DELETE" },
+        { name: "updateGoogleWorkspaceSettings (workspace)", call: () => updateGoogleWorkspaceSettings("gmail", { enabled: false }, "org-1"), url: "/user/integrations/gmail?workspace=org-1", method: "PATCH", body: { enabled: false } },
+        { name: "setGoogleWorkspaceToolEnabled (workspace)", call: () => setGoogleWorkspaceToolEnabled("gmail", "gmail_send", true, "org-1"), url: "/user/integrations/gmail/tools/gmail_send?workspace=org-1", method: "PATCH", body: { enabled: true } },
+        // CourtListener: a per-workspace switch and own token.
+        { name: "getCourtListenerConnector", call: () => getCourtListenerConnector(), url: "/user/integrations/courtlistener" },
+        { name: "getCourtListenerConnector (workspace)", call: () => getCourtListenerConnector("org-1"), url: "/user/integrations/courtlistener?workspace=org-1" },
+        { name: "setCourtListenerConnectorEnabled", call: () => setCourtListenerConnectorEnabled(false, "org-1"), url: "/user/integrations/courtlistener?workspace=org-1", method: "PATCH", body: { enabled: false } },
+        { name: "saveCourtListenerConnectorToken", call: () => saveCourtListenerConnectorToken("tok", "personal"), url: "/user/integrations/courtlistener/token?workspace=personal", method: "PUT", body: { token: "tok" } },
+        { name: "deleteCourtListenerConnectorToken", call: () => deleteCourtListenerConnectorToken("org-1"), url: "/user/integrations/courtlistener/token?workspace=org-1", method: "DELETE" },
         // Projects
         {
             name: "getProject",
@@ -2834,6 +2993,13 @@ describe("thin endpoint wrappers", () => {
             name: "getDocument",
             call: () => getDocument("d1"),
             url: "/single-documents/d1",
+        },
+        {
+            name: "getDocumentStatuses",
+            call: () => getDocumentStatuses(["d1", "d2"]),
+            url: "/single-documents/status",
+            method: "POST",
+            body: { document_ids: ["d1", "d2"] },
         },
         {
             name: "deleteDocument",
@@ -3282,10 +3448,6 @@ describe("thin endpoint wrappers", () => {
             url: "/orgs/org-1/api-keys/openai", method: "PATCH", body: { enabled: false },
         },
         {
-            name: "setOrgPersonalApiKeysAllowed", call: () => setOrgPersonalApiKeysAllowed("org-1", false),
-            url: "/orgs/org-1/api-keys/policy", method: "PUT", body: { allow_personal_api_keys: false },
-        },
-        {
             name: "getOrgMemberHandover", call: () => getOrgMemberHandover("org-1", "user-2"),
             url: "/orgs/org-1/members/user-2/handover",
         },
@@ -3452,6 +3614,27 @@ describe("unwrapping and blob wrappers", () => {
         await expect(Promise.all([first, second])).resolves.toEqual([
             document,
             document,
+        ]);
+    });
+
+    it("reads a panel document in the workspace it is given, and never shares the request with another", async () => {
+        const document = {
+            document_id: "case:789",
+            title: "Workspace case",
+            type: "case",
+            metadata: [],
+            quotes: [],
+        };
+        fetchMock.mockImplementation(async () => jsonResponse(document));
+
+        await Promise.all([
+            getPanelDocument("case:789", "org-1"),
+            getPanelDocument("case:789", "personal"),
+        ]);
+        const urls = fetchMock.mock.calls.map((call) => call[0]);
+        expect(urls).toEqual([
+            "/api/documents/case%3A789?workspace=org-1",
+            "/api/documents/case%3A789?workspace=personal",
         ]);
     });
 

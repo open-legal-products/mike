@@ -140,3 +140,14 @@ export async function deleteChat(
 // surrounding `.catch` logs it) but ignores it for the truncated-content
 // fallback, which must never break a stream that already succeeded.
 export type ChatWriteResult = { ok: true } | { ok: false; error: unknown };
+
+/** Remove only the rejected request's newly inserted input after a run race. */
+export async function discardRejectedChatInput(
+    db: Db,
+    args: { chatId: string; inputMessageId: string; userId: string },
+): Promise<ChatWriteResult> {
+    const { error } = await db.from("chat_messages").delete()
+        .eq("id", args.inputMessageId).eq("chat_id", args.chatId)
+        .eq("role", "user").eq("author_user_id", args.userId);
+    return error ? { ok: false, error } : { ok: true };
+}

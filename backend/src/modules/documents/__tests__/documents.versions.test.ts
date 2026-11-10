@@ -22,7 +22,9 @@ vi.mock("../../../lib/documentVersions", () => ({
   loadActiveVersion: mocks.active,
   contentSha256: () => "hash",
 }));
-vi.mock("../../../lib/storage", () => ({
+vi.mock("../../../lib/storage", async (importOriginal) => ({
+  // StorageOperationError stays real: a test below hands one through.
+  ...(await importOriginal<typeof import("../../../lib/storage")>()),
   downloadFile: mocks.downloadFile,
   uploadFile: mocks.uploadFile,
   versionStorageKey: () => "destination/key",
@@ -30,6 +32,9 @@ vi.mock("../../../lib/storage", () => ({
 vi.mock("../../../lib/queue/conversionQueue", () => ({
   enqueueConversion: mocks.enqueueConversion,
 }));
+import { AppError } from "../../../lib/appError";
+import { diagnosticErrorTags } from "../../../lib/observability/sentryPrivacy";
+import { StorageOperationError } from "../../../lib/storage";
 import {
   createVersionFromDocument,
   deleteVersion,
@@ -162,6 +167,65 @@ describe("version copy caller policy", () => {
       kind: "version_insert",
     });
     expect(mocks.deleteSource).not.toHaveBeenCalled();
+  });
+  // The internal failures used to console.error here and let the route answer
+  // a bare 500: two context-free events for one failure. The result now
+  // carries ONE AppError with the dependency's error as its cause, which the
+  // route hands to sendInternalError for the single report.
+  describe("internal failures carry a reportable cause", () => {
+    it("names a failed version RPC with its SQLSTATE", async () => {
+      const fake = db();
+      const rpcError = { code: "42501", message: "permission denied" };
+      fake.rpc.mockResolvedValue({ data: null, error: rpcError });
+      const log = vi.spyOn(console, "error").mockImplementation(() => undefined);
+      const result = await createVersionFromDocument(args, fake.db);
+      expect(result).toMatchObject({ ok: false, kind: "version_insert", detail: "Failed to record new version." });
+      const { error } = result as { error: AppError };
+      expect(error).toBeInstanceOf(AppError);
+      expect(error.cause).toBe(rpcError);
+      expect(diagnosticErrorTags(error)).toEqual({
+        error_kind: "db.rpc_failed",
+        failure_code: "42501",
+      });
+      // Nothing is logged here any more: the route reports it once.
+      expect(log).not.toHaveBeenCalled();
+      log.mockRestore();
+    });
+    it("passes the storage facade's own error through on a failed copy", async () => {
+      const storageError = new StorageOperationError("upload", {
+        cause: Object.assign(new Error("denied"), { name: "AccessDenied" }),
+      });
+      mocks.uploadFile.mockRejectedValue(storageError);
+      const fake = db();
+      const result = await createVersionFromDocument(args, fake.db);
+      expect(result).toMatchObject({ ok: false, kind: "storage_write", error: storageError });
+      expect(diagnosticErrorTags((result as { error: AppError }).error)).toEqual({
+        error_kind: "storage.upload_failed",
+        storage_operation: "upload",
+        failure_code: "AccessDenied",
+      });
+      expect(fake.rpc).not.toHaveBeenCalled();
+    });
+    it("wraps a bare storage throw as a copy failure", async () => {
+      const raw = new Error("socket hang up");
+      mocks.uploadFile.mockRejectedValue(raw);
+      const result = await createVersionFromDocument(args, db().db);
+      const { error } = result as { error: AppError };
+      expect(error.cause).toBe(raw);
+      expect(diagnosticErrorTags(error)).toEqual({ error_kind: "storage.copy_failed" });
+    });
+    it("names a failed source delete with its SQLSTATE", async () => {
+      const deleteError = { code: "42P01", message: "relation missing" };
+      mocks.deleteSource.mockResolvedValue({ error: deleteError });
+      const result = await createVersionFromDocument(args, db().db);
+      expect(result).toMatchObject({ ok: false, kind: "source_delete" });
+      const { error } = result as { error: AppError };
+      expect(error.cause).toBe(deleteError);
+      expect(diagnosticErrorTags(error)).toEqual({
+        error_kind: "db.query_failed",
+        failure_code: "42P01",
+      });
+    });
   });
   it("tolerates a missing legacy PDF while retaining the copied original", async () => {
     mocks.downloadFile

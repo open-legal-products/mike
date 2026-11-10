@@ -1,0 +1,495 @@
+import { describe, expect, it } from "vitest";
+import { AppError } from "../../../lib/appError";
+import { diagnosticErrorTags } from "../../../lib/observability/sentryPrivacy";
+import {
+  BLANK_RULE_CONCEPT,
+  blankPlaybookContent,
+  normalizeCompiledPlaybookOutput,
+  PLAYBOOK_IMPORT_GENERIC_FAILURE,
+  playbookCompilationTimeoutMs,
+  playbookContentSchema,
+  playbookImportFailureMessage,
+  normalizeFindings,
+  playbookModelAvailability,
+  PlaybookImportError,
+  PlaybookRequestError,
+  runFailureMessage,
+  validatePlaybookCompilationWithRetry,
+} from "../playbooks.operations";
+
+function content(name = "Commercial Playbook") {
+  return {
+    name,
+    description: "Standard commercial positions",
+    representedParty: "Customer",
+    documentTypes: ["MSA"],
+    jurisdictions: ["New York"],
+    topics: [
+      {
+        id: "liability",
+        name: "Liability",
+        rules: [
+          {
+            id: "liability-cap",
+            name: "Liability cap",
+            concept: "Determine whether liability is capped.",
+            scope: "clause" as const,
+            required: true,
+            guidance: "Escalate uncapped liability.",
+            standard: {
+              name: "Standard",
+              criteria: "Cap at fees paid in 12 months.",
+              sampleClauses: [
+                {
+                  text: "Liability will not exceed fees paid in the preceding 12 months.",
+                  usage: "preferred",
+                  sourceRefs: [] as string[],
+                },
+              ],
+            },
+            fallbacks: [],
+            unacceptable: [],
+            // Raw model output can contain objects that normalization must handle.
+            conditions: [] as unknown[],
+            actions: [],
+            sourceRefs: [] as string[],
+          },
+        ],
+      },
+    ],
+  };
+}
+
+const oneParagraph = {
+  format: "docx" as const,
+  blocks: [
+    {
+      kind: "paragraph" as const,
+      sourceRef: "P1",
+      text: "Liability is capped at fees paid in the prior 12 months.",
+      style: null,
+      level: null,
+    },
+  ],
+  sources: [
+    {
+      id: "P1",
+      kind: "paragraph" as const,
+      text: "Liability is capped at fees paid in the prior 12 months.",
+      style: null,
+      level: null,
+    },
+  ],
+  text: "[P1] Liability is capped at fees paid in the prior 12 months.",
+};
+
+describe("playbook failure classes", () => {
+  // Each names its failure with a closed-vocabulary kind so a report carries
+  // error_kind; what the router reads (status, code) and what tests match
+  // on (name, message) are unchanged.
+  it("a request error is an AppError under playbooks.request_invalid with its status", () => {
+    const error = new PlaybookRequestError("Select a model.", 409);
+    expect(error).toBeInstanceOf(AppError);
+    expect(error).toBeInstanceOf(Error);
+    expect(error.kind).toBe("playbooks.request_invalid");
+    expect(error.status).toBe(409);
+    expect(error.name).toBe("PlaybookRequestError");
+    expect(error.message).toBe("Select a model.");
+    expect(new PlaybookRequestError("Bad").status).toBe(400);
+  });
+
+  it("an import error is an AppError under playbooks.import_failed with its code, stage and cause", () => {
+    const cause = Object.assign(new Error("refused"), { code: "57014" });
+    const error = new PlaybookImportError("Import failed", "import-1", "compiling", {
+      cause,
+    });
+    expect(error).toBeInstanceOf(AppError);
+    expect(error.kind).toBe("playbooks.import_failed");
+    expect(error.code).toBe("PLAYBOOK_IMPORT_FAILED");
+    expect(error.stage).toBe("compiling");
+    expect(error.name).toBe("PlaybookImportError");
+    expect(error.cause).toBe(cause);
+    expect(diagnosticErrorTags(error)).toEqual({
+      error_kind: "playbooks.import_failed",
+      failure_code: "57014",
+    });
+  });
+});
+
+describe("playbook content validation", () => {
+  it("normalizes model-generated condition objects into readable strings", () => {
+    const raw = content();
+    raw.topics[0].rules[0].conditions = [
+      {
+        when: "The supplier processes personal data",
+        requirement: "A data processing addendum is required",
+      },
+    ];
+
+    const parsed = playbookContentSchema.parse(
+      normalizeCompiledPlaybookOutput(raw),
+    );
+
+    expect(parsed.topics[0].rules[0].conditions).toEqual([
+      "When: The supplier processes personal data; Requirement: A data processing addendum is required",
+    ]);
+  });
+
+  it("rejects empty playbooks and invalid clause usage", () => {
+    expect(() =>
+      playbookContentSchema.parse({ ...content(), topics: [] }),
+    ).toThrow();
+    const invalid = content();
+    invalid.topics[0].rules[0].standard!.sampleClauses[0].usage = "sometimes";
+    expect(() => playbookContentSchema.parse(invalid)).toThrow();
+  });
+});
+
+describe("playbook compilation", () => {
+  it("keeps every rule when imported IDs collide with each other or generated IDs", async () => {
+    const rule = { ...content().topics[0].rules[0], sourceRefs: ["P1"] };
+    const parsed = await validatePlaybookCompilationWithRetry({
+      raw: JSON.stringify({
+        ...content(),
+        rules: [{ ...rule, id: undefined }, { ...rule, id: "rule-1" }],
+        topics: [
+          { id: "group", name: "First", rules: [{ ...rule, id: "rule-1" }] },
+          { id: "group", name: "Second", rules: [{ ...rule, id: "group" }] },
+        ],
+      }),
+      structure: oneParagraph,
+      retry: async () => { throw new Error("Valid content should not need repair"); },
+    });
+    const ids = [
+      ...parsed.rules.map((item) => item.id),
+      ...parsed.topics.flatMap((topic) => [topic.id, ...topic.rules.map((item) => item.id)]),
+    ];
+    expect(new Set(ids).size).toBe(ids.length);
+    expect(parsed.rules[1].id).toBe("rule-1");
+    expect(normalizeFindings(parsed, "", [])).toHaveLength(4);
+  });
+
+  it("normalizes and validates imported rules without requiring topics", async () => {
+    const source = content();
+    const rule = source.topics[0].rules[0];
+    const flat = {
+      ...source,
+      topics: [],
+      rules: [
+        {
+          ...rule,
+          sourceRefs: ["P1"],
+          conditions: [{ when: "Personal data is processed" }],
+        },
+      ],
+    };
+    const parsed = await validatePlaybookCompilationWithRetry({
+      raw: JSON.stringify(flat),
+      structure: oneParagraph,
+      retry: async () => {
+        throw new Error("Valid rules should not need repair");
+      },
+    });
+    expect(parsed.topics).toEqual([]);
+    expect(parsed.rules[0]).toMatchObject({
+      id: "liability-cap",
+      sourceRefs: ["P1"],
+      conditions: ["Personal data is processed"],
+    });
+    const invalid = JSON.stringify({
+      ...flat,
+      rules: [{ ...rule, sourceRefs: ["missing"] }],
+    });
+    await expect(
+      validatePlaybookCompilationWithRetry({
+        raw: invalid,
+        structure: oneParagraph,
+        retry: async () => invalid,
+      }),
+    ).rejects.toThrow(/could not tie the imported rule/i);
+  });
+  it("automatically retries a compilation that is not structured JSON", async () => {
+    const retry = async (validationError: string) => {
+      expect(validationError).toMatch(/structured JSON/i);
+      const repaired = content();
+      repaired.topics[0].rules[0].sourceRefs = ["P1"];
+      return JSON.stringify(repaired);
+    };
+
+    const parsed = await validatePlaybookCompilationWithRetry({
+      raw: "I was unable to complete the requested JSON.",
+      structure: oneParagraph,
+      retry,
+    });
+
+    expect(parsed.name).toBe("Commercial Playbook");
+    expect(parsed.topics[0].rules[0].sourceRefs).toEqual(["P1"]);
+  });
+
+  it("reports a clear error when both compilation attempts are invalid", async () => {
+    await expect(
+      validatePlaybookCompilationWithRetry({
+        raw: "not JSON",
+        structure: { format: "docx", blocks: [], sources: [], text: "" },
+        retry: async () => "still not JSON",
+      }),
+    ).rejects.toThrow(/invalid structured output twice/i);
+  });
+
+  it("fails a rule the model cannot tie back to the Word source", async () => {
+    await expect(
+      validatePlaybookCompilationWithRetry({
+        raw: JSON.stringify(content()),
+        structure: oneParagraph,
+        retry: async () => JSON.stringify(content()),
+      }),
+    ).rejects.toThrow(/invalid structured output twice/i);
+  });
+
+  it("surfaces compilation failures as user-readable request errors", async () => {
+    await expect(
+      validatePlaybookCompilationWithRetry({
+        raw: "not JSON",
+        structure: { format: "docx", blocks: [], sources: [], text: "" },
+        retry: async () => "still not JSON",
+      }),
+    ).rejects.toBeInstanceOf(PlaybookRequestError);
+  });
+
+  it("turns compilation timeouts into an actionable import error", () => {
+    const timeout = Object.assign(
+      new Error("The model did not respond within 300000ms."),
+      { name: "TimeoutError" },
+    );
+    expect(playbookImportFailureMessage("compiling", timeout, 300_000)).toBe(
+      "The selected model did not finish within 5 minutes. Try again or select another model.",
+    );
+  });
+
+  it("does not leak an infrastructure failure into the import message", () => {
+    const internal = new Error("connect ECONNREFUSED db-primary.internal:5432");
+    expect(playbookImportFailureMessage("storing_source", internal)).toBe(
+      PLAYBOOK_IMPORT_GENERIC_FAILURE,
+    );
+  });
+
+  it("forwards a message this module wrote for the user", () => {
+    expect(
+      playbookImportFailureMessage(
+        "checking_model",
+        new PlaybookRequestError("Select a model."),
+      ),
+    ).toBe("Select a model.");
+  });
+
+  it("uses a longer configurable timeout for playbook compilation", () => {
+    expect(playbookCompilationTimeoutMs("")).toBe(300_000);
+    expect(playbookCompilationTimeoutMs("600000")).toBe(600_000);
+    expect(playbookCompilationTimeoutMs("invalid")).toBe(300_000);
+  });
+});
+
+describe("playbook model availability", () => {
+  it("accepts a built-in model once its provider key is saved", () => {
+    expect(
+      playbookModelAvailability("claude-haiku-4-5", { claude: "sk-ant" }),
+    ).toEqual({ available: true });
+    expect(playbookModelAvailability("claude-haiku-4-5", {})).toMatchObject({
+      available: false,
+      reason: expect.stringMatching(/Anthropic \(Claude\) API key/i),
+    });
+  });
+
+  it("accepts dynamic OpenRouter models when the router key is saved", () => {
+    expect(
+      playbookModelAvailability("openrouter/anthropic/claude-sonnet-4", {
+        openrouter: "sk-or-user",
+      }),
+    ).toEqual({ available: true });
+    expect(
+      playbookModelAvailability("openrouter/anthropic/claude-sonnet-4", {}),
+    ).toMatchObject({
+      available: false,
+      reason: expect.stringMatching(/OpenRouter API key/i),
+    });
+  });
+
+  it("accepts local Ollama models without any key", () => {
+    expect(playbookModelAvailability("ollama/qwen3.6", {})).toEqual({
+      available: true,
+    });
+  });
+
+  it("reports an unknown model id instead of throwing", () => {
+    expect(playbookModelAvailability("not-a-model", {})).toMatchObject({
+      available: false,
+      reason: expect.stringMatching(/unknown model id/i),
+    });
+  });
+});
+
+describe("review finding normalization", () => {
+  const published = playbookContentSchema.parse(content());
+
+  function finding(overrides: Record<string, unknown> = {}) {
+    return {
+      topicId: null,
+      ruleId: null,
+      ruleName: "Liability cap",
+      status: "unacceptable" as const,
+      quote: "",
+      location: "",
+      analysis: "The cap is uncapped.",
+      suggestedText: "Cap at fees paid.",
+      insertAfter: "",
+      ...overrides,
+    };
+  }
+
+  it("keeps a finding that identifies its rule by name instead of id", () => {
+    const [first, ...rest] = normalizeFindings(published, "", [finding()]);
+
+    expect(rest).toHaveLength(0);
+    expect(first).toMatchObject({
+      ruleId: "liability-cap",
+      topicId: "liability",
+      ruleName: "Liability cap",
+      status: "unacceptable",
+      analysis: "The cap is uncapped.",
+      suggestedText: "Cap at fees paid.",
+    });
+  });
+
+  it("matches a rule name regardless of case and surrounding space", () => {
+    const [first] = normalizeFindings(published, "", [
+      finding({ ruleName: "  liability CAP  " }),
+    ]);
+
+    expect(first).toMatchObject({ ruleId: "liability-cap" });
+  });
+
+  it("prefers a valid ruleId over the rule name", () => {
+    const [first] = normalizeFindings(published, "", [
+      finding({ ruleId: "liability-cap", ruleName: "Something else" }),
+    ]);
+
+    expect(first).toMatchObject({ ruleId: "liability-cap" });
+  });
+
+  it("back-fills a rule the model did not answer", () => {
+    const [first] = normalizeFindings(published, "", []);
+
+    expect(first).toMatchObject({
+      ruleId: "liability-cap",
+      status: "needs_review",
+    });
+    expect(first.analysis).toMatch(/did not return a result/i);
+  });
+
+  it("includes ungrouped and grouped rules in review findings", () => {
+    const mixed = playbookContentSchema.parse({
+      ...content(),
+      rules: blankPlaybookContent("P").rules,
+    });
+    const findings = normalizeFindings(mixed, "", [
+      finding({ ruleId: "rule-1", ruleName: "New rule" }),
+    ]);
+    expect(findings).toHaveLength(2);
+    expect(findings[0]).toMatchObject({
+      ruleId: "rule-1",
+      topicId: null,
+      status: "unacceptable",
+    });
+    expect(findings[1]).toMatchObject({
+      ruleId: "liability-cap",
+      topicId: "liability",
+      status: "needs_review",
+    });
+    expect(
+      normalizeFindings(mixed, "", []).map((entry) => entry.ruleId),
+    ).toEqual(["rule-1", "liability-cap"]);
+  });
+
+  it("does not guess when two rules share a name", () => {
+    const ambiguous = playbookContentSchema.parse({
+      ...content(),
+      topics: [
+        {
+          id: "liability",
+          name: "Liability",
+          rules: [
+            { ...content().topics[0].rules[0], id: "rule-a" },
+            { ...content().topics[0].rules[0], id: "rule-b" },
+          ],
+        },
+      ],
+    });
+
+    const normalized = normalizeFindings(ambiguous, "", [finding()]);
+
+    expect(normalized.every((entry) => entry.status === "needs_review")).toBe(
+      true,
+    );
+  });
+});
+
+describe("run failure messages", () => {
+  it("passes through a message this module wrote", () => {
+    expect(runFailureMessage(new PlaybookRequestError("Select a model."))).toBe(
+      "Select a model.",
+    );
+  });
+
+  it.each([
+    [
+      "a provider exception",
+      new Error("invalid x-api-key sk-ant-secret123456"),
+    ],
+    [
+      "a database error",
+      { code: "42P01", message: 'relation "x" does not exist' },
+    ],
+    ["a non-error value", "raw string failure"],
+  ])("does not pass through %s", (_label, error) => {
+    const message = runFailureMessage(error);
+
+    expect(message).toBe("The review failed. Try again.");
+    expect(message).not.toMatch(/sk-ant|x-api-key|relation|raw string/);
+  });
+
+  it("explains a timeout", () => {
+    const error = new Error("timed out");
+    error.name = "TimeoutError";
+
+    expect(runFailureMessage(error)).toMatch(/timed out/i);
+  });
+});
+
+describe("a playbook started without a Word file", () => {
+  it("produces content the schema accepts", () => {
+    const content = blankPlaybookContent("Vendor MSA playbook");
+
+    expect(() => playbookContentSchema.parse(content)).not.toThrow();
+    expect(content.name).toBe("Vendor MSA playbook");
+  });
+
+  it("gives the first rule a concept, because the schema requires one", () => {
+    const [rule] = blankPlaybookContent("P").rules;
+
+    expect(rule.concept).toBe(BLANK_RULE_CONCEPT);
+    expect(rule.concept.trim().length).toBeGreaterThan(0);
+  });
+
+  it("starts with one ungrouped rule and no topics", () => {
+    const content = blankPlaybookContent("P");
+
+    expect(content.topics).toHaveLength(0);
+    expect(content.rules).toHaveLength(1);
+  });
+
+  it("carries no source references, unlike a compiled import", () => {
+    const [rule] = blankPlaybookContent("P").rules;
+
+    expect(rule.sourceRefs).toEqual([]);
+  });
+});

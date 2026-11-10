@@ -4,9 +4,7 @@ import { useState, type ReactNode } from "react";
 import { ChevronDown, Loader2, RefreshCw } from "lucide-react";
 import { FieldLabel } from "@/app/components/ui/form-field";
 import { Modal } from "@/app/components/modals/Modal";
-import { LIQUID_GLASS_FLAT_CLASS } from "@/shared/ui/LiquidGlassUI";
-import { TabPillButtonUI } from "@/shared/ui/TabPillButtonUI";
-import { ToggleSwitchUI } from "@/shared/ui/ToggleSwitchUI";
+import { LIQUID_GLASS_FLAT_CLASS, TabPillButtonUI, ToggleSwitchUI } from "@mike/ui";
 
 export type ConnectorToolView = {
     id: string;
@@ -35,13 +33,16 @@ export type ConnectorDetailsView = {
 /**
  * The Manage dialog every connector shares — Slack, Notion, custom MCP
  * servers and Google alike: write-approval setting, tool switches, Refresh
- * and Delete. A custom MCP server adds a Details tab through `details`.
+ * and Delete. A custom MCP server adds a Details tab through `details`; a
+ * connector with its own actions passes them through `actions`, shown under
+ * the account.
  */
 export function ConnectorDetailsModal({
     connector,
     busyKey,
     toolsLoading,
     details,
+    actions,
     reconnecting = false,
     onClose,
     onRefresh,
@@ -55,6 +56,7 @@ export function ConnectorDetailsModal({
     busyKey: string | null;
     toolsLoading: boolean;
     details?: ReactNode;
+    actions?: ReactNode;
     reconnecting?: boolean;
     onClose: () => void;
     onRefresh: () => void;
@@ -136,6 +138,7 @@ export function ConnectorDetailsModal({
                                     </p>
                                 </div>
                             )}
+                            {actions}
                             <div className="flex items-start justify-between gap-3">
                                 <div className="min-w-0">
                                     <p id={`read-only-${connector.id}`} className="text-sm font-medium text-gray-700">

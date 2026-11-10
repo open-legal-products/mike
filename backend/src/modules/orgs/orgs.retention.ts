@@ -1,6 +1,7 @@
 import type {
     OrgDeparture, OrgDepartureArchive, OrgDepartureArchivePage, OrgDepartureList, OrgDepartureResolution,
 } from "@mike/contracts";
+import { AppError } from "../../lib/appError";
 import { getOrgRole } from "../../lib/access";
 import { failure, internalFailure, ok, type ServiceResult } from "../../lib/serviceResult";
 import type { Db } from "../../lib/supabase";
@@ -148,11 +149,11 @@ export async function expireDepartureArchives(db: Db): Promise<number> {
     const { data: expired, error: readError } = await db.from("org_departure_archives")
         .select("kind, item_id").lte("expires_at", new Date().toISOString())
         .order("expires_at").order("id").limit(100);
-    if (readError) throw new Error("Could not load expired organization archives");
+    if (readError) throw new AppError("db.query_failed", "Could not load expired organization archives", { cause: readError });
     const keys: string[] = [];
     for (const item of (expired ?? []) as OrgDepartureArchive[]) keys.push(...await cleanupKeys(db, item));
     const { data, error } = await db.rpc("expire_org_departure_archives", { p_limit: 100 });
-    if (error) throw new Error("Could not expire organization archives");
+    if (error) throw new AppError("db.query_failed", "Could not expire organization archives", { cause: error });
     await completeInlineDocumentCleanup(db, keys);
     return Number(data ?? 0);
 }

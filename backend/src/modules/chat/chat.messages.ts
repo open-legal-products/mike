@@ -12,8 +12,9 @@
 // its ordering is delicate. Only the NON-streaming logic and the pre-stream
 // DB preparation live here. `prepareChatStream` returns the prepared data the
 // route needs to run the stream; it does not stream.
+import { selectInBatches } from "../../lib/batchedQuery";
 import { type Db } from "../../lib/supabase";
-import { withoutEmptyAssistantReservations } from "./engine/index";
+import { withDelegationEvents, withoutEmptyAssistantReservations } from "./engine/index";
 
 // Stored doc_edited events capture the `status` at the time the assistant
 // produced the edit (always "pending"). If the user later accepts or rejects,
@@ -36,7 +37,7 @@ async function hydrateEditStatuses(
     for (const m of messages) {
         const content = m.content;
         if (Array.isArray(content)) {
-            for (const ev of content as Record<string, unknown>[]) {
+            for (const ev of withDelegationEvents(content as Record<string, unknown>[])) {
                 if (ev?.type === "doc_edited") {
                     collectFromAnnList(ev.annotations);
                     if (typeof ev.version_id === "string")
@@ -50,11 +51,12 @@ async function hydrateEditStatuses(
     // Edit status patch.
     const statusById = new Map<string, "pending" | "accepted" | "rejected">();
     if (editIds.size > 0) {
-        const { data: rows } = await db
-            .from("document_edits")
-            .select("id, status")
-            .in("id", Array.from(editIds));
-        for (const r of (rows ?? []) as { id: string; status: string }[]) {
+        const rows = await selectInBatches<{ id: string; status: string }>(
+            "edit status lookup",
+            editIds,
+            (batch) => db.from("document_edits").select("id, status").in("id", batch),
+        );
+        for (const r of rows) {
             if (
                 r.status === "pending" ||
                 r.status === "accepted" ||
@@ -70,14 +72,12 @@ async function hydrateEditStatuses(
     // document_versions so the UI can render "V3" chips + download filenames.
     const versionNumberById = new Map<string, number | null>();
     if (versionIds.size > 0) {
-        const { data: vrows } = await db
-            .from("document_versions")
-            .select("id, version_number")
-            .in("id", Array.from(versionIds));
-        for (const r of (vrows ?? []) as {
-            id: string;
-            version_number: number | null;
-        }[]) {
+        const vrows = await selectInBatches<{ id: string; version_number: number | null }>(
+            "edit version lookup",
+            versionIds,
+            (batch) => db.from("document_versions").select("id, version_number").in("id", batch),
+        );
+        for (const r of vrows) {
             versionNumberById.set(r.id, r.version_number ?? null);
         }
     }
@@ -101,29 +101,33 @@ async function hydrateEditStatuses(
             return next;
         });
     };
+    const patchEvent = (ev: Record<string, unknown>): Record<string, unknown> => {
+        if (ev?.type === "delegation" && Array.isArray(ev.events)) {
+            return {
+                ...ev,
+                events: (ev.events as Record<string, unknown>[]).map(patchEvent),
+            };
+        }
+        if (ev?.type !== "doc_edited") return ev;
+        let patched: Record<string, unknown> = {
+            ...ev,
+            annotations: patchAnnList(ev.annotations),
+        };
+        if (
+            typeof ev.version_id === "string" &&
+            versionNumberById.has(ev.version_id)
+        ) {
+            patched = {
+                ...patched,
+                version_number: versionNumberById.get(ev.version_id) ?? null,
+            };
+        }
+        return patched;
+    };
     return messages.map((m) => {
         const next: Record<string, unknown> = { ...m };
         if (Array.isArray(m.content)) {
-            next.content = (m.content as Record<string, unknown>[]).map(
-                (ev) => {
-                    if (ev?.type !== "doc_edited") return ev;
-                    let patched: Record<string, unknown> = {
-                        ...ev,
-                        annotations: patchAnnList(ev.annotations),
-                    };
-                    if (
-                        typeof ev.version_id === "string" &&
-                        versionNumberById.has(ev.version_id)
-                    ) {
-                        patched = {
-                            ...patched,
-                            version_number:
-                                versionNumberById.get(ev.version_id) ?? null,
-                        };
-                    }
-                    return patched;
-                },
-            );
+            next.content = (m.content as Record<string, unknown>[]).map(patchEvent);
         }
         return next;
     });

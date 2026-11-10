@@ -1,5 +1,6 @@
-import { useEffect, useRef, useState, type ReactNode } from "react";
-import { useReasoningDisclosure } from "@/shared/hooks/useReasoningDisclosure";
+import { useMarkdownCheckpoint } from "./markdownCheckpoint";
+import { memo, useEffect, useRef, useState, type ReactNode } from "react";
+import { useReasoningDisclosure, DocEditBlockUI, DocFindBlockUI, DocReadBlockUI } from "@mike/ui";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { Download, Loader2 } from "lucide-react";
@@ -13,11 +14,6 @@ import { API_BASE } from "@/app/lib/mikeApi";
 import { authenticatedFetch } from "@/app/lib/authEvents";
 import type { AssistantEvent } from "../../shared/types";
 import { FileTypeIcon } from "../../shared/FileTypeIcon";
-import {
-    DocEditBlockUI,
-    DocFindBlockUI,
-    DocReadBlockUI,
-} from "@/shared/ui/DocumentEventBlocksUI";
 import { RESPONSE_GLASS_SURFACE, withoutMarkdownNode } from "./messageStyles";
 
 const THINKING_PHRASES = [
@@ -34,7 +30,11 @@ const THINKING_PHRASES = [
 
 function EventConnector() {
     return (
-        <div className="absolute w-[1px] bg-gray-300 top-[14px] left-[3px] translate-x-[-50%] h-[calc(100%+10px)]" />
+        <div
+            aria-hidden="true"
+            data-slot="event-connector"
+            className="absolute w-[1px] bg-gray-300 top-[14px] left-[3px] translate-x-[-50%] h-[calc(100%+10px)]"
+        />
     );
 }
 
@@ -74,7 +74,16 @@ export function EventBlock({
 
 // ---------------------------------------------------------------------------
 
-function ReasoningContent({ text }: { text: string }) {
+export function ReasoningContent({
+    text,
+    label = "Thought process",
+    streaming = false,
+}: {
+    text: string;
+    label?: string;
+    streaming?: boolean;
+}) {
+    const {richText, plainTail} = useMarkdownCheckpoint(text, streaming);
     const viewportRef = useRef<HTMLDivElement>(null);
     const contentRef = useRef<HTMLDivElement>(null);
     const [hasMoreBelow, setHasMoreBelow] = useState(false);
@@ -122,7 +131,7 @@ function ReasoningContent({ text }: { text: string }) {
             <div
                 ref={viewportRef}
                 role="region"
-                aria-label="Thought process"
+                aria-label={label}
                 tabIndex={0}
                 className="max-h-36 overflow-y-auto overscroll-contain focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500/40"
             >
@@ -130,19 +139,8 @@ function ReasoningContent({ text }: { text: string }) {
                     ref={contentRef}
                     className="text-sm font-serif text-gray-400 prose prose-sm max-w-none [&>*]:text-gray-400 [&>*]:text-sm"
                 >
-                    <ReactMarkdown
-                        remarkPlugins={[remarkGfm]}
-                        components={{
-                            code: (props) => (
-                                <code
-                                    className="font-serif text-gray-600"
-                                    {...withoutMarkdownNode(props)}
-                                />
-                            ),
-                        }}
-                    >
-                        {text}
-                    </ReactMarkdown>
+                    <ReasoningMarkdown text={richText} />
+                    {plainTail && <span className="whitespace-pre-wrap">{plainTail}</span>}
                 </div>
             </div>
             {hasMoreBelow && (
@@ -155,6 +153,22 @@ function ReasoningContent({ text }: { text: string }) {
         </div>
     );
 }
+
+const ReasoningMarkdown = memo(function ReasoningMarkdown({text}: {text: string}) {
+    return (<ReactMarkdown
+                        remarkPlugins={[remarkGfm]}
+                        components={{
+                            code: (props) => (
+                                <code
+                                    className="font-serif text-gray-600"
+                                    {...withoutMarkdownNode(props)}
+                                />
+                            ),
+                        }}
+                    >
+                        {text}
+                    </ReactMarkdown>);
+});
 
 export function ReasoningBlock({
     text,
@@ -191,7 +205,7 @@ export function ReasoningBlock({
                         : "Thought process"
                 }
             />
-            {isContentOpen && <ReasoningContent text={text} />}
+            {isContentOpen && <ReasoningContent text={text} streaming={isStreaming} />}
         </EventBlock>
     );
 }

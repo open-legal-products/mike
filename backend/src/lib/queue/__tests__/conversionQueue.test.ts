@@ -53,6 +53,15 @@ vi.mock("bullmq", () => ({
         add = add;
     },
 }));
+const reportError = vi.hoisted(() => vi.fn());
+vi.mock("../../observability/sentry", async (importOriginal) => {
+    const actual =
+        await importOriginal<typeof import("../../observability/sentry")>();
+    reportError.mockImplementation(actual.reportError);
+    return { ...actual, reportError };
+});
+
+import { diagnosticErrorTags } from "../../observability/sentryPrivacy";
 
 import {
     conversionJobId,
@@ -70,6 +79,7 @@ const DATA: ConversionJobData = {
 
 beforeEach(() => {
     add.mockReset();
+    reportError.mockClear();
 });
 
 describe("conversionJobId", () => {
@@ -144,6 +154,45 @@ describe("enqueueConversion", () => {
         const data = add.mock.calls[0][1];
         expect(data.pdfKey).toBe("converted-pdfs/user-1/doc-1/slug.pdf");
         expect(data.finalizeDocumentStatus).toBe(false);
+    });
+});
+
+describe("enqueueConversion when Redis refuses the job", () => {
+    // The fallback used to log a message string, which the console bridge
+    // turned into a stackless, codeless Sentry event. The ioredis error is
+    // now the cause of a named warning, and the console line carries the
+    // same object so nothing is filed twice.
+    it("falls back to the DB queue and reports one named warning", async () => {
+        const redisError = Object.assign(new Error("connect ECONNREFUSED"), {
+            code: "ECONNREFUSED",
+        });
+        add.mockRejectedValueOnce(redisError);
+        enqueueDbJob.mockClear();
+        const log = vi.spyOn(console, "error").mockImplementation(() => {});
+
+        await expect(enqueueConversion(DATA)).resolves.toEqual({
+            id: "dbjob-1",
+            deduped: false,
+        });
+
+        expect(enqueueDbJob).toHaveBeenCalledTimes(1);
+        expect(enqueueDbJob.mock.calls[0][1].kind).toBe("conversion.convert");
+        expect(reportError).toHaveBeenCalledOnce();
+        const [reported, context] = reportError.mock.calls[0]!;
+        expect(diagnosticErrorTags(reported)).toEqual({
+            error_kind: "queue.enqueue_failed",
+            failure_code: "ECONNREFUSED",
+        });
+        expect(context).toMatchObject({
+            level: "warning",
+            tags: { job_kind: "conversion.convert" },
+            extra: { document_id: "doc-1", version_id: "ver-1" },
+        });
+        expect((reported as Error).cause).toBe(redisError);
+        expect(log).toHaveBeenCalledWith(expect.any(String), reported);
+        // The storage key never reaches the report.
+        expect(JSON.stringify(context)).not.toContain("uploads/user-1");
+        log.mockRestore();
     });
 });
 

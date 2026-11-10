@@ -40,8 +40,7 @@ import {
     LIQUID_GLASS_PRESSED_CLASS,
     LIQUID_FLOAT_PANEL_SURFACE_CLASS,
 } from "@/app/components/ui/liquid-surface";
-import { CloseButton } from "@/shared/ui/CloseButton";
-import { CitationPillUI } from "@/shared/ui/CitationPillUI";
+import { CloseButton, CitationPillUI } from "@mike/ui";
 import { resolveDocumentViewType } from "@/app/lib/documentViewType";
 
 interface Props {
@@ -344,7 +343,7 @@ export function TRSidePanel({
                         onPointerMove={handleDocumentResizePointerMove}
                         onPointerUp={handleDocumentResizePointerEnd}
                         onPointerCancel={handleDocumentResizePointerEnd}
-                        className="absolute inset-y-0 left-0 z-20 w-1.5 cursor-col-resize touch-none bg-transparent transition-colors hover:bg-blue-400/60"
+                        className="absolute inset-y-0 left-0 z-20 w-1.5 cursor-col-resize touch-none bg-transparent transition-colors hover:bg-blue-600/60 active:bg-blue-600"
                         title="Resize document pane"
                     />
                     <DocumentPaneTitle

@@ -1,3 +1,5 @@
+import { TEXT_CARD_TOOL } from "./textCard";
+
 /**
  * The tools that WRITE to stored content rather than read it: they create
  * `documents` rows (and, in a project chat, attach them to the project) or
@@ -16,6 +18,9 @@
  */
 export const DOCUMENT_MUTATING_TOOL_NAMES: ReadonlySet<string> = new Set([
   "edit_document",
+  // A playbook review of a Word document saves its suggestions as tracked
+  // changes in a new version.
+  "run_playbook",
   "replicate_document",
   "generate_docx",
   "generate_excel",
@@ -23,7 +28,7 @@ export const DOCUMENT_MUTATING_TOOL_NAMES: ReadonlySet<string> = new Set([
 ]);
 
 /** Read a tool schema's function name, whatever shape the entry arrived in. */
-function toolName(tool: unknown): string | null {
+export function toolName(tool: unknown): string | null {
   const fn = (tool as { function?: { name?: unknown } } | null)?.function;
   return typeof fn?.name === "string" ? fn.name : null;
 }
@@ -131,7 +136,52 @@ export const WORKFLOW_TOOLS = [
   },
 ];
 
+export const PLAYBOOK_TOOLS = [
+  {
+    type: "function",
+    function: {
+      name: "list_playbooks",
+      description:
+        "List the contract review playbooks the user can run in this workspace. Returns each playbook's id, name, description, document types, and represented party. Call this when the user asks to review a contract against a playbook, or names one you need the id of.",
+      parameters: { type: "object", properties: {} },
+    },
+  },
+  {
+    type: "function",
+    function: {
+      name: "run_playbook",
+      description:
+        "Review one attached document against a playbook, rule by rule. For a .docx, every recommended change is applied to the document as tracked changes, which the UI shows as Accept/Reject cards. Returns a summary and each rule's finding. Summarise the findings for the user; do not repeat the suggested language of findings that already have a tracked change.",
+      parameters: {
+        type: "object",
+        properties: {
+          playbook_id: {
+            type: "string",
+            description: "The playbook id from list_playbooks.",
+          },
+          doc_id: {
+            type: "string",
+            description: "Document slug of the contract to review (e.g. 'doc-0').",
+          },
+          review_mode: {
+            type: "string",
+            enum: ["strict", "permissive"],
+            description:
+              "strict flags fallback positions for review; permissive may accept them. Default strict.",
+          },
+          instructions: {
+            type: "string",
+            description: "Optional extra focus for the review, from the user's request.",
+          },
+        },
+        required: ["playbook_id", "doc_id"],
+      },
+    },
+  },
+];
+
 export const TOOLS = [
+  TEXT_CARD_TOOL,
   {
     type: "function",
     function: {

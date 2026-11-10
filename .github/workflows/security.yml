@@ -39,8 +39,8 @@ jobs:
         run: node --test scripts/audit-gate.test.mjs
 
   # Blocking for EVERY tree in the matrix below: high/critical advisories
-  # fail the build unless their GHSA id is documented (with a reason) in
-  # scripts/audit-allowlist.json — see scripts/audit-gate.mjs. Auditing
+  # fail the build unless every affected copy matches a documented dependency
+  # scope in scripts/audit-allowlist.json — see scripts/audit-gate.mjs. Auditing
   # straight from the lockfile needs no install, so this gate costs seconds.
   # Advisories with no non-breaking fix anywhere in the ecosystem get an
   # allowlist entry instead of demoting the whole job to report-only (which

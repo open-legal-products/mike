@@ -98,7 +98,7 @@ export const WORKSPACE_TOOLS = [
     "gmail",
     "gmail_list_labels",
     "List labels",
-    "List mailbox label IDs and names, for interpreting or changing labels.",
+    "List mailbox label IDs and names, for interpreting the labels on messages and drafts.",
     z.object({}).strict(),
   ),
   definition(
@@ -137,28 +137,6 @@ export const WORKSPACE_TOOLS = [
     "Delete draft",
     "Delete a draft.",
     z.object({ draft_id: id }).strict(),
-    true,
-  ),
-  definition(
-    "gmail",
-    "gmail_modify_labels",
-    "Change labels",
-    "Change labels on one message (for example read/unread or archive). Use label IDs from gmail_list_labels. Email contents cannot be edited after sending.",
-    z
-      .object({
-        message_id: id,
-        add_label_ids: z.array(id).max(20).default([]),
-        remove_label_ids: z.array(id).max(20).default([]),
-      })
-      .strict(),
-    true,
-  ),
-  definition(
-    "gmail",
-    "gmail_trash",
-    "Move email to Trash",
-    "Move one email to Trash. This does not permanently delete it.",
-    z.object({ message_id: id }).strict(),
     true,
   ),
   definition(
@@ -277,12 +255,15 @@ export async function googleJson(
     ? {}
     : ((await response.json()) as Record<string, unknown>);
 }
+/** Google answered with an error status; `status` lands in `dependency_status`. */
 export class GoogleApiError extends GoogleWorkspaceError {
   constructor(
     message: string,
     readonly status: number,
   ) {
-    super(message);
+    super(message, {
+      kind: status === 401 ? "google.auth_failed" : "google.api_failed",
+    });
   }
 }
 function asRecord(value: unknown): Record<string, unknown> {
@@ -514,40 +495,6 @@ export async function prepareWorkspaceAction(
           "Provide at least one event field to change.",
         );
     }
-  } else if (args.message_id) {
-    const before = await googleJson(
-      provider,
-      token,
-      `/messages/${segment(args.message_id)}`,
-      { format: "full" },
-    );
-    action.before = readableMessage(before);
-    if (name === "gmail_modify_labels") {
-      const add = args.add_label_ids as string[];
-      const remove = args.remove_label_ids as string[];
-      if (
-        (!add.length && !remove.length) ||
-        add.some((l) => remove.includes(l))
-      )
-        throw new GoogleWorkspaceError(
-          "Choose non-overlapping labels to add or remove.",
-        );
-      if (
-        [...add, ...remove].some((l) =>
-          ["TRASH", "SPAM", "SENT", "DRAFT"].includes(l),
-        )
-      )
-        throw new GoogleWorkspaceError(
-          "Use gmail_trash for deletion. Changing special mail-state labels is not supported.",
-        );
-      const labels = await googleJson(provider, token, "/labels");
-      action.before = {
-        message: action.before,
-        labels: list(labels.labels).filter((l) =>
-          [...add, ...remove].includes(text(asRecord(l).id)),
-        ),
-      };
-    }
   } else if (args.draft_id) {
     const draft = await googleJson(
       provider,
@@ -677,24 +624,6 @@ export async function executeWorkspaceAction(
         `/drafts/${segment(args.draft_id)}`,
         {},
         { method: "DELETE" },
-      );
-    if (tool.name === "gmail_trash")
-      return mutate(
-        `/messages/${segment(args.message_id)}/trash`,
-        {},
-        { method: "POST" },
-      );
-    if (tool.name === "gmail_modify_labels")
-      return mutate(
-        `/messages/${segment(args.message_id)}/modify`,
-        {},
-        {
-          method: "POST",
-          body: JSON.stringify({
-            addLabelIds: args.add_label_ids,
-            removeLabelIds: args.remove_label_ids,
-          }),
-        },
       );
   } else {
     validateEvent(args);

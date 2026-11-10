@@ -103,6 +103,27 @@ describe("audit event presentation", () => {
       context: "Acme · Acquisition",
     });
   });
+  it("labels playbook activity like the other surfaces instead of generating labels", () => {
+    const run = {
+      ...event,
+      action: "playbook.run",
+      title: "negotiation-guide",
+      surface: "playbooks",
+      detail: { playbook_id: "pb-1", run_id: "run-1", scope: "full" },
+    };
+    expect(auditAction(run)).toBe("Playbook review run");
+    expect(auditSubject(run).type).toBe("Playbook run");
+    expect(auditSubject({ ...run, action: "playbook.replaced" }).type).toBe(
+      "Playbook",
+    );
+    const failed = { ...run, status: "failed" };
+    expect(auditAction(failed)).toBe("Playbook review");
+    expect(auditSummary(failed, false)).toBe("Playbook review failed.");
+    expect(auditAction({ ...run, action: "playbook.run.deleted" })).toBe(
+      "Playbook run deleted",
+    );
+  });
+
   it("keeps failed actions from reading as successful changes", () => {
     const failed = { ...event, action: "document.uploaded", status: "failed" };
     expect(auditAction(failed)).toBe("Document upload");

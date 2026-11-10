@@ -1,3 +1,6 @@
+import type { RedlineStreamProjection } from "./redline";
+import type { ReasoningLevel } from "./modelSelectionTypes";
+export type { ReasoningLevel } from "./modelSelectionTypes";
 import type {
   Message as SavedMessage,
   WordAssistantEvent,
@@ -7,6 +10,7 @@ import type { RedlineEdit } from "./redline";
 
 export type WordChatStorageMode = "cloud" | "local";
 export type WorkflowAttachment = { id: string; title: string };
+export type PlaybookAttachment = { id: string; title: string };
 
 /**
  * Opening a stored chat in the pane. `activeTurnId` is set when the server is
@@ -21,13 +25,6 @@ export type WordChatOpenHandler = (
   reasoningLevel: ReasoningLevel | null,
   activeTurnId?: string | null,
 ) => void;
-export type ReasoningLevel =
-  | "none"
-  | "low"
-  | "medium"
-  | "high"
-  | "xhigh"
-  | "max";
 export type EditDecision = "accept" | "reject";
 export type EditBusyAction =
   | "view"
@@ -80,6 +77,7 @@ interface RuntimeMessageBase {
   id: string;
   files?: SavedMessage["files"];
   workflow?: SavedMessage["workflow"];
+  playbook?: SavedMessage["playbook"];
   /** Only the current streamed turn may mutate the live Word document. */
   live?: boolean;
 }
@@ -105,6 +103,8 @@ export interface WordChatSubmission {
   content: string;
   files?: { filename: string; document_id?: string }[];
   workflow?: WorkflowAttachment;
+  /** A playbook to run, sent as `{ id, title }` like a workflow. */
+  playbook?: PlaybookAttachment;
   model: string;
   reasoning: ReasoningLevel;
 }
@@ -160,6 +160,7 @@ export interface WordEditStreamController {
     messageId: string,
     content: string,
     persistent: boolean,
+    projection?: RedlineStreamProjection,
   ) => void;
   markIncompleteRedlines: (messageId: string, content: string) => void;
   /**

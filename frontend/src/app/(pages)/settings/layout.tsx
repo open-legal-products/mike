@@ -1,14 +1,17 @@
 "use client";
 
-import { useEffect } from "react";
+import { useEffect, useMemo } from "react";
 import { usePathname, useRouter } from "next/navigation";
 import { Loader2 } from "lucide-react";
 import { useAuth } from "@/app/contexts/AuthContext";
 import { useOrganizationInvitationCount } from "@/app/hooks/useOrganizationInvitationCount";
+import { useMemberDataActions } from "@/app/hooks/useMemberDataActions";
 import {
     SettingsShell,
     type SettingsShellTab,
 } from "@/app/components/settings/SettingsShell";
+import { SettingsSearch } from "@/app/components/settings/SettingsSearch";
+import { SETTINGS_SEARCH_ENTRIES } from "@/app/lib/settingsSearch";
 
 const TABS: SettingsShellTab[] = [
     { id: "account", label: "Account", href: "/settings" },
@@ -59,6 +62,25 @@ export default function SettingsLayout({
     const invitationCount = useOrganizationInvitationCount(
         isAuthenticated && !authLoading ? user?.id : undefined,
     );
+    // Privacy & Data has nothing to offer a member of an organization whose
+    // owners allow neither exports nor bulk deletes, so it is not listed.
+    const { canExport, canDelete } = useMemberDataActions();
+    const hidePrivacyData = !canExport && !canDelete;
+    const visibleTabs = useMemo(
+        () =>
+            TABS.filter(
+                (tab) => !(hidePrivacyData && tab.id === "privacy-data"),
+            ),
+        [hidePrivacyData],
+    );
+    // Search only what is listed: an entry on a hidden tab would open a page
+    // the person is not offered.
+    const searchEntries = useMemo(() => {
+        const visibleTabIds = new Set(visibleTabs.map((tab) => tab.id));
+        return SETTINGS_SEARCH_ENTRIES.filter((entry) =>
+            visibleTabIds.has(entry.tabId),
+        );
+    }, [visibleTabs]);
 
     useEffect(() => {
         if (!authLoading && !isAuthenticated) {
@@ -87,7 +109,8 @@ export default function SettingsLayout({
         <SettingsShell
             title="Settings"
             navLabel="Settings"
-            tabs={TABS.map((tab) =>
+            search={<SettingsSearch entries={searchEntries} />}
+            tabs={visibleTabs.map((tab) =>
                 tab.id === "organizations" && invitationCount > 0
                     ? {
                           ...tab,

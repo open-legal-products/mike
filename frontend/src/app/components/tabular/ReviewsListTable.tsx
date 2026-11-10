@@ -37,7 +37,7 @@ import {
     type PersonOption,
 } from "@/app/components/shared/PersonFilter";
 import { EmptyState } from "@/app/components/ui/empty-state";
-import { PillButtonUI } from "@/shared/ui/PillButtonUI";
+import { PillButtonUI } from "@mike/ui";
 import { cn } from "@/app/lib/utils";
 import { TabularReviewSkeuoIcon } from "@/app/components/shared/AppSidebarSkeuoIcons";
 import type { Project, TabularReview } from "@/app/components/shared/types";
@@ -46,6 +46,7 @@ import type {
     TabularReviewSortDirection,
     TabularReviewSortKey,
 } from "@/app/hooks/usePaginatedTabularReviews";
+import { useIdSet } from "@/app/hooks/useIdSet";
 
 /**
  * The tabular reviews list. Pass `projectColumn` on surfaces that list reviews
@@ -106,7 +107,7 @@ export function ReviewsListTable({
         filter: string | null;
         onFilterChange: (projectId: string | null) => void;
     };
-    /** Adds a Creator column; a project's list shows who made each review. */
+    /** Adds a Creator column showing who made each review. */
     showCreator?: boolean;
     /** Filters the Creator column; the host refetches with the person. */
     creatorFilter?: {
@@ -133,6 +134,7 @@ export function ReviewsListTable({
     loading?: boolean;
     renderToolbar?: (actions: ReactNode) => ReactNode;
 }) {
+    const selectedReviewIdSet = useIdSet(selectedReviewIds);
     function clearSelection() {
         setSelectedReviewIds([]);
     }
@@ -176,10 +178,10 @@ export function ReviewsListTable({
 
     const allVisibleReviewsSelected =
         reviews.length > 0 &&
-        reviews.every((review) => selectedReviewIds.includes(review.id));
+        reviews.every((review) => selectedReviewIdSet.has(review.id));
     const someVisibleReviewsSelected =
         !allVisibleReviewsSelected &&
-        reviews.some((review) => selectedReviewIds.includes(review.id));
+        reviews.some((review) => selectedReviewIdSet.has(review.id));
     const projectNameById = new Map(
         projectColumn?.projects.map((project) => [project.id, project.name]),
     );
@@ -190,6 +192,8 @@ export function ReviewsListTable({
         sort?.key === "documents" ? sort.direction : null;
     const createdSortDirection =
         sort?.key === "created" ? sort.direction : null;
+    const updatedSortDirection =
+        sort?.key === "updated" ? sort.direction : null;
     const nameFilterButton = (
         <TableSortFilter
             label="Sort by review name"
@@ -217,6 +221,13 @@ export function ReviewsListTable({
             label="Sort by created date"
             value={createdSortDirection}
             onChange={(direction) => handleSortChange("created", direction)}
+        />
+    );
+    const updatedFilterButton = (
+        <TableSortFilter
+            label="Sort by updated date"
+            value={updatedSortDirection}
+            onChange={(direction) => handleSortChange("updated", direction)}
         />
     );
 
@@ -317,6 +328,12 @@ export function ReviewsListTable({
                             {!loading && createdFilterButton}
                         </div>
                     </TableHeaderCell>
+                    <TableHeaderCell className="w-32">
+                        <div className="flex items-center gap-1">
+                            <span>Updated</span>
+                            {!loading && updatedFilterButton}
+                        </div>
+                    </TableHeaderCell>
                     <TableHeaderCell className="w-8" />
                 </TableHeaderRow>
             }
@@ -378,7 +395,7 @@ export function ReviewsListTable({
                                 interactive={!deleting}
                                 selected={
                                     !deleting &&
-                                    selectedReviewIds.includes(review.id)
+                                    selectedReviewIdSet.has(review.id)
                                 }
                                 rightClickDropdown={deleting ? undefined : (close) => renderReviewActions(review, close)}
                                 onClick={
@@ -395,7 +412,7 @@ export function ReviewsListTable({
                                 <TablePrimaryCell
                                     selected={
                                         !deleting &&
-                                        selectedReviewIds.includes(review.id)
+                                        selectedReviewIdSet.has(review.id)
                                     }
                                     selectionIndicator={
                                         deleting ? (
@@ -448,6 +465,16 @@ export function ReviewsListTable({
                                 <TableCell className="w-32">
                                     {review.created_at ? (
                                         formatDate(review.created_at)
+                                    ) : (
+                                        <span className="text-gray-300">—</span>
+                                    )}
+                                </TableCell>
+                                <TableCell className="w-32">
+                                    {review.updated_at || review.created_at ? (
+                                        formatDate(
+                                            review.updated_at ||
+                                                review.created_at,
+                                        )
                                     ) : (
                                         <span className="text-gray-300">—</span>
                                     )}
@@ -520,6 +547,9 @@ function ReviewsLoadingRows({
                             <CreatorLabelSkeleton className="w-16" />
                         </TableCell>
                     )}
+                    <TableCell className="w-32">
+                        <SkeletonLine className="w-20" />
+                    </TableCell>
                     <TableCell className="w-32">
                         <SkeletonLine className="w-20" />
                     </TableCell>

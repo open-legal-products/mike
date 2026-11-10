@@ -1,6 +1,11 @@
 "use client";
 
-import { useRef, useState } from "react";
+import { useLatestRef } from "@/app/hooks/useLatestRef";
+import { useMarkdownCheckpoint } from "./message/markdownCheckpoint";
+import { createCitationPreprocessor } from "./message/citationPreprocessor";
+import { TextCardUI } from "@mike/ui";
+import { memo, useMemo, useRef, useState, type ReactNode } from "react";
+import type { WebSource } from "@mike/contracts";
 import { Check, Copy } from "lucide-react";
 import type {
     AssistantEvent,
@@ -10,14 +15,29 @@ import type {
 } from "../shared/types";
 import { ConnectorSkeuoIcon } from "@/app/components/shared/AppSidebarSkeuoIcons";
 import { notifyError } from "@/app/lib/userFacingError";
+import { useOptionalUserProfile } from "@/app/contexts/UserProfileContext";
 import { EditCard } from "./EditCard";
 import { PreResponseWrapper } from "./PreResponseWrapper";
 import { ResponseStatus, type StatusState } from "./message/ResponseStatus";
 import { DocSearchBlock } from "./message/DocSearchBlock";
 import {
+    WebReadBlock,
+    WebSearchBlock,
+    WebSourcesBlock,
+} from "./message/WebActivityBlock";
+import {
+    SubagentGroup,
+    subagentTints,
+    timelineStepCount,
+    type DelegationEvent,
+} from "./message/SubagentGroup";
+import { responseDetailsText, subagentUsage } from "./message/responseDetails";
+import {
     connectorToolLabel,
     eventErrorMessage,
+    isRenderableEvent,
     toolCallLabel,
+    withDelegationEvents,
 } from "./message/eventUtils";
 import { preprocessCitations, internalCaseHref } from "./message/citationUtils";
 import { useSmoothedReveal } from "./message/useSmoothedReveal";
@@ -38,6 +58,8 @@ import {
     WorkflowAppliedBlock,
     type CourtListenerBlockItem,
 } from "./message/EventBlocks";
+
+const EMPTY_CITATIONS: Citation[] = [];
 
 interface Props {
     events?: AssistantEvent[];
@@ -117,13 +139,13 @@ interface Props {
     resolvedEditStatuses?: Record<string, "accepted" | "rejected">;
 }
 
-export function AssistantMessage({
+function AssistantMessageImpl({
     events,
     isStreaming = false,
     awaitingInput = false,
     isError = false,
     errorMessage,
-    citations = [],
+    citations = EMPTY_CITATIONS,
     citationStatus,
     activeCitation,
     onCitationClick,
@@ -185,12 +207,6 @@ export function AssistantMessage({
             ? "waiting"
             : null;
 
-    const isRenderableEvent = (event: AssistantEvent) =>
-        event.type !== "error" &&
-        event.type !== "ask_inputs_response" &&
-        event.type !== "case_citation" &&
-        event.type !== "case_opinions";
-
     // Find the last content event so its raw text can be smoothed before
     // citation preprocessing — slicing already-preprocessed text would risk
     // chopping a `§N§` citation token in half.
@@ -225,6 +241,9 @@ export function AssistantMessage({
         isStreaming && contentIsTail,
     );
 
+    const {richText, plainTail} = useMarkdownCheckpoint(smoothedLastText, isStreaming && contentIsTail);
+    const processCitations = useMemo(() => createCitationPreprocessor(preprocessCitations), []);
+
     // Pre-process citations for all content events. Each [N] marker resolves
     // to exactly one citation (models are instructed to use shared refs
     // only for cross-page continuations via the [[PAGE_BREAK]] sentinel).
@@ -248,11 +267,7 @@ export function AssistantMessage({
             }
             processedTexts.push(
                 event.type === "content"
-                    ? preprocessCitations(
-                          i === lastContentIdx ? smoothedLastText : event.text,
-                          citations,
-                          inlineCitationTargets,
-                      )
+                    ? processCitations(i, i === lastContentIdx ? richText : event.text, citations, inlineCitationTargets)
                     : "",
             );
         }
@@ -273,6 +288,20 @@ export function AssistantMessage({
     const canOpenCitationSource = (citation: Citation) =>
         !!onOpenCitationSource ||
         (citation.kind !== "case" && !!onOpenDocument);
+    const eventsWithDelegated = withDelegationEvents(events ?? []);
+    // The pages an answer cites follow the answer, not the steps before it.
+    // Several provider steps can cite the same page, so list each URL once.
+    const webSourcesByUrl = new Map<string, WebSource>();
+    for (const event of events ?? []) {
+        if (event.type !== "web_sources") continue;
+        for (const source of event.sources) {
+            const existing = webSourcesByUrl.get(source.url);
+            if (!existing || (!existing.title && source.title)) {
+                webSourcesByUrl.set(source.url, source);
+            }
+        }
+    }
+    const webSources = [...webSourcesByUrl.values()];
     const showCitationBlock =
         !!citationStatus || (!isStreaming && citations.length > 0);
     const handleCopy = async () => {
@@ -322,6 +351,11 @@ export function AssistantMessage({
     type EventGroup =
         | { kind: "pre"; events: AssistantEvent[]; indices: number[] }
         | {
+              kind: "text_card";
+              event: Extract<AssistantEvent, { type: "text_card" }>;
+              index: number;
+          }
+        | {
               kind: "content";
               event: Extract<AssistantEvent, { type: "content" }>;
               index: number;
@@ -332,12 +366,16 @@ export function AssistantMessage({
         let current: Extract<EventGroup, { kind: "pre" }> | null = null;
         events.forEach((e, i) => {
             if (!isRenderableEvent(e)) return;
-            if (e.type === "content") {
+            if (e.type === "content" || e.type === "text_card") {
                 if (current) {
                     groups.push(current);
                     current = null;
                 }
-                groups.push({ kind: "content", event: e, index: i });
+                if (e.type === "text_card") {
+                    groups.push({ kind: "text_card", event: e, index: i });
+                } else {
+                    groups.push({ kind: "content", event: e, index: i });
+                }
             } else {
                 if (!current)
                     current = { kind: "pre", events: [], indices: [] };
@@ -363,7 +401,10 @@ export function AssistantMessage({
     const hasContentAfter = (groupIdx: number): boolean => {
         for (let i = groupIdx + 1; i < groups.length; i++) {
             const g = groups[i];
-            if (g.kind === "content" && g.event.text.length > 0) return true;
+            if (
+                (g.kind === "content" || g.kind === "text_card") &&
+                g.event.text.length > 0
+            ) return true;
         }
         return false;
     };
@@ -390,10 +431,14 @@ export function AssistantMessage({
         i: number,
         allEvents: AssistantEvent[],
         globalIdx: number,
+        timeline: AssistantEvent[] = events ?? [],
+        connectsToNextRow = false,
     ) => {
         const nextEvent = allEvents[i + 1];
         const showConnector =
-            nextEvent !== undefined && nextEvent.type !== "content";
+            nextEvent !== undefined
+                ? nextEvent.type !== "content"
+                : connectsToNextRow;
 
         if (event.type === "reasoning") {
             return (
@@ -489,6 +534,14 @@ export function AssistantMessage({
         }
         if (event.type === "doc_search") {
             return <DocSearchBlock key={globalIdx} event={event}
+                isStreaming={event.isStreaming} showConnector={showConnector} />;
+        }
+        if (event.type === "web_search") {
+            return <WebSearchBlock key={globalIdx} event={event}
+                isStreaming={event.isStreaming} showConnector={showConnector} />;
+        }
+        if (event.type === "web_read") {
+            return <WebReadBlock key={globalIdx} event={event}
                 isStreaming={event.isStreaming} showConnector={showConnector} />;
         }
         if (event.type === "doc_find") {
@@ -809,16 +862,14 @@ export function AssistantMessage({
             // and final verify_citations events (one per matched citation) —
             // collect them so the user can expand to see resolved cases.
             const items: CourtListenerBlockItem[] = [];
-            if (events) {
-                for (let j = globalIdx + 1; j < events.length; j++) {
-                    const e = events[j];
-                    if (e.type !== "case_citation") break;
-                    items.push({
-                        caseName: e.case_name,
-                        citation: e.citation,
-                        url: e.url || null,
-                    });
-                }
+            for (let j = globalIdx + 1; j < timeline.length; j++) {
+                const e = timeline[j];
+                if (e.type !== "case_citation") break;
+                items.push({
+                    caseName: e.case_name,
+                    citation: e.citation,
+                    url: e.url || null,
+                });
             }
             return (
                 <CourtListenerBlock
@@ -841,6 +892,50 @@ export function AssistantMessage({
         return null;
     };
 
+    // Mike's steps in a pre-answer group. Consecutive delegations are
+    // subagents Mike ran in parallel; they render as one group.
+    const tints = subagentTints(events ?? []);
+    // Settings > Features > Response details: the model, effort and tokens
+    // under the answer and in each subagent's details. Off without a profile.
+    const showDetails =
+        useOptionalUserProfile()?.profile?.responseDetailsVisible === true;
+    const answerDetails = showDetails
+        ? (events ?? []).findLast((e) => e.type === "response_details")
+        : undefined;
+    const renderPreEvents = (g: Extract<EventGroup, { kind: "pre" }>) => {
+        const rows: ReactNode[] = [];
+        for (let i = 0; i < g.events.length; i++) {
+            if (g.events[i].type !== "delegation") {
+                rows.push(renderEvent(g.events[i], i, g.events, g.indices[i]));
+                continue;
+            }
+            let end = i;
+            while (g.events[end + 1]?.type === "delegation") end++;
+            rows.push(
+                <SubagentGroup
+                    key={`s-${g.indices[i]}`}
+                    delegations={g.events.slice(i, end + 1) as DelegationEvent[]}
+                    tints={tints}
+                    showDetails={showDetails}
+                    showConnectorAfter={end + 1 < g.events.length}
+                    renderSteps={renderTimeline}
+                />,
+            );
+            i = end;
+        }
+        return rows;
+    };
+
+    // A subagent's steps; the last one connects to the row its details put
+    // after them (its brief) when there is one.
+    const renderTimeline = (steps: AssistantEvent[], connectsToNextRow: boolean) => {
+        const indices = steps.flatMap((step, i) => (isRenderableEvent(step) ? [i] : []));
+        const renderable = indices.map((i) => steps[i]);
+        return renderable.map((step, i) =>
+            renderEvent(step, i, renderable, indices[i], steps, connectsToNextRow),
+        );
+    };
+
     return (
         <div style={{ minHeight }}>
             <ResponseStatus status={status} />
@@ -848,6 +943,15 @@ export function AssistantMessage({
                 {events && events.length > 0 ? (
                     <div className="flex flex-col gap-4">
                         {groups.map((g, gIdx) => {
+                            if (g.kind === "text_card") {
+                                return (
+                                    <TextCardUI
+                                        key={`card-${g.event.card_id}`}
+                                        title={g.event.title}
+                                        text={g.event.text}
+                                    />
+                                );
+                            }
                             if (g.kind === "content") {
                                 const isLastContent =
                                     g.index === lastContentIdx;
@@ -870,6 +974,7 @@ export function AssistantMessage({
                                                     : undefined
                                             }
                                         />
+                                        {isLastContent && plainTail && <span className="whitespace-pre-wrap font-serif">{plainTail}</span>}
                                     </div>
                                 );
                             }
@@ -884,7 +989,12 @@ export function AssistantMessage({
                             return (
                                 <PreResponseWrapper
                                     key={`p-${g.indices[0]}`}
-                                    stepCount={g.events.length}
+                                    stepCount={timelineStepCount(g.events)}
+                                    subagentCount={
+                                        g.events.filter(
+                                            (event) => event.type === "delegation",
+                                        ).length
+                                    }
                                     shouldMinimize={
                                         pendingAskInput
                                             ? false
@@ -893,14 +1003,7 @@ export function AssistantMessage({
                                     isStreaming={wrapperIsStreaming}
                                     forceOpen={pendingAskInput}
                                 >
-                                    {g.events.map((event, i) =>
-                                        renderEvent(
-                                            event,
-                                            i,
-                                            g.events,
-                                            g.indices[i],
-                                        ),
-                                    )}
+                                    {renderPreEvents(g)}
                                 </PreResponseWrapper>
                             );
                         })}
@@ -909,7 +1012,7 @@ export function AssistantMessage({
                             rendered above the download card. */}
                         {!isStreaming &&
                             (() => {
-                                const editedEvents = events.filter(
+                                const editedEvents = eventsWithDelegated.filter(
                                     (e) =>
                                         e.type === "doc_edited" &&
                                         !e.isStreaming,
@@ -1035,7 +1138,7 @@ export function AssistantMessage({
                 {events &&
                     !isStreaming &&
                     (() => {
-                        const edited = events.filter(
+                        const edited = eventsWithDelegated.filter(
                             (
                                 e,
                             ): e is Extract<
@@ -1098,12 +1201,12 @@ export function AssistantMessage({
                     them in the DocumentContent (like edited docs). */}
                 {events &&
                     !isStreaming &&
-                    events.some(
+                    eventsWithDelegated.some(
                         (e) => e.type === "doc_created" && e.download_url,
                     ) && (
                         <div className="flex flex-col gap-2 mt-2 mb-3">
                             {(
-                                events.filter(
+                                eventsWithDelegated.filter(
                                     (e) =>
                                         e.type === "doc_created" &&
                                         e.download_url,
@@ -1141,6 +1244,12 @@ export function AssistantMessage({
                         </div>
                     )}
 
+                {webSources.length > 0 && (
+                    <div className="mt-2 mb-3">
+                        <WebSourcesBlock sources={webSources} />
+                    </div>
+                )}
+
                 {showCitationBlock && (
                     <CitationsBlock
                         citations={citations}
@@ -1156,8 +1265,9 @@ export function AssistantMessage({
                     />
                 )}
 
-                {/* Copy button */}
-                <div className="flex items-center gap-2 font-sans justify-start">
+                {/* Copy button on the left; what the answer ran on, when the
+                    user asked to see it, at the right end of the same row. */}
+                <div className="flex flex-wrap items-center gap-x-2 font-sans justify-start">
                     {!isStreaming && !awaitingInput && (
                         <button
                             type="button"
@@ -1174,8 +1284,41 @@ export function AssistantMessage({
                             )}
                         </button>
                     )}
+                    {!isStreaming && answerDetails?.type === "response_details" && (
+                        <span className="ml-auto min-w-0 text-right font-serif text-sm text-gray-400 [overflow-wrap:anywhere]">
+                            {responseDetailsText(answerDetails, subagentUsage(events ?? []))}
+                        </span>
+                    )}
                 </div>
             </div>
         </div>
     );
+}
+
+const MemoAssistantMessage = memo(AssistantMessageImpl);
+/** Stable event dispatchers keep completed messages memoized without stale closures. */
+export function AssistantMessage(props: Props) {
+    const latest = useLatestRef(props);
+    const handlers = useMemo(() => ({
+        onCitationClick: ((...args) => latest.current.onCitationClick?.(...args)) as NonNullable<Props["onCitationClick"]>,
+        onOpenCitationSource: ((...args) => latest.current.onOpenCitationSource?.(...args)) as NonNullable<Props["onOpenCitationSource"]>,
+        onCaseClick: ((...args) => latest.current.onCaseClick?.(...args)) as NonNullable<Props["onCaseClick"]>,
+        onWorkflowClick: ((...args) => latest.current.onWorkflowClick?.(...args)) as NonNullable<Props["onWorkflowClick"]>,
+        onEditViewClick: ((...args) => latest.current.onEditViewClick?.(...args)) as NonNullable<Props["onEditViewClick"]>,
+        onOpenDocument: ((...args) => latest.current.onOpenDocument?.(...args)) as NonNullable<Props["onOpenDocument"]>,
+        onEditResolveStart: ((...args) => latest.current.onEditResolveStart?.(...args)) as NonNullable<Props["onEditResolveStart"]>,
+        onEditResolved: ((...args) => latest.current.onEditResolved?.(...args)) as NonNullable<Props["onEditResolved"]>,
+        onEditError: ((...args) => latest.current.onEditError?.(...args)) as NonNullable<Props["onEditError"]>,
+    }), [latest]);
+    return <MemoAssistantMessage {...props}
+        onCitationClick={props.onCitationClick ? handlers.onCitationClick : undefined}
+        onOpenCitationSource={props.onOpenCitationSource ? handlers.onOpenCitationSource : undefined}
+        onCaseClick={props.onCaseClick ? handlers.onCaseClick : undefined}
+        onWorkflowClick={props.onWorkflowClick ? handlers.onWorkflowClick : undefined}
+        onEditViewClick={props.onEditViewClick ? handlers.onEditViewClick : undefined}
+        onOpenDocument={props.onOpenDocument ? handlers.onOpenDocument : undefined}
+        onEditResolveStart={props.onEditResolveStart ? handlers.onEditResolveStart : undefined}
+        onEditResolved={props.onEditResolved ? handlers.onEditResolved : undefined}
+        onEditError={props.onEditError ? handlers.onEditError : undefined}
+    />;
 }

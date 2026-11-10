@@ -1,5 +1,6 @@
 "use client";
 
+import { indexFolderDirectory } from "./folderDirectoryIndex";
 import {
   type ReactNode,
   type UIEvent,
@@ -14,7 +15,7 @@ import { FileTypeIcon } from "./FileTypeIcon";
 import { ProjectSvgIcon, SubfolderSvgIcon } from "./FolderSvgIcon";
 import { SearchBar } from "@/app/components/ui/search-bar";
 import { SelectionCheckbox as DirectorySelectionCheckbox } from "@/app/components/ui/selection-checkbox";
-import { TabPillButtonUI } from "@/shared/ui/TabPillButtonUI";
+import { TabPillButtonUI } from "@mike/ui";
 import { SkeletonLine } from "./TablePrimitive";
 import { TableLoadMoreRow } from "./TableLoadMoreRow";
 import { useDirectoryData, type DirectoryTab } from "./useDirectoryData";
@@ -24,6 +25,7 @@ import {
   searchProjectDirectory,
 } from "@/app/lib/mikeApi";
 import { useDocumentWorkspace } from "@/app/contexts/WorkspaceContext";
+import { missingById } from "@/app/lib/idCollections";
 import {
     LIQUID_GLASS_MODAL_ROW_HOVER_CLASS,
     LIQUID_GLASS_MODAL_ROW_SELECTED_CLASS,
@@ -307,12 +309,7 @@ function WorkspaceFileDirectory({
         () =>
             showTabs
                 ? [
-                      ...documents.filter(
-                          (doc) =>
-                              !standaloneDocuments.some(
-                                  (loadedDoc) => loadedDoc.id === doc.id,
-                              ),
-                      ),
+                      ...missingById(standaloneDocuments, documents),
                       ...standaloneDocuments,
                   ]
                 : documents,
@@ -521,55 +518,55 @@ function WorkspaceFileDirectory({
         return doc.folder_id ?? doc.library_folder_id ?? null;
     }
 
-    function childFolders(
-        folders: DirectoryFolder[],
-        parentFolderId: string | null,
-    ) {
-        return folders.filter(
-            (folder) => (folder.parent_folder_id ?? null) === parentFolderId,
-        );
+    // Per-render dataset caches: all levels share one index. Selection changes
+    // recompute scalar aggregates, never lists of every descendant per folder.
+    const directoryIndexes = new Map<DirectoryFolder[], Map<Document[], ReturnType<typeof indexFolderDirectory<DirectoryFolder, Document>>>>();
+    function directoryIndex(allFolders: DirectoryFolder[], docs: Document[]) {
+        let byDocuments = directoryIndexes.get(allFolders);
+        if (!byDocuments) directoryIndexes.set(allFolders, byDocuments = new Map());
+        let index = byDocuments.get(docs);
+        if (!index) {
+            index = indexFolderDirectory(allFolders, docs, documentFolderId, checkedIds);
+            byDocuments.set(docs, index);
+        }
+        return index;
     }
-
+    const childIndexes = new Map<DirectoryFolder[], Map<string | null, DirectoryFolder[]>>();
+    function childFolders(allFolders: DirectoryFolder[], parent: string | null) {
+        let index = childIndexes.get(allFolders);
+        if (!index) {
+            index = indexFolderDirectory(allFolders, [], () => null).children;
+            childIndexes.set(allFolders, index);
+        }
+        return index.get(parent) ?? [];
+    }
+    const documentIndexes = new Map<Document[], Map<string | null, Document[]>>();
     function folderDocuments(docs: Document[], folderId: string | null) {
-        return docs.filter((doc) => documentFolderId(doc) === folderId);
+        let index = documentIndexes.get(docs);
+        if (!index) {
+            index = indexFolderDirectory([], docs, documentFolderId).direct;
+            documentIndexes.set(docs, index);
+        }
+        return index.get(folderId) ?? [];
     }
-
-    function collectFolderDocuments(
-        folders: DirectoryFolder[],
-        docs: Document[],
-        folderId: string,
-    ): Document[] {
-        const directDocs = folderDocuments(docs, folderId);
-        const nestedDocs = childFolders(folders, folderId).flatMap((folder) =>
-            collectFolderDocuments(folders, docs, folder.id),
-        );
-        return [...directDocs, ...nestedDocs];
+    const loadedIndexes = new Map<DirectoryFolder[], Map<string, ReturnType<typeof indexFolderDirectory>["summaries"]>>();
+    function folderIsFullyLoaded(allFolders: DirectoryFolder[], folderId: string, libraryTab?: "files" | "templates", projectId?: string) {
+        let contexts = loadedIndexes.get(allFolders);
+        if (!contexts) loadedIndexes.set(allFolders, contexts = new Map());
+        const context = libraryTab ?? projectId ?? "external";
+        let summaries = contexts.get(context);
+        if (!summaries) {
+            summaries = indexFolderDirectory(allFolders, [], () => null, checkedIds, id => {
+                const loaded = libraryTab ? loadedFolderIds[libraryTab].has(id)
+                    : projectId ? loadedProjectLevels.has(`${projectId}:${id}`) : externalLoadedFolderIds.has(id);
+                const more = libraryTab ? documentsHasMoreByLevel[libraryTab][id]
+                    : projectId ? projectDocumentsHasMoreByLevel[`${projectId}:${id}`] : documentsHasMoreByFolder[id];
+                return loaded && !more;
+            }).summaries;
+            contexts.set(context, summaries);
+        }
+        return summaries.get(folderId)?.fullyLoaded ?? false;
     }
-
-  function folderIsFullyLoaded(
-    allFolders: DirectoryFolder[],
-    folderId: string,
-    libraryTab?: "files" | "templates",
-    projectId?: string,
-  ): boolean {
-    const levelLoaded = libraryTab
-      ? loadedFolderIds[libraryTab].has(folderId)
-      : projectId
-        ? loadedProjectLevels.has(`${projectId}:${folderId}`)
-        : externalLoadedFolderIds.has(folderId);
-    const levelHasMore = libraryTab
-      ? !!documentsHasMoreByLevel[libraryTab][folderId]
-      : projectId
-        ? !!projectDocumentsHasMoreByLevel[`${projectId}:${folderId}`]
-        : !!documentsHasMoreByFolder[folderId];
-    return (
-      levelLoaded &&
-      !levelHasMore &&
-      childFolders(allFolders, folderId).every((child) =>
-        folderIsFullyLoaded(allFolders, child.id, libraryTab, projectId),
-      )
-    );
-  }
 
   function toggleLibraryFolder(
     folderId: string,
@@ -655,7 +652,8 @@ function WorkspaceFileDirectory({
     projectId?: string,
     ): ReactNode {
         return childFolders(folders, parentFolderId).map((folder) => {
-            const docsInFolder = collectFolderDocuments(folders, docs, folder.id);
+            const directory = directoryIndex(folders, docs);
+            const summary = directory.summaries.get(folder.id)!;
       const directDocs = folderDocuments(docs, folder.id);
       const visibleDirectDocs =
         !q && documentLimitByLevel[folder.id] != null
@@ -668,10 +666,10 @@ function WorkspaceFileDirectory({
         projectId,
       );
             const allSelected =
-                docsInFolder.length > 0 &&
-                docsInFolder.every((doc) => checkedIds.has(doc.id));
+                summary.count > 0 &&
+                summary.selected === summary.count;
             const someSelected =
-        docsInFolder.some((doc) => checkedIds.has(doc.id)) && !allSelected;
+        summary.selected > 0 && !allSelected;
             const isExpanded = !!q || expandedLibraryFolders.has(folder.id);
             return (
                 <div key={folder.id}>
@@ -685,14 +683,14 @@ function WorkspaceFileDirectory({
                             disabled={
                                 selectionDisabled ||
                                 !folderSelectionReady ||
-                                docsInFolder.length === 0
+                                summary.count === 0
                             }
                             label={
                                 folderSelectionReady
                                     ? `Select all files in ${folder.name}`
                                     : `Expand ${folder.name} and load all files before selecting it`
                             }
-                            onChange={() => toggleDocuments(docsInFolder)}
+                            onChange={() => toggleDocuments(directory.collect(folder.id))}
                         />
                         <button
                             type="button"
@@ -726,8 +724,8 @@ function WorkspaceFileDirectory({
                             {formatDate(folder.created_at) ?? "--"}
                         </span>
                         <span className="truncate text-right text-gray-400">
-                            {docsInFolder.length}{" "}
-                            {docsInFolder.length === 1 ? "file" : "files"}
+                            {summary.count}{" "}
+                            {summary.count === 1 ? "file" : "files"}
                         </span>
                         </button>
                     </div>

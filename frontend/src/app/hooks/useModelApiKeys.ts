@@ -11,9 +11,9 @@ import type { ApiKeyState } from "@/app/lib/mikeApi";
  * The provider keys the model pickers judge availability against.
  *
  * Personal work runs on the caller's own keys. Work in an organization runs
- * on the organization's, with the caller's beneath only where it allows that
- * — so in an organization workspace this is the server's answer for that
- * organization, not the profile's.
+ * on the organization's and the deployment's, never the caller's — so in an
+ * organization workspace this is the server's answer for that organization,
+ * not the profile's.
  *
  * `undefined` means "not known": the profile's keys failed to load, or the
  * organization's have not arrived. Callers fail open on it, as they always

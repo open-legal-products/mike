@@ -149,24 +149,26 @@ function parseMessageFiles(
   return { ok: true, value: files };
 }
 
+/** A picked workflow or playbook: `{ id, title }`. */
 function parseMessageWorkflow(
   value: unknown,
   messageIndex: number,
+  field: "workflow" | "playbook" = "workflow",
 ): ValidationResult<NonNullable<ChatMessage["workflow"]>> {
   if (!isRecord(value)) {
     return {
       ok: false,
-      detail: `messages[${messageIndex}].workflow must be an object`,
+      detail: `messages[${messageIndex}].${field} must be an object`,
     };
   }
   const id = parseNonEmptyString(
     value.id,
-    `messages[${messageIndex}].workflow.id must be a non-empty string`,
+    `messages[${messageIndex}].${field}.id must be a non-empty string`,
   );
   if (!id.ok) return id;
   const title = parseNonEmptyString(
     value.title,
-    `messages[${messageIndex}].workflow.title must be a non-empty string`,
+    `messages[${messageIndex}].${field}.title must be a non-empty string`,
   );
   if (!title.ok) return title;
   return { ok: true, value: { id: id.value, title: title.value } };
@@ -216,11 +218,23 @@ export function parseChatMessages(
       workflow = parsedWorkflow.value;
     }
 
+    let playbook: ChatMessage["playbook"];
+    if (message.playbook !== undefined) {
+      const parsedPlaybook = parseMessageWorkflow(
+        message.playbook,
+        index,
+        "playbook",
+      );
+      if (!parsedPlaybook.ok) return parsedPlaybook;
+      playbook = parsedPlaybook.value;
+    }
+
     messages.push({
       role,
       content: message.content,
       ...(files ? { files } : {}),
       ...(workflow ? { workflow } : {}),
+      ...(playbook ? { playbook } : {}),
     });
   }
 

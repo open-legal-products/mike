@@ -54,10 +54,17 @@ create table if not exists public.user_profiles (
   memory_curator_model text,
   last_selected_chat_model text,
   last_selected_reasoning_level text check (last_selected_reasoning_level in ('none', 'low', 'medium', 'high', 'xhigh', 'max')),
+  subagent_model text,
+  subagent_reasoning text check (subagent_reasoning in ('none', 'low', 'medium', 'high', 'xhigh', 'max')),
   quote_model text,
   mfa_on_login boolean not null default false,
+  -- Superseded by user_courtlistener_connections.enabled (20261022_01) and
+  -- no longer read; kept for a backend that predates that migration.
   legal_research_us boolean not null default true,
   quick_actions_visible boolean not null default true,
+  -- Whether each response and subagent shows the model, reasoning effort and
+  -- token count it used (Settings > Features).
+  response_details_visible boolean not null default false,
   dark_mode boolean not null default false,
   -- Whether projects this user creates start with shared memory enabled. Any
   -- project owner can still turn a given project's memory on or off later.
@@ -76,6 +83,14 @@ create table if not exists public.user_profiles (
     check (
       jsonb_typeof(response_style) = 'object'
       and octet_length(response_style::text) <= 2000
+    ),
+  -- Web search preferences from Settings > Features, stored like
+  -- response_style: only the choices that differ from the default.
+  web_search jsonb not null default '{}'::jsonb
+    constraint user_profiles_web_search_check
+    check (
+      jsonb_typeof(web_search) = 'object'
+      and octet_length(web_search::text) <= 1000
     ),
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now()
@@ -203,6 +218,30 @@ $$;
 revoke all on function public.merge_user_response_style(uuid, jsonb)
   from public, anon, authenticated;
 grant execute on function public.merge_user_response_style(uuid, jsonb)
+  to service_role;
+
+-- Merges a change into one user's web search settings and returns the result,
+-- or null when the user has no profile. A null value in the patch removes that
+-- key, which returns the setting to its default.
+create or replace function public.merge_user_web_search(
+  p_user_id uuid,
+  p_patch jsonb
+)
+returns jsonb
+language sql
+set search_path = ''
+as $$
+  update public.user_profiles
+     set web_search = jsonb_strip_nulls(web_search || p_patch),
+         updated_at = now()
+   where user_id = p_user_id
+     and jsonb_typeof(p_patch) = 'object'
+  returning web_search;
+$$;
+
+revoke all on function public.merge_user_web_search(uuid, jsonb)
+  from public, anon, authenticated;
+grant execute on function public.merge_user_web_search(uuid, jsonb)
   to service_role;
 
 create or replace function public.handle_user_email_updated()
@@ -366,9 +405,15 @@ create table if not exists public.organizations (
   id uuid primary key default gen_random_uuid(),
   name text not null,
   created_by uuid references auth.users(id) on delete set null,
-  -- Whether work in this organization may run on a member's own provider
-  -- key when the organization has none for that provider (org_api_keys).
-  allow_personal_api_keys boolean not null default true,
+  -- No longer read: work in an organization never runs on a member's own
+  -- provider key (20261024_01). Kept, always false, so a backend on the
+  -- previous release follows the same rule during a deploy.
+  allow_personal_api_keys boolean not null default false,
+  -- Whether members other than its owners may export, and bulk-delete, their
+  -- own work in this organization from Settings > Privacy & Data. Off until
+  -- an owner allows it.
+  allow_member_exports boolean not null default false,
+  allow_member_deletes boolean not null default false,
   -- When the organization's logo (org_logos) was last set, or null for none.
   -- Kept in step by a trigger on org_logos; clients read it to know whether
   -- there is a logo and when to fetch it again.
@@ -592,7 +637,7 @@ $$;
 create table if not exists public.user_api_keys (
   id uuid primary key default gen_random_uuid(),
   user_id uuid not null references auth.users(id) on delete cascade,
-  provider text not null check (provider in ('claude', 'gemini', 'openai', 'mistral', 'openrouter', 'vercel', 'opencode-go', 'bedrock', 'azure', 'azure-foundry', 'vertex', 'xai', 'custom', 'courtlistener')),
+  provider text not null check (provider in ('claude', 'gemini', 'openai', 'mistral', 'openrouter', 'vercel', 'opencode-go', 'bedrock', 'azure', 'azure-foundry', 'vertex', 'xai', 'custom', 'courtlistener', 'brave', 'tavily', 'deepseek')),
   encrypted_key text not null,
   iv text not null,
   auth_tag text not null,
@@ -621,16 +666,14 @@ alter table public.user_api_keys enable row level security;
 -- are user_api_keys' exactly, so one store reads and writes both
 -- (modules/user/user.apiKeyStore.ts).
 --
--- organizations.allow_personal_api_keys decides what happens for a provider
--- the organization has no key for: when true (the default, and the behaviour
--- before this table existed) a member's own key is used; when false, work in
--- the organization never runs on a member's personal key.
+-- For a provider the organization has no key for, its work runs on the
+-- deployment's key. It never runs on a member's personal key.
 create table if not exists public.org_api_keys (
   id uuid primary key default gen_random_uuid(),
   org_id uuid not null references public.organizations(id) on delete cascade,
   provider text not null
     constraint org_api_keys_provider_check
-    check (provider in ('claude', 'gemini', 'openai', 'mistral', 'openrouter', 'vercel', 'opencode-go', 'bedrock', 'azure', 'azure-foundry', 'vertex', 'xai', 'custom', 'courtlistener')),
+    check (provider in ('claude', 'gemini', 'openai', 'mistral', 'openrouter', 'vercel', 'opencode-go', 'bedrock', 'azure', 'azure-foundry', 'vertex', 'xai', 'custom', 'courtlistener', 'brave', 'tavily', 'deepseek')),
   encrypted_key text not null,
   iv text not null,
   auth_tag text not null,
@@ -844,6 +887,9 @@ $$;
 create table if not exists public.user_mcp_connectors (
   id uuid primary key default gen_random_uuid(),
   user_id uuid not null references auth.users(id) on delete cascade,
+  -- The workspace this connection is for: an organization, or null for
+  -- Personal. Tied to the membership, so it goes when the person leaves.
+  org_id uuid,
   name text not null,
   transport text not null default 'streamable_http'
     check (transport in ('streamable_http')),
@@ -860,11 +906,16 @@ create table if not exists public.user_mcp_connectors (
   auth_config_iv text,
   auth_config_tag text,
   created_at timestamptz not null default now(),
-  updated_at timestamptz not null default now()
+  updated_at timestamptz not null default now(),
+  constraint user_mcp_connectors_workspace_member_fkey
+    foreign key (org_id, user_id)
+    references public.org_members(org_id, user_id) on delete cascade
 );
 
-create index if not exists idx_user_mcp_connectors_user
-  on public.user_mcp_connectors(user_id);
+create index if not exists idx_user_mcp_connectors_user_workspace
+  on public.user_mcp_connectors(user_id, org_id);
+create index if not exists idx_user_mcp_connectors_org
+  on public.user_mcp_connectors(org_id) where org_id is not null;
 
 alter table public.user_mcp_connectors enable row level security;
 
@@ -1649,17 +1700,38 @@ language sql
 stable
 set search_path = public
 as $$
+  -- project_is_ownerless / workflow_is_ownerless, written as anti-joins so
+  -- the planner evaluates them for the whole set at once instead of calling
+  -- a function (three subqueries) per private item. Keep the conditions in
+  -- step with those functions: not archived, creator no longer a member of
+  -- the item's organization, and no 'owner' override.
   select 'project'::text, p.id
   from public.projects p
   where p.org_id = any(p_org_ids)
     and p.visibility <> 'organization'
-    and public.project_is_ownerless(p.id, p.user_id, p.org_id)
+    and p.archived_at is null
+    and not exists (
+      select 1 from public.org_members creator
+      where creator.org_id = p.org_id and creator.user_id = p.user_id
+    )
+    and not exists (
+      select 1 from public.project_org_access_overrides o
+      where o.project_id = p.id and o.role = 'owner'
+    )
   union all
   select 'workflow'::text, w.id
   from public.workflows w
   where w.org_id = any(p_org_ids)
     and w.visibility <> 'organization'
-    and public.workflow_is_ownerless(w.id, w.user_id, w.org_id);
+    and w.archived_at is null
+    and not exists (
+      select 1 from public.org_members creator
+      where creator.org_id = w.org_id and creator.user_id = w.user_id
+    )
+    and not exists (
+      select 1 from public.workflow_org_access_overrides o
+      where o.workflow_id = w.id and o.role = 'owner'
+    );
 $$;
 
 create or replace function public.workflow_access_role(
@@ -2292,163 +2364,7 @@ create index if not exists idx_workflow_open_source_submissions_submitter
 
 alter table public.workflow_open_source_submissions enable row level security;
 
-create or replace function public.get_workflows_overview(
-  p_user_id text,
-  p_user_email text default null,
-  p_type text default null
-)
-returns table (
-  id uuid,
-  user_id text,
-  org_id uuid,
-  access_scope text,
-  organization_name text,
-  title text,
-  type text,
-  prompt_md text,
-  columns_config jsonb,
-  language text,
-  practice text,
-  jurisdictions text[],
-  is_system boolean,
-  created_at timestamptz,
-  allow_edit boolean,
-  is_owner boolean,
-  shared_by_name text
-)
-language sql
-stable
-as $$
-  with owned as (
-    select
-      w.id,
-      w.user_id::text as user_id,
-      w.org_id,
-      public.workflow_access_scope(w.id, w.org_id, w.visibility) as access_scope,
-      (
-        select nullif(trim(o.name), '')
-        from public.organizations o
-        where o.id = w.org_id
-      ) as organization_name,
-      w.title,
-      w.type,
-      w.prompt_md,
-      w.columns_config,
-      w.language,
-      w.practice,
-      w.jurisdictions,
-      false as is_system,
-      w.created_at,
-      true as allow_edit,
-      true as is_owner,
-      null::text as shared_by_name,
-      0 as sort_bucket
-    from public.workflows w
-    where w.user_id::text = p_user_id
-      and public.workflow_access_role(
-        w.id, w.user_id, w.org_id, p_user_id, p_user_email
-      ) is not null
-      and (p_type is null or w.type = p_type)
-  ),
-  shared as (
-    select
-      w.id,
-      w.user_id::text as user_id,
-      w.org_id,
-      'shared'::text as access_scope,
-      null::text as organization_name,
-      w.title,
-      w.type,
-      w.prompt_md,
-      w.columns_config,
-      w.language,
-      w.practice,
-      w.jurisdictions,
-      false as is_system,
-      w.created_at,
-      (ws.role in ('owner', 'editor')) as allow_edit,
-      (ws.role = 'owner') as is_owner,
-      nullif(trim(up.display_name), '') as shared_by_name,
-      1 as sort_bucket
-    from public.workflow_shares ws
-    join public.workflows w
-      on w.id = ws.workflow_id
-    left join public.user_profiles up
-      on up.user_id::text = ws.shared_by_user_id::text
-    where lower(ws.shared_with_email) = lower(coalesce(p_user_email, ''))
-      and w.org_id is null
-      and (p_type is null or w.type = p_type)
-  ),
-  org_shared as (
-    -- Workflows in an org the caller belongs to. Admins default to Owner and
-    -- Members default to Editor; per-workflow overrides may narrow either.
-    -- Mirrors resolveWorkflowAccess in routes/workflows.ts, so a row's
-    -- affordances in the list match what the detail route will allow.
-    select
-      w.id,
-      w.user_id::text as user_id,
-      w.org_id,
-      public.workflow_access_scope(w.id, w.org_id, w.visibility) as access_scope,
-      (
-        select nullif(trim(o.name), '')
-        from public.organizations o
-        where o.id = w.org_id
-      ) as organization_name,
-      w.title,
-      w.type,
-      w.prompt_md,
-      w.columns_config,
-      w.language,
-      w.practice,
-      w.jurisdictions,
-      false as is_system,
-      w.created_at,
-      (public.workflow_access_role(
-        w.id, w.user_id, w.org_id, p_user_id, p_user_email
-      ) in ('owner', 'editor')) as allow_edit,
-      (public.workflow_access_role(
-        w.id, w.user_id, w.org_id, p_user_id, p_user_email
-      ) = 'owner') as is_owner,
-      nullif(trim(up.display_name), '') as shared_by_name,
-      2 as sort_bucket
-    from public.workflows w
-    left join public.user_profiles up
-      on up.user_id::text = w.user_id::text
-    where w.org_id is not null
-      and (w.user_id is null or w.user_id::text <> p_user_id)
-      and (p_type is null or w.type = p_type)
-      and public.workflow_access_role(
-        w.id, w.user_id, w.org_id, p_user_id, p_user_email
-      ) is not null
-  ),
-  visible_workflows as (
-    select * from owned
-    union all
-    select * from shared
-    union all
-    select * from org_shared
-  )
-  select
-    vw.id,
-    vw.user_id,
-    vw.org_id,
-    vw.access_scope,
-    vw.organization_name,
-    vw.title,
-    vw.type,
-    vw.prompt_md,
-    vw.columns_config,
-    vw.language,
-    vw.practice,
-    vw.jurisdictions,
-    vw.is_system,
-    vw.created_at,
-    vw.allow_edit,
-    vw.is_owner,
-    vw.shared_by_name
-  from visible_workflows vw
-  order by vw.sort_bucket asc, vw.created_at desc;
-$$;
+
 
 -- ---------------------------------------------------------------------------
 -- Assistant chats
@@ -2632,80 +2548,6 @@ as $$
 $$;
 
 drop function if exists public.get_chats_overview(text, text, integer, integer, timestamptz, uuid);
-create or replace function public.get_chats_overview(
-  p_user_id text,
-  p_user_email text,
-  p_limit integer default null,
-  p_offset integer default 0,
-  p_before_updated_at timestamptz default null,
-  p_before_id uuid default null,
-  p_workspace text default null
-)
-returns table (
-  id uuid,
-  project_id uuid,
-  user_id text,
-  title text,
-  model text,
-  created_at timestamptz,
-  updated_at timestamptz,
-  project_name text,
-  is_owner boolean,
-  access_role text
-)
-language sql
-stable
-set search_path = public
-as $$
-  select
-    c.id,
-    c.project_id,
-    c.user_id::text as user_id,
-    c.title,
-    c.model,
-    c.created_at,
-    c.updated_at,
-    p.name as project_name,
-    -- Provenance ("I started this thread"), not a role: the ladder itself is
-    -- lib/permissions.ts, and the creator branch of ensureChatAccess is what
-    -- turns this into Owner standing.
-    coalesce(c.user_id::text = p_user_id, false) as is_owner,
-    -- The SAME verdict the predicate below filters on, served to the caller.
-    -- Serving only is_owner was not enough: the client must distinguish
-    -- Editor and Viewer from Owner so its actions match the server verdict.
-    -- One evaluation, one truth: the lateral computes the role once and both
-    -- the column and the WHERE read it.
-    verdict.role as access_role
-  from public.chats c
-  left join public.projects p on p.id = c.project_id
-  cross join lateral (
-    select public.chat_access_role(
-             c.id,
-             c.user_id,
-             c.project_id,
-             c.org_id,
-             p_user_id,
-             p_user_email
-           ) as role
-  ) verdict
-  -- The whole predicate, in one call.
-  -- The join above is for project_name only; the function resolves the
-  -- project itself.
-  where verdict.role is not null
-    and public.workspace_matches(p_workspace, c.org_id)
-    and (
-      p_before_updated_at is null
-      or c.updated_at < p_before_updated_at
-      or (c.updated_at = p_before_updated_at and c.id > p_before_id)
-    )
-  order by c.updated_at desc, c.id asc
-  limit case
-    when p_limit is null then null
-    else greatest(1, least(p_limit, 100))
-  end
-  offset greatest(coalesce(p_offset, 0), 0);
-$$;
-
 create table if not exists public.chat_messages (
   id uuid primary key default gen_random_uuid(),
   chat_id uuid not null references public.chats(id) on delete cascade,
@@ -2717,6 +2559,7 @@ create table if not exists public.chat_messages (
   content jsonb,
   files jsonb,
   workflow jsonb,
+  playbook jsonb,
   citations jsonb,
   created_at timestamptz not null default now()
 );
@@ -2725,6 +2568,32 @@ create index if not exists chat_messages_chat_created_id_idx
   on public.chat_messages(chat_id, created_at, id);
 create index if not exists chat_messages_author_idx
   on public.chat_messages(author_user_id) where author_user_id is not null;
+
+-- What a subagent did in a chat answer, so the assistant can continue it in a
+-- later turn without the subagent redoing its reading. Only the backend reads
+-- or writes these rows; they expire after 30 days and go with their chat,
+-- answer or account.
+create table if not exists public.chat_subagent_runs (
+  id uuid primary key default gen_random_uuid(),
+  chat_id uuid not null references public.chats(id) on delete cascade,
+  message_id uuid not null references public.chat_messages(id) on delete cascade,
+  delegation_id text not null check (length(delegation_id) between 1 and 100),
+  user_id uuid not null references auth.users(id) on delete cascade,
+  status text not null check (status in ('completed', 'incomplete', 'needs_input')),
+  transcript jsonb not null check (octet_length(transcript::text) <= 400000),
+  created_at timestamptz not null default now(),
+  expires_at timestamptz not null default now() + interval '30 days',
+  unique (chat_id, delegation_id)
+);
+
+create index if not exists chat_subagent_runs_user_expiry
+  on public.chat_subagent_runs(user_id, expires_at);
+create index if not exists chat_subagent_runs_message
+  on public.chat_subagent_runs(message_id);
+
+alter table public.chat_subagent_runs enable row level security;
+revoke all on public.chat_subagent_runs from anon, authenticated;
+grant all on public.chat_subagent_runs to service_role;
 
 create or replace function public.set_chat_updated_at()
 returns trigger
@@ -2920,6 +2789,7 @@ create table if not exists public.word_chat_messages (
   content jsonb,
   files jsonb,
   workflow jsonb,
+  playbook jsonb,
   citations jsonb,
   created_at timestamptz not null default now()
 );
@@ -3159,95 +3029,7 @@ grant execute on function public.org_item_is_ownerless(text, uuid)
 grant execute on function public.ownerless_org_item_ids(uuid[])
   to service_role;
 
-create or replace function public.get_projects_overview(
-  p_user_id text,
-  p_user_email text default null
-)
-returns table (
-  id uuid,
-  user_id text,
-  org_id uuid,
-  access_scope text,
-  organization_name text,
-  name text,
-  cm_number text,
-  practice text,
-  created_at timestamptz,
-  updated_at timestamptz,
-  is_owner boolean,
-  owner_display_name text,
-  owner_email text,
-  access_role text,
-  document_count integer,
-  chat_count integer,
-  review_count integer
-)
-language sql
-stable
-as $$
-  with visible_projects as (
-    select p.*
-    from public.projects p
-    where public.project_access_role(
-      p.id, p.user_id, p.org_id, p_user_id, p_user_email
-    ) is not null
-  ),
-  document_counts as (
-    select d.project_id, count(*)::integer as document_count
-    from public.documents d
-    where d.project_id in (select vp.id from visible_projects vp)
-    group by d.project_id
-  ),
-  chat_counts as (
-    select c.project_id, count(*)::integer as chat_count
-    from public.chats c
-    where c.project_id in (select vp.id from visible_projects vp)
-    group by c.project_id
-  ),
-  review_counts as (
-    select tr.project_id, count(*)::integer as review_count
-    from public.tabular_reviews tr
-    where tr.project_id in (select vp.id from visible_projects vp)
-    group by tr.project_id
-  )
-  select
-    vp.id,
-    vp.user_id::text as user_id,
-    vp.org_id,
-    public.project_access_scope(vp.id, vp.org_id, vp.visibility) as access_scope,
-    (
-      select nullif(trim(o.name), '')
-      from public.organizations o
-      where o.id = vp.org_id
-    ) as organization_name,
-    vp.name,
-    vp.cm_number,
-    vp.practice,
-    vp.created_at,
-    vp.updated_at,
-    coalesce(vp.user_id::text = p_user_id, false) as is_owner,
-    nullif(trim(up.display_name), '') as owner_display_name,
-    -- Populated at last. The column has always been declared and always
-    -- returned NULL, so the UI's "ask the project admin" line had no address
-    -- to render and silently collapsed to nothing.
-    up.email as owner_email,
-    public.project_access_role(
-      vp.id, vp.user_id, vp.org_id, p_user_id, p_user_email
-    ) as access_role,
-    coalesce(dc.document_count, 0) as document_count,
-    coalesce(cc.chat_count, 0) as chat_count,
-    coalesce(rc.review_count, 0) as review_count
-  from visible_projects vp
-  left join public.user_profiles up
-    on up.user_id::text = vp.user_id::text
-  left join document_counts dc
-    on dc.project_id = vp.id
-  left join chat_counts cc
-    on cc.project_id = vp.id
-  left join review_counts rc
-    on rc.project_id = vp.id
-  order by vp.created_at desc;
-$$;
+
 
 create table if not exists public.tabular_review_rows (
   id uuid primary key default gen_random_uuid(),
@@ -3420,246 +3202,13 @@ grant execute on function public.get_tabular_review_history_status(text, text, u
   to service_role;
 
 drop function if exists public.get_tabular_reviews_overview(text, text, text, text, integer, integer, text, text, text, text);
-create or replace function public.get_tabular_reviews_overview(
-  p_user_id text,
-  p_user_email text,
-  p_project_id text,
-  p_scope text,
-  p_limit integer,
-  p_offset integer,
-  p_search_term text,
-  p_sort_key text,
-  p_sort_direction text,
-  p_workspace text default null,
-  p_owner_user_id text default null
-)
-returns table (
-  id uuid,
-  project_id uuid,
-  user_id text,
-  title text,
-  columns_config jsonb,
-  document_ids jsonb,
-  workflow_id uuid,
-  created_at timestamptz,
-  updated_at timestamptz,
-  is_owner boolean,
-  access_role text,
-  document_count integer
-)
-language sql
-stable
-as $$
-  with accessible_projects as (
-    select p.id
-    from public.projects p
-    where public.project_access_role(
-      p.id, p.user_id, p.org_id, p_user_id, p_user_email
-    ) is not null
-  ),
-  visible_reviews as (
-    select tr.*
-    from public.tabular_reviews tr
-    where (p_project_id is null or tr.project_id::text = p_project_id)
-      and public.workspace_matches(p_workspace, tr.org_id)
-      and (p_owner_user_id is null or tr.user_id::text = p_owner_user_id)
-      and (
-        coalesce(p_scope, 'all') = 'all'
-        or (p_scope = 'in-project' and tr.project_id is not null)
-        or (p_scope = 'standalone' and tr.project_id is null)
-      )
-      and (
-        p_search_term is null
-        or p_search_term = ''
-        or lower(tr.title) like
-          '%' ||
-          replace(
-            replace(
-              replace(lower(p_search_term), '\', '\\'),
-              '%',
-              '\%'
-            ),
-            '_',
-            '\_'
-          ) ||
-          '%'
-          escape '\'
-      )
-      and (
-        p_project_id is null
-        or exists (
-          select 1
-          from accessible_projects ap
-          where ap.id::text = p_project_id
-        )
-      )
-      and public.review_access_role(
-        tr.id, tr.user_id, tr.project_id, tr.org_id,
-        p_user_id, p_user_email
-      ) is not null
-  ),
-  cell_document_counts as (
-    select
-      tc.review_id,
-      count(distinct tc.document_id)::integer as document_count
-    from public.tabular_cells tc
-    where tc.review_id in (
-      select vr.id
-      from visible_reviews vr
-      where jsonb_typeof(vr.document_ids) is distinct from 'array'
-    )
-    group by tc.review_id
-  ),
-  review_document_counts as (
-    select
-      vr.id,
-      case
-        when jsonb_typeof(vr.document_ids) = 'array'
-          then (
-            select count(distinct doc_id.value)::integer
-            from jsonb_array_elements_text(vr.document_ids) as doc_id(value)
-          )
-        else coalesce(cdc.document_count, 0)
-      end as document_count
-    from visible_reviews vr
-    left join cell_document_counts cdc
-      on cdc.review_id = vr.id
-  )
-  select
-    vr.id,
-    vr.project_id,
-    vr.user_id::text as user_id,
-    vr.title,
-    vr.columns_config,
-    vr.document_ids,
-    vr.workflow_id,
-    vr.created_at,
-    vr.updated_at,
-    coalesce(vr.user_id::text = p_user_id, false) as is_owner,
-    public.review_access_role(
-      vr.id, vr.user_id, vr.project_id, vr.org_id,
-      p_user_id, p_user_email
-    ) as access_role,
-    rdc.document_count
-  from visible_reviews vr
-  join review_document_counts rdc
-    on rdc.id = vr.id
-  order by
-    case when p_sort_key = 'name' and p_sort_direction = 'asc' then lower(coalesce(vr.title, '')) else null end asc,
-    case when p_sort_key = 'name' and p_sort_direction = 'desc' then lower(coalesce(vr.title, '')) else null end desc,
-    case when p_sort_key = 'columns' and p_sort_direction = 'asc' then jsonb_array_length(coalesce(vr.columns_config, '[]'::jsonb)) else null end asc,
-    case when p_sort_key = 'columns' and p_sort_direction = 'desc' then jsonb_array_length(coalesce(vr.columns_config, '[]'::jsonb)) else null end desc,
-    case when p_sort_key = 'documents' and p_sort_direction = 'asc' then rdc.document_count else null end asc,
-    case when p_sort_key = 'documents' and p_sort_direction = 'desc' then rdc.document_count else null end desc,
-    case when p_sort_key = 'updated' and p_sort_direction = 'asc' then coalesce(vr.updated_at, vr.created_at) else null end asc,
-    case when p_sort_key = 'updated' and p_sort_direction = 'desc' then coalesce(vr.updated_at, vr.created_at) else null end desc,
-    case when p_sort_key = 'created' and p_sort_direction = 'asc' then vr.created_at else null end asc,
-    case when p_sort_key = 'created' and p_sort_direction = 'desc' then vr.created_at else null end desc,
-    vr.created_at desc,
-    vr.id asc
-  limit greatest(coalesce(p_limit, 20), 1)
-  offset greatest(coalesce(p_offset, 0), 0);
-$$;
 
-create or replace function public.get_tabular_reviews_overview(
-  p_user_id text,
-  p_user_email text default null,
-  p_project_id text default null
-)
-returns table (
-  id uuid,
-  project_id uuid,
-  user_id text,
-  title text,
-  columns_config jsonb,
-  document_ids jsonb,
-  workflow_id uuid,
-  created_at timestamptz,
-  updated_at timestamptz,
-  is_owner boolean,
-  access_role text,
-  document_count integer
-)
-language sql
-stable
-as $$
-  select *
-  from public.get_tabular_reviews_overview(
-    p_user_id, p_user_email, p_project_id, 'all', 2147483647, 0,
-    null, 'created', 'desc'
-  );
-$$;
+
+
 
 drop function if exists public.get_tabular_review_ids_overview(text, text, text, text, text, integer, integer);
 drop function if exists public.get_tabular_review_ids_overview(text, text, text, text, text, integer, integer, text);
-create or replace function public.get_tabular_review_ids_overview(
-  p_user_id text,
-  p_user_email text,
-  p_project_id text,
-  p_scope text,
-  p_search_term text,
-  p_limit integer,
-  p_offset integer,
-  p_workspace text default null,
-  p_owner_user_id text default null
-)
-returns table (
-  id uuid,
-  user_id text
-)
-language sql
-stable
-as $$
-  with accessible_projects as (
-    select p.id
-    from public.projects p
-    where public.project_access_role(
-      p.id, p.user_id, p.org_id, p_user_id, p_user_email
-    ) is not null
-  )
-  select tr.id, tr.user_id::text as user_id
-  from public.tabular_reviews tr
-  where (p_project_id is null or tr.project_id::text = p_project_id)
-    and public.workspace_matches(p_workspace, tr.org_id)
-    and (p_owner_user_id is null or tr.user_id::text = p_owner_user_id)
-    and (
-      coalesce(p_scope, 'all') = 'all'
-      or (p_scope = 'in-project' and tr.project_id is not null)
-      or (p_scope = 'standalone' and tr.project_id is null)
-    )
-    and (
-      p_search_term is null
-      or p_search_term = ''
-      or lower(tr.title) like
-        '%' ||
-        replace(
-          replace(
-            replace(lower(p_search_term), '\', '\\'),
-            '%',
-            '\%'
-          ),
-          '_',
-          '\_'
-        ) ||
-        '%'
-        escape '\'
-    )
-    and (
-      p_project_id is null
-      or exists (
-        select 1
-        from accessible_projects ap
-        where ap.id::text = p_project_id
-      )
-    )
-    and public.review_access_role(
-      tr.id, tr.user_id, tr.project_id, tr.org_id,
-      p_user_id, p_user_email
-    ) is not null
-  order by tr.created_at desc, tr.id asc
-  limit greatest(coalesce(p_limit, 1000), 1)
-  offset greatest(coalesce(p_offset, 0), 0);
-$$;
+
 
 create table if not exists public.tabular_review_chats (
   id uuid primary key default gen_random_uuid(),
@@ -3861,145 +3410,10 @@ as $$
 $$;
 
 drop function if exists public.get_project_filter_options(text, text);
-create or replace function public.get_project_filter_options(
-  p_user_id text,
-  p_user_email text default null,
-  p_workspace text default null
-)
-returns table (practices text[], owners jsonb)
-language sql
-stable
-as $$
-  with visible_projects as (
-    select p.user_id, nullif(trim(p.practice), '') as practice
-    from public.projects p
-    where public.project_access_role(
-      p.id, p.user_id, p.org_id, p_user_id, p_user_email
-    ) is not null
-      and public.workspace_matches(p_workspace, p.org_id)
-  ),
-  distinct_owners as (
-    -- NULL is not an owner. A project whose creator's account was deleted
-    -- carries user_id = NULL (on delete set null), and emitting it here put
-    -- an option with value null in the owner dropdown -- selecting which made
-    -- `p_owner_user_id is null or ...` true for EVERY row, so the filter
-    -- silently turned itself off instead of filtering.
-    select distinct vp.user_id
-    from visible_projects vp
-    where vp.user_id is not null
-  ),
-  owner_options as (
-    select
-      o.user_id,
-      case
-        when o.user_id::text = p_user_id then 'Me'
-        else coalesce(
-          nullif(trim(up.display_name), ''),
-          nullif(trim(up.email), ''),
-          'Shared'
-        )
-      end as label
-    from distinct_owners o
-    left join public.user_profiles up
-      on up.user_id::text = o.user_id::text
-  )
-  select
-    coalesce(
-      (select array_agg(distinct practice order by practice)
-       from visible_projects
-       where practice is not null),
-      array[]::text[]
-    ) as practices,
-    coalesce(
-      (select jsonb_agg(
-          jsonb_build_object('value', user_id, 'label', label)
-          order by label, user_id
-       ) from owner_options),
-      '[]'::jsonb
-    ) as owners;
-$$;
+
 
 drop function if exists public.get_workflow_filter_options(text, text, text, text);
-create or replace function public.get_workflow_filter_options(
-  p_user_id text,
-  p_user_email text default null,
-  p_type text default null,
-  p_scope text default 'all',
-  p_workspace text default null
-)
-returns table (
-  practices text[],
-  languages text[],
-  jurisdictions text[]
-)
-language sql
-stable
-as $$
-  with owned as (
-    select w.practice, w.language, w.jurisdictions, 'owned'::text as source
-    from public.workflows w
-    where w.user_id::text = p_user_id
-      and public.workflow_access_role(
-        w.id, w.user_id, w.org_id, p_user_id, p_user_email
-      ) is not null
-      and (p_type is null or w.type = p_type)
-      and public.workspace_matches(p_workspace, w.org_id)
-  ),
-  shared as (
-    select w.practice, w.language, w.jurisdictions, 'shared'::text as source
-    from public.workflow_shares ws
-    join public.workflows w on w.id = ws.workflow_id
-    where lower(ws.shared_with_email) = lower(coalesce(p_user_email, ''))
-      and w.org_id is null
-      and (p_type is null or w.type = p_type)
-      and public.workspace_matches(p_workspace, w.org_id)
-  ),
-  org_shared as (
-    -- Same org-membership arm as get_workflows_overview, including the
-    -- workflow_shares NOT EXISTS dedup, so a row visible via both routes
-    -- contributes its options exactly once. Tagged 'shared' to match the
-    -- overview's scope bucketing.
-    select w.practice, w.language, w.jurisdictions, 'shared'::text as source
-    from public.workflows w
-    where w.org_id is not null
-      and (w.user_id is null or w.user_id::text <> p_user_id)
-      and (p_type is null or w.type = p_type)
-      and public.workspace_matches(p_workspace, w.org_id)
-      and public.workflow_access_role(
-        w.id, w.user_id, w.org_id, p_user_id, p_user_email
-      ) is not null
-  ),
-  visible as (
-    select * from owned
-    union all
-    select * from shared
-    union all
-    select * from org_shared
-  ),
-  scoped as (
-    select * from visible
-    where coalesce(p_scope, 'all') = 'all' or source = p_scope
-  )
-  select
-    coalesce(
-      array_agg(distinct nullif(trim(practice), '') order by nullif(trim(practice), ''))
-        filter (where nullif(trim(practice), '') is not null),
-      array[]::text[]
-    ) as practices,
-    coalesce(
-      array_agg(distinct nullif(trim(language), '') order by nullif(trim(language), ''))
-        filter (where nullif(trim(language), '') is not null),
-      array[]::text[]
-    ) as languages,
-    coalesce(
-      (select array_agg(distinct jurisdiction order by jurisdiction)
-       from scoped s
-       cross join lateral unnest(coalesce(s.jurisdictions, array[]::text[])) jurisdiction
-       where nullif(trim(jurisdiction), '') is not null),
-      array[]::text[]
-    ) as jurisdictions
-  from scoped;
-$$;
+
 
 create index if not exists document_versions_filename_trgm_idx
   on public.document_versions using gin (lower(filename) gin_trgm_ops)
@@ -4037,167 +3451,7 @@ create index if not exists projects_updated_at_idx
   on public.projects(updated_at desc, id);
 
 drop function if exists public.get_projects_overview(text, text, text, integer, integer, text, text, text, text, text);
-create or replace function public.get_projects_overview(
-  p_user_id text,
-  p_user_email text,
-  p_scope text,
-  p_limit integer,
-  p_offset integer,
-  p_search_term text,
-  p_sort_key text,
-  p_sort_direction text,
-  p_practice text,
-  p_owner_user_id text,
-  p_workspace text default null
-)
-returns table (
-  id uuid,
-  user_id text,
-  org_id uuid,
-  access_scope text,
-  organization_name text,
-  name text,
-  cm_number text,
-  practice text,
-  created_at timestamptz,
-  updated_at timestamptz,
-  is_owner boolean,
-  owner_display_name text,
-  owner_email text,
-  access_role text,
-  document_count integer,
-  chat_count integer,
-  review_count integer
-)
-language sql
-stable
-as $$
-  with visible_projects as (
-    select p.*
-    from public.projects p
-    where public.project_access_role(
-        p.id, p.user_id, p.org_id, p_user_id, p_user_email
-      ) is not null
-      and public.workspace_matches(p_workspace, p.org_id)
-      and (
-        coalesce(p_scope, 'all') = 'all'
-        or (p_scope = 'mine' and p.user_id::text = p_user_id)
-        or (p_scope = 'shared' and (p.user_id is null or p.user_id::text <> p_user_id))
-        or (
-          p_scope = 'collaborative'
-          and (
-            p.user_id is null
-            or p.user_id::text <> p_user_id
-            or public.project_access_scope(p.id, p.org_id, p.visibility) <> 'private'
-          )
-        )
-        or (
-          p_scope = 'private'
-          and p.user_id::text = p_user_id
-          and public.project_access_scope(p.id, p.org_id, p.visibility) = 'private'
-        )
-        -- The Public and Private tabs: public is open to the whole
-        -- organization; everything else, shared with individuals or not, is
-        -- private.
-        or (
-          p_scope = 'public'
-          and public.project_access_scope(p.id, p.org_id, p.visibility) = 'organization'
-        )
-        or (
-          p_scope = 'nonpublic'
-          and public.project_access_scope(p.id, p.org_id, p.visibility) <> 'organization'
-        )
-      )
-      and (
-        p_search_term is null
-        or p_search_term = ''
-        or lower(coalesce(p.name, '')) like
-          '%' || replace(replace(replace(lower(p_search_term), '\', '\\'), '%', '\%'), '_', '\_') || '%'
-          escape '\'
-        or lower(coalesce(p.cm_number, '')) like
-          '%' || replace(replace(replace(lower(p_search_term), '\', '\\'), '%', '\%'), '_', '\_') || '%'
-          escape '\'
-        or lower(coalesce(p.practice, '')) like
-          '%' || replace(replace(replace(lower(p_search_term), '\', '\\'), '%', '\%'), '_', '\_') || '%'
-          escape '\'
-      )
-      and (p_practice is null or p.practice = p_practice)
-      and (p_owner_user_id is null or p.user_id::text = p_owner_user_id)
-  ),
-  document_counts as (
-    select d.project_id, count(*)::integer as document_count
-    from public.documents d
-    where d.project_id in (select vp.id from visible_projects vp)
-    group by d.project_id
-  ),
-  chat_counts as (
-    select c.project_id, count(*)::integer as chat_count
-    from public.chats c
-    where c.project_id in (select vp.id from visible_projects vp)
-    group by c.project_id
-  ),
-  review_counts as (
-    select tr.project_id, count(*)::integer as review_count
-    from public.tabular_reviews tr
-    where tr.project_id in (select vp.id from visible_projects vp)
-    group by tr.project_id
-  )
-  select
-    vp.id,
-    vp.user_id::text as user_id,
-    vp.org_id,
-    public.project_access_scope(vp.id, vp.org_id, vp.visibility) as access_scope,
-    (
-      select nullif(trim(o.name), '')
-      from public.organizations o
-      where o.id = vp.org_id
-    ) as organization_name,
-    vp.name,
-    vp.cm_number,
-    vp.practice,
-    vp.created_at,
-    vp.updated_at,
-    coalesce(vp.user_id::text = p_user_id, false) as is_owner,
-    nullif(trim(up.display_name), '') as owner_display_name,
-    -- Populated at last. The column has always been declared and always
-    -- returned NULL, so the UI's "ask the project admin" line had no address
-    -- to render and silently collapsed to nothing.
-    up.email as owner_email,
-    public.project_access_role(
-      vp.id, vp.user_id, vp.org_id, p_user_id, p_user_email
-    ) as access_role,
-    coalesce(dc.document_count, 0) as document_count,
-    coalesce(cc.chat_count, 0) as chat_count,
-    coalesce(rc.review_count, 0) as review_count
-  from visible_projects vp
-  left join public.user_profiles up
-    on up.user_id::text = vp.user_id::text
-  left join document_counts dc
-    on dc.project_id = vp.id
-  left join chat_counts cc
-    on cc.project_id = vp.id
-  left join review_counts rc
-    on rc.project_id = vp.id
-  order by
-    case when p_sort_key = 'name' and p_sort_direction = 'asc' then lower(coalesce(vp.name, '')) else null end asc,
-    case when p_sort_key = 'name' and p_sort_direction = 'desc' then lower(coalesce(vp.name, '')) else null end desc,
-    case when p_sort_key = 'cm' and p_sort_direction = 'asc' then lower(coalesce(vp.cm_number, '')) else null end asc,
-    case when p_sort_key = 'cm' and p_sort_direction = 'desc' then lower(coalesce(vp.cm_number, '')) else null end desc,
-    case when p_sort_key = 'files' and p_sort_direction = 'asc' then coalesce(dc.document_count, 0) else null end asc,
-    case when p_sort_key = 'files' and p_sort_direction = 'desc' then coalesce(dc.document_count, 0) else null end desc,
-    case when p_sort_key = 'chats' and p_sort_direction = 'asc' then coalesce(cc.chat_count, 0) else null end asc,
-    case when p_sort_key = 'chats' and p_sort_direction = 'desc' then coalesce(cc.chat_count, 0) else null end desc,
-    case when p_sort_key = 'reviews' and p_sort_direction = 'asc' then coalesce(rc.review_count, 0) else null end asc,
-    case when p_sort_key = 'reviews' and p_sort_direction = 'desc' then coalesce(rc.review_count, 0) else null end desc,
-    case when p_sort_key = 'created' and p_sort_direction = 'asc' then vp.created_at else null end asc,
-    case when p_sort_key = 'created' and p_sort_direction = 'desc' then vp.created_at else null end desc,
-    case when p_sort_key = 'updated' and p_sort_direction = 'asc' then vp.updated_at else null end asc,
-    case when p_sort_key = 'updated' and p_sort_direction = 'desc' then vp.updated_at else null end desc,
-    vp.created_at desc,
-    vp.id asc
-  limit greatest(coalesce(p_limit, 20), 1)
-  offset greatest(coalesce(p_offset, 0), 0);
-$$;
+
 
 -- Lightweight companion for bulk "select all matching" actions — id + owning
 -- user only, no count joins. Duplicates visible_projects' predicate rather
@@ -4210,78 +3464,7 @@ $$;
 -- row cap on every RPC response and truncates silently rather than erroring;
 -- backend/src/routes/projects.ts pages through this on the caller's behalf.
 drop function if exists public.get_project_ids_overview(text, text, text, text, text, text, integer, integer);
-create or replace function public.get_project_ids_overview(
-  p_user_id text,
-  p_user_email text,
-  p_scope text,
-  p_search_term text,
-  p_practice text,
-  p_owner_user_id text,
-  p_limit integer,
-  p_offset integer,
-  p_workspace text default null
-)
-returns table (
-  id uuid,
-  user_id text
-)
-language sql
-stable
-as $$
-  select p.id, p.user_id::text as user_id
-  from public.projects p
-  where public.project_access_role(
-      p.id, p.user_id, p.org_id, p_user_id, p_user_email
-    ) is not null
-    and public.workspace_matches(p_workspace, p.org_id)
-    and (
-      coalesce(p_scope, 'all') = 'all'
-      or (p_scope = 'mine' and p.user_id::text = p_user_id)
-      or (p_scope = 'shared' and (p.user_id is null or p.user_id::text <> p_user_id))
-      or (
-        p_scope = 'collaborative'
-        and (
-          p.user_id is null
-          or p.user_id::text <> p_user_id
-          or public.project_access_scope(p.id, p.org_id, p.visibility) <> 'private'
-        )
-      )
-      or (
-        p_scope = 'private'
-        and p.user_id::text = p_user_id
-        and public.project_access_scope(p.id, p.org_id, p.visibility) = 'private'
-      )
-      -- The Public and Private tabs: public is open to the whole
-      -- organization; everything else, shared with individuals or not, is
-      -- private.
-      or (
-        p_scope = 'public'
-        and public.project_access_scope(p.id, p.org_id, p.visibility) = 'organization'
-      )
-      or (
-        p_scope = 'nonpublic'
-        and public.project_access_scope(p.id, p.org_id, p.visibility) <> 'organization'
-      )
-    )
-    and (
-      p_search_term is null
-      or p_search_term = ''
-      or lower(coalesce(p.name, '')) like
-        '%' || replace(replace(replace(lower(p_search_term), '\', '\\'), '%', '\%'), '_', '\_') || '%'
-        escape '\'
-      or lower(coalesce(p.cm_number, '')) like
-        '%' || replace(replace(replace(lower(p_search_term), '\', '\\'), '%', '\%'), '_', '\_') || '%'
-        escape '\'
-      or lower(coalesce(p.practice, '')) like
-        '%' || replace(replace(replace(lower(p_search_term), '\', '\\'), '%', '\%'), '_', '\_') || '%'
-        escape '\'
-    )
-    and (p_practice is null or p.practice = p_practice)
-    and (p_owner_user_id is null or p.user_id::text = p_owner_user_id)
-  order by p.created_at desc, p.id asc
-  limit greatest(coalesce(p_limit, 1000), 1)
-  offset greatest(coalesce(p_offset, 0), 0);
-$$;
+
 
 -- ============================================================================
 -- Workflows overview pagination
@@ -4306,171 +3489,7 @@ create index if not exists workflows_jurisdictions_gin_idx
 -- grants and organization access, including resources created by the caller.
 -- This RPC never includes system workflows.
 drop function if exists public.get_workflows_overview(text, text, text, text, integer, integer, text, text, text, text, text, text);
-create or replace function public.get_workflows_overview(
-  p_user_id text,
-  p_user_email text,
-  p_type text,
-  p_scope text,
-  p_limit integer,
-  p_offset integer,
-  p_search_term text,
-  p_sort_key text,
-  p_sort_direction text,
-  p_practice text,
-  p_language text,
-  p_jurisdiction text,
-  p_workspace text default null
-)
-returns table (
-  id uuid,
-  user_id text,
-  org_id uuid,
-  access_scope text,
-  organization_name text,
-  title text,
-  type text,
-  prompt_md text,
-  columns_config jsonb,
-  language text,
-  practice text,
-  jurisdictions text[],
-  is_system boolean,
-  created_at timestamptz,
-  allow_edit boolean,
-  is_owner boolean,
-  shared_by_name text
-)
-language sql
-stable
-as $$
-  with owned as (
-    select
-      w.id, w.user_id::text as user_id, w.org_id,
-      public.workflow_access_scope(w.id, w.org_id, w.visibility) as access_scope,
-      (
-        select nullif(trim(o.name), '')
-        from public.organizations o
-        where o.id = w.org_id
-      ) as organization_name,
-      w.title, w.type, w.prompt_md,
-      w.columns_config, w.language, w.practice, w.jurisdictions,
-      false as is_system, w.created_at,
-      true as allow_edit, true as is_owner, null::text as shared_by_name,
-      0 as sort_bucket
-    from public.workflows w
-    where w.user_id::text = p_user_id
-      and public.workflow_access_role(
-        w.id, w.user_id, w.org_id, p_user_id, p_user_email
-      ) is not null
-      and (p_type is null or w.type = p_type)
-      and public.workspace_matches(p_workspace, w.org_id)
-  ),
-  shared as (
-    select
-      w.id, w.user_id::text as user_id, w.org_id,
-      'shared'::text as access_scope, null::text as organization_name,
-      w.title, w.type, w.prompt_md,
-      w.columns_config, w.language, w.practice, w.jurisdictions,
-      false as is_system, w.created_at,
-      (ws.role in ('owner', 'editor')) as allow_edit,
-      (ws.role = 'owner') as is_owner,
-      nullif(trim(up.display_name), '') as shared_by_name,
-      1 as sort_bucket
-    from public.workflow_shares ws
-    join public.workflows w
-      on w.id = ws.workflow_id
-    left join public.user_profiles up
-      on up.user_id::text = ws.shared_by_user_id::text
-    where lower(ws.shared_with_email) = lower(coalesce(p_user_email, ''))
-      and w.org_id is null
-      and (p_type is null or w.type = p_type)
-      and public.workspace_matches(p_workspace, w.org_id)
-  ),
-  org_shared as (
-    -- Workflows in an org the caller belongs to. Admins default to Owner and
-    -- Members default to Editor; per-workflow overrides may narrow either.
-    -- Mirrors resolveWorkflowAccess in routes/workflows.ts and the legacy
-    -- 3-argument overload. Under the scope filter these rows count as
-    -- "shared" — shared-with-me and shared-via-my-org are one bucket from
-    -- the caller's point of view.
-    select
-      w.id, w.user_id::text as user_id, w.org_id,
-      public.workflow_access_scope(w.id, w.org_id, w.visibility) as access_scope,
-      (
-        select nullif(trim(o.name), '')
-        from public.organizations o
-        where o.id = w.org_id
-      ) as organization_name,
-      w.title, w.type, w.prompt_md,
-      w.columns_config, w.language, w.practice, w.jurisdictions,
-      false as is_system, w.created_at,
-      (public.workflow_access_role(
-        w.id, w.user_id, w.org_id, p_user_id, p_user_email
-      ) in ('owner', 'editor')) as allow_edit,
-      (public.workflow_access_role(
-        w.id, w.user_id, w.org_id, p_user_id, p_user_email
-      ) = 'owner') as is_owner,
-      nullif(trim(up.display_name), '') as shared_by_name,
-      2 as sort_bucket
-    from public.workflows w
-    left join public.user_profiles up
-      on up.user_id::text = w.user_id::text
-    where w.org_id is not null
-      and (w.user_id is null or w.user_id::text <> p_user_id)
-      and (p_type is null or w.type = p_type)
-      and public.workspace_matches(p_workspace, w.org_id)
-      and public.workflow_access_role(
-        w.id, w.user_id, w.org_id, p_user_id, p_user_email
-      ) is not null
-  ),
-  visible_workflows as (
-    select * from owned
-    union all
-    select * from shared
-    union all
-    select * from org_shared
-  )
-  select
-    vw.id, vw.user_id, vw.org_id, vw.access_scope, vw.organization_name,
-    vw.title, vw.type, vw.prompt_md, vw.columns_config,
-    vw.language, vw.practice, vw.jurisdictions, vw.is_system, vw.created_at,
-    vw.allow_edit, vw.is_owner, vw.shared_by_name
-  from visible_workflows vw
-  where (
-      coalesce(p_scope, 'all') = 'all'
-      or (p_scope = 'owned' and vw.sort_bucket = 0)
-      or (p_scope = 'shared' and vw.sort_bucket in (1, 2))
-      or (p_scope = 'private' and vw.access_scope = 'private')
-      or (
-        p_scope = 'collaborative'
-        and vw.access_scope in ('shared', 'organization')
-      )
-      or (p_scope = 'public' and vw.access_scope = 'organization')
-      or (p_scope = 'nonpublic' and vw.access_scope <> 'organization')
-    )
-    and (
-      p_search_term is null
-      or p_search_term = ''
-      or lower(vw.title) like
-        '%' || replace(replace(replace(lower(p_search_term), '\', '\\'), '%', '\%'), '_', '\_') || '%'
-        escape '\'
-    )
-    and (p_practice is null or vw.practice = p_practice)
-    and (p_language is null or vw.language = p_language)
-    and (p_jurisdiction is null or vw.jurisdictions @> array[p_jurisdiction])
-  order by
-    case when p_sort_key = 'name' and p_sort_direction = 'asc' then lower(coalesce(vw.title, '')) else null end asc,
-    case when p_sort_key = 'name' and p_sort_direction = 'desc' then lower(coalesce(vw.title, '')) else null end desc,
-    case when p_sort_key = 'type' and p_sort_direction = 'asc' then vw.type else null end asc,
-    case when p_sort_key = 'type' and p_sort_direction = 'desc' then vw.type else null end desc,
-    case when p_sort_key = 'created' and p_sort_direction = 'asc' then vw.created_at else null end asc,
-    case when p_sort_key = 'created' and p_sort_direction = 'desc' then vw.created_at else null end desc,
-    vw.sort_bucket asc,
-    vw.created_at desc,
-    vw.id asc
-  limit greatest(coalesce(p_limit, 20), 1)
-  offset greatest(coalesce(p_offset, 0), 0);
-$$;
+
 
 -- Lightweight companion for bulk "select all matching" actions (owned
 -- workflows only — see the route/hook layer; shared workflows are excluded
@@ -4480,144 +3499,13 @@ $$;
 -- get_workflows_overview, same rationale as get_project_ids_overview: no
 -- need for the shared-by-name join when the caller only wants ids.
 drop function if exists public.get_workflow_ids_overview(text, text, text, text, text, text, text, text, integer, integer);
-create or replace function public.get_workflow_ids_overview(
-  p_user_id text,
-  p_user_email text,
-  p_type text,
-  p_scope text,
-  p_search_term text,
-  p_practice text,
-  p_language text,
-  p_jurisdiction text,
-  p_limit integer,
-  p_offset integer,
-  p_workspace text default null
-)
-returns table (
-  id uuid,
-  user_id text
-)
-language sql
-stable
-as $$
-  with owned as (
-    select
-      w.id, w.user_id::text as user_id,
-      public.workflow_access_scope(w.id, w.org_id, w.visibility) as access_scope,
-      w.title, w.practice, w.language, w.jurisdictions,
-      w.created_at, 0 as sort_bucket
-    from public.workflows w
-    where w.user_id::text = p_user_id
-      and public.workflow_access_role(
-        w.id, w.user_id, w.org_id, p_user_id, p_user_email
-      ) is not null
-      and (p_type is null or w.type = p_type)
-      and public.workspace_matches(p_workspace, w.org_id)
-  ),
-  shared as (
-    select
-      w.id, w.user_id::text as user_id, 'shared'::text as access_scope,
-      w.title, w.practice, w.language, w.jurisdictions,
-      w.created_at, 1 as sort_bucket
-    from public.workflow_shares ws
-    join public.workflows w
-      on w.id = ws.workflow_id
-    where lower(ws.shared_with_email) = lower(coalesce(p_user_email, ''))
-      and w.org_id is null
-      and (p_type is null or w.type = p_type)
-      and public.workspace_matches(p_workspace, w.org_id)
-  ),
-  org_shared as (
-    -- Same org-membership arm as get_workflows_overview: the ids RPC must
-    -- compute the same visible set, or "select all matching" silently
-    -- omits org-shared rows the list view shows.
-    select
-      w.id, w.user_id::text as user_id, public.workflow_access_scope(w.id, w.org_id, w.visibility) as access_scope,
-      w.title, w.practice, w.language, w.jurisdictions,
-      w.created_at, 2 as sort_bucket
-    from public.workflows w
-    where w.org_id is not null
-      and (w.user_id is null or w.user_id::text <> p_user_id)
-      and (p_type is null or w.type = p_type)
-      and public.workspace_matches(p_workspace, w.org_id)
-      and public.workflow_access_role(
-        w.id, w.user_id, w.org_id, p_user_id, p_user_email
-      ) is not null
-  ),
-  visible_workflows as (
-    select * from owned
-    union all
-    select * from shared
-    union all
-    select * from org_shared
-  )
-  select vw.id, vw.user_id
-  from visible_workflows vw
-  where (
-      coalesce(p_scope, 'all') = 'all'
-      or (p_scope = 'owned' and vw.sort_bucket = 0)
-      or (p_scope = 'shared' and vw.sort_bucket in (1, 2))
-      or (p_scope = 'private' and vw.access_scope = 'private')
-      or (
-        p_scope = 'collaborative'
-        and vw.access_scope in ('shared', 'organization')
-      )
-      or (p_scope = 'public' and vw.access_scope = 'organization')
-      or (p_scope = 'nonpublic' and vw.access_scope <> 'organization')
-    )
-    and (
-      p_search_term is null
-      or p_search_term = ''
-      or lower(vw.title) like
-        '%' || replace(replace(replace(lower(p_search_term), '\', '\\'), '%', '\%'), '_', '\_') || '%'
-        escape '\'
-    )
-    and (p_practice is null or vw.practice = p_practice)
-    and (p_language is null or vw.language = p_language)
-    and (p_jurisdiction is null or vw.jurisdictions @> array[p_jurisdiction])
-  order by vw.sort_bucket asc, vw.created_at desc, vw.id asc
-  limit greatest(coalesce(p_limit, 1000), 1)
-  offset greatest(coalesce(p_offset, 0), 0);
-$$;
+
 
 -- Lightweight sidebar project feed. The Projects overview RPC intentionally
 -- computes file/chat/review counts for table sorting; the sidebar needs none
 -- of those aggregates.
 drop function if exists public.get_project_summaries(text, text, integer, integer);
-create or replace function public.get_project_summaries(
-  p_user_id text,
-  p_user_email text,
-  p_limit integer,
-  p_offset integer,
-  p_workspace text default null
-)
-returns table (
-  id uuid,
-  user_id text,
-  name text,
-  created_at timestamptz,
-  updated_at timestamptz,
-  is_owner boolean
-)
-language sql
-stable
-as $$
-  select
-    p.id,
-    p.user_id::text as user_id,
-    p.name,
-    p.created_at,
-    p.updated_at,
-    coalesce(p.user_id::text = p_user_id, false) as is_owner
-  from public.projects p
-  where public.project_access_role(
-    p.id, p.user_id, p.org_id, p_user_id, p_user_email
-  ) is not null
-    and public.workspace_matches(p_workspace, p.org_id)
-  order by p.updated_at desc, p.created_at desc, p.id asc
-  limit greatest(coalesce(p_limit, 11), 1)
-  offset greatest(coalesce(p_offset, 0), 0);
-$$;
+
 
 -- ID-only Library query for select-all and bulk actions. This mirrors the
 -- flat Library search predicate without returning document/version payloads.
@@ -5467,6 +4355,147 @@ create table if not exists public.audit_events (
 create index if not exists audit_events_user_created on public.audit_events (user_id, created_at desc);
 create index if not exists audit_events_project_created on public.audit_events (project_id, created_at desc);
 alter table public.audit_events enable row level security;
+
+-- Continuously saved playbooks, with a content snapshot retained on each review.
+create table if not exists public.playbooks (
+  id uuid primary key default gen_random_uuid(),
+  user_id uuid not null references auth.users(id) on delete cascade,
+  org_id uuid references public.organizations(id) on delete cascade,
+  visibility text not null default 'private',
+  name text not null,
+  description text not null default '',
+  content_json jsonb not null,
+  source_filename text,
+  source_storage_key text,
+  import_model text,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now(),
+  constraint playbooks_visibility_check check (visibility in ('private', 'organization') and
+    (org_id is not null or visibility = 'private'))
+);
+create index if not exists idx_playbooks_user_updated on public.playbooks(user_id, updated_at desc);
+create index if not exists idx_playbooks_org_updated on public.playbooks(org_id, updated_at desc);
+alter table public.playbooks enable row level security;
+
+create table if not exists public.playbook_runs (
+  id uuid primary key default gen_random_uuid(),
+  playbook_id uuid not null references public.playbooks(id) on delete cascade,
+  content_json jsonb not null,
+  -- The stored document reviewed, and the version holding its tracked changes.
+  document_id uuid references public.documents(id) on delete set null,
+  edited_version_id uuid references public.document_versions(id) on delete set null,
+  user_id uuid not null references auth.users(id) on delete cascade,
+  model text not null,
+  document_name text,
+  review_mode text not null,
+  -- "issues" reported only what needs attention; "full" reviewed every rule.
+  review_scope text not null default 'full'
+    constraint playbook_runs_review_scope_check check (review_scope in ('full', 'issues')),
+  status text not null,
+  summary text,
+  findings_json jsonb,
+  error text,
+  started_at timestamptz not null,
+  completed_at timestamptz,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now()
+);
+create index if not exists idx_playbook_runs_playbook_started
+  on public.playbook_runs(playbook_id, started_at desc);
+create index if not exists idx_playbook_runs_document on public.playbook_runs(document_id);
+create index if not exists idx_playbook_runs_user_started
+  on public.playbook_runs(user_id, started_at desc);
+alter table public.playbook_runs enable row level security;
+
+create table if not exists public.playbook_imports (
+  id uuid primary key default gen_random_uuid(),
+  user_id uuid not null references auth.users(id) on delete cascade,
+  filename text not null,
+  requested_name text,
+  model text not null,
+  status text not null,
+  stage text not null,
+  error text,
+  playbook_id uuid references public.playbooks(id) on delete set null,
+  started_at timestamptz not null,
+  completed_at timestamptz,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now(),
+  org_id uuid references public.organizations(id) on delete cascade,
+  -- A replacement's target version: the playbook's updated_at when the
+  -- import began. The compiled content is saved only over that version.
+  target_updated_at timestamptz
+);
+create index if not exists idx_playbook_imports_user_started
+  on public.playbook_imports(user_id, started_at desc);
+create index if not exists idx_playbook_imports_user_status
+  on public.playbook_imports(user_id, status, started_at desc);
+-- Content writes are refused while a replacement of the playbook runs.
+create index if not exists idx_playbook_imports_running_playbook
+  on public.playbook_imports(playbook_id)
+  where status = 'running';
+alter table public.playbook_imports enable row level security;
+
+-- Supplementary documents a playbook's rules can refer to: copies the
+-- playbook owns. The imported Word file stays on public.playbooks.
+create table if not exists public.playbook_sources (
+  id uuid primary key default gen_random_uuid(),
+  playbook_id uuid not null references public.playbooks(id) on delete cascade,
+  filename text not null,
+  file_type text not null,
+  storage_key text not null,
+  size_bytes integer not null,
+  extracted_text text not null default '',
+  -- Lets a review list each document's length without loading its text.
+  text_length integer not null default 0,
+  created_by uuid references auth.users(id) on delete set null,
+  created_at timestamptz not null default now(),
+  constraint playbook_sources_file_type_check check (file_type in ('docx', 'pdf')),
+  constraint playbook_sources_size_check check (size_bytes > 0)
+);
+create index if not exists idx_playbook_sources_playbook_created
+  on public.playbook_sources(playbook_id, created_at);
+alter table public.playbook_sources enable row level security;
+
+-- Who a playbook is shared with: by email for a personal playbook, by member
+-- (including deny) for an organization's.
+create table if not exists public.playbook_shares (
+  id uuid primary key default gen_random_uuid(),
+  playbook_id uuid not null references public.playbooks(id) on delete cascade,
+  shared_by_user_id uuid references auth.users(id) on delete set null,
+  shared_with_email text not null,
+  role text not null default 'viewer'
+    check (role in ('owner', 'editor', 'viewer')),
+  created_at timestamptz not null default now(),
+  constraint playbook_shares_playbook_email_unique
+    unique (playbook_id, shared_with_email),
+  -- Canonical case, like workflow_shares: the unique constraint and the
+  -- access lookup must agree on who a recipient is.
+  constraint playbook_shares_email_lowercase
+    check (shared_with_email = lower(shared_with_email))
+);
+create index if not exists idx_playbook_shares_email
+  on public.playbook_shares(shared_with_email);
+
+create table if not exists public.playbook_org_access_overrides (
+  id uuid primary key default gen_random_uuid(),
+  playbook_id uuid not null references public.playbooks(id) on delete cascade,
+  org_id uuid not null references public.organizations(id) on delete cascade,
+  user_id uuid not null,
+  role text not null constraint playbook_org_access_overrides_role_check
+    check (role in ('owner', 'editor', 'viewer', 'deny')),
+  assigned_by uuid references auth.users(id) on delete set null,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now(),
+  unique (playbook_id, user_id),
+  -- Leaving the organization removes the grant.
+  foreign key (org_id, user_id)
+    references public.org_members(org_id, user_id) on delete cascade
+);
+create index if not exists idx_playbook_org_access_overrides_user
+  on public.playbook_org_access_overrides(user_id);
+alter table public.playbook_shares enable row level security;
+alter table public.playbook_org_access_overrides enable row level security;
 
 -- Durable, Postgres-backed background jobs (the "DB queue"): default-on
 -- at-least-once execution for audit trails, account deletion, storage
@@ -6685,10 +5714,64 @@ begin
 end;
 $$;
 
--- Account-level deletion is all-or-nothing and deliberately excludes every
--- organization project and every personal project with a direct grant.
+-- Migration date: 2026-11-01
+-- Batch form of wipe_memory_file for erasure loops (account and
+-- organization deletion), one round trip instead of one per file. Each id
+-- is wiped by wipe_memory_file itself, so locking, epoch/revision fencing,
+-- validation and errors are identical; ids are taken once each, in id
+-- order, so concurrent batches lock rows in the same order. The whole batch
+-- is one transaction: a missing id (memory_file_not_found, P0002) or an
+-- invalid source (22023) rolls back every wipe in it.
+create or replace function public.wipe_memory_files(
+  p_ids uuid[],
+  p_enabled boolean,
+  p_updated_by uuid default null,
+  p_source text default 'wipe'
+)
+returns table(
+  memory_file_id uuid,
+  new_epoch bigint,
+  new_revision bigint,
+  effective_enabled boolean,
+  mutation_at timestamptz,
+  mutation_by uuid
+)
+language plpgsql
+security definer
+set search_path = public, pg_temp
+as $$
+declare
+  file_id uuid;
+begin
+  if p_source is null or p_source not in ('wipe', 'settings') then
+    raise exception using errcode = '22023', message = 'invalid_memory_source';
+  end if;
+  for file_id in
+    select distinct requested.id from unnest(coalesce(p_ids, '{}'::uuid[])) requested(id)
+    order by requested.id
+  loop
+    return query
+      select file_id, wiped.new_epoch, wiped.new_revision, wiped.effective_enabled,
+        wiped.mutation_at, wiped.mutation_by
+      from public.wipe_memory_file(file_id, p_enabled, p_updated_by, p_source) wiped;
+  end loop;
+end;
+$$;
+revoke all on function public.wipe_memory_files(uuid[], boolean, uuid, text)
+  from public, anon, authenticated;
+grant execute on function public.wipe_memory_files(uuid[], boolean, uuid, text)
+  to service_role;
+
+-- Settings' "Delete all memory" clears one workspace. With p_org_id null that
+-- is Personal: the person's Personal memory and the memories of the private
+-- projects they created, all-or-nothing, excluding every organization project
+-- and every personal project with a direct grant. With an organization it is
+-- only the person's own memory there; the organization's project memories
+-- are its own, cleared from its Privacy & Data settings.
+drop function if exists public.delete_user_private_memories(uuid);
 create or replace function public.delete_user_private_memories(
-  p_user_id uuid
+  p_user_id uuid,
+  p_org_id uuid default null
 )
 returns integer
 language plpgsql
@@ -6699,6 +5782,21 @@ declare
   target record;
   deleted_projects integer := 0;
 begin
+  if p_org_id is not null then
+    -- One file per person per workspace; none for a non-member, since the
+    -- file is tied to the membership.
+    for target in
+      select file.id
+      from public.memory_files file
+      where file.scope = 'user'
+        and file.user_id = p_user_id
+        and file.org_id = p_org_id
+    loop
+      perform public.wipe_memory_file(target.id, null, p_user_id, 'wipe');
+    end loop;
+    return 0;
+  end if;
+
   -- Lock the caller's own private projects rather than the whole table.
   -- FOR UPDATE on a project row blocks both a move into an organization (an
   -- UPDATE of that row) and a new access grant (the grant's foreign key takes
@@ -6718,11 +5816,13 @@ begin
   for target in
     select eligible.id, eligible.scope
     from (
-      -- Every memory that is this person's own: Personal, and the one
-      -- they have in each organization they belong to.
+      -- The person's Personal memory. Their memory in each organization is
+      -- that workspace's, deleted from it.
       select file.id, file.scope
       from public.memory_files file
-      where file.scope = 'user' and file.user_id = p_user_id
+      where file.scope = 'user'
+        and file.user_id = p_user_id
+        and file.org_id is null
       union all
       select file.id, file.scope
       from public.memory_files file
@@ -7352,6 +6452,11 @@ begin
       select w.org_id, w.user_id, w.visibility, w.archived_at
         into resource_org_id, resource_creator_id, resource_visibility, archived
       from public.workflows w where w.id = new.workflow_id for update;
+    when 'playbook_org_access_overrides' then
+      -- Playbooks are never archived.
+      select b.org_id, b.user_id, b.visibility, null::timestamptz
+        into resource_org_id, resource_creator_id, resource_visibility, archived
+      from public.playbooks b where b.id = new.playbook_id for update;
     else
       raise exception 'Unsupported organization override table';
   end case;
@@ -7392,6 +6497,9 @@ create trigger project_org_access_overrides_guard before insert or update
 create trigger workflow_org_access_overrides_guard before insert or update
   on public.workflow_org_access_overrides for each row
   execute procedure public.validate_org_access_override();
+create trigger playbook_org_access_overrides_guard before insert or update
+  on public.playbook_org_access_overrides for each row
+  execute procedure public.validate_org_access_override();
 
 -- An organization Owner owns every PUBLIC item, implicitly and immutably.
 -- Remove any former override on one when somebody is promoted to owner, so
@@ -7414,6 +6522,10 @@ begin
     using public.workflows w
     where o.org_id = new.org_id and o.user_id = new.user_id
       and w.id = o.workflow_id and w.visibility = 'organization';
+    delete from public.playbook_org_access_overrides o
+    using public.playbooks b
+    where o.org_id = new.org_id and o.user_id = new.user_id
+      and b.id = o.playbook_id and b.visibility = 'organization';
   end if;
   return new;
 end;
@@ -7494,7 +6606,6 @@ returns table(document_id uuid) language sql stable set search_path = public as 
       or exists (select 1 from public.tabular_review_row_sources s join public.tabular_review_rows r on r.id=s.row_id
         where r.review_id=p_item_id and s.document_id=d.id)));
 $$;
-
 
 create or replace function public.org_members_departure_items(p_org_id uuid,p_user_ids uuid[])
 returns table(kind text,item_id uuid,title text,disposition text)
@@ -7799,6 +6910,12 @@ revoke all on public.courtlistener_citation_index from anon, authenticated;
 revoke all on public.courtlistener_opinion_cluster_index from anon, authenticated;
 revoke all on public.audit_events from anon, authenticated;
 revoke all on public.db_jobs from anon, authenticated;
+revoke all on public.playbooks from anon, authenticated;
+revoke all on public.playbook_runs from anon, authenticated;
+revoke all on public.playbook_imports from anon, authenticated;
+revoke all on public.playbook_sources from anon, authenticated;
+revoke all on public.playbook_shares from anon, authenticated;
+revoke all on public.playbook_org_access_overrides from anon, authenticated;
 revoke all on public.memory_files from anon, authenticated;
 revoke all on public.memory_consolidation_states from anon, authenticated;
 revoke all on public.memory_conversation_activity from anon, authenticated;
@@ -7836,7 +6953,7 @@ revoke all on function public.write_memory_file(uuid, bigint, bigint, text, text
   from public, anon, authenticated;
 revoke all on function public.wipe_memory_file(uuid, boolean, uuid, text)
   from public, anon, authenticated;
-revoke all on function public.delete_user_private_memories(uuid)
+revoke all on function public.delete_user_private_memories(uuid, uuid)
   from public, anon, authenticated;
 revoke all on function public.append_chat_assistant_events(uuid, uuid, uuid, jsonb, jsonb)
   from public, anon, authenticated;
@@ -7954,7 +7071,7 @@ grant execute
   on function public.wipe_memory_file(uuid, boolean, uuid, text)
   to service_role;
 grant execute
-  on function public.delete_user_private_memories(uuid)
+  on function public.delete_user_private_memories(uuid, uuid)
   to service_role;
 grant execute
   on function public.append_chat_assistant_events(uuid, uuid, uuid, jsonb, jsonb)
@@ -8065,6 +7182,40 @@ create trigger document_version_cleanup
 after delete or update of storage_path, pdf_storage_path, deleted_at, content_sha256
 on public.document_versions for each row
 execute function public.queue_document_version_cleanup();
+
+-- Migration date: 2026-10-17
+-- Retire owned files atomically with their rows, including account and
+-- organization cascades. The existing storage worker retries failed deletes.
+create or replace function public.queue_playbook_storage_cleanup()
+returns trigger
+language plpgsql security definer set search_path = ''
+as $$
+declare
+  v_key text := to_jsonb(old)->>tg_argv[0];
+begin
+  if v_key is null or v_key = '' then return null; end if;
+  if tg_op = 'UPDATE' then
+    if v_key is not distinct from (to_jsonb(new)->>tg_argv[0]) then
+      return null;
+    end if;
+  end if;
+  insert into public.db_jobs(kind, payload, max_attempts)
+    values ('storage.cleanup', jsonb_build_object('keys', jsonb_build_array(v_key)), 8);
+  return null;
+end;
+$$;
+revoke all on function public.queue_playbook_storage_cleanup() from public, anon, authenticated;
+grant execute on function public.queue_playbook_storage_cleanup() to service_role;
+
+drop trigger if exists playbook_storage_cleanup on public.playbooks;
+create trigger playbook_storage_cleanup
+after delete or update of source_storage_key on public.playbooks
+for each row execute function public.queue_playbook_storage_cleanup('source_storage_key');
+
+drop trigger if exists playbook_source_storage_cleanup on public.playbook_sources;
+create trigger playbook_source_storage_cleanup
+after delete or update of storage_key on public.playbook_sources
+for each row execute function public.queue_playbook_storage_cleanup('storage_key');
 
 -- Authorization remains with the calling service. These are service-role-only
 -- persistence primitives; a parent lock serializes number allocation and
@@ -8233,24 +7384,43 @@ as $$
        and kind not in ('storage.cleanup', 'document.cleanup')
     returning id
   ), candidates as (
-    select id
-      from public.db_jobs
-     where (p_kind is null or kind = p_kind)
-       and ((status = 'pending' and run_at <= now())
-        -- Cleanup intents are retried forever, but politely: a revived
-        -- `failed` row waits for its own run_at like everything else.
-        or (status = 'failed'
-            and kind in ('storage.cleanup', 'document.cleanup')
-            and run_at <= now())
-        or (status = 'running'
-            and claimed_at < now() - make_interval(secs => p_stale_seconds)
-            and (
-              attempts < max_attempts
-              or kind in ('storage.cleanup', 'document.cleanup')
-            )))
-     order by run_at
-     limit p_limit
-       for update skip locked
+    -- One arm per way a row can be claimable, each read in run_at order
+    -- from its own partial index and stopped after p_limit unlocked rows,
+    -- then merged. A single OR of the three conditions could use no index
+    -- order, so every tick read and sorted every due row. Arms are disjoint
+    -- (by status, and by whether p_kind is given; that test is a one-time
+    -- filter). Each arm may lock up to p_limit rows it then does not claim;
+    -- those stay locked only until this statement's transaction ends.
+    select arms.id from (
+      select * from (select id,run_at from public.db_jobs
+        where p_kind is null and status = 'pending' and run_at <= now()
+        order by run_at limit p_limit for update skip locked) pending_any
+      union all
+      select * from (select id,run_at from public.db_jobs
+        where kind = p_kind and status = 'pending' and run_at <= now()
+        order by run_at limit p_limit for update skip locked) pending_kind
+      -- Cleanup intents are retried forever, but politely: a revived
+      -- `failed` row waits for its own run_at like everything else.
+      union all
+      select * from (select id,run_at from public.db_jobs
+        where status = 'failed'
+          and kind in ('storage.cleanup', 'document.cleanup')
+          and run_at <= now()
+          and (p_kind is null or kind = p_kind)
+        order by run_at limit p_limit for update skip locked) failed_cleanup
+      union all
+      select * from (select id,run_at from public.db_jobs
+        where status = 'running'
+          and claimed_at < now() - make_interval(secs => p_stale_seconds)
+          and (
+            attempts < max_attempts
+            or kind in ('storage.cleanup', 'document.cleanup')
+          )
+          and (p_kind is null or kind = p_kind)
+        order by run_at limit p_limit for update skip locked) stale_running
+    ) arms
+    order by arms.run_at
+    limit p_limit
   )
   update public.db_jobs j
      set status = 'running',
@@ -8284,8 +7454,9 @@ as $$
              then null
            else j.dedupe_key
          end
-    from candidates c
-   where j.id = c.id
+   -- Primary-key probes for the few claimed ids. A join to the CTE is
+   -- planned without knowing p_limit and hash-joined the whole table.
+   where j.id = any (array(select id from candidates))
   returning j.*;
 $$;
 revoke all on function public.claim_db_jobs(integer, integer, text)
@@ -8469,7 +7640,11 @@ grant execute on function public.document_cache_writer_active(text[])
 -- backend (service key) can read the encrypted tokens.
 
 CREATE TABLE IF NOT EXISTS public.user_google_drive_tokens (
-  user_id uuid PRIMARY KEY REFERENCES auth.users(id) ON DELETE CASCADE,
+  id uuid NOT NULL DEFAULT gen_random_uuid(),
+  user_id uuid NOT NULL REFERENCES auth.users(id) ON DELETE CASCADE,
+  -- One grant per person per workspace: an organization, or null for
+  -- Personal (20261022_01).
+  org_id uuid,
   encrypted_access_token text,
   access_token_iv text,
   access_token_tag text,
@@ -8486,8 +7661,17 @@ CREATE TABLE IF NOT EXISTS public.user_google_drive_tokens (
   -- The Google account this connection signed in as; display only.
   account_email text,
   created_at timestamptz NOT NULL DEFAULT now(),
-  updated_at timestamptz NOT NULL DEFAULT now()
+  updated_at timestamptz NOT NULL DEFAULT now(),
+  CONSTRAINT user_google_drive_tokens_pkey PRIMARY KEY (id),
+  CONSTRAINT user_google_drive_tokens_workspace_key
+    UNIQUE NULLS NOT DISTINCT (user_id, org_id),
+  CONSTRAINT user_google_drive_tokens_workspace_member_fkey
+    FOREIGN KEY (org_id, user_id)
+    REFERENCES public.org_members(org_id, user_id) ON DELETE CASCADE
 );
+
+CREATE INDEX IF NOT EXISTS idx_user_google_drive_tokens_org
+  ON public.user_google_drive_tokens(org_id) WHERE org_id IS NOT NULL;
 
 ALTER TABLE public.user_google_drive_tokens ENABLE ROW LEVEL SECURITY;
 
@@ -8510,26 +7694,29 @@ create or replace function public.complete_google_drive_oauth(p_state_hash text,
 returns boolean language plpgsql security definer set search_path = '' as $$
 declare
   v_user_id uuid;
+  v_org_id uuid;
 begin
   select user_id into v_user_id from public.google_workspace_oauth_states
     where state_hash = p_state_hash and provider = 'google-drive';
   if not found then return false; end if;
   perform 1 from auth.users where id = v_user_id for update;
   if not found then return false; end if;
+  -- The workspace the sign-in was started in.
   delete from public.google_workspace_oauth_states
     where state_hash = p_state_hash and provider = 'google-drive'
-      and user_id = v_user_id and expires_at > now();
+      and user_id = v_user_id and expires_at > now()
+    returning org_id into v_org_id;
   if not found then return false; end if;
   insert into public.user_google_drive_tokens (
-    user_id, account_email, encrypted_access_token, access_token_iv, access_token_tag,
+    user_id, org_id, account_email, encrypted_access_token, access_token_iv, access_token_tag,
     encrypted_refresh_token, refresh_token_iv, refresh_token_tag, scope, expires_at
   ) values (
-    v_user_id, p_tokens->>'account_email', p_tokens->>'encrypted_access_token',
+    v_user_id, v_org_id, p_tokens->>'account_email', p_tokens->>'encrypted_access_token',
     p_tokens->>'access_token_iv', p_tokens->>'access_token_tag',
     p_tokens->>'encrypted_refresh_token', p_tokens->>'refresh_token_iv',
     p_tokens->>'refresh_token_tag', p_tokens->>'scope',
     (p_tokens->>'expires_at')::timestamptz
-  ) on conflict (user_id) do update set
+  ) on conflict (user_id, org_id) do update set
     grant_id = gen_random_uuid(),
     account_email = excluded.account_email,
     encrypted_access_token = excluded.encrypted_access_token,
@@ -8543,25 +7730,30 @@ $$;
 revoke all on function public.complete_google_drive_oauth(text, jsonb) from public, anon, authenticated;
 grant execute on function public.complete_google_drive_oauth(text, jsonb) to service_role;
 
-create or replace function public.disconnect_google_drive(p_user_id uuid)
+create or replace function public.disconnect_google_drive(p_user_id uuid, p_org_id uuid default null)
 returns jsonb language plpgsql security definer set search_path = '' as $$
 declare v_token jsonb;
 begin
   perform 1 from auth.users where id = p_user_id for update;
   if not found then return null; end if;
   delete from public.google_workspace_oauth_states
-    where user_id = p_user_id and provider = 'google-drive';
-  delete from public.user_google_drive_tokens where user_id = p_user_id
+    where user_id = p_user_id and provider = 'google-drive'
+      and org_id is not distinct from p_org_id;
+  delete from public.user_google_drive_tokens
+    where user_id = p_user_id and org_id is not distinct from p_org_id
     returning to_jsonb(user_google_drive_tokens) into v_token;
   return v_token;
 end;
 $$;
-revoke all on function public.disconnect_google_drive(uuid) from public, anon, authenticated;
-grant execute on function public.disconnect_google_drive(uuid) to service_role;
+revoke all on function public.disconnect_google_drive(uuid, uuid) from public, anon, authenticated;
+grant execute on function public.disconnect_google_drive(uuid, uuid) to service_role;
 -- Migration date: 2026-09-22
 -- Independent Gmail/Calendar grants. Connector settings survive reconnects.
 create table if not exists public.user_google_workspace_tokens (
+  id uuid not null default gen_random_uuid(),
   user_id uuid not null references auth.users(id) on delete cascade,
+  -- An organization, or null for Personal (20261022_01).
+  org_id uuid,
   provider text not null check (provider in ('gmail', 'google-calendar')),
   grant_id uuid not null default gen_random_uuid(),
   account_email text not null, account_id text not null,
@@ -8573,16 +7765,28 @@ create table if not exists public.user_google_workspace_tokens (
   require_write_approval boolean not null default false,
   read_only boolean not null default false,
   disabled_tools text[] not null default '{}',
-  primary key (user_id, provider)
+  constraint user_google_workspace_tokens_pkey primary key (id),
+  constraint user_google_workspace_tokens_workspace_key
+    unique nulls not distinct (user_id, org_id, provider),
+  constraint user_google_workspace_tokens_workspace_member_fkey
+    foreign key (org_id, user_id)
+    references public.org_members(org_id, user_id) on delete cascade
 );
+create index if not exists idx_user_google_workspace_tokens_org
+  on public.user_google_workspace_tokens(org_id) where org_id is not null;
 create table if not exists public.google_workspace_oauth_states (
   id uuid primary key default gen_random_uuid(),
   user_id uuid not null references auth.users(id) on delete cascade,
+  -- The workspace the sign-in was started in; the callback completes its grant.
+  org_id uuid,
   -- Every Google connection's pending OAuth sign-ins, including Drive's.
   provider text not null check (provider in ('gmail', 'google-calendar', 'google-drive')),
   state_hash text not null unique,
   encrypted_state_config text not null, state_config_iv text not null, state_config_tag text not null,
-  expires_at timestamptz not null
+  expires_at timestamptz not null,
+  constraint google_workspace_oauth_states_workspace_member_fkey
+    foreign key (org_id, user_id)
+    references public.org_members(org_id, user_id) on delete cascade
 );
 create index if not exists google_workspace_states_owner on public.google_workspace_oauth_states(user_id, provider);
 alter table public.user_google_workspace_tokens enable row level security;
@@ -8600,9 +7804,9 @@ begin
   if not found then return false; end if;
   delete from public.google_workspace_oauth_states where state_hash = p_state_hash and provider = p_provider and expires_at > now() returning * into v_state;
   if not found then return false; end if;
-  insert into public.user_google_workspace_tokens(user_id, provider, account_email, account_id, encrypted_access_token, access_token_iv, access_token_tag, encrypted_refresh_token, refresh_token_iv, refresh_token_tag, scope, expires_at, write_enabled)
-  values (v_state.user_id, p_provider, p_tokens->>'account_email', p_tokens->>'account_id', p_tokens->>'encrypted_access_token', p_tokens->>'access_token_iv', p_tokens->>'access_token_tag', p_tokens->>'encrypted_refresh_token', p_tokens->>'refresh_token_iv', p_tokens->>'refresh_token_tag', p_tokens->>'scope', (p_tokens->>'expires_at')::timestamptz, coalesce((p_tokens->>'write_enabled')::boolean, false))
-  on conflict (user_id, provider) do update set
+  insert into public.user_google_workspace_tokens(user_id, org_id, provider, account_email, account_id, encrypted_access_token, access_token_iv, access_token_tag, encrypted_refresh_token, refresh_token_iv, refresh_token_tag, scope, expires_at, write_enabled)
+  values (v_state.user_id, v_state.org_id, p_provider, p_tokens->>'account_email', p_tokens->>'account_id', p_tokens->>'encrypted_access_token', p_tokens->>'access_token_iv', p_tokens->>'access_token_tag', p_tokens->>'encrypted_refresh_token', p_tokens->>'refresh_token_iv', p_tokens->>'refresh_token_tag', p_tokens->>'scope', (p_tokens->>'expires_at')::timestamptz, coalesce((p_tokens->>'write_enabled')::boolean, false))
+  on conflict (user_id, org_id, provider) do update set
     grant_id = gen_random_uuid(), account_email = excluded.account_email, account_id = excluded.account_id, encrypted_access_token = excluded.encrypted_access_token,
     access_token_iv = excluded.access_token_iv, access_token_tag = excluded.access_token_tag,
     encrypted_refresh_token = excluded.encrypted_refresh_token, refresh_token_iv = excluded.refresh_token_iv, refresh_token_tag = excluded.refresh_token_tag,
@@ -8611,18 +7815,59 @@ begin
 end;
 $$;
 
-create or replace function public.disconnect_google_workspace(p_user_id uuid, p_provider text)
+create or replace function public.disconnect_google_workspace(p_user_id uuid, p_provider text, p_org_id uuid default null)
 returns void language plpgsql security definer set search_path = '' as $$
 begin
   perform 1 from auth.users where id = p_user_id for update;
   if not found then return; end if;
-  delete from public.google_workspace_oauth_states where user_id = p_user_id and provider = p_provider;
-  delete from public.user_google_workspace_tokens where user_id = p_user_id and provider = p_provider;
+  delete from public.google_workspace_oauth_states
+    where user_id = p_user_id and provider = p_provider
+      and org_id is not distinct from p_org_id;
+  delete from public.user_google_workspace_tokens
+    where user_id = p_user_id and provider = p_provider
+      and org_id is not distinct from p_org_id;
 end;
 $$;
 
-revoke all on function public.complete_google_workspace_oauth(text,text,jsonb), public.disconnect_google_workspace(uuid,text) from public, anon, authenticated;
-grant execute on function public.complete_google_workspace_oauth(text,text,jsonb), public.disconnect_google_workspace(uuid,text) to service_role;
+revoke all on function public.complete_google_workspace_oauth(text,text,jsonb), public.disconnect_google_workspace(uuid,text,uuid) from public, anon, authenticated;
+grant execute on function public.complete_google_workspace_oauth(text,text,jsonb), public.disconnect_google_workspace(uuid,text,uuid) to service_role;
+
+-- CourtListener: the switch and the person's own token, per workspace
+-- (20261022_01). An organization's own token stays in org_api_keys and is
+-- laid over the member's when it has one. Replaces
+-- user_profiles.legal_research_us and the 'courtlistener' row of
+-- user_api_keys, which are no longer read or written.
+create table if not exists public.user_courtlistener_connections (
+  id uuid primary key default gen_random_uuid(),
+  user_id uuid not null references auth.users(id) on delete cascade,
+  org_id uuid,
+  enabled boolean not null default true,
+  -- The person's own API token for this workspace, encrypted like
+  -- user_api_keys. Null when they have not saved one.
+  encrypted_key text,
+  iv text,
+  auth_tag text,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now(),
+  constraint user_courtlistener_connections_key_check check (
+    (encrypted_key is null) = (iv is null) and (iv is null) = (auth_tag is null)
+  ),
+  constraint user_courtlistener_connections_workspace_key
+    unique nulls not distinct (user_id, org_id),
+  constraint user_courtlistener_connections_workspace_member_fkey
+    foreign key (org_id, user_id)
+    references public.org_members(org_id, user_id) on delete cascade
+);
+
+create index if not exists idx_user_courtlistener_connections_org
+  on public.user_courtlistener_connections(org_id) where org_id is not null;
+
+alter table public.user_courtlistener_connections enable row level security;
+revoke all on public.user_courtlistener_connections from public, anon, authenticated;
+grant select, insert, update, delete
+  on public.user_courtlistener_connections
+  to service_role;
+
 
 -- Organization departure recovery and expiry.
 
@@ -9199,7 +8444,7 @@ as $$
     when not public.org_is_active(p_org_id) then null
     when not exists (
       select 1 from public.org_members m
-      where m.org_id = p_org_id and m.user_id::text = p_user_id
+      where m.org_id = p_org_id and m.user_id = (case when p_user_id ~ '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$' then p_user_id::uuid end)
     ) then null
     when p_creator_id::text = p_user_id then 'owner'
     else p_grant_role
@@ -9671,14 +8916,49 @@ $$;
 create or replace function public.list_org_private_content(p_org_id uuid,p_actor_id uuid,p_limit integer default 50,p_offset integer default 0,p_search text default '')
 returns table(kind text,item_id uuid,title text,user_id uuid,display_name text,email text,has_access boolean)
 language plpgsql stable set search_path=public,pg_temp as $$
+declare page_end bigint := greatest(0,p_offset)::bigint+greatest(1,least(p_limit,101));
 begin
   if not public.can_access_org_private_content(p_org_id,p_actor_id) then
     raise exception 'Private content permission required' using errcode='42501';
   end if;
+  -- The catalogue of org_private_content_items, one arm per kind. The page
+  -- is ordered by (lower(title), kind, item_id) and kind is constant within
+  -- an arm, so the page can only contain each arm's first offset+limit rows
+  -- in (lower(title), id) order: each arm stops there (index order for
+  -- projects, workflows, chats and reviews) and only those are sorted.
   return query select item.kind,item.item_id,item.title,item.user_id,profile.display_name,profile.email,
     exists(select 1 from public.org_private_content_access a where a.org_id=p_org_id and a.user_id=p_actor_id and a.kind=item.kind and a.item_id=item.item_id)
-    from public.org_private_content_items(p_org_id) item left join public.user_profiles profile on profile.user_id=item.user_id
-    where item.user_id is distinct from p_actor_id and (p_search='' or position(lower(p_search) in lower(coalesce(item.title,'')))>0)
+    from (
+      select * from (select 'project'::text kind,p.id item_id,p.name title,p.user_id
+        from public.projects p
+        where p.org_id=p_org_id and p.archived_at is null and p.visibility='private' and p.user_id is distinct from p_actor_id
+          and (p_search='' or position(lower(p_search) in lower(coalesce(p.name,'')))>0)
+        order by lower(p.name) nulls last,p.id limit page_end) project_page
+      union all
+      select * from (select 'workflow'::text kind,w.id item_id,w.title title,w.user_id
+        from public.workflows w
+        where w.org_id=p_org_id and w.archived_at is null and w.visibility='private' and w.user_id is distinct from p_actor_id
+          and (p_search='' or position(lower(p_search) in lower(coalesce(w.title,'')))>0)
+        order by lower(w.title) nulls last,w.id limit page_end) workflow_page
+      union all
+      select * from (select 'chat'::text kind,c.id item_id,c.title title,c.user_id
+        from public.chats c
+        where c.org_id=p_org_id and c.archived_at is null and c.project_id is null and c.user_id is distinct from p_actor_id
+          and (p_search='' or position(lower(p_search) in lower(coalesce(c.title,'')))>0)
+        order by lower(c.title) nulls last,c.id limit page_end) chat_page
+      union all
+      select * from (select 'tabular_review'::text kind,r.id item_id,r.title title,r.user_id
+        from public.tabular_reviews r
+        where r.org_id=p_org_id and r.archived_at is null and r.project_id is null and r.user_id is distinct from p_actor_id
+          and (p_search='' or position(lower(p_search) in lower(coalesce(r.title,'')))>0)
+        order by lower(r.title) nulls last,r.id limit page_end) tabular_review_page
+      union all
+      select * from (select 'document'::text kind,d.id item_id,coalesce(v.filename,'Untitled document') title,d.user_id
+        from public.documents d left join public.document_versions v on v.id=d.current_version_id and v.deleted_at is null
+        where d.org_id=p_org_id and d.archived_at is null and d.project_id is null and d.workflow_id is null and d.user_id is distinct from p_actor_id
+          and (p_search='' or position(lower(p_search) in lower(coalesce(coalesce(v.filename,'Untitled document'),'')))>0)
+        order by lower(coalesce(v.filename,'Untitled document')) nulls last,d.id limit page_end) document_page
+    ) item left join public.user_profiles profile on profile.user_id=item.user_id
     order by lower(item.title) nulls last,item.kind,item.item_id
     limit greatest(1,least(p_limit,101)) offset greatest(0,p_offset);
 end;
@@ -9789,7 +9069,7 @@ as $$
         on o.project_id = p_project_id
        and o.org_id = p_org_id
        and o.user_id = m.user_id
-      where m.org_id = p_org_id and m.user_id::text = p_user_id
+      where m.org_id = p_org_id and m.user_id = (case when p_user_id ~ '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$' then p_user_id::uuid end)
     )
     when p_project_user_id::text = p_user_id then 'owner'
     else (
@@ -9843,7 +9123,7 @@ as $$
         on o.workflow_id = p_workflow_id
        and o.org_id = p_org_id
        and o.user_id = m.user_id
-      where m.org_id = p_org_id and m.user_id::text = p_user_id
+      where m.org_id = p_org_id and m.user_id = (case when p_user_id ~ '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$' then p_user_id::uuid end)
     )
     when p_workflow_user_id::text = p_user_id then 'owner'
     else (
@@ -9904,6 +9184,159 @@ as $$
       limit 1
     )
   end), public.org_private_access_role(p_org_id,'chat',p_chat_id,p_user_id));
+$$;
+
+-- GET /chat. The list form of chat_access_role above: the same ladder, evaluated
+-- with set-based joins so the planner reaches the caller's chats through indexes
+-- instead of calling the verdict for every row (MIKE-BACKEND-F). Kept next to
+-- the verdict it mirrors; backend/src/modules/chat/__tests__/chat.overview.sql
+-- proves the two agree row for row.
+create or replace function public.get_chats_overview(
+  p_user_id text,
+  p_user_email text,
+  p_limit integer default null,
+  p_offset integer default 0,
+  p_before_updated_at timestamptz default null,
+  p_before_id uuid default null,
+  p_workspace text default null
+)
+returns table (
+  id uuid,
+  project_id uuid,
+  user_id text,
+  title text,
+  model text,
+  created_at timestamptz,
+  updated_at timestamptz,
+  project_name text,
+  is_owner boolean,
+  access_role text
+)
+language sql
+stable
+set search_path = public
+as $$
+-- Who is asking. The API passes the account id as text and the ladder only
+-- ever compares it as text, so a value that is not a uuid matches no creator;
+-- grants are stored lowercased.
+with actor as materialized (
+  select
+    case when p_user_id ~ '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'
+         then p_user_id::uuid end as id,
+    case when coalesce(p_user_email, '') <> '' then lower(p_user_email) end as email
+),
+-- The caller's organizations, plus the one derived fact the private-content
+-- fallback needs (can_access_org_private_content, inlined).
+membership as materialized (
+  select m.org_id, m.role,
+         (o.kind = 'team' and o.deleted_at is null
+          and (m.role = 'owner' or (m.role = 'admin' and m.can_access_private_content))) as opens_private
+  from public.org_members m
+  join public.organizations o on o.id = m.org_id
+  where m.user_id = (select id from actor)
+),
+-- Projects worth a verdict. Each indexed lookup is a superset of one branch
+-- of project_access_role, so no reachable project is missed; the verdict
+-- below removes the rest.
+project_candidates as materialized (
+  select p.id from public.projects p where p.user_id = (select id from actor)
+  union
+  select p.id from public.projects p join membership m on m.org_id = p.org_id
+  union
+  select g.project_id from public.project_access_grants g where g.email = (select email from actor)
+  union
+  select x.item_id from public.org_private_content_access x
+    where x.user_id = (select id from actor) and x.kind = 'project'
+),
+-- project_access_role, set-based: the same branches in the same order, one
+-- row per candidate. The coalesce is its org_private_access_role fallback
+-- (a private project the caller opened as an owner or permitted admin).
+reachable_projects as materialized (
+  select p.id, p.name,
+    coalesce(
+      case
+        when p.org_id is not null and (o.id is null or o.deleted_at is not null) then null
+        when p.archived_at is not null then null
+        when p.org_id is not null then
+          case
+            when m.org_id is null then null
+            when p.user_id = (select id from actor) then 'owner'
+            when m.role = 'owner' and (p.visibility = 'organization'
+                 or public.project_is_ownerless(p.id, p.user_id, p.org_id)) then 'owner'
+            when ov.role = 'deny' then null
+            when ov.role in ('owner', 'editor', 'viewer') then ov.role
+            when p.visibility = 'organization' then 'editor'
+          end
+        when p.user_id = (select id from actor) then 'owner'
+        else g.role
+      end,
+      case when x.item_id is not null and m.opens_private
+                and p.archived_at is null and p.visibility = 'private' then 'viewer' end
+    ) as role
+  from project_candidates c
+  join public.projects p on p.id = c.id
+  left join public.organizations o on o.id = p.org_id
+  left join membership m on m.org_id = p.org_id
+  left join public.project_org_access_overrides ov
+    on ov.project_id = p.id and ov.org_id = p.org_id and ov.user_id = (select id from actor)
+  left join public.project_access_grants g on g.project_id = p.id and g.email = (select email from actor)
+  left join public.org_private_content_access x
+    on x.org_id = p.org_id and x.user_id = (select id from actor) and x.kind = 'project' and x.item_id = p.id
+),
+-- Direct chat grants and opened private chats for the caller; both tiny.
+granted_chats as materialized (
+  select g.chat_id, g.role from public.chat_access_grants g where g.email = (select email from actor)
+),
+opened_chats as materialized (
+  select x.org_id, x.item_id from public.org_private_content_access x
+  where x.user_id = (select id from actor) and x.kind = 'chat'
+)
+-- chat_access_role, set-based, evaluated only for rows the candidate predicate
+-- admits. Branch order mirrors the function; the coalesce is its
+-- org_private_access_role fallback (an opened private standalone chat).
+select c.id, c.project_id, c.user_id::text as user_id, c.title, c.model, c.created_at, c.updated_at,
+       rp.name as project_name,
+       coalesce(c.user_id = (select id from actor), false) as is_owner,
+       verdict.role as access_role
+from public.chats c
+left join reachable_projects rp on rp.id = c.project_id
+left join granted_chats g on g.chat_id = c.id
+left join opened_chats x on x.item_id = c.id and x.org_id = c.org_id
+left join membership m on m.org_id = c.org_id
+left join public.organizations o on o.id = c.org_id
+cross join lateral (
+  select coalesce(
+    case
+      when c.org_id is not null and (o.id is null or o.deleted_at is not null) then null
+      when c.project_id is not null then rp.role
+      when o.kind = 'team' then
+        case when m.org_id is null then null
+             when c.user_id = (select id from actor) then 'owner'
+             else g.role end
+      when c.user_id = (select id from actor) then 'owner'
+      else g.role
+    end,
+    case when x.item_id is not null and m.opens_private and c.project_id is null then 'viewer' end
+  ) as role
+) verdict
+where c.archived_at is null
+  and public.workspace_matches(p_workspace, c.org_id)
+  and (
+    p_before_updated_at is null
+    or c.updated_at < p_before_updated_at
+    or (c.updated_at = p_before_updated_at and c.id > p_before_id)
+  )
+  -- Candidates: four indexable facts. The scalar subqueries become InitPlans,
+  -- so the planner can BitmapOr idx_chats_user, idx_chats_project and the
+  -- primary key instead of walking chats in activity order.
+  and (c.user_id = (select id from actor)
+    or c.project_id = any (array(select id from reachable_projects where role is not null))
+    or c.id = any (array(select chat_id from granted_chats))
+    or c.id = any (array(select item_id from opened_chats)))
+  and verdict.role is not null
+order by c.updated_at desc, c.id asc
+limit case when p_limit is null then null else greatest(1, least(p_limit, 100)) end
+offset greatest(coalesce(p_offset, 0), 0);
 $$;
 
 create or replace function public.review_access_role(
@@ -10290,9 +9723,25 @@ begin
   -- remain bound parameters, including arrays, search patterns and dates.
   candidates:=$query$
     select a.* from public.audit_events a where a.org_id=$1
+      -- Profile matches are resolved once per call: the organization's
+      -- distinct actors (an index seek per actor, as organization_audit_actors
+      -- does), each profile read by its key, instead of a profile probe per
+      -- event or a pass over every profile on the platform.
       and ($4->>'username_pattern' is null or a.user_email ilike $4->>'username_pattern'
-        or exists(select 1 from public.user_profiles profile where profile.user_id=a.user_id
-          and (profile.display_name ilike $4->>'username_pattern' or profile.email ilike $4->>'username_pattern')))
+        or a.user_id = any(array(
+          with recursive actors as (
+            (select e.user_id from public.audit_events e
+              where e.org_id=$1 and e.user_id is not null order by e.user_id limit 1)
+            union all
+            select next_actor.user_id from actors previous cross join lateral (
+              select e.user_id from public.audit_events e
+              where e.org_id=$1 and e.user_id>previous.user_id order by e.user_id limit 1
+            ) next_actor
+          )
+          select profile.user_id from actors cross join lateral (
+            select p.user_id,p.display_name,p.email from public.user_profiles p where p.user_id=actors.user_id offset 0
+          ) profile
+          where profile.display_name ilike $4->>'username_pattern' or profile.email ilike $4->>'username_pattern')))
       and ($4->>'action' is null or a.action=$4->>'action')
       and ($4->>'status' is null or a.status=$4->>'status')
       and ($4->>'surface' is null or a.surface=$4->>'surface')
@@ -10428,18 +9877,50 @@ drop trigger if exists document_text_changed on public.document_versions;
 create trigger document_text_changed after insert or update on public.document_versions
   for each row execute function public.document_text_changed();
 
+-- A job that kills its worker is failed by claim_db_jobs' stale sweep, which
+-- runs no TypeScript failure hook. Fail the text row whenever its job fails,
+-- or backfill_document_text queues the same file again forever.
+create or replace function public.document_text_job_failed()
+returns trigger language plpgsql security definer set search_path=public,pg_temp as $$
+declare v uuid; r uuid;
+begin
+  begin
+    v := (new.payload->>'versionId')::uuid;
+    r := (new.payload->>'revision')::uuid;
+  exception when invalid_text_representation then
+    return null;
+  end;
+  update public.document_version_texts
+     set status='failed',text_content=null,error_code='extraction_failed',updated_at=now()
+   where version_id=v and source_revision=r and status in ('pending','processing');
+  return null;
+end;
+$$;
+drop trigger if exists document_text_job_failed on public.db_jobs;
+create trigger document_text_job_failed after update of status on public.db_jobs
+  for each row when (new.kind='document.extract_text' and new.status='failed' and old.status is distinct from 'failed')
+  execute function public.document_text_job_failed();
+
 -- Bounded and resumable: rows/jobs themselves are the checkpoint. Prioritize
 -- active versions, then history. Failed rows require an explicit retry request.
 create or replace function public.backfill_document_text(p_limit integer default 100, p_retry_failed boolean default false)
 returns integer language plpgsql security invoker set search_path=public,pg_temp as $$
 declare row record; queued integer := 0;
 begin
+  -- Work starts from the unfinished text rows (partial index). Every live
+  -- version with a source file has a row for its current revision and
+  -- extractor: document_text_changed queues one on insert and on every
+  -- revision change, and 20261101_23 turned versions from before text
+  -- search into pending rows. So no live version is missing a row or has a
+  -- stale one, and "pending or processing" is the whole old work list.
+  -- Bumping extractor_version must turn its outdated rows pending likewise.
   for row in
-    select v.id from public.document_versions v join public.documents d on d.id=v.document_id
-    left join public.document_version_texts t on t.version_id=v.id
-    where v.deleted_at is null and v.storage_path is not null and d.archived_at is null
-      and (t.version_id is null or t.source_revision<>v.text_revision or t.extractor_version<>1
-        or t.status in ('pending','processing') or (p_retry_failed and t.status='failed'))
+    select v.id from public.document_version_texts t
+    join public.document_versions v on v.id=t.version_id
+    join public.documents d on d.id=v.document_id
+    where t.status <> 'ready'
+      and (t.status in ('pending','processing') or (p_retry_failed and t.status='failed'))
+      and v.deleted_at is null and v.storage_path is not null and d.archived_at is null
       and not exists(select 1 from public.db_jobs j where j.dedupe_key='document.text:'||v.id||':'||v.text_revision
         and j.status in ('pending','running'))
     order by (v.id=d.current_version_id) desc, v.id
@@ -10478,7 +9959,7 @@ returns boolean language sql stable set search_path=public,pg_temp as $$
         when d.project_id is not null then public.project_access_role(p.id,p.user_id,p.org_id,p_user_id,p_user_email) is not null
         when d.workflow_id is not null then public.workflow_access_role(w.id,w.user_id,w.org_id,p_user_id,p_user_email) is not null
         else (d.user_id::text=p_user_id and (d.org_id is null or exists(
-          select 1 from public.org_members m where m.org_id=d.org_id and m.user_id::text=p_user_id)))
+          select 1 from public.org_members m where m.org_id=d.org_id and m.user_id=(case when p_user_id ~ '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$' then p_user_id::uuid end))))
           or public.org_private_document_access(d.org_id,d.id,p_user_id)
       end);
 $$;
@@ -10555,6 +10036,7 @@ returns jsonb language sql stable security invoker set search_path=public,pg_tem
 $$;
 
 revoke all on function public.queue_document_text(uuid,boolean),public.document_text_revision_changed(),public.document_text_changed(),
+  public.document_text_job_failed(),
   public.backfill_document_text(integer,boolean),public.publish_document_text(uuid,uuid,text,text,integer),
   public.document_text_access(uuid,text,text),public.find_document_text(text,text,text,text,text,uuid,uuid,uuid,integer,integer),
   public.read_document_text(text,text,uuid,uuid) from public,anon,authenticated;
@@ -10565,6 +10047,2120 @@ grant execute on function public.queue_document_text(uuid,boolean),public.backfi
 
 -- Queue only a bounded first batch. The maintenance sweep resumes the rest.
 select public.backfill_document_text(100,false);
+
+-- Migration date: 2026-10-30
+-- Cleanup must locate surviving references by key, not scan every live version.
+create index if not exists document_versions_storage_path_idx
+  on public.document_versions(storage_path) where deleted_at is null and storage_path is not null;
+create index if not exists document_versions_pdf_storage_path_idx
+  on public.document_versions(pdf_storage_path) where deleted_at is null and pdf_storage_path is not null;
+
+-- Migration date: 2026-10-30
+create or replace function public.organization_audit_actors(
+  p_org_id uuid, p_actor_id uuid, p_search text default '',
+  p_offset integer default 0, p_limit integer default 21
+)
+returns table(user_id uuid, email text, display_name text, profile_photo text)
+language sql stable set search_path = public, pg_temp as $$
+  -- Seek to the next distinct actor using the leading (org_id,user_id)
+  -- index columns. DISTINCT ON would read every historical event first.
+  with recursive actors as (
+    (select a.user_id, a.user_email
+     from public.audit_events a
+     where a.org_id=p_org_id and a.user_id is not null and exists (
+       select 1 from public.active_org_members m
+       where m.org_id=p_org_id and m.user_id=p_actor_id and m.role in ('owner','admin')
+     )
+     order by a.user_id,a.created_at desc,a.id desc limit 1)
+    union all
+    select next_actor.user_id,next_actor.user_email
+    from actors previous
+    cross join lateral (
+      select a.user_id,a.user_email from public.audit_events a
+      where a.org_id=p_org_id and a.user_id>previous.user_id
+      order by a.user_id,a.created_at desc,a.id desc limit 1
+    ) next_actor
+  ), identities as (
+    select a.user_id, coalesce(nullif(btrim(p.email), ''), a.user_email) as email,
+      nullif(btrim(p.display_name), '') as display_name, p.profile_photo,
+      a.user_email as recorded_email
+    from actors a left join public.user_profiles p on p.user_id = a.user_id
+  )
+  select i.user_id, i.email, i.display_name, i.profile_photo from identities i
+  where strpos(lower(coalesce(i.display_name, '')), lower(left(coalesce(p_search, ''), 200))) > 0
+    or strpos(lower(coalesce(i.email, '')), lower(left(coalesce(p_search, ''), 200))) > 0
+    or strpos(lower(coalesce(i.recorded_email, '')), lower(left(coalesce(p_search, ''), 200))) > 0
+  order by lower(coalesce(i.display_name, i.email, i.user_id::text)), i.user_id
+  limit greatest(0, least(coalesce(p_limit, 21), 51))
+  offset greatest(0, coalesce(p_offset, 0));
+$$;
+
+-- Migration date: 2026-11-01
+-- The reverse of org_item_document_ids: the chats and reviews whose stored
+-- references name one document, each with its project. Same reference
+-- shapes, matched exactly: a chat message files[] object whose document_id
+-- is the document's canonical text; a review document_ids array string,
+-- object key or scalar string; a review row or row source by document_id.
+create or replace function public.document_referencing_items(p_document_id uuid)
+returns table(kind text,item_id uuid,project_id uuid) language sql stable set search_path=public as $$
+  with refs as (
+    select 'chat'::text kind,m.chat_id item_id from public.chat_messages m
+      where m.files @> jsonb_build_array(jsonb_build_object('document_id',p_document_id::text))
+    union select 'tabular_review',r.id from public.tabular_reviews r where r.document_ids ? p_document_id::text
+    union select 'tabular_review',row.review_id from public.tabular_review_rows row where row.document_id=p_document_id
+    union select 'tabular_review',row.review_id from public.tabular_review_row_sources source
+      join public.tabular_review_rows row on row.id=source.row_id where source.document_id=p_document_id
+  )
+  select refs.kind,refs.item_id,case refs.kind when 'chat' then c.project_id else r.project_id end
+  from refs
+  left join public.chats c on refs.kind='chat' and c.id=refs.item_id
+  left join public.tabular_reviews r on refs.kind='tabular_review' and r.id=refs.item_id;
+$$;
+revoke all on function public.document_referencing_items(uuid) from public,anon,authenticated;
+grant execute on function public.document_referencing_items(uuid) to service_role;
+
+-- Migration date: 2026-10-30
+-- A keyed catalogue lookup. Keep the listing function for actual listings;
+-- permission checks need at most one current item, not an entire organization.
+create or replace function public.org_private_content_item(p_org_id uuid,p_kind text,p_item_id uuid)
+returns table(kind text,item_id uuid,title text,user_id uuid)
+language sql stable set search_path=public,pg_temp as $$
+  select 'project',p.id,p.name,p.user_id from public.projects p
+    where p_kind='project' and p.id=p_item_id and p.org_id=p_org_id and p.archived_at is null and p.visibility='private'
+  union all select 'workflow',w.id,w.title,w.user_id from public.workflows w
+    where p_kind='workflow' and w.id=p_item_id and w.org_id=p_org_id and w.archived_at is null and w.visibility='private'
+  union all select 'chat',c.id,c.title,c.user_id from public.chats c
+    where p_kind='chat' and c.id=p_item_id and c.org_id=p_org_id and c.archived_at is null and c.project_id is null
+  union all select 'tabular_review',r.id,r.title,r.user_id from public.tabular_reviews r
+    where p_kind='tabular_review' and r.id=p_item_id and r.org_id=p_org_id and r.archived_at is null and r.project_id is null
+  union all select 'document',d.id,coalesce(v.filename,'Untitled document'),d.user_id
+    from public.documents d left join public.document_versions v on v.id=d.current_version_id and v.deleted_at is null
+    where p_kind='document' and d.id=p_item_id and d.org_id=p_org_id and d.archived_at is null and d.project_id is null and d.workflow_id is null;
+$$;
+revoke all on function public.org_private_content_item(uuid,text,uuid) from public,anon,authenticated;
+grant execute on function public.org_private_content_item(uuid,text,uuid) to service_role;
+
+create or replace function public.org_private_access_role(p_org_id uuid,p_kind text,p_item_id uuid,p_user_id text)
+returns text language sql stable set search_path=public,pg_temp as $$
+  select 'viewer'::text where exists (
+    select 1 from public.org_private_content_access a
+    join public.org_private_content_item(p_org_id,a.kind,a.item_id) item on item.kind=a.kind and item.item_id=a.item_id
+    where a.org_id=p_org_id and a.user_id=(case when p_user_id ~ '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$' then p_user_id::uuid end) and a.kind=p_kind and a.item_id=p_item_id
+      and public.can_access_org_private_content(p_org_id,a.user_id)
+  );
+$$;
+
+create or replace function public.org_private_document_access(p_org_id uuid,p_document_id uuid,p_user_id text)
+returns boolean language sql stable set search_path=public,pg_temp as $$
+  -- Anchored on the document: the items that can carry it (its project or
+  -- workflow, the chats/reviews referencing it and their projects) are
+  -- looked up by key, then matched against the caller's opened items by
+  -- primary key. Same answer as testing the document against every opened
+  -- item's full org_item_document_ids list.
+  select exists(select 1 from public.documents d where d.id=p_document_id and d.org_id=p_org_id
+    and d.archived_at is null and (
+      public.org_private_access_role(p_org_id,'document',d.id,p_user_id) is not null
+      or exists(select 1 from (
+          select 'project'::text kind,d.project_id item_id
+          union all select 'workflow',d.workflow_id
+          union all select ref.kind,ref.item_id from public.document_referencing_items(d.id) ref
+          union all select 'project',ref.project_id from public.document_referencing_items(d.id) ref
+        ) holder
+        join public.org_private_content_access a on a.org_id=p_org_id
+          and a.user_id=(case when p_user_id ~ '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$' then p_user_id::uuid end)
+          and a.kind=holder.kind and a.item_id=holder.item_id
+        join public.org_private_content_item(p_org_id,a.kind,a.item_id) item on item.kind=a.kind and item.item_id=a.item_id
+        where public.can_access_org_private_content(p_org_id,a.user_id))
+    ));
+$$;
+
+create or replace function public.list_org_private_content_access(p_org_ids uuid[],p_user_id text,p_offset integer default 0)
+returns table(kind text,item_id uuid) language sql stable set search_path=public,pg_temp as $$
+  select a.kind,a.item_id from public.org_private_content_access a
+    join lateral public.org_private_content_item(a.org_id,a.kind,a.item_id) item on item.kind=a.kind and item.item_id=a.item_id
+    where a.org_id=any(p_org_ids) and a.user_id=(case when p_user_id ~ '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$' then p_user_id::uuid end)
+      and public.can_access_org_private_content(a.org_id,a.user_id)
+    order by a.org_id,a.kind,a.item_id limit 500 offset greatest(0,p_offset);
+$$;
+
+-- Migration date: 2026-10-30
+-- Walk forward from the item to its references, then verify existence by PK.
+-- Never enumerate unrelated platform documents to ask whether each is linked.
+create or replace function public.org_item_document_ids(p_kind text,p_item_id uuid)
+returns table(document_id uuid) language sql stable set search_path=public as $$
+  with item_chats as materialized (
+    select c.id from public.chats c where p_kind='project' and c.project_id=p_item_id
+    union all select p_item_id where p_kind='chat'
+  ), item_reviews as materialized (
+    select r.id,r.document_ids from public.tabular_reviews r
+    where (p_kind='project' and r.project_id=p_item_id) or (p_kind='tabular_review' and r.id=p_item_id)
+  ), references_raw as (
+    select d.id::text id from public.documents d where p_kind='project' and d.project_id=p_item_id
+    union all select d.id::text from public.documents d where p_kind='workflow' and d.workflow_id=p_item_id
+    union all select f.value->>'document_id'
+      from item_chats c join public.chat_messages m on m.chat_id=c.id
+      cross join lateral jsonb_array_elements(case when jsonb_typeof(m.files)='array' then m.files else '[]'::jsonb end) f
+      where jsonb_typeof(f.value->'document_id')='string'
+    union all select value #>> '{}' from item_reviews r
+      cross join lateral jsonb_array_elements(case when jsonb_typeof(r.document_ids)='array' then r.document_ids else '[]'::jsonb end) j(value)
+      where jsonb_typeof(value)='string'
+    -- The historical ? predicate also recognized object keys and a scalar
+    -- string. Preserve those legacy shapes without accepting malformed UUIDs.
+    union all select key from item_reviews r cross join lateral jsonb_object_keys(
+      case when jsonb_typeof(r.document_ids)='object' then r.document_ids else '{}'::jsonb end) j(key)
+    union all select r.document_ids #>> '{}' from item_reviews r where jsonb_typeof(r.document_ids)='string'
+    union all select row.document_id::text from item_reviews r join public.tabular_review_rows row on row.review_id=r.id
+    union all select source.document_id::text from item_reviews r join public.tabular_review_rows row on row.review_id=r.id
+      join public.tabular_review_row_sources source on source.row_id=row.id
+  ), reference_ids as (
+    select distinct case when id ~ '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$' then id::uuid end id
+    from references_raw
+  )
+  select d.id from reference_ids ref
+  cross join lateral (
+    select existing.id from public.documents existing where existing.id=ref.id offset 0
+  ) d;
+$$;
+
+create or replace function public.org_members_departure_items(p_org_id uuid,p_user_ids uuid[])
+returns table(kind text,item_id uuid,title text,disposition text)
+language sql stable set search_path = public as $$
+  with roots as (
+select 'project'::text kind,item.id item_id,
+    case when item.visibility='organization' then item.name else null::text end title,
+    case when (item.visibility='organization' or exists (select 1 from public.project_org_access_overrides g join public.org_members holder on holder.user_id=g.user_id and holder.org_id=p_org_id where g.project_id=item.id and g.role in ('owner','editor','viewer') and not (holder.user_id = any(p_user_ids)))) then 'transfer' else 'archive' end disposition
+  from public.projects item where item.id in (
+      -- Only items a departing member created or co-owns can be roots; the
+      -- conditions below are evaluated for those, not every org project.
+      -- Per departing member, a lookup by creator (user_id index); the
+      -- organization is checked on the few rows found, never scanned.
+      select p.id from unnest(p_user_ids) leaver(id)
+        cross join lateral (select own.id,own.org_id from public.projects own where own.user_id=leaver.id offset 0) p
+        where p.org_id=p_org_id
+      union select g.project_id from unnest(p_user_ids) leaver(id) join public.project_org_access_overrides g on g.user_id=leaver.id
+        join public.org_members holder on holder.user_id=g.user_id and holder.org_id=p_org_id
+        where g.role='owner')
+    and item.org_id=p_org_id and item.archived_at is null
+
+    and (item.user_id=any(p_user_ids) or exists (select 1 from public.project_org_access_overrides g join public.org_members holder on holder.user_id=g.user_id and holder.org_id=p_org_id where g.project_id=item.id and g.role='owner' and holder.user_id = any(p_user_ids)))
+    and not exists (select 1 from public.org_members m where m.org_id=p_org_id and m.user_id=item.user_id and not(m.user_id=any(p_user_ids)))
+    and not exists (select 1 from public.project_org_access_overrides g join public.org_members holder on holder.user_id=g.user_id and holder.org_id=p_org_id where g.project_id=item.id and g.role='owner' and not (holder.user_id = any(p_user_ids)))
+ union all
+select 'workflow'::text kind,item.id item_id,
+    case when item.visibility='organization' then item.title else null::text end title,
+    case when (item.visibility='organization' or exists (select 1 from public.workflow_org_access_overrides g join public.org_members holder on holder.user_id=g.user_id and holder.org_id=p_org_id where g.workflow_id=item.id and g.role in ('owner','editor','viewer') and not (holder.user_id = any(p_user_ids)))) then 'transfer' else 'archive' end disposition
+  from public.workflows item where item.id in (
+      select w.id from unnest(p_user_ids) leaver(id)
+        cross join lateral (select own.id,own.org_id from public.workflows own where own.user_id=leaver.id offset 0) w
+        where w.org_id=p_org_id
+      union select g.workflow_id from unnest(p_user_ids) leaver(id) join public.workflow_org_access_overrides g on g.user_id=leaver.id
+        join public.org_members holder on holder.user_id=g.user_id and holder.org_id=p_org_id
+        where g.role='owner')
+    and item.org_id=p_org_id and item.archived_at is null
+
+    and (item.user_id=any(p_user_ids) or exists (select 1 from public.workflow_org_access_overrides g join public.org_members holder on holder.user_id=g.user_id and holder.org_id=p_org_id where g.workflow_id=item.id and g.role='owner' and holder.user_id = any(p_user_ids)))
+    and not exists (select 1 from public.org_members m where m.org_id=p_org_id and m.user_id=item.user_id and not(m.user_id=any(p_user_ids)))
+    and not exists (select 1 from public.workflow_org_access_overrides g join public.org_members holder on holder.user_id=g.user_id and holder.org_id=p_org_id where g.workflow_id=item.id and g.role='owner' and not (holder.user_id = any(p_user_ids)))
+ union all
+select 'chat'::text kind,item.id item_id,
+    null::text title,
+    case when (exists (select 1 from public.chat_access_grants g join public.user_profiles profile on lower(profile.email)=g.email and profile.email is not null and btrim(profile.email)<>'' join public.org_members holder on holder.user_id=profile.user_id and holder.org_id=p_org_id where g.chat_id=item.id and g.role in ('owner','editor','viewer') and not (holder.user_id = any(p_user_ids)))) then 'transfer' else 'archive' end disposition
+  from public.chats item where item.id in (
+      select c.id from unnest(p_user_ids) leaver(id)
+        cross join lateral (select own.id,own.org_id from public.chats own where own.user_id=leaver.id offset 0) c
+        where c.org_id=p_org_id
+      union select g.chat_id from unnest(p_user_ids) leaver(id) join public.user_profiles profile on profile.user_id=leaver.id
+        join public.chat_access_grants g on g.email=lower(profile.email)
+        join public.org_members holder on holder.user_id=profile.user_id and holder.org_id=p_org_id
+        where profile.email is not null and btrim(profile.email)<>'' and g.role='owner')
+    and item.org_id=p_org_id and item.archived_at is null
+    and item.project_id is null
+    and (item.user_id=any(p_user_ids) or exists (select 1 from public.chat_access_grants g join public.user_profiles profile on lower(profile.email)=g.email and profile.email is not null and btrim(profile.email)<>'' join public.org_members holder on holder.user_id=profile.user_id and holder.org_id=p_org_id where g.chat_id=item.id and g.role='owner' and holder.user_id = any(p_user_ids)))
+    and not exists (select 1 from public.org_members m where m.org_id=p_org_id and m.user_id=item.user_id and not(m.user_id=any(p_user_ids)))
+    and not exists (select 1 from public.chat_access_grants g join public.user_profiles profile on lower(profile.email)=g.email and profile.email is not null and btrim(profile.email)<>'' join public.org_members holder on holder.user_id=profile.user_id and holder.org_id=p_org_id where g.chat_id=item.id and g.role='owner' and not (holder.user_id = any(p_user_ids)))
+ union all
+select 'tabular_review'::text kind,item.id item_id,
+    null::text title,
+    case when (exists (select 1 from public.tabular_review_access_grants g join public.user_profiles profile on lower(profile.email)=g.email and profile.email is not null and btrim(profile.email)<>'' join public.org_members holder on holder.user_id=profile.user_id and holder.org_id=p_org_id where g.tabular_review_id=item.id and g.role in ('owner','editor','viewer') and not (holder.user_id = any(p_user_ids)))) then 'transfer' else 'archive' end disposition
+  from public.tabular_reviews item where item.id in (
+      select r.id from unnest(p_user_ids) leaver(id)
+        cross join lateral (select own.id,own.org_id from public.tabular_reviews own where own.user_id=leaver.id offset 0) r
+        where r.org_id=p_org_id
+      union select g.tabular_review_id from unnest(p_user_ids) leaver(id) join public.user_profiles profile on profile.user_id=leaver.id
+        join public.tabular_review_access_grants g on g.email=lower(profile.email)
+        join public.org_members holder on holder.user_id=profile.user_id and holder.org_id=p_org_id
+        where profile.email is not null and btrim(profile.email)<>'' and g.role='owner')
+    and item.org_id=p_org_id and item.archived_at is null
+    and item.project_id is null
+    and (item.user_id=any(p_user_ids) or exists (select 1 from public.tabular_review_access_grants g join public.user_profiles profile on lower(profile.email)=g.email and profile.email is not null and btrim(profile.email)<>'' join public.org_members holder on holder.user_id=profile.user_id and holder.org_id=p_org_id where g.tabular_review_id=item.id and g.role='owner' and holder.user_id = any(p_user_ids)))
+    and not exists (select 1 from public.org_members m where m.org_id=p_org_id and m.user_id=item.user_id and not(m.user_id=any(p_user_ids)))
+    and not exists (select 1 from public.tabular_review_access_grants g join public.user_profiles profile on lower(profile.email)=g.email and profile.email is not null and btrim(profile.email)<>'' join public.org_members holder on holder.user_id=profile.user_id and holder.org_id=p_org_id where g.tabular_review_id=item.id and g.role='owner' and not (holder.user_id = any(p_user_ids)))
+  ), retained_documents as materialized (
+    -- Start from the departing members' standalone documents (few) and look
+    -- up who references each one, instead of expanding every chat message
+    -- and review row in the organization. A reference counts when its chat
+    -- or review is retained: live in this org, its project not archived, and
+    -- neither it nor its project archived by this departure.
+    select distinct d.id document_id
+    from public.documents d
+    cross join lateral public.document_referencing_items(d.id) ref
+    left join public.chats c on ref.kind='chat' and c.id=ref.item_id
+    left join public.tabular_reviews tr on ref.kind='tabular_review' and tr.id=ref.item_id
+    where d.org_id=p_org_id and d.user_id=any(p_user_ids)
+      and d.project_id is null and d.workflow_id is null and d.archived_at is null
+      and case ref.kind when 'chat' then c.org_id=p_org_id and c.archived_at is null
+        else tr.org_id=p_org_id and tr.archived_at is null end
+      and not exists(select 1 from public.projects p where p.id=ref.project_id and p.archived_at is not null)
+      and not exists(select 1 from roots r where r.kind=ref.kind and r.item_id=ref.item_id and r.disposition='archive')
+      and (ref.project_id is null or not exists(select 1 from roots r where r.kind='project' and r.item_id=ref.project_id and r.disposition='archive'))
+  ), documents as (
+    select 'document'::text kind,d.id item_id,null::text title,
+      case when d.id in (select document_id from retained_documents) then 'transfer' else 'archive' end disposition
+    from public.documents d where d.org_id=p_org_id and d.user_id=any(p_user_ids)
+      and d.project_id is null and d.workflow_id is null and d.archived_at is null
+  ) select * from roots union all select * from documents;
+$$;
+
+-- Migration date: 2026-10-30
+-- Candidate ids are a union of indexed ownership/membership/grant lookups.
+-- The final access ladder is still authoritative; candidates only avoid
+-- asking it about projects that cannot possibly be visible to this actor.
+create index if not exists org_private_content_access_actor_kind_idx
+  on public.org_private_content_access(user_id,kind,org_id,item_id);
+create or replace function public.project_list_access(p_user_id text,p_user_email text,p_workspace text default null)
+returns table(project_id uuid,role text) language sql stable set search_path=public,pg_temp as $$
+  with actor as materialized (
+    select case when p_user_id ~ '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$' then p_user_id::uuid end id,
+      nullif(lower(p_user_email),'') email
+  ), candidates as materialized (
+    select p.id from public.projects p where p.user_id=(select id from actor)
+    -- Membership alone reaches only what the ladder can grant a member:
+    -- public projects for everyone, every project for an org Owner (private
+    -- and ownerless ones), and per-member overrides. Another member's private
+    -- project is never a candidate unless one of those facts holds.
+    union select p.id from public.org_members m join public.projects p on p.org_id=m.org_id and p.visibility='organization' where m.user_id=(select id from actor)
+    union select p.id from public.org_members m join public.projects p on p.org_id=m.org_id where m.user_id=(select id from actor) and m.role='owner'
+    union select o.project_id from public.project_org_access_overrides o where o.user_id=(select id from actor)
+    union select g.project_id from public.project_access_grants g where g.email=(select email from actor)
+    union select a.item_id from public.org_private_content_access a where a.user_id=(select id from actor) and a.kind='project'
+  ), verdicts as materialized (
+    select p.id,public.project_access_role(p.id,p.user_id,p.org_id,p_user_id,p_user_email) role
+    from candidates c cross join lateral (select item.* from public.projects item where item.id=c.id offset 0) p
+    where case when p_workspace is null then true when p_workspace='personal' then p.org_id is null else p.org_id=p_workspace::uuid end
+  ) select id,role from verdicts where role is not null;
+$$;
+revoke all on function public.project_list_access(text,text,text) from public,anon,authenticated;
+grant execute on function public.project_list_access(text,text,text) to service_role;
+
+create or replace function public.get_projects_overview(
+  p_user_id text,
+  p_user_email text default null
+)
+returns table (
+  id uuid,
+  user_id text,
+  org_id uuid,
+  access_scope text,
+  organization_name text,
+  name text,
+  cm_number text,
+  practice text,
+  created_at timestamptz,
+  updated_at timestamptz,
+  is_owner boolean,
+  owner_display_name text,
+  owner_email text,
+  access_role text,
+  document_count integer,
+  chat_count integer,
+  review_count integer
+)
+language sql
+stable
+set search_path=public,pg_temp
+as $$
+  with visible_projects as (
+    select p.*, access.role as list_access_role
+    from public.project_list_access(p_user_id,p_user_email,null) access
+    join public.projects p on p.id=access.project_id
+    where true
+  ),
+  document_counts as (
+    select d.project_id, count(*)::integer as document_count
+    from public.documents d
+    where d.project_id in (select vp.id from visible_projects vp)
+    group by d.project_id
+  ),
+  chat_counts as (
+    select c.project_id, count(*)::integer as chat_count
+    from public.chats c
+    where c.project_id in (select vp.id from visible_projects vp)
+    group by c.project_id
+  ),
+  review_counts as (
+    select tr.project_id, count(*)::integer as review_count
+    from public.tabular_reviews tr
+    where tr.project_id in (select vp.id from visible_projects vp)
+    group by tr.project_id
+  )
+  select
+    vp.id,
+    vp.user_id::text as user_id,
+    vp.org_id,
+    public.project_access_scope(vp.id, vp.org_id, vp.visibility) as access_scope,
+    (
+      select nullif(trim(o.name), '')
+      from public.organizations o
+      where o.id = vp.org_id
+    ) as organization_name,
+    vp.name,
+    vp.cm_number,
+    vp.practice,
+    vp.created_at,
+    vp.updated_at,
+    coalesce(vp.user_id = (case when p_user_id ~ '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$' then p_user_id::uuid end), false) as is_owner,
+    nullif(trim(up.display_name), '') as owner_display_name,
+    -- Populated at last. The column has always been declared and always
+    -- returned NULL, so the UI's "ask the project admin" line had no address
+    -- to render and silently collapsed to nothing.
+    up.email as owner_email,
+    vp.list_access_role as access_role,
+    coalesce(dc.document_count, 0) as document_count,
+    coalesce(cc.chat_count, 0) as chat_count,
+    coalesce(rc.review_count, 0) as review_count
+  from visible_projects vp
+  left join public.user_profiles up
+    on up.user_id = vp.user_id
+  left join document_counts dc
+    on dc.project_id = vp.id
+  left join chat_counts cc
+    on cc.project_id = vp.id
+  left join review_counts rc
+    on rc.project_id = vp.id
+  order by vp.created_at desc;
+$$;
+
+drop function if exists public.get_projects_overview(text,text,text,integer,integer,text,text,text,text,text,text);
+create or replace function public.get_projects_overview(
+  p_user_id text,
+  p_user_email text,
+  p_scope text,
+  p_limit integer,
+  p_offset integer,
+  p_search_term text,
+  p_sort_key text,
+  p_sort_direction text,
+  p_practice text,
+  p_owner_user_id text,
+  p_workspace text default null,
+  p_participating_only boolean default false
+)
+returns table (
+  id uuid,
+  user_id text,
+  org_id uuid,
+  access_scope text,
+  organization_name text,
+  name text,
+  cm_number text,
+  practice text,
+  created_at timestamptz,
+  updated_at timestamptz,
+  is_owner boolean,
+  owner_display_name text,
+  owner_email text,
+  access_role text,
+  document_count integer,
+  chat_count integer,
+  review_count integer
+)
+language sql
+stable
+set search_path=public,pg_temp
+as $$
+  with visible_projects as (
+    select p.*, access.role as list_access_role
+    from public.project_list_access(p_user_id,p_user_email,p_workspace) access
+    join public.projects p on p.id=access.project_id
+    where (
+        p_participating_only is not true
+        or p.user_id = (case when p_user_id ~ '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$' then p_user_id::uuid end)
+        or (p.org_id is null and exists (
+          select 1 from public.project_access_grants participation
+          where participation.project_id=p.id and participation.email=lower(trim(p_user_email))
+        ))
+        or (p.org_id is not null and exists (
+          select 1 from public.project_org_access_overrides participation
+          where participation.project_id=p.id
+            and participation.user_id=(case when p_user_id ~ '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$' then p_user_id::uuid end)
+            and participation.role in ('owner','editor','viewer')
+        ))
+      )
+      and public.workspace_matches(p_workspace, p.org_id)
+      and (
+        coalesce(p_scope, 'all') = 'all'
+        or (p_scope = 'mine' and p.user_id = (case when p_user_id ~ '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$' then p_user_id::uuid end))
+        or (p_scope = 'shared' and (p.user_id is null or p.user_id::text <> p_user_id))
+        or (
+          p_scope = 'collaborative'
+          and (
+            p.user_id is null
+            or p.user_id::text <> p_user_id
+            or public.project_access_scope(p.id, p.org_id, p.visibility) <> 'private'
+          )
+        )
+        or (
+          p_scope = 'private'
+          and p.user_id = (case when p_user_id ~ '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$' then p_user_id::uuid end)
+          and public.project_access_scope(p.id, p.org_id, p.visibility) = 'private'
+        )
+        -- The Public and Private tabs: public is open to the whole
+        -- organization; everything else, shared with individuals or not, is
+        -- private.
+        or (
+          p_scope = 'public'
+          and public.project_access_scope(p.id, p.org_id, p.visibility) = 'organization'
+        )
+        or (
+          p_scope = 'nonpublic'
+          and public.project_access_scope(p.id, p.org_id, p.visibility) <> 'organization'
+        )
+      )
+      and (
+        p_search_term is null
+        or p_search_term = ''
+        or lower(coalesce(p.name, '')) like
+          '%' || replace(replace(replace(lower(p_search_term), '\', '\\'), '%', '\%'), '_', '\_') || '%'
+          escape '\'
+        or lower(coalesce(p.cm_number, '')) like
+          '%' || replace(replace(replace(lower(p_search_term), '\', '\\'), '%', '\%'), '_', '\_') || '%'
+          escape '\'
+        or lower(coalesce(p.practice, '')) like
+          '%' || replace(replace(replace(lower(p_search_term), '\', '\\'), '%', '\%'), '_', '\_') || '%'
+          escape '\'
+      )
+      and (p_practice is null or p.practice = p_practice)
+      and (p_owner_user_id is null or p.user_id = (case when p_owner_user_id ~ '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$' then p_owner_user_id::uuid end))
+  ),
+  -- Page first. Counts are computed for every visible project only when the
+  -- caller sorts by one (it orders the whole list); otherwise only for the
+  -- page's rows. CASE evaluates a count subquery only when its key is chosen.
+  page as materialized (
+    select * from (
+      select vp.*,
+        case when p_sort_key = 'files' then (select count(*)::integer from public.documents d where d.project_id = vp.id) end as sort_document_count,
+        case when p_sort_key = 'chats' then (select count(*)::integer from public.chats c where c.project_id = vp.id) end as sort_chat_count,
+        case when p_sort_key = 'reviews' then (select count(*)::integer from public.tabular_reviews tr where tr.project_id = vp.id) end as sort_review_count
+      from visible_projects vp
+    ) vp
+    order by
+    case when p_sort_key = 'name' and p_sort_direction = 'asc' then lower(coalesce(vp.name, '')) else null end asc,
+    case when p_sort_key = 'name' and p_sort_direction = 'desc' then lower(coalesce(vp.name, '')) else null end desc,
+    case when p_sort_key = 'cm' and p_sort_direction = 'asc' then lower(coalesce(vp.cm_number, '')) else null end asc,
+    case when p_sort_key = 'cm' and p_sort_direction = 'desc' then lower(coalesce(vp.cm_number, '')) else null end desc,
+    case when p_sort_key = 'files' and p_sort_direction = 'asc' then vp.sort_document_count else null end asc,
+    case when p_sort_key = 'files' and p_sort_direction = 'desc' then vp.sort_document_count else null end desc,
+    case when p_sort_key = 'chats' and p_sort_direction = 'asc' then vp.sort_chat_count else null end asc,
+    case when p_sort_key = 'chats' and p_sort_direction = 'desc' then vp.sort_chat_count else null end desc,
+    case when p_sort_key = 'reviews' and p_sort_direction = 'asc' then vp.sort_review_count else null end asc,
+    case when p_sort_key = 'reviews' and p_sort_direction = 'desc' then vp.sort_review_count else null end desc,
+    case when p_sort_key = 'created' and p_sort_direction = 'asc' then vp.created_at else null end asc,
+    case when p_sort_key = 'created' and p_sort_direction = 'desc' then vp.created_at else null end desc,
+    case when p_sort_key = 'updated' and p_sort_direction = 'asc' then vp.updated_at else null end asc,
+    case when p_sort_key = 'updated' and p_sort_direction = 'desc' then vp.updated_at else null end desc,
+    vp.created_at desc,
+    vp.id asc
+    limit greatest(coalesce(p_limit, 20), 1)
+    offset greatest(coalesce(p_offset, 0), 0)
+  )
+  select
+    vp.id,
+    vp.user_id::text as user_id,
+    vp.org_id,
+    public.project_access_scope(vp.id, vp.org_id, vp.visibility) as access_scope,
+    (
+      select nullif(trim(o.name), '')
+      from public.organizations o
+      where o.id = vp.org_id
+    ) as organization_name,
+    vp.name,
+    vp.cm_number,
+    vp.practice,
+    vp.created_at,
+    vp.updated_at,
+    coalesce(vp.user_id = (case when p_user_id ~ '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$' then p_user_id::uuid end), false) as is_owner,
+    nullif(trim(up.display_name), '') as owner_display_name,
+    -- Populated at last. The column has always been declared and always
+    -- returned NULL, so the UI's "ask the project admin" line had no address
+    -- to render and silently collapsed to nothing.
+    up.email as owner_email,
+    vp.list_access_role as access_role,
+    coalesce(vp.sort_document_count, (select count(*)::integer from public.documents d where d.project_id = vp.id)) as document_count,
+    coalesce(vp.sort_chat_count, (select count(*)::integer from public.chats c where c.project_id = vp.id)) as chat_count,
+    coalesce(vp.sort_review_count, (select count(*)::integer from public.tabular_reviews tr where tr.project_id = vp.id)) as review_count
+  from page vp
+  left join public.user_profiles up
+    on up.user_id = vp.user_id
+  order by
+    case when p_sort_key = 'name' and p_sort_direction = 'asc' then lower(coalesce(vp.name, '')) else null end asc,
+    case when p_sort_key = 'name' and p_sort_direction = 'desc' then lower(coalesce(vp.name, '')) else null end desc,
+    case when p_sort_key = 'cm' and p_sort_direction = 'asc' then lower(coalesce(vp.cm_number, '')) else null end asc,
+    case when p_sort_key = 'cm' and p_sort_direction = 'desc' then lower(coalesce(vp.cm_number, '')) else null end desc,
+    case when p_sort_key = 'files' and p_sort_direction = 'asc' then vp.sort_document_count else null end asc,
+    case when p_sort_key = 'files' and p_sort_direction = 'desc' then vp.sort_document_count else null end desc,
+    case when p_sort_key = 'chats' and p_sort_direction = 'asc' then vp.sort_chat_count else null end asc,
+    case when p_sort_key = 'chats' and p_sort_direction = 'desc' then vp.sort_chat_count else null end desc,
+    case when p_sort_key = 'reviews' and p_sort_direction = 'asc' then vp.sort_review_count else null end asc,
+    case when p_sort_key = 'reviews' and p_sort_direction = 'desc' then vp.sort_review_count else null end desc,
+    case when p_sort_key = 'created' and p_sort_direction = 'asc' then vp.created_at else null end asc,
+    case when p_sort_key = 'created' and p_sort_direction = 'desc' then vp.created_at else null end desc,
+    case when p_sort_key = 'updated' and p_sort_direction = 'asc' then vp.updated_at else null end asc,
+    case when p_sort_key = 'updated' and p_sort_direction = 'desc' then vp.updated_at else null end desc,
+    vp.created_at desc,
+    vp.id asc;
+$$;
+revoke all on function public.get_projects_overview(text,text,text,integer,integer,text,text,text,text,text,text,boolean) from public,anon,authenticated;
+grant execute on function public.get_projects_overview(text,text,text,integer,integer,text,text,text,text,text,text,boolean) to service_role;
+
+
+create or replace function public.get_project_ids_overview(
+  p_user_id text,
+  p_user_email text,
+  p_scope text,
+  p_search_term text,
+  p_practice text,
+  p_owner_user_id text,
+  p_limit integer,
+  p_offset integer,
+  p_workspace text default null
+)
+returns table (
+  id uuid,
+  user_id text
+)
+language sql
+stable
+set search_path=public,pg_temp
+as $$
+  select p.id, p.user_id::text as user_id
+  from public.project_list_access(p_user_id,p_user_email,p_workspace) access
+    join public.projects p on p.id=access.project_id
+  where true
+    and public.workspace_matches(p_workspace, p.org_id)
+    and (
+      coalesce(p_scope, 'all') = 'all'
+      or (p_scope = 'mine' and p.user_id = (case when p_user_id ~ '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$' then p_user_id::uuid end))
+      or (p_scope = 'shared' and (p.user_id is null or p.user_id::text <> p_user_id))
+      or (
+        p_scope = 'collaborative'
+        and (
+          p.user_id is null
+          or p.user_id::text <> p_user_id
+          or public.project_access_scope(p.id, p.org_id, p.visibility) <> 'private'
+        )
+      )
+      or (
+        p_scope = 'private'
+        and p.user_id = (case when p_user_id ~ '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$' then p_user_id::uuid end)
+        and public.project_access_scope(p.id, p.org_id, p.visibility) = 'private'
+      )
+      -- The Public and Private tabs: public is open to the whole
+      -- organization; everything else, shared with individuals or not, is
+      -- private.
+      or (
+        p_scope = 'public'
+        and public.project_access_scope(p.id, p.org_id, p.visibility) = 'organization'
+      )
+      or (
+        p_scope = 'nonpublic'
+        and public.project_access_scope(p.id, p.org_id, p.visibility) <> 'organization'
+      )
+    )
+    and (
+      p_search_term is null
+      or p_search_term = ''
+      or lower(coalesce(p.name, '')) like
+        '%' || replace(replace(replace(lower(p_search_term), '\', '\\'), '%', '\%'), '_', '\_') || '%'
+        escape '\'
+      or lower(coalesce(p.cm_number, '')) like
+        '%' || replace(replace(replace(lower(p_search_term), '\', '\\'), '%', '\%'), '_', '\_') || '%'
+        escape '\'
+      or lower(coalesce(p.practice, '')) like
+        '%' || replace(replace(replace(lower(p_search_term), '\', '\\'), '%', '\%'), '_', '\_') || '%'
+        escape '\'
+    )
+    and (p_practice is null or p.practice = p_practice)
+    and (p_owner_user_id is null or p.user_id = (case when p_owner_user_id ~ '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$' then p_owner_user_id::uuid end))
+  order by p.created_at desc, p.id asc
+  limit greatest(coalesce(p_limit, 1000), 1)
+  offset greatest(coalesce(p_offset, 0), 0);
+$$;
+
+create or replace function public.get_project_filter_options(
+  p_user_id text,
+  p_user_email text default null,
+  p_workspace text default null
+)
+returns table (practices text[], owners jsonb)
+language sql
+stable
+set search_path=public,pg_temp
+as $$
+  with visible_projects as (
+    select p.user_id, nullif(trim(p.practice), '') as practice
+    from public.project_list_access(p_user_id,p_user_email,p_workspace) access
+    join public.projects p on p.id=access.project_id
+    where true
+      and public.workspace_matches(p_workspace, p.org_id)
+  ),
+  distinct_owners as (
+    -- NULL is not an owner. A project whose creator's account was deleted
+    -- carries user_id = NULL (on delete set null), and emitting it here put
+    -- an option with value null in the owner dropdown -- selecting which made
+    -- `p_owner_user_id is null or ...` true for EVERY row, so the filter
+    -- silently turned itself off instead of filtering.
+    select distinct vp.user_id
+    from visible_projects vp
+    where vp.user_id is not null
+  ),
+  owner_options as (
+    select
+      o.user_id,
+      case
+        when o.user_id = (case when p_user_id ~ '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$' then p_user_id::uuid end) then 'Me'
+        else coalesce(
+          nullif(trim(up.display_name), ''),
+          nullif(trim(up.email), ''),
+          'Shared'
+        )
+      end as label
+    from distinct_owners o
+    left join public.user_profiles up
+      on up.user_id = o.user_id
+  )
+  select
+    coalesce(
+      (select array_agg(distinct practice order by practice)
+       from visible_projects
+       where practice is not null),
+      array[]::text[]
+    ) as practices,
+    coalesce(
+      (select jsonb_agg(
+          jsonb_build_object('value', user_id, 'label', label)
+          order by label, user_id
+       ) from owner_options),
+      '[]'::jsonb
+    ) as owners;
+$$;
+
+create or replace function public.get_project_summaries(
+  p_user_id text,
+  p_user_email text,
+  p_limit integer,
+  p_offset integer,
+  p_workspace text default null
+)
+returns table (
+  id uuid,
+  user_id text,
+  name text,
+  created_at timestamptz,
+  updated_at timestamptz,
+  is_owner boolean
+)
+language sql
+stable
+set search_path=public,pg_temp
+as $$
+  select
+    p.id,
+    p.user_id::text as user_id,
+    p.name,
+    p.created_at,
+    p.updated_at,
+    coalesce(p.user_id = (case when p_user_id ~ '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$' then p_user_id::uuid end), false) as is_owner
+  from public.project_list_access(p_user_id,p_user_email,p_workspace) access
+    join public.projects p on p.id=access.project_id
+  where true
+    and public.workspace_matches(p_workspace, p.org_id)
+  order by p.updated_at desc, p.created_at desc, p.id asc
+  limit greatest(coalesce(p_limit, 11), 1)
+  offset greatest(coalesce(p_offset, 0), 0);
+$$;
+
+-- Migration date: 2026-10-30
+create or replace function public.review_list_access(p_user_id text,p_user_email text,p_project_id text,p_workspace text)
+returns table(review_id uuid,role text) language sql stable set search_path=public,pg_temp as $$
+  with actor as materialized (
+    select case when p_user_id ~ '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$' then p_user_id::uuid end id,
+      nullif(lower(p_user_email),'') email,
+      case when p_project_id ~ '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$' then p_project_id::uuid end project_id
+  ), project_roles as materialized (
+    -- A requested project is one PK lookup, not an all-projects permission scan.
+    select p.id project_id,public.project_access_role(p.id,p.user_id,p.org_id,p_user_id,p_user_email) role
+      from public.projects p where p.id=(select project_id from actor)
+    union all
+    select * from public.project_list_access(p_user_id,p_user_email,p_workspace) where p_project_id is null
+  ), candidates as materialized (
+    select r.id from project_roles p join public.tabular_reviews r on r.project_id=p.project_id where p.role is not null
+    union select r.id from public.tabular_reviews r where p_project_id is null and r.user_id=(select id from actor)
+    union select g.tabular_review_id from public.tabular_review_access_grants g where p_project_id is null and g.email=(select email from actor)
+    union select a.item_id from public.org_private_content_access a where p_project_id is null and a.user_id=(select id from actor) and a.kind='tabular_review'
+  ), verdicts as materialized (
+    select r.id,case when r.project_id is not null then p.role
+      else public.review_access_role(r.id,r.user_id,r.project_id,r.org_id,p_user_id,p_user_email) end role
+    from candidates c
+    cross join lateral (select item.* from public.tabular_reviews item where item.id=c.id offset 0) r
+    left join project_roles p on p.project_id=r.project_id
+    where r.archived_at is null and public.org_is_active(r.org_id)
+      and case when p_workspace is null then true when p_workspace='personal' then r.org_id is null else r.org_id=p_workspace::uuid end
+  ) select id,role from verdicts where role is not null;
+$$;
+revoke all on function public.review_list_access(text,text,text,text) from public,anon,authenticated;
+grant execute on function public.review_list_access(text,text,text,text) to service_role;
+
+create or replace function public.get_tabular_reviews_overview(
+  p_user_id text,
+  p_user_email text,
+  p_project_id text,
+  p_scope text,
+  p_limit integer,
+  p_offset integer,
+  p_search_term text,
+  p_sort_key text,
+  p_sort_direction text,
+  p_workspace text default null,
+  p_owner_user_id text default null
+)
+returns table (
+  id uuid,
+  project_id uuid,
+  user_id text,
+  title text,
+  columns_config jsonb,
+  document_ids jsonb,
+  workflow_id uuid,
+  created_at timestamptz,
+  updated_at timestamptz,
+  is_owner boolean,
+  access_role text,
+  document_count integer
+)
+language sql
+stable
+set search_path=public,pg_temp
+as $$
+  with visible_reviews as (
+    select tr.*,access.role as list_access_role
+    from public.review_list_access(p_user_id,p_user_email,p_project_id,p_workspace) access
+    join public.tabular_reviews tr on tr.id=access.review_id
+    where (p_project_id is null or tr.project_id = (case when p_project_id ~ '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$' then p_project_id::uuid end))
+      and public.workspace_matches(p_workspace, tr.org_id)
+      and (p_owner_user_id is null or tr.user_id = (case when p_owner_user_id ~ '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$' then p_owner_user_id::uuid end))
+      and (
+        coalesce(p_scope, 'all') = 'all'
+        or (p_scope = 'in-project' and tr.project_id is not null)
+        or (p_scope = 'standalone' and tr.project_id is null)
+      )
+      and (
+        p_search_term is null
+        or p_search_term = ''
+        or lower(tr.title) like
+          '%' ||
+          replace(
+            replace(
+              replace(lower(p_search_term), '\', '\\'),
+              '%',
+              '\%'
+            ),
+            '_',
+            '\_'
+          ) ||
+          '%'
+          escape '\'
+      )
+  ),
+  -- Page first. Document counts are computed for every visible review only
+  -- when the caller sorts by them; otherwise only for the page's rows.
+  page as materialized (
+    select * from (
+      select vr.*,
+        case when p_sort_key = 'documents' then case
+          when jsonb_typeof(vr.document_ids) = 'array'
+            then (
+              select count(distinct doc_id.value)::integer
+              from jsonb_array_elements_text(vr.document_ids) as doc_id(value)
+            )
+          else (
+            select count(distinct tc.document_id)::integer
+            from public.tabular_cells tc
+            where tc.review_id = vr.id
+          )
+        end end as sort_document_count
+      from visible_reviews vr
+    ) vr
+    order by
+    case when p_sort_key = 'name' and p_sort_direction = 'asc' then lower(coalesce(vr.title, '')) else null end asc,
+    case when p_sort_key = 'name' and p_sort_direction = 'desc' then lower(coalesce(vr.title, '')) else null end desc,
+    case when p_sort_key = 'columns' and p_sort_direction = 'asc' then jsonb_array_length(coalesce(vr.columns_config, '[]'::jsonb)) else null end asc,
+    case when p_sort_key = 'columns' and p_sort_direction = 'desc' then jsonb_array_length(coalesce(vr.columns_config, '[]'::jsonb)) else null end desc,
+    case when p_sort_key = 'documents' and p_sort_direction = 'asc' then vr.sort_document_count else null end asc,
+    case when p_sort_key = 'documents' and p_sort_direction = 'desc' then vr.sort_document_count else null end desc,
+    case when p_sort_key = 'updated' and p_sort_direction = 'asc' then coalesce(vr.updated_at, vr.created_at) else null end asc,
+    case when p_sort_key = 'updated' and p_sort_direction = 'desc' then coalesce(vr.updated_at, vr.created_at) else null end desc,
+    case when p_sort_key = 'created' and p_sort_direction = 'asc' then vr.created_at else null end asc,
+    case when p_sort_key = 'created' and p_sort_direction = 'desc' then vr.created_at else null end desc,
+    vr.created_at desc,
+    vr.id asc
+    limit greatest(coalesce(p_limit, 20), 1)
+    offset greatest(coalesce(p_offset, 0), 0)
+  )
+  select
+    vr.id,
+    vr.project_id,
+    vr.user_id::text as user_id,
+    vr.title,
+    vr.columns_config,
+    vr.document_ids,
+    vr.workflow_id,
+    vr.created_at,
+    vr.updated_at,
+    coalesce(vr.user_id::text = p_user_id, false) as is_owner,
+    vr.list_access_role as access_role,
+    coalesce(vr.sort_document_count, case
+          when jsonb_typeof(vr.document_ids) = 'array'
+            then (
+              select count(distinct doc_id.value)::integer
+              from jsonb_array_elements_text(vr.document_ids) as doc_id(value)
+            )
+          else (
+            select count(distinct tc.document_id)::integer
+            from public.tabular_cells tc
+            where tc.review_id = vr.id
+          )
+        end) as document_count
+  from page vr
+  order by
+    case when p_sort_key = 'name' and p_sort_direction = 'asc' then lower(coalesce(vr.title, '')) else null end asc,
+    case when p_sort_key = 'name' and p_sort_direction = 'desc' then lower(coalesce(vr.title, '')) else null end desc,
+    case when p_sort_key = 'columns' and p_sort_direction = 'asc' then jsonb_array_length(coalesce(vr.columns_config, '[]'::jsonb)) else null end asc,
+    case when p_sort_key = 'columns' and p_sort_direction = 'desc' then jsonb_array_length(coalesce(vr.columns_config, '[]'::jsonb)) else null end desc,
+    case when p_sort_key = 'documents' and p_sort_direction = 'asc' then vr.sort_document_count else null end asc,
+    case when p_sort_key = 'documents' and p_sort_direction = 'desc' then vr.sort_document_count else null end desc,
+    case when p_sort_key = 'updated' and p_sort_direction = 'asc' then coalesce(vr.updated_at, vr.created_at) else null end asc,
+    case when p_sort_key = 'updated' and p_sort_direction = 'desc' then coalesce(vr.updated_at, vr.created_at) else null end desc,
+    case when p_sort_key = 'created' and p_sort_direction = 'asc' then vr.created_at else null end asc,
+    case when p_sort_key = 'created' and p_sort_direction = 'desc' then vr.created_at else null end desc,
+    vr.created_at desc,
+    vr.id asc;
+$$;
+
+create or replace function public.get_tabular_review_ids_overview(
+  p_user_id text,
+  p_user_email text,
+  p_project_id text,
+  p_scope text,
+  p_search_term text,
+  p_limit integer,
+  p_offset integer,
+  p_workspace text default null,
+  p_owner_user_id text default null
+)
+returns table (
+  id uuid,
+  user_id text
+)
+language sql
+stable
+set search_path=public,pg_temp
+as $$
+  select tr.id, tr.user_id::text as user_id
+  from public.review_list_access(p_user_id,p_user_email,p_project_id,p_workspace) access
+    join public.tabular_reviews tr on tr.id=access.review_id
+  where (p_project_id is null or tr.project_id = (case when p_project_id ~ '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$' then p_project_id::uuid end))
+    and public.workspace_matches(p_workspace, tr.org_id)
+    and (p_owner_user_id is null or tr.user_id = (case when p_owner_user_id ~ '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$' then p_owner_user_id::uuid end))
+    and (
+      coalesce(p_scope, 'all') = 'all'
+      or (p_scope = 'in-project' and tr.project_id is not null)
+      or (p_scope = 'standalone' and tr.project_id is null)
+    )
+    and (
+      p_search_term is null
+      or p_search_term = ''
+      or lower(tr.title) like
+        '%' ||
+        replace(
+          replace(
+            replace(lower(p_search_term), '\', '\\'),
+            '%',
+            '\%'
+          ),
+          '_',
+          '\_'
+        ) ||
+        '%'
+        escape '\'
+    )
+  order by tr.created_at desc, tr.id asc
+  limit greatest(coalesce(p_limit, 1000), 1)
+  offset greatest(coalesce(p_offset, 0), 0);
+$$;
+
+-- Migration date: 2026-10-30
+create index if not exists workflow_shares_lower_email_idx on public.workflow_shares(lower(shared_with_email));
+create or replace function public.workflow_list_access(p_user_id text,p_user_email text,p_workspace text default null)
+returns table(workflow_id uuid,role text) language sql stable set search_path=public,pg_temp as $$
+  with actor as materialized (
+    select case when p_user_id ~ '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$' then p_user_id::uuid end id,
+      nullif(lower(p_user_email),'') email
+  ), candidates as materialized (
+    select w.id from public.workflows w where w.user_id=(select id from actor)
+    -- As for projects: public workflows, all of them for an org Owner, and
+    -- per-member overrides; never another member's private workflow.
+    union select w.id from public.org_members m join public.workflows w on w.org_id=m.org_id and w.visibility='organization' where m.user_id=(select id from actor)
+    union select w.id from public.org_members m join public.workflows w on w.org_id=m.org_id where m.user_id=(select id from actor) and m.role='owner'
+    union select o.workflow_id from public.workflow_org_access_overrides o where o.user_id=(select id from actor)
+    union select g.workflow_id from public.workflow_shares g where lower(g.shared_with_email)=(select email from actor)
+    union select a.item_id from public.org_private_content_access a where a.user_id=(select id from actor) and a.kind='workflow'
+  ), verdicts as materialized (
+    select w.id,public.workflow_access_role(w.id,w.user_id,w.org_id,p_user_id,p_user_email) role
+    from candidates c cross join lateral (select item.* from public.workflows item where item.id=c.id offset 0) w
+    where case when p_workspace is null then true when p_workspace='personal' then w.org_id is null else w.org_id=p_workspace::uuid end
+  ) select id,role from verdicts where role is not null;
+$$;
+revoke all on function public.workflow_list_access(text,text,text) from public,anon,authenticated;
+grant execute on function public.workflow_list_access(text,text,text) to service_role;
+
+create or replace function public.get_workflows_overview(
+  p_user_id text,
+  p_user_email text default null,
+  p_type text default null
+)
+returns table (
+  id uuid,
+  user_id text,
+  org_id uuid,
+  access_scope text,
+  organization_name text,
+  title text,
+  type text,
+  prompt_md text,
+  columns_config jsonb,
+  language text,
+  practice text,
+  jurisdictions text[],
+  is_system boolean,
+  created_at timestamptz,
+  allow_edit boolean,
+  is_owner boolean,
+  shared_by_name text
+)
+language sql
+stable
+set search_path=public,pg_temp
+as $$
+  with accessible as materialized (
+    select w.*,access.role as list_role
+    from public.workflow_list_access(p_user_id,p_user_email,null) access
+    join public.workflows w on w.id=access.workflow_id
+  ), owned as (
+    select
+      w.id,
+      w.user_id::text as user_id,
+      w.org_id,
+      public.workflow_access_scope(w.id, w.org_id, w.visibility) as access_scope,
+      (
+        select nullif(trim(o.name), '')
+        from public.organizations o
+        where o.id = w.org_id
+      ) as organization_name,
+      w.title,
+      w.type,
+      w.prompt_md,
+      w.columns_config,
+      w.language,
+      w.practice,
+      w.jurisdictions,
+      false as is_system,
+      w.created_at,
+      true as allow_edit,
+      true as is_owner,
+      null::text as shared_by_name,
+      0 as sort_bucket
+    from accessible w
+    where w.user_id::text = p_user_id
+      and w.list_role is not null
+      and (p_type is null or w.type = p_type)
+  ),
+  shared as (
+    select
+      w.id,
+      w.user_id::text as user_id,
+      w.org_id,
+      'shared'::text as access_scope,
+      null::text as organization_name,
+      w.title,
+      w.type,
+      w.prompt_md,
+      w.columns_config,
+      w.language,
+      w.practice,
+      w.jurisdictions,
+      false as is_system,
+      w.created_at,
+      (ws.role in ('owner', 'editor')) as allow_edit,
+      (ws.role = 'owner') as is_owner,
+      nullif(trim(up.display_name), '') as shared_by_name,
+      1 as sort_bucket
+    from public.workflow_shares ws
+    join accessible w
+      on w.id = ws.workflow_id
+    left join public.user_profiles up
+      on up.user_id = ws.shared_by_user_id
+    where lower(ws.shared_with_email) = lower(coalesce(p_user_email, ''))
+      and w.org_id is null
+      and (p_type is null or w.type = p_type)
+  ),
+  org_shared as (
+    -- Workflows in an org the caller belongs to. Admins default to Owner and
+    -- Members default to Editor; per-workflow overrides may narrow either.
+    -- Mirrors resolveWorkflowAccess in routes/workflows.ts, so a row's
+    -- affordances in the list match what the detail route will allow.
+    select
+      w.id,
+      w.user_id::text as user_id,
+      w.org_id,
+      public.workflow_access_scope(w.id, w.org_id, w.visibility) as access_scope,
+      (
+        select nullif(trim(o.name), '')
+        from public.organizations o
+        where o.id = w.org_id
+      ) as organization_name,
+      w.title,
+      w.type,
+      w.prompt_md,
+      w.columns_config,
+      w.language,
+      w.practice,
+      w.jurisdictions,
+      false as is_system,
+      w.created_at,
+      (w.list_role in ('owner', 'editor')) as allow_edit,
+      (w.list_role = 'owner') as is_owner,
+      nullif(trim(up.display_name), '') as shared_by_name,
+      2 as sort_bucket
+    from accessible w
+    left join public.user_profiles up
+      on up.user_id = w.user_id
+    where w.org_id is not null
+      and (w.user_id is null or w.user_id::text <> p_user_id)
+      and (p_type is null or w.type = p_type)
+      and w.list_role is not null
+  ),
+  visible_workflows as (
+    select * from owned
+    union all
+    select * from shared
+    union all
+    select * from org_shared
+  )
+  select
+    vw.id,
+    vw.user_id,
+    vw.org_id,
+    vw.access_scope,
+    vw.organization_name,
+    vw.title,
+    vw.type,
+    vw.prompt_md,
+    vw.columns_config,
+    vw.language,
+    vw.practice,
+    vw.jurisdictions,
+    vw.is_system,
+    vw.created_at,
+    vw.allow_edit,
+    vw.is_owner,
+    vw.shared_by_name
+  from visible_workflows vw
+  order by vw.sort_bucket asc, vw.created_at desc;
+$$;
+
+create or replace function public.get_workflows_overview(
+  p_user_id text,
+  p_user_email text,
+  p_type text,
+  p_scope text,
+  p_limit integer,
+  p_offset integer,
+  p_search_term text,
+  p_sort_key text,
+  p_sort_direction text,
+  p_practice text,
+  p_language text,
+  p_jurisdiction text,
+  p_workspace text default null
+)
+returns table (
+  id uuid,
+  user_id text,
+  org_id uuid,
+  access_scope text,
+  organization_name text,
+  title text,
+  type text,
+  prompt_md text,
+  columns_config jsonb,
+  language text,
+  practice text,
+  jurisdictions text[],
+  is_system boolean,
+  created_at timestamptz,
+  allow_edit boolean,
+  is_owner boolean,
+  shared_by_name text
+)
+language sql
+stable
+set search_path=public,pg_temp
+as $$
+  with accessible as materialized (
+    select w.*,access.role as list_role
+    from public.workflow_list_access(p_user_id,p_user_email,p_workspace) access
+    join public.workflows w on w.id=access.workflow_id
+  ), owned as (
+    select
+      w.id, w.user_id::text as user_id, w.org_id,
+      public.workflow_access_scope(w.id, w.org_id, w.visibility) as access_scope,
+      (
+        select nullif(trim(o.name), '')
+        from public.organizations o
+        where o.id = w.org_id
+      ) as organization_name,
+      w.title, w.type, w.prompt_md,
+      w.columns_config, w.language, w.practice, w.jurisdictions,
+      false as is_system, w.created_at,
+      true as allow_edit, true as is_owner, null::text as shared_by_name,
+      0 as sort_bucket
+    from accessible w
+    where w.user_id::text = p_user_id
+      and w.list_role is not null
+      and (p_type is null or w.type = p_type)
+      and public.workspace_matches(p_workspace, w.org_id)
+  ),
+  shared as (
+    select
+      w.id, w.user_id::text as user_id, w.org_id,
+      'shared'::text as access_scope, null::text as organization_name,
+      w.title, w.type, w.prompt_md,
+      w.columns_config, w.language, w.practice, w.jurisdictions,
+      false as is_system, w.created_at,
+      (ws.role in ('owner', 'editor')) as allow_edit,
+      (ws.role = 'owner') as is_owner,
+      nullif(trim(up.display_name), '') as shared_by_name,
+      1 as sort_bucket
+    from public.workflow_shares ws
+    join accessible w
+      on w.id = ws.workflow_id
+    left join public.user_profiles up
+      on up.user_id = ws.shared_by_user_id
+    where lower(ws.shared_with_email) = lower(coalesce(p_user_email, ''))
+      and w.org_id is null
+      and (p_type is null or w.type = p_type)
+      and public.workspace_matches(p_workspace, w.org_id)
+  ),
+  org_shared as (
+    -- Workflows in an org the caller belongs to. Admins default to Owner and
+    -- Members default to Editor; per-workflow overrides may narrow either.
+    -- Mirrors resolveWorkflowAccess in routes/workflows.ts and the legacy
+    -- 3-argument overload. Under the scope filter these rows count as
+    -- "shared" — shared-with-me and shared-via-my-org are one bucket from
+    -- the caller's point of view.
+    select
+      w.id, w.user_id::text as user_id, w.org_id,
+      public.workflow_access_scope(w.id, w.org_id, w.visibility) as access_scope,
+      (
+        select nullif(trim(o.name), '')
+        from public.organizations o
+        where o.id = w.org_id
+      ) as organization_name,
+      w.title, w.type, w.prompt_md,
+      w.columns_config, w.language, w.practice, w.jurisdictions,
+      false as is_system, w.created_at,
+      (w.list_role in ('owner', 'editor')) as allow_edit,
+      (w.list_role = 'owner') as is_owner,
+      nullif(trim(up.display_name), '') as shared_by_name,
+      2 as sort_bucket
+    from accessible w
+    left join public.user_profiles up
+      on up.user_id = w.user_id
+    where w.org_id is not null
+      and (w.user_id is null or w.user_id::text <> p_user_id)
+      and (p_type is null or w.type = p_type)
+      and public.workspace_matches(p_workspace, w.org_id)
+      and w.list_role is not null
+  ),
+  visible_workflows as (
+    select * from owned
+    union all
+    select * from shared
+    union all
+    select * from org_shared
+  )
+  select
+    vw.id, vw.user_id, vw.org_id, vw.access_scope, vw.organization_name,
+    vw.title, vw.type, vw.prompt_md, vw.columns_config,
+    vw.language, vw.practice, vw.jurisdictions, vw.is_system, vw.created_at,
+    vw.allow_edit, vw.is_owner, vw.shared_by_name
+  from visible_workflows vw
+  where (
+      coalesce(p_scope, 'all') = 'all'
+      or (p_scope = 'owned' and vw.sort_bucket = 0)
+      or (p_scope = 'shared' and vw.sort_bucket in (1, 2))
+      or (p_scope = 'private' and vw.access_scope = 'private')
+      or (
+        p_scope = 'collaborative'
+        and vw.access_scope in ('shared', 'organization')
+      )
+      or (p_scope = 'public' and vw.access_scope = 'organization')
+      or (p_scope = 'nonpublic' and vw.access_scope <> 'organization')
+    )
+    and (
+      p_search_term is null
+      or p_search_term = ''
+      or lower(vw.title) like
+        '%' || replace(replace(replace(lower(p_search_term), '\', '\\'), '%', '\%'), '_', '\_') || '%'
+        escape '\'
+    )
+    and (p_practice is null or vw.practice = p_practice)
+    and (p_language is null or vw.language = p_language)
+    and (p_jurisdiction is null or vw.jurisdictions @> array[p_jurisdiction])
+  order by
+    case when p_sort_key = 'name' and p_sort_direction = 'asc' then lower(coalesce(vw.title, '')) else null end asc,
+    case when p_sort_key = 'name' and p_sort_direction = 'desc' then lower(coalesce(vw.title, '')) else null end desc,
+    case when p_sort_key = 'type' and p_sort_direction = 'asc' then vw.type else null end asc,
+    case when p_sort_key = 'type' and p_sort_direction = 'desc' then vw.type else null end desc,
+    case when p_sort_key = 'created' and p_sort_direction = 'asc' then vw.created_at else null end asc,
+    case when p_sort_key = 'created' and p_sort_direction = 'desc' then vw.created_at else null end desc,
+    vw.sort_bucket asc,
+    vw.created_at desc,
+    vw.id asc
+  limit greatest(coalesce(p_limit, 20), 1)
+  offset greatest(coalesce(p_offset, 0), 0);
+$$;
+
+create or replace function public.get_workflow_ids_overview(
+  p_user_id text,
+  p_user_email text,
+  p_type text,
+  p_scope text,
+  p_search_term text,
+  p_practice text,
+  p_language text,
+  p_jurisdiction text,
+  p_limit integer,
+  p_offset integer,
+  p_workspace text default null
+)
+returns table (
+  id uuid,
+  user_id text
+)
+language sql
+stable
+set search_path=public,pg_temp
+as $$
+  with accessible as materialized (
+    select w.*,access.role as list_role
+    from public.workflow_list_access(p_user_id,p_user_email,p_workspace) access
+    join public.workflows w on w.id=access.workflow_id
+  ), owned as (
+    select
+      w.id, w.user_id::text as user_id,
+      public.workflow_access_scope(w.id, w.org_id, w.visibility) as access_scope,
+      w.title, w.practice, w.language, w.jurisdictions,
+      w.created_at, 0 as sort_bucket
+    from accessible w
+    where w.user_id::text = p_user_id
+      and w.list_role is not null
+      and (p_type is null or w.type = p_type)
+      and public.workspace_matches(p_workspace, w.org_id)
+  ),
+  shared as (
+    select
+      w.id, w.user_id::text as user_id, 'shared'::text as access_scope,
+      w.title, w.practice, w.language, w.jurisdictions,
+      w.created_at, 1 as sort_bucket
+    from public.workflow_shares ws
+    join accessible w
+      on w.id = ws.workflow_id
+    where lower(ws.shared_with_email) = lower(coalesce(p_user_email, ''))
+      and w.org_id is null
+      and (p_type is null or w.type = p_type)
+      and public.workspace_matches(p_workspace, w.org_id)
+  ),
+  org_shared as (
+    -- Same org-membership arm as get_workflows_overview: the ids RPC must
+    -- compute the same visible set, or "select all matching" silently
+    -- omits org-shared rows the list view shows.
+    select
+      w.id, w.user_id::text as user_id, public.workflow_access_scope(w.id, w.org_id, w.visibility) as access_scope,
+      w.title, w.practice, w.language, w.jurisdictions,
+      w.created_at, 2 as sort_bucket
+    from accessible w
+    where w.org_id is not null
+      and (w.user_id is null or w.user_id::text <> p_user_id)
+      and (p_type is null or w.type = p_type)
+      and public.workspace_matches(p_workspace, w.org_id)
+      and w.list_role is not null
+  ),
+  visible_workflows as (
+    select * from owned
+    union all
+    select * from shared
+    union all
+    select * from org_shared
+  )
+  select vw.id, vw.user_id
+  from visible_workflows vw
+  where (
+      coalesce(p_scope, 'all') = 'all'
+      or (p_scope = 'owned' and vw.sort_bucket = 0)
+      or (p_scope = 'shared' and vw.sort_bucket in (1, 2))
+      or (p_scope = 'private' and vw.access_scope = 'private')
+      or (
+        p_scope = 'collaborative'
+        and vw.access_scope in ('shared', 'organization')
+      )
+      or (p_scope = 'public' and vw.access_scope = 'organization')
+      or (p_scope = 'nonpublic' and vw.access_scope <> 'organization')
+    )
+    and (
+      p_search_term is null
+      or p_search_term = ''
+      or lower(vw.title) like
+        '%' || replace(replace(replace(lower(p_search_term), '\', '\\'), '%', '\%'), '_', '\_') || '%'
+        escape '\'
+    )
+    and (p_practice is null or vw.practice = p_practice)
+    and (p_language is null or vw.language = p_language)
+    and (p_jurisdiction is null or vw.jurisdictions @> array[p_jurisdiction])
+  order by vw.sort_bucket asc, vw.created_at desc, vw.id asc
+  limit greatest(coalesce(p_limit, 1000), 1)
+  offset greatest(coalesce(p_offset, 0), 0);
+$$;
+
+create or replace function public.get_workflow_filter_options(
+  p_user_id text,
+  p_user_email text default null,
+  p_type text default null,
+  p_scope text default 'all',
+  p_workspace text default null
+)
+returns table (
+  practices text[],
+  languages text[],
+  jurisdictions text[]
+)
+language sql
+stable
+set search_path=public,pg_temp
+as $$
+  with accessible as materialized (
+    select w.*,access.role as list_role
+    from public.workflow_list_access(p_user_id,p_user_email,p_workspace) access
+    join public.workflows w on w.id=access.workflow_id
+  ), owned as (
+    select w.practice, w.language, w.jurisdictions, 'owned'::text as source
+    from accessible w
+    where w.user_id::text = p_user_id
+      and w.list_role is not null
+      and (p_type is null or w.type = p_type)
+      and public.workspace_matches(p_workspace, w.org_id)
+  ),
+  shared as (
+    select w.practice, w.language, w.jurisdictions, 'shared'::text as source
+    from public.workflow_shares ws
+    join accessible w on w.id = ws.workflow_id
+    where lower(ws.shared_with_email) = lower(coalesce(p_user_email, ''))
+      and w.org_id is null
+      and (p_type is null or w.type = p_type)
+      and public.workspace_matches(p_workspace, w.org_id)
+  ),
+  org_shared as (
+    -- Same org-membership arm as get_workflows_overview, including the
+    -- workflow_shares NOT EXISTS dedup, so a row visible via both routes
+    -- contributes its options exactly once. Tagged 'shared' to match the
+    -- overview's scope bucketing.
+    select w.practice, w.language, w.jurisdictions, 'shared'::text as source
+    from accessible w
+    where w.org_id is not null
+      and (w.user_id is null or w.user_id::text <> p_user_id)
+      and (p_type is null or w.type = p_type)
+      and public.workspace_matches(p_workspace, w.org_id)
+      and w.list_role is not null
+  ),
+  visible as (
+    select * from owned
+    union all
+    select * from shared
+    union all
+    select * from org_shared
+  ),
+  scoped as (
+    select * from visible
+    where coalesce(p_scope, 'all') = 'all' or source = p_scope
+  )
+  select
+    coalesce(
+      array_agg(distinct nullif(trim(practice), '') order by nullif(trim(practice), ''))
+        filter (where nullif(trim(practice), '') is not null),
+      array[]::text[]
+    ) as practices,
+    coalesce(
+      array_agg(distinct nullif(trim(language), '') order by nullif(trim(language), ''))
+        filter (where nullif(trim(language), '') is not null),
+      array[]::text[]
+    ) as languages,
+    coalesce(
+      (select array_agg(distinct jurisdiction order by jurisdiction)
+       from scoped s
+       cross join lateral unnest(coalesce(s.jurisdictions, array[]::text[])) jurisdiction
+       where nullif(trim(jurisdiction), '') is not null),
+      array[]::text[]
+    ) as jurisdictions
+  from scoped;
+$$;
+
+-- Migration date: 2026-10-30
+create or replace function public.search_library_documents(
+  p_user_id text,
+  p_library_kind text,
+  p_limit integer,
+  p_offset integer,
+  p_search_term text default null,
+  p_file_type text default null,
+  p_sort_key text default 'updated',
+  p_sort_direction text default 'desc',
+  p_workspace text default null
+)
+returns table (
+  id uuid,
+  project_id uuid,
+  user_id text,
+  status text,
+  folder_id uuid,
+  library_kind text,
+  library_folder_id uuid,
+  current_version_id uuid,
+  created_at timestamptz,
+  updated_at timestamptz,
+  filename text,
+  file_type text,
+  storage_path text,
+  pdf_storage_path text,
+  size_bytes integer,
+  page_count integer,
+  textless_page_count integer,
+  active_version_number integer
+)
+language sql
+stable
+set search_path=public,pg_temp
+as $$
+  select
+    d.id,
+    d.project_id,
+    d.user_id::text as user_id,
+    d.status,
+    d.folder_id,
+    d.library_kind,
+    d.library_folder_id,
+    d.current_version_id,
+    d.created_at,
+    d.updated_at,
+    coalesce(nullif(trim(v.filename), ''), 'Untitled document') as filename,
+    v.file_type,
+    v.storage_path,
+    v.pdf_storage_path,
+    v.size_bytes,
+    v.page_count,
+    v.textless_page_count,
+    v.version_number as active_version_number
+  from public.documents d
+  left join public.document_versions v
+    on v.id = d.current_version_id
+   and v.deleted_at is null
+  where d.user_id=(case when p_user_id ~ '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$' then p_user_id::uuid end)
+    and (case when p_workspace is null then true when p_workspace='personal' then d.org_id is null else d.org_id=p_workspace::uuid end)
+    and d.project_id is null
+    and (
+      (p_library_kind = 'file' and coalesce(d.library_kind, 'file') = 'file')
+      or d.library_kind = p_library_kind
+    )
+    and (
+      p_search_term is null
+      or p_search_term = ''
+      or lower(coalesce(v.filename, '')) like
+        '%' || replace(replace(replace(lower(p_search_term), '\', '\\'), '%', '\%'), '_', '\_') || '%'
+        escape '\'
+    )
+    and (
+      p_file_type is null
+      or lower(coalesce(v.file_type, '')) = lower(p_file_type)
+    )
+  order by
+    case when p_sort_key = 'name' and p_sort_direction = 'asc' then lower(coalesce(v.filename, '')) else null end asc,
+    case when p_sort_key = 'name' and p_sort_direction = 'desc' then lower(coalesce(v.filename, '')) else null end desc,
+    case when p_sort_key = 'type' and p_sort_direction = 'asc' then lower(coalesce(v.file_type, '')) else null end asc,
+    case when p_sort_key = 'type' and p_sort_direction = 'desc' then lower(coalesce(v.file_type, '')) else null end desc,
+    case when p_sort_key = 'size' and p_sort_direction = 'asc' then coalesce(v.size_bytes, 0) else null end asc,
+    case when p_sort_key = 'size' and p_sort_direction = 'desc' then coalesce(v.size_bytes, 0) else null end desc,
+    case when p_sort_key = 'version' and p_sort_direction = 'asc' then coalesce(v.version_number, 0) else null end asc,
+    case when p_sort_key = 'version' and p_sort_direction = 'desc' then coalesce(v.version_number, 0) else null end desc,
+    case when p_sort_key = 'created' and p_sort_direction = 'asc' then d.created_at else null end asc,
+    case when p_sort_key = 'created' and p_sort_direction = 'desc' then d.created_at else null end desc,
+    case when p_sort_key = 'updated' and p_sort_direction = 'asc' then d.updated_at else null end asc,
+    case when p_sort_key = 'updated' and p_sort_direction = 'desc' then d.updated_at else null end desc,
+    d.updated_at desc,
+    d.id asc
+  limit greatest(coalesce(p_limit, 50), 1)
+  offset greatest(coalesce(p_offset, 0), 0);
+$$;
+
+create or replace function public.get_library_document_ids(
+  p_user_id text,
+  p_library_kind text,
+  p_search_term text,
+  p_file_type text,
+  p_limit integer,
+  p_offset integer,
+  p_workspace text default null
+)
+returns table (
+  id uuid,
+  user_id text
+)
+language sql
+stable
+set search_path=public,pg_temp
+as $$
+  select d.id, d.user_id::text as user_id
+  from public.documents d
+  left join public.document_versions v
+    on v.id = d.current_version_id
+   and v.deleted_at is null
+  where d.user_id=(case when p_user_id ~ '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$' then p_user_id::uuid end)
+    and (case when p_workspace is null then true when p_workspace='personal' then d.org_id is null else d.org_id=p_workspace::uuid end)
+    and d.project_id is null
+    and (
+      (p_library_kind = 'file' and coalesce(d.library_kind, 'file') = 'file')
+      or d.library_kind = p_library_kind
+    )
+    and (
+      p_search_term is null
+      or p_search_term = ''
+      or lower(coalesce(v.filename, '')) like
+        '%' || replace(replace(replace(lower(p_search_term), '\', '\\'), '%', '\%'), '_', '\_') || '%'
+        escape '\'
+    )
+    and (
+      p_file_type is null
+      or lower(coalesce(v.file_type, '')) = lower(p_file_type)
+    )
+  order by d.updated_at desc, d.id asc
+  limit greatest(coalesce(p_limit, 1000), 1)
+  offset greatest(coalesce(p_offset, 0), 0);
+$$;
+
+create or replace function public.get_library_filter_options(
+  p_user_id text,
+  p_library_kind text,
+  p_workspace text default null
+)
+returns table (file_types text[])
+language sql
+stable
+set search_path=public,pg_temp
+as $$
+  select coalesce(
+    array_agg(distinct lower(v.file_type) order by lower(v.file_type))
+      filter (where nullif(trim(v.file_type), '') is not null),
+    array[]::text[]
+  ) as file_types
+  from public.documents d
+  left join public.document_versions v
+    on v.id = d.current_version_id
+   and v.deleted_at is null
+  where d.user_id=(case when p_user_id ~ '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$' then p_user_id::uuid end)
+    and (case when p_workspace is null then true when p_workspace='personal' then d.org_id is null else d.org_id=p_workspace::uuid end)
+    and d.project_id is null
+    and (
+      (p_library_kind = 'file' and coalesce(d.library_kind, 'file') = 'file')
+      or d.library_kind = p_library_kind
+    );
+$$;
+
+-- Migration date: 2026-10-30
+create or replace function public.find_document_text(
+  p_user_id text,p_user_email text,p_workspace text,p_scope text,p_query text,
+  p_project_id uuid default null,p_document_id uuid default null,p_version_id uuid default null,
+  p_limit integer default 10,p_offset integer default 0
+) returns jsonb language plpgsql stable security invoker set search_path=public,pg_temp as $$
+declare result jsonb; project_allowed boolean; page_limit integer:=least(greatest(coalesce(p_limit,10),1),20);
+begin
+  if p_scope is null or p_scope not in ('project','library','templates','document') or p_query is null
+    or char_length(trim(p_query))<2 or char_length(p_query)>500
+    or p_offset is null or p_offset<0 or p_offset>100000
+    or (p_scope='project' and p_project_id is null)
+    or (p_scope='document' and p_document_id is null)
+    or (p_version_id is not null and p_scope<>'document') then
+    raise exception 'Invalid document search' using errcode='22023';
+  end if;
+  if p_scope='project' then
+    select public.project_access_role(p.id,p.user_id,p.org_id,p_user_id,p_user_email) is not null
+      into project_allowed from public.projects p where p.id=p_project_id;
+  end if;
+  with eligible as materialized (
+    select d.id document_id,d.library_kind,v.id version_id,v.version_number,v.filename,v.file_type,
+      v.storage_path,v.text_revision
+    from public.documents d join public.document_versions v on v.document_id=d.id
+    where d.archived_at is null and v.deleted_at is null
+      and (case when p_version_id is null then v.id=d.current_version_id else v.id=p_version_id end)
+      and (case when coalesce(p_workspace,'personal')='personal' then d.org_id is null else d.org_id=p_workspace::uuid end)
+      and case p_scope
+        when 'project' then d.project_id=p_project_id
+        when 'library' then d.project_id is null and d.workflow_id is null and d.library_kind='file' and d.user_id=(case when p_user_id ~ '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$' then p_user_id::uuid end)
+        when 'templates' then d.project_id is null and d.workflow_id is null and d.library_kind='template' and d.user_id=(case when p_user_id ~ '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$' then p_user_id::uuid end)
+        when 'document' then d.id=p_document_id
+        else false end
+      and case when p_scope='project' then coalesce(project_allowed,false) and public.org_is_active(d.org_id)
+        else public.document_text_access(d.id,p_user_id,p_user_email) end
+  ), coverage as (
+    select count(*) total_versions,
+      count(*) filter(where t.status='ready') indexed_versions,
+      count(*) filter(where t.status='failed') failed_versions,
+      count(*) filter(where t.status is null or t.status in ('pending','processing')) pending_versions,
+      count(*) filter(where t.status='ready' and t.textless_page_count>0) versions_needing_ocr
+    -- Each eligible version's text is one primary-key probe (OFFSET 0 keeps
+    -- the subquery from being flattened). Joined freely, a reused generic
+    -- plan scanned the text table, or its trigram index, across all tenants.
+    from eligible e left join lateral (
+      select item.status,item.textless_page_count from public.document_version_texts item
+      where item.version_id=e.version_id and item.source_revision=e.text_revision and item.extractor_version=1
+      offset 0
+    ) t on true
+  ), hits as (
+    select e.*,t.text_content,strpos(lower(t.text_content),lower(p_query)) pos
+    from eligible e cross join lateral (
+      select item.text_content from public.document_version_texts item
+      where item.version_id=e.version_id and item.source_revision=e.text_revision
+        and item.status='ready' and item.extractor_version=1 and lower(item.text_content) like
+          '%'||replace(replace(replace(lower(p_query),'\','\\'),'%','\%'),'_','\_')||'%' escape '\'
+      offset 0
+    ) t
+    order by e.document_id,e.version_id limit page_limit+1 offset p_offset
+  ), page as (
+    select * from hits order by document_id,version_id limit page_limit
+  )
+  select jsonb_build_object('coverage',(select to_jsonb(coverage) from coverage),
+    'next_offset',case when (select count(*) from hits)>page_limit then p_offset+page_limit else null end,
+    'matches',coalesce((select jsonb_agg(jsonb_build_object(
+      'document_id',document_id,'version_id',version_id,'version_number',version_number,
+      'revision',text_revision,'filename',filename,'file_type',file_type,'storage_path',storage_path,
+      'library_kind',library_kind,'start_char',pos-1,'end_char',pos-1+char_length(p_query),
+      'excerpt_start_char',greatest(pos-161,0),
+      'excerpt',substring(text_content from greatest(pos-160,1) for char_length(p_query)+320)
+    ) order by document_id,version_id) from page),'[]'::jsonb)) into result;
+  return result;
+end;
+$$;
+
+-- Migration date: 2026-10-30
+-- Audit history may contain many events for the same resource. Resolve live
+-- permissions per distinct resource and join the verdict back to each event.
+-- Search still operates on redacted titles: hidden titles cannot affect counts.
+create or replace function public.organization_audit_events(p_org_id uuid,p_actor_id uuid,p_actor_email text,p_event_ids uuid[])
+returns setof public.audit_events language sql stable set search_path=public,pg_temp as $$
+  with events as materialized (
+    -- Two arms instead of "p_event_ids is null or a.id = any(p_event_ids)":
+    -- this body is planned without parameter values, and an OR across a
+    -- parameter test can use neither index. Each arm's parameter test is a
+    -- one-time filter, so exactly one arm runs: a page's ids become
+    -- primary-key lookups, and only the null form reads the organization.
+    select a.* from public.audit_events a where p_event_ids is not null
+      and a.id=any(p_event_ids) and a.org_id=p_org_id and exists(
+        select 1 from public.active_org_members m where m.org_id=p_org_id and m.user_id=p_actor_id and m.role in ('owner','admin'))
+    union all
+    select a.* from public.audit_events a where p_event_ids is null and a.org_id=p_org_id and exists(
+        select 1 from public.active_org_members m where m.org_id=p_org_id and m.user_id=p_actor_id and m.role in ('owner','admin'))
+  ), actor as materialized (
+    select public.can_access_org_private_content(p_org_id,p_actor_id) opens_private
+  ), documents as materialized (
+    select d.* from (select distinct document_id from events where document_id is not null) ids
+    join public.documents d on d.id=ids.document_id and d.org_id=p_org_id and d.archived_at is null
+  ), chats as materialized (
+    select c.*,public.chat_access_role(c.id,c.user_id,c.project_id,c.org_id,p_actor_id::text,p_actor_email) role
+    from (select distinct chat_id from events where chat_id is not null) ids
+    join public.chats c on c.id=ids.chat_id and c.org_id=p_org_id and c.archived_at is null
+  ), reviews as materialized (
+    select r.*,public.review_access_role(r.id,r.user_id,r.project_id,r.org_id,p_actor_id::text,p_actor_email) role
+    from (select distinct review_id from events where review_id is not null) ids
+    join public.tabular_reviews r on r.id=ids.review_id and r.org_id=p_org_id and r.archived_at is null
+  ), projects as materialized (
+    select p.id,public.project_access_role(p.id,p.user_id,p.org_id,p_actor_id::text,p_actor_email) role
+    from (select project_id from events where project_id is not null union select project_id from documents where project_id is not null) ids
+    join public.projects p on p.id=ids.project_id and p.org_id=p_org_id
+  ), workflows as materialized (
+    select w.id,public.workflow_access_role(w.id,w.user_id,w.org_id,p_actor_id::text,p_actor_email) role
+    from (select distinct workflow_id from documents where workflow_id is not null) ids
+    join public.workflows w on w.id=ids.workflow_id and w.org_id=p_org_id
+  ), document_verdicts as materialized (
+    select d.id,(p.role is not null or w.role is not null
+      or (d.project_id is null and d.workflow_id is null and d.user_id=p_actor_id)
+      or public.org_private_document_access(d.org_id,d.id,p_actor_id::text)) can_view
+    from documents d left join projects p on p.id=d.project_id left join workflows w on w.id=d.workflow_id
+  ), targets as materialized (
+    select a.id,
+      case when a.document_id is not null then case when d.project_id is not null then 'project' when d.workflow_id is not null then 'workflow' else 'document' end
+        when a.review_id is not null then case when r.project_id is not null then 'project' else 'tabular_review' end
+        when a.chat_id is not null then case when c.project_id is not null then 'project' else 'chat' end
+        when a.project_id is not null then 'project'
+        when a.action in ('org.private_content.opened','org.private_content.closed') then a.detail->>'kind'
+        when a.detail->>'workflow_id' is not null then 'workflow' end kind,
+      case when a.document_id is not null then coalesce(d.project_id,d.workflow_id,d.id)::text
+        when a.review_id is not null then coalesce(r.project_id,r.id)::text
+        when a.chat_id is not null then coalesce(c.project_id,c.id)::text
+        when a.project_id is not null then p.id::text
+        when a.action in ('org.private_content.opened','org.private_content.closed') then a.detail->>'item_id'
+        else a.detail->>'workflow_id' end item_id
+    from events a left join documents d on d.id=a.document_id left join reviews r on r.id=a.review_id
+      left join chats c on c.id=a.chat_id left join projects p on p.id=a.project_id
+  ), private_descriptors as materialized (
+    select target.kind,target.item_id,jsonb_build_object('kind',item.kind,'item_id',item.item_id,
+      'has_access',public.org_private_access_role(p_org_id,item.kind,item.item_id,p_actor_id::text) is not null) access
+    from (select distinct kind,item_id from targets where item_id is not null) target
+    cross join lateral public.org_private_content_item(p_org_id,target.kind,
+      case when target.item_id ~ '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$' then target.item_id::uuid end) item
+    where (select opens_private from actor) and item.user_id is distinct from p_actor_id
+  ), scoped as (
+    select a.*,pd.access as private_access,(
+      pd.access is not null
+      or (a.action like 'org.%' and (a.action not in ('org.private_content.opened','org.private_content.closed') or (select opens_private from actor)))
+      or a.user_id=p_actor_id or p.role is not null or c.role is not null or r.role is not null or d.can_view
+    ) can_view
+    from events a left join targets t on t.id=a.id left join private_descriptors pd on pd.kind=t.kind and pd.item_id=t.item_id
+      left join projects p on p.id=a.project_id left join chats c on c.id=a.chat_id
+      left join reviews r on r.id=a.review_id left join document_verdicts d on d.id=a.document_id
+  )
+  select (jsonb_populate_record(null::public.audit_events,(to_jsonb(s)-'can_view'-'private_access')||
+    case when s.can_view then jsonb_build_object('detail',
+      case when s.private_access is null then s.detail-'private_content_access'
+        else (coalesce(s.detail,'{}'::jsonb)-'private_content_access')||jsonb_build_object('private_content_access',s.private_access) end)
+    else jsonb_build_object('title',null,'detail',null,'project_id',null,'chat_id',null,'review_id',null,'document_id',null) end
+  )).* from scoped s;
+$$;
+
+-- Migration date: 2026-10-30
+create or replace function public.cleanup_removed_org_member_overrides()
+returns trigger language plpgsql set search_path = public as $$
+declare item record; successor uuid; actor uuid; item_table text; item_title text;
+declare snapshot jsonb; active boolean; former_user uuid; needs_reference_fence boolean;
+begin
+  select deleted_at is null into active from public.organizations where id=old.org_id for update;
+  if not found then return old; end if;
+  if public.org_is_team(old.org_id) then
+    -- The auth row is already gone during an account-deletion cascade.
+    select id into former_user from auth.users where id=old.user_id;
+    if active then
+      successor:=coalesce(nullif(current_setting('mike.departure_successor',true),'')::uuid,
+      public.org_default_departure_successor(old.org_id,array[old.user_id]));
+      actor:=coalesce(nullif(current_setting('mike.departure_actor',true),'')::uuid,successor);
+    end if;
+    -- Keep the organization serialization fence (also used by membership
+    -- and account deletion). Projects/workflows need only affected-root locks.
+    -- Grant mutations lock their parent, and grants to the departing member
+    -- also lock that membership. Keep the original table/id lock order.
+    -- JSON document references do not acquire a document FK lock. A retained
+    -- chat/review can therefore hold an uncommitted reference to departing
+    -- documents. Only standalone documents (project_id and workflow_id null,
+    -- archived or not, so an in-flight restore is covered) can be departure
+    -- items, so only they need the broad fence over every chat and review.
+    -- Project/workflow documents follow their root. A document that becomes
+    -- standalone while this runs is caught by the re-check after its row lock
+    -- below. New document inserts acquire the organization fence, so cannot
+    -- appear behind either check.
+    select exists(select 1 from public.documents
+      where org_id=old.org_id and user_id=old.user_id and project_id is null and workflow_id is null)
+      into needs_reference_fence;
+    perform root.id from public.projects root join (
+      select id from public.projects where org_id=old.org_id and user_id=old.user_id
+      union select project_id from public.project_org_access_overrides where org_id=old.org_id and user_id=old.user_id and role='owner'
+    ) affected on affected.id=root.id
+    where root.org_id=old.org_id order by root.id for update of root;
+    perform root.id from public.workflows root join (
+      select id from public.workflows where org_id=old.org_id and user_id=old.user_id
+      union select workflow_id from public.workflow_org_access_overrides where org_id=old.org_id and user_id=old.user_id and role='owner'
+    ) affected on affected.id=root.id
+    where root.org_id=old.org_id order by root.id for update of root;
+    if needs_reference_fence then
+      perform id from public.chats where org_id=old.org_id order by id for update;
+      perform id from public.tabular_reviews where org_id=old.org_id order by id for update;
+    else
+      perform root.id from public.chats root join (
+        select id from public.chats where org_id=old.org_id and user_id=old.user_id
+        union select g.chat_id from public.chat_access_grants g join public.user_profiles p on lower(p.email)=g.email
+          where p.user_id=old.user_id and g.role='owner'
+      ) affected on affected.id=root.id
+      where root.org_id=old.org_id order by root.id for update of root;
+      perform root.id from public.tabular_reviews root join (
+        select id from public.tabular_reviews where org_id=old.org_id and user_id=old.user_id
+        union select g.tabular_review_id from public.tabular_review_access_grants g join public.user_profiles p on lower(p.email)=g.email
+          where p.user_id=old.user_id and g.role='owner'
+      ) affected on affected.id=root.id
+      where root.org_id=old.org_id order by root.id for update of root;
+    end if;
+    perform id from public.documents where org_id=old.org_id and user_id=old.user_id order by id for update;
+    -- A move out of a project/workflow updates the document row, so any such
+    -- move that was in flight at the first check has now committed (or rolled
+    -- back) and no new one can start. If it made a document standalone, take
+    -- the broad fence now: this rare path locks chats/reviews after documents.
+    if not needs_reference_fence and exists(select 1 from public.documents
+      where org_id=old.org_id and user_id=old.user_id and project_id is null and workflow_id is null) then
+      perform id from public.chats where org_id=old.org_id order by id for update;
+      perform id from public.tabular_reviews where org_id=old.org_id order by id for update;
+    end if;
+    -- Deleted organizations cannot transfer work. Archive every departure
+    -- item so restoring the organization never exposes ownerless private work.
+    select coalesce(jsonb_agg(to_jsonb(i) ||
+      case when active then '{}'::jsonb else '{"disposition":"archive"}'::jsonb end),'[]') into snapshot
+      from public.org_members_departure_items(old.org_id,array[old.user_id]) i;
+    for item in select * from jsonb_to_recordset(snapshot) as x(kind text,item_id uuid,title text,disposition text) loop
+      if item.disposition='transfer' then
+        if successor is null or successor=old.user_id then
+          raise exception 'An organization must keep at least one owner' using errcode='23514';
+        end if;
+        perform public.assign_org_departure_item(old.org_id,item.kind,item.item_id,successor,actor);
+      else
+        item_table:=case item.kind when 'project' then 'projects' when 'workflow' then 'workflows'
+          when 'chat' then 'chats' when 'tabular_review' then 'tabular_reviews' else 'documents' end;
+        if item.kind='document' then
+          select coalesce(v.filename,'Untitled document') into item_title from public.documents d
+            left join public.document_versions v on v.id=d.current_version_id where d.id=item.item_id;
+        else
+          execute format('select coalesce(%I, ''Untitled'') from public.%I where id=$1',
+            case when item.kind='project' then 'name' else 'title' end,item_table) into item_title using item.item_id;
+        end if;
+        insert into public.org_departure_archives(org_id,kind,item_id,former_user_id,title)
+          values(old.org_id,item.kind,item.item_id,former_user,item_title) on conflict(kind,item_id) do nothing;
+        -- Null creator prevents a re-invited member reclaiming archived work.
+        execute format('update public.%I set archived_at=now(),user_id=null where id=$1',item_table) using item.item_id;
+        if item.kind='chat' then delete from public.chat_access_grants where chat_id=item.item_id;
+        elsif item.kind='tabular_review' then delete from public.tabular_review_access_grants where tabular_review_id=item.item_id;
+        end if;
+      end if;
+      insert into public.org_departure_events(org_id,actor_id,action,detail) values(old.org_id,actor,
+        case when item.disposition='transfer' then 'item.transferred' else 'item.archived' end,
+        jsonb_build_object('kind',item.kind,'item_id',item.item_id,'assigned_to',case when item.disposition='transfer' then successor end));
+    end loop;
+    insert into public.org_departure_events(org_id,actor_id,action,detail)
+      values(old.org_id,actor,'member.departed',jsonb_build_object('transferred',
+        (select count(*) from jsonb_array_elements(snapshot) x where x->>'disposition'='transfer'),
+        'archived',(select count(*) from jsonb_array_elements(snapshot) x where x->>'disposition'='archive')));
+  end if;
+  if public.org_is_team(old.org_id) then
+    update public.projects set user_id=null where org_id=old.org_id and user_id=old.user_id;
+    update public.workflows set user_id=null where org_id=old.org_id and user_id=old.user_id;
+    update public.chats set user_id=null where org_id=old.org_id and user_id=old.user_id;
+    update public.tabular_reviews set user_id=null where org_id=old.org_id and user_id=old.user_id;
+    update public.documents set user_id=null where org_id=old.org_id and user_id=old.user_id;
+  end if;
+  delete from public.project_org_access_overrides where org_id=old.org_id and user_id=old.user_id;
+  delete from public.workflow_org_access_overrides where org_id=old.org_id and user_id=old.user_id;
+  delete from public.chat_access_grants g using public.chats c,public.user_profiles p
+    where g.chat_id=c.id and c.org_id=old.org_id and p.user_id=old.user_id and g.email=lower(p.email);
+  delete from public.tabular_review_access_grants g using public.tabular_reviews r,public.user_profiles p
+    where g.tabular_review_id=r.id and r.org_id=old.org_id and p.user_id=old.user_id and g.email=lower(p.email);
+  return old;
+end;
+$$;
+
+-- Migration date: 2026-10-30
+-- Select the project page before hydrating filename matches. A match test
+-- needs only existence; it must not transfer every matching document from
+-- every reachable project merely to discard all but one page in JavaScript.
+create or replace function public.search_project_directory(
+  p_user_id text,p_user_email text,p_search_term text,p_limit integer,p_offset integer,p_workspace text default null
+) returns jsonb language sql stable set search_path=public,pg_temp as $$
+  with search as materialized (
+    select lower(coalesce(p_search_term,'')) term,
+      '%'||replace(replace(replace(coalesce(p_search_term,''),'\','\\'),'%','\%'),'_','\_')||'%' pattern
+  ), reachable as materialized (
+    select p.* from public.project_list_access(p_user_id,p_user_email,p_workspace) access
+    join public.projects p on p.id=access.project_id
+  ), page as materialized (
+    select p.* from reachable p cross join search s
+    where strpos(lower(coalesce(p.name,'')),s.term)>0 or strpos(lower(coalesce(p.cm_number,'')),s.term)>0
+      or exists(select 1 from public.documents d join public.document_versions v on v.id=d.current_version_id and v.deleted_at is null
+        where d.project_id=p.id and v.filename ilike s.pattern escape '\')
+    order by p.updated_at desc nulls last,p.id
+    limit greatest(coalesce(p_limit,20),1)+1 offset greatest(coalesce(p_offset,0),0)
+  ), page_documents as materialized (
+    select d.* from page p cross join search s
+    cross join lateral (
+      select item.* from public.documents item
+      join public.document_versions v on v.id=item.current_version_id and v.deleted_at is null
+      where item.project_id=p.id and v.filename ilike s.pattern escape '\'
+      offset 0
+    ) d
+  ), grouped_documents as (
+    select d.project_id,jsonb_agg(to_jsonb(d) order by d.id) documents from page_documents d group by d.project_id
+  )
+  select coalesce(jsonb_agg(to_jsonb(p)||jsonb_build_object(
+    'is_owner',coalesce(p.user_id::text=p_user_id,false),'documents',coalesce(d.documents,'[]'::jsonb),'folders','[]'::jsonb
+  ) order by p.updated_at desc nulls last,p.id),'[]'::jsonb)
+  from page p left join grouped_documents d on d.project_id=p.id;
+$$;
+revoke all on function public.search_project_directory(text,text,text,integer,integer,text) from public,anon,authenticated;
+grant execute on function public.search_project_directory(text,text,text,integer,integer,text) to service_role;
+
+-- Compatibility overload delegates to the final workspace-aware review RPC.
+create or replace function public.get_tabular_reviews_overview(
+  p_user_id text,
+  p_user_email text default null,
+  p_project_id text default null
+)
+returns table (
+  id uuid,
+  project_id uuid,
+  user_id text,
+  title text,
+  columns_config jsonb,
+  document_ids jsonb,
+  workflow_id uuid,
+  created_at timestamptz,
+  updated_at timestamptz,
+  is_owner boolean,
+  access_role text,
+  document_count integer
+)
+language sql
+stable
+as $$
+  select *
+  from public.get_tabular_reviews_overview(
+    p_user_id, p_user_email, p_project_id, 'all', 2147483647, 0,
+    null, 'created', 'desc'
+  );
+$$;
+
+-- Migration date: 2026-11-01
+-- Every ON DELETE CASCADE / SET NULL runs "where <child column> = <deleted
+-- parent id>" once per deleted parent row. Without an index led by that
+-- column each one scans the whole child table across every tenant. Nullable
+-- columns are indexed only where set: the cascade's equality implies it.
+create index if not exists tabular_cells_row_idx
+  on public.tabular_cells(row_id);
+create index if not exists tabular_cells_document_idx
+  on public.tabular_cells(document_id);
+create index if not exists tabular_review_rows_document_idx
+  on public.tabular_review_rows(document_id) where document_id is not null;
+create index if not exists tabular_review_rows_folder_idx
+  on public.tabular_review_rows(folder_id) where folder_id is not null;
+create index if not exists tabular_review_rows_library_folder_idx
+  on public.tabular_review_rows(library_folder_id) where library_folder_id is not null;
+create index if not exists documents_current_version_idx
+  on public.documents(current_version_id) where current_version_id is not null;
+create index if not exists documents_folder_idx
+  on public.documents(folder_id) where folder_id is not null;
+create index if not exists documents_library_folder_idx
+  on public.documents(library_folder_id) where library_folder_id is not null;
+create index if not exists playbook_runs_edited_version_idx
+  on public.playbook_runs(edited_version_id) where edited_version_id is not null;
+create index if not exists tabular_reviews_workflow_idx
+  on public.tabular_reviews(workflow_id) where workflow_id is not null;
+create index if not exists project_subfolders_parent_idx
+  on public.project_subfolders(parent_folder_id) where parent_folder_id is not null;
+-- clear_org_private_item_access deletes "where kind=<item kind> and
+-- item_id=<deleted item>" on every delete/move/archive of a project,
+-- workflow, chat, review or document. Neither existing index leads with it.
+create index if not exists org_private_content_access_item_idx
+  on public.org_private_content_access(kind,item_id);
+
+-- Migration date: 2026-11-01
+-- Membership candidates: an organization's public projects/workflows are
+-- reachable by every member without touching its private ones.
+create index if not exists projects_org_visibility_idx
+  on public.projects(org_id,visibility) where org_id is not null;
+create index if not exists workflows_org_visibility_idx
+  on public.workflows(org_id,visibility) where org_id is not null;
+
+-- Migration date: 2026-11-01
+-- Reverse document references: which chat messages and reviews name one
+-- document. jsonb_path_ops serves files @> '[{"document_id":"..."}]';
+-- document_ids needs the default opclass for its ? (key/element) test, and
+-- no partial predicate: the planner cannot prove "document_ids is not null"
+-- from a ? test against a parameter, so a partial index would go unused.
+create index if not exists chat_messages_files_idx
+  on public.chat_messages using gin (files jsonb_path_ops) where files is not null;
+create index if not exists tabular_reviews_document_ids_idx
+  on public.tabular_reviews using gin (document_ids);
+
+-- Migration date: 2026-11-01
+-- Payload lookups the backend runs against db_jobs. Without these each one
+-- reads the whole queue table, done and failed history included:
+--  * account erasure deletes every job naming the user (payload userId, or
+--    base.userId) and lists that user's export.build jobs;
+--  * account erasure lists the user's memory.consolidate jobs by actorUserId
+--    in any status (the epoch index covers only live ones);
+--  * document_cache_writer_active and the inline text runner find a
+--    version's precompute/extract jobs by versionId.
+-- Partial predicates keep each index to the rows that carry the key; an
+-- equality on the expression implies "is not null", so the planner can use
+-- them for parameterized queries.
+create index if not exists db_jobs_payload_user_idx
+  on public.db_jobs((payload->>'userId')) where (payload->>'userId') is not null;
+create index if not exists db_jobs_payload_base_user_idx
+  on public.db_jobs((payload->'base'->>'userId')) where (payload->'base'->>'userId') is not null;
+create index if not exists db_jobs_memory_actor_idx
+  on public.db_jobs((payload->>'actorUserId')) where kind = 'memory.consolidate';
+create index if not exists db_jobs_text_version_idx
+  on public.db_jobs((payload->>'versionId'))
+  where kind in ('document.extract_text', 'document.precompute_text');
+
+-- Migration date: 2026-11-01
+-- resolve_project_folder_path / resolve_library_folder_path look a sibling
+-- up by its case- and space-insensitive name once per path segment, and
+-- once per "(2)", "(3)" ... rename probe. With only (project_id) or
+-- (user_id, library_kind) indexed, each lookup read every folder in the
+-- project or library. Keyed by the normalized name, a lookup reads only
+-- the folders of that name; the parent (matched with IS NOT DISTINCT FROM,
+-- which no index can serve) and workspace are checked on those few rows.
+create index if not exists project_subfolders_name_idx
+  on public.project_subfolders(project_id,lower(btrim(name)));
+create index if not exists library_folders_name_idx
+  on public.library_folders(user_id,library_kind,lower(btrim(name)));
+
+-- Migration date: 2026-11-01
+-- list_org_private_content pages an organization's private catalogue by
+-- lower(title), item id. Each kind's catalogue rows, in that order, so a
+-- page reads about offset + limit rows per kind instead of sorting them all.
+create index if not exists projects_private_catalogue_idx
+  on public.projects(org_id,lower(name),id) where archived_at is null and visibility = 'private';
+create index if not exists workflows_private_catalogue_idx
+  on public.workflows(org_id,lower(title),id) where archived_at is null and visibility = 'private';
+create index if not exists chats_private_catalogue_idx
+  on public.chats(org_id,lower(title),id) where archived_at is null and project_id is null;
+create index if not exists tabular_reviews_private_catalogue_idx
+  on public.tabular_reviews(org_id,lower(title),id) where archived_at is null and project_id is null;
+
+-- Migration date: 2026-11-01
+-- backfill_document_text's work list: text rows not yet ready. Ready rows
+-- (almost all of them) stay out of the index.
+create index if not exists document_version_texts_unfinished_idx
+  on public.document_version_texts(status,version_id) where status <> 'ready';
 
 insert into public.schema_migrations (filename) values
   ('20260419_tabular_chat_jsonb.sql'),
@@ -10707,5 +12303,68 @@ insert into public.schema_migrations (filename) values
   ('20261015_02_tabular_review_updated_sort.sql'),
   ('20261015_03_tabular_review_history_status.sql'),
   ('20261015_04_tabular_review_creator_filter.sql'),
-  ('20261016_01_tabular_review_generation_activity.sql')
+  ('20261016_01_tabular_review_generation_activity.sql'),
+  ('20261016_02_playbooks.sql'),
+  ('20261017_01_playbook_autosave_workspaces.sql'),
+  ('20261017_02_playbook_content_column.sql'),
+  ('20261017_03_playbook_sources.sql'),
+  ('20261017_04_playbook_access.sql'),
+  ('20261017_05_playbook_reviews.sql'),
+  ('20261017_06_remove_unused_playbook_structure.sql'),
+  ('20261017_07_playbook_storage_cleanup.sql'),
+  ('20261017_08_user_web_search.sql'),
+  ('20261018_01_remove_playbook_global_guidance.sql'),
+  ('20261018_02_playbook_run_history_index.sql'),
+  ('20261019_01_playbook_run_scope.sql'),
+  ('20261020_01_playbook_import_status.sql'),
+  ('20261020_02_web_search_api_keys.sql'),
+  ('20261020_03_playbook_import_target_version.sql'),
+  ('20261021_01_chat_subagent_runs.sql'),
+  ('20261021_02_user_subagent_defaults.sql'),
+  ('20261021_03_user_response_details.sql'),
+  ('20261021_04_word_chat_message_playbook.sql'),
+  ('20261022_01_workspace_connectors.sql'),
+  ('20261024_01_org_keys_central_only.sql'),
+  ('20261024_02_workspace_scoped_data_deletion.sql'),
+  ('20261024_03_backfill_project_child_org_id.sql'),
+  ('20261024_04_org_member_data_policy.sql'),
+  ('20261027_01_document_text_failed_jobs.sql'),
+  ('20261029_01_chat_overview_candidates.sql'),
+  ('20261030_01_document_cleanup_path_indexes.sql'),
+  ('20261030_02_audit_actor_index_seeks.sql'),
+  ('20261030_03_private_item_point_lookup.sql'),
+  ('20261030_04_forward_document_references.sql'),
+  ('20261030_05_project_list_candidates.sql'),
+  ('20261030_06_review_list_candidates.sql'),
+  ('20261030_07_workflow_list_candidates.sql'),
+  ('20261030_08_library_typed_owner_lookup.sql'),
+  ('20261030_09_search_project_verdict_once.sql'),
+  ('20261030_10_audit_distinct_resource_verdicts.sql'),
+  ('20261030_11_departure_affected_root_locks.sql'),
+  ('20261030_20_project_directory_page_first.sql'),
+  ('20261030_21_project_participation_before_page.sql'),
+  ('20261101_01_list_candidate_indexes_online.sql'),
+  ('20261101_02_foreign_key_indexes.sql'),
+  ('20261101_03_member_lookup_by_uuid.sql'),
+  ('20261101_04_org_visibility_indexes.sql'),
+  ('20261101_05_member_list_candidates.sql'),
+  ('20261101_06_departure_email_index_joins.sql'),
+  ('20261101_07_document_reference_indexes.sql'),
+  ('20261101_08_departure_reverse_references.sql'),
+  ('20261101_09_departure_fence_standalone_documents.sql'),
+  ('20261101_10_private_document_access_anchored.sql'),
+  ('20261101_11_audit_page_event_lookup.sql'),
+  ('20261101_12_overview_counts_after_page.sql'),
+  ('20261101_13_document_text_search_per_version.sql'),
+  ('20261101_14_claim_jobs_index_order.sql'),
+  ('20261101_15_db_jobs_payload_indexes.sql'),
+  ('20261101_16_folder_name_indexes.sql'),
+  ('20261101_17_ownerless_items_set_based.sql'),
+  ('20261101_18_departure_root_candidates.sql'),
+  ('20261101_19_audit_username_filter_actors.sql'),
+  ('20261101_20_private_catalogue_indexes.sql'),
+  ('20261101_21_private_catalogue_paged_per_kind.sql'),
+  ('20261101_22_document_text_unfinished_index.sql'),
+  ('20261101_23_document_text_backfill_from_unfinished.sql'),
+  ('20261101_24_wipe_memory_files_batch.sql')
 on conflict (filename) do nothing;

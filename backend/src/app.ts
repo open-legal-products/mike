@@ -1,6 +1,6 @@
 import "dotenv/config";
 import { rateLimitedBody } from "./lib/httpError";
-import { createHash, randomUUID } from "node:crypto";
+import { createHash } from "node:crypto";
 import express from "express";
 import cors from "cors";
 import helmet from "helmet";
@@ -30,6 +30,7 @@ import {
   projectMemoryRouter,
   userMemoryRouter,
 } from "./modules/memory/memory.routes";
+import { playbooksRouter } from "./modules/playbooks/playbooks.routes";
 import { manifestPublicKey } from "./lib/manifestSigning";
 import {
   handleUnhandledError,
@@ -37,7 +38,7 @@ import {
 } from "./middleware/internalErrorResponse";
 import { configuredAllowedOrigins } from "./lib/origins";
 import { envInt } from "./lib/runtimeConfig";
-import { tagCurrentRequest } from "./lib/observability/sentry";
+import { requestDiagnostics } from "./middleware/requestDiagnostics";
 
 export const app = express();
 const isProduction = process.env.NODE_ENV === "production";
@@ -142,6 +143,12 @@ const workflowImportLimiter = makeLimiter({
   message: "Too many workflow imports. Please try again later.",
 });
 
+const playbookImportLimiter = makeLimiter({
+  windowMs: hours(envInt("RATE_LIMIT_UPLOAD_WINDOW_HOURS", 1)),
+  max: envInt("RATE_LIMIT_UPLOAD_MAX", 50),
+  message: "Too many playbook imports. Please try again later.",
+});
+
 const dataDeleteLimiter = makeLimiter({
   windowMs: hours(envInt("RATE_LIMIT_DATA_DELETE_WINDOW_HOURS", 1)),
   max: envInt("RATE_LIMIT_DATA_DELETE_MAX", 20),
@@ -194,14 +201,7 @@ const authMfaLimiter = makeLimiter({
 
 app.disable("x-powered-by");
 app.set("trust proxy", envInt("TRUST_PROXY_HOPS", 1));
-app.use((_req, res, next) => {
-  const requestId = randomUUID();
-  res.locals.requestId = requestId;
-  res.setHeader("X-Request-ID", requestId);
-  // Same id on the Sentry event, the response body, and the access log.
-  tagCurrentRequest(requestId);
-  next();
-});
+app.use(requestDiagnostics);
 app.use(protectInternalErrorResponses);
 
 app.use(
@@ -273,8 +273,15 @@ app.post(TOOL_RESULT_PATH, toolResultLimiter, express.json({ limit: "2mb" }));
 app.post("/projects/:projectId/chat", chatLimiter);
 app.post("/tabular-review/:reviewId/chat", chatLimiter);
 app.post("/tabular-review/:reviewId/generate", chatLimiter);
+// A playbook review is one large model call (or a tool loop when the playbook
+// has supplementary documents), so it shares the chat lane's budget.
+app.post("/playbooks/:playbookId/review", chatLimiter);
 app.post("/chat/create", chatCreateLimiter);
 app.post("/workflow-addons/:addonId/import", workflowImportLimiter);
+app.post(
+  ["/playbooks/import", "/playbooks/import/upload-url"],
+  playbookImportLimiter,
+);
 const legacyUploadRemoved = (_req: express.Request, res: express.Response) => {
   res.status(410).json({
     code: "upload_session_required",
@@ -336,6 +343,7 @@ app.use("/user", userRouter);
 app.use("/download", downloadsRouter);
 app.use("/documents", sourceDocumentsRouter);
 app.use("/audit", auditRouter);
+app.use("/playbooks", playbooksRouter);
 app.use("/upload-sessions", uploadSessionsRouter);
 
 app.get("/health", (_req, res) => res.json({ ok: true }));

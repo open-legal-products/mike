@@ -18,6 +18,15 @@ vi.mock("../../../lib/llm", async (importOriginal) => ({
 const getUserModelSettings = vi.hoisted(() => vi.fn());
 vi.mock("../../user/user.settings", () => ({ getUserModelSettings }));
 
+const reportError = vi.hoisted(() => vi.fn());
+vi.mock("../../../lib/observability/sentry", async (importOriginal) => ({
+    ...(await importOriginal<
+        typeof import("../../../lib/observability/sentry")
+    >()),
+    reportError,
+}));
+
+import { AppError } from "../../../lib/appError";
 import { draftColumnPrompt } from "../tabular.prompt";
 
 // The service takes the request's Supabase client; these tests stub
@@ -102,7 +111,7 @@ describe("draftColumnPrompt", () => {
         });
     });
 
-    it("502s an unparseable reply", async () => {
+    it("502s an unparseable reply, reporting the parse failure as a warning", async () => {
         completeText.mockResolvedValue("not json at all");
         const result = await draftColumnPrompt(DB, ARGS);
         expect(result).toMatchObject({
@@ -111,10 +120,16 @@ describe("draftColumnPrompt", () => {
             status: 502,
             body: { detail: "Failed to generate prompt from LLM" },
         });
+        const [reported, context] = reportError.mock.calls[0];
+        expect(reported).toBeInstanceOf(AppError);
+        expect(reported.kind).toBe("tabular.prompt_failed");
+        expect(reported.cause).toBeInstanceOf(SyntaxError);
+        expect(context).toEqual({ level: "warning" });
     });
 
-    it("502s a provider failure without leaking its message", async () => {
-        completeText.mockRejectedValue(new Error("upstream 401 sk-abc"));
+    it("502s a provider failure without leaking its message, reporting it with the cause", async () => {
+        const cause = new Error("upstream 401 sk-abc");
+        completeText.mockRejectedValue(cause);
         const result = await draftColumnPrompt(DB, ARGS);
         expect(result).toMatchObject({
             ok: false,
@@ -122,5 +137,22 @@ describe("draftColumnPrompt", () => {
             status: 502,
             body: { detail: "Failed to generate prompt from LLM" },
         });
+        // The provider's error is the cause (its class and status become
+        // tags); the fixed message is the only text of ours on the event.
+        expect(reportError).toHaveBeenCalledTimes(1);
+        const [reported, context] = reportError.mock.calls[0];
+        expect(reported).toBeInstanceOf(AppError);
+        expect(reported.kind).toBe("tabular.prompt_failed");
+        expect(reported.message).toBe("Column prompt could not be generated");
+        expect(reported.cause).toBe(cause);
+        expect(context).toEqual({ level: "warning" });
+    });
+
+    it("reports nothing for a usable reply or a missing model", async () => {
+        completeText.mockResolvedValue('{"prompt":"p"}');
+        await draftColumnPrompt(DB, ARGS);
+        getUserModelSettings.mockResolvedValue({ tabular_model: null, api_keys: {} });
+        await draftColumnPrompt(DB, ARGS);
+        expect(reportError).not.toHaveBeenCalled();
     });
 });

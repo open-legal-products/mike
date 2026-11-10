@@ -1,35 +1,47 @@
 import type { Chat, TabularReview } from "@/app/components/shared/types";
+import type { PlaybookRunHistoryItem } from "./mikeApi";
 import { chatActivityAt } from "./chatActivity";
+import { parsedTime, sortByNewest } from "./sortByNewest";
 
 export type SidebarHistoryItem =
     | { kind: "chat"; item: Chat }
-    | { kind: "review"; item: TabularReview };
+    | { kind: "review"; item: TabularReview }
+    | { kind: "playbookRun"; item: PlaybookRunHistoryItem };
 
-function activityTime(item: Chat | TabularReview): number {
-    return Date.parse(chatActivityAt(item) ?? "") || 0;
+type HistorySource = Chat | TabularReview | PlaybookRunHistoryItem;
+
+function activityTime(item: HistorySource): number {
+    // A run is listed, and paged, by when it started.
+    if ("startedAt" in item) return parsedTime(item.startedAt);
+    return parsedTime(chatActivityAt(item));
 }
 
-/** Only show the portion for which both paginated sources have been read. */
+/** Only show the portion for which every paginated source has been read. */
 export function mergeSidebarHistory(
     chats: Chat[],
     reviews: TabularReview[],
     hasMoreChats: boolean,
     hasMoreReviews: boolean,
+    runs: PlaybookRunHistoryItem[] = [],
+    hasMoreRuns = false,
 ): SidebarHistoryItem[] {
     // Without this boundary, an old review could appear above newer chats
     // still on the next page (or vice versa). Keep older rows buffered.
-    const oldest = (items: (Chat | TabularReview)[]) =>
+    const oldest = (items: HistorySource[]) =>
         items.reduce((time, item) => Math.min(time, activityTime(item)), Infinity);
     const cutoff = Math.max(
         hasMoreChats ? oldest(chats) : -Infinity,
         hasMoreReviews ? oldest(reviews) : -Infinity,
+        hasMoreRuns ? oldest(runs) : -Infinity,
     );
     const entries: SidebarHistoryItem[] = [
         ...chats.map((item): SidebarHistoryItem => ({ kind: "chat", item })),
         ...reviews.map((item): SidebarHistoryItem => ({ kind: "review", item })),
+        ...runs.map((item): SidebarHistoryItem => ({ kind: "playbookRun", item })),
     ];
-    return entries
-        .filter(({ item }) => activityTime(item) >= cutoff)
-        .sort((a, b) => activityTime(b.item) - activityTime(a.item)
-            || `${a.kind}:${a.item.id}`.localeCompare(`${b.kind}:${b.item.id}`));
+    return sortByNewest(
+        entries.filter(({ item }) => activityTime(item) >= cutoff),
+        (entry) => activityTime(entry.item),
+        (a, b) => `${a.kind}:${a.item.id}`.localeCompare(`${b.kind}:${b.item.id}`),
+    );
 }

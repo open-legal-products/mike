@@ -1,28 +1,35 @@
 "use client";
 
 import { useRef } from "react";
-import { Library, Loader2, PlusIcon, Upload } from "lucide-react";
+import {
+    ClipboardCheck,
+    Cloud,
+    PlusIcon,
+    Upload,
+    Waypoints,
+} from "lucide-react";
 import {
     Dropdown,
     DropdownContent,
     DropdownItem,
+    DropdownSeparator,
     DropdownTrigger,
-} from "@/shared/ui/dropdown";
+} from "@mike/ui";
 
 interface Props {
     onBrowseAll: () => void;
     onLocalFiles: () => void;
-    selectedDocIds?: string[];
-    hideLabel?: boolean;
-    uploading?: boolean;
+    /** Adds the workflow and playbook pickers to the menu. */
+    onWorkflows?: () => void;
+    onPlaybooks?: () => void;
 }
 
+/** The composer's + menu: documents, then workflows and playbooks. */
 export function AddDocButton({
     onBrowseAll,
     onLocalFiles,
-    selectedDocIds = [],
-    hideLabel = false,
-    uploading = false,
+    onWorkflows,
+    onPlaybooks,
 }: Props) {
     const openingDialog = useRef(false);
     return (
@@ -30,25 +37,11 @@ export function AddDocButton({
             <DropdownTrigger asChild>
                 <button
                     type="button"
-                    disabled={uploading}
-                    className={`flex h-7.5 items-center gap-1 rounded-lg px-2 text-sm transition-colors cursor-pointer disabled:cursor-default focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500/40 ${
-                        selectedDocIds.length > 0
-                            ? "text-gray-700 hover:text-gray-900"
-                            : "text-gray-400 hover:text-gray-700"
-                    }`}
-                    title="Add documents"
-                    aria-label="Add documents"
+                    className="flex h-7.5 items-center gap-1 rounded-lg px-2 text-sm text-gray-400 transition-colors hover:text-gray-700 cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500/40"
+                    title="Add to message"
+                    aria-label="Add to message"
                 >
-                    {uploading ? (
-                        <Loader2 aria-hidden="true" className="h-4 w-4 shrink-0 animate-spin" />
-                    ) : selectedDocIds.length > 0 ? (
-                        <span className="font-medium tabular-nums">{selectedDocIds.length}</span>
-                    ) : (
-                        <PlusIcon aria-hidden="true" className="h-4 w-4 shrink-0" />
-                    )}
-                    <span className={hideLabel ? "hidden" : "hidden sm:inline"}>
-                        {selectedDocIds.length === 1 ? "Document" : "Documents"}
-                    </span>
+                    <PlusIcon aria-hidden="true" className="h-4 w-4 shrink-0" />
                 </button>
             </DropdownTrigger>
             <DropdownContent
@@ -72,9 +65,28 @@ export function AddDocButton({
                     openingDialog.current = true;
                     onBrowseAll();
                 }}>
-                    <Library aria-hidden="true" className="h-4 w-4 shrink-0 text-gray-500" />
+                    <Cloud aria-hidden="true" className="h-4 w-4 shrink-0 text-gray-500" />
                     Saved Documents
                 </DropdownItem>
+                {(onWorkflows || onPlaybooks) && <DropdownSeparator />}
+                {onWorkflows && (
+                    <DropdownItem onSelect={() => {
+                        openingDialog.current = true;
+                        onWorkflows();
+                    }}>
+                        <Waypoints aria-hidden="true" className="h-4 w-4 shrink-0 text-gray-500" />
+                        Workflows
+                    </DropdownItem>
+                )}
+                {onPlaybooks && (
+                    <DropdownItem onSelect={() => {
+                        openingDialog.current = true;
+                        onPlaybooks();
+                    }}>
+                        <ClipboardCheck aria-hidden="true" className="h-4 w-4 shrink-0 text-gray-500" />
+                        Playbooks
+                    </DropdownItem>
+                )}
             </DropdownContent>
         </Dropdown>
     );

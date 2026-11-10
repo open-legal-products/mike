@@ -2,8 +2,8 @@ import { execFileSync } from "node:child_process";
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
-import { buildUserAccountExport, buildUserChatsExport } from "../../modules/user/user.dataExport";
-import { makeExportDb, type Row } from "../../modules/user/__tests__/user.dataExport.fixture";
+import { buildUserAccountExport, buildUserChatsExport } from "../../application/exports/buildJsonExport";
+import { makeExportDb, type Row } from "../../application/exports/__tests__/exportDb.fixture";
 
 // Opt in with MIKE_TEST_POSTGRES_CONTAINER=supabase_db_backend. All writes
 // target a disposable database; the container's application DB is untouched.
@@ -117,11 +117,19 @@ describe.skipIf(!container)("organization offboarding retention in PostgreSQL", 
             tables[table] = JSON.parse(sql(`select coalesce(json_agg(t),'[]') from public.${table} t`));
         }
         const { db } = makeExportDb(tables);
-        const account = await buildUserAccountExport(db, uid(2), "departing@example.test");
-        const chats = await buildUserChatsExport(db, uid(2), "departing@example.test");
+        // Personal keeps the personal transcript.
+        const account = await buildUserAccountExport(db, uid(2), "departing@example.test", null);
+        const chats = await buildUserChatsExport(db, uid(2), "departing@example.test", null);
         for (const exported of [account, chats]) {
             expect(exported.tabular_review_chats.chats.map((row) => row.id)).toEqual([uid(41)]);
             expect(exported.tabular_review_chats.messages.map((row) => row.id)).toEqual([uid(71)]);
+            expect(JSON.stringify(exported)).not.toContain("Written after removal");
+        }
+        // The organization's export no longer reaches the team transcript.
+        const teamAccount = await buildUserAccountExport(db, uid(2), "departing@example.test", uid(10));
+        const teamChats = await buildUserChatsExport(db, uid(2), "departing@example.test", uid(10));
+        for (const exported of [teamAccount, teamChats]) {
+            expect(exported.tabular_review_chats).toEqual({ chats: [], messages: [] });
             expect(JSON.stringify(exported)).not.toContain("Written after removal");
         }
     });

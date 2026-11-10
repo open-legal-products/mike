@@ -81,7 +81,21 @@ export function createFilesystemStorageAdapter(): StorageAdapter {
   // Comparing against root + path.sep, not bare root, is what closes the classic
   // sibling escape — "/data/store-evil" startsWith "/data/store". The endsWith
   // guard keeps that correct when root is itself a separator (e.g. "/").
+  //
+  // Before resolving, the key must also be a plain relative key: no NUL, no
+  // backslash (a separator on Windows), no leading "/", and no "." or ".."
+  // segment. Containment alone lets "playbooks/<me>/x/../../../documents/<them>"
+  // through — it resolves inside the root, just not inside the prefix a caller
+  // checked. Backend-built keys never contain any of these.
   function fsPathFor(key: string): string {
+    if (
+      key.includes("\0") ||
+      key.includes("\\") ||
+      key.startsWith("/") ||
+      key.split("/").some((segment) => segment === "." || segment === "..")
+    ) {
+      throw new Error(`unsafe storage key: ${key}`);
+    }
     const root = path.resolve(fsRoot!);
     const rootPrefix = root.endsWith(path.sep) ? root : root + path.sep;
     const resolved = path.resolve(root, key);

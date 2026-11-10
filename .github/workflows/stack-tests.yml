@@ -22,6 +22,10 @@ on:
   pull_request:
   workflow_dispatch:
 
+permissions:
+  contents: read
+
+
 # Booting a Supabase stack is the slowest job in the repo, so cancel runs
 # that a newer push to the same PR has superseded. Pushes to main each get
 # their own group (keyed by sha) and are never cancelled.
@@ -35,7 +39,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 25
     steps:
-      - uses: actions/checkout@v7.0.1
+      - uses: actions/checkout@v7
 
       - uses: actions/setup-node@v7.1.0
         with:

@@ -10,13 +10,15 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Readable } from "node:stream";
 import { createHash } from "node:crypto";
-import JSZip from "jszip";
-import { Document, Packer, Paragraph } from "docx";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { MAX_UPLOAD_SIZE_BYTES } from "../uploads.manifest";
+import JSZip from "jszip";
+import { EXTRACTION_OPS } from "../../../lib/extraction/ops";
+import { ExtractionBusyError, ExtractionLimitError, withExtractionSlot } from "../../../lib/extraction/isolated";
+import { Document, Packer, Paragraph } from "docx";
 import { diagnosticErrorTags } from "../../../lib/observability/sentryPrivacy";
 
 const mocks = vi.hoisted(() => ({
+  maxUploadBytes: 100 * 1024 * 1024,
   deleteFile: vi.fn(),
   createFileReadStream: vi.fn(),
   copyFile: vi.fn(),
@@ -27,11 +29,15 @@ const mocks = vi.hoisted(() => ({
   enqueueStorageCleanup: vi.fn(),
   requestDocumentCleanupDelivery: vi.fn(),
   reportError: vi.fn((_error: unknown, _context?: unknown) => null),
+  setOperation: vi.fn(),
+  markStage: vi.fn(),
 }));
 
 vi.mock("../../../lib/observability/sentry", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../../lib/observability/sentry")>()),
   reportError: mocks.reportError,
+  setOperation: mocks.setOperation,
+  markStage: mocks.markStage,
 }));
 
 vi.mock("../../../lib/storage", async (importOriginal) => {
@@ -59,6 +65,15 @@ vi.mock("../../../lib/convert", async (importOriginal) => {
   return { ...actual, officeFileToPdf: mocks.officeFileToPdf };
 });
 
+vi.mock("node:fs/promises", async (original) => {
+  const actual = await original<typeof import("node:fs/promises")>();
+  return { ...actual, readFile: vi.fn(actual.readFile) };
+});
+vi.mock("../uploads.manifest", async (original) => ({
+  ...(await original<typeof import("../uploads.manifest")>()),
+  get MAX_UPLOAD_SIZE_BYTES() { return mocks.maxUploadBytes; },
+}));
+
 vi.mock("../../../lib/audit", () => ({ recordAudit: mocks.recordAudit }));
 vi.mock("../../../lib/dbq/enqueue", () => ({
   enqueueStorageCleanup: mocks.enqueueStorageCleanup,
@@ -79,6 +94,7 @@ import {
 type QueryResult = { data?: unknown; error?: unknown };
 
 function fakeDb(singleResults: Record<string, QueryResult[]> = {}) {
+  const calls: Array<{ table: string; operation: string; payload?: unknown }> = [];
   class Query {
     constructor(private readonly table: string) {}
     select() {
@@ -87,13 +103,16 @@ function fakeDb(singleResults: Record<string, QueryResult[]> = {}) {
     insert() {
       return this;
     }
-    update() {
+    update(payload: unknown) {
+      calls.push({ table: this.table, operation: "update", payload });
       return this;
     }
-    upsert() {
+    upsert(payload: unknown) {
+      calls.push({ table: this.table, operation: "upsert", payload });
       return this;
     }
     delete() {
+      calls.push({ table: this.table, operation: "delete" });
       return this;
     }
     eq() {
@@ -134,6 +153,7 @@ function fakeDb(singleResults: Record<string, QueryResult[]> = {}) {
   }
 
   return {
+    calls,
     from: vi.fn((table: string) => new Query(table)),
     rpc: vi.fn(async (name: string, args: { p_version?: Record<string, unknown> }): Promise<QueryResult> => name === "create_document_version"
       ? { data: { ...args.p_version, version_number: args.p_version?.version_number ?? 3 }, error: null }
@@ -215,13 +235,35 @@ function scriptedDb(results: QueryResult[]) {
   }
 
   return {
+    calls,
     from: vi.fn((table: string) => new Query(table)),
     rpc: vi.fn(async (name: string, args: { p_version?: Record<string, unknown> }): Promise<QueryResult> => name === "create_document_version"
       ? { data: { ...args.p_version, version_number: args.p_version?.version_number ?? 3 }, error: null }
       : { data: "processing", error: null }),
-    calls,
     remaining: results,
   };
+}
+
+const pdfBytes = Buffer.from("%PDF-1.7\n");
+
+/** The smallest PDF pdf.js opens: one empty page, a cross-reference table, a trailer. */
+function buildOnePagePdf(): Buffer {
+  const objects = [
+    "<< /Type /Catalog /Pages 2 0 R >>",
+    "<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
+    "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] >>",
+  ];
+  let pdf = "%PDF-1.7\n";
+  const offsets: number[] = [];
+  for (const [index, object] of objects.entries()) {
+    offsets.push(Buffer.byteLength(pdf));
+    pdf += `${index + 1} 0 obj\n${object}\nendobj\n`;
+  }
+  const xrefOffset = Buffer.byteLength(pdf);
+  pdf += `xref\n0 ${objects.length + 1}\n0000000000 65535 f \n`;
+  for (const offset of offsets) pdf += `${String(offset).padStart(10, "0")} 00000 n \n`;
+  pdf += `trailer\n<< /Size ${objects.length + 1} /Root 1 0 R >>\nstartxref\n${xrefOffset}\n%%EOF\n`;
+  return Buffer.from(pdf, "binary");
 }
 
 const baseFile = {
@@ -232,7 +274,7 @@ const baseFile = {
   filename: "contract.pdf",
   file_type: "pdf",
   content_type: "application/pdf",
-  expected_size_bytes: 4,
+  expected_size_bytes: pdfBytes.length,
   sealed_storage_path: "upload-sessions/user/session/file/sealed",
   target_folder_id: null,
   status: "uploaded",
@@ -310,10 +352,11 @@ describe("upload processing", () => {
 
   beforeEach(async () => {
     vi.clearAllMocks();
+    mocks.maxUploadBytes = 100 * 1024 * 1024;
     processingTempRoot = await mkdtemp(join(tmpdir(), "mike-upload-test-"));
     process.env.UPLOAD_PROCESSING_TEMP_DIR = processingTempRoot;
     mocks.createFileReadStream.mockImplementation(() =>
-      Readable.from([Buffer.from([1, 2, 3, 4])]),
+      Readable.from([pdfBytes]),
     );
     mocks.copyFile.mockResolvedValue(undefined);
     mocks.officeFileToPdf.mockResolvedValue("/tmp/converted.pdf");
@@ -365,42 +408,175 @@ describe("upload processing", () => {
     });
   });
 
-  it("converts Office files from temporary paths and streams the PDF upload", async () => {
-    const officeBytes = await minimalDocxBytes();
-    mocks.createFileReadStream.mockImplementation(() =>
-      Readable.from([officeBytes]),
-    );
-    const officeFile = {
-      ...baseFile,
-      filename: "contract.docx",
-      file_type: "docx",
-      content_type:
-        "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-      expected_size_bytes: officeBytes.length,
-    };
-    const document = {
-      id: officeFile.resource_id,
-      user_id: baseSession.user_id,
-      folder_id: null,
-      library_folder_id: null,
-    };
-    const db = fakeDb({ documents: [{ data: document, error: null }] });
-    mocks.officeFileToPdf.mockImplementation(
-      async (inputPath: string, outputDirectory: string) => {
-        expect(inputPath).toBe(join(outputDirectory, "source.docx"));
-        expect(await readFile(inputPath)).toEqual(officeBytes);
-        return join(outputDirectory, "source.pdf");
-      },
-    );
+  it.each([
+    ["nothing", pdfBytes],
+    ["whitespace", Buffer.concat([Buffer.from(" \t\r\n\f"), pdfBytes])],
+    ["a UTF-8 BOM", Buffer.concat([Buffer.from("\uFEFF"), pdfBytes])],
+    ["whitespace and a BOM", Buffer.concat([Buffer.from(" \n\uFEFF\t"), pdfBytes])],
+    // pdf.js accepts a header anywhere in the first 1024 bytes, so a
+    // preamble that ends exactly there must still pass.
+    ["a short binary preamble", Buffer.concat([Buffer.from("junk"), pdfBytes])],
+    ["a preamble that fills the window", Buffer.concat([Buffer.from("x".repeat(1024 - "%PDF-".length)), pdfBytes])],
+    // Past the window the signature search misses, but pdf.js still opens
+    // the file by rebuilding its cross-reference table, so it must pass too.
+    ["a preamble longer than the window, on a file pdf.js can parse", Buffer.concat([Buffer.from("x".repeat(1020)), buildOnePagePdf()])],
+  ])(
+    "accepts a PDF preceded by %s",
+    async (_label, bytes) => {
+      mocks.createFileReadStream.mockImplementation(() => Readable.from([bytes]));
+      const db = fakeDb({ documents: [{ data: { id: baseFile.resource_id } }] });
+      await processUploadFile(db as never, baseSession, {
+        ...baseFile, expected_size_bytes: bytes.length,
+      });
+      expect(mocks.copyFile).toHaveBeenCalledOnce();
+      expect(mocks.officeFileToPdf).not.toHaveBeenCalled();
+    },
+  );
 
-    await processUploadFile(db as never, baseSession, officeFile);
+  it.each([
+    ["an empty file", ""],
+    ["a renamed text file", "plain text"],
+    ["a ZIP container", "PK\u0003\u0004Office bytes"],
+    ["a signature missing its dash", "%PDF"],
+    ["whitespace only", " \uFEFF\n"],
+    // The signature search misses and pdf.js has nothing to parse either.
+    ["a bare header past 1024 bytes with no document behind it", "x".repeat(1024 - "%PDF-".length + 1) + "%PDF-1.7"],
+  ])(
+    "rejects %s before destination writes and removes the artifact",
+    async (_label, content) => {
+      const bytes = Buffer.from(content);
+      mocks.createFileReadStream.mockImplementation(() => Readable.from([bytes]));
+      const db = fakeDb();
+      await expect(processUploadFile(db as never, baseSession, {
+        ...baseFile, expected_size_bytes: bytes.length,
+      })).rejects.toThrow("invalid_pdf_file");
+      expect(db.from).not.toHaveBeenCalled();
+      expect(db.rpc).not.toHaveBeenCalled();
+      expect(mocks.copyFile).not.toHaveBeenCalled();
+      expect(mocks.uploadFileFromPath).not.toHaveBeenCalled();
+      expect(mocks.officeFileToPdf).not.toHaveBeenCalled();
+      expect(await readdir(processingTempRoot)).toEqual([]);
+    },
+  );
 
-    expect(mocks.officeFileToPdf).toHaveBeenCalledOnce();
-    expect(mocks.uploadFileFromPath).toHaveBeenCalledWith(
-      expect.stringMatching(/^converted-pdfs\//),
-      expect.stringMatching(/source\.pdf$/),
-      "application/pdf",
-    );
+  it.each([false, true])("keeps invalid PDFs terminal when already failed=%s", async (alreadyFailed) => {
+    const bytes = Buffer.from("not a PDF");
+    mocks.createFileReadStream.mockImplementation(() => Readable.from([bytes]));
+    const db = scriptedDb([
+      { data: { id: "job-1", session_id: baseSession.id, file_id: baseFile.id, attempts: 1, locked_by: "worker-1" } },
+      { data: baseSession },
+      { data: { ...baseFile, expected_size_bytes: bytes.length,
+        ...(alreadyFailed ? { status: "error", error_code: "invalid_pdf_file" } : {}),
+      } },
+      ...(!alreadyFailed ? [
+        { data: { id: "job-1" } }, // Initial heartbeat.
+        { error: null }, // Processing status.
+        { data: { id: "job-1" } }, // Failure heartbeat.
+        { error: null }, // File error.
+        { error: null }, // Document error.
+        { data: { id: "job-1" } }, // Final heartbeat.
+        { error: null }, // Remove failed document.
+      ] : []),
+      { data: [{ sealed_storage_path: baseFile.sealed_storage_path }] },
+      { data: { id: "job-1" } },
+    ]);
+    await processUploadJob(db as never, "job-1", "worker-1");
+    if (alreadyFailed) {
+      expect(mocks.createFileReadStream).not.toHaveBeenCalled();
+    } else {
+      expect(db.calls).toContainEqual(expect.objectContaining({
+        table: "upload_session_files", operation: "update",
+        payload: expect.objectContaining({ status: "error", error_code: "invalid_pdf_file" }),
+      }));
+    }
+    expect(db.calls.some((call) => (call.payload as { status?: string })?.status === "queued")).toBe(false);
+    expect(db.calls).toContainEqual(expect.objectContaining({
+      table: "upload_processing_jobs", operation: "update",
+      payload: expect.objectContaining({ status: "completed", error_code: "partial_failure" }),
+    }));
+    expect(mocks.deleteFile).toHaveBeenCalledWith(baseFile.sealed_storage_path);
+    expect(mocks.copyFile).not.toHaveBeenCalled();
+    expect(db.remaining).toHaveLength(0);
+  });
+
+  it.each(["invalid_docx_package", "document_too_large"])("does not retry or reopen a DOCX already failed with %s", async (code) => {
+    const job = { id: "job-1", session_id: baseSession.id, file_id: baseFile.id, attempts: 1, locked_by: "worker-1" };
+    const db = fakeDb({
+      upload_processing_jobs: [{ data: job }, { data: job }],
+      upload_sessions: [{ data: baseSession }],
+      upload_session_files: [{ data: { ...baseFile, file_type: "docx", status: "error", error_code: code } }],
+    });
+    await processUploadJob(db as never, job.id, "worker-1");
+    expect(mocks.createFileReadStream).not.toHaveBeenCalled();
+    expect(mocks.copyFile).not.toHaveBeenCalled();
+    expect(db.from).not.toHaveBeenCalledWith("documents");
+    expect(db.calls.some((call) => (call.payload as { status?: string })?.status === "queued")).toBe(false);
+    expect(db.calls).toContainEqual(expect.objectContaining({ table: "upload_processing_jobs", payload: expect.objectContaining({ status: "completed", error_code: "partial_failure" }) }));
+  });
+
+  it("enforces the compressed-size ceiling before loading the archive (tiny injected limit)", async () => {
+    const bytes = await minimalDocxBytes();
+    mocks.maxUploadBytes = bytes.length - 1;
+    mocks.createFileReadStream.mockImplementation(() => Readable.from([bytes]));
+    const db = fakeDb();
+    await expect(processUploadFile(db as never, baseSession, {
+      ...baseFile, file_type: "docx", expected_size_bytes: bytes.length,
+    })).rejects.toMatchObject({ code: "invalid_docx_package" });
+    expect(readFile).not.toHaveBeenCalled();
+    expect(db.from).not.toHaveBeenCalled();
+    expect(mocks.copyFile).not.toHaveBeenCalled();
+  });
+
+  it("acquires parser admission before loading sealed bytes and releases it after failure", async () => {
+    const bytes = await minimalDocxBytes();
+    mocks.createFileReadStream.mockImplementation(() => Readable.from([bytes]));
+    const file = { ...baseFile, file_type: "docx", expected_size_bytes: bytes.length };
+    let release!: () => void;
+    const held = withExtractionSlot({}, () => new Promise<void>((resolve) => { release = resolve; }));
+    try {
+      const db = fakeDb();
+      await expect(processUploadFile(db as never, baseSession, file)).rejects.toMatchObject({ code: "processing_failed", cause: expect.any(ExtractionBusyError) });
+      expect(readFile).not.toHaveBeenCalled();
+      expect(db.from).not.toHaveBeenCalled();
+      expect(mocks.copyFile).not.toHaveBeenCalled();
+    } finally { release(); await held; }
+    const db = fakeDb({ documents: [{ data: { id: file.resource_id } }] });
+    await expect(processUploadFile(db as never, baseSession, file)).resolves.toMatchObject({ id: file.resource_id });
+    expect(readFile).toHaveBeenCalledOnce();
+    expect(mocks.copyFile).toHaveBeenCalledOnce();
+  });
+
+  it.each([
+    ["malformed", null, "invalid_docx_package", false],
+    ["deadline", new ExtractionLimitError("parser deadline exceeded"), "document_too_large", false],
+    ["memory", new ExtractionLimitError("parser memory budget exceeded"), "document_too_large", false],
+    ["off-mode allocation", new RangeError("Array buffer allocation failed"), "document_too_large", false],
+    ["busy", new ExtractionBusyError(), "processing_failed", true],
+    ["unexpected child exit", new Error("extraction process exited without a result"), "processing_failed", true],
+  ] as const)("classifies DOCX %s without destination mutations", async (_label, error, code, retry) => {
+    const parse = vi.spyOn(EXTRACTION_OPS, "validateDocxPackage");
+    if (error) parse.mockRejectedValueOnce(error);
+    else parse.mockResolvedValueOnce({ text: "", valid: false });
+    const bytes = await minimalDocxBytes();
+    mocks.createFileReadStream.mockImplementation(() => Readable.from([bytes]));
+    const file = { ...baseFile, file_type: "docx", filename: "ordinary.docx", expected_size_bytes: bytes.length };
+    const job = { id: "job-1", session_id: baseSession.id, file_id: file.id, attempts: 1, locked_by: "worker-1" };
+    const db = fakeDb({
+      upload_processing_jobs: Array.from({ length: 8 }, () => ({ data: job })),
+      upload_sessions: [{ data: baseSession }],
+      upload_session_files: [{ data: file }],
+    });
+    try {
+      await processUploadJob(db as never, job.id, "worker-1");
+      expect(db.calls).toContainEqual(expect.objectContaining({ table: "upload_session_files", payload: expect.objectContaining({ status: "error", error_code: code }) }));
+      expect(db.calls.some((call) => call.table === "upload_processing_jobs" && (call.payload as { status?: string })?.status === "queued")).toBe(retry);
+      expect(db.from).not.toHaveBeenCalledWith("documents");
+      expect(db.from).not.toHaveBeenCalledWith("document_versions");
+      expect(mocks.copyFile).not.toHaveBeenCalled();
+      expect(mocks.officeFileToPdf).not.toHaveBeenCalled();
+      expect(mocks.uploadFileFromPath).not.toHaveBeenCalled();
+      expect(await readdir(processingTempRoot)).toEqual([]);
+    } finally { parse.mockRestore(); }
   });
 
   it("rejects a .docx upload that is a ZIP but not a Word package", async () => {
@@ -603,7 +779,6 @@ describe("upload processing", () => {
     ["default namespace and empty body", '<document xmlns="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><body/></document>'],
     ["alternate prefixes", '<word:document xmlns:word="http://schemas.openxmlformats.org/wordprocessingml/2006/main" xmlns:b="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><b:body/></word:document>'],
     ["strict namespace", '<w:document xmlns:w="http://purl.oclc.org/ooxml/wordprocessingml/main"><w:body/></w:document>'],
-    ["main XML larger than metadata ceiling", '<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body><w:p><w:r><w:t>' + 'a'.repeat(256 * 1024 + 1) + '</w:t></w:r></w:p></w:body></w:document>'],
   ])("accepts valid DOCX with %s", async (_name, xml) => {
     const zip = await JSZip.loadAsync(await minimalDocxBytes());
     zip.file("word/document.xml", xml);
@@ -629,37 +804,6 @@ describe("upload processing", () => {
     expect(mocks.copyFile).toHaveBeenCalledOnce();
     expect(mocks.officeFileToPdf).toHaveBeenCalledOnce();
   });
-
-  it.each([
-    ["_rels/.rels", 256 * 1024],
-    ["word/document.xml", MAX_UPLOAD_SIZE_BYTES],
-  ])("rejects %s with a declared size above its ceiling", async (part, limit) => {
-    const bytes = withDeclaredZipEntrySize(await minimalDocxBytes(), part, limit + 1);
-    mocks.createFileReadStream.mockImplementation(() => Readable.from([bytes]));
-
-    await expect(processUploadFile(fakeDb() as never, baseSession, {
-      ...baseFile, filename: "fake.docx", file_type: "docx", expected_size_bytes: bytes.length,
-    })).rejects.toThrow("invalid_docx_package");
-    expect(mocks.copyFile).not.toHaveBeenCalled();
-  });
-
-  it.each([
-    ["_rels/.rels", 256 * 1024],
-    ["word/document.xml", MAX_UPLOAD_SIZE_BYTES],
-  ])("rejects %s whose actual decompressed bytes exceed its ceiling", async (part, limit) => {
-    const zip = await JSZip.loadAsync(await minimalDocxBytes());
-    zip.file(part, Buffer.alloc(limit + 1, " "));
-    const bytes = withDeclaredZipEntrySize(
-      await zip.generateAsync({ type: "nodebuffer", compression: "DEFLATE" }), part, 1,
-    );
-    expect(bytes.length).toBeLessThan(MAX_UPLOAD_SIZE_BYTES);
-    mocks.createFileReadStream.mockImplementation(() => Readable.from([bytes]));
-
-    await expect(processUploadFile(fakeDb() as never, baseSession, {
-      ...baseFile, filename: "fake.docx", file_type: "docx", expected_size_bytes: bytes.length,
-    })).rejects.toThrow("invalid_docx_package");
-    expect(mocks.copyFile).not.toHaveBeenCalled();
-  }, 20_000);
 
   it("rejects invalid UTF-8 in the main XML", async () => {
     const zip = await JSZip.loadAsync(await minimalDocxBytes());
@@ -717,22 +861,6 @@ describe("upload processing", () => {
     })).rejects.toThrow("invalid_docx_package");
     expect(mocks.copyFile).not.toHaveBeenCalled();
   });
-
-  it("rejects an oversized sealed DOCX before ZIP parsing", async () => {
-    const loadZip = vi.spyOn(JSZip, "loadAsync");
-    const bytes = Buffer.alloc(MAX_UPLOAD_SIZE_BYTES + 1);
-    mocks.createFileReadStream.mockImplementation(() => Readable.from([bytes]));
-    try {
-      await expect(processUploadFile(fakeDb() as never, baseSession, {
-        ...baseFile, filename: "fake.docx", file_type: "docx", expected_size_bytes: bytes.length,
-      })).rejects.toThrow("invalid_docx_package");
-      expect(loadZip).not.toHaveBeenCalled();
-      expect(mocks.copyFile).not.toHaveBeenCalled();
-    } finally {
-      loadZip.mockRestore();
-    }
-  });
-
   it.each([
     ["prefixed root and override", '<ct:Types xmlns:ct="http://schemas.openxmlformats.org/package/2006/content-types"><ct:Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/></ct:Types>'],
     ["different override prefix", '<ct:Types xmlns:ct="http://schemas.openxmlformats.org/package/2006/content-types"><part:Override xmlns:part="http://schemas.openxmlformats.org/package/2006/content-types" PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/></ct:Types>'],
@@ -789,64 +917,53 @@ describe("upload processing", () => {
     expect(mocks.copyFile).not.toHaveBeenCalled();
   });
 
-  it("rejects a .docx upload with an oversized content-types part", async () => {
-    const bytes = await minimalDocxBytes("x".repeat(256 * 1024 + 1));
-    mocks.createFileReadStream.mockImplementation(() =>
-      Readable.from([bytes]),
+  it("converts Office files from temporary paths and streams the PDF upload", async () => {
+    const officeBytes = await minimalDocxBytes();
+    mocks.createFileReadStream.mockImplementation(() => Readable.from([officeBytes]));
+    const officeFile = {
+      ...baseFile,
+      expected_size_bytes: officeBytes.length,
+      filename: "contract.docx",
+      file_type: "docx",
+      content_type:
+        "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+    };
+    const document = {
+      id: officeFile.resource_id,
+      user_id: baseSession.user_id,
+      folder_id: null,
+      library_folder_id: null,
+    };
+    const db = fakeDb({ documents: [{ data: document, error: null }] });
+    mocks.officeFileToPdf.mockImplementation(
+      async (inputPath: string, outputDirectory: string) => {
+        expect(inputPath).toBe(join(outputDirectory, "source.docx"));
+        expect(await readFile(inputPath)).toEqual(officeBytes);
+        return join(outputDirectory, "source.pdf");
+      },
     );
 
-    await expect(
-      processUploadFile(fakeDb() as never, baseSession, {
-        ...baseFile,
-        filename: "fake.docx",
-        file_type: "docx",
-        content_type:
-          "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-        expected_size_bytes: bytes.length,
-      }),
-    ).rejects.toThrow("invalid_docx_package");
+    await processUploadFile(db as never, baseSession, officeFile);
 
-    expect(mocks.copyFile).not.toHaveBeenCalled();
-  });
-
-  it("rejects an oversized DOCX XML entry when ZIP metadata understates its size", async () => {
-    const generated = await minimalDocxBytes("x".repeat(256 * 1024 + 1));
-    const bytes = withDeclaredZipEntrySize(
-      generated,
-      "[Content_Types].xml",
-      1,
+    expect(mocks.officeFileToPdf).toHaveBeenCalledOnce();
+    expect(mocks.uploadFileFromPath).toHaveBeenCalledWith(
+      expect.stringMatching(/^converted-pdfs\//),
+      expect.stringMatching(/source\.pdf$/),
+      "application/pdf",
     );
-    mocks.createFileReadStream.mockImplementation(() =>
-      Readable.from([bytes]),
-    );
-
-    await expect(
-      processUploadFile(fakeDb() as never, baseSession, {
-        ...baseFile,
-        filename: "fake.docx",
-        file_type: "docx",
-        content_type:
-          "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-        expected_size_bytes: bytes.length,
-      }),
-    ).rejects.toThrow("invalid_docx_package");
-
-    expect(mocks.copyFile).not.toHaveBeenCalled();
   });
 
   it("keeps the upload and reports a missing LibreOffice once, as a warning grouped by file type", async () => {
     // MIKE-BACKEND-9: the worker on a host without soffice.
     const officeBytes = await minimalDocxBytes();
-    mocks.createFileReadStream.mockImplementation(() =>
-      Readable.from([officeBytes]),
-    );
+    mocks.createFileReadStream.mockImplementation(() => Readable.from([officeBytes]));
     const officeFile = {
       ...baseFile,
+      expected_size_bytes: officeBytes.length,
       filename: "PRIVATE_NAME.docx",
       file_type: "docx",
       content_type:
         "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-      expected_size_bytes: officeBytes.length,
     };
     const document = {
       id: officeFile.resource_id,
@@ -999,9 +1116,7 @@ describe("upload processing", () => {
 
   it.each([false, undefined])("replaces DOCX bytes with generate_pdf=%s and invalidates obsolete renditions", async (generatePdf) => {
     const officeBytes = await minimalDocxBytes();
-    mocks.createFileReadStream.mockImplementation(() =>
-      Readable.from([officeBytes]),
-    );
+    mocks.createFileReadStream.mockImplementation(() => Readable.from([officeBytes]));
     const db = scriptedDb([
       { data: { id: "v", storage_path: "old/source.docx", pdf_storage_path: "old/rendition.pdf", content_sha256: "a".repeat(64) } },
       { data: { id: "v" } },
@@ -1017,6 +1132,7 @@ describe("upload processing", () => {
       ...baseFile,
       filename: "edited.docx",
       file_type: "docx",
+      content_type: "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
       expected_size_bytes: officeBytes.length,
     })).toEqual({ id: "v" });
 
@@ -1031,7 +1147,6 @@ describe("upload processing", () => {
         content_sha256: createHash("sha256").update(officeBytes).digest("hex"),
         pdf_storage_path: generatePdf === false ? null : expect.stringContaining("converted-pdfs/"),
         page_count: null,
-        textless_page_count: null,
       }),
     }));
   });
@@ -1060,7 +1175,7 @@ describe("upload processing", () => {
   });
 
   it("treats an already-committed editor save as a successful retry", async () => {
-    const current = { id: "v", storage_path: "saved/key", content_sha256: createHash("sha256").update(Buffer.from([1, 2, 3, 4])).digest("hex") };
+    const current = { id: "v", storage_path: "saved/key", content_sha256: createHash("sha256").update(pdfBytes).digest("hex") };
     const db = fakeDb({ document_versions: [{ data: current }] });
     expect(await processUploadFile(db as never, {
       ...baseSession, purpose: "document_version_replace",
@@ -1074,10 +1189,13 @@ describe("upload processing", () => {
       { data: { id: "v", storage_path: "old/key", content_sha256: "a".repeat(64) } },
       { data: null, error: null },
     ] });
-    await expect(processUploadFile(db as never, {
+    const thrown = await processUploadFile(db as never, {
       ...baseSession, purpose: "document_version_replace",
       destination: { document_id: "doc", version_id: "v", expected_content_sha256: "a".repeat(64) },
-    }, baseFile)).rejects.toMatchObject({ message: "document_changed", orphanedKeys: expect.arrayContaining([expect.stringContaining("doc")]) });
+    }, baseFile).catch((error: unknown) => error);
+    expect(thrown).toMatchObject({ message: "document_changed", orphanedKeys: expect.arrayContaining([expect.stringContaining("doc")]) });
+    // Named for Sentry: the kind, not the message, is what leaves the process.
+    expect(diagnosticErrorTags(thrown)).toEqual({ error_kind: "upload.document_changed" });
   });
 
   it("hashes legacy stored bytes when the version has no recorded checksum", async () => {
@@ -1085,7 +1203,7 @@ describe("upload processing", () => {
       { data: { id: "v", storage_path: "old/key", content_sha256: null } },
       { data: { id: "v" } },
     ] });
-    const expected = createHash("sha256").update(Buffer.from([1, 2, 3, 4])).digest("hex");
+    const expected = createHash("sha256").update(pdfBytes).digest("hex");
     expect(await processUploadFile(db as never, {
       ...baseSession, purpose: "document_version_replace",
       destination: { document_id: "doc", version_id: "v", expected_content_sha256: expected },
@@ -1099,9 +1217,13 @@ describe("upload processing", () => {
   it("refuses to recreate a document deleted while the upload was processing", async () => {
     const db = scriptedDb([{ data: null, error: null }]);
 
-    await expect(
-      processUploadFile(db as never, baseSession, createdFile),
-    ).rejects.toThrow(/document_deleted/);
+    const thrown = await processUploadFile(
+      db as never,
+      baseSession,
+      createdFile,
+    ).catch((error: unknown) => error);
+    expect(thrown).toMatchObject({ message: expect.stringMatching(/document_deleted/) });
+    expect(diagnosticErrorTags(thrown)).toEqual({ error_kind: "upload.document_deleted" });
 
     expect(db.calls.some((call) => call.operation === "upsert")).toBe(false);
     expect(db.rpc).not.toHaveBeenCalled();
@@ -1169,6 +1291,33 @@ describe("upload processing", () => {
     expect(stamped).toBe(false);
   });
 
+  it("names a sealed object the store cannot serve as upload.sealed_missing", async () => {
+    const { StorageOperationError } = await import("../../../lib/storage.js");
+    const storageError = new StorageOperationError("download", {
+      cause: Object.assign(new Error("gone"), { name: "NoSuchKey" }),
+    });
+    mocks.createFileReadStream.mockImplementation(() =>
+      Readable.from(
+        (async function* () {
+          throw storageError;
+        })(),
+      ),
+    );
+    const db = fakeDb();
+
+    const thrown = await processUploadFile(db as never, baseSession, baseFile)
+      .catch((error: unknown) => error);
+
+    expect(thrown).toMatchObject({ message: "sealed_upload_not_found", kind: "upload.sealed_missing", cause: storageError });
+    // The deepest kind on the chain is the one reported: the store's own
+    // answer, with its code; the wrapper's kind stays on the thrown object.
+    expect(diagnosticErrorTags(thrown)).toEqual({
+      error_kind: "storage.download_failed",
+      storage_operation: "download",
+      failure_code: "NoSuchKey",
+    });
+  });
+
   it("marks a failed created document and safely queues the job for retry", async () => {
     mocks.createFileReadStream.mockImplementation(() =>
       Readable.from(
@@ -1202,6 +1351,15 @@ describe("upload processing", () => {
 
     await processUploadJob(db as never, "job-1", "worker-1");
 
+    // The job names its flow once and marks the stages it passes, so the
+    // failure above arrives in Sentry under documents.upload.complete with
+    // the path it took (claimed, then failed inside process-file).
+    expect(mocks.setOperation).toHaveBeenCalledWith("documents.upload.complete");
+    expect(mocks.markStage.mock.calls.map(([stage]) => stage)).toEqual([
+      "claim",
+      "process-file",
+    ]);
+
     expect(db.calls).toEqual(
       expect.arrayContaining([
         expect.objectContaining({
@@ -1222,50 +1380,6 @@ describe("upload processing", () => {
       ]),
     );
     expect(db.remaining).toHaveLength(0);
-  });
-
-  it("marks an invalid DOCX package as terminal and does not requeue the job", async () => {
-    const zip = new JSZip();
-    zip.file("not-word.txt", "hello");
-    const bytes = await zip.generateAsync({ type: "nodebuffer" });
-    mocks.createFileReadStream.mockImplementation(() =>
-      Readable.from([bytes]),
-    );
-    const invalidDocxFile = {
-      ...baseFile,
-      filename: "fake.docx",
-      file_type: "docx",
-      content_type:
-        "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-      expected_size_bytes: bytes.length,
-    };
-    const db = scriptedDb([
-      { data: { id: "job-1", session_id: baseSession.id, file_id: baseFile.id, attempts: 1, locked_by: "worker-1" } },
-      { data: baseSession, error: null },
-      { data: invalidDocxFile, error: null },
-      { data: { id: "job-1" }, error: null },
-      { error: null },
-      { data: { id: "job-1" }, error: null },
-      { error: null },
-      { error: null },
-      { data: { id: "job-1" }, error: null },
-      { error: null },
-      { data: [], error: null },
-      { data: { id: "job-1" }, error: null },
-    ]);
-
-    await processUploadJob(db as never, "job-1", "worker-1");
-
-    expect(db.calls).toContainEqual(expect.objectContaining({
-      table: "upload_session_files",
-      operation: "update",
-      payload: expect.objectContaining({
-        status: "error",
-        error_code: "invalid_docx_package",
-      }),
-    }));
-    expect(db.calls.some((call) => call.table === "upload_processing_jobs" && (call.payload as { status?: string })?.status === "queued")).toBe(false);
-    expect(mocks.reportError).not.toHaveBeenCalled();
   });
 
   // The measured resurrection: the job failed on P0002, retried, and the
@@ -1324,6 +1438,50 @@ describe("upload processing", () => {
       db,
       expect.arrayContaining([expect.stringContaining(baseFile.resource_id)]),
     );
+  });
+
+  it("names a job, session or file row that is no longer there (MIKE-BACKEND-M)", async () => {
+    const job = {
+      id: "job-1",
+      session_id: baseSession.id,
+      file_id: baseFile.id,
+      attempts: 1,
+      locked_by: "worker-1",
+    };
+    const cases: Array<{ results: QueryResult[]; kind: string; message: string }> = [
+      { results: [{ data: null, error: null }], kind: "upload.job_missing", message: "upload_job_not_found" },
+      {
+        results: [{ data: job, error: null }, { data: null, error: null }],
+        kind: "upload.session_missing",
+        message: "upload_session_not_found",
+      },
+      {
+        results: [{ data: job, error: null }, { data: baseSession, error: null }, { data: null, error: null }],
+        kind: "upload.file_missing",
+        message: "upload_session_file_not_found",
+      },
+    ];
+    for (const { results, kind, message } of cases) {
+      const db = scriptedDb(results);
+      const thrown = await processUploadJob(db as never, "job-1", "worker-1").then(
+        () => null,
+        (error: unknown) => error,
+      );
+      expect(thrown).toBeInstanceOf(Error);
+      expect((thrown as Error).message).toBe(message);
+      expect(diagnosticErrorTags(thrown).error_kind).toBe(kind);
+    }
+    expect(mocks.createFileReadStream).not.toHaveBeenCalled();
+  });
+
+  it("keeps a database failure on the lookup as the failure, with its code", async () => {
+    const db = scriptedDb([{ data: null, error: { code: "57014", message: "canceling statement" } }]);
+    const thrown = await processUploadJob(db as never, "job-1", "worker-1").then(
+      () => null,
+      (error: unknown) => error,
+    );
+    expect(diagnosticErrorTags(thrown).failure_code).toBe("57014");
+    expect(diagnosticErrorTags(thrown).error_kind).toBeUndefined();
   });
 
   it("stops before processing when the database lease has been lost", async () => {
@@ -1474,9 +1632,22 @@ describe("upload processing", () => {
         expect.stringMatching(/^\[upload-worker\] iteration recovered after \d+ consecutive failure/),
       );
 
+      // The same failure returning minutes after it was reported is a flap,
+      // not news: one event per class per window, however often it recurs.
       claimError = missingRpc;
       await vi.advanceTimersByTimeAsync(2_000);
+      expect(reports()).toHaveLength(1);
+      expect(consoleWarn).toHaveBeenCalledWith(
+        expect.stringMatching(/^\[upload-worker\] iteration failing again \(Error:PGRST202\)/),
+      );
+
+      // A different failure class is reported at once.
+      claimError = null;
+      await vi.advanceTimersByTimeAsync(31_000);
+      claimError = { ...missingRpc, code: "40P01", message: "deadlock detected" };
+      await vi.advanceTimersByTimeAsync(2_000);
       expect(reports()).toHaveLength(2);
+      expect(diagnosticErrorTags(reports()[1][0]).failure_code).toBe("40P01");
     } finally {
       stop();
       vi.useRealTimers();

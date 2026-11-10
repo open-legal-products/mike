@@ -17,8 +17,9 @@
 //      into an event so nothing is silently dropped. Errors already reported
 //      explicitly are remembered so the bridge does not double-report them.
 
+import { isDevelopmentBuild } from "../buildMode";
 import * as Sentry from "@sentry/node";
-import { diagnosticErrorTags, privacyBoundaryIntegration } from "./sentryPrivacy";
+import { retainExceptionTypes, diagnosticRoute, diagnosticErrorTags, privacyBoundaryIntegration, type Operation, type Stage } from "./sentryPrivacy";
 
 export type SentryRole = "api" | "worker" | "worker-thread" | "job";
 
@@ -35,12 +36,41 @@ export type ReportContext = {
 };
 
 const CONSOLE_MECHANISM = "auto.core.capture_console";
+/**
+ * The mechanism of the events Sentry's Vercel AI integration files itself.
+ * It subscribes to the AI SDK's `ai:telemetry` diagnostics channel and calls
+ * captureException(…, { handled: false }) for EVERY `tool-error` a tool step
+ * produces (`captureToolError` in @sentry/server-utils). For Mike that is
+ * never a fresh report: a tool failure ends the turn and is reported once,
+ * typed, by its owner (chat-stream's `reportError`, the job runner for the
+ * memory curator), and the ask_inputs / approval pause is control flow that
+ * travels the same `tool-error` path and is not a failure at all.
+ */
+const VERCEL_AI_TOOL_ERROR_MECHANISM = "auto.vercelai.channel";
 const NESTED_SEARCH_DEPTH = 2;
+
+/**
+ * What Node's warning writer hands to console.error: one string shaped
+ * `(node:<pid>) [<code>] <Name>: <text>` (`node:internal/process/warning`).
+ * It arrives through the console bridge from node:* frames only, so the
+ * privacy boundary left "Failure in application" with four SDK frames and no
+ * tag that said what happened (MIKE-BACKEND-2). The process 'warning'
+ * listener reports the warning object instead; this copy is dropped.
+ */
+const NODE_WARNING_TEXT = /^\(node:\d+\) (?:\[[\w-]+\] )?[\w$]+: /;
+
+function isNodeWarningText(args: unknown[]): boolean {
+  return (
+    args.length === 1 &&
+    typeof args[0] === "string" &&
+    NODE_WARNING_TEXT.test(args[0])
+  );
+}
 
 // BEGIN shared-redaction
 // This block is the privacy control for every runtime. It is authored once
 // and mirrored, indentation aside, between backend/src/lib/observability/
-// sentry.ts and frontend/src/shared/lib/sentryEvent.ts (the backend cannot
+// sentry.ts and packages/client/src/sentryEvent.ts (the backend cannot
 // import the frontend tree at build time). sentryEvent.sync.test.ts fails
 // the moment the two copies differ, so edit both or neither.
 const SENSITIVE_HEADERS = new Set([
@@ -186,18 +216,20 @@ const EXTRA_KEY_ALLOWLIST = new Set([
   "file_id",
   "fileId",
   "id",
+  "import_id",
   "job_id",
   "jobId",
   "kind",
   "message",
   "name",
-  "path",
+  "playbook_id",
   "request_id",
   "requestId",
   "review_id",
   "reviewId",
   "row_id",
   "rowId",
+  "run_id",
   "session_id",
   "sessionId",
   "stableEditId",
@@ -272,17 +304,20 @@ export function redactShaped(value: unknown, depth = 0): unknown {
  */
 export const MIKE_SENTRY_DSN = {
   backend:
-    "https://c755fbcd344e1d4ac0dfc3b3c927b938@o4512103319207936.ingest.us.sentry.io/4512103323074560",
+    "https://7d685d2a4e6a4bfd5991b320c0043d23@o4512288166510592.ingest.us.sentry.io/4512288204718080",
   frontend:
-    "https://b5a10f7549e6bd0165d4e01d67e762cd@o4512103319207936.ingest.us.sentry.io/4512103326416896",
+    "https://1d40513ce9978d4fbd4deeeeff23817a@o4512288166510592.ingest.us.sentry.io/4512288207798272",
   wordAddin:
-    "https://dcb3daf9d26bb576e94da2c584de63e8@o4512103319207936.ingest.us.sentry.io/4512103330349056",
+    "https://98e6cb43234267619a432a58c0ad71f9@o4512288166510592.ingest.us.sentry.io/4512288210812928",
 } as const;
 
 export type DsnResolution = {
   dsn: string;
-  /** Where the DSN came from; "default" means the Mike project's Sentry. */
-  source: "disabled" | "env" | "default";
+  /**
+   * Where the DSN came from; "default" means the Mike project's Sentry and
+   * "development" means off because this is a development build.
+   */
+  source: "disabled" | "env" | "default" | "development";
 };
 
 /**
@@ -294,13 +329,34 @@ export function resolveDsn(input: {
   disabled?: string;
   dsn?: string;
   fallback: string;
+  /**
+   * A development build (`next dev`, `tsx watch`, the add-in's webpack dev
+   * server): a contributor's laptop, not an install. It never falls back to
+   * the Mike project; only a DSN set on purpose (your own project, or the
+   * local sink in scripts/sentry-sink.mjs) turns it on.
+   */
+  development?: boolean;
 }): DsnResolution {
   if (input.disabled?.trim().toLowerCase() === "true") {
     return { dsn: "", source: "disabled" };
   }
   const explicit = input.dsn?.trim();
   if (explicit) return { dsn: explicit, source: "env" };
+  if (input.development) return { dsn: "", source: "development" };
   return { dsn: input.fallback, source: "default" };
+}
+
+/**
+  * The `environment` every runtime reports under. An explicit
+  * SENTRY_ENVIRONMENT always wins; otherwise a development build is
+  * "development" and everything else (an install) is "self-hosted", so a
+  * developer who does opt in can never be mistaken for an install.
+  */
+export function sentryEnvironment(
+  explicit: string | undefined,
+  development: boolean,
+): string {
+  return explicit?.trim() || (development ? "development" : "self-hosted");
 }
 
 export type InstallKind = "official" | "community";
@@ -416,7 +472,14 @@ function mapStringLeaves(
 export function minimiseForCommunity<T extends CommunityEvent>(event: T): T {
   delete event.server_name;
   delete event.user;
-  delete event.breadcrumbs;
+  // Breadcrumbs are request history; only our own stage trail stays
+  // (category mike.stage, message a stage name), the privacy boundary
+  // checks each one against the diagnostic label format.
+  const trail = Array.isArray(event.breadcrumbs)
+    ? event.breadcrumbs.filter((crumb) => (crumb as { category?: unknown })?.category === "mike.stage")
+    : [];
+  if (trail.length) event.breadcrumbs = trail;
+  else delete event.breadcrumbs;
   if (event.tags) {
     delete event.tags.server_name;
     delete event.tags.url;
@@ -482,6 +545,34 @@ export function minimiseForCommunity<T extends CommunityEvent>(event: T): T {
 }
 // END shared-redaction
 
+/** Marks a build that did not come from the release workflow. */
+export const UNVERSIONED = "0.0.0";
+const VERSION_PATTERN = /^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/;
+
+/** `MIKE_VERSION` as a semver string, or 0.0.0 when unset or malformed. */
+export function normalizeVersion(raw: string | undefined): string {
+  const trimmed = (raw ?? "").trim().replace(/^v/, "");
+  return VERSION_PATTERN.test(trimmed) ? trimmed : UNVERSIONED;
+}
+
+/**
+ * `mike@<version>+<sha12>`: the release every runtime tags events with. Same
+ * rule as packages/client/src/sentryEvent.ts (this module cannot import
+ * it). An explicit SENTRY_RELEASE wins; a build without MIKE_VERSION is
+ * `mike@0.0.0...`, valid and visibly not a release.
+ */
+export function releaseName(
+  explicit: string | undefined,
+  version: string | undefined,
+  gitSha: string | undefined,
+): string {
+  const named = explicit?.trim();
+  if (named) return named;
+  const sha = gitSha?.trim().slice(0, 12);
+  const base = `mike@${normalizeVersion(version)}`;
+  return sha ? `${base}+${sha}` : base;
+}
+
 /** Errors already sent via reportError(); the console bridge skips them. */
 const reportedErrors = new WeakSet<object>();
 
@@ -528,14 +619,50 @@ function parseRate(raw: string | undefined, fallback: number): number {
   return Math.min(Math.max(parsed, 0), 1);
 }
 
-export function sentryConfiguration(env: NodeJS.ProcessEnv = process.env) {
-  // ON BY DEFAULT: without SENTRY_DISABLED or a DSN of your own, errors go
-  // to the Mike project's Sentry as a community install (see the README's
-  // Telemetry section). Only Mike's own deployment sets SENTRY_INSTALL.
+// The rule lives in lib/buildMode.ts so non-Sentry code (boot, process
+// lifecycle) uses the same definition; re-exported for existing callers.
+export { isDevelopmentBuild };
+
+/**
+ * The `build_mode` tag: whether this process is a development build by the
+ * same rule that picks its destination, not NODE_ENV. Compose and the desktop
+ * app run the compiled image under NODE_ENV=development, so a NODE_ENV tag
+ * labelled every install "development". A test process keeps "test".
+ */
+export function backendBuildMode(
+  env: NodeJS.ProcessEnv,
+  development: boolean,
+): "development" | "production" | "test" {
+  if (env.NODE_ENV === "test") return "test";
+  return development ? "development" : "production";
+}
+
+/**
+ * SENTRY_SOURCE_RUN_IS_INSTALL=true: a self-hoster who runs the backend from
+ * its TypeScript source in production says "this source run is an install".
+ * It then reports like the compiled image (Mike project by default,
+ * environment self-hosted, build_mode production). Off unless exactly "true"
+ * (any case), and absent from every example value, so a contributor's
+ * checkout never turns it on by copying a file.
+ */
+export function sourceRunIsInstall(env: NodeJS.ProcessEnv): boolean {
+  return env.SENTRY_SOURCE_RUN_IS_INSTALL?.trim().toLowerCase() === "true";
+}
+
+export function sentryConfiguration(
+  env: NodeJS.ProcessEnv = process.env,
+  sourceRun: boolean = isDevelopmentBuild(),
+) {
+  // ON BY DEFAULT for installs: without SENTRY_DISABLED or a DSN of your own,
+  // errors go to the Mike project's Sentry as a community install (see the
+  // README's Telemetry section). A development build stays off unless a DSN
+  // is set on purpose. Only Mike's own deployment sets SENTRY_INSTALL.
+  const development = sourceRun && !sourceRunIsInstall(env);
   const resolved = resolveDsn({
-    disabled: env.SENTRY_DISABLED,
-    dsn: env.SENTRY_DSN,
+    disabled: env.SENTRY_DISABLED?.trim() || env.MIKE_BUILD_SENTRY_DISABLED,
+    dsn: env.SENTRY_DSN?.trim() || env.MIKE_BUILD_SENTRY_DSN,
     fallback: MIKE_SENTRY_DSN.backend,
+    development,
   });
   const dsn = resolved.dsn;
   // A test process must never report, even when a developer's backend/.env
@@ -546,17 +673,17 @@ export function sentryConfiguration(env: NodeJS.ProcessEnv = process.env) {
   return {
     dsn,
     dsnSource: resolved.source,
+    /** A development build for Sentry: a source run not declared an install. */
+    development,
     install: installKind(env.SENTRY_INSTALL),
     enabled:
       dsn.length > 0 &&
       (!isTestProcess || env.SENTRY_ALLOW_IN_TESTS === "true"),
-    environment: env.SENTRY_ENVIRONMENT?.trim() || "self-hosted",
-    // An explicit SENTRY_RELEASE wins; otherwise the git commit the image
-    // was built from (GIT_SHA, a Dockerfile build arg) — what lets Sentry
-    // say "regressed in this deploy" and resolve an issue until the next.
-    release:
-      env.SENTRY_RELEASE?.trim() ||
-      (env.GIT_SHA?.trim() ? `mike@${env.GIT_SHA.trim().slice(0, 12)}` : undefined),
+    environment: sentryEnvironment(env.SENTRY_ENVIRONMENT, development),
+    // An explicit SENTRY_RELEASE wins; otherwise mike@<version>+<sha12> from
+    // the MIKE_VERSION and GIT_SHA build arguments — what lets Sentry say
+    // "regressed in this release" and resolve an issue until the next.
+    release: releaseName(env.SENTRY_RELEASE, env.MIKE_VERSION, env.GIT_SHA),
     // Performance tracing is opt-in: error tracking is the goal of this
     // integration and traces cost quota. 0 keeps the OpenTelemetry request
     // instrumentation (needed for request context on errors) without
@@ -589,6 +716,8 @@ const DEFAULT_MAX_EVENTS_PER_ISSUE_PER_MINUTE = 10;
 const THROTTLE_WINDOW_MS = 60_000;
 type ThrottleBucket = { windowStart: number; sent: number; suppressed: number };
 const throttleBuckets = new Map<string, ThrottleBucket>();
+/** Distinct issues tracked at once; past it the oldest bucket is evicted. */
+const MAX_THROTTLE_KEYS = 1_000;
 let maxEventsPerIssuePerMinute = DEFAULT_MAX_EVENTS_PER_ISSUE_PER_MINUTE;
 
 function issueKey(event: Sentry.ErrorEvent): string {
@@ -615,14 +744,24 @@ export function withinIssueBudget(
       );
     }
     bucket = { windowStart: now, sent: 0, suppressed: 0 };
+    // Re-inserting moves the key to the end, so the Map's insertion order is
+    // window-start order and the oldest bucket is always the first entry.
+    throttleBuckets.delete(key);
     throttleBuckets.set(key, bucket);
-    // Keep the map bounded on a long-running process.
-    if (throttleBuckets.size > 1_000) {
-      for (const [otherKey, other] of throttleBuckets) {
-        if (now - other.windowStart >= THROTTLE_WINDOW_MS) {
-          throttleBuckets.delete(otherKey);
-        }
+    // Keep the map bounded on a long-running process: drop expired windows
+    // from the front, and past the cap evict the oldest live bucket too. Each
+    // key is evicted at most once per insert, so this is amortised O(1).
+    // (The old sweep scanned every key on every new key once 1,000 were
+    // live, and evicted nothing while they all stayed inside the window.)
+    for (const [oldestKey, oldest] of throttleBuckets) {
+      const expired = now - oldest.windowStart >= THROTTLE_WINDOW_MS;
+      if (!expired && throttleBuckets.size <= MAX_THROTTLE_KEYS) break;
+      if (oldest.suppressed) {
+        console.warn(
+          `[sentry] suppressed ${oldest.suppressed} further event(s) for: ${oldestKey.slice(0, 120)}`,
+        );
       }
+      throttleBuckets.delete(oldestKey);
     }
   }
   if (bucket.sent < maxEventsPerIssuePerMinute) {
@@ -631,6 +770,11 @@ export function withinIssueBudget(
   }
   bucket.suppressed += 1;
   return false;
+}
+
+/** Number of issue buckets the throttle currently holds (tests only). */
+export function issueThrottleKeyCountForTests(): number {
+  return throttleBuckets.size;
 }
 
 /** True once init() ran with a DSN in this process (or thread). */
@@ -666,6 +810,15 @@ function consoleArguments(hint: Sentry.EventHint): unknown[] | null {
   return Array.isArray(args) ? args : null;
 }
 
+/** Preserve complete code locations before free-text path redaction splits on spaces. */
+function consoleErrorStack(stack: string | undefined): string | undefined {
+  return stack?.replace(
+    /^(\s*at (?:.*? \()?)(?:file:\/\/)?((?:\/|[A-Za-z]:\\)[^\n]*):(\d+):(\d+)(\)?)$/gm,
+    (_line, prefix: string, path: string, line: string, column: string, closing: string) =>
+      `${prefix}${repoRelativePath(path)}:${line}:${column}${closing}`,
+  );
+}
+
 /**
  * Strip everything a legal-platform event must never carry, then drop
  * console-bridge duplicates of errors that were reported explicitly.
@@ -687,6 +840,11 @@ export function scrubEvent(
   if (automatic && isReported(original)) {
     return null;
   }
+  // handled:false made these read as unhandled rejections (MIKE-BACKEND-4,
+  // -3Q, -5N, -7D, -1K); see VERCEL_AI_TOOL_ERROR_MECHANISM.
+  if (mechanism === VERCEL_AI_TOOL_ERROR_MECHANISM) {
+    return null;
+  }
 
   // console.error("[label] failed", { jobId, error }) is the common shape in
   // this codebase. The bridge only recognises a top-level Error, so it sends
@@ -699,6 +857,8 @@ export function scrubEvent(
     if (args.some((arg) => findNested(arg, isReported))) {
       return null;
     }
+    // Node's own warning printer; reportProcessWarning() filed the object.
+    if (isNodeWarningText(args)) return null;
     // Positional payloads after the label are never titles or grouping keys.
     const label = typeof args[0] === "string" ? args[0].trim() : "Console error";
     const nestedError = args
@@ -711,7 +871,7 @@ export function scrubEvent(
     if (nestedError) {
       event.message = `${label ? `${label}: ` : ""}${nestedError.name}: ${nestedError.message}`;
       event.fingerprint = ["console", label, nestedError.name];
-      event.extra = { ...(event.extra ?? {}), error_stack: nestedError.stack };
+      event.extra = { ...(event.extra ?? {}), error_stack: consoleErrorStack(nestedError.stack) };
     } else if (!event.exception?.values?.length || mechanismInfo?.synthetic) {
       // SDK v11 attaches a synthetic exception to console messages by default.
       // Its value is the joined arguments, so strip positional payloads there too.
@@ -731,6 +891,8 @@ export function scrubEvent(
     const nested = findNested(arg, c => c instanceof Error || 'code' in c);
     Object.assign(event.tags, diagnosticErrorTags(nested));
   }
+
+  retainExceptionTypes(event.exception?.values, [original, ...(args ?? [])], event.tags?.warning_name);
 
   // The title and the exception text are free text from libraries that
   // happily quote emails, tokens, and URLs (Postgres "Key (email)=(…)",
@@ -803,14 +965,19 @@ export function scrubEvent(
 export function initSentry(
   role: SentryRole,
   env: NodeJS.ProcessEnv = process.env,
+  sourceRun: boolean = isDevelopmentBuild(),
 ): boolean {
   if (initialized) return true;
-  const config = sentryConfiguration(env);
+  const config = sentryConfiguration(env, sourceRun);
   if (!config.enabled) {
     if (env.NODE_ENV !== "test") {
       console.log(
         `[sentry] disabled for ${role} (${
-          config.dsnSource === "disabled" ? "SENTRY_DISABLED=true" : "test process"
+          config.dsnSource === "disabled"
+            ? "SENTRY_DISABLED=true"
+            : config.dsnSource === "development"
+              ? "development build; set SENTRY_DSN to report to your own project, or SENTRY_SOURCE_RUN_IS_INSTALL=true if this source run is an install"
+              : "test process"
         })`,
       );
     }
@@ -854,23 +1021,67 @@ export function initSentry(
       Sentry.onUnhandledRejectionIntegration({ mode: "strict" }),
     ],
     initialScope: {
-      tags: { service: "mike-backend", role, install: config.install, build_mode: env.NODE_ENV, diagnostics_version: "2" },
+      tags: { service: "mike-backend", role, install: config.install, build_mode: backendBuildMode(env, config.development), diagnostics_version: "2" },
     },
     beforeSend: scrubEvent,
   });
   initialized = true;
+  installProcessWarningReporter(env);
   if (config.dsnSource === "default") {
     console.log(
-      `[sentry] enabled for ${role} → Mike project Sentry (${config.install} install). ` +
+      `[sentry] enabled for ${role} → Mike project Sentry (${config.install} install, ` +
+        `release ${config.release}). ` +
         "Opt out with SENTRY_DISABLED=true or point SENTRY_DSN at your own project.",
     );
   } else {
     console.log(
       `[sentry] enabled for ${role} (environment ${config.environment}` +
-        `${config.release ? `, release ${config.release}` : ""})`,
+        `, release ${config.release})`,
+    );
+  }
+  if (config.release.startsWith(`mike@${UNVERSIONED}`) && env.NODE_ENV === "production") {
+    // An unversioned release cannot be told apart from any other local build;
+    // the images get MIKE_VERSION and GIT_SHA as build args (docs/observability.md).
+    console.warn(
+      "[sentry] unversioned release: build the images with MIKE_VERSION=$(cat VERSION) GIT_SHA=$(git rev-parse HEAD) or set SENTRY_RELEASE",
     );
   }
   return true;
+}
+
+/**
+ * Node process warnings (DeprecationWarning, ExperimentalWarning,
+ * MaxListenersExceededWarning, …) are printed by Node itself through
+ * console.error, which the console bridge captures as free text from node:*
+ * frames; after the privacy boundary nothing identified them. Reported as the
+ * warning object, the name, the code (DEP0040) and the stack of the module
+ * that triggered it survive, so an install's next warning says what it is.
+ * Not an application failure: level "warning", one issue per name and code.
+ */
+export function reportProcessWarning(warning: unknown): string | null {
+  const shaped = warning as { name?: unknown; code?: unknown } | null;
+  const name = typeof shaped?.name === "string" ? shaped.name : "Warning";
+  const code = typeof shaped?.code === "string" ? shaped.code : undefined;
+  if (name === "DeprecationWarning" && process.noDeprecation) return null;
+  return reportError(warning, {
+    level: "warning",
+    tags: { component: "runtime-warning", warning_name: name, warning_code: code },
+    fingerprint: ["runtime-warning", name, code ?? ""],
+  });
+}
+
+/**
+ * `--no-warnings` (or NODE_NO_WARNINGS=1) is the operator saying "do not
+ * tell me about these"; honour it the way Node's own printer does. Registered once per process: a second
+ * initSentry() returns before reaching here.
+ */
+function installProcessWarningReporter(env: NodeJS.ProcessEnv): void {
+  const silenced =
+    env.NODE_NO_WARNINGS === "1" ||
+    process.execArgv.includes("--no-warnings") ||
+    /(?:^|\s)--no-warnings(?:\s|=|$)/.test(env.NODE_OPTIONS ?? "");
+  if (silenced) return;
+  process.on("warning", reportProcessWarning);
 }
 
 /**
@@ -979,10 +1190,46 @@ export function bestEffort<T>(
   });
 }
 
-/** Attach the request id to every event captured during this request. */
-export function tagCurrentRequest(requestId: string): void {
+/**
+ * Name the flow this request or job belongs to. Set once at the entry
+ * (route handler, job handler) and every event captured until it finishes
+ * carries `operation`, which leads the issue title and the fingerprint.
+ * Default stack grouping still distinguishes different failure sites.
+ */
+export function setOperation(operation: Operation): void {
   if (!initialized) return;
-  Sentry.getIsolationScope().setTag("request_id", requestId);
+  Sentry.getIsolationScope().setTag("operation", operation);
+}
+
+/**
+ * Record that the current request or job reached a stage. The stages a
+ * failed operation passed through arrive on its event as breadcrumbs, so a
+ * failure in `seal-recover` is distinguishable from the same throw reached
+ * via `copy-rollback`. Only the static, source-authored stage label travels,
+ * never runtime data or a free-form message.
+ */
+export function markStage(stage: Stage): void {
+  if (!initialized) return;
+  Sentry.addBreadcrumb({ category: "mike.stage", message: stage, level: "info" });
+}
+
+/** Baseline identity for all request captures, including middleware/console errors. */
+export function tagCurrentRequest(
+  requestId: string,
+  request?: { method: string; originalUrl: string },
+): void {
+  if (!initialized) return;
+  const scope = Sentry.getIsolationScope();
+  scope.setTag("request_id", requestId);
+  if (request) {
+    // Never put a concrete URL, query, resource name or id on the scope.
+    // This fallback exists before Express selects a route; setOperation in
+    // a domain handler replaces it with the more specific business flow.
+    scope.setTag("component", "http");
+    scope.setTag("operation", "http.request");
+    scope.setTag("http_method", request.method);
+    scope.setTag("http_route", diagnosticRoute(request.originalUrl));
+  }
 }
 
 /** Attach the authenticated user's id (never the email) to this request. */
@@ -1011,8 +1258,14 @@ function describe(value: unknown): string {
 }
 
 /** Test seam: forget init and throttle state between unit tests. */
-export function resetSentryForTests(install: InstallKind = "official"): void {
-  initialized = false;
+export function resetSentryForTests(
+  install: InstallKind = "official",
+  options: { initialized?: boolean } = {},
+): void {
+  // A test that calls Sentry.init() itself (real SDK, fake transport) opts in
+  // so reportError() and friends treat that client as ours.
+  initialized = options.initialized ?? false;
+  process.off("warning", reportProcessWarning);
   // Tests exercise the full event shape unless they opt into community mode.
   currentInstall = install;
   throttleBuckets.clear();

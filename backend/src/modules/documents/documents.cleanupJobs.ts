@@ -2,7 +2,10 @@ import { type Db, type DbJob, DbJobDeferredError } from "../../lib/dbq/types";
 import { jobErrorMessage } from "../../lib/dbq/jobError";
 import { retryDelayMs, STALE_SECONDS } from "../../lib/dbq/runner";
 import { requestDocumentCleanupDelivery } from "../../lib/dbq/enqueue";
+import { mapWithConcurrency } from "../../lib/concurrency";
+import { selectAllByKey, selectInBatches } from "../../lib/batchedQuery";
 import { logError } from "../../lib/log";
+import { setOperation } from "../../lib/observability/sentry";
 
 import {
   assertStorageConfigured,
@@ -113,6 +116,9 @@ export async function handleDocumentCleanup(
   db: Db,
   job: Pick<DbJob, "payload"> & Partial<Pick<DbJob, "id">>,
 ): Promise<void> {
+  // A claimed row is the documents.delete job; the inline fallback runs on a
+  // request thread that already named its own operation, so leave that alone.
+  if (job.id) setOperation("documents.delete");
   // Only a genuinely claimed row may claim siblings: the inline fallback
   // below passes a synthetic job and owns nothing in db_jobs.
   const siblings = job.id ? await claimSiblingCleanupJobs(db, job.id) : [];
@@ -196,15 +202,20 @@ async function deleteCleanupKeys(
   for (const row of (referencedRows ?? []) as { key?: unknown }[]) {
     if (typeof row.key === "string") referenced.add(row.key);
   }
+  // A few deletes in flight at once, not one after another: a project's
+  // cleanup can name thousands of objects.
   const failed = new Set<string>();
-  for (const key of keys) {
-    if (referenced.has(key)) continue;
-    try {
-      await deleteFile(key);
-    } catch {
-      failed.add(key);
-    }
-  }
+  await mapWithConcurrency(
+    keys.filter((key) => !referenced.has(key)),
+    8,
+    async (key) => {
+      try {
+        await deleteFile(key);
+      } catch {
+        failed.add(key);
+      }
+    },
+  );
   for (const row of siblings) {
     const rowFailures = cleanupKeys(row.payload).filter((key) =>
       failed.has(key),
@@ -243,7 +254,8 @@ export async function captureInlineDocumentCleanup(
     | { documentIds: string[] }
     | { versionIds: string[] }
     | { projectIds: string[] }
-    | { workflowId: string },
+    | { workflowId: string }
+    | { workflowIds: string[] },
 ): Promise<string[]> {
   if (process.env.DB_JOBS_ENABLED !== "false") return [];
   try {
@@ -252,34 +264,40 @@ export async function captureInlineDocumentCleanup(
     if ("documentIds" in scope) ids = scope.documentIds;
     else if ("versionIds" in scope) ids = scope.versionIds;
     else {
-      const query = db.from("documents").select("id");
-      const { data, error } =
+      // Parent ids bound the URL, not the response: one workflow or project
+      // has many documents, so each parent batch is read in full pages.
+      const [column, parents] =
         "projectIds" in scope
-          ? await query.in("project_id", scope.projectIds)
-          : await query.eq("workflow_id", scope.workflowId);
-      if (error) throw error;
-      ids = (data ?? []).map((row) => row.id as string);
+          ? ["project_id", scope.projectIds]
+          : "workflowIds" in scope
+            ? ["workflow_id", scope.workflowIds]
+            : ["workflow_id", [scope.workflowId]];
+      const documents = await selectInBatches("inline cleanup documents", parents, (batch) =>
+        selectAllByKey<{ id: string }>("inline cleanup documents", () =>
+          db.from("documents").select("id").in(column, batch),
+        ),
+      );
+      ids = documents.map((row) => row.id);
     }
+    // Likewise one document has many versions: page each id batch.
+    const versions = await selectInBatches("inline cleanup versions", ids, (batch) =>
+      selectAllByKey<{ id: string; storage_path: unknown; pdf_storage_path: unknown }>(
+        "inline cleanup versions",
+        () =>
+          db
+            .from("document_versions")
+            .select("id, storage_path, pdf_storage_path")
+            .in("versionIds" in scope ? "id" : "document_id", batch),
+      ),
+    );
     const keys = new Set<string>();
-    // `in(...)` travels in the request URL; 50 uuids stay well under the
-    // gateway's limit (500 did not — see deleteCleanupKeys).
-    for (let start = 0; start < ids.length; start += 50) {
-      const { data, error } = await db
-        .from("document_versions")
-        .select("id, storage_path, pdf_storage_path")
-        .in(
-          "versionIds" in scope ? "id" : "document_id",
-          ids.slice(start, start + 50),
-        );
-      if (error) throw error;
-      for (const row of data ?? []) {
-        for (const key of [
-          row.storage_path,
-          row.pdf_storage_path,
-          extractedTextKey(row.id),
-        ]) {
-          if (typeof key === "string" && key) keys.add(key);
-        }
+    for (const row of versions) {
+      for (const key of [
+        row.storage_path,
+        row.pdf_storage_path,
+        extractedTextKey(row.id),
+      ]) {
+        if (typeof key === "string" && key) keys.add(key);
       }
     }
     return [...keys];

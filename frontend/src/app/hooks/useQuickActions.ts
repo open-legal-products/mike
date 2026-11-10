@@ -13,13 +13,14 @@ import type { QuickAction } from "@/app/components/shared/types";
 const LEGACY_VISIBLE_KEY = "mike.quickActions.visible";
 const MIGRATED_KEY = "mike.quickActions.databaseMigrated";
 
+/** Migrate legacy visibility preferences without losing server actions if storage is blocked. */
 async function migrateLegacyVisibility(
     actions: QuickAction[],
 ): Promise<{ actions: QuickAction[]; complete: boolean }> {
-    if (window.localStorage.getItem(MIGRATED_KEY)) {
-        return { actions, complete: true };
-    }
     try {
+        if (window.localStorage.getItem(MIGRATED_KEY)) {
+            return { actions, complete: true };
+        }
         const legacy = JSON.parse(
             window.localStorage.getItem(LEGACY_VISIBLE_KEY) ?? "null",
         ) as Record<string, unknown> | null;

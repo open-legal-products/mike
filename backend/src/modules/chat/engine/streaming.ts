@@ -1,19 +1,56 @@
+import { AppError } from "../../../lib/appError";
 import { teamOrgIdOf } from "../../../lib/personalOrgs";
+import { webSearchAccountFor, type WebSearchPlan } from "../../../lib/webSearch";
 import { buildGoogleWorkspaceTools } from "../../../lib/integrations/googleWorkspace";
 import {
   streamChatWithTools,
   resolveModel,
   type LlmMessage,
+  type NormalizedToolCall,
+  type NormalizedToolResult,
   type OpenAIToolSchema,
+  type TokenUsage,
 } from "../../../lib/llm";
 import { resolveRequestedModel } from "../../../lib/routerModels";
+import {
+  resolveEffectiveChatModel,
+  sameProviderModels,
+} from "../../../lib/modelSelection";
 import { UserFacingError } from "../../../lib/userFacingError";
 import { InvalidApiKeyError } from "../../../lib/llm/apiKeyErrors";
-import { reportError } from "../../../lib/observability/sentry";
+import { markStage, reportError } from "../../../lib/observability/sentry";
+import { providerFailureKind } from "../../../lib/llm/providerErrors";
+import { safeError } from "../../../lib/safeError";
 import type { Db } from "../../../lib/supabase";
+import type { StreamRunWriteOptions } from "../../../lib/streamRuns";
 import { buildUserMcpTools } from "../../../lib/mcpConnectors";
 import { buildGoogleDriveTools } from "../../../lib/integrations/googleDrive";
 import { COURTLISTENER_TOOLS } from "./tools/courtlistenerTools";
+import { createProviderWebSearchTracker } from "./tools/providerWebSearch";
+import {
+  MIKE_WEB_SEARCH_SYSTEM_PROMPT,
+  PROVIDER_WEB_READ_SYSTEM_PROMPT,
+  WEB_SEARCH_SYSTEM_PROMPT,
+  WEB_TOOL_NAMES,
+  createWebTurnState,
+  runWebToolCall,
+  webToolErrorMessage,
+  webToolsFor,
+  type WebTurnState,
+} from "./tools/webSearchTools";
+import {
+  ASK_PARENT_TOOL,
+  ASK_PARENT_TOOL_NAME,
+  DELEGATE_TOOL_NAME,
+  SUBAGENT_EXCLUDED_TOOL_NAMES,
+  createDelegateTurnState,
+  delegateSystemPrompt,
+  delegateTool,
+  runDelegateCall,
+  type DelegateContext,
+  type DelegateResult,
+  type SubagentDefaults,
+} from "./tools/delegateTools";
 import {
   type DocStore,
   type DocIndex,
@@ -21,22 +58,27 @@ import {
   type WorkflowStore,
   type ToolCall,
   devLog,
-  resolveDocLabel,
+  createDocLabelResolver,
   TOOL_ERROR_MESSAGE,
 } from "./types";
 import {
+  PLAYBOOK_TOOLS,
   TOOLS,
   WORKFLOW_TOOLS,
   isDocumentMutatingTool,
+  toolName,
   withoutDocumentMutatingTools,
 } from "./tools/toolSchemas";
 import {
   parseCitationsWithDiagnostics,
-  parsePartialCitationObjects,
+  createPartialCitationParser,
   createCitation,
   CITATIONS_OPEN_TAG,
 } from "./citations";
 import { runToolCalls } from "./tools/toolDispatcher";
+import { addApprovalItems } from "./tools/connectorApprovals";
+import { createKeyedLock, type KeyedLock } from "./tools/documentLocks";
+import type { SubagentRunStore } from "./tools/delegateRuns";
 import { documentSearchError } from "./tools/documentSearchErrors";
 import {
   getCachedCaseOpinionTexts,
@@ -67,7 +109,7 @@ export interface ClientToolsAdapter {
   ) => Promise<{ content: string; events: AssistantEvent[] }>;
 }
 
-export class AssistantStreamError extends Error {
+export class AssistantStreamError extends AppError {
   fullText: string;
   events: AssistantEvent[];
 
@@ -77,8 +119,7 @@ export class AssistantStreamError extends Error {
     events: AssistantEvent[],
     options?: ErrorOptions,
   ) {
-    super(message, options);
-    this.name = "AssistantStreamError";
+    super("chat.stream_failed", message, options);
     this.fullText = fullText;
     this.events = events;
   }
@@ -96,11 +137,21 @@ export const ASSISTANT_ERROR_MESSAGE =
  * which sends the user to retry something that cannot succeed — so the choice
  * lives here once instead of in each route's catch.
  */
-export function assistantStreamErrorPayload(error: unknown): {
+export function assistantStreamErrorPayload(
+  error: unknown,
+  requestId?: string | null,
+): {
   message: string;
   safe_to_display?: true;
   code?: AssistantErrorCode;
+  request_id?: string;
+  reporting_owner: "backend";
 } {
+  // The request id is the one handle a user can quote that finds the Sentry
+  // event and the access-log line for this failure; it carries no content.
+  // The server owns reporting for terminal failures, even when telemetry is
+  // disabled. This states ownership; it does not promise event delivery.
+  const reporting = { reporting_owner: "backend" as const, ...(requestId ? { request_id: requestId } : {}) };
   const safe =
     error instanceof AssistantStreamError
       ? [...error.events]
@@ -110,11 +161,12 @@ export function assistantStreamErrorPayload(error: unknown): {
               event.type === "error" && event.safe_to_display === true,
           )
       : undefined;
-  if (!safe) return { message: ASSISTANT_ERROR_MESSAGE };
+  if (!safe) return { message: ASSISTANT_ERROR_MESSAGE, ...reporting };
   return {
     message: safe.message,
     safe_to_display: true,
     ...(safe.code ? { code: safe.code } : {}),
+    ...reporting,
   };
 }
 
@@ -125,9 +177,13 @@ function sanitizeAssistantEvent(event: AssistantEvent): AssistantEvent {
       : { ...event, message: ASSISTANT_ERROR_MESSAGE };
   }
   if ("error" in event && typeof event.error === "string" && event.error) {
-    return event.type === "doc_search"
-      ? { ...event, ...documentSearchError(event.error_code) }
-      : { ...event, error: TOOL_ERROR_MESSAGE };
+    if (event.type === "doc_search") {
+      return { ...event, ...documentSearchError(event.error_code) };
+    }
+    if (event.type === "web_search" || event.type === "web_read") {
+      return { ...event, error: webToolErrorMessage(event.error_code) };
+    }
+    return { ...event, error: TOOL_ERROR_MESSAGE };
   }
   return event;
 }
@@ -205,10 +261,13 @@ export async function runLLMStream(params: {
    */
   userEmail?: string | null;
   db: Db;
-  write: (s: string) => void;
+  /** `opts.replay` is honoured by a server-owned run and ignored otherwise. */
+  write: (s: string, opts?: StreamRunWriteOptions) => void;
   onActivity?: () => void;
   extraTools?: unknown[];
   includeResearchTools?: boolean;
+  /** How this turn may search the web; null or omitted means it may not. */
+  webSearch?: WebSearchPlan | null;
   /** Expose ask_inputs only to clients that can render and answer it. */
   includeAskInputs?: boolean;
   /**
@@ -271,6 +330,23 @@ export async function runLLMStream(params: {
   nonce?: string;
   /** Durable conversation id, forwarded to the provider as a cache hint. */
   conversationId?: string | null;
+  subagentRuns?: SubagentRunStore | null;
+  subagentDefaults?: SubagentDefaults;
+  /** Shares its answer's connector tools, web pages, case cache and document edits. */
+  subagentRun?: {
+    connectorTools: unknown[];
+    webTurnState: WebTurnState;
+    courtlistenerTurnState: CourtlistenerTurnState;
+    turnEditState: TurnEditState;
+    documentLocks: KeyedLock;
+    documentsScoped: boolean;
+    onToolStart: (name: string) => void;
+    onUsage: (usage: TokenUsage, finishReason: string) => void;
+    onToolBatch: (
+      calls: NormalizedToolCall[],
+      results: NormalizedToolResult[],
+    ) => void;
+  };
 }): Promise<{
   fullText: string;
   events: AssistantEvent[];
@@ -286,6 +362,7 @@ export async function runLLMStream(params: {
     write: unsafeWrite,
     extraTools,
     includeResearchTools = true,
+    webSearch = null,
     includeAskInputs = true,
     connectorApprovals = false,
     allowDocumentMutation = true,
@@ -303,23 +380,54 @@ export async function runLLMStream(params: {
     memorySharedAudience = false,
     nonce,
     conversationId,
+    subagentRuns = null,
+    subagentDefaults,
+    subagentRun,
   } = params;
-  const write = (chunk: string) =>
-    unsafeWrite(sanitizeAssistantSseChunk(chunk));
+  // Only frames that carry replay options pass a second argument.
+  const write = (chunk: string, opts?: StreamRunWriteOptions) =>
+    opts
+      ? unsafeWrite(sanitizeAssistantSseChunk(chunk), opts)
+      : unsafeWrite(sanitizeAssistantSseChunk(chunk));
+  const isSubagent = subagentRun !== undefined;
   const researchTools = includeResearchTools ? COURTLISTENER_TOOLS : [];
-  // Account-owned credentials are enabled only in Personal.
-  const personalConnectors = (await teamOrgIdOf(db, orgId)) === null;
-  const mcpTools = personalConnectors ? await buildUserMcpTools(userId, db) : [];
-  const googleDriveTools = personalConnectors ? await buildGoogleDriveTools(userId, db) : [];
+  // The person's own connections for the workspace this conversation is in.
+  const connectorTools =
+    subagentRun?.connectorTools ??
+    (await (async () => {
+      const owner = { userId, orgId: await teamOrgIdOf(db, orgId) };
+      return [
+        ...(await buildUserMcpTools(owner, db)),
+        ...(await buildGoogleDriveTools(owner, db)),
+        ...(await buildGoogleWorkspaceTools(owner, db)),
+      ];
+    })());
+  // A subagent's approvals pause its answer, which puts them to the user.
+  const canPauseForApproval =
+    connectorApprovals && (includeAskInputs || isSubagent);
   const conversationTools = includeAskInputs
     ? TOOLS
     : TOOLS.filter((tool) => tool.function.name !== "ask_inputs");
-  const baseTools = [...conversationTools, ...researchTools, ...WORKFLOW_TOOLS];
+  const webTools = webToolsFor(webSearch);
+  const webSearchAccount = webSearchAccountFor(webSearch, apiKeys);
+  const webToolNames = new Set<string>(
+    webTools.map((tool) => tool.function.name),
+  );
+  // An invalid model fails the answer below, before any tool runs.
+  const chatModel = resolveModel(model, "");
+  const baseTools = [
+    ...conversationTools,
+    ...researchTools,
+    ...WORKFLOW_TOOLS,
+    ...PLAYBOOK_TOOLS,
+    ...webTools,
+    ...(subagentRuns && chatModel
+      ? [delegateTool(chatModel, sameProviderModels(chatModel, apiKeys ?? {}))]
+      : []),
+  ];
   const advertisedTools = [
     ...baseTools,
-    ...mcpTools,
-    ...googleDriveTools,
-    ...(personalConnectors ? await buildGoogleWorkspaceTools(userId, db) : []),
+    ...connectorTools,
     ...(extraTools ?? []),
     ...(clientTools?.schemas ?? []),
   ];
@@ -327,9 +435,14 @@ export async function runLLMStream(params: {
   // never shown is a tool it will not plan around. The second half is in
   // `runTools` below, because "not advertised" is not "not callable" — a
   // model can name a tool from memory.
-  const activeTools = allowDocumentMutation
+  const permittedTools = allowDocumentMutation
     ? advertisedTools
     : withoutDocumentMutatingTools(advertisedTools);
+  const activeTools = isSubagent
+    ? permittedTools.filter(
+        (tool) => !SUBAGENT_EXCLUDED_TOOL_NAMES.has(toolName(tool) ?? ""),
+      )
+    : permittedTools;
 
   // Extract system prompt; pass remaining turns to the adapter as
   // plain user/assistant messages (assistant turns may carry stored
@@ -350,7 +463,18 @@ export async function runLLMStream(params: {
     orgId,
     sharedAudience: memorySharedAudience,
   });
-  const systemPrompt = memory.systemPrompt;
+  const systemPrompt = [
+    memory.systemPrompt,
+    ...(webSearch
+      ? [
+          WEB_SEARCH_SYSTEM_PROMPT,
+          webSearch === "provider"
+            ? PROVIDER_WEB_READ_SYSTEM_PROMPT
+            : MIKE_WEB_SEARCH_SYSTEM_PROMPT,
+        ]
+      : []),
+    ...(subagentRuns ? [delegateSystemPrompt(subagentDefaults)] : []),
+  ].join("\n\n");
   const chatMessages: LlmMessage[] = rawMsgs
     .filter((m) => m.role !== "system")
     .map(
@@ -375,48 +499,75 @@ export async function runLLMStream(params: {
   // may emit multiple batches in a single turn, so this map persists
   // across batches to let subsequent edit_document calls overwrite the
   // turn's existing version instead of creating a new one.
-  const turnEditState: TurnEditState = new Map();
+  const turnEditState: TurnEditState = subagentRun?.turnEditState ?? new Map();
+  const documentLocks = subagentRun?.documentLocks ?? createKeyedLock();
   // Suppress repeated full-document reads for the same document/version in
   // one assistant response. The guard is invalidated when edit_document
   // changes that document so a post-edit verification read can still happen.
   const turnReadState: TurnReadState = new Map();
-  const courtlistenerTurnState: CourtlistenerTurnState = {
-    casesByClusterId: new Map(),
-  };
+  const courtlistenerTurnState: CourtlistenerTurnState =
+    subagentRun?.courtlistenerTurnState ?? { casesByClusterId: new Map() };
+  const webTurnState =
+    subagentRun?.webTurnState ??
+    createWebTurnState(
+      webSearch
+        ? ([...rawMsgs].reverse().find((m) => m.role === "user")?.content ?? "")
+        : "",
+    );
+  const providerWebSearch = createProviderWebSearchTracker(webTurnState);
+  // What the answer ran on, reported in its closing response_details event.
+  // The tokens are this assistant's own, summed over its steps; each
+  // subagent reports its own on its delegation event.
+  let answerModel: string | null = null;
+  let answerUsage: { input_tokens: number; output_tokens: number } | null = null;
   let fullText = "";
   let iterText = "";
   let iterVisibleText = "";
   let iterReasoning = "";
   let visibleTailBuffer = "";
   let citationsOpenSeen = false;
-  let streamingCitationsBuffer = "";
-  let streamedCitationCount = 0;
+  // The CITATIONS block streams through an incremental parser, so each delta
+  // is scanned once and each citation is parsed and built once.
+  let citationParser = createPartialCitationParser();
+  let streamedCitations: unknown[] = [];
+  // Every snapshot frame carries the whole list so far, and the client
+  // replaces its list with it. Only the newest snapshot is worth replaying to
+  // a client that attaches later; replaying them all would hand it O(C²)
+  // citations. The final frame bumps this too, so no partial outlives it.
+  let citationSnapshotSeq = 0;
 
   const emitCitationStreamSnapshot = (
     status: "started" | "partial",
     citations: unknown[],
   ) => {
     if (buildCitations) return;
+    const snapshot = ++citationSnapshotSeq;
     write(
       `data: ${JSON.stringify({ type: "citations", status, citations })}\n\n`,
+      { replay: () => snapshot === citationSnapshotSeq },
     );
+  };
+
+  const resetCitationStream = () => {
+    citationParser = createPartialCitationParser();
+    streamedCitations = [];
   };
 
   const streamHiddenCitationContent = (delta: string) => {
     if (buildCitations || !delta) return;
-    streamingCitationsBuffer += delta;
-    const partial = parsePartialCitationObjects(streamingCitationsBuffer);
-    if (partial.length <= streamedCitationCount) return;
-    streamedCitationCount = partial.length;
-    const citations = partial.map((c) =>
-      createCitation(
-        c,
-        docIndex,
-        courtlistenerTurnState.casesByClusterId,
-        docStore,
-      ),
-    );
-    emitCitationStreamSnapshot("partial", citations);
+    const completed = citationParser.push(delta);
+    if (completed.length === 0) return;
+    for (const c of completed) {
+      streamedCitations.push(
+        createCitation(
+          c,
+          docIndex,
+          courtlistenerTurnState.casesByClusterId,
+          docStore,
+        ),
+      );
+    }
+    emitCitationStreamSnapshot("partial", streamedCitations);
   };
 
   const streamVisibleContent = (delta: string) => {
@@ -438,8 +589,7 @@ export async function runLLMStream(params: {
       }
       visibleTailBuffer = "";
       citationsOpenSeen = true;
-      streamingCitationsBuffer = "";
-      streamedCitationCount = 0;
+      resetCitationStream();
       emitCitationStreamSnapshot("started", []);
       streamHiddenCitationContent(
         combined.slice(markerIdx + CITATIONS_OPEN_TAG.length),
@@ -484,8 +634,7 @@ export async function runLLMStream(params: {
     iterVisibleText = "";
     visibleTailBuffer = "";
     citationsOpenSeen = false;
-    streamingCitationsBuffer = "";
-    streamedCitationCount = 0;
+    resetCitationStream();
   };
 
   const flushPartialTurn = (opts: { emit?: boolean } = {}) => {
@@ -494,6 +643,119 @@ export async function runLLMStream(params: {
       events.push({ type: "reasoning", text: iterReasoning });
       iterReasoning = "";
     }
+  };
+
+  // A failed answer stops its subagents too, not only a stopped one.
+  const delegationStop = new AbortController();
+  const delegationSignal = signal
+    ? AbortSignal.any([signal, delegationStop.signal])
+    : delegationStop.signal;
+  const delegateContextFor = (
+    runStore: SubagentRunStore,
+    selectedModel: string,
+  ): DelegateContext => ({
+    state: createDelegateTurnState(),
+    chatModel: selectedModel,
+    reasoning: params.reasoning ?? "high",
+    systemPrompt: baseSystemPrompt,
+    webTurnState,
+    docStore,
+    docIndex,
+    runStore,
+    checkModel: async (requested) => {
+      const checked = await resolveEffectiveChatModel({
+        requested,
+        apiKeys: apiKeys ?? {},
+        userId,
+        db,
+        orgId,
+      }).catch((error) => {
+        reportError(
+          new AppError("chat.context_failed", "Subagent model check failed", {
+            cause: error,
+          }),
+          { tags: { component: "chat-stream", operation: "chat.subagent" } },
+        );
+        // warn: the report above is the Sentry event; the log keeps its
+        // redacted category.
+        console.warn("[subagents] model check failed", safeError(error));
+        return null;
+      });
+      return checked?.ok ? checked.model : null;
+    },
+    nonce,
+    signal: delegationSignal,
+    write,
+    spawn: (spawn) =>
+      runLLMStream({
+        // A subagent's question ends its run the way ask_inputs ends a turn.
+        clientTools: {
+          schemas: [ASK_PARENT_TOOL],
+          owns: (name) => name === ASK_PARENT_TOOL_NAME,
+          execute: async (call) => {
+            spawn.askParent(call.input.question);
+            throw new AssistantStreamAskInputsPause();
+          },
+        },
+        apiMessages: spawn.apiMessages,
+        docStore: spawn.docStore,
+        docIndex: spawn.docIndex,
+        userId,
+        userEmail,
+        db,
+        extraTools,
+        workflowStore,
+        tabularStore,
+        projectId,
+        orgId,
+        apiKeys,
+        nonce,
+        webSearch,
+        includeResearchTools,
+        onActivity: params.onActivity,
+        write: () => {},
+        model: spawn.model,
+        reasoning: spawn.reasoning,
+        maxIterations: spawn.maxSteps,
+        signal: spawn.signal,
+        subagentRun: {
+          connectorTools,
+          webTurnState: spawn.webTurnState,
+          courtlistenerTurnState,
+          turnEditState,
+          documentLocks,
+          documentsScoped: spawn.documentsScoped,
+          onToolStart: spawn.onToolStart,
+          onUsage: spawn.onUsage,
+          onToolBatch: spawn.onToolBatch,
+        },
+        includeAskInputs: false,
+        connectorApprovals: canPauseForApproval,
+        allowDocumentMutation,
+        emitDone: false,
+      }),
+  });
+  // A subagent starts as soon as the model has written its delegate call, not
+  // when the model's whole step ends, and reports back when it finishes.
+  const delegationRuns = new Map<string, Promise<DelegateResult>>();
+  const startDelegation = (call: NormalizedToolCall, context: DelegateContext) => {
+    let run = delegationRuns.get(call.id);
+    if (!run) {
+      run = runDelegateCall(call, context).then((result) => {
+        if (result.event) write(`data: ${JSON.stringify(result.event)}\n\n`);
+        return result;
+      });
+      delegationRuns.set(call.id, run);
+    }
+    return run;
+  };
+  // Records every delegation started so far, including those no tool batch
+  // collected: a stopped or failed answer ends the model's stream without
+  // waiting for its tools, and a retried or final step never runs them.
+  const recordDelegations = async () => {
+    const runs = [...delegationRuns.values()];
+    delegationRuns.clear();
+    for (const { event } of await Promise.all(runs)) if (event) events.push(event);
   };
 
   try {
@@ -527,6 +789,10 @@ export async function runLLMStream(params: {
       "throw",
       orgId,
     );
+    answerModel = selectedModel;
+    const delegateContext = subagentRuns && delegateContextFor(subagentRuns, selectedModel);
+    const providerSearches =
+      webSearch === "provider" ? providerWebSearch.reserve() : 0;
     await streamChatWithTools({
       model: selectedModel,
       systemPrompt,
@@ -541,11 +807,29 @@ export async function runLLMStream(params: {
       reasoning: params.reasoning ?? "high",
       abortSignal: signal,
       conversationId,
+      providerWebSearch:
+        providerSearches > 0 ? { maxSearches: providerSearches } : null,
+      finishWithoutToolsOnLastStep: isSubagent,
       callbacks: {
         onActivity: params.onActivity,
+        onUsage: (usage, finishReason) => {
+          answerUsage = {
+            input_tokens: (answerUsage?.input_tokens ?? 0) + usage.inputTokens,
+            output_tokens: (answerUsage?.output_tokens ?? 0) + usage.outputTokens,
+          };
+          subagentRun?.onUsage(usage, finishReason);
+        },
         onContentDelta: (delta) => {
           iterText += delta;
           streamVisibleContent(delta);
+        },
+        onStopNotice: (notice) => {
+          // A truncated model citation block must not swallow the server's
+          // incomplete-answer warning. Keep it in the visible/persisted prose;
+          // the original citation text still goes through normal verification.
+          flushText();
+          iterText += notice;
+          streamVisibleContent(notice);
         },
         onReasoningDelta: (delta) => {
           iterReasoning += delta;
@@ -559,20 +843,38 @@ export async function runLLMStream(params: {
           write(`data: ${JSON.stringify({ type: "reasoning_block_end" })}\n\n`);
           iterReasoning = "";
         },
-        // Fires after Claude's turn ends with stop_reason=tool_use, before
-        // the tool actually runs. Flushes any buffered assistant text so
-        // it's emitted in chronological order, then signals the client so
-        // it can open a fresh PreResponseWrapper (shows "Working…") while
-        // the tool executes — avoids the dead gap between message_stop
-        // and the first tool-specific event.
+        // Fires as soon as the model has written a tool call, while the step's
+        // tools run only once the whole step ends. Flushes any buffered text
+        // so it's emitted in order, then lets the client show "Working…"
+        // until the tool's first event arrives.
         onToolCallStart: (call) => {
           flushText();
+          subagentRun?.onToolStart(call.name);
           write(
             `data: ${JSON.stringify({
               type: "tool_call_start",
               name: call.name,
             })}\n\n`,
           );
+          if (
+            delegateContext &&
+            call.name === DELEGATE_TOOL_NAME &&
+            !call.invalid
+          ) {
+            void startDelegation(call, delegateContext);
+          }
+        },
+        onWebSearch: (progress) => {
+          const { frame, event } = providerWebSearch.handle(progress);
+          if (frame) {
+            flushText();
+            subagentRun?.onToolStart(WEB_TOOL_NAMES.search);
+            write(`data: ${JSON.stringify(frame)}\n\n`);
+          }
+          if (event) {
+            events.push(event);
+            write(`data: ${JSON.stringify(event)}\n\n`);
+          }
         },
       },
       runTools: async (calls) => {
@@ -581,10 +883,10 @@ export async function runLLMStream(params: {
         // UI sees it before the tool results stream in.
         flushText();
 
-        // Client-executed tools (Word add-in) round-trip through the SSE
-        // stream and never enter the server dispatcher. They run before the
-        // server batch and sequentially among themselves: each call mutates
-        // or reads the live document, so order is part of their semantics.
+        // Web tools and client-executed tools (Word add-in) never enter the
+        // server dispatcher. Web calls run in parallel. Client calls
+        // round-trip through the SSE stream sequentially: each one mutates or
+        // reads the live document, so order is part of their semantics.
         const clientResultByCallId = new Map<string, string>();
         // Enforcement, not just omission: a document-writing call from a
         // caller who may not write is dropped before dispatch, on the server
@@ -592,12 +894,43 @@ export async function runLLMStream(params: {
         // "Tool 'x' is not available." answer below, which every tool_use
         // without a result already gets, so the model is told plainly rather
         // than left waiting on a call that silently did nothing.
-        const permittedCalls = allowDocumentMutation
-          ? calls
-          : calls.filter((c) => !isDocumentMutatingTool(c.name));
-        const serverCalls = clientTools
-          ? permittedCalls.filter((c) => !clientTools.owns(c.name))
-          : permittedCalls;
+        const permittedCalls = calls.filter(
+          (c) =>
+            (allowDocumentMutation || !isDocumentMutatingTool(c.name)) &&
+            (!isSubagent || !SUBAGENT_EXCLUDED_TOOL_NAMES.has(c.name)),
+        );
+        const webCalls = permittedCalls.filter((c) => webToolNames.has(c.name));
+        const delegateCalls = permittedCalls.filter(
+          (c) => c.name === DELEGATE_TOOL_NAME,
+        );
+        const handledElsewhere = (c: NormalizedToolCall) =>
+          webToolNames.has(c.name) ||
+          c.name === DELEGATE_TOOL_NAME ||
+          !!clientTools?.owns(c.name);
+        const serverCalls = permittedCalls.filter((c) => !handledElsewhere(c));
+        const delegating = Promise.all(
+          delegateContext
+            ? delegateCalls.map((call) => startDelegation(call, delegateContext))
+            : [],
+        );
+        const webResults = await Promise.all(
+          webCalls.map((call) =>
+            runWebToolCall(call, {
+              state: webTurnState,
+              account: webSearchAccount,
+              nonce,
+              signal,
+              write,
+            }),
+          ),
+        );
+        throwIfAborted(signal);
+        webCalls.forEach((call, index) => {
+          const { content, event } = webResults[index];
+          clientResultByCallId.set(call.id, content);
+          events.push(event);
+          write(`data: ${JSON.stringify(event)}\n\n`);
+        });
         if (clientTools) {
           for (const call of permittedCalls) {
             if (!clientTools.owns(call.name)) continue;
@@ -626,6 +959,7 @@ export async function runLLMStream(params: {
           workflowsApplied,
           docsEdited,
           askInputsEvents,
+          textCardEvents,
           courtlistenerEvents,
           caseCitationEvents,
           mcpEvents,
@@ -645,11 +979,17 @@ export async function runLLMStream(params: {
           apiKeys,
           nonce,
           {
-            connectorApprovals: connectorApprovals && includeAskInputs,
+            connectorApprovals: canPauseForApproval,
             userEmail,
             orgId,
+            model: selectedModel,
+            documentLocks,
+            documentsScoped: subagentRun?.documentsScoped,
           },
         );
+        // A failure after this point happened with tool results in hand; the
+        // breadcrumb tells it apart from one in the first model call.
+        markStage("tool-result");
         throwIfAborted(signal);
         for (const r of docsRead) {
           events.push({
@@ -672,6 +1012,7 @@ export async function runLLMStream(params: {
           });
         }
         events.push(...(documentSearchEvents ?? []));
+        events.push(...(textCardEvents ?? []));
         for (const dl of docsCreated) {
           events.push({
             type: "doc_created",
@@ -708,10 +1049,6 @@ export async function runLLMStream(params: {
             annotations: e.annotations,
           });
         }
-        for (const askInputsEvent of askInputsEvents) {
-          write(`data: ${JSON.stringify(askInputsEvent)}\n\n`);
-          events.push(askInputsEvent);
-        }
         for (const event of courtlistenerEvents) {
           events.push(event);
         }
@@ -722,10 +1059,21 @@ export async function runLLMStream(params: {
           events.push(event);
         }
 
-        if (askInputsEvents.length > 0) {
-          throw new AssistantStreamAskInputsPause();
+        const delegated = await delegating;
+        // Once the answer has stopped or failed, its catch records these.
+        throwIfAborted(delegationSignal);
+        delegated.forEach(({ content }, index) =>
+          clientResultByCallId.set(delegateCalls[index].id, content),
+        );
+        await recordDelegations();
+        addApprovalItems(
+          askInputsEvents,
+          delegated.flatMap(({ approvals }) => approvals ?? []),
+        );
+        for (const askInputsEvent of askInputsEvents) {
+          write(`data: ${JSON.stringify(askInputsEvent)}\n\n`);
+          events.push(askInputsEvent);
         }
-
         // Index alignment would break if any tool branch skips its
         // push (unhandled tool name, disabled store, guard failure).
         // Each tool_result already carries its tool_call_id, so key off
@@ -742,7 +1090,7 @@ export async function runLLMStream(params: {
         }
         // Answer every tool_use the model sent — client and server alike —
         // in the model's original call order.
-        return calls.map((c) => ({
+        const results = calls.map((c) => ({
           tool_use_id: c.id,
           content:
             resultByCallId.get(c.id) ??
@@ -750,20 +1098,31 @@ export async function runLLMStream(params: {
               error: `Tool '${c.name}' is not available.`,
             }),
         }));
+        // Recorded before a pause too, so a continued subagent knows what
+        // already ran beside the actions awaiting approval.
+        subagentRun?.onToolBatch(calls, results);
+        if (askInputsEvents.length > 0) {
+          throw new AssistantStreamAskInputsPause();
+        }
+        return results;
       },
-    });
+    }).finally(() => providerWebSearch.release());
+    await recordDelegations();
   } catch (err) {
     if (isAskInputsPause(err)) {
       // The ask_inputs event has already been emitted and persisted in `events`.
       // Stop this assistant turn here so the model does not add redundant
       // prose telling the user to answer the picker or attach documents.
     } else if (isAbortError(err)) {
+      await recordDelegations().catch(() => {});
       flushPartialTurn({ emit: false });
       throw new AssistantStreamAbortError(
         fullText,
         events.map(sanitizeAssistantEvent),
       );
     } else {
+      delegationStop.abort();
+      await recordDelegations().catch(() => {});
       flushPartialTurn();
       const safeToDisplay = err instanceof UserFacingError;
       // The response already started, so the HTTP 500 path never sees this:
@@ -776,11 +1135,27 @@ export async function runLLMStream(params: {
       // operators see a rejected key with its provider_error tag, but a
       // warning, not an error. (Left unreported, the console bridge filed it
       // anyway, at error level, as MIKE-BACKEND-E.)
-      reportError(err, {
-        tags: { component: "chat-stream" },
+      // The kind says what the provider did (rejected the key, rate limited,
+      // unavailable) so one cause is one issue; the provider's own error
+      // stays underneath as the cause, where provider_error and
+      // dependency_status are still read from it. An error that already
+      // names its kind (a blocked destination, an unreadable page) keeps it.
+      const failure =
+        err instanceof AppError
+          ? err
+          : new AppError(providerFailureKind(err), "Model stream failed", {
+              cause: err,
+            });
+      // A subagent's run is its own flow inside the turn's request: name it
+      // on the event so a failing delegate is not filed under the answer.
+      reportError(failure, {
+        tags: {
+          component: "chat-stream",
+          ...(isSubagent ? { operation: "chat.subagent" as const } : {}),
+        },
         ...(safeToDisplay ? { level: "warning" as const } : {}),
       });
-      console.error("[chat/stream] model stream failed", err);
+      console.error("[chat/stream] model stream failed", failure);
       const message = safeToDisplay ? err.message : ASSISTANT_ERROR_MESSAGE;
       events.push({
         type: "error",
@@ -796,12 +1171,18 @@ export async function runLLMStream(params: {
         message,
         fullText,
         events.map(sanitizeAssistantEvent),
-        { cause: err },
+        { cause: failure },
       );
     }
   }
 
   flushText();
+
+  const citedWebSources = providerWebSearch.citedSources();
+  if (citedWebSources) {
+    events.push(citedWebSources);
+    write(`data: ${JSON.stringify(citedWebSources)}\n\n`);
+  }
 
   // Parse and emit citations from <CITATIONS> block
   const { citations: parsedCitations, diagnostics: citationDiagnostics } =
@@ -824,10 +1205,11 @@ export async function runLLMStream(params: {
     // already in storage with emitEvents:false. Case citations are matched
     // against the opinion text cached during this turn.
     const sourceTextByDocId = new Map<string, Promise<string>>();
+    const labelFor = createDocLabelResolver(docStore, docIndex);
     const getSourceText = (docId: string): Promise<string> => {
       let pending = sourceTextByDocId.get(docId);
       if (!pending) {
-        const label = resolveDocLabel(docId, docStore, docIndex);
+        const label = labelFor(docId);
         pending = label
           ? readDocumentContent(label, docStore, () => {}, docIndex, db, {
               emitEvents: false,
@@ -852,9 +1234,20 @@ export async function runLLMStream(params: {
     emittedCitationCount: citations.length,
     usedCustomCitationBuilder: !!buildCitations,
   });
+  citationSnapshotSeq += 1;
   write(
     `data: ${JSON.stringify({ type: "citations", status: "final", citations })}\n\n`,
   );
+  if (!isSubagent && answerModel) {
+    const details: AssistantEvent = {
+      type: "response_details",
+      model: answerModel,
+      reasoning: params.reasoning ?? "high",
+      ...(answerUsage ? { usage: answerUsage } : {}),
+    };
+    events.push(details);
+    write(`data: ${JSON.stringify(details)}\n\n`);
+  }
   if (params.emitDone !== false) {
     write("data: [DONE]\n\n");
   }

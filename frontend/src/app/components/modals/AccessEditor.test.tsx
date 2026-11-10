@@ -690,3 +690,82 @@ describe("OrganizationAccessEditor — public and private", () => {
         ).toBeInTheDocument();
     });
 });
+
+describe("OrganizationAccessEditor — public items members only view", () => {
+    const members = [
+        {
+            key: "other",
+            user_id: "user-other",
+            email: "other@firm.example",
+            display_name: "Other Counsel",
+            role: "editor" as const,
+        },
+        {
+            key: "boss",
+            user_id: "user-boss",
+            email: "boss@firm.example",
+            display_name: "Org Owner",
+            role: "owner" as const,
+        },
+    ];
+
+    it("adds people as Editors and keeps the deny list, not an owners-only picker", () => {
+        const onAssign = vi.fn();
+        render(
+            <OrganizationAccessEditor
+                members={members}
+                assignments={[]}
+                visibility="organization"
+                publicMemberRole="viewer"
+                resourceNoun="playbook"
+                organizationName="Firm"
+                onAssign={onAssign}
+                onRemove={vi.fn()}
+            />,
+        );
+        expect(
+            screen.getByText(
+                /Everyone in Firm can already open and run this playbook/,
+            ),
+        ).toBeInTheDocument();
+        expect(
+            screen.getByText("Nobody has been given more than view access."),
+        ).toBeInTheDocument();
+        expect(
+            screen.getByRole("button", { name: "Deny list" }),
+        ).toBeInTheDocument();
+
+        const search = screen.getByRole("searchbox", { name: "People" });
+        fireEvent.focus(search);
+        fireEvent.change(search, { target: { value: "firm.example" } });
+        const matches = screen.getByRole("listbox", { name: "People matches" });
+        // Organization owners already own a public item.
+        expect(
+            within(matches).queryByText("Org Owner"),
+        ).not.toBeInTheDocument();
+        fireEvent.click(within(matches).getByText("Other Counsel"));
+        expect(onAssign).toHaveBeenCalledWith(
+            expect.objectContaining({ user_id: "user-other" }),
+            "editor",
+        );
+    });
+
+    it("still offers only owners on a public item members can edit", () => {
+        render(
+            <OrganizationAccessEditor
+                members={members}
+                assignments={[]}
+                visibility="organization"
+                ownerLabel="Workflow owners"
+                onAssign={vi.fn()}
+                onRemove={vi.fn()}
+            />,
+        );
+        expect(
+            screen.getByRole("searchbox", { name: "Workflow owners" }),
+        ).toBeInTheDocument();
+        expect(
+            screen.getByText("No additional Owners added."),
+        ).toBeInTheDocument();
+    });
+});

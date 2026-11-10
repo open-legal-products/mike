@@ -24,13 +24,26 @@ sql() { docker exec -i "$workspace_container" psql -h 127.0.0.1 -X -q -v ON_ERRO
 sql <<'SQL'
 create role anon; create role authenticated; create role service_role bypassrls;
 create schema auth; create table auth.users(id uuid primary key);
-create table public.user_mcp_connectors(id uuid primary key, require_write_approval boolean not null default false);
+create table public.user_mcp_connectors(id uuid primary key, user_id uuid references auth.users(id), require_write_approval boolean not null default false);
+create table public.organizations(id uuid primary key, kind text not null default 'team', deleted_at timestamptz);
+create table public.org_members(org_id uuid references public.organizations(id) on delete cascade, user_id uuid references auth.users(id) on delete cascade, unique(org_id, user_id));
+create table public.user_profiles(user_id uuid unique references auth.users(id) on delete cascade, legal_research_us boolean not null default true);
+create table public.user_api_keys(user_id uuid references auth.users(id) on delete cascade, provider text not null, encrypted_key text not null, iv text not null, auth_tag text not null, enabled boolean not null default true, unique(user_id, provider));
 create table public.user_mcp_oauth_tokens(id uuid primary key, connector_id uuid unique references public.user_mcp_connectors(id));
 insert into public.user_mcp_connectors(id) values ('00000000-0000-0000-0000-000000000001');
 insert into public.user_mcp_oauth_tokens(id, connector_id) values
   ('00000000-0000-0000-0000-000000000002', '00000000-0000-0000-0000-000000000001');
+-- CourtListener backfill: one token in use, one the person switched off.
+insert into auth.users(id) values ('00000000-0000-0000-0000-0000000000a1'), ('00000000-0000-0000-0000-0000000000a2');
+insert into public.organizations(id) values ('00000000-0000-0000-0000-0000000000a3');
+insert into public.org_members(org_id, user_id) values
+  ('00000000-0000-0000-0000-0000000000a3', '00000000-0000-0000-0000-0000000000a1'),
+  ('00000000-0000-0000-0000-0000000000a3', '00000000-0000-0000-0000-0000000000a2');
+insert into public.user_api_keys(user_id, provider, encrypted_key, iv, auth_tag, enabled) values
+  ('00000000-0000-0000-0000-0000000000a1', 'courtlistener', 'k', 'i', 't', true),
+  ('00000000-0000-0000-0000-0000000000a2', 'courtlistener', 'k', 'i', 't', false);
 SQL
-for migration in 20260921_02_google_drive_integration.sql 20260922_01_google_workspace.sql 20261001_01_connector_write_access.sql 20261002_01_google_drive_writes.sql 20261002_02_google_drive_account_email.sql 20261002_03_connector_read_only.sql 20261002_05_mcp_oauth_grants.sql; do
+for migration in 20260921_02_google_drive_integration.sql 20260922_01_google_workspace.sql 20261001_01_connector_write_access.sql 20261002_01_google_drive_writes.sql 20261002_02_google_drive_account_email.sql 20261002_03_connector_read_only.sql 20261002_05_mcp_oauth_grants.sql 20261022_01_workspace_connectors.sql; do
   # Each migration must be safe to replay.
   sql < "$workspace_root/backend/migrations/$migration"
   if [ "$migration" = "20261002_05_mcp_oauth_grants.sql" ]; then
@@ -51,6 +64,17 @@ end $$;
 drop table mcp_grant_replay;
 delete from public.user_mcp_oauth_tokens where id = '00000000-0000-0000-0000-000000000002';
 delete from public.user_mcp_connectors where id = '00000000-0000-0000-0000-000000000001';
+do $$ begin
+  if (select count(*) from public.user_courtlistener_connections
+      where user_id = '00000000-0000-0000-0000-0000000000a1' and encrypted_key is not null) <> 2
+     or exists (select 1 from public.user_courtlistener_connections
+                where user_id = '00000000-0000-0000-0000-0000000000a2' and encrypted_key is not null)
+     or exists (select 1 from public.user_api_keys where provider = 'courtlistener') then
+    raise exception 'CourtListener backfill failed';
+  end if;
+end $$;
+delete from auth.users where id in ('00000000-0000-0000-0000-0000000000a1', '00000000-0000-0000-0000-0000000000a2');
+delete from public.organizations where id = '00000000-0000-0000-0000-0000000000a3';
 SQL
 sql < "$workspace_root/backend/src/lib/integrations/__tests__/googleWorkspaceDatabase.sql" >/dev/null
 echo 'Google Workspace database authorization, lifecycle, settings, and migration replay passed.'

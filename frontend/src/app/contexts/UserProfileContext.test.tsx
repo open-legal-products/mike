@@ -6,7 +6,7 @@ import {
     within,
 } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { ToastViewportUI, clearToasts } from "@/shared/ui/ToastUI";
+import { ToastViewportUI, clearToasts } from "@mike/ui";
 
 const {
     setUserProfilePhoto,
@@ -65,10 +65,11 @@ function apiProfile(darkMode: boolean) {
         titleModel: "gemini-3.1-flash-lite-preview",
         tabularModel: "gemini-3-flash-preview",
         memoryCuratorModel: null,
+        subagentModel: null,
+        subagentReasoning: null,
         lastSelectedChatModel: null,
         lastSelectedReasoningLevel: "high",
         mfaOnLogin: false,
-        legalResearchUs: true,
         emailIntegrationEnabled: false,
         darkMode,
         featureFlags: {},

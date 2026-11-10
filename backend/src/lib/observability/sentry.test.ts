@@ -1,4 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { readFileSync } from "node:fs";
+import path from "node:path";
+import { parse } from "dotenv";
 
 // A fake scope records what reportError() sets so the assertions can check
 // tags/extra/level land on the event rather than on a global scope.
@@ -21,6 +24,7 @@ const isolationScope: FakeScope = {
 
 const sentryMock = vi.hoisted(() => ({
   init: vi.fn(),
+  addBreadcrumb: vi.fn(),
   captureException: vi.fn(() => "event-id-1"),
   captureMessage: vi.fn(() => "event-id-2"),
   flush: vi.fn(() => Promise.resolve(true)),
@@ -57,13 +61,18 @@ import {
   MIKE_SENTRY_DSN,
   flushSentry,
   initSentry,
+  issueThrottleKeyCountForTests,
+  markStage,
+  setOperation,
   redactText,
   redactUrl,
   isSentryEnabled,
+  releaseName,
   reportError,
   reportMessage,
   resetSentryForTests,
   scrubEvent,
+  isDevelopmentBuild,
   sentryConfiguration,
   setCurrentUser,
   tagCurrentRequest,
@@ -87,6 +96,22 @@ afterEach(() => {
 });
 
 describe("sentryConfiguration", () => {
+  it.each([
+    ["upstream", "", "", true, MIKE_SENTRY_DSN.backend],
+    ["fork without Sentry", "true", "", false, ""],
+    ["fork with its own Sentry", "", "https://fork@self.example/9", true, "https://fork@self.example/9"],
+  ])("preserves %s reporting defaults with the stock Compose env_file", (_kind, disabled, dsn, enabled, expectedDsn) => {
+    const sample = parse(readFileSync(path.resolve(__dirname, "../../../../.env.example")));
+    const config = sentryConfiguration({
+      MIKE_BUILD_SENTRY_DISABLED: disabled,
+      MIKE_BUILD_SENTRY_DSN: dsn,
+      ...sample,
+      NODE_ENV: "production",
+    });
+    expect(config.enabled).toBe(enabled);
+    expect(config.dsn).toBe(expectedDsn);
+  });
+
   it("is ON BY DEFAULT: the Mike project DSN, a community install, environment self-hosted", () => {
     const config = sentryConfiguration({ NODE_ENV: "production" } as NodeJS.ProcessEnv);
     expect(config.enabled).toBe(true);
@@ -97,7 +122,8 @@ describe("sentryConfiguration", () => {
     // "production" is not ours.
     expect(config.environment).toBe("self-hosted");
     expect(config.tracesSampleRate).toBe(0);
-    expect(config.release).toBeUndefined();
+    // No MIKE_VERSION or GIT_SHA: a visibly unversioned build, never undefined.
+    expect(config.release).toBe("mike@0.0.0");
   });
 
   it("is off with SENTRY_DISABLED=true, whatever else is set", () => {
@@ -134,6 +160,35 @@ describe("sentryConfiguration", () => {
     expect(config.tracesSampleRate).toBe(1);
   });
 
+  it.each([undefined, "", "   "])("preserves a fork's baked DSN with runtime override %s", (runtimeDsn) => {
+    const config = sentryConfiguration({
+      SENTRY_DSN: runtimeDsn,
+      MIKE_BUILD_SENTRY_DSN: " https://fork@self.example/9 ",
+    });
+    expect(config.dsn).toBe("https://fork@self.example/9");
+    expect(config.dsnSource).toBe("env");
+    expect(config.enabled).toBe(true);
+  });
+
+  it("lets explicit runtime settings override the baked reporting defaults", () => {
+    const baked = {
+      MIKE_BUILD_SENTRY_DSN: "https://fork@self.example/9",
+      MIKE_BUILD_SENTRY_DISABLED: "true",
+    };
+    for (const disabled of [undefined, "", "   ", "true"]) {
+      expect(sentryConfiguration({ ...baked, SENTRY_DISABLED: disabled }).enabled).toBe(false);
+    }
+    expect(sentryConfiguration({ ...baked, SENTRY_DISABLED: " false " })).toMatchObject({
+      enabled: true, dsn: baked.MIKE_BUILD_SENTRY_DSN,
+    });
+    expect(sentryConfiguration({
+      ...baked, SENTRY_DISABLED: "false", SENTRY_DSN: " https://runtime@self.example/8 ",
+    })).toMatchObject({ enabled: true, dsn: "https://runtime@self.example/8" });
+    expect(sentryConfiguration({
+      ...baked, MIKE_BUILD_SENTRY_DISABLED: "false", SENTRY_DISABLED: "true",
+    }).enabled).toBe(false);
+  });
+
   it("never enables inside a test process unless explicitly allowed", () => {
     const dsn = "https://key@o1.ingest.sentry.io/1";
     expect(
@@ -165,11 +220,22 @@ describe("sentryConfiguration", () => {
     ).toBe(10);
   });
 
-  it("derives the release from GIT_SHA when SENTRY_RELEASE is unset", () => {
+  it("derives mike@<version>+<sha12> from the build args when SENTRY_RELEASE is unset", () => {
+    expect(
+      sentryConfiguration({
+        ...quietEnv,
+        MIKE_VERSION: "2.1.0",
+        GIT_SHA: "0123456789abcdef0123",
+      } as NodeJS.ProcessEnv).release,
+    ).toBe("mike@2.1.0+0123456789ab");
     expect(
       sentryConfiguration({ ...quietEnv, GIT_SHA: "0123456789abcdef0123" } as NodeJS.ProcessEnv)
         .release,
-    ).toBe("mike@0123456789ab");
+    ).toBe("mike@0.0.0+0123456789ab");
+    expect(releaseName(undefined, "v2.1.0-dev.4", "0123456789abcdef0123")).toBe(
+      "mike@2.1.0-dev.4+0123456789ab",
+    );
+    expect(releaseName(undefined, "2.1.0+meta", undefined)).toBe("mike@0.0.0");
     expect(
       sentryConfiguration({
         ...quietEnv,
@@ -302,6 +368,36 @@ describe("scrubEvent", () => {
     expect(scrubEvent(consoleEvent, { originalException: error })).toBeNull();
     expect(
       scrubEvent(consoleEvent, { originalException: new Error("other") }),
+    ).not.toBeNull();
+  });
+
+  it("drops the Vercel AI integration's copy of a tool error (MIK-96)", () => {
+    // What captureToolError in @sentry/server-utils files when the ask_inputs
+    // pause ends a tool step: handled:false, so it read as an unhandled
+    // rejection.
+    const pause = Object.assign(new Error("ask_inputs pause"), {
+      name: "AssistantStreamAskInputsPause",
+    });
+    const eventWith = (type: string) =>
+      ({
+        exception: {
+          values: [
+            {
+              type: "AssistantStreamAskInputsPause",
+              mechanism: { type, handled: false },
+            },
+          ],
+        },
+      }) as Parameters<typeof scrubEvent>[0];
+
+    expect(
+      scrubEvent(eventWith("auto.vercelai.channel"), { originalException: pause }),
+    ).toBeNull();
+    // A genuine unhandled rejection of the same error is still filed.
+    expect(
+      scrubEvent(eventWith("auto.node.onunhandledrejection"), {
+        originalException: pause,
+      }),
     ).not.toBeNull();
   });
 
@@ -444,6 +540,14 @@ describe("per-issue flood control", () => {
       expect.stringContaining("suppressed 2 further event(s)"),
     );
     warn.mockRestore();
+  });
+
+  it("stays bounded when more distinct issues than the cap arrive in one window", () => {
+    const t0 = 3_000_000;
+    for (let i = 0; i < 2_500; i += 1) {
+      withinIssueBudget(exceptionEvent(`distinct ${i}`), t0 + i);
+    }
+    expect(issueThrottleKeyCountForTests()).toBeLessThanOrEqual(1_000);
   });
 
   it("keys on the fingerprint when one is set and on the message otherwise", () => {
@@ -644,9 +748,9 @@ describe("scrubEvent URL hygiene", () => {
       "http://localhost:3001/download/[Filtered]?x=1",
     );
     expect(out.request?.query_string).toBe("code=[Filtered]&page=2");
-    expect(out.extra?.path).toBe(
-      "/user/oauth/callback?code=[Filtered]&state=[Filtered]",
-    );
+    // A request path is not an allowlisted extra: the route tag names the
+    // endpoint, and the path (ids, filenames) never enters the event.
+    expect(out.extra?.path).toBe("[Filtered]");
     expect(out.breadcrumbs?.[0]?.data?.url).toBe(
       "https://s3.local/b/k?X-Amz-Signature=[Filtered]&X-Amz-Expires=60",
     );
@@ -803,6 +907,112 @@ describe("automatic captures of an already-reported error", () => {
   });
 });
 
+describe("operation and stage trail", () => {
+  const dsnEnv = {
+    ...quietEnv,
+    SENTRY_DSN: "https://key@o1.ingest.sentry.io/1",
+  } as NodeJS.ProcessEnv;
+
+  it("tags the isolation scope with the operation and records stages as our own breadcrumbs", () => {
+    vi.spyOn(console, "log").mockImplementation(() => {});
+    initSentry("worker", dsnEnv);
+    setOperation("documents.upload.complete");
+    markStage("claim");
+    markStage("process-file");
+    expect(isolationScope.setTag).toHaveBeenCalledWith("operation", "documents.upload.complete");
+    expect(sentryMock.addBreadcrumb).toHaveBeenNthCalledWith(1, { category: "mike.stage", message: "claim", level: "info" });
+    expect(sentryMock.addBreadcrumb).toHaveBeenNthCalledWith(2, { category: "mike.stage", message: "process-file", level: "info" });
+  });
+
+  it("does nothing while reporting is off", () => {
+    setOperation("chat.turn");
+    markStage("claim");
+    expect(isolationScope.setTag).not.toHaveBeenCalled();
+    expect(sentryMock.addBreadcrumb).not.toHaveBeenCalled();
+  });
+
+  it("announces the release at boot and warns when a production build is unversioned", () => {
+    const log = vi.spyOn(console, "log").mockImplementation(() => {});
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    initSentry("api", {
+      ...dsnEnv,
+      SENTRY_DSN: undefined,
+      MIKE_VERSION: "2.1.0",
+      GIT_SHA: "0123456789abcdef0123",
+    } as NodeJS.ProcessEnv);
+    expect(log).toHaveBeenCalledWith(expect.stringContaining("release mike@2.1.0+0123456789ab"));
+    expect(warn).not.toHaveBeenCalled();
+    resetSentryForTests();
+    initSentry("api", { ...dsnEnv, SENTRY_DSN: undefined, NODE_ENV: "production" } as NodeJS.ProcessEnv);
+    expect(log).toHaveBeenCalledWith(expect.stringContaining("release mike@0.0.0"));
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining("unversioned release"));
+  });
+});
+
+describe("Node process warnings", () => {
+  const dsnEnv = {
+    ...quietEnv,
+    SENTRY_DSN: "https://key@o1.ingest.sentry.io/1",
+  } as NodeJS.ProcessEnv;
+  const warning = Object.assign(new Error("The `punycode` module is deprecated"), {
+    name: "DeprecationWarning",
+    code: "DEP0040",
+  });
+  // What node:internal/process/warning then hands to console.error.
+  const printed =
+    "(node:4242) [DEP0040] DeprecationWarning: The `punycode` module is deprecated. Please use a userland alternative instead.\n(Use `node --trace-deprecation ...` to show where the warning was created)";
+
+  it("reports the warning object with its name and code at warning level", () => {
+    vi.spyOn(console, "log").mockImplementation(() => {});
+    const stderr = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
+    initSentry("job", dsnEnv);
+
+    process.emit("warning", warning);
+    stderr.mockRestore();
+
+    expect(Sentry.captureException).toHaveBeenCalledWith(warning);
+    const scope = scopes[0];
+    expect(scope.setLevel).toHaveBeenCalledWith("warning");
+    expect(scope.setTag).toHaveBeenCalledWith("component", "runtime-warning");
+    expect(scope.setTag).toHaveBeenCalledWith("warning_name", "DeprecationWarning");
+    expect(scope.setTag).toHaveBeenCalledWith("warning_code", "DEP0040");
+    expect(scope.setFingerprint).toHaveBeenCalledWith([
+      "runtime-warning",
+      "DeprecationWarning",
+      "DEP0040",
+    ]);
+  });
+
+  it("drops the console bridge's copy of Node's printed warning, not application labels", () => {
+    const consoleEvent = (text: string) =>
+      scrubEvent({ logger: "console", message: text } as unknown as Sentry.ErrorEvent, {
+        captureContext: { extra: { arguments: [text] } },
+      });
+    expect(consoleEvent(printed)).toBeNull();
+    expect(consoleEvent("(node:1) ExperimentalWarning: SQLite is an experimental feature")).toBeNull();
+    expect(consoleEvent("[dbq] tick failed")).not.toBeNull();
+    expect(consoleEvent("Mike workflow sync failed")).not.toBeNull();
+  });
+
+  it("stays silent when the operator set NODE_NO_WARNINGS=1", () => {
+    vi.spyOn(console, "log").mockImplementation(() => {});
+    initSentry("job", { ...dsnEnv, NODE_NO_WARNINGS: "1" });
+    const stderr = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
+    process.emit("warning", warning);
+    stderr.mockRestore();
+    expect(Sentry.captureException).not.toHaveBeenCalled();
+  });
+
+  it("stays silent when the operator passed --no-warnings", () => {
+    vi.spyOn(console, "log").mockImplementation(() => {});
+    initSentry("job", { ...dsnEnv, NODE_OPTIONS: "--enable-source-maps --no-warnings" });
+    const stderr = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
+    process.emit("warning", warning);
+    stderr.mockRestore();
+    expect(Sentry.captureException).not.toHaveBeenCalled();
+  });
+});
+
 describe("community install minimisation", () => {
   afterEach(() => resetSentryForTests());
 
@@ -904,5 +1114,70 @@ describe("community install minimisation", () => {
     expect(out.server_name).toBe("api-1");
     expect(out.user).toEqual({ id: "user-1" });
     expect(out.breadcrumbs).toHaveLength(1);
+  });
+});
+
+// MIKE-BACKEND-B, 8, C, 1V, 1M: culprits under backend/src/... are `tsx
+// watch` checkouts reporting to the Mike project as environment=self-hosted.
+describe("development builds", () => {
+  it("are the TypeScript source, not the compiled image", () => {
+    expect(isDevelopmentBuild(["node", "/home/dev/mike/backend/src/index.ts"])).toBe(true);
+    expect(isDevelopmentBuild(["node", "/app/dist/index.js"])).toBe(false);
+    expect(isDevelopmentBuild(["node", "/app/dist/jobs/syncWorkflows.js"])).toBe(false);
+  });
+
+  it("do not fall back to the Mike project, even with the example's SENTRY_DISABLED=false", () => {
+    const config = sentryConfiguration({ NODE_ENV: "development", SENTRY_DISABLED: "false" } as NodeJS.ProcessEnv, true);
+    expect(config).toMatchObject({ enabled: false, dsn: "", dsnSource: "development" });
+    // The compiled image under compose's NODE_ENV=development is an install.
+    expect(sentryConfiguration({ NODE_ENV: "development" } as NodeJS.ProcessEnv, false)).toMatchObject({
+      enabled: true,
+      dsnSource: "default",
+      environment: "self-hosted",
+    });
+  });
+
+  // The build_mode tag follows the same rule, not NODE_ENV: compose and the
+  // desktop app run the compiled image under NODE_ENV=development, and those
+  // installs must not be tagged as laptops.
+  it("tag build_mode from the entry point, not NODE_ENV", () => {
+    vi.spyOn(console, "log").mockImplementation(() => {});
+    const compose = { NODE_ENV: "development", SENTRY_DSN: "https://key@o1.ingest.sentry.io/1" } as NodeJS.ProcessEnv;
+    expect(initSentry("api", compose, false)).toBe(true);
+    expect(vi.mocked(Sentry.init).mock.calls[0][0]!.initialScope).toMatchObject({
+      tags: { build_mode: "production" },
+    });
+
+    resetSentryForTests();
+    expect(initSentry("api", { ...compose, NODE_ENV: "production" } as NodeJS.ProcessEnv, true)).toBe(true);
+    expect(vi.mocked(Sentry.init).mock.calls[1][0]!.initialScope).toMatchObject({
+      tags: { build_mode: "development" },
+    });
+  });
+
+  // The opt-in for a self-hoster running the source in production: the run
+  // reports exactly like the compiled image. Without it, the same run is off.
+  it("report like an install when SENTRY_SOURCE_RUN_IS_INSTALL=true", () => {
+    vi.spyOn(console, "log").mockImplementation(() => {});
+    const env = { NODE_ENV: "production", SENTRY_DISABLED: "false" } as NodeJS.ProcessEnv;
+    expect(initSentry("api", env, true)).toBe(false);
+
+    resetSentryForTests();
+    expect(initSentry("api", { ...env, SENTRY_SOURCE_RUN_IS_INSTALL: "TRUE" } as NodeJS.ProcessEnv, true)).toBe(true);
+    const options = vi.mocked(Sentry.init).mock.calls[0][0]!;
+    expect(options).toMatchObject({ dsn: MIKE_SENTRY_DSN.backend, environment: "self-hosted" });
+    expect(options.initialScope).toMatchObject({ tags: { build_mode: "production" } });
+  });
+
+  it("report as environment development to a DSN set on purpose, unless SENTRY_ENVIRONMENT says otherwise", () => {
+    const dsn = "http://mike@localhost:9999/1";
+    expect(sentryConfiguration({ SENTRY_DSN: dsn } as NodeJS.ProcessEnv, true)).toMatchObject({
+      enabled: true,
+      dsn,
+      environment: "development",
+    });
+    expect(
+      sentryConfiguration({ SENTRY_DSN: dsn, SENTRY_ENVIRONMENT: "staging" } as NodeJS.ProcessEnv, true).environment,
+    ).toBe("staging");
   });
 });

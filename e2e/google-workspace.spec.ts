@@ -97,6 +97,7 @@ test("Google SSO does not auto-connect Gmail; Add asks Google for access and Man
       return route.fulfill({
         json: {
           configured: true,
+          available: true,
           schemaReady: true,
           connected: gmail && connected,
           writeEnabled: gmail && connected,
@@ -237,6 +238,7 @@ test("Calendar Add opens Google account selection directly and can be cancelled"
       return route.fulfill({
         json: {
           configured: true,
+          available: true,
           schemaReady: true,
           connected: false,
           writeEnabled: false,

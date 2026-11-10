@@ -1,9 +1,11 @@
 // Audit history of user actions -> public.audit_events (see the 20260728
 // migration). Fire-and-forget by design: recording an event must NEVER throw
-// or block the user-facing path — failures are logged and swallowed.
+// or block the user-facing path — failures are reported and swallowed.
 
 import { enqueueDbJob } from "./dbq/enqueue";
 import type { Db } from "./supabase";
+import { AppError } from "./appError";
+import { reportError } from "./observability/sentry";
 
 export type AuditStatus = "completed" | "cancelled" | "failed";
 
@@ -47,14 +49,32 @@ export async function insertAuditEvent(
     model: event.model ?? null,
     detail: event.detail ?? null,
   });
-  if (error) throw new Error(`[audit] insert failed: ${error.message}`);
+  if (error)
+    throw new AppError("audit.write_failed", `[audit] insert failed: ${error.message}`, {
+      cause: error,
+    });
+}
+
+/** The failure as one event: its own kind, the PostgREST error as the cause. */
+function auditWriteFailure(message: string, err: unknown): AppError {
+  return err instanceof AppError
+    ? err
+    : new AppError("audit.write_failed", message, { cause: err });
 }
 
 export async function recordAudit(db: Db, event: AuditEventInput): Promise<void> {
   try {
     await insertAuditEvent(db, event);
   } catch (err) {
-    console.error("[audit] insert threw:", err instanceof Error ? err.message : err);
+    // Swallowed by contract, so this is the only place a lost audit row is
+    // ever seen: report it, then log the same object (the console bridge
+    // knows it is already reported).
+    const failure = auditWriteFailure("[audit] insert threw", err);
+    reportError(failure, {
+      tags: { operation: "audit.write" },
+      extra: { action: event.action },
+    });
+    console.error("[audit] insert threw:", failure);
   }
 }
 
@@ -73,6 +93,8 @@ type TurnEvent = {
     document_id?: string;
     version_id?: string;
   }>;
+  /** A delegation's own events: its subagent's documents are the turn's too. */
+  events?: unknown[];
 };
 
 export type ChatTurnAuditBase = {
@@ -121,8 +143,10 @@ export function chatTurnAuditEvents(
       detail: base.flags && Object.keys(base.flags).length ? base.flags : null,
     },
   ];
-  for (const raw of events ?? []) {
-    const ev = raw as TurnEvent;
+  const turnEvents = ((events ?? []) as TurnEvent[]).flatMap((ev) =>
+    ev?.type === "delegation" ? [ev, ...((ev.events ?? []) as TurnEvent[])] : [ev],
+  );
+  for (const ev of turnEvents) {
     // A single doc_replicated event can produce several copies; emit one
     // document.generated row per copy, reading the copy's own new_filename and
     // document_id rather than the (source) top-level filename / absent id.
@@ -211,9 +235,16 @@ export async function enqueueChatTurnAudit(
       payload: { base, events: events ?? [] },
     });
   } catch (err) {
+    // The direct path still runs, so this is a warning; if it fails too,
+    // recordAudit reports the lost row itself.
+    const failure = auditWriteFailure("[audit] chat-turn enqueue failed", err);
+    reportError(failure, {
+      level: "warning",
+      tags: { component: "dbq", operation: "audit.write" },
+    });
     console.error(
       "[audit] chat-turn enqueue failed; falling back to direct inserts:",
-      err instanceof Error ? err.message : err,
+      failure,
     );
     await recordChatTurn(db, base, events);
   }

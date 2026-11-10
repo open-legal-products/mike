@@ -14,6 +14,7 @@
 //   documents.download.ts  — display bytes, zip bundling, signed URLs, raw file
 //   documents.versions.ts  — version lifecycle (list/create/rename/delete)
 //   documents.edits.ts     — tracked-change ids + accept/reject edits
+//   documents.trackedEdits.ts — apply tracked-change edits as a new version
 //
 // Upload sessions own transport and destination authorization; version metadata
 // creation, activation, replacement, copying, and cleanup use this facade.
@@ -25,7 +26,6 @@ export {
 
 export {
     getDisplayableVersion,
-    collectFolderDescendantIds,
     resolveZipExportDocuments,
     getDownloadUrl,
     getFileStreamSource,
@@ -41,6 +41,11 @@ export {
 export {
     resolveEdit,
 } from "./documents.edits";
+
+export {
+    applyTrackedEditsToDocument,
+    loadCurrentVersionBytes,
+} from "./documents.trackedEdits";
 
 export { renameDocument } from "./documents.rename";
 export { deleteCollectionDocuments } from "./documents.cleanup";
@@ -58,4 +63,6 @@ export { createDocumentVersions, activateDocumentVersion, updateDocumentVersion 
 export { runConversionJob, setDocumentTerminalStatus } from "./documents.conversion";
 
 export { handleDocumentExtractText, markDocumentTextFailed, backfillDocumentText } from "./documents.indexing";
-export { findDocumentText, readStoredDocumentText } from "./documents.textSearch";
+export { findDocumentText, readStoredDocumentText, storedDocumentTextCurrent } from "./documents.textSearch";
+
+export { getDocumentStatuses } from "./documents.status";

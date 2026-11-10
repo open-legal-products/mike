@@ -393,13 +393,19 @@ describe("tabular.routes", () => {
             expect(supabaseState.rpcCalls[0].args).not.toHaveProperty("p_owner_user_id");
         });
 
-        it("skips the creator lookup for the cross-project list", async () => {
+        it("labels the cross-project list's reviews with each creator", async () => {
             supabaseState.rpc = { data: [{ id: "r1", user_id: "u2" }], error: null };
+            supabaseState.tables.user_profiles = {
+                data: [{ user_id: "u2", display_name: "Ada", profile_photo: null }],
+                error: null,
+            };
             const res = await request(app)
                 .get("/tabular-review")
                 .set(...AUTH);
             expect(res.status).toBe(200);
-            expect(supabaseState.operations).not.toContain("from:user_profiles");
+            expect(res.body).toEqual([
+                { id: "r1", user_id: "u2", owner_display_name: "Ada", owner_profile_photo: null },
+            ]);
         });
 
         it("returns 500 with detail when the RPC errors", async () => {
@@ -604,7 +610,7 @@ describe("tabular.routes", () => {
                 error: null,
             };
             supabaseState.tables.project_subfolders = {
-                data: [{ id: "f1", name: "Contracts", parent_folder_id: null }],
+                data: [{ id: "f1", name: "Contracts", parent_folder_id: null, project_id: "p1" }],
                 error: null,
             };
             supabaseState.tables.tabular_review_rows = {
@@ -2114,6 +2120,22 @@ describe("tabular.routes", () => {
         });
         afterEach(() => {
             resetStreamRunsForTests();
+        });
+
+        it("returns a safe internal error and releases the claimed lease when document access lookup fails", async () => {
+            filterAccessibleDocumentIds.mockRejectedValueOnce(new Error("Document access lookup failed: private database detail"));
+
+            const res = await startGeneration();
+
+            expect(res.status).toBe(500);
+            expect(res.body).toMatchObject({
+                code: "internal_error", detail: "Something went wrong. Please try again.",
+            });
+            expect(res.text).not.toContain("private database detail");
+            expect(rpcNames()).toEqual([
+                "begin_tabular_review_generation", "finish_tabular_review_generation",
+            ]);
+            expect(extractRowColumns).not.toHaveBeenCalled();
         });
 
         it("keeps extracting after the requesting socket closes, and a reload attaches from where it left off", async () => {

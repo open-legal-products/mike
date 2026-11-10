@@ -154,6 +154,11 @@ const ALL_MODELS = new Set<string>([
     ...MISTRAL_LOW_MODELS,
 ]);
 
+/** Every statically catalogued model id, for callers that offer a model picker. */
+export function builtInModelIds(): string[] {
+    return [...ALL_MODELS];
+}
+
 // ---------------------------------------------------------------------------
 // Provider inference
 // ---------------------------------------------------------------------------

@@ -1,3 +1,4 @@
+import type { TextExtractionCache } from "../../lib/textExtractionCache";
 // The single source of truth for extracting one row's cells.
 //
 // A row is the review grid's unit of work: one document, or a folder of source
@@ -24,6 +25,7 @@
 // used by both the sync and async entry points. See tabular.shared.ts for the
 // lease itself.
 
+import { ExtractionBusyError, ExtractionLimitError } from "../../lib/extraction/limits";
 import { type UserApiKeys } from "../../lib/llm";
 import { queryTabularAllColumns } from "./tabular.extract";
 import { loadRowDocumentText, type ReviewRow } from "./tabular.rows";
@@ -112,6 +114,9 @@ export async function extractRowColumns(args: {
     generationId?: string | null;
     /** Stops the run (client disconnect, or lease lost). */
     abortSignal?: AbortSignal;
+    /** Queue runners report failed attempts; inline streams report here. */
+    reportFailure?: boolean;
+    textCache?: TextExtractionCache;
 }): Promise<ExtractRowResult> {
     const {
         db,
@@ -142,7 +147,15 @@ export async function extractRowColumns(args: {
     // prefixed with its source document id so citations can name it). Loaded
     // before anything is marked "generating" so a run stopped during the (slow)
     // download leaves the grid exactly as it found it.
-    const markdown = await loadRowDocumentText(db, row);
+    let markdown: string;
+    try {
+        markdown = await loadRowDocumentText(db, row, args.textCache);
+    } catch (error) {
+        if (!(error instanceof ExtractionLimitError || error instanceof ExtractionBusyError)) throw error;
+        if (abortSignal?.aborted) return untouched();
+        // Fail this row without asking the model to answer from an empty source.
+        return { processed, received: new Set(), missing: processed.map((col) => col.index), error };
+    }
     if (abortSignal?.aborted) return untouched();
 
     // Mark each outstanding column "generating" (insert the cell if it's new)
@@ -158,23 +171,19 @@ export async function extractRowColumns(args: {
     // claim their cells (stamping generation_id) before extraction begins, so
     // for a run that still owns its cells this matches, and for one that has
     // been superseded it matches nothing.
+    //
+    // Two writes per row (one update over the existing cells, one insert of
+    // the new ones) rather than one round trip per column before the model
+    // is even called; a row has at most one cell per column, so the id list
+    // is bounded by the column count.
+    const existingIds: string[] = [];
+    const inserts: Record<string, unknown>[] = [];
     for (const col of processed) {
         await sink.generating(row.id, col.index);
         const existing = existingByColumn.get(col.index);
-        if (existing?.id) {
-            const markQuery = db
-                .from("tabular_cells")
-                .update({
-                    status: "generating",
-                    content: null,
-                    generation_id: generationId ?? null,
-                })
-                .eq("id", existing.id);
-            await (generationId
-                ? markQuery.eq("generation_id", generationId)
-                : markQuery);
-        } else {
-            await db.from("tabular_cells").insert({
+        if (existing?.id) existingIds.push(existing.id as string);
+        else
+            inserts.push({
                 review_id: reviewId,
                 row_id: row.id,
                 document_id: row.document_id,
@@ -182,8 +191,21 @@ export async function extractRowColumns(args: {
                 status: "generating",
                 generation_id: generationId ?? null,
             });
-        }
     }
+    if (existingIds.length) {
+        const markQuery = db
+            .from("tabular_cells")
+            .update({
+                status: "generating",
+                content: null,
+                generation_id: generationId ?? null,
+            })
+            .in("id", existingIds);
+        await (generationId
+            ? markQuery.eq("generation_id", generationId)
+            : markQuery);
+    }
+    if (inserts.length) await db.from("tabular_cells").insert(inserts);
 
     // One LLM call for all outstanding columns; persist + announce each result.
     const received = new Set<number>();
@@ -214,13 +236,16 @@ export async function extractRowColumns(args: {
             apiKeys,
             abortSignal,
             sink.activity,
+            args.reportFailure,
         );
     } catch (err) {
         error = err;
         // An abort re-thrown by the stream is the caller stopping us, not a
         // failure worth logging; the unreturned columns are reported below.
+        // Not console.error: either the query already reported this failure
+        // or the queue runner will report the failed attempt.
         if (!abortSignal?.aborted) {
-            console.error(
+            console.warn(
                 `[tabular/extract-row] queryTabularAllColumns error row=${row.id}`,
                 err,
             );

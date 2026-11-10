@@ -6,7 +6,7 @@ import {
   nearestReasoningLevelForModel,
   reasoningLevelsForModel,
   type ReasoningLevel,
-} from "@/shared/ui/ModelToggleUI";
+} from "@mike/ui";
 import { isModelAvailable } from "@/app/lib/modelAvailability";
 import {
   MODELS,
@@ -16,7 +16,7 @@ import {
   type ModelOption,
   type NoModelsReason,
   type RouterSelections,
-} from "@/shared/lib/modelCatalog";
+} from "@mike/client";
 import type { ApiKeyState } from "@/app/lib/mikeApi";
 import {
   PERSONAL_WORKSPACE,
@@ -55,8 +55,8 @@ interface Props {
   routerSelections?: Partial<RouterSelections>;
   compact?: boolean;
   tone?: "muted" | "default";
-  /** Render as a full-width liquid-glass control inside a modal form. */
-  modalInput?: boolean;
+  /** A full-width form field: liquid glass, or "flat" grey like a flat select. */
+  modalInput?: boolean | "flat";
   toolbar?: boolean;
   /** Extra classes for the compact trigger button, for a host row's sizing. */
   triggerClassName?: string;
@@ -119,12 +119,10 @@ export function ModelToggle({
       (availableModels.length > 0 ? "Select model" : "No Models"));
   // In an organization workspace the keys and model lists are its admins'
   // to set, so an empty picker says who can fix it.
-  const { workspaceId, orgApiKeys } = useWorkspace();
-  const organization =
-    workspaceId !== null && workspaceId !== PERSONAL_WORKSPACE && orgApiKeys
-      ? { allowPersonalKeys: orgApiKeys.allow_personal_api_keys }
-      : null;
-  const emptyReason = noModelsReason(apiKeys, routerSelections, organization);
+  const { workspaceId } = useWorkspace();
+  const inOrganization =
+    workspaceId !== null && workspaceId !== PERSONAL_WORKSPACE;
+  const emptyReason = noModelsReason(apiKeys, routerSelections, inOrganization);
   return (
     <ModelToggleUI
       value={value}

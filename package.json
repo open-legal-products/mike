@@ -12,9 +12,9 @@
         "stack:status": "bash scripts/stack.sh status"
     },
     "devDependencies": {
-        "@axe-core/playwright": "^4.13.0",
-        "@playwright/test": "^1.64.0",
-        "@types/node": "^26.6.5",
+        "@axe-core/playwright": "^4.14.0",
+        "@playwright/test": "^1.64.1",
+        "@types/node": "^26.6.6",
         "typescript": "^7.0.2"
     },
     "engines": {

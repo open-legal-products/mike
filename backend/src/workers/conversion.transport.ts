@@ -1,5 +1,6 @@
 // conversion transport — implementation behind the module facade.
 import { Worker, type Job } from "bullmq";
+import { runIsolated } from "../lib/dbq/jobScope";
 import { getRedisConnection } from "../lib/queue/connection";
 import { reportError } from "../lib/observability/sentry";
 import { CONVERSION_QUEUE, type ConversionJobData } from "../lib/queue/conversionQueue";
@@ -19,7 +20,9 @@ export function createConversionWorker(): Worker<ConversionJobData> {
     worker = new Worker<ConversionJobData>(
         CONVERSION_QUEUE,
         async (job: Job<ConversionJobData>) => {
-            await runConversionJob(job.data);
+            // Own isolation scope per job: runConversionJob names the
+            // operation, and concurrency is 2.
+            await runIsolated(() => runConversionJob(job.data));
         },
         {
             connection: getRedisConnection(),
@@ -39,10 +42,14 @@ export function createConversionWorker(): Worker<ConversionJobData> {
     });
     worker.on("failed", async (job, err) => {
         const permanent = !!job && isPermanentFailure(job);
+        // The 'failed' event fires outside the processor's isolation scope,
+        // so the operation is named here rather than inherited.
         reportError(err, {
             level: permanent ? "error" : "warning",
             tags: {
                 component: "conversion-worker",
+                operation: "documents.convert",
+                stage: "conversion",
                 terminal: permanent,
                 attempt: job?.attemptsMade,
             },
@@ -85,9 +92,19 @@ export function createConversionWorker(): Worker<ConversionJobData> {
                 "error",
             );
         } catch (updateErr) {
+            // The document stays "processing" forever if this write is lost:
+            // reported with the terminal stage, logged as the same object.
+            reportError(updateErr, {
+                tags: {
+                    component: "conversion-worker",
+                    operation: "documents.convert",
+                    stage: "job.terminal",
+                },
+                extra: { job_id: job.id, document_id: job.data.documentId },
+            });
             console.error(
                 "[conversion-worker] failed to mark document error",
-                { jobId: job.id, documentId: job.data.documentId, updateErr },
+                { jobId: job.id, documentId: job.data.documentId, error: updateErr },
             );
         }
     });

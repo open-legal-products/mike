@@ -13,18 +13,20 @@ import {
 } from "react";
 import {
     ArrowRight,
-    Check,
-    Loader2,
     Square,
     Waypoints,
     X,
 } from "lucide-react";
 import { AddDocButton } from "./AddDocButton";
+import { PlaybookPickerModal } from "../playbooks/PlaybookPickerModal";
+import {
+    PlaybookPillUI,
+    COMPOSER_SEND_BUTTON_CLASS,
+    ExcerptModalUI,
+    ExcerptPillUI,
+} from "@mike/ui";
 import { UploadOverlay } from "./UploadOverlay";
-import { COMPOSER_SEND_BUTTON_CLASS } from "@/shared/ui/ComposerSendButtonUI.styles";
-import { ExcerptModalUI } from "@/shared/ui/ExcerptModalUI";
-import { ExcerptPillUI } from "@/shared/ui/ExcerptPillUI";
-import { FileTypeIcon } from "../shared/FileTypeIcon";
+import { DocumentPill } from "../shared/DocumentPill";
 import { AddDocumentsModal } from "../modals/AddDocumentsModal";
 import { AssistantWorkflowModal } from "./AssistantWorkflowModal";
 import { WORKFLOW_SLASH_MENU_ID, WorkflowSlashMenu } from "./WorkflowSlashMenu";
@@ -54,10 +56,7 @@ import {
 import type { Document, Message, Workflow } from "../shared/types";
 import type { DirectoryTab } from "../shared/useDirectoryData";
 import { cn } from "@/app/lib/utils";
-import {
-    LIQUID_GLASS_FLAT_CLASS,
-    LIQUID_GLASS_TRANSLUCENT_CLASS,
-} from "@/app/components/ui/liquid-surface";
+import { LIQUID_GLASS_TRANSLUCENT_CLASS } from "@/app/components/ui/liquid-surface";
 import {
     UploadBatchError,
     failedUploadMessage,
@@ -74,14 +73,8 @@ import {
     partitionSupportedDocumentFiles,
 } from "@/app/lib/documentUploadValidation";
 import { userFacingApiError } from "@/app/lib/userFacingError";
-import {
-    serializeExcerpts,
-    type MessageExcerpt,
-} from "@/shared/lib/messageExcerpts";
+import { serializeExcerpts, type MessageExcerpt, type NoModelsReason } from "@mike/client";
 import { useConfiguredModels } from "@/app/hooks/useConfiguredModels";
-import {
-    type NoModelsReason,
-} from "@/shared/lib/modelCatalog";
 
 export interface ChatInputHandle {
     addDoc: (doc: Document) => void;
@@ -97,6 +90,8 @@ export interface ChatInputHandle {
         prompt?: string,
         options?: { initialDocumentTab?: DirectoryTab },
     ) => void;
+    /** Attaches a playbook to run on the documents, as the picker does. */
+    attachPlaybook: (playbook: { id: string; title: string }) => void;
 }
 
 interface Props {
@@ -244,6 +239,15 @@ function ChatInputForChatImpl(
     const [docSelectorInitialTab, setDocSelectorInitialTab] =
         useState<DirectoryTab>("files");
     const [workflowModalOpen, setWorkflowModalOpen] = useState(false);
+    // A playbook picked to run on the attached documents, like a workflow.
+    const [selectedPlaybook, setSelectedPlaybook] = useState<{
+        id: string;
+        title: string;
+    } | null>(null);
+    const [playbookModalOpen, setPlaybookModalOpen] = useState(false);
+    const [playbookModalInitialId, setPlaybookModalInitialId] = useState<
+        string | undefined
+    >(undefined);
     // Set when the modal is opened from a pill, so it lands on that workflow
     // instead of the picker's default listing.
     const [workflowModalInitialId, setWorkflowModalInitialId] = useState<
@@ -400,12 +404,18 @@ function ChatInputForChatImpl(
                 file,
                 clientId: crypto.randomUUID(),
             }));
-            setUploadingFiles(
-                uploadInputs.map(({ clientId, file }) => ({
+            // Batches can overlap (a second drop or pick while one is still
+            // uploading), so each adds its own pills and clears only those.
+            const batchIds = new Set(
+                uploadInputs.map(({ clientId }) => clientId),
+            );
+            setUploadingFiles((current) => [
+                ...current,
+                ...uploadInputs.map(({ clientId, file }) => ({
                     clientId,
                     filename: file.name,
                 })),
-            );
+            ]);
             const addCompletedDocument = (document: Document) => {
                 if (!uploadGenerationActiveRef.current) return;
                 addAttachedDocuments([document]);
@@ -470,7 +480,11 @@ function ChatInputForChatImpl(
                           ),
                 );
             } finally {
-                if (uploadGenerationActiveRef.current) setUploadingFiles([]);
+                if (uploadGenerationActiveRef.current) {
+                    setUploadingFiles((current) =>
+                        current.filter((upload) => !batchIds.has(upload.clientId)),
+                    );
+                }
             }
         },
         [
@@ -503,6 +517,10 @@ function ChatInputForChatImpl(
                     ? prev
                     : [...prev, excerpt],
             );
+            requestAnimationFrame(() => textareaRef.current?.focus());
+        },
+        attachPlaybook: (playbook) => {
+            setSelectedPlaybook(playbook);
             requestAnimationFrame(() => textareaRef.current?.focus());
         },
         startWorkflow: (workflow, prompt) => {
@@ -628,6 +646,7 @@ function ChatInputForChatImpl(
         }));
         setAttachedDocs([]);
         setSelectedWorkflow(null);
+        setSelectedPlaybook(null);
         setExcerpts([]);
 
         onSubmit?.({
@@ -635,6 +654,7 @@ function ChatInputForChatImpl(
             content: serializeExcerpts(excerpts, query),
             files: files.length > 0 ? files : undefined,
             workflow: workflow ?? undefined,
+            playbook: selectedPlaybook ?? undefined,
             model,
             reasoning: reasoningLevel,
         });
@@ -727,7 +747,9 @@ function ChatInputForChatImpl(
                 >
                     {/* Attached chips */}
                     {(selectedWorkflow ||
+                        selectedPlaybook ||
                         attachedDocs.length > 0 ||
+                        uploadingFiles.length > 0 ||
                         excerpts.length > 0) && (
                         <div className="flex flex-wrap gap-1.5 px-2 pt-2">
                             {selectedWorkflow && (
@@ -759,56 +781,45 @@ function ChatInputForChatImpl(
                                     </button>
                                 </div>
                             )}
-                            {attachedDocs.map((doc) => {
-                                const documentLabel = (
-                                    <>
-                                        <FileTypeIcon
-                                            fileType={doc.file_type}
-                                            className="h-2.5 w-2.5"
-                                        />
-                                        <span className="max-w-[140px] truncate">
-                                            {doc.filename}
-                                        </span>
-                                    </>
-                                );
-                                return (
-                                    <div
-                                        key={doc.id}
-                                        className={`inline-flex items-center rounded-[10px] text-xs text-gray-800 ${LIQUID_GLASS_FLAT_CLASS}`}
-                                    >
-                                        {onDocumentClick ? (
-                                            <button
-                                                type="button"
-                                                onClick={() =>
-                                                    onDocumentClick(doc)
-                                                }
-                                                aria-label={`Open ${doc.filename}`}
-                                                className="inline-flex min-w-0 items-center gap-1 py-0.5 pl-2 transition-colors hover:text-gray-950"
-                                            >
-                                                {documentLabel}
-                                            </button>
-                                        ) : (
-                                            <span className="inline-flex min-w-0 items-center gap-1 py-0.5 pl-2">
-                                                {documentLabel}
-                                            </span>
-                                        )}
-                                        <button
-                                            type="button"
-                                            onClick={() =>
-                                                setAttachedDocs((prev) =>
-                                                    prev.filter(
-                                                        (d) => d.id !== doc.id,
-                                                    ),
-                                                )
-                                            }
-                                            aria-label={`Remove ${doc.filename}`}
-                                            className="mx-1 rounded-full p-0.5 text-gray-400 transition-colors hover:bg-gray-900/5 hover:text-gray-700"
-                                        >
-                                            <X className="h-2.5 w-2.5" />
-                                        </button>
-                                    </div>
-                                );
-                            })}
+                            {selectedPlaybook && (
+                                <PlaybookPillUI
+                                    title={selectedPlaybook.title}
+                                    onOpen={() => {
+                                        setPlaybookModalInitialId(
+                                            selectedPlaybook.id,
+                                        );
+                                        setPlaybookModalOpen(true);
+                                    }}
+                                    onRemove={() => setSelectedPlaybook(null)}
+                                />
+                            )}
+                            {attachedDocs.map((doc) => (
+                                <DocumentPill
+                                    key={doc.id}
+                                    filename={doc.filename}
+                                    fileType={doc.file_type}
+                                    onOpen={
+                                        onDocumentClick
+                                            ? () => onDocumentClick(doc)
+                                            : undefined
+                                    }
+                                    onRemove={() =>
+                                        setAttachedDocs((prev) =>
+                                            prev.filter((d) => d.id !== doc.id),
+                                        )
+                                    }
+                                />
+                            ))}
+                            {/* Still uploading: in the same row as the
+                                attached documents, side by side. */}
+                            {uploadingFiles.map((upload) => (
+                                <DocumentPill
+                                    key={upload.clientId}
+                                    filename={upload.filename}
+                                    status="Uploading"
+                                    loading
+                                />
+                            ))}
                             {excerpts.map((excerpt, index) => (
                                 <ExcerptPillUI
                                     key={`${index}-${excerpt.text}`}
@@ -820,22 +831,6 @@ function ChatInputForChatImpl(
                                         )
                                     }
                                 />
-                            ))}
-                        </div>
-                    )}
-
-                    {uploadingFiles.length > 0 && (
-                        <div className="flex flex-wrap items-center gap-1.5 px-2 pt-2">
-                            {uploadingFiles.map((upload) => (
-                                <div
-                                    key={upload.clientId}
-                                    className={`inline-flex items-center gap-1 rounded-[10px] px-2 py-1 text-xs text-gray-600 ${LIQUID_GLASS_FLAT_CLASS}`}
-                                >
-                                    <Loader2 className="h-2.5 w-2.5 animate-spin" />
-                                    <span className="max-w-[140px] truncate">
-                                        {upload.filename}
-                                    </span>
-                                </div>
                             ))}
                         </div>
                     )}
@@ -881,47 +876,31 @@ function ChatInputForChatImpl(
                             {!hideAddDocButton && composerOpen && (
                                 <AddDocButton
                                     onLocalFiles={() => localFileInputRef.current?.click()}
-                                    uploading={uploadingFiles.length > 0}
                                     onBrowseAll={() => {
                                         setDocSelectorInitialTab("files");
                                         setDocSelectorOpen(true);
                                     }}
-                                    selectedDocIds={attachedDocs.map(
-                                        (d) => d.id,
-                                    )}
-                                    hideLabel={compactControls}
+                                    onWorkflows={
+                                        hideWorkflowButton
+                                            ? undefined
+                                            : () => {
+                                                  setWorkflowModalInitialId(
+                                                      undefined,
+                                                  );
+                                                  setWorkflowModalOpen(true);
+                                              }
+                                    }
+                                    onPlaybooks={
+                                        hideWorkflowButton
+                                            ? undefined
+                                            : () => {
+                                                  setPlaybookModalInitialId(
+                                                      undefined,
+                                                  );
+                                                  setPlaybookModalOpen(true);
+                                              }
+                                    }
                                 />
-                            )}
-                            {!hideWorkflowButton && composerOpen && (
-                                <button
-                                    type="button"
-                                    onClick={() => {
-                                        setWorkflowModalInitialId(undefined);
-                                        setWorkflowModalOpen(true);
-                                    }}
-                                    aria-label="Open workflows"
-                                    className={cn(
-                                        "flex h-7.5 cursor-pointer items-center gap-1.5 rounded-lg px-2 text-sm transition-colors",
-                                        selectedWorkflow
-                                            ? "text-blue-600 hover:text-blue-700"
-                                            : "text-gray-400 hover:text-gray-700",
-                                    )}
-                                >
-                                    {selectedWorkflow ? (
-                                        <Check className="h-3.5 w-3.5" />
-                                    ) : (
-                                        <Waypoints className="h-3.5 w-3.5" />
-                                    )}
-                                    <span
-                                        className={
-                                            compactControls
-                                                ? "hidden"
-                                                : "hidden sm:inline"
-                                        }
-                                    >
-                                        Workflows
-                                    </span>
-                                </button>
                             )}
                         </div>
 
@@ -985,7 +964,7 @@ function ChatInputForChatImpl(
                 multiple
                 hidden
                 aria-label="Upload Documents"
-                disabled={!composerOpen || uploadingFiles.length > 0}
+                disabled={!composerOpen}
                 onChange={(event) => {
                     const files = Array.from(event.currentTarget.files ?? []);
                     event.currentTarget.value = "";
@@ -1025,6 +1004,22 @@ function ChatInputForChatImpl(
                 projectName={projectName}
                 projectCmNumber={projectCmNumber}
                 initialWorkflowId={workflowModalInitialId}
+            />
+            <PlaybookPickerModal
+                open={playbookModalOpen}
+                onClose={() => setPlaybookModalOpen(false)}
+                onSelect={(playbook) =>
+                    setSelectedPlaybook({
+                        id: playbook.id,
+                        title: playbook.name || "Untitled playbook",
+                    })
+                }
+                breadcrumbs={
+                    projectName
+                        ? ["Projects", projectName, "Assistant", "Add playbook"]
+                        : ["Assistant", "Add playbook"]
+                }
+                initialPlaybookId={playbookModalInitialId}
             />
             <ApiKeyMissingPopup
                 open={apiKeyModalProvider !== null}

@@ -57,14 +57,15 @@ export const projectsRouter = Router();
 // same response. The directory pickers (useDirectoryData) previously fanned
 // out one GET /projects/:id per project to obtain those documents; with N
 // projects that burst — auth check plus several DB queries per request —
-// could overwhelm the Supabase gateway. Batching keeps it at one request
-// and a fixed number of queries regardless of project count.
+// could overwhelm the Supabase gateway. Child and metadata queries remain
+// bounded internally, including for legacy callers requesting the full list.
 //
 // Pagination is opt-in via query params (limit/offset/search/sort_key or
 // key/scope). ProjectsOverview.tsx sends them. Legacy tabular-review project
 // pickers call this with no query params and must keep getting the full,
 // unpaginated list, so the branch below must never default
-// to paginating a request that didn't ask for it.
+// to paginating a request that didn't ask for it. `include=documents` selects
+// response fields, not pagination; older clients do not fetch another page.
 const PROJECT_PAGINATION_QUERY_KEYS = [
   "limit",
   "offset",
@@ -534,6 +535,7 @@ projectsRouter.post(
             .status(500)
             .json({ detail: "Failed to update document" });
         case "read_failed":
+          if (result.error) return void sendInternalError(res, result.error);
           return void res
             .status(500)
             .json({ detail: "Failed to read source document bytes" });
@@ -643,7 +645,7 @@ projectsRouter.post("/:projectId/folders", requireAuth, asyncRoute(async (req, r
   const userEmail = res.locals.userEmail as string | undefined;
   const { projectId } = req.params;
   const { name, parent_folder_id } = req.body as { name: string; parent_folder_id?: string | null };
-  if (!name?.trim()) return void res.status(400).json({ detail: "name is required" });
+  if (typeof name !== "string" || !name.trim()) return void res.status(400).json({ detail: "name is required" });
 
   const db = createServerSupabase();
   const result = await createProjectFolder(db, {
@@ -654,6 +656,8 @@ projectsRouter.post("/:projectId/folders", requireAuth, asyncRoute(async (req, r
     parent_folder_id,
   });
   if (!result.ok) {
+    if (result.kind === "validation")
+      return void res.status(400).json({ detail: result.detail });
     if (result.kind === "role_forbidden")
       return void res.status(403).json({ detail: result.detail });
     if (result.kind === "forbidden")
@@ -681,6 +685,8 @@ projectsRouter.patch("/:projectId/folders/:folderId", requireAuth, asyncRoute(as
     body,
   });
   if (!result.ok) {
+    if (result.kind === "validation")
+      return void res.status(400).json({ detail: result.detail });
     if (result.kind === "role_forbidden")
       return void res.status(403).json({ detail: result.detail });
     if (result.kind === "forbidden")

@@ -35,6 +35,7 @@ import {
   planMcpToolCall,
 } from "./servers";
 import type { Db } from "./types";
+import { personalConnectorOwner } from "../connectorOwner";
 function fixture(
   annotations: Record<string, unknown> | undefined = { readOnlyHint: false },
 ) {
@@ -68,6 +69,7 @@ function fixture(
   const chain = {
     select: () => chain,
     eq: () => chain,
+    filter: () => chain,
     maybeSingle: async () => ({
       data: table === "user_mcp_oauth_tokens" ? { ...token } : null,
       error: null,
@@ -104,7 +106,7 @@ it("read-only mode must block a write tool whose server omitted annotations", as
   connector.read_only = true;
   connector.require_write_approval = true;
   const plan = await planMcpToolCall(
-    "u1",
+    personalConnectorOwner("u1"),
     tool.openai_tool_name,
     { text: "hello" },
     db,
@@ -114,26 +116,26 @@ it("read-only mode must block a write tool whose server omitted annotations", as
 it("enabling approval while an MCP connection is opening must prevent an unapproved write", async () => {
   const { connector, tool, db } = fixture();
   expect(
-    (await planMcpToolCall("u1", tool.openai_tool_name, {}, db)).type,
+    (await planMcpToolCall(personalConnectorOwner("u1"), tool.openai_tool_name, {}, db)).type,
   ).toBe("run");
   mocks.connect.mockImplementation(async () => {
     connector.require_write_approval = true;
   });
-  await executeMcpToolCall("u1", tool.openai_tool_name, { text: "hello" }, db);
+  await executeMcpToolCall(personalConnectorOwner("u1"), tool.openai_tool_name, { text: "hello" }, db);
   expect(mocks.callTool).not.toHaveBeenCalled();
 });
 it("an approval reviewed for one server must not execute against a replaced server", async () => {
   const { connector, tool, db } = fixture();
   connector.require_write_approval = true;
   const plan = await planMcpToolCall(
-    "u1",
+    personalConnectorOwner("u1"),
     tool.openai_tool_name,
     { text: "hello" },
     db,
   );
   if (plan.type !== "approval") throw new Error("expected approval");
   connector.server_url = "https://replacement.example.com/mcp";
-  await executeApprovedMcpToolCall("u1", { ...plan.item, id: "approval1" }, db);
+  await executeApprovedMcpToolCall(personalConnectorOwner("u1"), { ...plan.item, id: "approval1" }, db);
   expect(mocks.callTool).not.toHaveBeenCalled();
 });
 
@@ -155,21 +157,21 @@ it("protects cached tools classified before the conservative policy", async () =
   tool.requires_confirmation = false;
   connector.read_only = true;
   expect(
-    (await planMcpToolCall("u1", tool.openai_tool_name, {}, db)).type,
+    (await planMcpToolCall(personalConnectorOwner("u1"), tool.openai_tool_name, {}, db)).type,
   ).toBe("result");
 });
 it("runs a valid approved call while retaining the approval requirement", async () => {
   const { connector, tool, db } = fixture();
   connector.require_write_approval = true;
   const plan = await planMcpToolCall(
-    "u1",
+    personalConnectorOwner("u1"),
     tool.openai_tool_name,
     { text: "reviewed" },
     db,
   );
   if (plan.type !== "approval") throw new Error("expected approval");
   const result = await executeApprovedMcpToolCall(
-    "u1",
+    personalConnectorOwner("u1"),
     { ...plan.item, id: "a1" },
     db,
   );
@@ -190,7 +192,7 @@ it.each([
   const { connector, tool, db, token } = fixture();
   if (change === "oauth-account") connector.auth_type = "oauth";
   connector.require_write_approval = true;
-  const plan = await planMcpToolCall("u1", tool.openai_tool_name, {}, db);
+  const plan = await planMcpToolCall(personalConnectorOwner("u1"), tool.openai_tool_name, {}, db);
   if (plan.type !== "approval") throw new Error("expected approval");
   if (change === "credentials")
     Object.assign(connector, authConfigPatch({ bearerToken: "replacement" }));
@@ -203,7 +205,7 @@ it.each([
   if (change === "legacy" && plan.item.binding.type === "mcp")
     delete plan.item.binding.connection_fingerprint;
   expect(
-    (await executeApprovedMcpToolCall("u1", { ...plan.item, id: "a1" }, db))
+    (await executeApprovedMcpToolCall(personalConnectorOwner("u1"), { ...plan.item, id: "a1" }, db))
       .event.status,
   ).toBe("error");
   expect(mocks.callTool).not.toHaveBeenCalled();
@@ -212,13 +214,13 @@ it("retains an approval across routine token refresh", async () => {
   const { connector, tool, db, token } = fixture();
   connector.auth_type = "oauth";
   connector.require_write_approval = true;
-  const plan = await planMcpToolCall("u1", tool.openai_tool_name, {}, db);
+  const plan = await planMcpToolCall(personalConnectorOwner("u1"), tool.openai_tool_name, {}, db);
   if (plan.type !== "approval") throw new Error("expected approval");
   mocks.connect.mockImplementation(async () => {
     token.encrypted_access_token = "refreshed-token";
   });
   expect(
-    (await executeApprovedMcpToolCall("u1", { ...plan.item, id: "a1" }, db))
+    (await executeApprovedMcpToolCall(personalConnectorOwner("u1"), { ...plan.item, id: "a1" }, db))
       .event.status,
   ).toBe("ok");
   expect(mocks.callTool).toHaveBeenCalledOnce();

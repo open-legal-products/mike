@@ -2,13 +2,14 @@ import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
+    deleteAllChats,
     deleteAllMemories,
     downloadUserExport,
     getUserExportStatus,
     startUserExport,
 } from "@/app/lib/mikeApi";
 import PrivacyDataPage from "./page";
-import { ToastViewportUI, clearToasts } from "@/shared/ui/ToastUI";
+import { ToastViewportUI, clearToasts } from "@mike/ui";
 
 // The export buttons drive the async job flow: schedule → poll → download.
 // These tests pin that wiring (start called with the right type, download
@@ -32,6 +33,27 @@ vi.mock("@/app/contexts/ChatHistoryContext", () => ({
     }),
 }));
 
+// The active workspace, which every "Delete all" is limited to. Null is the
+// default outside a provider, where the page deletes in Personal.
+const workspaceState = vi.hoisted(() => ({
+    workspaceId: null as string | null,
+    activeOrganization: null as {
+        id: string;
+        name: string;
+        role?: string;
+        allow_member_exports?: boolean;
+        allow_member_deletes?: boolean;
+    } | null,
+    organizations: [] as { id: string; name: string }[] | null,
+}));
+
+vi.mock("@/app/contexts/WorkspaceContext", async (importOriginal) => ({
+    ...(await importOriginal<
+        typeof import("@/app/contexts/WorkspaceContext")
+    >()),
+    useWorkspace: () => workspaceState,
+}));
+
 vi.mock("@/app/components/popups/MfaVerificationPopup", () => ({
     MfaVerificationPopup: () => null,
     needsMfaVerification: async () => false,
@@ -41,9 +63,13 @@ const mockedStart = vi.mocked(startUserExport);
 const mockedStatus = vi.mocked(getUserExportStatus);
 const mockedDownload = vi.mocked(downloadUserExport);
 const mockedDeleteMemories = vi.mocked(deleteAllMemories);
+const mockedDeleteChats = vi.mocked(deleteAllChats);
 
 beforeEach(() => {
     vi.clearAllMocks();
+    workspaceState.workspaceId = null;
+    workspaceState.activeOrganization = null;
+    workspaceState.organizations = [];
     // The page shortens its poll interval to 10ms under NODE_ENV=test, so
     // these tests run on real timers (fake timers fight userEvent).
 });
@@ -80,7 +106,9 @@ describe("privacy-data async exports", () => {
         await waitFor(() =>
             expect(mockedDownload).toHaveBeenCalledWith("job-9"),
         );
-        expect(mockedStart).toHaveBeenCalledWith("account");
+        expect(mockedStart).toHaveBeenCalledWith("account", {
+            workspace: "personal",
+        });
         expect(mockedStatus).toHaveBeenCalledTimes(2);
     });
 
@@ -113,7 +141,9 @@ describe("privacy-data async exports", () => {
             screen.getByRole("button", { name: "Retry" }),
         ).toBeInTheDocument();
         expect(alertSpy).not.toHaveBeenCalled();
-        expect(mockedStart).toHaveBeenCalledWith("chats");
+        expect(mockedStart).toHaveBeenCalledWith("chats", {
+            workspace: "personal",
+        });
         expect(mockedDownload).not.toHaveBeenCalled();
         clearToasts();
     });
@@ -139,7 +169,9 @@ describe("privacy-data async exports", () => {
         await waitFor(() =>
             expect(mockedDownload).toHaveBeenCalledWith("job-memory"),
         );
-        expect(mockedStart).toHaveBeenCalledWith("memory-zip");
+        expect(mockedStart).toHaveBeenCalledWith("memory-zip", {
+            workspace: "personal",
+        });
     });
 
     it("confirms and deletes app and private-project memory", async () => {
@@ -150,7 +182,10 @@ describe("privacy-data async exports", () => {
             screen.getByRole("button", { name: "Delete all memory" }),
         );
 
+        // With only Personal there is no other workspace to tell it from.
         expect(screen.getByText("Delete all memory?")).toBeVisible();
+        expect(screen.queryByText(/Deletes data in/)).toBeNull();
+        expect(screen.queryByText(/other workspaces/)).toBeNull();
         expect(
             screen.getAllByText(/private projects you created/i),
         ).toHaveLength(2);
@@ -159,7 +194,63 @@ describe("privacy-data async exports", () => {
         });
         await userEvent.click(confirmButtons.at(-1)!);
 
-        await waitFor(() => expect(mockedDeleteMemories).toHaveBeenCalledOnce());
+        await waitFor(() =>
+            expect(mockedDeleteMemories).toHaveBeenCalledWith("personal"),
+        );
+    });
+
+    it("names Personal to someone who also belongs to an organization", async () => {
+        workspaceState.organizations = [{ id: "org-1", name: "Acme LLP" }];
+        mockedDeleteMemories.mockResolvedValue();
+
+        render(<PrivacyDataPage />);
+        expect(screen.getByText(/Deletes data in Personal only/)).toBeVisible();
+        await userEvent.click(
+            screen.getByRole("button", { name: "Delete all memory" }),
+        );
+        expect(screen.getByText("Delete all memory in Personal?")).toBeVisible();
+        expect(
+            screen.getByText(/This permanently deletes your Personal memory/),
+        ).toBeVisible();
+    });
+
+    it("deletes in the active organization only, and says so", async () => {
+        workspaceState.workspaceId = "org-1";
+        workspaceState.activeOrganization = {
+            id: "org-1",
+            name: "Acme LLP",
+            role: "member",
+            allow_member_deletes: true,
+        };
+        workspaceState.organizations = [workspaceState.activeOrganization];
+        mockedDeleteChats.mockResolvedValue();
+
+        render(<PrivacyDataPage />);
+        expect(
+            screen.getByText(/Deletes data in Acme LLP only/),
+        ).toBeVisible();
+        // The rows describe what is deleted here, not Personal's private projects.
+        expect(
+            screen.getByText("Permanently delete your memory in Acme LLP."),
+        ).toBeVisible();
+        expect(
+            screen.queryByText(/private projects you created/i),
+        ).not.toBeInTheDocument();
+
+        await userEvent.click(
+            screen.getAllByRole("button", { name: "Delete" })[0],
+        );
+        expect(screen.getByText("Delete all chats in Acme LLP?")).toBeVisible();
+        expect(
+            screen.getByText(/Your other workspaces are not affected/),
+        ).toBeVisible();
+        await userEvent.click(
+            screen.getAllByRole("button", { name: "Delete" }).at(-1)!,
+        );
+
+        await waitFor(() =>
+            expect(mockedDeleteChats).toHaveBeenCalledWith("org-1"),
+        );
     });
 
     it("re-asks for confirmation when Retry follows a failed deletion", async () => {
@@ -191,5 +282,64 @@ describe("privacy-data async exports", () => {
         expect(mockedDeleteMemories).toHaveBeenCalledOnce();
         expect(await screen.findByText("Delete all memory?")).toBeVisible();
         clearToasts();
+    });
+
+    it("exports the active organization's data when its owners allow members to", async () => {
+        workspaceState.workspaceId = "org-1";
+        workspaceState.activeOrganization = {
+            id: "org-1",
+            name: "Acme LLP",
+            role: "admin",
+            allow_member_exports: true,
+            allow_member_deletes: false,
+        };
+        workspaceState.organizations = [workspaceState.activeOrganization];
+        mockedStart.mockRejectedValue(new Error("stop after scheduling"));
+        vi.spyOn(console, "error").mockImplementation(() => {});
+
+        render(<PrivacyDataPage />);
+        expect(screen.getByText(/Exports data in Acme LLP only/)).toBeVisible();
+        // Bulk deletion is not this member's to do here.
+        expect(screen.queryByText("Delete data")).toBeNull();
+
+        await userEvent.click(
+            screen.getAllByRole("button", { name: "Export" })[0],
+        );
+        await waitFor(() =>
+            expect(mockedStart).toHaveBeenCalledWith("chats", {
+                workspace: "org-1",
+            }),
+        );
+    });
+
+    it("explains, rather than offering nothing, when the owners allow neither", async () => {
+        workspaceState.workspaceId = "org-1";
+        workspaceState.activeOrganization = {
+            id: "org-1",
+            name: "Acme LLP",
+            role: "member",
+        };
+        workspaceState.organizations = [workspaceState.activeOrganization];
+
+        render(<PrivacyDataPage />);
+
+        expect(screen.getByText("Managed by your organization")).toBeVisible();
+        expect(screen.queryByRole("button", { name: "Export" })).toBeNull();
+        expect(screen.queryByRole("button", { name: "Delete" })).toBeNull();
+    });
+
+    it("offers an organization's owners everything", async () => {
+        workspaceState.workspaceId = "org-1";
+        workspaceState.activeOrganization = {
+            id: "org-1",
+            name: "Acme LLP",
+            role: "owner",
+        };
+        workspaceState.organizations = [workspaceState.activeOrganization];
+
+        render(<PrivacyDataPage />);
+
+        expect(screen.getByText("Export data")).toBeVisible();
+        expect(screen.getByText("Delete data")).toBeVisible();
     });
 });

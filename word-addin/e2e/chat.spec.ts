@@ -1195,7 +1195,7 @@ test("opens a left-aligned source menu and selects web files from the document m
   await expect(localFiles).toBeVisible();
   await expect(webFiles).toBeVisible();
   await expect(localFiles.locator('img[src*="desktop."]')).toBeVisible();
-  await expect(webFiles.locator('img[src*="earth."]')).toBeVisible();
+  await expect(webFiles.locator('img[src*="cloud."]')).toBeVisible();
 
   const menuBox = await page.getByRole("menu").boundingBox();
   expect(buttonBox).not.toBeNull();

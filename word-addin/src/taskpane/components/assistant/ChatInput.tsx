@@ -6,13 +6,23 @@ import React, {
   useState,
 } from "react";
 import { Library, X } from "lucide-react";
-import { ExcerptModalUI } from "@mike/excerpt-modal-ui";
-import { ExcerptPillUI } from "@mike/excerpt-pill-ui";
+import {
+  ExcerptModalUI,
+  ExcerptPillUI,
+  PlaybookPillUI,
+  slashCommandQueryFromValue,
+  withoutSlashCommand,
+  workflowSlashCommandFromTitle,
+} from "@mike/ui";
 import {
   serializeExcerpts,
   type MessageExcerpt,
-} from "@mike/message-excerpts";
+  NO_MODELS_MESSAGES,
+  routerSelections as routerSelectionsFromProfile,
+  type RouterSelections,
+} from "@mike/client";
 import { WorkflowModal } from "../workflows/WorkflowModal";
+import { PlaybookModal, playbookTitle } from "../playbooks/PlaybookModal";
 import { ChatInput as ChatInputShell } from "../../../shared/chat/ChatInput";
 import {
   getApiKeyStatus,
@@ -38,28 +48,19 @@ import { FileTypeIcon } from "../documents/DirectoryIcons";
 import { DocumentSourceMenu } from "../documents/DocumentSourceMenu";
 import { ModelToggle } from "./ModelToggle";
 import type {
+  PlaybookAttachment,
   WorkflowAttachment,
   ReasoningLevel,
   WordChatSubmission,
   WordChatSubmitOptions,
 } from "../../lib/wordChatTypes";
 import {
-  NO_MODELS_MESSAGES,
-  routerSelections as routerSelectionsFromProfile,
-  type RouterSelections,
-} from "@mike/model-catalog";
-import {
   isModelAvailable,
   noModelsReason,
   unavailableModelMessage,
 } from "../../lib/modelCatalog";
-import { notifyError, userMessage } from "../../lib/notify";
+import { reportFault, notifyError } from "../../lib/notify";
 import { loadWithRetry } from "../../lib/composerPreflight";
-import {
-  slashCommandQueryFromValue,
-  withoutSlashCommand,
-  workflowSlashCommandFromTitle,
-} from "@mike/workflow-slash-command-ui";
 import {
   WORD_WORKFLOW_SLASH_MENU_ID,
   WorkflowSlashMenu,
@@ -128,6 +129,14 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(
     const hasAnnotatedExcerpt = excerpts.some((excerpt) => excerpt.note);
     const [documentsModalOpen, setDocumentsModalOpen] = useState(false);
     const [workflowModalOpen, setWorkflowModalOpen] = useState(false);
+    // A playbook picked to run on the next message, as the web composer
+    // keeps it: local to the composer, cleared once the message is accepted.
+    const [selectedPlaybook, setSelectedPlaybook] =
+      useState<PlaybookAttachment | null>(null);
+    const [playbookModalOpen, setPlaybookModalOpen] = useState(false);
+    const [playbookModalInitialId, setPlaybookModalInitialId] = useState<
+      string | undefined
+    >(undefined);
     const [uploadingLocalFiles, setUploadingLocalFiles] = useState(false);
     const [documentUploadError, setDocumentUploadError] = useState<
       string | null
@@ -237,6 +246,7 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(
             action: "load your workflows",
             dedupeKey: "slash-workflows",
             page: "Assistant",
+            operation: "word_chat.turn",
             onRetry: () => {
               setSlashWorkflows(null);
             },
@@ -274,6 +284,7 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(
               action: "load your models",
               dedupeKey: "model-preflight",
               page: "Assistant",
+              operation: "word_chat.turn",
               onRetry: () => {
                 setKeyStatusLoading(true);
                 setPreflightAttempt((count) => count + 1);
@@ -312,6 +323,8 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(
       setAttachedDocuments([]);
       setDocumentsModalOpen(false);
       setWorkflowModalOpen(false);
+      setSelectedPlaybook(null);
+      setPlaybookModalOpen(false);
       setUploadingLocalFiles(false);
       setDocumentUploadError(null);
       setModelError(null);
@@ -411,9 +424,10 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(
           );
         } else {
           setDocumentUploadError(
-            userMessage(reason, {
+            reportFault(reason, {
               fallback: "Documents could not be uploaded. Try again.",
-            }),
+              operation: "documents.upload",
+            }).message,
           );
         }
       } finally {
@@ -469,6 +483,7 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(
           content: serializeExcerpts(excerpts, content),
           files: files.length > 0 ? files : undefined,
           workflow: selectedWorkflow ?? undefined,
+          playbook: selectedPlaybook ?? undefined,
           model,
           reasoning: resolvedReasoningLevel,
         },
@@ -478,6 +493,7 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(
             setAttachedDocuments([]);
             setExcerpts([]);
             onSelectedWorkflowChange(null);
+            setSelectedPlaybook(null);
           },
           onTurnReady,
         },
@@ -588,6 +604,7 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(
               canSubmitEmpty={hasAnnotatedExcerpt}
               attachments={
                 selectedWorkflow ||
+                selectedPlaybook ||
                 attachedDocuments.length > 0 ||
                 excerpts.length > 0 ? (
                   <>
@@ -606,6 +623,16 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(
                           <X className="h-2.5 w-2.5" />
                         </button>
                       </div>
+                    )}
+                    {selectedPlaybook && (
+                      <PlaybookPillUI
+                        title={selectedPlaybook.title}
+                        onOpen={() => {
+                          setPlaybookModalInitialId(selectedPlaybook.id);
+                          setPlaybookModalOpen(true);
+                        }}
+                        onRemove={() => setSelectedPlaybook(null)}
+                      />
                     )}
                     {attachedDocuments.map((document) => (
                       <div
@@ -657,6 +684,10 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(
                     onLocalFiles={() => localFileInputRef.current?.click()}
                     onWebFiles={() => setDocumentsModalOpen(true)}
                     onWorkflows={() => setWorkflowModalOpen(true)}
+                    onPlaybooks={() => {
+                      setPlaybookModalInitialId(undefined);
+                      setPlaybookModalOpen(true);
+                    }}
                   />
                   <EditApplyModeMenu
                     mode={editApplyMode}
@@ -725,6 +756,17 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(
             onSelectedWorkflowChange({
               id: workflow.id,
               title: workflow.metadata.title,
+            })
+          }
+        />
+        <PlaybookModal
+          open={playbookModalOpen}
+          onClose={() => setPlaybookModalOpen(false)}
+          initialPlaybookId={playbookModalInitialId}
+          onSelect={(playbook) =>
+            setSelectedPlaybook({
+              id: playbook.id,
+              title: playbookTitle(playbook),
             })
           }
         />

@@ -106,6 +106,7 @@ export {
   getWorkflowAssetUrl,
   listProjects,
   listQuickActions,
+  listPlaybooks,
   listWorkflowAssets,
   listWorkflows,
   postWordChatToolResult,
@@ -150,7 +151,7 @@ export async function listProjectDocuments(
     },
   );
   if (!res.ok) {
-    throw await responseError(res, `/projects/${projectId}/documents`);
+    throw await responseError(res, `/projects/${projectId}/documents`, "GET", "documents.directory");
   }
   return res.json() as Promise<Document[]>;
 }
@@ -181,6 +182,7 @@ interface WordChatServerMessage {
   content: string | unknown[] | null;
   files?: { filename: string; document_id?: string }[] | null;
   workflow?: { id: string; title: string } | null;
+  playbook?: { id: string; title: string } | null;
   citations?: unknown;
   edits?: unknown;
 }
@@ -273,7 +275,7 @@ export async function listCloudWordChats(
     signal,
     headers: { Accept: "application/json", ...(await getAuthHeaders()) },
   });
-  if (!res.ok) throw await responseError(res);
+  if (!res.ok) throw await responseError(res, undefined, "GET", "word_chat.turn");
   return res.json() as Promise<Chat[]>;
 }
 
@@ -299,7 +301,7 @@ export async function getCloudWordChat(
       headers: { Accept: "application/json", ...(await getAuthHeaders()) },
     },
   );
-  if (!res.ok) throw await responseError(res);
+  if (!res.ok) throw await responseError(res, undefined, "GET", "word_chat.turn");
   const raw = (await res.json()) as {
     chat: Chat;
     messages: WordChatServerMessage[];
@@ -316,6 +318,7 @@ export async function getCloudWordChat(
           content: typeof message.content === "string" ? message.content : "",
           files: message.files ?? undefined,
           workflow: message.workflow ?? undefined,
+          playbook: message.playbook ?? undefined,
         };
       }
       const events = normalizeStoredAssistantEvents(message.content);
@@ -350,7 +353,7 @@ export async function updateCloudWordChatModel(
       keepalive: true,
     },
   );
-  if (!res.ok) throw await responseError(res);
+  if (!res.ok) throw await responseError(res, undefined, "PATCH", "word_chat.turn");
 }
 
 export async function updateCloudWordChatReasoning(
@@ -371,7 +374,7 @@ export async function updateCloudWordChatReasoning(
       keepalive: true,
     },
   );
-  if (!res.ok) throw await responseError(res);
+  if (!res.ok) throw await responseError(res, undefined, "PATCH", "word_chat.turn");
 }
 
 export async function createCloudWordDocumentEdit(args: {
@@ -406,7 +409,7 @@ export async function createCloudWordDocumentEdit(args: {
       keepalive: true,
     },
   );
-  if (!res.ok) throw await responseError(res);
+  if (!res.ok) throw await responseError(res, undefined, "PUT", "word.edit_apply");
   const edits = normalizeWordDocumentEdits([await res.json()]);
   const edit = edits[0];
   if (!edit) throw new Error("Word edit response was invalid.");
@@ -433,5 +436,5 @@ export async function updateCloudWordDocumentEdit(args: {
       keepalive: true,
     },
   );
-  if (!res.ok) throw await responseError(res);
+  if (!res.ok) throw await responseError(res, undefined, "PATCH", "word.edit_apply");
 }

@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { scriptedDb } from "../../../__tests__/helpers/scriptedDb";
+import { tableDb } from "../../../__tests__/helpers/tableDb";
 import { DbJobDeferredError } from "../../../lib/dbq/types";
 const storage = vi.hoisted(() => ({
   deleteFile: vi.fn(),
@@ -11,6 +12,11 @@ vi.mock("../../../lib/storage", () => ({
 }));
 const appJobs = vi.hoisted(() => ({ enqueueAppJobDelivery: vi.fn() }));
 vi.mock("../../../lib/queue/appJobsQueue", () => appJobs);
+const sentry = vi.hoisted(() => ({ setOperation: vi.fn() }));
+vi.mock("../../../lib/observability/sentry", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../../lib/observability/sentry")>()),
+  setOperation: sentry.setOperation,
+}));
 import {
   handleDocumentCleanup,
   captureInlineDocumentCleanup,
@@ -190,6 +196,8 @@ describe("document cleanup job", () => {
     });
     const settled = fake.calls.slice(2);
     expect(settled.map((call) => (call.payload as { status: string }).status)).toEqual(["done", "done"]);
+    // A claimed row is the documents.delete job: its events carry that name.
+    expect(sentry.setOperation).toHaveBeenCalledWith("documents.delete");
     // Fenced to the claim we hold, exactly like the runner's own writes.
     expect(settled[0].filters).toEqual([
       ["eq", "id", "j2"],
@@ -297,6 +305,9 @@ describe("document cleanup job", () => {
       completeInlineDocumentCleanup(fake.db, ["gone"]),
     ).resolves.toBeUndefined();
     fake.done();
+    // The inline form runs on a request thread that already named its own
+    // operation (documents.delete via the route); it must not overwrite it.
+    expect(sentry.setOperation).not.toHaveBeenCalled();
   });
 
   it("never fails the request when the object store is unconfigured", async () => {
@@ -335,15 +346,47 @@ describe("document cleanup job", () => {
         table: "document_versions",
         data: [{ id: "v", storage_path: "source", pdf_storage_path: "pdf" }],
       },
+      // The keyset page loop ends on an empty page.
+      { table: "document_versions", data: [] },
     ]);
     expect(
       await captureInlineDocumentCleanup(fake.db, {
         documentIds: ["authorized-doc"],
       }),
     ).toEqual(["source", "pdf", "extracted-text/v.txt"]);
-    expect(fake.calls[0].filters).toEqual([
-      ["in", "document_id", ["authorized-doc"]],
+    expect(fake.calls[0].filters).toContainEqual([
+      "in",
+      "document_id",
+      ["authorized-doc"],
     ]);
     fake.done();
+  });
+  // One workflow has many documents and one document many versions:
+  // bounding the parent ids does not bound either response.
+  it("captures every version of every workflow document past the response cap", async () => {
+    vi.stubEnv("DB_JOBS_ENABLED", "false");
+    const workflows = ["w1", "w2", "w3"];
+    const documents = workflows.flatMap((workflow_id) =>
+      [1, 2, 3, 4].map((n) => ({ id: `${workflow_id}-d${n}`, workflow_id })),
+    );
+    const versions = documents.flatMap((doc) =>
+      [1, 2, 3].map((n) => ({
+        id: `${doc.id}-v${n}`,
+        document_id: doc.id,
+        storage_path: `${doc.id}-v${n}.docx`,
+        pdf_storage_path: `${doc.id}-v${n}.pdf`,
+      })),
+    );
+    // A cap below one batch's fan-out (12 documents, 36 versions).
+    const fake = tableDb(
+      { documents, document_versions: versions },
+      { maxRows: 5 },
+    );
+    const keys = await captureInlineDocumentCleanup(fake.db, {
+      workflowIds: workflows,
+    });
+    expect(keys.filter((key) => key.endsWith(".docx"))).toHaveLength(36);
+    expect(keys.filter((key) => key.endsWith(".pdf"))).toHaveLength(36);
+    expect(keys.filter((key) => key.startsWith("extracted-text/"))).toHaveLength(36);
   });
 });

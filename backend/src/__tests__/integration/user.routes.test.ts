@@ -1,5 +1,18 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
+
+// The data-deletion limiter counts every DELETE in this file, and the
+// per-workspace cases alone make more requests than its default allows.
+vi.hoisted(() => { process.env.RATE_LIMIT_DATA_DELETE_MAX = "1000"; });
 import request from "supertest";
+import { AppError } from "../../lib/appError";
+
+// Every unexpected 5xx these routes answer is ONE Sentry event, reported by
+// sendInternalError with the route's identity: asserted by kind and cause.
+const reportError = vi.hoisted(() => vi.fn((..._args: unknown[]) => "event-1"));
+vi.mock("../../lib/observability/sentry", async (importOriginal) => ({
+    ...(await importOriginal<Record<string, unknown>>()),
+    reportError,
+}));
 
 // ---------------------------------------------------------------------------
 // Hoisted mock fns we reconfigure per-test. These cover the three security
@@ -228,10 +241,10 @@ vi.mock("../../middleware/auth", () => ({
 // (which encrypts) and never echo plaintext — getUserApiKeyStatus returns
 // presence-only booleans. getUserApiKeys must be exported too — lib/userSettings
 // imports it at module load.
-vi.mock("../../modules/user/user.apiKeyStore", async (importOriginal) => {
+vi.mock("../../lib/providerCredentials/store", async (importOriginal) => {
     // The pure validation helpers run for real; every database touch is a spy.
     const actual =
-        await importOriginal<typeof import("../../modules/user/user.apiKeyStore")>();
+        await importOriginal<typeof import("../../lib/providerCredentials/store")>();
     return {
     isSettingsApiKeyProvider: actual.isSettingsApiKeyProvider,
     normalizeProviderSettings: actual.normalizeProviderSettings,
@@ -270,7 +283,7 @@ vi.mock("../../modules/user/user.apiKeyStore", async (importOriginal) => {
     };
 });
 
-vi.mock("../../modules/user/user.dataCleanup", () => ({
+vi.mock("../../application/accounts/dataCleanup", () => ({
     deleteAllUserChats: (...args: unknown[]) => deleteAllUserChats(...args),
     deleteAllUserTabularReviews: (...args: unknown[]) =>
         deleteAllUserTabularReviews(...args),
@@ -286,7 +299,7 @@ vi.mock("../../lib/memory/bulk", () => ({
         deleteUserPrivateMemories(...args),
 }));
 
-vi.mock("../../modules/user/user.dataExport", () => ({
+vi.mock("../../application/exports/buildJsonExport", () => ({
     buildUserAccountExport: (...args: unknown[]) =>
         buildUserAccountExport(...args),
     buildUserChatsExport: (...args: unknown[]) => buildUserChatsExport(...args),
@@ -299,6 +312,8 @@ vi.mock("../../modules/user/user.dataExport", () => ({
 import { app } from "../../app";
 
 const AUTH = ["Authorization", "Bearer test"] as const;
+// A team organization the caller may name as their workspace.
+const ORG_ID = "11111111-1111-4111-8111-111111111111";
 
 // A complete user_profiles row with credits_reset_date in the future so the
 // monthly-reset branch in loadProfile is not triggered.
@@ -318,10 +333,13 @@ function profileRow(overrides: Record<string, unknown> = {}) {
         title_model: null,
         tabular_model: "gemini-3.8-flash",
         memory_curator_model: null,
+        subagent_model: null,
+        subagent_reasoning: null,
         last_selected_chat_model: null,
         mfa_on_login: false,
         legal_research_us: true,
         quick_actions_visible: true,
+        response_details_visible: false,
         dark_mode: false,
         ...overrides,
     };
@@ -336,6 +354,15 @@ function rejectMfa(_req: unknown, res: any) {
         code: "mfa_verification_required",
         detail: "MFA verification required",
     });
+}
+
+// The one event a failed request reported: an AppError whose kind names the
+// flow and whose cause is the failure that actually happened.
+function reportedFailure(): AppError {
+    expect(reportError).toHaveBeenCalledOnce();
+    const [failure] = reportError.mock.calls[0] as unknown as [unknown];
+    expect(failure).toBeInstanceOf(AppError);
+    return failure as AppError;
 }
 
 describe("user.routes", () => {
@@ -399,7 +426,8 @@ describe("user.routes", () => {
             expect(removed.body).toEqual({ profilePhoto: null });
         });
         it.each([
-            "memory_curator_model", "project_memory_default",
+            "response_details_visible",
+            "subagent_model", "memory_curator_model", "project_memory_default",
             "last_selected_reasoning_level", "last_selected_chat_model",
             "dark_mode", "password_set_at", "onboarding_version",
             "quick_actions_visible", "legal_research_us", "mfa_on_login", "title_model",
@@ -504,7 +532,6 @@ describe("user.routes", () => {
                 passwordSet: false,
                 messageCreditsUsed: 3,
                 tier: "Pro",
-                legalResearchUs: true,
                 quickActionsVisible: true,
                 mfaOnLogin: false,
                 openRouterModels: [
@@ -513,6 +540,8 @@ describe("user.routes", () => {
                 ],
                 apiKeyStatus: STATUS,
             });
+            // The CourtListener switch is per workspace now, not a profile field.
+            expect(res.body).not.toHaveProperty("legalResearchUs");
             // Presence-only key status — never plaintext.
             expect(JSON.stringify(res.body)).not.toContain("sk-");
         });
@@ -638,7 +667,6 @@ describe("user.routes", () => {
 
             expect(res.status).toBe(200);
             expect(res.body).toMatchObject({
-                legalResearchUs: false,
                 quickActionsVisible: false,
                 onboardingComplete: true,
                 onboardingVersion: 0,
@@ -723,6 +751,59 @@ describe("user.routes", () => {
 
             expect(res.status).toBe(400);
             expect(res.body.detail).toMatch(/darkMode must be a boolean/);
+        });
+
+        it("persists and returns the response details preference", async () => {
+            supabaseState.tables.user_profiles = {
+                data: profileRow({ response_details_visible: true }),
+                error: null,
+            };
+
+            const res = await request(app)
+                .patch("/user/profile")
+                .set(...AUTH)
+                .send({ responseDetailsVisible: true });
+
+            expect(res.status).toBe(200);
+            expect(res.body.responseDetailsVisible).toBe(true);
+            expect(supabaseState.updates.user_profiles).toContainEqual(
+                expect.objectContaining({ response_details_visible: true }),
+            );
+        });
+
+        it("rejects a non-boolean response details preference", async () => {
+            const res = await request(app)
+                .patch("/user/profile")
+                .set(...AUTH)
+                .send({ responseDetailsVisible: "yes" });
+
+            expect(res.status).toBe(400);
+            expect(res.body.detail).toBe(
+                "responseDetailsVisible must be a boolean",
+            );
+        });
+
+        it("hides response details on a database without that column and keeps every other preference", async () => {
+            const preMigrationRow = profileRow({ subagent_model: "gpt-6-luna" });
+            delete (preMigrationRow as Record<string, unknown>)
+                .response_details_visible;
+            supabaseState.missingColumns = ["response_details_visible"];
+            supabaseState.tables.user_profiles = {
+                data: preMigrationRow,
+                error: null,
+            };
+
+            const res = await request(app)
+                .get("/user/profile")
+                .set(...AUTH);
+
+            expect(res.status).toBe(200);
+            const selects = supabaseState.selects.user_profiles ?? [];
+            expect(selects).toHaveLength(2);
+            expect(selects[1]).not.toContain("response_details_visible");
+            expect(selects[1]).toContain("subagent_model");
+            expect(res.body.responseDetailsVisible).toBe(false);
+            expect(res.body.subagentModel).toBe("gpt-6-luna");
         });
 
         it("persists and returns the project memory default", async () => {
@@ -1055,7 +1136,8 @@ describe("user.routes", () => {
         });
 
         it("returns 500 when saving the key throws", async () => {
-            saveUserApiKey.mockRejectedValue(new Error("kms unavailable"));
+            const cause = new Error("kms unavailable");
+            saveUserApiKey.mockRejectedValue(cause);
 
             const res = await request(app)
                 .put("/user/api-keys/claude")
@@ -1066,6 +1148,12 @@ describe("user.routes", () => {
             expect(res.body.detail).toBe(
                 "Something went wrong. Please try again.",
             );
+            const failure = reportedFailure();
+            expect(failure.kind).toBe("user.api_key_failed");
+            expect(failure.cause).toBe(cause);
+            expect(reportError.mock.calls[0]?.[1]).toMatchObject({
+                tags: { http_route: "/user/api-keys/:provider", http_status: 500 },
+            });
         });
 
         it("is rejected with 403 mfa_verification_required when MFA is unsatisfied", async () => {
@@ -1671,6 +1759,57 @@ describe("user.routes", () => {
             expect(res.body.code).toBe("mfa_verification_required");
             expect(buildUserAccountExport).not.toHaveBeenCalled();
         });
+
+        it("POST /user/exports reports a failed enqueue as export.failed and answers an opaque 500", async () => {
+            const cause = { code: "08006", message: "connection lost" };
+            supabaseState.tables.db_jobs = { data: null, error: cause };
+
+            const res = await request(app)
+                .post("/user/exports")
+                .set(...AUTH)
+                .send({ type: "account" });
+
+            expect(res.status).toBe(500);
+            expect(res.body).toMatchObject({
+                code: "internal_error",
+                detail: "Something went wrong. Please try again.",
+            });
+            expect(res.text).not.toContain("connection lost");
+            const failure = reportedFailure();
+            expect(failure.kind).toBe("export.failed");
+            // The enqueue's own failure, and the PostgREST code under it,
+            // stay on the cause chain for failure_code.
+            expect(failure.cause).toBeInstanceOf(AppError);
+            expect((failure.cause as AppError).kind).toBe("dbq.enqueue_failed");
+            expect((failure.cause as AppError).cause).toBe(cause);
+            expect(reportError.mock.calls[0]?.[1]).toMatchObject({
+                tags: { http_route: "/user/exports", http_status: 500 },
+            });
+        });
+    });
+
+    describe("GET /user/integrations/google-drive", () => {
+        it("reports a failed token-row query once, by kind, and answers an opaque 500", async () => {
+            const cause = { code: "08006", message: "connection lost" };
+            supabaseState.tables.user_google_drive_tokens = {
+                data: null,
+                error: cause,
+            };
+
+            const res = await request(app)
+                .get("/user/integrations/google-drive")
+                .set(...AUTH);
+
+            expect(res.status).toBe(500);
+            expect(res.body).toMatchObject({ code: "internal_error" });
+            expect(res.text).not.toContain("connection lost");
+            const failure = reportedFailure();
+            expect(failure.kind).toBe("db.query_failed");
+            expect(failure.cause).toBe(cause);
+            expect(reportError.mock.calls[0]?.[1]).toMatchObject({
+                tags: { http_route: "/user/integrations/google-drive", http_status: 500 },
+            });
+        });
     });
 
     // ── Data deletion endpoints (MFA-guarded, cleanup helpers) ────────────
@@ -1681,21 +1820,24 @@ describe("user.routes", () => {
                 .set(...AUTH);
 
             expect(res.status).toBe(204);
+            // No workspace named is Personal, never every workspace.
             expect(deleteAllUserChats).toHaveBeenCalledWith(
                 expect.anything(),
                 "u1",
+                null,
             );
         });
 
         it("DELETE /user/projects invokes deleteUserProjects and returns 204", async () => {
             const res = await request(app)
-                .delete("/user/projects")
+                .delete("/user/projects?workspace=personal")
                 .set(...AUTH);
 
             expect(res.status).toBe(204);
             expect(deleteUserProjects).toHaveBeenCalledWith(
                 expect.anything(),
                 "u1",
+                null,
             );
         });
 
@@ -1708,6 +1850,7 @@ describe("user.routes", () => {
             expect(deleteAllUserTabularReviews).toHaveBeenCalledWith(
                 expect.anything(),
                 "u1",
+                null,
             );
         });
 
@@ -1720,7 +1863,100 @@ describe("user.routes", () => {
             expect(deleteUserPrivateMemories).toHaveBeenCalledWith(
                 expect.anything(),
                 "u1",
+                null,
             );
+        });
+
+        it.each([
+            ["/user/chats", () => deleteAllUserChats],
+            ["/user/projects", () => deleteUserProjects],
+            ["/user/tabular-reviews", () => deleteAllUserTabularReviews],
+            ["/user/memories", () => deleteUserPrivateMemories],
+        ] as const)("DELETE %s deletes in the organization workspace named", async (path, helper) => {
+            // A member, in an organization whose owners allow bulk deletes.
+            supabaseState.tables.org_members = {
+                data: { org_id: ORG_ID, role: "member" },
+                error: null,
+            };
+            supabaseState.tables.organizations = {
+                data: { kind: "team", allow_member_deletes: true },
+                error: null,
+            };
+
+            const res = await request(app)
+                .delete(`${path}?workspace=${ORG_ID}`)
+                .set(...AUTH);
+
+            expect(res.status).toBe(204);
+            expect(helper()).toHaveBeenCalledWith(expect.anything(), "u1", ORG_ID);
+        });
+
+        it.each([
+            ["/user/chats", () => deleteAllUserChats],
+            ["/user/projects", () => deleteUserProjects],
+            ["/user/tabular-reviews", () => deleteAllUserTabularReviews],
+            ["/user/memories", () => deleteUserPrivateMemories],
+        ] as const)("DELETE %s refuses a member when the organization has not allowed it", async (path, helper) => {
+            supabaseState.tables.org_members = {
+                data: { org_id: ORG_ID, role: "admin" },
+                error: null,
+            };
+            supabaseState.tables.organizations = {
+                data: { kind: "team", allow_member_deletes: false },
+                error: null,
+            };
+
+            const res = await request(app)
+                .delete(`${path}?workspace=${ORG_ID}`)
+                .set(...AUTH);
+
+            expect(res.status).toBe(403);
+            expect(res.body.code).toBe("member_data_action_disabled");
+            expect(helper()).not.toHaveBeenCalled();
+        });
+
+        it("DELETE /user/chats lets an owner delete whatever the organization allows members", async () => {
+            supabaseState.tables.org_members = {
+                data: { org_id: ORG_ID, role: "owner" },
+                error: null,
+            };
+            supabaseState.tables.organizations = {
+                data: { kind: "team", allow_member_deletes: false },
+                error: null,
+            };
+
+            const res = await request(app)
+                .delete(`/user/chats?workspace=${ORG_ID}`)
+                .set(...AUTH);
+
+            expect(res.status).toBe(204);
+            expect(deleteAllUserChats).toHaveBeenCalledWith(expect.anything(), "u1", ORG_ID);
+        });
+
+        it.each([
+            ["/user/chats", () => deleteAllUserChats],
+            ["/user/projects", () => deleteUserProjects],
+            ["/user/tabular-reviews", () => deleteAllUserTabularReviews],
+            ["/user/memories", () => deleteUserPrivateMemories],
+        ] as const)("DELETE %s deletes nothing in a workspace the caller is not in", async (path, helper) => {
+            supabaseState.tables.org_members = { data: null, error: null };
+
+            const res = await request(app)
+                .delete(`${path}?workspace=${ORG_ID}`)
+                .set(...AUTH);
+
+            expect(res.status).toBe(404);
+            expect(res.body.code).toBe("workspace_not_found");
+            expect(helper()).not.toHaveBeenCalled();
+        });
+
+        it("DELETE /user/chats refuses a malformed workspace", async () => {
+            const res = await request(app)
+                .delete("/user/chats?workspace=everything")
+                .set(...AUTH);
+
+            expect(res.status).toBe(400);
+            expect(deleteAllUserChats).not.toHaveBeenCalled();
         });
 
         // ERASURE ORDERING. documents.user_id references auth.users ON DELETE
@@ -1827,6 +2063,12 @@ describe("user.routes", () => {
             expect(res.body.detail).toBe(
                 "Something went wrong. Please try again.",
             );
+            const failure = reportedFailure();
+            expect(failure.kind).toBe("account.delete_failed");
+            expect(failure.cause).toEqual({ message: "auth boom" });
+            expect(reportError.mock.calls[0]?.[1]).toMatchObject({
+                tags: { http_route: "/user/account", http_status: 500 },
+            });
         });
 
         it("DELETE /user/account returns 500 when the cascade cannot be scheduled", async () => {
@@ -1847,7 +2089,8 @@ describe("user.routes", () => {
         });
 
         it("DELETE /user/chats returns 500 when cleanup throws", async () => {
-            deleteAllUserChats.mockRejectedValue(new Error("cascade failed"));
+            const cause = new Error("cascade failed");
+            deleteAllUserChats.mockRejectedValue(cause);
 
             const res = await request(app)
                 .delete("/user/chats")
@@ -1857,6 +2100,9 @@ describe("user.routes", () => {
             expect(res.body.detail).toBe(
                 "Something went wrong. Please try again.",
             );
+            const failure = reportedFailure();
+            expect(failure.kind).toBe("db.query_failed");
+            expect(failure.cause).toBe(cause);
         });
 
         it("DELETE /user/account is rejected when MFA is unsatisfied (no cleanup)", async () => {

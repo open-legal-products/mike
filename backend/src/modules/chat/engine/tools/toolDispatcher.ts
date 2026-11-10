@@ -1,13 +1,22 @@
-import type { DocumentSearchEvent } from "@mike/contracts";
+import type { ConnectorApprovalItem, DocumentSearchEvent, TextCardEvent } from "@mike/contracts";
+import { textCardEvent } from "./textCard";
 import { internalFailure } from "../../../../lib/serviceResult";
 import { canUseWorkflowInWorkspace } from "../../../../lib/workflowWorkspace";
-import { catalogKeyFromWorkflowId } from "../../../../lib/workflowCatalog";
+import { AppError } from "../../../../lib/appError";
+import { reportError } from "../../../../lib/observability/sentry";
+import { safeError } from "../../../../lib/safeError";
+import {
+  listPlaybooks,
+  PlaybookRequestError,
+  reviewWithPlaybook,
+} from "../../../playbooks/playbooks.service";
+import { catalogKeyFromWorkflowId, findCatalogWorkflow } from "../../../../lib/workflowCatalog";
 import { teamOrgIdOf } from "../../../../lib/personalOrgs";
+import type { ConnectorOwner } from "../../../../lib/connectorOwner";
 import {
   isGoogleWorkspaceTool,
   executeGoogleWorkspaceToolCall,
 } from "../../../../lib/integrations/googleWorkspace";
-import { logError } from "../../../../lib/log";
 import { diagnosticErrorTags } from "../../../../lib/observability/sentryPrivacy";
 import { documentSearchFailure } from "./documentSearchErrors";
 import { findDocumentText, createDocumentVersions } from "../../../documents/documents.service";
@@ -25,8 +34,10 @@ import {
 import { executeMcpToolCall, type McpToolEvent } from "../../../../lib/mcpConnectors";
 import {
   APPROVAL_UNAVAILABLE_MESSAGE,
+  addApprovalItems,
   planConnectorToolCall,
 } from "./connectorApprovals";
+import { createKeyedLock, type KeyedLock } from "./documentLocks";
 import {
   GOOGLE_DRIVE_TOOL_PREFIX,
   executeGoogleDriveToolCall,
@@ -42,8 +53,9 @@ import {
   type AskInputsEvent,
   devLog,
   resolveDocLabel,
+  createDocLabelResolver,
 } from "../types";
-import { downloadFile, storageKey, uploadFile } from "../../../../lib/storage";
+import { downloadFile, downloadFileIfAvailable, storageKey, uploadFile } from "../../../../lib/storage";
 import { convertedPdfKey, docxToPdf } from "../../../../lib/convert";
 import { enqueueConversion } from "../../../../lib/queue/conversionQueue";
 import {
@@ -64,6 +76,7 @@ import {
   readDocumentContent,
   findInDocumentContent,
   findTextMatches,
+  normalizedTextFor,
   runEditDocument,
   safeGeneratedFilename,
   type DocEditedResult,
@@ -91,6 +104,29 @@ import {
   type CourtlistenerTurnState,
 } from "./courtlistenerTurnState";
 import type { Db } from "../../../../lib/supabase";
+import { renderTableCells } from "./tableCells";
+
+/**
+ * Report a server-side tool's failure and return what to log for it. The
+ * kind is the one issue every tool failure files under; which tool fired is
+ * the function name on the frame, not a tag (tool names are not a closed
+ * vocabulary). The provider's or database's own error is the cause, so its
+ * code reaches Sentry. Log the returned wrapper where the raw error was
+ * logged before (the console bridge then recognises the line as already
+ * sent); where the log line was a safeError() category, keep it and log at
+ * warn level, which the bridge does not forward.
+ */
+function reportToolFailure(error: unknown, level?: "warning"): AppError {
+  const failure =
+    error instanceof AppError
+      ? error
+      : new AppError("chat.tool_failed", "Tool call failed", { cause: error });
+  reportError(failure, {
+    tags: { component: "chat-stream", operation: "chat.tool" },
+    ...(level ? { level } : {}),
+  });
+  return failure;
+}
 
 function sourceMaterialNotice(
   sourceKind: "document" | "library_template" | "workflow_asset" | undefined,
@@ -281,6 +317,32 @@ function cachedCaseNotFetchedResult(clusterId: number | null) {
   };
 }
 
+/**
+ * read_workflow's access verdict, once per workflow per turn. The store is
+ * built afresh for every turn, so it is the turn's identity: the first
+ * read_workflow of a workflow re-checks access (the store's list may be a
+ * few seconds old), and a model that reads the same workflow again in that
+ * turn reuses the answer instead of repeating the full access check.
+ */
+const turnWorkflowVerdicts = new WeakMap<WorkflowStore, Map<string, Promise<boolean>>>();
+function workflowVerdictForTurn(
+  store: WorkflowStore,
+  workflowId: string,
+  check: () => Promise<boolean>,
+): Promise<boolean> {
+  let verdicts = turnWorkflowVerdicts.get(store);
+  if (!verdicts) {
+    verdicts = new Map();
+    turnWorkflowVerdicts.set(store, verdicts);
+  }
+  let verdict = verdicts.get(workflowId);
+  if (!verdict) {
+    verdict = check();
+    verdicts.set(workflowId, verdict);
+  }
+  return verdict;
+}
+
 export async function runToolCalls(
   toolCalls: ToolCall[],
   docStore: DocStore,
@@ -313,6 +375,15 @@ export async function runToolCalls(
      * done in an organization's workspace stays in that organization.
      */
     orgId?: string | null;
+    /** The conversation's model, used by run_playbook for its review. */
+    model?: string;
+    /**
+     * Shared by every runToolCalls of one answer, its subagents' included, so
+     * two writes to one document never start from the same version.
+     */
+    documentLocks?: KeyedLock;
+    /** A subagent scoped to its docStore's documents: searches stay inside them. */
+    documentsScoped?: boolean;
   } = {},
 ): Promise<{
   toolResults: unknown[];
@@ -336,6 +407,7 @@ export async function runToolCalls(
   workflowsApplied: { workflow_id: string; title: string }[];
   docsEdited: DocEditedResult[];
   askInputsEvents: AskInputsEvent[];
+  textCardEvents: TextCardEvent[];
   courtlistenerEvents: CourtlistenerToolEvent[];
   caseCitationEvents: CaseCitationEvent[];
   mcpEvents: McpToolEvent[];
@@ -361,10 +433,12 @@ export async function runToolCalls(
   const workflowsApplied: { workflow_id: string; title: string }[] = [];
   const docsEdited: DocEditedResult[] = [];
   const askInputsEvents: AskInputsEvent[] = [];
+  const textCardEvents: TextCardEvent[] = [];
   const courtlistenerEvents: CourtlistenerToolEvent[] = [];
   const caseCitationEvents: CaseCitationEvent[] = [];
   const mcpEvents: McpToolEvent[] = [];
-  const approvalItems: AskInputItem[] = [];
+  const approvalItems: ConnectorApprovalItem[] = [];
+  const documentLocks = options.documentLocks ?? createKeyedLock();
   const courtState: CourtlistenerTurnState = courtlistenerState ?? {
     casesByClusterId: new Map(),
   };
@@ -408,9 +482,8 @@ export async function runToolCalls(
       const storagePath = (result as { storage_path?: string }).storage_path;
 
       if (documentId && storagePath && docIndex) {
-        const existingLabels = new Set(Object.keys(docIndex));
         let i = 0;
-        while (existingLabels.has(`doc-${i}`)) i++;
+        while (`doc-${i}` in docIndex) i++;
         newDocLabel = `doc-${i}`;
         docIndex[newDocLabel] = {
           document_id: documentId,
@@ -468,6 +541,11 @@ export async function runToolCalls(
     });
   };
 
+  const searchesOwnDocument = (args: Record<string, unknown>) =>
+    args.scope === "document" &&
+    !!resolveDocLabel(String(args.doc_id ?? ""), docStore, docIndex);
+
+  let connectorOwner: ConnectorOwner | undefined;
   for (const tc of toolCalls) {
     let args: Record<string, unknown> = {};
     try {
@@ -480,17 +558,15 @@ export async function runToolCalls(
       tc.function.name.startsWith(GOOGLE_DRIVE_TOOL_PREFIX) ||
       isGoogleWorkspaceTool(tc.function.name) ||
       tc.function.name.startsWith("mcp_");
-    if (isConnectorTool && (await teamOrgIdOf(db, options.orgId)) !== null) {
-      toolResults.push({
-        role: "tool",
-        tool_call_id: tc.id,
-        content: "Connectors are available only in the Personal workspace.",
-      });
-      continue;
-    }
     if (isConnectorTool) {
-      const plan = await planConnectorToolCall(
+      // Only the connections for the conversation's workspace: a tool named
+      // after one in another workspace resolves to nothing.
+      connectorOwner ??= {
         userId,
+        orgId: await teamOrgIdOf(db, options.orgId),
+      };
+      const plan = await planConnectorToolCall(
+        connectorOwner,
         tc.function.name,
         args,
         db,
@@ -538,16 +614,21 @@ export async function runToolCalls(
                 },
               }
             : tc.function.name.startsWith("mcp_")
-              ? await executeMcpToolCall(userId, tc.function.name, args, db)
+              ? await executeMcpToolCall(
+                  connectorOwner,
+                  tc.function.name,
+                  args,
+                  db,
+                )
               : isGoogleWorkspaceTool(tc.function.name)
                 ? await executeGoogleWorkspaceToolCall(
-                    userId,
+                    connectorOwner,
                     tc.function.name,
                     args,
                     db,
                   )
                 : await executeGoogleDriveToolCall(
-                    userId,
+                    connectorOwner,
                     tc.function.name,
                     args,
                     db,
@@ -569,6 +650,26 @@ export async function runToolCalls(
           error: event.error,
         })}\n\n`,
       );
+      continue;
+    }
+
+    if (tc.function.name === "create_text_card") {
+      const event = textCardEvent(tc.id, args);
+      if (event) {
+        textCardEvents.push(event);
+        write(`data: ${JSON.stringify(event)}\n\n`);
+      }
+      toolResults.push({
+        role: "tool",
+        tool_call_id: tc.id,
+        content: JSON.stringify(
+          event
+            ? { card_id: event.card_id, displayed: true }
+            : {
+                error: "Provide a non-empty title (up to 200 characters) and text (up to 100000 characters).",
+              },
+        ),
+      });
       continue;
     }
 
@@ -633,6 +734,20 @@ export async function runToolCalls(
           ? `${citationReminder(docId, filename, promptFilename)}${sourceNotice ? `\n${sourceNotice}` : ""}\n\n${fencedContent}`
           : fencedContent,
       });
+    } else if (
+      tc.function.name === "find_documents" &&
+      options.documentsScoped &&
+      !searchesOwnDocument(args)
+    ) {
+      toolResults.push({
+        role: "tool",
+        tool_call_id: tc.id,
+        content: JSON.stringify({
+          ok: false,
+          error:
+            "You can search only the documents you were given: use document scope with one of their doc_ids, or find_in_document.",
+        }),
+      });
     } else if (tc.function.name === "find_documents") {
       const limit = typeof args.limit === "number" && Number.isInteger(args.limit)
         && args.limit >= 1 && args.limit <= 20 ? args.limit : undefined;
@@ -663,9 +778,35 @@ export async function runToolCalls(
       }).catch(internalFailure);
       if (!result.ok) {
         const failure = documentSearchFailure(result);
-        logError("find_documents", {
+        // Only a thrown database/storage error is ours to report. The model's
+        // own bad arguments (invalid_search) and a disabled search are
+        // answered in the tool result; the category is enough locally.
+        if (result.kind === "error") {
+          // The PostgREST error rides as the cause, so its SQLSTATE (57014 =
+          // statement timeout) or network code reaches the event as
+          // failure_code. A timeout is the install's database load and an
+          // unreachable database (ECONNREFUSED, 08006, 53300, fetch_failed)
+          // is the install's infrastructure, not a defect in this code: both
+          // file at warning level, like the Redis, provider and auth-upstream
+          // outages. Everything else (internal_error) stays an error.
+          const infrastructure =
+            failure.error_code === "search_timeout" || failure.error_code === "search_unavailable";
+          reportToolFailure(
+            new AppError("chat.document_search_failed", "Document search failed", {
+              cause: result.error,
+            }),
+            infrastructure ? "warning" : undefined,
+          );
+        }
+        // The category, plus the allowlisted failure_code (a SQLSTATE or
+        // network code, never database text): reportError sends nothing on an
+        // install without Sentry, so this line is all its operator has to
+        // tell a 42883 from a 23505.
+        const failureCode =
+          result.kind === "error" ? diagnosticErrorTags(result.error).failure_code : undefined;
+        console.warn("[run_tools] find_documents failed", {
           category: failure.error_code,
-          ...(result.kind === "error" ? diagnosticErrorTags(result.error) : {}),
+          ...(failureCode === undefined ? {} : { failure_code: failureCode }),
         });
         finishSearch(failure);
         toolResults.push({ role: "tool", tool_call_id: tc.id, content: JSON.stringify({
@@ -773,9 +914,8 @@ export async function runToolCalls(
       });
     } else if (tc.function.name === "fetch_documents") {
       const rawDocIds = (args.doc_ids as string[]) ?? [];
-      const docIds = rawDocIds.map(
-        (id) => resolveDocLabel(id, docStore, docIndex) ?? id,
-      );
+      const labelFor = createDocLabelResolver(docStore, docIndex);
+      const docIds = rawDocIds.map((id) => labelFor(id) ?? id);
       const parts: string[] = [];
       for (const docId of docIds) {
         const readIdentity = await getTurnReadIdentity({
@@ -833,6 +973,157 @@ export async function runToolCalls(
         tool_call_id: tc.id,
         content: parts.join("\n\n"),
       });
+    } else if (tc.function.name === "list_playbooks") {
+      try {
+        const workspace = (await teamOrgIdOf(db, options.orgId)) ?? "personal";
+        const playbooks = await listPlaybooks(userId, db, {
+          workspace,
+          email: options.userEmail,
+        });
+        toolResults.push({
+          role: "tool",
+          tool_call_id: tc.id,
+          content: JSON.stringify(
+            playbooks.map((playbook) => ({
+              id: playbook.id,
+              name: playbook.name,
+              description: playbook.description,
+              document_types: playbook.content.documentTypes,
+              represented_party: playbook.content.representedParty,
+            })),
+          ),
+        });
+      } catch (error) {
+        reportToolFailure(error);
+        console.warn("[run_tools] list_playbooks failed", safeError(error));
+        toolResults.push({
+          role: "tool",
+          tool_call_id: tc.id,
+          content: JSON.stringify({ error: "Playbooks could not be listed." }),
+        });
+      }
+    } else if (tc.function.name === "run_playbook") {
+      const rawDocId = String(args.doc_id ?? "");
+      const docId = resolveDocLabel(rawDocId, docStore, docIndex) ?? rawDocId;
+      const docInfo = docStore.get(docId);
+      const indexed = docIndex?.[docId];
+      const fail = (error: string) =>
+        toolResults.push({
+          role: "tool",
+          tool_call_id: tc.id,
+          content: JSON.stringify({ error }),
+        });
+      // The open Word document arrives as request-scoped text with no stored
+      // row: it is reviewed from that text, and its suggestions are made in
+      // Word by the pane's edit tools rather than saved as a new version.
+      const liveText = indexed ? undefined : docInfo?.inline_text;
+      if (!docInfo || (!indexed && liveText === undefined)) {
+        fail(`Document '${rawDocId}' not found in this chat's attachments.`);
+      } else if (!options.model) {
+        fail("No model is selected for the review.");
+      } else {
+        // The live Word document has no stored id; its request-local label
+        // still serializes reviews of the same document within this turn.
+        const release = await documentLocks.acquire(indexed?.document_id ?? docId);
+        try {
+          const isDocx = docInfo.file_type === "docx";
+          // A Word document is read from its file by the review itself; other
+          // formats are reviewed from their extracted text.
+          const documentText = isDocx
+            ? undefined
+            : await readDocumentContent(docId, docStore, write, docIndex, db, {
+                emitEvents: false,
+              });
+          const run = await reviewWithPlaybook({
+            userId,
+            userEmail: options.userEmail,
+            playbookId: String(args.playbook_id ?? ""),
+            documentId: indexed?.document_id,
+            documentText,
+            documentName: docInfo.filename,
+            instructions:
+              typeof args.instructions === "string" ? args.instructions : undefined,
+            model: options.model,
+            reviewMode: args.review_mode === "permissive" ? "permissive" : "strict",
+            db,
+          });
+          const annotations = run.findings.flatMap((finding) =>
+            finding.edit ? [finding.edit] : [],
+          );
+          if (
+            indexed &&
+            run.editedVersionId &&
+            run.editedVersionNumber !== null &&
+            annotations.length
+          ) {
+            // The same shape edit_document streams, so the changes render as
+            // Accept/Reject cards, and later reads in this turn see them.
+            // A later edit_document in this turn starts a new version on top
+            // of the review's changes rather than rewriting an earlier one.
+            turnEditState?.delete(indexed.document_id);
+            clearTurnReadsForDocument(turnReadState, indexed.document_id);
+            if (docIndex?.[docId]) {
+              docIndex[docId] = {
+                ...docIndex[docId],
+                version_id: run.editedVersionId,
+                version_number: run.editedVersionNumber,
+              };
+            }
+            const currentDocStore = docStore.get(docId);
+            if (currentDocStore)
+              docStore.set(docId, { ...currentDocStore, search_source: undefined });
+            const payload: DocEditedResult = {
+              filename: docInfo.filename,
+              document_id: indexed.document_id,
+              version_id: run.editedVersionId,
+              version_number: run.editedVersionNumber,
+              download_url: run.editedDownloadUrl ?? "",
+              annotations,
+            };
+            docsEdited.push(payload);
+            write(
+              `data: ${JSON.stringify({ type: "doc_edited_start", filename: docInfo.filename })}\n\n`,
+            );
+            write(`data: ${JSON.stringify({ type: "doc_edited", ...payload })}\n\n`);
+          }
+          toolResults.push({
+            role: "tool",
+            tool_call_id: tc.id,
+            content: JSON.stringify({
+              run_id: run.id,
+              doc_id: docId,
+              summary: run.summary,
+              tracked_changes: annotations.length,
+              findings: run.findings.map((finding) => ({
+                rule: finding.ruleName,
+                status: finding.status,
+                location: finding.location,
+                analysis: finding.analysis,
+                quote: finding.quote,
+                suggested_text: finding.suggestedText,
+                has_tracked_change: !!finding.edit,
+              })),
+              next_required_action: [
+                "Summarise the findings for the user, most serious first, grouped by status.",
+                annotations.length
+                  ? "Tracked changes are already shown as Accept/Reject cards; do not repeat their suggested language in full."
+                  : liveText !== undefined
+                    ? "This is the open Word document, so no tracked changes were made. Give the suggested language where it matters, and make a change in the document only when the user asks for it."
+                    : "No tracked changes were made; give the suggested language where it matters.",
+              ].join(" "),
+            }),
+          });
+        } catch (error) {
+          if (error instanceof PlaybookRequestError) fail(error.message);
+          else {
+            reportToolFailure(error);
+            console.warn("[run_tools] run_playbook failed", safeError(error));
+            fail("The playbook review failed. Try again.");
+          }
+        } finally {
+          release();
+        }
+      }
     } else if (tc.function.name === "list_workflows") {
       const list = workflowStore
         ? Array.from(workflowStore.entries())
@@ -849,12 +1140,22 @@ export async function runToolCalls(
       });
     } else if (tc.function.name === "read_workflow") {
       const wfId = args.workflow_id as string;
+      // Turn setup loads only active catalog versions; a historical chat
+      // can still name a retired one, which is looked up on demand.
+      if (workflowStore && !workflowStore.has(wfId) && catalogKeyFromWorkflowId(wfId)) {
+        const retired = await findCatalogWorkflow(wfId, db).catch(() => null);
+        if (retired?.type === "assistant" && retired.prompt_md) {
+          workflowStore.set(wfId, { title: retired.title, skill_md: retired.prompt_md, listed: false });
+        }
+      }
       const candidate = workflowStore?.get(wfId);
       const allowed = candidate && (
         catalogKeyFromWorkflowId(wfId) !== null ||
-        await canUseWorkflowInWorkspace(
-          db, wfId, userId, options.userEmail,
-          (await teamOrgIdOf(db, options.orgId)) ?? "personal",
+        await workflowVerdictForTurn(workflowStore!, wfId, async () =>
+          canUseWorkflowInWorkspace(
+            db, wfId, userId, options.userEmail,
+            (await teamOrgIdOf(db, options.orgId)) ?? "personal",
+          ),
         )
       );
       const wf = allowed ? candidate : undefined;
@@ -903,45 +1204,14 @@ export async function runToolCalls(
         content: `${instructions}${assetNotice}`,
       });
     } else if (tc.function.name === "read_table_cells" && tabularStore) {
-      const colIndices = args.col_indices as number[] | undefined;
-      const rowIndices = args.row_indices as number[] | undefined;
-
-      const filteredCols = colIndices?.length
-        ? tabularStore.columns.filter((_, i) => colIndices.includes(i))
-        : tabularStore.columns;
-      const filteredDocs = rowIndices?.length
-        ? tabularStore.documents.filter((_, i) => rowIndices.includes(i))
-        : tabularStore.documents;
-
-      const label = `${filteredCols.length} ${filteredCols.length === 1 ? "column" : "columns"} × ${filteredDocs.length} ${filteredDocs.length === 1 ? "row" : "rows"}`;
+      const { label, content } = renderTableCells(
+        tabularStore,
+        args.col_indices as number[] | undefined,
+        args.row_indices as number[] | undefined,
+      );
       write(
         `data: ${JSON.stringify({ type: "doc_read_start", filename: label })}\n\n`,
       );
-
-      const lines: string[] = [];
-      for (const col of filteredCols) {
-        const colPos = tabularStore.columns.findIndex(
-          (c) => c.index === col.index,
-        );
-        for (const doc of filteredDocs) {
-          const rowPos = tabularStore.documents.findIndex(
-            (d) => d.id === doc.id,
-          );
-          const cell = tabularStore.cells.get(`${col.index}:${doc.id}`);
-          lines.push(
-            `[COL:${colPos} "${col.name}" | ROW:${rowPos} "${doc.filename}"]`,
-          );
-          if (cell?.summary) {
-            lines.push(`Summary: ${cell.summary}`);
-            if (cell.flag) lines.push(`Flag: ${cell.flag}`);
-            if (cell.reasoning) lines.push(`Reasoning: ${cell.reasoning}`);
-          } else {
-            lines.push(`(not yet generated)`);
-          }
-          lines.push("");
-        }
-      }
-
       write(
         `data: ${JSON.stringify({ type: "doc_read", filename: label })}\n\n`,
       );
@@ -949,7 +1219,7 @@ export async function runToolCalls(
       toolResults.push({
         role: "tool",
         tool_call_id: tc.id,
-        content: lines.join("\n") || "No cells found.",
+        content,
       });
     } else if (tc.function.name === COURTLISTENER_TOOL_NAMES.searchCaseLaw) {
       const query = typeof args.query === "string" ? args.query : "";
@@ -1240,6 +1510,7 @@ export async function runToolCalls(
           maxResults: remaining,
           contextChars,
           startIndex: hits.length,
+          normalized: normalizedTextFor(opinion, opinion.text),
         });
         totalMatches += result.totalMatches;
         hits.push(
@@ -1599,22 +1870,26 @@ export async function runToolCalls(
             reason: e.reason ? String(e.reason) : undefined,
           }),
         );
-        const reuseVersion = turnEditState?.get(indexed.document_id);
-        const result = await runEditDocument({
-          documentId: indexed.document_id,
-          userId,
-          userEmail: options.userEmail ?? null,
-          edits,
-          db,
-          reuseVersion,
+        const result = await documentLocks.run(indexed.document_id, async () => {
+          const edited = await runEditDocument({
+            documentId: indexed.document_id,
+            userId,
+            userEmail: options.userEmail ?? null,
+            edits,
+            db,
+            reuseVersion: turnEditState?.get(indexed.document_id),
+          });
+          if (edited.ok) {
+            turnEditState?.set(indexed.document_id, {
+              versionId: edited.version_id,
+              versionNumber: edited.version_number,
+              storagePath: edited.storage_path,
+            });
+          }
+          return edited;
         });
 
         if (result.ok) {
-          turnEditState?.set(indexed.document_id, {
-            versionId: result.version_id,
-            versionNumber: result.version_number,
-            storagePath: result.storage_path,
-          });
           clearTurnReadsForDocument(turnReadState, indexed.document_id);
           // Keep the chat-local doc label pointed at the latest
           // edited version so any follow-up read_document call in
@@ -1758,7 +2033,7 @@ export async function runToolCalls(
           const sourcePdfPath = active?.pdf_storage_path ?? null;
           const raw = await downloadFile(sourcePath);
           let pdfBytes = sourcePdfPath
-            ? await downloadFile(sourcePdfPath)
+            ? await downloadFileIfAvailable(sourcePdfPath)
             : null;
           if (!raw) {
             fail("Could not read the source document's bytes from storage.");
@@ -1867,7 +2142,7 @@ export async function runToolCalls(
             ) {
               console.error(
                 "[replicate-document] failed to record documents",
-                docErr,
+                reportToolFailure(docErr ?? new Error("document insert returned a short result")),
               );
               fail("Failed to record replicated documents");
             } else {
@@ -1906,7 +2181,7 @@ export async function runToolCalls(
                   );
                 console.error(
                   "[replicate-document] failed to record document versions",
-                  verErr,
+                  reportToolFailure(verErr ?? new Error("version insert returned a short result")),
                 );
                 fail("Failed to record replicated document versions");
               } else {
@@ -1924,7 +2199,6 @@ export async function runToolCalls(
                 // Register every successful copy under a fresh
                 // doc-N slug so the model can edit/read any of
                 // them in the same turn.
-                const existingLabels = new Set(Object.keys(docIndex));
                 let nextLabelIdx = 0;
                 const copies: {
                   new_filename: string;
@@ -1967,10 +2241,8 @@ export async function runToolCalls(
                       );
                     }
                   }
-                  while (existingLabels.has(`doc-${nextLabelIdx}`))
-                    nextLabelIdx++;
+                  while (`doc-${nextLabelIdx}` in docIndex) nextLabelIdx++;
                   const slug = `doc-${nextLabelIdx}`;
-                  existingLabels.add(slug);
                   docIndex[slug] = {
                     document_id: d.id,
                     filename: d.filename,
@@ -2038,7 +2310,7 @@ export async function runToolCalls(
             }
           }
         } catch (e) {
-          console.error("[replicate-document] failed", e);
+          console.error("[replicate-document] failed", reportToolFailure(e));
           fail("replicate_document failed");
         }
       }
@@ -2135,22 +2407,7 @@ export async function runToolCalls(
     courtlistenerEvents.push(groupEvent);
   }
 
-  if (approvalItems.length > 0) {
-    // One pause carries every pending decision: approvals join the model's own
-    // questions when it asked any in the same step.
-    if (askInputsEvents.length > 0) {
-      askInputsEvents[0] = {
-        ...askInputsEvents[0],
-        items: [...askInputsEvents[0].items, ...approvalItems],
-      };
-    } else {
-      askInputsEvents.push({
-        type: "ask_inputs",
-        event_id: crypto.randomUUID(),
-        items: approvalItems,
-      });
-    }
-  }
+  addApprovalItems(askInputsEvents, approvalItems);
 
   return {
     toolResults,
@@ -2162,6 +2419,7 @@ export async function runToolCalls(
     workflowsApplied,
     docsEdited,
     askInputsEvents,
+    textCardEvents,
     courtlistenerEvents,
     caseCitationEvents,
     mcpEvents,

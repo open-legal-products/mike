@@ -2,7 +2,7 @@ import { fireEvent, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { mergeConfiguredModelOptions, ModelToggle } from "./ModelToggle";
-import { underlyingProviderGroup } from "@/shared/lib/modelCatalog";
+import { underlyingProviderGroup } from "@mike/client";
 import type {
     ApiKeyState,
     ConfiguredModelOption,
@@ -13,7 +13,6 @@ const { configuredModels, workspace } = vi.hoisted(() => ({
     // Personal unless a test says otherwise.
     workspace: {
         workspaceId: "personal" as string | null,
-        orgApiKeys: null as { allow_personal_api_keys: boolean } | null,
     },
 }));
 
@@ -32,7 +31,6 @@ vi.mock("@/app/contexts/WorkspaceContext", () => ({
 beforeEach(() => {
     configuredModels.splice(0);
     workspace.workspaceId = "personal";
-    workspace.orgApiKeys = null;
 });
 
 it("lets deployment configuration override a duplicate catalog id", () => {
@@ -349,7 +347,6 @@ describe("ModelToggle availability states", () => {
         const user = userEvent.setup();
         const onNoModelsClick = vi.fn();
         workspace.workspaceId = "org-1";
-        workspace.orgApiKeys = { allow_personal_api_keys: false };
         const orgKeys = keys({ openrouter: true });
         orgKeys.openrouter = { configured: true, enabled: true, source: "org" };
         render(
@@ -372,7 +369,6 @@ describe("ModelToggle availability states", () => {
         const user = userEvent.setup();
         const onNoModelsClick = vi.fn();
         workspace.workspaceId = "org-1";
-        workspace.orgApiKeys = { allow_personal_api_keys: false };
         render(
             <ModelToggle
                 value=""

@@ -14,21 +14,24 @@ import {
 
 import { createHash, randomUUID } from "node:crypto";
 import { createWriteStream } from "node:fs";
-import { mkdir, mkdtemp, readdir, readFile, rm, stat } from "node:fs/promises";
+import { mkdir, mkdtemp, open, readdir, readFile, rm, stat } from "node:fs/promises";
 import { hostname, tmpdir } from "node:os";
 import { join } from "node:path";
 import { Transform } from "node:stream";
 import { pipeline } from "node:stream/promises";
 import { pathToFileURL } from "node:url";
 
-import JSZip from "jszip";
-import { XMLParser, XMLValidator } from "fast-xml-parser";
-
 import { resolveContentOrgId } from "../../lib/access";
+import { AppError } from "../../lib/appError";
 import { recordAudit } from "../../lib/audit";
 import { enqueueStorageCleanup } from "../../lib/dbq/enqueue";
+import { runIsolated } from "../../lib/dbq/jobScope";
 import { convertedPdfKey, officeFileToPdf } from "../../lib/convert";
-import { reportError } from "../../lib/observability/sentry";
+import {
+  markStage,
+  reportError,
+  setOperation,
+} from "../../lib/observability/sentry";
 import {
   createPollFailureGate,
   type PollFailureGate,
@@ -48,10 +51,9 @@ import {
   versionStorageKey,
 } from "../../lib/storage";
 import { createServerSupabase, type Db } from "../../lib/supabase";
-import {
-  MAX_UPLOAD_SIZE_BYTES,
-  UPLOAD_VERIFICATION_LEASE_SECONDS,
-} from "./uploads.manifest";
+import { ExtractionLimitError, withExtractionSlot } from "../../lib/extraction/isolated";
+import { isAllocationFailure } from "../../lib/extraction/limits";
+import { MAX_UPLOAD_SIZE_BYTES, UPLOAD_VERIFICATION_LEASE_SECONDS } from "./uploads.manifest";
 
 type UploadSessionRow = {
   id: string;
@@ -108,7 +110,9 @@ const TERMINAL_UPLOAD_ERROR_CODES = new Set([
   "direct_upload_failed",
   "size_mismatch",
   "content_type_mismatch",
+  "invalid_pdf_file",
   "invalid_docx_package",
+  "document_too_large",
   // The destination document no longer exists. Retrying cannot make it exist
   // again — it can only put it back, which is the bug this code prevents.
   "document_deleted",
@@ -123,33 +127,90 @@ const TERMINAL_UPLOAD_ERROR_CODES = new Set([
  * stop, mark the file failed, and clean up whatever bytes this job wrote —
  * never to recreate the row.
  */
-class DeletedDocumentError extends Error {
+class DeletedDocumentError extends AppError {
   /** Objects this job uploaded that nothing will reference now. */
   readonly orphanedKeys: string[];
 
   constructor(documentId: string, orphanedKeys: (string | null)[] = []) {
-    super(`document_deleted:${documentId}`);
-    this.name = "DeletedDocumentError";
+    super("upload.document_deleted", `document_deleted:${documentId}`);
     this.orphanedKeys = orphanedKeys.filter(
       (key): key is string => typeof key === "string" && key.length > 0,
     );
   }
 }
 
-class ChangedDocumentError extends Error {
+class ChangedDocumentError extends AppError {
   constructor(readonly orphanedKeys: string[] = []) {
-    super("document_changed");
-    this.name = "ChangedDocumentError";
+    super("upload.document_changed", "document_changed");
   }
 }
 
-class InvalidUploadedFileError extends Error {
-  readonly code = "invalid_docx_package" as const;
-
+class InvalidPdfFileError extends Error {
   constructor() {
-    super("invalid_docx_package");
-    this.name = "InvalidUploadedFileError";
+    super("invalid_pdf_file");
+    this.name = "InvalidPdfFileError";
   }
+}
+
+class DocxValidationError extends AppError {
+  constructor(
+    readonly code: "invalid_docx_package" | "document_too_large" | "processing_failed",
+    cause?: unknown,
+  ) {
+    super("upload.docx_validation_failed", code, { cause });
+  }
+}
+
+async function validateDocxFile(artifact: SealedFileArtifact): Promise<void> {
+  // Bound the compressed source before reading it; waiting uploads hold no
+  // archive buffers. Reuse the parser's existing admission and OS budgets.
+  if (artifact.size > MAX_UPLOAD_SIZE_BYTES) throw new DocxValidationError("invalid_docx_package");
+  try {
+    await withExtractionSlot({ waitMs: 0 }, async (extract) => {
+      const bytes = await readFile(artifact.filePath);
+      const result = await extract("validateDocxPackage", bytes.buffer.slice(
+        bytes.byteOffset, bytes.byteOffset + bytes.byteLength,
+      ) as ArrayBuffer);
+      if (!result.valid) throw new DocxValidationError("invalid_docx_package");
+    });
+  } catch (error) {
+    if (error instanceof DocxValidationError) throw error;
+    // Busy or unexpected child/I/O failures remain retryable, not malformed.
+    throw new DocxValidationError(
+      error instanceof ExtractionLimitError || isAllocationFailure(error)
+        ? "document_too_large" : "processing_failed",
+      error,
+    );
+  }
+}
+
+const PDF_HEADER_SIGNATURE = Buffer.from("%PDF-");
+// ISO 32000 lets a reader accept the header anywhere in the first 1024 bytes
+// (Annex H, implementation note 13), and pdf.js — which renders and page-counts
+// these files downstream — scans exactly that window.
+const PDF_HEADER_SEARCH_WINDOW_BYTES = 1024;
+
+async function hasPdfSignature(filePath: string): Promise<boolean> {
+  const handle = await open(filePath, "r");
+  try {
+    const window = Buffer.alloc(PDF_HEADER_SEARCH_WINDOW_BYTES);
+    const { bytesRead } = await handle.read(window, 0, window.length, 0);
+    return window.subarray(0, bytesRead).indexOf(PDF_HEADER_SIGNATURE) !== -1;
+  } finally {
+    await handle.close();
+  }
+}
+
+// Refuse bytes that cannot be a PDF (a renamed .txt, a ZIP, a truncated or
+// empty file) before anything is written for them. The signature search is
+// the cheap path; when it misses, the decision is handed to the same parser
+// that renders the file downstream, because pdf.js keeps going without a
+// header and rebuilds the cross-reference table by scanning, so a file it
+// can open must never be refused here as "not a PDF".
+async function validatePdfFile(filePath: string): Promise<void> {
+  if (await hasPdfSignature(filePath)) return;
+  if ((await countPdfPages(filePath)) !== null) return;
+  throw new InvalidPdfFileError();
 }
 
 /**
@@ -228,6 +289,7 @@ async function buildPdfRendition(args: {
   if (args.fileType === "pdf") return args.sourceStoragePath;
   if (!shouldConvertToPdf(args.fileType)) return null;
   try {
+    markStage("conversion");
     const pdfPath = await officeFileToPdf(
       args.sourceFilePath,
       args.workingDirectory,
@@ -336,236 +398,11 @@ async function requireSealedFile(
   } catch (error) {
     await removeTemporaryArtifact(directory);
     if (error instanceof StorageOperationError) {
-      throw new Error("sealed_upload_not_found", { cause: error });
+      throw new AppError("upload.sealed_missing", "sealed_upload_not_found", {
+        cause: error,
+      });
     }
     throw error;
-  }
-}
-
-const DOCX_MAIN_DOCUMENT_CONTENT_TYPE =
-  "application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml";
-const DOCX_CONTENT_TYPES_MAX_BYTES = 256 * 1024;
-const docxXmlParser = new XMLParser({
-  ignoreAttributes: false,
-  attributeNamePrefix: "@_",
-  trimValues: false,
-  // Preserve namespace identity while retaining prior text/attribute trimming.
-  tagValueProcessor: (_name, value) => value.trim(),
-  attributeValueProcessor: (name, value) =>
-    name === "xmlns" || name.startsWith("xmlns:") ? value : value.trim(),
-  processEntities: false,
-  ignoreDeclaration: true,
-  ignorePiTags: true,
-});
-
-type XmlElement = Record<string, unknown>;
-
-function parseDocxXml(xml: string): XmlElement {
-  // Package XML must not define entities or depend on an external DTD.
-  if (/<!DOCTYPE\b/i.test(xml) || XMLValidator.validate(xml) !== true) {
-    throw new InvalidUploadedFileError();
-  }
-  return docxXmlParser.parse(xml) as XmlElement;
-}
-
-function xmlChildren(
-  parent: XmlElement,
-  localName: string,
-  namespace: string,
-): XmlElement[] {
-  return Object.entries(parent).flatMap(([name, values]) => {
-    if (name.startsWith("@_") || name.startsWith("#")) return [];
-    // XMLValidator accepts XML Names with extra colons, not just QNames.
-    const parts = name.split(":");
-    if (parts.length > 2 || parts.some((part) => !part)) {
-      throw new InvalidUploadedFileError();
-    }
-    const [prefix, local] = parts.length === 2 ? parts : ["", name];
-    if (local !== localName) return [];
-    const namespaceAttribute = prefix ? `@_xmlns:${prefix}` : "@_xmlns";
-    return (Array.isArray(values) ? values : [values]).flatMap((value) => {
-      const element = value !== null && typeof value === "object"
-        ? value as XmlElement
-        : {};
-      return (element[namespaceAttribute] ?? parent[namespaceAttribute]) === namespace
-        ? [element]
-        : [];
-    });
-  });
-}
-
-function hasDocxMainRelationship(xml: string): boolean {
-  const parsed = parseDocxXml(xml);
-  const namespace = "http://schemas.openxmlformats.org/package/2006/relationships";
-  const roots = xmlChildren(parsed, "Relationships", namespace);
-  if (Object.keys(parsed).length !== 1 || roots.length !== 1) return false;
-  const root = roots[0]!;
-  const relationships = xmlChildren(root, "Relationship", namespace).filter(
-    (relationship) => [
-      "http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument",
-      "http://purl.oclc.org/ooxml/officeDocument/relationships/officeDocument",
-    ].includes(String(relationship["@_Type"])),
-  );
-  if (relationships.length !== 1) return false;
-  const relationship = relationships[0]!;
-  if (
-    relationship["@_TargetMode"] !== undefined &&
-    relationship["@_TargetMode"] !== "Internal"
-  ) return false;
-  const target = relationship["@_Target"];
-  if (
-    typeof target !== "string" || !target ||
-    target.startsWith("//") || /[\\:?#]/.test(target)
-  ) return false;
-  // Resolve a package-relative URI only; this never opens a URL.
-  const resolved = new URL(target, "https://docx.invalid/");
-  return resolved.origin === "https://docx.invalid" &&
-    resolved.pathname === "/word/document.xml";
-}
-
-function hasDocxMainDocument(xml: string): boolean {
-  const parsed = parseDocxXml(xml);
-  if (Object.keys(parsed).length !== 1) return false;
-  return [
-    "http://schemas.openxmlformats.org/wordprocessingml/2006/main",
-    "http://purl.oclc.org/ooxml/wordprocessingml/main",
-  ].some((namespace) => {
-    const documents = xmlChildren(parsed, "document", namespace);
-    return documents.length === 1 &&
-      xmlChildren(documents[0]!, "body", namespace).length === 1;
-  });
-}
-
-function zipEntryUncompressedSize(entry: JSZip.JSZipObject): number | null {
-  const data = (entry as JSZip.JSZipObject & {
-    _data?: { uncompressedSize?: unknown };
-  })._data;
-  const size = data?.uncompressedSize;
-  return typeof size === "number" && Number.isFinite(size) ? size : null;
-}
-
-type BoundedZipEntryStream = {
-  on(event: "data", listener: (chunk: Buffer) => void): BoundedZipEntryStream;
-  on(event: "error", listener: (error: unknown) => void): BoundedZipEntryStream;
-  on(event: "end", listener: () => void): BoundedZipEntryStream;
-  pause(): void;
-  resume(): void;
-};
-
-async function readZipEntryBounded(
-  entry: JSZip.JSZipObject,
-  maxBytes: number,
-): Promise<string> {
-  const declaredSize = zipEntryUncompressedSize(entry);
-  if (
-    declaredSize === null ||
-    declaredSize < 0 ||
-    declaredSize > maxBytes
-  ) {
-    throw new InvalidUploadedFileError();
-  }
-
-  const chunks: Buffer[] = [];
-  let actualSize = 0;
-  const stream = (entry as JSZip.JSZipObject & {
-    internalStream(type: "nodebuffer"): BoundedZipEntryStream;
-  }).internalStream("nodebuffer");
-
-  await new Promise<void>((resolve, reject) => {
-    let settled = false;
-    stream.on("data", (chunk) => {
-      if (settled) return;
-      actualSize += chunk.byteLength;
-      if (actualSize > maxBytes) {
-        settled = true;
-        stream.pause();
-        reject(new InvalidUploadedFileError());
-        return;
-      }
-      chunks.push(chunk);
-    });
-    stream.on("error", () => {
-      if (settled) return;
-      settled = true;
-      reject(new InvalidUploadedFileError());
-    });
-    stream.on("end", () => {
-      if (settled) return;
-      settled = true;
-      resolve();
-    });
-    stream.resume();
-  });
-
-  if (actualSize !== declaredSize) {
-    throw new InvalidUploadedFileError();
-  }
-  const bytes = Buffer.concat(chunks, actualSize);
-  const encoding = bytes[0] === 0xff && bytes[1] === 0xfe
-    ? "utf-16le"
-    : bytes[0] === 0xfe && bytes[1] === 0xff
-      ? "utf-16be"
-      : "utf-8";
-  return new TextDecoder(encoding, { fatal: true }).decode(bytes);
-}
-
-function hasDocxMainDocumentOverride(contentTypes: string): boolean {
-  const parsed = parseDocxXml(contentTypes);
-  const namespace = "http://schemas.openxmlformats.org/package/2006/content-types";
-  const roots = xmlChildren(parsed, "Types", namespace);
-  if (Object.keys(parsed).length !== 1 || roots.length !== 1) return false;
-  return xmlChildren(roots[0]!, "Override", namespace).some(
-    (override) =>
-      override["@_PartName"] === "/word/document.xml" &&
-      override["@_ContentType"] === DOCX_MAIN_DOCUMENT_CONTENT_TYPE,
-  );
-}
-
-async function validateUploadedFilePackage(
-  file: UploadFileRow,
-  artifact: SealedFileArtifact,
-): Promise<void> {
-  if (file.file_type !== "docx") return;
-
-  try {
-    // The manifest caps uploads at 100 MiB. Enforce that policy before
-    // loading the sealed archive into memory for ZIP parsing.
-    if (artifact.size > MAX_UPLOAD_SIZE_BYTES) {
-      throw new InvalidUploadedFileError();
-    }
-
-    const zip = await JSZip.loadAsync(await readFile(artifact.filePath));
-    const contentTypesPart = zip.file("[Content_Types].xml");
-    const relationshipsPart = zip.file("_rels/.rels");
-    const documentPart = zip.file("word/document.xml");
-
-    if (!contentTypesPart || !relationshipsPart || !documentPart) {
-      throw new InvalidUploadedFileError();
-    }
-
-    const contentTypes = await readZipEntryBounded(
-      contentTypesPart,
-      DOCX_CONTENT_TYPES_MAX_BYTES,
-    );
-    if (!hasDocxMainDocumentOverride(contentTypes)) {
-      throw new InvalidUploadedFileError();
-    }
-    const relationships = await readZipEntryBounded(
-      relationshipsPart,
-      DOCX_CONTENT_TYPES_MAX_BYTES,
-    );
-    if (!hasDocxMainRelationship(relationships)) {
-      throw new InvalidUploadedFileError();
-    }
-    // Main document XML can be much larger than package metadata. Reuse the
-    // upload ceiling instead of imposing the small metadata limit on it.
-    const document = await readZipEntryBounded(documentPart, MAX_UPLOAD_SIZE_BYTES);
-    if (!hasDocxMainDocument(document)) {
-      throw new InvalidUploadedFileError();
-    }
-  } catch (error) {
-    if (error instanceof InvalidUploadedFileError) throw error;
-    throw new InvalidUploadedFileError();
   }
 }
 
@@ -946,7 +783,8 @@ export async function processUploadFile(
 ) {
   const artifact = await requireSealedFile(file);
   try {
-    await validateUploadedFilePackage(file, artifact);
+    if (file.file_type === "pdf") await validatePdfFile(artifact.filePath);
+    if (file.file_type === "docx") await validateDocxFile(artifact);
     switch (session.purpose) {
       case "document_create":
         return await processCreatedDocument(db, session, file, artifact);
@@ -1009,7 +847,17 @@ async function heartbeatJob(db: Db, jobId: string, workerId: string) {
     .eq("locked_by", workerId)
     .select("id")
     .maybeSingle();
-  if (error || !data) throw error ?? new Error("upload_job_lease_lost");
+  if (error || !data) throw error ?? leaseLost();
+}
+
+/**
+ * The job row no longer says this worker holds it: another worker claimed
+ * it after the lease aged out, or a sweep retired it. Named, so Sentry files
+ * it under its own kind (MIKE-BACKEND-M grouped every code-less iteration
+ * failure as one anonymous "Failure in upload-worker / iteration").
+ */
+function leaseLost(): AppError {
+  return new AppError("upload.lease_lost", "upload_job_lease_lost");
 }
 
 async function refreshUploadSessionStatus(
@@ -1043,6 +891,7 @@ async function removeFailedCreatedDocument(
   file: UploadFileRow,
 ): Promise<void> {
   if (session.purpose !== "document_create") return;
+  markStage("failed-document-remove");
   await deleteFilesBestEffort(
     [
       storageKey(session.user_id, file.resource_id, file.filename),
@@ -1065,22 +914,28 @@ export async function processUploadJob(
   jobId: string,
   workerId: string,
 ): Promise<void> {
+  setOperation("documents.upload.complete");
+  markStage("claim");
+  // maybeSingle(): zero rows is a missing row, named below, not a PostgREST
+  // PGRST116 error. Database failures still arrive on the error path.
   const { data: job, error: jobError } = await db
     .from("upload_processing_jobs")
     .select("id, session_id, file_id, attempts, locked_by")
     .eq("id", jobId)
     .eq("status", "running")
     .eq("locked_by", workerId)
-    .single();
-  if (jobError || !job) throw jobError ?? new Error("upload_job_not_found");
+    .maybeSingle();
+  if (jobError || !job)
+    throw jobError ?? new AppError("upload.job_missing", "upload_job_not_found");
   const typedJob = job as UploadJobRow;
   const { data: session, error: sessionError } = await db
     .from("upload_sessions")
     .select("id, user_id, user_email, purpose, destination, status")
     .eq("id", typedJob.session_id)
-    .single();
+    .maybeSingle();
   if (sessionError || !session) {
-    throw sessionError ?? new Error("upload_session_not_found");
+    throw sessionError
+      ?? new AppError("upload.session_missing", "upload_session_not_found");
   }
   const typedSession = session as UploadSessionRow;
   const { data: fileRow, error: filesError } = await db
@@ -1088,9 +943,10 @@ export async function processUploadJob(
     .select("*")
     .eq("session_id", typedSession.id)
     .eq("id", typedJob.file_id)
-    .single();
+    .maybeSingle();
   if (filesError || !fileRow) {
-    throw filesError ?? new Error("upload_session_file_not_found");
+    throw filesError
+      ?? new AppError("upload.file_missing", "upload_session_file_not_found");
   }
   const file = fileRow as UploadFileRow;
   const terminalUploadFailure =
@@ -1121,6 +977,7 @@ export async function processUploadJob(
 
   let failed = false;
   let terminalProcessingFailure = false;
+  let docxValidationFailure = false;
   try {
     if (file.status !== "completed" && !terminalUploadFailure) {
       await heartbeatJob(db, jobId, workerId);
@@ -1137,18 +994,25 @@ export async function processUploadJob(
 
       let result: unknown;
       try {
+        markStage("process-file");
         result = await processUploadFile(db, typedSession, file);
       } catch (error) {
         // A failed timer heartbeat makes ownership uncertain. Re-prove the
         // lease before recording even a failure result.
         await heartbeatJob(db, jobId, workerId);
         failed = true;
+        docxValidationFailure = error instanceof DocxValidationError;
         // These failures cannot be fixed by retrying the same upload.
         terminalProcessingFailure =
           error instanceof DeletedDocumentError ||
           error instanceof ChangedDocumentError ||
-          error instanceof InvalidUploadedFileError;
-        if (!(error instanceof ChangedDocumentError || error instanceof InvalidUploadedFileError)) {
+          error instanceof InvalidPdfFileError ||
+          (error instanceof DocxValidationError && error.code !== "processing_failed");
+        if (
+          !(error instanceof ChangedDocumentError) &&
+          !(error instanceof InvalidPdfFileError) &&
+          !(error instanceof DocxValidationError && error.code === "invalid_docx_package")
+        ) {
           reportError(error, {
             tags: {
               component: "upload-worker",
@@ -1175,11 +1039,10 @@ export async function processUploadJob(
             status: "error",
             error_code: error instanceof ChangedDocumentError
               ? "document_changed"
-              : error instanceof DeletedDocumentError
-                ? "document_deleted"
-                : error instanceof InvalidUploadedFileError
-                  ? error.code
-                  : "processing_failed",
+              : error instanceof DeletedDocumentError ? "document_deleted"
+              : error instanceof InvalidPdfFileError ? "invalid_pdf_file"
+              : error instanceof DocxValidationError ? error.code
+              : "processing_failed",
             updated_at: new Date().toISOString(),
           })
           .eq("id", file.id)
@@ -1190,7 +1053,7 @@ export async function processUploadJob(
           // any more, so this job is the last place that knows their keys.
           await enqueueStorageCleanup(db, error.orphanedKeys);
         }
-        await markCreatedDocumentFailed(db, typedSession, file);
+        if (!docxValidationFailure) await markCreatedDocumentFailed(db, typedSession, file);
         await heartbeatJob(db, jobId, workerId);
       }
 
@@ -1209,6 +1072,7 @@ export async function processUploadJob(
           .eq("id", file.id)
           .eq("session_id", typedSession.id);
         if (error) throw error;
+        markStage("sealed-source-after-process");
         await deleteFileBestEffort(file.sealed_storage_path, "sealed-source-after-process");
         await heartbeatJob(db, jobId, workerId);
       }
@@ -1218,7 +1082,7 @@ export async function processUploadJob(
   }
 
   const now = new Date().toISOString();
-  // Deleted destinations and stale editor saves cannot succeed on retry.
+  // Invalid files, deleted destinations, and stale saves cannot succeed on retry.
   if (
     failed &&
     !terminalProcessingFailure &&
@@ -1242,7 +1106,7 @@ export async function processUploadJob(
       .select("id")
       .maybeSingle();
     if (retryError || !retried) {
-      throw retryError ?? new Error("upload_job_lease_lost");
+      throw retryError ?? leaseLost();
     }
     const { error: fileRetryError } = await db
       .from("upload_session_files")
@@ -1262,12 +1126,13 @@ export async function processUploadJob(
 
   const partialFailure = failed || terminalUploadFailure;
   if (partialFailure) {
-    if (failed) await removeFailedCreatedDocument(db, typedSession, file);
+    if (failed && !docxValidationFailure) await removeFailedCreatedDocument(db, typedSession, file);
     const { data: failedFiles } = await db
       .from("upload_session_files")
       .select("sealed_storage_path")
       .eq("session_id", typedSession.id)
       .eq("status", "error");
+    markStage("failed-file-sealed");
     for (const failedFile of failedFiles ?? []) {
       if (failedFile.sealed_storage_path) {
         await deleteFileBestEffort(failedFile.sealed_storage_path, "failed-file-sealed");
@@ -1288,7 +1153,7 @@ export async function processUploadJob(
     .select("id")
     .maybeSingle();
   if (finishError || !finished) {
-    throw finishError ?? new Error("upload_job_lease_lost");
+    throw finishError ?? leaseLost();
   }
   await refreshUploadSessionStatus(db, typedSession.id);
 }
@@ -1379,6 +1244,7 @@ export async function cleanupUploadSessions(db: Db): Promise<void> {
         continue;
       }
       // Null/empty paths are skipped inside; one warning per file at most.
+      markStage("session-expiry");
       await deleteFilesBestEffort(
         [file.staging_storage_path, file.sealed_storage_path],
         "session-expiry",
@@ -1452,8 +1318,9 @@ function startUploadProcessingWorker(options: {
     try {
       const db = createServerSupabase();
       if (options.runCleanup && Date.now() - lastCleanupAt >= 60_000) {
+        // Own scope: the stages cleanup marks must not land on a later job.
         await Promise.all([
-          cleanupUploadSessions(db),
+          runIsolated(() => cleanupUploadSessions(db)),
           cleanupUploadProcessingTempFiles(),
         ]);
         lastCleanupAt = Date.now();
@@ -1468,7 +1335,10 @@ function startUploadProcessingWorker(options: {
         schedule(UPLOAD_WORKER_POLL_MS);
         return;
       }
-      await processUploadJob(db, jobId, workerId);
+      // Each job in its own Sentry isolation scope: several of these loops
+      // share the process, and the operation/stages one job records must not
+      // land on another's failure.
+      await runIsolated(() => processUploadJob(db, jobId, workerId));
       failures.success();
       schedule(0);
     } catch (thrown) {

@@ -1,4 +1,4 @@
-import type { RefObject } from "react";
+import { memo, type RefObject, type ComponentProps } from "react";
 import ReactMarkdown, { defaultUrlTransform } from "react-markdown";
 import remarkMath from "remark-math";
 import remarkGfm from "remark-gfm";
@@ -9,7 +9,7 @@ import type {
     Citation,
     PanelDocument,
 } from "../../shared/types";
-import { CitationPillUI } from "@/shared/ui/CitationPillUI";
+import { CitationPillUI, EXCERPT_SOURCE_PROPS } from "@mike/ui";
 import { withoutMarkdownNode } from "./messageStyles";
 import { citationTooltip } from "./CitationSources";
 import {
@@ -17,9 +17,19 @@ import {
     citationVerificationPillClassName,
 } from "./citationVerification";
 import { internalCaseHref } from "./citationUtils";
-import { EXCERPT_SOURCE_PROPS } from "@/shared/ui/ResponseSelectionMenuUI";
 
-export function MarkdownContent({
+function isSameOrigin(url: string): boolean {
+    if (typeof window === "undefined") return false;
+    try {
+        return (
+            new URL(url, window.location.href).origin === window.location.origin
+        );
+    } catch {
+        return false;
+    }
+}
+
+function MarkdownContentImpl({
     text,
     inlineCitationTargets,
     caseCitations,
@@ -301,6 +311,29 @@ export function MarkdownContent({
                             </a>
                         );
                     },
+                    img: (props) => {
+                        const { src, alt, ...imageProps } =
+                            withoutMarkdownNode(props);
+                        if (typeof src !== "string" || !src) return null;
+                        // Another site's image would load with no click, so
+                        // injected text could leak data in its URL.
+                        if (!isSameOrigin(src)) {
+                            return (
+                                <a
+                                    href={src}
+                                    className="text-blue-600 hover:text-blue-700 underline [overflow-wrap:anywhere] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500/40"
+                                    target="_blank"
+                                    rel="noopener noreferrer"
+                                >
+                                    {alt?.trim() || src}
+                                </a>
+                            );
+                        }
+                        return (
+                            // eslint-disable-next-line @next/next/no-img-element -- markdown content, not an optimizable page asset
+                            <img src={src} alt={alt ?? ""} {...imageProps} />
+                        );
+                    },
                     hr: (props) => (
                         <hr
                             className="my-6 border-gray-200"
@@ -314,3 +347,16 @@ export function MarkdownContent({
         </div>
     );
 }
+
+export const MarkdownContent = memo(MarkdownContentImpl, (previous, next) => {
+    for (const key of Object.keys(previous) as (keyof ComponentProps<typeof MarkdownContentImpl>)[]) {
+        if (key === "inlineCitationTargets" || key === "caseCitations" || key === "caseDocuments") continue;
+        if (previous[key] !== next[key]) return false;
+    }
+    if (Object.keys(previous).length !== Object.keys(next).length) return false;
+    if (previous.inlineCitationTargets.length !== next.inlineCitationTargets.length || previous.inlineCitationTargets.some((value, index) => value !== next.inlineCitationTargets[index])) return false;
+    if (previous.caseCitations.size !== next.caseCitations.size || previous.caseDocuments.size !== next.caseDocuments.size) return false;
+    for (const [key, value] of previous.caseCitations) if (next.caseCitations.get(key) !== value) return false;
+    for (const [key, value] of previous.caseDocuments) if (next.caseDocuments.get(key) !== value) return false;
+    return true;
+});
