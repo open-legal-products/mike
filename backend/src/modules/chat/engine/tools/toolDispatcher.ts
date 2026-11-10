@@ -17,7 +17,6 @@ import {
   isGoogleWorkspaceTool,
   executeGoogleWorkspaceToolCall,
 } from "../../../../lib/integrations/googleWorkspace";
-import { logError } from "../../../../lib/log";
 import { diagnosticErrorTags } from "../../../../lib/observability/sentryPrivacy";
 import { documentSearchFailure } from "./documentSearchErrors";
 import { findDocumentText, createDocumentVersions } from "../../../documents/documents.service";
@@ -117,12 +116,15 @@ import { renderTableCells } from "./tableCells";
  * sent); where the log line was a safeError() category, keep it and log at
  * warn level, which the bridge does not forward.
  */
-function reportToolFailure(error: unknown): AppError {
+function reportToolFailure(error: unknown, level?: "warning"): AppError {
   const failure =
     error instanceof AppError
       ? error
       : new AppError("chat.tool_failed", "Tool call failed", { cause: error });
-  reportError(failure, { tags: { component: "chat-stream", operation: "chat.tool" } });
+  reportError(failure, {
+    tags: { component: "chat-stream", operation: "chat.tool" },
+    ...(level ? { level } : {}),
+  });
   return failure;
 }
 
@@ -776,9 +778,35 @@ export async function runToolCalls(
       }).catch(internalFailure);
       if (!result.ok) {
         const failure = documentSearchFailure(result);
-        logError("find_documents", {
+        // Only a thrown database/storage error is ours to report. The model's
+        // own bad arguments (invalid_search) and a disabled search are
+        // answered in the tool result; the category is enough locally.
+        if (result.kind === "error") {
+          // The PostgREST error rides as the cause, so its SQLSTATE (57014 =
+          // statement timeout) or network code reaches the event as
+          // failure_code. A timeout is the install's database load and an
+          // unreachable database (ECONNREFUSED, 08006, 53300, fetch_failed)
+          // is the install's infrastructure, not a defect in this code: both
+          // file at warning level, like the Redis, provider and auth-upstream
+          // outages. Everything else (internal_error) stays an error.
+          const infrastructure =
+            failure.error_code === "search_timeout" || failure.error_code === "search_unavailable";
+          reportToolFailure(
+            new AppError("chat.document_search_failed", "Document search failed", {
+              cause: result.error,
+            }),
+            infrastructure ? "warning" : undefined,
+          );
+        }
+        // The category, plus the allowlisted failure_code (a SQLSTATE or
+        // network code, never database text): reportError sends nothing on an
+        // install without Sentry, so this line is all its operator has to
+        // tell a 42883 from a 23505.
+        const failureCode =
+          result.kind === "error" ? diagnosticErrorTags(result.error).failure_code : undefined;
+        console.warn("[run_tools] find_documents failed", {
           category: failure.error_code,
-          ...(result.kind === "error" ? diagnosticErrorTags(result.error) : {}),
+          ...(failureCode === undefined ? {} : { failure_code: failureCode }),
         });
         finishSearch(failure);
         toolResults.push({ role: "tool", tool_call_id: tc.id, content: JSON.stringify({

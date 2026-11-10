@@ -3,6 +3,7 @@ import * as Sentry from "@sentry/node";
 import type { Db } from "../../lib/supabase";
 import { markStage, resetSentryForTests, scrubEvent, setOperation } from "../../lib/observability/sentry";
 import { privacyBoundaryIntegration } from "../../lib/observability/sentryPrivacy";
+import { resetSchemaOutOfDateReportsForTests } from "../../lib/schemaOutOfDate";
 
 const sweeps = vi.hoisted(() => ({
     text: vi.fn(), documents: vi.fn(), cells: vi.fn(), organizations: vi.fn(), subagents: vi.fn(),
@@ -39,6 +40,7 @@ function database(failureAt?: "load" | "expire") {
 let warnings: unknown[][];
 beforeEach(() => {
     vi.resetAllMocks();
+    resetSchemaOutOfDateReportsForTests();
     warnings = [];
     vi.spyOn(console, "warn").mockImplementation((...args) => { warnings.push(args); });
     sweeps.captureCleanup.mockResolvedValue([]);
@@ -114,4 +116,103 @@ it("preserves successful sweep counts and completes archive cleanup", async () =
     expect(sweeps.completeCleanup).toHaveBeenCalledWith(db, []);
     expect(sweeps.subagents).toHaveBeenCalledWith(db);
     expect(warnings).toEqual([]);
+});
+
+function recordEvents(): Sentry.ErrorEvent[] {
+    const events: Sentry.ErrorEvent[] = [];
+    resetSentryForTests("community", { initialized: true });
+    Sentry.init({
+        dsn: "https://test@sentry.invalid/1", defaultIntegrations: false,
+        integrations: [privacyBoundaryIntegration(), Sentry.captureConsoleIntegration({ levels: ["error"] })],
+        beforeSend: scrubEvent,
+        transport: () => ({
+            send: async envelope => {
+                for (const [header, payload] of envelope[1]) {
+                    if (header.type === "event") events.push(payload as Sentry.ErrorEvent);
+                }
+                return { statusCode: 200 };
+            },
+            flush: async () => true,
+        }),
+    });
+    return events;
+}
+
+// MIK-94 / MIKE-BACKEND-3Z: an install whose database lacks a bundled
+// migration failed the same sweep on every run and filed an error each time.
+it("reports a missing database object once per operation, at error, under schema_out_of_date, and keeps sweeping", async () => {
+    const events = recordEvents();
+    sweeps.text.mockRejectedValue({ code: "PGRST202", message: PRIVATE });
+    sweeps.documents.mockResolvedValue(3);
+    const db = database();
+
+    await runStaleWorkSweep(db as unknown as Db);
+    await expect(runStaleWorkSweep(db as unknown as Db)).resolves.toEqual({ documents: 3, cells: 0 });
+    await Sentry.flush(2000);
+
+    expect(sweeps.text).toHaveBeenCalledTimes(2);
+    expect(sweeps.subagents).toHaveBeenCalledTimes(2);
+    expect(events).toHaveLength(1);
+    // Error, not warning: the org's per-project alert rule fires on a new
+    // high-priority issue, and this is the only event the process will send.
+    expect(events[0]!.level).toBe("error");
+    expect(events[0]!.tags).toMatchObject({
+        operation: "maintenance.document_text",
+        component: "stale-sweep",
+        error_kind: "schema_out_of_date",
+        failure_code: "PGRST202",
+    });
+    expect(JSON.stringify(events)).not.toContain(PRIVATE);
+    expect(JSON.stringify(warnings)).not.toContain(PRIVATE);
+});
+
+it("keeps reminding in the log, at most once an hour, while the database stays behind", async () => {
+    const events = recordEvents();
+    vi.useFakeTimers({ toFake: ["Date"] });
+    try {
+        vi.setSystemTime(new Date("2026-11-05T09:00:00Z"));
+        sweeps.text.mockRejectedValue({ code: "PGRST202", message: PRIVATE });
+        const db = database();
+        const reminders = () =>
+            warnings.filter(([line]) => String(line).startsWith("[schema-out-of-date] maintenance.document_text: still failing"));
+
+        await runStaleWorkSweep(db as unknown as Db); // first failure: event + log line
+        vi.setSystemTime(new Date("2026-11-05T09:30:00Z"));
+        await runStaleWorkSweep(db as unknown as Db); // inside the hour: silent
+        expect(reminders()).toHaveLength(0);
+
+        vi.setSystemTime(new Date("2026-11-05T10:00:00Z"));
+        await runStaleWorkSweep(db as unknown as Db); // an hour on: one reminder
+        vi.setSystemTime(new Date("2026-11-05T10:10:00Z"));
+        await runStaleWorkSweep(db as unknown as Db); // silent again
+        await Sentry.flush(2000);
+
+        expect(reminders()).toHaveLength(1);
+        expect(String(reminders()[0]![0])).toContain("2 more failure(s)");
+        expect(String(reminders()[0]![0])).toContain("migrate.sh status");
+        expect(events).toHaveLength(1);
+        expect(JSON.stringify(warnings)).not.toContain(PRIVATE);
+    } finally {
+        vi.useRealTimers();
+    }
+});
+
+it("still reports any other sweep failure at error level on every run", async () => {
+    const events = recordEvents();
+    sweeps.text.mockRejectedValue({ code: "57014", message: PRIVATE });
+    const db = database();
+
+    await runStaleWorkSweep(db as unknown as Db);
+    await runStaleWorkSweep(db as unknown as Db);
+    await Sentry.flush(2000);
+
+    expect(events).toHaveLength(2);
+    for (const event of events) {
+        expect(event.level).toBe("error");
+        expect(event.tags).toMatchObject({
+            operation: "maintenance.document_text",
+            error_kind: "maintenance.sweep_failed",
+            failure_code: "57014",
+        });
+    }
 });

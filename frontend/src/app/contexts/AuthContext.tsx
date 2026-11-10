@@ -20,8 +20,12 @@ import {
 } from "@/app/lib/authApi";
 import { AUTH_SESSION_INVALIDATED_EVENT } from "@/app/lib/authEvents";
 import { setReportingUser } from "@/app/lib/errorReporting";
-import { isOnAuthRoute, notifyError } from "@/app/lib/userFacingError";
-import { clearToasts } from "@mike/ui";
+import {
+    describeError,
+    isOnAuthRoute,
+    notifyError,
+} from "@/app/lib/userFacingError";
+import { clearToasts, dismissToastsWithKey } from "@mike/ui";
 
 type User = AuthUser;
 
@@ -45,6 +49,37 @@ const SESSION_ERROR_MESSAGE =
 /** One toast for the session, however many background checks fail. */
 const SESSION_TOAST_KEY = "auth-session";
 const EXPIRED_SESSION_MESSAGE = "Your session expired. Please log in again.";
+/** Retry delays for a session check the server could not answer. */
+const SESSION_RETRY_BASE_MS = 1_000;
+const SESSION_RETRY_MAX_MS = 30_000;
+
+/**
+ * Kinds (from the shared describeError) that mean the server could not
+ * answer: no response, offline, a timeout or gateway 504, a 502/503 or the
+ * `upstream_unavailable` code while GoTrue or the API is down.
+ */
+const TRANSIENT_SESSION_KINDS: ReadonlySet<string> = new Set([
+    "network",
+    "offline",
+    "timeout",
+    "unavailable",
+]);
+
+/**
+ * Did the session check fail because the server could not answer, rather
+ * than answer "no session"? Then nobody knows whether the user is signed in,
+ * and treating them as signed out would send a working session to the login
+ * page, so the check is retried. A 500 internal_error (a bug, which a retry
+ * will not fix), a 503 schema_out_of_date (a migration the operator must
+ * apply) and a coding error thrown here are not transient: they end the
+ * loading state and show the notice once. A 401 never gets here:
+ * getAuthSession answers null for it.
+ */
+function isTransientSessionFailure(error: unknown): boolean {
+    const described = describeError(error);
+    if (described.code === "schema_out_of_date") return false;
+    return TRANSIENT_SESSION_KINDS.has(described.kind);
+}
 
 type AuthSyncMessage = {
     state: "signed-in" | "signed-out";
@@ -95,9 +130,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         setReportingUser(user ? { id: user.id } : null);
     }, [user]);
 
-    const fetchAndApplySession = useCallback(async () => {
+    const fetchAndApplySession = useCallback(async (report = true) => {
         if (!sessionRequestRef.current) {
-            sessionRequestRef.current = getAuthSession().finally(() => {
+            sessionRequestRef.current = getAuthSession({ report }).finally(() => {
                 sessionRequestRef.current = null;
             });
         }
@@ -110,30 +145,94 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     // Background session checks (focus, tab visibility, another tab signing
     // in) have no screen of their own: without this the user sees a silently
     // stale session, so the failure gets a toast with a real Retry.
-    const reportSessionFailureRef = useRef<(error: unknown) => void>(() => {});
-    const reportSessionFailure = useCallback(
-        (error: unknown) => {
-            setAuthError(SESSION_ERROR_MESSAGE);
-            // Sign-in screens show `authError` themselves, with their own
-            // Retry; a toast there repeated it and then contradicted the
-            // form's next error.
-            if (isOnAuthRoute()) return;
-            notifyError(error, {
-                action: "check your session",
-                dedupeKey: SESSION_TOAST_KEY,
-                onRetry: () => {
-                    void fetchAndApplySession().catch((retryError: unknown) =>
-                        reportSessionFailureRef.current(retryError),
+    const checkSessionRef = useRef<(notify: boolean) => Promise<void>>(
+        async () => {},
+    );
+    const reportSessionFailure = useCallback((error: unknown) => {
+        setAuthError(SESSION_ERROR_MESSAGE);
+        // Sign-in screens show `authError` themselves, with their own
+        // Retry; a toast there repeated it and then contradicted the
+        // form's next error.
+        if (isOnAuthRoute()) return;
+        notifyError(error, {
+            action: "check your session",
+            dedupeKey: SESSION_TOAST_KEY,
+            onRetry: () => void checkSessionRef.current(true),
+        });
+    }, []);
+
+    // A check the server could not answer keeps the auth state it had (the
+    // signed-in user, or "still loading" on a fresh page load, which keeps
+    // the app's loader up instead of redirecting to the login page) and is
+    // retried with backoff until the server answers. One chain of retries
+    // at a time, one report and one notice per failing streak: the retries
+    // are marked handled and update the notice silently.
+    //
+    // `generation` counts checks: only the newest one may apply its outcome
+    // and schedule the next retry, so a focus event during a pending retry
+    // cannot start a second chain. `disposed` stops scheduling once the
+    // provider unmounts (reset on mount for StrictMode's remount).
+    const retryRef = useRef({
+        timer: null as ReturnType<typeof setTimeout> | null,
+        attempt: 0,
+        generation: 0,
+        disposed: false,
+    });
+    const checkSession = useCallback(
+        async (notify: boolean) => {
+            const retry = retryRef.current;
+            if (retry.timer !== null) {
+                clearTimeout(retry.timer);
+                retry.timer = null;
+            }
+            const generation = ++retry.generation;
+            const firstOfStreak = retry.attempt === 0;
+            try {
+                await fetchAndApplySession(firstOfStreak);
+                if (generation !== retry.generation) return;
+                // The streak is over: its sticky notice no longer applies.
+                if (!firstOfStreak) dismissToastsWithKey(SESSION_TOAST_KEY);
+                retry.attempt = 0;
+                setAuthLoading(false);
+            } catch (error) {
+                if (generation !== retry.generation || retry.disposed) return;
+                if (isTransientSessionFailure(error)) {
+                    const delay = Math.min(
+                        SESSION_RETRY_MAX_MS,
+                        SESSION_RETRY_BASE_MS * 2 ** retry.attempt,
                     );
-                },
-            });
+                    retry.attempt += 1;
+                    retry.timer = setTimeout(() => {
+                        retry.timer = null;
+                        void checkSessionRef.current(false);
+                    }, delay);
+                } else {
+                    retry.attempt = 0;
+                    setAuthLoading(false);
+                }
+                if (notify || firstOfStreak) reportSessionFailure(error);
+                else setAuthError(SESSION_ERROR_MESSAGE);
+            }
         },
-        [fetchAndApplySession],
+        [fetchAndApplySession, reportSessionFailure],
     );
 
     useEffect(() => {
-        reportSessionFailureRef.current = reportSessionFailure;
-    }, [reportSessionFailure]);
+        checkSessionRef.current = checkSession;
+    }, [checkSession]);
+
+    useEffect(() => {
+        const retry = retryRef.current;
+        retry.disposed = false;
+        return () => {
+            retry.disposed = true;
+            // Checks still in flight are now stale: none may schedule.
+            retry.generation += 1;
+            retry.attempt = 0;
+            if (retry.timer !== null) clearTimeout(retry.timer);
+            retry.timer = null;
+        };
+    }, []);
 
     useEffect(() => {
         clearLegacyBrowserAuthStorage();
@@ -152,7 +251,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
                 return;
             }
 
-            void fetchAndApplySession().catch(reportSessionFailure);
+            void checkSession(true);
         };
 
         const onChannelMessage = (event: MessageEvent<AuthSyncMessage>) => {
@@ -185,10 +284,10 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         };
         const onVisibilityChange = () => {
             if (document.visibilityState !== "visible") return;
-            void fetchAndApplySession().catch(reportSessionFailure);
+            void checkSession(false);
         };
         const onFocus = () => {
-            void fetchAndApplySession().catch(reportSessionFailure);
+            void checkSession(false);
         };
 
         channel?.addEventListener("message", onChannelMessage);
@@ -197,9 +296,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         window.addEventListener("focus", onFocus);
         document.addEventListener("visibilitychange", onVisibilityChange);
 
-        void fetchAndApplySession()
-            .catch(reportSessionFailure)
-            .finally(() => setAuthLoading(false));
+        // Through the ref (assigned by the effect above, which runs first):
+        // the check only sets state after its request settles.
+        void checkSessionRef.current(true);
 
         return () => {
             channel?.removeEventListener("message", onChannelMessage);
@@ -216,7 +315,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
                 onVisibilityChange,
             );
         };
-    }, [applySessionUser, broadcastAuthState, fetchAndApplySession, reportSessionFailure]);
+    }, [applySessionUser, broadcastAuthState, checkSession]);
 
     const refreshSession = useCallback(async () => {
         try {

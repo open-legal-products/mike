@@ -778,7 +778,8 @@ export async function streamAiSdk(
     );
     if (notice) {
       fullText += notice;
-      params.callbacks?.onContentDelta?.(notice);
+      if (params.callbacks?.onStopNotice) params.callbacks.onStopNotice(notice);
+      else params.callbacks?.onContentDelta?.(notice);
     }
     await rawStreamRecorder?.flush("completed");
     return { fullText };
