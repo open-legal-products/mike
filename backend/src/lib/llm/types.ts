@@ -70,6 +70,8 @@ export type StreamCallbacks = {
     onReasoningDelta?: (text: string) => void;
     onReasoningBlockEnd?: () => void;
     onContentDelta?: (text: string) => void;
+    /** Server-authored terminal warning, outside any hidden model citation block. */
+    onStopNotice?: (text: string) => void;
     onToolCallStart?: (call: NormalizedToolCall) => void;
     onWebSearch?: (event: ProviderWebSearchEvent) => void;
     /** Skipped when the provider reports no usage. */

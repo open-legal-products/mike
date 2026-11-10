@@ -12,6 +12,7 @@ const mocks = vi.hoisted(() => ({
   reportError: vi.fn((..._args: unknown[]) => "event-1"),
   createServerSupabase: vi.fn(),
   createRequestSupabase: vi.fn(),
+  clearRequestAuthCookies: vi.fn(),
   assurance: vi.fn(),
 }));
 vi.mock("../lib/observability/sentry", async (importOriginal) => ({
@@ -24,6 +25,7 @@ vi.mock("../lib/supabase", () => ({
 }));
 vi.mock("../lib/authSession", () => ({
   createRequestSupabase: () => mocks.createRequestSupabase(),
+  clearRequestAuthCookies: mocks.clearRequestAuthCookies,
 }));
 import { requireAuth, requireMfaIfEnrolled } from "./auth";
 

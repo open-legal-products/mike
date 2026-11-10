@@ -25,6 +25,7 @@ import type { ReasoningLevel } from "../lib/wordChatTypes";
 import {
   SERVER_FAILURE_MESSAGE,
   createControlRequestRetryPolicy,
+  reportedUpstreamMessage,
   firstUploadResult,
   uploadFilesWithSessionCore,
   type UploadOutcome,
@@ -140,8 +141,13 @@ export function parseApiErrorBody(args: {
 
   return {
     // 4xx detail is written for users by the backend. A 5xx body (a stack
-    // trace, a proxy's HTML, a provider's complaint) never is: replace it.
-    message: args.status >= 500 ? SERVER_FAILURE_MESSAGE : (detail ?? generic),
+    // trace, a proxy's HTML, a provider's complaint) never is: replace it,
+    // with the fixed sentence for a code that has one (an outage to wait
+    // out, a database the administrator must migrate).
+    message:
+      args.status >= 500
+        ? (reportedUpstreamMessage(code) ?? SERVER_FAILURE_MESSAGE)
+        : (detail ?? generic),
     code,
     requestId,
   };

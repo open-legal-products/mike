@@ -824,6 +824,14 @@ export async function runLLMStream(params: {
           iterText += delta;
           streamVisibleContent(delta);
         },
+        onStopNotice: (notice) => {
+          // A truncated model citation block must not swallow the server's
+          // incomplete-answer warning. Keep it in the visible/persisted prose;
+          // the original citation text still goes through normal verification.
+          flushText();
+          iterText += notice;
+          streamVisibleContent(notice);
+        },
         onReasoningDelta: (delta) => {
           iterReasoning += delta;
           write(

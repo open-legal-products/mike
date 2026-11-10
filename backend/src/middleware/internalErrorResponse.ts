@@ -7,6 +7,7 @@ import type {
 import {
   INTERNAL_ERROR_CODE,
   INTERNAL_ERROR_MESSAGE,
+  failureAlreadyReported,
   sendInternalError,
 } from "../lib/httpError";
 import {
@@ -46,6 +47,20 @@ export function protectInternalErrorResponses(
       Object.keys(errorBody).some(
         (key) => !["code", "detail", "request_id"].includes(key),
       );
+    // sendInternalError already reported this failure and wrote a fixed
+    // public body (internal_error, or an intentional 503 such as
+    // schema_out_of_date / upstream_unavailable that the client acts on).
+    // Pass it through untouched: replacing the code would hide the one thing
+    // the client can use, and a second report is a duplicate Sentry issue.
+    if (
+      failureAlreadyReported(res) &&
+      errorBody &&
+      !hasUnexpectedFields &&
+      typeof errorBody.code === "string" &&
+      typeof errorBody.detail === "string"
+    ) {
+      return originalJson(body);
+    }
     if (
       errorBody?.code === INTERNAL_ERROR_CODE &&
       errorBody.detail === INTERNAL_ERROR_MESSAGE &&
@@ -54,28 +69,33 @@ export function protectInternalErrorResponses(
       return originalJson(publicBody);
     }
 
-    // A handler wrote its own 5xx body instead of going through
-    // sendInternalError: still a server failure, still a Sentry event. The
-    // detail is the developer's message (never shown to the client), so it
-    // is the best title we have.
     const route = requestRoutePattern(req);
-    reportMessage(
-      typeof errorBody?.detail === "string"
-        ? errorBody.detail
-        : `Unexpected ${res.statusCode} response`,
-      {
-        tags: {
-          component: "http",
-          http_status: res.statusCode,
-          request_id: requestId,
-          http_method: req.method,
-          http_route: route,
+    if (!failureAlreadyReported(res)) {
+      // A handler wrote its own 5xx body instead of going through
+      // sendInternalError: still a server failure, still a Sentry event.
+      // The detail is the developer's message (never shown to the client),
+      // so it is the best title we have.
+      reportMessage(
+        typeof errorBody?.detail === "string"
+          ? errorBody.detail
+          : `Unexpected ${res.statusCode} response`,
+        {
+          tags: {
+            component: "http",
+            http_status: res.statusCode,
+            request_id: requestId,
+            http_method: req.method,
+            http_route: route,
+          },
+          extra: { path: req.originalUrl.split("?")[0], body: errorBody ?? body },
+          fingerprint: ["sanitized-5xx", req.method, route ?? ""],
         },
-        extra: { path: req.originalUrl.split("?")[0], body: errorBody ?? body },
-        fingerprint: ["sanitized-5xx", req.method, route ?? ""],
-      },
-    );
-    console.error("[http/sanitized-internal-error]", {
+      );
+    }
+    // console.warn, not console.error: the Sentry console bridge files every
+    // console.error as an event of its own, and this failure has just been
+    // reported (above, or by the handler).
+    console.warn("[http/sanitized-internal-error]", {
       requestId,
       method: req.method,
       path: req.originalUrl.split("?")[0],
