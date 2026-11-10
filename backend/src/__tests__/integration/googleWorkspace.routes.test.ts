@@ -54,6 +54,7 @@ vi.mock("../../lib/integrations/googleWorkspace", async (original) => ({
 }));
 import { app } from "../../app";
 import { ConnectorSetupError } from "../../lib/mcp/errors";
+import { GoogleWorkspaceUnavailableError } from "../../lib/integrations/googleWorkspaceAuth";
 import { encryptString } from "../../lib/mcp/client";
 import { driveDb } from "../../lib/integrations/__tests__/googleDriveDb";
 
@@ -242,15 +243,18 @@ describe("Google Workspace routes", () => {
       ).status,
     ).toBe(404);
   });
-  it("refuses to start consent for a service the operator switched off", async () => {
-    vi.stubEnv("GOOGLE_WORKSPACE_DISABLED_PROVIDERS", "gmail");
+  it("refuses to start consent for a service not offered to the user", async () => {
+    // startWorkspaceOAuth checks the user's flags itself, before it writes
+    // any state; the route turns that refusal into 404 connector_unavailable.
+    mocks.start.mockRejectedValueOnce(
+      new GoogleWorkspaceUnavailableError("Gmail is not offered on this Mike server."),
+    );
     const res = await request(app).post("/user/integrations/gmail/oauth/start");
     expect(res.status).toBe(404);
     expect(res.body).toEqual({
       code: "connector_unavailable",
       detail: "Gmail is not offered on this Mike server.",
     });
-    expect(mocks.start).not.toHaveBeenCalled();
     mocks.start.mockResolvedValue({ authorizationUrl: "https://accounts.google.com/x" });
     const calendar = await request(app).post(
       "/user/integrations/google-calendar/oauth/start",

@@ -3,6 +3,7 @@ import { setUserProfilePhoto, listDeletedOrganizations, restoreOrganization } fr
 import { listOrgDepartures, reassignOrgDepartureArchives, deleteOrgDepartureArchives } from "./mikeApi";
 import { getGoogleWorkspaceStatus, startGoogleWorkspaceOAuth, cancelGoogleWorkspaceOAuth, disconnectGoogleWorkspace, updateGoogleWorkspaceSettings, setGoogleWorkspaceToolEnabled, updateGoogleDriveSettings, setGoogleDriveToolEnabled, createGoogleDrivePickerSession } from "./mikeApi";
 import { getCourtListenerConnector, setCourtListenerConnectorEnabled, saveCourtListenerConnectorToken, deleteCourtListenerConnectorToken } from "./mikeApi";
+import { getAdminFeatureFlags, setAdminFeatureFlagDefault, getAdminUserFeatureFlags, setAdminUserFeatureFlag } from "./mikeApi";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { AssistantEvent, Chat } from "@/app/components/shared/types";
 import { subscribeTabularReviewChanges } from "./tabularReviewChanges";
@@ -2617,6 +2618,30 @@ describe("thin endpoint wrappers", () => {
             call: () => setProjectMemoryEnabled("project/1", false),
             url: "/projects/project%2F1/memory/settings",
             method: "PATCH",
+            body: { enabled: false },
+        },
+        {
+            name: "getAdminFeatureFlags",
+            call: () => getAdminFeatureFlags(),
+            url: "/admin/feature-flags",
+        },
+        {
+            name: "setAdminFeatureFlagDefault (clear)",
+            call: () => setAdminFeatureFlagDefault("gmail-read", null),
+            url: "/admin/feature-flags/gmail-read",
+            method: "PUT",
+            body: { enabled: null },
+        },
+        {
+            name: "getAdminUserFeatureFlags",
+            call: () => getAdminUserFeatureFlags("a+b@example.com"),
+            url: "/admin/users/feature-flags?email=a%2Bb%40example.com",
+        },
+        {
+            name: "setAdminUserFeatureFlag",
+            call: () => setAdminUserFeatureFlag("user-1", "gmail-write", false),
+            url: "/admin/users/user-1/feature-flags/gmail-write",
+            method: "PUT",
             body: { enabled: false },
         },
         {

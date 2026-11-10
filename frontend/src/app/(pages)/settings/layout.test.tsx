@@ -31,6 +31,15 @@ vi.mock("@/app/hooks/useMemberDataActions", () => ({
     useMemberDataActions: () => dataActions,
 }));
 
+// Whether the server lists this account in MIKE_ADMIN_EMAILS.
+const profileState = vi.hoisted(() => ({ instanceAdmin: false }));
+vi.mock("@/app/contexts/UserProfileContext", () => ({
+    useOptionalUserProfile: () => ({
+        profile: { instanceAdmin: profileState.instanceAdmin },
+        loading: false,
+    }),
+}));
+
 describe("SettingsLayout", () => {
     beforeEach(() => {
         vi.clearAllMocks();
@@ -38,6 +47,26 @@ describe("SettingsLayout", () => {
         vi.mocked(listMyOrgInvitations).mockResolvedValue([]);
         dataActions.canExport = true;
         dataActions.canDelete = true;
+        profileState.instanceAdmin = false;
+    });
+
+    it("lists Admin only for an instance admin", () => {
+        render(
+            <SettingsLayout>
+                <div />
+            </SettingsLayout>,
+        );
+        expect(screen.queryByRole("button", { name: "Admin" })).toBeNull();
+    });
+
+    it("lists Admin for an instance admin", () => {
+        profileState.instanceAdmin = true;
+        render(
+            <SettingsLayout>
+                <div />
+            </SettingsLayout>,
+        );
+        expect(screen.getByRole("button", { name: "Admin" })).toBeInTheDocument();
     });
 
     it("lists Privacy & Data while it has an export or a delete to offer", () => {

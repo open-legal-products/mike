@@ -8151,6 +8151,28 @@ $$;
 revoke all on function public.list_org_departure_work(uuid,uuid,integer) from public,anon,authenticated;
 grant execute on function public.list_org_departure_work(uuid,uuid,integer) to service_role;
 
+-- Feature flags: deployment defaults and per-user overrides of the flags
+-- listed in backend/src/lib/featureFlags.ts (20261028_01). Service role only;
+-- MIKE_ADMIN_EMAILS decides who may change them.
+create table if not exists public.feature_flag_defaults (
+  flag text primary key,
+  enabled boolean not null,
+  updated_at timestamptz not null default now(),
+  updated_by uuid references auth.users(id) on delete set null
+);
+create table if not exists public.user_feature_flags (
+  user_id uuid not null references auth.users(id) on delete cascade,
+  flag text not null,
+  enabled boolean not null,
+  updated_at timestamptz not null default now(),
+  updated_by uuid references auth.users(id) on delete set null,
+  constraint user_feature_flags_pkey primary key (user_id, flag)
+);
+alter table public.feature_flag_defaults enable row level security;
+alter table public.user_feature_flags enable row level security;
+revoke all on public.feature_flag_defaults, public.user_feature_flags from public, anon, authenticated;
+grant select, insert, update, delete on public.feature_flag_defaults, public.user_feature_flags to service_role;
+
 -- ---------------------------------------------------------------------------
 -- Migration ledger (backend/migrations/20261009_03_schema_migrations.sql)
 -- ---------------------------------------------------------------------------
@@ -12329,6 +12351,7 @@ insert into public.schema_migrations (filename) values
   ('20261024_03_backfill_project_child_org_id.sql'),
   ('20261024_04_org_member_data_policy.sql'),
   ('20261027_01_document_text_failed_jobs.sql'),
+  ('20261028_01_feature_flags.sql'),
   ('20261029_01_chat_overview_candidates.sql'),
   ('20261030_01_document_cleanup_path_indexes.sql'),
   ('20261030_02_audit_actor_index_seeks.sql'),

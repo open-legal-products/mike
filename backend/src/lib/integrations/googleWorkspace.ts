@@ -17,8 +17,9 @@ import {
   workspaceStatus,
   type GoogleProvider,
   assertWorkspaceProviderAvailable,
-  isWorkspaceProviderAvailable,
+  assertWorkspaceWriteAvailable,
 } from "./googleWorkspaceAuth";
+import { googleAccessMap, type GoogleAccessMap } from "./googleAccess";
 import {
   WORKSPACE_TOOLS,
   GoogleApiError,
@@ -51,13 +52,20 @@ function disabledTools(grant: Grant | null): string[] {
     : [];
 }
 
-/** Every Gmail/Calendar tool with the user's on/off choice, for Settings. */
+/**
+ * Every Gmail/Calendar tool with the user's on/off choice, for Settings. A
+ * write tool is listed only while the user's write flag is on: with it off the
+ * write scope is never requested, so there is nothing for the switch to do.
+ */
 export function workspaceToolList(
   provider: GoogleProvider,
   grant: Grant | null,
+  writeAvailable = true,
 ): NativeConnectorTool[] {
   const disabled = disabledTools(grant);
-  return WORKSPACE_TOOLS.filter((t) => t.provider === provider).map((t) => ({
+  return WORKSPACE_TOOLS.filter(
+    (t) => t.provider === provider && (!t.write || writeAvailable),
+  ).map((t) => ({
     name: t.name,
     title: t.title,
     description: t.summary,
@@ -75,7 +83,10 @@ export async function workspaceConnectorStatus(
   const grant = status.connected
     ? await loadWorkspaceGrant(db, owner, provider)
     : null;
-  return { ...status, tools: workspaceToolList(provider, grant) };
+  return {
+    ...status,
+    tools: workspaceToolList(provider, grant, status.writeAvailable),
+  };
 }
 
 export async function buildGoogleWorkspaceTools(
@@ -83,10 +94,26 @@ export async function buildGoogleWorkspaceTools(
   db: Db,
 ): Promise<unknown[]> {
   const tools: unknown[] = [];
+  // One flag read for both services: what this user may do with each.
+  let access: GoogleAccessMap;
+  try {
+    access = await googleAccessMap(db, owner.userId);
+  } catch (error) {
+    // No access map means no Google tools this turn; the failure (a flag
+    // query, normally) must not hide with them.
+    const failure = workspaceFailureError(
+      error,
+      "db.query_failed",
+      "Google feature flags could not be loaded",
+    );
+    reportError(failure);
+    console.error("[google-workspace] flag lookup failed", failure);
+    return tools;
+  }
   for (const provider of Object.keys(GOOGLE_PROVIDERS) as GoogleProvider[]) {
-    // A service the operator switched off has no tools, even for a user who
+    // A service not offered to this user has no tools, even for a user who
     // connected it before the switch; the grant stays until they delete it.
-    if (!isWorkspaceProviderAvailable(provider)) continue;
+    if (!access[provider].read) continue;
     try {
       const row = await loadWorkspaceGrant(db, owner, provider);
       if (!row || row.enabled === false) continue;
@@ -99,7 +126,10 @@ export async function buildGoogleWorkspaceTools(
         (t) =>
           t.provider === provider &&
           !disabled.includes(t.name) &&
-          (!t.write || (row.write_enabled === true && !row.read_only)),
+          (!t.write ||
+            (access[provider].write &&
+              row.write_enabled === true &&
+              !row.read_only)),
       )) {
         tools.push({
           type: "function",
@@ -221,8 +251,9 @@ async function resolveCall(
   input: unknown,
 ) {
   const provider = providerFor(name);
-  assertWorkspaceProviderAvailable(provider);
+  const access = await assertWorkspaceProviderAvailable(db, owner.userId, provider);
   const { tool, args } = parseWorkspaceTool(name, input);
+  if (tool.write) assertWorkspaceWriteAvailable(provider, access);
   const grant = await loadWorkspaceGrant(db, owner, provider);
   if (!grant)
     throw new GoogleWorkspaceError(

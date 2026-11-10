@@ -28,6 +28,12 @@ const {
     updateLastSelectedChatSettings: vi.fn(),
 }));
 
+const reportError = vi.hoisted(() => vi.fn(() => null));
+vi.mock("@/app/lib/errorReporting", async (importOriginal) => ({
+    ...(await importOriginal<typeof import("@/app/lib/errorReporting")>()),
+    reportError,
+}));
+
 vi.mock("@/app/contexts/AuthContext", () => ({
     useAuth: () => ({
         user: { id: "u1" },
@@ -50,7 +56,16 @@ vi.mock("@/app/lib/mikeApi", async (importOriginal) => ({
     saveApiKey: (...args: unknown[]) => saveApiKey(...args),
 }));
 
+vi.mock("@/app/hooks/useOllamaModels", () => ({ useOllamaModels: () => [] }));
+vi.mock("@/app/hooks/useConfiguredModels", async (importOriginal) => ({
+    ...(await importOriginal<typeof import("@/app/hooks/useConfiguredModels")>()),
+    useConfiguredModels: () => [],
+}));
+
+import { useState } from "react";
 import { UserProfileProvider, useUserProfile } from "./UserProfileContext";
+import { useModelApiKeys } from "@/app/hooks/useModelApiKeys";
+import { ModelToggle } from "@/app/components/assistant/ModelToggle";
 import { MikeApiError } from "@/app/lib/mikeApi";
 import { subscribeToTabularChatSettingsUpdates } from "@/app/lib/tabularChatSettingsEvents";
 
@@ -270,6 +285,47 @@ it("saves one router's Model Selections under that router's profile field", asyn
     expect(updateUserProfile).toHaveBeenCalledWith({
         azureFoundryModels: ["claude-opus-5-5"],
     });
+});
+
+it.each(["merge", "replace"])("keeps instance admin access when a %s save response omits it", async (mode) => {
+    // Review finding on #722: only GET /user/profile decides instanceAdmin;
+    // the save endpoints return the profile without it, and reading the
+    // missing field as false hid the Admin area until the next reload.
+    function AdminFlag() {
+        const { profile, updateDisplayName, updatePersonalisation, reloadProfile } = useUserProfile();
+        if (!profile) return null;
+        return (
+            <>
+                <span data-testid="name">{profile.displayName}</span>
+                <span data-testid="admin">{String(profile.instanceAdmin)}</span>
+                <button onClick={() => void (mode === "merge"
+                    ? updateDisplayName("Ada Lovelace")
+                    : updatePersonalisation({}))}>
+                    Save name
+                </button>
+                <button onClick={() => void reloadProfile()}>Reload</button>
+            </>
+        );
+    }
+    getUserProfile.mockResolvedValue({ ...apiProfile(false), instanceAdmin: true });
+    updateUserProfile.mockResolvedValueOnce({
+        ...apiProfile(false),
+        displayName: "Ada Lovelace",
+    });
+    render(<UserProfileProvider><AdminFlag /></UserProfileProvider>);
+    await waitFor(() =>
+        expect(screen.getByTestId("admin")).toHaveTextContent("true"),
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Save name" }));
+    await waitFor(() =>
+        expect(screen.getByTestId("name")).toHaveTextContent("Ada Lovelace"),
+    );
+    expect(screen.getByTestId("admin")).toHaveTextContent("true");
+
+    getUserProfile.mockResolvedValue(apiProfile(false));
+    fireEvent.click(screen.getByRole("button", { name: "Reload" }));
+    await waitFor(() => expect(screen.getByTestId("admin")).toHaveTextContent("false"));
 });
 
 describe("UserProfileProvider dark mode", () => {
@@ -511,5 +567,120 @@ describe("UserProfileProvider failure reporting", () => {
 
         const alert = await screen.findByRole("alert", {}, { timeout: 4000 });
         expect(alert).toHaveTextContent("Couldn't load your profile");
+    });
+});
+
+function ProfileSummary() {
+    const { profile, loading, apiKeysDegraded, reloadProfile, updateDisplayName } = useUserProfile();
+    const apiKeys = useModelApiKeys();
+    const [saved, setSaved] = useState<string>("");
+    if (loading) return null;
+    return (
+        <>
+            <span data-testid="loaded">yes</span>
+            <span data-testid="name">{profile?.displayName ?? "none"}</span>
+            <span data-testid="degraded">{String(apiKeysDegraded)}</span>
+            <span data-testid="keys">{apiKeys === undefined ? "unknown" : "known"}</span>
+            <span data-testid="saved">{saved}</span>
+            <button type="button" onClick={() => void reloadProfile()}>reload</button>
+            <button
+                type="button"
+                onClick={() => void updateDisplayName("Grace").then((ok) => setSaved(String(ok)))}
+            >
+                rename
+            </button>
+            <ModelToggle value="gemini-3.8-flash" onChange={() => {}} apiKeys={apiKeys} />
+        </>
+    );
+}
+
+describe("UserProfileProvider when the server omits apiKeyStatus", () => {
+    // Sentry MIKE-FRONTEND-4H: a profile answered 200 without
+    // `apiKeyStatus`; normalising it threw, the throw was filed as a fault
+    // and the user got the placeholder profile. Every Mike backend sends the
+    // field, so the sender was a forked server or a proxy/misroute.
+    const withoutKeyStatus = () => {
+        const body: Partial<ReturnType<typeof apiProfile>> = apiProfile(false);
+        delete body.apiKeyStatus;
+        return body;
+    };
+    const renderProfile = () =>
+        render(
+            <UserProfileProvider>
+                <ProfileSummary />
+                <ToastViewportUI />
+            </UserProfileProvider>,
+        );
+    const missingKeyStatusWarning = [
+        expect.objectContaining({ message: "profile missing apiKeyStatus" }),
+        {
+            level: "warning",
+            tags: { component: "profile", error_kind: "missing_api_key_status" },
+        },
+    ];
+
+    it.each([
+        ["missing", withoutKeyStatus],
+        ["malformed", () => ({ ...apiProfile(false), apiKeyStatus: "enabled" })],
+    ])("shows the real profile when the key status is %s, fails open and warns Sentry once", async (_case, body) => {
+        getUserProfile.mockResolvedValue(body());
+        renderProfile();
+
+        await screen.findByTestId("loaded");
+        expect(screen.queryByRole("alert")).toBeNull();
+        expect(screen.getByTestId("name")).toHaveTextContent("Ada");
+        // Pickers fail open, as after a failed fetch: a server that omits
+        // the status cannot vouch for which providers have keys.
+        expect(screen.getByTestId("degraded")).toHaveTextContent("true");
+        expect(getUserProfile).toHaveBeenCalledTimes(1);
+        // One warning, no payload: the error is fixed text and the context
+        // carries only the level and two static tags.
+        expect(reportError).toHaveBeenCalledTimes(1);
+        expect(reportError).toHaveBeenCalledWith(...missingKeyStatusWarning);
+
+        // A reload on the same page does not report it again.
+        fireEvent.click(screen.getByRole("button", { name: "reload" }));
+        await waitFor(() => expect(getUserProfile).toHaveBeenCalledTimes(2));
+        expect(reportError).toHaveBeenCalledTimes(1);
+    });
+
+    it("leaves key state unknown, so the model picker offers models instead of No Models", async () => {
+        getUserProfile.mockResolvedValue(withoutKeyStatus());
+        renderProfile();
+
+        await screen.findByTestId("loaded");
+        expect(screen.getByTestId("keys")).toHaveTextContent("unknown");
+        expect(screen.queryByText("No Models")).toBeNull();
+        expect(screen.getByText("Gemini 3.8 Flash")).toBeInTheDocument();
+    });
+
+    it.each([true, false])("updates key availability when a save changes it (initially known: %s)", async (known) => {
+        getUserProfile.mockResolvedValue(known ? apiProfile(false) : withoutKeyStatus());
+        updateUserProfile.mockResolvedValue({
+            ...(known ? withoutKeyStatus() : apiProfile(false)), displayName: "Grace",
+        });
+        renderProfile();
+        await screen.findByTestId("loaded");
+        expect(screen.getByTestId("keys")).toHaveTextContent(known ? "known" : "unknown");
+        fireEvent.click(screen.getByRole("button", { name: "rename" }));
+        await waitFor(() => expect(screen.getByTestId("saved")).toHaveTextContent("true"));
+        expect(screen.getByTestId("keys")).toHaveTextContent(known ? "unknown" : "known");
+        expect(reportError).toHaveBeenCalledTimes(1);
+    });
+
+    it("applies a save whose response also lacks the key status, without a notice", async () => {
+        getUserProfile.mockResolvedValue(withoutKeyStatus());
+        updateUserProfile.mockResolvedValue({ ...withoutKeyStatus(), displayName: "Grace" });
+        renderProfile();
+
+        await screen.findByTestId("loaded");
+        fireEvent.click(screen.getByRole("button", { name: "rename" }));
+
+        await waitFor(() => expect(screen.getByTestId("saved")).toHaveTextContent("true"));
+        expect(screen.getByTestId("name")).toHaveTextContent("Grace");
+        expect(screen.getByTestId("keys")).toHaveTextContent("unknown");
+        expect(screen.queryByRole("alert")).toBeNull();
+        // Only the load's warning; the save is not reported as a failure.
+        expect(reportError).toHaveBeenCalledTimes(1);
     });
 });

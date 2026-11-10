@@ -808,6 +808,8 @@ export interface PersonalisationDetails {
     practiceAreas?: string[];}
 
 export interface UserProfile extends RouterProfileLists {
+    /** The server lists this account's address in MIKE_ADMIN_EMAILS. */
+    instanceAdmin?: boolean;
     profilePhoto?: string | null;
     displayName: string | null;
     organisation: string | null;
@@ -840,7 +842,8 @@ export interface UserProfile extends RouterProfileLists {
     responseDetailsVisible?: boolean;
     darkMode: boolean;
     projectMemoryDefault: boolean;
-    apiKeyStatus: ApiKeyStatus;
+    /** Absent only when a forked server or a proxy/misroute answers; see `hasApiKeyStatus`. */
+    apiKeyStatus?: ApiKeyStatus;
 }
 
 /** Uploads a cropped profile-photo data URL, or removes the current photo when passed null. */
@@ -944,6 +947,56 @@ export async function lookupUserByEmail(
 ): Promise<UserLookupResult> {
     return apiRequest<UserLookupResult>(
         "settings.profile", `/user/lookup?email=${encodeURIComponent(email)}`,
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Instance admin: feature flags (Settings → Admin). Every call answers 403
+// instance_admin_required unless the server lists the caller in
+// MIKE_ADMIN_EMAILS.
+// ---------------------------------------------------------------------------
+
+export async function getAdminFeatureFlags(): Promise<
+    import("@mike/contracts").AdminFeatureFlagsResponse
+> {
+    return apiRequest("admin.feature_flags", "/admin/feature-flags");
+}
+
+/** `enabled: null` clears the deployment default so the code default applies. */
+export async function setAdminFeatureFlagDefault(
+    key: import("@mike/contracts").FeatureFlagKey,
+    enabled: boolean | null,
+): Promise<import("@mike/contracts").AdminFeatureFlagsResponse> {
+    return apiRequest("admin.feature_flags", `/admin/feature-flags/${encodeURIComponent(key)}`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ enabled }),
+    });
+}
+
+export async function getAdminUserFeatureFlags(
+    email: string,
+): Promise<import("@mike/contracts").AdminUserFeatureFlags> {
+    return apiRequest(
+        "admin.feature_flags",
+        `/admin/users/feature-flags?email=${encodeURIComponent(email)}`,
+    );
+}
+
+/** `enabled: null` clears the user's override so the deployment default applies. */
+export async function setAdminUserFeatureFlag(
+    userId: string,
+    key: import("@mike/contracts").FeatureFlagKey,
+    enabled: boolean | null,
+): Promise<import("@mike/contracts").AdminUserFeatureFlags> {
+    return apiRequest(
+        "admin.feature_flags",
+        `/admin/users/${encodeURIComponent(userId)}/feature-flags/${encodeURIComponent(key)}`,
+        {
+            method: "PUT",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ enabled }),
+        },
     );
 }
 

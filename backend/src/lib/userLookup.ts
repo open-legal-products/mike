@@ -115,17 +115,26 @@ export async function findProfileUserByEmail(db: Db, email: string) {
     const normalized = normalizeEmail(email);
     if (!normalized) return null;
 
+    return findProfileUser(db, "email", normalized);
+}
+
+/** The same identity fields for one user ID (an admin acting on an account). */
+export function findProfileUserById(db: Db, userId: string) {
+    return findProfileUser(db, "user_id", userId);
+}
+
+async function findProfileUser(db: Db, column: "email" | "user_id", value: string) {
     const { data, error } = await db
         .from("user_profiles")
         .select("user_id, email, display_name")
-        .eq("email", normalized)
+        .eq(column, value)
         .maybeSingle();
     if (error) throw error;
     if (!data) return null;
 
     return {
         id: data.user_id as string,
-        email: normalized,
+        email: normalizeEmail(data.email),
         display_name: normalizeDisplayName(data.display_name),
     };
 }
