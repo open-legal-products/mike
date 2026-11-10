@@ -99,12 +99,15 @@ it("activates the exact native body revision, including paired replacements, and
             revision("replacement", ["7", "8"], "/word/document.xml", "third-page"),
         ],
         setActiveReviewItem: vi.fn().mockReturnValue({ ok: true }),
+        clearHighlights: vi.fn(),
         findMatches: vi.fn(),
     };
     act(() => (state.props.onReady as (editor: unknown) => void)(editor));
     const surface = onReady.mock.calls[0][0];
     expect(surface.activateRevision({ ins: "8", del: "7" })).toBe(true);
     expect(editor.setActiveReviewItem).toHaveBeenLastCalledWith("replacement", { reveal: "center" });
+    // The edit replaces any citation the viewer was showing.
+    expect(editor.clearHighlights).toHaveBeenLastCalledWith("citation");
     expect(surface.activateRevision({ ins: "18" })).toBe(true);
     expect(editor.setActiveReviewItem).toHaveBeenLastCalledWith("other", { reveal: "center" });
     expect(surface.activateRevision({ ins: "missing" })).toBe(false);
@@ -144,6 +147,7 @@ it.each([
             },
         }],
         setActiveReviewItem: vi.fn().mockReturnValue({ ok: true }),
+        clearHighlights: vi.fn(),
         exec: vi.fn().mockReturnValue({ ok: true }),
         query: vi.fn(() => "edit"),
     };
@@ -173,6 +177,7 @@ it.each([false, true])("selects both separated revision ranges across paragraphs
             revision("insertion", "8", { ...head, offset: 50 }, head),
         ],
         setActiveReviewItem: vi.fn().mockReturnValue({ ok: true }),
+        clearHighlights: vi.fn(),
         exec: vi.fn(() => { selectedText = "deleted text with a gap then inserted text"; return { ok: true }; }),
         query: vi.fn(() => selectedText),
         findMatches: vi.fn(),
@@ -195,43 +200,44 @@ it.each([false, true])("selects both separated revision ranges across paragraphs
     expect(surface.activateRevision({ ins: "8", del: "7" })).toBe(false);
 });
 
-it("selects across table cells, scrolls to the first cell, and clears the complete citation on deselect", () => {
+it("paints a citation across table cells without touching the selection, centres it, and clears it on deselect", () => {
     const onReady = vi.fn();
     render(<DocxRenderer bytes={new ArrayBuffer(1)} mode="edit" onReady={onReady} onError={vi.fn()} />);
-    let selectedText = "";
     const first = { blockId: "first-cell", paragraphIndex: 0, start: 0, length: 2, text: "P1" };
     const last = { blockId: "last-cell", paragraphIndex: 1, start: 2, length: 5, text: "hours" };
+    const lastCell = { blockId: "last-cell", paragraphIndex: 1, start: 0, length: 1, text: "4" };
     const editor = {
         snapshot: () => ({ reviewPaneOpen: false }),
         on: vi.fn().mockReturnValue(vi.fn()),
-        findMatches: (text: string) => text === "P1" ? [first] : text === "hours" ? [last] : [],
-        query: ({ type }: { type: string }) => type === "paragraphs"
-            ? [{ text: "P1" }, { text: "4 hours" }] : selectedText,
-        selectMatch: vi.fn().mockReturnValue({ ok: true }),
-        exec: vi.fn(() => { selectedText = "P1\n4 hours"; return { ok: true }; }),
+        findMatches: (text: string) => ({ P1: [first], hours: [last], "4": [lastCell] })[text] ?? [],
+        query: () => [{ text: "P1" }, { text: "4 hours" }],
+        setHighlights: vi.fn().mockReturnValue({ applied: 2, unavailable: 0 }),
+        clearHighlights: vi.fn(),
         scrollToBlock: vi.fn(),
+        selectMatch: vi.fn(),
+        exec: vi.fn(),
     };
     act(() => (state.props.onReady as (editor: unknown) => void)(editor));
     const surface = onReady.mock.calls[0][0];
-    // Citation whitespace may differ from the native selected text.
+    // Citation whitespace may differ from the document's paragraph breaks.
     expect(surface.selectText("P1 4 hours")).toBe(true);
-    expect(editor.exec).toHaveBeenCalledWith({ type: "setSelection", range: {
-        anchor: { paragraphId: "first-cell", offset: 0 },
-        head: { paragraphId: "last-cell", offset: 7 },
-    } });
-    expect(editor.scrollToBlock).toHaveBeenCalledWith("first-cell");
-    surface.clearTextSelection();
-    expect(editor.selectMatch).toHaveBeenLastCalledWith({ ...first, length: 0 });
-
-    surface.selectText("P1 4 hours");
-    selectedText = "User selected something else";
-    editor.selectMatch.mockClear();
-    surface.clearTextSelection();
+    expect(editor.setHighlights).toHaveBeenCalledWith("citation", [
+        { blockId: "first-cell", start: 0, length: 2, scope: undefined },
+        { blockId: "last-cell", start: 0, length: 7, scope: undefined },
+    ], { color: "var(--pdf-highlight-background)" });
+    expect(editor.scrollToBlock).toHaveBeenCalledWith("first-cell", { block: "center" });
+    // A citation is painted, never selected: the reader's caret stays put.
     expect(editor.selectMatch).not.toHaveBeenCalled();
+    expect(editor.exec).not.toHaveBeenCalled();
+    surface.clearTextSelection();
+    expect(editor.clearHighlights).toHaveBeenLastCalledWith("citation");
 
-    editor.exec.mockReturnValueOnce({ ok: false });
+    // Ranges that no longer paint report failure and leave nothing behind.
+    editor.clearHighlights.mockClear();
+    editor.setHighlights.mockReturnValueOnce({ applied: 0, unavailable: 2 });
     expect(surface.selectText("P1 4 hours")).toBe(false);
-    expect(editor.selectMatch).toHaveBeenLastCalledWith({ ...first, length: 0 });
+    expect(editor.clearHighlights).toHaveBeenCalledWith("citation");
+    expect(surface.selectText("not in the document")).toBe(false);
 });
 
 it("keeps font failures non-fatal and permits dismissing their warning", () => {
