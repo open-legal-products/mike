@@ -553,6 +553,59 @@ const importPayload = {
   storageKey: STAGED_KEY,
 };
 
+// Before #819 split the write, main recorded these as failed too (an upload
+// fault) or as text only (a download fault). Preparation publishes nothing,
+// so the run must end, not wait on an outcome that cannot exist.
+describe("a review whose tracked changes could not be prepared", () => {
+  const payload = {
+    ...reviewPayload,
+    userId: "owner",
+    expectedVersion: { id: "v1", storagePath: "source.docx" },
+  };
+  function setup() {
+    const fixture = database([book()]);
+    fixture.tables.playbook_runs.push(runRow({ document_id: "doc-1" }));
+    fixture.tables.documents = [{ id: "doc-1", user_id: "owner", project_id: null,
+      org_id: null, workflow_id: null, current_version_id: "v1" }];
+    fixture.tables.document_versions = [{ id: "v1", document_id: "doc-1",
+      storage_path: "source.docx", filename: "Msa.docx", deleted_at: null }];
+    completeText.mockResolvedValue(JSON.stringify({ summary: "Reviewed", findings: [{
+      ruleId: "cap", ruleName: "Snapshot cap rule", status: "unacceptable", quote: "Contract",
+      analysis: "Uncapped.", suggestedText: "Capped contract",
+    }] }));
+    storage.downloadFile.mockRejectedValue(new Error("storage unavailable"));
+    return fixture;
+  }
+
+  it("ends the run as failed when a chat-started review cannot read the document", async () => {
+    const { db, tables } = setup();
+    const work = playbookReviewWork(tables.playbook_runs[0], payload);
+
+    // The chat tool reports the rejection; the run must not stay `running`.
+    const failure = await runPlaybookReview(db, work, { claude: "test-key" })
+      .catch((error: unknown) => error);
+
+    expect(failure).toBeInstanceOf(Error);
+    expect(tables.playbook_runs[0]).toMatchObject({
+      status: "failed",
+      error: "The review failed. Try again.",
+    });
+  });
+
+  it("ends the queued job without rerunning the model", async () => {
+    const { db, tables } = setup();
+    const claimed = job("playbook.review", payload);
+    tables.db_jobs = [claimed as unknown as Row];
+
+    await processClaimedJob(db, { "playbook.review": handlePlaybookReview }, claimed,
+      { "playbook.review": markPlaybookReviewJobFailed });
+
+    expect(tables.db_jobs[0].status).toBe("done");
+    expect(tables.playbook_runs[0].status).toBe("failed");
+    expect(completeText).toHaveBeenCalledTimes(1);
+  });
+});
+
 describe("the playbook.import job", () => {
   it("compiles the staged upload into the import's playbook and clears the upload", async () => {
     const { db, tables } = database([]);

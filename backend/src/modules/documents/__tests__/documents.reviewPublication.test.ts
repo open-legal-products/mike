@@ -168,6 +168,14 @@ async function expectRetryable(operation: Promise<unknown>, cause: { message: st
   return failure as DocumentReviewRetryableError;
 }
 
+/** Preparation runs before the RPC, so its failures are certain, not retryable. */
+async function expectPrepareFailure(operation: Promise<unknown>, cause: { message: string }) {
+  const failure: unknown = await operation.catch((error: unknown) => error);
+  expect(failure).toMatchObject(cause);
+  expect(failure).not.toBeInstanceOf(DocumentReviewRetryableError);
+  return failure;
+}
+
 beforeEach(async () => {
   vi.resetAllMocks();
   storage.downloadFile.mockResolvedValue(await docx());
@@ -274,7 +282,7 @@ describe("prepareDocumentReviewEdits", () => {
           : call.target === stage,
         message: `${stage} unavailable`,
       });
-      await expectRetryable(prepareDocumentReviewEdits(f.db, args()), { message: `${stage} unavailable` });
+      await expectPrepareFailure(prepareDocumentReviewEdits(f.db, args()), { message: `${stage} unavailable` });
       expect(storage.uploadFile).not.toHaveBeenCalled();
       noCleanup();
     },
@@ -288,10 +296,10 @@ describe("prepareDocumentReviewEdits", () => {
     if (stage === "invalid DOCX") storage.downloadFile.mockResolvedValue(new Uint8Array([1, 2, 3]).buffer);
     if (stage === "upload") storage.uploadFile.mockRejectedValue(failure);
     if (stage === "download" || stage === "upload") {
-      const thrown = await expectRetryable(prepareDocumentReviewEdits(f.db, args()), { message: failure.message });
-      expect(thrown.cause).toBe(failure);
+      const thrown = await expectPrepareFailure(prepareDocumentReviewEdits(f.db, args()), { message: failure.message });
+      expect(thrown).toBe(failure);
     } else if (stage === "missing bytes") {
-      await expectRetryable(prepareDocumentReviewEdits(f.db, args()), { message: "Review document bytes unavailable" });
+      await expectPrepareFailure(prepareDocumentReviewEdits(f.db, args()), { message: "Review document bytes unavailable" });
     } else {
       const thrown: unknown = await prepareDocumentReviewEdits(f.db, args()).catch((error: unknown) => error);
       expect(thrown).toBeInstanceOf(Error);
@@ -370,7 +378,7 @@ describe("review preparation uses actual document-edit permissions", () => {
     Object.assign(f.rows.documents[0], { user_id: "other-user", workflow_id: "workflow-1" });
     f.rows.workflows = [{ id: "workflow-1", user_id: "other-user", org_id: null, archived_at: null }];
     f.failures.push({ matches: call => call.target === target, message: `${target} unavailable` });
-    await expectRetryable(prepareDocumentReviewEdits(f.db, args()), { message: `${target} unavailable` });
+    await expectPrepareFailure(prepareDocumentReviewEdits(f.db, args()), { message: `${target} unavailable` });
     expect(storage.downloadFile).not.toHaveBeenCalled();
   });
 
@@ -386,7 +394,7 @@ describe("review preparation uses actual document-edit permissions", () => {
     const f = database();
     f.rows.documents[0].org_id = "org-1";
     f.failures.push({ matches: call => call.target === "organizations", message: "organization lookup unavailable" });
-    await expectRetryable(prepareDocumentReviewEdits(f.db, args()), { message: "organization lookup unavailable" });
+    await expectPrepareFailure(prepareDocumentReviewEdits(f.db, args()), { message: "organization lookup unavailable" });
     expect(storage.downloadFile).not.toHaveBeenCalled();
   });
 
@@ -451,7 +459,7 @@ describe("review preparation uses actual document-edit permissions", () => {
         f.rpcResults.org_private_access_role = "viewer";
       }
       f.failures.push({ matches: call => call.target === target, message: `${target} unavailable` });
-      await expectRetryable(prepareDocumentReviewEdits(f.db, args()), { message: `${target} unavailable` });
+      await expectPrepareFailure(prepareDocumentReviewEdits(f.db, args()), { message: `${target} unavailable` });
       expect(f.calls.some(call => call.target === target)).toBe(true);
       expect(storage.downloadFile).not.toHaveBeenCalled();
       expect(storage.uploadFile).not.toHaveBeenCalled();
@@ -462,7 +470,7 @@ describe("review preparation uses actual document-edit permissions", () => {
     const f = database();
     Object.assign(f.rows.documents[0], { user_id: "other-user", org_id: "org-1" });
     f.failures.push({ matches: call => call.target === "rpc/org_private_document_access", message: "access unavailable" });
-    await expectRetryable(prepareDocumentReviewEdits(f.db, args()), { message: "access unavailable" });
+    await expectPrepareFailure(prepareDocumentReviewEdits(f.db, args()), { message: "access unavailable" });
     expect(storage.downloadFile).not.toHaveBeenCalled();
   });
 });

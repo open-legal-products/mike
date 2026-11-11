@@ -12,7 +12,12 @@ import { processDocumentTextInline } from "./documents.indexing";
 import { logError } from "../../lib/log";
 import { safeError } from "../../lib/safeError";
 
-/** IO failed before publication, or its commit outcome is still unknown. */
+/**
+ * The publication RPC was called and its commit outcome is unknown. Nothing
+ * else may use it: callers leave the run `running` for a retry or for the
+ * interrupted-work reader. A failure while preparing happens before the RPC
+ * and is thrown as itself, so callers can record it as an ordinary failure.
+ */
 export class DocumentReviewRetryableError extends AppError {
   constructor(cause: unknown) {
     super("playbooks.review_retryable", "Review work could not be recorded", { cause });
@@ -21,11 +26,6 @@ export class DocumentReviewRetryableError extends AppError {
 
 /** Groups the best-effort delete of a review upload nothing will reference. */
 const UNPUBLISHED_UPLOAD = "playbook-review-unpublished";
-
-async function retryableIo<T>(read: () => PromiseLike<T>): Promise<T> {
-  try { return await read(); }
-  catch (error) { throw new DocumentReviewRetryableError(error); }
-}
 
 export type PreparedReviewEdits = {
   documentId: string;
@@ -67,32 +67,36 @@ function strictAccessReads(db: Db): Db {
   }) as Db;
 }
 
-/** Null means a real access/source/matching refusal, never an IO failure. */
+/**
+ * Null means a real access/source/matching refusal, never an IO failure. An
+ * IO failure throws as itself: nothing has been published yet, so the review
+ * can be recorded as failed instead of waiting on an unknown outcome.
+ */
 export async function prepareDocumentReviewEdits(db: Db, args: {
   documentId: string; userId: string; userEmail?: string | null;
   expectedVersion: { id: string; storagePath: string };
   edits: { findingIndex: number; edit: EditInput }[];
 }): Promise<PreparedReviewEdits | null> {
   if (!args.edits.length) return null;
-  const { data: doc, error: docError } = await retryableIo(() => db.from("documents")
+  const { data: doc, error: docError } = await db.from("documents")
     .select("id, user_id, project_id, org_id, workflow_id, current_version_id")
-    .eq("id", args.documentId).maybeSingle());
-  if (docError) throw new DocumentReviewRetryableError(docError);
+    .eq("id", args.documentId).maybeSingle();
+  if (docError) throw docError;
   if (!doc) return null;
-  const access = await retryableIo(() => ensureDocAccess(doc, args.userId, args.userEmail, strictAccessReads(db)));
+  const access = await ensureDocAccess(doc, args.userId, args.userEmail, strictAccessReads(db));
   if (!access.ok || !can(access.projectRole, "content.edit")) return null;
   if (doc.current_version_id !== args.expectedVersion.id) return null;
-  const { data: source, error: sourceError } = await retryableIo(() => db.from("document_versions")
+  const { data: source, error: sourceError } = await db.from("document_versions")
     .select("id, document_id, storage_path, filename")
     .eq("id", args.expectedVersion.id).eq("document_id", args.documentId)
-    .is("deleted_at", null).maybeSingle());
-  if (sourceError) throw new DocumentReviewRetryableError(sourceError);
+    .is("deleted_at", null).maybeSingle();
+  if (sourceError) throw sourceError;
   if (!source || source.storage_path !== args.expectedVersion.storagePath) return null;
-  const raw = await retryableIo(() => downloadFile(source.storage_path));
-  if (!raw) throw new DocumentReviewRetryableError(new Error("Review document bytes unavailable"));
-  const { data: profile, error: profileError } = await retryableIo(() => db.from("user_profiles")
-    .select("display_name, email").eq("user_id", args.userId).maybeSingle());
-  if (profileError) throw new DocumentReviewRetryableError(profileError);
+  const raw = await downloadFile(source.storage_path);
+  if (!raw) throw new Error("Review document bytes unavailable");
+  const { data: profile, error: profileError } = await db.from("user_profiles")
+    .select("display_name, email").eq("user_id", args.userId).maybeSingle();
+  if (profileError) throw profileError;
   const edited = await applyTrackedEdits(Buffer.from(raw), args.edits.map(({ edit }) => edit), {
     author: profileAttributionName(profile, "Mike"),
   });
@@ -102,10 +106,10 @@ export async function prepareDocumentReviewEdits(db: Db, args: {
   if (applied.length !== edited.changes.length)
     throw new AppError("playbooks.edit_mapping_failed", "Review edit mapping failed");
   // Match the existing edit writer's inheritance, including user renames.
-  const { data: previous, error: filenameError } = await retryableIo(() => db.from("document_versions")
+  const { data: previous, error: filenameError } = await db.from("document_versions")
     .select("filename, created_at").eq("document_id", args.documentId)
-    .order("created_at", { ascending: false }).limit(1).maybeSingle());
-  if (filenameError) throw new DocumentReviewRetryableError(filenameError);
+    .order("created_at", { ascending: false }).limit(1).maybeSingle();
+  if (filenameError) throw filenameError;
   const id = crypto.randomUUID();
   const path = `documents/${args.userId}/${args.documentId}/edits/${id.replace(/-/g, "")}.docx`;
   try {
@@ -116,7 +120,7 @@ export async function prepareDocumentReviewEdits(db: Db, args: {
     // A lost upload response can still leave the object behind. Nothing can
     // reference it: the publication RPC has not been called.
     await deleteFileBestEffort(path, UNPUBLISHED_UPLOAD);
-    throw new DocumentReviewRetryableError(error);
+    throw error;
   }
   return {
     documentId: args.documentId, expectedVersion: args.expectedVersion,
