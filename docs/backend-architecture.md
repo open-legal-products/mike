@@ -184,7 +184,8 @@ stored with its stop
 outcome, and is neither saved as a completed answer, given a fallback title,
 nor scheduled for memory curation. A stop that lands while the finished answer
 is being saved (or while its title is awaited) is checked again before the
-fallback title and memory curation (in chat, project chat and Word chat): the
+fallback title and memory curation (in chat, project chat, Word chat and
+tabular chat, which also checks after the title it awaits): the
 saved answer then gets only the stop label added, so it is stored once, ends with the outcome readers were
 sent, and is neither given a fallback title nor curated.
 A route that unwinds after the grace period
