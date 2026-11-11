@@ -90,7 +90,7 @@ import { TRTable } from "./TRTable";
 import type { TRTableHandle } from "./TRTable";
 import { TRChatPanel } from "./TRChatPanel";
 import { TabularReviewDetailsModal } from "./TabularReviewDetailsModal";
-import { exportTabularReviewToExcel } from "./exportToExcel";
+import { ExcelExportLimitError, exportTabularReviewToExcel } from "./exportToExcel";
 import { readSseFrames } from "@/app/lib/sse";
 import {
     UserVisibleError,
@@ -1765,6 +1765,14 @@ export function TRView({ reviewId, projectId }: Props) {
                                                         columns,
                                                         rows,
                                                         cells: cellStore.values(),
+                                                        documents,
+                                                    }).catch((error) => {
+                                                        notifyError(
+                                                            error instanceof ExcelExportLimitError
+                                                                ? new UserVisibleError(error.message, { kind: "validation", retryable: false })
+                                                                : error,
+                                                            { action: "export this review", dedupeKey: `tr-export:${reviewId}` },
+                                                        );
                                                     }),
                                                 disabled:
                                                     columns.length === 0 ||
