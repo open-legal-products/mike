@@ -216,9 +216,11 @@ does not provide this guarantee. Backend rollback restores that older behavior.
 
 The migration does not reconstruct edits orphaned by an older interrupted
 review: those versions lack the provenance needed to recover the exact findings.
-Uploads abandoned before publication may remain unreferenced objects. Never
-remove an object merely because a review row is missing after a timeout: history
-can be deleted after a successful publication while its document version stays.
+An upload the database answered as unpublished is deleted; one whose
+publication outcome is unknown (a lost response or timeout) is kept and may
+remain an unreferenced object. Never remove an object merely because a review
+row is missing after a timeout: history can be deleted after a successful
+publication while its document version stays.
 
 ### Adopting the ledger on an older deployment
 

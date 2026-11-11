@@ -150,6 +150,11 @@ function membership(fixture: Fixture, role: string) {
   }];
 }
 
+function cleanedUp(path: string) {
+  expect(storage.deleteFileBestEffort).toHaveBeenCalledExactlyOnceWith(path, "playbook-review-unpublished");
+  expect(storage.deleteFile).not.toHaveBeenCalled();
+}
+
 function noCleanup() {
   expect(storage.deleteFile).not.toHaveBeenCalled();
   expect(storage.deleteFileBestEffort).not.toHaveBeenCalled();
@@ -275,7 +280,7 @@ describe("prepareDocumentReviewEdits", () => {
     },
   );
 
-  it.each(["download", "missing bytes", "invalid DOCX", "upload"])("propagates %s failures without deleting objects", async (stage) => {
+  it.each(["download", "missing bytes", "invalid DOCX", "upload"])("propagates %s failures, deleting only an object the failed upload may have left", async (stage) => {
     const f = database();
     const failure = new Error(`${stage} unavailable`);
     if (stage === "download") storage.downloadFile.mockRejectedValue(failure);
@@ -294,7 +299,8 @@ describe("prepareDocumentReviewEdits", () => {
     }
     if (stage !== "upload") expect(storage.uploadFile).not.toHaveBeenCalled();
     expect(f.calls.every(call => call.method === "GET")).toBe(true);
-    noCleanup();
+    if (stage === "upload") cleanedUp(storage.uploadFile.mock.calls[0][0]);
+    else noCleanup();
   });
 });
 
@@ -518,12 +524,12 @@ describe("publishDocumentReview", () => {
     noCleanup();
   });
 
-  it.each(["source_changed", "missing", "terminal"])("returns the %s disposition without deleting uploaded bytes or indexing", async (disposition) => {
+  it.each(["source_changed", "existing", "missing", "terminal"])("returns the %s disposition and deletes the upload it proves unpublished", async (disposition) => {
     const f = database();
     f.rpcResults.publish_playbook_review = { disposition };
     expect(await publishDocumentReview(f.db, publicationArgs())).toEqual({ disposition });
     expect(indexing.processDocumentTextInline).not.toHaveBeenCalled();
-    noCleanup();
+    cleanedUp("new.docx");
   });
 
   it.each(["error", "empty response"])("reconciles an RPC %s with the completed persisted run, not the attempted edits", async (scenario) => {
@@ -566,7 +572,7 @@ describe("publishDocumentReview", () => {
     noCleanup();
   });
 
-  it.each(["22023", "22P02", "23503", "23505", "P0002"])("keeps deterministic SQL %s failures terminal rather than retrying the model", async (code) => {
+  it.each(["22023", "22P02", "23503", "23505", "P0002"])("keeps deterministic SQL %s failures terminal and deletes the rolled-back upload", async (code) => {
     const f = database();
     f.failures.push({ matches: call => call.target === "rpc/publish_playbook_review", message: "invalid publication input", code });
     const failure: unknown = await publishDocumentReview(f.db, publicationArgs()).catch((error: unknown) => error);
@@ -574,7 +580,7 @@ describe("publishDocumentReview", () => {
     expect(failure).not.toBeInstanceOf(DocumentReviewRetryableError);
     expect(f.calls.map(call => call.target)).toEqual(["rpc/publish_playbook_review"]);
     expect(indexing.processDocumentTextInline).not.toHaveBeenCalled();
-    noCleanup();
+    cleanedUp("new.docx");
   });
 
   it.each(["08006", "40001", "40P01"])("marks unresolved SQL %s connection/concurrency failures retryable with their original cause", async (code) => {
@@ -598,6 +604,7 @@ describe("publishDocumentReview", () => {
     expect(await publishDocumentReview(f.db, publicationArgs())).toEqual({ disposition: scenario === "published" ? "published" : "existing", run });
     expect(indexing.processDocumentTextInline).toHaveBeenCalledExactlyOnceWith(f.db, ["saved-version"]);
     expect(logging.logError).toHaveBeenCalledExactlyOnceWith("document-text", { category: "operation_failed" });
-    noCleanup();
+    if (scenario === "existing") cleanedUp("new.docx");
+    else noCleanup();
   });
 });
