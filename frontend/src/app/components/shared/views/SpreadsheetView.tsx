@@ -23,6 +23,16 @@ const PREVIEW_FAILURE_MESSAGE =
 // BIFF8 .xls and encrypted OOXML use an OLE container, not the ZIP package
 // LuckyExcel understands. Renaming the File to .xlsx cannot convert its bytes.
 const OLE_SIGNATURE = [0xd0, 0xcf, 0x11, 0xe0, 0xa1, 0xb1, 0x1a, 0xe1];
+// Every .xlsx/.xlsm is a ZIP package whose first record is a local file
+// header ("PK\x03\x04"). Anything else (an HTML or CSV table renamed .xls, an
+// empty or truncated file, an empty ZIP) cannot be a workbook LuckyExcel reads.
+const ZIP_LOCAL_FILE_SIGNATURE = [0x50, 0x4b, 0x03, 0x04];
+
+function startsWith(bytes: ArrayBuffer, signature: readonly number[]): boolean {
+    if (bytes.byteLength < signature.length) return false;
+    const header = new Uint8Array(bytes, 0, signature.length);
+    return signature.every((value, index) => header[index] === value);
+}
 
 /** A cell locator to highlight, e.g. { sheet: "Q3 Budget", cell: "B7" }. */
 export type HighlightCell = { sheet?: string; cell?: string };
@@ -329,9 +339,14 @@ function SpreadsheetSourceView({
         setSheets(null);
         setError(null);
 
-        const header = new Uint8Array(bytes, 0, Math.min(bytes.byteLength, OLE_SIGNATURE.length));
-        if (OLE_SIGNATURE.every((value, index) => header[index] === value)) {
+        if (startsWith(bytes, OLE_SIGNATURE)) {
             setError("Legacy or encrypted Excel files cannot be previewed here. For preview, save an unencrypted .xlsx copy and upload it.");
+            return;
+        }
+        // LuckyExcel swallows a non-ZIP input's error without calling back,
+        // so without this check the user would wait out the whole deadline.
+        if (!startsWith(bytes, ZIP_LOCAL_FILE_SIGNATURE)) {
+            setError(PREVIEW_FAILURE_MESSAGE);
             return;
         }
 

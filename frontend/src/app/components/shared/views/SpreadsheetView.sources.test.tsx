@@ -28,7 +28,7 @@ function deferred<T>() {
     return { promise, resolve, reject };
 }
 const workbook = (name: string): Parsed => ({ sheets: [{ id: name, name, celldata: [], config: {} }] });
-const response = (bytes = new Uint8Array([1, 2, 3])) => new Response(bytes);
+const response = (bytes = new Uint8Array([0x50, 0x4b, 0x03, 0x04])) => new Response(bytes);
 
 beforeEach(() => { state.fetch.mockReset(); state.callbacks.length = 0; });
 afterEach(() => { vi.useRealTimers(); });

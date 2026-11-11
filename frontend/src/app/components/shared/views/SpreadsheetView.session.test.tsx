@@ -101,9 +101,12 @@ vi.mock("@fortune-sheet/react", () => ({
     }),
 }));
 
+// An .xlsx starts with a ZIP local file header; the view rejects anything else.
+const xlsxBytes = () => new Uint8Array([0x50, 0x4b, 0x03, 0x04, 0, 0]).buffer;
+
 beforeEach(() => {
     vi.clearAllMocks();
-    state.bytes = new ArrayBuffer(3);
+    state.bytes = xlsxBytes();
     state.parse.mockImplementation((_file, done) =>
         done({
             sheets: [
@@ -121,6 +124,18 @@ it("reports a legacy or encrypted OLE workbook without handing it to the XLSX-on
     expect(screen.getByRole("alert")).toHaveTextContent(/Legacy or encrypted Excel files cannot be previewed/);
     expect(screen.getByRole("alert")).toHaveTextContent(/save an unencrypted .xlsx copy and upload it/);
     expect(screen.getByRole("alert")).not.toHaveTextContent(/Download the original/);
+    expect(state.parse).not.toHaveBeenCalled();
+});
+
+it.each([
+    ["an HTML table saved as .xls", new TextEncoder().encode("<table><tr><td>1</td></tr></table>").buffer],
+    ["an empty file", new ArrayBuffer(0)],
+    ["an empty ZIP archive", new Uint8Array([0x50, 0x4b, 0x05, 0x06, 0, 0]).buffer],
+])("reports %s at once instead of waiting out the parser deadline", (_name, bytes) => {
+    state.bytes = bytes;
+    render(<SpreadsheetView documentId="not-a-zip" />);
+
+    expect(screen.getByRole("alert")).toHaveTextContent(/This spreadsheet could not be displayed/);
     expect(state.parse).not.toHaveBeenCalled();
 });
 
@@ -240,7 +255,7 @@ it("retains parsed data and viewport, and removes global workbook input handlers
     expect(state.parse).toHaveBeenCalledTimes(1);
     expect(state.mounts).toHaveBeenCalledTimes(2);
     // Fresh bytes must not restore an old workbook snapshot.
-    state.bytes = new ArrayBuffer(4);
+    state.bytes = xlsxBytes();
     await act(async () =>
         rerender(
             <SpreadsheetView documentId="sheet" refetchKey="new-version" />,
