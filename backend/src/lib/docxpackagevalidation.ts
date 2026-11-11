@@ -192,9 +192,12 @@ export async function validateDocxPackage(bytes: ArrayBuffer): Promise<boolean> 
   if (bytes.byteLength > DOCX_MAX_BYTES) return false;
   try {
     const zip = await JSZip.loadAsync(bytes);
-    const contentTypesPart = zip.file("[Content_Types].xml");
-    const relationshipsPart = zip.file("_rels/.rels");
-    const documentPart = zip.file("word/document.xml");
+    // Older Windows writers store "\" separators; accept them as "/" the way
+    // normalizeDocxZipPaths (lib/convert.ts) does before conversion.
+    const part = (name: string) => zip.file(name) ?? zip.file(name.replaceAll("/", "\\"));
+    const contentTypesPart = part("[Content_Types].xml");
+    const relationshipsPart = part("_rels/.rels");
+    const documentPart = part("word/document.xml");
 
     if (!contentTypesPart || !relationshipsPart || !documentPart) {
       throw new InvalidDocxPackageError();

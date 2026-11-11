@@ -47,3 +47,15 @@ it("preserves allocation failures emitted by a ZIP entry stream", async () => {
   } as unknown as JSZip);
   await expect(validateDocxPackage(new ArrayBuffer(0))).rejects.toBe(error);
 });
+
+it("accepts a package whose entries use Windows backslash separators", async () => {
+  const bytes = await Packer.toBuffer(new Document({ sections: [{ children: [new Paragraph("Old Word")] }] }));
+  const source = await JSZip.loadAsync(bytes);
+  const renamed = new JSZip();
+  for (const entry of Object.values(source.files).filter((file) => !file.dir)) {
+    renamed.file(entry.name.replaceAll("/", "\\"), await entry.async("nodebuffer"));
+  }
+  const archive = await renamed.generateAsync({ type: "uint8array" });
+  expect(Object.keys((await JSZip.loadAsync(archive)).files)).toContain("word\\document.xml");
+  await expect(validateDocxPackage(archive.slice().buffer)).resolves.toBe(true);
+});
