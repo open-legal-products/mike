@@ -16,6 +16,16 @@ export function zipExportLimitDetail(
   return null;
 }
 
+// Default macOS (APFS) and Windows (NTFS) disks treat "Agreement.pdf" and
+// "agreement.pdf" as one file, and APFS also equates the composed and
+// decomposed spellings of "Résumé.pdf", so extracting both keeps only one.
+// `usedNames` holds these folded keys, while the entry keeps the document's
+// own spelling. NFC, not NFKC: neither disk equates compatibility forms such
+// as "ﬁ" and "fi".
+function archiveNameKey(name: string): string {
+  return name.normalize("NFC").toLowerCase();
+}
+
 export function uniqueArchiveFilename(
   requestedName: string,
   usedNames: Set<string>,
@@ -24,8 +34,9 @@ export function uniqueArchiveFilename(
   // reserving names, so renamed separators cannot become ZIP path aliases.
   // JSZip also resolves bare dot segments to the empty path when reopening.
   const filename = normalizeDownloadFilename(requestedName).replace(/^\.{1,2}$/, "_");
-  if (!usedNames.has(filename)) {
-    usedNames.add(filename);
+  const key = archiveNameKey(filename);
+  if (!usedNames.has(key)) {
+    usedNames.add(key);
     return filename;
   }
 
@@ -34,10 +45,10 @@ export function uniqueArchiveFilename(
   const extension = dot > 0 ? filename.slice(dot) : "";
   let copyNumber = 2;
   let candidate = `${stem} (${copyNumber})${extension}`;
-  while (usedNames.has(candidate)) {
+  while (usedNames.has(archiveNameKey(candidate))) {
     copyNumber += 1;
     candidate = `${stem} (${copyNumber})${extension}`;
   }
-  usedNames.add(candidate);
+  usedNames.add(archiveNameKey(candidate));
   return candidate;
 }

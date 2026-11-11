@@ -85,6 +85,28 @@ describe("ZIP export limits", () => {
     }
   });
 
+  it.each([
+    ["case", "Agreement.pdf", "agreement.pdf", "agreement (2).pdf"],
+    ["Unicode normalisation", "Résumé.pdf", "Résumé.pdf", "Résumé (2).pdf"],
+  ])("suffixes names that differ only by %s, which extract to one file", async (_, first, second, suffixed) => {
+    const usedNames = new Set<string>();
+    const zip = new JSZip();
+    zip.file(uniqueArchiveFilename(first, usedNames), "first");
+    zip.file(uniqueArchiveFilename(second, usedNames), "second");
+
+    const reopened = await JSZip.loadAsync(await zip.generateAsync({ type: "nodebuffer" }));
+
+    expect(Object.keys(reopened.files)).toEqual([first, suffixed]);
+    expect(await reopened.file(suffixed)!.async("string")).toBe("second");
+  });
+
+  it("writes a name nothing folds onto in its own case and Unicode form", () => {
+    const usedNames = new Set<string>();
+
+    expect(uniqueArchiveFilename("NDA - ACME.pdf", usedNames)).toBe("NDA - ACME.pdf");
+    expect(uniqueArchiveFilename("Résumé.PDF", usedNames)).toBe("Résumé.PDF");
+  });
+
   it("consumes streamed ZIP entries one at a time", async () => {
     let firstStarted = false;
     let secondStarted = false;
