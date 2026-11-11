@@ -571,6 +571,36 @@ describe("AssistantMessage stopped steps", () => {
         expect(screen.getByText("1 subagent finished, 1 stopped")).toBeInTheDocument();
         expect(screen.queryByText("2 subagents finished")).not.toBeInTheDocument();
     });
+
+    // After a reload the client-only `interrupted` flag is gone; the stored
+    // subagent carries the server's `status: "cancelled"` instead.
+    const reloaded = (events: AssistantEvent[]) => {
+        render(<AssistantMessage events={[
+            ...events,
+            { type: "content", text: "Cancelled by user." },
+        ]} />);
+        fireEvent.click(screen.getByRole("button", { name: /subagent/ }));
+    };
+
+    it("says a stored cancelled subagent was stopped, not finished", () => {
+        reloaded([
+            { type: "delegation", delegation_id: "d1", title: "Research", task: "Find cases",
+                events: [], status: "cancelled" },
+        ]);
+        expect(screen.getByText("Subagent stopped")).toBeInTheDocument();
+        expect(screen.queryByText("Subagent finished")).not.toBeInTheDocument();
+    });
+
+    it("counts a stored cancelled subagent as stopped beside a finished one", () => {
+        reloaded([
+            { type: "delegation", delegation_id: "d1", title: "Research", task: "Find cases",
+                events: [], status: "completed" },
+            { type: "delegation", delegation_id: "d2", title: "Summary", task: "Summarize",
+                events: [], status: "cancelled" },
+        ]);
+        expect(screen.getByText("1 subagent finished, 1 stopped")).toBeInTheDocument();
+        expect(screen.queryByText("2 subagents finished")).not.toBeInTheDocument();
+    });
 });
 
 describe("AssistantMessage response details", () => {
