@@ -42,6 +42,7 @@ import {
     runLLMStream,
     stripTransientAssistantEvents,
     TABULAR_TOOLS,
+    throwIfTurnStopped,
     type ChatMessage,
     parseOptionalModel,
     parseOptionalReasoning,
@@ -1120,6 +1121,9 @@ tabularRouter.post("/:reviewId/chat", requireAuth, asyncRoute(async (req, res) =
             memorySharedAudience,
             emitDone: false,
         });
+        // A stream that returns after the turn was stopped must not be saved
+        // as a completed answer: the abort handler below stores the stop.
+        throwIfTurnStopped(stream.signal, { fullText, events });
 
         const persistedEvents = stripTransientAssistantEvents(events);
         const annotations = extractTabularAnnotations(fullText, tabularStore);
