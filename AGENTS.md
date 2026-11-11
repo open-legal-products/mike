@@ -302,3 +302,16 @@ descriptions in Markdown and include:
 
 Do not commit secrets, API keys, private documents, `.env` files, build output,
 or local test artifacts.
+
+## Error reporting principles
+
+- Prefer small reporting helpers and clear ownership at the boundary that knows what happened. Reuse existing mechanisms before adding another policy layer.
+- Preserve original exceptions, causes, useful stack locations, operation/stage context, and request/job correlation. Optimize for actionable user failures.
+- Mark expected outcomes where they are actually handled. A recognized UI error code, HTTP status, or AbortError name alone does not prove handling or reporting ownership. Keep unowned terminal transport and response-body failures visible.
+- Keep the final outbound privacy allowlist protecting customer documents, credentials, and identities. Separate privacy enforcement from configurable volume policy; avoid repeat traffic starving new/severe failures.
+- Treat console capture as a fallback, not a business-policy engine. Prefer explicit capture of the original Error with static context.
+- Keep development reporting off by default; avoid accumulating compiler-internal filename filters.
+- Verify meaningful regressions through final SDK envelopes as well as source-level tests. Test diagnostic usefulness, ownership/deduplication, and privacy.
+- Prefer focused simplification and root-cause fixes over suppressing symptoms or building new reporting frameworks.
+
+See `docs/observability.md` for reporting ownership and transport policy.

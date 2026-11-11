@@ -8,6 +8,8 @@
 import * as Sentry from "@sentry/nextjs";
 import {
     privacyBoundaryIntegration,
+    eventBudget,
+    repeatEventLimit,
     type Operation,
     MIKE_SENTRY_DSN,
     createEventScrubber,
@@ -470,12 +472,12 @@ export function serverSentryOptions(
     runtime: "server" | "edge",
     env: NodeJS.ProcessEnv,
 ): Sentry.NodeOptions {
-    const { dsn } = reportingDestination(env);
+    const { dsn, source } = reportingDestination(env);
     return {
         dsn: dsn || undefined,
         enabled: dsn.length > 0,
         environment: sentryEnvironment(env.SENTRY_ENVIRONMENT, env.NODE_ENV === "development"),
-        integrations: [privacyBoundaryIntegration()],
+        integrations: [privacyBoundaryIntegration({ acceptEvent: eventBudget({ repeatEventsPerDay: repeatEventLimit(env.SENTRY_MAX_REPEAT_EVENTS_PER_DAY, source === "default") }) })],
         release: releaseName(env.SENTRY_RELEASE, env.MIKE_VERSION, env.GIT_SHA),
         tracesSampleRate: parseSampleRate(env.SENTRY_TRACES_SAMPLE_RATE, 0),
         dataCollection: {

@@ -16,6 +16,7 @@ declare const process: {
     readonly REACT_APP_SENTRY_RELEASE: string | undefined;
     readonly REACT_APP_GIT_SHA: string | undefined;
     readonly REACT_APP_MIKE_VERSION: string | undefined;
+    readonly REACT_APP_SENTRY_MAX_REPEAT_EVENTS_PER_DAY: string | undefined;
     readonly REACT_APP_SENTRY_TRACES_SAMPLE_RATE: string | undefined;
     readonly NODE_ENV: string;
   };

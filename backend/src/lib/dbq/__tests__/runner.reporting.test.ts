@@ -19,7 +19,7 @@ vi.mock("../../observability/sentry", async (importOriginal) => {
 
 import { scrubEvent } from "../../observability/sentry";
 import { diagnosticErrorTags } from "../../observability/sentryPrivacy";
-import { createDbJobClaimGate, createDbJobPool, processClaimedJob } from "../runner";
+import { createDbJobClaimGate, createDbJobPool, NonRetryableJobError, processClaimedJob } from "../runner";
 /** One claim through the production pool, then wait for the claimed jobs. */
 async function claimAndRun(
     db: unknown,
@@ -248,6 +248,26 @@ describe("processClaimedJob console lines", () => {
             ([label]) => label === "[dbq] unknown job kind",
         );
         expect(bridged(logged!)).toBeNull();
+    });
+
+    it("fails a job its handler marks unreported at once, and sends nothing", async () => {
+        // A provider rejecting the user's own key (MIKE-BACKEND-1W): the job
+        // ends, and neither a report nor an error-level log line is filed.
+        const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+        const db = makeDb(async () => ({ data: [], error: null }));
+        await processClaimedJob(db as never, {
+            "test.kind": async () => {
+                throw new NonRetryableJobError("provider refused", { reportLevel: null });
+            },
+        }, JOB({ attempts: 1, max_attempts: 20 }));
+
+        expect(mocks.reportError).not.toHaveBeenCalled();
+        expect(consoleError).not.toHaveBeenCalled();
+        expect(warn).toHaveBeenCalledWith(
+            "[dbq] job permanently failed",
+            expect.objectContaining({ id: "job-1" }),
+        );
+        warn.mockRestore();
     });
 
     it("never logs a deferral at error level (the console bridge would file it)", async () => {

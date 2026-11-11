@@ -12,6 +12,8 @@
 import * as Sentry from "@sentry/react";
 import {
   privacyBoundaryIntegration,
+  eventBudget,
+  repeatEventLimit,
   MIKE_SENTRY_DSN,
   createEventScrubber,
   installKind,
@@ -44,6 +46,7 @@ export const scrubEvent = scrubber.scrubEvent;
 // Reporting callers and automatic-capture deduplication share one registry.
 const markReported = scrubber.markReported;
 export const isReported = scrubber.isReported;
+export const markErrorHandled = scrubber.markReported;
 
 
 /** `service`/`surface` distinguish the pane from its ribbon and OAuth pages. */
@@ -61,6 +64,7 @@ export function addinSentryOptions(
     gitSha?: string;
     tracesSampleRate?: string;
     nodeEnv?: string;
+    maxRepeatEventsPerDay?: string;
   },
 ): Sentry.BrowserOptions {
   // ON BY DEFAULT: the Mike project's own DSN unless REACT_APP_SENTRY_DISABLED
@@ -68,7 +72,7 @@ export function addinSentryOptions(
   // webpack sets NODE_ENV from --mode: the dev server is "development",
   // `npm run build` (every image) is "production".
   const development = env.nodeEnv === "development";
-  const { dsn } = resolveDsn({
+  const { dsn, source } = resolveDsn({
     disabled: env.disabled,
     dsn: env.dsn,
     fallback: MIKE_SENTRY_DSN.wordAddin,
@@ -96,7 +100,7 @@ export function addinSentryOptions(
     // No session replay: the pane sits next to a privileged document.
     dataCollection,
     attachStacktrace: true,
-    integrations: [privacyBoundaryIntegration(), Sentry.captureConsoleIntegration({ levels: ["error"] })],
+    integrations: [privacyBoundaryIntegration({ acceptEvent: eventBudget({ repeatEventsPerDay: repeatEventLimit(env.maxRepeatEventsPerDay, source === "default") }) }), Sentry.captureConsoleIntegration({ levels: ["error"] })],
     initialScope: {
       tags: {
         service: "mike-word-addin",
@@ -122,6 +126,7 @@ export function initAddinErrorReporting(surface: AddinSurface): boolean {
     gitSha: process.env.REACT_APP_GIT_SHA,
     tracesSampleRate: process.env.REACT_APP_SENTRY_TRACES_SAMPLE_RATE,
     nodeEnv: process.env.NODE_ENV,
+    maxRepeatEventsPerDay: process.env.REACT_APP_SENTRY_MAX_REPEAT_EVENTS_PER_DAY,
   });
   if (!options.enabled) return false;
   Sentry.init(options);

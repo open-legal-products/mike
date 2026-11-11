@@ -106,46 +106,9 @@ describe("createEventScrubber", () => {
     });
 });
 
-describe("per-issue flood control", () => {
-    const exceptionEvent = (value: string, component = "x"): ScrubbableEvent => ({
-        exception: { values: [{ type: "Error", value }] },
-        tags: { component },
-    });
-
-    it("passes the first N events of an issue per minute and drops the rest", () => {
-        let clock = 1_000;
-        const { scrubEvent } = createEventScrubber({
-            install: "official",
-            maxEventsPerIssuePerMinute: 2,
-            now: () => clock,
-        });
-        expect(scrubEvent(exceptionEvent("loop"))).not.toBeNull();
-        expect(scrubEvent(exceptionEvent("loop"))).not.toBeNull();
-        expect(scrubEvent(exceptionEvent("loop"))).toBeNull();
-        // Other issues keep their own budget.
-        expect(scrubEvent(exceptionEvent("other"))).not.toBeNull();
-        expect(scrubEvent(exceptionEvent("loop", "y"))).not.toBeNull();
-        expect(scrubEvent({ message: "plain" })).not.toBeNull();
-        // Window rollover.
-        clock += 60_000;
-        expect(scrubEvent(exceptionEvent("loop"))).not.toBeNull();
-    });
-
-    it("keys on the fingerprint when present", () => {
-        const { scrubEvent } = createEventScrubber({ install: "official", maxEventsPerIssuePerMinute: 1 });
-        expect(
-            scrubEvent({ fingerprint: ["api-5xx"], message: "a" }),
-        ).not.toBeNull();
-        expect(scrubEvent({ fingerprint: ["api-5xx"], message: "b" })).toBeNull();
-    });
-
-    it("defaults to ten per minute", () => {
-        const { scrubEvent } = createEventScrubber({ install: "official" });
-        for (let i = 0; i < 10; i += 1) {
-            expect(scrubEvent(exceptionEvent("ten"))).not.toBeNull();
-        }
-        expect(scrubEvent(exceptionEvent("ten"))).toBeNull();
-    });
+it("leaves repeat sampling to the final transport", () => {
+    const { scrubEvent } = createEventScrubber();
+    for (let i = 0; i < 100; i++) expect(scrubEvent({ message: "same failure" })).not.toBeNull();
 });
 
 describe("console bridge post-processing", () => {
@@ -535,14 +498,13 @@ describe("community install minimisation", () => {
     });
 });
 
-// MIKE-FRONTEND-K / MIKE-FRONTEND-M: `next dev` toolchain events from a
-// contributor's local checkout (a Turbopack compile error of their own edits,
-// forwarded to the dev overlay and logged there) reached the shared project.
-describe("next dev toolchain noise", () => {
+// Development destination policy is enforced at initialization/the tunnel.
+// An operator who explicitly opts in sees failures without stack-filename guesses.
+describe("explicitly opted-in development reporting", () => {
     const devTags = { build_mode: "development", runtime: "browser" };
     const origin = "http://localhost:3000";
 
-    it("drops an unhandled dev-server compile error whose stack is all Next internals (M)", () => {
+    it("keeps an unhandled dev-server compile error whose stack is all Next internals (M)", () => {
         const { scrubEvent } = createEventScrubber();
         const next = "/Users/dev/mike/frontend/node_modules/next/dist/server";
         const event: ScrubbableEvent = {
@@ -560,10 +522,10 @@ describe("next dev toolchain noise", () => {
                 ] },
             }] },
         };
-        expect(scrubEvent(event)).toBeNull();
+        expect(scrubEvent(event)).not.toBeNull();
     });
 
-    it("drops a dev-overlay console.error whose call site is Next's Turbopack chunk (K)", () => {
+    it("keeps a dev-overlay console.error whose call site is Next's Turbopack chunk (K)", () => {
         const { scrubEvent } = createEventScrubber();
         const event: ScrubbableEvent = {
             logger: "console",
@@ -576,7 +538,7 @@ describe("next dev toolchain noise", () => {
                 { filename: `${origin}/_next/static/chunks/node_modules_next_dist_07iqgt0._.js` },
             ] },
         };
-        expect(scrubEvent(event, { captureContext: { extra: { arguments: ["Build Error"] } } })).toBeNull();
+        expect(scrubEvent(event, { captureContext: { extra: { arguments: ["Build Error"] } } })).not.toBeNull();
     });
 
     it("keeps a genuine app error in development", () => {
@@ -622,12 +584,12 @@ describe("next dev toolchain noise", () => {
         expect(scrubEvent(...loggedWithStack(
             `Error: x\n    ${origin}/_next/static/chunks/src_app_page_tsx_1a._.js:12:5`,
         ))).not.toBeNull();
-        // A line with no location adds nothing, so only the Next frame counts.
+        // Even without an application location, an opted-in event remains visible.
         // The long run of "!" made the old end-anchored regex retry from
         // every position (~15 s here); vitest cannot time out a synchronous
         // test, so bound the elapsed time instead.
         const started = performance.now();
-        expect(scrubEvent(...loggedWithStack(`Error: x\n${"!".repeat(100_000)} `))).toBeNull();
+        expect(scrubEvent(...loggedWithStack(`Error: x\n${"!".repeat(100_000)} `))).not.toBeNull();
         expect(performance.now() - started).toBeLessThan(1_000);
     });
 
@@ -646,4 +608,28 @@ describe("next dev toolchain noise", () => {
             scrubEvent({ tags: { ...devTags }, exception: { values: [{ type: "Error", mechanism: { handled: false } }] } }),
         ).not.toBeNull();
     });
+});
+
+it("keeps a primary failure when a contextual error was handled", () => {
+    const { scrubEvent, markReported } = createEventScrubber({ install: "official" });
+    const primary = Object.assign(new Error("server"), { status: 500, code: "ECONNRESET" });
+    const previous = Object.assign(new Error("refused"), { status: 429, code: "rate_limited" });
+    markReported(previous);
+    const event = scrubEvent({ tags: {} as Record<string, unknown>, logger: "console", exception: { values: [{ type: "Error", value: "server", mechanism: { type: "auto.core.capture_console" } }] } }, {
+        originalException: primary,
+        captureContext: { extra: { arguments: ["[chat] failed", primary, { previous }] } },
+    });
+    expect(event).not.toBeNull();
+    expect(event?.tags).toMatchObject({ failure_code: "ECONNRESET", dependency_status: 500 });
+});
+
+it.each([
+    Object.assign(new Error("refused"), { status: 409, code: "turn_in_progress" }),
+    Object.assign(new Error("cancelled unexpectedly"), { name: "AbortError" }),
+])("keeps an unhandled outcome until its owner explicitly handles it", failure => {
+    const { scrubEvent, markReported } = createEventScrubber();
+    const event = () => ({ exception: { values: [{ type: "Error", value: "failure", mechanism: { type: "generic", handled: false } }] } });
+    expect(scrubEvent(event(), { originalException: failure })).not.toBeNull();
+    markReported(failure);
+    expect(scrubEvent(event(), { originalException: failure })).toBeNull();
 });

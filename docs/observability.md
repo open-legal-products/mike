@@ -99,14 +99,25 @@ cannot stop that sender. The controls below protect different things:
 
 | Control | Current implementation / verified state | Limit |
 | --- | --- | --- |
-| Per-issue burst limit | Backend and shared web/add-in scrubbers allow 10 events per issue key per minute by default, before the quota budget below. Backend override: `SENTRY_MAX_EVENTS_PER_ISSUE_PER_MINUTE`. | Keyed on the raw error text, so varying messages bypass it; the transport budget below is keyed on the final grouping. |
-| Quota budget in the final transport | Per issue as Sentry groups it (the diagnostic fingerprint, error type and top frame), only occurrences 1, 2, 4, 8, … are sent, each tagged `occurrence`; the count restarts after an hour without that issue. Each SDK client also sends at most 50 events a day across all issues. Diagnostic test probes skip the per-issue step. A loop failing every second costs about 17 events a day per issue. This replaced a flat 60-a-minute cap, under which one install's stuck poll loops used the whole 5,000-event month in nine hours (2026-09-23). | Per process, worker thread, browser tab, or task pane, so a fleet of installs still adds up. Restarts reset it. Installs built before this change keep the old cap until they update. Does not stop direct submissions to the public DSN. |
+| Repeat budget after privacy filtering | Issues use the final diagnostic fingerprint, exception type, top frame and severity. The first observation always passes; repeats send at occurrences 2, 4, 8, …, resetting after one quiet hour. Mike's default destination allows 50 **repeat** events per day per budget. New issues, severity escalations and diagnostic probes do not consume that allowance. Explicit DSNs have no daily repeat cap by default. | SDK budgets are per process/thread/task pane. Browser budgets live in each Next tunnel process, where the runtime destination is known. Memory is bounded to 1,000 recent issue/severity keys; restarts and eviction reset counts. This is not a hard account quota or protection against direct public-DSN submissions. |
 | Duplicate and expected-error suppression | Explicit reports mark the same error object to prevent a later console/unhandled duplicate. API 4xx and deliberate client cancellations are excluded from the API reporting paths. | New error objects or independent console messages can still produce events. Grouping several events into one issue does not make them one quota unit. |
 | Non-error telemetry | The final transport rejects sessions, transactions, spans, logs, replay, attachments and every other non-error item. | Adding a new telemetry category requires an explicit privacy-reviewed policy change. |
 | Sentry spike protection | Enabled on all three projects of the `open-legal-products` organization when checked on 2026-10-20 UTC; no project notification actions are attached. | Uses historical volume; Sentry explicitly says it must not be the sole defense. |
 | Inbound filters | The frontend project has browser-extension, crawler, legacy-browser, hydration-error, and chunk-load-error filters enabled; localhost filtering is off (checked on the same date). | Filters can hide genuine bugs too. Custom release/message filters are offered during the Business trial but none are set, and the Developer plan does not offer them; no custom IP blocklist was set on the inspected frontend project. |
 | Hard DSN rate limit | The inspected frontend key has no custom limit. The organization was created on a 14-day Business trial (1,000,000 errors) that ends on 2026-11-03; it then falls back to the Developer plan with 5,000 errors per month, where key rate-limit controls are unavailable. | The monthly allowance can be exhausted, leaving genuine new errors unrecorded. |
 | Official/community isolation | Separate backend, frontend, and add-in projects; official and community events currently share each runtime's default key/project. | `install=official` is a client-supplied tag, not authentication or a reserved quota. |
+
+Volume policy is separate from `privacyBoundaryIntegration`, which always rebuilds
+the outbound allowlist. `SENTRY_MAX_REPEAT_EVENTS_PER_DAY` configures the backend,
+Next server and browser tunnel; `REACT_APP_SENTRY_MAX_REPEAT_EVENTS_PER_DAY`
+configures the add-in at build time. A nonnegative integer overrides the default;
+`0` keeps only first observations, severity changes and diagnostic probes.
+Power-of-two repeat sampling still applies with an explicit DSN. The former
+`SENTRY_MAX_EVENTS_PER_ISSUE_PER_MINUTE` setting is retired: there is no earlier
+raw-message throttle competing with final event grouping. `occurrence` counts
+observations reaching this budget, not all user failures: owning boundaries may
+already have deduplicated or gated an outage. Sampled events are acknowledged
+locally without retrying transmission.
 
 These are a dated account audit, not settings enforced by the repository.
 Recheck them in Sentry when changing the plan or deploying to another account.
@@ -731,6 +742,30 @@ approved technical codes and numeric statuses can be extracted from causes.
   need review for their origin.
 - Real-SDK transport tests cover both install modes, including new unregistered
   labels, dependency-provided names/kinds, cause payloads and automatic captures.
+
+### Reporting ownership
+
+Capture the original exception at the boundary that knows the operation and
+whether recovery failed. A known UI code, HTTP status or `AbortError` name is
+not evidence that another owner handled the failure. Expected outcomes are
+marked explicitly with `markErrorHandled` at that boundary. The registry means
+the reporting decision was made; it does not guarantee delivery to Sentry.
+Keep unowned terminal failures visible, including response-body failures after
+`fetch` resolves and plain proxy errors without a Mike ownership marker.
+
+Development reporting stays off unless a destination is explicitly configured;
+opted-in errors are not filtered using compiler or framework filenames.
+
+Console capture is a fallback. Its primary exception determines identity and
+deduplication; contextual errors alongside it cannot hide or relabel it. Prefer
+`reportError(original, context)` followed by logging the same object. Preserve
+causes, code locations, operation/stage and safe correlation IDs. Tests should
+inspect final SDK envelopes for diagnostic usefulness and privacy.
+
+The job runner owns retry/terminal reporting. `NonRetryableJobError` retains a
+cause and accepts a terminal `reportLevel`: `error` by default, `warning`, or
+`null` only for an outcome the handler has deliberately handled. Quiet outcomes
+are registered so a later automatic copy cannot resurrect them.
 
 ### Client reporting contract
 

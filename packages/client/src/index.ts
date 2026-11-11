@@ -27,3 +27,5 @@ export * from "./messageExcerpts";
 // Sentry event hygiene
 export * from "./sentryEvent";
 export * from "./sentryPrivacy";
+
+export * from "./sentryVolume";

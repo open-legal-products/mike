@@ -1,3 +1,4 @@
+import { eventBudget, repeatEventLimit } from "@mike/client";
 import { reportingDestination } from "./errorReporting";
 
 /** Envelopes are small (the privacy boundary strips attachments); refuse more. */
@@ -85,6 +86,7 @@ function parseJsonObject(bytes: Uint8Array): Record<string, unknown> | null {
 export function rewriteEnvelope(
     raw: Uint8Array,
     patch: { dsn: string; environment?: string; install?: string },
+    acceptEvent?: (event: Record<string, unknown>) => boolean,
 ): Uint8Array | null {
     const headerEnd = lineEnd(raw, 0);
     const header = parseJsonObject(raw.subarray(0, headerEnd));
@@ -112,7 +114,7 @@ export function rewriteEnvelope(
         if (payloadEnd > raw.length) return null;
         let payload = raw.subarray(payloadStart, payloadEnd);
 
-        if (itemHeader.type === "event" && (patch.environment || patch.install)) {
+        if (itemHeader.type === "event" && (patch.environment || patch.install || acceptEvent)) {
             const event = parseJsonObject(payload);
             if (!event) return null;
             if (patch.environment) event.environment = patch.environment;
@@ -124,6 +126,7 @@ export function rewriteEnvelope(
                 tags.install = patch.install;
                 event.tags = tags;
             }
+            if (acceptEvent && !acceptEvent(event)) { cursor = payloadEnd + 1; continue; }
             payload = encoder.encode(JSON.stringify(event));
             if (typeof declared === "number") itemHeader.length = payload.byteLength;
         }
@@ -131,6 +134,7 @@ export function rewriteEnvelope(
         cursor = payloadEnd + 1;
     }
 
+    if (acceptEvent && parts.length === 1) return new Uint8Array();
     const total = parts.reduce((sum, part) => sum + part.byteLength + 1, 0);
     const out = new Uint8Array(total);
     let offset = 0;
@@ -143,3 +147,13 @@ export function rewriteEnvelope(
     return out;
 }
 
+
+// One bounded budget per tunnel process, reset only when destination/policy changes.
+let browserBudget: { key: string; accepts: ReturnType<typeof eventBudget> } | undefined;
+export function browserReportBudget(env: NodeJS.ProcessEnv): ReturnType<typeof eventBudget> {
+    const destination = reportingDestination(env);
+    const limit = repeatEventLimit(env.SENTRY_MAX_REPEAT_EVENTS_PER_DAY, destination.source === "default");
+    const key = `${destination.dsn}:${limit}`;
+    if (browserBudget?.key !== key) browserBudget = { key, accepts: eventBudget({ repeatEventsPerDay: limit }) };
+    return browserBudget.accepts;
+}
