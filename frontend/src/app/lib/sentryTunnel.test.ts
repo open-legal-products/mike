@@ -1,7 +1,7 @@
 // @vitest-environment node
 import { describe, expect, it } from "vitest";
-import { MIKE_SENTRY_DSN } from "@mike/client";
-import { rewriteEnvelope, tunnelDecision } from "./sentryTunnel";
+import { MIKE_SENTRY_DSN, diagnosticEvent } from "@mike/client";
+import { rewriteEnvelope, tunnelDecision, browserReportBudget } from "./sentryTunnel";
 
 const encoder = new TextEncoder();
 const decoder = new TextDecoder();
@@ -194,4 +194,33 @@ describe("rewriteEnvelope", () => {
             }),
         ).toBeNull();
     });
+});
+
+it("applies the runtime destination's repeat policy in the tunnel", () => {
+    const env: NodeJS.ProcessEnv = { NODE_ENV: "production", SENTRY_DSN: "https://budget@sentry.example/42", SENTRY_MAX_REPEAT_EVENTS_PER_DAY: "0" };
+    const accepts = browserReportBudget(env);
+    const raw = envelope([{ dsn: "placeholder" }, { type: "event" }, { tags: { component: "budget-test" } }]);
+    expect(rewriteEnvelope(raw, { dsn: OWN_DSN }, accepts)!.byteLength).toBeGreaterThan(0);
+    expect(rewriteEnvelope(raw, { dsn: OWN_DSN }, accepts)!.byteLength).toBe(0);
+    const own = browserReportBudget({ ...env, SENTRY_MAX_REPEAT_EVENTS_PER_DAY: undefined, SENTRY_DSN: "https://other@sentry.example/43" });
+    expect(rewriteEnvelope(raw, { dsn: OWN_DSN }, own)!.byteLength).toBeGreaterThan(0);
+    expect(rewriteEnvelope(raw, { dsn: OWN_DSN }, own)!.byteLength).toBeGreaterThan(0);
+});
+
+it("caps explicitly configured Mike destinations after final envelope reconstruction", () => {
+    for (const env of [
+        { SENTRY_DSN: MIKE_SENTRY_DSN.frontend },
+        { NEXT_PUBLIC_SENTRY_DSN: MIKE_SENTRY_DSN.backend },
+        { SENTRY_DSN: "https://custom@sentry.invalid/73" },
+    ]) {
+        const accepts = browserReportBudget({ NODE_ENV: "production", ...env });
+        const raw = envelope([{}, { type: "event" }, diagnosticEvent({ message: "PRIVATE_QUOTA_CANARY", tags: { diagnostic_test: "true" } })]);
+        let sent = 0;
+        for (let n = 0; n < 60; n++) {
+            const out = rewriteEnvelope(raw, { dsn: OWN_DSN }, accepts)!;
+            if (out.byteLength) sent++;
+            expect(new TextDecoder().decode(out)).not.toContain("PRIVATE_QUOTA_CANARY");
+        }
+        expect(sent).toBe(env.SENTRY_DSN?.includes("custom@") ? 60 : 50);
+    }
 });

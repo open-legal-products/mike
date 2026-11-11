@@ -3,7 +3,7 @@ import type { ParamsFlatDictionary } from "express-serve-static-core";
 import { createServerSupabase, type Db } from "../lib/supabase";
 import { syncProfileEmail } from "../lib/userLookup";
 import { sendInternalError, sendUpstreamUnavailable } from "../lib/httpError";
-import { isAuthUpstreamFailure } from "../lib/authUpstream";
+import { authErrorShape, isAuthUpstreamFailure } from "../lib/authUpstream";
 import { noteUpstreamReachable } from "../lib/upstreamOutage";
 import { clearRequestAuthCookies, createRequestSupabase } from "../lib/authSession";
 import { reportSchemaOutOfDateOnce } from "../lib/schemaOutOfDate";
@@ -171,17 +171,6 @@ function getAdminClient(res: Response) {
   }
 }
 
-/**
- * The name and status of an auth-js error, or null for anything else.
- * Duck-typed like lib/authUpstream.ts, on auth-js's `__isAuthError` marker,
- * so it holds for any auth-js copy and for tests that stub supabase-js.
- */
-function authErrorShape(error: unknown): { name: unknown; status: number } | null {
-  if (!error || typeof error !== "object" || !("__isAuthError" in error)) return null;
-  const { name, status } = error as { name?: unknown; status?: unknown };
-  return { name, status: typeof status === "number" ? status : 0 };
-}
-
 export async function requireAuth(
   req: Request<ParamsFlatDictionary>,
   res: Response,
@@ -257,7 +246,8 @@ export async function requireAuth(
       );
       return;
     }
-    const { name, status } = failure;
+    const { name } = failure;
+    const status = failure.status ?? 0;
     if (name === "AuthApiError" && status >= 400 && status < 500) {
       // GoTrue refused the session (a refresh token revoked or already used,
       // a JWT for a session that no longer exists): the visitor must sign in

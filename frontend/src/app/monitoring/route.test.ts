@@ -84,7 +84,7 @@ describe("POST /monitoring", () => {
         expect(parsedLines(new Uint8Array(init.body as ArrayBuffer))).toEqual([
             { dsn: OWN_DSN },
             { type: "event" },
-            { event_id: "c".repeat(32), environment: "production" },
+            { event_id: "c".repeat(32), environment: "production", tags: { occurrence: 1 } },
         ]);
     });
 

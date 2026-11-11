@@ -61,7 +61,6 @@ import {
   MIKE_SENTRY_DSN,
   flushSentry,
   initSentry,
-  issueThrottleKeyCountForTests,
   markStage,
   setOperation,
   redactText,
@@ -76,7 +75,6 @@ import {
   sentryConfiguration,
   setCurrentUser,
   tagCurrentRequest,
-  withinIssueBudget,
 } from "./sentry";
 
 // Unit tests run with NODE_ENV=test, which disables reporting by design; the
@@ -208,16 +206,15 @@ describe("sentryConfiguration", () => {
     ).toBe(true);
   });
 
-  it("reads the per-issue budget with a sane default", () => {
-    expect(sentryConfiguration({} as NodeJS.ProcessEnv).maxEventsPerIssuePerMinute).toBe(10);
-    expect(
-      sentryConfiguration({ SENTRY_MAX_EVENTS_PER_ISSUE_PER_MINUTE: "3" } as NodeJS.ProcessEnv)
-        .maxEventsPerIssuePerMinute,
-    ).toBe(3);
-    expect(
-      sentryConfiguration({ SENTRY_MAX_EVENTS_PER_ISSUE_PER_MINUTE: "-2" } as NodeJS.ProcessEnv)
-        .maxEventsPerIssuePerMinute,
-    ).toBe(10);
+  it("reads the repeat-event budget without imposing a community cap on custom DSNs", () => {
+    expect(sentryConfiguration({}, false).repeatEventsPerDay).toBe(25);
+    expect(sentryConfiguration({ SENTRY_DSN: "https://key@sentry.invalid/1" }, false).repeatEventsPerDay).toBe(Infinity);
+    expect(sentryConfiguration({ SENTRY_MAX_REPEAT_EVENTS_PER_DAY: "0" }, false).repeatEventsPerDay).toBe(0);
+    for (const dsn of Object.values(MIKE_SENTRY_DSN)) {
+      expect(sentryConfiguration({ SENTRY_DSN: dsn }, false)).toMatchObject({ repeatEventsPerDay: 25, eventsPerDay: 50 });
+      expect(sentryConfiguration({ MIKE_BUILD_SENTRY_DSN: dsn }, false)).toMatchObject({ repeatEventsPerDay: 25, eventsPerDay: 50 });
+    }
+
   });
 
   it("derives mike@<version>+<sha12> from the build args when SENTRY_RELEASE is unset", () => {
@@ -513,80 +510,6 @@ describe("scrubEvent", () => {
       exception: { values: [{ mechanism: { type: "generic" } }] },
     } as Parameters<typeof scrubEvent>[0];
     expect(scrubEvent(direct, { originalException: error })).not.toBeNull();
-  });
-});
-
-describe("per-issue flood control", () => {
-  const exceptionEvent = (value: string, component = "dbq") =>
-    ({
-      exception: { values: [{ type: "Error", value }] },
-      tags: { component },
-    }) as unknown as Parameters<typeof scrubEvent>[0];
-
-  it("lets the first ten events of an issue through per minute and drops the rest", () => {
-    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
-    const t0 = 1_000_000;
-    for (let i = 0; i < 10; i += 1) {
-      expect(withinIssueBudget(exceptionEvent("fetch failed"), t0 + i)).toBe(true);
-    }
-    expect(withinIssueBudget(exceptionEvent("fetch failed"), t0 + 11)).toBe(false);
-    expect(withinIssueBudget(exceptionEvent("fetch failed"), t0 + 12)).toBe(false);
-    // A different issue has its own budget.
-    expect(withinIssueBudget(exceptionEvent("other"), t0 + 13)).toBe(true);
-    expect(withinIssueBudget(exceptionEvent("fetch failed", "upload-worker"), t0 + 14)).toBe(true);
-    // The window rolls over: allowed again, and the suppression is logged once.
-    expect(withinIssueBudget(exceptionEvent("fetch failed"), t0 + 60_001)).toBe(true);
-    expect(warn).toHaveBeenCalledWith(
-      expect.stringContaining("suppressed 2 further event(s)"),
-    );
-    warn.mockRestore();
-  });
-
-  it("stays bounded when more distinct issues than the cap arrive in one window", () => {
-    const t0 = 3_000_000;
-    for (let i = 0; i < 2_500; i += 1) {
-      withinIssueBudget(exceptionEvent(`distinct ${i}`), t0 + i);
-    }
-    expect(issueThrottleKeyCountForTests()).toBeLessThanOrEqual(1_000);
-  });
-
-  it("keys on the fingerprint when one is set and on the message otherwise", () => {
-    const t0 = 5_000_000;
-    const fingerprinted = {
-      fingerprint: ["dbq-claim-failed"],
-      exception: { values: [{ type: "Error", value: "a" }] },
-    } as unknown as Parameters<typeof scrubEvent>[0];
-    const differentValueSameFingerprint = {
-      fingerprint: ["dbq-claim-failed"],
-      exception: { values: [{ type: "Error", value: "b" }] },
-    } as unknown as Parameters<typeof scrubEvent>[0];
-    for (let i = 0; i < 10; i += 1) withinIssueBudget(fingerprinted, t0 + i);
-    expect(withinIssueBudget(differentValueSameFingerprint, t0 + 20)).toBe(false);
-
-    const message = { message: "odd state" } as Parameters<typeof scrubEvent>[0];
-    for (let i = 0; i < 10; i += 1) withinIssueBudget(message, t0 + i);
-    expect(withinIssueBudget(message, t0 + 20)).toBe(false);
-  });
-
-  it("is enforced by scrubEvent", () => {
-    vi.spyOn(console, "warn").mockImplementation(() => {});
-    for (let i = 0; i < 10; i += 1) {
-      expect(scrubEvent(exceptionEvent("loop"), {})).not.toBeNull();
-    }
-    expect(scrubEvent(exceptionEvent("loop"), {})).toBeNull();
-  });
-
-  it("honours the configured budget after init", () => {
-    vi.spyOn(console, "log").mockImplementation(() => {});
-    initSentry("api", {
-      ...quietEnv,
-      SENTRY_DSN: "https://key@o1.ingest.sentry.io/1",
-      SENTRY_ALLOW_IN_TESTS: "true",
-      SENTRY_MAX_EVENTS_PER_ISSUE_PER_MINUTE: "2",
-    } as NodeJS.ProcessEnv);
-    expect(withinIssueBudget(exceptionEvent("x"))).toBe(true);
-    expect(withinIssueBudget(exceptionEvent("x"))).toBe(true);
-    expect(withinIssueBudget(exceptionEvent("x"))).toBe(false);
   });
 });
 

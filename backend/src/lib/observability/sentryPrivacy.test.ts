@@ -1,3 +1,4 @@
+import { eventBudget } from "./sentryVolume";
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { identifyApplicationError, diagnosticEnvelope, diagnosticErrorTags, diagnosticEvent, diagnosticRoute, privacyBoundaryIntegration } from './sentryPrivacy';
 
@@ -92,7 +93,7 @@ describe('outbound telemetry privacy boundary', () => {
     const transport = { send };
     privacyBoundaryIntegration().setup({ getTransport: () => transport, getDsn: () => ({ protocol: 'https', publicKey: 'public-key', host: 'sentry.example', port: '443', path: 'ingest', projectId: '123' }) });
     await transport.send([{ dsn: 'Private NDA.pdf' }, [[{ type: 'event' }, {}]]]);
-    expect(send).toHaveBeenCalledWith([{ dsn: 'https://public-key@sentry.example:443/ingest/123' }, [[{ type: 'event' }, { ...diagnosticEvent({}), tags: { occurrence: 1 } }]]]);
+    expect(send).toHaveBeenCalledWith([{ dsn: 'https://public-key@sentry.example:443/ingest/123' }, [[{ type: 'event' }, diagnosticEvent({})]]]);
   });
 
   it('preserves transport responses and flush ownership', async () => {
@@ -113,7 +114,7 @@ describe('quota budget', () => {
   const setup = () => {
     const send = vi.fn().mockResolvedValue({});
     const transport = { send };
-    privacyBoundaryIntegration().setup({ getTransport: () => transport });
+    privacyBoundaryIntegration({ acceptEvent: eventBudget() }).setup({ getTransport: () => transport });
     const sentOccurrences = () => send.mock.calls.map(([envelope]) => (envelope[1][0][1] as { tags: { occurrence: number } }).tags.occurrence);
     return { transport, send, sentOccurrences };
   };
@@ -153,10 +154,18 @@ describe('quota budget', () => {
     expect(sentOccurrences()).toEqual([1, 2, 1]);
   });
 
-  it('caps a runtime at 50 events a day across distinct issues, then resets', async () => {
+  it('reserves capacity for new/severe failures while enforcing the total daily ceiling', async () => {
     const clock = vi.spyOn(Date, 'now').mockReturnValue(0);
     const { transport, send } = setup();
-    for (let n = 0; n < 80; n++) await transport.send(failure('upload-worker', `backend/src/file${n}.ts`));
+    for (let n = 0; n < 5; n++) {
+      for (let attempt = 0; attempt < 64; attempt++) await transport.send(failure('upload-worker', `backend/src/file${n}.ts`));
+    }
+    expect(send).toHaveBeenCalledTimes(30); // five new issues plus 25 repeats
+    const fatal = failure('upload-worker', 'backend/src/file0.ts');
+    (fatal[1][0]![1] as Record<string, unknown>).level = 'fatal';
+    await transport.send(fatal);
+    expect(send).toHaveBeenCalledTimes(31);
+    for (let n = 5; n < 100; n++) await transport.send(failure('upload-worker', `backend/src/file${n}.ts`));
     expect(send).toHaveBeenCalledTimes(50);
     clock.mockReturnValue(24 * 60 * 60_000);
     await transport.send(failure('upload-worker', 'backend/src/next-day.ts'));
@@ -172,12 +181,12 @@ describe('quota budget', () => {
     expect(sentOccurrences().slice(-2)).toEqual([1, 2]);
   });
 
-  it('delivers every diagnostic test probe', async () => {
+  it('delivers diagnostic probes only within the total ceiling', async () => {
     vi.spyOn(Date, 'now').mockReturnValue(0);
     const { transport, send } = setup();
     const probe: Parameters<typeof diagnosticEnvelope>[0] = [{}, [[{ type: 'event' }, { tags: { diagnostic_test: 'true' }, message: 'probe' }]]];
-    for (let n = 0; n < 5; n++) await transport.send(probe);
-    expect(send).toHaveBeenCalledTimes(5);
+    for (let n = 0; n < 60; n++) await transport.send(probe);
+    expect(send).toHaveBeenCalledTimes(50);
   });
 });
 
