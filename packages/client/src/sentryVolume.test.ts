@@ -76,3 +76,25 @@ it("recognizes the resolved shared project regardless of key or explicit configu
   }
   expect(eventBudgetLimits(undefined, "https://original@sentry.example/43", community)).toEqual({ eventsPerDay: Infinity, repeatEventsPerDay: Infinity });
 });
+
+const atSite = (fingerprint: string[], site: number, level = "warning") => ({
+  fingerprint, level,
+  exception: { values: [{ type: site % 2 ? "TypeError" : "Error", stacktrace: { frames: [{ filename: `backend/src/site${site}.ts`, lineno: site + 1 }] } }] },
+});
+it.each(["upstream-unavailable", "api-unreachable", "runtime-warning"])("treats %s from different stack sites as repeats, leaving room for unrelated failures", pinned => {
+  const accepts = eventBudget({ repeatEventsPerDay: 0 });
+  const fingerprint = [pinned, "component", "cause"];
+  expect(accepts(atSite(fingerprint, 0))).toBe(true);
+  for (let site = 1; site < 60; site++) expect(accepts(atSite(fingerprint, site))).toBe(false);
+  expect(accepts(atSite(["{{ default }}", "unrelated"], 100, "error"))).toBe(true);
+  // Severity escalation and different pinned causes still get a first event.
+  expect(accepts(atSite(fingerprint, 101, "error"))).toBe(true);
+  expect(accepts(atSite([pinned, "component", "different-cause"], 102))).toBe(true);
+});
+it("retains stack grouping when the fingerprint includes the default placeholder", () => {
+  const accepts = eventBudget({ repeatEventsPerDay: 0 });
+  const fingerprint = ["{{ default }}", "component"];
+  expect(accepts(atSite(fingerprint, 0))).toBe(true);
+  expect(accepts(atSite(fingerprint, 2))).toBe(true);
+  expect(accepts(atSite(fingerprint, 2))).toBe(false);
+});

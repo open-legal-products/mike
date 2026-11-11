@@ -5,8 +5,14 @@ const record = (value: unknown): RecordValue => value && typeof value === 'objec
 const ISSUE_QUIET_MS = 60 * 60_000;
 const DAY_MS = 24 * 60 * 60_000;
 
-/** One issue as Sentry groups it: our fingerprint plus the default (stack) grouping. */
+/** Pinned fingerprints replace stack grouping; severity retains a separate allowance. */
 function issueKey(event: RecordValue): string {
+  const fingerprint = event.fingerprint;
+  // The privacy boundary has already produced a controlled fingerprint. Use
+  // its grouping semantics, without maintaining a second list of pinned names.
+  if (Array.isArray(fingerprint) && fingerprint.length && !fingerprint.includes("{{ default }}")) {
+    return JSON.stringify([event.level ?? "error", fingerprint]);
+  }
   const values = record(event.exception).values;
   const exception = Array.isArray(values) ? record(values[values.length - 1]) : {};
   const frames = record(exception.stacktrace ?? event.stacktrace).frames;

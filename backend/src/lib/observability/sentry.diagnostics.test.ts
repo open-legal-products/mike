@@ -143,3 +143,30 @@ it('enforces the shared project ceiling through final SDK envelopes even with an
   expect(events).toHaveLength(50);
   expect(JSON.stringify(events)).not.toContain('PRIVATE_QUOTA_CANARY');
 });
+
+it.each(['upstream-unavailable', 'api-unreachable', 'runtime-warning'])('budgets %s as one pinned issue across stack sites in final SDK envelopes', async pinned => {
+  const events: Sentry.Event[] = [];
+  resetSentryForTests('community');
+  Sentry.init({
+    dsn: 'https://test@sentry.invalid/1', defaultIntegrations: false,
+    integrations: [privacyBoundaryIntegration({ acceptEvent: eventBudget({ repeatEventsPerDay: 0 }) })],
+    beforeSend: scrubEvent,
+    transport: () => ({ send: async envelope => {
+      for (const [header, payload] of envelope[1]) if (header.type === 'event') events.push(payload as Sentry.Event);
+      return { statusCode: 200 };
+    }, flush: async () => true }),
+  });
+  for (let site = 0; site < 60; site++) {
+    const error = new Error('PRIVATE_PINNED_CANARY');
+    error.stack = `Error: PRIVATE_PINNED_CANARY\n    at operation (backend/src/site${site}.ts:42:7)`;
+    Sentry.captureException(error, { level: 'warning', fingerprint: [pinned], tags: { component: 'api-gateway' } });
+  }
+  const unrelated = new TypeError('PRIVATE_PINNED_CANARY');
+  unrelated.stack = 'TypeError: PRIVATE_PINNED_CANARY\n    at save (backend/src/save.ts:80:2)';
+  Sentry.captureException(unrelated, { tags: { operation: 'documents.save' } });
+  await Sentry.flush(2000);
+  expect(events).toHaveLength(2);
+  expect(events[0]?.fingerprint?.[0]).toBe(pinned);
+  expect(events[1]?.tags?.operation).toBe('documents.save');
+  expect(JSON.stringify(events)).not.toContain('PRIVATE_PINNED_CANARY');
+});
