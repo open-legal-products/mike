@@ -105,6 +105,16 @@ const UPLOAD_FILE_CONTENT_MESSAGES: Record<
         filenames.length === 1
             ? `${filenames[0]} is not a valid PDF file.`
             : `${filenames.join(", ")} are not valid PDF files.`,
+    invalid_docx_package: (filenames) =>
+        filenames.length === 1
+            ? `${filenames[0]} is not a valid DOCX file.`
+            : `${filenames.join(", ")} are not valid DOCX files.`,
+    // Well formed, but past the parser's time or memory budget; the same
+    // bytes would hit the same budget again.
+    document_too_large: (filenames) =>
+        filenames.length === 1
+            ? `${filenames[0]} is too large or complex to process.`
+            : `${filenames.join(", ")} are too large or complex to process.`,
 };
 
 /**
