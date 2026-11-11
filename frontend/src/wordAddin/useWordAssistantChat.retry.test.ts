@@ -8,7 +8,7 @@ vi.mock('../../../word-addin/src/taskpane/api/stream', async () => ({
     }, WordChatTerminalError: (await import('../../../word-addin/src/taskpane/lib/wordChatTerminalError')).WordChatTerminalError,
 }));
 vi.mock('../../../word-addin/src/taskpane/hooks/useWordDoc', () => ({ useWordDoc: () => ({ readDocumentMarkdown: async () => 'document' }) }));
-vi.mock('../../../word-addin/src/taskpane/lib/errorReporting', () => ({ reportError: vi.fn() }));
+vi.mock('../../../word-addin/src/taskpane/lib/errorReporting', () => ({ reportError: vi.fn(), isReported: vi.fn(() => false) }));
 vi.mock('../../../word-addin/src/taskpane/api/mikeApi', () => ({ postWordChatToolResult: vi.fn(), stopWordChatTurn: vi.fn() }));
 vi.mock('../../../word-addin/src/taskpane/lib/localWordChats', () => ({ saveLocalWordMessage: vi.fn(), setLocalWordChatActiveTurn: vi.fn() }));
 vi.mock('../../../word-addin/src/taskpane/lib/wordDocumentIdentity', () => ({ readCurrentDocumentName: () => 'test.docx' }));

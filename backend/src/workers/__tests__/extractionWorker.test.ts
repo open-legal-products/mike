@@ -37,6 +37,7 @@ import { UnrecoverableError, type Job } from "bullmq";
 import { ExtractionLimitError } from "../../lib/extraction/limits";
 import type { ExtractionJobData } from "../../lib/queue/extractionQueue";
 import { AssistantStreamError } from "../../modules/chat/chat.service";
+import { markErrorHandled } from "../../lib/observability/sentry";
 
 type Call = {
     table: string;
@@ -828,7 +829,13 @@ describe("generation lease", () => {
         );
     });
 
-    it("publishes a rejected-key error for the generation stream", async () => {
+    // The frame says who accounted for the failure only when someone did:
+    // the model call marks a refused personal key handled at its source, and
+    // nothing else may claim that on its behalf.
+    it.each([
+        ["a refusal its source already handled", true],
+        ["a refusal nobody has accounted for yet", false],
+    ])("publishes a rejected-key error for the generation stream: %s", async (_name, handled) => {
         const publish = vi.fn(async () => {});
         const db = makeDb({
             tabular_reviews: {
@@ -840,15 +847,22 @@ describe("generation lease", () => {
                 select: { data: [] },
             },
         });
+        const refusal = new Error("provider refused the key");
+        if (handled) markErrorHandled(refusal);
         queryTabularAllColumns.mockRejectedValue(
-            new AssistantStreamError("rejected", "", [
-                {
-                    type: "error",
-                    message: "The Anthropic API key was rejected.",
-                    safe_to_display: true,
-                    code: "invalid_api_key",
-                },
-            ]),
+            new AssistantStreamError(
+                "rejected",
+                "",
+                [
+                    {
+                        type: "error",
+                        message: "The Anthropic API key was rejected.",
+                        safe_to_display: true,
+                        code: "invalid_api_key",
+                    },
+                ],
+                { cause: refusal },
+            ),
         );
 
         await expect(
@@ -859,7 +873,7 @@ describe("generation lease", () => {
         ).rejects.toThrow(/incomplete extraction/);
 
         expect(publish).toHaveBeenCalledWith("rev-1", {
-            reporting_owner: "backend",
+            ...(handled ? { reporting_owner: "backend" } : {}),
             type: "error",
             message: "The Anthropic API key was rejected.",
             safe_to_display: true,

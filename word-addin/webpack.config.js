@@ -269,6 +269,7 @@ module.exports = async (_env, options) => {
         REACT_APP_SENTRY_RELEASE: process.env.REACT_APP_SENTRY_RELEASE || "",
         REACT_APP_GIT_SHA: process.env.REACT_APP_GIT_SHA || "",
         REACT_APP_MIKE_VERSION: process.env.REACT_APP_MIKE_VERSION || "",
+        REACT_APP_SENTRY_MAX_REPEAT_EVENTS_PER_DAY: process.env.REACT_APP_SENTRY_MAX_REPEAT_EVENTS_PER_DAY || "",
         REACT_APP_SENTRY_TRACES_SAMPLE_RATE:
           process.env.REACT_APP_SENTRY_TRACES_SAMPLE_RATE || "",
       }),

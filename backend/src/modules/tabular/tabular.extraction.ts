@@ -1,5 +1,6 @@
 import { createTextExtractionCache } from "../../lib/textExtractionCache";
 // extraction body — implementation behind the module facade.
+import { ExtractionParseError } from "../../lib/extraction/failure";
 import { ExtractionLimitError } from "../../lib/extraction/limits";
 import { type ExtractionJobData } from "../../lib/queue/extractionQueue";
 import { publishCellUpdate as defaultPublish, type RunProgressUpdate } from "../../lib/queue/runProgress";
@@ -236,7 +237,7 @@ export async function runExtractionJob(
                     }),
             },
         });
-        if (error instanceof ExtractionLimitError) throw error;
+        if (error instanceof ExtractionLimitError || error instanceof ExtractionParseError) throw error;
         if (error) {
             const payload = assistantStreamErrorPayload(error);
             if (payload.code === "invalid_api_key") {

@@ -12,7 +12,7 @@
  */
 import { type NextRequest, NextResponse } from "next/server";
 import { reportingDestination } from "@/app/lib/errorReporting";
-import { MAX_ENVELOPE_BYTES, rewriteEnvelope, tunnelDecision } from "@/app/lib/sentryTunnel";
+import { MAX_ENVELOPE_BYTES, rewriteEnvelope, tunnelDecision, browserReportBudget } from "@/app/lib/sentryTunnel";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -53,8 +53,9 @@ export async function POST(request: NextRequest): Promise<Response> {
     const raw = Buffer.concat(chunks, length);
     if (raw.byteLength === 0) return new NextResponse(null, { status: 400 });
 
-    const envelope = rewriteEnvelope(raw, decision);
+    const envelope = rewriteEnvelope(raw, decision, browserReportBudget(process.env));
     if (!envelope) return new NextResponse(null, { status: 400 });
+    if (envelope.byteLength === 0) return new NextResponse(null, { status: 204 });
 
     try {
         const upstream = await fetch(decision.url, {

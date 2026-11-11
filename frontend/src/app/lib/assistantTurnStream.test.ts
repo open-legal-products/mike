@@ -172,6 +172,27 @@ describe("readAssistantTurn", () => {
     turn.finish();
   });
 
+  // The pairing the API gateway relies on: only a failed read resumes. A body
+  // that ends cleanly is taken as the end of the turn, which is why the
+  // gateway errors (never closes) an event stream whose backend went away.
+  it("treats a clean end of the body as the end of the turn and does not resume", async () => {
+    const turn = begin();
+    const sink = createTurnEventSink(turn, []);
+    await readAssistantTurn({
+      open: async () =>
+        sseResponse([
+          frame(1, { type: "chat_id", chatId: "chat-a", turnId: "turn-1" }),
+          frame(2, { type: "content_delta", text: "Hello" }),
+        ]),
+      turn,
+      sink,
+      cursor: createTurnCursor("chat-a"),
+    });
+    expect(streamChatTurnMock).not.toHaveBeenCalled();
+    expect(text(turn.turn.assistant)).toBe("Hello");
+    turn.finish();
+  });
+
   it("surfaces the original failure when the server no longer has the turn", async () => {
     vi.useFakeTimers();
     const turn = begin();

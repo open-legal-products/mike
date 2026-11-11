@@ -1,5 +1,7 @@
 import { afterEach, expect, it, vi } from "vitest";
 import { UnrecoverableError, type Job } from "bullmq";
+import { ExtractionParseError } from "../../lib/extraction/failure";
+import { reportError } from "../../lib/observability/sentry";
 import { ExtractionBusyError, ExtractionLimitError } from "../../lib/extraction/limits";
 import type { ExtractionJobData } from "../../lib/queue/extractionQueue";
 
@@ -12,7 +14,7 @@ vi.mock("bullmq", async (importOriginal) => ({
         close = vi.fn();
     },
 }));
-vi.mock("../../lib/queue/connection", () => ({ getRedisConnection: () => ({}) }));
+vi.mock("../../lib/queue/connection", () => ({ getRedisConnection: () => ({}), watchQueueErrors: vi.fn() }));
 vi.mock("../../lib/observability/sentry", () => ({ reportError: vi.fn() }));
 vi.mock("../../modules/tabular/tabular.service", () => ({
     extractionJobOperation: () => "tabular.row",
@@ -23,7 +25,7 @@ import { createExtractionWorker, stopExtractionWorker } from "../extraction.tran
 
 afterEach(async () => { await stopExtractionWorker(); vi.resetAllMocks(); });
 
-it.each([new ExtractionLimitError("too large"), new ExtractionBusyError()])(
+it.each([new ExtractionLimitError("too large"), new ExtractionBusyError(), new ExtractionParseError("extraction.parse_failed", "unreadable docx")])(
     "applies BullMQ retry policy and terminal cleanup for %s",
     async (error) => {
         mocks.run.mockRejectedValueOnce(error);
@@ -33,10 +35,12 @@ it.each([new ExtractionLimitError("too large"), new ExtractionBusyError()])(
             (job: Job<ExtractionJobData>, error: Error) => Promise<void>;
         const job = { data: { reviewId: "review", rowId: "row" }, attemptsMade: 1, opts: { attempts: 3 } } as Job<ExtractionJobData>;
         const thrown = await processJob(job).catch((err: Error) => err);
-        if (error instanceof ExtractionLimitError) expect(thrown).toBeInstanceOf(UnrecoverableError);
+        if (error instanceof ExtractionLimitError || error instanceof ExtractionParseError) expect(thrown).toBeInstanceOf(UnrecoverableError);
         else expect(thrown).toBe(error);
+        if (thrown instanceof UnrecoverableError) expect(thrown.cause).toBe(error);
         await onFailed(job, thrown as Error);
-        if (error instanceof ExtractionLimitError) expect(mocks.failed).toHaveBeenCalledWith(job.data);
+        if (error instanceof ExtractionParseError) expect(reportError).toHaveBeenCalledWith(thrown, expect.objectContaining({ level: "warning", tags: expect.objectContaining({ terminal: true }) }));
+        if (error instanceof ExtractionLimitError || error instanceof ExtractionParseError) expect(mocks.failed).toHaveBeenCalledWith(job.data);
         else expect(mocks.failed).not.toHaveBeenCalled();
     },
 );

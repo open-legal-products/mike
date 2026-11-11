@@ -21,6 +21,8 @@ import { isDevelopmentBuild } from "../buildMode";
 import * as Sentry from "@sentry/node";
 import { retainExceptionTypes, diagnosticRoute, diagnosticErrorTags, privacyBoundaryIntegration, type Operation, type Stage } from "./sentryPrivacy";
 
+import { eventBudget, eventBudgetLimits } from "./sentryVolume";
+
 export type SentryRole = "api" | "worker" | "worker-thread" | "job";
 
 export type ReportLevel = "fatal" | "error" | "warning";
@@ -576,6 +578,11 @@ export function releaseName(
 /** Errors already sent via reportError(); the console bridge skips them. */
 const reportedErrors = new WeakSet<object>();
 
+/** The owning boundary handled this outcome; suppress only its automatic copies. */
+export function markErrorHandled(error: unknown): void {
+  if (error && typeof error === "object") reportedErrors.add(error);
+}
+
 /** How far down an Error's `cause` chain isReported() looks. */
 const CAUSE_CHAIN_DEPTH = 8;
 
@@ -589,7 +596,7 @@ const CAUSE_CHAIN_DEPTH = 8;
  * findNested() never sees it. Bounded and cycle-safe: `cause` is arbitrary
  * user-settable data.
  */
-function isReported(value: unknown): boolean {
+export function isReported(value: unknown): boolean {
   const seen = new Set<object>();
   let current = value;
   for (let depth = 0; depth < CAUSE_CHAIN_DEPTH; depth++) {
@@ -690,91 +697,8 @@ export function sentryConfiguration(
     // sending transactions.
     tracesSampleRate: parseRate(env.SENTRY_TRACES_SAMPLE_RATE, 0),
     debug: env.SENTRY_DEBUG === "true",
-    maxEventsPerIssuePerMinute: envInt(
-      env.SENTRY_MAX_EVENTS_PER_ISSUE_PER_MINUTE,
-      DEFAULT_MAX_EVENTS_PER_ISSUE_PER_MINUTE,
-    ),
+    ...eventBudgetLimits(env.SENTRY_MAX_REPEAT_EVENTS_PER_DAY, dsn, Object.values(MIKE_SENTRY_DSN)),
   };
-}
-
-function envInt(raw: string | undefined, fallback: number): number {
-  if (!raw) return fallback;
-  const parsed = Number.parseInt(raw, 10);
-  return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
-}
-
-/**
- * CLIENT-SIDE FLOOD CONTROL. A background loop that fails on every poll
- * (Postgres down, 8 upload workers, sub-second retry) produces hundreds of
- * identical events a minute — one is a signal, five hundred are a quota bill
- * and a rate-limited SDK that then drops the *next, different* error. Sentry
- * only deduplicates strictly consecutive identical events, so this keeps a
- * per-issue budget per minute and drops the excess locally, logging once per
- * window how many were suppressed.
- */
-const DEFAULT_MAX_EVENTS_PER_ISSUE_PER_MINUTE = 10;
-const THROTTLE_WINDOW_MS = 60_000;
-type ThrottleBucket = { windowStart: number; sent: number; suppressed: number };
-const throttleBuckets = new Map<string, ThrottleBucket>();
-/** Distinct issues tracked at once; past it the oldest bucket is evicted. */
-const MAX_THROTTLE_KEYS = 1_000;
-let maxEventsPerIssuePerMinute = DEFAULT_MAX_EVENTS_PER_ISSUE_PER_MINUTE;
-
-function issueKey(event: Sentry.ErrorEvent): string {
-  if (event.fingerprint?.length) return event.fingerprint.join("|");
-  const exception = event.exception?.values?.[0];
-  const base = exception
-    ? `${exception.type ?? "Error"}: ${exception.value ?? ""}`
-    : (event.message ?? "");
-  const component = event.tags?.component;
-  return `${component == null ? "" : String(component)}::${base.slice(0, 300)}`;
-}
-
-/** True when this event is within its issue's per-minute budget. */
-export function withinIssueBudget(
-  event: Sentry.ErrorEvent,
-  now = Date.now(),
-): boolean {
-  const key = issueKey(event);
-  let bucket = throttleBuckets.get(key);
-  if (!bucket || now - bucket.windowStart >= THROTTLE_WINDOW_MS) {
-    if (bucket?.suppressed) {
-      console.warn(
-        `[sentry] suppressed ${bucket.suppressed} further event(s) for: ${key.slice(0, 120)}`,
-      );
-    }
-    bucket = { windowStart: now, sent: 0, suppressed: 0 };
-    // Re-inserting moves the key to the end, so the Map's insertion order is
-    // window-start order and the oldest bucket is always the first entry.
-    throttleBuckets.delete(key);
-    throttleBuckets.set(key, bucket);
-    // Keep the map bounded on a long-running process: drop expired windows
-    // from the front, and past the cap evict the oldest live bucket too. Each
-    // key is evicted at most once per insert, so this is amortised O(1).
-    // (The old sweep scanned every key on every new key once 1,000 were
-    // live, and evicted nothing while they all stayed inside the window.)
-    for (const [oldestKey, oldest] of throttleBuckets) {
-      const expired = now - oldest.windowStart >= THROTTLE_WINDOW_MS;
-      if (!expired && throttleBuckets.size <= MAX_THROTTLE_KEYS) break;
-      if (oldest.suppressed) {
-        console.warn(
-          `[sentry] suppressed ${oldest.suppressed} further event(s) for: ${oldestKey.slice(0, 120)}`,
-        );
-      }
-      throttleBuckets.delete(oldestKey);
-    }
-  }
-  if (bucket.sent < maxEventsPerIssuePerMinute) {
-    bucket.sent += 1;
-    return true;
-  }
-  bucket.suppressed += 1;
-  return false;
-}
-
-/** Number of issue buckets the throttle currently holds (tests only). */
-export function issueThrottleKeyCountForTests(): number {
-  return throttleBuckets.size;
 }
 
 /** True once init() ran with a DSN in this process (or thread). */
@@ -837,6 +761,7 @@ export function scrubEvent(
   const automatic =
     mechanism === CONSOLE_MECHANISM || mechanismInfo?.handled === false;
   const original = hint.originalException;
+  let reportSource = original;
   if (automatic && isReported(original)) {
     return null;
   }
@@ -854,20 +779,16 @@ export function scrubEvent(
   // name and text and group by label instead of by the serialised object.
   const args = event.logger === "console" ? consoleArguments(hint) : null;
   if (args) {
-    if (args.some((arg) => findNested(arg, isReported))) {
-      return null;
-    }
-    // Node's own warning printer; reportProcessWarning() filed the object.
+    const primaryError = original instanceof Error ? original : args.find(arg => arg instanceof Error);
+    reportSource = primaryError ?? args
+      .map(arg => findNested(arg, candidate => candidate instanceof Error || 'code' in candidate || isReported(candidate)))
+      .find(candidate => candidate !== null && candidate !== undefined) ?? original;
+    // Only the primary failure owns this event; contextual errors cannot suppress it.
+    if (isReported(reportSource)) return null;
     if (isNodeWarningText(args)) return null;
     // Positional payloads after the label are never titles or grouping keys.
     const label = typeof args[0] === "string" ? args[0].trim() : "Console error";
-    const nestedError = args
-      .map((arg) =>
-        arg instanceof Error
-          ? null
-          : findNested(arg, (c) => c instanceof Error),
-      )
-      .find((found): found is Error => found instanceof Error);
+    const nestedError = !primaryError && reportSource instanceof Error ? reportSource : null;
     if (nestedError) {
       event.message = `${label ? `${label}: ` : ""}${nestedError.name}: ${nestedError.message}`;
       event.fingerprint = ["console", label, nestedError.name];
@@ -884,15 +805,11 @@ export function scrubEvent(
 
   event.tags = {
     ...event.tags,
-    ...diagnosticErrorTags(original),
+    ...diagnosticErrorTags(reportSource),
     capture_source: event.logger === "console" ? "console" : mechanismInfo?.handled === false ? "unhandled" : event.exception?.values?.length ? "exception" : "message",
   };
-  for (const arg of args ?? []) {
-    const nested = findNested(arg, c => c instanceof Error || 'code' in c);
-    Object.assign(event.tags, diagnosticErrorTags(nested));
-  }
 
-  retainExceptionTypes(event.exception?.values, [original, ...(args ?? [])], event.tags?.warning_name);
+  retainExceptionTypes(event.exception?.values, [reportSource], event.tags?.warning_name);
 
   // The title and the exception text are free text from libraries that
   // happily quote emails, tokens, and URLs (Postgres "Key (email)=(…)",
@@ -953,7 +870,6 @@ export function scrubEvent(
       event as unknown as Parameters<typeof minimiseForCommunity>[0],
     );
   }
-  if (!withinIssueBudget(event)) return null;
   return event;
 }
 
@@ -984,7 +900,6 @@ export function initSentry(
     return false;
   }
 
-  maxEventsPerIssuePerMinute = config.maxEventsPerIssuePerMinute;
   currentInstall = config.install;
   Sentry.init({
     dsn: config.dsn,
@@ -1009,7 +924,7 @@ export function initSentry(
     // Bodies are stripped in beforeSend as well; not collecting them at all
     // means they never sit in memory on the event either.
     integrations: [
-      privacyBoundaryIntegration(),
+      privacyBoundaryIntegration({ acceptEvent: eventBudget({ repeatEventsPerDay: config.repeatEventsPerDay, eventsPerDay: config.eventsPerDay }) }),
       Sentry.httpIntegration(),
       Sentry.captureConsoleIntegration({ levels: ["error"] }),
       // Node 22 crashes on an unhandled rejection; the SDK's default "warn"
@@ -1059,15 +974,29 @@ export function initSentry(
  * Not an application failure: level "warning", one issue per name and code.
  */
 export function reportProcessWarning(warning: unknown): string | null {
-  const shaped = warning as { name?: unknown; code?: unknown } | null;
+  const shaped = warning as { name?: unknown; code?: unknown; emitter?: object; target?: object; type?: unknown; count?: unknown } | null;
   const name = typeof shaped?.name === "string" ? shaped.name : "Warning";
   const code = typeof shaped?.code === "string" ? shaped.code : undefined;
   if (name === "DeprecationWarning" && process.noDeprecation) return null;
   return reportError(warning, {
     level: "warning",
-    tags: { component: "runtime-warning", warning_name: name, warning_code: code },
+    tags: { component: "runtime-warning", warning_name: name, warning_code: code,
+      ...(name === "MaxListenersExceededWarning" ? listenerLeakTags(shaped) : {}),
+    },
     fingerprint: ["runtime-warning", name, code ?? ""],
   });
+}
+
+/** Finite labels only: event names may otherwise be application/customer data. */
+function listenerLeakTags(warning: { emitter?: object; target?: object; type?: unknown; count?: unknown } | null): Record<string, string | number> {
+  const tags: Record<string, string | number> = {};
+  try {
+    const name = (warning?.emitter ?? warning?.target)?.constructor?.name;
+    if (name && ["EventEmitter", "Socket", "TLSSocket", "ClientRequest", "ServerResponse", "AbortSignal", "Worker", "Redis"].includes(name)) tags.warning_emitter = name;
+  } catch { /* Host objects must not break reporting. */ }
+  if (typeof warning?.type === "string" && ["abort", "data", "end", "error", "close", "finish", "drain", "readable", "connect", "ready", "timeout"].includes(warning.type)) tags.warning_event = warning.type;
+  if (typeof warning?.count === "number") tags.warning_listener_count = warning.count;
+  return tags;
 }
 
 /**
@@ -1268,6 +1197,4 @@ export function resetSentryForTests(
   process.off("warning", reportProcessWarning);
   // Tests exercise the full event shape unless they opt into community mode.
   currentInstall = install;
-  throttleBuckets.clear();
-  maxEventsPerIssuePerMinute = DEFAULT_MAX_EVENTS_PER_ISSUE_PER_MINUTE;
 }

@@ -125,6 +125,7 @@ it("answers an unreachable GoTrue with 503 upstream_unavailable and files exactl
 
   expect(res.status).toBe(503);
   expect(res.body).toEqual({
+    reporting_owner: "backend",
     code: "upstream_unavailable",
     detail: "The server is temporarily unreachable. Please try again shortly.",
     request_id: "req-auth-outage",
@@ -185,6 +186,7 @@ describe("requireAuth with GoTrue unreachable", () => {
 
     expect(res.status).toBe(503);
     expect(res.body).toEqual({
+      reporting_owner: "backend",
       code: "upstream_unavailable",
       detail: "The server is temporarily unreachable. Please try again shortly.",
       request_id: "req-auth-outage",

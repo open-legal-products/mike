@@ -99,14 +99,27 @@ cannot stop that sender. The controls below protect different things:
 
 | Control | Current implementation / verified state | Limit |
 | --- | --- | --- |
-| Per-issue burst limit | Backend and shared web/add-in scrubbers allow 10 events per issue key per minute by default, before the quota budget below. Backend override: `SENTRY_MAX_EVENTS_PER_ISSUE_PER_MINUTE`. | Keyed on the raw error text, so varying messages bypass it; the transport budget below is keyed on the final grouping. |
-| Quota budget in the final transport | Per issue as Sentry groups it (the diagnostic fingerprint, error type and top frame), only occurrences 1, 2, 4, 8, … are sent, each tagged `occurrence`; the count restarts after an hour without that issue. Each SDK client also sends at most 50 events a day across all issues. Diagnostic test probes skip the per-issue step. A loop failing every second costs about 17 events a day per issue. This replaced a flat 60-a-minute cap, under which one install's stuck poll loops used the whole 5,000-event month in nine hours (2026-09-23). | Per process, worker thread, browser tab, or task pane, so a fleet of installs still adds up. Restarts reset it. Installs built before this change keep the old cap until they update. Does not stop direct submissions to the public DSN. |
+| Repeat budget after privacy filtering | Pinned fingerprints use their complete controlled fingerprint and severity; fingerprints containing `{{ default }}` also use exception type and top frame. Only the first accepted observation of an issue/severity that day bypasses the repeat allowance; repeats send at power-of-two occurrences. One quiet hour resets occurrence sampling, never first-observation eligibility. Mike's projects have a hard ceiling of **50 total events/day** per budget, including new issues, escalations and diagnostic probes. Repeats use at most 25 slots, reserving the rest for new failures/escalations. Matching uses the resolved host/project, even for explicitly configured DSNs or rotated keys. Other projects have no daily cap by default. | SDK budgets are per process/thread/task pane. Browser budgets live in each Next tunnel process, where the runtime destination is known. Occurrence and daily-identity caches are each bounded to 1,000 issue/severity keys; daily-identity overflow conservatively uses repeat capacity. Quiet resets and eviction never reset daily counters or restore new-issue capacity; process restarts do. A fixed local warning is emitted once when the daily ceiling rejects an event. This is not a hard account quota or protection against direct public-DSN submissions. |
 | Duplicate and expected-error suppression | Explicit reports mark the same error object to prevent a later console/unhandled duplicate. API 4xx and deliberate client cancellations are excluded from the API reporting paths. | New error objects or independent console messages can still produce events. Grouping several events into one issue does not make them one quota unit. |
 | Non-error telemetry | The final transport rejects sessions, transactions, spans, logs, replay, attachments and every other non-error item. | Adding a new telemetry category requires an explicit privacy-reviewed policy change. |
 | Sentry spike protection | Enabled on all three projects of the `open-legal-products` organization when checked on 2026-10-20 UTC; no project notification actions are attached. | Uses historical volume; Sentry explicitly says it must not be the sole defense. |
 | Inbound filters | The frontend project has browser-extension, crawler, legacy-browser, hydration-error, and chunk-load-error filters enabled; localhost filtering is off (checked on the same date). | Filters can hide genuine bugs too. Custom release/message filters are offered during the Business trial but none are set, and the Developer plan does not offer them; no custom IP blocklist was set on the inspected frontend project. |
 | Hard DSN rate limit | The inspected frontend key has no custom limit. The organization was created on a 14-day Business trial (1,000,000 errors) that ends on 2026-11-03; it then falls back to the Developer plan with 5,000 errors per month, where key rate-limit controls are unavailable. | The monthly allowance can be exhausted, leaving genuine new errors unrecorded. |
 | Official/community isolation | Separate backend, frontend, and add-in projects; official and community events currently share each runtime's default key/project. | `install=official` is a client-supplied tag, not authentication or a reserved quota. |
+
+Volume policy is separate from `privacyBoundaryIntegration`, which always rebuilds
+the outbound allowlist. `SENTRY_MAX_REPEAT_EVENTS_PER_DAY` configures the backend,
+Next server and browser tunnel; `REACT_APP_SENTRY_MAX_REPEAT_EVENTS_PER_DAY`
+configures the add-in at build time. A nonnegative integer sets the repeat allowance, limited to 25 for Mike projects;
+`0` keeps only first observations, severity changes and diagnostic probes, all
+subject to the 50-event ceiling. Power-of-two repeat sampling also applies to
+custom projects. These are per-runtime limits, not a guaranteed 5,000-event
+monthly account limit: multiple installs/processes and restarts still add up. The former
+`SENTRY_MAX_EVENTS_PER_ISSUE_PER_MINUTE` setting is retired: there is no earlier
+raw-message throttle competing with final event grouping. `occurrence` counts
+observations reaching this budget, not all user failures: owning boundaries may
+already have deduplicated or gated an outage. Sampled events are acknowledged
+locally without retrying transmission.
 
 These are a dated account audit, not settings enforced by the repository.
 Recheck them in Sentry when changing the plan or deploying to another account.
@@ -163,9 +176,15 @@ however many users hit it.
   body and the `X-Request-ID` header (exposed to cross-origin scripts). A handler that
   writes its own 5xx body is caught by the response sanitizer and reported as
   a message.
-- Model streams that fail after the response has started (the 500 path never
-  sees these). Deliberate, explained refusals (`UserFacingError`: missing API
-  key, disallowed model) are not bugs and are not reported.
+- Model failures preserve the provider's original cause and credential origin.
+  Rate limits and dependency outages are warnings; unexplained failures and
+  rejected deployment credentials are errors. Unknown credential ownership
+  stays visible. A chat turn may mark a known user-account refusal handled
+  when it returns the remedy to that user. Background memory jobs and tabular
+  cells retain reports because they do not own that interaction. Deterministic
+  provider refusals end memory retries; no available model leaves the curator
+  idle for a later turn. Repeat sampling belongs to the final transport, never
+  a process-lifetime "already seen this provider" set.
 - Background jobs: every failed attempt of a `db_jobs` job (warning while
   retries remain, error when exhausted), failure-hook crashes, unknown job
   kinds, claim/tick/retention failures, BullMQ conversion/extraction/delivery
@@ -241,7 +260,10 @@ minified browser frames cannot promise an original TypeScript line without it.
 - Assistant chat streams that fail for a reason other than the user stopping
   them.
 - Server side: gateway failures to reach the backend, and render/route-handler
-  errors through Next's `onRequestError` hook.
+  errors through Next's `onRequestError` hook. An unreachable backend is one
+  warning issue per failure code (`upstream-unavailable`); a backend that drops
+  a response mid-stream is a separate issue per code (stage `gateway-stream`),
+  and a stream body timeout or unknown stream failure stays at error level.
 - Everything else that reaches `console.error`, deduplicated as above. An
   error reported explicitly is also not filed a second time if the same
   object then escapes to the browser's unhandled-error or rejection handler.
@@ -298,8 +320,29 @@ the backend, Next server/edge, browser, and all Word add-in entries.
   category; response bodies, prompts and credentials are never retained.
   Browser fetch failures include only `network_state` (online/offline/unknown)
   and `request_origin` (same-origin/cross-origin/unknown), never the hostname.
+  A browser's direct storage PUT that fails after its retries adds
+  `storage_target` (loopback/mixed_content/cross_origin/same_origin: where
+  the signed URL points relative to the page) and is pinned to
+  `upload-storage-put`, one issue per component, failure code and
+  `http_status` (a 403, a 404, a 5xx and a network failure are separate
+  issues). Every non-2xx is
+  reported: the URL was just signed for a file the backend already accepted,
+  so 403/404/405/413 are the deployment's storage or proxy, not the file.
   Online means the browser reports connectivity, not that a server is reachable. Arbitrary
   codes/names/messages and dependency metadata are not transmitted.
+- Queue diagnostics retain static `queue` labels and bounded numeric
+  `network_failure_count` and `outage_minutes`. Parser retry verdicts stay local;
+  event kinds identify deterministic parse failures without transmitting parser
+  input or output.
+- Process warnings retain finite `warning_name`, Node `DEPnnnn` or reviewed
+  SDK `warning_code`, finite `warning_emitter`/`warning_event`, and bounded
+  numeric `warning_listener_count`. SDK deprecation codes distinguish known
+  APIs/settings; unknown warnings use a fixed fallback code. Raw warning
+  identity stays local.
+- Provider diagnostics retain reviewed `provider_error_type` and
+  `provider_reason` values alongside status. Quota/account verdicts are
+  classified locally; response bodies and credential ownership data are not
+  transmitted.
 - Invalid configuration reports may name approved environment **fields**, never
   their values. Converter failures distinguish missing binary, timeout and
   nonzero exit without sending stderr or document paths.
@@ -641,8 +684,9 @@ when it receives an event, so earlier issues keep their minified frames.
    `setTimeout(() => { throw new Error("Sentry web test") })`. The error
    arrives tagged `service=mike-frontend runtime=browser`. To see the
    request-id correlation, stop the backend and click anything that loads
-   data: the browser reports the normalized route and status 502 and the Next server reports
-   the gateway failure.
+   data: the Next server reports the gateway failure. Its explicit
+   `reporting_owner: "backend"` response prevents a second browser event.
+   An unowned proxy response or terminal body failure remains reportable.
 4. Word add-in: with the DSN baked in, open the pane and stop the backend; the
    next action reports a transport-failure warning with the Office host tags.
 
@@ -732,6 +776,30 @@ approved technical codes and numeric statuses can be extracted from causes.
 - Real-SDK transport tests cover both install modes, including new unregistered
   labels, dependency-provided names/kinds, cause payloads and automatic captures.
 
+### Reporting ownership
+
+Capture the original exception at the boundary that knows the operation and
+whether recovery failed. A known UI code, HTTP status or `AbortError` name is
+not evidence that another owner handled the failure. Expected outcomes are
+marked explicitly with `markErrorHandled` at that boundary. The registry means
+the reporting decision was made; it does not guarantee delivery to Sentry.
+Keep unowned terminal failures visible, including response-body failures after
+`fetch` resolves and plain proxy errors without a Mike ownership marker.
+
+Development reporting stays off unless a destination is explicitly configured;
+opted-in errors are not filtered using compiler or framework filenames.
+
+Console capture is a fallback. Its primary exception determines identity and
+deduplication; contextual errors alongside it cannot hide or relabel it. Prefer
+`reportError(original, context)` followed by logging the same object. Preserve
+causes, code locations, operation/stage and safe correlation IDs. Tests should
+inspect final SDK envelopes for diagnostic usefulness and privacy.
+
+The job runner owns retry/terminal reporting. `NonRetryableJobError` retains a
+cause and accepts a terminal `reportLevel`: `error` by default, `warning`, or
+`null` only for an outcome the handler has deliberately handled. Quiet outcomes
+are registered so a later automatic copy cannot resurrect them.
+
 ### Client reporting contract
 
 - `describeError`, `userFacingApiError` and the add-in's `userMessage` only
@@ -819,3 +887,45 @@ Unknown database-queue job kinds use `operation=jobs.dispatch` inside the
 same per-job isolation scope as normal handlers. Their
 `error_kind=dbq.unknown_job_kind` identifies the dispatch failure; destructive
 cleanup kinds retain their retry-until-success policy during rolling upgrades.
+
+### Consolidated failure handling
+
+HTTP error helpers and the Next gateway send `reporting_owner: "backend"` only
+after taking responsibility for a failure. Clients propagate that field on the
+original error; a status, request ID or recognized UI code alone is insufficient.
+Old servers without the field remain observable, with potentially redundant
+reports until upgraded. These copies use the same repeat budget as other
+events, and on Mike's own projects the same hard daily ceiling (a custom
+destination has no daily ceiling unless one is configured; see the quota
+table); a recognized code alone cannot safely suppress an unowned failure. Stream protocols keep their existing owner field. The marker
+also covers expected refusals explicitly handled at their source, independent
+of whether telemetry delivery is enabled. Merely classifying an error as safe
+to display does not establish ownership.
+
+Redis listeners cover producer, consumer and worker emitters. Connection
+outages recover only after Redis command readiness succeeds and escalate after
+15 minutes. The escalation is raised by the next connection error at or past
+that mark, not by a timer: a connection that stops retrying, and so stops
+emitting errors, does not escalate. Each failing connection, including a worker's separate blocking
+connection, must recover; unrelated socket readiness cannot reset the outage.
+Non-connection worker defects retain their own classification. Parser IPC keeps
+bounded original cause trees and source stacks locally, while the final outbound
+allowlist removes messages and private paths. Proven invalid bytes end document
+and tabular job retries; missing IPC verdicts, unknown parser failures and
+environment failures remain retryable.
+
+SDK compatibility notices become local warnings and stage breadcrumbs at their
+source. SDK deprecations and unrecognized SDK warnings remain reportable, with a
+bounded five-minute cooldown per local identity and finite diagnostic codes.
+Process warnings keep their own reporting path.
+Listener warnings retain only finite emitter/event labels and a numeric count.
+Missing credential-encryption secrets are diagnosed at the actual read/write
+boundary, including workers; no asynchronous boot database scan is required.
+
+Provider quota exhaustion and zero-allocation responses are deterministic
+refusals: neither the SDK nor memory jobs retry them. Shared deployment or
+organization credentials make these operator-actionable errors. A recognized
+personal-key refusal is handled where shown to the user; an opaque 403/404
+remains visible. Locally authored missing-key/model configuration refusals are
+warnings. Deployment-specific configuration problems still require operators
+to correct their settings.

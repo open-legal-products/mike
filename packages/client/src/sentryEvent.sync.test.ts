@@ -33,6 +33,10 @@ describe("shared-redaction block", () => {
         expect(readFileSync(path.resolve(__dirname, "sentryPrivacy.ts"), "utf8"))
             .toBe(readFileSync(path.resolve(__dirname, "../../../backend/src/lib/observability/sentryPrivacy.ts"), "utf8"));
     });
+    it("keeps the volume policy identical across runtimes", () => {
+        expect(readFileSync(path.resolve(__dirname, "sentryVolume.ts"), "utf8"))
+            .toBe(readFileSync(path.resolve(__dirname, "../../../backend/src/lib/observability/sentryVolume.ts"), "utf8"));
+    });
     it("is identical in the backend and the shared scrubber", () => {
         expect(sharedBlock(BACKEND)).toBe(sharedBlock(SHARED));
     });

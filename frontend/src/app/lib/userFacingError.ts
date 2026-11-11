@@ -1,3 +1,4 @@
+import { BACKEND_REPORTING_OWNER } from "@mike/client";
 import {
     MikeApiError,
     UploadBatchError,
@@ -167,7 +168,7 @@ function reportRealFault(
     const requestId = typeof shaped?.requestId === "string" ? shaped.requestId : typeof shaped?.request_id === "string" ? shaped.request_id : undefined;
     // A request id only correlates events. Suppress a client report only
     // when the stream protocol explicitly assigns reporting to the backend.
-    if (shaped?.reportingOwner === "backend") return;
+    if (shaped?.reportingOwner === BACKEND_REPORTING_OWNER) return;
     reportError(error, { tags: { component: "notify", action, error_code: code, request_id: requestId, operation } });
 }
 
@@ -204,7 +205,7 @@ export function reportFlowFailure(args: {
     status?: number | null;
     code?: string | null;
     requestId?: string | null;
-    reportingOwner?: "backend";
+    reportingOwner?: typeof BACKEND_REPORTING_OWNER;
     method?: string;
     /** The request path, reduced to a route at the boundary. Never a document name. */
     path?: string;
@@ -214,7 +215,7 @@ export function reportFlowFailure(args: {
     const status = typeof args.status === "number" ? args.status : undefined;
     if (status !== undefined && status < 500) return;
     if (args.error !== undefined && isReported(args.error)) return;
-    if (args.reportingOwner === "backend") return;
+    if (args.reportingOwner === BACKEND_REPORTING_OWNER) return;
     reportError(
         args.error ?? new Error(`Failure in ${args.operation}`),
         {
