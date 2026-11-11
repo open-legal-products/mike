@@ -82,15 +82,43 @@ export function isDeterministicProviderQuota(error: unknown): boolean {
   return apiError !== null && quotaRefusal(apiError) !== null;
 }
 
-/** A 403 can be a WAF/region/deployment failure; require a model-access verdict. */
+// Error codes with which a provider says "not this model for this key".
+const MODEL_ACCESS_CODES = new Set([
+  "model_not_found", // OpenAI and OpenAI-compatible APIs
+  "model_not_available",
+  "invalid_model", // Mistral
+  "DeploymentNotFound", // Azure OpenAI: the deployment name is the model
+]);
+
+/**
+ * A 403 can be a WAF/region/deployment failure; require a model-access verdict.
+ * Each provider words that verdict its own way, so every shape recognized here
+ * is one a provider documents for an unknown or unentitled model. Anything
+ * else stays an unexplained failure and is reported as one.
+ */
 function isModelAccessRefusal(error: ApiCallErrorLike): boolean {
   if (error.statusCode !== 403 && error.statusCode !== 404) return false;
   const body = error.responseBody ?? "";
   try {
-    const parsed = JSON.parse(body) as { error?: { code?: unknown; type?: unknown } };
-    if (parsed?.error?.code === "model_not_found" || parsed?.error?.code === "model_not_available") return true;
+    const parsed = JSON.parse(body) as {
+      error?: { code?: unknown; type?: unknown; message?: unknown };
+      code?: unknown;
+      type?: unknown;
+    };
+    for (const code of [parsed?.error?.code, parsed?.error?.type, parsed?.code, parsed?.type]) {
+      if (typeof code === "string" && MODEL_ACCESS_CODES.has(code)) return true;
+    }
+    // Anthropic names the missing model as the whole message of a
+    // not_found_error: {"type":"not_found_error","message":"model: <id>"}.
+    if (
+      parsed?.error?.type === "not_found_error" &&
+      typeof parsed.error.message === "string" &&
+      /^model:/i.test(parsed.error.message)
+    ) {
+      return true;
+    }
   } catch { /* Some compatible providers return plain text. */ }
-  return /(?:\b(?:do(?:es)? not|don't|doesn't) have access to (?:(?:the|this|requested) )?model\b|\bmodels?\b[^\n]{0,160}\b(?:not found|not available|does not exist|do(?:es)? not have access)\b)/i.test(body);
+  return /(?:\b(?:do(?:es)? not|don't|doesn't) have access to (?:(?:the|this|requested) )?model\b|\bmodels?\b[^\n]{0,160}\b(?:not found|not available|does not exist|do(?:es)? not have access)\b|\bno endpoints found for\b)/i.test(body);
 }
 
 // The AI SDK is ESM-only here, so match its error shapes rather than importing

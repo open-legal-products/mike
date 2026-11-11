@@ -323,8 +323,14 @@ describe("provider failure traversal", () => {
 
 
 describe("source-owned provider refusals", () => {
-  it.each([403, 404])("keeps an opaque %s visible even with a personal key", status => {
-    const original = apiCallError(status, "PRIVATE_WAF_BLOCK");
+  it.each([
+    [403, "PRIVATE_WAF_BLOCK"],
+    [404, "PRIVATE_WAF_BLOCK"],
+    // A not_found_error that does not name a model is some other missing resource.
+    [404, '{"type":"error","error":{"type":"not_found_error","message":"PRIVATE_FILE was not found"}}'],
+    [403, '{"error":{"code":403,"message":"User location is not supported for the API use.","status":"PERMISSION_DENIED"}}'],
+  ] as const)("keeps an opaque %s visible even with a personal key (%s)", (status, body) => {
+    const original = apiCallError(status, body);
     const error = toProviderStreamError(original, { ...gemini, keySource: "user" });
     expect(error).toBe(original);
     expect(error).not.toBeInstanceOf(UserFacingError);
@@ -354,6 +360,10 @@ describe("source-owned provider refusals", () => {
   it.each([
     [403, "Your organization does not have access to this model"],
     [404, "models/gemini-private is not found for API version v1beta"],
+    [404, '{"type":"error","error":{"type":"not_found_error","message":"model: claude-private"}}'],
+    [404, '{"object":"error","message":"Invalid model: mistral-private","type":"invalid_model"}'],
+    [404, '{"error":{"code":"DeploymentNotFound","message":"The API deployment for this resource does not exist."}}'],
+    [404, '{"error":{"message":"No endpoints found for acme/private-model.","code":404}}'],
   ] as const)("recognizes a provider's model-access verdict %s", (status, body) => {
     const error = toProviderStreamError(apiCallError(status, body), { ...gemini, keySource: "user" });
     expect(isUserProviderRefusal(error)).toBe(true);
