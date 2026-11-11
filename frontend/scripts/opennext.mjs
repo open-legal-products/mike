@@ -13,8 +13,9 @@
 // OpenNext has no setting for its root, so this script moves frontend/'s
 // lockfiles aside while OpenNext runs. OpenNext then finds the repository's
 // package-lock.json and agrees with Next.js. The lockfiles are restored when
-// OpenNext exits, fails or is interrupted. When they are already absent (the
-// hosted build deletes them first), nothing is moved.
+// OpenNext exits, fails or is interrupted with Ctrl-C; a run killed any other
+// way is recovered by the next one. When they are already absent (the hosted
+// build deletes them first), nothing is moved.
 //
 // With the repository as its root, OpenNext's build also compiles the
 // repository's .env files into the Worker, next to the app's own. Those hold
@@ -124,19 +125,10 @@ function runCommand(bin, args, cwd) {
             stdio: "inherit",
             shell: process.platform === "win32",
         });
-        // Ctrl-C reaches the child through the terminal. Forward the other
-        // termination signals, which are sent to this process alone.
-        const forward = (signal) => child.kill(signal);
-        const signals = ["SIGINT", "SIGTERM", "SIGHUP"];
-        for (const signal of signals) process.on(signal, forward);
-        const done = (code, signal) => {
-            for (const s of signals) process.off(s, forward);
-            resolve({ code, signal });
-        };
-        child.on("exit", done);
+        child.on("exit", (code) => resolve(code ?? 1));
         child.on("error", (error) => {
             console.error(`[opennext] could not start ${bin}: ${error.message}`);
-            done(1, null);
+            resolve(1);
         });
     });
 }
@@ -150,29 +142,24 @@ export async function main({
         console.error("Usage: node scripts/opennext.mjs <command> [command...]");
         return 2;
     }
-    const repoLockfile = path.join(appDir, "..", "package-lock.json");
-    if (!fs.existsSync(repoLockfile)) {
-        console.error(
-            `[opennext] ${repoLockfile} is missing; OpenNext needs it to find the repository root.`,
-        );
-        return 1;
-    }
     recoverLockfiles(appDir);
     const restore = hideLockfiles(appDir);
+    // Ctrl-C reaches OpenNext through the terminal. Outlive it here so the
+    // lockfiles are restored; any other kill is recovered by the next run.
+    const ignore = () => {};
+    process.on("SIGINT", ignore);
     try {
         for (const command of commands) {
-            const { code, signal } = await runCommand(bin, [command], appDir);
-            if (signal) return 128 + (signalNumbers[signal] ?? 1);
-            if (code !== 0) return code ?? 1;
+            const code = await runCommand(bin, [command], appDir);
+            if (code !== 0) return code;
             if (command === "build") await keepAppEnvOnly(appDir);
         }
         return 0;
     } finally {
+        process.off("SIGINT", ignore);
         restore();
     }
 }
-
-const signalNumbers = { SIGHUP: 1, SIGINT: 2, SIGTERM: 15 };
 
 if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
     main().then(

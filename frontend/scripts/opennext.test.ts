@@ -113,67 +113,22 @@ describe("scripts/opennext.mjs", () => {
         expect(appFiles()).toEqual([]);
     });
 
-    it("restores a lockfile left aside by a killed run before starting", async () => {
-        fs.renameSync(path.join(app, "bun.lock"), path.join(app, "bun.lock" + HIDDEN_SUFFIX));
+    it("restores a lockfile left aside by a killed run, unless that would overwrite one", async () => {
+        const hidden = path.join(app, "bun.lock" + HIDDEN_SUFFIX);
+        fs.renameSync(path.join(app, "bun.lock"), hidden);
 
         await main({ commands: ["build"], appDir: app, bin: fakeOpenNext() });
 
         expect(appFiles()).toEqual(["bun.lock", "package-lock.json"]);
-    });
 
-    it("refuses to choose between a lockfile and a hidden copy of it", async () => {
-        fs.writeFileSync(path.join(app, "bun.lock" + HIDDEN_SUFFIX), "older bun lock");
+        fs.writeFileSync(hidden, "older bun lock");
+        fs.rmSync(log);
 
         await expect(
             main({ commands: ["build"], appDir: app, bin: fakeOpenNext() }),
         ).rejects.toThrow(/Both bun\.lock and bun\.lock\.opennext-hidden exist/);
         expect(calls()).toEqual([]);
-        expect(appFiles()).toEqual([
-            "bun.lock",
-            "bun.lock" + HIDDEN_SUFFIX,
-            "package-lock.json",
-        ]);
-    });
-
-    it("restores the lockfiles when it is terminated mid-command", async () => {
-        // Run a copy of the script as its own process, so its appDir is this
-        // temporary app, with a stand-in opennextjs-cloudflare that waits.
-        fs.mkdirSync(path.join(app, "scripts"));
-        const script = path.join(app, "scripts", "opennext.mjs");
-        fs.copyFileSync(path.join(__dirname, "opennext.mjs"), script);
-        const binDir = path.join(repo, "bin");
-        fs.mkdirSync(binDir);
-        const started = path.join(repo, "started");
-        const bin = path.join(binDir, "opennextjs-cloudflare");
-        fs.writeFileSync(
-            bin,
-            `#!${process.execPath}\nrequire("node:fs").writeFileSync(${JSON.stringify(started)}, "");\nsetInterval(() => {}, 1000);\n`,
-        );
-        fs.chmodSync(bin, 0o755);
-
-        const { spawn } = await import("node:child_process");
-        const child = spawn(process.execPath, [script, "build"], {
-            env: { ...process.env, PATH: `${binDir}${path.delimiter}${process.env.PATH}` },
-            stdio: "ignore",
-        });
-        const exited = new Promise<number | null>((resolve) => child.on("exit", resolve));
-        await vi.waitFor(() => expect(fs.existsSync(started)).toBe(true), { timeout: 10_000 });
-        expect(fs.existsSync(path.join(app, "package-lock.json"))).toBe(false);
-
-        child.kill("SIGTERM");
-
-        expect(await exited).toBe(143);
-        expect(appFiles()).toEqual(["bun.lock", "package-lock.json", "scripts"]);
-    });
-
-    it("fails before moving anything when the repository has no lockfile", async () => {
-        fs.rmSync(path.join(repo, "package-lock.json"));
-
-        const code = await main({ commands: ["build"], appDir: app, bin: fakeOpenNext() });
-
-        expect(code).toBe(1);
-        expect(calls()).toEqual([]);
-        expect(appFiles()).toEqual(["bun.lock", "package-lock.json"]);
+        expect(fs.readFileSync(path.join(app, "bun.lock"), "utf8")).toBe("bun lock");
     });
 
     it("keeps the repository's .env files out of the Worker", async () => {

@@ -783,17 +783,10 @@ API_BASE_URL = "https://api.example.com"
 ```
 
 `API_BASE_URL` is the backend's public URL; the frontend's `/api` proxy
-requires it at runtime. Then build and deploy with `npm run deploy --prefix
-frontend` (or `preview` to run it locally, `upload` for a new version without
-deploying). These scripts run `frontend/scripts/opennext.mjs`, which moves
-`frontend/`'s lockfiles aside while OpenNext runs, so OpenNext treats the
-repository as the project root as Next.js does, and restores them afterwards.
-
-OpenNext compiles `.env` files into the Worker at build time. The script
-limits that to `frontend/`'s `.env*` files, the same ones Next.js reads; the
-repository-root `.env` holds backend secrets and is never built into the
-Worker. Set anything else the Worker needs under `[vars]` or as a Wrangler
-secret.
+requires it at runtime. Then run `npm run deploy --prefix frontend` (or
+`preview` to run it locally, `upload` for a new version without deploying).
+Only `frontend/`'s `.env*` files are built into the Worker, never the
+repository-root `.env`.
 
 ### Running the backend image
 
