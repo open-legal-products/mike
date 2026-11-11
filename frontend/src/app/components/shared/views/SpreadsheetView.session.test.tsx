@@ -139,6 +139,16 @@ it.each([
     expect(state.parse).not.toHaveBeenCalled();
 });
 
+it("leaves out download and upload advice when the host offers neither", () => {
+    state.bytes = new Uint8Array([0xd0, 0xcf, 0x11, 0xe0, 0xa1, 0xb1, 0x1a, 0xe1]).buffer;
+    const { rerender } = render(<SpreadsheetView documentId="legacy" fileActions={false} />);
+    expect(screen.getByRole("alert")).toHaveTextContent(/^Legacy or encrypted Excel files cannot be previewed here\.$/);
+
+    state.bytes = new ArrayBuffer(0);
+    rerender(<SpreadsheetView documentId="unreadable" fileActions={false} />);
+    expect(screen.getByRole("alert")).toHaveTextContent(/^This spreadsheet could not be displayed\.$/);
+});
+
 it("ends a silent parser failure and ignores a callback arriving after the preview timed out", async () => {
     vi.useFakeTimers();
     let finish: ((value: { sheets: Sheet[] }) => void) | undefined;

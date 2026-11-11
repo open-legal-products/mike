@@ -18,8 +18,6 @@ type HighlightRange = { row: [number, number]; column: [number, number] };
 type WorkbookComponent = typeof import("@fortune-sheet/react").Workbook;
 
 const PREVIEW_TIMEOUT_MS = 30_000;
-const PREVIEW_FAILURE_MESSAGE =
-    "This spreadsheet could not be displayed. Download the original, or try saving a new .xlsx copy.";
 // BIFF8 .xls and encrypted OOXML use an OLE container, not the ZIP package
 // LuckyExcel understands. Renaming the File to .xlsx cannot convert its bytes.
 const OLE_SIGNATURE = [0xd0, 0xcf, 0x11, 0xe0, 0xa1, 0xb1, 0x1a, 0xe1];
@@ -27,6 +25,20 @@ const OLE_SIGNATURE = [0xd0, 0xcf, 0x11, 0xe0, 0xa1, 0xb1, 0x1a, 0xe1];
 // header ("PK\x03\x04"). Anything else (an HTML or CSV table renamed .xls, an
 // empty or truncated file, an empty ZIP) cannot be a workbook LuckyExcel reads.
 const ZIP_LOCAL_FILE_SIGNATURE = [0x50, 0x4b, 0x03, 0x04];
+
+type PreviewFailure = "unsupported-ole" | "unreadable";
+// `advice` names a download or upload; it is shown only when the host
+// renders those controls (see the `fileActions` prop).
+const PREVIEW_FAILURE_COPY: Record<PreviewFailure, { reason: string; advice: string }> = {
+    "unsupported-ole": {
+        reason: "Legacy or encrypted Excel files cannot be previewed here.",
+        advice: "For preview, save an unencrypted .xlsx copy and upload it.",
+    },
+    unreadable: {
+        reason: "This spreadsheet could not be displayed.",
+        advice: "Download the original, or try saving a new .xlsx copy.",
+    },
+};
 
 function startsWith(bytes: ArrayBuffer, signature: readonly number[]): boolean {
     if (bytes.byteLength < signature.length) return false;
@@ -46,6 +58,12 @@ interface Props {
     highlightCells?: HighlightCell[];
     rounded?: ViewRounding;
     active?: boolean;
+    /**
+     * Whether the surrounding UI lets the user download or re-upload this
+     * file. When false, a failed preview states the reason without advising
+     * a download or upload the host cannot offer.
+     */
+    fileActions?: boolean;
 }
 
 /** "B" -> 1, "AA" -> 26 (0-based column index). */
@@ -283,6 +301,7 @@ function SpreadsheetSourceView({
     highlightCells,
     rounded = true,
     active = true,
+    fileActions = true,
 }: Props) {
     const workbookRef = useRef<WorkbookInstance>(null);
     const [session, setSession] = useState<SpreadsheetSession | null>(null);
@@ -296,7 +315,7 @@ function SpreadsheetSourceView({
     const [workbookGeneration, setWorkbookGeneration] = useState(0);
     const [WorkbookComponent, setWorkbookComponent] =
         useState<WorkbookComponent | null>(null);
-    const [error, setError] = useState<string | null>(null);
+    const [error, setError] = useState<PreviewFailure | null>(null);
 
     // Fetch the raw workbook bytes from /file, or from the caller's source
     // URL (workflow add-on assets). Uncached: a replaced version must reload.
@@ -340,13 +359,13 @@ function SpreadsheetSourceView({
         setError(null);
 
         if (startsWith(bytes, OLE_SIGNATURE)) {
-            setError("Legacy or encrypted Excel files cannot be previewed here. For preview, save an unencrypted .xlsx copy and upload it.");
+            setError("unsupported-ole");
             return;
         }
         // LuckyExcel swallows a non-ZIP input's error without calling back,
         // so without this check the user would wait out the whole deadline.
         if (!startsWith(bytes, ZIP_LOCAL_FILE_SIGNATURE)) {
-            setError(PREVIEW_FAILURE_MESSAGE);
+            setError("unreadable");
             return;
         }
 
@@ -358,7 +377,7 @@ function SpreadsheetSourceView({
             if (cancelled || settled) return;
             settled = true;
             window.clearTimeout(timer);
-            setError(PREVIEW_FAILURE_MESSAGE);
+            setError("unreadable");
         }
 
         try {
@@ -565,8 +584,14 @@ function SpreadsheetSourceView({
 
     const frameClass = `fortune-sheet-viewer relative flex flex-col flex-1 min-h-0 overflow-hidden ${viewRoundingClass(rounded)}`;
 
-    const message =
-        error ?? (fetchError ? "Failed to load spreadsheet." : null);
+    const failureCopy = error ? PREVIEW_FAILURE_COPY[error] : null;
+    const message = failureCopy
+        ? fileActions
+            ? `${failureCopy.reason} ${failureCopy.advice}`
+            : failureCopy.reason
+        : fetchError
+          ? "Failed to load spreadsheet."
+          : null;
     if (message) {
         return (
             <div className={frameClass}>
