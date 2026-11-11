@@ -178,7 +178,8 @@ an explicit Stop remains a cancellation. Once a turn's signal fires, the tool
 dispatcher starts none of the batch's remaining server tools (and no write
 that was still waiting on a document lock, connector planning or a source
 download), tools that already finished keep their events in the stored turn
-(also when a later call of the batch rejects; a rejection after the stop ends
+(also when a later call of the batch rejects, or is still pending when the
+model adapter ends the stream on the stop; a rejection after the stop ends
 the turn as stopped),
 and a chat, project-chat, Word chat or tabular chat route whose `runLLMStream` returns anyway (a
 provider or tool that ignored the abort) takes its stop path: the turn is
