@@ -894,16 +894,19 @@ HTTP error helpers and the Next gateway send `reporting_owner: "backend"` only
 after taking responsibility for a failure. Clients propagate that field on the
 original error; a status, request ID or recognized UI code alone is insufficient.
 Old servers without the field remain observable, with potentially redundant
-reports until upgraded. These copies use the same repeat budget and hard daily
-ceiling as other events; a recognized code alone cannot safely suppress an
-unowned failure. Stream protocols keep their existing owner field. The marker
+reports until upgraded. These copies use the same repeat budget as other
+events, and on Mike's own projects the same hard daily ceiling (a custom
+destination has no daily ceiling unless one is configured; see the quota
+table); a recognized code alone cannot safely suppress an unowned failure. Stream protocols keep their existing owner field. The marker
 also covers expected refusals explicitly handled at their source, independent
 of whether telemetry delivery is enabled. Merely classifying an error as safe
 to display does not establish ownership.
 
 Redis listeners cover producer, consumer and worker emitters. Connection
 outages recover only after Redis command readiness succeeds and escalate after
-15 minutes. Each failing connection, including a worker's separate blocking
+15 minutes. The escalation is raised by the next connection error at or past
+that mark, not by a timer: a connection that stops retrying, and so stops
+emitting errors, does not escalate. Each failing connection, including a worker's separate blocking
 connection, must recover; unrelated socket readiness cannot reset the outage.
 Non-connection worker defects retain their own classification. Parser IPC keeps
 bounded original cause trees and source stacks locally, while the final outbound
