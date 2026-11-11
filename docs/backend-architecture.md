@@ -185,7 +185,12 @@ and a chat, project-chat, Word chat or tabular chat route whose `runLLMStream` r
 provider or tool that ignored the abort) takes its stop path: the turn is
 stored with its stop
 outcome, and is neither saved as a completed answer, given a fallback title,
-nor scheduled for memory curation. A route that unwinds after the grace period
+nor scheduled for memory curation. Tabular chat checks again after saving the
+finished answer and after awaiting its title. A stop during either step marks
+the already-saved row as stopped instead of inserting it again, and skips
+memory curation. A stop during the save also skips title generation; a title
+already being generated is retained.
+A route that unwinds after the grace period
 has already ended the run writes no more frames, because the run is finished.
 A resume has to reach the replica
 that is generating: run one replica, or route by session, until the buffer is moved
