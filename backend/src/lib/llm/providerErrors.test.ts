@@ -329,6 +329,9 @@ describe("source-owned provider refusals", () => {
     // A not_found_error that does not name a model is some other missing resource.
     [404, '{"type":"error","error":{"type":"not_found_error","message":"PRIVATE_FILE was not found"}}'],
     [403, '{"error":{"code":403,"message":"User location is not supported for the API use.","status":"PERMISSION_DENIED"}}'],
+    // A wrong base URL: "models" is a path segment here, not a verdict.
+    [404, '{"error":"Route /v1/models/chat not found"}'],
+    [404, "Cannot POST /api/v1/models/messages: not found"],
   ] as const)("keeps an opaque %s visible even with a personal key (%s)", (status, body) => {
     const original = apiCallError(status, body);
     const error = toProviderStreamError(original, { ...gemini, keySource: "user" });

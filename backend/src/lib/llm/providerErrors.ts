@@ -118,7 +118,10 @@ function isModelAccessRefusal(error: ApiCallErrorLike): boolean {
       return true;
     }
   } catch { /* Some compatible providers return plain text. */ }
-  return /(?:\b(?:do(?:es)? not|don't|doesn't) have access to (?:(?:the|this|requested) )?model\b|\bmodels?\b[^\n]{0,160}\b(?:not found|not available|does not exist|do(?:es)? not have access)\b|\bno endpoints found for\b)/i.test(body);
+  // "model" must be a word of the sentence, not a segment of a URL path: a
+  // wrong base URL answers "Route /v1/models/chat not found", which is a
+  // deployment fault. Gemini's "models/<id> is not found" still matches.
+  return /(?:\b(?:do(?:es)? not|don't|doesn't) have access to (?:(?:the|this|requested) )?model\b|(?<![/\w.-])models?\b[^\n]{0,160}\b(?:not found|not available|does not exist|do(?:es)? not have access)\b|\bno endpoints found for\b)/i.test(body);
 }
 
 // The AI SDK is ESM-only here, so match its error shapes rather than importing
