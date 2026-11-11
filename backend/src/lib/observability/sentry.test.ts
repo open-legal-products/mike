@@ -207,9 +207,14 @@ describe("sentryConfiguration", () => {
   });
 
   it("reads the repeat-event budget without imposing a community cap on custom DSNs", () => {
-    expect(sentryConfiguration({}, false).repeatEventsPerDay).toBe(50);
+    expect(sentryConfiguration({}, false).repeatEventsPerDay).toBe(25);
     expect(sentryConfiguration({ SENTRY_DSN: "https://key@sentry.invalid/1" }, false).repeatEventsPerDay).toBe(Infinity);
     expect(sentryConfiguration({ SENTRY_MAX_REPEAT_EVENTS_PER_DAY: "0" }, false).repeatEventsPerDay).toBe(0);
+    for (const dsn of Object.values(MIKE_SENTRY_DSN)) {
+      expect(sentryConfiguration({ SENTRY_DSN: dsn }, false)).toMatchObject({ repeatEventsPerDay: 25, eventsPerDay: 50 });
+      expect(sentryConfiguration({ MIKE_BUILD_SENTRY_DSN: dsn }, false)).toMatchObject({ repeatEventsPerDay: 25, eventsPerDay: 50 });
+    }
+
   });
 
   it("derives mike@<version>+<sha12> from the build args when SENTRY_RELEASE is unset", () => {

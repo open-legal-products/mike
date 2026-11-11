@@ -309,6 +309,7 @@ or local test artifacts.
 - Preserve original exceptions, causes, useful stack locations, operation/stage context, and request/job correlation. Optimize for actionable user failures.
 - Mark expected outcomes where they are actually handled. A recognized UI error code, HTTP status, or AbortError name alone does not prove handling or reporting ownership. Keep unowned terminal transport and response-body failures visible.
 - Keep the final outbound privacy allowlist protecting customer documents, credentials, and identities. Separate privacy enforcement from configurable volume policy; avoid repeat traffic starving new/severe failures.
+- Preserve the shared Sentry projects' hard ceiling of 50 total events per runtime per day. Match the resolved destination project, including explicitly configured DSNs, and keep quiet resets or issue eviction from replenishing that ceiling. Reserve capacity for new failures and severity escalations before repeats.
 - Treat console capture as a fallback, not a business-policy engine. Prefer explicit capture of the original Error with static context.
 - Keep development reporting off by default; avoid accumulating compiler-internal filename filters.
 - Verify meaningful regressions through final SDK envelopes as well as source-level tests. Test diagnostic usefulness, ownership/deduplication, and privacy.

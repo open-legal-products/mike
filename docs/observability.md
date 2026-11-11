@@ -99,7 +99,7 @@ cannot stop that sender. The controls below protect different things:
 
 | Control | Current implementation / verified state | Limit |
 | --- | --- | --- |
-| Repeat budget after privacy filtering | Issues use the final diagnostic fingerprint, exception type, top frame and severity. The first observation always passes; repeats send at occurrences 2, 4, 8, …, resetting after one quiet hour. Mike's default destination allows 50 **repeat** events per day per budget. New issues, severity escalations and diagnostic probes do not consume that allowance. Explicit DSNs have no daily repeat cap by default. | SDK budgets are per process/thread/task pane. Browser budgets live in each Next tunnel process, where the runtime destination is known. Memory is bounded to 1,000 recent issue/severity keys; restarts and eviction reset counts. This is not a hard account quota or protection against direct public-DSN submissions. |
+| Repeat budget after privacy filtering | Issues use the final diagnostic fingerprint, exception type, top frame and severity. The first observation bypasses the repeat allowance; repeats send at occurrences 2, 4, 8, …, resetting after one quiet hour. Mike's projects have a hard ceiling of **50 total events/day** per budget, including new issues, escalations and diagnostic probes. Repeats use at most 25 slots, reserving the rest for new failures/escalations. Matching uses the resolved host/project, even for explicitly configured DSNs or rotated keys. Other projects have no daily cap by default. | SDK budgets are per process/thread/task pane. Browser budgets live in each Next tunnel process, where the runtime destination is known. Memory is bounded to 1,000 recent issue/severity keys. Quiet resets and eviction never reset daily counters; process restarts do. This is not a hard account quota or protection against direct public-DSN submissions. |
 | Duplicate and expected-error suppression | Explicit reports mark the same error object to prevent a later console/unhandled duplicate. API 4xx and deliberate client cancellations are excluded from the API reporting paths. | New error objects or independent console messages can still produce events. Grouping several events into one issue does not make them one quota unit. |
 | Non-error telemetry | The final transport rejects sessions, transactions, spans, logs, replay, attachments and every other non-error item. | Adding a new telemetry category requires an explicit privacy-reviewed policy change. |
 | Sentry spike protection | Enabled on all three projects of the `open-legal-products` organization when checked on 2026-10-20 UTC; no project notification actions are attached. | Uses historical volume; Sentry explicitly says it must not be the sole defense. |
@@ -110,9 +110,11 @@ cannot stop that sender. The controls below protect different things:
 Volume policy is separate from `privacyBoundaryIntegration`, which always rebuilds
 the outbound allowlist. `SENTRY_MAX_REPEAT_EVENTS_PER_DAY` configures the backend,
 Next server and browser tunnel; `REACT_APP_SENTRY_MAX_REPEAT_EVENTS_PER_DAY`
-configures the add-in at build time. A nonnegative integer overrides the default;
-`0` keeps only first observations, severity changes and diagnostic probes.
-Power-of-two repeat sampling still applies with an explicit DSN. The former
+configures the add-in at build time. A nonnegative integer sets the repeat allowance, limited to 25 for Mike projects;
+`0` keeps only first observations, severity changes and diagnostic probes, all
+subject to the 50-event ceiling. Power-of-two repeat sampling also applies to
+custom projects. These are per-runtime limits, not a guaranteed 5,000-event
+monthly account limit: multiple installs/processes and restarts still add up. The former
 `SENTRY_MAX_EVENTS_PER_ISSUE_PER_MINUTE` setting is retired: there is no earlier
 raw-message throttle competing with final event grouping. `occurrence` counts
 observations reaching this budget, not all user failures: owning boundaries may

@@ -1,4 +1,4 @@
-import { eventBudget, repeatEventLimit } from "@mike/client";
+import { eventBudget, eventBudgetLimits, MIKE_SENTRY_DSN } from "@mike/client";
 import { reportingDestination } from "./errorReporting";
 
 /** Envelopes are small (the privacy boundary strips attachments); refuse more. */
@@ -152,8 +152,8 @@ export function rewriteEnvelope(
 let browserBudget: { key: string; accepts: ReturnType<typeof eventBudget> } | undefined;
 export function browserReportBudget(env: NodeJS.ProcessEnv): ReturnType<typeof eventBudget> {
     const destination = reportingDestination(env);
-    const limit = repeatEventLimit(env.SENTRY_MAX_REPEAT_EVENTS_PER_DAY, destination.source === "default");
-    const key = `${destination.dsn}:${limit}`;
-    if (browserBudget?.key !== key) browserBudget = { key, accepts: eventBudget({ repeatEventsPerDay: limit }) };
+    const limits = eventBudgetLimits(env.SENTRY_MAX_REPEAT_EVENTS_PER_DAY, destination.dsn, Object.values(MIKE_SENTRY_DSN));
+    const key = `${destination.dsn}:${limits.repeatEventsPerDay}:${limits.eventsPerDay}`;
+    if (browserBudget?.key !== key) browserBudget = { key, accepts: eventBudget(limits) };
     return browserBudget.accepts;
 }

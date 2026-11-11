@@ -2,7 +2,8 @@ import { afterEach, expect, it, vi } from 'vitest';
 import * as Sentry from '@sentry/node';
 import { reportProcessWarning, resetSentryForTests, scrubEvent, reportError, markErrorHandled } from './sentry';
 import { toProviderStreamError } from '../llm/providerErrors';
-import { eventBudget } from './sentryVolume';
+import { eventBudget, eventBudgetLimits } from './sentryVolume';
+import { MIKE_SENTRY_DSN } from './sentry';
 import { privacyBoundaryIntegration } from './sentryPrivacy';
 
 // The final transport also emits Sentry's legacy top-level message stack.
@@ -123,4 +124,22 @@ it('preserves the primary exception, ownership, privacy and new failures through
   expect(events[0]?.exception?.values?.[0]?.stacktrace?.frames).toContainEqual(expect.objectContaining({ filename: 'backend/src/modules/chat/engine/streaming.ts', lineno: 42 }));
   expect(events[1]?.tags).toMatchObject({ operation: 'documents.save', request_id: '123e4567-e89b-12d3-a456-426614174000' });
   expect(JSON.stringify(events)).not.toContain('SYNTHETIC_PRIVATE');
+});
+
+it('enforces the shared project ceiling through final SDK envelopes even with an explicit DSN', async () => {
+  const events: Sentry.Event[] = [];
+  resetSentryForTests('community');
+  Sentry.init({
+    dsn: MIKE_SENTRY_DSN.backend, defaultIntegrations: false,
+    integrations: [privacyBoundaryIntegration({ acceptEvent: eventBudget(eventBudgetLimits(undefined, MIKE_SENTRY_DSN.backend, Object.values(MIKE_SENTRY_DSN))) })],
+    beforeSend: scrubEvent,
+    transport: () => ({ send: async envelope => {
+      for (const [header, payload] of envelope[1]) if (header.type === 'event') events.push(payload as Sentry.Event);
+      return { statusCode: 200 };
+    }, flush: async () => true }),
+  });
+  for (let n = 0; n < 60; n++) Sentry.captureEvent({ message: 'PRIVATE_QUOTA_CANARY', tags: { diagnostic_test: 'true' } });
+  await Sentry.flush(2000);
+  expect(events).toHaveLength(50);
+  expect(JSON.stringify(events)).not.toContain('PRIVATE_QUOTA_CANARY');
 });

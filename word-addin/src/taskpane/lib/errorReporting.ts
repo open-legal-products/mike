@@ -13,7 +13,7 @@ import * as Sentry from "@sentry/react";
 import {
   privacyBoundaryIntegration,
   eventBudget,
-  repeatEventLimit,
+  eventBudgetLimits,
   MIKE_SENTRY_DSN,
   createEventScrubber,
   installKind,
@@ -72,7 +72,7 @@ export function addinSentryOptions(
   // webpack sets NODE_ENV from --mode: the dev server is "development",
   // `npm run build` (every image) is "production".
   const development = env.nodeEnv === "development";
-  const { dsn, source } = resolveDsn({
+  const { dsn } = resolveDsn({
     disabled: env.disabled,
     dsn: env.dsn,
     fallback: MIKE_SENTRY_DSN.wordAddin,
@@ -100,7 +100,7 @@ export function addinSentryOptions(
     // No session replay: the pane sits next to a privileged document.
     dataCollection,
     attachStacktrace: true,
-    integrations: [privacyBoundaryIntegration({ acceptEvent: eventBudget({ repeatEventsPerDay: repeatEventLimit(env.maxRepeatEventsPerDay, source === "default") }) }), Sentry.captureConsoleIntegration({ levels: ["error"] })],
+    integrations: [privacyBoundaryIntegration({ acceptEvent: eventBudget(eventBudgetLimits(env.maxRepeatEventsPerDay, dsn, Object.values(MIKE_SENTRY_DSN))) }), Sentry.captureConsoleIntegration({ levels: ["error"] })],
     initialScope: {
       tags: {
         service: "mike-word-addin",
