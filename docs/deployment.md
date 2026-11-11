@@ -762,6 +762,47 @@ If port 3001 (or `PORT`) is already taken, for example by the Docker Compose
 backend, the backend reports the bind failure and exits instead of starting
 without a listener.
 
+### Deploying the frontend to Cloudflare Workers
+
+The frontend can also run on Cloudflare Workers through OpenNext. Add a
+Wrangler configuration for your account as `frontend/wrangler.toml` (the
+repository does not ship one), for example:
+
+```toml
+main = ".open-next/worker.js"
+name = "mike-frontend"
+compatibility_date = "2026-01-23"
+compatibility_flags = ["nodejs_compat"]
+
+[assets]
+directory = ".open-next/assets"
+binding = "ASSETS"
+
+[vars]
+API_BASE_URL = "https://api.example.com"
+```
+
+`API_BASE_URL` is the backend's public URL; the frontend's `/api` proxy
+requires it at runtime.
+
+OpenNext must treat the repository, not `frontend/`, as the project root,
+and it picks the nearest directory that has a lockfile. Remove `frontend/`'s
+lockfiles before building, then restore them:
+
+```bash
+rm -f frontend/bun.lock frontend/package-lock.json
+npm run deploy --prefix frontend   # or preview, or upload
+git checkout -- frontend/bun.lock frontend/package-lock.json
+```
+
+Without this the build fails with `bun: command not found` or
+`ENOENT … .next/standalone/.next/server/pages-manifest.json`.
+
+Build from a checkout that has no repository-root `.env` (a CI checkout, or
+move the file aside first). With the repository as its root, OpenNext
+compiles the root `.env*` files into the Worker along with `frontend/`'s,
+and the root `.env` holds backend secrets.
+
 ### Running the backend image
 
 The backend image sets `NODE_ENV=production`, so it refuses to start unless
