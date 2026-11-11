@@ -859,6 +859,26 @@ describe("memoryJobFailure", () => {
     );
   });
 
+  it.each([false, true])("retries a transient scope alongside a permanent provider refusal (transient first: %s)", async (transientFirst) => {
+    const refused = await scopeFailureFor(400);
+    const transient = memoryScopeFailure(Object.assign(new Error("storage unavailable"), { code: "ECONNRESET" }));
+    const failure = transientFirst
+      ? memoryJobFailure(transient, refused)
+      : memoryJobFailure(refused, transient);
+    expect(failure).not.toBeInstanceOf(NonRetryableJobError);
+    expect(diagnosticErrorTags(failure)).toMatchObject({ failure_code: "ECONNRESET" });
+  });
+
+  it.each([false, true])("stops only when all scopes are permanent and preserves the actionable severity (deployment first: %s)", async (deploymentFirst) => {
+    const personal = await scopeFailureFor(401);
+    const deployment = await scopeFailureFor(401, "{}", "deployment");
+    const failure = deploymentFirst
+      ? memoryJobFailure(deployment, personal)
+      : memoryJobFailure(personal, deployment);
+    expect(failure).toBeInstanceOf(NonRetryableJobError);
+    expect((failure as NonRetryableJobError).reportLevel).toBe("error");
+  });
+
   it("does not read a failed memory write as a provider refusal", async () => {
     // Storage answers with HTTP-ish statuses too; a 400 from the write is
     // not the provider refusing the request.

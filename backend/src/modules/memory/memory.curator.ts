@@ -800,17 +800,24 @@ export function memoryModelFailure(error: unknown): Error {
  * provider's condition (classified by memoryModelFailure while the
  * provider's answer was still there). A background refusal stays visible:
  * warning for a known user account, error for deployment/unknown ownership.
- * Anything else stays retryable.
+ * Anything else stays retryable. A job spanning multiple scopes may stop
+ * retrying only when every failed scope is nonretryable.
  */
-export function memoryJobFailure(firstScopeFailure: unknown): Error {
-  const refusal =
-    firstScopeFailure instanceof Error ? providerRefusals.get(firstScopeFailure) : undefined;
-  const failure = memoryScopeFailure(firstScopeFailure);
-  if (!refusal) return failure;
-  return new NonRetryableJobError("Memory curator provider refused the request", {
-    cause: failure,
-    reportLevel: refusal.reportLevel,
-  });
+export function memoryJobFailure(firstScopeFailure: unknown, ...otherScopeFailures: unknown[]): Error {
+  let terminal: NonRetryableJobError | undefined;
+  for (const error of [firstScopeFailure, ...otherScopeFailures]) {
+    const refusal = error instanceof Error ? providerRefusals.get(error) : undefined;
+    const failure = memoryScopeFailure(error);
+    // Report the cause that still needs recovery, regardless of scope order.
+    if (!refusal) return failure;
+    if (!terminal || refusal.reportLevel === "error") {
+      terminal = new NonRetryableJobError("Memory curator provider refused the request", {
+        cause: failure,
+        reportLevel: refusal.reportLevel,
+      });
+    }
+  }
+  return terminal!;
 }
 
 /**
@@ -1505,8 +1512,7 @@ export async function handleMemoryConsolidation(
     apiKeys: settings.api_keys,
   });
 
-  let scopeFailures = 0;
-  let firstScopeFailure: unknown;
+  const scopeFailures: unknown[] = [];
   for (const candidate of files) {
     const prior = await recordedResult(db, job.id, candidate.file.id);
     if (prior) {
@@ -1579,17 +1585,15 @@ export async function handleMemoryConsolidation(
       }
       // Keep the app and project processes failure-isolated. A successful
       // scope records an idempotency result and will be skipped on retry.
-      // The first failure's classification is what the job-level report
-      // carries; later scopes usually fail for the same reason.
-      scopeFailures += 1;
-      firstScopeFailure ??= error;
+      // A permanent failure here must not prevent another scope's recovery.
+      scopeFailures.push(error);
       outcomes[candidate.file.scope] = "failed";
     }
   }
 
-  if (scopeFailures > 0) {
+  if (scopeFailures.length > 0) {
     await refreshJobFileStatuses({ db, job, state, status: "scheduled" });
-    throw memoryJobFailure(firstScopeFailure);
+    throw memoryJobFailure(scopeFailures[0], ...scopeFailures.slice(1));
   }
 
   const finalized = await setStatus({
