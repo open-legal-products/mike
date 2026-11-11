@@ -762,6 +762,39 @@ If port 3001 (or `PORT`) is already taken, for example by the Docker Compose
 backend, the backend reports the bind failure and exits instead of starting
 without a listener.
 
+### Deploying the frontend to Cloudflare Workers
+
+The frontend can also run on Cloudflare Workers through OpenNext. Add a
+Wrangler configuration for your account as `frontend/wrangler.toml` (the
+repository does not ship one), for example:
+
+```toml
+main = ".open-next/worker.js"
+name = "mike-frontend"
+compatibility_date = "2026-01-23"
+compatibility_flags = ["nodejs_compat"]
+
+[assets]
+directory = ".open-next/assets"
+binding = "ASSETS"
+
+[vars]
+API_BASE_URL = "https://api.example.com"
+```
+
+`API_BASE_URL` is the backend's public URL; the frontend's `/api` proxy
+requires it at runtime. Then build and deploy with `npm run deploy --prefix
+frontend` (or `preview` to run it locally, `upload` for a new version without
+deploying). These scripts run `frontend/scripts/opennext.mjs`, which moves
+`frontend/`'s lockfiles aside while OpenNext runs, so OpenNext treats the
+repository as the project root as Next.js does, and restores them afterwards.
+
+OpenNext compiles `.env` files into the Worker at build time. The script
+limits that to `frontend/`'s `.env*` files, the same ones Next.js reads; the
+repository-root `.env` holds backend secrets and is never built into the
+Worker. Set anything else the Worker needs under `[vars]` or as a Wrangler
+secret.
+
 ### Running the backend image
 
 The backend image sets `NODE_ENV=production`, so it refuses to start unless

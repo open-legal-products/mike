@@ -110,6 +110,8 @@ export default defineConfig({
         // Unit tests only. Keep any Playwright e2e specs (*.spec.ts) out.
         include: [
             "src/**/*.test.{ts,tsx}",
+            // Build scripts that run outside the app (scripts/opennext.mjs).
+            "scripts/**/*.test.ts",
             // The shared packages' colocated tests run here: they need the
             // same jsdom + Testing Library setup, and this is the one Vitest
             // the web app and the add-in both already depend on.
