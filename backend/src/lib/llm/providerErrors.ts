@@ -3,10 +3,10 @@ import { UserFacingError } from "../userFacingError";
 import { asInvalidApiKeyError, InvalidApiKeyError } from "./apiKeyErrors";
 
 /**
- * Whose key a model call sent: the user's own (Bring Your Own Keys) or the
+ * Whose key a model call sent: the user's own, their organization's, or the
  * deployment's environment key, which requiredKey() and friends fall back to.
  */
-export type ProviderKeySource = "user" | "deployment";
+export type ProviderKeySource = "user" | "org" | "deployment";
 
 type ProviderContext = {
   label: string;
@@ -55,7 +55,7 @@ export function withKeySource<T>(
 function providerKeySource(error: unknown): ProviderKeySource | undefined {
   for (const current of failureChain(error)) {
     const source = (current as { keySource?: unknown }).keySource;
-    if (source === "user" || source === "deployment") return source;
+    if (source === "user" || source === "org" || source === "deployment") return source;
   }
   return undefined;
 }
@@ -175,7 +175,7 @@ export function isUserProviderRefusal(error: unknown): boolean {
     (kind === "chat.provider_rejected" || kind === "chat.provider_out_of_credits");
 }
 
-/** Unknown ownership and deployment credential failures remain actionable errors. */
+/** Unknown ownership and shared credential failures remain actionable errors. */
 export function providerFailureLevel(error: unknown): "warning" | "error" {
   switch (providerFailureKind(error)) {
     case "chat.provider_rejected":

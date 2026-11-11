@@ -12,7 +12,7 @@ vi.mock("../mcp/client", () => ({ guardedFetch }));
 
 import { completeWithProvider } from "./providers";
 import { UserFacingError } from "../userFacingError";
-import { providerFailureLevel, providerFailureStatus } from "./providerErrors";
+import { isUserProviderRefusal, providerFailureLevel, providerFailureStatus } from "./providerErrors";
 
 const SERVICE_ACCOUNT = JSON.stringify({
   type: "service_account",
@@ -371,7 +371,7 @@ describe("whose key a failed call sent", () => {
   it.each([
     ["env", "error"],
     ["user", "warning"],
-    ["org", "warning"],
+    ["org", "error"],
   ] as const)("reads a store key whose origin is %s", async (origin, level) => {
     vi.stubEnv("XAI_API_KEY", "xai-deployment-key");
     vi.stubGlobal("fetch", vi.fn().mockResolvedValue(rejected()));
@@ -382,10 +382,27 @@ describe("whose key a failed call sent", () => {
     }).catch((thrown: unknown) => thrown);
     expect(providerFailureStatus(error)).toBe(401);
     expect(providerFailureLevel(error)).toBe(level);
+    expect(isUserProviderRefusal(error)).toBe(origin === "user");
   });
 });
 
 describe("custom OpenAI-compatible endpoint adapter", () => {
+  it.each(["user", "org"] as const)("preserves %s ownership on a custom endpoint refusal", async (origin) => {
+    guardedFetch.mockResolvedValue(Response.json({ error: { message: "Rejected", type: "authentication_error" } }, { status: 401 }));
+    const error = await completeWithProvider({
+      model: "custom/example/model",
+      user: "x",
+      apiKeys: {
+        custom: "sk-custom",
+        keySources: { custom: origin },
+        providerSettings: { custom: { baseUrl: "https://llm.example.com/v1" } },
+      },
+    }).catch((thrown: unknown) => thrown);
+    expect(providerFailureStatus(error)).toBe(401);
+    expect(isUserProviderRefusal(error)).toBe(origin === "user");
+    expect(providerFailureLevel(error)).toBe(origin === "user" ? "warning" : "error");
+  });
+
   // PR #608 regression: a guard rejection (the base URL resolves to a
   // private/metadata address) reached the chat as a raw internal error
   // mentioning "MCP server URL"; it is the user's configuration to fix.

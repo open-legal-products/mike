@@ -5,6 +5,7 @@ import { UserFacingError } from "../userFacingError";
 import { InvalidApiKeyError } from "./apiKeyErrors";
 import {
   asProviderStallError,
+  isUserProviderRefusal,
   providerFailureKind,
   providerFailureResponse,
   providerFailureStatus,
@@ -231,17 +232,20 @@ describe("providerFailureLevel", () => {
     expect(providerFailureLevel(error)).toBe(level);
   });
 
-  // A refusal of the DEPLOYMENT'S key (the env fallback) fails every user
-  // and is the operator's to fix, so it is one warning; a user's own key
-  // stays unreported, as does one whose source nobody recorded.
+  // Shared credentials can fail users who cannot repair them. Only a
+  // proven personal credential refusal is eligible for interactive handling.
   it.each([
     ["a rejected key", () => toProviderStreamError(apiCallError(401), gemini)],
     ["a forbidden model", () => toProviderStreamError(apiCallError(403), gemini)],
     ["an account out of credits", () => toProviderStreamError(apiCallError(402), gemini)],
-  ])("keeps %s visible when ownership is unknown or belongs to the deployment", (_name, refusal) => {
+  ])("keeps %s visible when ownership is unknown or shared", (_name, refusal) => {
     const deployment = toProviderStreamError(refusal(), { ...gemini, keySource: "deployment" });
+    const org = toProviderStreamError(refusal(), { ...gemini, keySource: "org" });
     const user = toProviderStreamError(refusal(), { ...gemini, keySource: "user" });
     expect(providerFailureLevel(deployment)).toBe("error");
+    expect(providerFailureLevel(org)).toBe("error");
+    expect(isUserProviderRefusal(org)).toBe(false);
+    expect(isUserProviderRefusal(new AppError("chat.provider_rejected", "Model stream failed", { cause: org }))).toBe(false);
     expect(providerFailureLevel(user)).toBe("warning");
     expect(providerFailureLevel(refusal())).toBe("error");
     // Through the flow's own wrapper, as chat and tabular report it.

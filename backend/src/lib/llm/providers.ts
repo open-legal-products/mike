@@ -145,7 +145,9 @@ function keySourceFor(
   provider: ApiKeyName,
 ): ProviderKeySource {
   if (!apiKeys?.[provider]?.trim()) return "deployment";
-  return apiKeys.keySources?.[provider] === "env" ? "deployment" : "user";
+  const origin = apiKeys.keySources?.[provider];
+  if (origin === "env") return "deployment";
+  return origin === "org" ? "org" : "user";
 }
 
 function routerEnvironmentKey(provider: RouterProvider): string | undefined {
@@ -517,8 +519,8 @@ async function createCustomEndpointAdapter(
     label: "OpenAI-compatible endpoint",
     model: client(customEndpointModelId(model)),
     modelId: model,
-    // No environment fallback: always the user's own endpoint and key.
-    keySource: "user",
+    // Custom endpoints may belong to the user or their organization.
+    keySource: keySourceFor(apiKeys, "custom"),
     supportsReasoning: false,
   };
 }
