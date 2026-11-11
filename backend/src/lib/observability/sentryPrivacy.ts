@@ -78,6 +78,8 @@ function isRepositoryFrame(filename: string): boolean {
   return REPOSITORY_FRAME.test(filename) && !filename.split('/').includes('node_modules');
 }
 const LEVELS = new Set('fatal error warning info debug'.split(' '));
+/** Fixed runtime messages of a failed fetch (Node, Chrome, Firefox, Safari). */
+const FETCH_FAILURE_MESSAGES = new Set(['Failed to fetch', 'fetch failed', 'Load failed', 'NetworkError when attempting to fetch resource.']);
 /** Caller fingerprints that replace code-location grouping: one condition, one issue. */
 const PINNED_FINGERPRINTS = new Set(['upstream-unavailable', 'api-unreachable', 'runtime-warning']);
 
@@ -167,6 +169,7 @@ export function diagnosticErrorTags(error: unknown): Record<string, string | num
   const tags: Record<string, string | number> = {};
   const pending: unknown[] = [error];
   const seen = new Set<object>();
+  let fetchFailed = false;
   for (let n = 0; pending.length && n < 12; n++) {
     const candidate = pending.shift();
     if (!candidate || typeof candidate !== 'object' || seen.has(candidate)) continue;
@@ -191,6 +194,20 @@ export function diagnosticErrorTags(error: unknown): Record<string, string | num
       for (const code of [item.code, item.name]) {
         if (typeof code === 'string' && ENUMS.failure_code!.has(code) && tags.failure_code === undefined) tags.failure_code = code;
       }
+      // supabase-js hands a failed network call back as a plain object, not
+      // an Error: `code` is '' and the undici cause survives only as text in
+      // `details` ("Caused by: Error: connect ECONNREFUSED host:port
+      // (ECONNREFUSED)"). Read the fixed code it appends in parentheses, never
+      // the host or the prose around it (MIKE-BACKEND-X, 6T: every query an
+      // install sent while its database gateway was unreachable arrived blank).
+      if (tags.failure_code === undefined && typeof item.details === 'string') {
+        for (const [, code] of item.details.matchAll(/ \(([A-Za-z0-9_]{2,40})\)(?=\n|$)/g)) {
+          if (code && ENUMS.failure_code!.has(code)) { tags.failure_code = code; break; }
+        }
+      }
+      // Compare entire fixed runtime messages, with or without supabase-js's
+      // "TypeError: " prefix; never retain any of their text.
+      if (typeof item.message === 'string' && FETCH_FAILURE_MESSAGES.has(item.message.replace(/^(?:TypeError|FetchError): /, ''))) fetchFailed = true;
       const status = item.status ?? item.statusCode ?? record(item.$metadata).httpStatusCode;
       if (Number.isInteger(status) && Number(status) >= 400 && Number(status) <= 599 && tags.dependency_status === undefined) tags.dependency_status = Number(status);
       if (item.cause) pending.push(item.cause);
@@ -200,13 +217,7 @@ export function diagnosticErrorTags(error: unknown): Record<string, string | num
       // Host objects/proxies may have throwing accessors. Reporting must not throw.
     }
   }
-  if (tags.failure_code === undefined) {
-    try {
-      // Compare entire fixed runtime messages; never retain any of their text.
-      const message = record(error).message;
-      if (typeof message === 'string' && ['Failed to fetch', 'fetch failed', 'Load failed', 'NetworkError when attempting to fetch resource.'].includes(message)) tags.failure_code = 'fetch_failed';
-    } catch { /* Exotic errors must not break reporting. */ }
-  }
+  if (tags.failure_code === undefined && fetchFailed) tags.failure_code = 'fetch_failed';
   return tags;
 }
 
