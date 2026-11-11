@@ -110,6 +110,11 @@ jobs:
       # playwright.config.ts (tsconfig.e2e.json).
       - run: npm run typecheck
 
+      # server.mjs is the production host (word-addin/Dockerfile); the
+      # Playwright suite serves dist/ with a different static server, so its
+      # headers and proxy are only covered here.
+      - run: npm run test:server
+
       # Both engines: webkit is the browser the assertions were written for
       # (see header), chromium guards the honours-overflow-anchor path.
       - name: Install Playwright browsers

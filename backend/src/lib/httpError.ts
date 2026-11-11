@@ -186,6 +186,7 @@ export function sendInternalError(
     : (answer ?? { code: INTERNAL_ERROR_CODE, detail: INTERNAL_ERROR_MESSAGE });
   return res.status(status).json({
     ...body,
+    reporting_owner: "backend",
     ...(requestId ? { request_id: requestId } : {}),
   });
 }

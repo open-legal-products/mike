@@ -2,7 +2,6 @@
 
 import { streamChatTurn } from "@/app/lib/mikeApi";
 import { readSseFrames } from "@/app/lib/sse";
-import { isAbortError } from "@mike/client";
 import { isPanelDocument } from "@/app/components/shared/types";
 import type { AssistantEvent, Citation } from "@/app/components/shared/types";
 import type { AssistantTurnHandle } from "@/app/lib/assistantTurnTypes";
@@ -74,6 +73,7 @@ export async function chatRequestError(response: Response): Promise<Error> {
     typeof value === "string" && value.trim() ? value.trim() : null;
   let detail: string | null = null;
   let code: string | null = null;
+  let reportingOwner: "backend" | undefined;
   let requestId = read(response.headers.get("x-request-id"));
   // Only a JSON error body is read: anything else (an HTML proxy page, a
   // stream that never ends) is released unread so the failure still
@@ -84,6 +84,7 @@ export async function chatRequestError(response: Response): Promise<Error> {
     const body = (await response.json()) as Record<string, unknown>;
     detail = read(body?.detail);
     code = read(body?.code);
+    reportingOwner = body?.reporting_owner === "backend" ? "backend" : undefined;
     requestId = read(body?.request_id) ?? requestId;
   } catch {
     try {
@@ -98,6 +99,7 @@ export async function chatRequestError(response: Response): Promise<Error> {
     ),
     {
       status: response.status,
+      ...(reportingOwner ? { reportingOwner } : {}),
       ...(code ? { code } : {}),
       ...(requestId ? { requestId } : {}),
     },
@@ -1509,7 +1511,6 @@ export async function readAssistantTurn(args: {
       return;
     } catch (error) {
       if (
-        isAbortError(error) ||
         signal?.aborted ||
         !cursor.chatId ||
         !cursor.turnId ||

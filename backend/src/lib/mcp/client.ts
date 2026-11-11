@@ -31,9 +31,7 @@ function encryptionSecret(): string {
         process.env.MCP_CONNECTORS_ENCRYPTION_SECRET ||
         process.env.USER_API_KEYS_ENCRYPTION_SECRET;
     if (!secret) {
-        throw new Error(
-            "MCP_CONNECTORS_ENCRYPTION_SECRET or USER_API_KEYS_ENCRYPTION_SECRET is not configured",
-        );
+        throw Object.assign(new AppError("configuration.encryption_secret_missing", "MCP_CONNECTORS_ENCRYPTION_SECRET or USER_API_KEYS_ENCRYPTION_SECRET is not configured"), { code: "configuration_invalid", configurationFields: ["MCP_CONNECTORS_ENCRYPTION_SECRET", "USER_API_KEYS_ENCRYPTION_SECRET"] });
     }
     return secret;
 }

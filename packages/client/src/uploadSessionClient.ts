@@ -225,12 +225,99 @@ type UploadSessionResponse = {
     files: UploadSessionFileResponse[];
 };
 
+/**
+ * Where the browser sent a direct storage PUT, relative to the page, as a
+ * fixed enum (never the host). It names the usual reason a compose install
+ * opened from a real host cannot upload (MIKE-FRONTEND-28, 3D, 2Z):
+ *
+ * - `loopback`: the signed URL points at localhost/127.0.0.1 while the page
+ *   does not, so the browser is talking to its OWN machine
+ *   (`R2_PUBLIC_ENDPOINT_URL` left at its localhost default);
+ * - `mixed_content`: an https page PUTting to an http URL, which the
+ *   browser blocks before any request is sent;
+ * - `cross_origin`: a different origin, which needs the bucket's CORS
+ *   policy to list the page's origin;
+ * - `same_origin`: proxied through the page's own origin (no CORS).
+ */
+export type StorageTarget = "loopback" | "mixed_content" | "cross_origin" | "same_origin";
+
+const LOOPBACK_HOST = /^(?:localhost|127(?:\.\d{1,3}){3}|\[::1\])$/i;
+
+export function classifyStorageTarget(
+    uploadUrl: string,
+    pageUrl: string | undefined,
+): StorageTarget | undefined {
+    if (!pageUrl) return undefined;
+    try {
+        const page = new URL(pageUrl);
+        const target = new URL(uploadUrl, page);
+        if (LOOPBACK_HOST.test(target.hostname) && !LOOPBACK_HOST.test(page.hostname)) {
+            return "loopback";
+        }
+        if (page.protocol === "https:" && target.protocol === "http:") return "mixed_content";
+        return target.origin === page.origin ? "same_origin" : "cross_origin";
+    } catch {
+        return undefined;
+    }
+}
+
+/** What a runtime's `reportError` receives for an exhausted storage PUT. */
+export type StorageFailureReport = {
+    level?: "warning";
+    tags: Record<string, string | number | boolean>;
+    fingerprint: string[];
+};
+
+type StorageFailure = {
+    error: unknown;
+    status?: number;
+    network?: true;
+    target?: StorageTarget;
+};
+
+/**
+ * The one reporting rule for a storage PUT whose retries are exhausted,
+ * shared by the web app and the Word add-in. Every non-2xx is reported, with
+ * its status: the PUT goes to a URL the backend signed a moment ago for a
+ * file it already accepted (size and type are checked when the session is
+ * created), so a refusal is the deployment's storage or proxy, not the
+ * user's file. 403 is a signature the store refuses (clock skew, a proxy
+ * rewriting the signed Host header); 404 a missing bucket or a proxy route
+ * miss; 405 a proxy sending the PUT to the web app; 413 a proxy body limit
+ * (nginx's default is 1 MiB, far below the upload cap). Nothing else reports
+ * these: the backend only records `direct_upload_failed` on the file.
+ *
+ * Every failure is pinned to `upload-storage-put`, split at the privacy
+ * boundary only by component, failure code and HTTP status: the URL, the
+ * file and the calling screen differ per event, but a 403, a 404, a 5xx and
+ * a network failure are different storage faults. `storage_target` says
+ * which part of the configuration a network failure points at.
+ */
+export function storageFailureReport(failure: StorageFailure): StorageFailureReport {
+    const { status, network, target } = failure;
+    return {
+        ...(network ? { level: "warning" as const } : {}),
+        tags: {
+            component: "mike-api",
+            operation: "upload_session.storage",
+            http_method: "PUT",
+            ...(status !== undefined ? { http_status: status } : {}),
+            ...(network ? { network: true } : {}),
+            ...(target ? { storage_target: target } : {}),
+        },
+        fingerprint: ["upload-storage-put"],
+    };
+}
+
 type UploadSessionTransport = {
     apiRequest<T>(path: string, init?: RequestInit): Promise<T>;
     fetchStorage: typeof fetch;
     shouldRetryControlRequest(error: unknown): boolean;
-    /** Called once only after storage retries are exhausted; never receives URLs or files. */
-    onStorageFailure?(failure: { error: unknown; status?: number; network?: true }): void;
+    /**
+     * Called once, only after storage retries are exhausted, with the report
+     * `storageFailureReport` builds. Never receives URLs or files.
+     */
+    reportStorageFailure?(error: unknown, report: StorageFailureReport): void;
 };
 
 type ResolvedInput = UploadSessionInput & { clientId: string };
@@ -514,7 +601,7 @@ async function runUploadSession<T>(args: {
                     errorCode: null,
                 });
                 let lastError: unknown;
-                let storageFailure: { error: unknown; status?: number; network?: true } | undefined;
+                let storageFailure: StorageFailure | undefined;
                 for (let attempt = 0; attempt < 3; attempt += 1) {
                     storageFailure = undefined;
                     if (attempt > 0) {
@@ -531,6 +618,7 @@ async function runUploadSession<T>(args: {
                         lastError = new Error("Upload URL is unavailable");
                         continue;
                     }
+                    const target = classifyStorageTarget(descriptor.upload.url, globalThis.location?.href);
                     let response: Response;
                     try {
                         response = await fetchStorage(descriptor.upload.url, {
@@ -544,7 +632,11 @@ async function runUploadSession<T>(args: {
                         // timeout is just another failed attempt.
                         if (args.signal?.aborted) throw error;
                         lastError = error;
-                        storageFailure = { error, network: true };
+                        storageFailure = {
+                            error,
+                            network: true,
+                            target,
+                        };
                         continue;
                     }
                     if (response.ok) {
@@ -561,11 +653,18 @@ async function runUploadSession<T>(args: {
                     lastError = new Error(
                         `Object storage returned ${response.status}`,
                     );
-                    storageFailure = { error: lastError, status: response.status };
+                    storageFailure = {
+                        error: lastError,
+                        status: response.status,
+                        target,
+                    };
                 }
                 if (storageFailure) {
                     try {
-                        args.transport.onStorageFailure?.(storageFailure);
+                        args.transport.reportStorageFailure?.(
+                            storageFailure.error,
+                            storageFailureReport(storageFailure),
+                        );
                     } catch {
                         // Telemetry must not change the per-file failure accounting.
                     }

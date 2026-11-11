@@ -7,12 +7,15 @@ import { tmpdir } from "node:os";
 import { execFile, spawn, type ChildProcess } from "node:child_process";
 import type { ExtractionOp, ExtractionOps } from "./ops";
 import { EXTRACTION_MAX_BYTES, ExtractionBusyError, ExtractionLimitError, extractionMemoryMb, extractionTimeoutMs } from "./limits";
+import { asExtractionFailure, extractionFailureFromWire, type ExtractionFailureWire } from "./failure";
+import { AppError } from "../appError";
 
 export { EXTRACTION_MAX_BYTES, ExtractionBusyError, ExtractionLimitError } from "./limits";
+export { ExtractionParseError } from "./failure";
 
 type Result<K extends ExtractionOp> = Awaited<ReturnType<ExtractionOps[K]>>;
 export type ExtractInSlot = <K extends ExtractionOp>(op: K, bytes: ArrayBuffer, options?: { fileType?: string }) => Promise<Result<K>>;
-type Reply = { ok: true; result: unknown } | { ok: false; limited: boolean; message: string };
+type Reply = { ok: true; result: unknown } | ({ ok: false; limited: boolean } & ExtractionFailureWire);
 
 /** Hard OS memory boundary on Linux, including native buffers. Fail closed if
  * prlimit is unavailable. Other platforms retain process/heap and input/output
@@ -119,7 +122,12 @@ async function extractInChild<K extends ExtractionOp>(op: K, bytes: ArrayBuffer,
   if (bytes.byteLength > EXTRACTION_MAX_BYTES) throw new ExtractionLimitError("source exceeds 150 MB");
   if (process.env.EXTRACTION_ISOLATION === "off") {
     const { EXTRACTION_OPS } = await import("./ops.js");
-    return await EXTRACTION_OPS[op](bytes, options.fileType ?? "") as Result<K>;
+    try {
+      return await EXTRACTION_OPS[op](bytes, options.fileType ?? "") as Result<K>;
+    } catch (error) {
+      // Classified as the isolated path is, so callers treat both alike.
+      throw error instanceof ExtractionLimitError ? error : asExtractionFailure(error);
+    }
   }
   if (parser && parser.memoryMb !== extractionMemoryMb()) await stopExtractionProcess();
   const p = parser ?? (parser = await startParser());
@@ -161,10 +169,10 @@ async function extractInChild<K extends ExtractionOp>(op: K, bytes: ArrayBuffer,
       void p.closed.then(() => {
         if (failure instanceof ExtractionLimitError) reject(failure);
         else if (reply?.ok) resolve(reply.result as Result<K>);
-        else if (reply) reject(reply.limited ? new ExtractionLimitError(reply.message) : new Error(reply.message));
+        else if (reply) reject(reply.limited ? new ExtractionLimitError(reply.message) : extractionFailureFromWire(reply));
         else if (signal === "SIGABRT" || /out of memory|allocation failed|cannot allocate memory|failed to map segment|ENOMEM/i.test(diagnostics)) {
           reject(new ExtractionLimitError("parser memory budget exceeded"));
-        } else reject(failure ?? new Error("extraction process exited without a result"));
+        } else reject(failure ?? new AppError("extraction.process_exited", "extraction process exited without a result"));
       }, reject);
     };
     const send = () => child.send({ op, bytes, fileType: options.fileType ?? "" }, (error) => {

@@ -176,9 +176,15 @@ however many users hit it.
   body and the `X-Request-ID` header (exposed to cross-origin scripts). A handler that
   writes its own 5xx body is caught by the response sanitizer and reported as
   a message.
-- Model streams that fail after the response has started (the 500 path never
-  sees these). Deliberate, explained refusals (`UserFacingError`: missing API
-  key, disallowed model) are not bugs and are not reported.
+- Model failures preserve the provider's original cause and credential origin.
+  Rate limits and dependency outages are warnings; unexplained failures and
+  rejected deployment credentials are errors. Unknown credential ownership
+  stays visible. A chat turn may mark a known user-account refusal handled
+  when it returns the remedy to that user. Background memory jobs and tabular
+  cells retain reports because they do not own that interaction. Deterministic
+  provider refusals end memory retries; no available model leaves the curator
+  idle for a later turn. Repeat sampling belongs to the final transport, never
+  a process-lifetime "already seen this provider" set.
 - Background jobs: every failed attempt of a `db_jobs` job (warning while
   retries remain, error when exhausted), failure-hook crashes, unknown job
   kinds, claim/tick/retention failures, BullMQ conversion/extraction/delivery
@@ -254,7 +260,10 @@ minified browser frames cannot promise an original TypeScript line without it.
 - Assistant chat streams that fail for a reason other than the user stopping
   them.
 - Server side: gateway failures to reach the backend, and render/route-handler
-  errors through Next's `onRequestError` hook.
+  errors through Next's `onRequestError` hook. An unreachable backend is one
+  warning issue per failure code (`upstream-unavailable`); a backend that drops
+  a response mid-stream is a separate issue per code (stage `gateway-stream`),
+  and a stream body timeout or unknown stream failure stays at error level.
 - Everything else that reaches `console.error`, deduplicated as above. An
   error reported explicitly is also not filed a second time if the same
   object then escapes to the browser's unhandled-error or rejection handler.
@@ -311,6 +320,14 @@ the backend, Next server/edge, browser, and all Word add-in entries.
   category; response bodies, prompts and credentials are never retained.
   Browser fetch failures include only `network_state` (online/offline/unknown)
   and `request_origin` (same-origin/cross-origin/unknown), never the hostname.
+  A browser's direct storage PUT that fails after its retries adds
+  `storage_target` (loopback/mixed_content/cross_origin/same_origin: where
+  the signed URL points relative to the page) and is pinned to
+  `upload-storage-put`, one issue per component, failure code and
+  `http_status` (a 403, a 404, a 5xx and a network failure are separate
+  issues). Every non-2xx is
+  reported: the URL was just signed for a file the backend already accepted,
+  so 403/404/405/413 are the deployment's storage or proxy, not the file.
   Online means the browser reports connectivity, not that a server is reachable. Arbitrary
   codes/names/messages and dependency metadata are not transmitted.
 - Invalid configuration reports may name approved environment **fields**, never
@@ -654,8 +671,9 @@ when it receives an event, so earlier issues keep their minified frames.
    `setTimeout(() => { throw new Error("Sentry web test") })`. The error
    arrives tagged `service=mike-frontend runtime=browser`. To see the
    request-id correlation, stop the backend and click anything that loads
-   data: the browser reports the normalized route and status 502 and the Next server reports
-   the gateway failure.
+   data: the Next server reports the gateway failure. Its explicit
+   `reporting_owner: "backend"` response prevents a second browser event.
+   An unowned proxy response or terminal body failure remains reportable.
 4. Word add-in: with the DSN baked in, open the pane and stop the backend; the
    next action reports a transport-failure warning with the Office host tags.
 
@@ -856,3 +874,30 @@ Unknown database-queue job kinds use `operation=jobs.dispatch` inside the
 same per-job isolation scope as normal handlers. Their
 `error_kind=dbq.unknown_job_kind` identifies the dispatch failure; destructive
 cleanup kinds retain their retry-until-success policy during rolling upgrades.
+
+### Consolidated failure handling
+
+HTTP error helpers and the Next gateway send `reporting_owner: "backend"` only
+after taking responsibility for a failure. Clients propagate that field on the
+original error; a status, request ID or recognized UI code alone is insufficient.
+Old servers without the field remain observable, with potentially redundant
+reports until upgraded. Stream protocols keep their existing owner field.
+
+Redis listeners cover producer, consumer and worker emitters. Connection
+outages recover through the existing gate and escalate after 15 minutes;
+non-connection worker defects retain their own classification. Parser IPC keeps
+original source stacks locally, while the final outbound allowlist removes
+messages and private paths. Proven invalid bytes end job retries; unknown parser
+and environment failures remain retryable.
+
+SDK compatibility notices become local warnings and stage breadcrumbs at their
+source. SDK deprecations and unrecognized process warnings remain reportable.
+Listener warnings retain only finite emitter/event labels and a numeric count.
+Missing credential-encryption secrets are diagnosed at the actual read/write
+boundary, including workers; no asynchronous boot database scan is required.
+
+This consolidation covers #773, #775, #776, #778, #780, #781, #789, #790, #791,
+#792, #794 and #802. #776 merged during implementation and is preserved from
+main. #772 is intentionally excluded. Deployment-specific configuration problems
+still require operators to correct their settings; these changes do not claim
+that every historical Sentry issue has disappeared in production.

@@ -18,7 +18,6 @@ import {
     normalizeApiPath,
     parseSampleRate,
     releaseName,
-    reportedUpstreamMessage,
     resolveDsn,
 } from "@mike/client";
 
@@ -107,10 +106,11 @@ export function reportApiFailure(failure: {
     method?: string;
     operation?: Operation;
     error?: unknown;
+    reportingOwner?: "backend";
 }): string | null {
     if (isReported(failure.error)) return null;
     markReported(failure.error);
-    if (reportedUpstreamMessage(failure.code)) return null;
+    if (failure.reportingOwner === "backend") return null;
     if (!Sentry.isEnabled()) return null;
     const route = normalizeApiPath(failure.path);
     const method = failure.method ?? "GET";
@@ -129,7 +129,9 @@ export function reportApiFailure(failure: {
             },
             fingerprint: ["api-5xx", method, route, String(failure.status)],
         });
-        return Sentry.captureMessage(`API ${failure.status} on ${method} ${route}`, "error");
+        return failure.error instanceof Error
+            ? Sentry.captureException(failure.error)
+            : Sentry.captureMessage(`API ${failure.status} on ${method} ${route}`, "error");
     });
 }
 

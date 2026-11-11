@@ -2,11 +2,16 @@
   "name": "mike-backend",
   "version": "1.0.0",
   "private": true,
+  "engines": {
+    "node": ">=22.19.0"
+  },
   "scripts": {
+    "predev": "node scripts/check-node-version.cjs",
     "dev": "tsx watch src/index.ts",
     "build": "tsc",
     "typecheck:test": "tsc -p tsconfig.test.json",
     "typecheck:contracts": "tsc -p ../packages/contracts/tsconfig.json",
+    "prestart": "node scripts/check-node-version.cjs",
     "start": "node --enable-source-maps dist/index.js",
     "sync:workflows": "node dist/jobs/syncWorkflows.js",
     "test": "vitest run",
@@ -65,8 +70,10 @@
     "@types/express": "^5.0.6",
     "@types/html-to-text": "9.0.4",
     "@types/node": "^26.6.6",
+    "@types/semver": "^7.8.0",
     "@types/supertest": "^7.2.1",
     "@vitest/coverage-v8": "^5.1.0",
+    "semver": "^7.8.5",
     "supertest": "^7.3.1",
     "tsx": "^4.23.15",
     "typescript": "^7.0.2",

@@ -205,21 +205,53 @@ services:
       - storage_data:/data
     restart: unless-stopped
 
+  # Writes the bucket CORS policy createbucket installs: browsers PUT uploads
+  # straight to storage, so the bucket must allow every origin the backend
+  # trusts (FRONTEND_URL, WORD_ADDIN_URL, ALLOWED_ORIGINS). It runs the
+  # backend image's own origin parser (docker/storage-cors.mjs) with the
+  # backend's env_file and the same overrides as the backend service below,
+  # so the two allowlists cannot disagree. Keep these three blocks in step
+  # with the backend service (backend/src/__tests__/storageCors.test.ts).
+  storage-cors:
+    build: *backend-build
+    image: *backend-image
+    env_file:
+      - path: ./backend/.env
+        required: false
+      - path: .env
+        required: false
+    environment:
+      - NODE_ENV=${NODE_ENV:-development}
+      - FRONTEND_URL=${FRONTEND_URL:-http://localhost:3000}
+      - MIKE_ORIGINS_MODULE=/app/dist/lib/origins.js
+    volumes:
+      - ./docker/storage-cors.mjs:/storage-cors.mjs:ro
+      - storage_cors:/cors
+    entrypoint: /bin/sh
+    command: ["-c", "node /storage-cors.mjs > /cors/storage-cors.json"]
+    # It reads the backend's env_file (provider keys and signing secrets
+    # included) only to print a JSON policy, so it gets no network at all.
+    network_mode: none
+    restart: "no"
+
   createbucket:
     image: amazon/aws-cli
     depends_on:
-      - storage
+      storage:
+        condition: service_started
+      storage-cors:
+        condition: service_completed_successfully
     environment:
       AWS_ACCESS_KEY_ID: rustfsadmin
       AWS_SECRET_ACCESS_KEY: rustfsadmin
       AWS_DEFAULT_REGION: us-east-1
     volumes:
-      - ./docker/storage-cors.json:/storage-cors.json:ro
+      - storage_cors:/cors:ro
     entrypoint: /bin/sh
     command: >
       -c "until aws --endpoint-url http://storage:9000 s3 ls; do echo 'waiting for storage'; sleep 2; done;
           aws --endpoint-url http://storage:9000 s3 mb s3://mike || true;
-          aws --endpoint-url http://storage:9000 s3api put-bucket-cors --bucket mike --cors-configuration file:///storage-cors.json"
+          aws --endpoint-url http://storage:9000 s3api put-bucket-cors --bucket mike --cors-configuration file:///cors/storage-cors.json"
     restart: "no"
 
   # --- Redis: backs the BullMQ job queues (conversion, extraction, fast
@@ -295,7 +327,11 @@ services:
       - SUPABASE_PUBLISHABLE_KEY=${SUPABASE_PUBLISHABLE_KEY:-eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZS1kZW1vIiwicm9sZSI6ImFub24iLCJleHAiOjE5ODM4MTI5OTZ9.CRXP1A7WOeoJeXxjNni43kdQwgnWNReilDMblYTn_I0}
       - SUPABASE_SECRET_KEY=${SUPABASE_SECRET_KEY:-eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZS1kZW1vIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImV4cCI6MTk4MzgxMjk5Nn0.EGIM96RAZx35lJzdJsyH-qQwv8Hdp7fsn3W0YpN81IU}
       - R2_ENDPOINT_URL=http://storage:9000
-      - R2_PUBLIC_ENDPOINT_URL=${R2_PUBLIC_ENDPOINT_URL:-http://localhost:9000}
+      # The storage URL BROWSERS reach for direct uploads/downloads. The
+      # default only works when the app is opened on this machine; for any
+      # other host set it to a public (https under an https front end) URL
+      # that reaches the storage service. See docs/deployment.md.
+      - R2_PUBLIC_ENDPOINT_URL=${R2_PUBLIC_ENDPOINT_URL:-http://localhost:${STORAGE_PORT:-9000}}
       - R2_ACCESS_KEY_ID=rustfsadmin
       - R2_SECRET_ACCESS_KEY=rustfsadmin
       - R2_BUCKET_NAME=mike
@@ -406,6 +442,7 @@ services:
 volumes:
   db_data:
   storage_data:
+  storage_cors:
   redis_data:
 
 secrets:

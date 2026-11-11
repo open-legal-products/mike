@@ -6,7 +6,11 @@ import { InvalidApiKeyError } from "./apiKeyErrors";
 import {
   asProviderStallError,
   providerFailureKind,
+  providerFailureResponse,
+  providerFailureStatus,
+  providerFailureLevel,
   toProviderStreamError,
+  withKeySource,
 } from "./providerErrors";
 
 const gemini = { label: "Gemini", modelId: "gemini-2.5-pro" };
@@ -139,7 +143,8 @@ describe("providerFailureKind", () => {
     [429, "chat.provider_rate_limited"],
     [500, "chat.provider_unavailable"],
     [503, "chat.provider_unavailable"],
-    [402, "chat.stream_failed"],
+    // OpenRouter's "out of credits": the account's state, not our failure.
+    [402, "chat.provider_out_of_credits"],
     [404, "chat.stream_failed"],
   ] as const)("maps a provider %i to %s", (status, kind) => {
     expect(providerFailureKind(apiCallError(status))).toBe(kind);
@@ -177,9 +182,96 @@ describe("providerFailureKind", () => {
     ).toBe("chat.provider_unavailable");
   });
 
+  it("finds a dropped socket under the AI SDK's exhausted retries", () => {
+    // MIKE-BACKEND-88: RetryError → lastError APICallError (no status: the
+    // request never got an answer) → TypeError("terminated") → undici's
+    // SocketError. The socket sits on `lastError`, not `cause`.
+    const socket = Object.assign(new Error("other side closed"), {
+      name: "SocketError",
+      code: "UND_ERR_SOCKET",
+    });
+    const fetchFailure = Object.assign(
+      new Error("Cannot connect to API: terminated", {
+        cause: new TypeError("terminated", { cause: socket }),
+      }),
+      { name: "AI_APICallError" },
+    );
+    const retried = Object.assign(new Error("Failed after 3 attempts."), {
+      name: "AI_RetryError",
+      lastError: fetchFailure,
+      errors: [fetchFailure],
+    });
+    expect(providerFailureKind(fetchFailure)).toBe("chat.provider_unavailable");
+    expect(providerFailureKind(retried)).toBe("chat.provider_unavailable");
+  });
+
   it("falls back to the generic stream failure", () => {
     expect(providerFailureKind(new Error("something else"))).toBe("chat.stream_failed");
     expect(providerFailureKind(undefined)).toBe("chat.stream_failed");
+  });
+});
+
+describe("providerFailureLevel", () => {
+  // MIK-89: nothing in Mike can fix a user's exhausted quota or a provider
+  // outage, so those are warnings; the account's own state (a rejected key,
+  // no credit) is not reported at all; an unexplained failure stays an error.
+  it.each([
+    ["a rate limit", apiCallError(429), "warning"],
+    ["an exhausted retry of a rate limit", Object.assign(new Error("Failed after 3 attempts."), { name: "AI_RetryError", lastError: apiCallError(429) }), "warning"],
+    ["an outage", apiCallError(503), "warning"],
+    ["a stalled stream", new Error("first chunk timeout of 30000ms exceeded"), "warning"],
+    ["an unreachable provider", new TypeError("fetch failed", { cause: Object.assign(new Error("connect"), { code: "ECONNRESET" }) }), "warning"],
+    ["a body that stopped mid-stream", new TypeError("terminated", { cause: Object.assign(new Error("Body Timeout Error"), { name: "BodyTimeoutError", code: "UND_ERR_BODY_TIMEOUT" }) }), "warning"],
+    ["a rejected key", new InvalidApiKeyError("Anthropic"), "error"],
+    ["a forbidden model", apiCallError(403), "error"],
+    ["an account out of credits", apiCallError(402), "error"],
+    ["an unexplained 400", apiCallError(400), "error"],
+    ["an unexplained failure", new Error("something else"), "error"],
+  ] as const)("reports %s at %s", (_name, error, level) => {
+    expect(providerFailureLevel(error)).toBe(level);
+  });
+
+  // A refusal of the DEPLOYMENT'S key (the env fallback) fails every user
+  // and is the operator's to fix, so it is one warning; a user's own key
+  // stays unreported, as does one whose source nobody recorded.
+  it.each([
+    ["a rejected key", () => toProviderStreamError(apiCallError(401), gemini)],
+    ["a forbidden model", () => toProviderStreamError(apiCallError(403), gemini)],
+    ["an account out of credits", () => toProviderStreamError(apiCallError(402), gemini)],
+  ])("keeps %s visible when ownership is unknown or belongs to the deployment", (_name, refusal) => {
+    const deployment = toProviderStreamError(refusal(), { ...gemini, keySource: "deployment" });
+    const user = toProviderStreamError(refusal(), { ...gemini, keySource: "user" });
+    expect(providerFailureLevel(deployment)).toBe("error");
+    expect(providerFailureLevel(user)).toBe("warning");
+    expect(providerFailureLevel(refusal())).toBe("error");
+    // Through the flow's own wrapper, as chat and tabular report it.
+    expect(
+      providerFailureLevel(new AppError("chat.provider_rejected", "Model stream failed", { cause: deployment })),
+    ).toBe("error");
+  });
+
+  it("records the key source on a raw provider error without serializing it", () => {
+    const raw = withKeySource(apiCallError(401), "deployment");
+    expect(providerFailureLevel(raw)).toBe("error");
+    expect(Object.keys(raw)).not.toContain("keySource");
+    expect(JSON.stringify(raw)).not.toContain("deployment");
+    // A later conversion keeps the first answer.
+    expect(providerFailureLevel(withKeySource(raw, "user"))).toBe("error");
+  });
+
+  it("does not raise a busy provider's level for the deployment's key", () => {
+    expect(providerFailureLevel(withKeySource(apiCallError(503), "deployment"))).toBe("warning");
+    expect(providerFailureLevel(withKeySource(apiCallError(400), "deployment"))).toBe("error");
+  });
+
+  it("reads the condition through the AppError that names the flow", () => {
+    const failure = new AppError("tabular.generation_failed", "Tabular cell completion failed", {
+      cause: apiCallError(429),
+    });
+    expect(providerFailureLevel(failure)).toBe("warning");
+    expect(
+      providerFailureLevel(new AppError("chat.stream_failed", "Model stream failed", { cause: new Error("bug") })),
+    ).toBe("error");
   });
 });
 
@@ -199,5 +291,26 @@ describe("a classified provider failure at the privacy boundary", () => {
       provider_error: "api_call",
     });
     expect(JSON.stringify(tags)).not.toContain("private provider response");
+  });
+});
+
+
+describe("provider failure traversal", () => {
+  it("uses the same wrapped retry response for status, body and kind", () => {
+    const response = apiCallError(429, "quota");
+    const retry = Object.assign(new Error("retry"), { lastError: new Error("wrapper", { cause: response }) });
+    const error = new Error("outer", { cause: retry });
+    expect(providerFailureStatus(error)).toBe(429);
+    expect(providerFailureResponse(error)).toEqual({ status: 429, body: "quota" });
+    expect(providerFailureKind(error)).toBe("chat.provider_rate_limited");
+  });
+
+  it("terminates cyclic cause and retry chains", () => {
+    const error = Object.assign(new Error("cycle"), { lastError: null as unknown });
+    error.lastError = error;
+    error.cause = error;
+    expect(providerFailureStatus(error)).toBeNull();
+    expect(providerFailureResponse(error)).toBeNull();
+    expect(providerFailureKind(error)).toBe("chat.stream_failed");
   });
 });
