@@ -735,6 +735,48 @@ describe("playbook access and autosave", () => {
       expect(byRule.get("law")?.edit?.edit_id).toBe("e2");
     });
 
+    it.each(["the model answers", "the document downloads"])(
+      "saves no version when its chat turn stops while %s",
+      async (moment) => {
+        const { db, tables } = setup();
+        const turn = new AbortController();
+        if (moment === "the model answers") {
+          const answer = completeText.getMockImplementation()!;
+          // A provider that finishes its answer even though the turn stopped.
+          completeText.mockImplementationOnce(async (params) => {
+            turn.abort();
+            return answer(params);
+          });
+        } else {
+          // The document module checks the signal it is given before it
+          // writes, and refuses the edit.
+          docs.applyTrackedEditsToDocument.mockImplementationOnce(
+            async ({ signal }: { signal?: AbortSignal }) => {
+              turn.abort();
+              return signal?.aborted
+                ? { ok: false, error: "The turn was stopped before the edit was saved." }
+                : { ok: true, version_id: "v2", version_number: 2, storage_path: "e",
+                    download_url: "", annotations: [], errors: [] };
+            },
+          );
+        }
+
+        await expect(review(db, { signal: turn.signal })).rejects.toThrow();
+
+        expect(completeText.mock.lastCall?.[0].abortSignal).toBe(turn.signal);
+        // Writing is the document module's last step, so a review stopped
+        // before then never reaches it.
+        expect(docs.applyTrackedEditsToDocument).toHaveBeenCalledTimes(
+          moment === "the model answers" ? 0 : 1,
+        );
+        expect(tables.playbook_runs[0]).toMatchObject({
+          status: "failed",
+          error: INTERRUPTED_RUN_ERROR,
+          edited_version_id: null,
+        });
+      },
+    );
+
     it("reviews a PDF as text without editing it", async () => {
       const { db } = setup("pdf");
 

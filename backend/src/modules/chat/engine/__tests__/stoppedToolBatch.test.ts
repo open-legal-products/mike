@@ -324,6 +324,33 @@ describe("a write that waited past the turn's stop", () => {
     expect(reviewWithPlaybook).not.toHaveBeenCalled();
   });
 
+  it("stops a playbook review that is running when the turn stops", async () => {
+    // The review ends with the signal it is given, as its model call does,
+    // or else fails on its own once the wait is over.
+    reviewWithPlaybook.mockImplementation(
+      ({ signal }: { signal?: AbortSignal }) =>
+        new Promise((_, reject) => {
+          signal?.addEventListener("abort", () => reject(signal.reason));
+          setTimeout(() => reject(new Error("provider down")), WAIT);
+        }),
+    );
+    const signal = stopDuringWait();
+
+    const pending = runOne(
+      "run_playbook",
+      { doc_id: "doc-0", playbook_id: "playbook-1" },
+      { signal, model: "gemini-3.8-flash" },
+    );
+    await vi.advanceTimersByTimeAsync(WAIT);
+    const result = await pending;
+
+    expect(reviewWithPlaybook).toHaveBeenCalledWith(
+      expect.objectContaining({ signal }),
+    );
+    // Ended by the stop, so it is not reported back as a failed review.
+    expect(result.toolResults).toEqual([]);
+  });
+
   it("does not run a connector call whose planning finishes after the stop", async () => {
     planConnectorToolCall.mockImplementation(() => afterWait({ type: "run" }));
     const write = vi.fn();

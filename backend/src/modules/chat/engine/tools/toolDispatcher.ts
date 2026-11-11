@@ -1068,6 +1068,9 @@ export async function runToolCalls(
             model: options.model,
             reviewMode: args.review_mode === "permissive" ? "permissive" : "strict",
             db,
+            // A stop during the review also stops it: the model call ends,
+            // and its suggestions are not saved as a version.
+            signal: options.signal,
           });
           const annotations = run.findings.flatMap((finding) =>
             finding.edit ? [finding.edit] : [],
@@ -1136,6 +1139,8 @@ export async function runToolCalls(
             }),
           });
         } catch (error) {
+          // The review ended because the turn was stopped: not a failure.
+          if (stopped()) break;
           if (error instanceof PlaybookRequestError) fail(error.message);
           else {
             reportToolFailure(error);
