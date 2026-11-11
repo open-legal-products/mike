@@ -1481,6 +1481,15 @@ export async function readDocumentContent(
   }
 }
 
+/** A hyphen, dash or minus sign directly between two digits. */
+function isDashBetweenDigits(text: string, i: number): boolean {
+  return (
+    /[\p{Pd}\u2212]/u.test(text[i]) &&
+    /\p{N}/u.test(text[i - 1] ?? "") &&
+    /\p{N}/u.test(text[i + 1] ?? "")
+  );
+}
+
 /** A character is "punctuation" for tolerant matching if it is not a letter,
  *  number, or whitespace. Dropped entirely (not replaced with a space) so
  *  "U.S." collapses to "us" and "plaintiff's" to "plaintiffs". */
@@ -1517,8 +1526,17 @@ export function normalizeWithMap(
         prevSpace = true;
       }
     } else if (stripPunctuation && isPunctuation(ch)) {
-      // Drop punctuation without disturbing the space-collapsing state so
-      // "foo, bar" -> "foo bar" but "U.S." -> "us".
+      // A dash between two digits belongs to a number range or identifier
+      // ("pp. 3-7", "No. 21-1234"); deleting it would make "pp. 3-7" equal
+      // "pp. 37". Keep one canonical hyphen there instead, so "3-7" still
+      // matches "3–7" but never "37".
+      if (isDashBetweenDigits(text, i)) {
+        norm.push("-");
+        origIdx.push(i);
+        prevSpace = false;
+      }
+      // Drop other punctuation without disturbing the space-collapsing state
+      // so "foo, bar" -> "foo bar" but "U.S." -> "us".
       continue;
     } else {
       norm.push(ch.toLowerCase());
