@@ -19,3 +19,12 @@ it("respects an operator's existing warning logger or opt-out", () => {
     expect((globalThis as { AI_SDK_LOG_WARNINGS?: unknown }).AI_SDK_LOG_WARNINGS).toBe(setting);
   }
 });
+
+it("does not permanently suppress repeated unknown warnings or deprecations", () => {
+  vi.spyOn(console, "warn").mockImplementation(() => {});
+  const emit = vi.spyOn(process, "emitWarning").mockImplementation(() => {});
+  for (let attempt = 0; attempt < 2; attempt++) {
+    logProviderWarnings({ warnings: [{ type: "other" }, { type: "deprecated", setting: "old" }] });
+  }
+  expect(emit).toHaveBeenCalledTimes(4);
+});

@@ -7,10 +7,14 @@ const seen = new Set<string>();
 export function logProviderWarnings({ warnings = [], provider }: WarningOptions): void {
   for (const warning of warnings) {
     addBreadcrumb({ category: "mike.stage", message: "provider.compatibility", level: "warning" });
-    const key = JSON.stringify([provider, warning.type, warning.feature, warning.setting]);
-    if (seen.has(key)) continue;
-    if (seen.size >= 256) seen.delete(seen.values().next().value!);
-    seen.add(key);
+    // Only recognized compatibility notices are handled here. Actionable or
+    // unknown warnings keep reaching the shared transport's repeat policy.
+    if (warning.type === "unsupported" || warning.type === "compatibility") {
+      const key = JSON.stringify([provider, warning.type, warning.feature, warning.setting]);
+      if (seen.has(key)) continue;
+      if (seen.size >= 256) seen.delete(seen.values().next().value!);
+      seen.add(key);
+    }
     console.warn("[ai-sdk] provider compatibility warning", warning);
     if (warning.type === "deprecated") {
       process.emitWarning("AI SDK uses a deprecated provider setting; see the local compatibility warning", {
