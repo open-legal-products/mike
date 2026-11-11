@@ -8,8 +8,7 @@ project_id = "backend"
 # the Kong gateway, and the local mail catcher. Realtime, Studio, Storage, Edge
 # Functions, and Analytics are switched off below because no Mike code calls
 # them, and together they are most of the stack's memory (over 2 GB with
-# them, about 0.4 GB without). backend/src/__tests__/supabaseLocalStack.test.ts fails
-# if one is switched back on here.
+# them, about 0.4 GB without).
 
 [api]
 enabled = true
@@ -101,7 +100,7 @@ enabled = false
 # max_header_length = 4096
 
 # Off by default: Developer dashboard only. Disabling it also drops postgres-meta, which exists to
-# serve it. To browse tables locally, set this to true on your machine (do not commit).
+# serve it. To browse tables locally, set this to true on your machine.
 # See "Supabase CLI stack" in docs/local-development.md.
 [studio]
 enabled = false

@@ -97,20 +97,11 @@ data; `supabase stop --no-backup` removes both.
 
 ## Supabase CLI stack
 
-`supabase start`, run from `backend/`, reads `backend/supabase/config.toml` and
-starts only the services Mike uses: Postgres, Auth, the data API, the gateway,
-and the local mail catcher. Realtime, Studio, Storage, Edge Functions, and
-Analytics are disabled there because no Mike code calls them and together they
-are most of the stack's memory (over 2 GB with them, about 0.4 GB without).
-
-To browse tables in Supabase Studio, set `enabled = true` under `[studio]` in
-your local copy of that file, then run `supabase stop` and `supabase start`.
-Studio is then at `http://localhost:54323`. Do not commit the change: a backend
-test fails if one of the disabled services is switched back on. Any Postgres
-client can also connect directly on `localhost:54322`.
-
-A stack that was already running keeps its old set of containers until it is
-stopped and started again.
+`supabase start`, run from `backend/`, starts only the services Mike uses:
+Postgres, Auth, the data API, the gateway, and the local mail catcher. The
+others are disabled in `backend/supabase/config.toml`. To browse tables in
+Supabase Studio, set `enabled = true` under `[studio]` there and restart the
+stack; Studio is then at `http://localhost:54323`.
 
 ## Local service endpoints
 
