@@ -3,9 +3,8 @@ import * as backend from "../../../../backend/src/lib/reportedUpstreamCodes";
 import * as client from "@mike/client";
 
 // The backend writes these codes and sentences into its 503 bodies; the web
-// app and the Word add-in (packages/client) recognise the codes as "already
-// reported server-side" and show the same sentences. A drift on either side
-// would report the incident twice or show a sentence the server never sent.
+// app and the Word add-in show the same sentences. Reporting ownership is
+// carried separately in the response, never inferred from these codes.
 describe("server-reported 5xx codes", () => {
     it.each([
         "UPSTREAM_UNAVAILABLE_CODE",

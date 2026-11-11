@@ -1,15 +1,6 @@
 /**
- * 5xx codes the server side has already reported to Sentry, and what each
- * tells the user.
- *
- * The backend (`schema_out_of_date`, and `upstream_unavailable` when GoTrue is
- * unreachable) and the Next gateway (`upstream_unavailable` when the backend
- * is unreachable) each file one event per failure, with detail a client
- * cannot see. A client copy would be one more issue per endpoint per page
- * view for the same incident, so every client that reports 5xx answers (the
- * web app's mikeApi and authApi, the Word add-in's API client) checks this
- * table first: these codes are only marked handled, and show their own
- * sentence instead of the generic server-failure one.
+ * Fixed public messages for upstream failure codes. Reporting ownership is
+ * carried separately by reporting_owner; a known code never proves handling.
  */
 
 /**
@@ -35,8 +26,7 @@ const REPORTED_UPSTREAM_MESSAGES: Readonly<Record<string, string>> = {
 };
 
 /**
- * The fixed user-facing message for a code the server side already
- * reported, or null for any other code (report it as usual).
+ * The fixed user-facing message for a known upstream failure code, or null.
  */
 export function reportedUpstreamMessage(
     code: string | null | undefined,

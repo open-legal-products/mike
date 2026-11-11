@@ -14,8 +14,8 @@
  * A dependency this server needs (GoTrue, today) is unreachable: no answer,
  * or a gateway 502/503/504 in front of it. The same code the Next gateway
  * sends when it cannot reach this server, so a client treats both alike:
- * already reported server-side, show "try again shortly", do not report it
- * again.
+ * show "try again shortly". The separate reporting_owner marker establishes
+ * whether the client should report its copy.
  */
 export const UPSTREAM_UNAVAILABLE_CODE = "upstream_unavailable";
 export const UPSTREAM_UNAVAILABLE_MESSAGE =

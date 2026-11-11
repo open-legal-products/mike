@@ -230,7 +230,7 @@ describe("same-origin API gateway", () => {
         // A body timeout means the backend is up but held the stream silent
         // for 300 s: a hang, not an outage. Like an unrecognised code it keeps
         // an error-level report with default grouping (MIKE-FRONTEND-2C).
-        it("keeps a body timeout or an unknown failure at error level, once a minute", async () => {
+        it("keeps distinct unknown failures and body timeouts eligible for final transport sampling", async () => {
             vi.spyOn(console, "warn").mockImplementation(() => {});
             const bodyTimeout = () =>
                 new TypeError("terminated", {
@@ -239,7 +239,7 @@ describe("same-origin API gateway", () => {
                         code: "UND_ERR_BODY_TIMEOUT",
                     }),
                 });
-            for (const failure of [bodyTimeout(), bodyTimeout(), new TypeError("terminated")]) {
+            for (const failure of [bodyTimeout(), bodyTimeout(), new TypeError("terminated"), new Error("distinct defect")]) {
                 fetchMock.mockResolvedValueOnce(
                     new Response(failingBody(failure), { headers: { "content-type": "text/event-stream" } }),
                 );
@@ -250,7 +250,7 @@ describe("same-origin API gateway", () => {
                 await expect(readBody(response)).rejects.toMatchObject({ name: "AbortError" });
             }
 
-            expect(reportError).toHaveBeenCalledTimes(2);
+            expect(reportError).toHaveBeenCalledTimes(4);
             for (const [, options] of vi.mocked(reportError).mock.calls) {
                 expect(options).not.toHaveProperty("level");
                 expect(options).not.toHaveProperty("fingerprint");
