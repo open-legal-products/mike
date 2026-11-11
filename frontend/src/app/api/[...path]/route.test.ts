@@ -227,6 +227,27 @@ describe("same-origin API gateway", () => {
             expect(warn).toHaveBeenCalledWith("[api-gateway] upstream response stream failed", failure, expect.any(Object));
         });
 
+        it.each(["11111111-1111-4111-8111-111111111111", null, "private-customer-value"])(
+            "correlates a body failure with the browser request ID (upstream: %s)",
+            async (upstreamRequestId) => {
+                const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+                const failure = new Error("response interrupted");
+                fetchMock.mockResolvedValue(new Response(failingBody(failure), {
+                    headers: upstreamRequestId ? { "x-request-id": upstreamRequestId } : {},
+                }));
+
+                const response = await GET(new NextRequest("https://app.example.test/api/documents"), context(["documents"]));
+                const requestId = response.headers.get("x-request-id");
+                expect(requestId).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i);
+                if (upstreamRequestId?.startsWith("11111111")) expect(requestId).toBe(upstreamRequestId);
+                await expect(readBody(response)).rejects.toMatchObject({ name: "AbortError" });
+                expect(reportError).toHaveBeenCalledWith(failure, expect.objectContaining({
+                    tags: expect.objectContaining({ request_id: requestId }),
+                }));
+                expect(warn).toHaveBeenCalledWith("[api-gateway] upstream response stream failed", failure, { requestId });
+            },
+        );
+
         // A body timeout means the backend is up but held the stream silent
         // for 300 s: a hang, not an outage. Like an unrecognised code it keeps
         // an error-level report with default grouping (MIKE-FRONTEND-2C).

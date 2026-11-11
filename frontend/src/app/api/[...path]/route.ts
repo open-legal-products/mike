@@ -32,7 +32,7 @@ async function proxy(request: NextRequest, context: RouteContext) {
     const { path } = await context.params;
     const requestPath = `/${path.map(encodeURIComponent).join("/")}`;
 
-    const requestId = randomUUID();
+    let requestId: string = randomUUID();
     let stage = "gateway-config";
     try {
         const upstreamUrl = new URL(`${backendOrigin()}${requestPath}`);
@@ -63,6 +63,13 @@ async function proxy(request: NextRequest, context: RouteContext) {
         const upstream = await fetch(upstreamUrl, init);
         stage = "gateway-response";
         const responseHeaders = new Headers(upstream.headers);
+        // Correlate post-header failures with the backend and the ID the
+        // browser receives. Only UUIDs survive the diagnostic privacy boundary.
+        const upstreamRequestId = responseHeaders.get("x-request-id");
+        if (upstreamRequestId && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(upstreamRequestId)) {
+            requestId = upstreamRequestId;
+        }
+        responseHeaders.set("x-request-id", requestId);
         // Fetch implementations may transparently decompress the response.
         responseHeaders.delete("content-encoding");
         responseHeaders.delete("content-length");
