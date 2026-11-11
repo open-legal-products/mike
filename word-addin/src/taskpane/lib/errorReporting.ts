@@ -1,3 +1,4 @@
+import { BACKEND_REPORTING_OWNER } from "@mike/client";
 /**
  * Error reporting for the Word add-in. Same policy as the web app (see
  * frontend/src/app/lib/errorReporting.ts and the shared scrubber it uses):
@@ -264,14 +265,14 @@ export function reportApiFailure(failure: {
     method?: string;
     operation?: AddinOperation;
     error?: unknown;
-    reportingOwner?: "backend";
+    reportingOwner?: typeof BACKEND_REPORTING_OWNER;
 }): string | null {
     if (isReported(failure.error)) return null;
     // Marked even when not sent, so a later reportFault of the same error
     // (a sign-in screen, a session re-check) does not send it either.
     markReported(failure.error);
     // Only an explicit protocol owner proves this failure was handled upstream.
-    if (failure.reportingOwner === "backend") return null;
+    if (failure.reportingOwner === BACKEND_REPORTING_OWNER) return null;
     if (!Sentry.isEnabled()) return null;
     const route = normalizeApiPath(failure.path);
     const method = failure.method ?? "GET";

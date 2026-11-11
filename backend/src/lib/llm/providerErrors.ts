@@ -1,6 +1,9 @@
 import type { ErrorKind } from "../appError";
 import { UserFacingError } from "../userFacingError";
-import { asInvalidApiKeyError, InvalidApiKeyError } from "./apiKeyErrors";
+import { asInvalidApiKeyError, InvalidApiKeyError, isInvalidApiKeyError } from "./apiKeyErrors";
+
+/** An actionable setup instruction authored at the provider configuration boundary. */
+export class ProviderConfigurationError extends UserFacingError {}
 
 /**
  * Whose key a model call sent: the user's own, their organization's, or the
@@ -61,6 +64,34 @@ function providerKeySource(error: unknown): ProviderKeySource | undefined {
 }
 
 type ApiCallErrorLike = Error & { statusCode: number; responseBody?: string };
+
+/** A provider's explicit account verdict, never inferred from HTTP 429 alone. */
+function quotaRefusal(error: ApiCallErrorLike): "credits" | "plan" | null {
+  if (error.statusCode !== 429) return null;
+  const body = error.responseBody ?? "";
+  try {
+    const parsed = JSON.parse(body) as { error?: { code?: unknown; type?: unknown } };
+    if (parsed?.error?.code === "insufficient_quota" || parsed?.error?.type === "insufficient_quota") return "credits";
+  } catch { /* Plain-text provider responses can still carry the known quota verdict below. */ }
+  return /\bquota\b[\s\S]*\blimit:\s*0(?![\d.])/i.test(body) ? "plan" : null;
+}
+
+/** Used before the SDK retries and by the job's provider classification. */
+export function isDeterministicProviderQuota(error: unknown): boolean {
+  const apiError = findApiCallError(error);
+  return apiError !== null && quotaRefusal(apiError) !== null;
+}
+
+/** A 403 can be a WAF/region/deployment failure; require a model-access verdict. */
+function isModelAccessRefusal(error: ApiCallErrorLike): boolean {
+  if (error.statusCode !== 403 && error.statusCode !== 404) return false;
+  const body = error.responseBody ?? "";
+  try {
+    const parsed = JSON.parse(body) as { error?: { code?: unknown; type?: unknown } };
+    if (parsed?.error?.code === "model_not_found" || parsed?.error?.code === "model_not_available") return true;
+  } catch { /* Some compatible providers return plain text. */ }
+  return /(?:\b(?:do(?:es)? not|don't|doesn't) have access to (?:(?:the|this|requested) )?model\b|\bmodels?\b[^\n]{0,160}\b(?:not found|not available|does not exist|do(?:es)? not have access)\b)/i.test(body);
+}
 
 // The AI SDK is ESM-only here, so match its error shapes rather than importing
 // APICallError / RetryError classes. Retried failures (e.g. 429s) arrive as a
@@ -150,11 +181,15 @@ export function providerFailureKind(error: unknown): ErrorKind {
   }
   const response = providerFailureResponse(error);
   if (response) {
-    if (response.status === 401 || response.status === 403) return "chat.provider_rejected";
+    const apiError = findApiCallError(error)!;
+    if (isInvalidApiKeyError(apiError) || isModelAccessRefusal(apiError)) return "chat.provider_rejected";
     // OpenRouter (and other prepaid gateways) answer 402 when the account
     // has no credit left: the account's state, like a rejected key.
     if (response.status === 402) return "chat.provider_out_of_credits";
-    if (response.status === 429) return "chat.provider_rate_limited";
+    if (response.status === 429) {
+      const quota = quotaRefusal(apiError);
+      return quota === "credits" ? "chat.provider_out_of_credits" : quota === "plan" ? "chat.provider_rejected" : "chat.provider_rate_limited";
+    }
     if (response.status >= 500) return "chat.provider_unavailable";
     return "chat.stream_failed";
   }
@@ -177,6 +212,9 @@ export function isUserProviderRefusal(error: unknown): boolean {
 
 /** Unknown ownership and shared credential failures remain actionable errors. */
 export function providerFailureLevel(error: unknown): "warning" | "error" {
+  for (const current of failureChain(error)) {
+    if (current instanceof ProviderConfigurationError) return "warning";
+  }
   switch (providerFailureKind(error)) {
     case "chat.provider_rejected":
     case "chat.provider_out_of_credits":
@@ -192,17 +230,19 @@ export function providerFailureLevel(error: unknown): "warning" | "error" {
 // "The" rather than "your" key: requiredKey() may fall back to the
 // deployment's key, as noted on InvalidApiKeyError.
 function accessFailureMessage(
-  { statusCode, responseBody = "" }: ApiCallErrorLike,
+  error: ApiCallErrorLike,
   { label, modelId }: ProviderContext,
 ): string | null {
-  if (statusCode === 402) {
+  const { statusCode } = error;
+  const quota = quotaRefusal(error);
+  if (statusCode === 402 || quota === "credits") {
     return `The ${label} account is out of credits. Top up, or select another model.`;
   }
-  if (statusCode === 403 || statusCode === 404) {
+  if (isModelAccessRefusal(error)) {
     return `${modelId} isn't available with the ${label} API key. Select another model.`;
   }
   if (statusCode === 429) {
-    return /limit: 0\b/.test(responseBody)
+    return quota === "plan"
       ? `The ${label} plan doesn't include ${modelId}. Select another model, or upgrade the ${label} plan.`
       : `${label} rate limit or quota reached. Wait a moment and try again, or select another model.`;
   }

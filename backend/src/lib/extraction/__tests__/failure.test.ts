@@ -69,7 +69,7 @@ describe("extraction failures across the process boundary", () => {
     expect(rebuilt instanceof ExtractionParseError).toBe(rejected);
     expect(rebuilt).toBeInstanceOf(AppError);
     // Only allowlisted labels cross; the kind and code read the same on both sides.
-    expect(Object.keys(wire).every((key) => ["message", "kind", "code", "name", "retryable", "stack"].includes(key))).toBe(true);
+    expect(Object.keys(wire).every((key) => ["message", "kind", "code", "name", "retryable", "stack", "original"].includes(key))).toBe(true);
     if (error instanceof Error) expect((rebuilt.cause as Error).stack).toBe(error.stack);
     const { error_kind: _kind, ...before } = diagnosticErrorTags(error);
     expect(diagnosticErrorTags(rebuilt)).toMatchObject(before);
@@ -91,4 +91,41 @@ describe("extraction failures across the process boundary", () => {
     expect((parsed as Error).cause).toBe(corrupt);
     expect(diagnosticErrorTags(parsed)).toMatchObject({ error_kind: "extraction.parse_failed" });
   });
+});
+
+
+it("retains retries when an older or incomplete IPC reply has no verdict", () => {
+  const error = extractionFailureFromWire({ message: "unknown failure" });
+  expect(error).not.toBeInstanceOf(ExtractionParseError);
+  expect(error.kind).toBe("extraction.failed");
+});
+
+it("retains intermediate causes and aggregate branches without moving the leaf errno", () => {
+  const leaf = errno("ENOSPC");
+  leaf.stack = "Error: ENOSPC\n    at write (backend/src/lib/extraction/scratch.ts:12:3)";
+  const middle = new TypeError("parser failed", { cause: leaf });
+  const original = new AppError("extraction.failed", "cannot extract", { cause: new AggregateError([middle, new Error("other")], "aggregate") });
+  const rebuilt = extractionFailureFromWire(structuredClone(extractionFailureToWire(original)));
+  const root = rebuilt.cause as AppError;
+  expect(root.kind).toBe("extraction.failed");
+  expect(root).not.toHaveProperty("code");
+  const aggregate = root.cause as AggregateError;
+  expect(aggregate.name).toBe("AggregateError");
+  expect(aggregate.errors).toHaveLength(2);
+  expect(aggregate.errors[0]).toMatchObject({ name: "TypeError", message: "parser failed", cause: { code: "ENOSPC", stack: leaf.stack } });
+});
+
+it("bounds cycles, cause depth, aggregate width and local strings", () => {
+  const cyclic = new Error("x".repeat(5000));
+  cyclic.cause = cyclic;
+  const wire = extractionFailureToWire(new AggregateError(Array.from({ length: 20 }, () => cyclic)));
+  expect(wire.original?.errors).toHaveLength(1);
+  expect(wire.original?.errors?.[0]?.message).toHaveLength(4096);
+  expect(wire.original?.errors?.[0]?.cause).toBeUndefined();
+  let deep: Error = new Error("leaf");
+  for (let i = 0; i < 50; i++) deep = new Error("wrapper", { cause: deep });
+  let link = extractionFailureToWire(deep).original;
+  let depth = 0;
+  while (link) { depth++; link = link.cause; }
+  expect(depth).toBe(8);
 });

@@ -1,4 +1,5 @@
 "use client";
+import { BACKEND_REPORTING_OWNER } from "@mike/client";
 
 import {
   useCallback,
@@ -698,9 +699,8 @@ export function useAssistantChat({
         // This boundary shows these refusals with their recovery actions. Other
         // terminal failures, including body reads and unowned gateway 5xxs,
         // remain visible after readAssistantTurn has exhausted recovery.
-        const handledRefusal = described.status !== null && described.status < 500 &&
-          ["forbidden", "not_found", "turn_not_found", "turn_in_progress", "rate_limited", "payload_too_large", "request_too_large"].includes(described.code ?? "");
-        if (owner === "backend" || handledRefusal) markErrorHandled(error);
+        const handledRefusal = described.status !== null && described.status >= 400 && described.status < 500;
+        if (owner === BACKEND_REPORTING_OWNER || handledRefusal) markErrorHandled(error);
         else if (!isReported(error)) reportError(error, {
           ...(described.status !== null && described.status < 500 ? { level: "warning" as const } : {}),
           tags: {

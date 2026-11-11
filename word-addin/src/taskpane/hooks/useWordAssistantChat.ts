@@ -1,3 +1,4 @@
+import { BACKEND_REPORTING_OWNER } from "@mike/client";
 import { createRedlineStreamProjector } from "../lib/redline";
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import {
@@ -947,7 +948,7 @@ export function useWordAssistantChat({
           // state below always builds on the latest transcript.
           publishAssistantEventsNow();
           const sessionIsCurrent = sendIsCurrent();
-          if (!controller.signal.aborted && !isReported(error) && !(error instanceof WordChatTerminalError && error.reportingOwner === "backend")) {
+          if (!controller.signal.aborted && !isReported(error) && !(error instanceof WordChatTerminalError && error.reportingOwner === BACKEND_REPORTING_OWNER)) {
             // The stream failed for a reason other than the user stopping
             // it. The 5xx/network layers already reported transport-level
             // failures; this is the only report for mid-stream `error`

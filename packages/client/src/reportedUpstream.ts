@@ -1,3 +1,6 @@
+/** Ownership is explicit; a status or display code never establishes it. */
+export const BACKEND_REPORTING_OWNER = "backend";
+
 /**
  * Fixed public messages for upstream failure codes. Reporting ownership is
  * carried separately by reporting_owner; a known code never proves handling.

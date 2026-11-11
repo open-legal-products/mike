@@ -5,6 +5,8 @@ import { UserFacingError } from "../userFacingError";
 import { InvalidApiKeyError } from "./apiKeyErrors";
 import {
   asProviderStallError,
+  ProviderConfigurationError,
+  isDeterministicProviderQuota,
   isUserProviderRefusal,
   providerFailureKind,
   providerFailureResponse,
@@ -25,7 +27,7 @@ function apiCallError(statusCode: number, responseBody = "") {
 }
 
 describe("toProviderStreamError", () => {
-  it.each([401, 402, 403, 404, 429])("retains the original %i provider failure internally", (status) => {
+  it.each([401, 402, 429])("retains the original %i provider failure internally", (status) => {
     const original = apiCallError(status, "private provider response");
     const error = toProviderStreamError(original, gemini);
     expect(error.cause).toBe(original);
@@ -83,7 +85,7 @@ describe("toProviderStreamError", () => {
   });
 
   it.each([403, 404])("explains a %i as the model being unavailable", (status) => {
-    const error = toProviderStreamError(apiCallError(status), gemini);
+    const error = toProviderStreamError(apiCallError(status, '{"error":{"code":"model_not_found"}}'), gemini);
 
     expect(error).toBeInstanceOf(UserFacingError);
     expect(error.message).toBe(
@@ -140,7 +142,7 @@ describe("asProviderStallError", () => {
 describe("providerFailureKind", () => {
   it.each([
     [401, "chat.provider_rejected"],
-    [403, "chat.provider_rejected"],
+    [403, "chat.stream_failed"],
     [429, "chat.provider_rate_limited"],
     [500, "chat.provider_unavailable"],
     [503, "chat.provider_unavailable"],
@@ -236,7 +238,7 @@ describe("providerFailureLevel", () => {
   // proven personal credential refusal is eligible for interactive handling.
   it.each([
     ["a rejected key", () => toProviderStreamError(apiCallError(401), gemini)],
-    ["a forbidden model", () => toProviderStreamError(apiCallError(403), gemini)],
+    ["a forbidden model", () => toProviderStreamError(apiCallError(403, '{"error":{"code":"model_not_found"}}'), gemini)],
     ["an account out of credits", () => toProviderStreamError(apiCallError(402), gemini)],
   ])("keeps %s visible when ownership is unknown or shared", (_name, refusal) => {
     const deployment = toProviderStreamError(refusal(), { ...gemini, keySource: "deployment" });
@@ -316,5 +318,53 @@ describe("provider failure traversal", () => {
     expect(providerFailureStatus(error)).toBeNull();
     expect(providerFailureResponse(error)).toBeNull();
     expect(providerFailureKind(error)).toBe("chat.stream_failed");
+  });
+});
+
+
+describe("source-owned provider refusals", () => {
+  it.each([403, 404])("keeps an opaque %s visible even with a personal key", status => {
+    const original = apiCallError(status, "PRIVATE_WAF_BLOCK");
+    const error = toProviderStreamError(original, { ...gemini, keySource: "user" });
+    expect(error).toBe(original);
+    expect(error).not.toBeInstanceOf(UserFacingError);
+    expect(isUserProviderRefusal(error)).toBe(false);
+    expect(providerFailureLevel(error)).toBe("error");
+  });
+  it.each([403, 404])("handles a proven personal model-access %s refusal", status => {
+    const error = toProviderStreamError(apiCallError(status, '{"error":{"code":"model_not_found","message":"PRIVATE_MODEL"}}'), { ...gemini, keySource: "user" });
+    expect(error).toBeInstanceOf(UserFacingError);
+    expect(isUserProviderRefusal(error)).toBe(true);
+    expect(error.message).not.toContain("PRIVATE_MODEL");
+  });
+  it.each([
+    ['{"error":{"code":"insufficient_quota"}}', "chat.provider_out_of_credits", /Top up/],
+    ['{"error":{"type":"insufficient_quota"}}', "chat.provider_out_of_credits", /Top up/],
+    ['Quota exceeded, limit: 0, model: example', "chat.provider_rejected", /upgrade/],
+  ])("classifies deterministic quota %s before retries", (body, kind, remedy) => {
+    const original = apiCallError(429, body as string);
+    const personal = toProviderStreamError(original, { ...gemini, keySource: "user" });
+    expect(isDeterministicProviderQuota(original)).toBe(true);
+    expect(providerFailureKind(personal)).toBe(kind);
+    expect(personal.message).toMatch(remedy as RegExp);
+    expect(isUserProviderRefusal(personal)).toBe(true);
+    const deployment = toProviderStreamError(apiCallError(429, body as string), { ...gemini, keySource: "deployment" });
+    expect(providerFailureLevel(deployment)).toBe("error");
+  });
+  it.each([
+    [403, "Your organization does not have access to this model"],
+    [404, "models/gemini-private is not found for API version v1beta"],
+  ] as const)("recognizes a provider's model-access verdict %s", (status, body) => {
+    const error = toProviderStreamError(apiCallError(status, body), { ...gemini, keySource: "user" });
+    expect(isUserProviderRefusal(error)).toBe(true);
+    expect(error).toBeInstanceOf(UserFacingError);
+  });
+  it("leaves ordinary throttling retryable and keeps setup errors at warning", () => {
+    expect(isDeterministicProviderQuota(apiCallError(429, "Rate limit exceeded"))).toBe(false);
+    expect(isDeterministicProviderQuota(apiCallError(429, "Quota exceeded, limit: 0.5"))).toBe(false);
+    expect(isDeterministicProviderQuota(apiCallError(429, "unrelated input limit: 0"))).toBe(false);
+    const setup = new ProviderConfigurationError("Add your key in Settings");
+    expect(providerFailureLevel(new AppError("chat.stream_failed", "failed", { cause: setup }))).toBe("warning");
+    expect(providerFailureLevel(new UserFacingError("some other failure"))).toBe("error");
   });
 });

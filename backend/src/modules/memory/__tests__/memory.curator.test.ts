@@ -837,7 +837,7 @@ describe("memoryJobFailure", () => {
 
   it.each([
     [402, "warning"],
-    [403, "warning"],
+    [403, "error"],
     [404, "error"],
     [400, "error"],
   ] as const)("stops retrying a provider %i, reported at %s", async (status, level) => {
@@ -851,6 +851,18 @@ describe("memoryJobFailure", () => {
     const failure = memoryJobFailure(await scopeFailureFor(status));
     expect(failure).not.toBeInstanceOf(NonRetryableJobError);
     expect(failure.message).toBe("Memory curator scope failed");
+  });
+
+  it.each([
+    ['{"error":{"code":"insufficient_quota"}}', "user", "warning"],
+    ['{"error":{"code":"insufficient_quota"}}', "deployment", "error"],
+    ['Quota exceeded, limit: 0', "user", "warning"],
+    ['Quota exceeded, limit: 0', "deployment", "error"],
+  ] as const)("does not retry a proven quota refusal %s (%s)", async (body, source, level) => {
+    const failure = memoryJobFailure(await scopeFailureFor(429, body, source));
+    expect(failure).toBeInstanceOf(NonRetryableJobError);
+    expect((failure as NonRetryableJobError).reportLevel).toBe(level);
+    expect(inspect(failure, { depth: 6 })).not.toContain("SECRET");
   });
 
   it("keeps a failure that is not the provider's retryable", () => {

@@ -104,7 +104,7 @@ describe("watchQueueErrors", () => {
             workerB.emit("error", error);
         }
         workerA.emit("error", new Error("could not renew lock for job 1"));
-        queueConnectionRecovered();
+        queueConnectionRecovered(connection);
 
         expect(log).toHaveBeenCalledWith(
             "[queue] redis recovered after 3 consecutive failure(s)",

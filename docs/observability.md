@@ -99,7 +99,7 @@ cannot stop that sender. The controls below protect different things:
 
 | Control | Current implementation / verified state | Limit |
 | --- | --- | --- |
-| Repeat budget after privacy filtering | Pinned fingerprints use their complete controlled fingerprint and severity; fingerprints containing `{{ default }}` also use exception type and top frame. The first observation bypasses the repeat allowance; repeats send at occurrences 2, 4, 8, …, resetting after one quiet hour. Mike's projects have a hard ceiling of **50 total events/day** per budget, including new issues, escalations and diagnostic probes. Repeats use at most 25 slots, reserving the rest for new failures/escalations. Matching uses the resolved host/project, even for explicitly configured DSNs or rotated keys. Other projects have no daily cap by default. | SDK budgets are per process/thread/task pane. Browser budgets live in each Next tunnel process, where the runtime destination is known. Memory is bounded to 1,000 recent issue/severity keys. Quiet resets and eviction never reset daily counters; process restarts do. This is not a hard account quota or protection against direct public-DSN submissions. |
+| Repeat budget after privacy filtering | Pinned fingerprints use their complete controlled fingerprint and severity; fingerprints containing `{{ default }}` also use exception type and top frame. Only the first accepted observation of an issue/severity that day bypasses the repeat allowance; repeats send at power-of-two occurrences. One quiet hour resets occurrence sampling, never first-observation eligibility. Mike's projects have a hard ceiling of **50 total events/day** per budget, including new issues, escalations and diagnostic probes. Repeats use at most 25 slots, reserving the rest for new failures/escalations. Matching uses the resolved host/project, even for explicitly configured DSNs or rotated keys. Other projects have no daily cap by default. | SDK budgets are per process/thread/task pane. Browser budgets live in each Next tunnel process, where the runtime destination is known. Occurrence and daily-identity caches are each bounded to 1,000 issue/severity keys; daily-identity overflow conservatively uses repeat capacity. Quiet resets and eviction never reset daily counters or restore new-issue capacity; process restarts do. A fixed local warning is emitted once when the daily ceiling rejects an event. This is not a hard account quota or protection against direct public-DSN submissions. |
 | Duplicate and expected-error suppression | Explicit reports mark the same error object to prevent a later console/unhandled duplicate. API 4xx and deliberate client cancellations are excluded from the API reporting paths. | New error objects or independent console messages can still produce events. Grouping several events into one issue does not make them one quota unit. |
 | Non-error telemetry | The final transport rejects sessions, transactions, spans, logs, replay, attachments and every other non-error item. | Adding a new telemetry category requires an explicit privacy-reviewed policy change. |
 | Sentry spike protection | Enabled on all three projects of the `open-legal-products` organization when checked on 2026-10-20 UTC; no project notification actions are attached. | Uses historical volume; Sentry explicitly says it must not be the sole defense. |
@@ -330,6 +330,19 @@ the backend, Next server/edge, browser, and all Word add-in entries.
   so 403/404/405/413 are the deployment's storage or proxy, not the file.
   Online means the browser reports connectivity, not that a server is reachable. Arbitrary
   codes/names/messages and dependency metadata are not transmitted.
+- Queue diagnostics retain static `queue` labels and bounded numeric
+  `network_failure_count` and `outage_minutes`. Parser retry verdicts stay local;
+  event kinds identify deterministic parse failures without transmitting parser
+  input or output.
+- Process warnings retain finite `warning_name`, Node `DEPnnnn` or reviewed
+  SDK `warning_code`, finite `warning_emitter`/`warning_event`, and bounded
+  numeric `warning_listener_count`. SDK deprecation codes distinguish known
+  APIs/settings; unknown warnings use a fixed fallback code. Raw warning
+  identity stays local.
+- Provider diagnostics retain reviewed `provider_error_type` and
+  `provider_reason` values alongside status. Quota/account verdicts are
+  classified locally; response bodies and credential ownership data are not
+  transmitted.
 - Invalid configuration reports may name approved environment **fields**, never
   their values. Converter failures distinguish missing binary, timeout and
   nonzero exit without sending stderr or document paths.
@@ -881,23 +894,35 @@ HTTP error helpers and the Next gateway send `reporting_owner: "backend"` only
 after taking responsibility for a failure. Clients propagate that field on the
 original error; a status, request ID or recognized UI code alone is insufficient.
 Old servers without the field remain observable, with potentially redundant
-reports until upgraded. Stream protocols keep their existing owner field.
+reports until upgraded. These copies use the same repeat budget and hard daily
+ceiling as other events; a recognized code alone cannot safely suppress an
+unowned failure. Stream protocols keep their existing owner field. The marker
+also covers expected refusals explicitly handled at their source, independent
+of whether telemetry delivery is enabled. Merely classifying an error as safe
+to display does not establish ownership.
 
 Redis listeners cover producer, consumer and worker emitters. Connection
-outages recover through the existing gate and escalate after 15 minutes;
-non-connection worker defects retain their own classification. Parser IPC keeps
-original source stacks locally, while the final outbound allowlist removes
-messages and private paths. Proven invalid bytes end job retries; unknown parser
-and environment failures remain retryable.
+outages recover only after Redis command readiness succeeds and escalate after
+15 minutes. Each failing connection, including a worker's separate blocking
+connection, must recover; unrelated socket readiness cannot reset the outage.
+Non-connection worker defects retain their own classification. Parser IPC keeps
+bounded original cause trees and source stacks locally, while the final outbound
+allowlist removes messages and private paths. Proven invalid bytes end document
+and tabular job retries; missing IPC verdicts, unknown parser failures and
+environment failures remain retryable.
 
 SDK compatibility notices become local warnings and stage breadcrumbs at their
-source. SDK deprecations and unrecognized process warnings remain reportable.
+source. SDK deprecations and unrecognized SDK warnings remain reportable, with a
+bounded five-minute cooldown per local identity and finite diagnostic codes.
+Process warnings keep their own reporting path.
 Listener warnings retain only finite emitter/event labels and a numeric count.
 Missing credential-encryption secrets are diagnosed at the actual read/write
 boundary, including workers; no asynchronous boot database scan is required.
 
-This consolidation covers #773, #775, #776, #778, #780, #781, #789, #790, #791,
-#792, #794 and #802. #776 merged during implementation and is preserved from
-main. #772 is intentionally excluded. Deployment-specific configuration problems
-still require operators to correct their settings; these changes do not claim
-that every historical Sentry issue has disappeared in production.
+Provider quota exhaustion and zero-allocation responses are deterministic
+refusals: neither the SDK nor memory jobs retry them. Shared deployment or
+organization credentials make these operator-actionable errors. A recognized
+personal-key refusal is handled where shown to the user; an opaque 403/404
+remains visible. Locally authored missing-key/model configuration refusals are
+warnings. Deployment-specific configuration problems still require operators
+to correct their settings.

@@ -1,3 +1,8 @@
+import type { ReportingOwner } from "@mike/contracts";
+
+/** Ownership is explicit; a status or display code never establishes it. */
+export const BACKEND_REPORTING_OWNER = "backend" satisfies ReportingOwner;
+
 /**
  * The two 503 answers whose Sentry event the server side has already filed,
  * and the sentence each shows. The web app and the Word add-in recognise the

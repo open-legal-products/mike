@@ -1,3 +1,4 @@
+import { BACKEND_REPORTING_OWNER } from "../../lib/reportedUpstreamCodes";
 import { abortable } from "../../lib/abortable";
 import {
     attachAssistantTurnSse,
@@ -17,7 +18,7 @@ import { requireAuth } from "../../middleware/auth";
 import { asyncRoute, routerErrorHandler } from "../../middleware/asyncRoute";
 import { createServerSupabase } from "../../lib/supabase";
 import { enqueueChatTurnAudit } from "../../lib/audit";
-import { setOperation } from "../../lib/observability/sentry";
+import { setOperation, isReported, reportError } from "../../lib/observability/sentry";
 import {
     appendAssistantEventsToMessage,
     AssistantStreamError,
@@ -319,7 +320,7 @@ projectChatRouter.post("/", requireAuth, asyncRoute(async (req, res) => {
                             type: "error",
                             message:
                                 "The response was generated but could not be saved.",
-                            reporting_owner: "backend",
+                            reporting_owner: BACKEND_REPORTING_OWNER,
                             ...(requestId ? { request_id: requestId } : {}),
                         })}\n\n`,
                     );
@@ -450,6 +451,9 @@ projectChatRouter.post("/", requireAuth, asyncRoute(async (req, res) => {
                 write(stopOutcomeFrame(run));
                 write("data: [DONE]\n\n");
                 return;
+            }
+            if (!isReported(err)) {
+                reportError(err, { tags: { operation: "project_chat.turn", stage: "chat-stream" } });
             }
             console.error("[project-chat/stream] error:", err);
             const errorPayload = assistantStreamErrorPayload(err, requestId);

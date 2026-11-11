@@ -1,16 +1,18 @@
-import { afterEach, expect, it, vi } from "vitest";
-import { installProviderWarningLogger, logProviderWarnings } from "./warnings";
-afterEach(() => { vi.restoreAllMocks(); vi.unstubAllGlobals(); });
-it("handles compatibility notices locally but retains actionable deprecations", () => {
-  const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
-  const emit = vi.spyOn(process, "emitWarning").mockImplementation(() => {});
+import { afterEach, beforeEach, expect, it, vi } from "vitest";
+const { reportError } = vi.hoisted(() => ({ reportError: vi.fn() }));
+vi.mock("../observability/sentry", () => ({ reportError }));
+import { installProviderWarningLogger, logProviderWarnings, resetProviderWarningsForTests } from "./warnings";
+beforeEach(() => { resetProviderWarningsForTests(); vi.clearAllMocks(); });
+afterEach(() => { vi.restoreAllMocks(); vi.unstubAllGlobals(); vi.useRealTimers(); });
+it("handles compatibility locally and reports source-identifiable deprecations", () => {
+  vi.spyOn(console, "warn").mockImplementation(() => {});
   logProviderWarnings({ provider: "test", warnings: [{ type: "unsupported", feature: "reasoning" }] });
-  expect(warn).toHaveBeenCalledTimes(1);
-  expect(emit).not.toHaveBeenCalled();
-  logProviderWarnings({ provider: "test", warnings: [{ type: "deprecated", setting: "old-setting", message: "PRIVATE_NOTICE" }] });
-  expect(emit).toHaveBeenCalledWith(expect.not.stringContaining("PRIVATE_NOTICE"), { type: "DeprecationWarning", code: "AI_SDK_DEPRECATION" });
-  logProviderWarnings({ warnings: [{ type: "other", message: "PRIVATE_NOTICE" }] });
-  expect(emit).toHaveBeenLastCalledWith(expect.not.stringContaining("PRIVATE_NOTICE"), { code: "AI_SDK_WARNING" });
+  expect(reportError).not.toHaveBeenCalled();
+  logProviderWarnings({ warnings: [{ type: "deprecated", setting: "generateObject", message: "PRIVATE_NOTICE" }] });
+  expect(reportError).toHaveBeenCalledWith(expect.any(Error), {
+    level: "warning", tags: { component: "provider-warning", operation: "llm.warning", warning_name: "DeprecationWarning", warning_code: "AISDK_DEP_GENERATE_OBJECT" },
+  });
+  expect(reportError.mock.calls[0]?.[0].message).not.toContain("PRIVATE_NOTICE");
 });
 it("respects an operator's existing warning logger or opt-out", () => {
   for (const setting of [false, vi.fn()]) {
@@ -19,12 +21,24 @@ it("respects an operator's existing warning logger or opt-out", () => {
     expect((globalThis as { AI_SDK_LOG_WARNINGS?: unknown }).AI_SDK_LOG_WARNINGS).toBe(setting);
   }
 });
-
-it("does not permanently suppress repeated unknown warnings or deprecations", () => {
+it("preserves Node's explicit deprecation reporting opt-out", () => {
+  const original = process.noDeprecation;
   vi.spyOn(console, "warn").mockImplementation(() => {});
-  const emit = vi.spyOn(process, "emitWarning").mockImplementation(() => {});
-  for (let attempt = 0; attempt < 2; attempt++) {
-    logProviderWarnings({ warnings: [{ type: "other" }, { type: "deprecated", setting: "old" }] });
-  }
-  expect(emit).toHaveBeenCalledTimes(4);
+  try {
+    process.noDeprecation = true;
+    logProviderWarnings({ warnings: [{ type: "deprecated", setting: "generateObject" }] });
+    expect(reportError).not.toHaveBeenCalled();
+  } finally { process.noDeprecation = original; }
+});
+it("bounds repeat warnings without permanently suppressing them or starving new warnings", () => {
+  vi.useFakeTimers();
+  vi.spyOn(console, "warn").mockImplementation(() => {});
+  const warning = { type: "other", message: "first unknown warning" };
+  for (let attempt = 0; attempt < 20; attempt++) logProviderWarnings({ warnings: [warning] });
+  expect(reportError).toHaveBeenCalledTimes(1);
+  logProviderWarnings({ warnings: [{ type: "other", message: "different unknown warning" }] });
+  expect(reportError).toHaveBeenCalledTimes(2);
+  vi.advanceTimersByTime(5 * 60_000);
+  logProviderWarnings({ warnings: [warning] });
+  expect(reportError).toHaveBeenCalledTimes(3);
 });

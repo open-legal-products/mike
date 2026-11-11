@@ -47,10 +47,10 @@ const HOP_BY_HOP_HEADERS = [
     "content-length",
 ];
 
-/** The client's headers minus everything that belongs to its connection. */
-export function forwardableRequestHeaders(incoming: Headers): Headers {
+/** Headers minus everything that belongs to this connection. */
+export function forwardableHeaders(incoming: Headers): Headers {
     const headers = new Headers(incoming);
-    // Headers the client named in its own `Connection` header are hop-by-hop too.
+    // Headers the sender named in its own `Connection` header are hop-by-hop too.
     const named = (incoming.get("connection") ?? "")
         .split(",")
         .map((name) => name.trim().toLowerCase())

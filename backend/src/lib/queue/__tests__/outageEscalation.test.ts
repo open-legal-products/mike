@@ -56,7 +56,7 @@ it("escalates a Redis outage still failing after 15 minutes to one error, once p
     expect(levels()).toEqual(["warning", "error"]);
 
     // After recovery, a new outage starts its own 15-minute clock.
-    queueConnectionRecovered();
+    queueConnectionRecovered(connection);
     mocks.reportError.mockClear();
     failFor(14 * 60_000);
     expect(levels().filter((level) => level === "error")).toEqual([]);

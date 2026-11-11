@@ -25,6 +25,8 @@ import type { TextExtractionCache } from "../../lib/textExtractionCache";
 // used by both the sync and async entry points. See tabular.shared.ts for the
 // lease itself.
 
+import { ExtractionParseError } from "../../lib/extraction/failure";
+import { reportError } from "../../lib/observability/sentry";
 import { ExtractionBusyError, ExtractionLimitError } from "../../lib/extraction/limits";
 import { type UserApiKeys } from "../../lib/llm";
 import { queryTabularAllColumns } from "./tabular.extract";
@@ -151,8 +153,11 @@ export async function extractRowColumns(args: {
     try {
         markdown = await loadRowDocumentText(db, row, args.textCache);
     } catch (error) {
-        if (!(error instanceof ExtractionLimitError || error instanceof ExtractionBusyError)) throw error;
+        if (!(error instanceof ExtractionLimitError || error instanceof ExtractionBusyError || error instanceof ExtractionParseError)) throw error;
         if (abortSignal?.aborted) return untouched();
+        if (error instanceof ExtractionParseError && args.reportFailure !== false) {
+            reportError(error, { level: "warning", tags: { operation: "tabular.row", stage: "source-parse" } });
+        }
         // Fail this row without asking the model to answer from an empty source.
         return { processed, received: new Set(), missing: processed.map((col) => col.index), error };
     }

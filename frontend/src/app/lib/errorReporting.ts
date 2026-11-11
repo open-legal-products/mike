@@ -1,3 +1,4 @@
+import { BACKEND_REPORTING_OWNER } from "@mike/client";
 /**
  * Error reporting for the web app: a thin, testable layer over the Sentry
  * SDK. Application code calls these helpers instead of `@sentry/nextjs`
@@ -104,11 +105,11 @@ export function reportApiFailure(failure: {
     method?: string;
     operation?: Operation;
     error?: unknown;
-    reportingOwner?: "backend";
+    reportingOwner?: typeof BACKEND_REPORTING_OWNER;
 }): string | null {
     if (isReported(failure.error)) return null;
     markReported(failure.error);
-    if (failure.reportingOwner === "backend") return null;
+    if (failure.reportingOwner === BACKEND_REPORTING_OWNER) return null;
     if (!Sentry.isEnabled()) return null;
     const route = normalizeApiPath(failure.path);
     const method = failure.method ?? "GET";

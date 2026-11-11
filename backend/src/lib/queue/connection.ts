@@ -1,5 +1,5 @@
 import IORedis from "ioredis";
-import { queueConnectionRecovered, watchQueueErrors } from "./consumerErrors";
+import { watchQueueErrors } from "./consumerErrors";
 
 export { watchQueueErrors };
 
@@ -46,10 +46,11 @@ export function getRedisConnection(): IORedis {
     if (!connection) {
         connection = new IORedis(REDIS_URL, {
             maxRetriesPerRequest: null,
-            enableReadyCheck: false,
+            // A TCP connect is not recovery: INFO must succeed first. BullMQ
+            // duplicates these options for each worker blocking connection.
+            enableReadyCheck: true,
         });
         watchQueueErrors(connection, "connection");
-        connection.on("ready", queueConnectionRecovered);
     }
     return connection;
 }
@@ -57,7 +58,7 @@ export function getRedisConnection(): IORedis {
 /**
  * The wedged-connection signature, and why replacement is the only cure.
  *
- * With `enableReadyCheck: false`, ioredis marks a connection "ready" straight
+ * Previously, with `enableReadyCheck: false`, ioredis marked "ready" straight
  * from the TCP 'connect' event. When the link is flapping (a Redis restart, a
  * Docker/NAT proxy in the middle), a socket can die milliseconds after
  * connecting, and the events can land in this order — captured live:
@@ -74,7 +75,8 @@ export function getRedisConnection(): IORedis {
  * 6+ minutes wedged with a healthy Redis one PING away, every delivery
  * silently riding the 60s poll backstop instead of BullMQ.
  *
- * So: a client whose status claims "ready" while its stream is missing,
+ * Keep the dead-stream guard even with ready checks enabled: a client whose
+ * status claims "ready" while its stream is missing,
  * destroyed, or unwritable is dead beyond recovery, and the fix is to throw
  * the OBJECT away, not to poke its socket. The check is a synchronous pair of
  * property reads, so the getter runs it on every call; consumers that cache
@@ -116,7 +118,9 @@ export function getRedisProducerConnection(): IORedis {
     if (!producerConnection) {
         producerConnection = new IORedis(REDIS_URL, {
             maxRetriesPerRequest: 1,
-            enableReadyCheck: false,
+            // A TCP connect is not recovery: INFO must succeed first. BullMQ
+            // duplicates these options for each worker blocking connection.
+            enableReadyCheck: true,
             enableOfflineQueue: false,
             commandTimeout: redisProducerTimeoutMs(),
         });
@@ -127,9 +131,6 @@ export function getRedisProducerConnection(): IORedis {
         // report them (watchQueueErrors, source "producer"); this listener
         // only keeps a client with no Queue yet from crashing.
         producerConnection.on("error", () => {});
-        // A process that only produces (no Worker, so no consumer
-        // connection) must still close the outage when Redis is back.
-        producerConnection.on("ready", queueConnectionRecovered);
     }
     return producerConnection;
 }

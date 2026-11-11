@@ -15,6 +15,9 @@ import type {
 } from "@/app/components/shared/types";
 import type { ReviewCellStore } from "./reviewCellStore";
 import { TRView } from "./TabularReviewView";
+import * as Sentry from "@sentry/react";
+import { clearToasts, privacyBoundaryIntegration } from "@mike/client";
+import { scrubEvent } from "@/app/lib/errorReporting";
 
 const { apiKeyState } = vi.hoisted(() => ({
     apiKeyState: {
@@ -36,7 +39,8 @@ vi.mock("next/navigation", () => ({
     useRouter: () => ({ push: vi.fn(), replace: vi.fn() }),
     useSearchParams: () => new URLSearchParams(),
 }));
-vi.mock("@/app/lib/mikeApi", () => ({
+vi.mock("@/app/lib/mikeApi", async () => ({
+    reportedUpstreamMessage: (await import("@mike/client")).reportedUpstreamMessage,
     MikeApiError: class MikeApiError extends Error {
         status: number;
         code: string | null;
@@ -206,6 +210,37 @@ describe("TabularReviewView server-owned generation", () => {
             removeEventListener: vi.fn(),
             dispatchEvent: vi.fn(),
         }));
+    });
+
+    it.each(["backend", undefined, "proxy"])("reports run-start failures only without explicit backend ownership (%s)", async owner => {
+        const events: Sentry.Event[] = [];
+        clearToasts();
+        Sentry.init({
+            dsn: "https://test@sentry.invalid/1", defaultIntegrations: false,
+            integrations: [privacyBoundaryIntegration()], beforeSend: scrubEvent,
+            transport: () => ({ send: async envelope => {
+                for (const [header, payload] of envelope[1]) if (header.type === "event") events.push(payload as Sentry.Event);
+                return { statusCode: 200 };
+            }, flush: async () => true }),
+        });
+        try {
+            mockDetail({});
+            const requestId = "11111111-1111-4111-8111-111111111111";
+            vi.mocked(streamTabularGeneration).mockResolvedValueOnce(Response.json({
+                detail: "PRIVATE_BACKEND_DETAIL", code: "internal_error", request_id: requestId, reporting_owner: owner,
+            }, { status: 503 }));
+            render(<TRView reviewId="r1" />);
+            fireEvent.click(await screen.findByTitle("Run review"));
+            await waitFor(() => expect(streamTabularGeneration).toHaveBeenCalledOnce());
+            await screen.findByTitle("Run review");
+            expect(await Sentry.flush(2000)).toBe(true);
+            expect(events).toHaveLength(owner === "backend" ? 0 : 1);
+            if (owner !== "backend") expect(events[0]?.tags).toMatchObject({ operation: "tabular.run", http_status: 503, request_id: requestId });
+            expect(JSON.stringify(events)).not.toContain("PRIVATE_BACKEND_DETAIL");
+        } finally {
+            await Sentry.close();
+            clearToasts();
+        }
     });
 
     it("uses the new review timestamp when running again after completion", async () => {

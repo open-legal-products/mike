@@ -17,7 +17,7 @@ import {
 import { guardedFetch } from "../mcp/client";
 import { isBlockedDestinationError } from "../blockedDestination";
 import { localModelToleranceMiddleware } from "./localModelMiddleware";
-import { providerFailureResponse, type ProviderKeySource } from "./providerErrors";
+import { ProviderConfigurationError, providerFailureResponse, type ProviderKeySource } from "./providerErrors";
 import {
   ACCOUNT_MODEL_LABELS,
   accountModelPrefix,
@@ -108,7 +108,7 @@ const ENVIRONMENT_KEY_ALIASES: Record<string, string[]> = {
  */
 function keyNotConfigured(label: string, operatorHint: string): UserFacingError {
   console.warn(`[llm] ${label} API key is not configured. ${operatorHint}`);
-  return new UserFacingError(
+  return new ProviderConfigurationError(
     `The ${label} API key is not configured. Add your own key in Settings → Bring Your Own Keys or contact your administrator.`,
   );
 }
@@ -503,7 +503,7 @@ async function createCustomEndpointAdapter(
 ): Promise<AiSdkAdapterConfig> {
   const credentials = customEndpointCredentials(apiKeys);
   if (!credentials) {
-    throw new UserFacingError(
+    throw new ProviderConfigurationError(
       "OpenAI-compatible endpoint is not configured. Add an API key and base URL in Settings → Bring Your Own Keys.",
     );
   }
@@ -544,7 +544,7 @@ async function createConfiguredAdapter(
 ): Promise<AiSdkAdapterConfig> {
   const configured = configuredModelOrThrow(id);
   if (configured.apiKeyProvider && apiKeys?.disabledProviders?.includes(configured.apiKeyProvider)) {
-    throw new UserFacingError("This model provider is turned off. Turn it on in Settings → Bring Your Own Keys or select another model.");
+    throw new ProviderConfigurationError("This model provider is turned off. Turn it on in Settings → Bring Your Own Keys or select another model.");
   }
   const { createOpenAICompatible } = await import("@ai-sdk/openai-compatible");
   const apiKey = apiKeyForConfiguredModel(configured, apiKeys);
@@ -624,7 +624,7 @@ async function createProviderAdapter(
 ): Promise<AiSdkAdapterConfig> {
   const provider = providerForModel(model);
   if (apiKeys?.disabledProviders?.includes(provider)) {
-    throw new UserFacingError("This model provider is turned off. Turn it on in Settings → Bring Your Own Keys or select another model.");
+    throw new ProviderConfigurationError("This model provider is turned off. Turn it on in Settings → Bring Your Own Keys or select another model.");
   }
 
   // Last line of defence behind resolveModel and the save-time check: some
@@ -632,7 +632,7 @@ async function createProviderAdapter(
   // malformed id must never reach an adapter, whatever path it came from.
   const accountPrefix = accountModelPrefix(model);
   if (accountPrefix === provider && !isSafeAccountModel(model)) {
-    throw new UserFacingError(
+    throw new ProviderConfigurationError(
       `This is not a valid ${ACCOUNT_MODEL_LABELS[accountPrefix]} model id. Choose a model saved in Model Providers.`,
     );
   }

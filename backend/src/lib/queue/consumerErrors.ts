@@ -1,4 +1,5 @@
 import { isNotConnectionError } from "bullmq";
+import type { EventEmitter } from "node:events";
 import { AppError } from "../appError";
 import { reportError } from "../observability/sentry";
 import {
@@ -19,7 +20,8 @@ import {
  *   "Connection is closed."). That is the install's Redis being down, not a
  *   defect, and it repeats on every reconnect attempt of every client. It
  *   goes through ONE outage gate: one warning per outage and class, repeats
- *   counted into a console.warn, reset when the shared connection is ready.
+ *   counted into a console.warn, reset after the failing connections each
+ *   complete their Redis ready check (an INFO command, not a TCP connect).
  * - Anything else a Worker emits: its run loop, the stalled-jobs checker,
  *   scheduling, a lost lock. Those can be real defects, so they are reported
  *   at error level, stage=worker, through their own gate that reports a class
@@ -29,7 +31,7 @@ import {
  * The outage warning alone does not page anyone: the org's high-priority
  * alert matches level:error, and a self-hosted install whose Redis stays down
  * has stalled uploads. So an outage that is still failing
- * OUTAGE_ESCALATION_MS after its first error (no 'ready' in between) files
+ * OUTAGE_ESCALATION_MS after its first error without proven recovery files
  * ONE error-level event, queue.redis_outage_persisting, and nothing more
  * until the connection recovers.
  */
@@ -108,25 +110,38 @@ const workerErrorGate = createWorkerErrorGate();
 // consecutive failure(s)" counts failed attempts, not listeners.
 const seen = new WeakSet<object>();
 
-// The outage in progress: when its first connection error arrived, and
-// whether it has already been escalated. Cleared by a 'ready'.
-let outage: { since: number; escalated: boolean } | null = null;
+// Track the connections that actually failed. A healthy producer or shared
+// connection must not reset a worker's independent blocking-connection outage.
+const failingConnections = new Map<object, number>();
+let outageEscalated = false;
 
-/** Call when a shared Redis connection (consumer or producer) is ready again. */
-export function queueConnectionRecovered(): void {
-    outage = null;
+// BullMQ closes a stale Queue when its producer connection is replaced.
+// Retired connections cannot recover and must not poison later incidents.
+function forgetClosedConnections(): void {
+    for (const connection of failingConnections.keys()) {
+        const status = (connection as { status?: string }).status;
+        if (status === "closed" || status === "end") failingConnections.delete(connection);
+    }
+}
+
+/** Called only after this connection has successfully completed a Redis command. */
+export function queueConnectionRecovered(connection: object): void {
+    failingConnections.delete(connection);
+    forgetClosedConnections();
+    if (failingConnections.size) return;
+    outageEscalated = false;
     outageGate.success();
 }
 
-/** True once per outage, on the first error OUTAGE_ESCALATION_MS after it began. */
-function outagePersisting(at: number): number | null {
-    if (!outage) {
-        outage = { since: at, escalated: false };
-        return null;
-    }
-    if (outage.escalated || at - outage.since < OUTAGE_ESCALATION_MS) return null;
-    outage.escalated = true;
-    return Math.floor((at - outage.since) / 60_000);
+/** Escalate once while at least one failed connection has not recovered. */
+function outagePersisting(connection: object, at: number): number | null {
+    forgetClosedConnections();
+    if (!failingConnections.size) outageEscalated = false;
+    if (!failingConnections.has(connection)) failingConnections.set(connection, at);
+    const since = Math.min(...failingConnections.values());
+    if (outageEscalated || at - since < OUTAGE_ESCALATION_MS) return null;
+    outageEscalated = true;
+    return Math.floor((at - since) / 60_000);
 }
 
 type ErrorSource = "connection" | "worker" | "producer";
@@ -151,21 +166,54 @@ const DEFECT_KIND: Record<ErrorSource, string> = {
  * application / ECONNREFUSED" (MIKE-BACKEND-42). Producer and consumer share
  * the one outage gate: a Redis outage is one warning whichever side saw it.
  */
-export function watchQueueErrors(
-    emitter: { on(event: "error", listener: (error: Error) => void): unknown },
+type ErrorEmitter = Pick<EventEmitter, "on">;
+type ConnectionEmitter = Pick<EventEmitter, "on" | "prependListener">;
+type QueueEmitter = ErrorEmitter & {
+    getBackend?: () => {
+        connection: ConnectionEmitter;
+        blockingConnection?: ConnectionEmitter;
+    };
+};
+const watchedConnections = new WeakSet<object>();
+
+export function watchQueueErrors(emitter: QueueEmitter, source: ErrorSource, queue?: string): void {
+    const backend = emitter.getBackend?.();
+    for (const connection of [backend?.connection, backend?.blockingConnection]) {
+        if (!connection || watchedConnections.has(connection)) continue;
+        watchedConnections.add(connection);
+        // BullMQ forwards these errors to its Queue/Worker. Observe the actual
+        // connection first so forwarding deduplication retains its identity.
+        attachErrorListener(connection, source, queue, true);
+        connection.on("ready", () => queueConnectionRecovered(connection));
+    }
+    attachErrorListener(emitter, source, queue);
+    if (source === "worker") {
+        // Run-loop errors may originate above the connection emitter. A job
+        // claimed or an empty blocking read proves that loop is working again.
+        emitter.on("active", () => queueConnectionRecovered(emitter));
+        emitter.on("drained", () => queueConnectionRecovered(emitter));
+    }
+    if (source === "connection") {
+        emitter.on("ready", () => queueConnectionRecovered(emitter));
+    }
+}
+
+function attachErrorListener(
+    emitter: ErrorEmitter & Partial<Pick<EventEmitter, "prependListener">>,
     source: ErrorSource,
     queue?: string,
+    prepend = false,
 ): void {
     const tags = (stage: string): Record<string, string> =>
         queue ? { component: "queue", stage, queue } : { component: "queue", stage };
     const where = queue ? ` (${queue})` : "";
-    emitter.on("error", (error) => {
+    const onError = (error: Error) => {
         if (error && typeof error === "object") {
             if (seen.has(error)) return;
             seen.add(error);
         }
         if (isQueueConnectionError(error)) {
-            const minutes = outagePersisting(Date.now());
+            const minutes = outagePersisting(emitter, Date.now());
             if (minutes !== null) {
                 reportError(
                     new AppError(
@@ -197,5 +245,7 @@ export function watchQueueErrors(
             tags: tags(source),
         });
         console.warn(`[queue] ${source} error${where}`, queueErrorClass(error));
-    });
+    };
+    if (prepend && emitter.prependListener) emitter.prependListener("error", onError);
+    else emitter.on("error", onError);
 }

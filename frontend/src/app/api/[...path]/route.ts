@@ -1,10 +1,11 @@
+import { BACKEND_REPORTING_OWNER } from "@mike/client";
 import { randomUUID } from "node:crypto";
 import { reportError } from "@/app/lib/errorReporting";
 import { diagnosticErrorTags, diagnosticRoute } from "@mike/client";
 import type { NextRequest } from "next/server";
 import {
     UPSTREAM_UNAVAILABLE_FINGERPRINT,
-    forwardableRequestHeaders,
+    forwardableHeaders,
     guardUpstreamBody,
     upstreamReportWindow,
     upstreamUnreachableCode,
@@ -38,7 +39,10 @@ async function proxy(request: NextRequest, context: RouteContext) {
         const upstreamUrl = new URL(`${backendOrigin()}${requestPath}`);
         upstreamUrl.search = request.nextUrl.search;
 
-        const headers = forwardableRequestHeaders(request.headers);
+        const headers = forwardableHeaders(request.headers);
+        // Mint correlation here rather than trusting a caller-supplied ID.
+        // The backend logs the same ID even if its response never arrives.
+        headers.set("x-request-id", requestId);
         headers.set("x-forwarded-host", request.nextUrl.host);
         headers.set(
             "x-forwarded-proto",
@@ -62,7 +66,7 @@ async function proxy(request: NextRequest, context: RouteContext) {
         stage = "gateway-fetch";
         const upstream = await fetch(upstreamUrl, init);
         stage = "gateway-response";
-        const responseHeaders = new Headers(upstream.headers);
+        const responseHeaders = forwardableHeaders(upstream.headers);
         // Correlate post-header failures with the backend and the ID the
         // browser receives. Only UUIDs survive the diagnostic privacy boundary.
         const upstreamRequestId = responseHeaders.get("x-request-id");
@@ -128,7 +132,7 @@ async function proxy(request: NextRequest, context: RouteContext) {
         return Response.json(
             {
                 detail: "The API is temporarily unavailable.",
-                reporting_owner: "backend",
+                reporting_owner: BACKEND_REPORTING_OWNER,
                 ...(unreachable ? { code: "upstream_unavailable" } : {}),
                 request_id: requestId,
             },

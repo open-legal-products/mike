@@ -10,6 +10,9 @@ interface Transport {
   send(envelope: Envelope): PromiseLike<unknown>;
 }
 
+// Fixed SDK codes identify warnings without transmitting provider text.
+const SDK_WARNING_CODES = new Set('AISDK_DEP_GENERATE_OBJECT AISDK_DEP_STREAM_OBJECT AISDK_DEP_EXPERIMENTAL_GENERATE_SPEECH AISDK_DEP_EXPERIMENTAL_TRANSCRIBE AISDK_DEP_IMAGE_CONTENT_PART AISDK_DEP_TOOL_RESULT_FILE_DATA AISDK_DEP_TOOL_RESULT_FILE_URL AISDK_DEP_TOOL_RESULT_FILE_ID AISDK_DEP_TOOL_RESULT_FILE_REFERENCE AISDK_DEP_TOOL_RESULT_IMAGE_DATA AISDK_DEP_TOOL_RESULT_IMAGE_URL AISDK_DEP_TOOL_RESULT_IMAGE_FILE_ID AISDK_DEP_TOOL_RESULT_IMAGE_FILE_REFERENCE AISDK_DEP_UI_MESSAGE_RAW_INPUT AI_SDK_DEPRECATION AI_SDK_WARNING'.split(' '));
+
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const HEX_ID = /^[0-9a-f]{16,32}$/i;
 /**
@@ -173,7 +176,7 @@ function tagsFor(value: unknown): RecordValue {
     else if (key === 'configuration_fields' && typeof entry === 'string' && entry.length < 250 && entry.split(',').every(field => CONFIGURATION_FIELDS.has(field))) out[key] = entry;
     else if (key === 'office_version' && typeof entry === 'string' && /^\d+(?:\.\d+){1,4}$/.test(entry) && entry.length < 30) out[key] = entry;
     else if (key === 'warning_listener_count' && typeof entry === 'number' && Number.isSafeInteger(entry) && entry >= 0 && entry <= 1_000_000) out[key] = entry;
-    else if (key === 'warning_code' && typeof entry === 'string' && (/^DEP\d{4}$/.test(entry) || entry === 'AI_SDK_DEPRECATION' || entry === 'AI_SDK_WARNING')) out[key] = entry;
+    else if (key === 'warning_code' && typeof entry === 'string' && (/^DEP\d{4}$/.test(entry) || SDK_WARNING_CODES.has(entry))) out[key] = entry;
     else if (key === 'what' && isDiagnosticLabel(entry)) out.stage = entry;
     else if (key === 'http_route' && typeof entry === 'string') out[key] = diagnosticRoute(entry);
     else if ((key === 'http_status' || key === 'dependency_status') && /^\d{3}$/.test(String(entry)) && Number(entry) >= 100 && Number(entry) <= 599) out[key] = Number(entry);
@@ -348,7 +351,8 @@ export function diagnosticEvent(value: unknown): RecordValue {
   // raised from two modules is one thing to fix, and the stack says where.
   out.fingerprint = pinned === 'runtime-warning' ? [pinned, String(tags.warning_name ?? ''), String(tags.warning_code ?? '')]
     : pinned ? [pinned, String(tags.component ?? 'application'), String(tags.failure_code ?? ''), ...pinnedStage] : ['{{ default }}', String(tags.operation ?? ''), String(tags.error_kind ?? ''), String(tags.job_kind ?? ''), String(tags.component ?? 'application'), String(tags.stage ?? ''), String(tags.http_route ?? ''), String(tags.http_status ?? ''), String(tags.failure_code ?? ''), String(tags.file_type ?? ''), String(tags.provider_error ?? ''), String(tags.dependency_status ?? ''), String(tags.warning_name ?? ''), String(tags.warning_code ?? ''),
-      // Appended only when present, so every fingerprint without them (every existing issue) is unchanged.
+      // These optional diagnostics add grouping detail when present. Other fields above
+      // can still change grouping as the privacy schema evolves.
       ...[tags.provider_error_type, tags.provider_reason].filter(v => v !== undefined).map(String)];
   // The path the request took before it failed: stage names only (our
   // labels, pushed by markStage), newest last, never a message or data.

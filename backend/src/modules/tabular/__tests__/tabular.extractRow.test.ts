@@ -10,6 +10,7 @@ vi.mock("../tabular.rows", () => ({
     loadRowDocumentText: (...a: unknown[]) => loadRowDocumentText(...a),
 }));
 
+import { ExtractionParseError } from "../../../lib/extraction/failure";
 import { ExtractionBusyError, ExtractionLimitError } from "../../../lib/extraction/limits";
 import { streamTabularGenerateSync } from "../tabular.generateStream";
 import { extractRowColumns } from "../tabular.extractRow";
@@ -84,7 +85,7 @@ beforeEach(() => {
 });
 
 describe("extractRowColumns", () => {
-    it.each([new ExtractionLimitError("too large"), new ExtractionBusyError()])(
+    it.each([new ExtractionLimitError("too large"), new ExtractionBusyError(), new ExtractionParseError("extraction.parse_failed", "unreadable docx")])(
         "contains %s to its row and continues the run without querying empty text",
         async (error) => {
             loadRowDocumentText.mockRejectedValueOnce(error);

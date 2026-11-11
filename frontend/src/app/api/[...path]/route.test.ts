@@ -82,6 +82,20 @@ describe("same-origin API gateway", () => {
         );
     });
 
+    it("removes response hop-by-hop headers, including connection-nominated fields", async () => {
+        fetchMock.mockResolvedValue(new Response("body", { headers: {
+            connection: "keep-alive, x-internal-socket", "keep-alive": "timeout=5",
+            "x-internal-socket": "private", "transfer-encoding": "chunked",
+            trailer: "x-checksum", "proxy-authenticate": "private", "content-type": "text/plain",
+        } }));
+        const response = await GET(new NextRequest("https://app.example.test/api/projects"), context(["projects"]));
+        for (const name of ["connection", "keep-alive", "x-internal-socket", "transfer-encoding", "trailer", "proxy-authenticate"]) {
+            expect(response.headers.has(name)).toBe(false);
+        }
+        expect(response.headers.get("content-type")).toBe("text/plain");
+        expect(await response.text()).toBe("body");
+    });
+
     it("streams request and SSE response bodies without buffering", async () => {
         const encoder = new TextEncoder();
         const stream = new ReadableStream<Uint8Array>({
@@ -477,6 +491,7 @@ it('correlates gateway failures with the browser using a generated ID and a safe
         const response = await GET(request, context(['projects', 'private-name', 'documents']));
         const requestId = response.headers.get('x-request-id');
         expect(requestId).toMatch(/^[0-9a-f-]{36}$/);
+        expect(new Headers(fetch.mock.calls[0]?.[1]?.headers).get('x-request-id')).toBe(requestId);
         expect((await response.json()).request_id).toBe(requestId);
         expect(reportError).toHaveBeenLastCalledWith(error, {
             level: 'warning',

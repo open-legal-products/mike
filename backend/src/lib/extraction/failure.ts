@@ -21,6 +21,20 @@ export type ExtractionFailureWire = {
   name?: string;
   /** The child could not attribute the failure to the bytes (see isByteRejection). */
   retryable?: boolean;
+  /** Bounded original cause tree, local IPC only. */
+  original?: ExtractionErrorWire;
+};
+
+type ExtractionErrorWire = {
+  message: string;
+  name?: string;
+  stack?: string;
+  code?: string;
+  kind?: string;
+  status?: number;
+  statusCode?: number;
+  cause?: ExtractionErrorWire;
+  errors?: ExtractionErrorWire[];
 };
 
 const PARSE_KIND = "extraction.parse_failed";
@@ -97,33 +111,74 @@ function messageOf(error: unknown): string {
   return error instanceof Error ? error.message : "document extraction failed";
 }
 
+/** Keep local causes without serializing arbitrary parser fields or cycles. */
+function originalToWire(error: unknown): ExtractionErrorWire | undefined {
+  const seen = new Set<object>();
+  const visit = (value: unknown, depth: number): ExtractionErrorWire | undefined => {
+    if (!value || typeof value !== "object" || seen.has(value) || seen.size >= 12 || depth >= 8) return undefined;
+    seen.add(value);
+    const source = value as Record<string, unknown>;
+    const wire: ExtractionErrorWire = {
+      message: typeof source.message === "string" ? source.message.slice(0, 4096) : "document extraction failed",
+      ...(typeof source.name === "string" && ERROR_NAME.test(source.name) ? { name: source.name } : {}),
+      ...(typeof source.stack === "string" ? { stack: source.stack.slice(0, 32768) } : {}),
+      ...(typeof source.code === "string" ? { code: source.code.slice(0, 128) } : {}),
+      ...(value instanceof AppError ? { kind: value.kind } : {}),
+      ...(typeof source.status === "number" ? { status: source.status } : {}),
+      ...(typeof source.statusCode === "number" ? { statusCode: source.statusCode } : {}),
+    };
+    const cause = visit(source.cause, depth + 1);
+    if (cause) wire.cause = cause;
+    if (Array.isArray(source.errors)) {
+      const errors = source.errors.slice(0, 5).flatMap((item) => {
+        const child = visit(item, depth + 1);
+        return child ? [child] : [];
+      });
+      if (errors.length) wire.errors = errors;
+    }
+    return wire;
+  };
+  return visit(error, 0);
+}
+
+function originalFromWire(wire: ExtractionErrorWire): Error {
+  const cause = wire.cause ? originalFromWire(wire.cause) : undefined;
+  const original = wire.kind
+    ? new AppError(wire.kind, wire.message, { cause })
+    : new Error(wire.message, cause ? { cause } : undefined);
+  if (wire.name && ERROR_NAME.test(wire.name)) original.name = wire.name;
+  if (wire.stack) original.stack = wire.stack;
+  if (wire.code) Object.assign(original, { code: wire.code });
+  if (wire.status !== undefined) Object.assign(original, { status: wire.status });
+  if (wire.statusCode !== undefined) Object.assign(original, { statusCode: wire.statusCode });
+  if (wire.errors) Object.assign(original, { errors: wire.errors.map(originalFromWire) });
+  return original;
+}
+
 /** Child side: describe an extraction failure for the IPC reply. */
 export function extractionFailureToWire(error: unknown): ExtractionFailureWire {
   const tags = diagnosticErrorTags(error);
   const name = error instanceof Error ? error.name : undefined;
   return {
-    message: messageOf(error),
-    ...(error instanceof Error && error.stack ? { stack: error.stack } : {}),
+    message: messageOf(error).slice(0, 4096),
+    ...(error instanceof Error && error.stack ? { stack: error.stack.slice(0, 32768) } : {}),
     ...(typeof tags.error_kind === "string" ? { kind: tags.error_kind } : {}),
     ...(typeof tags.failure_code === "string" ? { code: tags.failure_code } : {}),
     ...(name && ERROR_NAME.test(name) ? { name } : {}),
-    ...(isByteRejection(error) ? {} : { retryable: true }),
+    retryable: !isByteRejection(error),
+    original: originalToWire(error),
   };
 }
 
 /**
- * Parent side: rebuild the child's failure. A byte rejection comes back as
- * ExtractionParseError; anything else as a plain AppError, which a job retries.
+ * Parent side: only an explicit byte-rejection verdict stops retries. An older
+ * child or an incomplete reply must not turn an unknown failure into bad bytes.
  */
 export function extractionFailureFromWire(wire: ExtractionFailureWire): AppError {
-  // The child's own error: stack, name and code sit on the cause
-  // where they sat in the child, so failure_code is read the same way.
-  const original = Object.assign(new Error(wire.message), wire.code ? { code: wire.code } : {});
-  if (wire.name && ERROR_NAME.test(wire.name)) original.name = wire.name;
-  if (typeof wire.stack === "string") original.stack = wire.stack;
-  return wire.retryable
-    ? new AppError(wire.kind ?? RETRYABLE_KIND, wire.message, { cause: original })
-    : new ExtractionParseError(wire.kind ?? PARSE_KIND, wire.message, { cause: original });
+  const original = wire.original ? originalFromWire(wire.original) : originalFromWire(wire);
+  return wire.retryable === false
+    ? new ExtractionParseError(wire.kind ?? PARSE_KIND, wire.message, { cause: original })
+    : new AppError(wire.kind ?? RETRYABLE_KIND, wire.message, { cause: original });
 }
 
 /**

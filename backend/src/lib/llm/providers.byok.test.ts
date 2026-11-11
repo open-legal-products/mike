@@ -470,3 +470,19 @@ describe("custom OpenAI-compatible endpoint adapter", () => {
     expect(guardedFetch).not.toHaveBeenCalled();
   });
 });
+
+
+describe("locally authored provider configuration refusals", () => {
+  it.each([
+    ["gemini-3-flash-preview", { disabledProviders: ["gemini"] }],
+    ["vertex/../../invalid", {}],
+    ["custom/example/model", {}],
+  ] as const)("keeps %s configuration failures at warning", async (model, apiKeys) => {
+    const fetch = vi.fn();
+    vi.stubGlobal("fetch", fetch);
+    const error = await completeWithProvider({ model, user: "hello", apiKeys: apiKeys as never }).catch(error => error);
+    expect(error).toBeInstanceOf(UserFacingError);
+    expect(providerFailureLevel(error)).toBe("warning");
+    expect(fetch).not.toHaveBeenCalled();
+  });
+});

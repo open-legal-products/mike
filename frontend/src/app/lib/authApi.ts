@@ -1,3 +1,4 @@
+import { BACKEND_REPORTING_OWNER } from "@mike/client";
 import {
     markErrorHandled,
     reportApiFailure,
@@ -32,14 +33,14 @@ export class AuthApiError extends Error {
      * carries it.
      */
     requestId: string | null;
-    reportingOwner?: "backend";
+    reportingOwner?: typeof BACKEND_REPORTING_OWNER;
 
     constructor(
         status: number,
         code: string | null,
         message: string,
         requestId: string | null = null,
-        reportingOwner?: "backend",
+        reportingOwner?: typeof BACKEND_REPORTING_OWNER,
     ) {
         super(message);
         this.name = "AuthApiError";
@@ -106,7 +107,7 @@ async function authRequest<T>(
                     ? body.detail
                     : "Authentication could not be completed."),
             requestId,
-            body.reporting_owner === "backend" ? "backend" : undefined,
+            body.reporting_owner === BACKEND_REPORTING_OWNER ? BACKEND_REPORTING_OWNER : undefined,
         );
         // A 4xx is the auth server's intentional answer (wrong password, a
         // spent link); a 5xx is a fault, reported under the same request id
