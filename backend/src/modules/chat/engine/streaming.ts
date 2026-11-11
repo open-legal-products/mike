@@ -1,3 +1,4 @@
+import { BACKEND_REPORTING_OWNER } from "../../../lib/reportedUpstreamCodes";
 import { AppError } from "../../../lib/appError";
 import { teamOrgIdOf } from "../../../lib/personalOrgs";
 import { webSearchAccountFor, type WebSearchPlan } from "../../../lib/webSearch";
@@ -18,8 +19,9 @@ import {
 } from "../../../lib/modelSelection";
 import { UserFacingError } from "../../../lib/userFacingError";
 import { InvalidApiKeyError } from "../../../lib/llm/apiKeyErrors";
-import { markStage, reportError } from "../../../lib/observability/sentry";
-import { providerFailureKind } from "../../../lib/llm/providerErrors";
+import { markStage, markErrorHandled, reportError, isReported } from "../../../lib/observability/sentry";
+import { ProviderConfigurationError, isUserProviderRefusal, providerFailureKind } from "../../../lib/llm/providerErrors";
+import { reportModelFailure } from "../../../lib/llm/providerFailureReport";
 import { safeError } from "../../../lib/safeError";
 import type { Db } from "../../../lib/supabase";
 import type { StreamRunWriteOptions } from "../../../lib/streamRuns";
@@ -145,13 +147,16 @@ export function assistantStreamErrorPayload(
   safe_to_display?: true;
   code?: AssistantErrorCode;
   request_id?: string;
-  reporting_owner: "backend";
+  reporting_owner?: typeof BACKEND_REPORTING_OWNER;
 } {
   // The request id is the one handle a user can quote that finds the Sentry
   // event and the access-log line for this failure; it carries no content.
-  // The server owns reporting for terminal failures, even when telemetry is
-  // disabled. This states ownership; it does not promise event delivery.
-  const reporting = { reporting_owner: "backend" as const, ...(requestId ? { request_id: requestId } : {}) };
+  // Only an explicit report or source-owned handling establishes ownership.
+  // A safe message/code says nothing about who accounted for the failure.
+  const reporting: { reporting_owner?: typeof BACKEND_REPORTING_OWNER; request_id?: string } = {
+    ...(isReported(error) ? { reporting_owner: BACKEND_REPORTING_OWNER } : {}),
+    ...(requestId ? { request_id: requestId } : {}),
+  };
   const safe =
     error instanceof AssistantStreamError
       ? [...error.events]
@@ -775,7 +780,7 @@ export async function runLLMStream(params: {
     // route before they arrive here, but this guard keeps every caller safe.
     const requestedModel = resolveModel(model, "");
     if (!requestedModel) {
-      throw new UserFacingError(
+      throw new ProviderConfigurationError(
         model
           ? `Model "${model}" is not available. Select another model.`
           : "Select a model before sending a message.",
@@ -1130,11 +1135,6 @@ export async function runLLMStream(params: {
       // any console.error, is what lets the console bridge recognise every
       // later log of it — this line's, and the route's log of the
       // AssistantStreamError below, whose `cause` is `err` — as already sent.
-      // A UserFacingError (rejected or missing API key, model not allowed)
-      // is the user's configuration rather than our bug: still one event, so
-      // operators see a rejected key with its provider_error tag, but a
-      // warning, not an error. (Left unreported, the console bridge filed it
-      // anyway, at error level, as MIKE-BACKEND-E.)
       // The kind says what the provider did (rejected the key, rate limited,
       // unavailable) so one cause is one issue; the provider's own error
       // stays underneath as the cause, where provider_error and
@@ -1146,16 +1146,15 @@ export async function runLLMStream(params: {
           : new AppError(providerFailureKind(err), "Model stream failed", {
               cause: err,
             });
-      // A subagent's run is its own flow inside the turn's request: name it
-      // on the event so a failing delegate is not filed under the answer.
-      reportError(failure, {
-        tags: {
-          component: "chat-stream",
-          ...(isSubagent ? { operation: "chat.subagent" as const } : {}),
-        },
-        ...(safeToDisplay ? { level: "warning" as const } : {}),
-      });
-      console.error("[chat/stream] model stream failed", failure);
+      if (safeToDisplay && isUserProviderRefusal(err)) {
+        // This turn returns the remedy to the owner of the rejected account.
+        markErrorHandled(failure);
+        console.warn("[chat/stream] model account refused", failure);
+      } else {
+        reportModelFailure(failure, {
+          tags: { component: "chat-stream", ...(isSubagent ? { operation: "chat.subagent" as const } : {}) },
+        }, "[chat/stream] model stream failed");
+      }
       const message = safeToDisplay ? err.message : ASSISTANT_ERROR_MESSAGE;
       events.push({
         type: "error",

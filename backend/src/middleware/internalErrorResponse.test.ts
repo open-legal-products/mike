@@ -92,6 +92,7 @@ describe("protectInternalErrorResponses", () => {
 
       expect(res.status).toBe(status);
       expect(res.body).toEqual({
+        reporting_owner: "backend",
         code: INTERNAL_ERROR_CODE,
         detail: INTERNAL_ERROR_MESSAGE,
         request_id: "req-test-123",
@@ -123,6 +124,7 @@ describe("protectInternalErrorResponses", () => {
 
     expect(res.status).toBe(503);
     expect(res.body).toEqual({
+      reporting_owner: "backend",
       code: "schema_out_of_date",
       detail: SCHEMA_OUT_OF_DATE_MESSAGE,
       request_id: "req-schema-123",
@@ -151,6 +153,7 @@ describe("protectInternalErrorResponses", () => {
     ).get("/test");
 
     expect(res.body).toEqual({
+      reporting_owner: "backend",
       code: INTERNAL_ERROR_CODE,
       detail: INTERNAL_ERROR_MESSAGE,
       request_id: "req-test-123",
@@ -178,6 +181,7 @@ describe("protectInternalErrorResponses", () => {
 
     expect(res.status).toBe(500);
     expect(res.body).toEqual({
+      reporting_owner: "backend",
       code: INTERNAL_ERROR_CODE,
       detail: INTERNAL_ERROR_MESSAGE,
       request_id: "req-thrown-123",

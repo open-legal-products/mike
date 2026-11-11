@@ -4,6 +4,7 @@ const record = (value: unknown): RecordValue => value && typeof value === 'objec
 
 const ISSUE_QUIET_MS = 60 * 60_000;
 const DAY_MS = 24 * 60 * 60_000;
+const MAX_TRACKED_ISSUES = 1_000;
 
 /** Pinned fingerprints replace stack grouping; severity retains a separate allowance. */
 function issueKey(event: RecordValue): string {
@@ -23,20 +24,31 @@ function issueKey(event: RecordValue): string {
 /**
  * Sample repeated failures after privacy reconstruction. The first observation
  * of each issue/severity bypasses the repeat allowance, but every accepted
- * event consumes the hard daily ceiling. Counters survive quiet resets and LRU
- * eviction. This is a local budget, not a project-wide quota or an impact count.
+ * event consumes the hard daily ceiling. Daily identities survive quiet resets
+ * and occurrence-cache eviction. Once the daily identity cache is full, unknown
+ * keys use the repeat allowance conservatively until the next day. Shared
+ * projects accept at most 50 events, so their identity cache cannot fill.
+ * This is a local budget, not a project-wide quota or an impact count.
  */
 export function eventBudget(options: { repeatEventsPerDay?: number; eventsPerDay?: number; now?: () => number } = {}): (event: RecordValue) => boolean {
   const limit = options.repeatEventsPerDay ?? 25;
   const ceiling = options.eventsPerDay ?? 50;
   const now = options.now ?? Date.now;
   const issues = new Map<string, { count: number; last: number }>();
+  const reportedToday = new Set<string>();
+  let ceilingNoticeLogged = false;
   let dayStart = now();
   let repeatsToday = 0;
   let eventsToday = 0;
   return event => {
     const at = now();
-    if (at - dayStart >= DAY_MS) { dayStart = at; repeatsToday = 0; eventsToday = 0; }
+    if (at - dayStart >= DAY_MS) {
+      dayStart = at;
+      repeatsToday = 0;
+      eventsToday = 0;
+      reportedToday.clear();
+      ceilingNoticeLogged = false;
+    }
     const key = issueKey(event);
     let issue = issues.get(key);
     if (!issue || at - issue.last >= ISSUE_QUIET_MS) issue = { count: 0, last: at };
@@ -45,14 +57,24 @@ export function eventBudget(options: { repeatEventsPerDay?: number; eventsPerDay
     issues.delete(key);
     issues.set(key, issue);
     // LRU bound also holds when every issue is still active.
-    if (issues.size > 1_000) issues.delete(issues.keys().next().value!);
+    if (issues.size > MAX_TRACKED_ISSUES) issues.delete(issues.keys().next().value!);
     event.tags = { ...record(event.tags), occurrence: issue.count };
-    if (eventsToday >= ceiling) return false;
+    if (eventsToday >= ceiling) {
+      if (!ceilingNoticeLogged) {
+        ceilingNoticeLogged = true;
+        // Fixed local text only: no event data, and warn is not captured by
+        // Mike's error-only console bridge. Set the guard before logging.
+        console.warn("[sentry] Daily event limit reached; further reports are suppressed until the next reporting day.");
+      }
+      return false;
+    }
     const probe = record(event.tags).diagnostic_test === 'true';
-    if (issue.count !== 1 && !probe) {
+    const firstToday = !reportedToday.has(key) && reportedToday.size < MAX_TRACKED_ISSUES;
+    if (!firstToday && !probe) {
       if (!Number.isInteger(Math.log2(issue.count)) || repeatsToday >= limit) return false;
       repeatsToday += 1;
     }
+    if (firstToday) reportedToday.add(key);
     eventsToday += 1;
     return true;
   };

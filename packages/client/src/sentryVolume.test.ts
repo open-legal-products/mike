@@ -1,5 +1,7 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { eventBudget, eventBudgetLimits, repeatEventLimit } from "./sentryVolume";
+
+afterEach(() => vi.restoreAllMocks());
 
 describe("reporting volume policy", () => {
   it("separates a new severity from exhausted repeats and resets repeats daily", () => {
@@ -43,7 +45,7 @@ describe("reporting volume policy", () => {
 });
 
 const issue = (id: number) => ({ fingerprint: [`issue-${id}`] });
-it("caps ten issues recurring every 61 minutes at 50 total, then renews next day", () => {
+it("keeps quiet recurrences inside the repeat allowance, then renews next day", () => {
   let now = 0;
   const accepts = eventBudget({ now: () => now });
   let sent = 0;
@@ -51,7 +53,8 @@ it("caps ten issues recurring every 61 minutes at 50 total, then renews next day
     now = hour * 61 * 60_000;
     for (let id = 0; id < 10; id++) if (accepts(issue(id))) sent++;
   }
-  expect(sent).toBe(50);
+  expect(sent).toBe(35); // Ten first observations plus at most 25 repeats.
+  expect(accepts(issue(100))).toBe(true);
   now = 24 * 60 * 60_000;
   expect(accepts(issue(0))).toBe(true);
 });
@@ -97,4 +100,45 @@ it("retains stack grouping when the fingerprint includes the default placeholder
   expect(accepts(atSite(fingerprint, 0))).toBe(true);
   expect(accepts(atSite(fingerprint, 2))).toBe(true);
   expect(accepts(atSite(fingerprint, 2))).toBe(false);
+});
+
+it("reserves capacity for new failures and severity escalations after quiet repeats", () => {
+  let now = 0;
+  const accepts = eventBudget({ now: () => now });
+  let sent = 0;
+  for (let hour = 0; hour < 24; hour++) {
+    now = hour * 61 * 60_000;
+    for (let id = 0; id < 2; id++) {
+      if (accepts({ fingerprint: [`outage-${id}`], level: "warning" })) sent++;
+    }
+  }
+  expect(sent).toBe(27);
+  expect(accepts({ fingerprint: ["outage-0"], level: "error" })).toBe(true);
+  expect(accepts({ fingerprint: ["new-defect"], level: "error" })).toBe(true);
+});
+
+it("does not treat an accepted issue as new after its occurrence entry is evicted", () => {
+  const accepts = eventBudget({ eventsPerDay: Infinity, repeatEventsPerDay: 0 });
+  for (let id = 0; id < 1000; id++) expect(accepts(issue(id))).toBe(true);
+  // Bound daily identity memory, conservatively sampling unknown overflow.
+  expect(accepts(issue(1000))).toBe(false);
+  // Its occurrence entry was evicted, but its daily identity was not.
+  expect(accepts(issue(0))).toBe(false);
+});
+
+it("logs the hard-ceiling rejection once per reporting day without event details", () => {
+  let now = 0;
+  const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+  const accepts = eventBudget({ eventsPerDay: 1, now: () => now });
+  expect(accepts(issue(0))).toBe(true);
+  expect(warn).not.toHaveBeenCalled();
+  for (let n = 0; n < 5; n++) {
+    expect(accepts({ fingerprint: ["PRIVATE_DIAGNOSTIC_CANARY"], tags: { secret: "PRIVATE_DIAGNOSTIC_CANARY" } })).toBe(false);
+  }
+  expect(warn).toHaveBeenCalledTimes(1);
+  expect(JSON.stringify(warn.mock.calls)).not.toContain("PRIVATE_DIAGNOSTIC_CANARY");
+  now = 24 * 60 * 60_000;
+  expect(accepts(issue(0))).toBe(true);
+  expect(accepts(issue(1))).toBe(false);
+  expect(warn).toHaveBeenCalledTimes(2);
 });

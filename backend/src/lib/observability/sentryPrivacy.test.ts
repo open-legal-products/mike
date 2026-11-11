@@ -58,6 +58,18 @@ describe('outbound telemetry privacy boundary', () => {
     expect(diagnosticEvent({ tags: { office_host: 'Word', office_platform: 'Mac', office_version: '16.0.123', job_kind: 'extraction.extract' } }).tags).toEqual({ office_host: 'Word', office_platform: 'Mac', office_version: '16.0.123', job_kind: 'extraction.extract' });
   });
 
+  it('keeps a whole-number outage_minutes tag and drops anything else', () => {
+    expect(diagnosticEvent({ tags: { outage_minutes: 15 } }).tags).toEqual({ outage_minutes: 15 });
+    expect(diagnosticEvent({ tags: { outage_minutes: '15' } }).tags).toEqual({ outage_minutes: 15 });
+    expect(diagnosticEvent({ tags: { outage_minutes: '15 min' } }).tags).toEqual({});
+    expect(diagnosticEvent({ tags: { outage_minutes: -1 } }).tags).toEqual({});
+  });
+
+  it('keeps a BullMQ queue name tag and drops one that is not a label', () => {
+    expect(diagnosticEvent({ tags: { component: 'queue', stage: 'connection', queue: 'tabular-extraction' } }).tags).toEqual({ component: 'queue', stage: 'connection', queue: 'tabular-extraction' });
+    expect(diagnosticEvent({ tags: { queue: 'Jane Doe NDA.pdf' } }).tags).toEqual({});
+  });
+
   it('groups optional storage reads by code location and failure identity, not the raw best-effort fingerprint', () => {
     const event = (code: string, file: string) => diagnosticEvent({
       tags: { component: 'best-effort', what: 'optional-read', error_kind: 'storage.download_failed', failure_code: code },
@@ -304,12 +316,61 @@ it('retains provider categories and retry status without response bodies or cred
   expect(diagnosticErrorTags(cyclic)).toEqual({});
 });
 
+it('names a provider refusal by its protocol type and a fixed reason, never its text', () => {
+  // MIK-89: every Anthropic/OpenAI 400 was "chat-stream / api_call / 400"
+  // (MIKE-BACKEND-G), whatever the provider said was wrong.
+  const refusal = (message: string, type = 'invalid_request_error') => ({
+    name: 'AI_APICallError', statusCode: 400, message,
+    data: { type: 'error', error: { type, message } },
+  });
+  expect(diagnosticErrorTags(refusal('prompt is too long: 215000 tokens > 200000 maximum PRIVATE_'))).toEqual({
+    provider_error: 'api_call', provider_error_type: 'invalid_request_error', provider_reason: 'prompt_too_long', dependency_status: 400,
+  });
+  expect(diagnosticErrorTags(refusal('messages.3.content.1.image.source.base64: image exceeds 5 MB maximum')).provider_reason).toBe('invalid_image');
+  expect(diagnosticErrorTags(refusal('tools.2.custom.input_schema: JSON schema is invalid')).provider_reason).toBe('invalid_tool_schema');
+  // An unknown reason or a type outside the protocol vocabulary says nothing.
+  expect(diagnosticErrorTags(refusal('PRIVATE_ something else', 'PRIVATE_type'))).toEqual({ provider_error: 'api_call', dependency_status: 400 });
+  // A stream error after the response started carries its type itself.
+  expect(diagnosticErrorTags({ name: 'AI_StreamProviderError', type: 'overloaded_error', statusCode: 503, message: 'Overloaded' }))
+    .toEqual({ provider_error: 'stream_provider', provider_error_type: 'overloaded_error', dependency_status: 503 });
+
+  const tags = { component: 'chat-stream', ...diagnosticErrorTags(refusal('prompt is too long PRIVATE_')) };
+  const event = diagnosticEvent({ tags, exception: { values: [{ type: 'Error', value: 'prompt is too long PRIVATE_' }] } });
+  expect((event.exception as { values: Array<{ value: string }> }).values[0]!.value)
+    .toBe('Failure in chat-stream / api_call / invalid_request_error / prompt_too_long / 400');
+  expect(JSON.stringify(event)).not.toContain('PRIVATE_');
+  // Appended only when present: an event without them groups as before.
+  expect(diagnosticEvent({ tags: { component: 'chat-stream', provider_error: 'api_call' } }).fingerprint).toHaveLength(14);
+  expect(event.fingerprint).toEqual(expect.arrayContaining(['invalid_request_error', 'prompt_too_long']));
+});
+
 it('allows only bounded network context and known model endpoints', () => {
   expect(diagnosticEvent({ tags: { network_state: 'offline', request_origin: 'cross-origin' } }).tags).toEqual({ network_state: 'offline', request_origin: 'cross-origin' });
   expect(diagnosticEvent({ tags: { network_state: 'private-network', request_origin: 'https://private.example', provider_error: 'private' } }).tags).toEqual({});
   for (const operation of ['configured', 'ollama', 'openrouter', 'vercel', 'opencode-go']) {
     expect(diagnosticRoute(`/api/models/${operation}?key=private`)).toBe(`/api/models/${operation}`);
   }
+});
+
+// MIK-128: a backend that went away mid-response is a different moment from
+// one that refused the connection. It is its own pinned issue per code, the
+// connect-time fingerprint is unchanged, and a body timeout (a hang, not an
+// outage) is never pinned at all.
+it('splits a mid-stream gateway failure from a connect-time one and keeps body timeouts at default grouping', () => {
+  const gateway = (stage: string, code: string, pinned = true) => diagnosticEvent({
+    ...(pinned ? { fingerprint: ['upstream-unavailable'], level: 'warning' } : {}),
+    tags: { component: 'api-gateway', stage, http_method: 'POST', http_route: '/chat', http_status: 200, failure_code: code },
+    exception: { values: [{ type: 'TypeError', value: 'terminated' }] },
+  });
+  expect(gateway('gateway-fetch', 'ECONNREFUSED').fingerprint).toEqual(['upstream-unavailable', 'api-gateway', 'ECONNREFUSED']);
+  expect(gateway('gateway-stream', 'UND_ERR_SOCKET').fingerprint).toEqual(['upstream-unavailable', 'api-gateway', 'UND_ERR_SOCKET', 'gateway-stream']);
+  expect(gateway('gateway-stream', 'ECONNRESET').fingerprint).not.toEqual(gateway('gateway-fetch', 'ECONNRESET').fingerprint);
+  const timeout = gateway('gateway-stream', 'UND_ERR_BODY_TIMEOUT', false);
+  expect(timeout.fingerprint).toEqual(expect.arrayContaining(['{{ default }}', 'gateway-stream', 'UND_ERR_BODY_TIMEOUT']));
+  expect(timeout.fingerprint).not.toContain('upstream-unavailable');
+  // Other pinned conditions keep their fingerprint whatever their stage.
+  expect(diagnosticEvent({ fingerprint: ['api-unreachable'], tags: { component: 'mike-api', stage: 'api-unreachable', failure_code: 'fetch_failed' } }).fingerprint)
+    .toEqual(['api-unreachable', 'mike-api', 'fetch_failed']);
 });
 
 // MIKE-FRONTEND-J/4: an unreachable backend is one condition, not one issue

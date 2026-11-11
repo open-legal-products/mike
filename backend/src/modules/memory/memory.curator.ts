@@ -15,6 +15,12 @@ import {
   type UserModelSettings,
 } from "../user/user.service";
 import { DbJobDeferredError, type Db, type DbJob } from "../../lib/dbq/types";
+import { NonRetryableJobError } from "../../lib/dbq/runner";
+import {
+  providerFailureKind,
+  providerFailureResponse,
+} from "../../lib/llm/providerErrors";
+import { providerFailureLevel } from "../../lib/llm/providerErrors";
 import { AppError } from "../../lib/appError";
 import { setOperation } from "../../lib/observability/sentry";
 import { ensureMemoryFile, getMemoryCurrentForFile, MemoryConversationNotQuietError, MemoryDisabledError, MemoryEpochSupersededError, MemoryJobSupersededError, MemoryValidationError, writeMemoryFile, type MemoryFileRow, type MemoryScope, type MemorySurface } from "../../lib/memory/files";
@@ -752,6 +758,68 @@ export function memoryScopeFailure(error: unknown): Error {
   );
 }
 
+/** Provider answers a retry cannot change; 408, 409 and 429 can clear. */
+const RETRYABLE_CLIENT_STATUS = new Set([408, 409, 429]);
+
+/**
+ * Scope failures whose model call the provider refused, with the level the
+ * job reports that refusal at. Kept beside the flattened error rather than
+ * on it: the flattened error is persisted and reported, and must carry
+ * nothing but its fixed classification.
+ */
+const providerRefusals = new WeakMap<Error, { reportLevel: "warning" | "error" }>();
+
+/**
+ * The scope failure for an error the curator's MODEL CALL threw, classified
+ * before memoryScopeFailure flattens it. The flattened cause keeps only the
+ * first named link, and for a 402/403/404 that is the UserFacingError
+ * toProviderStreamError wrapped around the provider's answer: no status, so
+ * a refusal read off the flattened error looked retryable and the job spent
+ * its whole backoff ladder on an answer that cannot change.
+ */
+export function memoryModelFailure(error: unknown): Error {
+  const failure = memoryScopeFailure(error);
+  const kind = providerFailureKind(error);
+  const status = providerFailureResponse(error)?.status;
+  const refused =
+    kind === "chat.provider_rejected" ||
+    kind === "chat.provider_out_of_credits" ||
+    (status !== undefined && status >= 400 && status < 500 && !RETRYABLE_CLIENT_STATUS.has(status));
+  if (refused) providerRefusals.set(failure, { reportLevel: providerFailureLevel(error) });
+  return failure;
+}
+
+/**
+ * The error a consolidation job ends with when a scope failed.
+ *
+ * A provider that refused the request itself — rejected the key, has no
+ * credit, forbids the model, or answered another 4xx — answers the same way
+ * on every one of the job's attempts. Retrying spent the whole backoff
+ * ladder and filed a warning per attempt (MIKE-BACKEND-1W, -2J, -89), so the
+ * job fails at once instead, at the level providerFailureLevel gives the
+ * provider's condition (classified by memoryModelFailure while the
+ * provider's answer was still there). A background refusal stays visible:
+ * warning for a known user account, error for deployment/unknown ownership.
+ * Anything else stays retryable. A job spanning multiple scopes may stop
+ * retrying only when every failed scope is nonretryable.
+ */
+export function memoryJobFailure(firstScopeFailure: unknown, ...otherScopeFailures: unknown[]): Error {
+  let terminal: NonRetryableJobError | undefined;
+  for (const error of [firstScopeFailure, ...otherScopeFailures]) {
+    const refusal = error instanceof Error ? providerRefusals.get(error) : undefined;
+    const failure = memoryScopeFailure(error);
+    // Report the cause that still needs recovery, regardless of scope order.
+    if (!refusal) return failure;
+    if (!terminal || refusal.reportLevel === "error") {
+      terminal = new NonRetryableJobError("Memory curator provider refused the request", {
+        cause: failure,
+        reportLevel: refusal.reportLevel,
+      });
+    }
+  }
+  return terminal!;
+}
+
 /**
  * The `    at …` lines of the original stack, without its message line.
  * Our own wrappers (a scope failure wrapped again at the job level) hold the
@@ -965,7 +1033,9 @@ export async function runMemoryCuratorScope(
     if (writeFailure instanceof MemoryConversationNotQuietError) {
       throw writeFailure;
     }
-    throw memoryScopeFailure(error);
+    // A failed write is storage, not the provider: only the model call's own
+    // failure is read for a provider refusal.
+    throw writeFailure === undefined ? memoryModelFailure(error) : memoryScopeFailure(error);
   }
   if (writeFailure instanceof MemoryConversationNotQuietError) {
     throw writeFailure;
@@ -1420,7 +1490,21 @@ export async function handleMemoryConsolidation(
     db,
     orgId: conversation.orgId,
   });
-  if (!resolved.ok) throw new Error("Memory curator has no available model");
+  if (!resolved.ok) {
+    // The actor has no model this curator may use (no key, every provider
+    // off). Their configuration, not a fault: retrying cannot change it and
+    // reporting it filed "Failure in dbq" with nothing to act on
+    // (MIKE-BACKEND-1Q). Not marked processed, so a later turn — once a model
+    // is available — schedules the conversation again.
+    await setStatus({
+      db,
+      stateId,
+      generation: requestedGeneration,
+      status: "idle",
+    });
+    await refreshJobFileStatuses({ db, job, state, status: "idle" });
+    return { skipped: "no_available_model" };
+  }
   const model = memoryCuratorModelForChat({
     chatModel: resolved.model,
     memoryCuratorModel: settings.memory_curator_model,
@@ -1428,8 +1512,7 @@ export async function handleMemoryConsolidation(
     apiKeys: settings.api_keys,
   });
 
-  let scopeFailures = 0;
-  let firstScopeFailure: unknown;
+  const scopeFailures: unknown[] = [];
   for (const candidate of files) {
     const prior = await recordedResult(db, job.id, candidate.file.id);
     if (prior) {
@@ -1502,17 +1585,15 @@ export async function handleMemoryConsolidation(
       }
       // Keep the app and project processes failure-isolated. A successful
       // scope records an idempotency result and will be skipped on retry.
-      // The first failure's classification is what the job-level report
-      // carries; later scopes usually fail for the same reason.
-      scopeFailures += 1;
-      firstScopeFailure ??= error;
+      // A permanent failure here must not prevent another scope's recovery.
+      scopeFailures.push(error);
       outcomes[candidate.file.scope] = "failed";
     }
   }
 
-  if (scopeFailures > 0) {
+  if (scopeFailures.length > 0) {
     await refreshJobFileStatuses({ db, job, state, status: "scheduled" });
-    throw memoryScopeFailure(firstScopeFailure);
+    throw memoryJobFailure(scopeFailures[0], ...scopeFailures.slice(1));
   }
 
   const finalized = await setStatus({

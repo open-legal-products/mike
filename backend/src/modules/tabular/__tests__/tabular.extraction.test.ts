@@ -48,6 +48,7 @@ vi.mock("../../../lib/observability/sentry", async (importOriginal) => ({
     setOperation,
 }));
 
+import { ExtractionParseError } from "../../../lib/extraction/failure";
 import { AppError } from "../../../lib/appError";
 import { diagnosticErrorTags } from "../../../lib/observability/sentryPrivacy";
 import { runExtractionJob } from "../tabular.extraction";
@@ -252,4 +253,11 @@ describe("runExtractionJob", () => {
             expect.objectContaining({ error: reported }),
         );
     });
+});
+
+it("returns a deterministic source rejection to the worker without wrapping it as missing model output", async () => {
+    const error = new ExtractionParseError("extraction.parse_failed", "unreadable docx");
+    service.extractRowColumns.mockResolvedValue({ processed: [COLUMN], received: new Set(), missing: [0], error });
+    await expect(run(reviewDb().db)).rejects.toBe(error);
+    expect(reportError).not.toHaveBeenCalled();
 });

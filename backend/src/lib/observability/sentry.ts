@@ -974,15 +974,29 @@ export function initSentry(
  * Not an application failure: level "warning", one issue per name and code.
  */
 export function reportProcessWarning(warning: unknown): string | null {
-  const shaped = warning as { name?: unknown; code?: unknown } | null;
+  const shaped = warning as { name?: unknown; code?: unknown; emitter?: object; target?: object; type?: unknown; count?: unknown } | null;
   const name = typeof shaped?.name === "string" ? shaped.name : "Warning";
   const code = typeof shaped?.code === "string" ? shaped.code : undefined;
   if (name === "DeprecationWarning" && process.noDeprecation) return null;
   return reportError(warning, {
     level: "warning",
-    tags: { component: "runtime-warning", warning_name: name, warning_code: code },
+    tags: { component: "runtime-warning", warning_name: name, warning_code: code,
+      ...(name === "MaxListenersExceededWarning" ? listenerLeakTags(shaped) : {}),
+    },
     fingerprint: ["runtime-warning", name, code ?? ""],
   });
+}
+
+/** Finite labels only: event names may otherwise be application/customer data. */
+function listenerLeakTags(warning: { emitter?: object; target?: object; type?: unknown; count?: unknown } | null): Record<string, string | number> {
+  const tags: Record<string, string | number> = {};
+  try {
+    const name = (warning?.emitter ?? warning?.target)?.constructor?.name;
+    if (name && ["EventEmitter", "Socket", "TLSSocket", "ClientRequest", "ServerResponse", "AbortSignal", "Worker", "Redis"].includes(name)) tags.warning_emitter = name;
+  } catch { /* Host objects must not break reporting. */ }
+  if (typeof warning?.type === "string" && ["abort", "data", "end", "error", "close", "finish", "drain", "readable", "connect", "ready", "timeout"].includes(warning.type)) tags.warning_event = warning.type;
+  if (typeof warning?.count === "number") tags.warning_listener_count = warning.count;
+  return tags;
 }
 
 /**

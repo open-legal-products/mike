@@ -8,6 +8,7 @@ import { createTextExtractionCache, type TextExtractionCache } from "../../lib/t
 // text a row's extraction runs over. The synchronous SSE route and the async
 // extraction worker share this one copy.
 
+import { ExtractionParseError } from "../../lib/extraction/failure";
 import { ExtractionBusyError, ExtractionLimitError } from "../../lib/extraction/isolated";
 import { downloadFile } from "../../lib/storage";
 import { attachActiveVersionPaths } from "../../lib/documentVersions";
@@ -232,7 +233,7 @@ export async function loadRowDocumentText(
                 }
             } catch (error) {
                 // Do not ask the model to fill cells from a source we refused.
-                if (error instanceof ExtractionBusyError || error instanceof ExtractionLimitError) throw error;
+                if (error instanceof ExtractionBusyError || error instanceof ExtractionLimitError || error instanceof ExtractionParseError) throw error;
                 // The row goes on with an empty source section; the
                 // parser's or converter's error is the cause, so its
                 // class and code say what failed. Logging the reported

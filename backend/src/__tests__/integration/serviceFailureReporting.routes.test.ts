@@ -103,6 +103,7 @@ describe("a PostgREST error returned by a list service", () => {
       // fixed text, the request id, and nothing raw.
       expect(res.status).toBe(503);
       expect(res.body).toEqual({
+      reporting_owner: "backend",
         code: "schema_out_of_date",
         detail: SCHEMA_OUT_OF_DATE_MESSAGE,
         request_id: "7db9e42e-81ba-4b63-be51-4b6bb00e1866",
@@ -156,6 +157,7 @@ describe("GET /chat when the list RPC is missing", () => {
     expect(rpc).toHaveBeenCalledWith("get_chats_overview", expect.anything());
     expect(res.status).toBe(503);
     expect(res.body).toEqual({
+      reporting_owner: "backend",
       code: "schema_out_of_date",
       detail: SCHEMA_OUT_OF_DATE_MESSAGE,
       request_id: "7db9e42e-81ba-4b63-be51-4b6bb00e1866",

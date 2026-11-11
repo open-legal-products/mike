@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import request from "supertest";
+import { isReported } from "../../lib/observability/sentry";
 
 const {
     runLLMStream,
@@ -733,7 +734,8 @@ describe("POST /projects/:projectId/chat", () => {
     });
 
     it("surfaces a stream failure as an in-stream error event, not an HTTP error", async () => {
-        runLLMStream.mockRejectedValue(new Error("upstream LLM failure"));
+        const original = new Error("upstream LLM failure");
+        runLLMStream.mockRejectedValue(original);
 
         const res = await request(app)
             .post("/projects/p1/chat")
@@ -743,6 +745,8 @@ describe("POST /projects/:projectId/chat", () => {
         expect(res.status).toBe(200);
         expect(res.text).toContain('"type":"error"');
         expect(res.text).toContain("[DONE]");
+        expect(isReported(original)).toBe(true);
+        expect(res.text).toContain('"reporting_owner":"backend"');
     expect(releaseMemoryConversationTurn).toHaveBeenCalledWith({
       db: expect.anything(),
       surface: "chat",

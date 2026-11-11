@@ -1,3 +1,6 @@
+/** Boundary that has taken responsibility for reporting or handling a failure. */
+export type ReportingOwner = "backend";
+
 // Authored wire contracts. No server, browser, UI or storage dependencies.
 
 export type TabularReviewHistoryStatus = {
@@ -528,7 +531,7 @@ export type AssistantEvent =
        */
       request_id?: string;
       /** Reporting responsibility, not confirmation of telemetry delivery. Absent on older servers. */
-      reporting_owner?: "backend";
+      reporting_owner?: ReportingOwner;
     };
 
 export type AssistantErrorCode = "invalid_api_key";

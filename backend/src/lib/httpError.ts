@@ -1,3 +1,4 @@
+import { BACKEND_REPORTING_OWNER } from "./reportedUpstreamCodes";
 import type { Response } from "express";
 import { reportError, requestRoutePattern } from "./observability/sentry";
 import { shouldReportUpstreamFailure } from "./upstreamOutage";
@@ -6,9 +7,9 @@ import {
   gateSchemaOutOfDate,
 } from "./schemaOutOfDate";
 
-// The codes and sentences a client recognises as "already reported server-side"
-// live in a dependency-free module (reportedUpstreamCodes.ts) so the frontend
-// parity test can import them; re-exported here for the callers that build 503s.
+// Shared public codes and sentences live in a dependency-free module so the
+// frontend parity test can import them. Reporting ownership is carried by the
+// explicit response marker, not inferred from these codes.
 export {
   SCHEMA_OUT_OF_DATE_CODE,
   SCHEMA_OUT_OF_DATE_MESSAGE,
@@ -186,6 +187,7 @@ export function sendInternalError(
     : (answer ?? { code: INTERNAL_ERROR_CODE, detail: INTERNAL_ERROR_MESSAGE });
   return res.status(status).json({
     ...body,
+    reporting_owner: BACKEND_REPORTING_OWNER,
     ...(requestId ? { request_id: requestId } : {}),
   });
 }

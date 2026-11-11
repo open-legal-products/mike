@@ -10,6 +10,9 @@ interface Transport {
   send(envelope: Envelope): PromiseLike<unknown>;
 }
 
+// Fixed SDK codes identify warnings without transmitting provider text.
+const SDK_WARNING_CODES = new Set('AISDK_DEP_GENERATE_OBJECT AISDK_DEP_STREAM_OBJECT AISDK_DEP_EXPERIMENTAL_GENERATE_SPEECH AISDK_DEP_EXPERIMENTAL_TRANSCRIBE AISDK_DEP_IMAGE_CONTENT_PART AISDK_DEP_TOOL_RESULT_FILE_DATA AISDK_DEP_TOOL_RESULT_FILE_URL AISDK_DEP_TOOL_RESULT_FILE_ID AISDK_DEP_TOOL_RESULT_FILE_REFERENCE AISDK_DEP_TOOL_RESULT_IMAGE_DATA AISDK_DEP_TOOL_RESULT_IMAGE_URL AISDK_DEP_TOOL_RESULT_IMAGE_FILE_ID AISDK_DEP_TOOL_RESULT_IMAGE_FILE_REFERENCE AISDK_DEP_UI_MESSAGE_RAW_INPUT AI_SDK_DEPRECATION AI_SDK_WARNING'.split(' '));
+
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const HEX_ID = /^[0-9a-f]{16,32}$/i;
 /**
@@ -27,7 +30,7 @@ export function isDiagnosticLabel(value: unknown): value is string {
     && /^[a-z][a-z0-9]*(?:[._-][a-z0-9]+)*$/.test(value);
 }
 
-const APPLICATION_TAGS = new Set(['operation', 'error_kind', 'component', 'stage', 'job_kind']);
+const APPLICATION_TAGS = new Set(['operation', 'error_kind', 'component', 'stage', 'job_kind', 'queue']);
 // Only our error constructor may supply a free-form kind. A dependency's
 // arbitrary `kind` property must not become telemetry just because it fits.
 const APPLICATION_KIND = Symbol.for('mike.diagnostic.errorKind');
@@ -50,8 +53,12 @@ export const DIAGNOSTIC_VOCABULARY: Record<string, ReadonlySet<string>> = Object
   capture_source: 'exception console unhandled message',
   diagnostics_version: '2',
   build_mode: 'development production test',
-  failure_code: 'ECONNREFUSED ECONNRESET EADDRINUSE ETIMEDOUT ENOTFOUND EHOSTUNREACH ENETUNREACH EAI_AGAIN ENOENT EACCES EPERM ENOSPC EPIPE ERR_SERVER_NOT_RUNNING UND_ERR_CONNECT_TIMEOUT UND_ERR_HEADERS_TIMEOUT UND_ERR_SOCKET CERT_HAS_EXPIRED DEPTH_ZERO_SELF_SIGNED_CERT AccessDenied InvalidAccessKeyId SignatureDoesNotMatch NoSuchBucket NoSuchKey SlowDown ServiceUnavailable RequestTimeout 23505 23503 23514 22003 22P02 28P01 28000 42P10 42883 42501 42P01 42703 53300 57014 40001 40P01 55P03 53100 53200 57P01 57P03 08001 08003 08006 08P01 PGRST000 PGRST001 PGRST100 PGRST116 PGRST200 PGRST201 PGRST202 PGRST203 PGRST204 PGRST205 configuration_invalid signing_key_invalid conversion_unavailable conversion_timeout conversion_failed fetch_failed',
-  provider_error: 'invalid_api_key api_call retry_exhausted',
+  failure_code: 'ECONNREFUSED ECONNRESET EADDRINUSE ETIMEDOUT ENOTFOUND EHOSTUNREACH ENETUNREACH EAI_AGAIN ENOENT EACCES EPERM ENOSPC EPIPE ERR_SERVER_NOT_RUNNING UND_ERR_CONNECT_TIMEOUT UND_ERR_HEADERS_TIMEOUT UND_ERR_BODY_TIMEOUT UND_ERR_SOCKET CERT_HAS_EXPIRED DEPTH_ZERO_SELF_SIGNED_CERT AccessDenied InvalidAccessKeyId SignatureDoesNotMatch NoSuchBucket NoSuchKey SlowDown ServiceUnavailable RequestTimeout 23505 23503 23514 22003 22P02 28P01 28000 42P10 42883 42501 42P01 42703 53300 57014 40001 40P01 55P03 53100 53200 57P01 57P03 08001 08003 08006 08P01 PGRST000 PGRST001 PGRST100 PGRST116 PGRST200 PGRST201 PGRST202 PGRST203 PGRST204 PGRST205 configuration_invalid signing_key_invalid conversion_unavailable conversion_timeout conversion_failed fetch_failed',
+  provider_error: 'invalid_api_key api_call retry_exhausted stream_provider',
+  // The `error.type` model providers put in an error body (Anthropic, OpenAI and the gateways that copy them).
+  provider_error_type: 'invalid_request_error authentication_error permission_error not_found_error request_too_large rate_limit_error api_error overloaded_error billing_error timeout_error insufficient_quota server_error',
+  // Why a provider refused a request, matched by PROVIDER_REASONS below; never the provider's text.
+  provider_reason: 'prompt_too_long invalid_image invalid_tool_schema',
   network_state: 'online offline unknown',
   request_origin: 'same-origin cross-origin unknown',
   file_type: 'pdf doc docx odt rtf ppt pptx xls xlsx csv txt html',
@@ -61,13 +68,16 @@ export const DIAGNOSTIC_VOCABULARY: Record<string, ReadonlySet<string>> = Object
   office_platform: 'PC Mac OfficeOnline Universal iOS Android',
   storage: 'local cloud',
   storage_operation: 'HEAD copy upload download delete',
+  storage_target: 'loopback mixed_content cross_origin same_origin',
   // Node's own process warnings (reported by the backend's 'warning' listener).
+  warning_emitter: 'EventEmitter Socket TLSSocket ClientRequest ServerResponse AbortSignal Worker Redis',
+  warning_event: 'abort data end error close finish drain readable connect ready timeout',
   warning_name: 'Warning DeprecationWarning ExperimentalWarning MaxListenersExceededWarning TimeoutOverflowWarning TimeoutNegativeWarning UnsupportedWarning',
 }).map(([key, values]) => [key, new Set(values.split(' '))]));
 const ENUMS = DIAGNOSTIC_VOCABULARY;
 const ROUTE_PARTS = new Set(('word-chat orgs single-documents tabular-review quick-actions workflow-addons audit manifest-signing-key api auth login logout refresh session user users projects directory people access memory ids filter-options folder-paths resolve folder documents versions files folders upload uploads upload-sessions parts complete abort content download preview source text conversion chats chat messages stream cancel assistant tabular tabular-reviews reviews rows columns cells run results export workflows playbooks templates library models configured ollama openrouter vercel opencode-go bedrock azure azure-foundry vertex xai custom settings profile organizations members permissions shares keys api-keys health observability sentry-test').split(' '));
 const ID_KEYS = new Set(('request_id requestId document_id documentId file_id fileId job_id jobId review_id reviewId row_id rowId session_id sessionId version_id versionId run_id import_id playbook_id').split(' '));
-const CONFIGURATION_FIELDS = new Set('SUPABASE_URL SUPABASE_PUBLISHABLE_KEY SUPABASE_SECRET_KEY AUTH_HANDOFF_ENCRYPTION_SECRET FRONTEND_URL API_PUBLIC_URL WORD_ADDIN_URL'.split(' '));
+const CONFIGURATION_FIELDS = new Set('SUPABASE_URL SUPABASE_PUBLISHABLE_KEY SUPABASE_SECRET_KEY AUTH_HANDOFF_ENCRYPTION_SECRET USER_API_KEYS_ENCRYPTION_SECRET MCP_CONNECTORS_ENCRYPTION_SECRET FRONTEND_URL API_PUBLIC_URL WORD_ADDIN_URL'.split(' '));
 /** Static exception identifiers are trusted under the source contract, not because of this syntax check. */
 const ERROR_TYPE = /^[A-Z][A-Za-z0-9]{1,60}(?:Error|Warning|Exception)$|^(?:Error|Warning)$/;
 /** A frame's function name as V8 prints it: dotted identifiers, optionally `async`/`new`, `[as x]`, `<anonymous>`. ASCII identifier characters only; a document name has spaces or an extension-like tail that this still admits, so names are kept only for frames in our own files (see framesFor). */
@@ -81,7 +91,20 @@ const LEVELS = new Set('fatal error warning info debug'.split(' '));
 /** Fixed runtime messages of a failed fetch (Node, Chrome, Firefox, Safari). */
 const FETCH_FAILURE_MESSAGES = new Set(['Failed to fetch', 'fetch failed', 'Load failed', 'NetworkError when attempting to fetch resource.']);
 /** Caller fingerprints that replace code-location grouping: one condition, one issue. */
-const PINNED_FINGERPRINTS = new Set(['upstream-unavailable', 'api-unreachable', 'runtime-warning']);
+const PINNED_FINGERPRINTS = new Set(['upstream-unavailable', 'api-unreachable', 'runtime-warning', 'upload-storage-put']);
+
+/**
+ * Fixed reasons for a provider's refusal, matched against its error message
+ * locally. Only the reason name leaves the process; the message never does.
+ * A 400 from Anthropic or OpenAI is otherwise "invalid_request_error" for
+ * every cause, which put a prompt that outgrew the context window, a broken
+ * image and a malformed tool schema in one unexplained issue.
+ */
+const PROVIDER_REASONS: Array<[string, RegExp]> = [
+  ['prompt_too_long', /prompt is too long|context(?:[ _]length|[ _]window)|maximum context|too many (?:input )?tokens|input is too long|exceeds the maximum number of tokens/i],
+  ['invalid_image', /\bimage\b.*\b(?:invalid|could not|unable to|unsupported|not supported|not valid|exceeds|too large)|could not process image|invalid base64/i],
+  ['invalid_tool_schema', /\btools?\.\d+|input_schema|invalid schema for function|function parameters|tool[^.]*\bschema\b/i],
+];
 
 function record(value: unknown): RecordValue {
   return value !== null && typeof value === 'object' && !Array.isArray(value) ? value as RecordValue : {};
@@ -152,11 +175,13 @@ function tagsFor(value: unknown): RecordValue {
     else if (ID_KEYS.has(key) && typeof entry === 'string' && UUID.test(entry)) out[key] = entry;
     else if (key === 'configuration_fields' && typeof entry === 'string' && entry.length < 250 && entry.split(',').every(field => CONFIGURATION_FIELDS.has(field))) out[key] = entry;
     else if (key === 'office_version' && typeof entry === 'string' && /^\d+(?:\.\d+){1,4}$/.test(entry) && entry.length < 30) out[key] = entry;
-    else if (key === 'warning_code' && typeof entry === 'string' && /^DEP\d{4}$/.test(entry)) out[key] = entry;
+    else if (key === 'warning_listener_count' && typeof entry === 'number' && Number.isSafeInteger(entry) && entry >= 0 && entry <= 1_000_000) out[key] = entry;
+    else if (key === 'warning_code' && typeof entry === 'string' && (/^DEP\d{4}$/.test(entry) || SDK_WARNING_CODES.has(entry))) out[key] = entry;
     else if (key === 'what' && isDiagnosticLabel(entry)) out.stage = entry;
     else if (key === 'http_route' && typeof entry === 'string') out[key] = diagnosticRoute(entry);
     else if ((key === 'http_status' || key === 'dependency_status') && /^\d{3}$/.test(String(entry)) && Number(entry) >= 100 && Number(entry) <= 599) out[key] = Number(entry);
     else if (key === 'network_failure_count' && Number.isInteger(entry) && Number(entry) >= 1 && Number(entry) <= 100000) out[key] = Number(entry);
+    else if (key === 'outage_minutes' && /^\d{1,6}$/.test(String(entry))) out[key] = Number(entry);
     else if ((key === 'network' || key === 'project') && (entry === true || entry === false || entry === 'true' || entry === 'false')) out[key] = entry;
   }
   return out;
@@ -183,8 +208,16 @@ export function diagnosticErrorTags(error: unknown): Record<string, string | num
       }
       const providerError = item.name === 'InvalidApiKeyError' ? 'invalid_api_key'
         : item.name === 'AI_APICallError' ? 'api_call'
-          : item.name === 'AI_RetryError' ? 'retry_exhausted' : undefined;
+          : item.name === 'AI_RetryError' ? 'retry_exhausted'
+            : item.name === 'AI_StreamProviderError' ? 'stream_provider' : undefined;
       if (providerError && tags.provider_error === undefined) tags.provider_error = providerError;
+      if (item.name === 'AI_APICallError' || item.name === 'AI_StreamProviderError') {
+        // The SDK's parsed error body (`data.error.type`) or the stream error's own `type`; fixed protocol values only.
+        const providerType = record(record(item.data).error).type ?? item.type;
+        if (typeof providerType === 'string' && ENUMS.provider_error_type!.has(providerType) && tags.provider_error_type === undefined) tags.provider_error_type = providerType;
+        const reason = typeof item.message === 'string' ? PROVIDER_REASONS.find(([, pattern]) => pattern.test(item.message as string))?.[0] : undefined;
+        if (reason && tags.provider_reason === undefined) tags.provider_reason = reason;
+      }
       if (item.code === 'sentry_test') tags.diagnostic_test = 'true';
       // AppError identity: the thrower's own static label, never a dependency property.
       // The deepest kind wins: a wrapper names the operation that failed, the
@@ -276,7 +309,7 @@ export function diagnosticEvent(value: unknown): RecordValue {
   for (const key of ['release', 'environment']) {
     if (typeof event[key] === 'string' && /^[\w@.+/-]{1,100}$/.test(event[key])) out[key] = event[key];
   }
-  const description = [tags.operation, tags.component ?? 'application', tags.stage, tags.error_kind, tags.warning_name, tags.warning_code, tags.http_method, tags.http_route, tags.http_status, tags.error_code, tags.office_code, tags.failure_code, tags.storage_operation, tags.provider_error, tags.dependency_status].filter(v => v !== undefined).join(' / ');
+  const description = [tags.operation, tags.component ?? 'application', tags.stage, tags.error_kind, tags.warning_name, tags.warning_code, tags.http_method, tags.http_route, tags.http_status, tags.error_code, tags.office_code, tags.failure_code, tags.storage_operation, tags.provider_error, tags.provider_error_type, tags.provider_reason, tags.dependency_status].filter(v => v !== undefined).join(' / ');
   const values = record(event.exception).values;
   const exceptionValues = Array.isArray(values) ? values : [];
   // attachStacktrace gives captureMessage() a synthetic exception (mechanism
@@ -313,10 +346,14 @@ export function diagnosticEvent(value: unknown): RecordValue {
   // route, method or stack, split only by its controlled component and code.
   const pinned = Array.isArray(event.fingerprint) && typeof event.fingerprint[0] === 'string' && PINNED_FINGERPRINTS.has(event.fingerprint[0]) ? event.fingerprint[0]
     : tags.component === 'runtime-warning' ? 'runtime-warning' : undefined;
+  const pinnedStage = pinned === 'upstream-unavailable' && typeof tags.stage === 'string' && tags.stage !== 'gateway-fetch' ? [tags.stage] : [];
   // A process warning is one issue per name and code: the same deprecation
   // raised from two modules is one thing to fix, and the stack says where.
   out.fingerprint = pinned === 'runtime-warning' ? [pinned, String(tags.warning_name ?? ''), String(tags.warning_code ?? '')]
-    : pinned ? [pinned, String(tags.component ?? 'application'), String(tags.failure_code ?? '')] : ['{{ default }}', String(tags.operation ?? ''), String(tags.error_kind ?? ''), String(tags.job_kind ?? ''), String(tags.component ?? 'application'), String(tags.stage ?? ''), String(tags.http_route ?? ''), String(tags.http_status ?? ''), String(tags.failure_code ?? ''), String(tags.file_type ?? ''), String(tags.provider_error ?? ''), String(tags.dependency_status ?? ''), String(tags.warning_name ?? ''), String(tags.warning_code ?? '')];
+    : pinned ? [pinned, String(tags.component ?? 'application'), String(tags.failure_code ?? ''), ...pinnedStage] : ['{{ default }}', String(tags.operation ?? ''), String(tags.error_kind ?? ''), String(tags.job_kind ?? ''), String(tags.component ?? 'application'), String(tags.stage ?? ''), String(tags.http_route ?? ''), String(tags.http_status ?? ''), String(tags.failure_code ?? ''), String(tags.file_type ?? ''), String(tags.provider_error ?? ''), String(tags.dependency_status ?? ''), String(tags.warning_name ?? ''), String(tags.warning_code ?? ''),
+      // These optional diagnostics add grouping detail when present. Other fields above
+      // can still change grouping as the privacy schema evolves.
+      ...[tags.provider_error_type, tags.provider_reason].filter(v => v !== undefined).map(String)];
   // The path the request took before it failed: stage names only (our
   // labels, pushed by markStage), newest last, never a message or data.
   const crumbs = Array.isArray(event.breadcrumbs) ? event.breadcrumbs : [];
@@ -328,6 +365,7 @@ export function diagnosticEvent(value: unknown): RecordValue {
     return [out];
   }).slice(-20);
   if (trail.length) out.breadcrumbs = trail;
+  if (pinned === 'upload-storage-put') (out.fingerprint as string[]).push(String(tags.http_status ?? ''));
   const extra: RecordValue = {};
   for (const [key, entry] of Object.entries(record(event.extra))) {
     if (ID_KEYS.has(key) && typeof entry === 'string' && UUID.test(entry)) extra[key] = entry;

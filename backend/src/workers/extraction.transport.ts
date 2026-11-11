@@ -1,8 +1,9 @@
 // extraction transport — implementation behind the module facade.
 import { Worker, UnrecoverableError, type Job } from "bullmq";
+import { ExtractionParseError } from "../lib/extraction/failure";
 import { ExtractionLimitError } from "../lib/extraction/limits";
 import { runIsolated } from "../lib/dbq/jobScope";
-import { getRedisConnection } from "../lib/queue/connection";
+import { getRedisConnection, watchQueueErrors } from "../lib/queue/connection";
 import { reportError } from "../lib/observability/sentry";
 import { EXTRACTION_QUEUE, type ExtractionJobData } from "../lib/queue/extractionQueue";
 import { extractionJobOperation, runExtractionJob, markExtractionFailed } from "../modules/tabular/tabular.service";
@@ -26,7 +27,9 @@ export function createExtractionWorker(): Worker<ExtractionJobData> {
                 try {
                     await runExtractionJob(job.data);
                 } catch (error) {
-                    if (error instanceof ExtractionLimitError) throw new UnrecoverableError("document_too_large");
+                    if (error instanceof ExtractionLimitError || error instanceof ExtractionParseError) {
+                        throw Object.assign(new UnrecoverableError(error instanceof ExtractionParseError ? "document_text_unreadable" : "document_too_large"), { cause: error });
+                    }
                     throw error;
                 }
             });
@@ -41,6 +44,7 @@ export function createExtractionWorker(): Worker<ExtractionJobData> {
             maxStalledCount: 2,
         },
     );
+    watchQueueErrors(worker, "worker");
     worker.on("stalled", (jobId) => {
         console.warn(
             "[extraction-worker] job stalled; will be re-queued",
@@ -52,7 +56,7 @@ export function createExtractionWorker(): Worker<ExtractionJobData> {
         // The 'failed' event fires outside the processor's isolation scope,
         // so the operation is named here rather than inherited.
         reportError(err, {
-            level: permanent ? "error" : "warning",
+            level: err.cause instanceof ExtractionParseError ? "warning" : permanent ? "error" : "warning",
             tags: {
                 component: "extraction-worker",
                 operation: extractionJobOperation(job?.data ?? {}),

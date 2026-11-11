@@ -1,3 +1,4 @@
+import { BACKEND_REPORTING_OWNER } from "@mike/client";
 /**
  * Error reporting for the web app: a thin, testable layer over the Sentry
  * SDK. Application code calls these helpers instead of `@sentry/nextjs`
@@ -18,7 +19,6 @@ import {
     normalizeApiPath,
     parseSampleRate,
     releaseName,
-    reportedUpstreamMessage,
     resolveDsn,
 } from "@mike/client";
 
@@ -94,10 +94,8 @@ export function markErrorHandled(error: unknown): void {
  * attached to its own event, so the two sides of one failure can be matched
  * in Sentry by searching `request_id:<id>`.
  *
- * Same rule as the Word add-in's reportApiFailure: a code the backend or the
- * Next gateway already reported (`upstream_unavailable`,
- * `schema_out_of_date`) is only marked, so neither this nor a screen's later
- * notifyError or console.error files the incident a second time.
+ * Same rule as the Word add-in: only an explicit backend ownership marker
+ * suppresses a duplicate. Codes and statuses alone do not prove ownership.
  */
 export function reportApiFailure(failure: {
     path: string;
@@ -107,10 +105,11 @@ export function reportApiFailure(failure: {
     method?: string;
     operation?: Operation;
     error?: unknown;
+    reportingOwner?: typeof BACKEND_REPORTING_OWNER;
 }): string | null {
     if (isReported(failure.error)) return null;
     markReported(failure.error);
-    if (reportedUpstreamMessage(failure.code)) return null;
+    if (failure.reportingOwner === BACKEND_REPORTING_OWNER) return null;
     if (!Sentry.isEnabled()) return null;
     const route = normalizeApiPath(failure.path);
     const method = failure.method ?? "GET";
@@ -129,7 +128,9 @@ export function reportApiFailure(failure: {
             },
             fingerprint: ["api-5xx", method, route, String(failure.status)],
         });
-        return Sentry.captureMessage(`API ${failure.status} on ${method} ${route}`, "error");
+        return failure.error instanceof Error
+            ? Sentry.captureException(failure.error)
+            : Sentry.captureMessage(`API ${failure.status} on ${method} ${route}`, "error");
     });
 }
 

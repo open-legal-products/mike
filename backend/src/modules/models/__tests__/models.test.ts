@@ -318,6 +318,7 @@ describe("GET /models/openrouter", () => {
         // internal error (a thrown fetch, not an upstream status).
         expect(response.status).toBe(500);
         expect(response.body).toEqual({
+            reporting_owner: "backend",
             code: INTERNAL_ERROR_CODE,
             detail: INTERNAL_ERROR_MESSAGE,
         });
@@ -338,6 +339,7 @@ describe("GET /models/openrouter", () => {
 
         expect(response.status).toBe(502);
         expect(response.body).toEqual({
+            reporting_owner: "backend",
             code: INTERNAL_ERROR_CODE,
             detail: INTERNAL_ERROR_MESSAGE,
         });
@@ -550,6 +552,7 @@ describe("GET /models/opencode-go", () => {
 
         expect(response.status).toBe(502);
         expect(response.body).toEqual({
+            reporting_owner: "backend",
             code: INTERNAL_ERROR_CODE,
             detail: INTERNAL_ERROR_MESSAGE,
         });

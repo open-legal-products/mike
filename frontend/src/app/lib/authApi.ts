@@ -1,10 +1,10 @@
+import { BACKEND_REPORTING_OWNER } from "@mike/client";
 import {
     markErrorHandled,
     reportApiFailure,
     reportNetworkFailure,
 } from "@/app/lib/errorReporting";
 import {
-    isAbortError,
     reportedUpstreamMessage,
     type Operation,
 } from "@mike/client";
@@ -33,18 +33,21 @@ export class AuthApiError extends Error {
      * carries it.
      */
     requestId: string | null;
+    reportingOwner?: typeof BACKEND_REPORTING_OWNER;
 
     constructor(
         status: number,
         code: string | null,
         message: string,
         requestId: string | null = null,
+        reportingOwner?: typeof BACKEND_REPORTING_OWNER,
     ) {
         super(message);
         this.name = "AuthApiError";
         this.status = status;
         this.code = code;
         this.requestId = requestId;
+        this.reportingOwner = reportingOwner;
     }
 }
 
@@ -77,7 +80,7 @@ async function authRequest<T>(
         // "API unreachable" event per outage, never one per auth screen. An
         // abort is the caller's doing, not an outage.
         if (!report) markErrorHandled(error);
-        else if (!isAbortError(error)) {
+        else if (!init?.signal?.aborted) {
             reportNetworkFailure(error, { method, url });
         }
         throw error;
@@ -87,6 +90,7 @@ async function authRequest<T>(
             code?: unknown;
             detail?: unknown;
             request_id?: unknown;
+            reporting_owner?: unknown;
         };
         const code = typeof body.code === "string" ? body.code : null;
         // Mirrors mikeApi.toApiError: the body wins, the header is the
@@ -99,16 +103,16 @@ async function authRequest<T>(
             response.status,
             code,
             (code && reportedUpstreamMessage(code)) ??
-                (typeof body.detail === "string"
+                (response.status < 500 && typeof body.detail === "string"
                     ? body.detail
                     : "Authentication could not be completed."),
             requestId,
+            body.reporting_owner === BACKEND_REPORTING_OWNER ? BACKEND_REPORTING_OWNER : undefined,
         );
         // A 4xx is the auth server's intentional answer (wrong password, a
         // spent link); a 5xx is a fault, reported under the same request id
         // the backend attached to its own event, unless the backend or the
-        // gateway already reported it (upstream_unavailable when GoTrue or
-        // the API is down, schema_out_of_date).
+        // gateway explicitly claims ownership in the response.
         if (!report) markErrorHandled(error);
         else if (response.status >= 500) {
             reportApiFailure({
@@ -119,6 +123,7 @@ async function authRequest<T>(
                 requestId,
                 method,
                 error,
+                reportingOwner: error.reportingOwner,
             });
         }
         throw error;
