@@ -771,7 +771,7 @@ repository does not ship one), for example:
 ```toml
 main = ".open-next/worker.js"
 name = "mike-frontend"
-compatibility_date = "2026-01-23"
+compatibility_date = "2026-08-01"
 compatibility_flags = ["nodejs_compat"]
 
 [assets]
@@ -782,12 +782,17 @@ binding = "ASSETS"
 API_BASE_URL = "https://api.example.com"
 ```
 
-`API_BASE_URL` is the backend's public URL; the frontend's `/api` proxy
-requires it at runtime.
+`API_BASE_URL` is the backend origin the frontend's `/api` proxy forwards
+to; without it every `/api` request returns 502. On Workers it must be
+reachable from Cloudflare over the internet, unlike the internal origin
+described under [Environment](#environment). Set the backend's
+`FRONTEND_URL` and `API_PUBLIC_URL` to the Worker's public URL, as described
+there.
 
 OpenNext must treat the repository, not `frontend/`, as the project root,
-and it picks the nearest directory that has a lockfile. Remove `frontend/`'s
-lockfiles before building, then restore them:
+and it picks the nearest directory that has a lockfile. From the repository
+root, remove `frontend/`'s lockfiles before building, then restore them
+(also when the build fails):
 
 ```bash
 rm -f frontend/bun.lock frontend/package-lock.json
@@ -795,13 +800,18 @@ npm run deploy --prefix frontend   # or preview, or upload
 git checkout -- frontend/bun.lock frontend/package-lock.json
 ```
 
-Without this the build fails with `bun: command not found` or
+`preview` serves the Worker locally and needs no Cloudflare account;
+`deploy` and `upload` need `npx wrangler login` or `CLOUDFLARE_API_TOKEN`.
+Without the lockfile step the build fails with `bun: command not found` or
 `ENOENT … .next/standalone/.next/server/pages-manifest.json`.
 
-Build from a checkout that has no repository-root `.env` (a CI checkout, or
-move the file aside first). With the repository as its root, OpenNext
-compiles the root `.env*` files into the Worker along with `frontend/`'s,
-and the root `.env` holds backend secrets.
+Build from a checkout with no `.env` or `.env.*` files at the repository
+root (a CI checkout, or move them aside and put them back afterwards). With
+the repository as its root, OpenNext compiles every root `.env*` file into
+the Worker script, and the root `.env` is the Docker Compose file that holds
+backend secrets. Its values would also apply at runtime wherever `[vars]`
+does not set them. `frontend/.env*` files are compiled in the same way, so
+keep build-only secrets such as `SENTRY_AUTH_TOKEN` out of them.
 
 ### Running the backend image
 
