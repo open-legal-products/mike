@@ -1,7 +1,5 @@
-import { chunkArray } from "../../lib/arrays";
 import type { Db } from "../../lib/supabase";
-import { throwIfError } from "../../lib/serviceData";
-import { uniqueIds } from "../../lib/batchedQuery";
+import { mutateInBatches, uniqueIds } from "../../lib/batchedQuery";
 import { captureInlineDocumentCleanup, completeInlineDocumentCleanup } from "../documents/documents.service";
 /**
  * Delete projects (and everything inside them) by id, with no ownership
@@ -15,10 +13,10 @@ export async function deleteProjectsByIds(db: Db, projectIds: string[]) {
         return 0;
     const keys = await captureInlineDocumentCleanup(db, { projectIds: ownedProjectIds });
     // Parent DELETE owns the relational cascades and all durable cleanup.
-    for (const ids of chunkArray(ownedProjectIds, 500)) {
-        const { error } = await db.from("projects").delete().in("id", ids);
-        await throwIfError(error, "Failed to delete projects");
-    }
+    // The id list travels in the request URL, so it goes out in the shared
+    // URL-safe batch size: 500 UUIDs is past what the gateway accepts.
+    await mutateInBatches("project delete", ownedProjectIds, (ids) =>
+        db.from("projects").delete().in("id", ids));
     await completeInlineDocumentCleanup(db, keys);
     return ownedProjectIds.length;
 }
