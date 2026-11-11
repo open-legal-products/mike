@@ -235,6 +235,7 @@ vi.mock("../../lib/access", () => ({
 
 import { app } from "../../app";
 import { getActiveAssistantTurn, resetAssistantTurnRunsForTests } from "../../lib/assistantTurnRuns";
+import { chatTurnAuditEvents, type ChatTurnAuditBase } from "../../lib/audit";
 import { spotlight } from "../../modules/chat/engine/index";
 import { createServerSupabase } from "../../lib/supabase";
 import { DEFAULT_WEB_SEARCH_SETTINGS } from "../../lib/webSearch";
@@ -407,6 +408,58 @@ describe("POST /projects/:projectId/chat", () => {
             expect(scheduleMemoryConsolidation).not.toHaveBeenCalled();
         },
     );
+
+    it("audits a stopped turn once, with the document it edited", async () => {
+        const { getAssistantTurnRun } =
+            await import("../../lib/assistantTurnRuns.js");
+        let releaseSave!: () => void;
+        dbControl.assistantInsertGate = new Promise<void>((resolve) => {
+            releaseSave = resolve;
+        });
+        runLLMStream.mockResolvedValue({
+            fullText: "Done",
+            events: [
+                {
+                    type: "doc_edited",
+                    filename: "Lease.docx",
+                    document_id: "doc-1",
+                    version_id: "ver-2",
+                    version_number: 2,
+                    download_url: "",
+                    annotations: [],
+                },
+                { type: "content", text: "Done" },
+            ],
+            citations: [],
+        });
+        const response = request(app)
+            .post("/projects/p1/chat")
+            .set("Authorization", "Bearer test")
+            .send(VALID_BODY)
+            .then((res) => res);
+        await vi.waitFor(() => {
+            expect(
+                dbInserts.some(
+                    ({ table, value }) =>
+                        table === "chat_messages" &&
+                        (value as { role?: string }).role === "assistant",
+                ),
+            ).toBe(true);
+        });
+        getAssistantTurnRun(getActiveAssistantTurn("chat-1")!.id)!.stop();
+        releaseSave();
+        expect((await response).text).toContain('"type":"cancelled"');
+
+        const jobs = dbInserts.filter(({ table }) => table === "db_jobs");
+        expect(jobs).toHaveLength(1);
+        const { base, events } = (
+            jobs[0].value as { payload: { base: ChatTurnAuditBase; events: unknown[] } }
+        ).payload;
+        expect(chatTurnAuditEvents(base, events)).toEqual([
+            expect.objectContaining({ action: "chat.message", status: "cancelled" }),
+            expect.objectContaining({ action: "document.edited", documentId: "doc-1" }),
+        ]);
+    });
 
     it("ends a turn stopped during an insert that then fails as stopped, not as a save error", async () => {
             const { getAssistantTurnRun } =
