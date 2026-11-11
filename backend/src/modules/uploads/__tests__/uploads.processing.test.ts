@@ -527,23 +527,52 @@ describe("upload processing", () => {
     expect(mocks.copyFile).not.toHaveBeenCalled();
   });
 
-  it("acquires parser admission before loading sealed bytes and releases it after failure", async () => {
+  it("waits for a parser another file holds, without loading sealed bytes, then validates", async () => {
     const bytes = await minimalDocxBytes();
     mocks.createFileReadStream.mockImplementation(() => Readable.from([bytes]));
     const file = { ...baseFile, file_type: "docx", expected_size_bytes: bytes.length };
+    // Another file's parse holds the single slot when this upload arrives.
     let release!: () => void;
     const held = withExtractionSlot({}, () => new Promise<void>((resolve) => { release = resolve; }));
-    try {
-      const db = fakeDb();
-      await expect(processUploadFile(db as never, baseSession, file)).rejects.toMatchObject({ code: "processing_failed", cause: expect.any(ExtractionBusyError) });
-      expect(readFile).not.toHaveBeenCalled();
-      expect(db.from).not.toHaveBeenCalled();
-      expect(mocks.copyFile).not.toHaveBeenCalled();
-    } finally { release(); await held; }
     const db = fakeDb({ documents: [{ data: { id: file.resource_id } }] });
-    await expect(processUploadFile(db as never, baseSession, file)).resolves.toMatchObject({ id: file.resource_id });
+    const upload = processUploadFile(db as never, baseSession, file);
+    const settled = vi.fn();
+    void upload.then(settled, settled);
+    await vi.waitFor(() => expect(mocks.createFileReadStream).toHaveBeenCalled());
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(settled).not.toHaveBeenCalled();
+    expect(readFile).not.toHaveBeenCalled();
+    release();
+    await held;
+    await expect(upload).resolves.toMatchObject({ id: file.resource_id });
     expect(readFile).toHaveBeenCalledOnce();
     expect(mocks.copyFile).toHaveBeenCalledOnce();
+  });
+
+  it("requeues a DOCX the parser stayed too busy for without spending an attempt or reporting", async () => {
+    const parse = vi.spyOn(EXTRACTION_OPS, "validateDocxPackage").mockRejectedValueOnce(new ExtractionBusyError());
+    const bytes = await minimalDocxBytes();
+    mocks.createFileReadStream.mockImplementation(() => Readable.from([bytes]));
+    const file = { ...baseFile, file_type: "docx", expected_size_bytes: bytes.length };
+    const job = { id: "job-1", session_id: baseSession.id, file_id: file.id, attempts: 2, locked_by: "worker-1" };
+    const db = fakeDb({
+      upload_processing_jobs: Array.from({ length: 4 }, () => ({ data: job })),
+      upload_sessions: [{ data: baseSession }],
+      upload_session_files: [{ data: file }],
+    });
+    try {
+      await processUploadJob(db as never, job.id, "worker-1");
+    } finally { parse.mockRestore(); }
+    expect(db.calls).toContainEqual(expect.objectContaining({
+      table: "upload_processing_jobs",
+      payload: expect.objectContaining({ status: "queued", attempts: 1 }),
+    }));
+    expect(db.calls).toContainEqual(expect.objectContaining({
+      table: "upload_session_files", payload: expect.objectContaining({ status: "uploaded" }),
+    }));
+    expect(db.calls.some((call) => (call.payload as { status?: string })?.status === "error")).toBe(false);
+    expect(mocks.reportError).not.toHaveBeenCalled();
+    expect(mocks.copyFile).not.toHaveBeenCalled();
   });
 
   it.each([
@@ -551,7 +580,6 @@ describe("upload processing", () => {
     ["deadline", new ExtractionLimitError("parser deadline exceeded"), "document_too_large", false],
     ["memory", new ExtractionLimitError("parser memory budget exceeded"), "document_too_large", false],
     ["off-mode allocation", new RangeError("Array buffer allocation failed"), "document_too_large", false],
-    ["busy", new ExtractionBusyError(), "processing_failed", true],
     ["unexpected child exit", new Error("extraction process exited without a result"), "processing_failed", true],
   ] as const)("classifies DOCX %s without destination mutations", async (_label, error, code, retry) => {
     const parse = vi.spyOn(EXTRACTION_OPS, "validateDocxPackage");
