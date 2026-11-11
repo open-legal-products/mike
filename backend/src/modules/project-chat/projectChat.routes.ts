@@ -16,7 +16,7 @@ import { randomUUID } from "node:crypto";
 import { requireAuth } from "../../middleware/auth";
 import { asyncRoute, routerErrorHandler } from "../../middleware/asyncRoute";
 import { createServerSupabase } from "../../lib/supabase";
-import { enqueueChatTurnAudit } from "../../lib/audit";
+import { enqueueChatTurnAudit, stoppedTurnAuditStatus } from "../../lib/audit";
 import { setOperation } from "../../lib/observability/sentry";
 import {
     appendAssistantEventsToMessage,
@@ -434,6 +434,22 @@ projectChatRouter.post("/", requireAuth, asyncRoute(async (req, res) => {
                 console.log("[project-chat/stream] turn stopped", {
                     chatId,
                 });
+                // Same record as the assistant chat's stop path: the turn,
+                // marked stopped, with the documents it changed before it did.
+                void enqueueChatTurnAudit(
+                    db,
+                    {
+                        userId,
+                        orgId,
+                        userEmail,
+                        chatId,
+                        projectId,
+                        title: chatTitle,
+                        model: selectedModel,
+                        status: stoppedTurnAuditStatus(run?.stopReason),
+                    },
+                    err instanceof AssistantStreamError ? err.events : null,
+                );
                 if (err instanceof AssistantStreamError) {
                     const partial = buildStoppedAssistantMessage({
                         stopReason: run?.stopReason,

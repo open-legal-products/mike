@@ -19,7 +19,7 @@ import { randomUUID } from "node:crypto";
 import { requireAuth } from "../../middleware/auth";
 import { asyncRoute, routerErrorHandler } from "../../middleware/asyncRoute";
 import { createServerSupabase } from "../../lib/supabase";
-import { enqueueChatTurnAudit } from "../../lib/audit";
+import { enqueueChatTurnAudit, stoppedTurnAuditStatus } from "../../lib/audit";
 import {
     appendAssistantEventsToMessage,
     AssistantStreamError,
@@ -967,19 +967,22 @@ chatRouter.post("/", requireAuth, asyncRoute(async (req, res) => {
             }
             if (isAbortError(err)) {
                 devLog("[chat/stream] turn stopped", { chatId });
+                // The events the turn finished before it stopped: a document
+                // it edited or created has a new version even though the turn
+                // did not complete, so its audit row is written all the same.
                 void enqueueChatTurnAudit(
                     db,
                     {
                         userId,
-                    orgId,
+                        orgId,
                         userEmail,
                         chatId,
                         projectId: resolvedProjectId,
                         title: chatTitle,
                         model: selectedModel,
-                        status: run?.stopReason && run.stopReason !== "user" ? "failed" : "cancelled",
+                        status: stoppedTurnAuditStatus(run?.stopReason),
                     },
-                    null,
+                    err instanceof AssistantStreamError ? err.events : null,
                 );
                 if (err instanceof AssistantStreamError) {
                     const partial = buildStoppedAssistantMessage({

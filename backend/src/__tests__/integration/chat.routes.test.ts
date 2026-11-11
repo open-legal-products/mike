@@ -439,6 +439,7 @@ vi.mock("../../lib/llm", async (importOriginal) => {
 
 import { app } from "../../app";
 import { resetAssistantTurnRunsForTests } from "../../lib/assistantTurnRuns";
+import { chatTurnAuditEvents, type ChatTurnAuditBase } from "../../lib/audit";
 import { createServerSupabase } from "../../lib/supabase";
 import { DEFAULT_WEB_SEARCH_SETTINGS } from "../../lib/webSearch";
 
@@ -3783,6 +3784,41 @@ describe("server-owned turns: resume, stop, concurrency", () => {
                 expect(scheduleMemoryConsolidation).not.toHaveBeenCalled();
             },
         );
+
+        it("audits a document the stopped turn edited once, with the turn marked cancelled", async () => {
+            const { getAssistantTurnRun } =
+                await import("../../lib/assistantTurnRuns.js");
+            runLLMStream.mockResolvedValue({
+                ...answer,
+                events: [
+                    {
+                        type: "doc_edited",
+                        filename: "Lease.docx",
+                        document_id: "doc-1",
+                        version_id: "ver-2",
+                        version_number: 2,
+                        download_url: "",
+                        annotations: [],
+                    },
+                    ...answer.events,
+                ],
+            });
+            const { response, id } = await turnInSave();
+
+            getAssistantTurnRun(id)!.stop();
+            releaseSave();
+            expect((await response).text).toContain('"type":"cancelled"');
+
+            const jobs = dbInserts.filter(({ table }) => table === "db_jobs");
+            expect(jobs).toHaveLength(1);
+            const { base, events } = (
+                jobs[0].value as { payload: { base: ChatTurnAuditBase; events: unknown[] } }
+            ).payload;
+            expect(chatTurnAuditEvents(base, events)).toEqual([
+                expect.objectContaining({ action: "chat.message", status: "cancelled" }),
+                expect.objectContaining({ action: "document.edited", documentId: "doc-1" }),
+            ]);
+        });
 
         it("ends a turn stopped during a save that then fails as stopped, not as a save error", async () => {
             const { getAssistantTurnRun } =
