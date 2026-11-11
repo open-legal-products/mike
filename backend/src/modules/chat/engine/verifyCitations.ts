@@ -1,5 +1,5 @@
 import type { QuoteVerification } from "./types";
-import { normalizeWithMap } from "./tools/documentOps";
+import { normalizeWithMap, type NormalizeOptions } from "./tools/documentOps";
 
 // Mirrors the frontend: cross-page quotes join two page segments with this
 // sentinel (see expandDocumentQuoteEntry in
@@ -29,12 +29,35 @@ type QuoteVerificationResult = QuoteVerification & {
   needs_correction: boolean;
 };
 
+// Tiers 2 and 3: whitespace + case, then also punctuation-tolerant.
+const CHEAP_TIERS: NormalizeOptions[] = [{}, { stripPunctuation: true }];
+// Tier 4: words hyphenated at a line end in the extracted text ("indem-",
+// newline, "nification"), quoted joined. Tried, and indexed, only after the
+// cheap tiers miss, and only for a source that has a line-end hyphen at all.
+const LINE_END_HYPHEN_TIERS: NormalizeOptions[] = [
+  { joinLineEndHyphens: "keep" },
+  { joinLineEndHyphens: "drop" },
+  { stripPunctuation: true, joinLineEndHyphens: "drop" },
+];
+const MAY_HAVE_LINE_END_HYPHEN = /[-\u2010\u2011\u00ad][^\S\n\r]*[\n\r]/;
+
+// Cached indexes are keyed by EVERY option: an index built with one join mode
+// served to another tier would match text that tier is meant to reject.
+const optionsKey = (opts: NormalizeOptions) =>
+  `${opts.stripPunctuation ? "strip" : "punct"}/${opts.joinLineEndHyphens ?? "nojoin"}`;
+
 type QuoteSource = {
   source: string;
-  normalized: Map<boolean, ReturnType<typeof normalizeWithMap>>;
+  normalized: Map<string, ReturnType<typeof normalizeWithMap>>;
   needles: Map<string, string>;
+  mayHaveLineEndHyphen?: boolean;
 };
 const prepareSource = (source: string): QuoteSource => ({ source, normalized: new Map(), needles: new Map() });
+
+function lineEndHyphenTiers(prepared: QuoteSource): NormalizeOptions[] {
+  prepared.mayHaveLineEndHyphen ??= MAY_HAVE_LINE_END_HYPHEN.test(prepared.source);
+  return prepared.mayHaveLineEndHyphen ? LINE_END_HYPHEN_TIERS : [];
+}
 
 /** Request-local reuse: text changes create a new index; nothing crosses users or turns. */
 export function createQuoteVerifier(source: string) {
@@ -85,6 +108,7 @@ function verifierCache() {
  *   1. exact substring
  *   2. whitespace + case normalized
  *   3. whitespace + case + punctuation normalized (tolerant/fuzzy)
+ *   4. as 2 and 3, with words hyphenated at a line end joined
  * Offsets index into the EXTRACTED source text, not the raw file bytes.
  */
 export function locateQuote(
@@ -100,12 +124,16 @@ export function locateQuote(
     return { start: exactIdx, end: exactIdx + quote.length, excerpt: quote };
   }
 
-  // Tier 2: whitespace + case. Tier 3: also punctuation-tolerant.
-  return (
-    locateNormalized(prepared, quote, false) ??
-    locateNormalized(prepared, quote, true)
-  );
+  for (const opts of [...CHEAP_TIERS, ...lineEndHyphenTiers(prepared)]) {
+    const location = locateNormalized(prepared, quote, opts);
+    if (location) return location;
+  }
+  return null;
 }
+
+const earliest = (locations: (QuoteLocation | null)[]) =>
+  locations.reduce<QuoteLocation | null>((first, candidate) =>
+    candidate && (!first || candidate.start < first.start) ? candidate : first, null);
 
 /** Locate a quote at or after `from`, preserving offsets into `source`. */
 function locateQuoteFrom(
@@ -116,15 +144,11 @@ function locateQuoteFrom(
   const { source } = prepared;
   if (from >= source.length) return null;
   const offset = Math.max(0, from);
-  const candidates: QuoteLocation[] = [];
   const exactIndex = source.indexOf(quote, offset);
-  if (exactIndex >= 0) candidates.push({ start: exactIndex, end: exactIndex + quote.length, excerpt: quote });
-  const normalized = locateNormalized(prepared, quote, false, offset);
-  if (normalized) candidates.push(normalized);
-  const punctuationTolerant = locateNormalized(prepared, quote, true, offset);
-  if (punctuationTolerant) candidates.push(punctuationTolerant);
-  return candidates.reduce<QuoteLocation | null>((earliest, candidate) =>
-    !earliest || candidate.start < earliest.start ? candidate : earliest, null);
+  const exact = exactIndex >= 0 ? { start: exactIndex, end: exactIndex + quote.length, excerpt: quote } : null;
+  const at = (opts: NormalizeOptions) => locateNormalized(prepared, quote, opts, offset);
+  // Line-end hyphen indexes are built only when no cheap tier matches.
+  return earliest([exact, ...CHEAP_TIERS.map(at)]) ?? earliest(lineEndHyphenTiers(prepared).map(at));
 }
 
 /**
@@ -169,19 +193,20 @@ function locateSegmentsInOrder(
 function locateNormalized(
   prepared: QuoteSource,
   quote: string,
-  stripPunctuation: boolean,
+  opts: NormalizeOptions,
   from = 0,
 ): QuoteLocation | null {
-  let normalized = prepared.normalized.get(stripPunctuation);
+  const tier = optionsKey(opts);
+  let normalized = prepared.normalized.get(tier);
   if (!normalized) {
-    normalized = normalizeWithMap(prepared.source, { stripPunctuation });
-    prepared.normalized.set(stripPunctuation, normalized);
+    normalized = normalizeWithMap(prepared.source, opts);
+    prepared.normalized.set(tier, normalized);
   }
   const { norm, origIdx } = normalized;
-  const key = `${stripPunctuation}:${quote}`;
+  const key = `${tier}:${quote}`;
   let needle = prepared.needles.get(key);
   if (needle === undefined) {
-    needle = normalizeWithMap(quote, { stripPunctuation }).norm.trim();
+    needle = normalizeWithMap(quote, opts).norm.trim();
     prepared.needles.set(key, needle);
   }
   if (!needle) return null;
