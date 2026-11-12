@@ -1,5 +1,13 @@
 import { afterEach, expect, it } from "vitest";
 import * as Sentry from "@sentry/node";
+import { streamAiSdk } from "../llm/aiSdk";
+import {
+  AssistantStreamAskInputsPause,
+  callStep,
+  config,
+  makeModel,
+  TOOLS,
+} from "../llm/__tests__/mockLanguageModel";
 import { parseTextToolCalls } from "../llm/toolCallParsing";
 import { resetSentryForTests, scrubEvent } from "./sentry";
 
@@ -50,4 +58,52 @@ it("drops logged model bodies and positional content from real console envelopes
     if (previous === undefined) delete process.env.DEBUG_LLM_TOOL_CALLS;
     else process.env.DEBUG_LLM_TOOL_CALLS = previous;
   }
+});
+
+it("drops the Vercel AI integration's own capture of a tool error (MIKE-BACKEND-5N, -3Q)", async () => {
+  // The real integration, not a hand-written mechanism string: @sentry 11.10
+  // renamed it from auto.vercelai.channel to auto.ai.vercelai, and the drop
+  // silently stopped matching.
+  const captured: Sentry.ErrorEvent[] = [];
+  const sent: Sentry.Event[] = [];
+  resetSentryForTests("community");
+  Sentry.init({
+    dsn: "https://test@sentry.invalid/1",
+    defaultIntegrations: false,
+    integrations: [Sentry.vercelAIIntegration()],
+    beforeSend: (event, hint) => {
+      captured.push(event);
+      return scrubEvent(event, hint);
+    },
+    transport: () => ({
+      send: async (envelope) => {
+        for (const [header, payload] of envelope[1]) {
+          if (header.type === "event") sent.push(payload as Sentry.Event);
+        }
+        return { statusCode: 200 };
+      },
+      flush: async () => true,
+    }),
+  });
+  const pause = new AssistantStreamAskInputsPause();
+  const model = await makeModel([callStep("c1", "read_document", { doc_id: "d" })]);
+  await expect(
+    streamAiSdk(
+      {
+        model: "m",
+        systemPrompt: "S",
+        messages: [{ role: "user", content: "go" }],
+        tools: TOOLS,
+        runTools: async () => {
+          throw pause;
+        },
+      },
+      config(model),
+    ),
+  ).rejects.toBe(pause);
+  expect(await Sentry.flush(2000)).toBe(true);
+  // The integration did file the pause as unhandled...
+  expect(captured.map((event) => event.exception?.values?.[0]?.mechanism?.handled)).toEqual([false]);
+  // ...and that copy never leaves the process.
+  expect(sent).toEqual([]);
 });

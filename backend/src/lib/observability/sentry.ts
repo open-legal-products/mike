@@ -47,8 +47,11 @@ const CONSOLE_MECHANISM = "auto.core.capture_console";
  * typed, by its owner (chat-stream's `reportError`, the job runner for the
  * memory curator), and the ask_inputs / approval pause is control flow that
  * travels the same `tool-error` path and is not a failure at all.
+ * @sentry 11.10 renamed the mechanism from `auto.vercelai.channel` to
+ * `auto.ai.vercelai`; match both, and let sentry.transport.test.ts catch the
+ * next rename against the real integration.
  */
-const VERCEL_AI_TOOL_ERROR_MECHANISM = "auto.vercelai.channel";
+const VERCEL_AI_TOOL_ERROR_MECHANISM = /^auto\.(?:ai\.)?vercelai(?:\.|$)/;
 const NESTED_SEARCH_DEPTH = 2;
 
 /**
@@ -767,7 +770,7 @@ export function scrubEvent(
   }
   // handled:false made these read as unhandled rejections (MIKE-BACKEND-4,
   // -3Q, -5N, -7D, -1K); see VERCEL_AI_TOOL_ERROR_MECHANISM.
-  if (mechanism === VERCEL_AI_TOOL_ERROR_MECHANISM) {
+  if (mechanism && VERCEL_AI_TOOL_ERROR_MECHANISM.test(mechanism)) {
     return null;
   }
 
