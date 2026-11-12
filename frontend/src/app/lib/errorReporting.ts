@@ -1,21 +1,26 @@
+import { BACKEND_REPORTING_OWNER } from "@mike/client";
 /**
  * Error reporting for the web app: a thin, testable layer over the Sentry
  * SDK. Application code calls these helpers instead of `@sentry/nextjs`
- * directly so the PII policy (see `@/shared/lib/sentryEvent`) and the
+ * directly so the PII policy (see `@mike/client`'s sentryEvent) and the
  * explicit opt-out rule live in one place.
  */
 
 import * as Sentry from "@sentry/nextjs";
-import { privacyBoundaryIntegration, type Operation } from "@/shared/lib/sentryPrivacy";
 import {
+    privacyBoundaryIntegration,
+    eventBudget,
+    eventBudgetLimits,
+    type Operation,
     MIKE_SENTRY_DSN,
     createEventScrubber,
+    sentryEnvironment,
     installKind,
     normalizeApiPath,
     parseSampleRate,
     releaseName,
     resolveDsn,
-} from "@/shared/lib/sentryEvent";
+} from "@mike/client";
 
 export type ReportLevel = "fatal" | "error" | "warning";
 
@@ -84,11 +89,14 @@ export function markErrorHandled(error: unknown): void {
 }
 
 /**
- * A backend 5xx seen from the browser. The request id is the same one the
- * backend attached to its own event, so the two sides of one failure can be
- * matched in Sentry by searching `request_id:<id>`.
+ * A backend 5xx seen from the browser, reported immediately with the
+ * operation known by its caller. The request id is the same one the backend
+ * attached to its own event, so the two sides of one failure can be matched
+ * in Sentry by searching `request_id:<id>`.
+ *
+ * Same rule as the Word add-in: only an explicit backend ownership marker
+ * suppresses a duplicate. Codes and statuses alone do not prove ownership.
  */
-/** Report an API failure immediately with the operation known by its caller. */
 export function reportApiFailure(failure: {
     path: string;
     status: number;
@@ -97,9 +105,11 @@ export function reportApiFailure(failure: {
     method?: string;
     operation?: Operation;
     error?: unknown;
+    reportingOwner?: typeof BACKEND_REPORTING_OWNER;
 }): string | null {
     if (isReported(failure.error)) return null;
     markReported(failure.error);
+    if (failure.reportingOwner === BACKEND_REPORTING_OWNER) return null;
     if (!Sentry.isEnabled()) return null;
     const route = normalizeApiPath(failure.path);
     const method = failure.method ?? "GET";
@@ -118,7 +128,9 @@ export function reportApiFailure(failure: {
             },
             fingerprint: ["api-5xx", method, route, String(failure.status)],
         });
-        return Sentry.captureMessage(`API ${failure.status} on ${method} ${route}`, "error");
+        return failure.error instanceof Error
+            ? Sentry.captureException(failure.error)
+            : Sentry.captureMessage(`API ${failure.status} on ${method} ${route}`, "error");
     });
 }
 
@@ -329,7 +341,7 @@ export function browserSentryOptions(env: {
         // initialize so a runtime override can enable a baked-off image.
         dsn: MIKE_SENTRY_DSN.frontend,
         enabled: true,
-        environment: env.environment?.trim() || "self-hosted",
+        environment: sentryEnvironment(env.environment, env.nodeEnv === "development"),
         release: releaseName(env.release, env.version, env.gitSha),
         // Every browser envelope goes through the Next server (see
         // app/monitoring/route.ts), which applies the deployment's runtime
@@ -370,7 +382,7 @@ export function browserSentryOptions(env: {
 export type ReportingDestination = {
     /** Empty when reporting is off. */
     dsn: string;
-    source: "disabled" | "runtime" | "build" | "default";
+    source: "disabled" | "runtime" | "build" | "default" | "development";
     /** For `source: "disabled"`: which variable switched reporting off. */
     disabledBy?: "runtime" | "build";
     /** Runtime overrides for every report; absent means "as built". */
@@ -400,7 +412,7 @@ export function reportingDestination(env: NodeJS.ProcessEnv): ReportingDestinati
         ...(env.SENTRY_INSTALL?.trim() ? { install: installKind(env.SENTRY_INSTALL) } : {}),
     };
     // An explicit runtime value (true or false) wins over the image's baked
-    // default; the shipped .env sets SENTRY_DISABLED=false deliberately.
+    // default; the sample .env leaves it empty to preserve that default.
     const runtimeDisabled = env.SENTRY_DISABLED?.trim();
     const runtimeDsn = env.SENTRY_DSN?.trim();
     const buildDsn = env.NEXT_PUBLIC_SENTRY_DSN?.trim();
@@ -410,7 +422,13 @@ export function reportingDestination(env: NodeJS.ProcessEnv): ReportingDestinati
         disabled: runtimeDisabled || env.NEXT_PUBLIC_SENTRY_DISABLED?.trim(),
         dsn: runtimeDsn || buildDsn,
         fallback: MIKE_SENTRY_DSN.frontend,
+        // `next dev` runs with NODE_ENV=development; `next build`/`next
+        // start` (every image) with production.
+        development: env.NODE_ENV === "development",
     });
+    if (resolved.source === "development") {
+        return { dsn: "", source: "development", ...overrides };
+    }
     if (resolved.source === "disabled") {
         return {
             dsn: "",
@@ -439,6 +457,8 @@ export function describeReportingDestination(destination: ReportingDestination):
             return destination.disabledBy === "runtime"
                 ? "[sentry] web app reports: off (SENTRY_DISABLED=true at runtime), browser included"
                 : "[sentry] web app reports: off (NEXT_PUBLIC_SENTRY_DISABLED=true baked at build; set SENTRY_DISABLED=false to override), browser included";
+        case "development":
+            return "[sentry] web app reports: off (development build; set SENTRY_DSN to report to your own project), browser included";
         case "runtime":
             return `[sentry] web app reports → SENTRY_DSN project ${project} (runtime), browser included`;
         case "build":
@@ -457,8 +477,8 @@ export function serverSentryOptions(
     return {
         dsn: dsn || undefined,
         enabled: dsn.length > 0,
-        environment: env.SENTRY_ENVIRONMENT?.trim() || "self-hosted",
-        integrations: [privacyBoundaryIntegration()],
+        environment: sentryEnvironment(env.SENTRY_ENVIRONMENT, env.NODE_ENV === "development"),
+        integrations: [privacyBoundaryIntegration({ acceptEvent: eventBudget(eventBudgetLimits(env.SENTRY_MAX_REPEAT_EVENTS_PER_DAY, dsn, Object.values(MIKE_SENTRY_DSN))) })],
         release: releaseName(env.SENTRY_RELEASE, env.MIKE_VERSION, env.GIT_SHA),
         tracesSampleRate: parseSampleRate(env.SENTRY_TRACES_SAMPLE_RATE, 0),
         dataCollection: {

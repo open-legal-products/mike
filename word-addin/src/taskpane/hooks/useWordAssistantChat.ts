@@ -1,3 +1,5 @@
+import { BACKEND_REPORTING_OWNER } from "@mike/client";
+import { createRedlineStreamProjector } from "../lib/redline";
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import {
   resumeAssistant,
@@ -7,7 +9,7 @@ import {
   type WordClientToolCall,
   type WordTurnHandlers,
 } from "../api/stream";
-import { reportError } from "../lib/errorReporting";
+import { isReported, reportError } from "../lib/errorReporting";
 import { postWordChatToolResult, stopWordChatTurn } from "../api/mikeApi";
 import { useWordDoc } from "./useWordDoc";
 import type {
@@ -406,6 +408,7 @@ export function useWordAssistantChat({
         if (!requestIsCurrent()) return;
 
         let streamedContent = "";
+        const redlineProjector = createRedlineStreamProjector();
         let assistantCitations: SavedMessage["citations"];
         // Canonical rows for this turn's tool-proposed edits. A live turn
         // learns an edit exists when the call is forwarded, long before the
@@ -451,6 +454,7 @@ export function useWordAssistantChat({
                 messageId,
                 streamedContent,
                 assistantMessageHasStableId,
+                redlineProjector.projection,
               );
             }
           }
@@ -806,6 +810,7 @@ export function useWordAssistantChat({
           const onStreamText = (chunk: string): void => {
               if (!requestIsCurrent()) return;
               streamedContent += chunk;
+              redlineProjector.append(chunk);
               assistantEvents = appendAssistantContent(assistantEvents, chunk);
               redlineParsePending = true;
               publishAssistantEvents();
@@ -895,6 +900,7 @@ export function useWordAssistantChat({
               assistantMessageId,
               streamedContent,
               assistantMessageHasStableId,
+              redlineProjector.projection,
             );
             // A malformed block (e.g. no usable replacement or format) never
             // seals; settle its card on "incomplete" rather than leaving the
@@ -942,7 +948,7 @@ export function useWordAssistantChat({
           // state below always builds on the latest transcript.
           publishAssistantEventsNow();
           const sessionIsCurrent = sendIsCurrent();
-          if (!controller.signal.aborted && !(error instanceof WordChatTerminalError && error.reportingOwner === "backend")) {
+          if (!controller.signal.aborted && !isReported(error) && !(error instanceof WordChatTerminalError && error.reportingOwner === BACKEND_REPORTING_OWNER)) {
             // The stream failed for a reason other than the user stopping
             // it. The 5xx/network layers already reported transport-level
             // failures; this is the only report for mid-stream `error`

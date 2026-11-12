@@ -21,7 +21,6 @@ on:
     branches: [main]
     paths:
       - "word-addin/**"
-      - "frontend/src/shared/**"
       - "frontend/public/icons/**"
       - "packages/**"
       - ".github/workflows/word-addin.yml"
@@ -31,6 +30,10 @@ on:
   # 03:47 so the two stress suites don't compete for runners.
   schedule:
     - cron: "17 4 * * *"
+
+permissions:
+  contents: read
+
 
 # Don't pile up runs on rapid pushes to the same PR; pushes to main each get
 # their own group (keyed by sha) and are never cancelled.
@@ -106,6 +109,11 @@ jobs:
       # Covers both the app bundle (tsconfig.json) and the e2e suite +
       # playwright.config.ts (tsconfig.e2e.json).
       - run: npm run typecheck
+
+      # server.mjs is the production host (word-addin/Dockerfile); the
+      # Playwright suite serves dist/ with a different static server, so its
+      # headers and proxy are only covered here.
+      - run: npm run test:server
 
       # Both engines: webkit is the browser the assertions were written for
       # (see header), chromium guards the honours-overflow-anchor path.

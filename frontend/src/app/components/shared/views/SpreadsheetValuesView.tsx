@@ -6,8 +6,7 @@ import { getSpreadsheetValuesPreview, getSpreadsheetValuesSource } from "@/app/l
 import { downloadBlob } from "@/app/lib/downloadDocument";
 import { notifyError, UserVisibleError, type UserFacingError } from "@/app/lib/userFacingError";
 import { EmptyState } from "@/app/components/ui/empty-state";
-import { PillButtonUI } from "@/shared/ui/PillButtonUI";
-import { Dropdown, DropdownContent, DropdownRadioGroup, DropdownRadioItem, DropdownTrigger } from "@/shared/ui/dropdown";
+import { PillButtonUI, Dropdown, DropdownContent, DropdownRadioGroup, DropdownRadioItem, DropdownTrigger } from "@mike/ui";
 
 export type ValuesHighlight = { sheet?: string; row: [number, number]; column: [number, number] };
 type Props = {

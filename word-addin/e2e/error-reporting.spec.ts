@@ -59,7 +59,7 @@ function tagsOf(event: Record<string, unknown>): Record<string, unknown> {
   return (event.tags ?? {}) as Record<string, unknown>;
 }
 
-test("a backend 5xx is reported with the operation, route, status, and request id but no body", async ({
+test("an unowned backend 5xx preserves its exception, operation, route, status, and request id but no body", async ({
   addin,
   page,
 }) => {
@@ -73,7 +73,7 @@ test("a backend 5xx is reported with the operation, route, status, and request i
       headers: { "x-request-id": "8f1c2a3e-1234-4bcd-9e0f-1234567890ab" },
       body: JSON.stringify({
         code: "internal_error",
-        detail: "Something went wrong. Please try again.",
+        detail: "PRIVATE_SERVER_DETAIL",
         request_id: "8f1c2a3e-1234-4bcd-9e0f-1234567890ab",
       }),
     }),
@@ -86,7 +86,10 @@ test("a backend 5xx is reported with the operation, route, status, and request i
   await page.getByRole("menuitem", { name: "Workflows" }).click();
 
   const event = await nextEvent;
-  expect(event.message).toBe("Failure in workflows.run / mike-api / GET / /workflows / 500 / internal_error");
+  const exception = (event.exception as { values: { value: string; stacktrace: { frames: unknown[] } }[] }).values[0]!;
+  expect(exception.value).toContain("Failure in workflows.run / mike-api");
+  expect(exception.stacktrace.frames.length).toBeGreaterThan(0);
+  expect(JSON.stringify(event)).not.toContain("PRIVATE_SERVER_DETAIL");
   expect(event.level).toBe("error");
   expect(tagsOf(event)).toMatchObject({
     service: "mike-word-addin",
@@ -107,6 +110,43 @@ test("a backend 5xx is reported with the operation, route, status, and request i
   expect(JSON.stringify(event)).not.toContain("e2e@mike.local");
   expect(event).not.toHaveProperty("request.data");
   expect(event).not.toHaveProperty("request.cookies");
+});
+
+test.describe("5xx ownership is explicit, never inferred from a recognized code", () => {
+  for (const code of ["upstream_unavailable", "schema_out_of_date"]) {
+    for (const owned of [true, false]) {
+      test(`${code}: ${owned ? "server owned" : "unowned"}`, async ({ addin, page }) => {
+        const sentry = captureEvents(page);
+        await sentry.ready;
+        addin.seedToken("seeded-jwt");
+        let answered = false;
+        await page.route("**/workflows**", (route) => {
+          answered = true;
+          return route.fulfill({
+            status: 503,
+            contentType: "application/json",
+            body: JSON.stringify({ code, detail: "PRIVATE_SERVER_DETAIL", ...(owned ? { reporting_owner: "backend" } : {}) }),
+          });
+        });
+        await addin.gotoTaskpane();
+        await addin.expectAuthedShell();
+
+        const nextEvent = owned ? null : sentry.next();
+        await page.getByRole("button", { name: "Open menu" }).click();
+        await page.getByRole("menuitem", { name: "Workflows" }).click();
+        await expect.poll(() => answered).toBe(true);
+
+        if (nextEvent) {
+          const event = await nextEvent;
+          expect(tagsOf(event)).toMatchObject({ error_code: code, http_status: 503, component: "mike-api" });
+          expect(JSON.stringify(event)).not.toContain("PRIVATE_SERVER_DETAIL");
+        }
+        // Also catch a duplicate from the screen or console bridge.
+        await page.waitForTimeout(500);
+        expect(sentry.events).toHaveLength(owned ? 0 : 1);
+      });
+    }
+  }
 });
 
 test("a transport failure is reported as a warning grouped by endpoint", async ({
@@ -201,4 +241,34 @@ test("a mid-stream chat failure is reported once, tagged as word-chat", async ({
     (candidate) => tagsOf(candidate).component === "word-chat",
   );
   expect(chatEvents).toHaveLength(1);
+});
+
+test("a failed grouped cleanup after Accept all is reported once, never swallowed", async ({
+  addin,
+  page,
+}) => {
+  const sentry = captureEvents(page);
+  await sentry.ready;
+  addin.seedToken("seeded-jwt");
+  const originals = Array.from({ length: 4 }, (_, i) => `Recital ${i} text`);
+  await addin.mockChatStream(
+    [`<EDITS>${JSON.stringify(originals.map((original, i) => ({ type: "edit_data", kind: "edit", deleted_text: original, inserted_text: `Recital ${i}` })))}</EDITS>`],
+    { chatId: "chat-cleanup", assistantMessageId: "assistant-cleanup" },
+  );
+  // Word rejects the first batch that untracks the applied edits' proxies.
+  await addin.gotoTaskpane({ documentText: originals.join(".\n"), untrackSyncFailures: 1 });
+  await addin.expectAuthedShell();
+  await page.getByTestId("edit-apply-toggle").click();
+  await page.getByRole("menuitem", { name: /Edit/ }).click();
+  await page.getByPlaceholder("How can I help?").fill("Shorten the recitals");
+  await page.getByRole("button", { name: "Send" }).click();
+  await expect(page.getByRole("button", { name: "Accept", exact: true })).toHaveCount(4);
+  await page.getByRole("button", { name: "Accept all", exact: true }).click();
+  // The document decision stands; only the proxy release failed.
+  await expect(page.getByText("Accepted.", { exact: true })).toHaveCount(4);
+  const cleanupLevels = () =>
+    sentry.events.filter((event) => tagsOf(event).stage === "resolve-cleanup").map((event) => event.level);
+  await expect.poll(cleanupLevels).toEqual(["warning"]);
+  await page.waitForTimeout(500);
+  expect(cleanupLevels()).toEqual(["warning"]);
 });

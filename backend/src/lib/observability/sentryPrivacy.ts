@@ -1,6 +1,6 @@
 /**
  * Final outbound boundary, after SDK processors and before transport serialization.
- * Mirrored in frontend/src/shared/lib/sentryPrivacy.ts; the sync test guards drift.
+ * Mirrored in packages/client/src/sentryPrivacy.ts; the sync test guards drift.
  * Never infer whether arbitrary text is PII. Rebuild diagnostic events from an
  * allowlist and reject every other envelope item, including automatic sessions.
  */
@@ -9,6 +9,9 @@ type Envelope = [RecordValue, Array<[{ type: string; [key: string]: unknown }, u
 interface Transport {
   send(envelope: Envelope): PromiseLike<unknown>;
 }
+
+// Fixed SDK codes identify warnings without transmitting provider text.
+const SDK_WARNING_CODES = new Set('AISDK_DEP_GENERATE_OBJECT AISDK_DEP_STREAM_OBJECT AISDK_DEP_EXPERIMENTAL_GENERATE_SPEECH AISDK_DEP_EXPERIMENTAL_TRANSCRIBE AISDK_DEP_IMAGE_CONTENT_PART AISDK_DEP_TOOL_RESULT_FILE_DATA AISDK_DEP_TOOL_RESULT_FILE_URL AISDK_DEP_TOOL_RESULT_FILE_ID AISDK_DEP_TOOL_RESULT_FILE_REFERENCE AISDK_DEP_TOOL_RESULT_IMAGE_DATA AISDK_DEP_TOOL_RESULT_IMAGE_URL AISDK_DEP_TOOL_RESULT_IMAGE_FILE_ID AISDK_DEP_TOOL_RESULT_IMAGE_FILE_REFERENCE AISDK_DEP_UI_MESSAGE_RAW_INPUT AI_SDK_DEPRECATION AI_SDK_WARNING'.split(' '));
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const HEX_ID = /^[0-9a-f]{16,32}$/i;
@@ -27,7 +30,7 @@ export function isDiagnosticLabel(value: unknown): value is string {
     && /^[a-z][a-z0-9]*(?:[._-][a-z0-9]+)*$/.test(value);
 }
 
-const APPLICATION_TAGS = new Set(['operation', 'error_kind', 'component', 'stage', 'job_kind']);
+const APPLICATION_TAGS = new Set(['operation', 'error_kind', 'component', 'stage', 'job_kind', 'queue']);
 // Only our error constructor may supply a free-form kind. A dependency's
 // arbitrary `kind` property must not become telemetry just because it fits.
 const APPLICATION_KIND = Symbol.for('mike.diagnostic.errorKind');
@@ -45,13 +48,17 @@ export const DIAGNOSTIC_VOCABULARY: Record<string, ReadonlySet<string>> = Object
   surface: 'taskpane commands dialog',
   install: 'community official',
   http_method: 'GET POST PUT PATCH DELETE HEAD OPTIONS',
-  // Every code a server emits (frontend/src/shared/lib/userError.ts CODE_KINDS) plus the client's own two.
+  // Every code a server emits (packages/client/src/userError.ts CODE_KINDS) plus the client's own two.
   error_code: 'internal_error network_error upstream_unavailable schema_out_of_date rate_limited upload_session_control_rate_limit upload_session_poll_rate_limit upload_session_rate_limit_exceeded request_too_large upload_file_too_large upload_batch_too_large validation_failed invalid_request invalid_json password_too_short password_too_long email_address_invalid upload_incomplete missing_api_key model_unavailable model_required authentication_failed session_expired cookie_session_required mfa_verification_required untrusted_origin review_running review_stale memory_revision_conflict upload_target_busy access_inherited ask_inputs_stale',
   capture_source: 'exception console unhandled message',
   diagnostics_version: '2',
   build_mode: 'development production test',
-  failure_code: 'ECONNREFUSED ECONNRESET EADDRINUSE ETIMEDOUT ENOTFOUND EHOSTUNREACH ENETUNREACH EAI_AGAIN ENOENT EACCES EPERM ENOSPC EPIPE ERR_SERVER_NOT_RUNNING UND_ERR_CONNECT_TIMEOUT UND_ERR_HEADERS_TIMEOUT UND_ERR_SOCKET CERT_HAS_EXPIRED DEPTH_ZERO_SELF_SIGNED_CERT AccessDenied InvalidAccessKeyId SignatureDoesNotMatch NoSuchBucket NoSuchKey SlowDown ServiceUnavailable RequestTimeout 23505 23503 23514 22003 22P02 28P01 28000 42P10 42883 42501 42P01 42703 53300 57014 40001 40P01 55P03 53100 53200 57P01 57P03 08001 08003 08006 08P01 PGRST000 PGRST001 PGRST100 PGRST116 PGRST200 PGRST201 PGRST202 PGRST203 PGRST204 PGRST205 configuration_invalid signing_key_invalid conversion_unavailable conversion_timeout conversion_failed fetch_failed',
-  provider_error: 'invalid_api_key api_call retry_exhausted',
+  failure_code: 'ECONNREFUSED ECONNRESET EADDRINUSE ETIMEDOUT ENOTFOUND EHOSTUNREACH ENETUNREACH EAI_AGAIN ENOENT EACCES EPERM ENOSPC EPIPE ERR_SERVER_NOT_RUNNING UND_ERR_CONNECT_TIMEOUT UND_ERR_HEADERS_TIMEOUT UND_ERR_BODY_TIMEOUT UND_ERR_SOCKET CERT_HAS_EXPIRED DEPTH_ZERO_SELF_SIGNED_CERT AccessDenied InvalidAccessKeyId SignatureDoesNotMatch NoSuchBucket NoSuchKey SlowDown ServiceUnavailable RequestTimeout 23505 23503 23514 22003 22P02 28P01 28000 42P10 42883 42501 42P01 42703 53300 57014 40001 40P01 55P03 53100 53200 57P01 57P03 08001 08003 08006 08P01 PGRST000 PGRST001 PGRST100 PGRST116 PGRST200 PGRST201 PGRST202 PGRST203 PGRST204 PGRST205 configuration_invalid signing_key_invalid conversion_unavailable conversion_timeout conversion_failed fetch_failed',
+  provider_error: 'invalid_api_key api_call retry_exhausted stream_provider',
+  // The `error.type` model providers put in an error body (Anthropic, OpenAI and the gateways that copy them).
+  provider_error_type: 'invalid_request_error authentication_error permission_error not_found_error request_too_large rate_limit_error api_error overloaded_error billing_error timeout_error insufficient_quota server_error',
+  // Why a provider refused a request, matched by PROVIDER_REASONS below; never the provider's text.
+  provider_reason: 'prompt_too_long invalid_image invalid_tool_schema',
   network_state: 'online offline unknown',
   request_origin: 'same-origin cross-origin unknown',
   file_type: 'pdf doc docx odt rtf ppt pptx xls xlsx csv txt html',
@@ -61,13 +68,16 @@ export const DIAGNOSTIC_VOCABULARY: Record<string, ReadonlySet<string>> = Object
   office_platform: 'PC Mac OfficeOnline Universal iOS Android',
   storage: 'local cloud',
   storage_operation: 'HEAD copy upload download delete',
+  storage_target: 'loopback mixed_content cross_origin same_origin',
   // Node's own process warnings (reported by the backend's 'warning' listener).
+  warning_emitter: 'EventEmitter Socket TLSSocket ClientRequest ServerResponse AbortSignal Worker Redis',
+  warning_event: 'abort data end error close finish drain readable connect ready timeout',
   warning_name: 'Warning DeprecationWarning ExperimentalWarning MaxListenersExceededWarning TimeoutOverflowWarning TimeoutNegativeWarning UnsupportedWarning',
 }).map(([key, values]) => [key, new Set(values.split(' '))]));
 const ENUMS = DIAGNOSTIC_VOCABULARY;
 const ROUTE_PARTS = new Set(('word-chat orgs single-documents tabular-review quick-actions workflow-addons audit manifest-signing-key api auth login logout refresh session user users projects directory people access memory ids filter-options folder-paths resolve folder documents versions files folders upload uploads upload-sessions parts complete abort content download preview spreadsheet-preview source text conversion chats chat messages stream cancel assistant tabular tabular-reviews reviews rows columns cells run results export workflows playbooks templates library models configured ollama openrouter vercel opencode-go bedrock azure azure-foundry vertex xai custom settings profile organizations members permissions shares keys api-keys health observability sentry-test').split(' '));
 const ID_KEYS = new Set(('request_id requestId document_id documentId file_id fileId job_id jobId review_id reviewId row_id rowId session_id sessionId version_id versionId run_id import_id playbook_id').split(' '));
-const CONFIGURATION_FIELDS = new Set('SUPABASE_URL SUPABASE_PUBLISHABLE_KEY SUPABASE_SECRET_KEY AUTH_HANDOFF_ENCRYPTION_SECRET FRONTEND_URL API_PUBLIC_URL WORD_ADDIN_URL'.split(' '));
+const CONFIGURATION_FIELDS = new Set('SUPABASE_URL SUPABASE_PUBLISHABLE_KEY SUPABASE_SECRET_KEY AUTH_HANDOFF_ENCRYPTION_SECRET USER_API_KEYS_ENCRYPTION_SECRET MCP_CONNECTORS_ENCRYPTION_SECRET FRONTEND_URL API_PUBLIC_URL WORD_ADDIN_URL'.split(' '));
 /** Static exception identifiers are trusted under the source contract, not because of this syntax check. */
 const ERROR_TYPE = /^[A-Z][A-Za-z0-9]{1,60}(?:Error|Warning|Exception)$|^(?:Error|Warning)$/;
 /** A frame's function name as V8 prints it: dotted identifiers, optionally `async`/`new`, `[as x]`, `<anonymous>`. ASCII identifier characters only; a document name has spaces or an extension-like tail that this still admits, so names are kept only for frames in our own files (see framesFor). */
@@ -78,8 +88,23 @@ function isRepositoryFrame(filename: string): boolean {
   return REPOSITORY_FRAME.test(filename) && !filename.split('/').includes('node_modules');
 }
 const LEVELS = new Set('fatal error warning info debug'.split(' '));
+/** Fixed runtime messages of a failed fetch (Node, Chrome, Firefox, Safari). */
+const FETCH_FAILURE_MESSAGES = new Set(['Failed to fetch', 'fetch failed', 'Load failed', 'NetworkError when attempting to fetch resource.']);
 /** Caller fingerprints that replace code-location grouping: one condition, one issue. */
-const PINNED_FINGERPRINTS = new Set(['upstream-unavailable', 'api-unreachable', 'runtime-warning']);
+const PINNED_FINGERPRINTS = new Set(['upstream-unavailable', 'api-unreachable', 'runtime-warning', 'upload-storage-put']);
+
+/**
+ * Fixed reasons for a provider's refusal, matched against its error message
+ * locally. Only the reason name leaves the process; the message never does.
+ * A 400 from Anthropic or OpenAI is otherwise "invalid_request_error" for
+ * every cause, which put a prompt that outgrew the context window, a broken
+ * image and a malformed tool schema in one unexplained issue.
+ */
+const PROVIDER_REASONS: Array<[string, RegExp]> = [
+  ['prompt_too_long', /prompt is too long|context(?:[ _]length|[ _]window)|maximum context|too many (?:input )?tokens|input is too long|exceeds the maximum number of tokens/i],
+  ['invalid_image', /\bimage\b.*\b(?:invalid|could not|unable to|unsupported|not supported|not valid|exceeds|too large)|could not process image|invalid base64/i],
+  ['invalid_tool_schema', /\btools?\.\d+|input_schema|invalid schema for function|function parameters|tool[^.]*\bschema\b/i],
+];
 
 function record(value: unknown): RecordValue {
   return value !== null && typeof value === 'object' && !Array.isArray(value) ? value as RecordValue : {};
@@ -150,11 +175,13 @@ function tagsFor(value: unknown): RecordValue {
     else if (ID_KEYS.has(key) && typeof entry === 'string' && UUID.test(entry)) out[key] = entry;
     else if (key === 'configuration_fields' && typeof entry === 'string' && entry.length < 250 && entry.split(',').every(field => CONFIGURATION_FIELDS.has(field))) out[key] = entry;
     else if (key === 'office_version' && typeof entry === 'string' && /^\d+(?:\.\d+){1,4}$/.test(entry) && entry.length < 30) out[key] = entry;
-    else if (key === 'warning_code' && typeof entry === 'string' && /^DEP\d{4}$/.test(entry)) out[key] = entry;
+    else if (key === 'warning_listener_count' && typeof entry === 'number' && Number.isSafeInteger(entry) && entry >= 0 && entry <= 1_000_000) out[key] = entry;
+    else if (key === 'warning_code' && typeof entry === 'string' && (/^DEP\d{4}$/.test(entry) || SDK_WARNING_CODES.has(entry))) out[key] = entry;
     else if (key === 'what' && isDiagnosticLabel(entry)) out.stage = entry;
     else if (key === 'http_route' && typeof entry === 'string') out[key] = diagnosticRoute(entry);
     else if ((key === 'http_status' || key === 'dependency_status') && /^\d{3}$/.test(String(entry)) && Number(entry) >= 100 && Number(entry) <= 599) out[key] = Number(entry);
     else if (key === 'network_failure_count' && Number.isInteger(entry) && Number(entry) >= 1 && Number(entry) <= 100000) out[key] = Number(entry);
+    else if (key === 'outage_minutes' && /^\d{1,6}$/.test(String(entry))) out[key] = Number(entry);
     else if ((key === 'network' || key === 'project') && (entry === true || entry === false || entry === 'true' || entry === 'false')) out[key] = entry;
   }
   return out;
@@ -167,6 +194,7 @@ export function diagnosticErrorTags(error: unknown): Record<string, string | num
   const tags: Record<string, string | number> = {};
   const pending: unknown[] = [error];
   const seen = new Set<object>();
+  let fetchFailed = false;
   for (let n = 0; pending.length && n < 12; n++) {
     const candidate = pending.shift();
     if (!candidate || typeof candidate !== 'object' || seen.has(candidate)) continue;
@@ -180,8 +208,16 @@ export function diagnosticErrorTags(error: unknown): Record<string, string | num
       }
       const providerError = item.name === 'InvalidApiKeyError' ? 'invalid_api_key'
         : item.name === 'AI_APICallError' ? 'api_call'
-          : item.name === 'AI_RetryError' ? 'retry_exhausted' : undefined;
+          : item.name === 'AI_RetryError' ? 'retry_exhausted'
+            : item.name === 'AI_StreamProviderError' ? 'stream_provider' : undefined;
       if (providerError && tags.provider_error === undefined) tags.provider_error = providerError;
+      if (item.name === 'AI_APICallError' || item.name === 'AI_StreamProviderError') {
+        // The SDK's parsed error body (`data.error.type`) or the stream error's own `type`; fixed protocol values only.
+        const providerType = record(record(item.data).error).type ?? item.type;
+        if (typeof providerType === 'string' && ENUMS.provider_error_type!.has(providerType) && tags.provider_error_type === undefined) tags.provider_error_type = providerType;
+        const reason = typeof item.message === 'string' ? PROVIDER_REASONS.find(([, pattern]) => pattern.test(item.message as string))?.[0] : undefined;
+        if (reason && tags.provider_reason === undefined) tags.provider_reason = reason;
+      }
       if (item.code === 'sentry_test') tags.diagnostic_test = 'true';
       // AppError identity: the thrower's own static label, never a dependency property.
       // The deepest kind wins: a wrapper names the operation that failed, the
@@ -191,6 +227,20 @@ export function diagnosticErrorTags(error: unknown): Record<string, string | num
       for (const code of [item.code, item.name]) {
         if (typeof code === 'string' && ENUMS.failure_code!.has(code) && tags.failure_code === undefined) tags.failure_code = code;
       }
+      // supabase-js hands a failed network call back as a plain object, not
+      // an Error: `code` is '' and the undici cause survives only as text in
+      // `details` ("Caused by: Error: connect ECONNREFUSED host:port
+      // (ECONNREFUSED)"). Read the fixed code it appends in parentheses, never
+      // the host or the prose around it (MIKE-BACKEND-X, 6T: every query an
+      // install sent while its database gateway was unreachable arrived blank).
+      if (tags.failure_code === undefined && typeof item.details === 'string') {
+        for (const [, code] of item.details.slice(0, 8192).matchAll(/ \(([A-Za-z0-9_]{2,40})\)(?=\n|$)/g)) {
+          if (code && ENUMS.failure_code!.has(code)) { tags.failure_code = code; break; }
+        }
+      }
+      // Compare entire fixed runtime messages, with or without supabase-js's
+      // "TypeError: " prefix; never retain any of their text.
+      if (typeof item.message === 'string' && FETCH_FAILURE_MESSAGES.has(item.message.replace(/^(?:TypeError|FetchError): /, ''))) fetchFailed = true;
       const status = item.status ?? item.statusCode ?? record(item.$metadata).httpStatusCode;
       if (Number.isInteger(status) && Number(status) >= 400 && Number(status) <= 599 && tags.dependency_status === undefined) tags.dependency_status = Number(status);
       if (item.cause) pending.push(item.cause);
@@ -200,13 +250,7 @@ export function diagnosticErrorTags(error: unknown): Record<string, string | num
       // Host objects/proxies may have throwing accessors. Reporting must not throw.
     }
   }
-  if (tags.failure_code === undefined) {
-    try {
-      // Compare entire fixed runtime messages; never retain any of their text.
-      const message = record(error).message;
-      if (typeof message === 'string' && ['Failed to fetch', 'fetch failed', 'Load failed', 'NetworkError when attempting to fetch resource.'].includes(message)) tags.failure_code = 'fetch_failed';
-    } catch { /* Exotic errors must not break reporting. */ }
-  }
+  if (tags.failure_code === undefined && fetchFailed) tags.failure_code = 'fetch_failed';
   return tags;
 }
 
@@ -265,7 +309,7 @@ export function diagnosticEvent(value: unknown): RecordValue {
   for (const key of ['release', 'environment']) {
     if (typeof event[key] === 'string' && /^[\w@.+/-]{1,100}$/.test(event[key])) out[key] = event[key];
   }
-  const description = [tags.operation, tags.component ?? 'application', tags.stage, tags.error_kind, tags.warning_name, tags.warning_code, tags.http_method, tags.http_route, tags.http_status, tags.error_code, tags.office_code, tags.failure_code, tags.storage_operation, tags.provider_error, tags.dependency_status].filter(v => v !== undefined).join(' / ');
+  const description = [tags.operation, tags.component ?? 'application', tags.stage, tags.error_kind, tags.warning_name, tags.warning_code, tags.http_method, tags.http_route, tags.http_status, tags.error_code, tags.office_code, tags.failure_code, tags.storage_operation, tags.provider_error, tags.provider_error_type, tags.provider_reason, tags.dependency_status].filter(v => v !== undefined).join(' / ');
   const values = record(event.exception).values;
   const exceptionValues = Array.isArray(values) ? values : [];
   // attachStacktrace gives captureMessage() a synthetic exception (mechanism
@@ -302,10 +346,14 @@ export function diagnosticEvent(value: unknown): RecordValue {
   // route, method or stack, split only by its controlled component and code.
   const pinned = Array.isArray(event.fingerprint) && typeof event.fingerprint[0] === 'string' && PINNED_FINGERPRINTS.has(event.fingerprint[0]) ? event.fingerprint[0]
     : tags.component === 'runtime-warning' ? 'runtime-warning' : undefined;
+  const pinnedStage = pinned === 'upstream-unavailable' && typeof tags.stage === 'string' && tags.stage !== 'gateway-fetch' ? [tags.stage] : [];
   // A process warning is one issue per name and code: the same deprecation
   // raised from two modules is one thing to fix, and the stack says where.
   out.fingerprint = pinned === 'runtime-warning' ? [pinned, String(tags.warning_name ?? ''), String(tags.warning_code ?? '')]
-    : pinned ? [pinned, String(tags.component ?? 'application'), String(tags.failure_code ?? '')] : ['{{ default }}', String(tags.operation ?? ''), String(tags.error_kind ?? ''), String(tags.job_kind ?? ''), String(tags.component ?? 'application'), String(tags.stage ?? ''), String(tags.http_route ?? ''), String(tags.http_status ?? ''), String(tags.failure_code ?? ''), String(tags.file_type ?? ''), String(tags.provider_error ?? ''), String(tags.dependency_status ?? ''), String(tags.warning_name ?? ''), String(tags.warning_code ?? '')];
+    : pinned ? [pinned, String(tags.component ?? 'application'), String(tags.failure_code ?? ''), ...pinnedStage] : ['{{ default }}', String(tags.operation ?? ''), String(tags.error_kind ?? ''), String(tags.job_kind ?? ''), String(tags.component ?? 'application'), String(tags.stage ?? ''), String(tags.http_route ?? ''), String(tags.http_status ?? ''), String(tags.failure_code ?? ''), String(tags.file_type ?? ''), String(tags.provider_error ?? ''), String(tags.dependency_status ?? ''), String(tags.warning_name ?? ''), String(tags.warning_code ?? ''),
+      // These optional diagnostics add grouping detail when present. Other fields above
+      // can still change grouping as the privacy schema evolves.
+      ...[tags.provider_error_type, tags.provider_reason].filter(v => v !== undefined).map(String)];
   // The path the request took before it failed: stage names only (our
   // labels, pushed by markStage), newest last, never a message or data.
   const crumbs = Array.isArray(event.breadcrumbs) ? event.breadcrumbs : [];
@@ -317,6 +365,7 @@ export function diagnosticEvent(value: unknown): RecordValue {
     return [out];
   }).slice(-20);
   if (trail.length) out.breadcrumbs = trail;
+  if (pinned === 'upload-storage-put') (out.fingerprint as string[]).push(String(tags.http_status ?? ''));
   const extra: RecordValue = {};
   for (const [key, entry] of Object.entries(record(event.extra))) {
     if (ID_KEYS.has(key) && typeof entry === 'string' && UUID.test(entry)) extra[key] = entry;
@@ -348,61 +397,8 @@ export function diagnosticEnvelope(envelope: Envelope, destination?: string): En
   return [header, items];
 }
 
-const ISSUE_QUIET_MS = 60 * 60_000;
-const DAY_MS = 24 * 60 * 60_000;
-const MAX_EVENTS_PER_DAY = 50;
-
-/** One issue as Sentry groups it: our fingerprint plus the default (stack) grouping. */
-function issueKey(event: RecordValue): string {
-  const values = record(event.exception).values;
-  const exception = Array.isArray(values) ? record(values[values.length - 1]) : {};
-  const frames = record(exception.stacktrace ?? event.stacktrace).frames;
-  const top = Array.isArray(frames) ? record(frames[frames.length - 1]) : {};
-  return JSON.stringify([event.fingerprint, exception.type ?? null, top.filename ?? null, top.lineno ?? null]);
-}
-
-/**
- * QUOTA BUDGET, per runtime (process, worker thread, browser tab, task pane).
- * Every community install reports to one Sentry project on a 5,000 errors a
- * month plan, so one stuck loop anywhere blinds the project for everyone: on
- * 2026-09-23 a single install's failing poll loops sent ~4,800 events in nine
- * hours under the old flat 60-a-minute cap, and every report after that was
- * dropped until the period ended. Per issue, occurrences 1, 2, 4, 8, … are
- * sent (each tagged with its occurrence number, so the real count survives);
- * the count restarts after an hour without that issue. On top of that, a
- * runtime sends at most MAX_EVENTS_PER_DAY events a day. A loop failing every
- * second now costs about 17 events a day per issue instead of 14,400.
- */
-export function eventBudget(): (event: RecordValue) => boolean {
-  const issues = new Map<string, { count: number; last: number }>();
-  let dayStart = Date.now();
-  let sentToday = 0;
-  return event => {
-    const now = Date.now();
-    if (now - dayStart >= DAY_MS) { dayStart = now; sentToday = 0; }
-    const key = issueKey(event);
-    let issue = issues.get(key);
-    if (!issue || now - issue.last >= ISSUE_QUIET_MS) {
-      issue = { count: 0, last: now };
-      issues.set(key, issue);
-      // Keep the map bounded on a long-running process.
-      if (issues.size > 1_000) {
-        for (const [other, entry] of issues) if (now - entry.last >= ISSUE_QUIET_MS) issues.delete(other);
-      }
-    }
-    issue.count += 1;
-    issue.last = now;
-    // An operator's "send a test event" probe must arrive every time it is pressed.
-    const sampledOut = (issue.count & (issue.count - 1)) !== 0 && record(event.tags).diagnostic_test !== 'true';
-    if (sampledOut || sentToday >= MAX_EVENTS_PER_DAY) return false;
-    sentToday += 1;
-    event.tags = { ...record(event.tags), occurrence: issue.count };
-    return true;
-  };
-}
-
 /** Applies to browser, server, workers and add-in, in both install modes. */
-export function privacyBoundaryIntegration() {
+export function privacyBoundaryIntegration(options: { acceptEvent?: (event: RecordValue) => boolean } = {}) {
   return {
     name: 'MikePrivacyBoundary',
     setup(client: {
@@ -414,12 +410,10 @@ export function privacyBoundaryIntegration() {
       const send = transport.send.bind(transport);
       const dsn = client.getDsn?.();
       const destination = dsn?.publicKey ? `${dsn.protocol}://${dsn.publicKey}@${dsn.host}${dsn.port ? `:${dsn.port}` : ''}/${dsn.path ? `${dsn.path}/` : ''}${dsn.projectId}` : undefined;
-      // Quota control, not an auth boundary: the DSN is public by design.
-      const withinBudget = eventBudget();
       transport.send = envelope => {
         const safe = diagnosticEnvelope(envelope, destination);
         if (!safe) return Promise.resolve({});
-        const items = safe[1].filter(([, payload]) => withinBudget(record(payload)));
+        const items = safe[1].filter(([, payload]) => options.acceptEvent?.(record(payload)) ?? true);
         if (!items.length) return Promise.resolve({});
         return send([safe[0], items]);
       };

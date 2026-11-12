@@ -1,6 +1,7 @@
 import { AppError } from "../../../lib/appError";
 import { reportError } from "../../../lib/observability/sentry";
 import { responseLanguageName } from "../../../lib/responseLanguages";
+import { folderPathResolver } from "../../../lib/folderTree";
 import { deadlineMessage, type StreamStopReason } from "../../../lib/streamRuns";
 import crypto from "crypto";
 import type { Db } from "../../../lib/supabase";
@@ -8,6 +9,7 @@ import { listWorkspaceWorkflows } from "../../../lib/workflowWorkspace";
 import { teamOrgIdOf } from "../../../lib/personalOrgs";
 import { ensureDocAccess } from "../../../lib/access";
 import { attachActiveVersionPaths } from "../../../lib/documentVersions";
+import { selectAllByKey, selectInBatches } from "../../../lib/batchedQuery";
 import {
   type DocStore,
   type DocIndex,
@@ -28,7 +30,7 @@ import {
 } from "../../../lib/userTime";
 import { ACTIVE_WORD_DOCUMENT_LIVE_FILENAME } from "./wordPrompt";
 import { parseCitations, createCitation } from "./citations";
-import type { AssistantEvent } from "./streaming";
+import type { AssistantEvent } from "@mike/contracts";
 import { catalogWorkflowId, ensureDefaultWorkflows } from "../../../lib/workflowCatalog";
 
 // ---------------------------------------------------------------------------
@@ -278,6 +280,16 @@ export const MAX_REPLAYED_REASONING_TOTAL_CHARS = 36_000;
 
 const MAX_REPLAYED_BRIEF_CHARS = 4_000;
 
+/** One lazy history read shared by the context builders for a single turn. */
+export function createAssistantHistoryLoader(db: Db, chatId: string | null | undefined, messageTable = "chat_messages") {
+  let pending: Promise<{ data: { content?: unknown }[] | null; error: unknown }> | undefined;
+  return () => pending ??= chatId ? Promise.resolve(db.from(messageTable)
+    .select("content").eq("chat_id", chatId).eq("role", "assistant")
+    .not("content", "is", null).order("created_at", { ascending: true }))
+    : Promise.resolve({ data: [], error: null });
+}
+type AssistantHistoryLoader = ReturnType<typeof createAssistantHistoryLoader>;
+
 /**
  * Attaches each earlier assistant turn's stored reasoning to the matching
  * message in `messages`, for models that opt into reasoning replay
@@ -293,17 +305,18 @@ export async function attachPriorReasoning(
   chatId: string | null | undefined,
   db: Db,
   messageTable = "chat_messages",
+  history?: AssistantHistoryLoader,
 ): Promise<ChatMessage[]> {
   if (!chatId || !messages.some((m) => m.role === "assistant")) {
     return messages;
   }
-  const { data: rows, error } = await db
+  const { data: rows, error } = await (history ? history() : db
     .from(messageTable)
     .select("content")
     .eq("chat_id", chatId)
     .eq("role", "assistant")
     .not("content", "is", null)
-    .order("created_at", { ascending: true });
+    .order("created_at", { ascending: true }));
   // Replay is an optimisation: a failed read degrades to text-only history.
   if (error || !rows?.length) return messages;
 
@@ -1339,6 +1352,7 @@ export async function buildDocContext(
   chatId?: string | null,
   messageTable = "chat_messages",
   userEmail?: string | null,
+  history?: AssistantHistoryLoader,
 ): Promise<{ docIndex: DocIndex; docStore: DocStore }> {
   const docIndex: DocIndex = {};
   const docStore: DocStore = new Map();
@@ -1357,11 +1371,11 @@ export async function buildDocContext(
   // the model loses access to generated docs after the turn that created
   // them, and can't call edit_document / read_document on them.
   if (chatId) {
-    const { data: rows } = await db
+    const { data: rows } = await (history ? history() : db
       .from(messageTable)
       .select("content")
       .eq("chat_id", chatId)
-      .eq("role", "assistant");
+      .eq("role", "assistant"));
     for (const row of rows ?? []) {
       const content = (row as { content?: unknown }).content;
       if (!Array.isArray(content)) continue;
@@ -1396,15 +1410,18 @@ export async function buildDocContext(
     // answered "I can't see that document" about a file the caller has full
     // access to. The verdict is per document, not per chat: being cited in a
     // readable chat never grants access to the cited file.
-    const { data: docs } = await db
-      .from("documents")
-      .select(
-        "id, current_version_id, status, library_kind, user_id, project_id, org_id, workflow_id",
-      )
-      .in("id", ids)
-      .eq("status", "ready");
+    // Batched: ids come from the whole conversation history, unbounded.
+    const docs = await selectInBatches("chat document context", ids, (batch) =>
+      db
+        .from("documents")
+        .select(
+          "id, current_version_id, status, library_kind, user_id, project_id, org_id, workflow_id",
+        )
+        .in("id", batch)
+        .eq("status", "ready"),
+    );
 
-    const candidates = (docs ?? []) as unknown as {
+    const candidates = docs as unknown as {
       id: string;
       filename?: string | null;
       file_type?: string | null;
@@ -1515,19 +1532,29 @@ export async function buildProjectDocContext(
   const docIndex: DocIndex = {};
   const docStore: DocStore = new Map();
 
-  const [{ data: docs }, { data: folders }] = await Promise.all([
-    db
-      .from("documents")
-      .select("id, current_version_id, status, folder_id")
-      .eq("project_id", projectId)
-      .eq("status", "ready")
-      .order("created_at", { ascending: true }),
-    db
-      .from("project_subfolders")
-      .select("id, name, parent_folder_id")
-      .eq("project_id", projectId),
+  // Paged: past max_rows an unpaged read silently hid the rest of the
+  // project from the model. Labels (doc-N) follow created_at order as before.
+  type ProjectDocRow = { id: string; created_at?: string | null };
+  type ProjectFolderRow = { id: string; name: string; parent_folder_id: string | null };
+  const [docs, folders] = await Promise.all([
+    selectAllByKey<ProjectDocRow>("project chat documents", () =>
+      db
+        .from("documents")
+        .select("id, current_version_id, status, folder_id, created_at")
+        .eq("project_id", projectId)
+        .eq("status", "ready")),
+    selectAllByKey<ProjectFolderRow>("project chat folders", () =>
+      db
+        .from("project_subfolders")
+        .select("id, name, parent_folder_id")
+        .eq("project_id", projectId)),
   ]);
-  const docList = (docs ?? []) as unknown as {
+  docs.sort(
+    (a, b) =>
+      String(a.created_at ?? "").localeCompare(String(b.created_at ?? "")) ||
+      a.id.localeCompare(b.id),
+  );
+  const docList = docs as unknown as {
     id: string;
     filename?: string | null;
     file_type?: string | null;
@@ -1538,29 +1565,7 @@ export async function buildProjectDocContext(
   }[];
   await attachActiveVersionPaths(db, docList);
 
-  // Build folder id → full path map
-  const folderMap = new Map<
-    string,
-    { name: string; parent_folder_id: string | null }
-  >();
-  for (const f of folders ?? [])
-    folderMap.set(f.id, {
-      name: f.name,
-      parent_folder_id: f.parent_folder_id,
-    });
-
-  function resolvePath(folderId: string | null): string {
-    if (!folderId) return "";
-    const parts: string[] = [];
-    let cur: string | null = folderId;
-    while (cur) {
-      const f = folderMap.get(cur);
-      if (!f) break;
-      parts.unshift(f.name);
-      cur = f.parent_folder_id;
-    }
-    return parts.join(" / ");
-  }
+  const resolvePath = folderPathResolver(folders);
 
   const folderPaths = new Map<string, string>(); // doc label → folder path
 
@@ -1644,13 +1649,16 @@ export async function buildWorkflowStore(
   }
 
   // Keep catalog IDs readable for historical chat attachments, but do not
-  // expose them through list_workflows. Active versions sort first; inactive
-  // content-addressed versions remain available as a fallback.
+  // expose them through list_workflows. Only active versions are loaded per
+  // turn: replace_mike_workflows retires versions (active = false) without
+  // deleting them, so the full history — every prompt_md ever shipped —
+  // grows with each catalog sync. read_workflow resolves a retired id on
+  // demand (findCatalogWorkflow), the rare case that needs one.
   const { data: catalogWorkflows, error: catalogError } = await db
     .from("mike_workflows")
-    .select("workflow_key, title, prompt_md, active, updated_at")
+    .select("workflow_key, title, prompt_md, updated_at")
     .eq("type", "assistant")
-    .order("active", { ascending: false })
+    .eq("active", true)
     .order("updated_at", { ascending: false });
   if (catalogError) {
     const failure = new AppError(
@@ -1694,11 +1702,24 @@ export async function buildWorkflowStore(
     .filter(([, workflow]) => workflow.listed !== false)
     .map(([id]) => id);
   if (databaseWorkflowIds.length > 0) {
-    const { data: assetDocuments } = await db
-      .from("documents")
-      .select("id, workflow_id, current_version_id")
-      .in("workflow_id", databaseWorkflowIds);
-    const documents = (assetDocuments ?? []) as {
+    type AssetRow = { id: string; workflow_id: string; current_version_id: string | null; created_at?: string | null };
+    const assetDocuments = await selectInBatches<AssetRow>(
+      "workflow asset lookup",
+      databaseWorkflowIds,
+      (batch) =>
+        selectAllByKey<AssetRow>("workflow asset lookup", () =>
+          db
+            .from("documents")
+            .select("id, workflow_id, current_version_id, created_at")
+            .in("workflow_id", batch)),
+    );
+    // Asset handles are numbered by position; keep it upload order.
+    assetDocuments.sort(
+      (a, b) =>
+        String(a.created_at ?? "").localeCompare(String(b.created_at ?? "")) ||
+        a.id.localeCompare(b.id),
+    );
+    const documents = assetDocuments as {
       id: string;
       workflow_id: string;
       current_version_id: string | null;

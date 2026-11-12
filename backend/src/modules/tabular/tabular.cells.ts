@@ -16,6 +16,7 @@ import {
 import { can } from "../../lib/permissions";
 import { failure, internalFailure } from "../../lib/serviceResult";
 import { AppError } from "../../lib/appError";
+import { ExtractionParseError } from "../../lib/extraction/failure";
 import { reportError } from "../../lib/observability/sentry";
 import {
     enqueueExtraction,
@@ -24,7 +25,7 @@ import {
 import { queryTabularCell } from "./tabular.extract";
 import { finalizeCell } from "./tabular.extractRow";
 import { awaitCellTerminal } from "./tabular.generateStream";
-import { loadReviewRows, loadRowDocumentText } from "./tabular.rows";
+import { loadReviewRow, loadRowDocumentText } from "./tabular.rows";
 import {
     isReviewGenerationRunning,
     modelFailure,
@@ -210,8 +211,7 @@ export async function regenerateTabularCell(
     ).find((c) => c.index === columnIndex);
     if (!column) return failure("validation", "Column not found");
 
-    const rows = await loadReviewRows(db, reviewId);
-    const row = rows.find((candidate) => candidate.id === rowId);
+    const row = await loadReviewRow(db, reviewId, rowId);
     if (!row) return failure("not_found", "Review row not found");
     const sourceIds = row.source_document_ids ?? [];
     let allowedSourceIds: string[];
@@ -433,7 +433,12 @@ export async function regenerateTabularCell(
             "Tabular cell generation failed",
             { cause: error },
         );
-        reportError(generationFailure);
+        // An unreadable source document is the document's fault, reported
+        // at the same level as on the row path (tabular.extractRow.ts).
+        reportError(
+            generationFailure,
+            error instanceof ExtractionParseError ? { level: "warning" } : {},
+        );
         log.error("[tabular/regenerate-cell] generation failed", generationFailure);
         return GENERATION_FAILED;
     } finally {

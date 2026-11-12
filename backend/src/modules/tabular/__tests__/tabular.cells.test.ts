@@ -39,11 +39,11 @@ vi.mock("../tabular.extractRow", () => ({ finalizeCell }));
 const awaitCellTerminal = vi.hoisted(() => vi.fn());
 vi.mock("../tabular.generateStream", () => ({ awaitCellTerminal }));
 
-const { loadReviewRows, loadRowDocumentText } = vi.hoisted(() => ({
-    loadReviewRows: vi.fn(),
+const { loadReviewRow, loadRowDocumentText } = vi.hoisted(() => ({
+    loadReviewRow: vi.fn(),
     loadRowDocumentText: vi.fn(),
 }));
-vi.mock("../tabular.rows", () => ({ loadReviewRows, loadRowDocumentText }));
+vi.mock("../tabular.rows", () => ({ loadReviewRow, loadRowDocumentText }));
 
 const validateSelectedModel = vi.hoisted(() => vi.fn());
 vi.mock("../tabular.shared", async (importOriginal) => ({
@@ -60,6 +60,7 @@ vi.mock("../../../lib/observability/sentry", async (importOriginal) => ({
 }));
 
 import { AppError } from "../../../lib/appError";
+import { ExtractionParseError } from "../../../lib/extraction/failure";
 import {
     clearTabularReviewCells,
     regenerateTabularCell,
@@ -103,7 +104,7 @@ beforeEach(() => {
         projectRole: "owner",
     });
     filterAccessibleDocumentIds.mockResolvedValue(["doc-1"]);
-    loadReviewRows.mockResolvedValue([ROW]);
+    loadReviewRow.mockResolvedValue(ROW);
     loadRowDocumentText.mockResolvedValue("markdown");
     validateSelectedModel.mockResolvedValue({
         ok: true,
@@ -436,6 +437,32 @@ describe("regenerateTabularCell", () => {
             reported,
         );
         expect(fake.rpcCalls[1].fn).toBe("finish_tabular_review_generation");
+    });
+
+    it("reports an unreadable source document as a warning, like the row path", async () => {
+        const cause = new ExtractionParseError(
+            "extraction.parse_failed",
+            "unreadable docx",
+        );
+        loadRowDocumentText.mockRejectedValue(cause);
+        const fake = makeFakeDb({
+            tables: { tabular_reviews: { data: REVIEW, error: null } },
+            rpc: (fn) =>
+                fn === "begin_tabular_review_generation"
+                    ? started()
+                    : { data: null, error: null },
+        });
+        await regenerateTabularCell(fake.db, {
+            reviewId: "rev-1",
+            ...WHO,
+            rowId: "row-1",
+            columnIndex: 0,
+            log: LOG,
+        });
+        expect(reportError).toHaveBeenCalledTimes(1);
+        const [reported, context] = reportError.mock.calls[0];
+        expect(reported.cause).toBe(cause);
+        expect(context).toEqual({ level: "warning" });
     });
 
     it("keeps the lease for the worker once the job is enqueued", async () => {

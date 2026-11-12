@@ -26,7 +26,6 @@ export {
 
 export {
     getDisplayableVersion,
-    collectFolderDescendantIds,
     resolveZipExportDocuments,
     getDownloadUrl,
     getFileStreamSource,
@@ -64,5 +63,7 @@ export { createDocumentVersions, activateDocumentVersion, updateDocumentVersion 
 export { runConversionJob, setDocumentTerminalStatus } from "./documents.conversion";
 
 export { handleDocumentExtractText, markDocumentTextFailed, backfillDocumentText } from "./documents.indexing";
-export { findDocumentText, readStoredDocumentText } from "./documents.textSearch";
+export { findDocumentText, readStoredDocumentText, storedDocumentTextCurrent } from "./documents.textSearch";
 export { getSpreadsheetValuesPreview, getSpreadsheetValuesSource } from "./documents.spreadsheetValues";
+
+export { getDocumentStatuses } from "./documents.status";

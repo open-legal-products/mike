@@ -16,22 +16,41 @@ import { act, renderHook, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { Message } from "@/app/components/shared/types";
 
-const { routerReplaceMock, reportErrorMock } = vi.hoisted(() => ({
+const { routerReplaceMock, reportErrorMock, reported } = vi.hoisted(() => ({
     routerReplaceMock: vi.fn(),
     reportErrorMock: vi.fn(),
+    reported: new WeakSet<object>(),
 }));
 vi.mock("next/navigation", () => ({
     useRouter: () => ({ replace: routerReplaceMock, push: vi.fn() }),
 }));
-vi.mock("@/app/lib/errorReporting", () => ({
-    reportError: reportErrorMock,
-    trackPendingRequest: () => () => {},
-    reportNetworkFailure: vi.fn(),
-    reportApiFailure: vi.fn(),
-    // notifyError asks whether a fault was already reported before it
-    // reports a 5xx itself; nothing in these tests pre-reports.
-    isReported: () => false,
-}));
+// The real module's contract, minus Sentry: every report or deliberate
+// non-report marks the error, and isReported (which notifyError consults
+// before filing a fault itself) reads the same registry.
+vi.mock("@/app/lib/errorReporting", () => {
+    const mark = (error: unknown) => {
+        if (error && typeof error === "object") reported.add(error);
+    };
+    return {
+        reportError: (error: unknown, ...rest: unknown[]) => {
+            mark(error);
+            reportErrorMock(error, ...rest);
+            return null;
+        },
+        markErrorHandled: mark,
+        trackPendingRequest: () => () => {},
+        reportNetworkFailure: (error: unknown) => mark(error),
+        reportApiFailure: vi.fn(),
+        isReported: (error: unknown) => {
+            let current = error;
+            for (let depth = 0; depth < 8 && current && typeof current === "object"; depth++) {
+                if (reported.has(current)) return true;
+                current = (current as { cause?: unknown }).cause;
+            }
+            return false;
+        },
+    };
+});
 vi.mock("@/app/contexts/ChatHistoryContext", () => ({
     useChatHistoryContext: () => ({
         replaceChatId: vi.fn(),
@@ -43,7 +62,7 @@ vi.mock("@/app/contexts/ChatHistoryContext", () => ({
     }),
 }));
 import { useAssistantChat } from "./useAssistantChat";
-import { clearToasts, useToasts, type ToastRecord } from "@/shared/ui/ToastUI";
+import { clearToasts, useToasts, type ToastRecord } from "@mike/ui";
 
 const fetchMock = vi.fn();
 
@@ -452,18 +471,113 @@ describe("useAssistantChat retry", () => {
         expect(result.current.toasts[0]?.message).toBe(
             "Too many chat requests.",
         );
-        // The classification and the support hand-off both read these off the
-        // thrown error, so they have to survive the non-ok branch.
-        const reported = reportErrorMock.mock.calls[0]?.[0] as {
-            status?: number;
-            code?: string;
-            requestId?: string;
-        };
-        expect(reported).toMatchObject({
-            status: 429,
-            code: "rate_limited",
-            requestId: "r1",
+    });
+});
+
+/**
+ * Which turn failures reach Sentry. A refusal is the server's deliberate
+ * answer (MIKE-FRONTEND-12: 409 turn_in_progress; 3V, 2A: 403/404), a
+ * connection that never got a response was already reported by the API
+ * client, and a fault already on file must not be filed twice. A server
+ * fault nothing has reported yet is sent exactly once. A 400, 401 or 422
+ * means this client sent something the server could not take (1X is still
+ * undiagnosed; 401 is #779's refresh race), so it is sent at warning level.
+ */
+describe("useAssistantChat turn-failure reporting", () => {
+    const refusal = (status: number, code?: string) =>
+        new Response(JSON.stringify({ code, detail: "Refused.", request_id: "r1", ...(code === "upstream_unavailable" ? { reporting_owner: "backend" } : {}) }), {
+            status,
+            headers: { "Content-Type": "application/json" },
         });
+
+    const failTurn = async () => {
+        const { result } = renderHook(() => useAssistantChat({ chatId: "chat-1" }));
+        await act(async () => {
+            await result.current.handleChat(userMessage());
+        });
+    };
+
+    it.each([
+        [403, undefined],
+        [404, undefined],
+        [404, "turn_not_found"],
+        [409, "turn_in_progress"],
+        [413, "payload_too_large"],
+        [429, "rate_limited"],
+    ])("does not report a %i refusal", async (status, code) => {
+        fetchMock.mockResolvedValueOnce(refusal(status, code));
+        await failTurn();
+        expect(reportErrorMock).not.toHaveBeenCalled();
+    });
+
+    it("does not report a connection that never got a response", async () => {
+        fetchMock.mockRejectedValueOnce(new TypeError("Failed to fetch"));
+        await failTurn();
+        expect(reportErrorMock).not.toHaveBeenCalled();
+    });
+
+    // This boundary displays the server's actual 4xx response, even when
+    // it has no machine code. Transport failures are tested separately.
+    it.each([
+        [400, "validation_failed"],
+        [401, "session_expired"],
+        [422, "missing_api_key"],
+    ])("handles a %i refusal without filing an issue", async (status, code) => {
+        fetchMock.mockResolvedValueOnce(refusal(status, code));
+        await failTurn();
+        expect(reportErrorMock).not.toHaveBeenCalled();
+    });
+
+    it("reports an unreported 500 exactly once, with its request id", async () => {
+        fetchMock.mockResolvedValueOnce(refusal(500, "internal_error"));
+        await failTurn();
+        expect(reportErrorMock).toHaveBeenCalledTimes(1);
+        expect(reportErrorMock.mock.calls[0]?.[0]).toMatchObject({ status: 500, requestId: "r1" });
+        expect(reportErrorMock.mock.calls[0]?.[1]).toMatchObject({
+            tags: { component: "assistant-chat", operation: "chat.turn", project: false },
+        });
+        expect(reportErrorMock.mock.calls[0]?.[1]?.level).toBeUndefined();
+    });
+
+    it("tags a project chat's fault with project: true", async () => {
+        fetchMock.mockResolvedValueOnce(refusal(500, "internal_error"));
+        const { result } = renderHook(() => useAssistantChat({ chatId: "chat-1", projectId: "project-1" }));
+        await act(async () => {
+            await result.current.handleChat(userMessage());
+        });
+        expect(reportErrorMock).toHaveBeenCalledTimes(1);
+        expect(reportErrorMock.mock.calls[0]?.[1]).toMatchObject({
+            tags: { component: "assistant-chat", project: true },
+        });
+    });
+
+    // Review of #775: in an existing chat, a 5xx before the server named the
+    // turn is an uncertain delivery, and the toast wraps the error in a
+    // UserVisibleError (kind "unknown"). That wrapper must not be filed as a
+    // second, "unknown" fault: the 500 goes out once, and a 503 (the
+    // backend's own report) not at all.
+    it.each([
+        [500, "internal_error", 1],
+        [503, "upstream_unavailable", 0],
+    ])("files an uncertain-delivery %i at most once, not its toast wrapper", async (status, code, reports) => {
+        fetchMock.mockResolvedValueOnce(refusal(status, code));
+        const { result } = renderHook(() => ({ chat: useAssistantChat({ chatId: "chat-1" }), toasts: useToasts() }));
+        await act(async () => {
+            await result.current.chat.handleChat(userMessage());
+        });
+        const toast = result.current.toasts.at(-1);
+        expect(toast?.message).toContain("may still be running");
+        expect(toast?.actions?.map((a) => a.label)).toContain("Check chat");
+        expect(reportErrorMock).toHaveBeenCalledTimes(reports);
+        if (reports) expect(reportErrorMock.mock.calls[0]?.[0]).toMatchObject({ status });
+    });
+
+    it("does not re-report a failure that is already on file", async () => {
+        const filed = Object.assign(new Error("API error: 500"), { status: 500 });
+        reported.add(filed);
+        fetchMock.mockRejectedValueOnce(filed);
+        await failTurn();
+        expect(reportErrorMock).not.toHaveBeenCalled();
     });
 });
 
@@ -480,5 +594,46 @@ it.each([undefined, "chat-existing"])("does not repost an uncertain delivery bef
         fetchMock.mockResolvedValueOnce(new Response(JSON.stringify({ chat: {id:chatId}, messages: [], active_turn: null }), {status:200}));
         await act(async () => { await toast?.actions?.find(a => a.label === "Check chat")?.onClick(); });
         expect(fetchMock.mock.calls.filter(c => c[1]?.method === "POST")).toHaveLength(1);
+    }
+});
+
+
+describe("terminal transport ownership", () => {
+    it("reports a body network failure after fetch has resolved, before turn metadata", async () => {
+        fetchMock.mockReset();
+        const stream = new ReadableStream<Uint8Array>({
+            pull(controller) { controller.error(new TypeError("network error")); },
+        });
+        fetchMock.mockResolvedValueOnce(new Response(stream, {
+            status: 200,
+            headers: { "Content-Type": "text/event-stream" },
+        }));
+        const { result } = renderHook(() => ({ chat: useAssistantChat({ chatId: "chat-1" }), toasts: useToasts() }));
+        await act(async () => { await result.current.chat.handleChat(userMessage()); });
+        expect(result.current.toasts.length).toBeGreaterThan(0);
+        expect(reportErrorMock).toHaveBeenCalledTimes(1);
+    });
+    it.each([502, 503, 504])("reports an unowned proxy %i without a Mike error code", async (status) => {
+        fetchMock.mockReset();
+        fetchMock.mockResolvedValueOnce(new Response("proxy failed", {
+            status, headers: { "Content-Type": "text/html" },
+        }));
+        const { result } = renderHook(() => useAssistantChat({ chatId: "chat-1" }));
+        await act(async () => { await result.current.handleChat(userMessage()); });
+        expect(reportErrorMock).toHaveBeenCalledTimes(1);
+    });
+});
+
+it("reports an unowned code and an unexpected abort name", async () => {
+    for (const response of [
+        new Response(JSON.stringify({ code: "upstream_unavailable" }), { status: 503, headers: { "Content-Type": "application/json" } }),
+        new Response(new ReadableStream({ pull(controller) { controller.error(new DOMException("transport aborted", "AbortError")); } })),
+    ]) {
+        reportErrorMock.mockClear(); fetchMock.mockReset();
+        fetchMock.mockResolvedValueOnce(response);
+        const { result, unmount } = renderHook(() => useAssistantChat({ chatId: "chat-1" }));
+        await act(async () => { await result.current.handleChat(userMessage()); });
+        expect(reportErrorMock).toHaveBeenCalledTimes(1);
+        unmount();
     }
 });

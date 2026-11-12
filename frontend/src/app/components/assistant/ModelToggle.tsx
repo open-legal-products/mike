@@ -6,7 +6,7 @@ import {
   nearestReasoningLevelForModel,
   reasoningLevelsForModel,
   type ReasoningLevel,
-} from "@/shared/ui/ModelToggleUI";
+} from "@mike/ui";
 import { isModelAvailable } from "@/app/lib/modelAvailability";
 import {
   MODELS,
@@ -16,7 +16,7 @@ import {
   type ModelOption,
   type NoModelsReason,
   type RouterSelections,
-} from "@/shared/lib/modelCatalog";
+} from "@mike/client";
 import type { ApiKeyState } from "@/app/lib/mikeApi";
 import {
   PERSONAL_WORKSPACE,

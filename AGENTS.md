@@ -6,7 +6,7 @@ These instructions apply to the entire repository. Keep changes focused,
 preserve unrelated work in the tree, and follow the more detailed guidance in
 `CONTRIBUTING.md` and `docs/` when working in a documented subsystem.
 
-The repository requires Node.js 22 or newer and contains three applications:
+The repository requires Node.js 22.19 or newer and contains three applications:
 
 - `frontend/`: Next.js web application.
 - `backend/`: Express API, document processing, database access, and LLM
@@ -36,10 +36,12 @@ Before creating UI markup, search these locations in order:
 
 1. `frontend/src/app/components/ui/` contains reusable web primitives such as
    buttons, inputs, dropdowns, search, empty states, and liquid-glass surfaces.
-2. `frontend/src/shared/ui/` contains framework-light components rendered by
-   both the web app and Word add-in. Files use the `XxxUI.tsx` convention, with
-   thin web adapters or re-exports in `frontend/src/app/components/ui/` where
-   appropriate. Code here must not import from `frontend/src/app/`.
+2. `packages/ui/` (imported as `@mike/ui`) contains framework-light
+   components rendered by both the web app and Word add-in. Files use the
+   `XxxUI.tsx` convention and are exported from `packages/ui/src/index.ts`,
+   with thin web adapters or re-exports in `frontend/src/app/components/ui/`
+   where appropriate. Code here may import `@mike/client` but never an
+   application (`frontend/src/app/`, `word-addin/src/`).
 3. `frontend/src/app/components/shared/` contains web-app building blocks that
    understand the application shell, including `PageHeader`,
    `TablePrimitive`, `TableToolbar`, `FileDirectory`, and side panels.
@@ -53,9 +55,9 @@ Before creating UI markup, search these locations in order:
 For add-in-only work, low-level controls live in `word-addin/src/shared/ui/`
 and reusable task-pane compositions live in
 `word-addin/src/taskpane/components/primitives/`. If a component must render in
-both the web app and add-in, prefer `frontend/src/shared/ui/`. When adding a
-cross-target file there, also add its `@source` entry to
-`word-addin/src/taskpane/styles.css` so Tailwind discovers its classes.
+both the web app and add-in, prefer `packages/ui/`. Export a new file from
+`packages/ui/src/index.ts`; both targets already scan the package for Tailwind
+classes.
 
 The web app is configured for shadcn's `new-york` style in
 `frontend/components.json`. If no existing primitive fits a non-trivial
@@ -96,6 +98,11 @@ Preserve the accessibility baseline:
   authentication, API error parsing, and request behavior stay consistent.
 - Reusable client behavior belongs in `frontend/src/app/hooks/` or
   `frontend/src/app/lib/`, with a colocated `*.test.ts` or `*.test.tsx` file.
+  Behavior the Word add-in also needs (error classification and toasts, the
+  model catalog, upload sessions, response excerpts, Sentry event hygiene)
+  lives in `packages/client/`, imported as `@mike/client`, and must stay
+  framework-free. Its public surface is `packages/client/src/index.ts`; its
+  tests are colocated and run with the frontend's Vitest.
 - Use the `@/` alias for imports rooted at `frontend/src/`.
 - Production frontend code must not import anything outside `frontend/`
   except through a `paths` alias in `frontend/tsconfig.json` whose target
@@ -133,19 +140,28 @@ failure is shown.
   in the routes file.
 - Large modules split the service into topic files (`<name>.<topic>.ts`)
   behind the facade. Import a module from outside (another module, a worker,
-  a job, `app.ts`) only through that facade.
+  a job, `app.ts`) only through that facade. Within a module, import sibling implementations
+  directly, never through its own facade.
+- `backend/src/application/` owns cross-domain account, purge and export
+  workflows. Routes and the job registry may call it; domain implementations
+  and facades must not import or re-export it. Application services call
+  domain facades, accept explicit inputs and never depend on Express.
 - `backend/src/lib/` is the shared kernel: infrastructure and cross-domain
-  primitives. It must not import from `backend/src/modules/`, and neither may
+  primitives. It must not import from `backend/src/modules/` or `application/`, and neither may
   `backend/src/middleware/`. There is no `backend/src/routes/` directory; a
   new HTTP surface is a new module.
 - `backend/src/__tests__/architecture.test.ts` checks these rules on every
   test run. If it fails, fix the layering rather than the test; allowlist
-  entries need a comment explaining why.
+  entries need a comment explaining why. `dependencyCycles.test.ts` also parses
+  imports/re-exports, literal dynamic imports, require calls and type references
+  across all four applications, the shared `packages/` sources and every local
+  file they reach. All source cycles fail CI.
 - Document-version creation, activation, replacement, and deletion belong to
   `backend/src/modules/documents/`. Call its facade instead of writing version
   rows or lifecycle RPCs from another module. Callers authorize destination and
   copy-source scopes independently; the database trigger owns durable cleanup.
-- Domain job bodies live in their modules; `backend/src/jobs/registry.ts`
+- Domain job bodies live in their modules; cross-domain workflow adapters live
+  in `application/jobs/`; `backend/src/jobs/registry.ts`
   composes handlers and failure hooks. Keep queue transport in `lib/dbq/` and
   `workers/`, and the assistant engine in `modules/chat/engine/`.
 - Shared serialized API/event declarations live in `packages/contracts/` and
@@ -165,7 +181,7 @@ send internal exception messages to clients: use the helpers in
 `backend/src/lib/httpError.ts`; logging must use the redaction helpers in
 `backend/src/lib/safeError.ts`. Intentional validation and permission failures
 should remain explicit 4xx responses, and a `code` a client is expected to act
-on must be listed in `CODE_KINDS` in `frontend/src/shared/lib/userError.ts` (a
+on must be listed in `CODE_KINDS` in `packages/client/src/userError.ts` (a
 drift test keeps that table to codes some server really emits).
 
 ## Database Migrations
@@ -286,3 +302,17 @@ descriptions in Markdown and include:
 
 Do not commit secrets, API keys, private documents, `.env` files, build output,
 or local test artifacts.
+
+## Error reporting principles
+
+- Prefer small reporting helpers and clear ownership at the boundary that knows what happened. Reuse existing mechanisms before adding another policy layer.
+- Preserve original exceptions, causes, useful stack locations, operation/stage context, and request/job correlation. Optimize for actionable user failures.
+- Mark expected outcomes where they are actually handled. A recognized UI error code, HTTP status, or AbortError name alone does not prove handling or reporting ownership. Keep unowned terminal transport and response-body failures visible.
+- Keep the final outbound privacy allowlist protecting customer documents, credentials, and identities. Separate privacy enforcement from configurable volume policy; avoid repeat traffic starving new/severe failures.
+- Preserve the shared Sentry projects' hard ceiling of 50 total events per runtime per day. Match the resolved destination project, including explicitly configured DSNs, and keep quiet resets or issue eviction from replenishing that ceiling. Reserve capacity for new failures and severity escalations before repeats.
+- Treat console capture as a fallback, not a business-policy engine. Prefer explicit capture of the original Error with static context.
+- Keep development reporting off by default; avoid accumulating compiler-internal filename filters.
+- Verify meaningful regressions through final SDK envelopes as well as source-level tests. Test diagnostic usefulness, ownership/deduplication, and privacy.
+- Prefer focused simplification and root-cause fixes over suppressing symptoms or building new reporting frameworks.
+
+See `docs/observability.md` for reporting ownership and transport policy.

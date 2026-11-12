@@ -57,14 +57,15 @@ export const projectsRouter = Router();
 // same response. The directory pickers (useDirectoryData) previously fanned
 // out one GET /projects/:id per project to obtain those documents; with N
 // projects that burst — auth check plus several DB queries per request —
-// could overwhelm the Supabase gateway. Batching keeps it at one request
-// and a fixed number of queries regardless of project count.
+// could overwhelm the Supabase gateway. Child and metadata queries remain
+// bounded internally, including for legacy callers requesting the full list.
 //
 // Pagination is opt-in via query params (limit/offset/search/sort_key or
 // key/scope). ProjectsOverview.tsx sends them. Legacy tabular-review project
 // pickers call this with no query params and must keep getting the full,
 // unpaginated list, so the branch below must never default
-// to paginating a request that didn't ask for it.
+// to paginating a request that didn't ask for it. `include=documents` selects
+// response fields, not pagination; older clients do not fetch another page.
 const PROJECT_PAGINATION_QUERY_KEYS = [
   "limit",
   "offset",

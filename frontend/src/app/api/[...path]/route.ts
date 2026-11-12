@@ -1,9 +1,12 @@
+import { BACKEND_REPORTING_OWNER } from "@mike/client";
 import { randomUUID } from "node:crypto";
 import { reportError } from "@/app/lib/errorReporting";
-import { diagnosticRoute } from "@/shared/lib/sentryPrivacy";
+import { diagnosticErrorTags, diagnosticRoute } from "@mike/client";
 import type { NextRequest } from "next/server";
 import {
     UPSTREAM_UNAVAILABLE_FINGERPRINT,
+    forwardableHeaders,
+    guardUpstreamBody,
     upstreamReportWindow,
     upstreamUnreachableCode,
 } from "./upstreamFailure";
@@ -30,16 +33,16 @@ async function proxy(request: NextRequest, context: RouteContext) {
     const { path } = await context.params;
     const requestPath = `/${path.map(encodeURIComponent).join("/")}`;
 
-    const requestId = randomUUID();
+    let requestId: string = randomUUID();
     let stage = "gateway-config";
     try {
         const upstreamUrl = new URL(`${backendOrigin()}${requestPath}`);
         upstreamUrl.search = request.nextUrl.search;
 
-        const headers = new Headers(request.headers);
-        headers.delete("host");
-        headers.delete("connection");
-        headers.delete("content-length");
+        const headers = forwardableHeaders(request.headers);
+        // Mint correlation here rather than trusting a caller-supplied ID.
+        // The backend logs the same ID even if its response never arrives.
+        headers.set("x-request-id", requestId);
         headers.set("x-forwarded-host", request.nextUrl.host);
         headers.set(
             "x-forwarded-proto",
@@ -51,6 +54,9 @@ async function proxy(request: NextRequest, context: RouteContext) {
             headers,
             cache: "no-store",
             redirect: "manual",
+            // A client that goes away aborts the backend request too, instead
+            // of leaving it to run until undici's body timeout.
+            signal: request.signal,
         };
         if (request.method !== "GET" && request.method !== "HEAD") {
             init.body = request.body;
@@ -60,17 +66,35 @@ async function proxy(request: NextRequest, context: RouteContext) {
         stage = "gateway-fetch";
         const upstream = await fetch(upstreamUrl, init);
         stage = "gateway-response";
-        const responseHeaders = new Headers(upstream.headers);
+        const responseHeaders = forwardableHeaders(upstream.headers);
+        // Correlate post-header failures with the backend and the ID the
+        // browser receives. Only UUIDs survive the diagnostic privacy boundary.
+        const upstreamRequestId = responseHeaders.get("x-request-id");
+        if (upstreamRequestId && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(upstreamRequestId)) {
+            requestId = upstreamRequestId;
+        }
+        responseHeaders.set("x-request-id", requestId);
         // Fetch implementations may transparently decompress the response.
         responseHeaders.delete("content-encoding");
         responseHeaders.delete("content-length");
 
-        return new Response(upstream.body, {
+        const body = upstream.body
+            ? guardUpstreamBody(upstream.body, (error) =>
+                  reportStreamFailure(error, request, requestPath, requestId, upstream.status),
+              )
+            : null;
+        return new Response(body, {
             status: upstream.status,
             statusText: upstream.statusText,
             headers: responseHeaders,
         });
     } catch (error) {
+        // The client went away before the backend answered; the forwarded
+        // signal aborted the backend request. Nobody is waiting for a
+        // response and nothing failed.
+        if (request.signal.aborted && stage === "gateway-fetch") {
+            return new Response(null, { status: 499, headers: { "x-request-id": requestId } });
+        }
         // A connection-level failure (ECONNREFUSED, DNS, reset, connect
         // timeout) means the backend is down or misaddressed: an operator
         // condition, not an application bug, and every request fails the
@@ -108,6 +132,7 @@ async function proxy(request: NextRequest, context: RouteContext) {
         return Response.json(
             {
                 detail: "The API is temporarily unavailable.",
+                reporting_owner: BACKEND_REPORTING_OWNER,
                 ...(unreachable ? { code: "upstream_unavailable" } : {}),
                 request_id: requestId,
             },
@@ -120,6 +145,54 @@ async function proxy(request: NextRequest, context: RouteContext) {
             },
         );
     }
+}
+
+/**
+ * The backend's response failed after its headers were forwarded. Split the
+ * same way as a failed fetch. A connection-level code (the backend went away
+ * mid-stream: UND_ERR_SOCKET, ECONNRESET) is the same fact as an unreachable
+ * backend, so it is one pinned warning per cause per minute; every open
+ * stream fails the same way at the same moment. The stage tag keeps it a
+ * separate issue from a refused connection (see diagnosticEvent).
+ * Anything else, including undici's 300 s body timeout (the backend is up but
+ * held the stream silent: a hang, not an outage) and a code we do not know,
+ * keeps an error-level report with default grouping; the final transport
+ * owns repeat sampling. A client that disconnected first is not a failure.
+ */
+function reportStreamFailure(
+    error: unknown,
+    request: NextRequest,
+    requestPath: string,
+    requestId: string,
+    status: number,
+): void {
+    if (request.signal.aborted) return;
+    const code = diagnosticErrorTags(error).failure_code;
+    const failureCode = typeof code === "string" ? code : undefined;
+    const unreachable = upstreamUnreachableCode(error);
+    if (!unreachable || upstreamReportWindow.allow(`gateway-stream:${unreachable}`)) {
+        const tags = {
+            component: "api-gateway",
+            stage: "gateway-stream",
+            http_method: request.method,
+            http_route: diagnosticRoute(requestPath),
+            http_status: status,
+            request_id: requestId,
+            failure_code: failureCode,
+        };
+        if (unreachable) {
+            reportError(error, {
+                level: "warning",
+                fingerprint: [UPSTREAM_UNAVAILABLE_FINGERPRINT],
+                tags,
+            });
+        } else {
+            reportError(error, { tags });
+        }
+    }
+    // console.warn: the operator's log keeps the cause; the Sentry console
+    // bridge only forwards console.error.
+    console.warn("[api-gateway] upstream response stream failed", error, { requestId });
 }
 
 export const GET = proxy;

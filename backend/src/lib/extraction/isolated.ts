@@ -8,13 +8,16 @@ import { execFile, spawn, type ChildProcess } from "node:child_process";
 import type { ExtractionOp, ExtractionOps } from "./ops";
 import { EXTRACTION_MAX_BYTES, ExtractionBusyError, ExtractionLimitError, extractionMemoryMb, extractionTimeoutMs,
   SpreadsheetValuesError, SPREADSHEET_VALUES_MAX_BYTES, isSpreadsheetValuesErrorCode, assertSpreadsheetValuesOutputBudget } from "./limits";
+import { asExtractionFailure, extractionFailureFromWire, type ExtractionFailureWire } from "./failure";
+import { AppError } from "../appError";
 
 export { EXTRACTION_MAX_BYTES, ExtractionBusyError, ExtractionLimitError } from "./limits";
 export { SpreadsheetValuesError, SPREADSHEET_VALUES_MAX_BYTES, SPREADSHEET_VALUES_LIMITS } from "./limits";
+export { ExtractionParseError } from "./failure";
 
 type Result<K extends ExtractionOp> = Awaited<ReturnType<ExtractionOps[K]>>;
 export type ExtractInSlot = <K extends ExtractionOp>(op: K, bytes: ArrayBuffer, options?: { fileType?: string }) => Promise<Result<K>>;
-type Reply = { ok: true; result: unknown } | { ok: false; limited: boolean; message: string; code?: unknown };
+type Reply = { ok: true; result: unknown } | ({ ok: false; limited: boolean } & ExtractionFailureWire);
 
 /** Hard OS memory boundary on Linux, including native buffers. Fail closed if
  * prlimit is unavailable. Other platforms retain process/heap and input/output
@@ -91,6 +94,9 @@ async function startParser(): Promise<Parser> {
   for (const name of ["PATH", "SystemRoot", "HOME", "LANG", "SOFFICE_BINARY_PATH", "LIBREOFFICE_BINARY_PATH", "LIBRE_OFFICE_EXE"]) {
     if (process.env[name] !== undefined) env[name] = process.env[name];
   }
+  // Packaged desktop backends run under Electron's Node mode. Its executable
+  // starts the GUI app again unless each parser child explicitly keeps Node mode.
+  if (process.versions.electron) env.ELECTRON_RUN_AS_NODE = "1";
   env.TMPDIR = env.TMP = env.TEMP = scratch;
   // Avoid glibc arena reservations exhausting RLIMIT_AS at low actual usage.
   env.MALLOC_ARENA_MAX = "2";
@@ -121,7 +127,12 @@ async function extractInChild<K extends ExtractionOp>(op: K, bytes: ArrayBuffer,
   if (process.env.EXTRACTION_ISOLATION === "off") {
     if (valuesPreview) throw new SpreadsheetValuesError("spreadsheet_values_unavailable");
     const { EXTRACTION_OPS } = await import("./ops.js");
-    return await EXTRACTION_OPS[op](bytes, options.fileType ?? "") as Result<K>;
+    try {
+      return await EXTRACTION_OPS[op](bytes, options.fileType ?? "") as Result<K>;
+    } catch (error) {
+      // Classified as the isolated path is, so callers treat both alike.
+      throw error instanceof ExtractionLimitError ? error : asExtractionFailure(error);
+    }
   }
   if (parser && parser.memoryMb !== extractionMemoryMb()) await stopExtractionProcess();
   let p: Parser;
@@ -180,10 +191,10 @@ async function extractInChild<K extends ExtractionOp>(op: K, bytes: ArrayBuffer,
         }
         if (failure instanceof ExtractionLimitError) reject(failure);
         else if (reply?.ok) resolve(reply.result as Result<K>);
-        else if (reply) reject(reply.limited ? new ExtractionLimitError(reply.message) : new Error(reply.message));
+        else if (reply) reject(reply.limited ? new ExtractionLimitError(reply.message) : extractionFailureFromWire(reply));
         else if (signal === "SIGABRT" || /out of memory|allocation failed|cannot allocate memory|failed to map segment|ENOMEM/i.test(diagnostics)) {
           reject(new ExtractionLimitError("parser memory budget exceeded"));
-        } else reject(failure ?? new Error("extraction process exited without a result"));
+        } else reject(failure ?? new AppError("extraction.process_exited", "extraction process exited without a result"));
       }, reject);
     };
     const send = () => child.send({ op, bytes, fileType: options.fileType ?? "" }, (error) => {

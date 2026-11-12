@@ -1,9 +1,19 @@
+import { createTextExtractionCache } from "../../lib/textExtractionCache";
 // extraction body — implementation behind the module facade.
+import { ExtractionParseError } from "../../lib/extraction/failure";
 import { ExtractionLimitError } from "../../lib/extraction/limits";
 import { type ExtractionJobData } from "../../lib/queue/extractionQueue";
 import { publishCellUpdate as defaultPublish, type RunProgressUpdate } from "../../lib/queue/runProgress";
 import { assistantStreamErrorPayload } from "../chat/chat.service";
-import { extractRowColumns, finalizeCell, finishGenerationIfIdle, loadReviewRow, renewGeneration, validateSelectedModel, TABULAR_GENERATION_HEARTBEAT_MS, type Column } from "./tabular.service";
+import { extractRowColumns, finalizeCell } from "./tabular.extractRow";
+import { loadReviewRow } from "./tabular.rows";
+import {
+    finishGenerationIfIdle,
+    renewGeneration,
+    validateSelectedModel,
+    TABULAR_GENERATION_HEARTBEAT_MS,
+    type Column,
+} from "./tabular.shared";
 import { createServerSupabase, type Db } from "../../lib/supabase";
 import { AppError } from "../../lib/appError";
 import { asReportableError } from "../../lib/httpError";
@@ -33,6 +43,9 @@ function reportLeaseLost(
     });
     return failure;
 }
+
+// Queue jobs may share a source; revision keys prevent stale in-place edits.
+const workerTextCache = createTextExtractionCache();
 
 export interface ExtractionDeps {
     db: Db;
@@ -195,6 +208,7 @@ export async function runExtractionJob(
         //    tailing /generate request sees them live. Every cell write is
         //    stamped with — and, once terminal, guarded by — this generation.
         const { processed, missing, error } = await extractRowColumns({
+            textCache: workerTextCache,
             reportFailure: false,
             db,
             reviewId,
@@ -223,7 +237,7 @@ export async function runExtractionJob(
                     }),
             },
         });
-        if (error instanceof ExtractionLimitError) throw error;
+        if (error instanceof ExtractionLimitError || error instanceof ExtractionParseError) throw error;
         if (error) {
             const payload = assistantStreamErrorPayload(error);
             if (payload.code === "invalid_api_key") {

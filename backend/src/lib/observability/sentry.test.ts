@@ -1,4 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { readFileSync } from "node:fs";
+import path from "node:path";
+import { parse } from "dotenv";
 
 // A fake scope records what reportError() sets so the assertions can check
 // tags/extra/level land on the event rather than on a global scope.
@@ -68,10 +71,10 @@ import {
   reportMessage,
   resetSentryForTests,
   scrubEvent,
+  isDevelopmentBuild,
   sentryConfiguration,
   setCurrentUser,
   tagCurrentRequest,
-  withinIssueBudget,
 } from "./sentry";
 
 // Unit tests run with NODE_ENV=test, which disables reporting by design; the
@@ -91,6 +94,22 @@ afterEach(() => {
 });
 
 describe("sentryConfiguration", () => {
+  it.each([
+    ["upstream", "", "", true, MIKE_SENTRY_DSN.backend],
+    ["fork without Sentry", "true", "", false, ""],
+    ["fork with its own Sentry", "", "https://fork@self.example/9", true, "https://fork@self.example/9"],
+  ])("preserves %s reporting defaults with the stock Compose env_file", (_kind, disabled, dsn, enabled, expectedDsn) => {
+    const sample = parse(readFileSync(path.resolve(__dirname, "../../../../.env.example")));
+    const config = sentryConfiguration({
+      MIKE_BUILD_SENTRY_DISABLED: disabled,
+      MIKE_BUILD_SENTRY_DSN: dsn,
+      ...sample,
+      NODE_ENV: "production",
+    });
+    expect(config.enabled).toBe(enabled);
+    expect(config.dsn).toBe(expectedDsn);
+  });
+
   it("is ON BY DEFAULT: the Mike project DSN, a community install, environment self-hosted", () => {
     const config = sentryConfiguration({ NODE_ENV: "production" } as NodeJS.ProcessEnv);
     expect(config.enabled).toBe(true);
@@ -187,16 +206,15 @@ describe("sentryConfiguration", () => {
     ).toBe(true);
   });
 
-  it("reads the per-issue budget with a sane default", () => {
-    expect(sentryConfiguration({} as NodeJS.ProcessEnv).maxEventsPerIssuePerMinute).toBe(10);
-    expect(
-      sentryConfiguration({ SENTRY_MAX_EVENTS_PER_ISSUE_PER_MINUTE: "3" } as NodeJS.ProcessEnv)
-        .maxEventsPerIssuePerMinute,
-    ).toBe(3);
-    expect(
-      sentryConfiguration({ SENTRY_MAX_EVENTS_PER_ISSUE_PER_MINUTE: "-2" } as NodeJS.ProcessEnv)
-        .maxEventsPerIssuePerMinute,
-    ).toBe(10);
+  it("reads the repeat-event budget without imposing a community cap on custom DSNs", () => {
+    expect(sentryConfiguration({}, false).repeatEventsPerDay).toBe(25);
+    expect(sentryConfiguration({ SENTRY_DSN: "https://key@sentry.invalid/1" }, false).repeatEventsPerDay).toBe(Infinity);
+    expect(sentryConfiguration({ SENTRY_MAX_REPEAT_EVENTS_PER_DAY: "0" }, false).repeatEventsPerDay).toBe(0);
+    for (const dsn of Object.values(MIKE_SENTRY_DSN)) {
+      expect(sentryConfiguration({ SENTRY_DSN: dsn }, false)).toMatchObject({ repeatEventsPerDay: 25, eventsPerDay: 50 });
+      expect(sentryConfiguration({ MIKE_BUILD_SENTRY_DSN: dsn }, false)).toMatchObject({ repeatEventsPerDay: 25, eventsPerDay: 50 });
+    }
+
   });
 
   it("derives mike@<version>+<sha12> from the build args when SENTRY_RELEASE is unset", () => {
@@ -492,72 +510,6 @@ describe("scrubEvent", () => {
       exception: { values: [{ mechanism: { type: "generic" } }] },
     } as Parameters<typeof scrubEvent>[0];
     expect(scrubEvent(direct, { originalException: error })).not.toBeNull();
-  });
-});
-
-describe("per-issue flood control", () => {
-  const exceptionEvent = (value: string, component = "dbq") =>
-    ({
-      exception: { values: [{ type: "Error", value }] },
-      tags: { component },
-    }) as unknown as Parameters<typeof scrubEvent>[0];
-
-  it("lets the first ten events of an issue through per minute and drops the rest", () => {
-    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
-    const t0 = 1_000_000;
-    for (let i = 0; i < 10; i += 1) {
-      expect(withinIssueBudget(exceptionEvent("fetch failed"), t0 + i)).toBe(true);
-    }
-    expect(withinIssueBudget(exceptionEvent("fetch failed"), t0 + 11)).toBe(false);
-    expect(withinIssueBudget(exceptionEvent("fetch failed"), t0 + 12)).toBe(false);
-    // A different issue has its own budget.
-    expect(withinIssueBudget(exceptionEvent("other"), t0 + 13)).toBe(true);
-    expect(withinIssueBudget(exceptionEvent("fetch failed", "upload-worker"), t0 + 14)).toBe(true);
-    // The window rolls over: allowed again, and the suppression is logged once.
-    expect(withinIssueBudget(exceptionEvent("fetch failed"), t0 + 60_001)).toBe(true);
-    expect(warn).toHaveBeenCalledWith(
-      expect.stringContaining("suppressed 2 further event(s)"),
-    );
-    warn.mockRestore();
-  });
-
-  it("keys on the fingerprint when one is set and on the message otherwise", () => {
-    const t0 = 5_000_000;
-    const fingerprinted = {
-      fingerprint: ["dbq-claim-failed"],
-      exception: { values: [{ type: "Error", value: "a" }] },
-    } as unknown as Parameters<typeof scrubEvent>[0];
-    const differentValueSameFingerprint = {
-      fingerprint: ["dbq-claim-failed"],
-      exception: { values: [{ type: "Error", value: "b" }] },
-    } as unknown as Parameters<typeof scrubEvent>[0];
-    for (let i = 0; i < 10; i += 1) withinIssueBudget(fingerprinted, t0 + i);
-    expect(withinIssueBudget(differentValueSameFingerprint, t0 + 20)).toBe(false);
-
-    const message = { message: "odd state" } as Parameters<typeof scrubEvent>[0];
-    for (let i = 0; i < 10; i += 1) withinIssueBudget(message, t0 + i);
-    expect(withinIssueBudget(message, t0 + 20)).toBe(false);
-  });
-
-  it("is enforced by scrubEvent", () => {
-    vi.spyOn(console, "warn").mockImplementation(() => {});
-    for (let i = 0; i < 10; i += 1) {
-      expect(scrubEvent(exceptionEvent("loop"), {})).not.toBeNull();
-    }
-    expect(scrubEvent(exceptionEvent("loop"), {})).toBeNull();
-  });
-
-  it("honours the configured budget after init", () => {
-    vi.spyOn(console, "log").mockImplementation(() => {});
-    initSentry("api", {
-      ...quietEnv,
-      SENTRY_DSN: "https://key@o1.ingest.sentry.io/1",
-      SENTRY_ALLOW_IN_TESTS: "true",
-      SENTRY_MAX_EVENTS_PER_ISSUE_PER_MINUTE: "2",
-    } as NodeJS.ProcessEnv);
-    expect(withinIssueBudget(exceptionEvent("x"))).toBe(true);
-    expect(withinIssueBudget(exceptionEvent("x"))).toBe(true);
-    expect(withinIssueBudget(exceptionEvent("x"))).toBe(false);
   });
 });
 
@@ -1085,5 +1037,70 @@ describe("community install minimisation", () => {
     expect(out.server_name).toBe("api-1");
     expect(out.user).toEqual({ id: "user-1" });
     expect(out.breadcrumbs).toHaveLength(1);
+  });
+});
+
+// MIKE-BACKEND-B, 8, C, 1V, 1M: culprits under backend/src/... are `tsx
+// watch` checkouts reporting to the Mike project as environment=self-hosted.
+describe("development builds", () => {
+  it("are the TypeScript source, not the compiled image", () => {
+    expect(isDevelopmentBuild(["node", "/home/dev/mike/backend/src/index.ts"])).toBe(true);
+    expect(isDevelopmentBuild(["node", "/app/dist/index.js"])).toBe(false);
+    expect(isDevelopmentBuild(["node", "/app/dist/jobs/syncWorkflows.js"])).toBe(false);
+  });
+
+  it("do not fall back to the Mike project, even with the example's SENTRY_DISABLED=false", () => {
+    const config = sentryConfiguration({ NODE_ENV: "development", SENTRY_DISABLED: "false" } as NodeJS.ProcessEnv, true);
+    expect(config).toMatchObject({ enabled: false, dsn: "", dsnSource: "development" });
+    // The compiled image under compose's NODE_ENV=development is an install.
+    expect(sentryConfiguration({ NODE_ENV: "development" } as NodeJS.ProcessEnv, false)).toMatchObject({
+      enabled: true,
+      dsnSource: "default",
+      environment: "self-hosted",
+    });
+  });
+
+  // The build_mode tag follows the same rule, not NODE_ENV: compose and the
+  // desktop app run the compiled image under NODE_ENV=development, and those
+  // installs must not be tagged as laptops.
+  it("tag build_mode from the entry point, not NODE_ENV", () => {
+    vi.spyOn(console, "log").mockImplementation(() => {});
+    const compose = { NODE_ENV: "development", SENTRY_DSN: "https://key@o1.ingest.sentry.io/1" } as NodeJS.ProcessEnv;
+    expect(initSentry("api", compose, false)).toBe(true);
+    expect(vi.mocked(Sentry.init).mock.calls[0][0]!.initialScope).toMatchObject({
+      tags: { build_mode: "production" },
+    });
+
+    resetSentryForTests();
+    expect(initSentry("api", { ...compose, NODE_ENV: "production" } as NodeJS.ProcessEnv, true)).toBe(true);
+    expect(vi.mocked(Sentry.init).mock.calls[1][0]!.initialScope).toMatchObject({
+      tags: { build_mode: "development" },
+    });
+  });
+
+  // The opt-in for a self-hoster running the source in production: the run
+  // reports exactly like the compiled image. Without it, the same run is off.
+  it("report like an install when SENTRY_SOURCE_RUN_IS_INSTALL=true", () => {
+    vi.spyOn(console, "log").mockImplementation(() => {});
+    const env = { NODE_ENV: "production", SENTRY_DISABLED: "false" } as NodeJS.ProcessEnv;
+    expect(initSentry("api", env, true)).toBe(false);
+
+    resetSentryForTests();
+    expect(initSentry("api", { ...env, SENTRY_SOURCE_RUN_IS_INSTALL: "TRUE" } as NodeJS.ProcessEnv, true)).toBe(true);
+    const options = vi.mocked(Sentry.init).mock.calls[0][0]!;
+    expect(options).toMatchObject({ dsn: MIKE_SENTRY_DSN.backend, environment: "self-hosted" });
+    expect(options.initialScope).toMatchObject({ tags: { build_mode: "production" } });
+  });
+
+  it("report as environment development to a DSN set on purpose, unless SENTRY_ENVIRONMENT says otherwise", () => {
+    const dsn = "http://mike@localhost:9999/1";
+    expect(sentryConfiguration({ SENTRY_DSN: dsn } as NodeJS.ProcessEnv, true)).toMatchObject({
+      enabled: true,
+      dsn,
+      environment: "development",
+    });
+    expect(
+      sentryConfiguration({ SENTRY_DSN: dsn, SENTRY_ENVIRONMENT: "staging" } as NodeJS.ProcessEnv, true).environment,
+    ).toBe("staging");
   });
 });

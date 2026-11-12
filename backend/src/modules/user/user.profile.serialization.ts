@@ -1,6 +1,6 @@
 // user profile serialization — implementation behind the module facade.
 import { normalizeOptionalModelPreference, normalizeReasoningLevel } from "../../lib/modelSelection";
-import { type ApiKeyStatus } from "./user.apiKeyStore";
+import { type ApiKeyStatus } from "../../lib/providerCredentials/index";
 import { ROUTER_SLUGS, type RouterModelSelections } from "../../lib/routerModels";
 import { UserProfileRow, MONTHLY_CREDIT_LIMIT } from "./user.profile.storage";
 import { courtlistenerBulkDataEnabled } from "../../lib/courtlistener";

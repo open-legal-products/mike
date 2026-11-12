@@ -33,12 +33,8 @@ import {
   type PlaybookRun,
 } from "@/app/lib/mikeApi";
 import { showToast } from "@/app/components/ui/toast";
-import {
-  clearToasts,
-  getSnapshot as getToastSnapshot,
-} from "@/shared/lib/toastStore";
+import { clearToasts, getSnapshot as getToastSnapshot, SETTINGS_MODELS } from "@mike/client";
 import { PlaybooksWorkspaceLayout as PlaybooksPage } from "./PlaybooksWorkspace";
-import { SETTINGS_MODELS } from "@/shared/lib/modelCatalog";
 
 const TEST_MODEL = SETTINGS_MODELS[0].id;
 
@@ -1269,6 +1265,43 @@ describe("playbooks page", () => {
       "clean",
     ]);
     await waitFor(() => expect(rows()).toEqual(["Select busy.docx"]));
+  });
+
+  it("sends every run delete before the first one answers", async () => {
+    const run = (id: string) => ({
+      ...RUN,
+      id,
+      documentName: `${id}.docx`,
+      playbookName: "Playbook A",
+    });
+    vi.mocked(listAllPlaybookRuns).mockResolvedValue([run("first"), run("second"), run("third")]);
+    const pending: Array<() => void> = [];
+    vi.mocked(deletePlaybookRun).mockImplementation(
+      () => new Promise<void>((resolve) => pending.push(resolve)),
+    );
+    render(<PlaybooksPage />);
+    await screen.findByRole("link", { name: "Playbook A" });
+    await userEvent.click(screen.getByRole("button", { name: "Runs" }));
+    const table = await screen.findByRole("table", { name: "Playbook runs" });
+    await userEvent.click(within(table).getAllByRole("checkbox")[0]);
+    await userEvent.click(screen.getByRole("button", { name: "Actions" }));
+    await userEvent.click(
+      await screen.findByRole("menuitem", { name: "Delete 3 runs" }),
+    );
+    vi.mocked(listAllPlaybookRuns).mockResolvedValue([]);
+    await userEvent.click(
+      within(screen.getByRole("dialog", { name: "Delete runs?" })).getByRole(
+        "button",
+        { name: "Delete" },
+      ),
+    );
+
+    // Every request is out before the first one answers.
+    await waitFor(() => expect(deletePlaybookRun).toHaveBeenCalledTimes(3));
+    act(() => pending.forEach((resolve) => resolve()));
+    await waitFor(() =>
+      expect(screen.queryByRole("dialog", { name: "Delete runs?" })).toBeNull(),
+    );
   });
 
   it("retries only the runs left after a partly failed delete", async () => {

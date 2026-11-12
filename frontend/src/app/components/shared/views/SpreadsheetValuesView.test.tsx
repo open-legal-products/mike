@@ -8,7 +8,7 @@ const mocks = vi.hoisted(() => ({ preview: vi.fn(), source: vi.fn(), save: vi.fn
 vi.mock("@/app/lib/mikeApi", () => ({ getSpreadsheetValuesPreview: mocks.preview, getSpreadsheetValuesSource: mocks.source }));
 vi.mock("@/app/lib/downloadDocument", () => ({ downloadBlob: mocks.save }));
 vi.mock("@/app/lib/userFacingError", async () => {
-    const actual = await import("@/shared/lib/userError");
+    const actual = await import("@mike/client");
     return { ...actual, notifyError: (...args: Parameters<typeof actual.describeError>) => { mocks.notify(...args); return actual.describeError(...args); } };
 });
 const DOC = "11111111-1111-4111-8111-111111111111";

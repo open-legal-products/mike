@@ -3,6 +3,7 @@ import { networkFailure } from "../lib/networkError";
 import { responseError } from "../api/client";
 import { reportNetworkFailure } from "../lib/errorReporting";
 import { notifyError, reportFault } from "../lib/notify";
+import { paneStorage } from "../lib/paneStorage";
 import { parseGoogleOAuthDialogMessage } from "./oauthProtocol";
 
 const LEGACY_ACCESS_KEY = "mike_token";
@@ -48,10 +49,13 @@ export function getSessionState(): SessionState {
 
 async function clearLegacyTokenStorage(): Promise<void> {
   // Best-effort cleanup of a storage format no longer read. Nothing the user
-  // asked for depends on it, so a failure stays silent.
+  // asked for depends on it, so a failure stays silent. `paneStorage`, not
+  // the `OfficeRuntime` global: outside Office that global does not exist,
+  // and naming it threw before this `.catch` could see it, so sign-in
+  // failed and was reported as a word.session fault.
   await Promise.all([
-    OfficeRuntime.storage.removeItem(LEGACY_ACCESS_KEY).catch(() => {}),
-    OfficeRuntime.storage.removeItem(LEGACY_REFRESH_KEY).catch(() => {}),
+    paneStorage.removeItem(LEGACY_ACCESS_KEY).catch(() => {}),
+    paneStorage.removeItem(LEGACY_REFRESH_KEY).catch(() => {}),
   ]);
 }
 

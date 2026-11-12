@@ -49,6 +49,7 @@ export {
   buildUserPersonalisationPrompt,
   buildWorkflowStore,
   attachPriorReasoning,
+  createAssistantHistoryLoader,
   enrichWithPriorEvents,
   appendAskInputsResponseToAssistantMessage,
   runApprovedConnectorActions,

@@ -14,7 +14,7 @@ import {
 } from "@testing-library/react";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import type { WorkbookInstance } from "@fortune-sheet/react";
-import type { Sheet } from "@fortune-sheet/core";
+import type { Cell, Sheet } from "@fortune-sheet/core";
 import { SpreadsheetView } from "./SpreadsheetView";
 
 const state = vi.hoisted(() => ({
@@ -45,6 +45,14 @@ vi.mock("@fortune-sheet/react", () => ({
         ref,
     ) {
         const [zoom, setZoom] = useState(data[0].zoomRatio ?? 1);
+        // Like Fortune-sheet, read cells from celldata once into a data matrix.
+        const [cells] = useState(() => {
+            const matrix: (Cell | null)[][] = [];
+            for (const { r, c, v } of data[0].celldata ?? []) {
+                (matrix[r] ??= [])[c] = v;
+            }
+            return matrix;
+        });
         const x = useRef<HTMLDivElement>(null);
         const y = useRef<HTMLDivElement>(null);
         useEffect(() => {
@@ -63,7 +71,15 @@ vi.mock("@fortune-sheet/react", () => ({
             () =>
                 ({
                     getSheet: () => data[0],
-                    getAllSheets: () => [{ ...data[0], zoomRatio: zoom }],
+                    getAllSheets: () => {
+                        const sheet = { ...data[0], data: cells, zoomRatio: zoom };
+                        delete sheet.celldata;
+                        return [sheet];
+                    },
+                    dataToCelldata: (matrix: (Cell | null)[][] | undefined) =>
+                        (matrix ?? []).flatMap((row, r) =>
+                            row.flatMap((v, c) => (v ? [{ r, c, v }] : [])),
+                        ),
                     getSelection: () => [{ row: [2, 2], column: [3, 3] }],
                     setSelection: vi.fn(),
                     activateSheet: vi.fn(),
@@ -78,11 +94,16 @@ vi.mock("@fortune-sheet/react", () => ({
                         if (y.current) y.current.scrollTop = scrollTop;
                     },
                 }) as unknown as WorkbookInstance,
-            [data, zoom],
+            [data, cells, zoom],
         );
         return (
             <div>
                 <span>Zoom {zoom}</span>
+                {cells.flatMap((row, r) =>
+                    row.map((cell, c) => (
+                        <span key={`${r}_${c}`}>{cell?.v}</span>
+                    )),
+                )}
                 {data[0].images?.map((image) => (
                     <img
                         key={image.id}
@@ -114,7 +135,13 @@ beforeEach(() => {
     state.parse.mockImplementation((_file, done) =>
         done({
             sheets: [
-                { id: "s1", name: "Budget", data: [], config: {}, status: 1 },
+                {
+                    id: "s1",
+                    name: "Budget",
+                    celldata: [{ r: 0, c: 0, v: { v: "Total" } }],
+                    config: {},
+                    status: 1,
+                },
             ],
         }),
     );
@@ -263,6 +290,7 @@ it("retains parsed data and viewport, and removes global workbook input handlers
     expect(event.defaultPrevented).toBe(false);
     rerender(<SpreadsheetView documentId="sheet" />);
     expect(screen.getByText("Zoom 1.1")).toBeVisible();
+    expect(screen.getByText("Total")).toBeVisible();
     await waitFor(() => {
         expect(screen.getByTestId("x").scrollLeft).toBe(180);
         expect(screen.getByTestId("y").scrollTop).toBe(460);

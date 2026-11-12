@@ -1,4 +1,6 @@
-import type { Operation } from "@/shared/lib/sentryPrivacy";
+import { BACKEND_REPORTING_OWNER } from "@mike/client";
+import type { Operation } from "@mike/client";
+import { settleWithConcurrency } from "@mike/client";
 import type {
     TabularReviewHistoryStatus,
     AuditActor,
@@ -26,9 +28,9 @@ export type {
 import { isPanelDocument } from "@/app/components/shared/types";
 import { authenticatedFetch } from "@/app/lib/authEvents";
 import { notifyTabularReviewsChanged } from "@/app/lib/tabularReviewChanges";
-import type { RouterProfileLists } from "@/shared/lib/modelCatalog";
+import type { RouterProfileLists } from "@mike/client";
+import { reportedUpstreamMessage } from "@mike/client";
 import {
-    markErrorHandled,
     reportApiFailure,
     reportError,
     reportNetworkFailure,
@@ -38,6 +40,7 @@ import {
     UploadBatchError,
     createControlRequestRetryPolicy,
     failedUploadMessage,
+    uploadOutcomeNeedsRetry,
     firstUploadResult,
     uploadFilesWithSessionCore,
     type UploadOutcome,
@@ -45,7 +48,7 @@ import {
     type UploadProgressStatus,
     type UploadSessionInput,
     type UploadSessionPurpose,
-} from "@/shared/api/uploadSessionClient";
+} from "@mike/client";
 // The role vocabulary is defined once, next to the capability matrix that
 // gives it meaning, and re-exported here so API consumers do not need two
 // imports to describe one row.
@@ -85,7 +88,7 @@ import type {
 } from "@/app/components/shared/types";
 
 export { UploadBatchError };
-export { failedUploadMessage };
+export { failedUploadMessage, uploadOutcomeNeedsRetry };
 export type {
     UploadOutcome,
     UploadProgress,
@@ -133,13 +136,7 @@ const apiFetch = async (input: RequestInfo | URL, init?: RequestInit, operation?
     } catch (error) {
         // Stopping a stream or leaving a screen is expected. Abort reasons
         // may be arbitrary values, so the signal also covers custom reasons.
-        if (
-            init?.signal?.aborted ||
-            (typeof error === "object" &&
-                error !== null &&
-                "name" in error &&
-                error.name === "AbortError")
-        ) {
+        if (init?.signal?.aborted) {
             throw error;
         }
         reportNetworkFailure(error, {
@@ -161,57 +158,37 @@ export class MikeApiError extends Error {
     status: number;
     code: string | null;
     requestId: string | null;
+    reportingOwner?: typeof BACKEND_REPORTING_OWNER;
 
     constructor(args: {
         message: string;
         status: number;
         code?: string | null;
         requestId?: string | null;
+        reportingOwner?: typeof BACKEND_REPORTING_OWNER;
     }) {
         super(args.message);
         this.name = "MikeApiError";
         this.status = args.status;
         this.code = args.code ?? null;
         this.requestId = args.requestId ?? null;
+        this.reportingOwner = args.reportingOwner;
     }
 }
 
 export const INTERNAL_ERROR_MESSAGE = "Something went wrong. Please try again.";
 export const MALFORMED_ERROR_RESPONSE_MESSAGE =
     "The request could not be completed. Please try again.";
-/**
- * The backend's answer when its database is missing a migration (PGRST202/
- * 204/205, 42P01). Unlike other 5xx it tells the user something actionable
- * — contact whoever runs the server — so it is shown instead of the generic
- * fallback (see userFacingApiError).
- */
-export const SCHEMA_OUT_OF_DATE_CODE = "schema_out_of_date";
-export const SCHEMA_OUT_OF_DATE_MESSAGE =
-    "The server's database needs an update before this can load. Please contact your administrator.";
-/**
- * The Next gateway's answer (503, Retry-After) when it cannot reach the
- * backend at all (ECONNREFUSED and friends). The gateway reports it once
- * per outage; the user can only wait and retry.
- */
-export const UPSTREAM_UNAVAILABLE_CODE = "upstream_unavailable";
-export const UPSTREAM_UNAVAILABLE_MESSAGE =
-    "The server is temporarily unreachable. Please try again shortly.";
-/**
- * 5xx codes that the server side (backend or gateway) has already reported
- * to Sentry, and that carry a message worth showing instead of the generic
- * fallback. The browser shows the message and does not report them again.
- */
-const REPORTED_UPSTREAM_MESSAGES: Readonly<Record<string, string>> = {
-    [SCHEMA_OUT_OF_DATE_CODE]: SCHEMA_OUT_OF_DATE_MESSAGE,
-    [UPSTREAM_UNAVAILABLE_CODE]: UPSTREAM_UNAVAILABLE_MESSAGE,
-};
-
-/** The fixed user-facing message for a server-reported code, or null. */
-export function reportedUpstreamMessage(code: string): string | null {
-    return Object.hasOwn(REPORTED_UPSTREAM_MESSAGES, code)
-        ? REPORTED_UPSTREAM_MESSAGES[code]
-        : null;
-}
+// The 5xx codes the server side already reported, and their fixed messages,
+// are shared with the Word add-in (packages/client); they are re-exported
+// here because API consumers know them as mikeApi's answers.
+export {
+    SCHEMA_OUT_OF_DATE_CODE,
+    SCHEMA_OUT_OF_DATE_MESSAGE,
+    UPSTREAM_UNAVAILABLE_CODE,
+    UPSTREAM_UNAVAILABLE_MESSAGE,
+    reportedUpstreamMessage,
+} from "@mike/client";
 
 export function isMfaRequiredError(error: unknown) {
     return (
@@ -268,14 +245,7 @@ export async function uploadFilesWithSession<T>(args: {
         transport: {
             apiRequest: <R>(path: string, init?: RequestInit) => apiRequest<R>("upload_session.control", path, init),
             fetchStorage: (...fetchArgs) => fetch(...fetchArgs),
-            onStorageFailure: ({ error, status, network }) => reportError(error, {
-                ...(network ? { level: "warning" as const } : {}),
-                tags: {
-                    component: "mike-api", operation: "upload_session.storage", http_method: "PUT",
-                    ...(status !== undefined ? { http_status: status } : {}),
-                    ...(network ? { network: true } : {}),
-                },
-            }),
+            reportStorageFailure: reportError,
             shouldRetryControlRequest: createControlRequestRetryPolicy(
                 (error) =>
                     error instanceof MikeApiError
@@ -319,6 +289,7 @@ async function toApiError(
     const text = await response.text();
     try {
         const parsed = JSON.parse(text) as {
+            reporting_owner?: unknown;
             detail?: unknown;
             code?: unknown;
             request_id?: unknown;
@@ -334,28 +305,15 @@ async function toApiError(
             requestId,
         });
         const code = typeof parsed.code === "string" ? parsed.code : null;
+        // A code the backend or gateway already reported carries our fixed
+        // sentence for it (never the body's `detail`); reportApiFailure
+        // below only marks it, so no screen files it a second time.
         const upstreamMessage = code ? reportedUpstreamMessage(code) : null;
-        if (upstreamMessage) {
-            // The backend (schema_out_of_date) or the gateway
-            // (upstream_unavailable) has already reported this failure once,
-            // with detail the browser cannot see. A browser copy would be one
-            // more event per endpoint per page view for the same incident —
-            // the per-route fan-out again — so it is only marked: a screen's
-            // console.error of it is not bridged either. The message is
-            // ours, not the body's `detail`.
-            const upstreamError = new MikeApiError({
-                status: response.status,
-                code,
-                requestId,
-                message: upstreamMessage,
-            });
-            markErrorHandled(upstreamError);
-            return upstreamError;
-        }
         const apiError = new MikeApiError({
             status: response.status,
             code,
             requestId,
+            ...(parsed.reporting_owner === BACKEND_REPORTING_OWNER ? { reportingOwner: BACKEND_REPORTING_OWNER } : {}),
             // A 4xx whose body carries no usable `detail` is a malformed
             // error response, and it is treated as one. `API error: 409` used
             // to be produced here instead — and because a 4xx message is the
@@ -365,11 +323,12 @@ async function toApiError(
             // already has the right sentence for "the server did not tell us
             // what went wrong"; this arm now uses it too.
             message:
-                response.status >= 500
+                upstreamMessage ??
+                (response.status >= 500
                     ? INTERNAL_ERROR_MESSAGE
                     : typeof parsed.detail === "string" && parsed.detail
                       ? parsed.detail
-                      : MALFORMED_ERROR_RESPONSE_MESSAGE,
+                      : MALFORMED_ERROR_RESPONSE_MESSAGE),
         });
         // 4xx are intentional answers (validation, permissions) and are
         // shown to the user; 5xx are failures worth an alert, correlated to
@@ -383,6 +342,7 @@ async function toApiError(
                 code: apiError.code,
                 requestId,
                 error: apiError,
+                reportingOwner: apiError.reportingOwner,
             });
         }
         return apiError;
@@ -407,6 +367,7 @@ async function toApiError(
                 status: response.status,
                 requestId: apiError.requestId,
                 error: apiError,
+                reportingOwner: apiError.reportingOwner,
             });
         }
         return apiError;
@@ -428,7 +389,7 @@ export async function listProjects(options?: {
     if (options?.workspace) params.set("workspace", options.workspace);
     // Workspace filters select the paginated backend overload. Pickers still
     // need the full list, including projects beyond its default first page.
-    if (options?.workspace && !options.participatingOnly) {
+    if (options?.includeDocuments || (options?.workspace && !options.participatingOnly)) {
         const projects: Project[] = [];
         const pageSize = 100;
         params.set("limit", String(pageSize));
@@ -876,7 +837,8 @@ export interface UserProfile extends RouterProfileLists {
     responseDetailsVisible?: boolean;
     darkMode: boolean;
     projectMemoryDefault: boolean;
-    apiKeyStatus: ApiKeyStatus;
+    /** Absent only when a forked server or a proxy/misroute answers; see `hasApiKeyStatus`. */
+    apiKeyStatus?: ApiKeyStatus;
 }
 
 /** Uploads a cropped profile-photo data URL, or removes the current photo when passed null. */
@@ -2836,6 +2798,35 @@ export async function uploadStandaloneDocuments(
         onProgress: options?.onProgress,
         signal: options?.signal,
     });
+}
+
+export async function getDocumentStatuses(documentIds: string[], signal?: AbortSignal): Promise<Document[]> {
+    try {
+        return await apiRequest<Document[]>("documents.directory", "/single-documents/status", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ document_ids: documentIds }),
+            signal,
+        });
+    } catch (error) {
+        // Self-hosted frontends and backends may be upgraded independently.
+        // Only an unsupported endpoint selects the legacy reads: auth/server
+        // failures must retain their normal handling and retry behavior.
+        if (!(error instanceof MikeApiError) || ![404, 405].includes(error.status)) throw error;
+        signal?.throwIfAborted();
+        const results = await settleWithConcurrency([...new Set(documentIds)], 2, async id => {
+            signal?.throwIfAborted();
+            return apiRequest<Document>("documents.directory", `/single-documents/${encodeURIComponent(id)}`, { signal });
+        });
+        signal?.throwIfAborted();
+        return results.flatMap(result => {
+            if (result.status === "fulfilled") return [result.value];
+            // The batch endpoint also omits deleted or no-longer-readable
+            // documents. Other failures must not look like an empty result.
+            if (result.reason instanceof MikeApiError && result.reason.status === 404) return [];
+            throw result.reason;
+        });
+    }
 }
 
 export async function getDocument(documentId: string): Promise<Document> {

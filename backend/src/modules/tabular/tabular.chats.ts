@@ -44,7 +44,7 @@ import {
     titleModelForChat,
 } from "../../lib/modelSelection";
 import { generateChatTitle } from "./tabular.extract";
-import { filterReadableReviewRows, loadReviewRows } from "./tabular.rows";
+import { filterReadableReviewRows, loadReviewCells, loadReviewRows } from "./tabular.rows";
 import {
     parseCellContent,
     statusFailure,
@@ -602,12 +602,10 @@ export async function prepareTabularChat(
     // the rows whose source documents the caller can read: the model answers
     // the caller, so it must not be handed filenames or extracted text the
     // caller could not open themselves (see filterReadableReviewRows).
-    const { data: allCells } = await db
-        .from("tabular_cells")
-        .select("*")
-        .eq("review_id", reviewId);
+    let allCells: Record<string, unknown>[];
     let rows: Awaited<ReturnType<typeof loadReviewRows>>;
     try {
+        allCells = await loadReviewCells(db, reviewId);
         ({ rows } = await filterReadableReviewRows(
             db,
             await loadReviewRows(db, reviewId),
@@ -619,7 +617,7 @@ export async function prepareTabularChat(
         return internalFailure(error);
     }
     const visibleRowIds = new Set(rows.map((row) => row.id));
-    const cells = (allCells ?? []).filter((c: { row_id?: string }) =>
+    const cells = allCells.filter((c: { row_id?: unknown }) =>
         visibleRowIds.has(c.row_id as string),
     );
 

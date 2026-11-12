@@ -1,3 +1,5 @@
+import { chunkArray } from "../arrays";
+import { ID_FILTER_BATCH_SIZE } from "../batchedQuery";
 import { createHash } from "node:crypto";
 import { AppError } from "../appError";
 import type { Db } from "../dbq/types";
@@ -397,6 +399,39 @@ export async function wipeMemoryFile(args: {
         ? result.mutation_at
         : new Date().toISOString(),
   };
+}
+
+/**
+ * Empty many memory files: the bulk form of wipeMemoryFile for cleanup
+ * paths (organization and account deletion). Ids go 50 per
+ * wipe_memory_files call, which wipes each distinct id under its own row
+ * lock exactly as wipe_memory_file does.
+ *
+ * That RPC is all-or-nothing per call: one bad id (deleted meanwhile, P0002)
+ * rolls back the whole batch, where the old one-id-at-a-time loop had
+ * already kept every wipe before the failure. To keep those partial-progress
+ * semantics, a failed batch is retried id by id, in order, through
+ * wipe_memory_file, and the first id that still fails ends the cleanup with
+ * an error (as it did before). Returns nothing; throws on failure.
+ */
+export async function wipeMemoryFiles(
+  db: Db,
+  ids: string[],
+  options: { enabled: boolean | null; source?: "wipe" | "settings" },
+): Promise<void> {
+  const args = {
+    p_enabled: options.enabled,
+    p_updated_by: null,
+    p_source: options.source ?? "wipe",
+  };
+  for (const batch of chunkArray([...new Set(ids)], ID_FILTER_BATCH_SIZE)) {
+    const { error } = await db.rpc("wipe_memory_files", { p_ids: batch, ...args });
+    if (!error) continue;
+    for (const id of batch) {
+      const single = await db.rpc("wipe_memory_file", { p_memory_file_id: id, ...args });
+      if (single.error) throw new Error("Failed to wipe memory", { cause: single.error });
+    }
+  }
 }
 
 export async function enableMemoryFile(

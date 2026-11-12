@@ -1,3 +1,4 @@
+import { BACKEND_REPORTING_OWNER } from "@mike/client";
 import { UserVisibleError, describeError } from "@/app/lib/userFacingError";
 
 // What a chat surface says, and offers, when a turn fails. The assistant chat
@@ -42,7 +43,7 @@ export function errorFrameFailure(
     // a MikeApiError, so the report of this failure carries them as tags and
     // the support email can quote the id. Neither is ever rendered.
     return Object.assign(failure, {
-        ...(frame.reportingOwner === "backend" ? { reportingOwner: "backend" as const } : {}),
+        ...(frame.reportingOwner === BACKEND_REPORTING_OWNER ? { reportingOwner: BACKEND_REPORTING_OWNER } : {}),
         ...(typeof frame.code === "string" && frame.code
             ? { code: frame.code }
             : {}),

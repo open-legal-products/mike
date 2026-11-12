@@ -8,11 +8,11 @@ vi.mock('../../../word-addin/src/taskpane/api/stream', async () => ({
     }, WordChatTerminalError: (await import('../../../word-addin/src/taskpane/lib/wordChatTerminalError')).WordChatTerminalError,
 }));
 vi.mock('../../../word-addin/src/taskpane/hooks/useWordDoc', () => ({ useWordDoc: () => ({ readDocumentMarkdown: async () => 'document' }) }));
-vi.mock('../../../word-addin/src/taskpane/lib/errorReporting', () => ({ reportError: vi.fn() }));
+vi.mock('../../../word-addin/src/taskpane/lib/errorReporting', () => ({ reportError: vi.fn(), isReported: vi.fn(() => false) }));
 vi.mock('../../../word-addin/src/taskpane/api/mikeApi', () => ({ postWordChatToolResult: vi.fn(), stopWordChatTurn: vi.fn() }));
 vi.mock('../../../word-addin/src/taskpane/lib/localWordChats', () => ({ saveLocalWordMessage: vi.fn(), setLocalWordChatActiveTurn: vi.fn() }));
 vi.mock('../../../word-addin/src/taskpane/lib/wordDocumentIdentity', () => ({ readCurrentDocumentName: () => 'test.docx' }));
-vi.mock('../../../word-addin/src/taskpane/lib/notify', async () => ({ ...(await import('@/shared/lib/userError')), notifyError: mocks.notify, notifyInfo: mocks.info }));
+vi.mock('../../../word-addin/src/taskpane/lib/notify', async () => ({ ...(await import('@mike/client')), notifyError: mocks.notify, notifyInfo: mocks.info }));
 import { useWordAssistantChat } from '../../../word-addin/src/taskpane/hooks/useWordAssistantChat';
 import { WordChatStreamInterrupted, WordChatTerminalError } from '../../../word-addin/src/taskpane/api/stream';
 const submission = (content: string) => ({ content, model: 'gpt-5.4', reasoning: 'none' as const });

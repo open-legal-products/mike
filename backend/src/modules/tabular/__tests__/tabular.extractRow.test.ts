@@ -10,6 +10,7 @@ vi.mock("../tabular.rows", () => ({
     loadRowDocumentText: (...a: unknown[]) => loadRowDocumentText(...a),
 }));
 
+import { ExtractionParseError } from "../../../lib/extraction/failure";
 import { ExtractionBusyError, ExtractionLimitError } from "../../../lib/extraction/limits";
 import { streamTabularGenerateSync } from "../tabular.generateStream";
 import { extractRowColumns } from "../tabular.extractRow";
@@ -37,6 +38,10 @@ function makeDb() {
             },
             eq(col: string, val: unknown) {
                 state.filters[col] = val;
+                return b;
+            },
+            in(col: string, vals: unknown[]) {
+                state.filters[col] = vals;
                 return b;
             },
             then(onF: (v: unknown) => unknown) {
@@ -80,7 +85,7 @@ beforeEach(() => {
 });
 
 describe("extractRowColumns", () => {
-    it.each([new ExtractionLimitError("too large"), new ExtractionBusyError()])(
+    it.each([new ExtractionLimitError("too large"), new ExtractionBusyError(), new ExtractionParseError("extraction.parse_failed", "unreadable docx")])(
         "contains %s to its row and continues the run without querying empty text",
         async (error) => {
             loadRowDocumentText.mockRejectedValueOnce(error);
@@ -142,10 +147,11 @@ describe("extractRowColumns", () => {
         expect(out.processed).toHaveLength(2);
         expect([...out.received].sort()).toEqual([0, 1]);
         expect(out.missing).toEqual([]);
-        // new cells are inserted with the row identity attached
+        // new cells are inserted together, with the row identity attached
         const inserts = db.calls.filter((c) => c.op === "insert");
-        expect(inserts).toHaveLength(2);
-        expect(inserts[0].payload).toMatchObject({
+        expect(inserts).toHaveLength(1);
+        expect((inserts[0].payload as unknown as unknown[])).toHaveLength(2);
+        expect((inserts[0].payload as unknown as unknown[])[0]).toMatchObject({
             review_id: "rev-1",
             row_id: "row-1",
             document_id: "doc-1",
@@ -247,6 +253,23 @@ describe("extractRowColumns", () => {
 });
 
 describe("extractRowColumns generation isolation", () => {
+    it("marks a row's cells generating in two writes, not one per column", async () => {
+        const columns = Array.from({ length: 10 }, (_, index) => ({ index, name: `C${index}`, prompt: "p" }));
+        let writesBeforeModel = -1;
+        const db = makeDb();
+        queryTabularAllColumns.mockImplementation(async () => {
+            writesBeforeModel = db.calls.length;
+        });
+        await extractRowColumns({
+            db: db as never, reviewId: "rev-1", row: ROW, columns,
+            existingByColumn: new Map(columns.slice(0, 5).map((col) => [col.index, { id: `c${col.index}`, status: "pending" }])),
+            model: "m", apiKeys: {}, sink: sinkSpy(), generationId: "gen-1",
+        });
+        expect(writesBeforeModel).toBe(2);
+        expect(db.calls[0].filters).toMatchObject({ id: ["c0", "c1", "c2", "c3", "c4"], generation_id: "gen-1" });
+        expect((db.calls[1].payload as unknown as unknown[]).length).toBe(5);
+    });
+
     it("stamps every write with the generation id and guards the terminal one", async () => {
         queryTabularAllColumns.mockImplementation(
             async (_m, _f, _t, cols, onResult) => {
@@ -278,7 +301,7 @@ describe("extractRowColumns generation isolation", () => {
         // A brand-new cell carries the stamp from birth.
         const inserts = db.calls.filter((c) => c.op === "insert");
         expect(inserts).toHaveLength(1);
-        expect(inserts[0].payload).toMatchObject({ generation_id: "gen-1" });
+        expect((inserts[0].payload as unknown as unknown[])[0]).toMatchObject({ generation_id: "gen-1" });
 
         const done = db.calls.filter(
             (c) => c.op === "update" && c.payload?.status === "done",
@@ -355,16 +378,22 @@ describe("extractRowColumns generation isolation", () => {
                         state.filters[col] = val;
                         return b;
                     },
+                    in(col: string, vals: unknown[]) {
+                        state.filters[col] = { in: vals };
+                        return b;
+                    },
                     then(onF: (v: unknown) => unknown) {
                         if (state.payload)
                             for (const row of rows) {
                                 const matches = Object.entries(
                                     state.filters,
                                 ).every(
-                                    ([col, val]) =>
-                                        (row as Record<string, unknown>)[
-                                            col
-                                        ] === val,
+                                    ([col, val]) => {
+                                        const cell = (row as Record<string, unknown>)[col];
+                                        return val && typeof val === "object" && "in" in val
+                                            ? (val.in as unknown[]).includes(cell)
+                                            : cell === val;
+                                    },
                                 );
                                 if (matches) Object.assign(row, state.payload);
                             }

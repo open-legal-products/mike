@@ -13,7 +13,7 @@ import { reportError } from "../../../../lib/observability/sentry";
 import { safeError } from "../../../../lib/safeError";
 import type { Db } from "../../../../lib/supabase";
 import { loadAssistantMessage } from "../contextBuilders";
-import { resolveDocLabel, type DocIndex, type DocStore } from "../types";
+import { createDocLabelResolver, type DocIndex, type DocStore } from "../types";
 
 type DocumentRef = { document_id: string; version_id: string | null };
 
@@ -82,10 +82,11 @@ export function toolRecord(
         call.name === "find_documents" && call.input.scope !== "document"
             ? []
             : [call.input.doc_id, ...(Array.isArray(call.input.doc_ids) ? call.input.doc_ids : [])];
+    const labelFor = createDocLabelResolver(docStore, docIndex);
     const documents = named
         .filter((id) => id !== undefined)
         .map((id) => {
-            const label = typeof id === "string" ? resolveDocLabel(id, docStore, docIndex) : null;
+            const label = typeof id === "string" ? labelFor(id) : null;
             const doc = label ? docIndex[label] : undefined;
             return doc && { document_id: doc.document_id, version_id: doc.version_id ?? null };
         });

@@ -40,6 +40,10 @@ on:
   pull_request:
   workflow_dispatch:
 
+permissions:
+  contents: read
+
+
 concurrency:
   group: schema-drift-${{ github.event_name == 'push' && github.sha || github.ref }}
   cancel-in-progress: ${{ github.event_name != 'push' }}
@@ -170,6 +174,15 @@ jobs:
 
       - name: Concurrent document lifecycle operations
         run: node backend/scripts/test-document-lifecycle-concurrency.mjs
+
+      - name: Algorithmic performance and authorization regressions
+        run: |
+          for test in backend/src/__tests__/sql/performance.*.sql; do
+            psql "$SUPABASE_TEST_DB_URL" -X --set ON_ERROR_STOP=1 -f "$test"
+          done
+
+      - name: Concurrent organization departure locking
+        run: node backend/scripts/test-org-departure-locks.mjs
 
       - name: Compare fingerprints
         run: |

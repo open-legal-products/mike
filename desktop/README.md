@@ -55,6 +55,37 @@ Local mode supervises the bundled Mike stack on loopback, without Docker or a
 separately installed server; it creates an authenticated account only inside
 the installation's own database.
 
+## Native PostgREST linkage
+
+`local:fetch` and `local:stage` relocate the pinned macOS PostgREST binary to
+`@loader_path/pg/lib/libpq.5.dylib`, including previously cached downloads.
+The helper rejects unexpected non-system dependencies and audits the complete
+bundled dependency closure. It does not require Homebrew or a `DYLD_*` override.
+Load-command changes invalidate the arm64 binary's signature, so the helper
+applies and verifies an ad-hoc signature for development. If a prior build
+stopped between relocation and signing, rerunning repairs the signature only
+after the dependency audit passes. Already-valid signatures are preserved. Run this before
+release packaging: `dist:local:signed` must still apply Developer ID signatures
+and notarize the complete app. Never patch an already signed release in place.
+
+After fetching native binaries on macOS, run the relocation regression:
+
+```bash
+MIKE_NATIVE_BIN="$PWD/desktop/local-stack/bin" node --test desktop/src/local/postgrest-linkage.test.js
+```
+
+`MIKE_NATIVE_BIN` must point to fetched, staged, or packaged output that is
+already relocated, with `postgrest` beside `pg/`. The test first audits that
+actual input without modifying it, including its signature. Unmodified upstream
+binaries fail even on a host with Homebrew installed. A separate mutable-copy
+regression restores the upstream load command, checks repair, interrupted
+signing recovery, unsafe-dependency rejection and idempotence, then moves the
+copy to a path containing spaces and runs it with an empty environment.
+
+CI runs the full regression after native fetch and the read-only input audit
+again against the packaged app. Without `MIKE_NATIVE_BIN`, this native
+integration test skips in the ordinary unit suite.
+
 ## Shortcuts
 
 | Shortcut | Action                          |
@@ -369,11 +400,23 @@ start, with one deliberate exception:
 
 `npm run e2e:local` drives the **packaged** app (or `MIKE_E2E_DEV=1` for
 `electron .`) through the cold first run — initdb, signup, onboarding,
-project, upload, blob-token download, guest sign-in twice — then quits it for
-real (postgres fast shutdown) and relaunches on the same userData: the
-returning-user path must land in the product without a login, replay no
-migrations, and still show the project and document. Fresh-only suites never
-see that path, which is how the upgrade regression above shipped.
+project, upload, blob-token download, background text extraction, guest
+sign-in twice — then quits it for real (postgres fast shutdown) and relaunches
+on the same userData: the returning-user path must land in the product without
+a login, replay no migrations, and still show the project and document.
+Fresh-only suites never see that path, which is how the upgrade regression
+above shipped.
+
+The extraction step polls the local postgres (port 42810, password from
+`userData/local/secrets.json`) for up to 120 s until the uploaded PDF's
+`document_version_texts` row is `ready` with text and zero textless pages.
+Only the isolated parser child writes that row; the versions API's page counts
+are measured in-process at upload and stay correct even when every extraction
+fails. Before #799 the child's environment allowlist dropped
+`ELECTRON_RUN_AS_NODE`, so in the packaged app the child relaunched Mike
+instead of parsing, while this suite passed. A failure here names the document,
+the text row and job status, and points at that cause; the screenshot is
+`local-04b-extracted.png`. DOCX extraction through LibreOffice is not covered.
 
 CI (`.github/workflows/desktop.yml`) runs both on Apple Silicon runners: the
 unit job on every desktop/backend/frontend change, and the packaged job — the

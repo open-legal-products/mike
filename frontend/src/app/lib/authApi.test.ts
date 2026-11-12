@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { describeError } from "@/shared/lib/userError";
+import { describeError } from "@mike/client";
+import { isReported } from "@/app/lib/errorReporting";
 import {
     AuthApiError,
     challengeAndVerifyMfa,
@@ -64,13 +65,44 @@ describe("cookie auth client", () => {
             const error = await login(user.email, "nope").catch((e) => e);
 
             expect(reporting.reportApiFailure).toHaveBeenCalledWith({
+                operation: "auth.signin",
                 path: "/api/auth/login",
                 method: "POST",
                 status: 500,
                 code: "internal_error",
                 requestId: "req-1",
                 error,
+                reportingOwner: undefined,
             });
+        });
+
+        // MIK-125: the backend answers an unreachable GoTrue with 503
+        // upstream_unavailable and has already filed the one event for it.
+        it("does not report a 503 the backend already reported, and shows its fixed sentence", async () => {
+            fetchMock.mockResolvedValue(
+                new Response(
+                    JSON.stringify({
+                        code: "upstream_unavailable",
+                        reporting_owner: "backend",
+                        detail: "server text",
+                        request_id: "req-2",
+                    }),
+                    { status: 503, headers: { "Content-Type": "application/json" } },
+                ),
+            );
+
+            const error = await getAuthSession().catch((e) => e);
+
+            expect(error).toMatchObject({
+                status: 503,
+                code: "upstream_unavailable",
+                requestId: "req-2",
+                message: "The server is temporarily unreachable. Please try again shortly.",
+            });
+            // reportApiFailure deduplicates only the explicit protocol owner.
+            expect(reporting.reportApiFailure).toHaveBeenCalledExactlyOnceWith(
+                expect.objectContaining({ status: 503, code: "upstream_unavailable", reportingOwner: "backend", error }),
+            );
         });
 
         it("does not report a 4xx: it is the auth server's answer", async () => {
@@ -97,6 +129,29 @@ describe("cookie auth client", () => {
                 method: "GET",
                 url: "/api/auth/mfa/assurance",
             });
+        });
+
+        it("only marks a retry that never got a response, so the retry loop files nothing", async () => {
+            // AuthContext retries a session check with `report: false`: the
+            // first failure of the streak was already reported, and each
+            // retry must neither file a new event nor leave the error
+            // unmarked for a later notifyError to pick up.
+            const failure = new TypeError("Failed to fetch");
+            fetchMock.mockRejectedValue(failure);
+
+            await expect(getAuthSession({ report: false })).rejects.toBe(failure);
+
+            expect(reporting.reportNetworkFailure).not.toHaveBeenCalled();
+            expect(isReported(failure)).toBe(true);
+        });
+
+        it("reports an AbortError without an aborted caller signal", async () => {
+            const abort = new DOMException("The operation was aborted.", "AbortError");
+            fetchMock.mockRejectedValue(abort);
+
+            await expect(getMfaAssurance()).rejects.toBe(abort);
+
+            expect(reporting.reportNetworkFailure).toHaveBeenCalledWith(abort, { method: "GET", url: "/api/auth/mfa/assurance" });
         });
     });
 
@@ -200,7 +255,7 @@ describe("cookie auth client", () => {
 
         await expect(getAuthSession()).rejects.toMatchObject({
             status: 503,
-            message: "Unavailable",
+            message: "Authentication could not be completed.",
         });
     });
 
@@ -415,4 +470,11 @@ describe("cookie auth client", () => {
         vi.stubGlobal("window", undefined);
         expect(() => clearLegacyBrowserAuthStorage()).not.toThrow();
     });
+});
+
+it("does not expose an unowned auth server's internal 5xx detail", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response(JSON.stringify({ detail: "PRIVATE_DATABASE_FAILURE" }), { status: 500 })));
+    try {
+        await expect(login("test@example.test", "test")).rejects.toMatchObject({ message: "Authentication could not be completed.", reportingOwner: undefined });
+    } finally { vi.unstubAllGlobals(); }
 });

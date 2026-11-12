@@ -136,8 +136,9 @@ async function serveStatic(req, res, distRoot) {
   try {
     const info = await stat(filename);
     if (!info.isFile()) throw new Error("not a file");
+    const isHtml = relative.endsWith(".html");
     res.writeHead(200, {
-      "cache-control": relative.endsWith(".html")
+      "cache-control": isHtml
         ? "no-cache"
         : "public, max-age=31536000, immutable",
       "content-length": info.size,
@@ -145,6 +146,10 @@ async function serveStatic(req, res, distRoot) {
         MIME_TYPES.get(path.extname(filename).toLowerCase()) ??
         "application/octet-stream",
       "x-content-type-options": "nosniff",
+      // The pages only work inside Word, so a search result or a link
+      // preview of them leads nowhere (Sentry MIKE-WORD-ADDIN-6/7 were mostly
+      // crawlers). Office ignores this header; it still needs the 200.
+      ...(isHtml ? { "x-robots-tag": "noindex, nofollow" } : {}),
     });
     if (req.method === "HEAD") {
       res.end();

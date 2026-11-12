@@ -82,6 +82,20 @@ describe("same-origin API gateway", () => {
         );
     });
 
+    it("removes response hop-by-hop headers, including connection-nominated fields", async () => {
+        fetchMock.mockResolvedValue(new Response("body", { headers: {
+            connection: "keep-alive, x-internal-socket", "keep-alive": "timeout=5",
+            "x-internal-socket": "private", "transfer-encoding": "chunked",
+            trailer: "x-checksum", "proxy-authenticate": "private", "content-type": "text/plain",
+        } }));
+        const response = await GET(new NextRequest("https://app.example.test/api/projects"), context(["projects"]));
+        for (const name of ["connection", "keep-alive", "x-internal-socket", "transfer-encoding", "trailer", "proxy-authenticate"]) {
+            expect(response.headers.has(name)).toBe(false);
+        }
+        expect(response.headers.get("content-type")).toBe("text/plain");
+        expect(await response.text()).toBe("body");
+    });
+
     it("streams request and SSE response bodies without buffering", async () => {
         const encoder = new TextEncoder();
         const stream = new ReadableStream<Uint8Array>({
@@ -115,6 +129,189 @@ describe("same-origin API gateway", () => {
         );
     });
 
+    // undici refuses some hop-by-hop request headers outright, and the
+    // gateway answered 502 for every such request: `Expect` throws
+    // NotSupportedError (MIKE-FRONTEND-3M), and `keep-alive`, `upgrade` and
+    // `transfer-encoding` throw InvalidArgumentError (MIKE-FRONTEND-4B, -4A).
+    it("does not forward hop-by-hop headers", async () => {
+        fetchMock.mockResolvedValue(new Response(null, { status: 204 }));
+        const request = new NextRequest("https://app.example.test/api/documents", {
+            method: "POST",
+            body: "{}",
+            headers: {
+                expect: "100-continue",
+                "keep-alive": "timeout=5",
+                te: "trailers",
+                trailer: "x-checksum",
+                upgrade: "h2c",
+                "transfer-encoding": "chunked",
+                "proxy-authorization": "Basic cHJveHk6c2VjcmV0",
+                connection: "keep-alive, x-hop",
+                "x-hop": "1",
+                "content-type": "application/json",
+            },
+        });
+
+        await POST(request, context(["documents"]));
+
+        const forwarded = new Headers((fetchMock.mock.calls[0][1] as RequestInit).headers);
+        for (const name of ["expect", "keep-alive", "te", "trailer", "upgrade", "transfer-encoding", "proxy-authorization", "connection", "x-hop"]) {
+            expect(forwarded.has(name), name).toBe(false);
+        }
+        expect(forwarded.get("content-type")).toBe("application/json");
+    });
+
+    it("aborts the backend request when the client goes away", async () => {
+        fetchMock.mockResolvedValue(new Response(null, { status: 204 }));
+        const request = new NextRequest("https://app.example.test/api/health");
+
+        await GET(request, context(["health"]));
+
+        expect((fetchMock.mock.calls[0][1] as RequestInit).signal).toBe(request.signal);
+    });
+
+    it("does not report a backend request the client aborted", async () => {
+        const client = new AbortController();
+        fetchMock.mockImplementation(async () => {
+            client.abort();
+            throw new DOMException("This operation was aborted", "AbortError");
+        });
+        const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+        const request = new NextRequest("https://app.example.test/api/health", { signal: client.signal });
+
+        await GET(request, context(["health"]));
+
+        expect(reportError).not.toHaveBeenCalled();
+        expect(errorSpy).not.toHaveBeenCalled();
+    });
+
+    // MIKE-FRONTEND-2C/-2V/-Y/-4E: the backend's body failed after the route
+    // returned (undici's body timeout, a backend restart mid-stream), so the
+    // handler's try/catch had exited and Next filed a context-free
+    // "Failure in application".
+    describe("an upstream body that fails mid-stream", () => {
+        const socketClosed = () =>
+            new TypeError("terminated", {
+                cause: Object.assign(new Error("other side closed"), {
+                    name: "SocketError",
+                    code: "UND_ERR_SOCKET",
+                }),
+            });
+        const failingBody = (error: unknown) => {
+            let sent = false;
+            return new ReadableStream<Uint8Array>({
+                pull(controller) {
+                    if (!sent) {
+                        sent = true;
+                        controller.enqueue(new TextEncoder().encode("data: first\n\n"));
+                        return;
+                    }
+                    controller.error(error);
+                },
+            });
+        };
+
+        // An event stream errors too: the chat client resumes a turn only
+        // when its read fails, so a clean end would leave the answer partial.
+        it("reports one pinned warning and errors an event stream so the client resumes", async () => {
+            const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+            const failure = socketClosed();
+            fetchMock.mockResolvedValue(
+                new Response(failingBody(failure), { headers: { "content-type": "text/event-stream" } }),
+            );
+            const request = new NextRequest("https://app.example.test/api/chat", { method: "POST", body: "{}" });
+
+            const response = await POST(request, context(["chat"]));
+
+            const reader = response.body!.getReader();
+            expect(new TextDecoder().decode((await reader.read()).value)).toBe("data: first\n\n");
+            await expect(reader.read()).rejects.toMatchObject({ name: "AbortError" });
+            expect(reportError).toHaveBeenCalledTimes(1);
+            expect(reportError).toHaveBeenCalledWith(failure, {
+                level: "warning",
+                fingerprint: ["upstream-unavailable"],
+                tags: expect.objectContaining({
+                    component: "api-gateway",
+                    stage: "gateway-stream",
+                    http_route: "/chat",
+                    http_status: 200,
+                    failure_code: "UND_ERR_SOCKET",
+                }),
+            });
+            expect(warn).toHaveBeenCalledWith("[api-gateway] upstream response stream failed", failure, expect.any(Object));
+        });
+
+        it.each(["11111111-1111-4111-8111-111111111111", null, "private-customer-value"])(
+            "correlates a body failure with the browser request ID (upstream: %s)",
+            async (upstreamRequestId) => {
+                const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+                const failure = new Error("response interrupted");
+                fetchMock.mockResolvedValue(new Response(failingBody(failure), {
+                    headers: upstreamRequestId ? { "x-request-id": upstreamRequestId } : {},
+                }));
+
+                const response = await GET(new NextRequest("https://app.example.test/api/documents"), context(["documents"]));
+                const requestId = response.headers.get("x-request-id");
+                expect(requestId).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i);
+                if (upstreamRequestId?.startsWith("11111111")) expect(requestId).toBe(upstreamRequestId);
+                await expect(readBody(response)).rejects.toMatchObject({ name: "AbortError" });
+                expect(reportError).toHaveBeenCalledWith(failure, expect.objectContaining({
+                    tags: expect.objectContaining({ request_id: requestId }),
+                }));
+                expect(warn).toHaveBeenCalledWith("[api-gateway] upstream response stream failed", failure, { requestId });
+            },
+        );
+
+        // A body timeout means the backend is up but held the stream silent
+        // for 300 s: a hang, not an outage. Like an unrecognised code it keeps
+        // an error-level report with default grouping (MIKE-FRONTEND-2C).
+        it("keeps distinct unknown failures and body timeouts eligible for final transport sampling", async () => {
+            vi.spyOn(console, "warn").mockImplementation(() => {});
+            const bodyTimeout = () =>
+                new TypeError("terminated", {
+                    cause: Object.assign(new Error("Body Timeout Error"), {
+                        name: "BodyTimeoutError",
+                        code: "UND_ERR_BODY_TIMEOUT",
+                    }),
+                });
+            for (const failure of [bodyTimeout(), bodyTimeout(), new TypeError("terminated"), new Error("distinct defect")]) {
+                fetchMock.mockResolvedValueOnce(
+                    new Response(failingBody(failure), { headers: { "content-type": "text/event-stream" } }),
+                );
+                const response = await POST(
+                    new NextRequest("https://app.example.test/api/chat", { method: "POST", body: "{}" }),
+                    context(["chat"]),
+                );
+                await expect(readBody(response)).rejects.toMatchObject({ name: "AbortError" });
+            }
+
+            expect(reportError).toHaveBeenCalledTimes(4);
+            for (const [, options] of vi.mocked(reportError).mock.calls) {
+                expect(options).not.toHaveProperty("level");
+                expect(options).not.toHaveProperty("fingerprint");
+                expect(options).toMatchObject({ tags: { component: "api-gateway", stage: "gateway-stream" } });
+            }
+            expect(vi.mocked(reportError).mock.calls[0][1]).toMatchObject({
+                tags: { failure_code: "UND_ERR_BODY_TIMEOUT" },
+            });
+        });
+
+        it("aborts any other body so a truncated download never looks complete", async () => {
+            vi.spyOn(console, "warn").mockImplementation(() => {});
+            fetchMock.mockResolvedValue(
+                new Response(failingBody(socketClosed()), { headers: { "content-type": "application/pdf" } }),
+            );
+
+            const response = await GET(
+                new NextRequest("https://app.example.test/api/single-documents/doc/file"),
+                context(["single-documents", "doc", "file"]),
+            );
+
+            await expect(readBody(response)).rejects.toMatchObject({ name: "AbortError" });
+            expect(reportError).toHaveBeenCalledTimes(1);
+        });
+    });
+
     it("returns a sanitized 502 when the backend is unavailable", async () => {
         vi.spyOn(console, "error").mockImplementation(() => {});
         fetchMock.mockRejectedValue(new Error("connect ECONNREFUSED backend"));
@@ -125,6 +322,7 @@ describe("same-origin API gateway", () => {
         expect(response.status).toBe(502);
         await expect(response.json()).resolves.toEqual({
             detail: "The API is temporarily unavailable.",
+                reporting_owner: "backend",
             request_id: response.headers.get("x-request-id"),
         });
     });
@@ -155,8 +353,8 @@ describe("same-origin API gateway", () => {
         // The real scrubber: once reportError marked the error, the console
         // bridge's copy of this exact log call is dropped, not re-sent.
         const { createEventScrubber } = await vi.importActual<
-            typeof import("@/shared/lib/sentryEvent")
-        >("@/shared/lib/sentryEvent");
+            typeof import("@mike/client")
+        >("@mike/client");
         const scrubber = createEventScrubber();
         const [reported] = reportError.mock.calls.at(-1) as [unknown];
         scrubber.markReported(reported);
@@ -196,6 +394,7 @@ describe("same-origin API gateway", () => {
         expect(response.status).toBe(502);
         await expect(response.json()).resolves.toEqual({
             detail: "The API is temporarily unavailable.",
+                reporting_owner: "backend",
             request_id: response.headers.get("x-request-id"),
         });
         expect(errorSpy).toHaveBeenCalledWith(
@@ -239,6 +438,7 @@ describe("same-origin API gateway", () => {
             const body = await response.json();
             expect(body).toEqual({
                 detail: "The API is temporarily unavailable.",
+                reporting_owner: "backend",
                 code: "upstream_unavailable",
                 request_id: response.headers.get("x-request-id"),
             });
@@ -291,6 +491,7 @@ it('correlates gateway failures with the browser using a generated ID and a safe
         const response = await GET(request, context(['projects', 'private-name', 'documents']));
         const requestId = response.headers.get('x-request-id');
         expect(requestId).toMatch(/^[0-9a-f-]{36}$/);
+        expect(new Headers(fetch.mock.calls[0]?.[1]?.headers).get('x-request-id')).toBe(requestId);
         expect((await response.json()).request_id).toBe(requestId);
         expect(reportError).toHaveBeenLastCalledWith(error, {
             level: 'warning',

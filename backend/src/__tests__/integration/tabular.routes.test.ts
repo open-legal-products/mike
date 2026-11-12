@@ -610,7 +610,7 @@ describe("tabular.routes", () => {
                 error: null,
             };
             supabaseState.tables.project_subfolders = {
-                data: [{ id: "f1", name: "Contracts", parent_folder_id: null }],
+                data: [{ id: "f1", name: "Contracts", parent_folder_id: null, project_id: "p1" }],
                 error: null,
             };
             supabaseState.tables.tabular_review_rows = {
@@ -2136,6 +2136,41 @@ describe("tabular.routes", () => {
                 "begin_tabular_review_generation", "finish_tabular_review_generation",
             ]);
             expect(extractRowColumns).not.toHaveBeenCalled();
+        });
+
+        it("owns a terminal generation failure once in the final envelope and the error frame", async () => {
+            const Sentry = await import("@sentry/node");
+            const { resetSentryForTests, scrubEvent } = await import("../../lib/observability/sentry.js");
+            const { privacyBoundaryIntegration } = await import("../../lib/observability/sentryPrivacy.js");
+            const sent: import("@sentry/node").Event[] = [];
+            resetSentryForTests("official", { initialized: true });
+            Sentry.init({
+                dsn: "https://test@sentry.invalid/1", defaultIntegrations: false,
+                integrations: [Sentry.linkedErrorsIntegration(), privacyBoundaryIntegration(), Sentry.captureConsoleIntegration({ levels: ["error"] })],
+                beforeSend: scrubEvent,
+                transport: () => ({ send: async envelope => {
+                    for (const [header, payload] of envelope[1]) if (header.type === "event") sent.push(payload as import("@sentry/node").Event);
+                    return { statusCode: 200 };
+                }, flush: async () => true }),
+            });
+            try {
+                const original = new TypeError("PRIVATE_SOURCE_DOCUMENT");
+                original.stack = "TypeError: PRIVATE_SOURCE_DOCUMENT\n    at extractRow (backend/src/modules/tabular/tabular.extractRow.ts:42:7)";
+                extractRowColumns.mockRejectedValueOnce(original);
+                const res = await startGeneration();
+                expect(res.status).toBe(200);
+                expect(res.text).toContain('"reporting_owner":"backend"');
+                expect(res.text).toContain("data: [DONE]");
+                expect(res.text).not.toContain("PRIVATE_SOURCE_DOCUMENT");
+                await Sentry.flush(2000);
+                expect(sent).toHaveLength(1);
+                expect(sent[0]?.tags).toMatchObject({ operation: "tabular.generate", stage: "generation-stream" });
+                expect(sent[0]?.exception?.values?.some(value => value.stacktrace?.frames?.some(frame => frame.lineno === 42))).toBe(true);
+                expect(JSON.stringify(sent)).not.toContain("PRIVATE_SOURCE_DOCUMENT");
+            } finally {
+                await Sentry.close();
+                resetSentryForTests();
+            }
         });
 
         it("keeps extracting after the requesting socket closes, and a reload attaches from where it left off", async () => {

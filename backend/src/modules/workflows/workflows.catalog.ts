@@ -1,4 +1,5 @@
 // workflows catalog — implementation behind the module facade.
+import { selectInBatches } from "../../lib/batchedQuery";
 import { type Db } from "../../lib/supabase";
 import { catalogWorkflowToLegacy, ensureDefaultWorkflows, findCatalogWorkflow, listActiveCatalogWorkflows, type LegacyCatalogWorkflow } from "../../lib/workflowCatalog";
 import { WorkflowType, ServiceFailure } from "./workflows.types";
@@ -32,17 +33,18 @@ export async function markDefaultWorkflows<T extends { id: string }>(
   workflows: T[],
 ): Promise<Array<T & { is_default: boolean; default_key: string | null }>> {
   if (workflows.length === 0) return [];
-  const { data, error } = await db
-    .from("default_workflow_installations")
-    .select("workflow_id, default_key")
-    .eq("user_id", userId)
-    .in(
-      "workflow_id",
-      workflows.map((workflow) => workflow.id),
-    );
-  if (error) throw error;
+  const data = await selectInBatches<{ workflow_id: string | null; default_key: string | null }>(
+    "default workflow lookup",
+    workflows.map((workflow) => workflow.id),
+    (batch) =>
+      db
+        .from("default_workflow_installations")
+        .select("workflow_id, default_key")
+        .eq("user_id", userId)
+        .in("workflow_id", batch),
+  );
   const defaultKeyByWorkflowId = new Map(
-    (data ?? []).flatMap((row) =>
+    data.flatMap((row) =>
       row.workflow_id && row.default_key
         ? [[row.workflow_id, row.default_key] as const]
         : [],

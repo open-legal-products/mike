@@ -1,3 +1,4 @@
+import { BACKEND_REPORTING_OWNER } from "../../../lib/reportedUpstreamCodes";
 import { AppError } from "../../../lib/appError";
 import { teamOrgIdOf } from "../../../lib/personalOrgs";
 import { webSearchAccountFor, type WebSearchPlan } from "../../../lib/webSearch";
@@ -18,10 +19,12 @@ import {
 } from "../../../lib/modelSelection";
 import { UserFacingError } from "../../../lib/userFacingError";
 import { InvalidApiKeyError } from "../../../lib/llm/apiKeyErrors";
-import { markStage, reportError } from "../../../lib/observability/sentry";
-import { providerFailureKind } from "../../../lib/llm/providerErrors";
+import { markStage, markErrorHandled, reportError, isReported } from "../../../lib/observability/sentry";
+import { ProviderConfigurationError, isUserProviderRefusal, providerFailureKind } from "../../../lib/llm/providerErrors";
+import { reportModelFailure } from "../../../lib/llm/providerFailureReport";
 import { safeError } from "../../../lib/safeError";
 import type { Db } from "../../../lib/supabase";
+import type { StreamRunWriteOptions } from "../../../lib/streamRuns";
 import { buildUserMcpTools } from "../../../lib/mcpConnectors";
 import { buildGoogleDriveTools } from "../../../lib/integrations/googleDrive";
 import { COURTLISTENER_TOOLS } from "./tools/courtlistenerTools";
@@ -57,7 +60,7 @@ import {
   type WorkflowStore,
   type ToolCall,
   devLog,
-  resolveDocLabel,
+  createDocLabelResolver,
   TOOL_ERROR_MESSAGE,
 } from "./types";
 import {
@@ -70,7 +73,7 @@ import {
 } from "./tools/toolSchemas";
 import {
   parseCitationsWithDiagnostics,
-  parsePartialCitationObjects,
+  createPartialCitationParser,
   createCitation,
   CITATIONS_OPEN_TAG,
 } from "./citations";
@@ -144,13 +147,16 @@ export function assistantStreamErrorPayload(
   safe_to_display?: true;
   code?: AssistantErrorCode;
   request_id?: string;
-  reporting_owner: "backend";
+  reporting_owner?: typeof BACKEND_REPORTING_OWNER;
 } {
   // The request id is the one handle a user can quote that finds the Sentry
   // event and the access-log line for this failure; it carries no content.
-  // The server owns reporting for terminal failures, even when telemetry is
-  // disabled. This states ownership; it does not promise event delivery.
-  const reporting = { reporting_owner: "backend" as const, ...(requestId ? { request_id: requestId } : {}) };
+  // Only an explicit report or source-owned handling establishes ownership.
+  // A safe message/code says nothing about who accounted for the failure.
+  const reporting: { reporting_owner?: typeof BACKEND_REPORTING_OWNER; request_id?: string } = {
+    ...(isReported(error) ? { reporting_owner: BACKEND_REPORTING_OWNER } : {}),
+    ...(requestId ? { request_id: requestId } : {}),
+  };
   const safe =
     error instanceof AssistantStreamError
       ? [...error.events]
@@ -260,7 +266,8 @@ export async function runLLMStream(params: {
    */
   userEmail?: string | null;
   db: Db;
-  write: (s: string) => void;
+  /** `opts.replay` is honoured by a server-owned run and ignored otherwise. */
+  write: (s: string, opts?: StreamRunWriteOptions) => void;
   onActivity?: () => void;
   extraTools?: unknown[];
   includeResearchTools?: boolean;
@@ -382,8 +389,11 @@ export async function runLLMStream(params: {
     subagentDefaults,
     subagentRun,
   } = params;
-  const write = (chunk: string) =>
-    unsafeWrite(sanitizeAssistantSseChunk(chunk));
+  // Only frames that carry replay options pass a second argument.
+  const write = (chunk: string, opts?: StreamRunWriteOptions) =>
+    opts
+      ? unsafeWrite(sanitizeAssistantSseChunk(chunk), opts)
+      : unsafeWrite(sanitizeAssistantSseChunk(chunk));
   const isSubagent = subagentRun !== undefined;
   const researchTools = includeResearchTools ? COURTLISTENER_TOOLS : [];
   // The person's own connections for the workspace this conversation is in.
@@ -521,34 +531,48 @@ export async function runLLMStream(params: {
   let iterReasoning = "";
   let visibleTailBuffer = "";
   let citationsOpenSeen = false;
-  let streamingCitationsBuffer = "";
-  let streamedCitationCount = 0;
+  // The CITATIONS block streams through an incremental parser, so each delta
+  // is scanned once and each citation is parsed and built once.
+  let citationParser = createPartialCitationParser();
+  let streamedCitations: unknown[] = [];
+  // Every snapshot frame carries the whole list so far, and the client
+  // replaces its list with it. Only the newest snapshot is worth replaying to
+  // a client that attaches later; replaying them all would hand it O(C²)
+  // citations. The final frame bumps this too, so no partial outlives it.
+  let citationSnapshotSeq = 0;
 
   const emitCitationStreamSnapshot = (
     status: "started" | "partial",
     citations: unknown[],
   ) => {
     if (buildCitations) return;
+    const snapshot = ++citationSnapshotSeq;
     write(
       `data: ${JSON.stringify({ type: "citations", status, citations })}\n\n`,
+      { replay: () => snapshot === citationSnapshotSeq },
     );
+  };
+
+  const resetCitationStream = () => {
+    citationParser = createPartialCitationParser();
+    streamedCitations = [];
   };
 
   const streamHiddenCitationContent = (delta: string) => {
     if (buildCitations || !delta) return;
-    streamingCitationsBuffer += delta;
-    const partial = parsePartialCitationObjects(streamingCitationsBuffer);
-    if (partial.length <= streamedCitationCount) return;
-    streamedCitationCount = partial.length;
-    const citations = partial.map((c) =>
-      createCitation(
-        c,
-        docIndex,
-        courtlistenerTurnState.casesByClusterId,
-        docStore,
-      ),
-    );
-    emitCitationStreamSnapshot("partial", citations);
+    const completed = citationParser.push(delta);
+    if (completed.length === 0) return;
+    for (const c of completed) {
+      streamedCitations.push(
+        createCitation(
+          c,
+          docIndex,
+          courtlistenerTurnState.casesByClusterId,
+          docStore,
+        ),
+      );
+    }
+    emitCitationStreamSnapshot("partial", streamedCitations);
   };
 
   const streamVisibleContent = (delta: string) => {
@@ -570,8 +594,7 @@ export async function runLLMStream(params: {
       }
       visibleTailBuffer = "";
       citationsOpenSeen = true;
-      streamingCitationsBuffer = "";
-      streamedCitationCount = 0;
+      resetCitationStream();
       emitCitationStreamSnapshot("started", []);
       streamHiddenCitationContent(
         combined.slice(markerIdx + CITATIONS_OPEN_TAG.length),
@@ -616,8 +639,7 @@ export async function runLLMStream(params: {
     iterVisibleText = "";
     visibleTailBuffer = "";
     citationsOpenSeen = false;
-    streamingCitationsBuffer = "";
-    streamedCitationCount = 0;
+    resetCitationStream();
   };
 
   const flushPartialTurn = (opts: { emit?: boolean } = {}) => {
@@ -758,7 +780,7 @@ export async function runLLMStream(params: {
     // route before they arrive here, but this guard keeps every caller safe.
     const requestedModel = resolveModel(model, "");
     if (!requestedModel) {
-      throw new UserFacingError(
+      throw new ProviderConfigurationError(
         model
           ? `Model "${model}" is not available. Select another model.`
           : "Select a model before sending a message.",
@@ -805,6 +827,14 @@ export async function runLLMStream(params: {
         onContentDelta: (delta) => {
           iterText += delta;
           streamVisibleContent(delta);
+        },
+        onStopNotice: (notice) => {
+          // A truncated model citation block must not swallow the server's
+          // incomplete-answer warning. Keep it in the visible/persisted prose;
+          // the original citation text still goes through normal verification.
+          flushText();
+          iterText += notice;
+          streamVisibleContent(notice);
         },
         onReasoningDelta: (delta) => {
           iterReasoning += delta;
@@ -1105,11 +1135,6 @@ export async function runLLMStream(params: {
       // any console.error, is what lets the console bridge recognise every
       // later log of it — this line's, and the route's log of the
       // AssistantStreamError below, whose `cause` is `err` — as already sent.
-      // A UserFacingError (rejected or missing API key, model not allowed)
-      // is the user's configuration rather than our bug: still one event, so
-      // operators see a rejected key with its provider_error tag, but a
-      // warning, not an error. (Left unreported, the console bridge filed it
-      // anyway, at error level, as MIKE-BACKEND-E.)
       // The kind says what the provider did (rejected the key, rate limited,
       // unavailable) so one cause is one issue; the provider's own error
       // stays underneath as the cause, where provider_error and
@@ -1121,16 +1146,15 @@ export async function runLLMStream(params: {
           : new AppError(providerFailureKind(err), "Model stream failed", {
               cause: err,
             });
-      // A subagent's run is its own flow inside the turn's request: name it
-      // on the event so a failing delegate is not filed under the answer.
-      reportError(failure, {
-        tags: {
-          component: "chat-stream",
-          ...(isSubagent ? { operation: "chat.subagent" as const } : {}),
-        },
-        ...(safeToDisplay ? { level: "warning" as const } : {}),
-      });
-      console.error("[chat/stream] model stream failed", failure);
+      if (safeToDisplay && isUserProviderRefusal(err)) {
+        // This turn returns the remedy to the owner of the rejected account.
+        markErrorHandled(failure);
+        console.warn("[chat/stream] model account refused", failure);
+      } else {
+        reportModelFailure(failure, {
+          tags: { component: "chat-stream", ...(isSubagent ? { operation: "chat.subagent" as const } : {}) },
+        }, "[chat/stream] model stream failed");
+      }
       const message = safeToDisplay ? err.message : ASSISTANT_ERROR_MESSAGE;
       events.push({
         type: "error",
@@ -1180,10 +1204,11 @@ export async function runLLMStream(params: {
     // already in storage with emitEvents:false. Case citations are matched
     // against the opinion text cached during this turn.
     const sourceTextByDocId = new Map<string, Promise<string>>();
+    const labelFor = createDocLabelResolver(docStore, docIndex);
     const getSourceText = (docId: string): Promise<string> => {
       let pending = sourceTextByDocId.get(docId);
       if (!pending) {
-        const label = resolveDocLabel(docId, docStore, docIndex);
+        const label = labelFor(docId);
         pending = label
           ? readDocumentContent(label, docStore, () => {}, docIndex, db, {
               emitEvents: false,
@@ -1208,6 +1233,7 @@ export async function runLLMStream(params: {
     emittedCitationCount: citations.length,
     usedCustomCitationBuilder: !!buildCitations,
   });
+  citationSnapshotSeq += 1;
   write(
     `data: ${JSON.stringify({ type: "citations", status: "final", citations })}\n\n`,
   );

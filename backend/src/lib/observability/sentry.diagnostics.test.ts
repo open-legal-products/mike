@@ -1,7 +1,9 @@
 import { afterEach, expect, it, vi } from 'vitest';
 import * as Sentry from '@sentry/node';
-import { reportProcessWarning, resetSentryForTests, scrubEvent } from './sentry';
+import { reportProcessWarning, resetSentryForTests, scrubEvent, reportError, markErrorHandled } from './sentry';
 import { toProviderStreamError } from '../llm/providerErrors';
+import { eventBudget, eventBudgetLimits } from './sentryVolume';
+import { MIKE_SENTRY_DSN } from './sentry';
 import { privacyBoundaryIntegration } from './sentryPrivacy';
 
 // The final transport also emits Sentry's legacy top-level message stack.
@@ -92,4 +94,79 @@ it.each(['community', 'official'] as const)('reports a Node process warning once
   // The frame that matters: where the warning was raised, not Node's printer.
   expect(event?.exception?.values?.[0]?.stacktrace?.frames?.some(f => f.filename?.endsWith('sentry.diagnostics.test.ts'))).toBe(true);
   expect(JSON.stringify(events)).not.toContain('SYNTHETIC_PRIVATE_DOCUMENT');
+});
+
+it('preserves the primary exception, ownership, privacy and new failures through final SDK envelopes', async () => {
+  const events: DiagnosticEvent[] = [];
+  resetSentryForTests('official', { initialized: true });
+  Sentry.init({
+    dsn: 'https://test@sentry.invalid/1', defaultIntegrations: false,
+    integrations: [privacyBoundaryIntegration({ acceptEvent: eventBudget({ repeatEventsPerDay: 0 }) }), Sentry.captureConsoleIntegration({ levels: ['error'] })],
+    beforeSend: scrubEvent,
+    transport: () => ({ send: async envelope => {
+      for (const [header, payload] of envelope[1]) if (header.type === 'event') events.push(payload as DiagnosticEvent);
+      return { statusCode: 200 };
+    }, flush: async () => true }),
+  });
+  const handled = Object.assign(new Error('SYNTHETIC_PRIVATE_REFUSAL'), { status: 429, code: 'rate_limited' });
+  markErrorHandled(handled);
+  const primary = Object.assign(new Error('SYNTHETIC_PRIVATE_DOCUMENT'), { code: 'ECONNRESET', status: 500 });
+  primary.stack = 'Error: SYNTHETIC_PRIVATE_DOCUMENT\n    at stream (backend/src/modules/chat/engine/streaming.ts:42:7)';
+  console.error('[chat] failed', primary, { previous: handled });
+  const failure = new Error('SYNTHETIC_PRIVATE_DOCUMENT');
+  failure.stack = 'Error: SYNTHETIC_PRIVATE_DOCUMENT\n    at save (backend/src/modules/documents/documents.versions.ts:80:2)';
+  reportError(failure, { tags: { operation: 'documents.save', request_id: '123e4567-e89b-12d3-a456-426614174000' } });
+  console.error('[save] failed', failure);
+  console.error('[handled]', handled);
+  await Sentry.flush(2000);
+  expect(events).toHaveLength(2);
+  expect(events[0]?.tags).toMatchObject({ failure_code: 'ECONNRESET', dependency_status: 500, occurrence: 1 });
+  expect(events[0]?.exception?.values?.[0]?.stacktrace?.frames).toContainEqual(expect.objectContaining({ filename: 'backend/src/modules/chat/engine/streaming.ts', lineno: 42 }));
+  expect(events[1]?.tags).toMatchObject({ operation: 'documents.save', request_id: '123e4567-e89b-12d3-a456-426614174000' });
+  expect(JSON.stringify(events)).not.toContain('SYNTHETIC_PRIVATE');
+});
+
+it('enforces the shared project ceiling through final SDK envelopes even with an explicit DSN', async () => {
+  const events: Sentry.Event[] = [];
+  resetSentryForTests('community');
+  Sentry.init({
+    dsn: MIKE_SENTRY_DSN.backend, defaultIntegrations: false,
+    integrations: [privacyBoundaryIntegration({ acceptEvent: eventBudget(eventBudgetLimits(undefined, MIKE_SENTRY_DSN.backend, Object.values(MIKE_SENTRY_DSN))) })],
+    beforeSend: scrubEvent,
+    transport: () => ({ send: async envelope => {
+      for (const [header, payload] of envelope[1]) if (header.type === 'event') events.push(payload as Sentry.Event);
+      return { statusCode: 200 };
+    }, flush: async () => true }),
+  });
+  for (let n = 0; n < 60; n++) Sentry.captureEvent({ message: 'PRIVATE_QUOTA_CANARY', tags: { diagnostic_test: 'true' } });
+  await Sentry.flush(2000);
+  expect(events).toHaveLength(50);
+  expect(JSON.stringify(events)).not.toContain('PRIVATE_QUOTA_CANARY');
+});
+
+it.each(['upstream-unavailable', 'api-unreachable', 'runtime-warning'])('budgets %s as one pinned issue across stack sites in final SDK envelopes', async pinned => {
+  const events: Sentry.Event[] = [];
+  resetSentryForTests('community');
+  Sentry.init({
+    dsn: 'https://test@sentry.invalid/1', defaultIntegrations: false,
+    integrations: [privacyBoundaryIntegration({ acceptEvent: eventBudget({ repeatEventsPerDay: 0 }) })],
+    beforeSend: scrubEvent,
+    transport: () => ({ send: async envelope => {
+      for (const [header, payload] of envelope[1]) if (header.type === 'event') events.push(payload as Sentry.Event);
+      return { statusCode: 200 };
+    }, flush: async () => true }),
+  });
+  for (let site = 0; site < 60; site++) {
+    const error = new Error('PRIVATE_PINNED_CANARY');
+    error.stack = `Error: PRIVATE_PINNED_CANARY\n    at operation (backend/src/site${site}.ts:42:7)`;
+    Sentry.captureException(error, { level: 'warning', fingerprint: [pinned], tags: { component: 'api-gateway' } });
+  }
+  const unrelated = new TypeError('PRIVATE_PINNED_CANARY');
+  unrelated.stack = 'TypeError: PRIVATE_PINNED_CANARY\n    at save (backend/src/save.ts:80:2)';
+  Sentry.captureException(unrelated, { tags: { operation: 'documents.save' } });
+  await Sentry.flush(2000);
+  expect(events).toHaveLength(2);
+  expect(events[0]?.fingerprint?.[0]).toBe(pinned);
+  expect(events[1]?.tags?.operation).toBe('documents.save');
+  expect(JSON.stringify(events)).not.toContain('PRIVATE_PINNED_CANARY');
 });

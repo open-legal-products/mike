@@ -25,11 +25,12 @@ describe("ModalSegmentedToggle", () => {
         const { container } = render(<Toggle />);
         const highlight = container.querySelector<HTMLElement>("[aria-hidden='true']")!;
         expect(highlight).toHaveClass("liquid-glass-selected", "transition-transform");
-        expect(highlight.style.transform).toBe("translateX(calc(0 * (100% + 0.25rem)))");
+        // jsdom simplifies `calc(i * (100% + 0.25rem))`, the offset of option i.
+        expect(highlight.style.transform).toBe("translateX(calc(0% + 0rem))");
 
         await userEvent.click(screen.getByRole("button", { name: "Three" }));
         expect(screen.getByRole("button", { name: "Three" })).toHaveAttribute("aria-pressed", "true");
-        expect(highlight.style.transform).toBe("translateX(calc(2 * (100% + 0.25rem)))");
+        expect(highlight.style.transform).toBe("translateX(calc(200% + 0.5rem))");
         // The options themselves carry no fill, so only the highlight moves.
         expect(screen.getByRole("button", { name: "Three" })).not.toHaveClass("liquid-glass-selected");
     });

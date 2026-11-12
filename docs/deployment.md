@@ -5,7 +5,8 @@ storage instead of the infrastructure bundled with Docker Compose.
 
 ## Prerequisites
 
-- Node.js 22 or newer
+- Node.js 22.19 or newer. The backend's HTTP client (undici 8) needs it;
+  an older 22.x crashes at boot inside `undici/lib/interceptor/decompress.js`.
 - npm and Git
 - A Supabase project
 - A Cloudflare R2, MinIO, or other S3-compatible bucket
@@ -87,6 +88,122 @@ select filename, applied_at, checksum is not null as run_by_migrate_sh
 from public.schema_migrations
 order by filename;
 ```
+
+### Install is behind on migrations
+
+A backend started against a database that is missing some of
+`backend/migrations/` keeps running, but anything that needs a missing
+function, table or column fails. Requests answer `503` with code
+`schema_out_of_date` ("The server's database needs an update"), and the
+backend logs `[schema-out-of-date]` warnings naming the PostgREST/SQLSTATE
+code (`PGRST202` function, `PGRST203` function signature, `PGRST204` or
+`42703` column, `PGRST205` table, `42P01` relation). With error reporting on,
+Sentry shows an error with `schema_out_of_date` and the code in its title,
+for example `Failure in maintenance.document_text / stale-sweep /
+schema_out_of_date / PGRST202`; a request's event also names its method,
+route and `503`. Each is sent once per process per request route or
+background operation (sweeps, upload-session deadline extension), so its
+event count does not measure how often it happens; while the failures go on,
+the log repeats a `[schema-out-of-date] <key>: still failing` line at most
+once an hour with the number of failures since the last line, and each
+failed request also logs an `[http/schema-out-of-date]` line. Run
+`backend/scripts/migrate.sh status` to list what is pending, apply it with
+`backend/scripts/migrate.sh up`, reload the PostgREST schema cache (`notify
+pgrst, 'reload schema';`), and restart the backend. If `migrate.sh status`
+shows nothing pending, a `schema_out_of_date` event is a bug in Mike (a
+query naming a column that does not exist, or a migration that left an old
+function overload behind): report it.
+
+### Supabase Auth (GoTrue) unreachable
+
+When the backend cannot reach GoTrue (no answer, or a 502/503/504 from a
+gateway in front of it), signed-in requests answer `503` with code
+`upstream_unavailable` and `retry-after: 5` instead of signing anyone out;
+the web app keeps the session and retries. A GoTrue `500` is GoTrue failing
+on something of ours and stays a reported `500`. Sentry receives one
+`upstream-unavailable` event per process per failure class (no answer, 502,
+503, 504), again at most once per 15 minutes while that class keeps failing
+or keeps coming back, and a class that returns after a quiet 15 minutes is
+reported as a new outage. Every replica reports for itself, so the event
+count is replicas × classes × 15-minute windows, not the number of failed
+requests; the quiet repeats are counted in an `[upstream-unavailable] still
+failing` log line at most once a minute.
+
+### Before upgrading: secrets copied from the template
+
+The backend refuses to start when `DOWNLOAD_SIGNING_SECRET` or
+`USER_API_KEYS_ENCRYPTION_SECRET` still holds the `backend/.env.example`
+placeholder, a whitespace-only value, or a value shorter than 32 characters
+after trimming whitespace. A deployment that copied the template verbatim
+was running with publicly known secrets: download and
+blob tokens could be forged, and user-supplied provider API keys were
+encrypted under a key derived from a public string. The startup error names
+the variable; generate a real value for each and restart:
+
+```bash
+openssl rand -hex 32   # once per variable
+```
+
+Both variables may also be left unset: the download and API-key features then
+fail on first use, as before. Plan for these effects when replacing existing
+secrets; changing the environment does not re-encrypt stored credentials:
+
+- Changing `USER_API_KEYS_ENCRYPTION_SECRET` makes stored personal and
+  organization provider credentials unreadable. Users must re-enter their
+  personal API keys, and organization admins must replace their organization's
+  saved provider credentials.
+- When `MCP_CONNECTORS_ENCRYPTION_SECRET` is unset or empty, MCP connectors
+  also use `USER_API_KEYS_ENCRYPTION_SECRET`. Rotating it then makes stored
+  connector authentication configurations and OAuth tokens unreadable.
+  Re-enter connector authentication credentials and reconnect OAuth connectors
+  to authorize them again. A separately configured, unchanged
+  `MCP_CONNECTORS_ENCRYPTION_SECRET` keeps those connector credentials usable.
+- Changing `DOWNLOAD_SIGNING_SECRET` invalidates existing download links and
+  blob capability URLs signed with the old secret, including persistent links
+  in chat history. Request fresh download links from the application and
+  replace any previously shared links; restarting does not re-sign old URLs.
+
+### Upgrade order and rollback
+
+For the SQL/backend/web/Word performance changes in PR #749, upgrade an
+existing installation in this order:
+
+1. Back up the database and retain the currently deployed image tags or Git
+   commit. Let active assistant turns finish before restarting their backend;
+   their resumable stream buffers live in that process.
+2. Apply the new checkout's pending migrations with `migrate.sh up` above,
+   then run `migrate.sh status` and require no pending files. Do not substitute
+   `schema.sql` for this upgrade. The new project-directory search requires
+   `search_project_directory`, and paginated participation requires the new
+   `get_projects_overview` argument. Starting the new backend before these
+   migrations makes those requests fail.
+3. Reload the PostgREST schema cache after the migrations (`notify pgrst,
+   'reload schema';` in SQL), run the workflow sync release job described
+   below, and deploy the backend and any separate workers.
+4. Deploy the frontend and Word add-in. Check project-directory search,
+   document conversion completion, and reopening an existing Word chat.
+
+Compose's `db-init` and `workflow-sync` dependencies perform the database and
+catalog steps before starting the backend. Manual or independently hosted
+components need the same ordering. A new frontend can poll an older backend
+using individual document reads when its batch endpoint is unavailable.
+Older API clients can still request `/projects?include=documents` without
+pagination; new clients should send `limit` and `offset` explicitly.
+
+The migrations in this release retain the previous backend's project RPC
+call shapes. A backend rollback leaves the migration ledger and schema in
+place; do not delete ledger rows or replay old migrations to undo an
+application deployment. Validate a rollback against a copy of the database
+before using it on a deployment that has accepted new writes.
+
+Word's released device-only database remains at IndexedDB version 4, so an
+older pane can still save an answer after another pane loads the new code.
+Existing v4 databases retain their history-listing path; fresh v4 databases
+include the optional recency index. PR preview builds used version 5: the
+new add-in can read those databases in place, but a rollback to a released
+v4-only bundle cannot. Keep a compatible add-in build for those devices.
+Do not clear browser/add-in storage to resolve a version error: device-only
+chats have no durable server copy.
 
 ### Adopting the ledger on an older deployment
 
@@ -297,7 +414,53 @@ S3-compatible provider:
 
 List exact trusted origins; do not use `*` for a production deployment. The
 signed URL authorizes only its generated object key and expires independently
-of the CORS cache. The backend still verifies the uploaded byte count and
+of the CORS cache.
+
+With Docker Compose, two settings in the compose-root `.env` decide whether
+browser uploads work from anywhere other than the machine running the stack:
+
+- `FRONTEND_URL`, `WORD_ADDIN_URL` and `ALLOWED_ORIGINS` decide which origins
+  the bundled storage bucket allows: exactly the origins the backend's own
+  CORS trusts. On every `docker compose up` the `storage-cors` job runs
+  `docker/storage-cors.mjs` in the backend image, with the backend's
+  `env_file`s and overrides, through the backend's own origin parser
+  (`backend/src/lib/origins.ts`), and `createbucket` installs the result. So
+  an extra trusted client listed in `ALLOWED_ORIGINS` (a second hostname, or a
+  developer's `http://localhost:3000` against a public deployment) can upload
+  as well as call the API, and changing any of them and re-running `up`
+  updates the bucket. `FRONTEND_URL` and `WORD_ADDIN_URL` are reduced to their
+  `scheme://host[:port]`. If either is not an absolute http(s) URL with a DNS
+  or IP host (no scheme, or an underscore host such as `mike_app`), or the
+  backend image predates `origins.ts`, the job does not stop the stack: it
+  logs a `storage-cors:` line naming the value and installs a policy that
+  allows only the loopback development origins (plus any valid ones), so
+  uploads from that origin are refused until it is fixed. Read it with
+  `docker compose logs storage-cors`.
+  An `ALLOWED_ORIGINS` entry must be an exact origin such as
+  `https://review.example.com` (no path, lower-case host), because the
+  backend matches it byte for byte; any other entry is skipped with a warning
+  in the job's log. Outside `NODE_ENV=production` the backend also trusts
+  `http://localhost:3000` and `https://localhost:3200` when `FRONTEND_URL` or
+  `WORD_ADDIN_URL` is unset, and so does the bucket.
+- `R2_PUBLIC_ENDPOINT_URL` is the storage URL the backend signs for browsers.
+  It defaults to `http://localhost:${STORAGE_PORT:-9000}`, which is correct
+  only when the browser runs on the same machine. For any other host, set it
+  to a URL that reaches the storage service from users' browsers: a
+  dedicated https host such as `https://storage.mike.example` on the reverse
+  proxy in front of Mike, forwarded to `storage:9000` with the `Host` header
+  preserved (the signature covers it). Do not use a path on the app's host
+  (`https://mike.example/storage`): the URL is signed path-style, so the
+  prefix is part of the signature, and a proxy that strips it breaks the
+  signature (403) while one that keeps it makes storage look for a bucket
+  named `storage` (404). The storage port itself is bound to `127.0.0.1` because it carries the
+  default admin credentials; do not publish it directly.
+
+On boot the backend logs a `[storage]` warning when `FRONTEND_URL` is not a
+loopback address but the public storage endpoint is loopback, a bare service
+name such as `storage`, or `http` under an `https` front end. Each of those
+makes every upload fail in the browser with a bare network error.
+
+The backend still verifies the uploaded byte count and
 copies accepted bytes to a non-signed, sealed key before queuing processing.
 Each file is verified and queued as soon as its individual `PUT` completes;
 the remaining files in the same session may continue uploading while the
@@ -376,6 +539,19 @@ To report to your own Sentry instead, set `SENTRY_DSN` (backend) and
 `FRONTEND_SENTRY_DSN` (web app; the Next server forwards browser reports
 there at runtime). What is reported, what is scrubbed, and how to verify are
 in [observability.md](observability.md).
+
+Default reporting assumes an install runs built code. Run the built backend
+(`node dist/index.js` or `npm start`) and the web app with `next start` under
+`NODE_ENV=production`. A backend run from its TypeScript source (`tsx
+src/index.ts`, `bun src/index.ts`, under pm2, systemd or anything else) is a
+development build and does not report unless `SENTRY_DSN` is set or
+`SENTRY_SOURCE_RUN_IS_INSTALL=true` declares it an install (it then reports
+like the compiled image: Mike project by default, `environment=self-hosted`,
+`build_mode=production`). `next start`
+keeps an exported `NODE_ENV=development` (the root `.env.example` ships one),
+and the web app then counts as a development build and turns its reporting
+off. The web image sets `NODE_ENV=production`, so this only affects a
+non-Docker frontend started from that env.
 
 ## Authentication email
 
@@ -591,7 +767,12 @@ convenience tags for trying things out; production deployments pin a version,
 and a published version is never rebuilt (a fix is a new patch version).
 `docker compose up --build` still builds from the checkout for development and
 for anyone who patches the code; those images report as `mike@0.0.0...` unless
-you pass `MIKE_VERSION` and `GIT_SHA`. The Word add-in image is not published:
+you pass `MIKE_VERSION` and `GIT_SHA`. A local build reuses whatever
+`node:22-slim` Docker has cached, and an old cached base can be older than
+the Node 22.19 the images need; run `docker compose build --pull` before `up` to
+refresh it. The backend image
+refuses a too-old base at `npm ci` (`EBADENGINE` / `notsup`) rather than
+building an image that crashes at boot. The Word add-in image is not published:
 its production build bakes in the deployment's web-app URL, so build it as
 described under [Building the Word add-in image](#building-the-word-add-in-image).
 
@@ -723,8 +904,9 @@ can compile against `packages/contracts`. For a manual backend image build use
 `docker build -f backend/Dockerfile -t mike-backend .` from the root.
 
 Each image reads only what its Dockerfile copies: the frontend image contains
-`frontend/` and `packages/contracts`; the add-in image adds `frontend/src/shared`
-and `frontend/public/icons`, which its bundle includes. In the frontend image
+`frontend/`, `packages/contracts`, `packages/ui` and `packages/client`; the
+add-in image holds `word-addin/`, the same three packages and
+`frontend/public/icons`, which its bundle includes. In the frontend image
 `next build` type-checks `frontend/tsconfig.build.json`, which excludes test
 files, so test fixtures and sibling applications never become build inputs. CI builds all three
 images on every pull request (`.github/workflows/docker-images.yml`), so a

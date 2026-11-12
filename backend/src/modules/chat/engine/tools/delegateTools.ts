@@ -16,7 +16,7 @@ import { REASONING_LEVELS, type ReasoningLevel } from "../../../../lib/llm/types
 import { DELEGATION_MODEL_TIERS, subagentModelFor } from "../../../../lib/modelSelection";
 import { CITATIONS_OPEN_TAG } from "../citations";
 import { spotlight, withDocumentList } from "../contextBuilders";
-import { resolveDocLabel, type DocIndex, type DocStore } from "../types";
+import { createDocLabelResolver, type DocIndex, type DocStore } from "../types";
 import {
     actionLabel,
     keepNewest,
@@ -100,7 +100,8 @@ export function delegateTool(chatModel: string, models: string[]): OpenAIToolSch
                 properties: {
                     title: {
                         type: "string",
-                        description: "A few words naming the task, shown to the user.",
+                        description:
+                            "A few words naming the task, shown to the user. If omitted, a continuation keeps its title and a new task uses Subagent.",
                     },
                     task: {
                         type: "string",
@@ -381,8 +382,7 @@ async function resolveDelegation(
           (await ctx.runStore.load(continuedFrom)))
         : null;
     if (continuedFrom && !earlier) return { error: CANNOT_CONTINUE };
-    const title = textInput(call.input.title) || earlier?.title;
-    if (!title) return { error: "A delegate call needs a title." };
+    const title = textInput(call.input.title) || earlier?.title || "Subagent";
     const documents = earlier
         ? earlier.documents && labelsOf(earlier.documents, ctx.docIndex)
         : requestedDocuments(call.input.documents, ctx);
@@ -415,7 +415,8 @@ function labelsOf(documentIds: string[], docIndex: DocIndex): string[] {
 function requestedDocuments(value: unknown, ctx: DelegateContext): string[] | string | undefined {
     if (!Array.isArray(value)) return undefined;
     const requested = value.map(String);
-    const labels = requested.map((id) => resolveDocLabel(id, ctx.docStore, ctx.docIndex));
+    const labelFor = createDocLabelResolver(ctx.docStore, ctx.docIndex);
+    const labels = requested.map(labelFor);
     const unknown = requested.filter((_, i) => !labels[i]);
     if (unknown.length) {
         return `Unknown documents: ${unknown.join(", ")}. Use doc_ids from your document list.`;

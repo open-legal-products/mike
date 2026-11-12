@@ -18,7 +18,7 @@ import {
     listQuickActions,
     streamWordChat,
 } from "../../../word-addin/src/taskpane/api/client";
-import { describeError } from "@/shared/lib/userError";
+import { describeError } from "@mike/client";
 
 const fetchMock = vi.fn<typeof fetch>();
 const payload = {
@@ -40,13 +40,11 @@ beforeEach(() => {
 });
 
 describe("Word API transport cancellation", () => {
-    it("preserves AbortError without wrapping or reporting it", async () => {
+    it("reports an unexpected abort and preserves its cause", async () => {
         const error = new DOMException("The operation was aborted", "AbortError");
         fetchMock.mockRejectedValueOnce(error);
-
-        await expect(streamWordChat(payload)).rejects.toBe(error);
-
-        expect(reportNetworkFailure).not.toHaveBeenCalled();
+        await expect(streamWordChat(payload)).rejects.toMatchObject({ cause: error });
+        expect(reportNetworkFailure).toHaveBeenCalledWith(error, expect.objectContaining({ operation: "word_chat.turn" }));
     });
 
     it.each([new Error("User stopped the response"), "navigation", null])(

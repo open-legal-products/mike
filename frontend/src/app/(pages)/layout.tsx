@@ -11,7 +11,7 @@ import { PageChromeContext } from "@/app/contexts/PageChromeContext";
 import { AppSidebar } from "@/app/components/shared/AppSidebar";
 import { preloadSidebarIcons } from "@/app/components/shared/AppSidebarSkeuoIcons";
 import { FullScreenLoader } from "@/app/components/shared/FullScreenLoader";
-import { HeaderButtonUI, HeaderButtonsUI } from "@/shared/ui/HeaderButtonsUI";
+import { HeaderButtonUI, HeaderButtonsUI } from "@mike/ui";
 import { cn } from "@/app/lib/utils";
 
 export default function MikeLayout({

@@ -37,14 +37,15 @@ vi.mock("../../../lib/convert", () => ({
 }));
 
 import { AppError } from "../../../lib/appError";
+import { withKeySource } from "../../../lib/llm/providerErrors";
 import { diagnosticErrorTags } from "../../../lib/observability/sentryPrivacy";
 import { queryTabularAllColumns, queryTabularCell } from "../tabular.extract";
 
 /** The AI SDK's provider failure, as the privacy boundary classifies it. */
-function providerError(): Error {
-    return Object.assign(new Error("401 invalid x-api-key sk-abc"), {
+function providerError(statusCode = 503): Error {
+    return Object.assign(new Error(`${statusCode} provider said sk-abc`), {
         name: "AI_APICallError",
-        statusCode: 401,
+        statusCode,
     });
 }
 
@@ -75,7 +76,7 @@ describe("queryTabularCell", () => {
         expect(diagnosticErrorTags(reported)).toEqual({
             error_kind: "tabular.generation_failed",
             provider_error: "api_call",
-            dependency_status: 401,
+            dependency_status: 503,
         });
         // The log carries the reported object, not the raw error: the console
         // bridge recognises it and files nothing.
@@ -83,6 +84,32 @@ describe("queryTabularCell", () => {
             "[queryTabularCell] completion failed",
             reported,
         );
+    });
+
+    // MIK-89: the level follows the provider's condition, as in chat.
+    it.each([
+        [503, "warning"],
+        [429, "warning"],
+        [400, "error"],
+    ] as const)("reports a provider %i at %s level", async (status, level) => {
+        completeText.mockRejectedValue(providerError(status));
+        await queryTabularCell("m", "Contract.pdf", "text", "p");
+        expect(reportError).toHaveBeenCalledTimes(1);
+        expect(reportError.mock.calls[0][1]).toMatchObject({ level });
+    });
+
+    it("keeps an account refusal with unknown ownership visible", async () => {
+        completeText.mockRejectedValue(providerError(401));
+        await expect(queryTabularCell("m", "Contract.pdf", "text", "p")).resolves.toBeNull();
+        expect(reportError).toHaveBeenCalledTimes(1);
+        expect(reportError.mock.calls[0][1]).toMatchObject({ level: "error" });
+    });
+
+    it("leaves repeat sampling to the transport for deployment-key failures", async () => {
+        completeText.mockRejectedValue(withKeySource(providerError(401), "deployment", "gemini"));
+        for (let i = 0; i < 2; i++) await queryTabularCell("m", "Contract.pdf", "text", "p");
+        expect(reportError).toHaveBeenCalledTimes(2);
+        expect(reportError.mock.calls[1][1]).toMatchObject({ level: "error" });
     });
 
     it("reports nothing when the model answers", async () => {
@@ -117,6 +144,21 @@ describe("queryTabularAllColumns", () => {
             "[queryTabularAllColumns] stream failed",
             reported,
         );
+    });
+
+    // The row stream applies the same rule as the cell call.
+    it.each([
+        [503, "warning"],
+        [429, "warning"],
+        [400, "error"],
+    ] as const)("reports a provider %i at %s level", async (status, level) => {
+        const cause = providerError(status);
+        streamChatWithTools.mockRejectedValue(cause);
+        await expect(
+            queryTabularAllColumns("m", "Contract.pdf", "text", COLUMNS, async () => {}),
+        ).rejects.toBe(cause);
+        expect(reportError).toHaveBeenCalledTimes(1);
+        expect(reportError.mock.calls[0][1]).toMatchObject({ level });
     });
 
     it("leaves reporting to the queue runner when requested", async () => {

@@ -1,7 +1,9 @@
+import { createMessageEditStateSelector, EMPTY_MESSAGE_EDIT_STATE } from "../../lib/messageEditState";
 import React, {
     useCallback,
     useEffect,
     useLayoutEffect,
+    useMemo,
     useRef,
     useState,
 } from "react";
@@ -11,7 +13,7 @@ import { ChatInput } from "./ChatInput";
 import type { ChatInputHandle } from "./ChatInput";
 import { InitialView } from "./InitialView";
 import { UserMessage } from "./UserMessage";
-import { ResponseSelectionMenuUI } from "@mike/response-selection-menu-ui";
+import { ResponseSelectionMenuUI } from "@mike/ui";
 import type {
     EditDecision,
     ReasoningLevel,
@@ -227,6 +229,8 @@ export function ChatView({
         id: latestUserMessageId,
         content: latestUserMessageContent,
     };
+    const selectMessageEditState = useMemo(createMessageEditStateSelector, []);
+    const messageEditState = useMemo(() => selectMessageEditState(editStateByKey), [editStateByKey, selectMessageEditState]);
     const latestAssistantMessageId =
         latestAssistantIndex > latestUserIndex
             ? (messages[latestAssistantIndex]?.id ?? null)
@@ -775,7 +779,7 @@ export function ChatView({
                                         ? assistantMinHeight
                                         : undefined
                                 }
-                                editStateByKey={editStateByKey}
+                                editStateByKey={messageEditState.get(message.id) ?? EMPTY_MESSAGE_EDIT_STATE}
                                 onApplyEdit={handleApplyEdit}
                                 onViewEdit={handleViewEdit}
                                 onResolveEdit={handleResolveEdit}

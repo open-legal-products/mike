@@ -1,9 +1,13 @@
 import { Queue } from "bullmq";
 import type IORedis from "ioredis";
-import { getRedisProducerConnection, withRedisTimeout } from "./connection";
+import { getRedisProducerConnection, withRedisTimeout, watchQueueErrors } from "./connection";
 import { redisEnabled } from "../dbq/driver";
 import { enqueueDbJob } from "../dbq/enqueue";
 import { createServerSupabase } from "../supabase";
+import { mapWithConcurrency } from "../concurrency";
+
+/** Jobs that do exist are cancelled a few at a time, not one by one. */
+const CANCEL_CONCURRENCY = 8;
 
 /**
  * BullMQ queue that runs tabular-review cell extraction off the request thread.
@@ -67,6 +71,7 @@ export function getExtractionQueue(): Queue<ExtractionJobData> {
     }
     if (!queue) {
         queue = new Queue<ExtractionJobData>(EXTRACTION_QUEUE, { connection });
+        watchQueueErrors(queue, "producer", EXTRACTION_QUEUE);
         queueConnection = connection;
     }
     return queue;
@@ -173,36 +178,47 @@ export async function removeQueuedExtractionJobs(
         return { removed: (data as number) ?? 0, canceled: 0 };
     }
     const queue = getExtractionQueue();
+    const jobIds = rowIds.flatMap((rowId) => [
+        extractionJobId(reviewId, rowId),
+        ...columnIndexes.map((c) => extractionJobId(reviewId, rowId, c)),
+    ]);
+    // One pipelined EXISTS for every candidate id: most of them (every
+    // per-column id of a row that was never regenerated on its own) name no
+    // job at all, and asking BullMQ for each one cost a round trip apiece —
+    // ~15k sequential calls to cancel a 500-row x 10-column clear.
+    let live: string[];
+    try {
+        const pipeline = getRedisProducerConnection().pipeline();
+        for (const jobId of jobIds) pipeline.exists(queue.toKey(jobId));
+        const answers = (await pipeline.exec()) ?? [];
+        live = jobIds.filter((_, i) => answers[i]?.[1] === 1);
+    } catch {
+        return { removed: 0, canceled: 0 };
+    }
     let removed = 0;
     let canceled = 0;
-    for (const rowId of rowIds) {
-        const jobIds = [
-            extractionJobId(reviewId, rowId),
-            ...columnIndexes.map((c) => extractionJobId(reviewId, rowId, c)),
-        ];
-        for (const jobId of jobIds) {
-            try {
-                const job = await queue.getJob(jobId);
-                if (!job) continue;
-                if ((await job.getState()) === "active") {
+    await mapWithConcurrency(live, CANCEL_CONCURRENCY, async (jobId) => {
+        try {
+            const job = await queue.getJob(jobId);
+            if (!job) return;
+            if ((await job.getState()) === "active") {
+                await job.updateData({ ...job.data, canceled: true });
+                canceled++;
+            } else {
+                try {
+                    await job.remove();
+                    removed++;
+                } catch {
+                    // Raced the worker: the job went active between the
+                    // state check and remove(). Fall back to the marker.
                     await job.updateData({ ...job.data, canceled: true });
                     canceled++;
-                } else {
-                    try {
-                        await job.remove();
-                        removed++;
-                    } catch {
-                        // Raced the worker: the job went active between the
-                        // state check and remove(). Fall back to the marker.
-                        await job.updateData({ ...job.data, canceled: true });
-                        canceled++;
-                    }
                 }
-            } catch {
-                // Job finished/vanished mid-race — the write guards cover it.
             }
+        } catch {
+            // Job finished/vanished mid-race — the write guards cover it.
         }
-    }
+    });
     return { removed, canceled };
 }
 

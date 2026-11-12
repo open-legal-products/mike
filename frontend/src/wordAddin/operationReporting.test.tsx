@@ -41,13 +41,14 @@ vi.mock("@sentry/react", () => ({
 }));
 
 import * as Sentry from "@sentry/react";
-import { diagnosticEvent } from "@/shared/lib/sentryPrivacy";
-import { clearToasts } from "@/shared/lib/toastStore";
-import { UserVisibleError } from "@/shared/lib/userError";
+import { diagnosticEvent } from "@mike/client";
+import { clearToasts } from "@mike/client";
+import { UserVisibleError } from "@mike/client";
 import {
     isReported,
     reportApiFailure,
     reportError,
+    reportHostlessOfficeClient,
     reportNetworkFailure,
     reportWordFailure,
 } from "../../../word-addin/src/taskpane/lib/errorReporting";
@@ -86,6 +87,34 @@ describe("the add-in's operations", () => {
     });
 });
 
+// Review of #789: the pane shows a static notice when Office.onReady has no
+// host. A crawler (MIKE-WORD-ADDIN-6/7) has no Office diagnostics and must
+// stay silent; a real Office client misdetected as hostless must not.
+describe("reportHostlessOfficeClient", () => {
+    it("sends nothing for a plain browser tab, which has no Office diagnostics", () => {
+        vi.stubGlobal("Office", { context: {} });
+        reportHostlessOfficeClient();
+        vi.stubGlobal("Office", undefined);
+        reportHostlessOfficeClient();
+        expect(Sentry.captureMessage).not.toHaveBeenCalled();
+    });
+
+    it("sends one warning when an Office client reports diagnostics but no host", () => {
+        vi.stubGlobal("Office", {
+            context: { diagnostics: { host: null, platform: "Mac", version: "16.99" } },
+        });
+        reportHostlessOfficeClient();
+        expect(Sentry.captureMessage).toHaveBeenCalledTimes(1);
+        expect(Sentry.captureMessage).toHaveBeenCalledWith(
+            "office host null inside an Office client",
+            {
+                level: "warning",
+                tags: { operation: "office.on_ready", error_kind: "office_host_null" },
+            },
+        );
+    });
+});
+
 describe("reportWordFailure", () => {
     it("names the operation beside the stage and Word's code", () => {
         const refused = Object.assign(new Error("refused"), { code: "GeneralException" });
@@ -119,12 +148,12 @@ describe("reportWordFailure", () => {
 
 describe("API and transport reports", () => {
     it("carry the operation the request belonged to", () => {
-        const failed = new MikeApiError({ status: 503, message: "x", requestId: "r-1" });
+        const failed = new MikeApiError({ status: 500, message: "x", requestId: "r-1" });
         reportApiFailure({
             path: "/auth/session",
             method: "GET",
-            status: 503,
-            code: "upstream_unavailable",
+            status: 500,
+            code: "internal_error",
             requestId: "r-1",
             operation: "word.session",
             error: failed,
@@ -132,8 +161,8 @@ describe("API and transport reports", () => {
         expect(tagsOf(state.scopes[0])).toMatchObject({
             component: "mike-api",
             operation: "word.session",
-            http_status: 503,
-            error_code: "upstream_unavailable",
+            http_status: 500,
+            error_code: "internal_error",
             request_id: "r-1",
         });
         expect(isReported(failed)).toBe(true);
@@ -147,6 +176,35 @@ describe("API and transport reports", () => {
         });
         expect(isReported(dead)).toBe(true);
     });
+
+    it.each(["upstream_unavailable", "schema_out_of_date"])(
+        "leave a %s answer to the server, which already filed it once",
+        (code) => {
+            // The backend files a GoTrue outage once per process (tagged
+            // operation=auth.session, fingerprint upstream-unavailable) and a
+            // missing migration once per key; the gateway files a backend
+            // outage. A pane copy per request would be a second issue for the
+            // same incident.
+            const failed = new MikeApiError({ status: 503, code, message: "x", requestId: "r-2" });
+            expect(
+                reportApiFailure({
+                    path: "/auth/session",
+                    method: "GET",
+                    status: 503,
+                    code,
+                    requestId: "r-2",
+                    operation: "word.session",
+                    error: failed,
+                    reportingOwner: "backend",
+                }),
+            ).toBeNull();
+            expect(Sentry.captureException).not.toHaveBeenCalled();
+            expect(Sentry.captureMessage).not.toHaveBeenCalled();
+            expect(state.scopes).toHaveLength(0);
+            // Marked, so a later notice of the same error stays quiet too.
+            expect(isReported(failed)).toBe(true);
+        },
+    );
 });
 
 describe("what a notice reports", () => {
@@ -235,7 +293,7 @@ describe("the session refresh", () => {
             vi.fn(async () => answer(502, "<html>bad gateway</html>", { "x-request-id": "req-5" })),
         );
         await expect(refreshSession()).rejects.toMatchObject({ status: 502 });
-        expect(Sentry.captureMessage).toHaveBeenCalledTimes(1);
+        expect(Sentry.captureException).toHaveBeenCalledTimes(1);
         expect(tagsOf(state.scopes[0])).toMatchObject({
             component: "mike-api",
             operation: "word.session",
@@ -243,7 +301,7 @@ describe("the session refresh", () => {
             request_id: "req-5",
         });
         // The 5xx is filed once: the refresh's own fault check sees it was.
-        expect(Sentry.captureException).not.toHaveBeenCalled();
+        expect(Sentry.captureMessage).not.toHaveBeenCalled();
     });
 
     it("files an unreachable backend as a word.session transport failure", async () => {
@@ -288,15 +346,15 @@ describe("workflow API failure identity", () => {
             const error = await updateWorkflow("11111111-2222-4333-8444-555555555555", { skill_md: "# Workflow" })
                 .catch((error: unknown) => error);
             expect(error).toBeInstanceOf(MikeApiError);
-            expect(Sentry.captureMessage).toHaveBeenCalledTimes(1);
+            expect(Sentry.captureException).toHaveBeenCalledTimes(1);
             expect(tagsOf(state.scopes[0]).operation).toBe("workflows.run");
             await vi.advanceTimersByTimeAsync(1000);
             const shown = wrapped ? new UserVisibleError("The outcome is unknown.", { cause: error }) : error;
             reportFault(shown, { operation: "workflows.run" });
             notifyError(error, { operation: "workflows.run" });
             await vi.runAllTimersAsync();
-            expect(Sentry.captureMessage).toHaveBeenCalledTimes(1);
-            expect(Sentry.captureException).not.toHaveBeenCalled();
+            expect(Sentry.captureException).toHaveBeenCalledTimes(1);
+            expect(Sentry.captureMessage).not.toHaveBeenCalled();
             expect(tagsOf(state.scopes[0])).toMatchObject({
                 component: "mike-api", operation: "workflows.run", http_status: 500,
                 http_method: "PATCH", http_route: "/workflows/:id", request_id: "req-workflow",
@@ -315,13 +373,19 @@ it("sends immediately without a screen and suppresses a later notice", async () 
         const error = new MikeApiError({ status: 500, message: "Failed" });
         reportApiFailure({ path: "/workflows", status: 500, error });
         expect(isReported(error)).toBe(true);
-        expect(Sentry.captureMessage).toHaveBeenCalledTimes(1);
+        expect(Sentry.captureException).toHaveBeenCalledTimes(1);
         await vi.runAllTimersAsync();
-        expect(Sentry.captureMessage).toHaveBeenCalledTimes(1);
+        expect(Sentry.captureException).toHaveBeenCalledTimes(1);
         notifyError(error, { operation: "workflows.run" });
-        expect(Sentry.captureException).not.toHaveBeenCalled();
-        expect(Sentry.captureMessage).toHaveBeenCalledTimes(1);
+        expect(Sentry.captureMessage).not.toHaveBeenCalled();
+        expect(Sentry.captureException).toHaveBeenCalledTimes(1);
     } finally {
         vi.useRealTimers();
     }
+});
+
+it("reports an unowned 503 even with a recognized code, preserving the original Error", () => {
+    const failure = new Error("private transport detail");
+    reportApiFailure({ path: "/chat", status: 503, code: "upstream_unavailable", error: failure });
+    expect(Sentry.captureException).toHaveBeenCalledWith(failure);
 });
