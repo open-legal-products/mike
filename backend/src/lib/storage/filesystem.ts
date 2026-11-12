@@ -17,7 +17,7 @@ import { randomUUID } from "node:crypto";
 import { createReadStream } from "node:fs";
 import fs, { stat } from "node:fs/promises";
 import path from "node:path";
-import { Readable, Transform } from "node:stream";
+import { Readable, Transform, addAbortSignal } from "node:stream";
 import { pipeline } from "node:stream/promises";
 import { signBlobToken, signBlobUploadToken } from "../downloadTokens";
 import type { StorageAdapter } from "./adapter";
@@ -218,18 +218,22 @@ export function createFilesystemStorageAdapter(): StorageAdapter {
       }
     },
 
-    async openReadStream(key) {
+    async openReadStream(key, options) {
       // createReadStream opens lazily, so the facade's contract holds:
       // nothing is read until a consumer pulls.
-      return createReadStream(fsPathFor(key));
+      const stream = createReadStream(fsPathFor(key));
+      return options?.signal ? addAbortSignal(options.signal, stream) : stream;
     },
 
     async headFile(key) {
       try {
         const info = await stat(fsPathFor(key));
-        // No etag: the filesystem has no equivalent, and every caller treats
-        // a null etag as "not available" rather than "mismatch".
-        return { size: info.size, etag: null, contentType: null };
+        // The filesystem has no content hash, so the etag is a weak validator
+        // from size and modification time (the same one static file servers
+        // use): it changes whenever the file is rewritten, which is all a
+        // download's conditional GET needs.
+        const etag = `W/"${info.size.toString(16)}-${Math.floor(info.mtimeMs).toString(16)}"`;
+        return { size: info.size, etag, contentType: null };
       } catch (error) {
         if (isMissingFile(error)) return null;
         throw error;

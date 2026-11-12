@@ -3,19 +3,83 @@
 // Route handlers parse params, call the downloads.service functions, and map
 // their typed results onto status codes, headers, and JSON.
 
-import { Router } from "express";
+import { Router, type Request, type Response } from "express";
+import { pipeline } from "node:stream/promises";
 import { requireAuth } from "../../middleware/auth";
 import { asyncRoute, routerErrorHandler } from "../../middleware/asyncRoute";
 import { createServerSupabase } from "../../lib/supabase";
-import { buildContentDisposition } from "../../lib/storage";
+import {
+    StorageOperationError,
+    buildContentDisposition,
+} from "../../lib/storage";
 import { sendServiceFailure } from "../../lib/serviceResult";
 import {
     resolveBlobDownload,
     resolveTokenDownload,
     storeBlobUpload,
+    type ObjectDownload,
 } from "./downloads.service";
 
 export const downloadsRouter = Router();
+
+/**
+ * Answer a download by streaming the object to the client, so a large file
+ * costs a few chunks of memory rather than the whole object.
+ *
+ * - A matching If-None-Match answers 304, and HEAD answers headers only,
+ *   both without reading the object.
+ * - The object is opened before any header is written, so a store that
+ *   cannot serve it fails into the router's error handler as an ordinary
+ *   500 instead of a dropped connection.
+ * - A failure after the first byte can no longer change the status: the
+ *   pipeline destroys the socket (the client sees a short body against its
+ *   Content-Length) and the storage read, and the error is reported.
+ * - A client that disconnects aborts the storage read; that is not a
+ *   failure, so nothing is reported.
+ */
+async function sendObject(
+    req: Request,
+    res: Response,
+    download: ObjectDownload,
+): Promise<void> {
+    if (download.etag) {
+        res.setHeader("ETag", download.etag);
+        if (req.fresh) return void res.status(304).end();
+    }
+    const headers = () => {
+        res.setHeader("Content-Type", download.contentType);
+        res.setHeader("Content-Length", String(download.size));
+        res.setHeader(
+            "Content-Disposition",
+            buildContentDisposition("attachment", download.filename),
+        );
+    };
+    if (req.method === "HEAD") {
+        headers();
+        return void res.end();
+    }
+
+    const clientGone = new AbortController();
+    res.once("close", () => {
+        if (!res.writableFinished) clientGone.abort();
+    });
+    let body;
+    try {
+        body = await download.open(clientGone.signal);
+    } catch (error) {
+        // The error answer is JSON, not this object: drop its validator.
+        res.removeHeader("ETag");
+        throw error;
+    }
+    headers();
+    try {
+        await pipeline(body, res);
+    } catch (error) {
+        if (error instanceof StorageOperationError) throw error;
+        // Anything else is the client going away mid-transfer (premature
+        // close, EPIPE): the pipeline has already released the storage read.
+    }
+}
 
 // GET /download/signed/:token — the filesystem storage driver's presigned
 // URL. Deliberately unauthenticated, exactly like the S3 presigned URLs it
@@ -27,12 +91,7 @@ export const downloadsRouter = Router();
 downloadsRouter.get("/signed/:token", asyncRoute(async (req, res) => {
     const result = await resolveBlobDownload(req.params.token);
     if (!result.ok) return void sendServiceFailure(res, result);
-    res.setHeader("Content-Type", result.data.contentType);
-    res.setHeader(
-        "Content-Disposition",
-        buildContentDisposition("attachment", result.data.filename),
-    );
-    res.send(result.data.bytes);
+    await sendObject(req, res, result.data);
 }));
 
 /**
@@ -73,13 +132,7 @@ downloadsRouter.get("/:token", requireAuth, asyncRoute(async (req, res) => {
             detail:
                 result.kind === "invalid_link" ? "Invalid link" : "File not found",
         });
-
-    res.setHeader("Content-Type", result.contentType);
-    res.setHeader(
-        "Content-Disposition",
-        buildContentDisposition("attachment", result.filename),
-    );
-    res.send(result.bytes);
+    await sendObject(req, res, result.download);
 }));
 
 downloadsRouter.use(routerErrorHandler("[downloads]"));

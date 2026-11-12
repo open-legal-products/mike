@@ -24,6 +24,7 @@ import { getSignedUrl as awsGetSignedUrl } from "@aws-sdk/s3-request-presigner";
 import { createReadStream } from "node:fs";
 import { stat } from "node:fs/promises";
 import type { StorageAdapter } from "./adapter";
+import { storageReadTimeoutMs } from "./timeouts";
 
 const GetObjectCommand = (S3Commands as any).GetObjectCommand;
 
@@ -36,13 +37,6 @@ const CHECKSUM_DEFAULTS = {
   requestChecksumCalculation: "WHEN_REQUIRED",
   responseChecksumValidation: "WHEN_REQUIRED",
 } as const;
-
-// A stalled GET would otherwise pin whoever awaits it, including the single
-// background source-loading slot. Aborting tears the socket down mid-body too.
-function downloadTimeoutMs(): number {
-  const value = Number(process.env.STORAGE_DOWNLOAD_TIMEOUT_MS);
-  return Number.isFinite(value) && value > 0 ? value : 120_000;
-}
 
 export function createS3StorageAdapter(): StorageAdapter {
   const bucket = process.env.R2_BUCKET_NAME ?? "mike";
@@ -152,7 +146,8 @@ export function createS3StorageAdapter(): StorageAdapter {
     },
 
     async downloadFile(key) {
-      const abortSignal = AbortSignal.timeout(downloadTimeoutMs());
+      // See ./timeouts.ts. Aborting tears the socket down mid-body too.
+      const abortSignal = AbortSignal.timeout(storageReadTimeoutMs());
       let response: any;
       try {
         response = await client().send(
@@ -176,11 +171,22 @@ export function createS3StorageAdapter(): StorageAdapter {
       }
     },
 
-    async openReadStream(key) {
+    async openReadStream(key, options) {
+      const abortSignal = options?.signal;
       const response = (await client().send(
         new GetObjectCommand({ Bucket: bucket, Key: key }),
+        abortSignal ? { abortSignal } : undefined,
       )) as any;
-      return (response.Body as AsyncIterable<Uint8Array> | undefined) ?? null;
+      const body = response.Body;
+      if (!body) return null;
+      // The SDK's signal covers the request; once the body is flowing, tear
+      // the socket down here so an abort never leaves it half-read.
+      if (abortSignal) {
+        const stop = () => body.destroy?.(abortSignal.reason);
+        if (abortSignal.aborted) stop();
+        else abortSignal.addEventListener("abort", stop, { once: true });
+      }
+      return body as AsyncIterable<Uint8Array>;
     },
 
     async headFile(key) {
