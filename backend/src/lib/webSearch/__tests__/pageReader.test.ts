@@ -16,6 +16,7 @@ vi.mock("../../observability/sentry", async (importOriginal) => ({
 }));
 
 import { BlockedDestinationError } from "../../blockedDestination";
+import { scrubEvent } from "../../observability/sentry";
 import { WebPageUnreadableError, readWebPage } from "../pageReader";
 
 const ARTICLE = `<!doctype html>
@@ -98,6 +99,32 @@ describe("readWebPage", () => {
         const result = await readWebPage("https://example.test/cafe.txt");
 
         expect(result.text).toBe("caf\u00e9");
+    });
+
+    it("reads a page whose JSON-LD is malformed without filing a Sentry error", async () => {
+        const html = ARTICLE.replace(
+            "</head>",
+            '<script type="application/ld+json">{"@type": "Article",}</script></head>',
+        );
+        guardedFetch.mockResolvedValue(page(html, "text/html"));
+        const calls: unknown[][] = [];
+        const logged = vi
+            .spyOn(console, "error")
+            .mockImplementation((...args: unknown[]) => void calls.push(args));
+
+        const result = await readWebPage("https://example.test/s172").finally(() =>
+            logged.mockRestore(),
+        );
+
+        expect(result.text).toContain("promote the success of the company");
+        // What the console bridge would make of each line the read logged.
+        const filed = calls.map((args) =>
+            scrubEvent(
+                { logger: "console", message: String(args[0]) } as never,
+                { captureContext: { extra: { arguments: args } } },
+            ),
+        );
+        expect(filed.filter(Boolean)).toEqual([]);
     });
 
     it("reads a PDF served as a generic binary file", async () => {

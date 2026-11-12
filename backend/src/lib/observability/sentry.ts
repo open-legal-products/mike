@@ -72,6 +72,18 @@ function isNodeWarningText(args: unknown[]): boolean {
   );
 }
 
+/**
+ * The web page reader's parser (defuddle) logs, rather than throws, when a
+ * page's JSON-LD metadata is not valid JSON, and reads the page without it.
+ * The page is someone else's and the read succeeds, yet the bridge filed the
+ * log as a SyntaxError in chat.turn (MIKE-BACKEND-DK).
+ */
+const DEFUDDLE_SCHEMA_LABEL = "Defuddle: Error parsing schema.org data:";
+
+function isDefuddleSchemaParseLog(args: unknown[]): boolean {
+  return args[0] === DEFUDDLE_SCHEMA_LABEL && args[1] instanceof SyntaxError;
+}
+
 // BEGIN shared-redaction
 // This block is the privacy control for every runtime. It is authored once
 // and mirrored, indentation aside, between backend/src/lib/observability/
@@ -788,7 +800,7 @@ export function scrubEvent(
       .find(candidate => candidate !== null && candidate !== undefined) ?? original;
     // Only the primary failure owns this event; contextual errors cannot suppress it.
     if (isReported(reportSource)) return null;
-    if (isNodeWarningText(args)) return null;
+    if (isNodeWarningText(args) || isDefuddleSchemaParseLog(args)) return null;
     // Positional payloads after the label are never titles or grouping keys.
     const label = typeof args[0] === "string" ? args[0].trim() : "Console error";
     const nestedError = !primaryError && reportSource instanceof Error ? reportSource : null;
