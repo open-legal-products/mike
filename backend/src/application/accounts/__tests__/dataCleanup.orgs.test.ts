@@ -70,7 +70,7 @@ function recordWrites(db: any) {
 // Stateful fake with a minimal simulation of the ON DELETE CASCADE from
 // org_members → organizations, so deleting an org also drops its membership
 // rows (as Postgres would). Supports the query subset the cleanup uses:
-// select/eq/neq/in/order/limit/delete/update + thenable.
+// select/eq/neq/gt/in/order/limit/delete/update + thenable.
 //
 // `options.lastOwnerTrigger` additionally simulates the database trigger
 // org_members_protect_last_owner (migration 20261011_01): deleting an
@@ -95,6 +95,7 @@ function makeDb(
             | { type: "is"; col: string; val: unknown }
             | { type: "neq"; col: string; val: unknown }
             | { type: "in"; col: string; vals: unknown[] }
+            | { type: "gt"; col: string; val: unknown }
         )[] = [];
         let op: "select" | "update" | "delete" = "select";
         let payload: Row | null = null;
@@ -111,6 +112,7 @@ function makeDb(
                         : r[f.col] ?? null) === f.val;
                     if (f.type === "eq") return r[f.col] === f.val;
                     if (f.type === "neq") return r[f.col] !== f.val;
+                    if (f.type === "gt") return (r[f.col] as never) > (f.val as never);
                     return f.vals.includes(r[f.col]);
                 }),
             );
@@ -199,6 +201,11 @@ function makeDb(
             },
             neq: (col: string, val: unknown) => {
                 filters.push({ type: "neq", col, val });
+                return builder;
+            },
+            // Keyset pages of lib/batchedQuery: rows strictly after the cursor.
+            gt: (col: string, val: unknown) => {
+                filters.push({ type: "gt", col, val });
                 return builder;
             },
             order: (col: string, opts?: { ascending?: boolean }) => {
