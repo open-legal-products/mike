@@ -17,7 +17,11 @@ No extraction configuration or upload/package ceilings are changed.
   `document_too_large` outcome, not a claim of malformed XML.
 - A busy parser is not a failure: the upload waits up to 60 s for the slot,
   then is requeued 30 s later without spending a retry attempt or reporting
-  an error (the same bounds as the background text jobs).
+  an error (the same bounds as the background text jobs). Like those jobs,
+  uploads pass through the background admission gate first, so only one
+  upload at a time occupies a place in the parser's own queue and a batch of
+  uploads cannot fill it and turn away interactive parses. That one upload
+  holds its bytes while it waits for the parser; the others hold nothing.
 - Unexpected process/I/O failures remain retryable through the existing
   bounded upload retry policy. A terminal validation failure runs the same
   destination-document cleanup as any other upload failure: a document row
