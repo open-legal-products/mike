@@ -613,7 +613,12 @@ export async function runToolCalls(
           name: tc.function.name,
         })}\n\n`,
       );
-      const result: { content: string; event: McpToolEvent; legalSource?: LegalDataHunterSource | null } =
+      const result: {
+        content: string;
+        event: McpToolEvent;
+        legalSource?: LegalDataHunterSource | null;
+        truncated?: boolean;
+      } =
         plan.type === "result"
           ? plan
           : plan.type === "approval"
@@ -657,6 +662,9 @@ export async function runToolCalls(
       if (event.status === "ok" && result.legalSource && docIndex) {
         const handle = registerMcpLegalSource(result.legalSource, docIndex, docStore);
         sourceCitation = `\n\nCanonical legal source: {"doc_id":"${handle}"}. Cite an exact quote from this source with that doc_id.`;
+        if (result.truncated) {
+          sourceCitation += ` The result above was cut off before the end of the document. Call read_document with doc_id "${handle}" to read the full text before relying on or quoting any part not shown above.`;
+        }
       }
       toolResults.push({
         role: "tool",

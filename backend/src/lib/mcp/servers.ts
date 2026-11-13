@@ -55,6 +55,8 @@ type McpCallResult = {
     content: string;
     event: McpToolEvent;
     legalSource: LegalDataHunterSource | null;
+    /** The model received only the first MAX_MCP_RESULT_CHARS of the result. */
+    truncated?: boolean;
 };
 
 export { startUserMcpConnectorOAuth };
@@ -798,8 +800,11 @@ async function callResolvedTool(
         }
         const content = stringifyMcpResult(result);
         // The serializer appends a marker beyond the cap when truncating.
-        // Never promote bytes the model did not receive as a complete result.
-        const legalSource = content.length > MAX_MCP_RESULT_CHARS ? null : extractLegalDataHunterSource(result, {
+        const truncated = content.length > MAX_MCP_RESULT_CHARS;
+        // A long document is still registered from the complete result: the
+        // panel and exact-quote verification use the full text, and the model
+        // is told to read the rest with read_document before relying on it.
+        const legalSource = extractLegalDataHunterSource(result, {
             connectorId: connector.id,
             serverUrl: connector.server_url,
             toolName: tool.tool_name,
@@ -818,6 +823,7 @@ async function callResolvedTool(
         return {
             content,
             legalSource,
+            truncated,
             event: {
                 type: "mcp_tool_call",
                 connector_id: connector.id,

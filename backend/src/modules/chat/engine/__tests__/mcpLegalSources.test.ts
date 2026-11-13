@@ -115,12 +115,32 @@ describe("MCP source → dispatcher → exact-quote citation", () => {
   it("suppresses unresolved external document identities", () => {
     expect(extractCitations('<CITATIONS>[{"ref":1,"doc_id":"mcp:unknown","quote":"invented"}]</CITATIONS>', {}, new Map())).toEqual([]);
   });
-  it("never promotes a locally truncated MCP result", async () => {
+  it("registers the full source when the model's copy is cut off", async () => {
+    const tail = "The court allowed the appeal.";
+    const text = `${payload.text} ${"x".repeat(210_000)} ${tail}`;
+    mocks.callTool.mockResolvedValue({ structuredContent: { ...payload, data_type: "case_law", text } });
     const f = fixture();
-    mocks.callTool.mockResolvedValue({ structuredContent: { ...payload, text: "x".repeat(60_000) } });
     const result = await f.dispatch();
-    expect((result.toolResults[0] as { content: string }).content).toContain("Truncated MCP result");
-    expect(f.docStore.has("doc-2")).toBe(false);
+    const content = (result.toolResults[0] as { content: string }).content;
+    expect(content).toContain("Truncated MCP result");
+    expect(content).not.toContain(tail);
+    expect(content).toContain('Call read_document with doc_id "doc-2"');
+    expect(f.docStore.get("doc-2")).toMatchObject({ inline_text: text, panel_document: { type: "case" } });
+    const read = (id: string) => readDocumentContent(id, f.docStore, () => {}, f.docIndex, f.db, { emitEvents: false });
+    expect(await read("doc-2")).toBe(text);
+    // A quote from beyond the cut verifies against the full text; an
+    // invented one is still dropped.
+    const parsed = parseCitations(`<CITATIONS>${JSON.stringify([
+      { ref: 1, doc_id: "doc-2", quote: tail },
+      { ref: 2, doc_id: "doc-2", quote: "The court dismissed the appeal." },
+    ])}</CITATIONS>`);
+    const citations = await verifyCitations(
+      parsed.map((c) => createCitation(c, f.docIndex, undefined, f.docStore)),
+      read,
+      vi.fn(),
+    );
+    expect(citations.filter(Boolean)).toHaveLength(1);
+    expect(citations[0]).toMatchObject({ verified: true, document: { type: "case" } });
   });
   it.each([
     payload.text.toLowerCase(), payload.text.replaceAll(" ", "  "),
@@ -173,6 +193,7 @@ describe("MCP source → dispatcher → exact-quote citation", () => {
     const result = await f.dispatch();
     expect(result.mcpEvents[0].status).toBe("ok");
     expect((result.toolResults[0] as { content: string }).content).toContain('"doc_id":"doc-2"');
+    expect((result.toolResults[0] as { content: string }).content).not.toContain("cut off");
     expect(f.docStore.get("doc-2")).toMatchObject({ inline_text: payload.text, panel_document: { type } });
     const source = f.docStore.get("doc-2")!;
     const parsed = parseCitations(`<CITATIONS>${JSON.stringify([

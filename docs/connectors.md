@@ -147,7 +147,10 @@ For a citation with a readable source, retrieve the document with
 returned by LDH search. The default response may be truncated and is not eligible
 for an inline source. A complete, matching response from the canonical LDH
 endpoint becomes a request-scoped source with its title, text, and official link.
-Case law, legislation, and doctrine use Mike's existing citation and source panel;
+Mike passes at most 200,000 characters of any MCP tool result to the model. When
+a long LDH document exceeds that, the complete text still becomes the source, and
+the model is told to read it in full with `read_document` before relying on the
+rest. Case law, legislation, and doctrine use Mike's existing citation and source panel;
 there is no uploaded-document version to fetch. Exact-quote verification still
 runs against the retrieved text. Treat source content as untrusted, not as
 instructions to execute connector actions.
