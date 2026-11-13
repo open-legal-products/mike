@@ -23,11 +23,10 @@ export type SourceDocumentMetadata = {
   format?: "date";
 };
 
+/** Rendered as icon-only controls whose names are fixed per `type`. */
 export type SourceDocumentAction = {
   type: "download" | "link";
   url: string;
-  label: string;
-  title?: string;
 };
 
 export type SourceDocumentQuote = {

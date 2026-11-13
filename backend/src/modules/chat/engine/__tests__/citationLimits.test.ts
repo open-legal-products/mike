@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { parseCitations, parsePartialCitationObjects, limitCitationPayload } from "../citations";
+import { parseCitations, parsePartialCitationObjects, limitCitationPayload, withoutEmbeddedSourceText } from "../citations";
 import { extractCitations } from "../contextBuilders";
 import type { DocStore } from "../types";
 
@@ -32,5 +32,28 @@ describe("bounded citation payloads", () => {
     const result = extractCitations(`<CITATIONS>${json}</CITATIONS>`, {}, docStore);
     expect(result).toHaveLength(2);
     expect(Buffer.byteLength(JSON.stringify(result))).toBeLessThanOrEqual(5_000_000);
+  });
+});
+
+describe("embedded source text leaving the turn", () => {
+  it("drops only mcp: source bodies and keeps their references", () => {
+    const embedded = {
+      kind: "document", doc_id: "doc-2", verified: true,
+      document: {
+        document_id: "mcp:c1:2:uk:3:abc", title: "R v X", type: "case", metadata: [],
+        quotes: [{ quote: "Held", target: { subdocument_id: "mcp:c1:2:uk:3:abc:text" } }],
+        actions: [{ type: "link", url: "https://example.com/judgment" }],
+        subdocuments: [{ document_id: "mcp:c1:2:uk:3:abc:text", title: "R v X", type: "html", text: "Held, the appeal is allowed." }],
+      },
+    };
+    const uploaded = { kind: "document", doc_id: "doc-0", filename: "a.pdf", document: { document_id: "uuid-1", subdocuments: [{ document_id: "s", text: "kept" }] } };
+    const kase = { kind: "case", cluster_id: 1, quotes: [] };
+    const [stripped, untouchedUpload, untouchedCase] = withoutEmbeddedSourceText([embedded, uploaded, kase]) as typeof embedded[];
+    expect(stripped.document.subdocuments).toEqual([{ document_id: "mcp:c1:2:uk:3:abc:text", title: "R v X", type: "html" }]);
+    expect(stripped.document.quotes).toEqual(embedded.document.quotes);
+    expect(stripped.document.actions).toEqual(embedded.document.actions);
+    expect(untouchedUpload).toBe(uploaded);
+    expect(untouchedCase).toBe(kase);
+    expect(embedded.document.subdocuments[0].text).toBe("Held, the appeal is allowed.");
   });
 });

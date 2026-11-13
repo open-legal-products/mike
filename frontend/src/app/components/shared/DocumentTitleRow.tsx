@@ -17,12 +17,6 @@ import { isEmbeddedMcpDocument, type PanelDocument } from "./types";
 import type { DocxSaveState } from "./views/DocxRenderer.types";
 import { DocxSaveErrorPopup } from "./views/DocxSaveErrorPopup";
 
-type ExternalSourceLink = {
-    href: string;
-    label: string;
-    title: string;
-};
-
 function isSafeMcpSourceUrl(value: string): boolean {
     try {
         const url = new URL(value);
@@ -35,7 +29,6 @@ function isSafeMcpSourceUrl(value: string): boolean {
 export function DocumentTitleRow({
     document,
     isReloading,
-    compactActions,
     onDownload,
     saveState,
     onVersionChange,
@@ -44,7 +37,6 @@ export function DocumentTitleRow({
 }: {
     document: PanelDocument;
     isReloading: boolean;
-    compactActions: boolean;
     /** Export live editor bytes when available; undefined falls back to the server version. */
     onDownload?: () => Promise<void> | undefined;
     saveState?: DocxSaveState | null;
@@ -156,12 +148,7 @@ export function DocumentTitleRow({
                         ) : (
                             <ExternalSourceLinkButton
                                 key={`${action.type}:${action.url}:${index}`}
-                                link={{
-                                    href: action.url,
-                                    label: action.label,
-                                    title: action.title ?? action.label,
-                                }}
-                                compact={compactActions}
+                                href={action.url}
                             />
                         ),
                     )}
@@ -256,28 +243,20 @@ function UrlDownloadButton({
     );
 }
 
-function ExternalSourceLinkButton({
-    link,
-    compact,
-}: {
-    link: ExternalSourceLink;
-    compact: boolean;
-}) {
+/** Icon-only, like the download action: the name is fixed, not per source. */
+function ExternalSourceLinkButton({ href }: { href: string }) {
     return (
         <a
-            href={link.href}
+            href={href}
             target="_blank"
             rel="noopener noreferrer"
-            aria-label={link.title}
-            title={link.title}
+            aria-label="Open link"
+            title="Open link"
             className={textButtonUIClassName({
-                size: compact ? "icon-xs" : "sm",
+                size: "icon-xs",
             })}
         >
             <ExternalLink aria-hidden="true" className="h-3.5 w-3.5" />
-            <span className={compact ? "sr-only" : undefined}>
-                {link.label}
-            </span>
         </a>
     );
 }

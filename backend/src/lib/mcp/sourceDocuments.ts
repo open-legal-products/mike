@@ -24,7 +24,44 @@ function identifier(value: unknown): string | null {
   return typeof value === "string" && value === value.trim() &&
     value.length > 0 && value.length <= 2_048 ? value : null;
 }
-function isLegalDataHunterUrl(value: string): boolean {
+/**
+ * A citation's stable id for an LDH document: the connector it was read
+ * through plus the provider's identifiers, each length-prefixed so neither
+ * can be confused with a separator.
+ */
+export function legalDataHunterDocumentId(
+  connectorId: string,
+  provider: string,
+  providerId: string,
+): string {
+  return `mcp:${connectorId}:${provider.length}:${provider}:${providerId.length}:${providerId}`;
+}
+
+/** The provider identifiers in an id from `legalDataHunterDocumentId`, or null. */
+export function parseLegalDataHunterDocumentId(
+  documentId: string,
+): { connectorId: string; provider: string; providerId: string } | null {
+  const match = /^mcp:([^:]+):(\d+):/.exec(documentId);
+  if (!match) return null;
+  const connectorId = match[1];
+  let rest = documentId.slice(match[0].length);
+  const providerLength = Number(match[2]);
+  const provider = rest.slice(0, providerLength);
+  rest = rest.slice(providerLength);
+  const second = /^:(\d+):/.exec(rest);
+  if (!second) return null;
+  const providerId = rest.slice(second[0].length);
+  if (
+    provider.length !== providerLength ||
+    providerId.length !== Number(second[1]) ||
+    !identifier(provider) ||
+    !identifier(providerId)
+  )
+    return null;
+  return { connectorId, provider, providerId };
+}
+
+export function isLegalDataHunterUrl(value: string): boolean {
   try {
     const url = new URL(value);
     return !url.username && !url.password && !url.search && !url.hash &&
@@ -82,12 +119,12 @@ export function extractLegalDataHunterSource(
       identifier(context.arguments.source) !== provider ||
       identifier(context.arguments.source_id) !== providerId) return null;
 
-  const documentId = `mcp:${context.connectorId}:${provider.length}:${provider}:${providerId.length}:${providerId}`;
+  const documentId = legalDataHunterDocumentId(context.connectorId, provider, providerId);
   return {
     text: body,
     document: {
       document_id: documentId, title, type, metadata: [], quotes: [],
-      actions: [{ type: "link", label: "Link", title: "Link", url: officialUrl }],
+      actions: [{ type: "link", url: officialUrl }],
       // `text`, not `html`: the shared panel renders this as plain text.
       subdocuments: [{ document_id: `${documentId}:text`, title, type: "html", text: body }],
     },

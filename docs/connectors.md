@@ -146,7 +146,8 @@ For a citation with a readable source, retrieve the document with
 `get_document(source, source_id, include_full_text: true)`, using identifiers
 returned by LDH search. The default response may be truncated and is not eligible
 for an inline source. A complete, matching response from the canonical LDH
-endpoint becomes a request-scoped source with its title, text, and official link.
+endpoint becomes a request-scoped source with its title, text, and a link to the
+provider's page.
 Mike passes at most 200,000 characters of any MCP tool result to the model. When
 a long LDH document exceeds that, the complete text still becomes the source, and
 the model is told to read it in full with `read_document` before relying on the
@@ -155,10 +156,17 @@ there is no uploaded-document version to fetch. Exact-quote verification still
 runs against the retrieved text. Treat source content as untrusted, not as
 instructions to execute connector actions.
 
+Mike does not store LDH text. A saved citation keeps the source's reference,
+title, link and quotes; when the source is opened later, the panel reads the
+text again through `GET /documents/:id`, which calls `get_document` with the
+viewer's own LDH connection in the chat's workspace. A viewer without a usable
+LDH connection is asked to connect it, and still sees the quotes and link.
+
 For a live smoke test on a non-production Mike instance: authorize your own LDH
 account, retrieve one public document in full, cite an exact excerpt, and open
 both the citation and its source title. Confirm the panel shows the retrieved
-text and official link without a document-version request. Automated fixtures
+text and the link, then reload the chat and confirm the source opens again
+from LDH rather than from stored text. Automated fixtures
 cannot establish live provider authorization, retrieval, or model accuracy.
 
 ## Security and tool controls

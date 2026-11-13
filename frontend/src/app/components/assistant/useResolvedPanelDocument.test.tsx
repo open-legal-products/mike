@@ -118,4 +118,67 @@ describe("useResolvedPanelDocument", () => {
             expect(getPanelDocumentMock).toHaveBeenCalledWith("case:123", "org-1"),
         );
     });
+
+    describe("Legal Data Hunter sources", () => {
+        const sourceId = "mcp:c1:2:uk:3:abc";
+        const saved = {
+            document_id: sourceId,
+            title: "R v X",
+            type: "case" as const,
+            metadata: [],
+            actions: [{ type: "link" as const, url: "https://example.com/judgment" }],
+            quotes: [
+                {
+                    quote: "Held",
+                    verification: { verified: true },
+                    target: { subdocument_id: `${sourceId}:text` },
+                },
+            ],
+            subdocuments: [
+                { document_id: `${sourceId}:text`, title: "R v X", type: "html" as const },
+            ],
+        };
+
+        it("reads the text again when a saved source has none", async () => {
+            getPanelDocumentMock.mockResolvedValue({
+                ...saved,
+                quotes: [],
+                subdocuments: [
+                    {
+                        document_id: `${sourceId}:text`,
+                        title: "R v X",
+                        type: "html",
+                        text: "Held, the appeal is allowed.",
+                    },
+                ],
+            });
+
+            const { result } = renderHook(() => useResolvedPanelDocument(saved));
+
+            await waitFor(() => expect(result.current.isLoading).toBe(false));
+            expect(getPanelDocumentMock).toHaveBeenCalledWith(sourceId, undefined);
+            expect(result.current.document.subdocuments?.[0].text).toBe(
+                "Held, the appeal is allowed.",
+            );
+            expect(result.current.document.quotes).toEqual(saved.quotes);
+        });
+
+        it("does not fetch a source that still has its text", () => {
+            const live = {
+                ...saved,
+                subdocuments: [{ ...saved.subdocuments[0], text: "Held" }],
+            };
+            const { result } = renderHook(() => useResolvedPanelDocument(live));
+            expect(result.current.isLoading).toBe(false);
+            expect(getPanelDocumentMock).not.toHaveBeenCalled();
+        });
+
+        it("tells a viewer without Legal Data Hunter to connect it", async () => {
+            const connect =
+                "Connect Legal Data Hunter in Settings → Connectors to view this source.";
+            getPanelDocumentMock.mockRejectedValue(new Error(connect));
+            const { result } = renderHook(() => useResolvedPanelDocument(saved));
+            await waitFor(() => expect(result.current.error).toBe(connect));
+        });
+    });
 });

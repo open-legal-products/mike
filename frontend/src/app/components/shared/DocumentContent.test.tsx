@@ -5,7 +5,6 @@ import { ProjectDocumentTabs } from "../projects/ProjectDocumentTabs";
 import { panelDocumentAtVersion } from "@/app/lib/panelDocumentAtVersion";
 import type { DocumentVersion } from "@/app/lib/mikeApi";
 import {
-    act,
     fireEvent,
     render,
     screen,
@@ -253,40 +252,11 @@ describe.each(["assistant", "project"] as const)(
             expect(viewerProps().quotes).toEqual([]);
         });
 
-        it("keeps Download icon-only at narrow and wide widths on both surfaces", () => {
-            let resize: ResizeObserverCallback;
-            const disconnect = vi.fn();
-            vi.stubGlobal(
-                "ResizeObserver",
-                class {
-                    constructor(callback: ResizeObserverCallback) {
-                        resize = callback;
-                    }
-                    observe() {}
-                    disconnect = disconnect;
-                },
-            );
-            const { unmount } = render(content(surface, { kind: "document" }));
-            act(() =>
-                resize(
-                    [{ contentRect: { width: 400 } } as ResizeObserverEntry],
-                    {} as ResizeObserver,
-                ),
-            );
-            expect(
-                screen.getByRole("button", { name: "Download" }),
-            ).toHaveClass("w-6");
-            act(() =>
-                resize(
-                    [{ contentRect: { width: 800 } } as ResizeObserverEntry],
-                    {} as ResizeObserver,
-                ),
-            );
-            expect(
-                screen.getByRole("button", { name: "Download" }),
-            ).toHaveClass("w-6");
-            unmount();
-            expect(disconnect).toHaveBeenCalledOnce();
+        it("keeps Download icon-only on both surfaces", () => {
+            render(content(surface, { kind: "document" }));
+            const download = screen.getByRole("button", { name: "Download" });
+            expect(download).toHaveClass("w-6");
+            expect(download).not.toHaveTextContent("Download");
         });
 
         it("shows an edit, refocuses it, and reports accept to the host", async () => {

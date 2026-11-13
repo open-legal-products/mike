@@ -60,13 +60,10 @@ describe("normalized source documents", () => {
       {
         type: "download",
         url: "https://example.com/source.pdf",
-        label: "Download",
       },
       {
         type: "link",
         url: "https://example.com/source",
-        label: "Link",
-        title: "Link",
       },
     ]);
     expect(document.subdocuments?.map((item) => item.title)).toEqual([

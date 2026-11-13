@@ -188,6 +188,45 @@ export const CITATIONS_CLOSE_TAG = "</CITATIONS>";
 export const MAX_PARSED_CITATIONS = 50;
 export const MAX_CITATION_PAYLOAD_BYTES = 5_000_000;
 
+/**
+ * Drop the body text of embedded external sources (`mcp:` documents) from
+ * citations that leave the turn. Their quotes, verification and links stay;
+ * the panel fetches the text again from the provider when the source opens,
+ * so a judgment is never stored once per citation in chat history.
+ */
+export function withoutEmbeddedSourceText(citations: unknown[]): unknown[] {
+  return citations.map((citation) => {
+    const value =
+      citation && typeof citation === "object" && !Array.isArray(citation)
+        ? (citation as Record<string, unknown>)
+        : null;
+    const document =
+      value?.document && typeof value.document === "object" && !Array.isArray(value.document)
+        ? (value.document as Record<string, unknown>)
+        : null;
+    if (
+      !document ||
+      typeof document.document_id !== "string" ||
+      !document.document_id.startsWith("mcp:") ||
+      !Array.isArray(document.subdocuments)
+    ) {
+      return citation;
+    }
+    return {
+      ...value,
+      document: {
+        ...document,
+        subdocuments: document.subdocuments.map((subdocument) => {
+          if (!subdocument || typeof subdocument !== "object") return subdocument;
+          // eslint-disable-next-line @typescript-eslint/no-unused-vars
+          const { text, ...rest } = subdocument as Record<string, unknown>;
+          return rest;
+        }),
+      },
+    };
+  });
+}
+
 export function limitCitationPayload(citations: unknown[]): unknown[] {
   const limited: unknown[] = [];
   let totalBytes = 2; // JSON array brackets.

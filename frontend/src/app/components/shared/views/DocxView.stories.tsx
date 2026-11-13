@@ -102,7 +102,7 @@ export function EditDocument() {
             <p className="text-sm">{name}</p>
             <div style={{ width: narrow ? 400 : 950, maxWidth: "100%", height: 720 }} className="flex overflow-hidden rounded-lg bg-app-surface">
                 <DocumentAnnotationLayer
-                    title={<DocumentTitleRow document={{ document_id: url ?? "sample", title: name, type: "docx", metadata: [], quotes: [] }} isReloading={false} compactActions={narrow} toolbarVisible={toolbarVisible} onToggleToolbar={() => setToolbarVisible((visible) => !visible)} />}
+                    title={<DocumentTitleRow document={{ document_id: url ?? "sample", title: name, type: "docx", metadata: [], quotes: [] }} isReloading={false} toolbarVisible={toolbarVisible} onToggleToolbar={() => setToolbarVisible((visible) => !visible)} />}
                     annotation={(edit || laterEdit) ? <div className="px-2 pb-2"><EditCardUI originalText="thirty" replacementText="sixty" onClose={() => { setEdit(false); setLaterEdit(false); }} className={`${RESPONSE_GLASS_SURFACE} p-2`} /></div>
                         : (quote || laterQuote || tableQuote) ? <CitationQuotesSection citationRef={1}
                             quotes={[{ id: "sample", quote: tableQuote ? tableCitation : laterQuote ? "Clause 70. Confidential information must be protected by each party." : "Payment is due within thirty days." }]}

@@ -49,7 +49,11 @@ import {
     type ToolCacheRow,
 } from "./types";
 
-import { extractLegalDataHunterSource, type LegalDataHunterSource } from "./sourceDocuments";
+import {
+    extractLegalDataHunterSource,
+    isLegalDataHunterUrl,
+    type LegalDataHunterSource,
+} from "./sourceDocuments";
 
 type McpCallResult = {
     content: string;
@@ -676,6 +680,70 @@ export async function executeApprovedMcpToolCall(
                     "This connector tool was changed, turned off, or removed after it was reviewed.",
                 );
     return { ...result, event: { ...result.event, approval_id: item.id } };
+}
+
+export type LegalDataHunterFetchResult =
+    | { ok: true; source: LegalDataHunterSource }
+    | { ok: false; kind: "not_connected" | "unavailable" };
+
+/**
+ * Reads one Legal Data Hunter document again, for display, through the
+ * viewer's own enabled LDH connection in their workspace. Only the canonical
+ * endpoint's read-only `get_document` runs, with the identifiers from the
+ * citation, and its result must pass the same extractor as in chat. The
+ * connector the citation was read through is preferred when the viewer owns
+ * it; otherwise any of theirs serves, since the identifiers are the provider's.
+ */
+export async function fetchLegalDataHunterSource(
+    owner: ConnectorOwner,
+    reference: { connectorId: string; provider: string; providerId: string },
+    db: Db = createServerSupabase(),
+): Promise<LegalDataHunterFetchResult> {
+    const { data, error } = await db
+        .from("user_mcp_connector_tools")
+        .select("*, user_mcp_connectors!inner(*)")
+        .eq("tool_name", "get_document")
+        .eq("enabled", true)
+        .eq("user_mcp_connectors.user_id", owner.userId)
+        .filter(...workspaceFilter(owner, "user_mcp_connectors.org_id"))
+        .eq("user_mcp_connectors.enabled", true);
+    if (error) return { ok: false, kind: "unavailable" };
+    const candidates = ((data ?? []) as (ToolCacheRow & {
+        user_mcp_connectors: ConnectorRow | ConnectorRow[];
+    })[])
+        .map((row) => ({
+            tool: row,
+            connector: Array.isArray(row.user_mcp_connectors)
+                ? row.user_mcp_connectors[0]
+                : row.user_mcp_connectors,
+        }))
+        .filter(
+            ({ connector, tool }) =>
+                !!connector &&
+                isLegalDataHunterUrl(connector.server_url) &&
+                !mcpToolRequiresWriteAccess(tool),
+        )
+        .sort(
+            (a, b) =>
+                Number(b.connector.id === reference.connectorId) -
+                Number(a.connector.id === reference.connectorId),
+        );
+    const chosen = candidates[0];
+    if (!chosen) return { ok: false, kind: "not_connected" };
+    const result = await callResolvedTool(
+        owner,
+        chosen.connector,
+        chosen.tool,
+        {
+            source: reference.provider,
+            source_id: reference.providerId,
+            include_full_text: true,
+        },
+        db,
+    );
+    return result.event.status === "ok" && result.legalSource
+        ? { ok: true, source: result.legalSource }
+        : { ok: false, kind: "unavailable" };
 }
 
 async function connectionFingerprint(

@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { extractLegalDataHunterSource } from "./sourceDocuments";
+import {
+  extractLegalDataHunterSource,
+  legalDataHunterDocumentId,
+  parseLegalDataHunterDocumentId,
+} from "./sourceDocuments";
 
 const context = {
   connectorId: "connector-1",
@@ -43,7 +47,7 @@ describe("Legal Data Hunter source documents", () => {
         type: "legislation",
         metadata: [],
         quotes: [],
-        actions: [{ type: "link", label: "Link", title: "Link", url: payload.url }],
+        actions: [{ type: "link", url: payload.url }],
         subdocuments: [{
           document_id: "mcp:connector-1:10:legifrance:12:JORFTEXT0001:text",
           title: payload.title,
@@ -91,5 +95,36 @@ describe("Legal Data Hunter source documents", () => {
       extractLegalDataHunterSource({ structuredContent: { ...payload, source: provider, source_id: id } }, { ...context, connectorId, arguments: { source: provider, source_id: id } });
     expect(source("a:b", "c")?.document.document_id).not.toBe(source("a", "b:c")?.document.document_id);
     expect(source("a", "b")?.document.document_id).not.toBe(source("a", "b", "connector-2")?.document.document_id);
+  });
+});
+
+describe("Legal Data Hunter document ids", () => {
+  it.each([
+    ["legifrance", "JORFTEXT0001"],
+    ["a:b", "c"],
+    ["a", "b:c"],
+    ["uk", "ewca/crim/2025/472"],
+  ])("reads back the provider identifiers of %s / %s", (provider, providerId) => {
+    expect(
+      parseLegalDataHunterDocumentId(legalDataHunterDocumentId("connector-1", provider, providerId)),
+    ).toEqual({ connectorId: "connector-1", provider, providerId });
+  });
+
+  it("matches the id the extractor gives a source", () => {
+    const source = extractLegalDataHunterSource({ structuredContent: payload }, context);
+    expect(source?.document.document_id).toBe(
+      legalDataHunterDocumentId(context.connectorId, payload.source, payload.source_id),
+    );
+  });
+
+  it.each([
+    "case:123",
+    "mcp:connector-1",
+    "mcp:connector-1:5:legi",
+    "mcp:connector-1:10:legifrance:99:JORFTEXT0001",
+    "mcp:connector-1:10:legifrance:3:JORFTEXT0001",
+    "mcp:connector-1:0::12:JORFTEXT0001",
+  ])("rejects %s", (documentId) => {
+    expect(parseLegalDataHunterDocumentId(documentId)).toBeNull();
   });
 });

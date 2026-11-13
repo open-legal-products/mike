@@ -138,8 +138,16 @@ export type PanelDocument = SourceDocument;
 
 /** MCP citation bodies are embedded sources, not uploaded/versioned files. */
 export function isEmbeddedMcpDocument(document: PanelDocument): boolean {
-  return document.document_id.startsWith("mcp:") &&
-    !!document.subdocuments?.some((source) => typeof source.text === "string");
+  return document.document_id.startsWith("mcp:");
+}
+
+/**
+ * Saved citations keep only an embedded source's reference; its text is
+ * read again from the provider when the source opens.
+ */
+export function embeddedMcpDocumentNeedsText(document: PanelDocument): boolean {
+  return isEmbeddedMcpDocument(document) &&
+    !document.subdocuments?.some((source) => typeof source.text === "string");
 }
 
 export function isPanelDocument(value: unknown): value is PanelDocument {
@@ -548,21 +556,12 @@ export function panelDocumentFromCitation(
       actions: [
         ...(citation.pdfUrl
           ? [
-              {
-                type: "download" as const,
-                url: citation.pdfUrl,
-                label: "Download",
-              },
+              { type: "download" as const, url: citation.pdfUrl },
             ]
           : []),
         ...(citation.url
           ? [
-              {
-                type: "link" as const,
-                url: citation.url,
-                label: "Link",
-                title: "Link",
-              },
+              { type: "link" as const, url: citation.url },
             ]
           : []),
       ],

@@ -32,6 +32,8 @@ import { readDocumentContent } from "../tools/documentOps";
 import { verifyCitations } from "../verifyCitations";
 import { runLLMStream } from "../streaming";
 import { extractCitations } from "../contextBuilders";
+import { getSourceDocument, LEGAL_DATA_HUNTER_CONNECT_DETAIL } from "../../../source-documents/sourceDocuments.service";
+import { legalDataHunterDocumentId } from "../../../../lib/mcp/sourceDocuments";
 
 const args = { source: "legifrance", source_id: "JORFTEXT0001" };
 const payload = {
@@ -63,6 +65,15 @@ function fixture() {
         is: (name: string, value: unknown) => { filters[name] = value; return chain; },
         filter: (name: string, _op: string, value: unknown) => { filters[name] = value; return chain; },
         single: async () => ({ data: tool.enabled && connector.enabled && filters["user_mcp_connectors.user_id"] === connector.user_id && filters["user_mcp_connectors.org_id"] === connector.org_id ? { ...tool, user_mcp_connectors: { ...connector } } : null, error: null }),
+        // List reads (the source re-fetch looks tools up by name, not id).
+        then: (resolve: (value: { data: unknown[]; error: null }) => unknown) => resolve({
+          data: table === "user_mcp_connector_tools" && tool.enabled && connector.enabled &&
+            filters.tool_name === tool.tool_name &&
+            filters["user_mcp_connectors.user_id"] === connector.user_id &&
+            filters["user_mcp_connectors.org_id"] === connector.org_id
+            ? [{ ...tool, user_mcp_connectors: { ...connector } }] : [],
+          error: null,
+        }),
         maybeSingle: async () => ({ data: table === "chat_messages" ? row : { ...token }, error: null }),
         insert: async (value: unknown) => { writes.push({ table, value }); return { error: null }; },
       };
@@ -184,7 +195,13 @@ describe("MCP source → dispatcher → exact-quote citation", () => {
       expect(Buffer.byteLength(JSON.stringify(event.citations))).toBeLessThanOrEqual(5_000_000);
     }
     expect(result.citations.length).toBeGreaterThan(0);
-    expect(result.citations[0]).toMatchObject({ verified: true, document: { type: "legislation", subdocuments: [{ text }], quotes: [{ verification: { verified: true } }] } });
+    expect(result.citations[0]).toMatchObject({ verified: true, document: { type: "legislation", subdocuments: [{ document_id: `${f.docIndex["doc-2"].document_id}:text` }], quotes: [{ verification: { verified: true } }] } });
+    // Verified against the full text, but only the reference is streamed and
+    // saved: the panel reads the text again when the source opens.
+    expect(JSON.stringify(result.citations)).not.toContain("é".repeat(100));
+    for (const event of snapshots) {
+      expect(JSON.stringify(event.citations)).not.toContain("é".repeat(100));
+    }
   });
 
   it.each([["legislation", "legislation"], ["case_law", "case"], ["doctrine", "legal_research"]])("registers %s and verifies it as a document, not a CourtListener case", async (data_type, type) => {
@@ -274,5 +291,53 @@ describe("MCP source → dispatcher → exact-quote citation", () => {
     expect(events[0].status).toBe("ok");
     expect(JSON.stringify(f.row)).not.toContain("subdocuments");
     expect(JSON.stringify(f.row)).not.toContain("panel_document");
+  });
+});
+
+describe("opening a saved Legal Data Hunter source", () => {
+  const savedId = (connectorId = "c1") => legalDataHunterDocumentId(connectorId, args.source, args.source_id);
+
+  it("reads the text again through the viewer's LDH connection under the cited id", async () => {
+    const f = fixture();
+    const result = await getSourceDocument(f.db, { userId: "u1", documentId: savedId(), orgId: null });
+    if (!result.ok) throw new Error(`expected a document, got ${result.kind}`);
+    expect(result.document).toMatchObject({
+      document_id: savedId(),
+      type: "legislation",
+      subdocuments: [{ document_id: `${savedId()}:text`, text: payload.text }],
+    });
+    expect(mocks.callTool).toHaveBeenCalledExactlyOnceWith(
+      { name: "get_document", arguments: { ...args, include_full_text: true } },
+      undefined,
+      expect.any(Object),
+    );
+  });
+
+  it("uses the viewer's own LDH connector for a source cited through another one", async () => {
+    const f = fixture();
+    const result = await getSourceDocument(f.db, { userId: "u1", documentId: savedId("someone-elses"), orgId: null });
+    expect(result).toMatchObject({ ok: true, document: { document_id: savedId("someone-elses") } });
+  });
+
+  it.each(["other-user", "disabled"])("asks the viewer to connect LDH when they have no usable connection (%s)", async (failure) => {
+    const f = fixture();
+    if (failure === "disabled") f.tool.enabled = false;
+    const result = await getSourceDocument(f.db, { userId: failure === "other-user" ? "u2" : "u1", documentId: savedId(), orgId: null });
+    expect(result).toEqual({ ok: false, kind: "credentials", detail: LEGAL_DATA_HUNTER_CONNECT_DETAIL });
+    expect(mocks.callTool).not.toHaveBeenCalled();
+  });
+
+  it("fails without a document when LDH returns a different source", async () => {
+    mocks.callTool.mockResolvedValue({ structuredContent: { ...payload, source_id: "wrong" } });
+    const f = fixture();
+    const result = await getSourceDocument(f.db, { userId: "u1", documentId: savedId(), orgId: null });
+    expect(result).toMatchObject({ ok: false, kind: "error" });
+  });
+
+  it("refuses an id that is not a Legal Data Hunter reference", async () => {
+    const f = fixture();
+    const result = await getSourceDocument(f.db, { userId: "u1", documentId: "mcp:c1:not-a-reference", orgId: null });
+    expect(result).toMatchObject({ ok: false, kind: "not_found" });
+    expect(mocks.callTool).not.toHaveBeenCalled();
   });
 });
