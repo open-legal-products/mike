@@ -217,8 +217,15 @@ function AddonAssetViewer({
   });
 
   if (viewType === "spreadsheet") {
+    // The modal offers no download or upload, so failure copy must not
+    // advise one.
     return (
-      <SpreadsheetView documentId={asset.id} displayUrl={displayUrl} rounded />
+      <SpreadsheetView
+        documentId={asset.id}
+        displayUrl={displayUrl}
+        rounded
+        fileActions={false}
+      />
     );
   }
   return (

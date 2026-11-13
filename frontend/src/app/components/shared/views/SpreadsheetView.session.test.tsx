@@ -122,9 +122,12 @@ vi.mock("@fortune-sheet/react", () => ({
     }),
 }));
 
+// An .xlsx starts with a ZIP local file header; the view rejects anything else.
+const xlsxBytes = () => new Uint8Array([0x50, 0x4b, 0x03, 0x04, 0, 0]).buffer;
+
 beforeEach(() => {
     vi.clearAllMocks();
-    state.bytes = new ArrayBuffer(3);
+    state.bytes = xlsxBytes();
     state.parse.mockImplementation((_file, done) =>
         done({
             sheets: [
@@ -140,6 +143,96 @@ beforeEach(() => {
     );
 });
 afterEach(() => vi.restoreAllMocks());
+
+it("reports a legacy or encrypted OLE workbook without handing it to the XLSX-only parser", () => {
+    state.bytes = new Uint8Array([0xd0, 0xcf, 0x11, 0xe0, 0xa1, 0xb1, 0x1a, 0xe1, 0, 0]).buffer;
+    render(<SpreadsheetView documentId="legacy-workbook" />);
+
+    expect(screen.getByRole("alert")).toHaveTextContent(/Legacy or encrypted Excel files cannot be previewed/);
+    expect(screen.getByRole("alert")).toHaveTextContent(/save an unencrypted .xlsx copy and upload it/);
+    expect(screen.getByRole("alert")).not.toHaveTextContent(/Download the original/);
+    expect(state.parse).not.toHaveBeenCalled();
+});
+
+it.each([
+    ["an HTML table saved as .xls", new TextEncoder().encode("<table><tr><td>1</td></tr></table>").buffer],
+    ["an empty file", new ArrayBuffer(0)],
+    ["an empty ZIP archive", new Uint8Array([0x50, 0x4b, 0x05, 0x06, 0, 0]).buffer],
+])("reports %s at once instead of waiting out the parser deadline", (_name, bytes) => {
+    state.bytes = bytes;
+    render(<SpreadsheetView documentId="not-a-zip" />);
+
+    expect(screen.getByRole("alert")).toHaveTextContent(/This spreadsheet could not be displayed/);
+    expect(state.parse).not.toHaveBeenCalled();
+});
+
+it("leaves out download and upload advice when the host offers neither", () => {
+    state.bytes = new Uint8Array([0xd0, 0xcf, 0x11, 0xe0, 0xa1, 0xb1, 0x1a, 0xe1]).buffer;
+    const { rerender } = render(<SpreadsheetView documentId="legacy" fileActions={false} />);
+    expect(screen.getByRole("alert")).toHaveTextContent(/^Legacy or encrypted Excel files cannot be previewed here\.$/);
+
+    state.bytes = new ArrayBuffer(0);
+    rerender(<SpreadsheetView documentId="unreadable" fileActions={false} />);
+    expect(screen.getByRole("alert")).toHaveTextContent(/^This spreadsheet could not be displayed\.$/);
+});
+
+it("ends a silent parser failure and ignores a callback arriving after the preview timed out", async () => {
+    vi.useFakeTimers();
+    let finish: ((value: { sheets: Sheet[] }) => void) | undefined;
+    state.parse.mockImplementation((_file, done) => { finish = done; });
+    const { unmount } = render(<SpreadsheetView documentId="silent-parser" />);
+    try {
+        expect(screen.queryByRole("alert")).toBeNull();
+        await act(async () => { vi.advanceTimersByTime(30_000); });
+        expect(screen.getByRole("alert")).toHaveTextContent(/could not be displayed/);
+
+        await act(async () => { finish?.({ sheets: [{ id: "late", name: "Late", data: [] }] }); });
+        expect(screen.queryByText("Zoom 1")).toBeNull();
+        expect(screen.getByRole("alert")).toHaveTextContent(/could not be displayed/);
+    } finally {
+        unmount();
+        vi.useRealTimers();
+    }
+});
+
+it("clears the parser deadline after a successful callback", async () => {
+    vi.useFakeTimers();
+    const { unmount } = render(<SpreadsheetView documentId="successful-parser" />);
+    try {
+        expect(vi.getTimerCount()).toBe(0);
+        await act(async () => { vi.advanceTimersByTime(30_000); });
+        expect(screen.getByText("Zoom 1")).toBeInTheDocument();
+        expect(screen.queryByRole("alert")).toBeNull();
+    } finally {
+        unmount();
+        vi.useRealTimers();
+    }
+});
+
+it("reports malformed asynchronous parser output instead of throwing or waiting forever", async () => {
+    let finish: ((value: unknown) => void) | undefined;
+    state.parse.mockImplementation((_file, done) => { finish = done; });
+    render(<SpreadsheetView documentId="invalid-parser-output" />);
+
+    await act(async () => { finish?.({ sheets: [null] }); });
+
+    expect(screen.getByRole("alert")).toHaveTextContent(/could not be displayed/);
+    expect(screen.queryByText("Zoom 1")).toBeNull();
+});
+
+it("clears a pending parser deadline when the viewer unmounts", () => {
+    vi.useFakeTimers();
+    state.parse.mockImplementation(() => {});
+    const { unmount } = render(<SpreadsheetView documentId="pending-parser" />);
+    try {
+        expect(vi.getTimerCount()).toBe(1);
+        unmount();
+        expect(vi.getTimerCount()).toBe(0);
+    } finally {
+        unmount();
+        vi.useRealTimers();
+    }
+});
 
 it("loads the raw workbook from /file, uncached, rather than the PDF display route", async () => {
     render(<SpreadsheetView documentId="sheet" versionId="v2" refetchKey={3} />);
@@ -200,7 +293,7 @@ it("retains parsed data and viewport, and removes global workbook input handlers
     expect(state.parse).toHaveBeenCalledTimes(1);
     expect(state.mounts).toHaveBeenCalledTimes(2);
     // Fresh bytes must not restore an old workbook snapshot.
-    state.bytes = new ArrayBuffer(4);
+    state.bytes = xlsxBytes();
     await act(async () =>
         rerender(
             <SpreadsheetView documentId="sheet" refetchKey="new-version" />,
