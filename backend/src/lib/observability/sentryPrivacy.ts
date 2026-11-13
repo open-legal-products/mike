@@ -54,11 +54,14 @@ export const DIAGNOSTIC_VOCABULARY: Record<string, ReadonlySet<string>> = Object
   diagnostics_version: '2',
   build_mode: 'development production test',
   failure_code: 'ECONNREFUSED ECONNRESET EADDRINUSE ETIMEDOUT ENOTFOUND EHOSTUNREACH ENETUNREACH EAI_AGAIN ENOENT EACCES EPERM ENOSPC EPIPE ERR_SERVER_NOT_RUNNING UND_ERR_CONNECT_TIMEOUT UND_ERR_HEADERS_TIMEOUT UND_ERR_BODY_TIMEOUT UND_ERR_SOCKET CERT_HAS_EXPIRED DEPTH_ZERO_SELF_SIGNED_CERT AccessDenied InvalidAccessKeyId SignatureDoesNotMatch NoSuchBucket NoSuchKey SlowDown ServiceUnavailable RequestTimeout 23505 23503 23514 22003 22P02 28P01 28000 42P10 42883 42501 42P01 42703 53300 57014 40001 40P01 55P03 53100 53200 57P01 57P03 08001 08003 08006 08P01 PGRST000 PGRST001 PGRST100 PGRST116 PGRST200 PGRST201 PGRST202 PGRST203 PGRST204 PGRST205 configuration_invalid signing_key_invalid conversion_unavailable conversion_timeout conversion_failed fetch_failed',
+  // The adapter id a model call went through (backend/src/lib/llm/types.ts Provider), never an endpoint's host.
+  provider: 'claude gemini openai mistral openai-compatible openrouter vercel opencode-go bedrock azure azure-foundry vertex xai custom ollama',
   provider_error: 'invalid_api_key api_call retry_exhausted stream_provider',
-  // The `error.type` model providers put in an error body (Anthropic, OpenAI and the gateways that copy them).
-  provider_error_type: 'invalid_request_error authentication_error permission_error not_found_error request_too_large rate_limit_error api_error overloaded_error billing_error timeout_error insufficient_quota server_error',
+  // The `error.type` model providers put in an error body (Anthropic, OpenAI and the gateways that copy them),
+  // then the Vercel AI Gateway's own error classes (@ai-sdk/gateway src/errors).
+  provider_error_type: 'invalid_request_error authentication_error permission_error not_found_error request_too_large rate_limit_error api_error overloaded_error billing_error timeout_error insufficient_quota server_error rate_limit_exceeded model_not_found not_found internal_server_error failed_dependency forbidden response_error',
   // Why a provider refused a request, matched by PROVIDER_REASONS below; never the provider's text.
-  provider_reason: 'prompt_too_long invalid_image invalid_tool_schema',
+  provider_reason: 'prompt_too_long invalid_image invalid_tool_schema reasoning_required credit_balance',
   network_state: 'online offline unknown',
   request_origin: 'same-origin cross-origin unknown',
   file_type: 'pdf doc docx odt rtf ppt pptx xls xlsx csv txt html',
@@ -104,7 +107,13 @@ const PROVIDER_REASONS: Array<[string, RegExp]> = [
   ['prompt_too_long', /prompt is too long|context(?:[ _]length|[ _]window)|maximum context|too many (?:input )?tokens|input is too long|exceeds the maximum number of tokens/i],
   ['invalid_image', /\bimage\b.*\b(?:invalid|could not|unable to|unsupported|not supported|not valid|exceeds|too large)|could not process image|invalid base64/i],
   ['invalid_tool_schema', /\btools?\.\d+|input_schema|invalid schema for function|function parameters|tool[^.]*\bschema\b/i],
+  // OpenRouter, for a model that always reasons when the request turned reasoning off.
+  ['reasoning_required', /\breasoning is mandatory for this endpoint\b/i],
+  // Anthropic answers an empty prepaid balance with a 400 invalid_request_error, not a 402.
+  ['credit_balance', /\byour credit balance is too low\b/i],
 ];
+/** @ai-sdk/gateway's own instance marker (GatewayError.isInstance); its classes are not exported. */
+const GATEWAY_ERROR = Symbol.for('vercel.ai.gateway.error');
 
 function record(value: unknown): RecordValue {
   return value !== null && typeof value === 'object' && !Array.isArray(value) ? value as RecordValue : {};
@@ -211,9 +220,16 @@ export function diagnosticErrorTags(error: unknown): Record<string, string | num
           : item.name === 'AI_RetryError' ? 'retry_exhausted'
             : item.name === 'AI_StreamProviderError' ? 'stream_provider' : undefined;
       if (providerError && tags.provider_error === undefined) tags.provider_error = providerError;
-      if (item.name === 'AI_APICallError' || item.name === 'AI_StreamProviderError') {
+      // Recorded by withKeySource (backend/src/lib/llm/providerErrors.ts); admitted only as a registry id.
+      if (typeof item.keyProvider === 'string' && ENUMS.provider!.has(item.keyProvider) && tags.provider === undefined) tags.provider = item.keyProvider;
+      const gateway = (candidate as Record<symbol, unknown>)[GATEWAY_ERROR] === true;
+      if (item.name === 'AI_APICallError' || item.name === 'AI_StreamProviderError' || gateway) {
         // The SDK's parsed error body (`data.error.type`) or the stream error's own `type`; fixed protocol values only.
-        const providerType = record(record(item.data).error).type ?? item.type;
+        // A gateway error maps every upstream type it does not know to internal_server_error, so the
+        // upstream body on its APICallError cause is read first and the class's fixed `type` is the fallback.
+        const providerType = gateway
+          ? [record(record(record(item.cause).data).error).type, item.type].find(type => typeof type === 'string' && ENUMS.provider_error_type!.has(type))
+          : record(record(item.data).error).type ?? item.type;
         if (typeof providerType === 'string' && ENUMS.provider_error_type!.has(providerType) && tags.provider_error_type === undefined) tags.provider_error_type = providerType;
         const reason = typeof item.message === 'string' ? PROVIDER_REASONS.find(([, pattern]) => pattern.test(item.message as string))?.[0] : undefined;
         if (reason && tags.provider_reason === undefined) tags.provider_reason = reason;

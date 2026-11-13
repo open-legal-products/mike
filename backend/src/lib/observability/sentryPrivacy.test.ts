@@ -344,6 +344,38 @@ it('names a provider refusal by its protocol type and a fixed reason, never its 
   expect(event.fingerprint).toEqual(expect.arrayContaining(['invalid_request_error', 'prompt_too_long']));
 });
 
+it('names a Vercel AI Gateway refusal by its type, preferring the upstream body over the class default', () => {
+  // @ai-sdk/gateway marks every error with this symbol and wraps the APICallError as its cause.
+  const gatewayError = (name: string, type: string, upstreamType: string) => ({
+    [Symbol.for('vercel.ai.gateway.error')]: true, name, type, statusCode: 403, message: 'PRIVATE_ gateway text',
+    cause: { name: 'AI_APICallError', statusCode: 403, message: 'PRIVATE_', data: { error: { type: upstreamType, message: 'PRIVATE_' } } },
+  });
+  const forbidden = { name: 'AssistantStreamError', cause: gatewayError('GatewayForbiddenError', 'forbidden', 'forbidden') };
+  expect(diagnosticErrorTags(forbidden)).toMatchObject({ provider_error_type: 'forbidden', dependency_status: 403 });
+  // An upstream type the gateway does not know is mapped to its internal_server_error class, keeping the 403.
+  expect(diagnosticErrorTags(gatewayError('GatewayInternalServerError', 'internal_server_error', 'PRIVATE_type')).provider_error_type).toBe('internal_server_error');
+  expect(diagnosticErrorTags(gatewayError('GatewayInternalServerError', 'internal_server_error', 'permission_error')).provider_error_type).toBe('permission_error');
+  const event = diagnosticEvent({ tags: { component: 'chat-stream', ...diagnosticErrorTags(forbidden) } });
+  expect(event.tags).toMatchObject({ provider_error_type: 'forbidden' });
+  expect(JSON.stringify(event)).not.toContain('PRIVATE_');
+});
+
+it('names an OpenRouter mandatory-reasoning 400 and an Anthropic credit-balance 400 by a fixed reason', () => {
+  const refusal = (message: string) => ({ name: 'AppError', cause: { name: 'AI_APICallError', statusCode: 400, message } });
+  expect(diagnosticErrorTags(refusal('[Google] Reasoning is mandatory for this endpoint and cannot be disabled.')).provider_reason).toBe('reasoning_required');
+  expect(diagnosticErrorTags(refusal('Your credit balance is too low to access the Anthropic API. Please go to Plans & Billing to upgrade or purchase credits.')).provider_reason).toBe('credit_balance');
+  expect(diagnosticErrorTags(refusal('reasoning effort must be one of low, medium, high')).provider_reason).toBeUndefined();
+  expect(diagnosticErrorTags(refusal('Your credit card was declined')).provider_reason).toBeUndefined();
+  const event = diagnosticEvent({ tags: diagnosticErrorTags(refusal('Your credit balance is too low PRIVATE_')) });
+  expect(event.tags).toMatchObject({ provider_reason: 'credit_balance' });
+  expect(JSON.stringify(event)).not.toContain('PRIVATE_');
+});
+
+it('keeps only a registry adapter id as the provider tag', () => {
+  expect(diagnosticEvent({ tags: { provider: 'azure-foundry' } }).tags).toEqual({ provider: 'azure-foundry' });
+  expect(diagnosticEvent({ tags: { provider: 'https://llm.private.example/v1' } }).tags).toEqual({});
+});
+
 it('allows only bounded network context and known model endpoints', () => {
   expect(diagnosticEvent({ tags: { network_state: 'offline', request_origin: 'cross-origin' } }).tags).toEqual({ network_state: 'offline', request_origin: 'cross-origin' });
   expect(diagnosticEvent({ tags: { network_state: 'private-network', request_origin: 'https://private.example', provider_error: 'private' } }).tags).toEqual({});

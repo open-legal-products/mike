@@ -15,6 +15,7 @@ import {
   toProviderStreamError,
   withKeySource,
 } from "./providerErrors";
+import type { Provider } from "./types";
 
 const gemini = { label: "Gemini", modelId: "gemini-2.5-pro" };
 
@@ -298,6 +299,22 @@ describe("a classified provider failure at the privacy boundary", () => {
     });
     expect(JSON.stringify(tags)).not.toContain("private provider response");
   });
+
+  it("names the adapter whose call failed, only from the registry's fixed ids", () => {
+    // Keyed by Provider so an adapter added to the union must be listed here.
+    const adapters: Record<Provider, true> = {
+      claude: true, gemini: true, openai: true, mistral: true, "openai-compatible": true,
+      openrouter: true, vercel: true, "opencode-go": true, bedrock: true, azure: true,
+      "azure-foundry": true, vertex: true, xai: true, custom: true, ollama: true,
+    };
+    for (const provider of Object.keys(adapters)) {
+      const wrapped = toProviderStreamError(apiCallError(403), { ...gemini, keySource: "user", provider });
+      const failure = new AppError(providerFailureKind(wrapped), "Model stream failed", { cause: wrapped });
+      expect(diagnosticErrorTags(failure).provider).toBe(provider);
+    }
+    const endpoint = withKeySource(apiCallError(403), "user", "https://llm.private.example/v1");
+    expect(diagnosticErrorTags(endpoint)).not.toHaveProperty("provider");
+  });
 });
 
 
@@ -334,9 +351,10 @@ describe("source-owned provider refusals", () => {
     [404, "Cannot POST /api/v1/models/messages: not found"],
   ] as const)("keeps an opaque %s visible even with a personal key (%s)", (status, body) => {
     const original = apiCallError(status, body);
-    const error = toProviderStreamError(original, { ...gemini, keySource: "user" });
+    const error = toProviderStreamError(original, { ...gemini, keySource: "user", provider: "gemini" });
     expect(error).toBe(original);
     expect(error).not.toBeInstanceOf(UserFacingError);
+    expect(providerFailureKind(error)).toBe("chat.stream_failed");
     expect(isUserProviderRefusal(error)).toBe(false);
     expect(providerFailureLevel(error)).toBe("error");
   });
