@@ -47,8 +47,11 @@ const CONSOLE_MECHANISM = "auto.core.capture_console";
  * typed, by its owner (chat-stream's `reportError`, the job runner for the
  * memory curator), and the ask_inputs / approval pause is control flow that
  * travels the same `tool-error` path and is not a failure at all.
+ * @sentry 11.10 renamed the mechanism from `auto.vercelai.channel` to
+ * `auto.ai.vercelai`; match both, and let sentry.transport.test.ts catch the
+ * next rename against the real integration.
  */
-const VERCEL_AI_TOOL_ERROR_MECHANISM = "auto.vercelai.channel";
+const VERCEL_AI_TOOL_ERROR_MECHANISM = /^auto\.(?:ai\.)?vercelai(?:\.|$)/;
 const NESTED_SEARCH_DEPTH = 2;
 
 /**
@@ -67,6 +70,18 @@ function isNodeWarningText(args: unknown[]): boolean {
     typeof args[0] === "string" &&
     NODE_WARNING_TEXT.test(args[0])
   );
+}
+
+/**
+ * The web page reader's parser (defuddle) logs, rather than throws, when a
+ * page's JSON-LD metadata is not valid JSON, and reads the page without it.
+ * The page is someone else's and the read succeeds, yet the bridge filed the
+ * log as a SyntaxError in chat.turn (MIKE-BACKEND-DK).
+ */
+const DEFUDDLE_SCHEMA_LABEL = "Defuddle: Error parsing schema.org data:";
+
+function isDefuddleSchemaParseLog(args: unknown[]): boolean {
+  return args[0] === DEFUDDLE_SCHEMA_LABEL && args[1] instanceof SyntaxError;
 }
 
 // BEGIN shared-redaction
@@ -767,7 +782,7 @@ export function scrubEvent(
   }
   // handled:false made these read as unhandled rejections (MIKE-BACKEND-4,
   // -3Q, -5N, -7D, -1K); see VERCEL_AI_TOOL_ERROR_MECHANISM.
-  if (mechanism === VERCEL_AI_TOOL_ERROR_MECHANISM) {
+  if (mechanism && VERCEL_AI_TOOL_ERROR_MECHANISM.test(mechanism)) {
     return null;
   }
 
@@ -785,7 +800,7 @@ export function scrubEvent(
       .find(candidate => candidate !== null && candidate !== undefined) ?? original;
     // Only the primary failure owns this event; contextual errors cannot suppress it.
     if (isReported(reportSource)) return null;
-    if (isNodeWarningText(args)) return null;
+    if (isNodeWarningText(args) || isDefuddleSchemaParseLog(args)) return null;
     // Positional payloads after the label are never titles or grouping keys.
     const label = typeof args[0] === "string" ? args[0].trim() : "Console error";
     const nestedError = !primaryError && reportSource instanceof Error ? reportSource : null;

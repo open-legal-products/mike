@@ -1,8 +1,8 @@
 import crypto from "node:crypto";
-import { pipeline } from "node:stream/promises";
 import { Router, type Response } from "express";
 import { requireAuth, requireMfaIfEnrolled } from "../../middleware/auth";
 import { sendInternalError } from "../../lib/httpError";
+import { pipeToResponse } from "../../lib/pipeToResponse";
 import { setOperation } from "../../lib/observability/sentry";
 import {
   buildContentDisposition,
@@ -461,7 +461,7 @@ playbooksRouter.get("/:playbookId/source", async (req, res) => {
     );
     const stream = createFileReadStream(source.storageKey);
     try {
-      await pipeline(stream, res);
+      await pipeToResponse(stream, res);
     } catch (error) {
       stream.destroy();
       if (!res.headersSent && !res.destroyed) sendInternalError(res, error);
@@ -693,7 +693,7 @@ playbooksRouter.get("/:playbookId/sources/:sourceId/file", async (req, res) => {
     );
     const stream = createFileReadStream(source.storageKey);
     try {
-      await pipeline(stream, res);
+      await pipeToResponse(stream, res);
     } catch (error) {
       stream.destroy();
       if (!res.headersSent && !res.destroyed) sendInternalError(res, error);
