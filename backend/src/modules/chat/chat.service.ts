@@ -28,6 +28,7 @@ export {
   assistantStreamErrorPayload,
   ASSISTANT_ERROR_MESSAGE,
   buildCancelledAssistantMessage,
+  buildStoppedAssistantEvent,
   buildStoppedAssistantMessage,
   extractCitations,
   isAbortError,

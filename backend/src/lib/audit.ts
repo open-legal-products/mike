@@ -6,8 +6,19 @@ import { enqueueDbJob } from "./dbq/enqueue";
 import type { Db } from "./supabase";
 import { AppError } from "./appError";
 import { reportError } from "./observability/sentry";
+import type { StreamStopReason } from "./streamRuns";
 
 export type AuditStatus = "completed" | "cancelled" | "failed";
+
+/**
+ * The status of a chat turn that ended on its stop path: the user's Stop
+ * cancels it, a stream deadline (idle, max lifetime) fails it.
+ */
+export function stoppedTurnAuditStatus(
+  stopReason: StreamStopReason | null | undefined,
+): AuditStatus {
+  return stopReason && stopReason !== "user" ? "failed" : "cancelled";
+}
 
 export type AuditEventInput = {
   userId: string;

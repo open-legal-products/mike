@@ -53,6 +53,8 @@ const {
         terminalUpdateFailures: 0,
         terminalUpdateAttempts: 0,
         terminalUpdateGate: null as Promise<void> | null,
+        // Holds append_chat_assistant_events open until a test releases it.
+        appendEventsGate: null as Promise<void> | null,
         wordChatMissing: false,
         // Makes the chat_access_grants probe behind hasDirectContentGrants
         // fail, which is how a transient DB error reaches the route.
@@ -324,8 +326,11 @@ function makeQuery(table: string) {
 function mockSupabase() {
   return {
     from: vi.fn((table: string) => makeQuery(table)),
-    rpc: vi.fn((name: string, args: unknown) => {
+    rpc: vi.fn(async (name: string, args: unknown) => {
       dbRpcCalls.push({ name, args });
+      if (name === "append_chat_assistant_events" && dbControl.appendEventsGate) {
+        await dbControl.appendEventsGate;
+      }
       // Model the append-only persistence seam for the wired pause/resume
       // tests. The RPC implementation itself is not exercised here.
       const params = args as Record<string, unknown>;
@@ -435,6 +440,7 @@ vi.mock("../../lib/llm", async (importOriginal) => {
 
 import { app } from "../../app";
 import { resetAssistantTurnRunsForTests } from "../../lib/assistantTurnRuns";
+import { chatTurnAuditEvents, type ChatTurnAuditBase } from "../../lib/audit";
 import { createServerSupabase } from "../../lib/supabase";
 import { DEFAULT_WEB_SEARCH_SETTINGS } from "../../lib/webSearch";
 
@@ -3705,6 +3711,273 @@ describe("server-owned turns: resume, stop, concurrency", () => {
         held.release();
         expect((await firstDone).text).toContain("data: [DONE]");
         expect(runLLMStream).toHaveBeenCalledTimes(1);
+    });
+
+    describe("a stop while the finished answer is being saved", () => {
+        const answer = {
+            fullText: "Done",
+            events: [{ type: "content", text: "Done" }],
+            citations: [],
+        };
+        const appends = () =>
+            dbRpcCalls.filter(({ name }) => name.startsWith("append_chat_"));
+        const occurrences = (text: string, needle: string) =>
+            text.split(needle).length - 1;
+        let releaseSave: () => void = () => {};
+
+        beforeEach(() => {
+            dbControl.terminalUpdateAttempts = 0;
+            dbControl.terminalUpdateFailures = 0;
+            dbControl.terminalUpdateGate = new Promise<void>((resolve) => {
+                releaseSave = resolve;
+            });
+            runLLMStream.mockResolvedValue(answer);
+        });
+
+        afterEach(() => {
+            releaseSave();
+            dbControl.terminalUpdateGate = null;
+            dbControl.appendEventsGate = null;
+            vi.useRealTimers();
+        });
+
+        /** Starts a turn and waits until its answer is being saved. */
+        async function turnInSave() {
+            const response = request(app)
+                .post("/chat")
+                .set("Authorization", "Bearer test")
+                .send(VALID_BODY)
+                .then((res) => res);
+            await vi.waitFor(() => {
+                expect(dbControl.terminalUpdateAttempts).toBe(1);
+            });
+            const id = (findAssistantReservation()?.value as { id: string }).id;
+            return { response, id };
+        }
+
+        it.each([
+            ["user", { type: "content", text: "Cancelled by user." }, '"type":"cancelled"'],
+            ["idle", { type: "error", safe_to_display: true }, '"type":"error"'],
+        ] as const)(
+            "ends the turn as stopped (%s) and marks the saved answer, without consolidating memory",
+            async (reason, label, outcome) => {
+                const { getAssistantTurnRun } =
+                    await import("../../lib/assistantTurnRuns.js");
+                const { response, id } = await turnInSave();
+
+                getAssistantTurnRun(id)!.stop(reason);
+                releaseSave();
+                const text = (await response).text;
+
+                expect(text).toContain(outcome);
+                expect(occurrences(text, "data: [DONE]")).toBe(1);
+                // Saved once as the finished answer, then marked as stopped.
+                expect(
+                    dbUpdates.filter(({ table }) => table === "chat_messages"),
+                ).toHaveLength(1);
+                expect(appends()).toEqual([
+                    {
+                        name: "append_chat_assistant_events",
+                        args: expect.objectContaining({
+                            p_message_id: id,
+                            p_events: [expect.objectContaining(label)],
+                            p_citations: [],
+                        }),
+                    },
+                ]);
+                expect(scheduleMemoryConsolidation).not.toHaveBeenCalled();
+            },
+        );
+
+        it("audits a document the stopped turn edited once, with the turn marked cancelled", async () => {
+            const { getAssistantTurnRun } =
+                await import("../../lib/assistantTurnRuns.js");
+            runLLMStream.mockResolvedValue({
+                ...answer,
+                events: [
+                    {
+                        type: "doc_edited",
+                        filename: "Lease.docx",
+                        document_id: "doc-1",
+                        version_id: "ver-2",
+                        version_number: 2,
+                        download_url: "",
+                        annotations: [],
+                    },
+                    ...answer.events,
+                ],
+            });
+            const { response, id } = await turnInSave();
+
+            getAssistantTurnRun(id)!.stop();
+            releaseSave();
+            expect((await response).text).toContain('"type":"cancelled"');
+
+            const jobs = dbInserts.filter(({ table }) => table === "db_jobs");
+            expect(jobs).toHaveLength(1);
+            const { base, events } = (
+                jobs[0].value as { payload: { base: ChatTurnAuditBase; events: unknown[] } }
+            ).payload;
+            expect(chatTurnAuditEvents(base, events)).toEqual([
+                expect.objectContaining({ action: "chat.message", status: "cancelled" }),
+                expect.objectContaining({ action: "document.edited", documentId: "doc-1" }),
+            ]);
+        });
+
+        it("ends a turn stopped during a save that then fails as stopped, not as a save error", async () => {
+            const { getAssistantTurnRun } =
+                await import("../../lib/assistantTurnRuns.js");
+            // The answer's three save attempts fail; the stop path's save succeeds.
+            dbControl.terminalUpdateFailures = 3;
+            const { response, id } = await turnInSave();
+
+            getAssistantTurnRun(id)!.stop();
+            releaseSave();
+            const text = (await response).text;
+
+            expect(text).toContain('"type":"cancelled"');
+            expect(text).not.toContain("could not be saved");
+            expect(
+                dbUpdates.filter(({ table }) => table === "chat_messages").at(-1)?.value,
+            ).toMatchObject({
+                content: [
+                    { type: "content", text: "Done" },
+                    { type: "content", text: "Cancelled by user." },
+                ],
+            });
+            expect(scheduleMemoryConsolidation).not.toHaveBeenCalled();
+        });
+
+        it("gives a turn stopped during its save no fallback title", async () => {
+            const { generateAssistantChatTitle } =
+                await import("../../modules/chat/chat.title.js");
+            // The title is still generating, so only the fallback could name it.
+            vi.mocked(generateAssistantChatTitle).mockImplementationOnce(
+                () => new Promise<string>(() => {}),
+            );
+            const { getAssistantTurnRun } =
+                await import("../../lib/assistantTurnRuns.js");
+            const { response, id } = await turnInSave();
+
+            getAssistantTurnRun(id)!.stop();
+            releaseSave();
+            expect((await response).text).toContain('"type":"cancelled"');
+            expect(
+                dbUpdates.filter(({ table }) => table === "chats"),
+            ).toEqual([]);
+        });
+
+        it("adds only the stop label to a continuation whose answer was already appended", async () => {
+            const { getAssistantTurnRun, getActiveAssistantTurn } =
+                await import("../../lib/assistantTurnRuns.js");
+            dbControl.assistantMessageRows = [
+                {
+                    id: "assistant-real",
+                    chat_id: "chat-1",
+                    role: "assistant",
+                    content: [
+                        {
+                            type: "ask_inputs",
+                            event_id: "ask-1",
+                            items: [
+                                {
+                                    id: "choice-1",
+                                    kind: "choice",
+                                    question: "Continue?",
+                                    options: [{ value: "Yes" }, { value: "No" }],
+                                    allow_other: false,
+                                    other_label: "Other",
+                                },
+                            ],
+                        },
+                    ],
+                    citations: null,
+                    author_user_id: "u1",
+                    created_at: "2026-01-01T00:00:00Z",
+                },
+            ];
+            dbControl.appendEventsGate = new Promise<void>((resolve) => {
+                releaseSave = resolve;
+            });
+            const eventAppends = () =>
+                appends().filter(({ name }) => name === "append_chat_assistant_events");
+
+            const response = request(app)
+                .post("/chat")
+                .set("Authorization", "Bearer test")
+                .send({
+                    ...VALID_BODY,
+                    chat_id: "chat-1",
+                    ask_inputs_response: {
+                        assistant_message_id: "assistant-real",
+                        ask_event_id: "ask-1",
+                        responses: [
+                            {
+                                id: "choice-1",
+                                kind: "choice",
+                                question: "Continue?",
+                                answer: "Yes",
+                            },
+                        ],
+                    },
+                })
+                .then((res) => res);
+            await vi.waitFor(() => {
+                expect(eventAppends()).toHaveLength(1);
+            });
+            getAssistantTurnRun(getActiveAssistantTurn("chat-1")!.id)!.stop();
+            releaseSave();
+            const text = (await response).text;
+
+            expect(text).toContain('"type":"cancelled"');
+            // The answer is appended once; the stop adds only its label.
+            expect(eventAppends().map(({ args }) => (args as { p_events: unknown }).p_events)).toEqual([
+                [{ type: "content", text: "Done" }],
+                [{ type: "content", text: "Cancelled by user." }],
+            ]);
+            expect(dbControl.assistantMessageRows?.[0].content).toEqual([
+                expect.objectContaining({ type: "ask_inputs" }),
+                expect.objectContaining({ type: "ask_inputs_response" }),
+                { type: "content", text: "Done" },
+                { type: "content", text: "Cancelled by user." },
+            ]);
+            expect(scheduleMemoryConsolidation).not.toHaveBeenCalled();
+        });
+
+        it("stores an answer whose save outlasts the stop grace as stopped, as its readers were told", async () => {
+            const { getAssistantTurnRun } =
+                await import("../../lib/assistantTurnRuns.js");
+            const { deadlineMessage, STOPPED_RUN_GRACE_MS } =
+                await import("../../lib/streamRuns.js");
+            const { response, id } = await turnInSave();
+
+            vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+            getAssistantTurnRun(id)!.stop("idle");
+            await vi.advanceTimersByTimeAsync(STOPPED_RUN_GRACE_MS);
+            const text = (await response).text;
+
+            // Readers got the deadline from the registry while the save hung.
+            expect(occurrences(text, '"type":"error"')).toBe(1);
+            expect(text).toContain(JSON.stringify(deadlineMessage("idle")));
+            expect(occurrences(text, "data: [DONE]")).toBe(1);
+            expect(appends()).toEqual([]);
+
+            releaseSave();
+            await vi.waitFor(() => {
+                expect(appends()).toHaveLength(1);
+            });
+            expect(appends()[0].args).toMatchObject({
+                p_message_id: id,
+                p_events: [
+                    {
+                        type: "error",
+                        message: deadlineMessage("idle"),
+                        safe_to_display: true,
+                    },
+                ],
+            });
+            expect(scheduleMemoryConsolidation).not.toHaveBeenCalled();
+        });
     });
 
     it.each(["idle", "max_lifetime"] as const)(
