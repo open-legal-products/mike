@@ -26,6 +26,8 @@ import { startUploadProcessingWorkers } from "./modules/uploads/uploads.service"
 import { uploadProcessingConfiguration } from "./lib/runtimeConfig";
 import { createServerSupabase } from "./lib/supabase";
 import { reportError } from "./lib/observability/sentry";
+import { createPollFailureGate } from "./lib/observability/pollFailureGate";
+import { asReportableError } from "./lib/httpError";
 
 const SWEEP_INTERVAL_MS = (() => {
     const raw = Number(process.env.STALE_SWEEP_INTERVAL_MS);
@@ -43,6 +45,17 @@ const MCP_REFRESH_SWEEP_INTERVAL_MS = 5 * 60 * 1000;
  * a dead grant re-enqueues a doomed job for the rest of the deployment's life.
  */
 const MCP_REFRESH_MAX_EXPIRED_AGE_MS = 24 * 60 * 60 * 1000;
+
+/**
+ * One report per failure class per process: an unreachable database fails
+ * every 5-minute tick identically, and each tick was its own event
+ * (MIKE-BACKEND-E7). The interval is fixed, so the gate's backoff is unused.
+ */
+const mcpRefreshFailures = createPollFailureGate({
+    label: "[mcp-refresh-sweep]",
+    baseDelayMs: MCP_REFRESH_SWEEP_INTERVAL_MS,
+    maxDelayMs: MCP_REFRESH_SWEEP_INTERVAL_MS,
+});
 
 let sweepTimer: ReturnType<typeof setInterval> | null = null;
 let initialSweep: ReturnType<typeof setTimeout> | null = null;
@@ -64,7 +77,9 @@ async function runMcpTokenRefreshSweep(): Promise<void> {
         .not("encrypted_refresh_token", "is", null)
         .lt("expires_at", new Date(now + MCP_TOKEN_REFRESH_WINDOW_MS).toISOString())
         .gt("expires_at", new Date(now - MCP_REFRESH_MAX_EXPIRED_AGE_MS).toISOString());
-    if (error) throw new Error(error.message);
+    // Keep the PostgREST object as the cause: supabase-js puts the network
+    // errno in `details`, which `new Error(error.message)` dropped.
+    if (error) throw asReportableError(error, runMcpTokenRefreshSweep);
 
     for (const row of (data ?? []) as { connector_id: string }[]) {
         if (!row.connector_id) continue;
@@ -143,10 +158,15 @@ export function startAllWorkers(
     // rather than inside whichever request first trips over the expiry. The
     // lazy refresh in lib/mcp/oauth.ts stays as the last line of defense.
     const runMcpRefresh = () =>
-        void runMcpTokenRefreshSweep().catch((err) => {
-            reportError(err, { tags: { component: "mcp-refresh-sweep" } });
-            console.error("[mcp-refresh-sweep] failed", err);
-        });
+        void runMcpTokenRefreshSweep()
+            .then(() => mcpRefreshFailures.success())
+            .catch((thrown) => {
+                const error = asReportableError(thrown);
+                if (mcpRefreshFailures.failure(error).report) {
+                    reportError(error, { tags: { component: "mcp-refresh-sweep" } });
+                    console.error("[mcp-refresh-sweep] failed", error);
+                }
+            });
     mcpRefreshTimer = setInterval(runMcpRefresh, MCP_REFRESH_SWEEP_INTERVAL_MS);
     mcpRefreshTimer.unref();
 }
