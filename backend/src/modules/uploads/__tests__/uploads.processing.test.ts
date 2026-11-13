@@ -598,13 +598,52 @@ describe("upload processing", () => {
       await processUploadJob(db as never, job.id, "worker-1");
       expect(db.calls).toContainEqual(expect.objectContaining({ table: "upload_session_files", payload: expect.objectContaining({ status: "error", error_code: code }) }));
       expect(db.calls.some((call) => call.table === "upload_processing_jobs" && (call.payload as { status?: string })?.status === "queued")).toBe(retry);
-      expect(db.from).not.toHaveBeenCalledWith("documents");
+      // No document is created, but the failure runs the same destination
+      // cleanup as any other, so a row an earlier attempt left behind is closed.
+      expect(db.calls.some((call) => call.table === "documents" && call.operation === "upsert")).toBe(false);
+      expect(db.calls).toContainEqual(expect.objectContaining({
+        table: "documents", operation: "update", payload: expect.objectContaining({ status: "error" }),
+      }));
       expect(db.from).not.toHaveBeenCalledWith("document_versions");
       expect(mocks.copyFile).not.toHaveBeenCalled();
       expect(mocks.officeFileToPdf).not.toHaveBeenCalled();
       expect(mocks.uploadFileFromPath).not.toHaveBeenCalled();
       expect(await readdir(processingTempRoot)).toEqual([]);
     } finally { parse.mockRestore(); }
+  });
+
+  it("closes the document an earlier attempt created when a reclaimed DOCX job fails validation", async () => {
+    // Attempt 1 validated, upserted the document row and stamped the marker,
+    // then lost its worker mid-conversion. The reclaimed job validates again;
+    // this time the parser's budget runs out. The document must not stay
+    // "processing" forever because the failure happened before the destination.
+    const parse = vi.spyOn(EXTRACTION_OPS, "validateDocxPackage")
+      .mockRejectedValueOnce(new ExtractionLimitError("parser deadline exceeded"));
+    const bytes = await minimalDocxBytes();
+    mocks.createFileReadStream.mockImplementation(() => Readable.from([bytes]));
+    const file = {
+      ...baseFile, file_type: "docx", filename: "ordinary.docx", expected_size_bytes: bytes.length,
+      status: "processing", document_created_at: "2026-11-11T10:00:00.000Z",
+    };
+    const job = { id: "job-1", session_id: baseSession.id, file_id: file.id, attempts: 2, locked_by: "worker-1" };
+    const db = fakeDb({
+      upload_processing_jobs: Array.from({ length: 8 }, () => ({ data: job })),
+      upload_sessions: [{ data: baseSession }],
+      upload_session_files: [{ data: file }],
+    });
+    try {
+      await processUploadJob(db as never, job.id, "worker-1");
+    } finally { parse.mockRestore(); }
+    expect(db.calls).toContainEqual(expect.objectContaining({
+      table: "upload_session_files", payload: expect.objectContaining({ status: "error", error_code: "document_too_large" }),
+    }));
+    expect(db.calls).toContainEqual(expect.objectContaining({
+      table: "documents", operation: "update", payload: expect.objectContaining({ status: "error" }),
+    }));
+    expect(db.calls).toContainEqual(expect.objectContaining({ table: "documents", operation: "delete" }));
+    expect(mocks.deleteFile).toHaveBeenCalledWith(`documents/${baseSession.user_id}/${file.resource_id}/source.docx`);
+    expect(db.calls.some((call) => call.table === "documents" && call.operation === "upsert")).toBe(false);
+    expect(db.calls.some((call) => (call.payload as { status?: string })?.status === "queued")).toBe(false);
   });
 
   it("rejects a .docx upload that is a ZIP but not a Word package", async () => {

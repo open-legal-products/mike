@@ -1024,7 +1024,6 @@ export async function processUploadJob(
 
   let failed = false;
   let terminalProcessingFailure = false;
-  let docxValidationFailure = false;
   try {
     if (file.status !== "completed" && !terminalUploadFailure) {
       await heartbeatJob(db, jobId, workerId);
@@ -1055,7 +1054,6 @@ export async function processUploadJob(
           return;
         }
         failed = true;
-        docxValidationFailure = error instanceof DocxValidationError;
         // These failures cannot be fixed by retrying the same upload.
         terminalProcessingFailure =
           error instanceof DeletedDocumentError ||
@@ -1107,7 +1105,7 @@ export async function processUploadJob(
           // any more, so this job is the last place that knows their keys.
           await enqueueStorageCleanup(db, error.orphanedKeys);
         }
-        if (!docxValidationFailure) await markCreatedDocumentFailed(db, typedSession, file);
+        await markCreatedDocumentFailed(db, typedSession, file);
         await heartbeatJob(db, jobId, workerId);
       }
 
@@ -1180,7 +1178,7 @@ export async function processUploadJob(
 
   const partialFailure = failed || terminalUploadFailure;
   if (partialFailure) {
-    if (failed && !docxValidationFailure) await removeFailedCreatedDocument(db, typedSession, file);
+    if (failed) await removeFailedCreatedDocument(db, typedSession, file);
     const { data: failedFiles } = await db
       .from("upload_session_files")
       .select("sealed_storage_path")

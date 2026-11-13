@@ -19,9 +19,11 @@ No extraction configuration or upload/package ceilings are changed.
   then is requeued 30 s later without spending a retry attempt or reporting
   an error (the same bounds as the background text jobs).
 - Unexpected process/I/O failures remain retryable through the existing
-  bounded upload retry policy. Validation failures do not run
-  destination-document failure/deletion cleanup, because this attempt has not
-  reached the destination. Temporary sealed-file artifacts are still removed.
+  bounded upload retry policy. A terminal validation failure runs the same
+  destination-document cleanup as any other upload failure: a document row
+  an earlier attempt of the job created (and whose worker was then lost) is
+  marked failed and removed rather than left `processing`. Temporary
+  sealed-file artifacts are still removed.
 - `EXTRACTION_ISOLATION=off` retains the existing in-process fallback and provides
   **no containment guarantee**. Non-Linux platforms retain separate-process,
   heap, deadline and input/output bounds, but not Linux's native-memory limit.
