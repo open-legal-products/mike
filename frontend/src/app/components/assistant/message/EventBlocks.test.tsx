@@ -4,7 +4,10 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
     AskInputsBlock,
     CourtListenerBlock,
+    DocCreatedBlock,
     DocDownloadBlock,
+    DocEditBlock,
+    DocReplicatedBlock,
     ReasoningBlock,
 } from "./EventBlocks";
 
@@ -152,6 +155,36 @@ describe("DocDownloadBlock", () => {
                 'img[src*="/icons/file-types/word.svg"]',
             ),
         ).toHaveClass("h-3.5", "w-3.5", "@md:h-4", "@md:w-4");
+    });
+});
+
+describe("document step labels", () => {
+    it("names a failed replication as a failure and drops the copy count", () => {
+        render(<DocReplicatedBlock filename="lease.docx" count={3} hasError />);
+        expect(screen.getByText("Replication failed")).toBeInTheDocument();
+        expect(screen.queryByText("Replicated")).not.toBeInTheDocument();
+        expect(screen.queryByText("3 times")).not.toBeInTheDocument();
+    });
+
+    it("keeps the copy count on a replication that succeeded", () => {
+        render(<DocReplicatedBlock filename="lease.docx" count={3} />);
+        expect(screen.getByText("Replicated")).toBeInTheDocument();
+        expect(screen.getByText("3 times")).toBeInTheDocument();
+    });
+
+    it.each([
+        ["a creation", <DocCreatedBlock key="c" filename="memo.docx" interrupted />, "Creation stopped", "Created"],
+        ["an edit", <DocEditBlock key="e" filename="memo.docx" interrupted />, "Edit stopped", "Edited"],
+        [
+            "a replication",
+            <DocReplicatedBlock key="r" filename="memo.docx" count={2} interrupted />,
+            "Replication stopped",
+            "Replicated",
+        ],
+    ])("shows %s the turn stopped before its result as stopped", (_label, block, stopped, done) => {
+        render(block);
+        expect(screen.getByText(stopped)).toBeInTheDocument();
+        expect(screen.queryByText(done)).not.toBeInTheDocument();
     });
 });
 

@@ -2,6 +2,13 @@ import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import request from "supertest";
 import { isReported } from "../../lib/observability/sentry";
 
+// Same as chat.routes.test.ts: this file now sends more requests than the chat
+// limiter's 30-per-window budget, and the last ones would answer 429 before
+// any permission check ran. Hoisted so it precedes app.ts's limiter.
+vi.hoisted(() => {
+    process.env.RATE_LIMIT_CHAT_MAX = "1000";
+});
+
 const {
     runLLMStream,
     checkProjectAccess,
@@ -315,6 +322,136 @@ describe("POST /projects/:projectId/chat", () => {
             expect(dbUpdates.some(({ table }) => table === "chats")).toBe(false);
         },
     );
+
+    describe("stream deadline", () => {
+        const IDLE_MS = 30_000;
+        const occurrences = (text: string, needle: string) =>
+            text.split(needle).length - 1;
+        const assistantInsert = () =>
+            dbInserts.find(
+                ({ table, value }) =>
+                    table === "chat_messages" &&
+                    (value as { role?: string }).role === "assistant",
+            );
+        // Lets the route's late unwinding run without advancing fake time.
+        const settle = async () => {
+            for (let i = 0; i < 50; i += 1)
+                await new Promise((resolve) => setImmediate(resolve));
+        };
+
+        beforeEach(() => {
+            vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+            vi.stubEnv("STREAM_IDLE_TIMEOUT_MS", String(IDLE_MS));
+        });
+
+        afterEach(() => {
+            vi.useRealTimers();
+            vi.unstubAllEnvs();
+        });
+
+        it("aborts a hung turn at the idle deadline with one timeout error and one [DONE]", async () => {
+            const { AssistantStreamAbortError } =
+                await import("../../modules/chat/engine/index.js");
+            const { deadlineMessage, FINISHED_RUN_RETENTION_MS } =
+                await import("../../lib/streamRuns.js");
+            let signal: AbortSignal | undefined;
+            const started = new Promise<void>((resolve) => {
+                runLLMStream.mockImplementation(
+                    async (params: { signal: AbortSignal }) => {
+                        signal = params.signal;
+                        resolve();
+                        await new Promise<void>((done) =>
+                            params.signal.addEventListener("abort", () => done(), {
+                                once: true,
+                            }),
+                        );
+                        throw new AssistantStreamAbortError("Partial", [
+                            { type: "content", text: "Partial" },
+                        ]);
+                    },
+                );
+            });
+
+            const response = request(app)
+                .post("/projects/p1/chat")
+                .set("Authorization", "Bearer test")
+                .send(VALID_BODY)
+                .then((res) => res);
+            await started;
+            await vi.advanceTimersByTimeAsync(IDLE_MS - 1);
+            expect(signal?.aborted).toBe(false);
+            await vi.advanceTimersByTimeAsync(1);
+            const res = await response;
+
+            expect(signal?.aborted).toBe(true);
+            expect(occurrences(res.text, '"type":"error"')).toBe(1);
+            expect(res.text).toContain(JSON.stringify(deadlineMessage("idle")));
+            expect(res.text).not.toContain('"type":"cancelled"');
+            expect(occurrences(res.text, "data: [DONE]")).toBe(1);
+            expect(assistantInsert()?.value).toMatchObject({
+                content: [
+                    { type: "content", text: "Partial" },
+                    {
+                        type: "error",
+                        message: deadlineMessage("idle"),
+                        safe_to_display: true,
+                    },
+                ],
+            });
+            expect(scheduleMemoryConsolidation).not.toHaveBeenCalled();
+            // Deadline, grace and retention timers are all released.
+            await vi.advanceTimersByTimeAsync(FINISHED_RUN_RETENTION_MS);
+            expect(vi.getTimerCount()).toBe(0);
+        });
+
+        it("ends a turn that ignores the abort once, and stores its late completion as timed out", async () => {
+            const { deadlineMessage, STOPPED_RUN_GRACE_MS } =
+                await import("../../lib/streamRuns.js");
+            let completeLate!: (value: unknown) => void;
+            const started = new Promise<void>((resolve) => {
+                runLLMStream.mockImplementation(() => {
+                    resolve();
+                    return new Promise((done) => {
+                        completeLate = done;
+                    });
+                });
+            });
+
+            const response = request(app)
+                .post("/projects/p1/chat")
+                .set("Authorization", "Bearer test")
+                .send(VALID_BODY)
+                .then((res) => res);
+            await started;
+            await vi.advanceTimersByTimeAsync(IDLE_MS + STOPPED_RUN_GRACE_MS);
+            const res = await response;
+
+            expect(occurrences(res.text, '"type":"error"')).toBe(1);
+            expect(res.text).toContain(JSON.stringify(deadlineMessage("idle")));
+            expect(occurrences(res.text, "data: [DONE]")).toBe(1);
+            expect(assistantInsert()).toBeUndefined();
+
+            completeLate({
+                fullText: "Late answer",
+                events: [{ type: "content", text: "Late answer" }],
+                citations: [],
+            });
+            await settle();
+
+            expect(assistantInsert()?.value).toMatchObject({
+                content: [
+                    { type: "content", text: "Late answer" },
+                    {
+                        type: "error",
+                        message: deadlineMessage("idle"),
+                        safe_to_display: true,
+                    },
+                ],
+            });
+            expect(scheduleMemoryConsolidation).not.toHaveBeenCalled();
+            expect(releaseMemoryConversationTurn).toHaveBeenCalled();
+        });
+    });
 
     it("carries the request id on the terminal error frame when the stream fails", async () => {
         runLLMStream.mockRejectedValueOnce(new Error("upstream LLM failure"));

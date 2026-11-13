@@ -2848,6 +2848,41 @@ describe("tabular.routes", () => {
             expect(runLLMStream).toHaveBeenCalledTimes(1);
         });
 
+        it("stores a stream that returns after Stop as stopped, not as a completed answer", async () => {
+            const started = new Promise<StreamParams>((resolve) => {
+                runLLMStream.mockImplementation(async (raw: unknown) => {
+                    const params = raw as StreamParams;
+                    resolve(params);
+                    await new Promise<void>((done) =>
+                        params.signal?.addEventListener("abort", () => done(), {
+                            once: true,
+                        }),
+                    );
+                    // Ignores the abort and returns the whole answer anyway.
+                    return {
+                        fullText: "Late answer",
+                        events: [{ type: "content", text: "Late answer" }],
+                    };
+                });
+            });
+            const firstDone = send().then((res) => res);
+            await started;
+            const turnId = await activeTurnId();
+            const { getAssistantTurnRun } =
+                await import("../../lib/assistantTurnRuns.js");
+            getAssistantTurnRun(turnId, "tabular")!.stop();
+
+            const text = (await firstDone).text;
+            expect(text).toContain('"type":"cancelled"');
+            expect(assistantInsert()).toMatchObject({
+                content: [
+                    { type: "content", text: "Late answer" },
+                    { type: "content", text: "Cancelled by user." },
+                ],
+            });
+            expect(scheduleMemoryConsolidation).not.toHaveBeenCalled();
+        });
+
         it.each(["user", "idle", "max_lifetime"] as const)(
             "persists and replays the %s stop reason",
             async (reason) => {

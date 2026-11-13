@@ -41,6 +41,7 @@ import {
   runLLMStream,
   stripTransientAssistantEvents,
   submitClientToolResult,
+  throwIfTurnStopped,
 } from "../chat/chat.service";
 import { enqueueChatTurnAudit } from "../../lib/audit";
 import { setOperation, isReported, reportError } from "../../lib/observability/sentry";
@@ -828,7 +829,7 @@ wordChatRouter.post("/", requireAuth, asyncRoute(async (req, res) => {
         assistantMessageId,
       })}\n\n`,
     );
-    const { events, citations } = await runLLMStream({
+    const { fullText, events, citations } = await runLLMStream({
       onActivity: run?.touch,
       apiMessages,
       docStore,
@@ -867,6 +868,10 @@ wordChatRouter.post("/", requireAuth, asyncRoute(async (req, res) => {
       nonce,
       emitDone: false,
     });
+    // A stream that returns after the turn was stopped (citation checks, or a
+    // provider or tool that ignored the abort) must not be saved as a
+    // completed answer: the abort handler below stores the stop outcome.
+    throwIfTurnStopped(stream.signal, { fullText, events });
     const persistedEvents = await normalizeAssistantEvents(
       stripTransientAssistantEvents(events),
     );

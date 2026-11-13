@@ -216,6 +216,22 @@ export class AssistantStreamAbortError extends AssistantStreamError {
   }
 }
 
+/**
+ * Treat a turn as stopped when its signal fired after `runLLMStream` had
+ * already returned: a deadline or Stop that lands during citation
+ * verification, or while a provider or tool ignored the abort. The run has
+ * told its readers the turn is over (and may have force-finished it), so the
+ * route must take its stop path rather than persist, title and curate the
+ * turn as a completed answer.
+ */
+export function throwIfTurnStopped(
+  signal: AbortSignal,
+  result: { fullText: string; events: AssistantEvent[] },
+): void {
+  if (signal.aborted)
+    throw new AssistantStreamAbortError(result.fullText, result.events);
+}
+
 class AssistantStreamAskInputsPause extends Error {
   constructor() {
     super("Waiting for user input.");
@@ -990,12 +1006,12 @@ export async function runLLMStream(params: {
             model: selectedModel,
             documentLocks,
             documentsScoped: subagentRun?.documentsScoped,
+            signal,
           },
         );
         // A failure after this point happened with tool results in hand; the
         // breadcrumb tells it apart from one in the first model call.
         markStage("tool-result");
-        throwIfAborted(signal);
         for (const r of docsRead) {
           events.push({
             type: "doc_read",
@@ -1063,6 +1079,10 @@ export async function runLLMStream(params: {
         for (const event of caseCitationEvents) {
           events.push(event);
         }
+        // Checked only now: a tool that finished before the stop (an edit
+        // that saved a new version, a created document) keeps its event in
+        // the stopped turn the route stores.
+        throwIfAborted(signal);
 
         const delegated = await delegating;
         // Once the answer has stopped or failed, its catch records these.
