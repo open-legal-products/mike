@@ -1,0 +1,28 @@
+import express from "express";
+import request from "supertest";
+import { beforeEach, expect, it, vi } from "vitest";
+const svc = vi.hoisted(() => ({ resumeBrief: vi.fn(), designateBrief: vi.fn(), proposeBrief: vi.fn(), getBriefProposal: vi.fn(), applyBrief: vi.fn(), readBriefSource: vi.fn() }));
+vi.mock("../projectBrief.service", () => svc);
+vi.mock("../../../lib/supabase", () => ({ createServerSupabase: () => ({}) }));
+vi.mock("../../../middleware/auth", () => ({ requireAuth: (_req: express.Request, res: express.Response, next: express.NextFunction) => { res.locals.userId = "actor"; res.locals.userEmail = "actor@example.invalid"; next(); } }));
+import { projectBriefRouter } from "../projectBrief.routes";
+const app = express();
+app.use(express.json());
+app.use("/projects/:projectId/brief", projectBriefRouter);
+const base = "/projects/40000000-0000-4000-8000-000000000001/brief", id = "40000000-0000-4000-8000-000000000002";
+beforeEach(() => { vi.resetAllMocks(); for (const fn of Object.values(svc))
+    fn.mockResolvedValue({ ok: true, data: {} }); });
+it("requires explicit provider consent and bounded selection", async () => { expect((await request(app).post(base + "/proposals").send({ sourceIds: [id], model: "mock" })).status).toBe(400); expect(svc.proposeBrief).not.toHaveBeenCalled(); expect((await request(app).post(base + "/proposals").send({ sourceIds: [id], model: "mock", confirmProvider: true })).status).toBe(201); expect(svc.proposeBrief.mock.calls[0][1].userId).toBe("actor"); });
+it("requires review and sharing consent before Apply", async () => { expect((await request(app).post(base + `/proposals/${id}/apply`).send({ confirmReviewed: true })).status).toBe(400); expect(svc.applyBrief).not.toHaveBeenCalled(); expect((await request(app).post(base + `/proposals/${id}/apply`).send({ confirmReviewed: true, confirmShared: true })).status).toBe(200); });
+it("does not accept client-supplied text or source fingerprints at Apply", async () => { const r = await request(app).post(base + `/proposals/${id}/apply`).send({ confirmReviewed: true, confirmShared: true, content: "override" }); expect(r.status).toBe(400); expect(svc.applyBrief).not.toHaveBeenCalled(); });
+it("maps stale conflict and sends no-store", async () => { svc.applyBrief.mockResolvedValue({ ok: false, kind: "conflict", detail: "Refresh changed sources." }); const r = await request(app).post(base + `/proposals/${id}/apply`).send({ confirmReviewed: true, confirmShared: true }); expect(r.status).toBe(409); expect(r.headers["cache-control"]).toBe("private, no-store"); });
+it("unknown subroute terminates with 404 rather than invoking an error factory", async () => { const r = await request(app).get(base + "/unknown").timeout(1000); expect(r.status).toBe(404); });
+it("rejects malformed source navigation and streams verified bytes with their type", async () => { expect((await request(app).get(base + `/sources/${id}/${id}?hash=bad&revision=${id}`)).status).toBe(400); svc.readBriefSource.mockResolvedValue({ ok: true, data: { bytes: new TextEncoder().encode("fictional").buffer, filename: "source.xlsx", mime: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" } }); const r = await request(app).get(base + `/sources/${id}/${id}?hash=${"a".repeat(64)}&revision=${id}`); expect(r.status).toBe(200); expect(r.headers["content-disposition"]).toContain("source.xlsx"); });
+
+it("binds checked source identity to path parameters instead of similarly named query fields", async () => {
+    const other = "40000000-0000-4000-8000-000000000003";
+    svc.readBriefSource.mockResolvedValue({ ok: true, data: { bytes: new TextEncoder().encode("fictional path source").buffer, filename: "source.txt", mime: "text/plain" } });
+    const r = await request(app).get(base + `/sources/${id}/${id}?hash=${"a".repeat(64)}&revision=${id}&documentId=${other}&versionId=${other}`);
+    expect(r.status).toBe(200);
+    expect(svc.readBriefSource).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ projectId: "40000000-0000-4000-8000-000000000001", userId: "actor" }), { documentId: id, versionId: id, hash: "a".repeat(64), revision: id });
+});

@@ -19,6 +19,8 @@ interface ModalProps {
   children: ReactNode;
   breadcrumbs?: ReactNode[];
   headerAction?: ReactNode;
+  /** Disables only the header button; onClose retains Escape/backdrop policy. */
+  closeButtonDisabled?: boolean;
   size?: ModalUISize;
   className?: string;
   footerStatus?: ReactNode;
@@ -41,6 +43,7 @@ export function Modal({
   children,
   breadcrumbs,
   headerAction,
+  closeButtonDisabled = false,
   size = "lg",
   className,
   footerStatus,
@@ -58,6 +61,7 @@ export function Modal({
       onClose={onClose}
       breadcrumbs={breadcrumbs}
       headerAction={headerAction}
+      closeButtonDisabled={closeButtonDisabled}
       size={size}
       className={cn("h-[min(600px,calc(100vh-2rem))]", className)}
       ariaLabel={
