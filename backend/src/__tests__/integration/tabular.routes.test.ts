@@ -2198,7 +2198,7 @@ describe("tabular.routes", () => {
 
         it("tells the grid a rejected key is the key, using the provider layer's real error", async () => {
             const { APICallError } = await import("ai");
-            const { toProviderStreamError } = await import("../../lib/llm/providerErrors");
+            const { toProviderStreamError } = await import("../../lib/llm/providerErrors.js");
             const rejected = toProviderStreamError(
                 new APICallError({
                     message: "PRIVATE provider text: invalid x-api-key",
