@@ -742,3 +742,4 @@ export interface AuditActorPage {
   users: AuditActor[];
   nextOffset: number | null;
 }
+export type { ProjectEmailLatest, ProjectEmailMessage, ProjectEmailPreview, ProjectEmailReceipt } from "./projectEmail";

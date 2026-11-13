@@ -7,6 +7,19 @@ const eventId = '1234567890abcdef1234567890abcdef';
 afterEach(() => vi.restoreAllMocks());
 
 describe('outbound telemetry privacy boundary', () => {
+  it.each(['preview', 'import', 'receipt', 'latest'])('retains the email %s route while removing UUIDs, source hashes and queries', operation => {
+    const previewId = '81234567-89ab-4cde-8f01-23456789abcd';
+    const sourceHash = 'a'.repeat(64);
+    const path = operation === 'latest' ? `/project-email/${id}/latest` : operation === 'preview' ? `/project-email/${id}/preview` : `/project-email/${id}/${previewId}/${operation}`;
+    const expected = operation === 'latest' ? '/project-email/:id/latest' : operation === 'preview' ? '/project-email/:id/preview' : `/project-email/:id/:id/${operation}`;
+    const route = `${path}?query=private%40example.invalid&sha256=${sourceHash}#private-fragment`;
+    expect(diagnosticRoute(route)).toBe(expected);
+    expect(diagnosticRoute(`${path}/${sourceHash}`)).toBe(`${expected}/:id`);
+    const event = diagnosticEvent({ tags: { http_route: route } });
+    expect(event.tags).toEqual({ http_route: expected });
+    for (const privateValue of [id, previewId, sourceHash, 'private%40example.invalid', 'private-fragment']) expect(JSON.stringify(event)).not.toContain(privateValue);
+  });
+
   it.each(['Synthetic_Client_Jane_Doe_NDA.pdf', 'Jane Doe medical claim', '秘密の依頼人契約.docx'])('drops client-controlled text in every event carrier: %s', privateName => {
     const out = diagnosticEvent({
       event_id: eventId, message: privateName, logentry: { message: privateName },
