@@ -22,6 +22,7 @@ import type {
 import { createS3StorageAdapter } from "./storage/s3";
 import { createFilesystemStorageAdapter } from "./storage/filesystem";
 import { buildContentDisposition } from "./storage/filenames";
+import { storageReadTimeoutMs } from "./storage/timeouts";
 export { BlobUploadSizeError } from "./storage/filesystem";
 export {
   buildContentDisposition,
@@ -224,6 +225,112 @@ export function createFileReadStream(key: string): Readable {
       }
     })(),
   );
+}
+
+function asDownloadError(error: unknown): StorageOperationError {
+  return error instanceof StorageOperationError
+    ? error
+    : new StorageOperationError("download", { cause: error });
+}
+
+/**
+ * Wait for one step of a storage read, but never longer than the read timeout
+ * and never past an abort. The race settles even when the store has stalled
+ * (and its own promise never settles), which is what lets a timed-out or
+ * abandoned read be torn down instead of pinning its caller.
+ */
+function boundedStep<T>(step: Promise<T>, controller: AbortController): Promise<T> {
+  // The losing side of the race may reject later; it is already handled.
+  step.catch(() => undefined);
+  const { signal } = controller;
+  return new Promise<T>((resolve, reject) => {
+    if (signal.aborted) return reject(signal.reason);
+    const onAbort = () => reject(signal.reason);
+    const timer = setTimeout(() => {
+      controller.abort(
+        new DOMException("Object storage read timed out", "TimeoutError"),
+      );
+    }, storageReadTimeoutMs());
+    signal.addEventListener("abort", onAbort, { once: true });
+    step.then(resolve, reject).finally(() => {
+      clearTimeout(timer);
+      signal.removeEventListener("abort", onAbort);
+    });
+  });
+}
+
+/**
+ * Open an object for a streamed response (a download handed straight to the
+ * client) without holding the whole object in memory.
+ *
+ * The object is opened, and its first chunk read, before this resolves, so a
+ * store that cannot serve it fails HERE with a StorageOperationError while the
+ * caller can still answer with an error status. After that, failures surface
+ * as an error on the returned stream.
+ *
+ * Every wait on the store is bounded by the storage read timeout, and the
+ * read is released (the request cancelled, the socket or file closed) when
+ * the returned stream is destroyed, the timeout fires, or `signal` aborts.
+ * Unlike downloadFile, the timeout bounds each wait on the store rather than
+ * the whole transfer, so a slow client applying backpressure is not cut off.
+ */
+export async function openFileStream(
+  key: string,
+  options: { signal?: AbortSignal } = {},
+): Promise<Readable> {
+  requireStorageConfig();
+  const controller = new AbortController();
+  const outer = options.signal;
+  const forward = () => controller.abort(outer?.reason);
+  if (outer?.aborted) forward();
+  else outer?.addEventListener("abort", forward, { once: true });
+  const release = () => {
+    controller.abort();
+    outer?.removeEventListener("abort", forward);
+  };
+
+  let iterator: AsyncIterator<Uint8Array>;
+  let first: IteratorResult<Uint8Array>;
+  try {
+    const body = await boundedStep(
+      adapter.openReadStream(key, { signal: controller.signal }),
+      controller,
+    );
+    if (!body) throw new StorageOperationError("download");
+    iterator = body[Symbol.asyncIterator]();
+    first = await boundedStep(iterator.next(), controller);
+  } catch (error) {
+    release();
+    // Thrown, not logged (see headFile).
+    throw asDownloadError(error);
+  }
+
+  let pending: IteratorResult<Uint8Array> | null = first;
+  return new Readable({
+    read() {
+      const step = pending
+        ? Promise.resolve(pending)
+        : boundedStep(iterator.next(), controller);
+      pending = null;
+      step.then(
+        (result) => {
+          if (this.destroyed) return;
+          this.push(result.done ? null : result.value);
+        },
+        (error) => {
+          if (!this.destroyed) this.destroy(asDownloadError(error));
+        },
+      );
+    },
+    destroy(error, callback) {
+      // Abort first: a store that is mid-read only lets go when its signal
+      // fires, and return() on an iterator with a pending next() would wait
+      // for that read to finish.
+      release();
+      iterator.return?.().catch(() => undefined);
+      callback(error);
+    },
+  });
 }
 
 export async function listFiles(prefix: string): Promise<string[]> {

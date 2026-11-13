@@ -110,7 +110,7 @@ describe("filesystem storage driver", () => {
     // really sent the bytes it declared, so the fs driver has to answer too.
     expect(await storage.headFile(key)).toEqual({
       size: 10,
-      etag: null,
+      etag: expect.stringMatching(/^W\/"a-[0-9a-f]+"$/),
       contentType: null,
     });
     expect(await storage.headFile("uploads/s1/never.bin")).toBeNull();
