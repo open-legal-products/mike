@@ -43,6 +43,7 @@ import {
     type RunProgressUpdate,
 } from "../../lib/queue/runProgress";
 import { type UserApiKeys } from "../../lib/llm";
+import { providerFailureKind, providerFailureStatus } from "../../lib/llm/providerErrors";
 import { AppError } from "../../lib/appError";
 import { reportError } from "../../lib/observability/sentry";
 import { extractRowColumns, finalizeCell } from "./tabular.extractRow";
@@ -649,6 +650,15 @@ export async function streamTabularGenerateSync(args: {
     } = args;
 
     const textCache = createTextExtractionCache();
+    // Every row calls the same model with the same keys, so a refused key or
+    // an outage fails each row alike: report each kind of failure once per run.
+    const reportedFailures = new Set<string>();
+    const reportFailure = (error: unknown): boolean => {
+        const failure = `${providerFailureKind(error)}:${providerFailureStatus(error) ?? ""}`;
+        if (reportedFailures.has(failure)) return false;
+        reportedFailures.add(failure);
+        return true;
+    };
     let nextRowIndex = 0;
     const cellFrame = (
         rowId: string,
@@ -684,6 +694,7 @@ export async function streamTabularGenerateSync(args: {
             apiKeys,
             generationId,
             abortSignal,
+            reportFailure,
             sink: {
                 activity: args.onActivity,
                 generating: (rowId, columnIndex) =>
