@@ -83,6 +83,28 @@ const ERROR_TYPE = /^[A-Z][A-Za-z0-9]{1,60}(?:Error|Warning|Exception)$|^(?:Erro
 // A DOMException's constructor is always DOMException; its spec-defined name is
 // what tells failures apart. The caller can pass any name, so only these pass.
 const DOM_EXCEPTION_NAMES = new Set('AbortError NotFoundError NotAllowedError NotSupportedError InvalidStateError SecurityError NetworkError TimeoutError QuotaExceededError DataCloneError HierarchyRequestError SyntaxError'.split(' '));
+function domExceptionName(error: unknown): string | undefined {
+  try {
+    if (typeof DOMException === 'function' && error instanceof DOMException && DOM_EXCEPTION_NAMES.has(error.name)) return error.name;
+  } catch { /* A host object must not break reporting. */ }
+  return undefined;
+}
+
+/** The browser SDK turns a stackless DOMException into a synthetic message. */
+export function restoreDomExceptionType(
+  event: { message?: string; exception?: { values?: Array<{ type?: string }> } },
+  original: unknown,
+): void {
+  const name = domExceptionName(original);
+  if (!name) return;
+  const values = event.exception?.values;
+  if (values?.length) values[values.length - 1]!.type = name;
+  else event.exception = { values: [{ type: name }] };
+  // This is an exception, even when its only frames came from captureException.
+  // Leaving message set makes the final boundary treat it as captureMessage.
+  delete event.message;
+}
+
 /** A frame's function name as V8 prints it: dotted identifiers, optionally `async`/`new`, `[as x]`, `<anonymous>`. ASCII identifier characters only; a document name has spaces or an extension-like tail that this still admits, so names are kept only for frames in our own files (see framesFor). */
 const FUNCTION_NAME = /^(?:async |new )?[A-Za-z_$<][\w$<>]{0,60}(?:\.[A-Za-z_$<][\w$<>]{0,60}){0,6}(?: \[as [\w$]{1,60}\]| \(index \d{1,6}\))?$/;
 /** Repository locations subject to the static diagnostic-name source contract. */
@@ -158,7 +180,8 @@ export function retainExceptionTypes(
         const constructor = Object.getPrototypeOf(candidate)?.constructor;
         if (typeof constructor === 'function' && ERROR_TYPE.test(constructor.name)) types.add(constructor.name);
       }
-      if (typeof DOMException === 'function' && candidate instanceof DOMException && DOM_EXCEPTION_NAMES.has(candidate.name)) types.add(candidate.name);
+      const domName = domExceptionName(candidate);
+      if (domName) types.add(domName);
       const item = candidate as RecordValue;
       if (item.cause) pending.push(item.cause);
       if (item.lastError) pending.push(item.lastError);
