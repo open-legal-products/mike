@@ -6,11 +6,13 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { execFile, spawn, type ChildProcess } from "node:child_process";
 import type { ExtractionOp, ExtractionOps } from "./ops";
-import { EXTRACTION_MAX_BYTES, ExtractionBusyError, ExtractionLimitError, extractionMemoryMb, extractionTimeoutMs } from "./limits";
+import { EXTRACTION_MAX_BYTES, ExtractionBusyError, ExtractionLimitError, extractionMemoryMb, extractionTimeoutMs,
+  SpreadsheetValuesError, SPREADSHEET_VALUES_MAX_BYTES, isSpreadsheetValuesErrorCode, assertSpreadsheetValuesOutputBudget } from "./limits";
 import { asExtractionFailure, extractionFailureFromWire, type ExtractionFailureWire } from "./failure";
 import { AppError } from "../appError";
 
 export { EXTRACTION_MAX_BYTES, ExtractionBusyError, ExtractionLimitError } from "./limits";
+export { SpreadsheetValuesError, SPREADSHEET_VALUES_MAX_BYTES, SPREADSHEET_VALUES_LIMITS } from "./limits";
 export { ExtractionParseError } from "./failure";
 
 type Result<K extends ExtractionOp> = Awaited<ReturnType<ExtractionOps[K]>>;
@@ -119,8 +121,11 @@ async function startParser(): Promise<Parser> {
 }
 
 async function extractInChild<K extends ExtractionOp>(op: K, bytes: ArrayBuffer, options: { fileType?: string } = {}): Promise<Result<K>> {
+  const valuesPreview = op === "spreadsheetValues";
+  if (valuesPreview && bytes.byteLength > SPREADSHEET_VALUES_MAX_BYTES) throw new SpreadsheetValuesError("spreadsheet_values_limit");
   if (bytes.byteLength > EXTRACTION_MAX_BYTES) throw new ExtractionLimitError("source exceeds 150 MB");
   if (process.env.EXTRACTION_ISOLATION === "off") {
+    if (valuesPreview) throw new SpreadsheetValuesError("spreadsheet_values_unavailable");
     const { EXTRACTION_OPS } = await import("./ops.js");
     try {
       return await EXTRACTION_OPS[op](bytes, options.fileType ?? "") as Result<K>;
@@ -130,7 +135,12 @@ async function extractInChild<K extends ExtractionOp>(op: K, bytes: ArrayBuffer,
     }
   }
   if (parser && parser.memoryMb !== extractionMemoryMb()) await stopExtractionProcess();
-  const p = parser ?? (parser = await startParser());
+  let p: Parser;
+  try { p = parser ?? (parser = await startParser()); }
+  catch (error) {
+    if (valuesPreview) throw new SpreadsheetValuesError("spreadsheet_values_unavailable");
+    throw error;
+  }
   clearTimeout(p.idle);
   reference(p, true);
   const { child } = p;
@@ -139,9 +149,9 @@ async function extractInChild<K extends ExtractionOp>(op: K, bytes: ArrayBuffer,
     let failure: Error | undefined;
     let diagnostics = "";
     const timeout = setTimeout(() => {
-      failure = new ExtractionLimitError("parser deadline exceeded");
+      failure = valuesPreview ? new SpreadsheetValuesError("spreadsheet_values_limit") : new ExtractionLimitError("parser deadline exceeded");
       retire(p);
-    }, extractionTimeoutMs());
+    }, valuesPreview ? Math.min(extractionTimeoutMs(), 15_000) : extractionTimeoutMs());
     const onDiagnostics = (chunk: Buffer) => {
       diagnostics = (diagnostics + chunk.toString()).slice(-8192);
     };
@@ -155,6 +165,10 @@ async function extractInChild<K extends ExtractionOp>(op: K, bytes: ArrayBuffer,
     };
     const onMessage = (message: Reply) => {
       if (failure) return;
+      if (valuesPreview && message.ok) {
+        try { assertSpreadsheetValuesOutputBudget(message.result); }
+        catch (error) { failure = error as Error; retire(p); return; }
+      }
       reply = message;
       if (!reply.ok || ++p.files >= RECYCLE_AFTER_FILES) { retire(p); return; }
       cleanup();
@@ -167,6 +181,14 @@ async function extractInChild<K extends ExtractionOp>(op: K, bytes: ArrayBuffer,
     const onClose = (_code: number | null, signal: NodeJS.Signals | null) => {
       cleanup();
       void p.closed.then(() => {
+        if (valuesPreview) {
+          if (failure instanceof SpreadsheetValuesError) reject(failure);
+          else if (reply?.ok) resolve(reply.result as Result<K>);
+          else if (reply) reject(new SpreadsheetValuesError(isSpreadsheetValuesErrorCode(reply.code) ? reply.code : "spreadsheet_values_malformed"));
+          else if (signal === "SIGABRT" || /out of memory|allocation failed|cannot allocate memory|failed to map segment|ENOMEM/i.test(diagnostics)) reject(new SpreadsheetValuesError("spreadsheet_values_limit"));
+          else reject(new SpreadsheetValuesError("spreadsheet_values_unavailable"));
+          return;
+        }
         if (failure instanceof ExtractionLimitError) reject(failure);
         else if (reply?.ok) resolve(reply.result as Result<K>);
         else if (reply) reject(reply.limited ? new ExtractionLimitError(reply.message) : extractionFailureFromWire(reply));

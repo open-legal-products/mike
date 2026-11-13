@@ -73,6 +73,8 @@ import {
     getDocumentStatuses,
     getDocumentFile,
     getDocumentFileUrl,
+    getSpreadsheetValuesPreview,
+    getSpreadsheetValuesSource,
     getDocumentUrl,
     getConfiguredModels,
     getLibrary,
@@ -2268,6 +2270,30 @@ describe("tabular cell operations", () => {
 });
 
 describe("query and payload defaults", () => {
+    it("fetches values for current or pinned versions through the authenticated API with cancellation", async () => {
+        fetchMock.mockImplementation(async () => jsonResponse({ source: { versionId: "returned-version" }, values: { sheets: [] } }));
+        const controller = new AbortController();
+        await getSpreadsheetValuesPreview("d 1", null, controller.signal);
+        expect(lastFetchCall().url).toBe("/api/single-documents/d%201/spreadsheet-preview");
+        expect(lastFetchCall().init.signal).toBe(controller.signal);
+        expect(lastFetchCall().init.cache).toBe("no-store");
+        await getSpreadsheetValuesPreview("d1", "v 1");
+        expect(lastFetchCall().url).toBe("/api/single-documents/d1/spreadsheet-preview?version_id=v%201");
+    });
+
+    it("downloads only the exact returned version/hash checkpoint, never the current file endpoint", async () => {
+        fetchMock.mockResolvedValue(new Response("original bytes", { headers: { "content-disposition": 'attachment; filename="source.xls"' } }));
+        const controller = new AbortController();
+        const result = await getSpreadsheetValuesSource({ documentId: "d 1", versionId: "v 1", sha256: "a&b" }, controller.signal);
+        expect(lastFetchCall().url).toBe("/api/single-documents/d%201/spreadsheet-preview/source?version_id=v+1&sha256=a%26b");
+        expect(lastFetchCall().init.signal).toBe(controller.signal);
+        expect(lastFetchCall().init.cache).toBe("no-store");
+        expect(result.filename).toBe("source.xls");
+        expect(await result.blob.text()).toBe("original bytes");
+        fetchMock.mockResolvedValue(new Response("source"));
+        expect((await getSpreadsheetValuesSource({ documentId: "d1", versionId: "v1", sha256: "abc" })).filename).toBeNull();
+    });
+
     it("getDocumentFile appends version_id only when a version is requested", async () => {
         expect(getDocumentFileUrl("d 1")).toBe(
             "/api/single-documents/d%201/file",

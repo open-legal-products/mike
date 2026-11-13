@@ -64,5 +64,6 @@ export { runConversionJob, setDocumentTerminalStatus } from "./documents.convers
 
 export { handleDocumentExtractText, markDocumentTextFailed, backfillDocumentText } from "./documents.indexing";
 export { findDocumentText, readStoredDocumentText, storedDocumentTextCurrent } from "./documents.textSearch";
+export { getSpreadsheetValuesPreview, getSpreadsheetValuesSource } from "./documents.spreadsheetValues";
 
 export { getDocumentStatuses } from "./documents.status";

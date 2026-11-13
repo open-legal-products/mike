@@ -339,6 +339,7 @@ export function DocumentContent({
                     <SpreadsheetView
                         active={active}
                         documentId={documentId}
+                        fileType={resolvedDocument.title.toLowerCase().endsWith(".xls") ? "xls" : undefined}
                         versionId={versionId}
                         rounded={false}
                         refetchKey={refetchKey}

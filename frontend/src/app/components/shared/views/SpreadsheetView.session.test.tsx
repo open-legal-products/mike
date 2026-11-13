@@ -22,6 +22,13 @@ const state = vi.hoisted(() => ({
     fetch: vi.fn(),
     parse: vi.fn(),
     mounts: vi.fn(),
+    values: vi.fn(),
+}));
+vi.mock("./SpreadsheetValuesView", () => ({
+    SpreadsheetValuesView: (props: unknown) => {
+        state.values(props);
+        return <div data-testid="values-preview">Stored values preview</div>;
+    },
 }));
 vi.mock("@/app/hooks/useFetchDocxBytes", () => ({
     useFetchDocxBytes: (...args: unknown[]) => {
@@ -140,6 +147,97 @@ beforeEach(() => {
     );
 });
 afterEach(() => vi.restoreAllMocks());
+
+it("routes an OLE workbook to the separate values viewer without parsing it as XLSX", () => {
+    state.bytes = new Uint8Array([0xd0, 0xcf, 0x11, 0xe0, 0xa1, 0xb1, 0x1a, 0xe1, 0, 0]).buffer;
+    render(<SpreadsheetView documentId="legacy-workbook" versionId="v1" refetchKey={3} highlightCells={[{ sheet: "Budget", cell: "B21:C22" }]} />);
+
+    expect(screen.getByTestId("values-preview")).toBeInTheDocument();
+    expect(state.values).toHaveBeenCalledWith({ documentId: "legacy-workbook", versionId: "v1", refetchKey: 3, highlights: [{ sheet: "Budget", row: [20, 21], column: [1, 2] }] });
+    expect(state.parse).not.toHaveBeenCalled();
+    expect(state.mounts).not.toHaveBeenCalled();
+});
+
+it("routes a known XLS before any raw-byte fetch or XLSX parsing", () => {
+    state.bytes = null;
+    render(<SpreadsheetView documentId="legacy-workbook" fileType="xls" versionId="v1" />);
+    expect(screen.getByTestId("values-preview")).toBeInTheDocument();
+    expect(state.fetch).not.toHaveBeenCalled();
+    expect(state.parse).not.toHaveBeenCalled();
+    expect(state.mounts).not.toHaveBeenCalled();
+});
+
+it("does not attach an arbitrary asset URL to a stored document checkpoint", () => {
+    state.bytes = new Uint8Array([0xd0, 0xcf, 0x11, 0xe0, 0xa1, 0xb1, 0x1a, 0xe1]).buffer;
+    render(<SpreadsheetView documentId="document" displayUrl="/api/workflow-addons/asset/display" />);
+    expect(screen.getByRole("alert")).toHaveTextContent(/asset URL cannot be bound/);
+    expect(state.values).not.toHaveBeenCalled();
+    expect(state.parse).not.toHaveBeenCalled();
+});
+
+it("accepts the exact internal document/version raw-source URL", () => {
+    state.bytes = new Uint8Array([0xd0, 0xcf, 0x11, 0xe0, 0xa1, 0xb1, 0x1a, 0xe1]).buffer;
+    render(<SpreadsheetView documentId="document" versionId="v1" displayUrl="/api/single-documents/document/file?version_id=v1" />);
+    expect(screen.getByTestId("values-preview")).toBeInTheDocument();
+});
+
+it("ends a silent parser failure and ignores a callback arriving after the preview timed out", async () => {
+    vi.useFakeTimers();
+    let finish: ((value: { sheets: Sheet[] }) => void) | undefined;
+    state.parse.mockImplementation((_file, done) => { finish = done; });
+    const { unmount } = render(<SpreadsheetView documentId="silent-parser" />);
+    try {
+        expect(screen.queryByRole("alert")).toBeNull();
+        await act(async () => { vi.advanceTimersByTime(30_000); });
+        expect(screen.getByRole("alert")).toHaveTextContent(/could not be displayed/);
+
+        await act(async () => { finish?.({ sheets: [{ id: "late", name: "Late", data: [] }] }); });
+        expect(screen.queryByText("Zoom 1")).toBeNull();
+        expect(screen.getByRole("alert")).toHaveTextContent(/could not be displayed/);
+    } finally {
+        unmount();
+        vi.useRealTimers();
+    }
+});
+
+it("clears the parser deadline after a successful callback", async () => {
+    vi.useFakeTimers();
+    const { unmount } = render(<SpreadsheetView documentId="successful-parser" />);
+    try {
+        expect(vi.getTimerCount()).toBe(0);
+        await act(async () => { vi.advanceTimersByTime(30_000); });
+        expect(screen.getByText("Zoom 1")).toBeInTheDocument();
+        expect(screen.queryByRole("alert")).toBeNull();
+    } finally {
+        unmount();
+        vi.useRealTimers();
+    }
+});
+
+it("reports malformed asynchronous parser output instead of throwing or waiting forever", async () => {
+    let finish: ((value: unknown) => void) | undefined;
+    state.parse.mockImplementation((_file, done) => { finish = done; });
+    render(<SpreadsheetView documentId="invalid-parser-output" />);
+
+    await act(async () => { finish?.({ sheets: [null] }); });
+
+    expect(screen.getByRole("alert")).toHaveTextContent(/could not be displayed/);
+    expect(screen.queryByText("Zoom 1")).toBeNull();
+});
+
+it("clears a pending parser deadline when the viewer unmounts", () => {
+    vi.useFakeTimers();
+    state.parse.mockImplementation(() => {});
+    const { unmount } = render(<SpreadsheetView documentId="pending-parser" />);
+    try {
+        expect(vi.getTimerCount()).toBe(1);
+        unmount();
+        expect(vi.getTimerCount()).toBe(0);
+    } finally {
+        unmount();
+        vi.useRealTimers();
+    }
+});
 
 it("loads the raw workbook from /file, uncached, rather than the PDF display route", async () => {
     render(<SpreadsheetView documentId="sheet" versionId="v2" refetchKey={3} />);
