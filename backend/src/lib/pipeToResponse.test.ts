@@ -1,6 +1,6 @@
 import http from "node:http";
 import type { AddressInfo } from "node:net";
-import { Readable } from "node:stream";
+import { Readable, Stream } from "node:stream";
 import JSZip from "jszip";
 import { afterEach, describe, expect, it } from "vitest";
 import { pipeToResponse } from "./pipeToResponse";
@@ -8,12 +8,35 @@ import { pipeToResponse } from "./pipeToResponse";
 type Outcome = { error?: unknown; peakCloseListeners: number };
 
 let server: http.Server | undefined;
+const timers: NodeJS.Timeout[] = [];
 
 afterEach(async () => {
+  for (const timer of timers.splice(0)) clearInterval(timer);
   server?.closeAllConnections();
   await new Promise((resolve) => (server ? server.close(resolve) : resolve(null)));
   server = undefined;
 });
+
+/**
+ * A stream from before async iteration, like JSZip's: 'data' events plus
+ * pause, resume and destroy. It never ends, so only a disconnect stops it.
+ */
+function legacyStream(onDestroy: () => void): Readable {
+  let paused = false;
+  const stream = Object.assign(new Stream(), {
+    pause: () => void (paused = true),
+    resume: () => void (paused = false),
+    destroy: () => {
+      clearInterval(timer);
+      onDestroy();
+    },
+  });
+  const timer = setInterval(() => {
+    if (!paused) stream.emit("data", Buffer.alloc(64 * 1024));
+  }, 5);
+  timers.push(timer);
+  return stream as unknown as Readable;
+}
 
 /** Serve `makeSource()` through pipeToResponse; resolves with what it did. */
 async function serve(makeSource: () => Readable, onError?: (res: http.ServerResponse) => void) {
@@ -84,6 +107,44 @@ describe("pipeToResponse", () => {
     const { error } = await outcome;
     expect((error as NodeJS.ErrnoException).code).toBe("ERR_STREAM_PREMATURE_CLOSE");
     expect(source.destroyed).toBe(true);
+  });
+
+  it("rejects and destroys the source when the client disconnects while the source is stalled", async () => {
+    let source!: Readable;
+    const { url, outcome } = await serve(() => {
+      let sent = false;
+      source = new Readable({
+        read() {
+          // One chunk, then silence: a storage read that never answers.
+          if (sent) return;
+          sent = true;
+          this.push(Buffer.from("head"));
+        },
+      });
+      return source;
+    });
+
+    const response = await fetch(url);
+    const reader = response.body!.getReader();
+    // Take the first chunk so the helper is waiting on the source, not on 'drain'.
+    await reader.read();
+    await reader.cancel();
+
+    const { error } = await outcome;
+    expect((error as NodeJS.ErrnoException).code).toBe("ERR_STREAM_PREMATURE_CLOSE");
+    expect(source.destroyed).toBe(true);
+  });
+
+  it("destroys a legacy source, which the wrapper reads for it, when the client disconnects", async () => {
+    let destroyed = false;
+    const { url, outcome } = await serve(() => legacyStream(() => (destroyed = true)));
+
+    const response = await fetch(url);
+    await response.body!.cancel();
+
+    const { error } = await outcome;
+    expect((error as NodeJS.ErrnoException).code).toBe("ERR_STREAM_PREMATURE_CLOSE");
+    expect(destroyed).toBe(true);
   });
 
   it("breaks the download when the source fails after bytes were sent", async () => {

@@ -12,7 +12,8 @@ import { Readable } from "node:stream";
  * listener and keeps what the routes relied on from `pipeline`:
  *
  * - backpressure: a slow client pauses the read from object storage;
- * - a client that disconnects destroys `source` and rejects;
+ * - a client that disconnects destroys `source` and rejects, whether the
+ *   helper is waiting on the socket to drain or on a stalled source;
  * - a `source` error rejects. If bytes are already on the wire the response
  *   is destroyed, so the client sees a broken download rather than a short
  *   one that looks complete. If nothing was sent, the response is left
@@ -25,10 +26,23 @@ export async function pipeToResponse(
   source: Readable,
   res: ServerResponse,
 ): Promise<void> {
-  const chunks =
-    Symbol.asyncIterator in source ? source : new Readable().wrap(source);
+  const wrapped = typeof source[Symbol.asyncIterator] !== "function";
+  const chunks = wrapped ? new Readable().wrap(source) : source;
+  const destroySource = () => {
+    chunks.destroy();
+    // wrap() does not forward destroy to the legacy stream it reads from.
+    if (wrapped) source.destroy();
+  };
   const closed = new AbortController();
-  const onClose = () => closed.abort();
+  const onClose = () => {
+    // The 'close' after 'finish' is a completed response, not a disconnect.
+    if (res.writableFinished) return;
+    closed.abort();
+    // The signal only interrupts the wait for 'drain'. A read waiting on a
+    // stalled source settles only when the stream is destroyed; otherwise
+    // the helper and the storage read would stay pending indefinitely.
+    destroySource();
+  };
   res.once("close", onClose);
   try {
     for await (const chunk of chunks) {
@@ -43,7 +57,7 @@ export async function pipeToResponse(
       await once(res, "finish", { signal: closed.signal });
     }
   } catch (error) {
-    // Leaving the loop early has already destroyed the stream being read.
+    destroySource();
     if (res.headersSent && !res.writableFinished) res.destroy();
     throw closed.signal.aborted ? prematureClose() : error;
   } finally {
