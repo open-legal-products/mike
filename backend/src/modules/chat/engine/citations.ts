@@ -271,7 +271,12 @@ export function parseCitationsWithDiagnostics(text: string): {
       };
     }
     return {
-      citations: parsed.slice(0, MAX_PARSED_CITATIONS).map(normalizeCitation).filter((c): c is ParsedCitation => c !== null),
+      // Cap valid citations, not raw entries, so invalid ones cannot push a
+      // valid citation past the cap (the streaming parser counts the same way).
+      citations: parsed
+        .map(normalizeCitation)
+        .filter((c): c is ParsedCitation => c !== null)
+        .slice(0, MAX_PARSED_CITATIONS),
       diagnostics: { hasBlock: true, rawLength: raw.length, error: null },
     };
   } catch (error) {
@@ -428,6 +433,15 @@ export function createCitation(
   // fall through to the tolerant uploaded-document citation path.
   const sourceLabel = docStore ? resolveDocLabel(citation.doc_id, docStore, docIndex) : null;
   if (sourceLabel && docStore?.get(sourceLabel)?.panel_document) {
+    // A title names a source only when it names one document: with two
+    // sharing it, the first would take quotes meant for the other.
+    if (!docStore.has(citation.doc_id)) {
+      let sameTitle = 0;
+      for (const document of docStore.values()) {
+        if (document.filename === citation.doc_id) sameTitle += 1;
+      }
+      if (sameTitle > 1) return null;
+    }
     citation = { ...citation, doc_id: sourceLabel };
   }
   const docInfo = resolveDoc(citation.doc_id, docIndex);

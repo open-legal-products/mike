@@ -57,3 +57,13 @@ describe("embedded source text leaving the turn", () => {
     expect(embedded.document.subdocuments[0].text).toBe("Held, the appeal is allowed.");
   });
 });
+
+describe("citation cap", () => {
+  it("counts valid citations, so invalid entries cannot crowd out a valid one", () => {
+    const invalid = Array.from({ length: 50 }, (_, i) => ({ ref: i + 1 }));
+    const valid = { ref: 51, doc_id: "doc-0", quote: "Exact text" };
+    const parsed = parseCitations(`<CITATIONS>${JSON.stringify([...invalid, valid])}</CITATIONS>`);
+    expect(parsed).toHaveLength(1);
+    expect(parsed[0]).toMatchObject({ ref: 51, doc_id: "doc-0" });
+  });
+});

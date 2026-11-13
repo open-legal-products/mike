@@ -33,7 +33,8 @@ import { verifyCitations } from "../verifyCitations";
 import { runLLMStream } from "../streaming";
 import { extractCitations } from "../contextBuilders";
 import { getSourceDocument, LEGAL_DATA_HUNTER_CONNECT_DETAIL } from "../../../source-documents/sourceDocuments.service";
-import { legalDataHunterDocumentId } from "../../../../lib/mcp/sourceDocuments";
+import { extractLegalDataHunterSource, legalDataHunterDocumentId } from "../../../../lib/mcp/sourceDocuments";
+import { registerMcpLegalSource } from "../tools/mcpSourceDocuments";
 
 const args = { source: "legifrance", source_id: "JORFTEXT0001" };
 const payload = {
@@ -339,5 +340,62 @@ describe("opening a saved Legal Data Hunter source", () => {
     const result = await getSourceDocument(f.db, { userId: "u1", documentId: "mcp:c1:not-a-reference", orgId: null });
     expect(result).toMatchObject({ ok: false, kind: "not_found" });
     expect(mocks.callTool).not.toHaveBeenCalled();
+  });
+});
+
+describe("legal source identity and search", () => {
+  it("drops a citation that names two retrieved sources by their shared title", () => {
+    const f = fixture();
+    const [first, second] = ["A1", "B2"].map((id) =>
+      registerMcpLegalSource(
+        extractLegalDataHunterSource(
+          { structuredContent: { ...payload, source_id: id, text: `${payload.text} ${id}` } },
+          { connectorId: "c1", serverUrl: f.connector.server_url, toolName: "get_document", arguments: { source: args.source, source_id: id } },
+        )!,
+        f.docIndex,
+        f.docStore,
+      ),
+    );
+    expect(first).not.toBe(second);
+    const cite = (doc_id: string, quote: string) =>
+      createCitation(parseCitations(`<CITATIONS>${JSON.stringify([{ ref: 1, doc_id, quote }])}</CITATIONS>`)[0], f.docIndex, undefined, f.docStore);
+    // The shared quote is in both: by title it cannot say which was meant.
+    expect(cite(payload.title, payload.text)).toBeNull();
+    expect(cite(payload.title, `${payload.text} B2`)).toBeNull();
+    // Each source's own handle still identifies it.
+    expect(cite(second, `${payload.text} B2`)).toMatchObject({ verified: true, document: { document_id: f.docIndex[second].document_id } });
+  });
+
+  it("keeps a unique title as an alias for its source", async () => {
+    const f = fixture();
+    await f.dispatch();
+    const citation = createCitation(
+      parseCitations(`<CITATIONS>${JSON.stringify([{ ref: 1, doc_id: payload.title, quote: payload.text }])}</CITATIONS>`)[0],
+      f.docIndex, undefined, f.docStore,
+    );
+    expect(citation).toMatchObject({ doc_id: "doc-2", verified: true });
+  });
+
+  const find = (f: ReturnType<typeof fixture>, doc_id: string, query: string) =>
+    runToolCalls(
+      [{ id: "find-1", function: { name: "find_in_document", arguments: JSON.stringify({ doc_id, query }) } }],
+      f.docStore, "u1", f.db, () => {}, undefined, undefined, f.docIndex,
+      undefined, undefined, undefined, undefined, undefined, "n0nce",
+    );
+
+  it("searches a retrieved legal source and fences its snippets", async () => {
+    const f = fixture();
+    await f.dispatch();
+    const result = await find(f, "doc-2", "tiennent lieu de loi");
+    const content = (result.toolResults[0] as { content: string }).content;
+    expect(content).not.toContain("must be opened with read_document");
+    expect(content.startsWith('<untrusted-content nonce="n0nce">')).toBe(true);
+    expect(content).toContain("tiennent lieu de loi");
+  });
+
+  it("still refuses to search other request-scoped documents", async () => {
+    const f = fixture();
+    const result = await find(f, "doc-1", "unrelated");
+    expect((result.toolResults[0] as { content: string }).content).toContain("must be opened with read_document");
   });
 });

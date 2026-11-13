@@ -876,8 +876,10 @@ export async function runToolCalls(
       // must enter model context only through read_document/fetch_documents.
       // Those paths emit the visible read lifecycle and nonce-fence the entire
       // body. find_in_document otherwise returns raw, user-controlled snippets
-      // and would silently bypass both guarantees.
-      if (docInfo?.inline_text !== undefined) {
+      // and would silently bypass both guarantees. A retrieved legal source
+      // is searched like any document, with its snippets fenced below.
+      const isLegalSource = !!docInfo?.panel_document;
+      if (docInfo?.inline_text !== undefined && !isLegalSource) {
         toolResults.push({
           role: "tool",
           tool_call_id: tc.id,
@@ -933,7 +935,11 @@ export async function runToolCalls(
           total_matches: totalMatches,
         });
       }
-      toolResults.push({ role: "tool", tool_call_id: tc.id, content });
+      toolResults.push({
+        role: "tool",
+        tool_call_id: tc.id,
+        content: isLegalSource && nonce ? spotlight(content, nonce) : content,
+      });
     } else if (tc.function.name === "list_documents") {
       const list = Array.from(docStore.entries()).map(([doc_id, info]) => ({
         doc_id,
