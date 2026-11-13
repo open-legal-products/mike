@@ -13,15 +13,57 @@ import { wipeMemoryFiles } from "../../lib/memory/files";
 import { listPersonalOrgIds } from "../../lib/personalOrgs";
 import { deleteOrgContent } from "../organizations/purgeContent";
 import { throwIfError } from "../../lib/serviceData";
-import { uniqueIds } from "../../lib/batchedQuery";
+import {
+    ID_FILTER_BATCH_SIZE,
+    queryFailureCause,
+    selectAllByKey,
+    uniqueIds,
+} from "../../lib/batchedQuery";
 
-const DELETE_BATCH_SIZE = 500;
+// Every `.in()` id list travels in the request URL, for reads, updates and
+// deletes alike. 500 UUIDs is about 18 KB of URL, past the gateway's limit;
+// batches of ID_FILTER_BATCH_SIZE stay under it (as lib/access.ts does).
+const DELETE_BATCH_SIZE = ID_FILTER_BATCH_SIZE;
 
 async function deleteByIds(db: Db, table: string, ids: string[]) {
     for (const batch of chunkArray(ids, DELETE_BATCH_SIZE)) {
         const { error } = await (db as any).from(table).delete().in("id", batch);
         await throwIfError(error, `Failed to delete ${table}`);
     }
+}
+
+/**
+ * Every row of a filtered read, keyset-paged by id. A single select returns at
+ * most PostgREST's max_rows (1000 in supabase/config.toml) without an error,
+ * so a cleanup that acted on one would delete (or keep) only that prefix and
+ * still report success. `build` returns the filtered builder, without order
+ * or limit. A failure throws "<context>: <message>", like throwIfError.
+ */
+async function selectEveryRow<T extends Record<string, unknown>>(
+    context: string,
+    build: () => unknown,
+): Promise<T[]> {
+    try {
+        return await selectAllByKey<T>(context, build);
+    } catch (error) {
+        const failure = queryFailureCause(error) as { message?: string } | null;
+        throw new Error(`${context}: ${failure?.message ?? "unknown error"}`, {
+            cause: error,
+        });
+    }
+}
+
+/** {@link selectEveryRow} for a filter on many ids, one URL-safe batch at a time. */
+async function selectEveryRowIn<T extends Record<string, unknown>>(
+    context: string,
+    ids: string[],
+    build: (batch: string[]) => unknown,
+): Promise<T[]> {
+    const rows: T[] = [];
+    for (const batch of chunkArray(ids, DELETE_BATCH_SIZE)) {
+        rows.push(...(await selectEveryRow<T>(context, () => build(batch))));
+    }
+    return rows;
 }
 
 /**
@@ -66,12 +108,10 @@ async function partitionOwnedProjects(
     db: Db,
     userId: string,
 ): Promise<{ personal: string[]; org: string[] }> {
-    const { data, error } = await db
-        .from("projects")
-        .select("id, org_id")
-        .eq("user_id", userId);
-    await throwIfError(error, "Failed to load user projects");
-    const rows = (data ?? []) as { id: string | null; org_id?: string | null }[];
+    const rows = await selectEveryRow<{ id: string | null; org_id?: string | null }>(
+        "Failed to load user projects",
+        () => db.from("projects").select("id, org_id").eq("user_id", userId),
+    );
     return {
         personal: uniqueIds(
             rows.filter((row) => !row.org_id).map((row) => row.id),
@@ -105,30 +145,19 @@ async function orgProjectIdsHoldingUserContent(
 ): Promise<string[]> {
     const results = await Promise.all(
         PROJECT_CONTENT_TABLES.map((table) =>
-            (db as any)
-                .from(table)
-                .select("project_id")
-                .eq("user_id", userId)
-                .not("project_id", "is", null),
+            selectEveryRow<{ project_id: string | null }>(
+                `Failed to load ${table} projects`,
+                () =>
+                    (db as any)
+                        .from(table)
+                        .select("id, project_id")
+                        .eq("user_id", userId)
+                        .not("project_id", "is", null),
+            ),
         ),
     );
 
-    const candidateIds: string[] = [];
-    for (const [index, result] of results.entries()) {
-        await throwIfError(
-            result.error,
-            `Failed to load ${PROJECT_CONTENT_TABLES[index]} projects`,
-        );
-        candidateIds.push(
-            ...uniqueIds(
-                ((result.data ?? []) as { project_id: string | null }[]).map(
-                    (row) => row.project_id,
-                ),
-            ),
-        );
-    }
-
-    const unique = uniqueIds(candidateIds);
+    const unique = uniqueIds(results.flat().map((row) => row.project_id));
     if (unique.length === 0) return [];
 
     const orgProjectIds: string[] = [];
@@ -168,38 +197,33 @@ async function getDocumentIdsForAccountDeletion(
     personalProjectIds: string[],
     orgProjectIds: string[],
 ): Promise<string[]> {
-    const [ownedDocs, projectDocs, orgProjectDocs] = await Promise.all([
-        db.from("documents").select("id, org_id, workflow_id").eq("user_id", userId),
-        personalProjectIds.length > 0
-            ? db
-                  .from("documents")
-                  .select("id, org_id, workflow_id")
-                  .in("project_id", personalProjectIds)
-            : Promise.resolve({ data: [], error: null }),
-        orgProjectIds.length > 0
-            ? db
-                  .from("documents")
-                  .select("id, org_id")
-                  .in("project_id", orgProjectIds)
-            : Promise.resolve({ data: [], error: null }),
-    ]);
-
-    await throwIfError(ownedDocs.error, "Failed to load user documents");
-    await throwIfError(projectDocs.error, "Failed to load project documents");
-    await throwIfError(
-        orgProjectDocs.error,
-        "Failed to load organization project documents",
-    );
-
     type DocRow = {
         id: string | null;
         org_id?: string | null;
         workflow_id?: string | null;
     };
-    const candidates = [
-        ...((ownedDocs.data ?? []) as DocRow[]),
-        ...((projectDocs.data ?? []) as DocRow[]),
-    ];
+    const [ownedDocs, projectDocs, orgProjectDocs] = await Promise.all([
+        selectEveryRow<DocRow>("Failed to load user documents", () =>
+            db.from("documents").select("id, org_id, workflow_id").eq("user_id", userId),
+        ),
+        selectEveryRowIn<DocRow>(
+            "Failed to load project documents",
+            personalProjectIds,
+            (batch) =>
+                db
+                    .from("documents")
+                    .select("id, org_id, workflow_id")
+                    .in("project_id", batch),
+        ),
+        selectEveryRowIn<DocRow>(
+            "Failed to load organization project documents",
+            orgProjectIds,
+            (batch) =>
+                db.from("documents").select("id, org_id").in("project_id", batch),
+        ),
+    ]);
+
+    const candidates = [...ownedDocs, ...projectDocs];
 
     // A workflow asset (documents.workflow_id) belongs to its workflow. When
     // the workflow is organization-owned it survives this deletion, and an
@@ -224,9 +248,7 @@ async function getDocumentIdsForAccountDeletion(
     }
 
     const keep = new Set([
-        ...uniqueIds(
-            ((orgProjectDocs.data ?? []) as DocRow[]).map((row) => row.id),
-        ),
+        ...uniqueIds(orgProjectDocs.map((row) => row.id)),
         ...uniqueIds(
             candidates.filter((row) => !!row.org_id).map((row) => row.id),
         ),
@@ -332,17 +354,12 @@ async function detachChildrenOfSurvivingContent(db: Db, userId: string) {
     ] as const;
 
     for (const { table, fk, parent, label } of pairs) {
-        const { data, error } = await (db as any)
-            .from(table)
-            .select(fk)
-            .eq("user_id", userId);
-        await throwIfError(error, `Failed to load ${label}`);
-
-        const parentIds = uniqueIds(
-            ((data ?? []) as Record<string, string | null>[]).map(
-                (row) => row[fk],
-            ),
+        const rows = await selectEveryRow<Record<string, string | null>>(
+            `Failed to load ${label}`,
+            () => (db as any).from(table).select(`id, ${fk}`).eq("user_id", userId),
         );
+
+        const parentIds = uniqueIds(rows.map((row) => row[fk]));
         if (parentIds.length === 0) continue;
 
         // A parent survives when it is org-owned — either detached moments
@@ -743,15 +760,12 @@ async function deleteUserTabularReviewChats(
     userId: string,
     orgId: string | null,
 ) {
-    const { data: chats, error: chatsError } = await db
-        .from("tabular_review_chats")
-        .select("id, review_id")
-        .eq("user_id", userId);
-    await throwIfError(chatsError, "Failed to load tabular chats");
-    const rows = (chats ?? []) as {
+    const rows = await selectEveryRow<{
         id: string | null;
         review_id: string | null;
-    }[];
+    }>("Failed to load tabular chats", () =>
+        db.from("tabular_review_chats").select("id, review_id").eq("user_id", userId),
+    );
 
     const reviewsInWorkspace = new Set<string>();
     for (const batch of chunkArray(
@@ -785,15 +799,15 @@ export async function deleteAllUserTabularReviews(
     userId: string,
     orgId: string | null,
 ) {
-    const owned = db.from("tabular_reviews").select("id").eq("user_id", userId);
-    const { data: reviews, error: reviewsError } = await (orgId
-        ? owned.eq("org_id", orgId)
-        : owned.is("org_id", null));
-    await throwIfError(reviewsError, "Failed to load tabular reviews");
-
-    const reviewIds = uniqueIds(
-        ((reviews ?? []) as { id: string | null }[]).map((row) => row.id),
+    const reviews = await selectEveryRow<{ id: string | null }>(
+        "Failed to load tabular reviews",
+        () => {
+            const owned = db.from("tabular_reviews").select("id").eq("user_id", userId);
+            return orgId ? owned.eq("org_id", orgId) : owned.is("org_id", null);
+        },
     );
+
+    const reviewIds = uniqueIds(reviews.map((row) => row.id));
     if (reviewIds.length === 0) return 0;
 
     // The parent delete is atomic. Its FK cascades fire the conversation
@@ -816,19 +830,18 @@ export async function deleteAllUserTabularReviews(
  * is deleted with the account, matching docs/playbooks.md.
  */
 async function handOverOrgPlaybooks(db: Db, userId: string) {
-    const { data, error } = await db
-        .from("playbooks")
-        .select("id, org_id")
-        .eq("user_id", userId)
-        .eq("visibility", "organization")
-        .not("org_id", "is", null);
-    await throwIfError(error, "Failed to load organization playbooks");
-
-    const orgIds = uniqueIds(
-        ((data ?? []) as { org_id?: string | null }[]).map(
-            (row) => row.org_id ?? null,
-        ),
+    const rows = await selectEveryRow<{ org_id?: string | null }>(
+        "Failed to load organization playbooks",
+        () =>
+            db
+                .from("playbooks")
+                .select("id, org_id")
+                .eq("user_id", userId)
+                .eq("visibility", "organization")
+                .not("org_id", "is", null),
     );
+
+    const orgIds = uniqueIds(rows.map((row) => row.org_id ?? null));
     for (const orgId of orgIds) {
         const successor = await db.rpc("org_default_departure_successor", {
             p_org_id: orgId,
@@ -892,17 +905,17 @@ export async function deleteUserProjects(
     userId: string,
     orgId: string | null,
 ) {
-    const created = db.from("projects").select("id").eq("user_id", userId);
-    const { data: projects, error: projectsError } = await (orgId
-        ? created.eq("org_id", orgId)
-        : created.is("org_id", null));
-    await throwIfError(projectsError, "Failed to load user projects");
+    const projects = await selectEveryRow<{ id: string | null }>(
+        "Failed to load user projects",
+        () => {
+            const created = db.from("projects").select("id").eq("user_id", userId);
+            return orgId ? created.eq("org_id", orgId) : created.is("org_id", null);
+        },
+    );
 
     return deleteProjectsByIds(
         db,
-        ((projects ?? []) as { id: string | null }[])
-            .map((row) => row.id)
-            .filter((id): id is string => !!id),
+        projects.map((row) => row.id).filter((id): id is string => !!id),
     );
 }
 
