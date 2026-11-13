@@ -54,6 +54,7 @@ it.each([
   await Sentry.flush(2000);
   expect(sent).toHaveLength(count);
   if (count) expect(sent[0]?.level).toBe("error");
+  if (count) expect(sent[0]?.tags).toMatchObject({ provider: "gemini" });
   expect(JSON.stringify(sent)).not.toContain("PRIVATE_");
 });
 it("reports a locally authored missing-key instruction at warning", async () => {
