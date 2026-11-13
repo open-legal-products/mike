@@ -51,7 +51,7 @@ import {
   versionStorageKey,
 } from "../../lib/storage";
 import { createServerSupabase, type Db } from "../../lib/supabase";
-import { ExtractionBusyError, ExtractionLimitError, withExtractionSlot } from "../../lib/extraction/isolated";
+import { ExtractionBusyError, ExtractionLimitError, withBackgroundExtraction } from "../../lib/extraction/isolated";
 import { isAllocationFailure } from "../../lib/extraction/limits";
 import { MAX_UPLOAD_SIZE_BYTES, UPLOAD_VERIFICATION_LEASE_SECONDS } from "./uploads.manifest";
 
@@ -167,13 +167,17 @@ class DocxValidationError extends AppError {
 }
 
 async function validateDocxFile(artifact: SealedFileArtifact): Promise<void> {
-  // Bound the compressed source before reading it; waiting uploads hold no
-  // archive buffers. Reuse the parser's existing admission and OS budgets.
+  // Bound the compressed source before reading it. Reuse the parser's
+  // existing admission and OS budgets.
   if (artifact.size > MAX_UPLOAD_SIZE_BYTES) throw new DocxValidationError("invalid_docx_package");
   try {
-    // Wait for the single parser slot as background extraction jobs do; a
-    // validation queued behind another file's parse is not a failure.
-    await withExtractionSlot({ waitMs: PARSER_SLOT_WAIT_MS }, async (extract) => {
+    // Wait for the parser as the background text jobs do; a validation queued
+    // behind another file's parse is not a failure. The background gate lets
+    // one upload at a time into the parser's own queue, so a batch of
+    // UPLOAD_PROCESSING_CONCURRENCY workers cannot fill it and turn away
+    // interactive parses. Only that one upload holds its (size-bounded)
+    // bytes while it waits; the rest wait outside the gate holding nothing.
+    await withBackgroundExtraction({ waitMs: PARSER_SLOT_WAIT_MS }, async (extract) => {
       const bytes = await readFile(artifact.filePath);
       const result = await extract("validateDocxPackage", bytes.buffer.slice(
         bytes.byteOffset, bytes.byteOffset + bytes.byteLength,

@@ -13,7 +13,7 @@ import { createHash } from "node:crypto";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import JSZip from "jszip";
 import { EXTRACTION_OPS } from "../../../lib/extraction/ops";
-import { ExtractionBusyError, ExtractionLimitError, withExtractionSlot } from "../../../lib/extraction/isolated";
+import { ExtractionBusyError, ExtractionLimitError, withExtractionRequest, withExtractionSlot } from "../../../lib/extraction/isolated";
 import { Document, Packer, Paragraph } from "docx";
 import { diagnosticErrorTags } from "../../../lib/observability/sentryPrivacy";
 
@@ -527,7 +527,7 @@ describe("upload processing", () => {
     expect(mocks.copyFile).not.toHaveBeenCalled();
   });
 
-  it("waits for a parser another file holds, without loading sealed bytes, then validates", async () => {
+  it("waits for a parser another file holds, then validates", async () => {
     const bytes = await minimalDocxBytes();
     mocks.createFileReadStream.mockImplementation(() => Readable.from([bytes]));
     const file = { ...baseFile, file_type: "docx", expected_size_bytes: bytes.length };
@@ -541,12 +541,39 @@ describe("upload processing", () => {
     await vi.waitFor(() => expect(mocks.createFileReadStream).toHaveBeenCalled());
     await new Promise((resolve) => setTimeout(resolve, 20));
     expect(settled).not.toHaveBeenCalled();
-    expect(readFile).not.toHaveBeenCalled();
+    expect(mocks.copyFile).not.toHaveBeenCalled();
     release();
     await held;
     await expect(upload).resolves.toMatchObject({ id: file.resource_id });
     expect(readFile).toHaveBeenCalledOnce();
     expect(mocks.copyFile).toHaveBeenCalledOnce();
+  });
+
+  it("leaves room in the parser queue for an interactive parse while a DOCX batch waits", async () => {
+    // Nine validations against a held parser: more than the parser queue
+    // admits. Only one may sit in that queue; an interactive request arriving
+    // meanwhile must be queued (and served first), not refused as busy.
+    const bytes = await minimalDocxBytes();
+    mocks.createFileReadStream.mockImplementation(() => Readable.from([bytes]));
+    const file = { ...baseFile, file_type: "docx", expected_size_bytes: bytes.length };
+    let release!: () => void;
+    const held = withExtractionSlot({}, () => new Promise<void>((resolve) => { release = resolve; }));
+    const db = fakeDb({ documents: Array.from({ length: 9 }, () => ({ data: { id: file.resource_id } })) });
+    const uploads = Array.from({ length: 9 }, () => processUploadFile(db as never, baseSession, file));
+    const order: string[] = [];
+    void uploads[0]!.then(() => order.push("upload"), () => order.push("upload"));
+    await vi.waitFor(() => expect(mocks.createFileReadStream).toHaveBeenCalledTimes(9));
+    const interactive = withExtractionRequest(async () => { order.push("interactive"); });
+    const refused = vi.fn();
+    void interactive.catch(refused);
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(refused).not.toHaveBeenCalled();
+    release();
+    await held;
+    await interactive;
+    const outcomes = await Promise.allSettled(uploads);
+    expect(outcomes.map((outcome) => outcome.status)).toEqual(Array(9).fill("fulfilled"));
+    expect(order[0]).toBe("interactive");
   });
 
   it("requeues a DOCX the parser stayed too busy for without spending an attempt or reporting", async () => {
