@@ -1,7 +1,7 @@
 import { afterEach, expect, it, vi } from "vitest";
 import { UnrecoverableError, type Job } from "bullmq";
 import { ExtractionParseError } from "../../lib/extraction/failure";
-import { reportError } from "../../lib/observability/sentry";
+import { markErrorHandled, reportError } from "../../lib/observability/sentry";
 import { ExtractionBusyError, ExtractionLimitError } from "../../lib/extraction/limits";
 import type { ExtractionJobData } from "../../lib/queue/extractionQueue";
 import { AppError } from "../../lib/appError";
@@ -17,8 +17,9 @@ vi.mock("bullmq", async (importOriginal) => ({
     },
 }));
 vi.mock("../../lib/queue/connection", () => ({ getRedisConnection: () => ({}), watchQueueErrors: vi.fn() }));
-vi.mock("../../lib/observability/sentry", () => ({ reportError: vi.fn() }));
-vi.mock("../../modules/tabular/tabular.service", () => ({
+vi.mock("../../lib/observability/sentry", () => ({ reportError: vi.fn(), markErrorHandled: vi.fn(), isReported: () => false }));
+vi.mock("../../modules/tabular/tabular.service", async () => ({
+    isRefusalShownToUser: (await vi.importActual<typeof import("../../modules/tabular/tabular.extraction")>("../../modules/tabular/tabular.extraction")).isRefusalShownToUser,
     extractionJobOperation: () => "tabular.row",
     runExtractionJob: mocks.run,
     markExtractionFailed: mocks.failed,
@@ -67,17 +68,25 @@ async function runFailedAttempt(error: Error) {
 }
 
 // A provider refusal answers the same on every attempt: fail the row at once,
-// at the level the chat engine gives the same refusal.
+// at the level the chat engine gives the same refusal. A user's own rejected
+// key is not reported at all: the grid was sent the remedy.
 it.each([
-    ["the user's own key", "user", "warning"],
-    ["the deployment's key", "deployment", "error"],
-] as const)("ends retries on the first attempt when the provider rejects %s", async (_name, keySource, level) => {
-    const error = providerFailure(401, keySource);
+    ["the user's own key", 401, "user", null],
+    ["the user's out-of-credits account", 402, "user", "warning"],
+    ["the deployment's key", 401, "deployment", "error"],
+] as const)("ends retries on the first attempt when the provider rejects %s", async (_name, status, keySource, level) => {
+    const error = providerFailure(status, keySource);
     const { thrown, job } = await runFailedAttempt(error);
     expect(thrown).toBeInstanceOf(UnrecoverableError);
     expect((thrown as Error).cause).toBe(error);
-    expect(reportError).toHaveBeenCalledTimes(1);
-    expect(reportError).toHaveBeenCalledWith(thrown, expect.objectContaining({ level, tags: expect.objectContaining({ terminal: true }) }));
+    if (level === null) {
+        expect(reportError).not.toHaveBeenCalled();
+        // Its log line must not reach Sentry through the console bridge.
+        expect(markErrorHandled).toHaveBeenCalledWith(thrown);
+    } else {
+        expect(reportError).toHaveBeenCalledTimes(1);
+        expect(reportError).toHaveBeenCalledWith(thrown, expect.objectContaining({ level, tags: expect.objectContaining({ terminal: true }) }));
+    }
     expect(mocks.failed).toHaveBeenCalledWith(job.data);
 });
 

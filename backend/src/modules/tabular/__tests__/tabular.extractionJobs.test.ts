@@ -82,11 +82,14 @@ describe("handleExtractionExtract", () => {
         expect(await thrownFor(transient)).toBe(transient);
     });
 
+    // Even the user's own rejected key keeps its warning here: this queue runs
+    // without Redis, so no error frame reaches the grid to name the remedy.
     it.each([
-        ["the user's own key", "user", "warning"],
-        ["the deployment's key", "deployment", "error"],
-    ] as const)("ends retries when the provider rejects %s, at the chat engine's level", async (_name, keySource, level) => {
-        const refusal = providerFailure(401, keySource);
+        ["the user's own key", 401, "user", "warning"],
+        ["the user's out-of-credits account", 402, "user", "warning"],
+        ["the deployment's key", 401, "deployment", "error"],
+    ] as const)("ends retries when the provider rejects %s, at the chat engine's level", async (_name, status, keySource, level) => {
+        const refusal = providerFailure(status, keySource);
         const error = await thrownFor(refusal);
 
         expect(error).toBeInstanceOf(NonRetryableJobError);

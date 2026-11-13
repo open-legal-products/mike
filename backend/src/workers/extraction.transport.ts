@@ -5,9 +5,9 @@ import { ExtractionLimitError } from "../lib/extraction/limits";
 import { runIsolated } from "../lib/dbq/jobScope";
 import { getRedisConnection, watchQueueErrors } from "../lib/queue/connection";
 import { isDeterministicProviderRefusal, providerFailureLevel } from "../lib/llm/providerErrors";
-import { reportError } from "../lib/observability/sentry";
+import { markErrorHandled, reportError } from "../lib/observability/sentry";
 import { EXTRACTION_QUEUE, type ExtractionJobData } from "../lib/queue/extractionQueue";
-import { extractionJobOperation, runExtractionJob, markExtractionFailed } from "../modules/tabular/tabular.service";
+import { extractionJobOperation, isRefusalShownToUser, runExtractionJob, markExtractionFailed } from "../modules/tabular/tabular.service";
 
 /** Terminal resource refusals and exhausted retries both need cell cleanup. */
 export function isPermanentFailure(job: Job<ExtractionJobData>, error?: Error): boolean {
@@ -58,8 +58,10 @@ export function createExtractionWorker(): Worker<ExtractionJobData> {
     worker.on("failed", async (job, err) => {
         const permanent = !!job && isPermanentFailure(job, err);
         // The 'failed' event fires outside the processor's isolation scope,
-        // so the operation is named here rather than inherited.
-        reportError(err, {
+        // so the operation is named here rather than inherited. The grid was
+        // already told the user's key was rejected: only the log below stays.
+        if (isRefusalShownToUser(err)) markErrorHandled(err);
+        else reportError(err, {
             // A refusal ends on its first attempt, at the chat engine's level.
             level: err.cause instanceof ExtractionParseError ? "warning"
                 : isDeterministicProviderRefusal(err) ? providerFailureLevel(err)
