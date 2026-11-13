@@ -636,7 +636,6 @@ tabularRouter.post("/:reviewId/generate", requireAuth, asyncRoute(async (req, re
         // an internal error unreportable.
         attachStreamRunSse(res, run);
 
-        let sentGenerationError = false;
         const completed = await streamTabularGenerateSync({
             onActivity: run.touch,
             write,
@@ -649,15 +648,6 @@ tabularRouter.post("/:reviewId/generate", requireAuth, asyncRoute(async (req, re
             apiKeys: api_keys,
             generationId,
             abortSignal: generationSignal,
-            onError: (error) => {
-                if (sentGenerationError) return;
-                const payload = assistantStreamErrorPayload(error);
-                if (payload.code !== "invalid_api_key") return;
-                sentGenerationError = true;
-                write(
-                    `data: ${JSON.stringify({ type: "error", ...payload })}\n\n`,
-                );
-            },
         });
 
         if (completed) {

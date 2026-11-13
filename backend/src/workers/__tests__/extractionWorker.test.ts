@@ -36,7 +36,7 @@ import {
 import { UnrecoverableError, type Job } from "bullmq";
 import { ExtractionLimitError } from "../../lib/extraction/limits";
 import type { ExtractionJobData } from "../../lib/queue/extractionQueue";
-import { AssistantStreamError } from "../../modules/chat/chat.service";
+import { toProviderStreamError } from "../../lib/llm/providerErrors";
 import { markErrorHandled } from "../../lib/observability/sentry";
 
 type Call = {
@@ -847,23 +847,20 @@ describe("generation lease", () => {
                 select: { data: [] },
             },
         });
-        const refusal = new Error("provider refused the key");
-        if (handled) markErrorHandled(refusal);
-        queryTabularAllColumns.mockRejectedValue(
-            new AssistantStreamError(
-                "rejected",
-                "",
-                [
-                    {
-                        type: "error",
-                        message: "The Anthropic API key was rejected.",
-                        safe_to_display: true,
-                        code: "invalid_api_key",
-                    },
-                ],
-                { cause: refusal },
-            ),
+        // The error the model call really throws: the provider layer's
+        // classification of a 401, not a chat-engine AssistantStreamError.
+        const { APICallError } = await import("ai");
+        const refusal = toProviderStreamError(
+            new APICallError({
+                message: "invalid x-api-key",
+                url: "https://api.example.test/v1/messages",
+                requestBodyValues: {},
+                statusCode: 401,
+            }),
+            { label: "Anthropic", modelId: "claude-test", keySource: "user" },
         );
+        if (handled) markErrorHandled(refusal);
+        queryTabularAllColumns.mockRejectedValue(refusal);
 
         await expect(
             runExtractionJob(
@@ -875,7 +872,7 @@ describe("generation lease", () => {
         expect(publish).toHaveBeenCalledWith("rev-1", {
             ...(handled ? { reporting_owner: "backend" } : {}),
             type: "error",
-            message: "The Anthropic API key was rejected.",
+            message: refusal.message,
             safe_to_display: true,
             code: "invalid_api_key",
         });

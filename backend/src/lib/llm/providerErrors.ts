@@ -241,6 +241,18 @@ export function isUserProviderRefusal(error: unknown): boolean {
     (kind === "chat.provider_rejected" || kind === "chat.provider_out_of_credits");
 }
 
+/**
+ * A provider answer a retry cannot change: a refused key, model or account,
+ * or another 4xx. A timeout (408) and a rate limit (429) can clear, unless
+ * the 429 is the provider's explicit quota verdict.
+ */
+export function isDeterministicProviderRefusal(error: unknown): boolean {
+  const kind = providerFailureKind(error);
+  if (kind === "chat.provider_rejected" || kind === "chat.provider_out_of_credits") return true;
+  const status = providerFailureStatus(error);
+  return status !== null && status >= 400 && status < 500 && status !== 408 && status !== 429;
+}
+
 /** Unknown ownership and shared credential failures remain actionable errors. */
 export function providerFailureLevel(error: unknown): "warning" | "error" {
   for (const current of failureChain(error)) {

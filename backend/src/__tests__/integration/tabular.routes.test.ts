@@ -2196,6 +2196,37 @@ describe("tabular.routes", () => {
             }
         });
 
+        it("tells the grid a rejected key is the key, using the provider layer's real error", async () => {
+            const { APICallError } = await import("ai");
+            const { toProviderStreamError } = await import("../../lib/llm/providerErrors.js");
+            const rejected = toProviderStreamError(
+                new APICallError({
+                    message: "PRIVATE provider text: invalid x-api-key",
+                    url: "https://api.example.test/v1/messages",
+                    requestBodyValues: {},
+                    statusCode: 401,
+                }),
+                { label: "Anthropic", modelId: "claude-sonnet-5-5", keySource: "user" },
+            );
+            extractRowColumns.mockImplementationOnce(async (raw: unknown) => {
+                const args = raw as ExtractArgs;
+                return { processed: args.columns, received: new Set<number>(), missing: [0], error: rejected };
+            });
+
+            const res = await startGeneration();
+
+            expect(res.status).toBe(200);
+            const errorRecord = records(res.text).find((record) => record.includes('"type":"error"'));
+            expect(errorRecord).toBeDefined();
+            expect(JSON.parse(errorRecord!.slice(errorRecord!.indexOf("data: ") + 6))).toMatchObject({
+                type: "error",
+                message: rejected.message,
+                safe_to_display: true,
+                code: "invalid_api_key",
+            });
+            expect(res.text).not.toContain("PRIVATE provider text");
+        });
+
         it("keeps extracting after the requesting socket closes, and a reload attaches from where it left off", async () => {
             const held = heldExtraction();
             const first = startGeneration();

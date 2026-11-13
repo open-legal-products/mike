@@ -1,9 +1,18 @@
 import { describe, it, expect, vi, afterEach } from "vitest";
 
-const { redisEnabled, reportError, redisConnect } = vi.hoisted(() => ({
+const { redisEnabled, reportError, redisConnect, streamChatWithTools } = vi.hoisted(() => ({
     redisEnabled: vi.fn(() => false),
     reportError: vi.fn(),
     redisConnect: vi.fn(),
+    streamChatWithTools: vi.fn(),
+}));
+vi.mock("../../../lib/llm", async (importOriginal) => ({
+    ...(await importOriginal<typeof import("../../../lib/llm")>()),
+    streamChatWithTools,
+}));
+vi.mock("../tabular.rows", async (importOriginal) => ({
+    ...(await importOriginal<typeof import("../tabular.rows")>()),
+    loadRowDocumentText: async () => "document text",
 }));
 vi.mock("../../../lib/dbq/driver", () => ({
     redisEnabled: () => redisEnabled(),
@@ -26,9 +35,11 @@ vi.mock("ioredis", () => ({
 
 import { EventEmitter } from "node:events";
 import { AppError } from "../../../lib/appError";
+import { toProviderStreamError } from "../../../lib/llm/providerErrors";
 import { tableDb } from "../../../__tests__/helpers/tableDb";
 import {
     awaitCellTerminal,
+    streamTabularGenerateSync,
     streamTabularRunView,
     targetPendingCells,
 } from "../tabular.generateStream";
@@ -301,5 +312,50 @@ describe("run-view reconcile poll pacing", () => {
         } finally {
             vi.useRealTimers();
         }
+    });
+});
+
+describe("streamTabularGenerateSync failure reports", () => {
+    afterEach(() => {
+        vi.restoreAllMocks();
+        reportError.mockReset();
+        streamChatWithTools.mockReset();
+    });
+
+    // Every row of a run calls the same model with the same key, so a refused
+    // key fails each row alike: one report for the run, not one per row. A
+    // user's own rejected key is not reported at all: the grid is told why.
+    it.each([
+        ["the user's own key", 401, "user", null],
+        ["the user's out-of-credits account", 402, "user", "warning"],
+        ["the deployment's key", 401, "deployment", "error"],
+    ] as const)("reports a provider rejecting %s once per run", async (_name, status, keySource, level) => {
+        vi.spyOn(console, "error").mockImplementation(() => {});
+        vi.spyOn(console, "warn").mockImplementation(() => {});
+        const answer = Object.assign(new Error(`${status} from provider`), { name: "AI_APICallError", statusCode: status, responseBody: "" });
+        streamChatWithTools.mockImplementation(async () => {
+            throw toProviderStreamError(answer, { label: "Anthropic", modelId: "m", keySource, provider: "claude" });
+        });
+        const rows = ["row-1", "row-2", "row-3", "row-4"].map((id, sort_index) => ({
+            id, review_id: "rev-1", label: `${id}.pdf`, row_type: "document", folder_id: null,
+            library_folder_id: null, document_id: `doc-${id}`, sort_index, source_document_ids: [`doc-${id}`],
+        }));
+        const frames: Array<{ type: string; row_id: string; status: string; code?: string }> = [];
+
+        await streamTabularGenerateSync({
+            write: (line) => (frames.push(JSON.parse(line.slice(6))), true),
+            db: tableDb({ tabular_cells: [] }).db,
+            reviewId: "rev-1", columns: COLUMNS, rows: rows as never, cellMap: new Map(),
+            model: "m", apiKeys: {}, generationId: "gen-1", abortSignal: new AbortController().signal,
+        });
+
+        const reports = reportError.mock.calls.filter(([failure]) => (failure as AppError).kind === "tabular.generation_failed");
+        expect(reports).toHaveLength(level === null ? 0 : 1);
+        if (level !== null) expect(reports[0][1]).toMatchObject({ level });
+        // A rejected key, whoever's it is, is named to the grid once.
+        expect(frames.filter((frame) => frame.type === "error").map((frame) => frame.code))
+            .toEqual(status === 401 ? ["invalid_api_key"] : []);
+        // The grid still sees every cell of every row fail.
+        expect(frames.filter((frame) => frame.status === "error")).toHaveLength(rows.length * COLUMNS.length);
     });
 });

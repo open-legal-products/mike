@@ -6,6 +6,7 @@ import { type Db, type DbJob } from "../../lib/dbq/types";
 import { NonRetryableJobError } from "../../lib/dbq/runner";
 import { ExtractionParseError } from "../../lib/extraction/failure";
 import { ExtractionLimitError } from "../../lib/extraction/limits";
+import { isDeterministicProviderRefusal, providerFailureLevel } from "../../lib/llm/providerErrors";
 
 export async function handleExtractionExtract(
     db: Db,
@@ -22,8 +23,8 @@ export async function handleExtractionExtract(
         // The same terminal verdicts as the Redis transport
         // (workers/extraction.transport.ts): a source document that cannot be
         // parsed, or is over the extraction limits, fails identically on
-        // every attempt. Retrying only keeps the cell "generating" until the
-        // attempts run out.
+        // every attempt, as does a provider refusing the request. Retrying only
+        // keeps the cell "generating" until the attempts run out.
         if (error instanceof ExtractionParseError) {
             throw new NonRetryableJobError("document_text_unreadable", {
                 cause: error,
@@ -32,6 +33,12 @@ export async function handleExtractionExtract(
         }
         if (error instanceof ExtractionLimitError) {
             throw new NonRetryableJobError("document_too_large", { cause: error });
+        }
+        if (isDeterministicProviderRefusal(error)) {
+            throw new NonRetryableJobError("provider_refused", {
+                cause: error,
+                reportLevel: providerFailureLevel(error),
+            });
         }
         throw error;
     }
