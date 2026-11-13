@@ -17,11 +17,21 @@ type Result<K extends ExtractionOp> = Awaited<ReturnType<ExtractionOps[K]>>;
 export type ExtractInSlot = <K extends ExtractionOp>(op: K, bytes: ArrayBuffer, options?: { fileType?: string }) => Promise<Result<K>>;
 type Reply = { ok: true; result: unknown } | ({ ok: false; limited: boolean } & ExtractionFailureWire);
 
+/** The executable the parser child is launched through, or null when it runs directly. */
+export function extractionLauncher(platform: NodeJS.Platform = process.platform): "prlimit" | null {
+  return platform === "linux" ? "prlimit" : null;
+}
+
+export function extractionIsolated(env: NodeJS.ProcessEnv = process.env): boolean {
+  return env.EXTRACTION_ISOLATION !== "off";
+}
+
 /** Hard OS memory boundary on Linux, including native buffers. Fail closed if
  * prlimit is unavailable. Other platforms retain process/heap and input/output
  * bounds, but do not claim the Linux OS-memory guarantee.
  */
 export function extractionCommand(entry: string): { command: string; args: string[] } {
+  const launcher = extractionLauncher();
   const memoryMb = extractionMemoryMb();
   const nodeArgs = [
     "--disable-wasm-trap-handler",
@@ -29,15 +39,23 @@ export function extractionCommand(entry: string): { command: string; args: strin
     ...(entry.endsWith(".ts") ? ["--require", require.resolve("tsx/cjs")] : []),
     entry,
   ];
-  if (process.platform === "linux") {
+  if (launcher) {
     const bytes = memoryMb * 1024 * 1024;
     // Writable heap/native allocations share the data limit. V8 also reserves
     // address space for code (and the TS loader in dev); bound that separately.
     const addressBytes = bytes + 1024 ** 3;
-    return { command: "prlimit", args: [`--data=${bytes}:${bytes}`, `--as=${addressBytes}:${addressBytes}`, "--core=0:0", "--", process.execPath, ...nodeArgs] };
+    return { command: launcher, args: [`--data=${bytes}:${bytes}`, `--as=${addressBytes}:${addressBytes}`, "--core=0:0", "--", process.execPath, ...nodeArgs] };
   }
   return { command: process.execPath, args: nodeArgs };
 }
+
+// Server-log text for the operator (never sent to a client).
+const PARSER_UNAVAILABLE_MESSAGE =
+  "The document parser process could not be started, so text extraction " +
+  "and DOCX validation fail. On Linux it is launched through prlimit " +
+  "(util-linux) to enforce its memory limit; install util-linux (the " +
+  "backend Docker image and backend/nixpacks.toml include it, see " +
+  "docs/deployment.md), then restart the backend and worker.";
 
 function killParser(child: ChildProcess): void {
   if (!child.pid) return;
@@ -120,7 +138,7 @@ async function startParser(): Promise<Parser> {
 
 async function extractInChild<K extends ExtractionOp>(op: K, bytes: ArrayBuffer, options: { fileType?: string } = {}): Promise<Result<K>> {
   if (bytes.byteLength > EXTRACTION_MAX_BYTES) throw new ExtractionLimitError("source exceeds 150 MB");
-  if (process.env.EXTRACTION_ISOLATION === "off") {
+  if (!extractionIsolated()) {
     const { EXTRACTION_OPS } = await import("./ops.js");
     try {
       return await EXTRACTION_OPS[op](bytes, options.fileType ?? "") as Result<K>;
@@ -163,7 +181,11 @@ async function extractInChild<K extends ExtractionOp>(op: K, bytes: ArrayBuffer,
       reference(p, false);
       resolve(reply.result as Result<K>);
     };
-    const onError = (error: Error) => { failure = error; retire(p); };
+    // Before "spawn" the launcher itself failed; its errno stays on the cause.
+    const onError = (error: Error) => {
+      failure = p.started ? error : new AppError("extraction.parser_unavailable", PARSER_UNAVAILABLE_MESSAGE, { cause: error });
+      retire(p);
+    };
     const onClose = (_code: number | null, signal: NodeJS.Signals | null) => {
       cleanup();
       void p.closed.then(() => {
@@ -172,7 +194,12 @@ async function extractInChild<K extends ExtractionOp>(op: K, bytes: ArrayBuffer,
         else if (reply) reject(reply.limited ? new ExtractionLimitError(reply.message) : extractionFailureFromWire(reply));
         else if (signal === "SIGABRT" || /out of memory|allocation failed|cannot allocate memory|failed to map segment|ENOMEM/i.test(diagnostics)) {
           reject(new ExtractionLimitError("parser memory budget exceeded"));
-        } else reject(failure ?? new AppError("extraction.process_exited", "extraction process exited without a result"));
+        } else if (failure) reject(failure);
+        else {
+          // The signal separates an OOM-killer SIGKILL from a native crash.
+          const exited = new AppError("extraction.process_exited", "extraction process exited without a result");
+          reject(signal ? Object.assign(exited, { code: signal }) : exited);
+        }
       }, reject);
     };
     const send = () => child.send({ op, bytes, fileType: options.fileType ?? "" }, (error) => {
