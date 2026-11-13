@@ -14,10 +14,10 @@ export type WorkspacePanelLayout = {
     sideChatOpen: boolean;
 };
 
-export const EXPLORER_MIN = 160;
+const EXPLORER_MIN = 160;
 export const EXPLORER_DEFAULT = 280;
 export const DOCUMENT_MIN = 320;
-export const CHAT_MIN = 320;
+const CHAT_MIN = 320;
 export const CHAT_DEFAULT = 420;
 const DIVIDER_WIDTH = 6;
 const COLLAPSED_EXPLORER_FOOTPRINT = 42;

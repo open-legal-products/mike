@@ -176,7 +176,7 @@ export class MikeApiError extends Error {
 }
 
 export const INTERNAL_ERROR_MESSAGE = "Something went wrong. Please try again.";
-export const MALFORMED_ERROR_RESPONSE_MESSAGE =
+const MALFORMED_ERROR_RESPONSE_MESSAGE =
     "The request could not be completed. Please try again.";
 // The 5xx codes the server side already reported, and their fixed messages,
 // are shared with the Word add-in (packages/client); they are re-exported

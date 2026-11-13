@@ -87,7 +87,7 @@ function versionLabel(doc: Document) {
   return typeof n === "number" && Number.isFinite(n) && n >= 1 ? `${n}` : null;
 }
 
-export function DocFileIcon({ fileType }: { fileType: string | null }) {
+function DocFileIcon({ fileType }: { fileType: string | null }) {
     return <FileTypeIcon fileType={fileType} className="h-3.5 w-3.5" />;
 }
 

@@ -9,10 +9,10 @@ import {
 import { showToast } from "@mike/client";
 
 /** One notice for a switch, however many things on the page ask for it. */
-export const WORKSPACE_SWITCH_TOAST_KEY = "workspace-switch";
+const WORKSPACE_SWITCH_TOAST_KEY = "workspace-switch";
 
 /** Shorter than an ordinary notice: it only confirms what the sidebar shows. */
-export const WORKSPACE_SWITCH_TOAST_MS = 2500;
+const WORKSPACE_SWITCH_TOAST_MS = 2500;
 
 /**
  * Says the active workspace has changed, to `name`. `reason` is for a switch
