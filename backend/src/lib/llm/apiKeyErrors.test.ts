@@ -102,6 +102,10 @@ describe("isInvalidApiKeyError", () => {
     ).toBe(false);
   });
 
+  it.each(["Unauthorized", "authentication_error", "invalid_authentication"])("does not mistake an opaque 403 %s for a rejected credential", (message) => {
+    expect(isInvalidApiKeyError(apiCallError({ statusCode: 403, message }))).toBe(false);
+  });
+
   it("leaves rate limits and server failures alone", () => {
     expect(
       isInvalidApiKeyError(

@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import request from "supertest";
+import { isReported } from "../../lib/observability/sentry";
 import { streamAiSdk } from "../../lib/llm/aiSdk";
 import {
     callStep,
@@ -1474,7 +1475,8 @@ describe("POST /chat — streaming endpoint", () => {
     });
 
     it("surfaces a stream failure as an in-stream error event, not an HTTP error", async () => {
-        runLLMStream.mockRejectedValue(new Error("upstream LLM failure"));
+        const original = new Error("upstream LLM failure");
+        runLLMStream.mockRejectedValue(original);
 
         const res = await request(app)
             .post("/chat")
@@ -1486,6 +1488,8 @@ describe("POST /chat — streaming endpoint", () => {
         expect(res.status).toBe(200);
         expect(res.text).toContain('"type":"error"');
         expect(res.text).toContain("[DONE]");
+        expect(isReported(original)).toBe(true);
+        expect(res.text).toContain('"reporting_owner":"backend"');
         // The terminal frame carries the request id (the X-Request-ID header)
         // so the user can quote the one handle that finds this failure.
         const errorFrame = JSON.parse(
@@ -1575,6 +1579,127 @@ describe("POST /chat — streaming endpoint", () => {
       turn: { activityId: "activity-1" },
     });
     expect(scheduleMemoryConsolidation).not.toHaveBeenCalled();
+    });
+
+    describe("stream deadline", () => {
+        const IDLE_MS = 30_000;
+        const occurrences = (text: string, needle: string) =>
+            text.split(needle).length - 1;
+        // Lets the route's late unwinding run without advancing fake time.
+        const settle = async () => {
+            for (let i = 0; i < 50; i += 1)
+                await new Promise((resolve) => setImmediate(resolve));
+        };
+
+        beforeEach(() => {
+            vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+            vi.stubEnv("STREAM_IDLE_TIMEOUT_MS", String(IDLE_MS));
+        });
+
+        afterEach(() => {
+            vi.useRealTimers();
+            vi.unstubAllEnvs();
+        });
+
+        it("aborts a hung turn at the idle deadline with one timeout error and one [DONE]", async () => {
+            const { AssistantStreamAbortError } = await import("../../modules/chat/engine/index.js");
+            const { deadlineMessage, FINISHED_RUN_RETENTION_MS } = await import("../../lib/streamRuns.js");
+            let signal: AbortSignal | undefined;
+            const started = new Promise<void>((resolve) => {
+                runLLMStream.mockImplementation(
+                    async (params: { signal: AbortSignal }) => {
+                        signal = params.signal;
+                        resolve();
+                        await new Promise<void>((done) =>
+                            params.signal.addEventListener("abort", () => done(), {
+                                once: true,
+                            }),
+                        );
+                        throw new AssistantStreamAbortError("Partial", [
+                            { type: "content", text: "Partial" },
+                        ]);
+                    },
+                );
+            });
+
+            const response = request(app)
+                .post("/chat")
+                .set("Authorization", "Bearer test")
+                .send(VALID_BODY)
+                .then((res) => res);
+            await started;
+            await vi.advanceTimersByTimeAsync(IDLE_MS - 1);
+            expect(signal?.aborted).toBe(false);
+            await vi.advanceTimersByTimeAsync(1);
+            const res = await response;
+
+            expect(signal?.aborted).toBe(true);
+            expect(occurrences(res.text, '"type":"error"')).toBe(1);
+            expect(res.text).toContain(JSON.stringify(deadlineMessage("idle")));
+            expect(res.text).not.toContain('"type":"cancelled"');
+            expect(occurrences(res.text, "data: [DONE]")).toBe(1);
+            expect(findAssistantUpdate()?.value).toMatchObject({
+                content: [
+                    { type: "content", text: "Partial" },
+                    {
+                        type: "error",
+                        message: deadlineMessage("idle"),
+                        safe_to_display: true,
+                    },
+                ],
+            });
+            expect(scheduleMemoryConsolidation).not.toHaveBeenCalled();
+            // Deadline, grace and retention timers are all released.
+            await vi.advanceTimersByTimeAsync(FINISHED_RUN_RETENTION_MS);
+            expect(vi.getTimerCount()).toBe(0);
+        });
+
+        it("ends a turn that ignores the abort once, and stores its late completion as timed out", async () => {
+            const { deadlineMessage, STOPPED_RUN_GRACE_MS } = await import("../../lib/streamRuns.js");
+            let completeLate!: (value: unknown) => void;
+            const started = new Promise<void>((resolve) => {
+                runLLMStream.mockImplementation(() => {
+                    resolve();
+                    return new Promise((done) => {
+                        completeLate = done;
+                    });
+                });
+            });
+
+            const response = request(app)
+                .post("/chat")
+                .set("Authorization", "Bearer test")
+                .send(VALID_BODY)
+                .then((res) => res);
+            await started;
+            await vi.advanceTimersByTimeAsync(IDLE_MS + STOPPED_RUN_GRACE_MS);
+            const res = await response;
+
+            expect(occurrences(res.text, '"type":"error"')).toBe(1);
+            expect(res.text).toContain(JSON.stringify(deadlineMessage("idle")));
+            expect(occurrences(res.text, "data: [DONE]")).toBe(1);
+            expect(findAssistantUpdate()).toBeUndefined();
+
+            completeLate({
+                fullText: "Late answer",
+                events: [{ type: "content", text: "Late answer" }],
+                citations: [],
+            });
+            await settle();
+
+            expect(findAssistantUpdate()?.value).toMatchObject({
+                content: [
+                    { type: "content", text: "Late answer" },
+                    {
+                        type: "error",
+                        message: deadlineMessage("idle"),
+                        safe_to_display: true,
+                    },
+                ],
+            });
+            expect(scheduleMemoryConsolidation).not.toHaveBeenCalled();
+            expect(releaseMemoryConversationTurn).toHaveBeenCalled();
+        });
     });
 
     it.each([

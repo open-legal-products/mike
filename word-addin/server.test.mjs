@@ -34,6 +34,7 @@ before(async () => {
     path.join(staticRoot, "taskpane.html"),
     "<!doctype html><title>Mike Word</title>",
   );
+  await writeFile(path.join(staticRoot, "taskpane.js"), "void 0;");
 
   backend = http.createServer((req, res) => {
     observedRequest = {
@@ -72,6 +73,17 @@ test("serves health and the task pane", async () => {
   const taskpane = await fetch(`${addinOrigin}/`);
   assert.equal(taskpane.status, 200);
   assert.match(await taskpane.text(), /Mike Word/);
+});
+
+test("asks crawlers not to index the add-in pages", async () => {
+  for (const pathname of ["/", "/taskpane.html"]) {
+    const page = await fetch(`${addinOrigin}${pathname}`);
+    assert.equal(page.status, 200);
+    assert.equal(page.headers.get("x-robots-tag"), "noindex, nofollow");
+  }
+  const asset = await fetch(`${addinOrigin}/taskpane.js`);
+  assert.equal(asset.status, 200);
+  assert.equal(asset.headers.get("x-robots-tag"), null);
 });
 
 test("streams the API while preserving auth headers and cookies", async () => {

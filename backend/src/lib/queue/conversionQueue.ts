@@ -3,7 +3,7 @@ import { Queue } from "bullmq";
 import type IORedis from "ioredis";
 import { AppError } from "../appError";
 import { reportError } from "../observability/sentry";
-import { getRedisProducerConnection, withRedisTimeout } from "./connection";
+import { getRedisProducerConnection, withRedisTimeout, watchQueueErrors } from "./connection";
 import { redisEnabled } from "../dbq/driver";
 import { enqueueDbJob } from "../dbq/enqueue";
 import { createServerSupabase } from "../supabase";
@@ -56,6 +56,7 @@ export function getConversionQueue(): Queue<ConversionJobData> {
     }
     if (!queue) {
         queue = new Queue<ConversionJobData>(CONVERSION_QUEUE, { connection });
+        watchQueueErrors(queue, "producer", CONVERSION_QUEUE);
         queueConnection = connection;
     }
     return queue;

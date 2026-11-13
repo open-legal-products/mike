@@ -174,7 +174,17 @@ for response headers. Provider clocks stop at the end of each provider step,
 so local tool execution is governed by its own timeout and the run limits.
 Model output refreshes idle even while tabular JSON is buffered; transport
 keep-alives do not. Deadline errors are preserved in history and replay, while
-an explicit Stop remains a cancellation. A resume has to reach the replica
+an explicit Stop remains a cancellation. Once a turn's signal fires, the tool
+dispatcher starts none of the batch's remaining server tools (and no write
+that was still waiting on a document lock, connector planning or a source
+download), tools that already finished keep their events in the stored turn,
+and a chat, project-chat, Word chat or tabular chat route whose `runLLMStream` returns anyway (a
+provider or tool that ignored the abort) takes its stop path: the turn is
+stored with its stop
+outcome, and is neither saved as a completed answer, given a fallback title,
+nor scheduled for memory curation. A route that unwinds after the grace period
+has already ended the run writes no more frames, because the run is finished.
+A resume has to reach the replica
 that is generating: run one replica, or route by session, until the buffer is moved
 to shared storage. `lib/assistantSse.ts` (`openAssistantSse`) survives only
 for the one case that cannot be a run: a tabular review chat whose

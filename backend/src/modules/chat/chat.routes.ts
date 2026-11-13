@@ -1,3 +1,4 @@
+import { BACKEND_REPORTING_OWNER } from "../../lib/reportedUpstreamCodes";
 import { abortable } from "../../lib/abortable";
 import {
     attachAssistantTurnSse,
@@ -30,6 +31,7 @@ import {
     isMeaningfulTextlessAssistantOutput,
     runLLMStream,
     stripTransientAssistantEvents,
+    throwIfTurnStopped,
     writeApprovedConnectorFrames,
     parseChatMessages,
     parseOptionalAskInputsResponse,
@@ -43,7 +45,7 @@ import {
     requestIdOf,
     reserveAssistantMessage,
 } from "./engine/index";
-import { setOperation } from "../../lib/observability/sentry";
+import { setOperation, isReported, reportError } from "../../lib/observability/sentry";
 import { normalizeEmail } from "../../lib/access";
 import { teamOrgIdOf } from "../../lib/personalOrgs";
 import { can } from "../../lib/permissions";
@@ -784,6 +786,7 @@ chatRouter.post("/", requireAuth, asyncRoute(async (req, res) => {
                 // populated.
                 emitDone: false,
             });
+            throwIfTurnStopped(stream.signal, { fullText, events });
 
             devLog("[chat/stream] LLM stream finished", {
                 fullTextLen: fullText?.length ?? 0,
@@ -839,7 +842,7 @@ chatRouter.post("/", requireAuth, asyncRoute(async (req, res) => {
                             type: "error",
                             message:
                                 "The response was generated but could not be saved.",
-                            reporting_owner: "backend",
+                            reporting_owner: BACKEND_REPORTING_OWNER,
                             ...(requestId ? { request_id: requestId } : {}),
                         })}\n\n`,
                     );
@@ -997,6 +1000,9 @@ chatRouter.post("/", requireAuth, asyncRoute(async (req, res) => {
                 write(stopOutcomeFrame(run));
                 write("data: [DONE]\n\n");
                 return;
+            }
+            if (!isReported(err)) {
+                reportError(err, { tags: { operation: "chat.turn", stage: "chat-stream" } });
             }
             console.error("[chat/stream] error:", err);
             const errorPayload = assistantStreamErrorPayload(err, requestId);

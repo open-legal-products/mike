@@ -110,13 +110,59 @@ describe("version text extraction", () => {
     await handleDocumentExtractText(fake.db, job);
     expect(fake.calls[2].payload).toMatchObject({ status: "failed", error_code: "too_large" }); fake.done();
   });
-  it("propagates extraction failure for queue retries", async () => {
-    mocks.docx.mockRejectedValue(new Error("invalid document"));
-    const fake = scriptedDb([{ table: "document_versions", data: version }, { table: "document_version_texts", op: "update", data: { version_id: "v1" } }]);
-    await expect(handleDocumentExtractText(fake.db, job)).rejects.toThrow("invalid document"); fake.done();
-    // The runner reports the throw; the job named its operation for that event.
+  // The other half of that pair: a converter that could not start says
+  // nothing about the bytes. The next attempt may find it, so the job keeps
+  // its retries instead of failing a valid document on its first attempt.
+  it("retries a document whose converter failed to start", async () => {
+    const { AppError } = await import("../../../lib/appError.js");
+    const spawnFailure = Object.assign(new Error("spawn soffice ENOENT"), { code: "ENOENT", syscall: "spawn soffice" });
+    mocks.convert.mockRejectedValue(new AppError("conversion.unavailable", "LibreOffice could not be started", { cause: spawnFailure }));
+    vi.spyOn(console, "error").mockImplementation(() => undefined);
+    vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    const fake = scriptedDb([
+      { table: "document_versions", data: { ...version, file_type: "doc" } },
+      { table: "document_version_texts", op: "update", data: { version_id: "v1" } },
+      { table: "db_jobs", op: "update" },
+    ]);
+    await processClaimedJob(
+      fake.db,
+      { "document.extract_text": handleDocumentExtractText },
+      { ...job, status: "running", attempts: 1 },
+      { "document.extract_text": markDocumentTextFailed },
+    );
+    expect(fake.calls[2].payload).toMatchObject({ status: "pending" });
+    expect(fake.calls[2].payload).not.toMatchObject({ status: "failed" });
+    fake.done();
+    expect(diagnosticErrorTags(sentry.reportError.mock.calls[0]![0])).toMatchObject({ error_kind: "conversion.unavailable", failure_code: "ENOENT" });
+  });
+  // The source hash already matched, so a parser rejection repeats on every
+  // attempt: max_attempts=3 used to parse the same corrupt file three times.
+  it("fails an unreadable document once instead of spending its retries", async () => {
+    // JSZip's own rejection of a .docx that is not a ZIP container.
+    mocks.docx.mockRejectedValue(new Error("Can't find end of central directory : is this a zip file ?"));
+    vi.spyOn(console, "error").mockImplementation(() => undefined);
+    const fake = scriptedDb([
+      { table: "document_versions", data: version },
+      { table: "document_version_texts", op: "update", data: { version_id: "v1" } },
+      { table: "db_jobs", op: "update" },
+      { table: "document_version_texts", op: "update" },
+    ]);
+    await processClaimedJob(
+      fake.db,
+      { "document.extract_text": handleDocumentExtractText },
+      { ...job, status: "running", attempts: 1 },
+      { "document.extract_text": markDocumentTextFailed },
+    );
+    expect(fake.calls[2].payload).toMatchObject({ status: "failed", last_error: "document_text_unreadable" });
+    expect(fake.calls[3].payload).toMatchObject({ status: "failed", error_code: "extraction_failed" });
+    fake.done();
+    // Reported once, named after the operation and the parser's own kind.
     expect(sentry.setOperation).toHaveBeenCalledWith("documents.extract");
-    expect(sentry.reportError).not.toHaveBeenCalled();
+    expect(sentry.reportError).toHaveBeenCalledOnce();
+    expect(diagnosticErrorTags(sentry.reportError.mock.calls[0]![0])).toMatchObject({ error_kind: "extraction.parse_failed" });
+    // A corrupt upload is a handled outcome the user already sees, not an
+    // application defect: it files a warning, not an error.
+    expect(sentry.reportError.mock.calls[0]![1]).toMatchObject({ level: "warning" });
   });
   it.each(["xlsx", "xlsm", "xls"])("uses the full spreadsheet reader for %s", async (type) => {
     mocks.sheet.mockReturnValue("Sheet and cell addresses");
@@ -164,6 +210,8 @@ describe("version text extraction", () => {
 
     expect(sentry.reportError).toHaveBeenCalledOnce();
     const [reported, context] = sentry.reportError.mock.calls[0]!;
+    // An errno is the environment, not the bytes: the extractor's own error
+    // stays the cause, unwrapped, and the job keeps its retries.
     expect(diagnosticErrorTags(reported)).toEqual({ error_kind: "extraction.failed", failure_code: "ENOENT" });
     expect((reported as Error).cause).toBe(cause);
     expect(context).toMatchObject({ tags: { job_kind: "document.extract_text" }, extra: { job_id: "job" } });

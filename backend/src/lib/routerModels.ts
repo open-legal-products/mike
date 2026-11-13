@@ -1,5 +1,5 @@
 import { createServerSupabase } from "./supabase";
-import { UserFacingError } from "./userFacingError";
+import { ProviderConfigurationError } from "./llm/providerErrors";
 import type { Db } from "./supabase";
 import { ACCOUNT_MODEL_LABELS, resolveModel } from "./llm/models";
 import { getConfiguredModel } from "./llm/registry";
@@ -107,7 +107,7 @@ export async function resolveRequestedModel(
         return resolved;
     }
     if (onOutsideSelection === "throw") {
-        throw new UserFacingError(
+        throw new ProviderConfigurationError(
             fromOrganization
                 ? `Model ${resolved} is not in your organization's saved ${ROUTER_LABELS[router]} models — an organization admin can add it in Organization Settings.`
                 : `Model ${resolved} is not in your saved ${ROUTER_LABELS[router]} models — open ${ROUTER_LABELS[router]} in Settings → Bring Your Own Keys and add it under Model Selections.`,

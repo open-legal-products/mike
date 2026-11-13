@@ -51,6 +51,7 @@ import { loadActiveVersion } from "../../lib/documentVersions";
 import { buildDownloadUrl } from "../../lib/downloadTokens";
 import {
   prepareDocumentReviewEdits,
+  discardUnpublishedReviewUpload,
   DocumentReviewRetryableError,
   publishDocumentReview,
   loadCurrentVersionBytes,
@@ -2194,7 +2195,7 @@ export async function beginPlaybookReview(args: PlaybookReviewRequest) {
  */
 export async function startPlaybookReview(args: PlaybookReviewRequest) {
   const { run, work, apiKeys, db } = await beginPlaybookReview(args);
-  return { run, done: runPlaybookReview(db, work, apiKeys) };
+  return { run, done: runPlaybookReview(db, work, apiKeys, args.signal) };
 }
 
 /**
@@ -2225,6 +2226,8 @@ export async function runPlaybookReview(
   db: Db,
   work: PlaybookReviewWork,
   apiKeys?: UserApiKeys,
+  /** The asking chat turn's; see PlaybookReviewRequest.signal. */
+  signal?: AbortSignal,
 ) {
   const { runId } = work;
   const stopHeartbeat = keepPlaybookWorkAttended(db, "playbook_runs", runId);
@@ -2261,6 +2264,7 @@ export async function runPlaybookReview(
           apiKeys: keys,
           prompt,
           sources,
+          signal,
         })
       : await completeText({
           model: work.model,
@@ -2268,6 +2272,7 @@ export async function runPlaybookReview(
           user: prompt,
           maxTokens: 20_000,
           apiKeys: keys,
+          abortSignal: signal,
         });
     const parsed = reviewSchema.parse(parseModelJson(raw));
     const normalized = normalizeFindings(
@@ -2283,12 +2288,23 @@ export async function runPlaybookReview(
         : normalized;
     stage = "review.apply_edits";
     markStage(stage);
+    // A provider can finish its answer after the turn was stopped: a stopped
+    // review saves nothing, neither a new version nor a completed run.
+    signal?.throwIfAborted();
     const prepared = work.documentId && work.expectedVersion
       ? await prepareReviewEdits({
           db, userId: work.userId, userEmail: work.userEmail,
           documentId: work.documentId, expectedVersion: work.expectedVersion, findings: reviewed,
         })
       : null;
+    // The download can finish after the stop too. This is the last point
+    // before publication (#853's write-time check, moved here for #819's
+    // publish step): nothing has been published, so the upload prepared
+    // meanwhile is deleted.
+    if (signal?.aborted) {
+      if (prepared) await discardUnpublishedReviewUpload(prepared);
+      signal.throwIfAborted();
+    }
     stage = "review.save";
     markStage(stage);
     const publication = await publishDocumentReview(db, {
@@ -2334,7 +2350,11 @@ export async function runPlaybookReview(
       jobKind: "playbook.review" as const,
       ids: { run_id: runId, playbook_id: work.playbookId },
     };
-    if (!isPlaybookRefusal(error)) reportPlaybookFailure(error, { ...report, stage });
+    // A review its chat turn stopped did not fail: it was cut short on
+    // purpose, so it is not reported, and its run says to run it again.
+    const stopped = signal?.aborted === true;
+    if (!stopped && !isPlaybookRefusal(error))
+      reportPlaybookFailure(error, { ...report, stage });
     // A failed publication response is not proof of rollback: the
     // transaction may still be in flight. Never stamp that run failed. A
     // failure while preparing the edits is certain (nothing was published)
@@ -2347,7 +2367,7 @@ export async function runPlaybookReview(
       .from("playbook_runs")
       .update({
         status: "failed",
-        error: runFailureMessage(error),
+        error: stopped ? INTERRUPTED_RUN_ERROR : runFailureMessage(error),
         completed_at: completedAt,
         updated_at: completedAt,
       })
@@ -2381,6 +2401,7 @@ async function completeReviewWithSources(args: {
   apiKeys: UserApiKeys;
   prompt: string;
   sources: PlaybookSourceRow[];
+  signal?: AbortSignal;
 }): Promise<string> {
   const known = new Set(args.sources.map((source) => source.id));
   const result = await streamChatWithTools({
@@ -2390,6 +2411,7 @@ async function completeReviewWithSources(args: {
     tools: [READ_SOURCE_TOOL],
     maxIterations: 8,
     apiKeys: args.apiKeys,
+    abortSignal: args.signal,
     runTools: (calls) =>
       Promise.all(
         calls.map(async (call) => ({

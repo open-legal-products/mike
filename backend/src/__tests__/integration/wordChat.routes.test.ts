@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import request from "supertest";
+import { isReported } from "../../lib/observability/sentry";
 
 type QueryError = { message: string } | null;
 type QueryResult = { data: unknown; error: QueryError };
@@ -621,7 +622,8 @@ describe("POST /word-chat — local storage", () => {
       data: { id: CHAT_ID, title: null, user_id: "u1" },
       error: null,
     };
-    runLLMStream.mockRejectedValueOnce(new Error("provider failed"));
+    const original = new Error("provider failed");
+    runLLMStream.mockRejectedValueOnce(original);
     const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
 
     const res = await request(app)
@@ -636,6 +638,8 @@ describe("POST /word-chat — local storage", () => {
       });
 
     expect(res.status).toBe(200);
+    expect(isReported(original)).toBe(true);
+    expect(res.text).toContain('"reporting_owner":"backend"');
     expect(releaseMemoryConversationTurn).toHaveBeenCalledWith({
       db: expect.anything(),
       surface: "word",
@@ -953,6 +957,42 @@ describe("server-owned Word turns", () => {
       expect(again.body).toEqual({ stopped: false, finished: true });
     },
   );
+
+  it("stores a stream that returns after Stop as stopped, not as a completed answer", async () => {
+    const started = new Promise<StreamParams>((resolve) => {
+      runLLMStream.mockImplementation(async (raw: unknown) => {
+        const params = raw as StreamParams;
+        resolve(params);
+        await new Promise<void>((done) =>
+          params.signal?.addEventListener("abort", () => done(), {
+            once: true,
+          }),
+        );
+        // Ignores the abort and returns the whole answer anyway.
+        return {
+          fullText: "Late answer",
+          events: [{ type: "content", text: "Late answer" }],
+          citations: [],
+        };
+      });
+    });
+    const firstDone = send().then((res) => res);
+    await started;
+    const turnId = (await detail()).body.active_turn.id as string;
+    const { getAssistantTurnRun } =
+      await import("../../lib/assistantTurnRuns.js");
+    getAssistantTurnRun(turnId, "word")!.stop();
+
+    const text = (await firstDone).text;
+    expect(text).toContain('"type":"cancelled"');
+    expect(assistantUpdate()).toMatchObject({
+      content: [
+        { type: "content", text: "Late answer" },
+        { type: "content", text: "Cancelled by user." },
+      ],
+    });
+    expect(scheduleMemoryConsolidation).not.toHaveBeenCalled();
+  });
 
   it("refuses a second turn while one is generating into the chat", async () => {
     const held = heldGeneration();

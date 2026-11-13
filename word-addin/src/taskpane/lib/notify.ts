@@ -1,3 +1,4 @@
+import { BACKEND_REPORTING_OWNER } from "@mike/client";
 /**
  * How the task pane tells the user something failed.
  *
@@ -88,7 +89,7 @@ function reportRealFault(
 ): void {
   if (described.kind !== "unknown" && described.kind !== "server") return;
   if (isReported(error)) return;
-  if (error && typeof error === "object" && "reportingOwner" in error && error.reportingOwner === "backend") return;
+  if (error && typeof error === "object" && "reportingOwner" in error && error.reportingOwner === BACKEND_REPORTING_OWNER) return;
   reportError(error, {
     tags: {
       component: "notify",

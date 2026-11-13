@@ -11,6 +11,7 @@ vi.mock("../../../lib/llm", async (original) => ({
 vi.mock("../../../lib/providerCredentials/index", () => ({ getUserApiKeys }));
 const docs = vi.hoisted(() => ({
   prepareDocumentReviewEdits: vi.fn(),
+  deleteFileBestEffort: vi.fn(),
   loadCurrentVersionBytes: vi.fn(),
   loadActiveVersion: vi.fn(),
   extractDocxBodyText: vi.fn(),
@@ -19,6 +20,10 @@ vi.mock("../../documents/documents.service", async (original) => ({
   ...(await original<typeof import("../../documents/documents.service")>()),
   prepareDocumentReviewEdits: docs.prepareDocumentReviewEdits,
   loadCurrentVersionBytes: docs.loadCurrentVersionBytes,
+}));
+vi.mock("../../../lib/storage", async (original) => ({
+  ...(await original<typeof import("../../../lib/storage")>()),
+  deleteFileBestEffort: docs.deleteFileBestEffort,
 }));
 vi.mock("../../../lib/documentVersions", async (original) => ({
   ...(await original<typeof import("../../../lib/documentVersions")>()),
@@ -712,6 +717,50 @@ describe("playbook access and autosave", () => {
       expect(byRule.get("cap")?.edit).toBeUndefined();
       expect(byRule.get("law")?.edit?.edit_id).toBe("e2");
     });
+
+    it.each(["the model answers", "the document downloads"])(
+      "saves no version when its chat turn stops while %s",
+      async (moment) => {
+        const { db, tables } = setup();
+        const turn = new AbortController();
+        if (moment === "the model answers") {
+          const answer = completeText.getMockImplementation()!;
+          // A provider that finishes its answer even though the turn stopped.
+          completeText.mockImplementationOnce(async (params) => {
+            turn.abort();
+            return answer(params);
+          });
+        } else {
+          // The download and the tracked changes finish after the stop: the
+          // prepared upload is then discarded, never published.
+          docs.prepareDocumentReviewEdits.mockImplementationOnce(async () => {
+            turn.abort();
+            return prepared(["e1"]);
+          });
+        }
+
+        await expect(review(db, { signal: turn.signal })).rejects.toThrow();
+
+        expect(completeText.mock.lastCall?.[0].abortSignal).toBe(turn.signal);
+        // A review stopped while the model answers never prepares an edit; one
+        // stopped during the download prepares it, then deletes that upload.
+        expect(docs.prepareDocumentReviewEdits).toHaveBeenCalledTimes(
+          moment === "the model answers" ? 0 : 1,
+        );
+        expect(docs.deleteFileBestEffort).toHaveBeenCalledTimes(
+          moment === "the model answers" ? 0 : 1,
+        );
+        if (moment === "the document downloads")
+          expect(docs.deleteFileBestEffort).toHaveBeenCalledWith("edited.docx", expect.any(String));
+        // Nothing reached the publication RPC: the source version stands alone.
+        expect(tables.document_versions).toHaveLength(1);
+        expect(tables.playbook_runs[0]).toMatchObject({
+          status: "failed",
+          error: INTERRUPTED_RUN_ERROR,
+          edited_version_id: null,
+        });
+      },
+    );
 
     it("reviews a PDF as text without editing it", async () => {
       const { db } = setup("pdf");

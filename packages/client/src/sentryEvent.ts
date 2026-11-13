@@ -259,11 +259,11 @@ export function redactShaped(value: unknown, depth = 0): unknown {
   */
 export const MIKE_SENTRY_DSN = {
     backend:
-        "https://7d685d2a4e6a4bfd5991b320c0043d23@o4512288166510592.ingest.us.sentry.io/4512288204718080",
+        "https://d0d66029ed783707289c965cd3d5c868@o4512288166510592.ingest.us.sentry.io/4512288204718080",
     frontend:
-        "https://1d40513ce9978d4fbd4deeeeff23817a@o4512288166510592.ingest.us.sentry.io/4512288207798272",
+        "https://fa97921af9f387723a4bc3d42dd7bb44@o4512288166510592.ingest.us.sentry.io/4512288207798272",
     wordAddin:
-        "https://98e6cb43234267619a432a58c0ad71f9@o4512288166510592.ingest.us.sentry.io/4512288210812928",
+        "https://2b90028876534676ea38580cfc61cdde@o4512288166510592.ingest.us.sentry.io/4512288210812928",
 } as const;
 
 export type DsnResolution = {
@@ -577,125 +577,13 @@ function findNested(
     return null;
 }
 
-/**
- * Code the `next dev` toolchain runs, never Mike's: Next's own dist (the dev
- * server, hot reloader, dev overlay, console interceptor), React and the
- * scheduler it drives, and the Turbopack dev runtime. On the server these are
- * `node_modules/<pkg>/…` paths; in the browser Turbopack serves the same
- * modules as chunks named after their path (`node_modules_next_dist_<hash>._.js`).
- * Mike's own code is `src/…` on the server and `[project]`/`src_…` chunks in
- * the browser, so it never matches.
- */
-const DEV_TOOLCHAIN_FRAME =
-    /(?:^|\/)node_modules\/(?:next\/dist|react-dom|react|scheduler)\/|(?:^|\/)_next\/static\/chunks\/(?:node_modules_(?:next_dist|react-dom|react|scheduler)_|(?:\[|%5B)turbopack(?:\]|%5D)_)/i;
-
-/**
- * The file of a V8/JSC stack line ("    at fn (file:12:5)" or "file:12:5"):
- * the run of non-space, non-parenthesis characters before the trailing
- * ":line:column", as `/\(?([^\s()]+):\d+:\d+\)?\s*$/` matched. That
- * regex is anchored only at the end, so the engine retries it from every
- * position and it is quadratic on a long line; isolating the last token
- * first leaves one start-anchored match.
- */
-function stackLineLocation(line: string): string | undefined {
-    let end = line.trimEnd();
-    if (end.endsWith(")")) end = end.slice(0, -1);
-    let start = end.length;
-    while (start > 0 && !STACK_TOKEN_BOUNDARY.test(end.charAt(start - 1))) start--;
-    return STACK_TOKEN_LOCATION.exec(end.slice(start))?.[1];
-}
-const STACK_TOKEN_BOUNDARY = /[\s()]/;
-const STACK_TOKEN_LOCATION = /^([^\s()]+):\d+:\d+$/;
-
-/**
- * True for an AUTOMATIC capture (console bridge, global unhandled handler)
- * in a `next dev` build whose every known frame is dev-toolchain code.
- * MIKE-FRONTEND-M: a Turbopack compile error of the developer's own
- * unsaved edits (hot-reloader-turbopack `getCompilationErrors` →
- * next-dev-server `findPageComponents` → base-server rendering `/_error`),
- * forwarded to the browser's dev overlay and caught as unhandled there.
- * MIKE-FRONTEND-K: the dev overlay logging it through console.error. Neither
- * is a defect in Mike and both went to the project's shared community
- * Sentry. An explicit report, a production build, or any event with a
- * frame in Mike's own code (including the stack of an Error nested in the
- * console arguments) is kept.
- */
-function isDevToolchainNoise(event: ScrubbableEvent, automatic: boolean): boolean {
-    if (!automatic || event.tags?.build_mode !== "development") return false;
-    const locations: string[] = [];
-    for (const frames of [
-        event.stacktrace?.frames,
-        ...(event.exception?.values ?? []).map((value) => value.stacktrace?.frames),
-    ]) {
-        for (const frame of frames ?? []) {
-            const location = frame.abs_path || frame.filename;
-            if (location) locations.push(location);
-        }
-    }
-    const nestedStack = event.extra?.error_stack;
-    if (typeof nestedStack === "string") {
-        for (const line of nestedStack.split("\n").slice(1)) {
-            const location = stackLineLocation(line);
-            if (location) locations.push(location);
-        }
-    }
-    const known = locations.filter(
-        (location) => location !== "<anonymous>" && location !== "native",
-    );
-    return known.length > 0 && known.every((location) => DEV_TOOLCHAIN_FRAME.test(location));
-}
-
-const DEFAULT_MAX_EVENTS_PER_ISSUE_PER_MINUTE = 10;
-const THROTTLE_WINDOW_MS = 60_000;
-
-function issueKey(event: ScrubbableEvent): string {
-    if (event.fingerprint?.length) return event.fingerprint.join("|");
-    const exception = event.exception?.values?.[0];
-    const base = exception
-        ? `${exception.type ?? "Error"}: ${exception.value ?? ""}`
-        : (event.message ?? "");
-    const component = (event.tags as Record<string, unknown> | undefined)
-        ?.component;
-    return `${component ?? ""}::${base.slice(0, 300)}`;
-}
-
-/**
- * A registry of errors already sent with explicit context, plus per-issue
- * flood control. Each runtime (web app, add-in) creates one and installs its
- * scrubber as `beforeSend`.
- *
- * Flood control: a render loop or a retry loop can raise the same error many
- * times a second, and Sentry only collapses strictly consecutive duplicates.
- * The first `maxEventsPerIssuePerMinute` events of an issue go out; the rest
- * are dropped locally so the quota stays for the next, different bug.
- */
+/** Shared automatic-capture registry and event hygiene. Volume policy runs at transport. */
 export function createEventScrubber(options?: {
-    maxEventsPerIssuePerMinute?: number;
-    now?: () => number;
     /** Community installs get the minimised shape; default, the safe side. */
     install?: InstallKind;
 }) {
     const install = options?.install ?? "community";
     const reported = new WeakSet<object>();
-    const budget =
-        options?.maxEventsPerIssuePerMinute ??
-        DEFAULT_MAX_EVENTS_PER_ISSUE_PER_MINUTE;
-    const now = options?.now ?? (() => Date.now());
-    const buckets = new Map<string, { windowStart: number; sent: number }>();
-
-    const withinBudget = (event: ScrubbableEvent): boolean => {
-        const key = issueKey(event);
-        const at = now();
-        let bucket = buckets.get(key);
-        if (!bucket || at - bucket.windowStart >= THROTTLE_WINDOW_MS) {
-            bucket = { windowStart: at, sent: 0 };
-            buckets.set(key, bucket);
-        }
-        if (bucket.sent >= budget) return false;
-        bucket.sent += 1;
-        return true;
-    };
-
     const markReported = (error: unknown): void => {
         if (error && typeof error === "object") reported.add(error);
     };
@@ -716,6 +604,7 @@ export function createEventScrubber(options?: {
             mechanism === CONSOLE_CAPTURE_MECHANISM ||
             mechanismInfo?.handled === false;
         const original = hint.originalException;
+        let reportSource = original;
         if (
             automatic &&
             isReported(original)
@@ -731,20 +620,17 @@ export function createEventScrubber(options?: {
         const args =
             event.logger === "console" ? consoleArguments(hint) : null;
         if (args) {
-            if (args.some((arg) => findNested(arg, isReported))) {
-                return null;
-            }
+            const primaryError = original instanceof Error ? original : args.find(arg => arg instanceof Error);
+            reportSource = primaryError ?? args
+              .map(arg => findNested(arg, candidate => candidate instanceof Error || 'code' in candidate || isReported(candidate)))
+              .find(candidate => candidate !== null && candidate !== undefined) ?? original;
+            // Only the primary failure owns this event; contextual errors cannot suppress it.
+            if (isReported(reportSource)) return null;
             // Only the first argument is the logging label. Other strings
             // may be document/model output; never concatenate them into titles
             // or grouping keys. Raw arguments are removed by scrubFreeform.
             const label = typeof args[0] === "string" ? args[0].trim() : "Console error";
-            const nestedError = args
-                .map((arg) =>
-                    typeof arg === "object" && arg instanceof Error
-                        ? null
-                        : findNested(arg, (c) => c instanceof Error),
-                )
-                .find((found): found is Error => found instanceof Error);
+            const nestedError = !primaryError && reportSource instanceof Error ? reportSource : null;
             if (nestedError) {
                 event.message = `${label ? `${label}: ` : ""}${nestedError.name}: ${nestedError.message}`;
                 event.fingerprint = ["console", label, nestedError.name];
@@ -757,20 +643,12 @@ export function createEventScrubber(options?: {
             }
         }
 
-        const consoleCapture =
-            mechanism === CONSOLE_CAPTURE_MECHANISM || event.logger === "console";
-        if (isDevToolchainNoise(event, automatic || consoleCapture)) return null;
-
         event.tags = {
             ...event.tags,
-            ...diagnosticErrorTags(original),
+            ...diagnosticErrorTags(reportSource),
             capture_source: event.logger === "console" ? "console" : mechanismInfo?.handled === false ? "unhandled" : event.exception?.values?.length ? "exception" : "message",
         };
-        for (const arg of args ?? []) {
-            const nested = findNested(arg, c => c instanceof Error || 'code' in c);
-            Object.assign(event.tags, diagnosticErrorTags(nested));
-        }
-        retainExceptionTypes(event.exception?.values, [original, ...(args ?? [])], event.tags?.warning_name);
+        retainExceptionTypes(event.exception?.values, [reportSource], event.tags?.warning_name);
 
         // The title and the exception text are free text from libraries
         // that quote emails, tokens, and URLs; key filtering cannot see them.
@@ -828,7 +706,6 @@ export function createEventScrubber(options?: {
             }));
         }
         if (install === "community") minimiseForCommunity(event);
-        if (!withinBudget(event)) return null;
         return event;
     };
 

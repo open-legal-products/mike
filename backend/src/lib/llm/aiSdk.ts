@@ -1,5 +1,6 @@
+import { installProviderWarningLogger } from "./warnings";
 import { normalizeReasoningLevelForModel } from "./models";
-import type { LanguageModel, ToolSet } from "ai" with {
+import type { LanguageModel, LanguageModelMiddleware, ToolSet } from "ai" with {
   "resolution-mode": "import",
 };
 import type * as AiSdk from "ai" with { "resolution-mode": "import" };
@@ -15,8 +16,36 @@ import type {
 } from "./types";
 import type { WebSource } from "@mike/contracts";
 import { providerDeadlines } from "./providerDeadlines";
-import { asProviderStallError, streamErrorMessage, toProviderStreamError } from "./providerErrors";
+import {
+  asProviderStallError,
+  isDeterministicProviderQuota,
+  streamErrorMessage,
+  toProviderStreamError,
+  withKeySource,
+  type ProviderKeySource,
+} from "./providerErrors";
 import { createRawLlmStreamRecorder, logRawLlmStream } from "./rawStreamLog";
+
+installProviderWarningLogger();
+
+/** Keep SDK retry backoff for throttling, but don't repeat a proven account refusal. */
+function quotaRefusalRetries(): LanguageModelMiddleware {
+  const attempt = async <T>(call: () => PromiseLike<T>): Promise<T> => {
+    try { return await call(); }
+    catch (error) {
+      if (isDeterministicProviderQuota(error) && error instanceof Error) {
+        // APICallError exposes this flag to the SDK retry loop. Preserve the
+        // actual exception, provider response, stack and cause for its owner.
+        Object.defineProperty(error, "isRetryable", { value: false, configurable: true });
+      }
+      throw error;
+    }
+  };
+  return {
+    wrapGenerate: ({ doGenerate }) => attempt(doGenerate),
+    wrapStream: ({ doStream }) => attempt(doStream),
+  };
+}
 
 /**
  * Per-step output limit, or undefined to leave it to the provider.
@@ -221,6 +250,12 @@ export type AiSdkAdapterConfig = {
   label: string;
   model: Exclude<LanguageModel, string>;
   modelId: string;
+  /**
+   * Whose key this adapter sends: a user's own, or the deployment's
+   * environment key. Recorded on a failure so a refusal of the operator's
+   * key is reported and a user's is not (providerFailureLevel).
+   */
+  keySource?: ProviderKeySource;
   /** Some protocol-compatible gateways reject reasoning request fields. */
   supportsReasoning?: boolean;
   /** OpenAI's CourtListener tools require an extra instruction after use. */
@@ -558,7 +593,7 @@ export async function streamAiSdk(
     const result = sdk.streamText({
       model: sdk.wrapLanguageModel({
         model: config.model,
-        middleware: providerDeadlines(params.callbacks?.onActivity),
+        middleware: [providerDeadlines(params.callbacks?.onActivity), quotaRefusalRetries()],
       }),
       system: params.systemPrompt,
       messages: cacheHints.messages,
@@ -806,30 +841,37 @@ export async function completeAiSdkText(
   },
   config: AiSdkAdapterConfig,
 ): Promise<string> {
-  const { generateText } = await import("ai");
+  const { generateText, wrapLanguageModel } = await import("ai");
   const reasoning =
     config.supportsReasoning === false
       ? undefined
       : normalizeReasoningLevelForModel(config.modelId, "none");
   const requested = params.maxTokens ?? 512;
-  const result = await generateText({
-    model: config.model,
-    system: params.systemPrompt,
-    prompt: params.user,
-    abortSignal: params.abortSignal,
-    // Some models cannot turn thinking off ("none" is normalized to the
-    // lowest level they accept), and thinking is output too. Without
-    // headroom a short call — a 64-token title — can spend its whole
-    // allowance thinking and return no text. The cap is only a ceiling, so
-    // the headroom costs nothing unless the model actually uses it.
-    maxOutputTokens:
-      reasoning && reasoning !== "none"
-        ? requested + COMPLETION_REASONING_HEADROOM_TOKENS
-        : requested,
-    reasoning: reasoning as
-      | Exclude<NonNullable<StreamChatParams["reasoning"]>, "max">
-      | undefined,
-  });
+  let result: Awaited<ReturnType<typeof generateText>>;
+  try {
+    result = await generateText({
+      model: wrapLanguageModel({ model: config.model, middleware: quotaRefusalRetries() }),
+      system: params.systemPrompt,
+      prompt: params.user,
+      abortSignal: params.abortSignal,
+      // Some models cannot turn thinking off ("none" is normalized to the
+      // lowest level they accept), and thinking is output too. Without
+      // headroom a short call — a 64-token title — can spend its whole
+      // allowance thinking and return no text. The cap is only a ceiling, so
+      // the headroom costs nothing unless the model actually uses it.
+      maxOutputTokens:
+        reasoning && reasoning !== "none"
+          ? requested + COMPLETION_REASONING_HEADROOM_TOKENS
+          : requested,
+      reasoning: reasoning as
+        | Exclude<NonNullable<StreamChatParams["reasoning"]>, "max">
+        | undefined,
+    });
+  } catch (error) {
+    // The provider's own error, unconverted (callers classify it), with
+    // whose key was sent recorded on it for the reporting level.
+    throw withKeySource(error, config.keySource, config.provider);
+  }
   return result.text;
 }
 

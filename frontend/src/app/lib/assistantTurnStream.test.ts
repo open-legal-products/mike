@@ -115,6 +115,26 @@ describe("consumeAssistantTurnStream", () => {
     ]);
     turn.finish();
   });
+
+  it("shows an edit that was still running when the turn was stopped as stopped", async () => {
+    const turn = begin();
+    const sink = createTurnEventSink(turn, []);
+    await consumeAssistantTurnStream(
+      sseResponse([
+        frame(1, { type: "doc_edited_start", filename: "brief.docx" }),
+        frame(2, { type: "cancelled" }),
+        "data: [DONE]\n\n",
+      ]),
+      { turn, sink, cursor: createTurnCursor("chat-a") },
+    );
+    expect(turn.turn.assistant.events?.[0]).toMatchObject({
+      type: "doc_edited",
+      filename: "brief.docx",
+      interrupted: true,
+    });
+    expect(turn.turn.assistant.events?.[0]).not.toHaveProperty("isStreaming");
+    turn.finish();
+  });
 });
 
 describe("readAssistantTurn", () => {
@@ -149,6 +169,27 @@ describe("readAssistantTurn", () => {
     });
     expect(text(turn.turn.assistant)).toBe("Hello world");
     expect(cursor.lastSeq).toBe(4);
+    turn.finish();
+  });
+
+  // The pairing the API gateway relies on: only a failed read resumes. A body
+  // that ends cleanly is taken as the end of the turn, which is why the
+  // gateway errors (never closes) an event stream whose backend went away.
+  it("treats a clean end of the body as the end of the turn and does not resume", async () => {
+    const turn = begin();
+    const sink = createTurnEventSink(turn, []);
+    await readAssistantTurn({
+      open: async () =>
+        sseResponse([
+          frame(1, { type: "chat_id", chatId: "chat-a", turnId: "turn-1" }),
+          frame(2, { type: "content_delta", text: "Hello" }),
+        ]),
+      turn,
+      sink,
+      cursor: createTurnCursor("chat-a"),
+    });
+    expect(streamChatTurnMock).not.toHaveBeenCalled();
+    expect(text(turn.turn.assistant)).toBe("Hello");
     turn.finish();
   });
 
@@ -474,6 +515,48 @@ describe("error frames", () => {
       },
     ]);
     turn.finish();
+  });
+
+  it("ends tool steps still in progress, as a deadline's error ends the turn", async () => {
+    expect(
+      await eventsOf([
+        { type: "doc_created_start", filename: "memo.docx" },
+        { type: "doc_replicate_start", filename: "answer.docx", count: 2 },
+        { type: "doc_edited_start", filename: "brief.docx" },
+        {
+          type: "error",
+          message: "The request timed out because it stopped responding. Please try again.",
+          safe_to_display: true,
+        },
+      ]),
+    ).toEqual([
+      { type: "doc_created", filename: "memo.docx", download_url: "", interrupted: true },
+      { type: "doc_replicated", filename: "answer.docx", count: 2, interrupted: true },
+      {
+        type: "doc_edited",
+        filename: "brief.docx",
+        document_id: "",
+        version_id: "",
+        download_url: "",
+        annotations: [],
+        interrupted: true,
+      },
+      {
+        type: "error",
+        message: "The request timed out because it stopped responding. Please try again.",
+        safe_to_display: true,
+      },
+    ]);
+  });
+
+  it("keeps a step that reported its result as done when the turn then fails", async () => {
+    const [edited] = (await eventsOf([
+      { type: "doc_edited_start", filename: "brief.docx" },
+      { type: "doc_edited", filename: "brief.docx", document_id: "doc-1", version_id: "ver-2" },
+      { type: "error", message: "boom" },
+    ])) ?? [];
+    expect(edited).toMatchObject({ type: "doc_edited", document_id: "doc-1", isStreaming: false });
+    expect(edited).not.toHaveProperty("interrupted");
   });
 
   it("finalizes an in-flight content block before appending the error", async () => {

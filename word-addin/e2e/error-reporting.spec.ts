@@ -59,7 +59,7 @@ function tagsOf(event: Record<string, unknown>): Record<string, unknown> {
   return (event.tags ?? {}) as Record<string, unknown>;
 }
 
-test("a backend 5xx is reported with the operation, route, status, and request id but no body", async ({
+test("an unowned backend 5xx preserves its exception, operation, route, status, and request id but no body", async ({
   addin,
   page,
 }) => {
@@ -73,7 +73,7 @@ test("a backend 5xx is reported with the operation, route, status, and request i
       headers: { "x-request-id": "8f1c2a3e-1234-4bcd-9e0f-1234567890ab" },
       body: JSON.stringify({
         code: "internal_error",
-        detail: "Something went wrong. Please try again.",
+        detail: "PRIVATE_SERVER_DETAIL",
         request_id: "8f1c2a3e-1234-4bcd-9e0f-1234567890ab",
       }),
     }),
@@ -86,7 +86,10 @@ test("a backend 5xx is reported with the operation, route, status, and request i
   await page.getByRole("menuitem", { name: "Workflows" }).click();
 
   const event = await nextEvent;
-  expect(event.message).toBe("Failure in workflows.run / mike-api / GET / /workflows / 500 / internal_error");
+  const exception = (event.exception as { values: { value: string; stacktrace: { frames: unknown[] } }[] }).values[0]!;
+  expect(exception.value).toContain("Failure in workflows.run / mike-api");
+  expect(exception.stacktrace.frames.length).toBeGreaterThan(0);
+  expect(JSON.stringify(event)).not.toContain("PRIVATE_SERVER_DETAIL");
   expect(event.level).toBe("error");
   expect(tagsOf(event)).toMatchObject({
     service: "mike-word-addin",
@@ -109,32 +112,40 @@ test("a backend 5xx is reported with the operation, route, status, and request i
   expect(event).not.toHaveProperty("request.cookies");
 });
 
-test.describe("a 5xx the server side already reported is not reported again", () => {
+test.describe("5xx ownership is explicit, never inferred from a recognized code", () => {
   for (const code of ["upstream_unavailable", "schema_out_of_date"]) {
-    test(code, async ({ addin, page }) => {
-      const sentry = captureEvents(page);
-      await sentry.ready;
-      addin.seedToken("seeded-jwt");
-      let answered = false;
-      await page.route("**/workflows**", (route) => {
-        answered = true;
-        return route.fulfill({
-          status: 503,
-          contentType: "application/json",
-          body: JSON.stringify({ code, detail: "already reported" }),
+    for (const owned of [true, false]) {
+      test(`${code}: ${owned ? "server owned" : "unowned"}`, async ({ addin, page }) => {
+        const sentry = captureEvents(page);
+        await sentry.ready;
+        addin.seedToken("seeded-jwt");
+        let answered = false;
+        await page.route("**/workflows**", (route) => {
+          answered = true;
+          return route.fulfill({
+            status: 503,
+            contentType: "application/json",
+            body: JSON.stringify({ code, detail: "PRIVATE_SERVER_DETAIL", ...(owned ? { reporting_owner: "backend" } : {}) }),
+          });
         });
+        await addin.gotoTaskpane();
+        await addin.expectAuthedShell();
+
+        const nextEvent = owned ? null : sentry.next();
+        await page.getByRole("button", { name: "Open menu" }).click();
+        await page.getByRole("menuitem", { name: "Workflows" }).click();
+        await expect.poll(() => answered).toBe(true);
+
+        if (nextEvent) {
+          const event = await nextEvent;
+          expect(tagsOf(event)).toMatchObject({ error_code: code, http_status: 503, component: "mike-api" });
+          expect(JSON.stringify(event)).not.toContain("PRIVATE_SERVER_DETAIL");
+        }
+        // Also catch a duplicate from the screen or console bridge.
+        await page.waitForTimeout(500);
+        expect(sentry.events).toHaveLength(owned ? 0 : 1);
       });
-      await addin.gotoTaskpane();
-      await addin.expectAuthedShell();
-
-      await page.getByRole("button", { name: "Open menu" }).click();
-      await page.getByRole("menuitem", { name: "Workflows" }).click();
-      await expect.poll(() => answered).toBe(true);
-
-      // Give a would-be envelope time to leave; none should.
-      await page.waitForTimeout(500);
-      expect(sentry.events).toHaveLength(0);
-    });
+    }
   }
 });
 

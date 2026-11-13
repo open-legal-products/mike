@@ -113,6 +113,12 @@ export type PlaybookReviewRequest = {
   /** "issues" reports only what needs attention; the run records which. */
   reviewScope?: "full" | "issues";
   db?: Db;
+  /**
+   * The assistant turn that asked for the review, when one did. Its Stop or
+   * deadline ends the model call and leaves the document unedited. Reviews
+   * queued from the Playbooks page have no turn and never see one.
+   */
+  signal?: AbortSignal;
 };
 /**
  * What a review needs that its run row does not record. The rules, model,

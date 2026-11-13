@@ -198,10 +198,12 @@ describe("upstream provider guidance stays separate from tool failures", () => {
   const cases = [
     [401, "", "was rejected"],
     [402, "", "out of credits"],
-    [403, "", "isn't available"],
-    [404, "", "isn't available"],
+    // 403/404 and a zero quota are guidance only on the provider's own
+    // verdict (providerErrors.test.ts covers the recognized shapes).
+    [403, "Your organization does not have access to this model", "isn't available"],
+    [404, '{"error":{"code":"model_not_found"}}', "isn't available"],
     [429, "", "rate limit or quota reached"],
-    [429, "limit: 0", "plan doesn't include"],
+    [429, "Quota exceeded for metric: free_tier_requests, limit: 0", "plan doesn't include"],
   ] as const;
 
   for (const source of ["stream part", "before stream"] as const) {
@@ -223,6 +225,32 @@ describe("upstream provider guidance stays separate from tool failures", () => {
         }
         expect(caught).toBeInstanceOf(UserFacingError);
         expect((caught as Error).message).toContain(message);
+      },
+    );
+  }
+
+  // A bare 403/404 may be a WAF, a region block or a wrong endpoint: not
+  // something "select another model" fixes, so it must reach its reporter
+  // as the provider's own error rather than as guidance.
+  for (const source of ["stream part", "before stream"] as const) {
+    it.each([403, 404])(
+      `${source}: an unexplained provider %i stays the provider's error`,
+      async (statusCode) => {
+        const error = Object.assign(new Error("provider request failed"), {
+          statusCode,
+          responseBody: "",
+        });
+        const model = await makeModel(
+          source === "stream part" ? [step({ type: "error", error })] : [error],
+        );
+        let caught: unknown;
+        try {
+          await streamAiSdk({ ...base, runTools: okRunTools }, config(model));
+        } catch (thrown) {
+          caught = thrown;
+        }
+        expect(caught).toBe(error);
+        expect(caught).not.toBeInstanceOf(UserFacingError);
       },
     );
   }

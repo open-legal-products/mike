@@ -33,6 +33,7 @@ export {
   isAbortError,
   runLLMStream,
   stripTransientAssistantEvents,
+  throwIfTurnStopped,
   PROJECT_EXTRA_TOOLS,
   parseChatMessages,
   parseOptionalAskInputsResponse,

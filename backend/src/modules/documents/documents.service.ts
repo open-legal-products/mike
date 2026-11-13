@@ -67,4 +67,4 @@ export { findDocumentText, readStoredDocumentText, storedDocumentTextCurrent } f
 
 export { getDocumentStatuses } from "./documents.status";
 
-export { prepareDocumentReviewEdits, publishDocumentReview, DocumentReviewRetryableError } from "./documents.reviewPublication";
+export { prepareDocumentReviewEdits, publishDocumentReview, discardUnpublishedReviewUpload, DocumentReviewRetryableError } from "./documents.reviewPublication";

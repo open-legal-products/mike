@@ -72,6 +72,7 @@ describe("cookie auth client", () => {
                 code: "internal_error",
                 requestId: "req-1",
                 error,
+                reportingOwner: undefined,
             });
         });
 
@@ -82,6 +83,7 @@ describe("cookie auth client", () => {
                 new Response(
                     JSON.stringify({
                         code: "upstream_unavailable",
+                        reporting_owner: "backend",
                         detail: "server text",
                         request_id: "req-2",
                     }),
@@ -97,10 +99,9 @@ describe("cookie auth client", () => {
                 requestId: "req-2",
                 message: "The server is temporarily unreachable. Please try again shortly.",
             });
-            // Through reportApiFailure, which only marks a code the server
-            // side already reported (errorReporting.test.ts).
+            // reportApiFailure deduplicates only the explicit protocol owner.
             expect(reporting.reportApiFailure).toHaveBeenCalledExactlyOnceWith(
-                expect.objectContaining({ status: 503, code: "upstream_unavailable", error }),
+                expect.objectContaining({ status: 503, code: "upstream_unavailable", reportingOwner: "backend", error }),
             );
         });
 
@@ -144,13 +145,13 @@ describe("cookie auth client", () => {
             expect(isReported(failure)).toBe(true);
         });
 
-        it("does not report an aborted request: the caller cancelled it", async () => {
+        it("reports an AbortError without an aborted caller signal", async () => {
             const abort = new DOMException("The operation was aborted.", "AbortError");
             fetchMock.mockRejectedValue(abort);
 
             await expect(getMfaAssurance()).rejects.toBe(abort);
 
-            expect(reporting.reportNetworkFailure).not.toHaveBeenCalled();
+            expect(reporting.reportNetworkFailure).toHaveBeenCalledWith(abort, { method: "GET", url: "/api/auth/mfa/assurance" });
         });
     });
 
@@ -254,7 +255,7 @@ describe("cookie auth client", () => {
 
         await expect(getAuthSession()).rejects.toMatchObject({
             status: 503,
-            message: "Unavailable",
+            message: "Authentication could not be completed.",
         });
     });
 
@@ -469,4 +470,11 @@ describe("cookie auth client", () => {
         vi.stubGlobal("window", undefined);
         expect(() => clearLegacyBrowserAuthStorage()).not.toThrow();
     });
+});
+
+it("does not expose an unowned auth server's internal 5xx detail", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response(JSON.stringify({ detail: "PRIVATE_DATABASE_FAILURE" }), { status: 500 })));
+    try {
+        await expect(login("test@example.test", "test")).rejects.toMatchObject({ message: "Authentication could not be completed.", reportingOwner: undefined });
+    } finally { vi.unstubAllGlobals(); }
 });

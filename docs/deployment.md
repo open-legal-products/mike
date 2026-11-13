@@ -5,7 +5,8 @@ storage instead of the infrastructure bundled with Docker Compose.
 
 ## Prerequisites
 
-- Node.js 22 or newer
+- Node.js 22.19 or newer. The backend's HTTP client (undici 8) needs it;
+  an older 22.x crashes at boot inside `undici/lib/interceptor/decompress.js`.
 - npm and Git
 - A Supabase project
 - A Cloudflare R2, MinIO, or other S3-compatible bucket
@@ -431,7 +432,53 @@ S3-compatible provider:
 
 List exact trusted origins; do not use `*` for a production deployment. The
 signed URL authorizes only its generated object key and expires independently
-of the CORS cache. The backend still verifies the uploaded byte count and
+of the CORS cache.
+
+With Docker Compose, two settings in the compose-root `.env` decide whether
+browser uploads work from anywhere other than the machine running the stack:
+
+- `FRONTEND_URL`, `WORD_ADDIN_URL` and `ALLOWED_ORIGINS` decide which origins
+  the bundled storage bucket allows: exactly the origins the backend's own
+  CORS trusts. On every `docker compose up` the `storage-cors` job runs
+  `docker/storage-cors.mjs` in the backend image, with the backend's
+  `env_file`s and overrides, through the backend's own origin parser
+  (`backend/src/lib/origins.ts`), and `createbucket` installs the result. So
+  an extra trusted client listed in `ALLOWED_ORIGINS` (a second hostname, or a
+  developer's `http://localhost:3000` against a public deployment) can upload
+  as well as call the API, and changing any of them and re-running `up`
+  updates the bucket. `FRONTEND_URL` and `WORD_ADDIN_URL` are reduced to their
+  `scheme://host[:port]`. If either is not an absolute http(s) URL with a DNS
+  or IP host (no scheme, or an underscore host such as `mike_app`), or the
+  backend image predates `origins.ts`, the job does not stop the stack: it
+  logs a `storage-cors:` line naming the value and installs a policy that
+  allows only the loopback development origins (plus any valid ones), so
+  uploads from that origin are refused until it is fixed. Read it with
+  `docker compose logs storage-cors`.
+  An `ALLOWED_ORIGINS` entry must be an exact origin such as
+  `https://review.example.com` (no path, lower-case host), because the
+  backend matches it byte for byte; any other entry is skipped with a warning
+  in the job's log. Outside `NODE_ENV=production` the backend also trusts
+  `http://localhost:3000` and `https://localhost:3200` when `FRONTEND_URL` or
+  `WORD_ADDIN_URL` is unset, and so does the bucket.
+- `R2_PUBLIC_ENDPOINT_URL` is the storage URL the backend signs for browsers.
+  It defaults to `http://localhost:${STORAGE_PORT:-9000}`, which is correct
+  only when the browser runs on the same machine. For any other host, set it
+  to a URL that reaches the storage service from users' browsers: a
+  dedicated https host such as `https://storage.mike.example` on the reverse
+  proxy in front of Mike, forwarded to `storage:9000` with the `Host` header
+  preserved (the signature covers it). Do not use a path on the app's host
+  (`https://mike.example/storage`): the URL is signed path-style, so the
+  prefix is part of the signature, and a proxy that strips it breaks the
+  signature (403) while one that keeps it makes storage look for a bucket
+  named `storage` (404). The storage port itself is bound to `127.0.0.1` because it carries the
+  default admin credentials; do not publish it directly.
+
+On boot the backend logs a `[storage]` warning when `FRONTEND_URL` is not a
+loopback address but the public storage endpoint is loopback, a bare service
+name such as `storage`, or `http` under an `https` front end. Each of those
+makes every upload fail in the browser with a bare network error.
+
+The backend still verifies the uploaded byte count and
 copies accepted bytes to a non-signed, sealed key before queuing processing.
 Each file is verified and queued as soon as its individual `PUT` completes;
 the remaining files in the same session may continue uploading while the
@@ -738,7 +785,12 @@ convenience tags for trying things out; production deployments pin a version,
 and a published version is never rebuilt (a fix is a new patch version).
 `docker compose up --build` still builds from the checkout for development and
 for anyone who patches the code; those images report as `mike@0.0.0...` unless
-you pass `MIKE_VERSION` and `GIT_SHA`. The Word add-in image is not published:
+you pass `MIKE_VERSION` and `GIT_SHA`. A local build reuses whatever
+`node:22-slim` Docker has cached, and an old cached base can be older than
+the Node 22.19 the images need; run `docker compose build --pull` before `up` to
+refresh it. The backend image
+refuses a too-old base at `npm ci` (`EBADENGINE` / `notsup`) rather than
+building an image that crashes at boot. The Word add-in image is not published:
 its production build bakes in the deployment's web-app URL, so build it as
 described under [Building the Word add-in image](#building-the-word-add-in-image).
 

@@ -144,6 +144,16 @@ export type ReviewPublication = {
 };
 
 /**
+ * Deletes a prepared upload that will never be published: the review was
+ * stopped before `publishDocumentReview`, so no version can reference it.
+ */
+export function discardUnpublishedReviewUpload(
+  prepared: PreparedReviewEdits,
+): Promise<void | undefined> {
+  return deleteFileBestEffort(prepared.version.storage_path, UNPUBLISHED_UPLOAD);
+}
+
+/**
  * Trusted persistence, not authorization. Findings must be normalized and
  * unlinked. The documents module owns the version/edit RPC; it knows no
  * playbook implementation or schema type.
@@ -163,7 +173,7 @@ export async function publishDocumentReview(db: Db, args: {
 }): Promise<ReviewPublication> {
   const prepared = args.prepared;
   const discardUpload = async () => {
-    if (prepared) await deleteFileBestEffort(prepared.version.storage_path, UNPUBLISHED_UPLOAD);
+    if (prepared) await discardUnpublishedReviewUpload(prepared);
   };
   let result: ReviewPublication;
   let reconciled = false;

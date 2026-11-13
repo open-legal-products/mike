@@ -1,3 +1,4 @@
+import { BACKEND_REPORTING_OWNER } from "@mike/client";
 import type { Operation } from "@mike/client";
 import { settleWithConcurrency } from "@mike/client";
 import type {
@@ -134,13 +135,7 @@ const apiFetch = async (input: RequestInfo | URL, init?: RequestInit, operation?
     } catch (error) {
         // Stopping a stream or leaving a screen is expected. Abort reasons
         // may be arbitrary values, so the signal also covers custom reasons.
-        if (
-            init?.signal?.aborted ||
-            (typeof error === "object" &&
-                error !== null &&
-                "name" in error &&
-                error.name === "AbortError")
-        ) {
+        if (init?.signal?.aborted) {
             throw error;
         }
         reportNetworkFailure(error, {
@@ -162,23 +157,26 @@ export class MikeApiError extends Error {
     status: number;
     code: string | null;
     requestId: string | null;
+    reportingOwner?: typeof BACKEND_REPORTING_OWNER;
 
     constructor(args: {
         message: string;
         status: number;
         code?: string | null;
         requestId?: string | null;
+        reportingOwner?: typeof BACKEND_REPORTING_OWNER;
     }) {
         super(args.message);
         this.name = "MikeApiError";
         this.status = args.status;
         this.code = args.code ?? null;
         this.requestId = args.requestId ?? null;
+        this.reportingOwner = args.reportingOwner;
     }
 }
 
 export const INTERNAL_ERROR_MESSAGE = "Something went wrong. Please try again.";
-export const MALFORMED_ERROR_RESPONSE_MESSAGE =
+const MALFORMED_ERROR_RESPONSE_MESSAGE =
     "The request could not be completed. Please try again.";
 // The 5xx codes the server side already reported, and their fixed messages,
 // are shared with the Word add-in (packages/client); they are re-exported
@@ -246,14 +244,7 @@ export async function uploadFilesWithSession<T>(args: {
         transport: {
             apiRequest: <R>(path: string, init?: RequestInit) => apiRequest<R>("upload_session.control", path, init),
             fetchStorage: (...fetchArgs) => fetch(...fetchArgs),
-            onStorageFailure: ({ error, status, network }) => reportError(error, {
-                ...(network ? { level: "warning" as const } : {}),
-                tags: {
-                    component: "mike-api", operation: "upload_session.storage", http_method: "PUT",
-                    ...(status !== undefined ? { http_status: status } : {}),
-                    ...(network ? { network: true } : {}),
-                },
-            }),
+            reportStorageFailure: reportError,
             shouldRetryControlRequest: createControlRequestRetryPolicy(
                 (error) =>
                     error instanceof MikeApiError
@@ -296,6 +287,7 @@ async function toApiError(
     const text = await response.text();
     try {
         const parsed = JSON.parse(text) as {
+            reporting_owner?: unknown;
             detail?: unknown;
             code?: unknown;
             request_id?: unknown;
@@ -319,6 +311,7 @@ async function toApiError(
             status: response.status,
             code,
             requestId,
+            ...(parsed.reporting_owner === BACKEND_REPORTING_OWNER ? { reportingOwner: BACKEND_REPORTING_OWNER } : {}),
             // A 4xx whose body carries no usable `detail` is a malformed
             // error response, and it is treated as one. `API error: 409` used
             // to be produced here instead — and because a 4xx message is the
@@ -347,6 +340,7 @@ async function toApiError(
                 code: apiError.code,
                 requestId,
                 error: apiError,
+                reportingOwner: apiError.reportingOwner,
             });
         }
         return apiError;
@@ -371,6 +365,7 @@ async function toApiError(
                 status: response.status,
                 requestId: apiError.requestId,
                 error: apiError,
+                reportingOwner: apiError.reportingOwner,
             });
         }
         return apiError;
@@ -840,7 +835,8 @@ export interface UserProfile extends RouterProfileLists {
     responseDetailsVisible?: boolean;
     darkMode: boolean;
     projectMemoryDefault: boolean;
-    apiKeyStatus: ApiKeyStatus;
+    /** Absent only when a forked server or a proxy/misroute answers; see `hasApiKeyStatus`. */
+    apiKeyStatus?: ApiKeyStatus;
 }
 
 /** Uploads a cropped profile-photo data URL, or removes the current photo when passed null. */

@@ -5,6 +5,7 @@ vi.mock("../../../lib/documentVersions", () => ({ attachActiveVersionPaths: vi.f
 vi.mock("../../../lib/documentTextCache", async load => ({ ...await load<object>(), loadVersionTextState: mocks.state }));
 vi.mock("../tabular.extract", () => ({ extractDocumentMarkdown: mocks.extract }));
 import { loadRowDocumentText, type ReviewRow } from "../tabular.rows";
+import { ExtractionParseError } from "../../../lib/extraction/failure";
 import { createTextExtractionCache } from "../../../lib/textExtractionCache";
 const row = { id: "row", document_id: "doc" } as ReviewRow;
 const fake = () => scriptedDb([{ table: "documents", data: [{ id: "doc", filename: "contract", storage_path: "source", current_version_id: "v", file_type: "docx" }] }]);
@@ -23,4 +24,11 @@ it("shares a cold source between concurrent rows and invalidates on revision cha
     mocks.state.mockResolvedValue({ revision: "r2", text: null, textlessPageCount: 0 });
     await loadRowDocumentText(fake().db, row, cache);
     expect(mocks.extract).toHaveBeenCalledTimes(2);
+});
+
+it("propagates a corrupt DOCX verdict instead of producing an empty model source", async () => {
+    mocks.state.mockResolvedValue({ revision: "r1", text: null, textlessPageCount: 0 });
+    const failure = new ExtractionParseError("extraction.parse_failed", "unreadable docx", { cause: new Error("Corrupted zip") });
+    mocks.extract.mockRejectedValueOnce(failure);
+    await expect(loadRowDocumentText(fake().db, row)).rejects.toBe(failure);
 });

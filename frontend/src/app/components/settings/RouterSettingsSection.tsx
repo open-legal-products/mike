@@ -131,7 +131,7 @@ const ROUTER_MODEL_ID: Record<
  * longer id is a guaranteed 400 from the profile PATCH. Enforcing it here
  * turns that round trip into an immediate, specific message.
  */
-export const MAX_MODEL_ID_LENGTH = 200;
+const MAX_MODEL_ID_LENGTH = 200;
 
 /**
  * The id a typed string would become, before it is validated. The router slug

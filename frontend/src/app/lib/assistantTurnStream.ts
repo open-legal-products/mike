@@ -1,8 +1,8 @@
 "use client";
+import { BACKEND_REPORTING_OWNER } from "@mike/client";
 
 import { streamChatTurn } from "@/app/lib/mikeApi";
 import { readSseFrames } from "@/app/lib/sse";
-import { isAbortError } from "@mike/client";
 import { isPanelDocument } from "@/app/components/shared/types";
 import type { AssistantEvent, Citation } from "@/app/components/shared/types";
 import type { AssistantTurnHandle } from "@/app/lib/assistantTurnTypes";
@@ -56,7 +56,7 @@ export type TurnStreamHooks = {
     code: string | null;
     /** The id of the request that produced the frame, when it carried one. */
     requestId: string | null;
-    reportingOwner?: "backend";
+    reportingOwner?: typeof BACKEND_REPORTING_OWNER;
   }) => void;
 };
 
@@ -74,6 +74,7 @@ export async function chatRequestError(response: Response): Promise<Error> {
     typeof value === "string" && value.trim() ? value.trim() : null;
   let detail: string | null = null;
   let code: string | null = null;
+  let reportingOwner: typeof BACKEND_REPORTING_OWNER | undefined;
   let requestId = read(response.headers.get("x-request-id"));
   // Only a JSON error body is read: anything else (an HTML proxy page, a
   // stream that never ends) is released unread so the failure still
@@ -84,6 +85,7 @@ export async function chatRequestError(response: Response): Promise<Error> {
     const body = (await response.json()) as Record<string, unknown>;
     detail = read(body?.detail);
     code = read(body?.code);
+    reportingOwner = body?.reporting_owner === BACKEND_REPORTING_OWNER ? BACKEND_REPORTING_OWNER : undefined;
     requestId = read(body?.request_id) ?? requestId;
   } catch {
     try {
@@ -98,6 +100,7 @@ export async function chatRequestError(response: Response): Promise<Error> {
     ),
     {
       status: response.status,
+      ...(reportingOwner ? { reportingOwner } : {}),
       ...(code ? { code } : {}),
       ...(requestId ? { requestId } : {}),
     },
@@ -298,6 +301,15 @@ export function createTurnEventSink(
         if (!("isStreaming" in event) || !event.isStreaming) return event;
         const rest = { ...event };
         delete (rest as { isStreaming?: boolean }).isStreaming;
+        // A document step that never reported its result may or may not have
+        // happened: show it as stopped, not as done.
+        if (
+          rest.type === "doc_created" ||
+          rest.type === "doc_edited" ||
+          rest.type === "doc_replicated"
+        ) {
+          return { ...rest, interrupted: true };
+        }
         return rest as AssistantEvent;
       });
 
@@ -314,9 +326,10 @@ export function createTurnEventSink(
     publish();
   };
 
-  // A turn that failed outside an error frame (the request was refused, or
-  // the connection broke for good): nothing is still running, so no
-  // "Thinking…" line or in-progress step may keep spinning beside the error.
+  // A turn that failed: an error frame (which always ends the turn, including
+  // the one a deadline writes), a refused request, or a connection that broke
+  // for good. Nothing is still running, so no "Thinking…" line or in-progress
+  // step (an edit, a replication, …) may keep spinning beside the error.
   const endStreamingAfterFailure = () => {
     eventsRef.current = cancelStreamingEvents(eventsRef.current);
     publish();
@@ -402,6 +415,7 @@ export async function consumeAssistantTurnStream(
     finalizeStreamingContent,
     finalizeStreamingReasoning,
     clearStreamingPlaceholders,
+    endStreamingAfterFailure,
     pushThinkingPlaceholder,
     pushEvent,
     updateMatchingEvent,
@@ -463,9 +477,7 @@ export async function consumeAssistantTurnStream(
           // signal the surface can turn into "go fix your key" rather than
           // leaving it as one more line of failed-response text.
           if (data.code === "invalid_api_key") hooks.onRejectedApiKey?.();
-          clearStreamingPlaceholders();
-          finalizeStreamingContent();
-          finalizeStreamingReasoning();
+          endStreamingAfterFailure();
           eventsRef.current = [
             ...eventsRef.current,
             {
@@ -489,7 +501,7 @@ export async function consumeAssistantTurnStream(
           hooks.onErrorFrame?.({
             message,
             safeToDisplay,
-            ...(data.reporting_owner === "backend" ? { reportingOwner: "backend" as const } : {}),
+            ...(data.reporting_owner === BACKEND_REPORTING_OWNER ? { reportingOwner: BACKEND_REPORTING_OWNER } : {}),
             code: typeof data.code === "string" ? data.code : null,
             requestId:
               typeof data.request_id === "string" ? data.request_id : null,
@@ -1509,7 +1521,6 @@ export async function readAssistantTurn(args: {
       return;
     } catch (error) {
       if (
-        isAbortError(error) ||
         signal?.aborted ||
         !cursor.chatId ||
         !cursor.turnId ||

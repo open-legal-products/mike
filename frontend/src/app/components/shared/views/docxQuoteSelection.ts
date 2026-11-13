@@ -1,4 +1,4 @@
-import type { TextMatch } from "@docx-editor.dev/core";
+import type { HighlightRange, TextMatch } from "@docx-editor.dev/core";
 import type { Editor } from "@docx-editor.dev/core/contracts/editor";
 import { foldCase } from "@docx-editor.dev/core/store";
 
@@ -7,6 +7,8 @@ type QuoteSearch = Pick<Editor, "findMatches" | "query">;
 export interface DocxQuoteMatch {
     start: TextMatch;
     end: TextMatch;
+    /** The quote as one range per paragraph it covers, in document order. */
+    ranges: HighlightRange[];
 }
 
 /** Find the whole quote before selecting anything, including across table cells.
@@ -19,7 +21,7 @@ export function findDocxQuote(
 ): DocxQuoteMatch | null {
     if (!quote.trim()) return null;
     const exact = editor.findMatches(quote)[0];
-    if (exact) return { start: exact, end: exact };
+    if (exact) return { start: exact, end: exact, ranges: [exact] };
 
     const words: {
         text: string;
@@ -70,6 +72,37 @@ export function findDocxQuote(
                     match.start === sourceOffset,
             );
     };
+    // One range per covered paragraph. Each paragraph's address is recovered
+    // like an endpoint, from its first covered character.
+    const paragraphRanges = (index: number): HighlightRange[] | null => {
+        const last = index + needle.length;
+        const covered = words.filter(
+            (word) => word.start < last && word.start + word.text.length > index,
+        );
+        const ranges: HighlightRange[] = [];
+        for (let i = 0; i < covered.length; i++) {
+            const word = covered[i];
+            const end =
+                word.offset + Math.min(word.text.length, last - word.start);
+            if (covered[i - 1]?.paragraphIndex === word.paragraphIndex) {
+                const current = ranges[ranges.length - 1];
+                ranges[ranges.length - 1] = {
+                    ...current,
+                    length: end - current.start,
+                };
+                continue;
+            }
+            const first = endpoint(Math.max(index, word.start), false);
+            if (!first) return null;
+            ranges.push({
+                blockId: first.blockId,
+                start: first.start,
+                length: end - first.start,
+                scope: first.scope,
+            });
+        }
+        return ranges;
+    };
     for (
         let index = text.indexOf(needle);
         index !== -1;
@@ -77,7 +110,8 @@ export function findDocxQuote(
     ) {
         const start = endpoint(index, false);
         const end = endpoint(index + needle.length - 1, true);
-        if (start && end) return { start, end };
+        const ranges = start && end ? paragraphRanges(index) : null;
+        if (start && end && ranges) return { start, end, ranges };
     }
     return null;
 }

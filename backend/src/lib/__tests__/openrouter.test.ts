@@ -682,14 +682,18 @@ describe("OpenCode Go LLM adapter", () => {
     });
 
     it("names OpenCode Go when no key is configured", async () => {
+        const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
         await expect(
             completeWithProvider({
                 model: "opencode-go/glm-5",
                 user: "Title this",
             }),
-        ).rejects.toThrow(
-            "OpenCode Go API key is not configured. Set OPENCODE_API_KEY",
+        ).rejects.toThrow("The OpenCode Go API key is not configured.");
+        // The env variable is the operator's: the log, not the user's message.
+        expect(warn).toHaveBeenCalledWith(
+            expect.stringContaining("Set OPENCODE_API_KEY."),
         );
+        warn.mockRestore();
     });
 
     it("uses the Messages endpoint for Qwen and MiniMax models", async () => {

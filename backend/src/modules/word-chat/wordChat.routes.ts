@@ -1,3 +1,4 @@
+import { BACKEND_REPORTING_OWNER } from "../../lib/reportedUpstreamCodes";
 import { sendInternalError } from "../../lib/httpError";
 import {
   attachAssistantTurnSse,
@@ -40,9 +41,10 @@ import {
   runLLMStream,
   stripTransientAssistantEvents,
   submitClientToolResult,
+  throwIfTurnStopped,
 } from "../chat/chat.service";
 import { enqueueChatTurnAudit } from "../../lib/audit";
-import { setOperation } from "../../lib/observability/sentry";
+import { setOperation, isReported, reportError } from "../../lib/observability/sentry";
 import {
   persistWordDocumentEdits,
   WORD_EDIT_FORMATS,
@@ -827,7 +829,7 @@ wordChatRouter.post("/", requireAuth, asyncRoute(async (req, res) => {
         assistantMessageId,
       })}\n\n`,
     );
-    const { events, citations } = await runLLMStream({
+    const { fullText, events, citations } = await runLLMStream({
       onActivity: run?.touch,
       apiMessages,
       docStore,
@@ -866,6 +868,10 @@ wordChatRouter.post("/", requireAuth, asyncRoute(async (req, res) => {
       nonce,
       emitDone: false,
     });
+    // A stream that returns after the turn was stopped (citation checks, or a
+    // provider or tool that ignored the abort) must not be saved as a
+    // completed answer: the abort handler below stores the stop outcome.
+    throwIfTurnStopped(stream.signal, { fullText, events });
     const persistedEvents = await normalizeAssistantEvents(
       stripTransientAssistantEvents(events),
     );
@@ -886,7 +892,7 @@ wordChatRouter.post("/", requireAuth, asyncRoute(async (req, res) => {
           type: "error",
           message:
             "The response was generated but could not be saved. Keep this document open and review its tracked changes in Word.",
-          reporting_owner: "backend",
+          reporting_owner: BACKEND_REPORTING_OWNER,
           ...(requestId ? { request_id: requestId } : {}),
         })}\n\n`,
       );
@@ -986,6 +992,9 @@ wordChatRouter.post("/", requireAuth, asyncRoute(async (req, res) => {
       write(stopOutcomeFrame(run));
       write("data: [DONE]\n\n");
       return;
+    }
+    if (!isReported(error)) {
+        reportError(error, { tags: { operation: "word_chat.turn", stage: "chat-stream" } });
     }
     console.error("[word-chat] stream error", error);
     const errorPayload = assistantStreamErrorPayload(error, requestId);

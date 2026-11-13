@@ -2138,6 +2138,41 @@ describe("tabular.routes", () => {
             expect(extractRowColumns).not.toHaveBeenCalled();
         });
 
+        it("owns a terminal generation failure once in the final envelope and the error frame", async () => {
+            const Sentry = await import("@sentry/node");
+            const { resetSentryForTests, scrubEvent } = await import("../../lib/observability/sentry.js");
+            const { privacyBoundaryIntegration } = await import("../../lib/observability/sentryPrivacy.js");
+            const sent: import("@sentry/node").Event[] = [];
+            resetSentryForTests("official", { initialized: true });
+            Sentry.init({
+                dsn: "https://test@sentry.invalid/1", defaultIntegrations: false,
+                integrations: [Sentry.linkedErrorsIntegration(), privacyBoundaryIntegration(), Sentry.captureConsoleIntegration({ levels: ["error"] })],
+                beforeSend: scrubEvent,
+                transport: () => ({ send: async envelope => {
+                    for (const [header, payload] of envelope[1]) if (header.type === "event") sent.push(payload as import("@sentry/node").Event);
+                    return { statusCode: 200 };
+                }, flush: async () => true }),
+            });
+            try {
+                const original = new TypeError("PRIVATE_SOURCE_DOCUMENT");
+                original.stack = "TypeError: PRIVATE_SOURCE_DOCUMENT\n    at extractRow (backend/src/modules/tabular/tabular.extractRow.ts:42:7)";
+                extractRowColumns.mockRejectedValueOnce(original);
+                const res = await startGeneration();
+                expect(res.status).toBe(200);
+                expect(res.text).toContain('"reporting_owner":"backend"');
+                expect(res.text).toContain("data: [DONE]");
+                expect(res.text).not.toContain("PRIVATE_SOURCE_DOCUMENT");
+                await Sentry.flush(2000);
+                expect(sent).toHaveLength(1);
+                expect(sent[0]?.tags).toMatchObject({ operation: "tabular.generate", stage: "generation-stream" });
+                expect(sent[0]?.exception?.values?.some(value => value.stacktrace?.frames?.some(frame => frame.lineno === 42))).toBe(true);
+                expect(JSON.stringify(sent)).not.toContain("PRIVATE_SOURCE_DOCUMENT");
+            } finally {
+                await Sentry.close();
+                resetSentryForTests();
+            }
+        });
+
         it("keeps extracting after the requesting socket closes, and a reload attaches from where it left off", async () => {
             const held = heldExtraction();
             const first = startGeneration();
@@ -2811,6 +2846,41 @@ describe("tabular.routes", () => {
             held.release();
             expect((await firstDone).text).toContain("data: [DONE]");
             expect(runLLMStream).toHaveBeenCalledTimes(1);
+        });
+
+        it("stores a stream that returns after Stop as stopped, not as a completed answer", async () => {
+            const started = new Promise<StreamParams>((resolve) => {
+                runLLMStream.mockImplementation(async (raw: unknown) => {
+                    const params = raw as StreamParams;
+                    resolve(params);
+                    await new Promise<void>((done) =>
+                        params.signal?.addEventListener("abort", () => done(), {
+                            once: true,
+                        }),
+                    );
+                    // Ignores the abort and returns the whole answer anyway.
+                    return {
+                        fullText: "Late answer",
+                        events: [{ type: "content", text: "Late answer" }],
+                    };
+                });
+            });
+            const firstDone = send().then((res) => res);
+            await started;
+            const turnId = await activeTurnId();
+            const { getAssistantTurnRun } =
+                await import("../../lib/assistantTurnRuns.js");
+            getAssistantTurnRun(turnId, "tabular")!.stop();
+
+            const text = (await firstDone).text;
+            expect(text).toContain('"type":"cancelled"');
+            expect(assistantInsert()).toMatchObject({
+                content: [
+                    { type: "content", text: "Late answer" },
+                    { type: "content", text: "Cancelled by user." },
+                ],
+            });
+            expect(scheduleMemoryConsolidation).not.toHaveBeenCalled();
         });
 
         it.each(["user", "idle", "max_lifetime"] as const)(

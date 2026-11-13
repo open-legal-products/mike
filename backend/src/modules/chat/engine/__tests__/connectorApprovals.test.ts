@@ -291,6 +291,57 @@ describe("runApprovedConnectorActions", () => {
     });
   });
 
+  it("keeps a completed action's record when a later approved action throws", async () => {
+    const { db, row } = messageDb([askEvent]);
+    await appendAskInputsResponseToAssistantMessage(
+      db,
+      "chat-1",
+      {
+        assistant_message_id: "assistant-1",
+        ask_event_id: "ask-1",
+        responses: [
+          { id: "approve-gmail", kind: "approval", decision: "approve" },
+          { id: "approve-slack", kind: "approval", decision: "approve" },
+        ],
+      },
+      "user-1",
+    );
+    mocks.google.mockResolvedValue({
+      content: '{"ok":true}',
+      event: {
+        type: "mcp_tool_call",
+        connector_id: "gmail-native",
+        connector_name: "Gmail",
+        tool_name: "gmail_send",
+        openai_tool_name: "gmail_send",
+        status: "ok",
+      },
+    });
+    // The MCP token lookup reads the database outside the call's own try.
+    mocks.mcp.mockRejectedValue(new Error("connection terminated"));
+    const log = vi.spyOn(console, "error").mockImplementation(() => {});
+
+    const events = await runApprovedConnectorActions({
+      db,
+      chatId: "chat-1",
+      messageId: "assistant-1",
+      askEventId: "ask-1",
+      userId: "user-1",
+    });
+
+    const stored = row.content.filter((event) => event.type === "mcp_tool_call");
+    expect(stored).toEqual(events);
+    expect(stored).toMatchObject([
+      { approval_id: "approve-gmail", status: "ok" },
+      {
+        approval_id: "approve-slack",
+        status: "error",
+        error: "This tool could not complete its request.",
+      },
+    ]);
+    log.mockRestore();
+  });
+
   it("runs nothing when there is no recorded decision", async () => {
     const { db } = messageDb([askEvent]);
     expect(

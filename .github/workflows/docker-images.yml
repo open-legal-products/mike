@@ -62,6 +62,9 @@ jobs:
           context: ${{ matrix.context }}
           file: ${{ matrix.dockerfile }}
           push: false
+          # The backend image is loaded so the next step can run it.
+          load: ${{ matrix.image == 'backend' }}
+          tags: mike-${{ matrix.image }}:ci
           # GIT_SHA becomes the Sentry release (docs/observability.md); an
           # image without it reports events nobody can map to a commit.
           build-args: |
@@ -69,3 +72,23 @@ jobs:
             ${{ matrix.build_args }}
           cache-from: type=gha,scope=${{ matrix.image }}
           cache-to: type=gha,mode=max,scope=${{ matrix.image }}
+
+      # Compose's storage-cors job runs docker/storage-cors.mjs inside this
+      # image against its compiled /app/dist/lib/origins.js (CommonJS) to
+      # write the bucket CORS policy. Run it the same way, with no network,
+      # so an image that stops shipping that module, or a change to its
+      # shape, fails here instead of on a fresh install's first upload.
+      - name: storage-cors policy from the built backend image
+        if: matrix.image == 'backend'
+        run: |
+          policy=$(docker run --rm --network none \
+            -v "$PWD/docker/storage-cors.mjs:/storage-cors.mjs:ro" \
+            -e NODE_ENV=production \
+            -e FRONTEND_URL=https://mike.example.com \
+            -e ALLOWED_ORIGINS=https://word.example.com \
+            -e MIKE_ORIGINS_MODULE=/app/dist/lib/origins.js \
+            --entrypoint node mike-backend:ci /storage-cors.mjs 2>stderr.txt)
+          cat stderr.txt
+          echo "$policy"
+          test ! -s stderr.txt
+          echo "$policy" | jq -e '.CORSRules[0].AllowedOrigins == ["https://mike.example.com","https://word.example.com"]'
