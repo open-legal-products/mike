@@ -36,7 +36,16 @@ function sendCatalogFailure(res: Response, failure: CatalogFailure): void {
         return;
     }
     if (failure.kind === "upstream") {
-        sendInternalError(res, failure.error, 502);
+        // Only the user can fix their endpoint or key, so it is logged at
+        // warn (the console bridge files console.error) and not reported.
+        if (failure.report === false) {
+            console.warn("[models] catalog request failed", {
+                requestId: res.locals.requestId,
+                path: res.req?.originalUrl?.split("?")[0],
+                reason: failure.error.message,
+            });
+        }
+        sendInternalError(res, failure.error, 502, { report: failure.report });
         return;
     }
     sendInternalError(res, failure.error);

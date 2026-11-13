@@ -6,6 +6,8 @@ import {
     CUSTOM_ENDPOINT_URL_LABEL,
     customEndpointCredentials,
 } from "../../lib/llm/cloudProviders";
+import { isBlockedDestinationError } from "../../lib/blockedDestination";
+import { NETWORK_FAILURE_CODES } from "../../lib/llm/providerErrors";
 import { guardedFetch } from "../../lib/mcp/client";
 import { getEffectiveApiKeys } from "../../lib/providerCredentials/index";
 import type { CatalogModel, CatalogResult } from "./models.types";
@@ -14,6 +16,9 @@ const XAI_BASE_URL = "https://api.x.ai/v1";
 // xAI lists its image, video and voice models next to the chat models.
 const XAI_NON_CHAT_MODEL_RE = /imag|video|voice|tts|speech/i;
 
+/** The endpoint answered the list request with a non-2xx status. */
+class ModelListRefusedError extends Error {}
+
 /**
  * Why a catalog request failed, for the server log. The loaders throw plain
  * Errors that carry only a status code or a fixed phrase, never a response
@@ -21,10 +26,33 @@ const XAI_NON_CHAT_MODEL_RE = /imag|video|voice|tts|speech/i;
  * name so a user-supplied URL or key cannot end up in the message.
  */
 export function catalogFailureReason(error: unknown): string {
-    if (error instanceof Error && error.constructor === Error) {
+    if (
+        error instanceof ModelListRefusedError ||
+        (error instanceof Error && error.constructor === Error)
+    ) {
         return error.message;
     }
     return error instanceof Error ? error.name : "unknown error";
+}
+
+/**
+ * True when the user's endpoint or key is at fault: it refused the request,
+ * did not resolve, could not be reached or answered too slowly, or the
+ * egress guard refused its address. A 2xx answer we could not read, or any
+ * other error, may be our own bug and stays reported.
+ */
+function isEndpointFault(error: unknown): boolean {
+    if (error instanceof ModelListRefusedError) return true;
+    if (isBlockedDestinationError(error)) return true;
+    let current: unknown = error;
+    for (let depth = 0; depth < 10 && current && typeof current === "object"; depth++) {
+        const { name, code, cause } = current as { name?: unknown; code?: unknown; cause?: unknown };
+        // AbortSignal.timeout rejects with a DOMException named TimeoutError.
+        if (name === "TimeoutError") return true;
+        if (typeof code === "string" && NETWORK_FAILURE_CODES.has(code)) return true;
+        current = cause;
+    }
+    return false;
 }
 
 /**
@@ -66,7 +94,9 @@ async function readModels(
     // Do not retain response bodies: an arbitrary endpoint's error page is
     // not something to log or forward.
     if (!response.ok) {
-        throw new Error(`Model list request failed (${response.status})`);
+        throw new ModelListRefusedError(
+            `Model list request failed (${response.status})`,
+        );
     }
     return listedModels(await response.json());
 }
@@ -107,6 +137,7 @@ export async function listXaiModels(
             error: new Error(
                 `xAI model catalog could not be loaded: ${catalogFailureReason(error)}`,
             ),
+            report: !isEndpointFault(error),
         };
     }
 }
@@ -155,6 +186,7 @@ export async function listCustomEndpointModels(
             error: new Error(
                 `The OpenAI-compatible endpoint's model list could not be loaded: ${catalogFailureReason(error)}`,
             ),
+            report: !isEndpointFault(error),
         };
     }
 }

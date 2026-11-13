@@ -2,7 +2,7 @@ import express from "express";
 import request from "supertest";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-const { getUserApiKeys, getOrgWorkKeys, memberOf, guardedFetch } = vi.hoisted(
+const { getUserApiKeys, getOrgWorkKeys, memberOf, guardedFetch, reportError } = vi.hoisted(
     () => ({
         getUserApiKeys: vi.fn(),
         // The keys an organization's work runs on, by organization id.
@@ -10,10 +10,16 @@ const { getUserApiKeys, getOrgWorkKeys, memberOf, guardedFetch } = vi.hoisted(
         // The organizations user-1 belongs to.
         memberOf: { ids: [] as string[] },
         guardedFetch: vi.fn(),
+        reportError: vi.fn(),
     }),
 );
 
 vi.mock("../../../lib/mcp/client", () => ({ guardedFetch }));
+
+vi.mock("../../../lib/observability/sentry", async (importOriginal) => ({
+    ...(await importOriginal<typeof import("../../../lib/observability/sentry")>()),
+    reportError,
+}));
 
 vi.mock("../../../middleware/auth", () => ({
     requireAuth: (
@@ -63,6 +69,7 @@ import {
     INTERNAL_ERROR_CODE,
     INTERNAL_ERROR_MESSAGE,
 } from "../../../lib/httpError";
+import { BlockedDestinationError } from "../../../lib/blockedDestination";
 
 const app = express();
 app.use("/models", modelsRouter);
@@ -717,6 +724,14 @@ describe("GET /models/xai", () => {
         expect(failed.status).toBe(502);
         expect(JSON.stringify(failed.body)).not.toContain("private-key");
     });
+
+    it("does not report xAI refusing the user's key (MIKE-BACKEND-CF)", async () => {
+        const consoleWarn = vi.spyOn(console, "warn").mockImplementation(() => {});
+        fetchMock.mockResolvedValue(new Response("bad key", { status: 401 }));
+        expect((await request(app).get("/models/xai")).status).toBe(502);
+        expect(reportError).not.toHaveBeenCalled();
+        consoleWarn.mockRestore();
+    });
 });
 
 describe("GET /models/custom", () => {
@@ -760,6 +775,43 @@ describe("GET /models/custom", () => {
         const blocked = await request(app).get("/models/custom");
         expect(blocked.status).toBe(502);
         expect(JSON.stringify(blocked.body)).not.toContain("blocked network");
+    });
+
+    // The user's endpoint or key is at fault and nothing in Mike can fix it,
+    // so the 502 is logged but not filed (MIKE-BACKEND-DE).
+    it.each([
+        ["answers 401", () => guardedFetch.mockResolvedValueOnce(new Response("denied", { status: 401 }))],
+        ["cannot be reached", () => guardedFetch.mockRejectedValueOnce(
+            new TypeError("fetch failed", { cause: Object.assign(new Error("connect ECONNREFUSED"), { code: "ECONNREFUSED" }) }),
+        )],
+        ["does not resolve", () => guardedFetch.mockRejectedValueOnce(
+            Object.assign(new Error("getaddrinfo ENOTFOUND llm.example.com"), { code: "ENOTFOUND" }),
+        )],
+        ["times out", () => guardedFetch.mockRejectedValueOnce(new DOMException("The operation was aborted due to timeout", "TimeoutError"))],
+        ["is refused by the egress guard", () => guardedFetch.mockRejectedValueOnce(
+            new BlockedDestinationError("Custom endpoint URL resolves to a blocked network address."),
+        )],
+    ])("answers 502 without a report when the endpoint %s", async (_case, arrange) => {
+        const consoleWarn = vi.spyOn(console, "warn").mockImplementation(() => {});
+        arrange();
+        const response = await request(app).get("/models/custom");
+        expect(response.status).toBe(502);
+        expect(response.body).toMatchObject({ code: INTERNAL_ERROR_CODE, detail: INTERNAL_ERROR_MESSAGE });
+        expect(reportError).not.toHaveBeenCalled();
+        expect(consoleWarn).toHaveBeenCalledOnce();
+        consoleWarn.mockRestore();
+    });
+
+    it.each([
+        ["a body that is not JSON", () => new Response("<html>ok</html>", { status: 200 })],
+        ["JSON that is not a model list", () => Response.json({ models: [] })],
+    ])("still reports a 2xx answer with %s", async (_case, body) => {
+        const consoleError = vi.spyOn(console, "error").mockImplementation(() => {});
+        guardedFetch.mockResolvedValueOnce(body());
+        const response = await request(app).get("/models/custom");
+        expect(response.status).toBe(502);
+        expect(reportError).toHaveBeenCalledOnce();
+        consoleError.mockRestore();
     });
 });
 

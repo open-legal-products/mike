@@ -16,7 +16,8 @@ export type ConfiguredCatalogModel = LocalModel & {
 };
 export type CatalogFailure =
     | { ok: false; kind: "missing_api_key"; code: string; detail: string }
-    | { ok: false; kind: "upstream"; error: Error }
+    // report: false when the user's own endpoint or key is at fault.
+    | { ok: false; kind: "upstream"; error: Error; report?: boolean }
     | { ok: false; kind: "error"; error: unknown };
 export type CatalogResult =
     | { ok: true; models: CatalogModel[] }

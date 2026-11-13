@@ -156,7 +156,7 @@ export function providerFailureStatus(error: unknown): number | null {
   return findApiCallError(error)?.statusCode ?? null;
 }
 
-const NETWORK_FAILURE_CODES = new Set([
+export const NETWORK_FAILURE_CODES: ReadonlySet<string> = new Set([
   "ECONNREFUSED",
   "ECONNRESET",
   "ETIMEDOUT",
