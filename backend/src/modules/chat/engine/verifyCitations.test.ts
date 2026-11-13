@@ -104,6 +104,25 @@ describe("verifyQuoteAgainstSource", () => {
     ).toBe(false);
   });
 
+  // Punctuation tolerance must not turn a range or identifier into another
+  // number: a dash between digits survives, as one canonical hyphen.
+  it.each([
+    ["see pp. 3-7 of the report", "see pp. 37 of the report"],
+    ["see pp. 3\u20137 of the report", "see pp. 37 of the report"],
+    ["Case No. 21-1234 was filed", "Case No. 211234 was filed"],
+    ["dated 2024-01-15 below", "dated 20240115 below"],
+  ])("%j quoted as %j must NOT verify", (source, quote) => {
+    expect(verifyQuoteAgainstSource(source, quote).verified).toBe(false);
+  });
+
+  it("a digit range still matches across dash styles and punctuation drift", () => {
+    const source = "Clause 4 applies, see pp. 3\u20137 of the report.";
+    expect(verifyQuoteAgainstSource(source, "see pp. 3-7, of the report")).toMatchObject({
+      verified: true,
+      source_excerpt: "see pp. 3\u20137 of the report",
+    });
+  });
+
   it("cross-page [[PAGE_BREAK]] quote → each segment verified independently", () => {
     const src = "the first day of each month. The Landlord may terminate";
     const quote =
