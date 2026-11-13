@@ -232,6 +232,15 @@ describe('bounded error diagnostics', () => {
     expect(diagnosticErrorTags({ message: 'TypeError: private request failed', details: 'Caused by: Error: private (private_code)\n', code: '' })).toEqual({});
   });
 
+  it('names the codes PostgREST and Postgres emit while the database restarts', () => {
+    // PGRST002/PGRST003: PostgREST cannot build its schema cache / get a pooled
+    // connection; 57P02: crash shutdown. Unlisted, MIKE-BACKEND-4C and 8N arrived blank.
+    for (const code of ['PGRST002', 'PGRST003', '57P02']) {
+      const wrapped = new Error('Dependency failure (non-Error value)', { cause: { code, message: 'x', details: '', hint: '' } });
+      expect(diagnosticErrorTags(wrapped)).toEqual({ failure_code: code });
+    }
+  });
+
   it('keeps storage status and known database codes, drops arbitrary codes and metadata', () => {
     const tags = diagnosticErrorTags({ name: 'AccessDenied', $metadata: { httpStatusCode: 403, requestId: 'private' } });
     expect(diagnosticEvent({ tags }).tags).toEqual({ failure_code: 'AccessDenied', dependency_status: 403 });
