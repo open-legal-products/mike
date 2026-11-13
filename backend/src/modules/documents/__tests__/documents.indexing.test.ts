@@ -140,7 +140,7 @@ describe("version text extraction", () => {
   it("fails an unreadable document once instead of spending its retries", async () => {
     // JSZip's own rejection of a .docx that is not a ZIP container.
     mocks.docx.mockRejectedValue(new Error("Can't find end of central directory : is this a zip file ?"));
-    vi.spyOn(console, "error").mockImplementation(() => undefined);
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
     const fake = scriptedDb([
       { table: "document_versions", data: version },
       { table: "document_version_texts", op: "update", data: { version_id: "v1" } },
@@ -156,13 +156,37 @@ describe("version text extraction", () => {
     expect(fake.calls[2].payload).toMatchObject({ status: "failed", last_error: "document_text_unreadable" });
     expect(fake.calls[3].payload).toMatchObject({ status: "failed", error_code: "extraction_failed" });
     fake.done();
-    // Reported once, named after the operation and the parser's own kind.
+    // The user's own file, and nothing in Mike can read it: logged on the
+    // server, not sent to Sentry.
     expect(sentry.setOperation).toHaveBeenCalledWith("documents.extract");
+    expect(sentry.reportError).not.toHaveBeenCalled();
+    expect(warn).toHaveBeenCalledWith("[dbq] job permanently failed", expect.objectContaining({ kind: "document.extract_text", message: "document_text_unreadable" }));
+  });
+  // The counterexample: the same pdf_parse_failed kind, but pdf.js itself
+  // could not load. That is the deployment, not the file, so it keeps its
+  // retries and its report.
+  it("still reports a PDF whose parser could not load", async () => {
+    const { AppError } = await import("../../../lib/appError.js");
+    const missing = Object.assign(new Error("Cannot find module 'pdfjs-dist'"), { code: "ERR_MODULE_NOT_FOUND" });
+    mocks.pdf.mockRejectedValue(new AppError("extraction.pdf_parse_failed", "document_text_pdf_unreadable", {
+      cause: new AppError("extraction.failed", "pdf.js could not be loaded", { cause: missing }),
+    }));
+    vi.spyOn(console, "error").mockImplementation(() => undefined);
+    const fake = scriptedDb([
+      { table: "document_versions", data: { ...version, file_type: "pdf" } },
+      { table: "document_version_texts", op: "update", data: { version_id: "v1" } },
+      { table: "db_jobs", op: "update" },
+    ]);
+    await processClaimedJob(
+      fake.db,
+      { "document.extract_text": handleDocumentExtractText },
+      { ...job, status: "running", attempts: 1 },
+      { "document.extract_text": markDocumentTextFailed },
+    );
+    expect(fake.calls[2].payload).toMatchObject({ status: "pending" });
+    fake.done();
     expect(sentry.reportError).toHaveBeenCalledOnce();
-    expect(diagnosticErrorTags(sentry.reportError.mock.calls[0]![0])).toMatchObject({ error_kind: "extraction.parse_failed" });
-    // A corrupt upload is a handled outcome the user already sees, not an
-    // application defect: it files a warning, not an error.
-    expect(sentry.reportError.mock.calls[0]![1]).toMatchObject({ level: "warning" });
+    expect(sentry.reportError.mock.calls[0]![1]).toMatchObject({ level: "warning", tags: { job_kind: "document.extract_text", terminal: false } });
   });
   it.each(["xlsx", "xlsm", "xls"])("uses the full spreadsheet reader for %s", async (type) => {
     mocks.sheet.mockReturnValue("Sheet and cell addresses");
