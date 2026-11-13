@@ -128,6 +128,46 @@ describe("resolving a tracked edit", () => {
     fake.done();
   });
 
+  it.each(["accept", "reject"] as const)("keeps the winner's bytes and status when a competing %s removed the change", async (mode) => {
+    arrange();
+    vi.mocked(loadActiveVersion)
+      .mockResolvedValueOnce({ id: "v1", storage_path: "docs/v1.docx" } as never)
+      .mockResolvedValueOnce({ id: "v1", storage_path: "docs/winner.docx" } as never);
+    docx.resolveTrackedChange
+      .mockResolvedValueOnce({ bytes: new Uint8Array([9]), found: true })
+      .mockResolvedValueOnce({ bytes: new Uint8Array([1]), found: false });
+    const fake = scriptedDb([
+      { table: "document_edits", data: PENDING_EDIT },
+      { table: "documents", data: DOC },
+      { table: "document_versions", op: "update", data: null },
+      // The winner's byte swap is visible before its separate status write.
+      { table: "document_edits", data: PENDING_EDIT },
+      { table: "documents", data: DOC },
+    ]);
+    expect(await resolveEdit(mode, "doc-1", "edit-1", "user-1", undefined, fake.db))
+      .toMatchObject({ ok: false, status: 409 });
+    expect(storage.downloadFile.mock.calls.map(([key]) => key)).toEqual(["docs/v1.docx", "docs/winner.docx"]);
+    expect(storage.uploadFile).toHaveBeenCalledOnce();
+    expect(storage.deleteFileBestEffort).toHaveBeenCalledWith(storage.uploadFile.mock.calls[0][0], "edit-resolution-conflict");
+    expect(fake.calls.some(call => call.table === "document_edits" && call.op === "update")).toBe(false);
+    fake.done();
+  });
+
+  it("returns the winner's recorded decision when the retry sees it resolved", async () => {
+    arrange();
+    const fake = scriptedDb([
+      { table: "document_edits", data: PENDING_EDIT },
+      { table: "documents", data: DOC },
+      { table: "document_versions", op: "update", data: null },
+      { table: "document_edits", data: { ...PENDING_EDIT, status: "rejected" } },
+      { table: "documents", data: DOC },
+    ]);
+    expect(await run(fake.db)).toMatchObject({ ok: true, body: { already_resolved: true, status: "rejected" } });
+    expect(docx.resolveTrackedChange).toHaveBeenCalledOnce();
+    expect(fake.calls.some(call => call.table === "document_edits" && call.op === "update")).toBe(false);
+    fake.done();
+  });
+
   it("answers 409 when every attempt loses the swap", async () => {
     arrange();
     const fake = scriptedDb([

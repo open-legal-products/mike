@@ -37,14 +37,14 @@ export async function resolveEdit(
     userEmail: string | undefined,
     db: Db,
 ): Promise<ResolveEditResult> {
-    // The usual winner of the swap is a review of another card on this
-    // document. Each attempt starts from the edit row and the current version,
-    // and the change is addressed by w:id, so redoing it on the newer bytes is
-    // safe; only sustained contention reaches the user as a conflict.
-    for (let attempt = 1; ; attempt++) {
-        const result = await resolveEditOnce(mode, documentId, editId, userId, userEmail, db);
-        if (result !== VERSION_CONFLICT || attempt >= RESOLVE_ATTEMPTS) return result;
+    // Another card may have won the byte swap. Re-read the edit and bytes,
+    // but only redo a change that still exists: a competing accept/reject
+    // can remove it before its separate status write becomes visible.
+    for (let attempt = 1; attempt <= RESOLVE_ATTEMPTS; attempt++) {
+        const result = await resolveEditOnce(mode, documentId, editId, userId, userEmail, db, attempt > 1);
+        if (result !== "retry") return result;
     }
+    return VERSION_CONFLICT;
 }
 
 async function resolveEditOnce(
@@ -54,7 +54,8 @@ async function resolveEditOnce(
     userId: string,
     userEmail: string | undefined,
     db: Db,
-): Promise<ResolveEditResult> {
+    retrying: boolean,
+): Promise<ResolveEditResult | "retry"> {
     devLog(`[edit-resolution] incoming ${mode}`, {
         userId,
         documentId,
@@ -161,6 +162,9 @@ async function resolveEditOnce(
         resolvedByteLength: resolvedBytes?.byteLength ?? 0,
     });
     if (!found) {
+        // The winner may have made the opposite decision. A missing change
+        // cannot establish our requested outcome; leave its status alone.
+        if (retrying) return VERSION_CONFLICT;
         devLog(
             `[edit-resolution] change_id not found in docx — updating status only`,
         );
@@ -215,7 +219,7 @@ async function resolveEditOnce(
         if (!versionErr) await deleteFileBestEffort(nextPath, "edit-resolution-conflict");
         return versionErr
             ? { ok: false, detail: "Failed to resolve edit", error: versionErr }
-            : VERSION_CONFLICT;
+            : "retry";
     }
 
     const { error: statusErr } = await db
