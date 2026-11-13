@@ -1,6 +1,6 @@
 import { eventBudget } from "./sentryVolume";
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { identifyApplicationError, diagnosticEnvelope, diagnosticErrorTags, diagnosticEvent, diagnosticRoute, privacyBoundaryIntegration } from './sentryPrivacy';
+import { identifyApplicationError, diagnosticEnvelope, diagnosticErrorTags, diagnosticEvent, diagnosticRoute, privacyBoundaryIntegration, retainExceptionTypes } from './sentryPrivacy';
 
 const id = '8f1c2a3e-1234-4bcd-9e0f-1234567890ab';
 const eventId = '1234567890abcdef1234567890abcdef';
@@ -466,4 +466,13 @@ it('does not mistake dependencies under an application directory for our functio
   ] } });
   expect(JSON.stringify(out)).not.toContain('JaneDoeClaim');
   expect(JSON.stringify(out)).toContain('runJob');
+});
+
+it('keeps a spec-defined DOMException name as the type, but not a custom one', () => {
+  const values = [{ type: 'AbortError' }];
+  retainExceptionTypes(values, [new DOMException('x', 'AbortError')]);
+  expect(values[0]!.type).toBe('AbortError');
+  const custom = [{ type: 'JaneDoeClaimError' }];
+  retainExceptionTypes(custom, [new DOMException('x', 'JaneDoeClaimError')]);
+  expect(custom[0]!.type).toBe('Error');
 });
