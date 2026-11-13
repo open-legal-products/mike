@@ -689,7 +689,7 @@ describe("GET /models/xai", () => {
     beforeEach(() => {
         vi.stubGlobal("fetch", fetchMock);
         fetchMock.mockReset();
-        getUserApiKeys.mockResolvedValue({ xai: "private-key" });
+        getUserApiKeys.mockResolvedValue({ xai: "private-key", keySources: { xai: "user" } });
     });
     afterEach(() => { vi.unstubAllGlobals(); vi.clearAllMocks(); });
 
@@ -736,7 +736,7 @@ describe("GET /models/xai", () => {
 
 describe("GET /models/custom", () => {
     const fetchMock = vi.fn();
-    const apiKeys = { custom: "private-key", providerSettings: { custom: { baseUrl: "https://llm.example.com/v1" } } };
+    const apiKeys = { custom: "private-key", keySources: { custom: "user" }, providerSettings: { custom: { baseUrl: "https://llm.example.com/v1" } } };
     beforeEach(() => {
         vi.stubGlobal("fetch", fetchMock);
         fetchMock.mockReset();
@@ -840,5 +840,62 @@ describe("catalog loaders separate Mike's own failures from the provider's", () 
         const response = await request(app).get("/models/bedrock");
         expect(response.status).toBe(200);
         expect(fetchMock.mock.calls[0][0]).toBe("https://bedrock.us-iso-east-1.c2s.ic.gov/foundation-models?byOutputModality=TEXT");
+    });
+});
+
+// Exercise the reporting decision through the real SDK and final privacy transport.
+describe("catalog reporting envelopes", () => {
+    let Sentry: typeof import("@sentry/node");
+    let reporting: typeof import("../../../lib/observability/sentry");
+    let events: import("@sentry/node").Event[];
+    beforeEach(async () => {
+        Sentry = await import("@sentry/node");
+        reporting = await vi.importActual("../../../lib/observability/sentry");
+        const { privacyBoundaryIntegration } = await import("../../../lib/observability/sentryPrivacy.js");
+        events = [];
+        reporting.resetSentryForTests("official", { initialized: true });
+        reportError.mockImplementation(reporting.reportError);
+        Sentry.init({
+            dsn: "https://test@sentry.invalid/1", defaultIntegrations: false,
+            integrations: [Sentry.linkedErrorsIntegration(), privacyBoundaryIntegration()], beforeSend: reporting.scrubEvent,
+            transport: () => ({ send: async envelope => {
+                for (const [header, payload] of envelope[1]) if (header.type === "event") events.push(payload as import("@sentry/node").Event);
+                return { statusCode: 200 };
+            }, flush: async () => true }),
+        });
+        vi.spyOn(console, "error").mockImplementation(() => {});
+        vi.spyOn(console, "warn").mockImplementation(() => {});
+    });
+    afterEach(async () => {
+        await Sentry.close(); reporting.resetSentryForTests(); reportError.mockReset();
+        vi.unstubAllGlobals(); vi.restoreAllMocks();
+    });
+    it.each(["user", "org", "env", undefined] as const)("only silences a proven personal xAI key (%s)", async source => {
+        getUserApiKeys.mockResolvedValue({ xai: "PRIVATE_KEY", keySources: { xai: source } });
+        vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response("PRIVATE_UPSTREAM_BODY", { status: 401 })));
+        const response = await request(app).get("/models/xai");
+        expect(response.status).toBe(502);
+        expect(response.body.reporting_owner).toBe("backend");
+        await Sentry.flush(2000);
+        expect(events).toHaveLength(source === "user" ? 0 : 1);
+        if (source !== "user") expect(events[0].tags).toMatchObject({ http_status: 502, dependency_status: 401 });
+        expect(JSON.stringify(events)).not.toContain("PRIVATE_");
+    });
+    it.each(["user", "org", undefined] as const)("only silences a proven personal custom endpoint (%s)", async source => {
+        getUserApiKeys.mockResolvedValue({
+            custom: "PRIVATE_KEY", keySources: { custom: source },
+            providerSettings: { custom: { baseUrl: "https://private-endpoint.example/v1" } },
+        });
+        guardedFetch.mockRejectedValueOnce(new TypeError("PRIVATE_FAILURE", {
+            cause: Object.assign(new Error("PRIVATE_HOST"), { code: "ECONNREFUSED" }),
+        }));
+        expect((await request(app).get("/models/custom")).status).toBe(502);
+        await Sentry.flush(2000);
+        expect(events).toHaveLength(source === "user" ? 0 : 1);
+        if (source !== "user") {
+            expect(events[0].tags).toMatchObject({ failure_code: "ECONNREFUSED", http_status: 502 });
+            expect(events[0].exception?.values?.some(value => value.type === "TypeError" && value.stacktrace?.frames?.length)).toBe(true);
+        }
+        expect(JSON.stringify(events)).not.toMatch(/PRIVATE_|private-endpoint/);
     });
 });

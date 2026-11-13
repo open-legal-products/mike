@@ -17,7 +17,11 @@ const XAI_BASE_URL = "https://api.x.ai/v1";
 const XAI_NON_CHAT_MODEL_RE = /imag|video|voice|tts|speech/i;
 
 /** The endpoint answered the list request with a non-2xx status. */
-class ModelListRefusedError extends Error {}
+class ModelListRefusedError extends Error {
+    constructor(readonly status: number) {
+        super(`Model list request failed (${status})`);
+    }
+}
 
 /**
  * Why a catalog request failed, for the server log. The loaders throw plain
@@ -36,7 +40,7 @@ export function catalogFailureReason(error: unknown): string {
 }
 
 /**
- * True when the user's endpoint or key is at fault: it refused the request,
+ * An endpoint failure whose ownership the caller must check: it refused the request,
  * did not resolve, could not be reached or answered too slowly, or the
  * egress guard refused its address. A 2xx answer we could not read, or any
  * other error, may be our own bug and stays reported.
@@ -94,9 +98,7 @@ async function readModels(
     // Do not retain response bodies: an arbitrary endpoint's error page is
     // not something to log or forward.
     if (!response.ok) {
-        throw new ModelListRefusedError(
-            `Model list request failed (${response.status})`,
-        );
+        throw new ModelListRefusedError(response.status);
     }
     return listedModels(await response.json());
 }
@@ -109,8 +111,11 @@ export async function listXaiModels(
     // Reading the user's keys is Mike's own work: a failure there is an
     // internal error to log, not a provider outage.
     let key: string | undefined;
+    let userOwned = false;
     try {
-        key = (await getEffectiveApiKeys(userId, orgId, db)).xai?.trim();
+        const keys = await getEffectiveApiKeys(userId, orgId, db);
+        key = keys.xai?.trim();
+        userOwned = keys.keySources?.xai === "user";
     } catch (error) {
         return { ok: false, kind: "error", error };
     }
@@ -136,8 +141,10 @@ export async function listXaiModels(
             kind: "upstream",
             error: new Error(
                 `xAI model catalog could not be loaded: ${catalogFailureReason(error)}`,
+                { cause: error },
             ),
-            report: !isEndpointFault(error),
+            // Shared and unknown ownership remain actionable to the operator.
+            report: !(userOwned && isEndpointFault(error)),
         };
     }
 }
@@ -152,10 +159,11 @@ export async function listCustomEndpointModels(
     orgId?: string | null,
 ): Promise<CatalogResult> {
     let credentials: ReturnType<typeof customEndpointCredentials>;
+    let userOwned = false;
     try {
-        credentials = customEndpointCredentials(
-            await getEffectiveApiKeys(userId, orgId, db),
-        );
+        const keys = await getEffectiveApiKeys(userId, orgId, db);
+        credentials = customEndpointCredentials(keys);
+        userOwned = keys.keySources?.custom === "user";
     } catch (error) {
         return { ok: false, kind: "error", error };
     }
@@ -185,8 +193,10 @@ export async function listCustomEndpointModels(
             kind: "upstream",
             error: new Error(
                 `The OpenAI-compatible endpoint's model list could not be loaded: ${catalogFailureReason(error)}`,
+                { cause: error },
             ),
-            report: !isEndpointFault(error),
+            // Shared and unknown ownership remain actionable to the operator.
+            report: !(userOwned && isEndpointFault(error)),
         };
     }
 }
