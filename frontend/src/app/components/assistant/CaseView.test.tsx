@@ -160,4 +160,59 @@ describe("CaseView", () => {
             "thecourtthereforeconcludesthatreliefisdenied",
         );
     });
+
+    describe("a saved Legal Data Hunter source without its text", () => {
+        const saved = {
+            ...document,
+            document_id: "mcp:test",
+            type: "case" as const,
+            subdocuments: [
+                { document_id: "mcp:test:text", title: "R v X", type: "html" as const },
+            ],
+        };
+
+        it("shows a spinner, not an empty body, while the text loads", () => {
+            render(<CaseView document={saved} isLoading />);
+            expect(
+                screen.getByRole("status", { name: "Loading document" }),
+            ).toBeInTheDocument();
+            expect(
+                screen.queryByText("No document text returned."),
+            ).not.toBeInTheDocument();
+        });
+
+        it("shows the load error with a retry instead of an empty body", () => {
+            const onRetry = vi.fn();
+            render(
+                <CaseView
+                    document={saved}
+                    error="Connect Legal Data Hunter in Settings → Connectors to view this source."
+                    onRetry={onRetry}
+                />,
+            );
+            expect(
+                screen.getByText(
+                    "Connect Legal Data Hunter in Settings → Connectors to view this source.",
+                ),
+            ).toBeInTheDocument();
+            expect(
+                screen.queryByText("No document text returned."),
+            ).not.toBeInTheDocument();
+            fireEvent.click(screen.getByRole("button", { name: "Try again" }));
+            expect(onRetry).toHaveBeenCalledOnce();
+        });
+
+        it("shows the text once it has loaded", () => {
+            render(
+                <CaseView
+                    document={{
+                        ...saved,
+                        subdocuments: [{ ...saved.subdocuments[0], text: "Held, the appeal is allowed." }],
+                    }}
+                />,
+            );
+            expect(screen.getByText("Held, the appeal is allowed.")).toBeInTheDocument();
+            expect(screen.queryByRole("status", { name: "Loading document" })).not.toBeInTheDocument();
+        });
+    });
 });

@@ -168,8 +168,13 @@ export function CaseView({
     }, [activeQuote, activeSubdocument, isEmbeddedSource, quoteFocusKey]);
 
     const surfaceClassName = LIQUID_GLASS_FLAT_CLASS;
-    const visibleLoading = isLoading && subdocuments.length === 0;
-    const visibleError = subdocuments.length === 0 ? error : null;
+    // A saved Legal Data Hunter source keeps its subdocument but not its
+    // text, so "loaded" means some subdocument has a body to show.
+    const hasContent = subdocuments.some(
+        (subdocument) => !!subdocument.html || !!subdocument.text,
+    );
+    const visibleLoading = isLoading && !hasContent;
+    const visibleError = hasContent ? null : error;
 
     return (
         <div className="flex min-h-0 flex-1 flex-col">
@@ -205,10 +210,18 @@ export function CaseView({
 
             <div className="flex min-h-0 flex-1 flex-col">
                 {visibleLoading && (
-                    <div className={cn("h-full min-h-0", surfaceClassName)}>
-                        <div className="flex h-full items-center justify-center p-5">
-                            <Loader2 className="h-7 w-7 animate-spin text-gray-400" />
-                        </div>
+                    <div
+                        role="status"
+                        aria-label="Loading document"
+                        className={cn(
+                            "flex h-full min-h-0 items-center justify-center p-5",
+                            surfaceClassName,
+                        )}
+                    >
+                        <Loader2
+                            aria-hidden="true"
+                            className="h-7 w-7 animate-spin text-muted-foreground"
+                        />
                     </div>
                 )}
                 {visibleError && (
