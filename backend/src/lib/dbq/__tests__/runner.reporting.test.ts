@@ -194,13 +194,13 @@ describe("job pool claim failure reporting", () => {
         await tick();
         expect(claimReports()).toHaveLength(2);
         expect(consoleWarn).toHaveBeenCalledWith(
-            expect.stringMatching(/^\[dbq\] claim failing again \(Error:ECONNREFUSED\)/),
+            expect.stringMatching(/^\[dbq\] claim failing again \(dependency_unreachable\)/),
         );
 
         // A class not reported within the window is still news.
         error = null;
         await tick();
-        error = { code: "ETIMEDOUT", message: "connect ETIMEDOUT" };
+        error = { code: "40P01", message: "deadlock detected" };
         await tick();
         expect(claimReports()).toHaveLength(3);
     });

@@ -29,9 +29,9 @@ describe("pollFailureClass", () => {
   });
 
   it("keys code-less errors by a message hash, so different messages differ", () => {
-    const a = pollFailureClass(new TypeError("fetch failed"));
+    const a = pollFailureClass(new TypeError("x is not a function"));
     expect(a).toMatch(/^TypeError#[0-9a-f]{8}$/);
-    expect(pollFailureClass(new TypeError("fetch failed"))).toBe(a);
+    expect(pollFailureClass(new TypeError("x is not a function"))).toBe(a);
     expect(pollFailureClass(new TypeError("other"))).not.toBe(a);
   });
 
@@ -68,6 +68,33 @@ describe("createPollFailureGate", () => {
     expect(g.failure(coded("PGRST202")).report).toBe(false);
     expect(g.failure(coded("ECONNREFUSED")).report).toBe(true);
     expect(g.failure(coded("ECONNREFUSED")).report).toBe(false);
+  });
+
+  it("reports one outage once while it walks several connectivity codes", () => {
+    const { g } = gate({ t: 0 });
+    // One Postgres/gateway restart: the backend is terminated, PostgREST
+    // loses its pool, then the gateway refuses connections (supabase-js
+    // network shape: code '' with the errno only in `details`).
+    const restart = [
+      coded("57P01"),
+      coded("PGRST002"),
+      {
+        message: "TypeError: fetch failed",
+        details: "TypeError: fetch failed\n\nCaused by: Error: connect ECONNREFUSED private.host:8000 (ECONNREFUSED)\n    at private (node:net:1)",
+        hint: "",
+        code: "",
+      },
+      coded("ECONNREFUSED"),
+    ];
+    expect(restart.map((error) => g.failure(error).report)).toEqual([
+      true, false, false, false,
+    ]);
+  });
+
+  it("still reports a connectivity failure that follows a schema failure", () => {
+    const { g } = gate({ t: 0 });
+    expect(g.failure(coded("PGRST202")).report).toBe(true);
+    expect(g.failure(coded("ECONNREFUSED")).report).toBe(true);
   });
 
   it("logs a compact still-failing line at most once per summary interval", () => {
