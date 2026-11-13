@@ -1,4 +1,4 @@
-import type { ConnectorApprovalItem, DocumentSearchEvent, TextCardEvent } from "@mike/contracts";
+import type { ConnectorApprovalItem, DocumentSearchEvent } from "@mike/contracts";
 import { textCardEvent } from "./textCard";
 import { internalFailure } from "../../../../lib/serviceResult";
 import { canUseWorkflowInWorkspace } from "../../../../lib/workflowWorkspace";
@@ -28,16 +28,19 @@ import {
 import { normalizeCaseDocument } from "../../../../lib/sourceDocuments";
 import {
   COURTLISTENER_TOOL_NAMES,
-  type CaseCitationEvent,
   type CourtlistenerToolEvent,
 } from "./courtlistenerTools";
-import { executeMcpToolCall, type McpToolEvent } from "../../../../lib/mcpConnectors";
+import { executeMcpToolCall } from "../../../../lib/mcpConnectors";
 import {
   APPROVAL_UNAVAILABLE_MESSAGE,
   addApprovalItems,
   planConnectorToolCall,
 } from "./connectorApprovals";
 import { createKeyedLock, type KeyedLock } from "./documentLocks";
+import {
+  emptyToolCallBatchResult,
+  type ToolCallBatchResult,
+} from "./toolBatchResult";
 import {
   GOOGLE_DRIVE_TOOL_PREFIX,
   executeGoogleDriveToolCall,
@@ -82,8 +85,6 @@ import {
   type DocEditedResult,
   type TurnEditState,
   type TurnReadState,
-  type DocCreatedResult,
-  type DocReplicatedResult,
   type TextMatch,
 } from "./documentOps";
 import {
@@ -390,59 +391,32 @@ export async function runToolCalls(
      * (their document edits, creations and connector writes included).
      */
     signal?: AbortSignal;
+    /**
+     * Where to collect the batch's results. They are added as each call
+     * completes, so if a later call rejects, the caller still knows which
+     * edits, creations and other results already happened.
+     */
+    results?: ToolCallBatchResult;
   } = {},
-): Promise<{
-  toolResults: unknown[];
-  docsRead: {
-    filename: string;
-    document_id?: string;
-    version_id?: string | null;
-    version_number?: number | null;
-  }[];
-  docsFound: {
-    filename: string;
-    document_id?: string;
-    version_id?: string | null;
-    version_number?: number | null;
-    query: string;
-    total_matches: number;
-  }[];
-  docsCreated: DocCreatedResult[];
-  documentSearchEvents: DocumentSearchEvent[];
-  docsReplicated: DocReplicatedResult[];
-  workflowsApplied: { workflow_id: string; title: string }[];
-  docsEdited: DocEditedResult[];
-  askInputsEvents: AskInputsEvent[];
-  textCardEvents: TextCardEvent[];
-  courtlistenerEvents: CourtlistenerToolEvent[];
-  caseCitationEvents: CaseCitationEvent[];
-  mcpEvents: McpToolEvent[];
-}> {
-  const toolResults: unknown[] = [];
-  const docsRead: {
-    filename: string;
-    document_id?: string;
-    version_id?: string | null;
-    version_number?: number | null;
-  }[] = [];
-  const docsFound: {
-    filename: string;
-    document_id?: string;
-    version_id?: string | null;
-    version_number?: number | null;
-    query: string;
-    total_matches: number;
-  }[] = [];
-  const docsCreated: DocCreatedResult[] = [];
-  const documentSearchEvents: DocumentSearchEvent[] = [];
-  const docsReplicated: DocReplicatedResult[] = [];
-  const workflowsApplied: { workflow_id: string; title: string }[] = [];
-  const docsEdited: DocEditedResult[] = [];
-  const askInputsEvents: AskInputsEvent[] = [];
-  const textCardEvents: TextCardEvent[] = [];
-  const courtlistenerEvents: CourtlistenerToolEvent[] = [];
-  const caseCitationEvents: CaseCitationEvent[] = [];
-  const mcpEvents: McpToolEvent[] = [];
+): Promise<ToolCallBatchResult> {
+  // Filled in place as each call completes, so a caller that passed
+  // `results` still has what finished when a later call rejects.
+  const results = options.results ?? emptyToolCallBatchResult();
+  const {
+    toolResults,
+    docsRead,
+    docsFound,
+    docsCreated,
+    documentSearchEvents,
+    docsReplicated,
+    workflowsApplied,
+    docsEdited,
+    askInputsEvents,
+    textCardEvents,
+    courtlistenerEvents,
+    caseCitationEvents,
+    mcpEvents,
+  } = results;
   const approvalItems: ConnectorApprovalItem[] = [];
   const documentLocks = options.documentLocks ?? createKeyedLock();
   const courtState: CourtlistenerTurnState = courtlistenerState ?? {
@@ -470,6 +444,35 @@ export async function runToolCalls(
     CourtlistenerToolEvent,
     { type: "courtlistener_find_in_case" }
   >[] = [];
+  // The grouped searches' summary. Kept current in the batch result as each
+  // search completes, so a later call's rejection still leaves the finished
+  // searches there; at the end of the batch it moves last and is streamed.
+  let groupedFindInCaseSummary: CourtlistenerToolEvent | null = null;
+  const summarizeGroupedFindInCase = (): CourtlistenerToolEvent => {
+    const errors = groupedFindInCaseEvents
+      .map((event) => event.error)
+      .filter((error): error is string => !!error);
+    const summary: CourtlistenerToolEvent = {
+      type: "courtlistener_find_in_case",
+      cluster_id: null,
+      query: "",
+      total_matches: groupedFindInCaseEvents.reduce(
+        (sum, event) => sum + event.total_matches,
+        0,
+      ),
+      searches: groupedFindInCaseEvents.map(findInCaseSearchSummary),
+      ...(errors.length ? { error: errors.join("; ") } : {}),
+    };
+    if (groupedFindInCaseSummary) {
+      courtlistenerEvents.splice(
+        courtlistenerEvents.indexOf(groupedFindInCaseSummary),
+        1,
+      );
+    }
+    courtlistenerEvents.push(summary);
+    groupedFindInCaseSummary = summary;
+    return summary;
+  };
 
   const registerGeneratedDocument = (
     tc: ToolCall,
@@ -1507,6 +1510,7 @@ export async function runToolCalls(
         };
         if (shouldGroupFindInCase) {
           groupedFindInCaseEvents.push(event);
+          summarizeGroupedFindInCase();
         } else {
           write(`data: ${JSON.stringify(event)}\n\n`);
           courtlistenerEvents.push(event);
@@ -1561,6 +1565,7 @@ export async function runToolCalls(
       };
       if (shouldGroupFindInCase) {
         groupedFindInCaseEvents.push(event);
+        summarizeGroupedFindInCase();
       } else {
         write(`data: ${JSON.stringify(event)}\n\n`);
         courtlistenerEvents.push(event);
@@ -2432,39 +2437,12 @@ export async function runToolCalls(
   }
 
   if (shouldGroupFindInCase && groupedFindInCaseEvents.length > 0) {
-    const errors = groupedFindInCaseEvents
-      .map((event) => event.error)
-      .filter((error): error is string => !!error);
-    const groupEvent: CourtlistenerToolEvent = {
-      type: "courtlistener_find_in_case",
-      cluster_id: null,
-      query: "",
-      total_matches: groupedFindInCaseEvents.reduce(
-        (sum, event) => sum + event.total_matches,
-        0,
-      ),
-      searches: groupedFindInCaseEvents.map(findInCaseSearchSummary),
-      ...(errors.length ? { error: errors.join("; ") } : {}),
-    };
-    write(`data: ${JSON.stringify(groupEvent)}\n\n`);
-    courtlistenerEvents.push(groupEvent);
+    // Moves the summary after the batch's other CourtListener events.
+    const summary = summarizeGroupedFindInCase();
+    write(`data: ${JSON.stringify(summary)}\n\n`);
   }
 
   addApprovalItems(askInputsEvents, approvalItems);
 
-  return {
-    toolResults,
-    docsRead,
-    docsFound,
-    docsCreated,
-    documentSearchEvents,
-    docsReplicated,
-    workflowsApplied,
-    docsEdited,
-    askInputsEvents,
-    textCardEvents,
-    courtlistenerEvents,
-    caseCitationEvents,
-    mcpEvents,
-  };
+  return results;
 }
