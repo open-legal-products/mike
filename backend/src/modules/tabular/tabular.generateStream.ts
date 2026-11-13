@@ -658,7 +658,12 @@ export async function streamTabularGenerateSync(args: {
     const reportedFailures = new Set<string>();
     const reportFailure = (error: unknown): boolean => {
         if (isRefusalShownToUser(error)) return false;
-        const failure = `${providerFailureKind(error)}:${providerFailureStatus(error) ?? ""}`;
+        const kind = providerFailureKind(error);
+        // Unknown failures can be distinct adapter/application bugs with
+        // different stacks. Only identified provider conditions repeat here;
+        // the final transport owns sampling for everything else.
+        if (kind === "chat.stream_failed") return true;
+        const failure = `${kind}:${providerFailureStatus(error) ?? ""}`;
         if (reportedFailures.has(failure)) return false;
         reportedFailures.add(failure);
         return true;
