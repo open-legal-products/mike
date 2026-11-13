@@ -18,6 +18,17 @@ import { devLog } from "../../lib/log";
 // Accept / reject a tracked-change edit
 // ---------------------------------------------------------------------------
 
+type ResolveEditResult =
+    | { ok: true; body: Record<string, unknown> }
+    | { ok: false; detail: string; status?: number; error?: unknown };
+
+const RESOLVE_ATTEMPTS = 3;
+const VERSION_CONFLICT = {
+    ok: false,
+    status: 409,
+    detail: "This document changed. Reopen the latest version and try again.",
+} as const;
+
 export async function resolveEdit(
     mode: "accept" | "reject",
     documentId: string,
@@ -25,10 +36,25 @@ export async function resolveEdit(
     userId: string,
     userEmail: string | undefined,
     db: Db,
-): Promise<
-    | { ok: true; body: Record<string, unknown> }
-    | { ok: false; detail: string; status?: number; error?: unknown }
-> {
+): Promise<ResolveEditResult> {
+    // The usual winner of the swap is a review of another card on this
+    // document. Each attempt starts from the edit row and the current version,
+    // and the change is addressed by w:id, so redoing it on the newer bytes is
+    // safe; only sustained contention reaches the user as a conflict.
+    for (let attempt = 1; ; attempt++) {
+        const result = await resolveEditOnce(mode, documentId, editId, userId, userEmail, db);
+        if (result !== VERSION_CONFLICT || attempt >= RESOLVE_ATTEMPTS) return result;
+    }
+}
+
+async function resolveEditOnce(
+    mode: "accept" | "reject",
+    documentId: string,
+    editId: string,
+    userId: string,
+    userEmail: string | undefined,
+    db: Db,
+): Promise<ResolveEditResult> {
     devLog(`[edit-resolution] incoming ${mode}`, {
         userId,
         documentId,
@@ -189,7 +215,7 @@ export async function resolveEdit(
         if (!versionErr) await deleteFileBestEffort(nextPath, "edit-resolution-conflict");
         return versionErr
             ? { ok: false, detail: "Failed to resolve edit", error: versionErr }
-            : { ok: false, status: 409, detail: "This document changed. Reopen the latest version and try again." };
+            : VERSION_CONFLICT;
     }
 
     const { error: statusErr } = await db
