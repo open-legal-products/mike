@@ -161,6 +161,9 @@ export function assistantStreamErrorPayload(
     ...(isReported(error) ? { reporting_owner: BACKEND_REPORTING_OWNER } : {}),
     ...(requestId ? { request_id: requestId } : {}),
   };
+  // A caller that runs the model itself (tabular) holds the provider's own
+  // error, not an AssistantStreamError; it gets the verdict the engine would
+  // have tagged on that same failure.
   const safe =
     error instanceof AssistantStreamError
       ? [...error.events]
@@ -169,13 +172,30 @@ export function assistantStreamErrorPayload(
             (event): event is Extract<AssistantEvent, { type: "error" }> =>
               event.type === "error" && event.safe_to_display === true,
           )
-      : undefined;
-  if (!safe) return { message: ASSISTANT_ERROR_MESSAGE, ...reporting };
+      : modelFailureEvent(error);
+  if (!safe?.safe_to_display) return { message: ASSISTANT_ERROR_MESSAGE, ...reporting };
   return {
     message: safe.message,
     safe_to_display: true,
     ...(safe.code ? { code: safe.code } : {}),
     ...reporting,
+  };
+}
+
+/** The error event a failed model call becomes, shown only when it is ours. */
+function modelFailureEvent(
+  err: unknown,
+): Extract<AssistantEvent, { type: "error" }> {
+  const safeToDisplay = err instanceof UserFacingError;
+  return {
+    type: "error",
+    message: safeToDisplay ? err.message : ASSISTANT_ERROR_MESSAGE,
+    ...(safeToDisplay ? { safe_to_display: true } : {}),
+    // A rejected key is worth naming: the client turns this into a prompt
+    // to go fix the key rather than a suggestion to retry.
+    ...(err instanceof InvalidApiKeyError
+      ? { code: "invalid_api_key" as const }
+      : {}),
   };
 }
 
@@ -1204,19 +1224,10 @@ export async function runLLMStream(params: {
           tags: { component: "chat-stream", ...(isSubagent ? { operation: "chat.subagent" as const } : {}) },
         }, "[chat/stream] model stream failed");
       }
-      const message = safeToDisplay ? err.message : ASSISTANT_ERROR_MESSAGE;
-      events.push({
-        type: "error",
-        message,
-        ...(safeToDisplay ? { safe_to_display: true } : {}),
-        // A rejected key is worth naming: the client turns this into a prompt
-        // to go fix the key rather than a suggestion to retry.
-        ...(err instanceof InvalidApiKeyError
-          ? { code: "invalid_api_key" as const }
-          : {}),
-      });
+      const errorEvent = modelFailureEvent(err);
+      events.push(errorEvent);
       throw new AssistantStreamError(
-        message,
+        errorEvent.message,
         fullText,
         events.map(sanitizeAssistantEvent),
         { cause: failure },
