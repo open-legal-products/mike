@@ -9,7 +9,8 @@ import type { Db } from "../../lib/supabase";
 import type { Readable } from "node:stream";
 import {
     BlobUploadSizeError,
-    downloadFile,
+    createFileReadStream,
+    headFile,
     writeBlobFromStream,
 } from "../../lib/storage";
 import {
@@ -35,19 +36,29 @@ function contentTypeFor(filename: string): string {
 
 /**
  * Resolve a filesystem-driver blob token (the fs stand-in for an S3 presigned
- * GET) to its bytes. The token itself is the authorization: it is minted only
- * after an authenticated caller's access check, matching the S3 presigned URLs
- * used by the cloud storage driver.
+ * GET) to a lazily opened read stream. The token itself is the authorization:
+ * it is minted only after an authenticated caller's access check, matching the
+ * S3 presigned URLs used by the cloud storage driver.
+ *
+ * Streaming rather than buffering keeps a download's memory cost bounded: the
+ * upload path is fully streamed, and this keeps the read half symmetrical so
+ * concurrent downloads of large documents cannot exhaust the process heap.
  */
 export async function resolveBlobDownload(token: string): Promise<
-    ServiceResult<{ bytes: Buffer; contentType: string; filename: string }>
+    ServiceResult<{
+        stream: Readable;
+        contentLength: number | null;
+        contentType: string;
+        filename: string;
+    }>
 > {
     const info = verifyBlobToken(token);
     if (!info) return failure("not_found", "Invalid or expired link");
-    const bytes = await downloadFile(info.path);
-    if (!bytes) return failure("not_found", "File not found");
+    const head = await headFile(info.path);
+    if (!head) return failure("not_found", "File not found");
     return ok({
-        bytes: Buffer.from(bytes),
+        stream: createFileReadStream(info.path),
+        contentLength: head.size,
         contentType: contentTypeFor(info.filename),
         filename: info.filename,
     });
@@ -96,7 +107,13 @@ export async function resolveTokenDownload(
     db: Db,
     args: { token: string; userId: string; userEmail: string | undefined },
 ): Promise<
-    | { ok: true; bytes: Buffer; contentType: string; filename: string }
+    | {
+          ok: true;
+          stream: Readable;
+          contentLength: number | null;
+          contentType: string;
+          filename: string;
+      }
     | { ok: false; kind: "invalid_link" | "not_found" }
 > {
     const info = verifyDownload(args.token);
@@ -120,12 +137,15 @@ export async function resolveTokenDownload(
     const access = await ensureDocAccess(doc, args.userId, args.userEmail, db);
     if (!access.ok) return { ok: false, kind: "not_found" };
 
-    const raw = await downloadFile(info.path);
-    if (!raw) return { ok: false, kind: "not_found" };
+    // Head before opening so a missing object still collapses to not_found,
+    // and so browsers get a Content-Length to show download progress.
+    const head = await headFile(info.path);
+    if (!head) return { ok: false, kind: "not_found" };
 
     return {
         ok: true,
-        bytes: Buffer.from(raw),
+        stream: createFileReadStream(info.path),
+        contentLength: head.size,
         contentType: contentTypeFor(info.filename),
         filename: info.filename,
     };
