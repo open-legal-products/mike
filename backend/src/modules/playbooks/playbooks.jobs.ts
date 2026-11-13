@@ -50,6 +50,8 @@ import {
   recordPlaybookRunAudit,
 } from "./playbooks.audit";
 
+import { DocumentReviewRetryableError } from "../documents/documents.service";
+
 export const PLAYBOOK_REVIEW_JOB = "playbook.review";
 export const PLAYBOOK_IMPORT_JOB = "playbook.import";
 
@@ -125,7 +127,13 @@ async function untilRecorded(
   try {
     await work();
   } catch (error) {
-    const row = await loadRow(db, table, id);
+    let row: Record<string, unknown> | null;
+    try { row = await loadRow(db, table, id); }
+    catch (readError) {
+      // Preserve the retry marker through a failed reconciliation read,
+      // especially for the inline dispatcher below.
+      throw error instanceof DocumentReviewRetryableError ? error : readError;
+    }
     if (!row || row.status !== "running") return;
     throw error;
   }
@@ -316,6 +324,10 @@ async function dispatch(
         kind,
         error: safeError(error),
       });
+      // An inline transport fault has no automatic retry, but its RPC may
+      // still commit. Leave the run unresolved rather than racing it with
+      // a terminal failure. The history reader can report interrupted work.
+      if (error instanceof DocumentReviewRetryableError) return;
       await onFailure(db, job).catch((hookError: unknown) =>
         reportFailureHookCrash(hookError, kind),
       );

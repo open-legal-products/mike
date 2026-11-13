@@ -75,6 +75,42 @@ test only the non-LLM flows first:
 Then add one disposable, capped model-provider key and test assistant behavior
 with synthetic documents.
 
+## Playbook Review Recovery Regressions
+
+After applying the current schema to a disposable database, run the same
+transaction regression as schema-drift CI:
+
+```bash
+psql "$SUPABASE_TEST_DB_URL" -X --set ON_ERROR_STOP=1 \
+  -f backend/scripts/test-playbook-review-publication.sql
+```
+
+It rolls back all synthetic rows and temporary fault-injection triggers. It
+checks exact finding/edit mapping, replay, source/status guards and atomic
+rollback, including extraction rows and queued jobs. This sequential script
+does not establish concurrent lock behavior or lost-network-response handling.
+
+The actual-handler crash regression requires loopback PostgreSQL and a local
+Supabase REST API (or PostgREST mounted beneath `/rest/v1`), `psql` in `PATH`,
+and the locked backend dependencies. Set `SUPABASE_TEST_URL`,
+`SUPABASE_TEST_DB_URL` and `SUPABASE_TEST_SERVICE_ROLE_KEY` for that isolated
+stack, then run from `backend/`:
+
+```bash
+PLAYBOOK_REAL_REVIEW=1 PLAYBOOK_NATIVE_EVIDENCE_DIR=/tmp/mike-review-evidence \
+  npm test -- src/modules/playbooks/__tests__/playbookRecovery.supabase.test.ts \
+  --maxWorkers=1 --no-file-parallelism
+```
+
+This test uses synthetic model output and disk object storage, but the real
+review handler, DOCX matcher, Supabase client and database. It kills the child
+process after the committed RPC response and invokes the job handler in a
+fresh process with attempt two. It does not test the queue scheduler's claim
+operation. The same test on the pre-fix source exposes the missing version and
+finding links. Unlike the SQL test, it retains unique synthetic rows and local
+DOCX evidence for inspection. Remove them only when done with the disposable
+test environment. Never use a production database or real storage keys.
+
 ## Clean Up After Testing
 
 After testing, delete:

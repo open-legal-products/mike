@@ -23,12 +23,16 @@ vi.mock("../../../lib/storage", async (original) => ({
 }));
 
 import { DbJobDeferredError, type DbJob } from "../../../lib/dbq/types";
+import { processClaimedJob } from "../../../lib/dbq/runner";
+import type { Db } from "../../../lib/supabase";
 import {
   blankPlaybookContent,
   compilePlaybookImport,
   INTERRUPTED_IMPORT_ERROR,
   INTERRUPTED_RUN_ERROR,
   PLAYBOOK_EDITED_DURING_REPLACEMENT_ERROR,
+  playbookReviewWork,
+  runPlaybookReview,
 } from "../playbooks.operations";
 import {
   handlePlaybookImport,
@@ -140,6 +144,61 @@ const audited = (action: string) =>
 afterEach(() => vi.unstubAllEnvs());
 
 describe("queueing a playbook review", () => {
+  it.each(["running", "read_error", "read_throw"])(
+    "does not fail an inline publication still in flight after a %s reconciliation",
+    async (reconciliation) => {
+      vi.stubEnv("DB_JOBS_ENABLED", "false");
+      const { db, tables, writes } = database([book()]);
+      const rpc = db.rpc.bind(db);
+      let dispatched = false;
+      let finishCommit!: () => PromiseLike<unknown>;
+      db.rpc = ((name: string, args: Record<string, unknown>) => {
+        // The response timed out before the server reached the run lock.
+        // Its transaction may still complete, modeled by finishCommit below.
+        finishCommit = () => rpc(name, args);
+        dispatched = true;
+        return Promise.resolve({ data: null, error: { code: "08006", message: "response lost" } });
+      }) as unknown as Db["rpc"];
+      const from = db.from.bind(db);
+      db.from = ((table: string) => {
+        const query = from(table) as unknown as { maybeSingle: () => Promise<unknown> };
+        const read = query.maybeSingle.bind(query);
+        query.maybeSingle = async () => {
+          if (table === "playbook_runs" && dispatched && reconciliation !== "running") {
+            if (reconciliation === "read_throw") throw new Error("read unavailable");
+            return { data: null, error: { code: "08006", message: "read unavailable" } };
+          }
+          return read();
+        };
+        return query;
+      }) as unknown as Db["from"];
+      let inlineSettled = false;
+      const warn = vi.spyOn(console, "warn").mockImplementation((label) => {
+        if (label === "[playbooks] inline job failed") inlineSettled = true;
+      });
+      try {
+        await queuePlaybookReview({ userId: "owner", playbookId: "book", documentText: "Contract",
+          model: MODEL, reviewMode: "strict", db });
+        await vi.waitFor(() => expect(inlineSettled).toBe(true));
+        expect(tables.playbook_runs[0].status).toBe("running");
+        expect(writes.filter((write) => write.table === "playbook_runs" && write.payload.status === "failed")).toEqual([]);
+        await finishCommit();
+        expect(tables.playbook_runs[0]).toMatchObject({ status: "completed", summary: "Reviewed" });
+        expect(storage.deleteFile).not.toHaveBeenCalled();
+      } finally { warn.mockRestore(); }
+    },
+  );
+
+  it("records a deterministic publication validation failure instead of leaving it unresolved", async () => {
+    vi.stubEnv("DB_JOBS_ENABLED", "false");
+    const { db, tables } = database([book()]);
+    db.rpc = (() => Promise.resolve({ data: null, error: { code: "22023", message: "invalid prepared mapping" } })) as unknown as Db["rpc"];
+    await queuePlaybookReview({ userId: "owner", playbookId: "book", documentText: "Contract",
+      model: MODEL, reviewMode: "strict", db });
+    await vi.waitFor(() => expect(tables.playbook_runs[0].status).toBe("failed"));
+    expect(tables.playbook_runs[0].error).toBe("The review failed. Try again.");
+  });
+
   it("stores the run and queues a job for it instead of running the model", async () => {
     const { db, tables } = database([book()]);
 
@@ -190,6 +249,97 @@ describe("queueing a playbook review", () => {
 });
 
 describe("the playbook.review job", () => {
+  it("returns the exact different stored winner rather than this claim's model output", async () => {
+    vi.stubEnv("DOWNLOAD_SIGNING_SECRET", "synthetic-test-only");
+    const { db, tables } = database([book()]);
+    const row = runRow({ document_id: "doc-1" });
+    tables.playbook_runs.push(row);
+    const work = playbookReviewWork(row, { ...reviewPayload, userId: "owner" });
+    const savedFindings = [{ id: "saved-finding", ruleId: "cap", ruleName: "Stored winner",
+      status: "acceptable", analysis: "Already reviewed", suggestedText: "", quote: "", location: "", insertAfter: "", topicId: null }];
+    tables.document_versions = [{ id: "saved-version", document_id: "doc-1", version_number: 7,
+      filename: "Saved.docx", storage_path: "saved.docx", deleted_at: null }];
+    completeText.mockImplementation(async () => {
+      Object.assign(row, { status: "completed", summary: "The other claim won", findings_json: savedFindings,
+        edited_version_id: "saved-version", completed_at: "2026-11-07T10:00:00.000Z" });
+      return reviewed("This claim must not be returned");
+    });
+    const result = await runPlaybookReview(db, work, { claude: "test-key" });
+    expect(result).toMatchObject({ status: "completed", summary: "The other claim won",
+      findings: savedFindings, editedVersionId: "saved-version", editedVersionNumber: 7,
+      completedAt: "2026-11-07T10:00:00.000Z" });
+    expect(result.editedDownloadUrl).toBeTruthy();
+    expect(audited("playbook.run")).toEqual([]);
+  });
+
+  it.each(["audit", "signing", "version_lookup"])("keeps a saved completed result after postcommit %s failure", async (fault) => {
+    vi.stubEnv("DOWNLOAD_SIGNING_SECRET", fault === "signing" ? "" : "synthetic-test-only");
+    const { db, tables, writes } = database([book()]);
+    const row = runRow({ document_id: "doc-1" });
+    tables.playbook_runs.push(row);
+    const work = playbookReviewWork(row, { ...reviewPayload, userId: "owner" });
+    const savedFindings = [{ id: "stored-finding", ruleName: "Stored finding", status: "acceptable", analysis: "Saved analysis" }];
+    tables.document_versions = [{ id: "saved-version", document_id: "doc-1", version_number: 2,
+      filename: "Saved.docx", storage_path: "saved.docx", deleted_at: null }];
+    db.rpc = (() => {
+      Object.assign(row, { status: "completed", summary: "Saved summary", findings_json: savedFindings,
+        edited_version_id: "saved-version", completed_at: new Date().toISOString() });
+      return Promise.resolve({ data: { disposition: "published", run: structuredClone(row) }, error: null });
+    }) as unknown as Db["rpc"];
+    if (fault === "audit") recordAudit.mockRejectedValueOnce(new Error("audit unavailable"));
+    if (fault === "version_lookup") {
+      const from = db.from.bind(db);
+      db.from = ((table: string) => {
+        const query = from(table) as unknown as { maybeSingle: () => Promise<unknown> };
+        if (table === "document_versions") query.maybeSingle = async () => ({ data: null, error: { code: "08006" } });
+        return query;
+      }) as unknown as Db["from"];
+    }
+    const result = await runPlaybookReview(db, work, { claude: "test-key" });
+    expect(result).toMatchObject({ status: "completed", summary: "Saved summary",
+      findings: savedFindings, editedVersionId: "saved-version" });
+    expect(row.status).toBe("completed");
+    expect(writes.filter((write) => write.table === "playbook_runs" && write.payload.status === "failed")).toEqual([]);
+    if (fault !== "audit") expect(result.editedDownloadUrl).toBeNull();
+    expect(storage.deleteFile).not.toHaveBeenCalled();
+  });
+
+  it.each([1, 3])("keeps the queued retry budget for unresolved publication at attempt %i", async (attempt) => {
+    const { db, tables } = database([book()]);
+    tables.playbook_runs.push(runRow({ updated_at: silent() }));
+    const claimed = job("playbook.review", reviewPayload, attempt);
+    tables.db_jobs = [claimed as unknown as Row];
+    const publish = db.rpc.bind(db);
+    db.rpc = (() => Promise.resolve({ data: null, error: { code: "08006", message: "response lost" } })) as unknown as Db["rpc"];
+    await processClaimedJob(db, { "playbook.review": handlePlaybookReview }, claimed,
+      { "playbook.review": markPlaybookReviewJobFailed });
+    expect(tables.db_jobs[0].status).toBe(attempt === 1 ? "pending" : "failed");
+    expect(tables.playbook_runs[0].status).toBe(attempt === 1 ? "running" : "failed");
+    if (attempt === 3) {
+      expect(tables.playbook_runs[0].error).toBe(INTERRUPTED_RUN_ERROR);
+      // Exhaustion deliberately ends queued work. An old request that only
+      // reaches its guarded publication afterwards cannot revive that run.
+      const late = await publish("publish_playbook_review", {
+        p_run_id: "run-1", p_user_id: "owner", p_summary: "Late", p_findings: [], p_version: null,
+      });
+      expect(late.data).toMatchObject({ disposition: "terminal" });
+      expect(tables.playbook_runs[0].summary).toBeNull();
+    }
+  });
+
+  it("ends a queued deterministic SQL validation failure without rerunning the model", async () => {
+    const { db, tables } = database([book()]);
+    tables.playbook_runs.push(runRow());
+    const claimed = job("playbook.review", reviewPayload);
+    tables.db_jobs = [claimed as unknown as Row];
+    db.rpc = (() => Promise.resolve({ data: null, error: { code: "22023", message: "invalid prepared mapping" } })) as unknown as Db["rpc"];
+    await processClaimedJob(db, { "playbook.review": handlePlaybookReview }, claimed,
+      { "playbook.review": markPlaybookReviewJobFailed });
+    expect(tables.db_jobs[0].status).toBe("done");
+    expect(tables.playbook_runs[0].status).toBe("failed");
+    expect(completeText).toHaveBeenCalledTimes(1);
+  });
+
   it("runs the review from the run's stored rules and completes it", async () => {
     const { db, tables } = database([book()]);
     tables.playbook_runs.push(runRow());
@@ -402,6 +552,59 @@ const importPayload = {
   startedAt: new Date().toISOString(),
   storageKey: STAGED_KEY,
 };
+
+// Before #819 split the write, main recorded these as failed too (an upload
+// fault) or as text only (a download fault). Preparation publishes nothing,
+// so the run must end, not wait on an outcome that cannot exist.
+describe("a review whose tracked changes could not be prepared", () => {
+  const payload = {
+    ...reviewPayload,
+    userId: "owner",
+    expectedVersion: { id: "v1", storagePath: "source.docx" },
+  };
+  function setup() {
+    const fixture = database([book()]);
+    fixture.tables.playbook_runs.push(runRow({ document_id: "doc-1" }));
+    fixture.tables.documents = [{ id: "doc-1", user_id: "owner", project_id: null,
+      org_id: null, workflow_id: null, current_version_id: "v1" }];
+    fixture.tables.document_versions = [{ id: "v1", document_id: "doc-1",
+      storage_path: "source.docx", filename: "Msa.docx", deleted_at: null }];
+    completeText.mockResolvedValue(JSON.stringify({ summary: "Reviewed", findings: [{
+      ruleId: "cap", ruleName: "Snapshot cap rule", status: "unacceptable", quote: "Contract",
+      analysis: "Uncapped.", suggestedText: "Capped contract",
+    }] }));
+    storage.downloadFile.mockRejectedValue(new Error("storage unavailable"));
+    return fixture;
+  }
+
+  it("ends the run as failed when a chat-started review cannot read the document", async () => {
+    const { db, tables } = setup();
+    const work = playbookReviewWork(tables.playbook_runs[0], payload);
+
+    // The chat tool reports the rejection; the run must not stay `running`.
+    const failure = await runPlaybookReview(db, work, { claude: "test-key" })
+      .catch((error: unknown) => error);
+
+    expect(failure).toBeInstanceOf(Error);
+    expect(tables.playbook_runs[0]).toMatchObject({
+      status: "failed",
+      error: "The review failed. Try again.",
+    });
+  });
+
+  it("ends the queued job without rerunning the model", async () => {
+    const { db, tables } = setup();
+    const claimed = job("playbook.review", payload);
+    tables.db_jobs = [claimed as unknown as Row];
+
+    await processClaimedJob(db, { "playbook.review": handlePlaybookReview }, claimed,
+      { "playbook.review": markPlaybookReviewJobFailed });
+
+    expect(tables.db_jobs[0].status).toBe("done");
+    expect(tables.playbook_runs[0].status).toBe("failed");
+    expect(completeText).toHaveBeenCalledTimes(1);
+  });
+});
 
 describe("the playbook.import job", () => {
   it("compiles the staged upload into the import's playbook and clears the upload", async () => {

@@ -163,6 +163,7 @@ function failing(
 ): Db {
   const refused = { data: null, error: { code: "57014", message: "canceled" } };
   return {
+    rpc: base.rpc.bind(base),
     from: (table: string) => {
       const query = base.from(table) as unknown as Record<string, unknown>;
       const update = query.update as (values: Row) => unknown;

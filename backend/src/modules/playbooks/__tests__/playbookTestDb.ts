@@ -84,6 +84,7 @@ export function database(
       return { data: result, error: null };
     };
     const query = {
+      throwOnError: () => query,
       select: () => query,
       eq: (key: string, value: unknown) => {
         predicates.push((row) => row[key] === value);
@@ -151,5 +152,49 @@ export function database(
     };
     return query;
   };
-  return { db: { from } as unknown as Db, writes, tables };
+  return { db: { from, rpc: publicationRpc(tables, writes) } as unknown as Db, writes, tables };
+}
+
+// Sequential contract model only. PostgreSQL tests establish the actual
+// publication transaction, rollback and concurrent winner behavior.
+export function publicationRpc(
+  tables: Record<string, Row[]>,
+  writes: { table: string; op: string; payload: Row }[] = [],
+) {
+  return async (name: string, args: Row) => {
+    if (name !== "publish_playbook_review") throw new Error(`Unexpected RPC: ${name}`);
+    const run = tables.playbook_runs.find((row) => row.id === args.p_run_id && row.user_id === args.p_user_id);
+    if (!run) return { data: { disposition: "missing" }, error: null };
+    if (run.status !== "running") return { data: {
+      disposition: run.status === "completed" ? "existing" : "terminal", run: structuredClone(run),
+    }, error: null };
+    let disposition = "published";
+    let versionId: unknown = null;
+    const findings = structuredClone(args.p_findings) as Row[];
+    const version = args.p_version as Row | null;
+    if (version) {
+      const doc = (tables.documents ?? []).find((row) => row.id === args.p_document_id);
+      const source = (tables.document_versions ?? []).find((row) => row.id === args.p_expected_version_id);
+      if (!doc || run.document_id !== doc.id || doc.current_version_id !== source?.id ||
+        source?.storage_path !== args.p_expected_storage_path || source?.deleted_at) disposition = "source_changed";
+      else {
+        const number = (tables.document_versions ?? []).filter((row) => row.document_id === doc.id).length + 1;
+        versionId = version.id;
+        tables.document_versions.push({ ...version, document_id: doc.id, version_number: number, deleted_at: null });
+        for (const item of args.p_edits as Row[]) {
+          const { finding_index, reason, ...edit } = item;
+          (tables.document_edits ??= []).push({ ...edit, document_id: doc.id, version_id: versionId, status: "pending" });
+          const { id, ...fields } = edit;
+          findings[Number(finding_index)].edit = { ...fields, kind: "edit", edit_id: id,
+            document_id: doc.id, version_id: versionId, version_number: number, reason, status: "pending" };
+        }
+        doc.current_version_id = versionId;
+      }
+    }
+    const payload = { status: "completed", summary: args.p_summary, findings_json: findings,
+      edited_version_id: versionId, completed_at: new Date().toISOString(), updated_at: new Date().toISOString() };
+    Object.assign(run, payload);
+    writes.push({ table: "playbook_runs", op: "update", payload });
+    return { data: { disposition, run: structuredClone(run) }, error: null };
+  };
 }
