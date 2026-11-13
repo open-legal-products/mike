@@ -43,7 +43,7 @@ describe("Legal Data Hunter source documents", () => {
         type: "legislation",
         metadata: [],
         quotes: [],
-        actions: [{ type: "link", label: "Official source", url: payload.url }],
+        actions: [{ type: "link", label: "Link", title: "Link", url: payload.url }],
         subdocuments: [{
           document_id: "mcp:connector-1:10:legifrance:12:JORFTEXT0001:text",
           title: payload.title,

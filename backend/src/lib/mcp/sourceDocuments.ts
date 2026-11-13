@@ -87,7 +87,7 @@ export function extractLegalDataHunterSource(
     text: body,
     document: {
       document_id: documentId, title, type, metadata: [], quotes: [],
-      actions: [{ type: "link", label: "Official source", url: officialUrl }],
+      actions: [{ type: "link", label: "Link", title: "Link", url: officialUrl }],
       // `text`, not `html`: the shared panel renders this as plain text.
       subdocuments: [{ document_id: `${documentId}:text`, title, type: "html", text: body }],
     },

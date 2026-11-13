@@ -49,7 +49,7 @@ function sourceCitation(type: string, url = "https://example.org/official/source
         document: {
             document_id: id, title: "Fair hearing", type,
             metadata: [],
-            actions: [{ type: "link", label: "Official source", url }],
+            actions: [{ type: "link", label: "Link", title: "Link", url }],
             quotes: [{ quote, target: { subdocument_id: `${id}:text` } }],
             subdocuments: [{ document_id: `${id}:text`, title: "Fair hearing", type: "html", text: body }],
         } as PanelDocument, // legal_research is added to @mike/contracts by the backend port.
@@ -114,7 +114,7 @@ describe("Legal Data Hunter citation to document panel", () => {
         const article = within(panel).getByRole("article");
         expect(article.textContent).toBe(`Fair hearing${body}`);
         expect(article.querySelector(".case-quote-highlight")).toHaveTextContent(quote);
-        const officialSource = within(panel).getByRole("link", { name: "Official source" });
+        const officialSource = within(panel).getByRole("link", { name: "Link" });
         expect(officialSource).toHaveAttribute("href", "https://example.org/official/source");
         expect(officialSource).toHaveAttribute("target", "_blank");
         expect(officialSource).toHaveAttribute("rel", "noopener noreferrer");
@@ -138,7 +138,7 @@ describe("Legal Data Hunter citation to document panel", () => {
         renderView(sourceCitation("case", url));
         clickInlineCitation();
         const panel = await screen.findByRole("tabpanel");
-        expect(within(panel).queryByRole("link", { name: "Official source" })).toBeNull();
+        expect(within(panel).queryByRole("link", { name: "Link" })).toBeNull();
     });
 
     it("renders provider text as text, never executable HTML", async () => {

@@ -73,7 +73,7 @@ for (const type of ["case", "legislation", "legal_research"] as const) {
             page: 1, quote, quotes: [{ page: 1, quote, verification: { verified: true } }],
             document: {
                 document_id: documentId, title, type, metadata: [],
-                actions: [{ type: "link", label: "Official source", url: "https://example.com/public-source" }],
+                actions: [{ type: "link", label: "Link", title: "Link", url: "https://example.com/public-source" }],
                 quotes: [{ quote, verification: { verified: true }, target: { subdocument_id: `${documentId}:text` } }],
                 subdocuments: [{ document_id: `${documentId}:text`, title, type: "html", text: `${quote}\n\n<script>window.ldhInjected = true</script>` }],
             },
@@ -98,7 +98,7 @@ for (const type of ["case", "legislation", "legal_research"] as const) {
         });
         await page.goto("/assistant/chat/ldh-citation");
         await page.getByRole("button", { name: title, exact: true }).click();
-        await expect(page.getByRole("link", { name: "Official source", exact: true })).toHaveAttribute("href", "https://example.com/public-source");
+        await expect(page.getByRole("link", { name: "Link", exact: true })).toHaveAttribute("href", "https://example.com/public-source");
         const article = page.getByRole("article");
         await expect(article).toBeVisible();
         await expect(article).toContainText(quote);
