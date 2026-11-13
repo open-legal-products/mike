@@ -134,7 +134,9 @@ const listFiles = vi.fn<(prefix: string) => Promise<string[]>>(
     async () => [] as string[],
 );
 const downloadFile = vi.fn(async (..._a: unknown[]) => new Uint8Array([1, 2, 3]));
-vi.mock("../../lib/storage", () => ({
+vi.mock("../../lib/storage", async (importOriginal) => ({
+    // Keep filename policy real while replacing every storage I/O operation.
+    normalizeDownloadFilename: (await importOriginal<typeof import("../../lib/storage")>()).normalizeDownloadFilename,
     assertStorageConfigured: vi.fn(),
     uploadFile: (key: string, content: ArrayBuffer, contentType: string) =>
         uploadFile(key, content, contentType),
