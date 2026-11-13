@@ -20,6 +20,8 @@ const {
   scheduleMemoryConsolidation,
   dbInserts,
   dbUpdates,
+  dbRpcCalls,
+  dbControl,
 } = vi.hoisted(() => ({
     runLLMStream: vi.fn(),
     checkProjectAccess: vi.fn(),
@@ -36,6 +38,13 @@ const {
   }),
   dbInserts: [] as { table: string; value: unknown }[],
   dbUpdates: [] as { table: string; value: unknown }[],
+  dbRpcCalls: [] as { name: string; args: unknown }[],
+  // Holds the insert of the assistant's answer open until a test releases it.
+  dbControl: {
+    assistantInsertGate: null as Promise<void> | null,
+    // Fails this many assistant inserts before letting one through.
+    assistantInsertFailures: 0,
+  },
 }));
 
 function makeQuery(table: string) {
@@ -69,8 +78,12 @@ function makeQuery(table: string) {
     dbUpdates.push({ table, value });
     return q;
   });
+  let assistantInsert = false;
   q.insert = vi.fn((value: unknown) => {
     dbInserts.push({ table, value });
+    assistantInsert =
+      table === "chat_messages" &&
+      (value as { role?: unknown }).role === "assistant";
     return q;
   });
     q.single = vi.fn(() => Promise.resolve(result));
@@ -78,19 +91,31 @@ function makeQuery(table: string) {
   q.then = (
     resolve: (v: unknown) => unknown,
     reject?: (e: unknown) => unknown,
-  ) => Promise.resolve(result).then(resolve, reject);
+  ) => {
+    const gate = assistantInsert ? dbControl.assistantInsertGate : null;
+    return (gate ?? Promise.resolve())
+      .then(() => {
+        if (assistantInsert && dbControl.assistantInsertFailures > 0) {
+          dbControl.assistantInsertFailures -= 1;
+          return { data: null, error: { message: "insert failed" } };
+        }
+        return result;
+      })
+      .then(resolve, reject);
+  };
     return q;
 }
 
 function mockSupabase() {
   return {
     from: vi.fn((table: string) => makeQuery(table)),
-    rpc: vi.fn((name: string) =>
-      Promise.resolve({
+    rpc: vi.fn((name: string, args: unknown) => {
+      dbRpcCalls.push({ name, args });
+      return Promise.resolve({
         data: name.startsWith("append_chat_") ? "appended" : null,
         error: null,
-      }),
-    ),
+      });
+    }),
     auth: {
       getUser: () =>
         Promise.resolve({ data: { user: { id: "u1" } }, error: null }),
@@ -225,6 +250,9 @@ describe("POST /projects/:projectId/chat", () => {
         vi.clearAllMocks();
     dbInserts.length = 0;
     dbUpdates.length = 0;
+    dbRpcCalls.length = 0;
+    dbControl.assistantInsertGate = null;
+    dbControl.assistantInsertFailures = 0;
         buildMessages.mockReturnValue([]);
         buildProjectDocContext.mockResolvedValue({
             docIndex: {},
@@ -322,6 +350,143 @@ describe("POST /projects/:projectId/chat", () => {
             expect(dbUpdates.some(({ table }) => table === "chats")).toBe(false);
         },
     );
+
+    it.each([
+        ["user", { type: "content", text: "Cancelled by user." }, '"type":"cancelled"'],
+        ["idle", { type: "error", safe_to_display: true }, '"type":"error"'],
+    ] as const)(
+        "ends a turn stopped (%s) while its finished answer is being saved as stopped",
+        async (reason, label, outcome) => {
+            const { getAssistantTurnRun } =
+                await import("../../lib/assistantTurnRuns.js");
+            let releaseSave!: () => void;
+            dbControl.assistantInsertGate = new Promise<void>((resolve) => {
+                releaseSave = resolve;
+            });
+            runLLMStream.mockResolvedValue({
+                fullText: "Done",
+                events: [{ type: "content", text: "Done" }],
+                citations: [],
+            });
+            const assistantInserts = () =>
+                dbInserts.filter(
+                    ({ table, value }) =>
+                        table === "chat_messages" &&
+                        (value as { role?: string }).role === "assistant",
+                );
+
+            const response = request(app)
+                .post("/projects/p1/chat")
+                .set("Authorization", "Bearer test")
+                .send(VALID_BODY)
+                .then((res) => res);
+            await vi.waitFor(() => {
+                expect(assistantInserts()).toHaveLength(1);
+            });
+            getAssistantTurnRun(getActiveAssistantTurn("chat-1")!.id)!.stop(reason);
+            releaseSave();
+            const text = (await response).text;
+
+            expect(text).toContain(outcome);
+            expect(text.split("data: [DONE]").length - 1).toBe(1);
+            // Inserted once as the finished answer, then marked as stopped.
+            const inserted = assistantInserts();
+            expect(inserted).toHaveLength(1);
+            expect(
+                dbRpcCalls.filter(({ name }) => name.startsWith("append_chat_")),
+            ).toEqual([
+                {
+                    name: "append_chat_assistant_events",
+                    args: expect.objectContaining({
+                        p_message_id: (inserted[0].value as { id: string }).id,
+                        p_events: [expect.objectContaining(label)],
+                        p_citations: [],
+                    }),
+                },
+            ]);
+            expect(scheduleMemoryConsolidation).not.toHaveBeenCalled();
+        },
+    );
+
+    it("ends a turn stopped during an insert that then fails as stopped, not as a save error", async () => {
+            const { getAssistantTurnRun } =
+                await import("../../lib/assistantTurnRuns.js");
+            let releaseSave!: () => void;
+            dbControl.assistantInsertGate = new Promise<void>((resolve) => {
+                releaseSave = resolve;
+            });
+            dbControl.assistantInsertFailures = 1;
+            runLLMStream.mockResolvedValue({
+                fullText: "Done",
+                events: [{ type: "content", text: "Done" }],
+                citations: [],
+            });
+            const assistantInserts = () =>
+                dbInserts.filter(
+                    ({ table, value }) =>
+                        table === "chat_messages" &&
+                        (value as { role?: string }).role === "assistant",
+                );
+            const response = request(app)
+                .post("/projects/p1/chat")
+                .set("Authorization", "Bearer test")
+                .send(VALID_BODY)
+                .then((res) => res);
+            await vi.waitFor(() => {
+                expect(assistantInserts()).toHaveLength(1);
+            });
+            getAssistantTurnRun(getActiveAssistantTurn("chat-1")!.id)!.stop();
+            releaseSave();
+            const text = (await response).text;
+
+            expect(text).toContain('"type":"cancelled"');
+            expect(text).not.toContain("could not be saved");
+            expect(assistantInserts().at(-1)?.value).toMatchObject({
+                content: [
+                    { type: "content", text: "Done" },
+                    { type: "content", text: "Cancelled by user." },
+                ],
+            });
+            expect(scheduleMemoryConsolidation).not.toHaveBeenCalled();
+    });
+
+    it("gives a turn stopped during its save no fallback title", async () => {
+            const { generateAssistantChatTitle } =
+                await import("../../modules/chat/chat.title.js");
+            // The title is still generating, so only the fallback could name it.
+            vi.mocked(generateAssistantChatTitle).mockImplementationOnce(
+                () => new Promise<string>(() => {}),
+            );
+            const { getAssistantTurnRun } =
+                await import("../../lib/assistantTurnRuns.js");
+            let releaseSave!: () => void;
+            dbControl.assistantInsertGate = new Promise<void>((resolve) => {
+                releaseSave = resolve;
+            });
+            runLLMStream.mockResolvedValue({
+                fullText: "Done",
+                events: [{ type: "content", text: "Done" }],
+                citations: [],
+            });
+            const response = request(app)
+                .post("/projects/p1/chat")
+                .set("Authorization", "Bearer test")
+                .send(VALID_BODY)
+                .then((res) => res);
+            await vi.waitFor(() => {
+                expect(
+                    dbInserts.some(
+                        ({ table, value }) =>
+                            table === "chat_messages" &&
+                            (value as { role?: string }).role === "assistant",
+                    ),
+                ).toBe(true);
+            });
+            getAssistantTurnRun(getActiveAssistantTurn("chat-1")!.id)!.stop();
+            releaseSave();
+            expect((await response).text).toContain('"type":"cancelled"');
+            expect(dbUpdates.filter(({ table }) => table === "chats")).toEqual([]);
+    });
 
     describe("stream deadline", () => {
         const IDLE_MS = 30_000;

@@ -22,6 +22,7 @@ const { dbState, recordedQueries } = vi.hoisted(() => ({
     messageDetail: { data: null, error: null },
     edits: { data: [], error: null },
     editDetail: { data: null, error: null },
+    assistantUpdateGate: null,
   } as {
     document: QueryResult;
     chatList: QueryResult;
@@ -30,6 +31,8 @@ const { dbState, recordedQueries } = vi.hoisted(() => ({
     messageDetail: QueryResult;
     edits: QueryResult;
     editDetail: QueryResult;
+    /** Holds updates of word_chat_messages open until a test releases it. */
+    assistantUpdateGate: Promise<void> | null;
   },
   recordedQueries: [] as RecordedQuery[],
 }));
@@ -112,7 +115,15 @@ function makeQuery(table: string) {
   query.then = (
     resolve: (value: unknown) => unknown,
     reject?: (reason: unknown) => unknown,
-  ) => Promise.resolve(resultForAwaitedQuery(table)).then(resolve, reject);
+  ) => {
+    const gate =
+      table === "word_chat_messages" && recorded.op === "update"
+        ? dbState.assistantUpdateGate
+        : null;
+    return (gate ?? Promise.resolve())
+      .then(() => resultForAwaitedQuery(table))
+      .then(resolve, reject);
+  };
   return query;
 }
 
@@ -992,6 +1003,47 @@ describe("server-owned Word turns", () => {
       ],
     });
     expect(scheduleMemoryConsolidation).not.toHaveBeenCalled();
+  });
+
+  it("ends a turn stopped while its answer is saved as stopped, with the answer's events kept", async () => {
+    let releaseSave!: () => void;
+    dbState.assistantUpdateGate = new Promise<void>((resolve) => {
+      releaseSave = resolve;
+    });
+    runLLMStream.mockResolvedValue({
+      fullText: "Done",
+      events: [{ type: "content", text: "Done" }],
+      citations: [],
+    });
+    const updates = () =>
+      recordedQueries
+        .filter(({ table, op }) => table === "word_chat_messages" && op === "update")
+        .map(({ payload }) => (payload as { content?: unknown }).content);
+    try {
+      const firstDone = send().then((res) => res);
+      await vi.waitFor(() => {
+        expect(updates()).toHaveLength(1);
+      });
+      const turnId = (await detail()).body.active_turn.id as string;
+      const { getAssistantTurnRun } =
+        await import("../../lib/assistantTurnRuns.js");
+      getAssistantTurnRun(turnId, "word")!.stop();
+      releaseSave();
+
+      const text = (await firstDone).text;
+      expect(text).toContain('"type":"cancelled"');
+      // Saved once as the answer, then rewritten with the stop label.
+      expect(updates()).toEqual([
+        [{ type: "content", text: "Done" }],
+        [
+          { type: "content", text: "Done" },
+          { type: "content", text: "Cancelled by user." },
+        ],
+      ]);
+      expect(scheduleMemoryConsolidation).not.toHaveBeenCalled();
+    } finally {
+      dbState.assistantUpdateGate = null;
+    }
   });
 
   it("refuses a second turn while one is generating into the chat", async () => {

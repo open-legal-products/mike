@@ -695,6 +695,10 @@ chatRouter.post("/", requireAuth, asyncRoute(async (req, res) => {
         // A holder, not a `let`: it is assigned inside the title promise's
         // catch, which TypeScript's flow analysis cannot see.
         const titleOutcome: { failure: { error: unknown } | null } = { failure: null };
+        // Where the finished answer was saved, once it was. A stop that is seen
+        // only after the save marks that answer as stopped instead of saving it
+        // a second time.
+        let savedAnswer: { messageId: string; eventCount: number } | null = null;
         try {
             write(
                 `data: ${JSON.stringify({
@@ -825,6 +829,12 @@ chatRouter.post("/", requireAuth, asyncRoute(async (req, res) => {
                     citations,
                 );
                 completedTurnPersisted = appended;
+                if (appended) {
+                    savedAnswer = {
+                        messageId: askInputsResponse.assistant_message_id,
+                        eventCount: persistedEvents.length,
+                    };
+                }
             } else {
                 const saveError = await updateReservedAssistantMessage(
                     persistedEvents.length ? persistedEvents : null,
@@ -837,6 +847,9 @@ chatRouter.post("/", requireAuth, asyncRoute(async (req, res) => {
                         cause: saveError,
                         component: "chat-stream",
                     });
+                    // A turn stopped while the save was pending ends as stopped,
+                    // not as a save failure (the stop path saves it again).
+                    throwIfTurnStopped(stream.signal, { fullText, events });
                     write(
                         `data: ${JSON.stringify({
                             type: "error",
@@ -849,6 +862,12 @@ chatRouter.post("/", requireAuth, asyncRoute(async (req, res) => {
                     write("data: [DONE]\n\n");
                     return;
                 }
+                if (assistantMessageId) {
+                    savedAnswer = {
+                        messageId: assistantMessageId,
+                        eventCount: persistedEvents.length,
+                    };
+                }
             }
             await subagentRuns.flush();
 
@@ -860,6 +879,12 @@ chatRouter.post("/", requireAuth, asyncRoute(async (req, res) => {
                     null,
                 );
             }
+
+            // The answer is saved, but the turn may have been stopped while it was
+            // being saved (or while the title was awaited). A stop seen here
+            // still ends it as stopped: no fallback title, no memory
+            // consolidation, and the stored answer gets the stop label.
+            throwIfTurnStopped(stream.signal, { fullText, events });
 
             if (!chatTitle && lastUser?.content) {
                 const title = lastUser.content.slice(0, 120);
@@ -965,15 +990,19 @@ chatRouter.post("/", requireAuth, asyncRoute(async (req, res) => {
                         buildCitations: (fullText) =>
                             extractCitations(fullText, docIndex),
                     });
-                    const saveError = askInputsResponse
-                        ? null
-                        : await updateReservedAssistantMessage(
-                              partial.events.length ? partial.events : null,
-                              partial.citations.length
-                                  ? partial.citations
-                                  : null,
-                          );
-                    if (askInputsResponse) {
+                    let saveError: unknown | null = null;
+                    if (savedAnswer) {
+                        // The finished answer is already stored: add only what
+                        // marks it as stopped (the label after its events).
+                        await appendAssistantEventsToMessage(
+                            db,
+                            chatId,
+                            savedAnswer.messageId,
+                            userId,
+                            partial.events.slice(savedAnswer.eventCount),
+                            [],
+                        );
+                    } else if (askInputsResponse) {
                         await appendAssistantEventsToMessage(
                             db,
                             chatId,
@@ -981,6 +1010,11 @@ chatRouter.post("/", requireAuth, asyncRoute(async (req, res) => {
                             userId,
                             partial.events,
                             partial.citations,
+                        );
+                    } else {
+                        saveError = await updateReservedAssistantMessage(
+                            partial.events.length ? partial.events : null,
+                            partial.citations.length ? partial.citations : null,
                         );
                     }
                     if (saveError) {
