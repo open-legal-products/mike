@@ -841,6 +841,32 @@ export async function saveTabularChatTurn(
 }
 
 /**
+ * Mark an answer `saveTabularChatTurn` already stored as stopped: a Stop or
+ * deadline landed while it was being saved (or titled). The row is this
+ * turn's own, so its content is replaced by the stopped message (the same
+ * events plus the stop label) instead of inserting the turn a second time.
+ */
+export async function markSavedTabularChatTurnStopped(
+    db: Db,
+    args: {
+        chatId: string;
+        messageId: string;
+        content: unknown[];
+        annotations: unknown[];
+    },
+): Promise<{ error: unknown }> {
+    const { error } = await db
+        .from("tabular_review_chat_messages")
+        .update({
+            content: args.content.length ? args.content : null,
+            annotations: args.annotations.length ? args.annotations : null,
+        })
+        .eq("id", args.messageId)
+        .eq("chat_id", args.chatId);
+    return { error };
+}
+
+/**
  * Name a chat from its first user message and persist the title. Returns the
  * title so the caller can announce it on the stream, or null when the model
  * declined to produce one (the chat simply stays untitled).

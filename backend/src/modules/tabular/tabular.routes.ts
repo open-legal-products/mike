@@ -94,6 +94,7 @@ import {
     extractTabularAnnotations,
     listTabularReviewChatMessages,
     listTabularReviewChats,
+    markSavedTabularChatTurnStopped,
     prepareTabularChat,
     saveTabularChatTurn,
     titleTabularChat,
@@ -1099,6 +1100,10 @@ tabularRouter.post("/:reviewId/chat", requireAuth, asyncRoute(async (req, res) =
         );
     }
 
+    // Whether the finished answer was stored, once it was. A stop that is seen
+    // only after the save marks that row as stopped instead of inserting the
+    // turn a second time.
+    let assistantSaved = false;
     try {
         const { fullText, events } = await runLLMStream({
             onActivity: run?.touch,
@@ -1131,7 +1136,6 @@ tabularRouter.post("/:reviewId/chat", requireAuth, asyncRoute(async (req, res) =
         const persistedEvents = stripTransientAssistantEvents(events);
         const annotations = extractTabularAnnotations(fullText, tabularStore);
 
-        let assistantSaved = false;
         if (chatId) {
             const saved = await saveTabularChatTurn(db, {
                 chatId,
@@ -1150,6 +1154,12 @@ tabularRouter.post("/:reviewId/chat", requireAuth, asyncRoute(async (req, res) =
             assistantSaved = saved.saved;
         }
 
+        // The answer is saved, but the turn may have been stopped while it
+        // was being saved. A stop seen here still ends it as stopped: no
+        // title, no memory consolidation, and the stored answer gets the stop
+        // label.
+        throwIfTurnStopped(stream.signal, { fullText, events });
+
         // Generate title on first exchange
         if (chatId && isFirstExchange && !chatTitle && lastUser.content) {
             const title = await titleTabularChat(db, {
@@ -1165,6 +1175,9 @@ tabularRouter.post("/:reviewId/chat", requireAuth, asyncRoute(async (req, res) =
                     `data: ${JSON.stringify({ type: "chat_title", chatId, title })}\n\n`,
                 );
             }
+            // Titling is a model call of its own; a stop during it ends the
+            // turn as stopped too, before it is curated.
+            throwIfTurnStopped(stream.signal, { fullText, events });
         }
 
         // Only a durably saved, successful turn is worth consolidating: an
@@ -1201,15 +1214,24 @@ tabularRouter.post("/:reviewId/chat", requireAuth, asyncRoute(async (req, res) =
                     buildCitations: (fullText) =>
                         extractTabularAnnotations(fullText, tabularStore),
                 });
-                const { error: saveError } = await saveTabularChatTurn(db, {
-                    chatId,
-                    messageId: assistantMessageId,
-                    authorUserId: userId,
-                    memoryInputMessageId: inputMessageId,
-                    content: partial.events,
-                    annotations: partial.citations,
-                    touch: "always",
-                });
+                // Once the finished answer is stored, only mark that row as
+                // stopped; inserting it again would fail on its id.
+                const { error: saveError } = assistantSaved
+                    ? await markSavedTabularChatTurnStopped(db, {
+                          chatId,
+                          messageId: assistantMessageId,
+                          content: partial.events,
+                          annotations: partial.citations,
+                      })
+                    : await saveTabularChatTurn(db, {
+                          chatId,
+                          messageId: assistantMessageId,
+                          authorUserId: userId,
+                          memoryInputMessageId: inputMessageId,
+                          content: partial.events,
+                          annotations: partial.citations,
+                          touch: "always",
+                      });
                 if (saveError)
                     console.error(
                         "[tabular/chat] failed to save aborted stream",
