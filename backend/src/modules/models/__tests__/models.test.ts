@@ -2,7 +2,7 @@ import express from "express";
 import request from "supertest";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-const { getUserApiKeys, getOrgWorkKeys, memberOf, guardedFetch } = vi.hoisted(
+const { getUserApiKeys, getOrgWorkKeys, memberOf, guardedFetch, reportError } = vi.hoisted(
     () => ({
         getUserApiKeys: vi.fn(),
         // The keys an organization's work runs on, by organization id.
@@ -10,10 +10,16 @@ const { getUserApiKeys, getOrgWorkKeys, memberOf, guardedFetch } = vi.hoisted(
         // The organizations user-1 belongs to.
         memberOf: { ids: [] as string[] },
         guardedFetch: vi.fn(),
+        reportError: vi.fn(),
     }),
 );
 
 vi.mock("../../../lib/mcp/client", () => ({ guardedFetch }));
+
+vi.mock("../../../lib/observability/sentry", async (importOriginal) => ({
+    ...(await importOriginal<typeof import("../../../lib/observability/sentry")>()),
+    reportError,
+}));
 
 vi.mock("../../../middleware/auth", () => ({
     requireAuth: (
@@ -63,6 +69,7 @@ import {
     INTERNAL_ERROR_CODE,
     INTERNAL_ERROR_MESSAGE,
 } from "../../../lib/httpError";
+import { BlockedDestinationError } from "../../../lib/blockedDestination";
 
 const app = express();
 app.use("/models", modelsRouter);
@@ -682,7 +689,7 @@ describe("GET /models/xai", () => {
     beforeEach(() => {
         vi.stubGlobal("fetch", fetchMock);
         fetchMock.mockReset();
-        getUserApiKeys.mockResolvedValue({ xai: "private-key" });
+        getUserApiKeys.mockResolvedValue({ xai: "private-key", keySources: { xai: "user" } });
     });
     afterEach(() => { vi.unstubAllGlobals(); vi.clearAllMocks(); });
 
@@ -717,11 +724,19 @@ describe("GET /models/xai", () => {
         expect(failed.status).toBe(502);
         expect(JSON.stringify(failed.body)).not.toContain("private-key");
     });
+
+    it("does not report xAI refusing the user's key (MIKE-BACKEND-CF)", async () => {
+        const consoleWarn = vi.spyOn(console, "warn").mockImplementation(() => {});
+        fetchMock.mockResolvedValue(new Response("bad key", { status: 401 }));
+        expect((await request(app).get("/models/xai")).status).toBe(502);
+        expect(reportError).not.toHaveBeenCalled();
+        consoleWarn.mockRestore();
+    });
 });
 
 describe("GET /models/custom", () => {
     const fetchMock = vi.fn();
-    const apiKeys = { custom: "private-key", providerSettings: { custom: { baseUrl: "https://llm.example.com/v1" } } };
+    const apiKeys = { custom: "private-key", keySources: { custom: "user" }, providerSettings: { custom: { baseUrl: "https://llm.example.com/v1" } } };
     beforeEach(() => {
         vi.stubGlobal("fetch", fetchMock);
         fetchMock.mockReset();
@@ -761,6 +776,43 @@ describe("GET /models/custom", () => {
         expect(blocked.status).toBe(502);
         expect(JSON.stringify(blocked.body)).not.toContain("blocked network");
     });
+
+    // The user's endpoint or key is at fault and nothing in Mike can fix it,
+    // so the 502 is logged but not filed (MIKE-BACKEND-DE).
+    it.each([
+        ["answers 401", () => guardedFetch.mockResolvedValueOnce(new Response("denied", { status: 401 }))],
+        ["cannot be reached", () => guardedFetch.mockRejectedValueOnce(
+            new TypeError("fetch failed", { cause: Object.assign(new Error("connect ECONNREFUSED"), { code: "ECONNREFUSED" }) }),
+        )],
+        ["does not resolve", () => guardedFetch.mockRejectedValueOnce(
+            Object.assign(new Error("getaddrinfo ENOTFOUND llm.example.com"), { code: "ENOTFOUND" }),
+        )],
+        ["times out", () => guardedFetch.mockRejectedValueOnce(new DOMException("The operation was aborted due to timeout", "TimeoutError"))],
+        ["is refused by the egress guard", () => guardedFetch.mockRejectedValueOnce(
+            new BlockedDestinationError("Custom endpoint URL resolves to a blocked network address."),
+        )],
+    ])("answers 502 without a report when the endpoint %s", async (_case, arrange) => {
+        const consoleWarn = vi.spyOn(console, "warn").mockImplementation(() => {});
+        arrange();
+        const response = await request(app).get("/models/custom");
+        expect(response.status).toBe(502);
+        expect(response.body).toMatchObject({ code: INTERNAL_ERROR_CODE, detail: INTERNAL_ERROR_MESSAGE });
+        expect(reportError).not.toHaveBeenCalled();
+        expect(consoleWarn).toHaveBeenCalledOnce();
+        consoleWarn.mockRestore();
+    });
+
+    it.each([
+        ["a body that is not JSON", () => new Response("<html>ok</html>", { status: 200 })],
+        ["JSON that is not a model list", () => Response.json({ models: [] })],
+    ])("still reports a 2xx answer with %s", async (_case, body) => {
+        const consoleError = vi.spyOn(console, "error").mockImplementation(() => {});
+        guardedFetch.mockResolvedValueOnce(body());
+        const response = await request(app).get("/models/custom");
+        expect(response.status).toBe(502);
+        expect(reportError).toHaveBeenCalledOnce();
+        consoleError.mockRestore();
+    });
 });
 
 describe("catalog loaders separate Mike's own failures from the provider's", () => {
@@ -788,5 +840,62 @@ describe("catalog loaders separate Mike's own failures from the provider's", () 
         const response = await request(app).get("/models/bedrock");
         expect(response.status).toBe(200);
         expect(fetchMock.mock.calls[0][0]).toBe("https://bedrock.us-iso-east-1.c2s.ic.gov/foundation-models?byOutputModality=TEXT");
+    });
+});
+
+// Exercise the reporting decision through the real SDK and final privacy transport.
+describe("catalog reporting envelopes", () => {
+    let Sentry: typeof import("@sentry/node");
+    let reporting: typeof import("../../../lib/observability/sentry");
+    let events: import("@sentry/node").Event[];
+    beforeEach(async () => {
+        Sentry = await import("@sentry/node");
+        reporting = await vi.importActual("../../../lib/observability/sentry");
+        const { privacyBoundaryIntegration } = await import("../../../lib/observability/sentryPrivacy.js");
+        events = [];
+        reporting.resetSentryForTests("official", { initialized: true });
+        reportError.mockImplementation(reporting.reportError);
+        Sentry.init({
+            dsn: "https://test@sentry.invalid/1", defaultIntegrations: false,
+            integrations: [Sentry.linkedErrorsIntegration(), privacyBoundaryIntegration()], beforeSend: reporting.scrubEvent,
+            transport: () => ({ send: async envelope => {
+                for (const [header, payload] of envelope[1]) if (header.type === "event") events.push(payload as import("@sentry/node").Event);
+                return { statusCode: 200 };
+            }, flush: async () => true }),
+        });
+        vi.spyOn(console, "error").mockImplementation(() => {});
+        vi.spyOn(console, "warn").mockImplementation(() => {});
+    });
+    afterEach(async () => {
+        await Sentry.close(); reporting.resetSentryForTests(); reportError.mockReset();
+        vi.unstubAllGlobals(); vi.restoreAllMocks();
+    });
+    it.each(["user", "org", "env", undefined] as const)("only silences a proven personal xAI key (%s)", async source => {
+        getUserApiKeys.mockResolvedValue({ xai: "PRIVATE_KEY", keySources: { xai: source } });
+        vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response("PRIVATE_UPSTREAM_BODY", { status: 401 })));
+        const response = await request(app).get("/models/xai");
+        expect(response.status).toBe(502);
+        expect(response.body.reporting_owner).toBe("backend");
+        await Sentry.flush(2000);
+        expect(events).toHaveLength(source === "user" ? 0 : 1);
+        if (source !== "user") expect(events[0].tags).toMatchObject({ http_status: 502, dependency_status: 401 });
+        expect(JSON.stringify(events)).not.toContain("PRIVATE_");
+    });
+    it.each(["user", "org", undefined] as const)("only silences a proven personal custom endpoint (%s)", async source => {
+        getUserApiKeys.mockResolvedValue({
+            custom: "PRIVATE_KEY", keySources: { custom: source },
+            providerSettings: { custom: { baseUrl: "https://private-endpoint.example/v1" } },
+        });
+        guardedFetch.mockRejectedValueOnce(new TypeError("PRIVATE_FAILURE", {
+            cause: Object.assign(new Error("PRIVATE_HOST"), { code: "ECONNREFUSED" }),
+        }));
+        expect((await request(app).get("/models/custom")).status).toBe(502);
+        await Sentry.flush(2000);
+        expect(events).toHaveLength(source === "user" ? 0 : 1);
+        if (source !== "user") {
+            expect(events[0].tags).toMatchObject({ failure_code: "ECONNREFUSED", http_status: 502 });
+            expect(events[0].exception?.values?.some(value => value.type === "TypeError" && value.stacktrace?.frames?.length)).toBe(true);
+        }
+        expect(JSON.stringify(events)).not.toMatch(/PRIVATE_|private-endpoint/);
     });
 });
