@@ -20,6 +20,7 @@
 import "./instrument";
 
 import { enforceDocumentLifecycleMigration } from "./lib/dbq/lifecycleGuard";
+import { extractionLauncherWarnings } from "./lib/runtimeConfig";
 import { startAllWorkers, stopAllWorkers } from "./workerRuntime";
 import { flushSentry, reportError } from "./lib/observability/sentry";
 
@@ -28,6 +29,10 @@ import { flushSentry, reportError } from "./lib/observability/sentry";
 // only start claiming rows once the answer is in, so no job is touched by a
 // worker the database cannot back.
 async function main(): Promise<void> {
+  // Extraction jobs run the parser here when the API runs WORKERS_MODE=none.
+  for (const warning of extractionLauncherWarnings()) {
+    console.warn(`[extraction] ${warning}`);
+  }
   await enforceDocumentLifecycleMigration();
   startAllWorkers();
   console.log("Mike worker process running");
