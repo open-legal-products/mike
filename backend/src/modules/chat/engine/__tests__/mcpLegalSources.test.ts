@@ -1,0 +1,401 @@
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { DocIndex, DocStore } from "../types";
+import type { Db } from "../../../../lib/supabase";
+
+// Only external transport and persistence are faked. Planning, account binding,
+// extraction, dispatch, inline reads, citation construction and verification run.
+type StreamParams = Parameters<typeof import("../../../../lib/llm").streamChatWithTools>[0];
+const mocks = vi.hoisted(() => ({ callTool: vi.fn(), connect: vi.fn(), stream: vi.fn<(params: StreamParams) => Promise<{ fullText: string }>>() }));
+vi.mock("../../../../lib/llm", async (original) => ({
+  ...(await original<typeof import("../../../../lib/llm")>()),
+  streamChatWithTools: mocks.stream,
+}));
+vi.mock("@modelcontextprotocol/sdk/client/index.js", () => ({
+  Client: class { connect = mocks.connect; callTool = mocks.callTool; close = async () => {}; },
+}));
+vi.mock("@modelcontextprotocol/sdk/client/streamableHttp.js", () => ({
+  StreamableHTTPClientTransport: class {},
+}));
+vi.mock("../../../../lib/mcp/client", async (original) => ({
+  ...(await original<typeof import("../../../../lib/mcp/client")>()),
+  validateRemoteMcpUrl: async (url: string) => url,
+}));
+vi.mock("../../../../lib/mcp/oauth", async (original) => ({
+  ...(await original<typeof import("../../../../lib/mcp/oauth")>()),
+  discoverOAuthMetadata: async () => { throw new Error("not OAuth"); },
+}));
+import { executeApprovedMcpToolCall, executeMcpToolCall, planMcpToolCall } from "../../../../lib/mcp/servers";
+import { runToolCalls } from "../tools/toolDispatcher";
+import { runApprovedConnectorActions } from "../tools/connectorApprovals";
+import { createCitation, parseCitations } from "../citations";
+import { readDocumentContent } from "../tools/documentOps";
+import { verifyCitations } from "../verifyCitations";
+import { runLLMStream } from "../streaming";
+import { extractCitations } from "../contextBuilders";
+import { getSourceDocument, LEGAL_DATA_HUNTER_CONNECT_DETAIL } from "../../../source-documents/sourceDocuments.service";
+import { extractLegalDataHunterSource, legalDataHunterDocumentId } from "../../../../lib/mcp/sourceDocuments";
+import { registerMcpLegalSource } from "../tools/mcpSourceDocuments";
+
+const args = { source: "legifrance", source_id: "JORFTEXT0001" };
+const payload = {
+  ...args, data_type: "legislation", title: "Article 1103",
+  text: "Les contrats légalement formés tiennent lieu de loi à ceux qui les ont faits.",
+  text_truncated: false, url: "https://www.legifrance.gouv.fr/codes/article/1",
+};
+function fixture() {
+  const connector = {
+    id: "c1", user_id: "u1", org_id: null as string | null, name: "Legal Data Hunter",
+    server_url: "https://legaldatahunter.com/mcp", auth_type: "none",
+    enabled: true, read_only: true, require_write_approval: true,
+    encrypted_auth_config: null, auth_config_iv: null, auth_config_tag: null,
+  };
+  const tool = {
+    id: "t1", connector_id: "c1", tool_name: "get_document",
+    openai_tool_name: "mcp_c1_get_document", enabled: true,
+    annotations: { readOnlyHint: true }, requires_confirmation: false,
+  };
+  const token = { grant_id: "grant-1" };
+  const row = { id: "a1", role: "assistant", content: [] as unknown[], author_user_id: "u1" };
+  const writes: { table: string; value: unknown }[] = [];
+  const db = {
+    from(table: string) {
+      const filters: Record<string, unknown> = {};
+      const chain = {
+        select: () => chain,
+        eq: (name: string, value: unknown) => { filters[name] = value; return chain; },
+        is: (name: string, value: unknown) => { filters[name] = value; return chain; },
+        filter: (name: string, _op: string, value: unknown) => { filters[name] = value; return chain; },
+        single: async () => ({ data: tool.enabled && connector.enabled && filters["user_mcp_connectors.user_id"] === connector.user_id && filters["user_mcp_connectors.org_id"] === connector.org_id ? { ...tool, user_mcp_connectors: { ...connector } } : null, error: null }),
+        // List reads (the source re-fetch looks tools up by name, not id).
+        then: (resolve: (value: { data: unknown[]; error: null }) => unknown) => resolve({
+          data: table === "user_mcp_connector_tools" && tool.enabled && connector.enabled &&
+            filters.tool_name === tool.tool_name &&
+            filters["user_mcp_connectors.user_id"] === connector.user_id &&
+            filters["user_mcp_connectors.org_id"] === connector.org_id
+            ? [{ ...tool, user_mcp_connectors: { ...connector } }] : [],
+          error: null,
+        }),
+        maybeSingle: async () => ({ data: table === "chat_messages" ? row : { ...token }, error: null }),
+        insert: async (value: unknown) => { writes.push({ table, value }); return { error: null }; },
+      };
+      return chain;
+    },
+    rpc: async (_name: string, params: { p_events: unknown[] }) => {
+      row.content.push(...params.p_events);
+      return { data: "appended", error: null };
+    },
+  } as unknown as Db;
+  const docIndex: DocIndex = { "doc-0": { document_id: "existing", filename: "existing.pdf" } };
+  const docStore: DocStore = new Map([["doc-1", { filename: "inline.txt", storage_path: "", file_type: "text/plain", inline_text: "unrelated" }]]);
+  const dispatch = (approvals = false, userId = "u1") => runToolCalls(
+    [{ id: "call-1", function: { name: tool.openai_tool_name, arguments: JSON.stringify(args) } }],
+    docStore, userId, db, () => {}, undefined, undefined, docIndex,
+    undefined, undefined, undefined, undefined, undefined, undefined,
+    { connectorApprovals: approvals },
+  );
+  return { connector, tool, token, row, writes, db, docIndex, docStore, dispatch };
+}
+
+beforeEach(() => {
+  vi.clearAllMocks();
+  mocks.connect.mockReset().mockResolvedValue(undefined);
+  mocks.callTool.mockReset().mockResolvedValue({ structuredContent: payload });
+  vi.stubEnv("MCP_CONNECTORS_ENCRYPTION_SECRET", "test-only-legal-source-key");
+});
+afterEach(() => vi.unstubAllEnvs());
+
+describe("MCP source → dispatcher → exact-quote citation", () => {
+  it.each(["canonical-id", "title"])("cannot bypass strict verification or partial suppression using a source %s", async (alias) => {
+    const f = fixture();
+    await f.dispatch();
+    const doc_id = alias === "title" ? payload.title : f.docIndex["doc-2"].document_id;
+    const invalid = `<CITATIONS>${JSON.stringify([{ ref: 1, doc_id, quote: payload.text.toLowerCase() }])}</CITATIONS>`;
+    expect(extractCitations(invalid, f.docIndex, f.docStore)).toEqual([]);
+    const fullText = `<CITATIONS>${JSON.stringify([{ ref: 1, doc_id, quote: payload.text }])}</CITATIONS>`;
+    mocks.stream.mockImplementationOnce(async (params) => {
+      params.callbacks?.onContentDelta?.(fullText);
+      return { fullText };
+    });
+    const chunks: string[] = [];
+    const result = await runLLMStream({ model: "gemini-3.8-flash", apiMessages: [{ role: "user", content: "Find law" }], docIndex: f.docIndex, docStore: f.docStore, userId: "u1", db: f.db, write: (s) => chunks.push(s) });
+    expect(result.citations).toMatchObject([{ doc_id: "doc-2", verified: true, document: { type: "legislation" } }]);
+    for (const chunk of chunks.filter((s) => s.startsWith("data: {"))) {
+      const event = JSON.parse(chunk.slice(6));
+      if (event.type === "citations" && event.status === "partial") expect(event.citations).toEqual([]);
+    }
+  });
+  it("suppresses unresolved external document identities", () => {
+    expect(extractCitations('<CITATIONS>[{"ref":1,"doc_id":"mcp:unknown","quote":"invented"}]</CITATIONS>', {}, new Map())).toEqual([]);
+  });
+  it("registers the full source when the model's copy is cut off", async () => {
+    const tail = "The court allowed the appeal.";
+    const text = `${payload.text} ${"x".repeat(210_000)} ${tail}`;
+    mocks.callTool.mockResolvedValue({ structuredContent: { ...payload, data_type: "case_law", text } });
+    const f = fixture();
+    const result = await f.dispatch();
+    const content = (result.toolResults[0] as { content: string }).content;
+    expect(content).toContain("Truncated MCP result");
+    expect(content).not.toContain(tail);
+    expect(content).toContain('Call read_document with doc_id "doc-2"');
+    expect(f.docStore.get("doc-2")).toMatchObject({ inline_text: text, panel_document: { type: "case" } });
+    const read = (id: string) => readDocumentContent(id, f.docStore, () => {}, f.docIndex, f.db, { emitEvents: false });
+    expect(await read("doc-2")).toBe(text);
+    // A quote from beyond the cut verifies against the full text; an
+    // invented one is still dropped.
+    const parsed = parseCitations(`<CITATIONS>${JSON.stringify([
+      { ref: 1, doc_id: "doc-2", quote: tail },
+      { ref: 2, doc_id: "doc-2", quote: "The court dismissed the appeal." },
+    ])}</CITATIONS>`);
+    const citations = await verifyCitations(
+      parsed.map((c) => createCitation(c, f.docIndex, undefined, f.docStore)),
+      read,
+      vi.fn(),
+    );
+    expect(citations.filter(Boolean)).toHaveLength(1);
+    expect(citations[0]).toMatchObject({ verified: true, document: { type: "case" } });
+  });
+  it.each([
+    payload.text.toLowerCase(), payload.text.replaceAll(" ", "  "),
+    payload.text.replace(".", "!"), "Les contrats ... ceux qui les ont faits.",
+    "Les contrats [[PAGE_BREAK]] ceux qui les ont faits.",
+  ])("suppresses nonexact external quotes in fallback and final streams: %s", async (quote) => {
+    const f = fixture();
+    await f.dispatch();
+    const fullText = `<CITATIONS>${JSON.stringify([{ ref: 1, doc_id: "doc-2", quote }])}</CITATIONS>`;
+    expect(extractCitations(fullText, f.docIndex, f.docStore)).toEqual([]);
+    mocks.stream.mockImplementationOnce(async (params) => {
+      params.callbacks?.onContentDelta?.(fullText);
+      return { fullText };
+    });
+    const chunks: string[] = [];
+    const result = await runLLMStream({ model: "gemini-3.8-flash", apiMessages: [{ role: "user", content: "Find law" }], docIndex: f.docIndex, docStore: f.docStore, userId: "u1", db: f.db, write: (s) => chunks.push(s) });
+    expect(result.citations).toEqual([]);
+    for (const chunk of chunks.filter((s) => s.startsWith("data: {"))) {
+      const event = JSON.parse(chunk.slice(6));
+      if (event.type === "citations") expect(event.citations).toEqual([]);
+    }
+  });
+  it("bounds partial and final streamed citations after real MCP dispatch and exact verification", async () => {
+    const f = fixture();
+    const text = payload.text + "\n" + "é".repeat(50_000);
+    mocks.callTool.mockResolvedValue({ structuredContent: { ...payload, text } });
+    mocks.stream.mockImplementationOnce(async (params) => {
+      if (!params.runTools) throw new Error("runTools missing");
+      const result = await params.runTools([{ id: "call-1", name: f.tool.openai_tool_name, input: args }]);
+      expect(JSON.stringify(result)).toContain("doc-2");
+      const fullText = `Answer [1].<CITATIONS>${JSON.stringify(Array.from({ length: 51 }, (_, i) => ({ ref: i + 1, doc_id: "doc-2", quote: payload.text })))}</CITATIONS>`;
+      params.callbacks?.onContentDelta?.(fullText);
+      return { fullText };
+    });
+    const chunks: string[] = [];
+    const result = await runLLMStream({ model: "gemini-3.8-flash", apiMessages: [{ role: "user", content: "Find the law" }], docIndex: f.docIndex, docStore: f.docStore, userId: "u1", db: f.db, write: (s) => chunks.push(s) });
+    const snapshots = chunks.filter((s) => s.startsWith("data: {")).map((s) => JSON.parse(s.slice(6))).filter((event) => event.type === "citations" && event.citations.length);
+    expect(snapshots.some((event) => event.status === "partial")).toBe(false);
+    for (const event of snapshots) {
+      expect(event.citations.length).toBeLessThanOrEqual(50);
+      expect(Buffer.byteLength(JSON.stringify(event.citations))).toBeLessThanOrEqual(5_000_000);
+    }
+    expect(result.citations.length).toBeGreaterThan(0);
+    expect(result.citations[0]).toMatchObject({ verified: true, document: { type: "legislation", subdocuments: [{ document_id: `${f.docIndex["doc-2"].document_id}:text` }], quotes: [{ verification: { verified: true } }] } });
+    // Verified against the full text, but only the reference is streamed and
+    // saved: the panel reads the text again when the source opens.
+    expect(JSON.stringify(result.citations)).not.toContain("é".repeat(100));
+    for (const event of snapshots) {
+      expect(JSON.stringify(event.citations)).not.toContain("é".repeat(100));
+    }
+  });
+
+  it.each([["legislation", "legislation"], ["case_law", "case"], ["doctrine", "legal_research"]])("registers %s and verifies it as a document, not a CourtListener case", async (data_type, type) => {
+    mocks.callTool.mockResolvedValue({ structuredContent: { ...payload, data_type } });
+    const f = fixture();
+    const result = await f.dispatch();
+    expect(result.mcpEvents[0].status).toBe("ok");
+    expect((result.toolResults[0] as { content: string }).content).toContain('"doc_id":"doc-2"');
+    expect((result.toolResults[0] as { content: string }).content).not.toContain("cut off");
+    expect(f.docStore.get("doc-2")).toMatchObject({ inline_text: payload.text, panel_document: { type } });
+    const source = f.docStore.get("doc-2")!;
+    const parsed = parseCitations(`<CITATIONS>${JSON.stringify([
+      { ref: 1, doc_id: "doc-2", quote: payload.text },
+      { ref: 2, doc_id: "doc-2", quote: "This wholly invented proposition is not in the source." },
+    ])}</CITATIONS>`);
+    const caseReader = vi.fn();
+    const citations = await verifyCitations(
+      parsed.map((c) => createCitation(c, f.docIndex, undefined, f.docStore)),
+      (id) => readDocumentContent(id, f.docStore, () => {}, f.docIndex, f.db, { emitEvents: false }),
+      caseReader,
+    );
+    expect(citations[0]).toMatchObject({ kind: "document", verified: true, document: {
+      ...source.panel_document,
+      quotes: [{ quote: payload.text, target: { subdocument_id: `${f.docIndex["doc-2"].document_id}:text` }, verification: { verified: true } }],
+    } });
+    expect(citations.filter(Boolean)).toHaveLength(1);
+    expect(caseReader).not.toHaveBeenCalled();
+    await f.dispatch();
+    expect(Object.keys(f.docIndex)).toEqual(["doc-0", "doc-2"]);
+    expect(f.docStore.size).toBe(2);
+    expect(f.writes.every((w) => w.table === "user_mcp_tool_audit_logs")).toBe(true);
+  });
+
+  it.each(["isError", "auth", "disabled", "other-user", "read-only", "identity", "type"])("never registers a source after %s failure", async (failure) => {
+    const f = fixture();
+    if (failure === "isError") mocks.callTool.mockResolvedValue({ isError: true, structuredContent: payload });
+    if (failure === "auth") mocks.connect.mockRejectedValue(new Error("Unauthorized"));
+    if (failure === "disabled") f.connector.enabled = false;
+    if (failure === "read-only") { f.tool.annotations.readOnlyHint = false; f.tool.requires_confirmation = true; }
+    if (failure === "identity") mocks.callTool.mockResolvedValue({ structuredContent: { ...payload, source_id: "wrong" } });
+    if (failure === "type") mocks.callTool.mockResolvedValue({ structuredContent: { ...payload, data_type: "unknown" } });
+    const result = await f.dispatch(false, failure === "other-user" ? "other" : "u1");
+    expect(Object.keys(f.docIndex)).toEqual(["doc-0"]);
+    expect(f.docStore.size).toBe(1);
+    expect((result.toolResults[0] as { content: string }).content).not.toContain("Canonical legal source");
+  });
+
+  it("returns a source from the shared approved executor only after reviewed execution", async () => {
+    const owner = { userId: "u1", orgId: null };
+    const f = fixture();
+    f.connector.read_only = false;
+    f.tool.annotations.readOnlyHint = false;
+    f.tool.requires_confirmation = true;
+    const pending = await f.dispatch(true);
+    expect(mocks.callTool).not.toHaveBeenCalled();
+    expect(f.docStore.size).toBe(1);
+    expect(pending.askInputsEvents[0].items[0].kind).toBe("approval");
+    const unapproved = await executeMcpToolCall(owner, f.tool.openai_tool_name, args, f.db);
+    expect(unapproved.event.status).toBe("error");
+    expect(unapproved.legalSource).toBeNull();
+    const plan = await planMcpToolCall(owner, f.tool.openai_tool_name, args, f.db);
+    if (plan.type !== "approval") throw new Error("expected approval");
+    const result = await executeApprovedMcpToolCall(owner, { ...plan.item, id: "approved" }, f.db);
+    expect(result.event).toMatchObject({ status: "ok", approval_id: "approved" });
+    expect(result.legalSource).toMatchObject({ text: payload.text, document: { type: "legislation" } });
+    expect(mocks.callTool).toHaveBeenCalledExactlyOnceWith({ name: "get_document", arguments: args }, undefined, expect.any(Object));
+    f.connector.server_url = "https://replacement.example.com/mcp";
+    expect((await executeApprovedMcpToolCall(owner, { ...plan.item, id: "approved" }, f.db)).legalSource).toBeNull();
+    expect(mocks.callTool).toHaveBeenCalledOnce();
+  });
+
+  it("passes approved sources to the resumed request without persisting panel documents", async () => {
+    const owner = { userId: "u1", orgId: null };
+    const f = fixture();
+    f.connector.read_only = false;
+    f.tool.annotations.readOnlyHint = false;
+    f.tool.requires_confirmation = true;
+    const plan = await planMcpToolCall(owner, f.tool.openai_tool_name, args, f.db);
+    if (plan.type !== "approval") throw new Error("expected approval");
+    f.row.content = [
+      { type: "ask_inputs", event_id: "ask1", items: [{ ...plan.item, id: "approved" }] },
+      { type: "ask_inputs_response", ask_event_id: "ask1", responses: [{ id: "approved", kind: "approval", decision: "approve" }] },
+    ];
+    const onLegalSource = vi.fn();
+    const events = await runApprovedConnectorActions({ db: f.db, chatId: "chat1", messageId: "a1", askEventId: "ask1", userId: "u1", onLegalSource });
+    expect(onLegalSource).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ text: payload.text }));
+    expect(events[0].status).toBe("ok");
+    expect(JSON.stringify(f.row)).not.toContain("subdocuments");
+    expect(JSON.stringify(f.row)).not.toContain("panel_document");
+  });
+});
+
+describe("opening a saved Legal Data Hunter source", () => {
+  const savedId = (connectorId = "c1") => legalDataHunterDocumentId(connectorId, args.source, args.source_id);
+
+  it("reads the text again through the viewer's LDH connection under the cited id", async () => {
+    const f = fixture();
+    const result = await getSourceDocument(f.db, { userId: "u1", documentId: savedId(), orgId: null });
+    if (!result.ok) throw new Error(`expected a document, got ${result.kind}`);
+    expect(result.document).toMatchObject({
+      document_id: savedId(),
+      type: "legislation",
+      subdocuments: [{ document_id: `${savedId()}:text`, text: payload.text }],
+    });
+    expect(mocks.callTool).toHaveBeenCalledExactlyOnceWith(
+      { name: "get_document", arguments: { ...args, include_full_text: true } },
+      undefined,
+      expect.any(Object),
+    );
+  });
+
+  it("uses the viewer's own LDH connector for a source cited through another one", async () => {
+    const f = fixture();
+    const result = await getSourceDocument(f.db, { userId: "u1", documentId: savedId("someone-elses"), orgId: null });
+    expect(result).toMatchObject({ ok: true, document: { document_id: savedId("someone-elses") } });
+  });
+
+  it.each(["other-user", "disabled"])("asks the viewer to connect LDH when they have no usable connection (%s)", async (failure) => {
+    const f = fixture();
+    if (failure === "disabled") f.tool.enabled = false;
+    const result = await getSourceDocument(f.db, { userId: failure === "other-user" ? "u2" : "u1", documentId: savedId(), orgId: null });
+    expect(result).toEqual({ ok: false, kind: "credentials", detail: LEGAL_DATA_HUNTER_CONNECT_DETAIL });
+    expect(mocks.callTool).not.toHaveBeenCalled();
+  });
+
+  it("fails without a document when LDH returns a different source", async () => {
+    mocks.callTool.mockResolvedValue({ structuredContent: { ...payload, source_id: "wrong" } });
+    const f = fixture();
+    const result = await getSourceDocument(f.db, { userId: "u1", documentId: savedId(), orgId: null });
+    expect(result).toMatchObject({ ok: false, kind: "error" });
+  });
+
+  it("refuses an id that is not a Legal Data Hunter reference", async () => {
+    const f = fixture();
+    const result = await getSourceDocument(f.db, { userId: "u1", documentId: "mcp:c1:not-a-reference", orgId: null });
+    expect(result).toMatchObject({ ok: false, kind: "not_found" });
+    expect(mocks.callTool).not.toHaveBeenCalled();
+  });
+});
+
+describe("legal source identity and search", () => {
+  it("drops a citation that names two retrieved sources by their shared title", () => {
+    const f = fixture();
+    const [first, second] = ["A1", "B2"].map((id) =>
+      registerMcpLegalSource(
+        extractLegalDataHunterSource(
+          { structuredContent: { ...payload, source_id: id, text: `${payload.text} ${id}` } },
+          { connectorId: "c1", serverUrl: f.connector.server_url, toolName: "get_document", arguments: { source: args.source, source_id: id } },
+        )!,
+        f.docIndex,
+        f.docStore,
+      ),
+    );
+    expect(first).not.toBe(second);
+    const cite = (doc_id: string, quote: string) =>
+      createCitation(parseCitations(`<CITATIONS>${JSON.stringify([{ ref: 1, doc_id, quote }])}</CITATIONS>`)[0], f.docIndex, undefined, f.docStore);
+    // The shared quote is in both: by title it cannot say which was meant.
+    expect(cite(payload.title, payload.text)).toBeNull();
+    expect(cite(payload.title, `${payload.text} B2`)).toBeNull();
+    // Each source's own handle still identifies it.
+    expect(cite(second, `${payload.text} B2`)).toMatchObject({ verified: true, document: { document_id: f.docIndex[second].document_id } });
+  });
+
+  it("keeps a unique title as an alias for its source", async () => {
+    const f = fixture();
+    await f.dispatch();
+    const citation = createCitation(
+      parseCitations(`<CITATIONS>${JSON.stringify([{ ref: 1, doc_id: payload.title, quote: payload.text }])}</CITATIONS>`)[0],
+      f.docIndex, undefined, f.docStore,
+    );
+    expect(citation).toMatchObject({ doc_id: "doc-2", verified: true });
+  });
+
+  const find = (f: ReturnType<typeof fixture>, doc_id: string, query: string) =>
+    runToolCalls(
+      [{ id: "find-1", function: { name: "find_in_document", arguments: JSON.stringify({ doc_id, query }) } }],
+      f.docStore, "u1", f.db, () => {}, undefined, undefined, f.docIndex,
+      undefined, undefined, undefined, undefined, undefined, "n0nce",
+    );
+
+  it("searches a retrieved legal source and fences its snippets", async () => {
+    const f = fixture();
+    await f.dispatch();
+    const result = await find(f, "doc-2", "tiennent lieu de loi");
+    const content = (result.toolResults[0] as { content: string }).content;
+    expect(content).not.toContain("must be opened with read_document");
+    expect(content.startsWith('<untrusted-content nonce="n0nce">')).toBe(true);
+    expect(content).toContain("tiennent lieu de loi");
+  });
+
+  it("still refuses to search other request-scoped documents", async () => {
+    const f = fixture();
+    const result = await find(f, "doc-1", "unrelated");
+    expect((result.toolResults[0] as { content: string }).content).toContain("must be opened with read_document");
+  });
+});

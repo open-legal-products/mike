@@ -1,4 +1,4 @@
-import { type DocIndex, type DocStore, resolveDoc } from "./types";
+import { type DocIndex, type DocStore, resolveDoc, resolveDocLabel } from "./types";
 import {
   normalizeCaseDocument,
   sourceDocumentType,
@@ -185,6 +185,67 @@ function normalizeCaseCitationQuotes(c: Record<string, unknown>) {
 export const CITATIONS_BLOCK_RE = /<CITATIONS>\s*([\s\S]*?)\s*<\/CITATIONS>/;
 export const CITATIONS_OPEN_TAG = "<CITATIONS>";
 export const CITATIONS_CLOSE_TAG = "</CITATIONS>";
+export const MAX_PARSED_CITATIONS = 50;
+export const MAX_CITATION_PAYLOAD_BYTES = 5_000_000;
+
+/**
+ * Drop the body text of embedded external sources (`mcp:` documents) from
+ * citations that leave the turn. Their quotes, verification and links stay;
+ * the panel fetches the text again from the provider when the source opens,
+ * so a judgment is never stored once per citation in chat history.
+ */
+export function withoutEmbeddedSourceText(citations: unknown[]): unknown[] {
+  return citations.map((citation) => {
+    const value =
+      citation && typeof citation === "object" && !Array.isArray(citation)
+        ? (citation as Record<string, unknown>)
+        : null;
+    const document =
+      value?.document && typeof value.document === "object" && !Array.isArray(value.document)
+        ? (value.document as Record<string, unknown>)
+        : null;
+    if (
+      !document ||
+      typeof document.document_id !== "string" ||
+      !document.document_id.startsWith("mcp:") ||
+      !Array.isArray(document.subdocuments)
+    ) {
+      return citation;
+    }
+    return {
+      ...value,
+      document: {
+        ...document,
+        subdocuments: document.subdocuments.map((subdocument) => {
+          if (!subdocument || typeof subdocument !== "object") return subdocument;
+          // eslint-disable-next-line @typescript-eslint/no-unused-vars
+          const { text, ...rest } = subdocument as Record<string, unknown>;
+          return rest;
+        }),
+      },
+    };
+  });
+}
+
+export function limitCitationPayload(citations: unknown[]): unknown[] {
+  const limited: unknown[] = [];
+  let totalBytes = 2; // JSON array brackets.
+  for (const citation of citations) {
+    if (citation == null) continue;
+    let serialized: string | undefined;
+    try {
+      serialized = JSON.stringify(citation);
+    } catch {
+      continue;
+    }
+    if (serialized === undefined) continue;
+    const bytes = Buffer.byteLength(serialized, "utf8") + (limited.length ? 1 : 0);
+    if (totalBytes + bytes > MAX_CITATION_PAYLOAD_BYTES) continue;
+    limited.push(citation);
+    totalBytes += bytes;
+  }
+  return limited;
+}
 
 type CitationParseDiagnostics = {
   hasBlock: boolean;
@@ -210,7 +271,12 @@ export function parseCitationsWithDiagnostics(text: string): {
       };
     }
     return {
-      citations: parsed.map(normalizeCitation).filter((c): c is ParsedCitation => c !== null),
+      // Cap valid citations, not raw entries, so invalid ones cannot push a
+      // valid citation past the cap (the streaming parser counts the same way).
+      citations: parsed
+        .map(normalizeCitation)
+        .filter((c): c is ParsedCitation => c !== null)
+        .slice(0, MAX_PARSED_CITATIONS),
       diagnostics: { hasBlock: true, rawLength: raw.length, error: null },
     };
   } catch (error) {
@@ -254,6 +320,9 @@ export function createPartialCitationParser(): {
   // just matched. The tag's characters never change the JSON scan state,
   // so the scan can run ahead before the tag is recognised.
   let closeMatched = 0;
+  // Citations returned so far, across every push, capped like the
+  // whole-buffer parse.
+  let parsedCount = 0;
 
   const push = (delta: string): ParsedCitation[] => {
     const completed: ParsedCitation[] = [];
@@ -293,8 +362,15 @@ export function createPartialCitationParser(): {
           objectStart = -1;
           try {
             const citation = normalizeCitation(JSON.parse(raw));
-            if (citation) completed.push(citation);
+            if (citation) {
+              completed.push(citation);
+              parsedCount += 1;
+            }
           } catch { /* ignore incomplete/malformed partial object */ }
+          if (parsedCount >= MAX_PARSED_CITATIONS) {
+            finished = true;
+            break;
+          }
         }
       } else if (char === "]" && depth === 0) {
         finished = true;
@@ -353,14 +429,40 @@ export function createCitation(
     };
   }
 
+  // Alternate IDs must resolve through the same request-scoped source, not
+  // fall through to the tolerant uploaded-document citation path.
+  const sourceLabel = docStore ? resolveDocLabel(citation.doc_id, docStore, docIndex) : null;
+  if (sourceLabel && docStore?.get(sourceLabel)?.panel_document) {
+    // A title names a source only when it names one document: with two
+    // sharing it, the first would take quotes meant for the other.
+    if (!docStore.has(citation.doc_id)) {
+      let sameTitle = 0;
+      for (const document of docStore.values()) {
+        if (document.filename === citation.doc_id) sameTitle += 1;
+      }
+      if (sameTitle > 1) return null;
+    }
+    citation = { ...citation, doc_id: sourceLabel };
+  }
   const docInfo = resolveDoc(citation.doc_id, docIndex);
   const requestScopedDocument = docStore?.get(citation.doc_id);
   const documentId = docInfo?.document_id ?? citation.doc_id;
   const filename =
     docInfo?.filename ?? requestScopedDocument?.filename ?? citation.doc_id;
+  const panelDocument = requestScopedDocument?.panel_document;
+  if (!panelDocument && (citation.doc_id.startsWith("mcp:") || docInfo?.document_id.startsWith("mcp:"))) return null;
+  const canonicalText = panelDocument?.subdocuments?.[0]?.text;
+  // External sources are not uploads: no fuzzy correction, omissions, or
+  // cross-page matching may turn a changed legal quote into a verified one.
+  if (panelDocument && (typeof canonicalText !== "string" ||
+      citation.quotes.some(({ quote }) => !quote.trim() || !canonicalText.includes(quote)))) {
+    return null;
+  }
+  const subdocumentId = panelDocument?.subdocuments?.[0]?.document_id;
   const quotes: SourceDocumentQuote[] = citation.quotes.map((quote) => ({
     quote: quote.quote,
-    target: {
+    ...(panelDocument ? { verification: { verified: true } } : {}),
+    target: subdocumentId ? { subdocument_id: subdocumentId } : {
       page: quote.page,
       ...(quote.sheet ? { sheet: quote.sheet } : {}),
       ...(quote.cell ? { cell: quote.cell } : {}),
@@ -370,7 +472,7 @@ export function createCitation(
     type: "citation_data",
     kind: "document",
     ref: citation.ref,
-    document: {
+    document: panelDocument ? { ...panelDocument, quotes } : {
       document_id: documentId,
       title: filename,
       type: sourceDocumentType(filename),
@@ -384,6 +486,7 @@ export function createCitation(
     version_id: docInfo?.version_id ?? null,
     version_number: docInfo?.version_number ?? null,
     filename,
+    ...(panelDocument ? { verified: true } : {}),
     page: citation.page,
     quote: citation.quote,
     sheet: citation.sheet,

@@ -465,7 +465,11 @@ export async function verifyDocumentCitationAnnotation(
   }
 
   const verifiedQuotes = entries.map((entry) => {
-    const result = verifierFor(source)(entry.quote);
+    // External legal sources must match exactly: no fuzzy correction.
+    const external = String(record(a.document)?.document_id ?? "").startsWith("mcp:");
+    const result = external
+      ? { verified: !!entry.quote.trim() && source.includes(entry.quote), needs_correction: false }
+      : verifierFor(source)(entry.quote);
     const { needs_correction, ...verification } = result;
     // Swap the exact source text into the displayed quote when it drifted,
     // so a drifted quote is never surfaced as the source's words.

@@ -136,16 +136,11 @@ export function normalizeCaseDocument(args: {
   const actions: SourceDocumentAction[] = [];
   const pdfUrl = stringValue(args.pdfUrl);
   if (pdfUrl) {
-    actions.push({ type: "download", url: pdfUrl, label: "Download" });
+    actions.push({ type: "download", url: pdfUrl });
   }
   const sourceUrl = stringValue(args.url);
   if (sourceUrl) {
-    actions.push({
-      type: "link",
-      url: sourceUrl,
-      label: "Link",
-      title: "Link",
-    });
+    actions.push({ type: "link", url: sourceUrl });
   }
 
   const orderedOpinions = (args.opinions ?? [])

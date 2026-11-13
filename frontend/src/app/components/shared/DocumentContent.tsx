@@ -10,7 +10,7 @@ import {
     documentQuoteId,
 } from "../assistant/CitationQuotesSection";
 import { EditCard } from "../assistant/EditCard";
-import { expandDocumentQuoteEntry } from "./types";
+import { expandDocumentQuoteEntry, isEmbeddedMcpDocument } from "./types";
 import type { Citation, EditAnnotation, PanelDocument } from "./types";
 import { quoteVerificationState } from "../assistant/message/citationVerification";
 import { CaseView } from "../assistant/CaseView";
@@ -63,7 +63,6 @@ export interface DocumentContentProps {
     document: PanelDocument;
     mode: DocumentContentMode;
     isReloading?: boolean;
-    compactActions?: boolean;
     /** Assistant default: start with editing locked and the DOCX toolbar hidden. */
     showToolbarToggle?: boolean;
     /**
@@ -97,7 +96,6 @@ export function DocumentContent({
     document,
     mode,
     isReloading = false,
-    compactActions,
     showToolbarToggle = false,
     canEdit = false,
     active = true,
@@ -112,19 +110,7 @@ export function DocumentContent({
     cacheBytes = true,
     onVersionChange,
 }: DocumentContentProps) {
-    const contentRef = useRef<HTMLDivElement>(null);
-    const [narrow, setNarrow] = useState(false);
     const [toolbarVisible, setToolbarVisible] = useState(!showToolbarToggle);
-    useEffect(() => {
-        const element = contentRef.current;
-        if (!element || typeof ResizeObserver === "undefined") return;
-        const observer = new ResizeObserver(([entry]) => {
-            if (entry.contentRect.width > 0)
-                setNarrow(entry.contentRect.width < 600);
-        });
-        observer.observe(element);
-        return () => observer.disconnect();
-    }, []);
     const [saveState, setSaveState] = useState<DocxSaveState | null>(null);
     const onSaveStateChange = useCallback(
         (_documentId: string, state: DocxSaveState | null) =>
@@ -148,7 +134,7 @@ export function DocumentContent({
 
     const documentId = resolvedDocument.document_id;
     const versionId = resolvedDocument.version_id ?? null;
-    const isCase = resolvedDocument.type === "case";
+    const isTextSource = resolvedDocument.type === "case" || isEmbeddedMcpDocument(resolvedDocument);
     const viewType = resolveDocumentViewType({
         filename: resolvedDocument.title,
         fileType: resolvedDocument.type,
@@ -178,7 +164,7 @@ export function DocumentContent({
         : undefined;
 
     const { activeViewerQuotes, activeHighlightCells } = useMemo(() => {
-        if (mode.kind !== "citation" || isCase) {
+        if (mode.kind !== "citation" || isTextSource) {
             return {
                 activeViewerQuotes: undefined,
                 activeHighlightCells: undefined,
@@ -207,7 +193,7 @@ export function DocumentContent({
                       ]
                     : [],
         };
-    }, [activeDocumentQuote, isCase, mode.kind]);
+    }, [activeDocumentQuote, isTextSource, mode.kind]);
 
     useEffect(() => {
         // eslint-disable-next-line react-hooks/set-state-in-effect -- reset quote selection for a newly opened citation without remounting the editor
@@ -235,19 +221,18 @@ export function DocumentContent({
     }, [editFocusKey, mode]);
 
     return (
-        <div ref={contentRef} className="flex h-full min-h-0 flex-col">
+        <div className="flex h-full min-h-0 flex-col">
             <DocumentAnnotationLayer
                 title={
                     <DocumentTitleRow
                         document={resolvedDocument}
                         isReloading={isReloading}
-                        compactActions={compactActions ?? narrow}
                         saveState={saveState}
                         onVersionChange={onVersionChange}
                         onDownload={() => localDownload.current?.()}
                         toolbarVisible={toolbarVisible}
                         onToggleToolbar={
-                            viewType === "docx" && canEdit
+                            !isTextSource && viewType === "docx" && canEdit
                                 ? () => setToolbarVisible((visible) => !visible)
                                 : undefined
                         }
@@ -255,7 +240,7 @@ export function DocumentContent({
                 }
                 annotation={
                     mode.kind === "citation" ||
-                    (mode.kind === "edit" && !isCase) ? (
+                    (mode.kind === "edit" && !isTextSource) ? (
                         <>
                             {mode.kind === "citation" && (
                                 <CitationQuotesSection
@@ -279,7 +264,7 @@ export function DocumentContent({
                                 />
                             )}
 
-                            {mode.kind === "edit" && !isCase && (
+                            {mode.kind === "edit" && !isTextSource && (
                                 <div className="px-2 pb-2">
                                     <EditCard
                                         annotation={mode.edit}
@@ -301,7 +286,7 @@ export function DocumentContent({
                     ) : undefined
                 }
             >
-                {isCase ? (
+                {isTextSource ? (
                     <CaseView
                         document={resolvedDocument}
                         activeQuote={active ? activeDocumentQuote : undefined}

@@ -64,6 +64,43 @@ describe("CitationsBlock verification states", () => {
     expect(button).toHaveClass("bg-gray-200/80", "text-gray-800");
   });
 
+  it.each([
+    ["legislation", "/icons/legal-sources/legislation.svg"],
+    ["case", "/icons/legal-sources/case-law.svg"],
+  ] as const)(
+    "shows the %s icon for an embedded legal source titled without an extension",
+    (type, icon) => {
+      const citation: DocumentCitation = {
+        ...documentCitation(5),
+        document_id: "mcp:legaldatahunter:legifrance:JORFTEXT0001",
+        filename: "Article 1103",
+        document: {
+          document_id: "mcp:legaldatahunter:legifrance:JORFTEXT0001",
+          title: "Article 1103",
+          type,
+          metadata: [],
+          quotes: [],
+        },
+      };
+      const { container } = render(<CitationsBlock citations={[citation]} />);
+
+      expect(container.querySelector(`img[src*="${icon}"]`)).not.toBeNull();
+    },
+  );
+
+  it("keeps the file-type icon for uploaded documents", () => {
+    const { container } = render(
+      <CitationsBlock citations={[documentCitation(6)]} />,
+    );
+
+    expect(
+      container.querySelector('img[src*="/icons/file-types/pdf.svg"]'),
+    ).not.toBeNull();
+    expect(
+      container.querySelector('img[src*="/icons/legal-sources/"]'),
+    ).toBeNull();
+  });
+
   it("adds the selected quote background only to the active citation", () => {
     const inactive = documentCitation(1);
     const active = documentCitation(2);
