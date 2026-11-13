@@ -9,7 +9,7 @@ type RecordedQuery = {
   filters: { column: string; value: unknown }[];
   /** Which write produced `payload`; a user insert and an assistant update
    *  both carry a `content`, so the two have to be told apart. */
-  op?: "insert" | "update";
+  op?: "insert" | "update" | "upsert";
   payload?: unknown;
 };
 
@@ -77,7 +77,6 @@ function makeQuery(table: string) {
   const chain = [
     "select",
     "delete",
-    "upsert",
     "neq",
     "in",
     "is",
@@ -96,6 +95,11 @@ function makeQuery(table: string) {
   for (const method of chain) query[method] = vi.fn(() => query);
   query.insert = vi.fn((payload: unknown) => {
     recorded.op = "insert";
+    recorded.payload = payload;
+    return query;
+  });
+  query.upsert = vi.fn((payload: unknown) => {
+    recorded.op = "upsert";
     recorded.payload = payload;
     return query;
   });
@@ -1005,46 +1009,84 @@ describe("server-owned Word turns", () => {
     expect(scheduleMemoryConsolidation).not.toHaveBeenCalled();
   });
 
-  it("ends a turn stopped while its answer is saved as stopped, with the answer's events kept", async () => {
-    let releaseSave!: () => void;
-    dbState.assistantUpdateGate = new Promise<void>((resolve) => {
-      releaseSave = resolve;
-    });
-    runLLMStream.mockResolvedValue({
-      fullText: "Done",
-      events: [{ type: "content", text: "Done" }],
-      citations: [],
-    });
-    const updates = () =>
-      recordedQueries
-        .filter(({ table, op }) => table === "word_chat_messages" && op === "update")
-        .map(({ payload }) => (payload as { content?: unknown }).content);
-    try {
-      const firstDone = send().then((res) => res);
-      await vi.waitFor(() => {
-        expect(updates()).toHaveLength(1);
+  it.each(["user", "idle", "max_lifetime"] as const)(
+    "preserves persisted Word edits without writing them again when %s stops the answer's save",
+    async (reason) => {
+      let releaseSave!: () => void;
+      dbState.assistantUpdateGate = new Promise<void>((resolve) => {
+        releaseSave = resolve;
       });
-      const turnId = (await detail()).body.active_turn.id as string;
-      const { getAssistantTurnRun } =
-        await import("../../lib/assistantTurnRuns.js");
-      getAssistantTurnRun(turnId, "word")!.stop();
-      releaseSave();
+      const edit = {
+        type: "word_edit_block",
+        block_index: 0,
+        original_text: "Schedule 1",
+        replacement_text: "Schedule 2",
+        reason: "Correct the schedule reference",
+      };
+      dbState.edits = {
+        data: [{ id: "edit-1", block_index: 0 }],
+        error: null,
+      };
+      runLLMStream.mockResolvedValue({
+        fullText: "Done",
+        events: [edit, { type: "content", text: "Done" }],
+        citations: [],
+      });
+      const updates = () =>
+        recordedQueries
+          .filter(({ table, op }) => table === "word_chat_messages" && op === "update")
+          .map(({ payload }) => (payload as { content?: unknown }).content);
+      try {
+        const firstDone = send().then((res) => res);
+        await vi.waitFor(() => {
+          expect(updates()).toHaveLength(1);
+        });
+        const turnId = (await detail()).body.active_turn.id as string;
+        const { getAssistantTurnRun } =
+          await import("../../lib/assistantTurnRuns.js");
+        getAssistantTurnRun(turnId, "word")!.stop(reason);
+        releaseSave();
 
-      const text = (await firstDone).text;
-      expect(text).toContain('"type":"cancelled"');
-      // Saved once as the answer, then rewritten with the stop label.
-      expect(updates()).toEqual([
-        [{ type: "content", text: "Done" }],
-        [
+        const text = (await firstDone).text;
+        expect(text).toContain(
+          reason === "user" ? '"type":"cancelled"' : '"type":"error"',
+        );
+        const { deadlineMessage } = await import("../../lib/streamRuns.js");
+        const stopEvent = reason === "user"
+          ? { type: "content", text: "Cancelled by user." }
+          : {
+              type: "error",
+              message: deadlineMessage(reason),
+              safe_to_display: true,
+            };
+        const savedEvents = [
+          { type: "word_edit_ref", edit_id: "edit-1" },
           { type: "content", text: "Done" },
-          { type: "content", text: "Cancelled by user." },
-        ],
-      ]);
-      expect(scheduleMemoryConsolidation).not.toHaveBeenCalled();
-    } finally {
-      dbState.assistantUpdateGate = null;
-    }
-  });
+        ];
+        // Saved once as the answer, then rewritten with the stop label.
+        expect(updates()).toEqual([
+          savedEvents,
+          [...savedEvents, stopEvent],
+        ]);
+        expect(
+          recordedQueries
+            .filter(({ table, op }) => table === "word_document_edits" && op === "upsert")
+            .map(({ payload }) => payload),
+        ).toEqual([
+          [expect.objectContaining({
+            word_chat_message_id: turnId,
+            block_index: 0,
+            original_text: "Schedule 1",
+            replacement_text: "Schedule 2",
+          })],
+        ]);
+        expect(scheduleMemoryConsolidation).not.toHaveBeenCalled();
+      } finally {
+        releaseSave();
+        dbState.assistantUpdateGate = null;
+      }
+    },
+  );
 
   it("refuses a second turn while one is generating into the chat", async () => {
     const held = heldGeneration();

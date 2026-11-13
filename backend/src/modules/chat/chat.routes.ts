@@ -25,6 +25,7 @@ import {
     appendAssistantEventsToMessage,
     AssistantStreamError,
     assistantStreamErrorPayload,
+    buildStoppedAssistantEvent,
     buildStoppedAssistantMessage,
     extractCitations,
     isAbortError,
@@ -698,7 +699,7 @@ chatRouter.post("/", requireAuth, asyncRoute(async (req, res) => {
         // Where the finished answer was saved, once it was. A stop that is seen
         // only after the save marks that answer as stopped instead of saving it
         // a second time.
-        let savedAnswer: { messageId: string; eventCount: number } | null = null;
+        let savedAnswerMessageId: string | null = null;
         try {
             write(
                 `data: ${JSON.stringify({
@@ -830,10 +831,7 @@ chatRouter.post("/", requireAuth, asyncRoute(async (req, res) => {
                 );
                 completedTurnPersisted = appended;
                 if (appended) {
-                    savedAnswer = {
-                        messageId: askInputsResponse.assistant_message_id,
-                        eventCount: persistedEvents.length,
-                    };
+                    savedAnswerMessageId = askInputsResponse.assistant_message_id;
                 }
             } else {
                 const saveError = await updateReservedAssistantMessage(
@@ -862,12 +860,7 @@ chatRouter.post("/", requireAuth, asyncRoute(async (req, res) => {
                     write("data: [DONE]\n\n");
                     return;
                 }
-                if (assistantMessageId) {
-                    savedAnswer = {
-                        messageId: assistantMessageId,
-                        eventCount: persistedEvents.length,
-                    };
-                }
+                savedAnswerMessageId = assistantMessageId;
             }
             await subagentRuns.flush();
 
@@ -986,23 +979,28 @@ chatRouter.post("/", requireAuth, asyncRoute(async (req, res) => {
                     err instanceof AssistantStreamError ? err.events : null,
                 );
                 if (err instanceof AssistantStreamError) {
-                    const partial = buildStoppedAssistantMessage({
-                        stopReason: run?.stopReason,
-                        fullText: err.fullText,
-                        events: err.events,
-                        buildCitations: (fullText) =>
-                            extractCitations(fullText, docIndex),
-                    });
+                    const partial = savedAnswerMessageId
+                        ? {
+                              events: [buildStoppedAssistantEvent(run?.stopReason)],
+                              citations: [],
+                          }
+                        : buildStoppedAssistantMessage({
+                              stopReason: run?.stopReason,
+                              fullText: err.fullText,
+                              events: err.events,
+                              buildCitations: (fullText) =>
+                                  extractCitations(fullText, docIndex),
+                          });
                     let saveError: unknown | null = null;
-                    if (savedAnswer) {
+                    if (savedAnswerMessageId) {
                         // The finished answer is already stored: add only what
                         // marks it as stopped (the label after its events).
                         await appendAssistantEventsToMessage(
                             db,
                             chatId,
-                            savedAnswer.messageId,
+                            savedAnswerMessageId,
                             userId,
-                            partial.events.slice(savedAnswer.eventCount),
+                            partial.events,
                             [],
                         );
                     } else if (askInputsResponse) {
