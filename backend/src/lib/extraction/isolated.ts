@@ -6,7 +6,7 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { execFile, spawn, type ChildProcess } from "node:child_process";
 import type { ExtractionOp, ExtractionOps } from "./ops";
-import { EXTRACTION_MAX_BYTES, ExtractionBusyError, ExtractionLimitError, extractionMemoryMb, extractionTimeoutMs } from "./limits";
+import { EXTRACTION_MAX_BYTES, ExtractionBusyError, ExtractionLimitError, extractionIsolated, extractionLauncher, extractionMemoryMb, extractionTimeoutMs } from "./limits";
 import { asExtractionFailure, extractionFailureFromWire, type ExtractionFailureWire } from "./failure";
 import { AppError } from "../appError";
 
@@ -16,15 +16,6 @@ export { ExtractionParseError } from "./failure";
 type Result<K extends ExtractionOp> = Awaited<ReturnType<ExtractionOps[K]>>;
 export type ExtractInSlot = <K extends ExtractionOp>(op: K, bytes: ArrayBuffer, options?: { fileType?: string }) => Promise<Result<K>>;
 type Reply = { ok: true; result: unknown } | ({ ok: false; limited: boolean } & ExtractionFailureWire);
-
-/** The executable the parser child is launched through, or null when it runs directly. */
-export function extractionLauncher(platform: NodeJS.Platform = process.platform): "prlimit" | null {
-  return platform === "linux" ? "prlimit" : null;
-}
-
-export function extractionIsolated(env: NodeJS.ProcessEnv = process.env): boolean {
-  return env.EXTRACTION_ISOLATION !== "off";
-}
 
 /** Hard OS memory boundary on Linux, including native buffers. Fail closed if
  * prlimit is unavailable. Other platforms retain process/heap and input/output

@@ -1,6 +1,6 @@
 import { accessSync, constants, statSync } from "node:fs";
 import path from "node:path";
-import { extractionIsolated, extractionLauncher } from "./extraction/isolated";
+import { extractionIsolated, extractionLauncher } from "./extraction/limits";
 
 function required(env: NodeJS.ProcessEnv, names: readonly string[]): string {
   for (const name of names) {
