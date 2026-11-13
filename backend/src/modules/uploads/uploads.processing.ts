@@ -901,6 +901,21 @@ async function removeFailedCreatedDocument(
 ): Promise<void> {
   if (session.purpose !== "document_create") return;
   markStage("failed-document-remove");
+  // The row goes first, and the objects only if the row went. An earlier
+  // attempt of this job may have committed a version (which sets
+  // current_version_id) and then lost its worker; the row survives this
+  // delete, and its version still points at these same storage keys.
+  const { data: removed, error } = await db
+    .from("documents")
+    .delete()
+    .eq("id", file.resource_id)
+    .eq("user_id", session.user_id)
+    .eq("status", "error")
+    .is("current_version_id", null)
+    .select("id")
+    .maybeSingle();
+  if (error) throw error;
+  if (!removed) return;
   await deleteFilesBestEffort(
     [
       storageKey(session.user_id, file.resource_id, file.filename),
@@ -908,14 +923,6 @@ async function removeFailedCreatedDocument(
     ],
     "failed-document-remove",
   );
-  const { error } = await db
-    .from("documents")
-    .delete()
-    .eq("id", file.resource_id)
-    .eq("user_id", session.user_id)
-    .eq("status", "error")
-    .is("current_version_id", null);
-  if (error) throw error;
 }
 
 /**

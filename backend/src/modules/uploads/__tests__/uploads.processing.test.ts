@@ -630,6 +630,8 @@ describe("upload processing", () => {
       upload_processing_jobs: Array.from({ length: 8 }, () => ({ data: job })),
       upload_sessions: [{ data: baseSession }],
       upload_session_files: [{ data: file }],
+      // The row has no version yet, so the guarded delete removes it.
+      documents: [{ data: { id: file.resource_id } }],
     });
     try {
       await processUploadJob(db as never, job.id, "worker-1");
@@ -644,6 +646,41 @@ describe("upload processing", () => {
     expect(mocks.deleteFile).toHaveBeenCalledWith(`documents/${baseSession.user_id}/${file.resource_id}/source.docx`);
     expect(db.calls.some((call) => call.table === "documents" && call.operation === "upsert")).toBe(false);
     expect(db.calls.some((call) => (call.payload as { status?: string })?.status === "queued")).toBe(false);
+  });
+
+  it("keeps the files of a version an earlier attempt committed when a reclaimed DOCX job fails", async () => {
+    // Attempt 1 got as far as create_document_version, which set
+    // current_version_id, then lost its worker before marking the upload
+    // completed. The reclaimed attempt's validation fails terminally. The
+    // guarded row delete keeps the document, so its version's source and
+    // rendition objects must survive too.
+    const parse = vi.spyOn(EXTRACTION_OPS, "validateDocxPackage")
+      .mockRejectedValueOnce(new ExtractionLimitError("parser memory budget exceeded"));
+    const bytes = await minimalDocxBytes();
+    mocks.createFileReadStream.mockImplementation(() => Readable.from([bytes]));
+    const file = {
+      ...baseFile, file_type: "docx", filename: "ordinary.docx", expected_size_bytes: bytes.length,
+      status: "processing", document_created_at: "2026-11-11T10:00:00.000Z",
+    };
+    const job = { id: "job-1", session_id: baseSession.id, file_id: file.id, attempts: 2, locked_by: "worker-1" };
+    const db = fakeDb({
+      upload_processing_jobs: Array.from({ length: 8 }, () => ({ data: job })),
+      upload_sessions: [{ data: baseSession }],
+      upload_session_files: [{ data: file }],
+      // current_version_id is set, so the guarded delete matches no row.
+      documents: [{ data: null }],
+    });
+    try {
+      await processUploadJob(db as never, job.id, "worker-1");
+    } finally { parse.mockRestore(); }
+    expect(db.calls).toContainEqual(expect.objectContaining({ table: "documents", operation: "delete" }));
+    const documentKeys = mocks.deleteFile.mock.calls
+      .map(([key]) => String(key))
+      .filter((key) => key.startsWith(`documents/${baseSession.user_id}/${file.resource_id}/`));
+    expect(documentKeys).toEqual([]);
+    expect(db.calls).toContainEqual(expect.objectContaining({
+      table: "upload_session_files", payload: expect.objectContaining({ status: "error", error_code: "document_too_large" }),
+    }));
   });
 
   it("rejects a .docx upload that is a ZIP but not a Word package", async () => {
