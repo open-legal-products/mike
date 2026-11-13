@@ -4,7 +4,6 @@
 // their typed results onto status codes, headers, and JSON.
 
 import { Router, type Request, type Response } from "express";
-import { pipeline } from "node:stream/promises";
 import { requireAuth } from "../../middleware/auth";
 import { asyncRoute, routerErrorHandler } from "../../middleware/asyncRoute";
 import { createServerSupabase } from "../../lib/supabase";
@@ -13,6 +12,7 @@ import {
     buildContentDisposition,
 } from "../../lib/storage";
 import { sendServiceFailure } from "../../lib/serviceResult";
+import { pipeToResponse } from "../../lib/pipeToResponse";
 import {
     resolveBlobDownload,
     resolveTokenDownload,
@@ -32,8 +32,8 @@ export const downloadsRouter = Router();
  *   cannot serve it fails into the router's error handler as an ordinary
  *   500 instead of a dropped connection.
  * - A failure after the first byte can no longer change the status: the
- *   pipeline destroys the socket (the client sees a short body against its
- *   Content-Length) and the storage read, and the error is reported.
+ *   socket and the storage read are destroyed (the client sees a short body
+ *   against its Content-Length), and the error is reported.
  * - A client that disconnects aborts the storage read; that is not a
  *   failure, so nothing is reported.
  */
@@ -73,11 +73,27 @@ async function sendObject(
     }
     headers();
     try {
-        await pipeline(body, res);
+        // Not `pipeline(body, res)`: see pipeToResponse (MIKE-BACKEND-5F).
+        await pipeToResponse(body, res);
     } catch (error) {
-        if (error instanceof StorageOperationError) throw error;
-        // Anything else is the client going away mid-transfer (premature
-        // close, EPIPE): the pipeline has already released the storage read.
+        if (!(error instanceof StorageOperationError)) {
+            // The client going away mid-transfer (premature close, EPIPE):
+            // the storage read has already been released.
+            return;
+        }
+        if (!res.headersSent) {
+            // Nothing is on the wire, so the error answer is JSON: drop the
+            // headers that describe the object.
+            for (const name of [
+                "ETag",
+                "Content-Type",
+                "Content-Length",
+                "Content-Disposition",
+            ]) {
+                res.removeHeader(name);
+            }
+        }
+        throw error;
     }
 }
 

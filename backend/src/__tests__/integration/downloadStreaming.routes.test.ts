@@ -46,6 +46,13 @@ function adapterReading(reader: Reader): StorageAdapter {
 }
 
 const app = express();
+// Sentry's http integration puts 4 'close' listeners on every production
+// response before the route runs; vitest loads http before any SDK could
+// patch it, so the same load is added here.
+app.use((_req, res, next) => {
+  for (let i = 0; i < 4; i++) res.on("close", () => {});
+  next();
+});
 app.use("/download", downloadsRouter);
 let server: http.Server;
 let base: string;
@@ -107,6 +114,29 @@ describe("GET /download/signed/:token streaming", () => {
     expect(res.status).toBe(200);
     expect(res.length).toBe(String(SIZE));
     expect(res.body.toString()).toBe("first chunk;second chunk");
+  });
+
+  it("stays under Node's listener limit on the response (MIKE-BACKEND-5F)", async () => {
+    const warnings: string[] = [];
+    const onWarning = (warning: Error) => warnings.push(warning.name);
+    process.on("warning", onWarning);
+    setStorageAdapter(
+      adapterReading(async function* () {
+        yield FIRST;
+        yield SECOND;
+      }),
+    );
+
+    try {
+      const res = await get(() => undefined);
+      expect(res.body.toString()).toBe("first chunk;second chunk");
+      // Process warnings are emitted on a later tick.
+      await new Promise((resolve) => setImmediate(resolve));
+    } finally {
+      process.off("warning", onWarning);
+    }
+
+    expect(warnings).not.toContain("MaxListenersExceededWarning");
   });
 
   it("answers a store that fails before the first byte with an error status", async () => {
