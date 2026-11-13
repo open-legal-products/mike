@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { clearToasts, firstUploadResult, getSnapshot } from "@mike/client";
-import { MikeApiError, UploadBatchError } from "./mikeApi";
+import { MikeApiError, UploadBatchError, uploadOutcomeNeedsRetry } from "./mikeApi";
 import { errorFrameFailure } from "./chatTurnFailure";
 import {
     UserVisibleError,
@@ -251,6 +251,32 @@ describe("uploadBatchFault", () => {
     it("does not report a file the server refused as not a PDF", () => {
         // The worker names the bytes, not a fault of ours (PR #577).
         expect(uploadBatchFault([outcome("invalid_pdf_file")])).toBeNull();
+    });
+
+    it.each([
+        ["invalid_docx_package", "a.docx is not a valid DOCX file."],
+        ["document_too_large", "a.docx is too large or complex to process."],
+    ])("treats a DOCX refused with %s as the user's to fix: named, no Retry, no report", (code, message) => {
+        // PR #574's worker refuses these terminally; re-sending the same
+        // bytes fails the same way, so neither Retry path may re-send them.
+        const refused = { ...outcome(code), filename: "a.docx" };
+        expect(uploadOutcomeNeedsRetry(refused)).toBe(false);
+        expect(uploadBatchFault([refused])).toBeNull();
+
+        let thrown: unknown;
+        try {
+            firstUploadResult([refused]);
+        } catch (error) {
+            thrown = error;
+        }
+        const described = notifyError(thrown, {
+            action: "upload a new version",
+            operation: "documents.upload",
+        });
+        expect(described?.message).toBe(message);
+        expect(described?.retryable).toBe(false);
+        expect(described?.supportable).toBe(false);
+        expect(reporting.reportError).not.toHaveBeenCalled();
     });
 
     it("wraps the failures when one of them is ours", () => {

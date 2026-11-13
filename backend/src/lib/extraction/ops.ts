@@ -2,6 +2,7 @@
 // does CPU-bound work on the whole file, so it runs outside the calling process (see
 // isolated.ts). Keep imports parser-only: this module is all the parser process loads.
 
+import { validateDocxPackage } from "../docxpackagevalidation";
 import { extractDocxBodyText } from "../docxTrackedChanges";
 import { extractPresentationText } from "../officeText";
 import { extractLegacyOfficeText, extractPdfTextForModel } from "../pdfText";
@@ -15,6 +16,7 @@ async function mammothRawText(bytes: ArrayBuffer): Promise<string> {
 }
 
 export const EXTRACTION_OPS = {
+  validateDocxPackage: async (bytes: ArrayBuffer) => ({ text: "", valid: await validateDocxPackage(bytes) }),
   /** Search index text (document.extract_text). */
   documentText: (bytes: ArrayBuffer, fileType: string) =>
     extractDocumentText(bytes, fileType),
