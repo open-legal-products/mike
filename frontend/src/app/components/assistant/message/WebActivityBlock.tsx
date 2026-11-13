@@ -76,10 +76,13 @@ function WebToolError({ message }: { message?: string }) {
 export function WebSearchBlock({
     event,
     isStreaming,
+    interrupted,
     showConnector,
 }: {
     event: WebSearchEvent;
     isStreaming?: boolean;
+    /** The turn ended before the search reported its results. */
+    interrupted?: boolean;
     showConnector?: boolean;
 }) {
     const [open, setOpen] = useState(false);
@@ -88,6 +91,8 @@ export function WebSearchBlock({
     const error = event.error;
     const label: ReactNode = isStreaming ? (
         <>Searching the web{forQuery}</>
+    ) : interrupted ? (
+        <>Web search stopped{forQuery}</>
     ) : error ? (
         query ? <>Web search failed{forQuery}</> : "Web search unavailable"
     ) : (
@@ -122,10 +127,13 @@ export function WebSearchBlock({
 export function WebReadBlock({
     event,
     isStreaming,
+    interrupted,
     showConnector,
 }: {
     event: WebReadEvent;
     isStreaming?: boolean;
+    /** The turn ended before the read reported its result. */
+    interrupted?: boolean;
     showConnector?: boolean;
 }) {
     const error = event.error;
@@ -133,14 +141,23 @@ export function WebReadBlock({
         <EventBlock
             showConnector={showConnector}
             isStreaming={isStreaming}
-            dotColor={error ? "red" : "green"}
+            dotColor={error ? "red" : interrupted ? "gray" : "green"}
         >
             <EventLabel>
-                {isStreaming ? "Reading" : error ? "Read failed" : "Read"}
+                {isStreaming
+                    ? "Reading"
+                    : error
+                      ? "Read failed"
+                      : interrupted
+                        ? "Read stopped"
+                        : "Read"}
             </EventLabel>{" "}
             {/* Only a page the server actually read is a link: the model
                 picks the URL, and it may not be one the user should open. */}
-            <WebPageName source={event} linked={!isStreaming && !error} />
+            <WebPageName
+                source={event}
+                linked={!isStreaming && !error && !interrupted}
+            />
             {isStreaming ? <span>...</span> : null}
             <WebToolError message={error} />
         </EventBlock>

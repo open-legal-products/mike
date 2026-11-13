@@ -476,15 +476,17 @@ function AssistantMessageImpl({
         }
         if (event.type === "mcp_tool_call") {
             const isError = event.status === "error";
-            const label = event.connector_name
-                ? `${event.connector_name}: ${connectorToolLabel(event.tool_name, event.tool_title)}`
-                : toolCallLabel(event.openai_tool_name);
+            const label = event.interrupted
+                ? "Connector call stopped"
+                : event.connector_name
+                  ? `${event.connector_name}: ${connectorToolLabel(event.tool_name, event.tool_title)}`
+                  : toolCallLabel(event.openai_tool_name);
             return (
                 <EventBlock
                     key={globalIdx}
                     showConnector={showConnector}
                     isStreaming={event.isStreaming}
-                    dotColor={isError ? "red" : "green"}
+                    dotColor={isError ? "red" : event.interrupted ? "gray" : "green"}
                 >
                     <span className="flex min-w-0 items-center gap-1.5 font-medium">
                         <ConnectorSkeuoIcon
@@ -512,6 +514,7 @@ function AssistantMessageImpl({
                     key={globalIdx}
                     filename={event.filename}
                     isStreaming={event.isStreaming}
+                    interrupted={!!event.interrupted}
                     onClick={
                         !event.isStreaming &&
                         event.document_id &&
@@ -534,15 +537,18 @@ function AssistantMessageImpl({
         }
         if (event.type === "doc_search") {
             return <DocSearchBlock key={globalIdx} event={event}
-                isStreaming={event.isStreaming} showConnector={showConnector} />;
+                isStreaming={event.isStreaming} interrupted={!!event.interrupted}
+                showConnector={showConnector} />;
         }
         if (event.type === "web_search") {
             return <WebSearchBlock key={globalIdx} event={event}
-                isStreaming={event.isStreaming} showConnector={showConnector} />;
+                isStreaming={event.isStreaming} interrupted={!!event.interrupted}
+                showConnector={showConnector} />;
         }
         if (event.type === "web_read") {
             return <WebReadBlock key={globalIdx} event={event}
-                isStreaming={event.isStreaming} showConnector={showConnector} />;
+                isStreaming={event.isStreaming} interrupted={!!event.interrupted}
+                showConnector={showConnector} />;
         }
         if (event.type === "doc_find") {
             return (
@@ -552,6 +558,7 @@ function AssistantMessageImpl({
                     query={event.query}
                     totalMatches={event.total_matches}
                     isStreaming={!!event.isStreaming}
+                    interrupted={!!event.interrupted}
                     showConnector={showConnector}
                     onClick={
                         !event.isStreaming &&
@@ -676,7 +683,8 @@ function AssistantMessageImpl({
         }
         if (event.type === "courtlistener_search_case_law") {
             const count = event.result_count ?? 0;
-            const detail = event.isStreaming
+            // A stopped search reported no results: show its query, not "0 results".
+            const detail = event.isStreaming || event.interrupted
                 ? event.query
                     ? `for "${event.query}"`
                     : undefined
@@ -691,11 +699,14 @@ function AssistantMessageImpl({
                             ? "Searching case law"
                             : event.error
                               ? "Case law search failed"
-                              : "Searched case law"
+                              : event.interrupted
+                                ? "Case law search stopped"
+                                : "Searched case law"
                     }
                     detail={detail}
                     isStreaming={!!event.isStreaming}
                     hasError={!!event.error}
+                    interrupted={!!event.interrupted}
                     showConnector={showConnector}
                 />
             );
@@ -728,11 +739,14 @@ function AssistantMessageImpl({
                             ? `Fetching ${displayLabel}`
                             : event.error
                               ? "Case fetch failed"
-                              : `Fetched ${displayLabel}`
+                              : event.interrupted
+                                ? `Fetch of ${displayLabel} stopped`
+                                : `Fetched ${displayLabel}`
                     }
                     detail={detail}
                     isStreaming={!!event.isStreaming}
                     hasError={!!event.error}
+                    interrupted={!!event.interrupted}
                     showConnector={showConnector}
                     items={items.length > 0 ? items : undefined}
                 />
@@ -758,7 +772,7 @@ function AssistantMessageImpl({
                 const searchLabel = `${searches.length} ${
                     searches.length === 1 ? "search" : "searches"
                 } in ${caseCount} ${caseCount === 1 ? "case" : "cases"}`;
-                const detail = event.isStreaming
+                const detail = event.isStreaming || event.interrupted
                     ? undefined
                     : event.error
                       ? event.error
@@ -773,7 +787,10 @@ function AssistantMessageImpl({
                                 : null),
                         url: null,
                         query: search.query,
-                        totalMatches: search.total_matches ?? 0,
+                        // A stopped search has no match count to show.
+                        totalMatches: event.interrupted
+                            ? undefined
+                            : (search.total_matches ?? 0),
                         hasError: !!search.error,
                     }),
                 );
@@ -785,11 +802,14 @@ function AssistantMessageImpl({
                                 ? `Running ${searchLabel}`
                                 : event.error
                                   ? "Case searches failed"
-                                  : `Ran ${searchLabel}`
+                                  : event.interrupted
+                                    ? `Stopped ${searchLabel}`
+                                    : `Ran ${searchLabel}`
                         }
                         detail={detail}
                         isStreaming={!!event.isStreaming}
                         hasError={!!event.error}
+                        interrupted={!!event.interrupted}
                         showConnector={showConnector}
                         items={items.length > 0 ? items : undefined}
                     />
@@ -799,7 +819,7 @@ function AssistantMessageImpl({
             const caseLabel =
                 [event.case_name, event.citation].filter(Boolean).join(", ") ||
                 (event.cluster_id ? `cluster ${event.cluster_id}` : "case");
-            const detail = event.isStreaming
+            const detail = event.isStreaming || event.interrupted
                 ? event.query
                     ? `for "${event.query}" in ${caseLabel}`
                     : caseLabel
@@ -814,11 +834,14 @@ function AssistantMessageImpl({
                             ? "Searching case"
                             : event.error
                               ? "Case search failed"
-                              : "Searched case"
+                              : event.interrupted
+                                ? "Case search stopped"
+                                : "Searched case"
                     }
                     detail={detail}
                     isStreaming={!!event.isStreaming}
                     hasError={!!event.error}
+                    interrupted={!!event.interrupted}
                     showConnector={showConnector}
                 />
             );
@@ -828,7 +851,7 @@ function AssistantMessageImpl({
             const caseLabel =
                 [event.case_name, event.citation].filter(Boolean).join(", ") ||
                 "case";
-            const detail = event.isStreaming
+            const detail = event.isStreaming || event.interrupted
                 ? undefined
                 : event.error
                   ? event.error
@@ -843,11 +866,14 @@ function AssistantMessageImpl({
                             ? `Reading case ${caseLabel}`
                             : event.error
                               ? `Case read failed ${caseLabel}`
-                              : `Read case ${caseLabel}`
+                              : event.interrupted
+                                ? `Case read stopped ${caseLabel}`
+                                : `Read case ${caseLabel}`
                     }
                     detail={detail}
                     isStreaming={!!event.isStreaming}
                     hasError={!!event.error}
+                    interrupted={!!event.interrupted}
                     showConnector={showConnector}
                 />
             );
@@ -856,7 +882,7 @@ function AssistantMessageImpl({
             const citations = event.citation_count ?? 0;
             const matches = event.match_count ?? 0;
             const citationLabel = `${citations} ${citations === 1 ? "citation" : "citations"}`;
-            const detail = event.isStreaming
+            const detail = event.isStreaming || event.interrupted
                 ? undefined
                 : event.error
                   ? event.error
@@ -882,11 +908,14 @@ function AssistantMessageImpl({
                             ? `Verifying ${citationLabel}`
                             : event.error
                               ? "Citation verification failed"
-                              : `Verified ${citationLabel}`
+                              : event.interrupted
+                                ? `Verification of ${citationLabel} stopped`
+                                : `Verified ${citationLabel}`
                     }
                     detail={detail}
                     isStreaming={!!event.isStreaming}
                     hasError={!!event.error}
+                    interrupted={!!event.interrupted}
                     showConnector={showConnector}
                     items={items.length > 0 ? items : undefined}
                 />

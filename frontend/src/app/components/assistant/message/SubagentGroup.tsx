@@ -32,13 +32,21 @@ function stepCount(event: DelegationEvent): number {
     return event.events.filter(isRenderableEvent).length;
 }
 
-/** A subagent's status line: how it is doing or how it ended. */
-function subagentStatus(event: DelegationEvent): { text: string; failed: boolean } {
+/**
+ * A subagent's status line: how it is doing or how it ended. `stopped` says
+ * Stop cut it short; the group's summary counts it, so the two never disagree.
+ */
+function subagentStatus(event: DelegationEvent): {
+    text: string;
+    failed: boolean;
+    stopped: boolean;
+} {
     const count = stepCount(event);
     const steps = count > 0 ? `${count} ${count === 1 ? "step" : "steps"}` : null;
     const line = (...parts: Array<string | null | false | undefined>) => ({
         text: parts.filter(Boolean).join(" · "),
         failed: false,
+        stopped: false,
     });
     const resumed = !!event.continued_from && "Resumed";
     if (event.isStreaming) {
@@ -58,9 +66,11 @@ function subagentStatus(event: DelegationEvent): { text: string; failed: boolean
             );
         case "failed":
             return { ...line(resumed, "Couldn't finish"), failed: true };
+        // Stored as `cancelled`, or, while the stopped turn is still on
+        // screen, no status at all: the subagent never reported back.
         case "cancelled":
         default:
-            return line(resumed, "Stopped", steps);
+            return { ...line(resumed, "Stopped", steps), stopped: true };
     }
 }
 
@@ -273,6 +283,19 @@ export function SubagentGroup({
     const running = delegations.some((d) => d.isStreaming);
     const allDone = delegations.every((d) => d.status === "completed");
     const count = delegations.length;
+    // Subagents still running when the turn ended, by the pills' own rule.
+    const stoppedCount = delegations.filter((d) => subagentStatus(d).stopped).length;
+    const finishedCount = count - stoppedCount;
+    const summary =
+        count === 1
+            ? stoppedCount
+                ? "Subagent stopped"
+                : "Subagent finished"
+            : stoppedCount === 0
+              ? `${count} subagents finished`
+              : finishedCount === 0
+                ? `${count} subagents stopped`
+                : `${finishedCount} ${finishedCount === 1 ? "subagent" : "subagents"} finished, ${stoppedCount} stopped`;
     return (
         <>
             {/* The pills sit in this step's content column, so Mike's line
@@ -310,9 +333,7 @@ export function SubagentGroup({
                     dotColor={allDone ? "green" : "gray"}
                     showConnector={showConnectorAfter}
                 >
-                    <EventLabel>
-                        {count === 1 ? "Subagent finished" : `${count} subagents finished`}
-                    </EventLabel>
+                    <EventLabel>{summary}</EventLabel>
                 </EventBlock>
             )}
         </>
