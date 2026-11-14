@@ -64,6 +64,8 @@ export { runConversionJob, setDocumentTerminalStatus } from "./documents.convers
 
 export { handleDocumentExtractText, markDocumentTextFailed, backfillDocumentText } from "./documents.indexing";
 export { findDocumentText, readStoredDocumentText, storedDocumentTextCurrent } from "./documents.textSearch";
+export { handleDocumentEmbedText, markDocumentEmbeddingsFailed, backfillDocumentEmbeddings } from "./documents.embeddings";
+export { searchDocumentsSemantic } from "./documents.semanticSearch";
 
 export { getDocumentStatuses } from "./documents.status";
 

@@ -7,6 +7,7 @@ import { AppError } from "../../lib/appError";
 import { reportError, setOperation } from "../../lib/observability/sentry";
 import { enrichExtractedPdfText, extractImageOcrText, meaningfulPageLength, ocrEnabled } from "../../lib/ocr/ocrClient";
 import { contentTypeForDocumentType, isImageDocumentType } from "../../lib/documentTypes";
+import { queueDocumentEmbeddings } from "./documents.embeddings";
 
 export { extractDocumentText } from "../../lib/extraction/documentText";
 
@@ -86,6 +87,8 @@ export async function handleDocumentExtractText(db: Db, job: DbJob): Promise<voi
         p_text: text.replaceAll("\0", ""), p_sha256: hash, p_textless_pages: textlessPageCount,
       });
       if (publishError) throw publishError;
+      // Optional RAG (RAG_ENABLED=true): best effort, never fails extraction.
+      await queueDocumentEmbeddings(db, versionId);
     });
   } catch (error) {
     if (error instanceof ExtractionBusyError) {
