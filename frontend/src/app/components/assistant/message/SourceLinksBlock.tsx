@@ -1,24 +1,33 @@
+import type { Ref } from "react";
 import type { AssistantEvent } from "../../shared/types";
 import type { McpSourceLink } from "@mike/contracts";
 import { parseMcpSourceLinks } from "@/app/lib/mcpSourceLinks";
 
-export function SourceLinksBlock({ events, isStreaming }: { events: AssistantEvent[]; isStreaming?: boolean }) {
+export function SourceLinksBlock({ events, isStreaming, containerRef }: { events: AssistantEvent[]; isStreaming?: boolean; containerRef?: Ref<HTMLElement> }) {
     const links: McpSourceLink[] = [];
     let counterpediaCall = false;
-    for (const event of events) {
-        if (event.type !== "mcp_tool_call") continue;
-        if (event.tool_name.startsWith("counterpedia.") || event.openai_tool_name.includes("counterpedia")) counterpediaCall = true;
-        if (event.tool_name !== "counterpedia.get_source_presence") continue;
-        if (event.status !== "ok" || event.isStreaming || ("interrupted" in event && event.interrupted === true)) continue;
-        for (const value of parseMcpSourceLinks(event.source_links)) {
-            if (!links.some((link) => link.source_id === value.source_id && link.url === value.url)) {
-                links.push(value);
+    function collect(completedEvents: AssistantEvent[], parentEligible = true) {
+        for (const event of completedEvents) {
+            if (event.type === "delegation") {
+                // A child's successful call is provisional until its parent finishes.
+                collect(event.events, parentEligible && event.status === "completed" && !event.isStreaming && !("interrupted" in event && event.interrupted === true));
+                continue;
+            }
+            if (event.type !== "mcp_tool_call") continue;
+            if (event.tool_name.startsWith("counterpedia.") || event.openai_tool_name.includes("counterpedia")) counterpediaCall = true;
+            if (!parentEligible || event.tool_name !== "counterpedia.get_source_presence") continue;
+            if (event.status !== "ok" || event.isStreaming || ("interrupted" in event && event.interrupted === true)) continue;
+            for (const value of parseMcpSourceLinks(event.source_links)) {
+                if (!links.some((link) => link.source_id === value.source_id && link.url === value.url)) {
+                    links.push(value);
+                }
             }
         }
     }
+    collect(events);
     if (isStreaming || (!links.length && !counterpediaCall)) return null;
     return (
-        <section className="mt-3 mb-3 font-sans" aria-label="Source links">
+        <section ref={containerRef} className="mt-3 mb-3 font-sans" aria-label="Source links">
             <h3 className="text-sm font-semibold text-gray-700">Source links</h3>
             {links.length ? (
                 <ul className="mt-1 flex flex-col gap-1 text-sm">

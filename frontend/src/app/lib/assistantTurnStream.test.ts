@@ -872,12 +872,73 @@ describe("MCP tool frames", () => {
     });
   });
 
+  it("retains a successful source-presence result when its start frame is absent", async () => {
+    const events = await eventsOf([{
+      type: "mcp_tool_result",
+      name: "counterpedia_get_source_presence",
+      connector_name: "Counterpedia",
+      tool_name: "counterpedia.get_source_presence",
+      tool_title: "Source presence",
+      approval_id: "approval-1",
+      status: "ok",
+      source_links: [{
+        source_id: "TH-S09-SRC-0001",
+        label: "Ninth Circuit Order",
+        url: "https://cdn.ca9.uscourts.gov/datastore/opinions/2025/12/22/22-10312.pdf",
+        basis: "capture_observation",
+      }],
+    }]);
+    expect(events).toHaveLength(2);
+    expect(events?.[0]).toMatchObject({
+      type: "mcp_tool_call",
+      status: "ok",
+      tool_title: "Source presence",
+      approval_id: "approval-1",
+      source_links: [{ source_id: "TH-S09-SRC-0001" }],
+      isStreaming: false,
+    });
+  });
+
+  it("suppresses a replayed result with the same SSE cursor id", async () => {
+    const turn = begin();
+    const result = { type: "mcp_tool_result", name: "counterpedia_get_source_presence", tool_name: "counterpedia.get_source_presence", status: "ok", source_links: [{ source_id: "TH-S01-SRC-0001", label: "SEC", url: "https://www.sec.gov/litigation/complaints/2018/comp-pr2018-41-theranos-holmes.pdf", basis: "discovery" }] };
+    await consumeAssistantTurnStream(sseResponse([
+      `id: 1\ndata: ${JSON.stringify(result)}\n\n`,
+      `id: 1\ndata: ${JSON.stringify(result)}\n\n`,
+      "data: [DONE]\n\n",
+    ]), { turn, sink: createTurnEventSink(turn, []), cursor: createTurnCursor("chat-a") });
+    expect(turn.turn.assistant.events?.filter((event) => event.type === "mcp_tool_call")).toHaveLength(1);
+    turn.finish();
+  });
+
+  it("keeps distinct result-only calls to the same tool", async () => {
+    const events = await eventsOf([
+      { type: "mcp_tool_result", name: "counterpedia_get_source_presence", tool_name: "counterpedia.get_source_presence", status: "ok", source_links: [{ source_id: "TH-S01-SRC-0001", label: "SEC", url: "https://www.sec.gov/litigation/complaints/2018/comp-pr2018-41-theranos-holmes.pdf", basis: "discovery" }] },
+      { type: "mcp_tool_result", name: "counterpedia_get_source_presence", tool_name: "counterpedia.get_source_presence", status: "ok", source_links: [{ source_id: "TH-S09-SRC-0001", label: "Ninth Circuit", url: "https://cdn.ca9.uscourts.gov/datastore/opinions/2025/12/22/22-10312.pdf", basis: "capture_observation" }] },
+    ]);
+    expect(events?.filter((event) => event.type === "mcp_tool_call")).toHaveLength(2);
+    expect(events?.[0]).toMatchObject({ source_links: [{ source_id: "TH-S01-SRC-0001" }] });
+    expect(events?.[1]).toMatchObject({ source_links: [{ source_id: "TH-S09-SRC-0001" }] });
+  });
+
+  it("does not promote links from a malformed result status", async () => {
+    const events = await eventsOf([{
+      type: "mcp_tool_result",
+      name: "counterpedia_get_source_presence",
+      tool_name: "counterpedia.get_source_presence",
+      status: "partial",
+      source_links: [{ source_id: "SEC-FAKE", label: "SEC", url: "https://evil.example", basis: "discovery" }],
+    }]);
+    expect(events?.[0]).not.toHaveProperty("source_links");
+  });
+
   it("does not carry source links from an error result", async () => {
     const events = await eventsOf([
       { type: "mcp_tool_start", name: "counterpedia_get_source_presence" },
       {
         type: "mcp_tool_result",
         name: "counterpedia_get_source_presence",
+        tool_name: "counterpedia.get_source_presence",
         status: "error",
         source_links: [{ source_id: "SEC-FAKE", label: "SEC", url: "https://evil.example", basis: "discovery" }],
       },
@@ -903,10 +964,20 @@ describe("MCP tool frames", () => {
     ]);
   });
 
-  it("only shows a placeholder when a result has no call to resolve", async () => {
+  it("retains a result even when its start frame is absent", async () => {
     expect(
       await eventsOf([{ type: "mcp_tool_result", name: "drive__search" }]),
-    ).toEqual([thinking]);
+    ).toEqual([{
+      type: "mcp_tool_call",
+      connector_id: "",
+      connector_name: "",
+      tool_name: "drive__search",
+      openai_tool_name: "drive__search",
+      status: "ok",
+      error: undefined,
+      approval_id: undefined,
+      isStreaming: false,
+    }, thinking]);
   });
 });
 

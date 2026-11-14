@@ -9,7 +9,7 @@ export function parseMcpSourceLinks(value: unknown): McpSourceLink[] {
         if (
             typeof source_id !== "string" || !source_id.trim() || source_id.length > 200 ||
             typeof label !== "string" || !label.trim() || label.length > 240 ||
-            typeof url !== "string" || !url || url.length > 2048 || /[\s\\]/.test(url) ||
+            typeof url !== "string" || !url || url.length > 2048 || !/^https?:\/\/[^/]/i.test(url) || /[\s\\]/.test(url) ||
             (basis !== "discovery" && basis !== "capture_observation")
         ) return [];
         try {

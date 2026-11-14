@@ -10,6 +10,7 @@ describe("AssistantMessage copy", () => {
     afterEach(() => {
         clearToasts();
         vi.restoreAllMocks();
+        vi.unstubAllGlobals();
     });
 
     it("tells the user when the clipboard refuses the copy", async () => {
@@ -84,6 +85,7 @@ describe("AssistantMessage web sources", () => {
 });
 
 describe("AssistantMessage source links", () => {
+    afterEach(() => vi.unstubAllGlobals());
     const mcp = (overrides: Record<string, unknown> = {}) =>
         ({
             type: "mcp_tool_call",
@@ -182,6 +184,79 @@ describe("AssistantMessage source links", () => {
         ]} />);
         expect(screen.queryByRole("link")).toBeNull();
         expect(screen.getAllByText("Source link not established.").length).toBeGreaterThan(0);
+    });
+
+    const courtWitness = {
+        source_id: "TH-S09-SRC-0001",
+        label: "Ninth Circuit Order and Amended Opinion (captured public document)",
+        url: "https://cdn.ca9.uscourts.gov/datastore/opinions/2025/12/22/22-10312.pdf",
+        basis: "capture_observation",
+    };
+    const delegation = (overrides: Record<string, unknown> = {}) => ({
+        type: "delegation", delegation_id: "research", title: "Research source",
+        task: "Find the recorded original", status: "completed", model: "test", effort: "quick",
+        events: [mcp({ source_links: [courtWitness] })], ...overrides,
+    }) as never;
+
+    it("shows completed nested subagent witnesses once alongside top-level calls", () => {
+        render(<AssistantMessage events={[
+            delegation({ events: [delegation()] }),
+            mcp({ source_links: [courtWitness] }),
+        ]} />);
+        expect(screen.getAllByRole("link", { name: courtWitness.label })).toHaveLength(1);
+        expect(screen.getByRole("link", { name: courtWitness.label })).toHaveAttribute("href", courtWitness.url);
+        expect(screen.getByText("(TH-S09-SRC-0001)")).toBeInTheDocument();
+    });
+
+    it.each([
+        { status: undefined }, { status: "failed" }, { status: "incomplete" },
+        { status: "needs_input" }, { status: "cancelled" },
+        { isStreaming: true }, { interrupted: true },
+    ])("withholds a successful child witness under an ineligible parent %j", (parent) => {
+        render(<AssistantMessage events={[delegation(parent)]} />);
+        expect(screen.queryByRole("link", { name: courtWitness.label })).toBeNull();
+        expect(screen.getByRole("region", { name: "Source links" })).toHaveTextContent("Source link not established.");
+    });
+
+    it("keeps the Source refusal for a completed subagent without a presence witness", () => {
+        render(<AssistantMessage events={[delegation({ events: [mcp({ tool_name: "counterpedia.sources" })] })]} />);
+        expect(screen.getByRole("region", { name: "Source links" })).toHaveTextContent("Source link not established.");
+        expect(screen.queryByRole("link")).toBeNull();
+    });
+
+    it.each([true, false])("copies visible Source provenance into HTML and plain text (witness=%s)", async (hasWitness) => {
+        const user = userEvent.setup();
+        vi.stubGlobal("ClipboardItem", class {
+            constructor(public items: Record<string, Blob>) {}
+        });
+        const write = vi.fn().mockResolvedValue(undefined);
+        Object.defineProperty(navigator, "clipboard", { configurable: true, value: { write } });
+        // Use markup-like labels to prove copied HTML preserves React escaping.
+        const witness = { ...courtWitness, label: 'Ninth Circuit <img src=x onerror="alert(1)">' };
+        render(<AssistantMessage events={[
+            { type: "content", text: "[SEC guessed](https://www.sec.gov/litigation/complaints/2018/comp18200.htm)" },
+            delegation({ events: [mcp({ source_links: hasWitness ? [witness] : [] })] }),
+        ]} />);
+        await user.click(screen.getByRole("button", { name: "Copy response" }));
+        expect(write).toHaveBeenCalledOnce();
+        const { items } = write.mock.calls[0][0][0] as { items: Record<string, Blob> };
+        const html = await items["text/html"].text();
+        const text = await items["text/plain"].text();
+        const copy = document.createElement("div");
+        copy.innerHTML = html;
+        expect(copy.querySelector("img")).toBeNull();
+        expect(html).not.toContain("comp18200.htm");
+        expect(text).not.toContain("comp18200.htm");
+        if (hasWitness) {
+            expect(copy.querySelector("a")?.getAttribute("href")).toBe(courtWitness.url);
+            for (const value of [witness.label, courtWitness.source_id, courtWitness.url, "current access not established."]) {
+                expect(text).toContain(value);
+            }
+        } else {
+            expect(copy.querySelector("a")).toBeNull();
+            expect(text).toContain("Source links\nSource link not established.");
+        }
+        vi.unstubAllGlobals();
     });
 
     it("ignores source links from failed or interrupted MCP calls", () => {

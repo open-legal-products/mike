@@ -7,7 +7,7 @@ describe("Source-link wire/history validation", () => {
         expect(parseMcpSourceLinks([witness])).toEqual([witness]);
         expect(parseMcpSourceLinks([{ ...witness, url: "https://www.sec.gov:443/source" }])[0].url).toBe("https://www.sec.gov:443/source");
     });
-    it.each(["javascript:alert(1)", "//evil.example", "/sources/guessed", "https://u:p@www.sec.gov/x", "https://www.sec.gov/x?secret=1", "https://www.sec.gov/x#token", "http://127.1/x", "http://[::1]/x", "https://localhost/x", "https://host.local/x", "https://host.internal/x", "https://metadata/x", " https://www.sec.gov/x", "https://www.sec.gov/\\x"])("refuses unsafe or private URL %s", (value) => {
+    it.each(["javascript:alert(1)", "//evil.example", "/sources/guessed", "https:example.org", "https:/example.org", "https:///example.org", "https:////example.org", "https://u:p@www.sec.gov/x", "https://www.sec.gov/x?secret=1", "https://www.sec.gov/x#token", "http://127.1/x", "http://[::1]/x", "https://localhost/x", "https://host.local/x", "https://host.internal/x", "https://metadata/x", " https://www.sec.gov/x", "https://www.sec.gov/\\x"])("refuses unsafe or private URL %s", (value) => {
         expect(parseMcpSourceLinks([{ ...witness, url: value }])).toEqual([]);
     });
     it("refuses absent, oversized or untyped data", () => {

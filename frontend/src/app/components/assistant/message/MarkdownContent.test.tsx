@@ -31,4 +31,17 @@ describe("MarkdownContent external media", () => {
         expect(screen.queryByRole("link", { name: "SEC filing" })).toBeNull();
         expect(screen.getByText(/Source link not established/)).toBeInTheDocument();
     });
+
+    it.each(["", "javascript:alert(1)", "data:text/html,<p>nope</p>"])("refuses an empty or sanitized anchor %s", (url) => {
+        render(
+            <MarkdownContent
+                text={`[SEC filing](${url})`}
+                inlineCitationTargets={[]}
+                caseCitations={new Map()}
+                caseDocuments={new Map()}
+            />,
+        );
+        expect(screen.queryByRole("link", { name: "SEC filing" })).toBeNull();
+        expect(screen.getByText("Source link not established.")).toBeInTheDocument();
+    });
 });

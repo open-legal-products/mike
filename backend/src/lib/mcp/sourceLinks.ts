@@ -1,4 +1,5 @@
 import net from "net";
+import { isDeepStrictEqual } from "node:util";
 import type { McpSourceLink } from "@mike/contracts";
 import { isBlockedIp } from "../privateIp";
 
@@ -17,7 +18,7 @@ function text(value: unknown, max: number): string | null {
   return typeof value === "string" && value.trim() && value.length <= max ? value.trim() : null;
 }
 function sameJson(left: unknown, right: unknown): boolean {
-  try { return JSON.stringify(left) === JSON.stringify(right); } catch { return false; }
+  return isDeepStrictEqual(left, right);
 }
 function candidateObjects(result: unknown): unknown[] | null {
   const root = record(result);
@@ -34,7 +35,7 @@ function candidateObjects(result: unknown): unknown[] | null {
 }
 function safePublicUrl(value: unknown): string | null {
   const raw = text(value, MAX_URL);
-  if (!raw || raw !== value || /[\s\\]/.test(raw)) return null;
+  if (!raw || raw !== value || !/^https?:\/\/[^/]/i.test(raw) || /[\s\\]/.test(raw)) return null;
   let parsed: URL;
   try { parsed = new URL(raw); } catch { return null; }
   if (!(parsed.protocol === "https:" || parsed.protocol === "http:")) return null;

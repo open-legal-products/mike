@@ -8,6 +8,27 @@ const SEC_URL = "https://www.sec.gov/litigation/complaints/2018/comp-pr2018-41-t
 const COURT_URL = "https://cdn.ca9.uscourts.gov/datastore/opinions/2025/12/22/22-10312.pdf";
 const wire = (payload: unknown) => ({ content: [{ type: "text", text: JSON.stringify(payload) }], isError: false });
 const call = (payload = sec, args = { source_id: payload.source_id }) => extract(TOOL, args, wire(payload));
+const reorderKeys = (value: unknown): unknown => {
+    if (Array.isArray(value)) return value.map(reorderKeys);
+    if (!value || typeof value !== "object") return value;
+    return Object.fromEntries(Object.entries(value as Record<string, unknown>).reverse().map(([key, nested]) => [key, reorderKeys(nested)]));
+};
+const dualWire = (structuredContent: unknown, textContent: unknown) => ({
+    structuredContent,
+    content: [{ type: "text", text: JSON.stringify(textContent) }],
+    isError: false,
+});
+type Mutation = (structured: typeof sec, text: typeof sec) => void;
+const conflicts: Array<[string, Mutation]> = [
+    ["array order", (structured, text) => {
+        const second = { ...structured.presence.discovery.value[0], locator: "https://www.sec.gov/second-source.pdf" };
+        structured.presence.discovery.value.push(second);
+        text.presence.discovery.value.push({ ...second });
+        text.presence.discovery.value.reverse();
+    }],
+    ["array value", (_structured, text) => { text.presence.discovery.value[0].locator = "https://www.sec.gov/changed-source.pdf"; }],
+    ["missing nested key", (_structured, text) => { delete (text.presence.identity as Record<string, unknown>).publication_status; }],
+];
 
 describe("Source links from retained SEC/Ninth Circuit tool responses", () => {
     it("returns the exact recorded SEC discovery URL, title and Source identity", () => {
@@ -24,6 +45,17 @@ describe("Source links from retained SEC/Ninth Circuit tool responses", () => {
         expect(extract("counterpedia.sources", { record_id: "TH-S01" }, wire({ source_id: sec.source_id, url: invented }))).toEqual([]);
         expect(extract(TOOL, { source_id: sec.source_id }, wire({ model_claim: invented, presence: sec.presence }))).toEqual([]);
         expect(call()[0].url).not.toBe(invented);
+    });
+    it("accepts equivalent structured and text witnesses despite reordered nested object keys", () => {
+        expect(extract(TOOL, { source_id: sec.source_id }, dualWire(sec, reorderKeys(sec)))).toEqual([
+            { source_id: sec.source_id, label: sec.presence.identity.label, url: SEC_URL, basis: "discovery" },
+        ]);
+    });
+    it.each(conflicts)("refuses a structured/text witness conflict in %s", (_case, mutate) => {
+        const structuredValue = structuredClone(sec);
+        const textValue = structuredClone(sec);
+        mutate(structuredValue, textValue);
+        expect(extract(TOOL, { source_id: sec.source_id }, dualWire(structuredValue, textValue))).toEqual([]);
     });
     it.each(["source_id", "schema", "identity", "private", "discovery binding", "discovery unavailable", "no documentary title"])("refuses a missing or contradictory %s", (field) => {
         const value = structuredClone(sec);
@@ -49,7 +81,7 @@ describe("Source links from retained SEC/Ninth Circuit tool responses", () => {
         expect(extract(TOOL, { source_id: sec.source_id }, { ...wire(sec), isError: true })).toEqual([]);
         expect(extract(TOOL, { source_id: sec.source_id }, { ...wire(sec), structuredContent: court })).toEqual([]);
     });
-    it.each(["javascript:alert(1)", "//www.sec.gov/source", "https://user:secret@www.sec.gov/source", "https://www.sec.gov/source?token=secret", "https://www.sec.gov/source#token", "http://127.0.0.1/source", "http://[::1]/source", "http://169.254.169.254/source", "https://localhost/source", "https://host.local/source", "https://metadata/source", " https://www.sec.gov/source", "https://www.sec.gov/\\source"])("rejects unsafe or private locator %s", (url) => {
+    it.each(["javascript:alert(1)", "//www.sec.gov/source", "https:example.org", "https:/example.org", "https:///example.org", "https:////example.org", "https://user:secret@www.sec.gov/source", "https://www.sec.gov/source?token=secret", "https://www.sec.gov/source#token", "http://127.0.0.1/source", "http://[::1]/source", "http://169.254.169.254/source", "https://localhost/source", "https://host.local/source", "https://metadata/source", " https://www.sec.gov/source", "https://www.sec.gov/\\source"])("rejects unsafe or private locator %s", (url) => {
         const value = structuredClone(sec);
         value.presence.discovery.value[0].locator = url;
         expect(call(value)).toEqual([]);

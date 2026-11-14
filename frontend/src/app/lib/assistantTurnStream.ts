@@ -421,14 +421,21 @@ export async function consumeAssistantTurnStream(
     appendCancellation,
   } = sink;
   const updateLatestAssistantMessage = turn.update;
+  let skipFrame = false;
 
   for await (const frame of readSseFrames(response, {
     signal,
     onEventId: (id) => {
       const seq = Number.parseInt(id, 10);
-      if (Number.isFinite(seq)) cursor.lastSeq = seq;
+      skipFrame = Number.isFinite(seq) && seq <= cursor.lastSeq;
+      if (Number.isFinite(seq) && !skipFrame) cursor.lastSeq = seq;
     },
   })) {
+    if (skipFrame) {
+      skipFrame = false;
+      continue;
+    }
+    skipFrame = false;
     const data = frame as Record<string, unknown>;
 
     try {
@@ -700,40 +707,42 @@ export async function consumeAssistantTurnStream(
           const sourceLinks =
             data.status === "ok" && data.tool_name === "counterpedia.get_source_presence"
               ? parseMcpSourceLinks(data.source_links) : [];
-          updateMatchingEvent(
+          const completedEvent: Extract<AssistantEvent, { type: "mcp_tool_call" }> = {
+            type: "mcp_tool_call",
+            connector_id: "",
+            connector_name:
+              typeof data.connector_name === "string"
+                ? (data.connector_name as string)
+                : "",
+            tool_name:
+              typeof data.tool_name === "string"
+                ? (data.tool_name as string)
+                : openaiToolName,
+            tool_title:
+              typeof data.tool_title === "string" && data.tool_title
+                ? (data.tool_title as string)
+                : undefined,
+            openai_tool_name: openaiToolName,
+            status: data.status === "error" ? "error" : "ok",
+            error:
+              typeof data.error === "string"
+                ? (data.error as string)
+                : undefined,
+            approval_id:
+              typeof data.approval_id === "string"
+                ? (data.approval_id as string)
+                : undefined,
+            ...(sourceLinks.length > 0 ? { source_links: sourceLinks } : {}),
+            isStreaming: false,
+          };
+          const updatedStreaming = updateMatchingEvent(
             (e) =>
               e.type === "mcp_tool_call" &&
               e.openai_tool_name === openaiToolName &&
               !!e.isStreaming,
-            () => ({
-              type: "mcp_tool_call",
-              connector_id: "",
-              connector_name:
-                typeof data.connector_name === "string"
-                  ? (data.connector_name as string)
-                  : "",
-              tool_name:
-                typeof data.tool_name === "string"
-                  ? (data.tool_name as string)
-                  : openaiToolName,
-              tool_title:
-                typeof data.tool_title === "string" && data.tool_title
-                  ? (data.tool_title as string)
-                  : undefined,
-              openai_tool_name: openaiToolName,
-              status: data.status === "error" ? "error" : "ok",
-              error:
-                typeof data.error === "string"
-                  ? (data.error as string)
-                  : undefined,
-              approval_id:
-                typeof data.approval_id === "string"
-                  ? (data.approval_id as string)
-                  : undefined,
-              ...(sourceLinks.length > 0 ? { source_links: sourceLinks } : {}),
-              isStreaming: false,
-            }),
+            () => completedEvent,
           );
+          if (!updatedStreaming) pushEvent(completedEvent);
           pushThinkingPlaceholder();
           continue;
         }

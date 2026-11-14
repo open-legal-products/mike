@@ -243,6 +243,9 @@ function MarkdownContentImpl({
                     a: (props) => {
                         const { href, children, ...anchorProps } =
                             withoutMarkdownNode(props);
+                        if (!href) {
+                            return <span>Source link not established.</span>;
+                        }
                         if (href) {
                             const isInternalCaseHref = !!internalCaseHref(href);
                             const citation = findCaseCitation(href);
