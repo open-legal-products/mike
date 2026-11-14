@@ -74,6 +74,7 @@ import {
   generateDocx,
   generateExcel,
   generatePpt,
+  generateImage,
   getTurnReadIdentity,
   duplicateReadDocumentResult,
   clearTurnReadsForDocument,
@@ -2489,6 +2490,38 @@ export async function runToolCalls(
         result as Record<string, unknown>,
         previewFilename,
         "xlsx",
+      );
+    } else if (tc.function.name === "generate_image") {
+      const title = typeof args.title === "string" ? args.title : "image";
+      devLog(`[generate_image] title="${title}"`);
+      const previewFilename = safeGeneratedFilename(title, "png");
+      write(
+        `data: ${JSON.stringify({ type: "doc_created_start", filename: previewFilename })}\n\n`,
+      );
+      const result = await generateImage(
+        title,
+        typeof args.prompt === "string" ? args.prompt : "",
+        userId,
+        db,
+        {
+          size: args.size,
+          negativePrompt:
+            typeof args.negative_prompt === "string" ? args.negative_prompt : undefined,
+          projectId: projectId ?? null,
+          orgId: options.orgId ?? null,
+          signal: options.signal,
+        },
+      );
+      const generatedType =
+        typeof (result as { filename?: unknown }).filename === "string" &&
+        (result as { filename: string }).filename.toLowerCase().endsWith(".jpg")
+          ? "jpg"
+          : "png";
+      registerGeneratedDocument(
+        tc,
+        result as Record<string, unknown>,
+        previewFilename,
+        generatedType,
       );
     } else if (tc.function.name === "generate_ppt") {
       const title = args.title as string;
