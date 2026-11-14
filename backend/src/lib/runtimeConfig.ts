@@ -262,7 +262,7 @@ export function extractionLauncherWarnings(
   const launcher = extractionIsolated(env) ? extractionLauncher(platform) : null;
   if (!launcher || onPath(launcher, env.PATH)) return [];
   return [
-    `${launcher} was not found on PATH: text extraction and DOCX uploads will fail. Install util-linux (the official backend image includes it), then restart the backend and any worker (docs/deployment.md).`,
+    `${launcher} was not found on PATH: text extraction and DOCX uploads will fail. Install util-linux (the official backend image includes it; docs/deployment.md). Extraction recovers without a restart once it is on PATH.`,
   ];
 }
 

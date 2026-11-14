@@ -46,7 +46,7 @@ const PARSER_UNAVAILABLE_MESSAGE =
   "and DOCX validation fail. On Linux it is launched through prlimit " +
   "(util-linux) to enforce its memory limit; install util-linux (the " +
   "backend Docker image and backend/nixpacks.toml include it, see " +
-  "docs/deployment.md), then restart the backend and worker.";
+  "docs/deployment.md). No restart is needed once it is on PATH.";
 
 function killParser(child: ChildProcess): void {
   if (!child.pid) return;
