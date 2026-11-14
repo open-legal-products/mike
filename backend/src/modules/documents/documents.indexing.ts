@@ -5,6 +5,7 @@ import { DbJobDeferredError, type Db, type DbJob } from "../../lib/dbq/types";
 import { NonRetryableJobError } from "../../lib/dbq/runner";
 import { AppError } from "../../lib/appError";
 import { reportError, setOperation } from "../../lib/observability/sentry";
+import { enrichExtractedPdfText, meaningfulPageLength, ocrEnabled } from "../../lib/ocr/ocrClient";
 
 export { extractDocumentText } from "../../lib/extraction/documentText";
 
@@ -47,6 +48,26 @@ export async function handleDocumentExtractText(db: Db, job: DbJob): Promise<voi
         if (!(err instanceof ExtractionLimitError)) throw err;
         await markDocumentTextFailed(db, job, "too_large");
         return;
+      }
+      if (fileType.toLowerCase() === "pdf" && (extracted.textlessPageCount ?? 0) > 0 && ocrEnabled()) {
+        const enriched = await enrichExtractedPdfText(raw, extracted);
+        extracted = { text: enriched.text, textlessPageCount: enriched.textlessPageCount };
+        if (enriched.error && enriched.error.kind !== "ocr.file_too_large" && meaningfulPageLength(enriched.text) === 0) {
+          // Nothing readable without OCR (fully scanned PDF or image) and OCR
+          // failed: do not publish ready empty text, which backfill never
+          // revisits. Fail the attempt so the runner retries it and, once
+          // exhausted, marks the text failed for `backfill_document_text`
+          // with retry. Partially native PDFs still publish their native text
+          // with the OCR pages reported as incomplete coverage.
+          throw enriched.error;
+        }
+        if (enriched.error) {
+          reportError(enriched.error, {
+            level: "warning",
+            tags: { component: "documents", stage: "ocr", job_kind: "document.extract_text" },
+            extra: { job_id: job.id, version_id: versionId },
+          });
+        }
       }
       const { text, textlessPageCount } = extracted;
       const { error: publishError } = await db.rpc("publish_document_text", {
