@@ -1,0 +1,104 @@
+{
+  "operation": "counterpedia.get_source_presence",
+  "source_id": "TH-S01-SRC-0001",
+  "presence": {
+    "schema_version": "counterpedia.source_presence_projection/v0.1",
+    "identity": {
+      "source_id": "TH-S01-SRC-0001",
+      "slug": "sec-enforcement-filing-capture",
+      "label": "SEC enforcement filing (captured public document)",
+      "source_type": "filing",
+      "publication_status": "public"
+    },
+    "host": {
+      "status": "unavailable",
+      "reason": "HOST_FACTS_NOT_SUPPLIED"
+    },
+    "reader_access": {
+      "status": "unavailable",
+      "reason": "NO_GOVERNED_SOURCE_PRODUCER_BINDING"
+    },
+    "exposure": {
+      "status": "unavailable",
+      "reason": "EXPOSURE_DECISIONS_NOT_SUPPLIED"
+    },
+    "discovery": {
+      "status": "available",
+      "value": [
+        {
+          "binding_id": "source-producer-binding:sha256:b25b911551f1b5a96757a4bca4173d4b999c0dbddfd93429dad53173e5ad23d0",
+          "source_id": "TH-S01-SRC-0001",
+          "producer_contract": "acquisition.discovery_lineage_projection/v0.1",
+          "producer_commit": "f5b441a6d25b4152f6399fdb23d840d50a931d40",
+          "candidate_id": "src-cand:b238030bf76a2fd117694599",
+          "locator_id": "sha256:18e46b246dfc2ef032f37f2e80f68ed0a66b11430952d7a26d64c0bd4bde217",
+          "locator": "https://www.sec.gov/litigation/complaints/2018/comp-pr2018-41-theranos-holmes.pdf",
+          "producer_payload_digest": "sha256:26a6c8a04aeebbc4f4e1c2937c87500a73b0b9c87b8b2c5fdd149b93ed8b3436",
+          "relation_decision_ref": "cp.relation:prospective-source-producer:2026-sec-theranos-complaint:v1",
+          "attempt_status": "not_attempted",
+          "attempt_id": null,
+          "capture_id": null,
+          "failure_reason": null
+        }
+      ]
+    },
+    "custody_observations": {
+      "status": "unavailable",
+      "reason": "SOURCE_SURFACE_FACTS_NOT_SUPPLIED"
+    },
+    "family_organizations": {
+      "source_id": "TH-S01-SRC-0001",
+      "family": {
+        "disposition": "classified",
+        "primary": {
+          "family_id": "law_public_authority",
+          "label": "Law & Public Authority"
+        },
+        "secondary": [
+          {
+            "family_id": "companies_financial_markets",
+            "label": "Companies & Financial Markets"
+          }
+        ]
+      },
+      "organizations": [
+        {
+          "organization_key": "sec",
+          "label": "U.S. Securities and Exchange Commission",
+          "role": "origin_authority",
+          "role_label": "Issued by"
+        }
+      ]
+    },
+    "documentary_relations": {
+      "status": "available",
+      "value": [
+        {
+          "associationId": "association:28d380b9e825a219506f120e",
+          "corpusTargetKind": "counterpedia_entry",
+          "corpusTargetRef": "counterpedia:theranos-investor-representations",
+          "documentaryRelation": "primary_record",
+          "documentaryRelationLabel": "Primary record",
+          "relevanceBasisKind": "governed_editorial_determination",
+          "relevanceBasisLabel": "Governed editorial determination"
+        }
+      ]
+    },
+    "evidence_relations": {
+      "status": "unavailable",
+      "reason": "CLAIM_SOURCE_READ0_PENDING"
+    },
+    "evidence_relationships": {
+      "status": "unavailable",
+      "reason": "NO_GENERAL_COMMITTED_ADJ1_BINDING_REGISTRY"
+    },
+    "editions_currentness": {
+      "status": "unavailable",
+      "reason": "NO_GOVERNED_PUBLIC_SRC1_BINDING"
+    },
+    "machine_links": {
+      "source_detail": "/sources/TH-S01-SRC-0001",
+      "source_index_api": "/api/sources"
+    }
+  }
+}

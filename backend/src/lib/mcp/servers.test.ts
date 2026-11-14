@@ -1,12 +1,14 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import secPresence from "./__fixtures__/sec-source-presence.json";
 
 // Force the transport-error branch of executeMcpToolCall without a live MCP
 // server or network: `withMcpClient` calls `validateRemoteMcpUrl` before it
 // does anything else, so having that throw lands us straight in the catch path
 // we want to exercise. The thrown message stands in for remote-server-authored
 // error text, which is exactly what the "untrusted data" wrapper must contain.
-const { validateRemoteMcpUrlMock } = vi.hoisted(() => ({
+const { validateRemoteMcpUrlMock, callToolMock } = vi.hoisted(() => ({
     validateRemoteMcpUrlMock: vi.fn(),
+    callToolMock: vi.fn(),
 }));
 
 const { reportErrorMock } = vi.hoisted(() => ({
@@ -15,6 +17,19 @@ const { reportErrorMock } = vi.hoisted(() => ({
 vi.mock("../observability/sentry", async (importOriginal) => ({
     ...(await importOriginal<Record<string, unknown>>()),
     reportError: (...args: unknown[]) => reportErrorMock(...args),
+}));
+
+vi.mock("@modelcontextprotocol/sdk/client/index.js", () => ({
+    Client: vi.fn().mockImplementation(function () {
+        return {
+            connect: vi.fn().mockResolvedValue(undefined),
+            callTool: (...args: unknown[]) => callToolMock(...args),
+            close: vi.fn().mockResolvedValue(undefined),
+        };
+    }),
+}));
+vi.mock("@modelcontextprotocol/sdk/client/streamableHttp.js", () => ({
+    StreamableHTTPClientTransport: vi.fn(),
 }));
 
 vi.mock("./client", async (importOriginal) => {
@@ -158,6 +173,32 @@ describe("executeMcpToolCall error path", () => {
         expect(auditRows[0].status).toBe("error");
         expect(auditRows[0].result_size_chars).toBe(content.length);
         expect(auditRows[0].result_size_chars).toBeGreaterThan(0);
+    });
+});
+
+describe("successful Counterpedia Source witnesses", () => {
+    it("extracts the retained SEC response through the real client.callTool success path", async () => {
+        validateRemoteMcpUrlMock.mockResolvedValue("https://mcp.example.com/mcp");
+        callToolMock.mockResolvedValue({
+            content: [{ type: "text", text: JSON.stringify(secPresence) }],
+            isError: false,
+        });
+        const tool = { ...makeTool(), tool_name: "counterpedia.get_source_presence", openai_tool_name: "mcp_counterpedia_get_source_presence" };
+        const { event } = await executeMcpToolCall(
+            personalConnectorOwner("user-1"), tool.openai_tool_name,
+            { source_id: secPresence.source_id }, makeDb(tool, makeConnector(), []),
+        );
+        expect(callToolMock).toHaveBeenCalledWith(
+            { name: tool.tool_name, arguments: { source_id: secPresence.source_id } },
+            undefined, expect.any(Object),
+        );
+        expect(event.status).toBe("ok");
+        expect(event.source_links).toEqual([{
+            source_id: secPresence.source_id,
+            label: secPresence.presence.identity.label,
+            url: secPresence.presence.discovery.value[0].locator,
+            basis: "discovery",
+        }]);
     });
 });
 
