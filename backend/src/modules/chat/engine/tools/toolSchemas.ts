@@ -25,6 +25,7 @@ export const DOCUMENT_MUTATING_TOOL_NAMES: ReadonlySet<string> = new Set([
   "generate_docx",
   "generate_excel",
   "generate_ppt",
+  "generate_image",
 ]);
 
 /** Read a tool schema's function name, whatever shape the entry arrived in. */
@@ -338,6 +339,24 @@ export const TOOLS = [
   {
     type: "function",
     function: {
+      name: "search_documents_semantic",
+      description:
+        "Semantic (meaning-based) search across stored document text in the current project, Library Files, Library Templates, or one document. Use it for conceptual questions where the exact wording is unknown (e.g. 'clauses limiting the right to appeal the award', 'termination for convenience'); use find_documents for an exact phrase, name or number. Combines vector similarity with full-text ranking and returns the best-matching passages (not whole documents) with page range, character offsets, doc_id handles and embedding coverage. Results are ranked, not exhaustive: never treat a missing hit as proof of absence, and read_document or find_in_document before quoting or relying on a passage. Only available when the server has semantic search enabled; otherwise use find_documents.",
+      parameters: {
+        type: "object",
+        properties: {
+          scope: { type: "string", enum: ["project", "library", "templates", "document"] },
+          query: { type: "string", minLength: 2, maxLength: 2000, description: "A natural-language description of what to find." },
+          doc_id: { type: "string", description: "Document handle or UUID, required for document scope." },
+          limit: { type: "integer", minimum: 1, maximum: 20 },
+        },
+        required: ["scope", "query"],
+      },
+    },
+  },
+  {
+    type: "function",
+    function: {
       name: "find_in_document",
       description:
         "Search for specific strings inside a document — a Ctrl+F equivalent. Returns each match with surrounding context so you can locate and quote the exact text without reading the whole document. Matching is case-insensitive and whitespace-tolerant. Use this for targeted lookups (e.g. finding a clause title, party name, or a specific phrase) rather than reading the whole document.",
@@ -489,6 +508,39 @@ export const TOOLS = [
           },
         },
         required: ["title", "sheets"],
+      },
+    },
+  },
+  {
+    type: "function",
+    function: {
+      name: "generate_image",
+      description:
+        "Generate an image (PNG or JPEG) from a text prompt with the image engine configured for this deployment: illustrations for a presentation, a visual timeline, a diagram-style figure, a cover image. Use it only when the user asks for an image, picture, illustration or visual. Not suitable for exact charts with figures (use generate_excel) or for legal documents (use generate_docx). The prompt leaves this deployment and goes to the configured image provider: do not put client names, confidential facts or personal data in it unless the user explicitly asks. Returns the stored image as a generated document.",
+      parameters: {
+        type: "object",
+        properties: {
+          title: {
+            type: "string",
+            description: "Short title for the image, used as the filename.",
+          },
+          prompt: {
+            type: "string",
+            description:
+              "Detailed visual description of the image to generate, in English for best results. Max 4000 characters.",
+          },
+          size: {
+            type: "string",
+            description:
+              "Optional: 'square', 'landscape', 'portrait', or an explicit WIDTHxHEIGHT the deployment allows (e.g. '1024x1024'). Defaults to the deployment's default size.",
+          },
+          negative_prompt: {
+            type: "string",
+            description:
+              "Optional: what the image must not contain. Used only by Stable Diffusion engines.",
+          },
+        },
+        required: ["title", "prompt"],
       },
     },
   },

@@ -19,7 +19,8 @@ import {
 } from "../../../../lib/integrations/googleWorkspace";
 import { diagnosticErrorTags } from "../../../../lib/observability/sentryPrivacy";
 import { documentSearchFailure } from "./documentSearchErrors";
-import { findDocumentText, createDocumentVersions } from "../../../documents/documents.service";
+import { findDocumentText, createDocumentVersions, searchDocumentsSemantic } from "../../../documents/documents.service";
+import { ragEnabled } from "../../../../lib/rag/embeddingClient";
 import {
   getCourtlistenerCases,
   searchCourtlistenerCaseLaw,
@@ -73,6 +74,7 @@ import {
   generateDocx,
   generateExcel,
   generatePpt,
+  generateImage,
   getTurnReadIdentity,
   duplicateReadDocumentResult,
   clearTurnReadsForDocument,
@@ -752,7 +754,7 @@ export async function runToolCalls(
           : fencedContent,
       });
     } else if (
-      tc.function.name === "find_documents" &&
+      (tc.function.name === "find_documents" || tc.function.name === "search_documents_semantic") &&
       options.documentsScoped &&
       !searchesOwnDocument(args)
     ) {
@@ -850,6 +852,82 @@ export async function runToolCalls(
       const content = JSON.stringify({ ok: true, ...result.data, matches });
       finishSearch({ match_count: matches.length, next_offset: result.data.next_offset,
         coverage: result.data.coverage });
+      toolResults.push({ role: "tool", tool_call_id: tc.id,
+        content: nonce ? spotlight(content, nonce) : content });
+    } else if (tc.function.name === "search_documents_semantic") {
+      if (!ragEnabled()) {
+        toolResults.push({ role: "tool", tool_call_id: tc.id, content: JSON.stringify({
+          ok: false, error_code: "semantic_search_disabled",
+          error: "Semantic search is not enabled on this server. Use find_documents with alternative wordings instead.",
+        }) });
+        continue;
+      }
+      const limit = typeof args.limit === "number" && Number.isInteger(args.limit)
+        && args.limit >= 1 && args.limit <= 20 ? args.limit : undefined;
+      const search: DocumentSearchEvent = {
+        type: "doc_search", search_id: tc.id,
+        scope: typeof args.scope === "string" ? args.scope.slice(0, 32) : "",
+        query: typeof args.query === "string" ? args.query.slice(0, 500) : "",
+        offset: 0,
+      };
+      write(`data: ${JSON.stringify({ ...search, type: "doc_search_start" })}\n\n`);
+      const finishSearch = (details: Partial<DocumentSearchEvent>) => {
+        const event = { ...search, ...details };
+        documentSearchEvents.push(event);
+        write(`data: ${JSON.stringify(event)}\n\n`);
+      };
+      const rawDocId = typeof args.doc_id === "string" ? args.doc_id : undefined;
+      const label = rawDocId ? resolveDocLabel(rawDocId, docStore, docIndex) : null;
+      const result = await searchDocumentsSemantic(db, {
+        userId, userEmail: options.userEmail, workspace: options.orgId ?? "personal",
+        scope: typeof args.scope === "string" ? args.scope : "",
+        query: typeof args.query === "string" ? args.query : "",
+        projectId: args.scope === "project" ? projectId : null,
+        documentId: label ? docIndex?.[label]?.document_id : rawDocId,
+        limit,
+      }).catch(internalFailure);
+      if (!result.ok) {
+        const failure = documentSearchFailure(result);
+        if (result.kind === "error") {
+          const infrastructure =
+            failure.error_code === "search_timeout" || failure.error_code === "search_unavailable";
+          reportToolFailure(
+            new AppError("chat.semantic_search_failed", "Semantic document search failed", {
+              cause: result.error,
+            }),
+            infrastructure ? "warning" : undefined,
+          );
+        }
+        const failureCode =
+          result.kind === "error" ? diagnosticErrorTags(result.error).failure_code : undefined;
+        console.warn("[run_tools] search_documents_semantic failed", {
+          category: failure.error_code,
+          ...(failureCode === undefined ? {} : { failure_code: failureCode }),
+        });
+        finishSearch(failure);
+        toolResults.push({ role: "tool", tool_call_id: tc.id, content: JSON.stringify({
+          ok: false, ...failure,
+        }) });
+        continue;
+      }
+      const matches = result.data.matches.map((match) => {
+        // Same handle scheme as find_documents: pinned to the exact revision,
+        // reauthorized on every later read.
+        const docId = `found-${match.version_id}-${match.revision}`;
+        docStore.set(docId, {
+          filename: match.filename, file_type: match.file_type, storage_path: match.storage_path,
+          source_kind: match.library_kind === "template" ? "library_template" : "document",
+          search_source: { revision: match.revision, userId, userEmail: options.userEmail },
+        });
+        if (docIndex) docIndex[docId] = {
+          document_id: match.document_id, filename: match.filename,
+          version_id: match.version_id, version_number: match.version_number,
+        };
+        const { storage_path: _path, ...publicMatch } = match;
+        return { ...publicMatch, doc_id: docId };
+      });
+      const content = JSON.stringify({ ok: true, ...result.data, matches });
+      finishSearch({ match_count: matches.length, next_offset: null });
       toolResults.push({ role: "tool", tool_call_id: tc.id,
         content: nonce ? spotlight(content, nonce) : content });
     } else if (tc.function.name === "find_in_document") {
@@ -2412,6 +2490,38 @@ export async function runToolCalls(
         result as Record<string, unknown>,
         previewFilename,
         "xlsx",
+      );
+    } else if (tc.function.name === "generate_image") {
+      const title = typeof args.title === "string" ? args.title : "image";
+      devLog(`[generate_image] title="${title}"`);
+      const previewFilename = safeGeneratedFilename(title, "png");
+      write(
+        `data: ${JSON.stringify({ type: "doc_created_start", filename: previewFilename })}\n\n`,
+      );
+      const result = await generateImage(
+        title,
+        typeof args.prompt === "string" ? args.prompt : "",
+        userId,
+        db,
+        {
+          size: args.size,
+          negativePrompt:
+            typeof args.negative_prompt === "string" ? args.negative_prompt : undefined,
+          projectId: projectId ?? null,
+          orgId: options.orgId ?? null,
+          signal: options.signal,
+        },
+      );
+      const generatedType =
+        typeof (result as { filename?: unknown }).filename === "string" &&
+        (result as { filename: string }).filename.toLowerCase().endsWith(".jpg")
+          ? "jpg"
+          : "png";
+      registerGeneratedDocument(
+        tc,
+        result as Record<string, unknown>,
+        previewFilename,
+        generatedType,
       );
     } else if (tc.function.name === "generate_ppt") {
       const title = args.title as string;

@@ -37,7 +37,7 @@ import {
   type PollFailureGate,
 } from "../../lib/observability/pollFailureGate";
 import { asReportableError } from "../../lib/httpError";
-import { shouldConvertToPdf } from "../../lib/documentTypes";
+import { isImageDocumentType, shouldConvertToPdf } from "../../lib/documentTypes";
 import { countPagesWithoutText } from "../../lib/pdfText";
 import { uploadJobWallClockMs } from "../../lib/runtimeConfig";
 import {
@@ -116,6 +116,7 @@ const TERMINAL_UPLOAD_ERROR_CODES = new Set([
   "size_mismatch",
   "content_type_mismatch",
   "invalid_pdf_file",
+  "invalid_image_file",
   "invalid_docx_package",
   "document_too_large",
   // The destination document no longer exists. Retrying cannot make it exist
@@ -154,6 +155,32 @@ class InvalidPdfFileError extends Error {
   constructor() {
     super("invalid_pdf_file");
     this.name = "InvalidPdfFileError";
+  }
+}
+
+class InvalidImageFileError extends Error {
+  constructor() {
+    super("invalid_image_file");
+    this.name = "InvalidImageFileError";
+  }
+}
+
+const PNG_SIGNATURE = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
+
+async function validateImageFile(filePath: string, fileType: string): Promise<void> {
+  const handle = await open(filePath, "r");
+  try {
+    const header = Buffer.alloc(8);
+    const { bytesRead } = await handle.read(header, 0, header.length, 0);
+    const normalized = fileType.toLowerCase();
+    if (normalized === "png") {
+      if (bytesRead >= 8 && header.equals(PNG_SIGNATURE)) return;
+    } else if (normalized === "jpg" || normalized === "jpeg") {
+      if (bytesRead >= 3 && header[0] === 0xff && header[1] === 0xd8 && header[2] === 0xff) return;
+    }
+    throw new InvalidImageFileError();
+  } finally {
+    await handle.close();
   }
 }
 
@@ -797,6 +824,7 @@ export async function processUploadFile(
   const artifact = await requireSealedFile(file);
   try {
     if (file.file_type === "pdf") await validatePdfFile(artifact.filePath);
+    if (isImageDocumentType(file.file_type)) await validateImageFile(artifact.filePath, file.file_type);
     if (file.file_type === "docx") await validateDocxFile(artifact);
     switch (session.purpose) {
       case "document_create":
@@ -1070,10 +1098,12 @@ export async function processUploadJob(
           error instanceof DeletedDocumentError ||
           error instanceof ChangedDocumentError ||
           error instanceof InvalidPdfFileError ||
+          error instanceof InvalidImageFileError ||
           (error instanceof DocxValidationError && error.code !== "processing_failed");
         if (
           !(error instanceof ChangedDocumentError) &&
           !(error instanceof InvalidPdfFileError) &&
+          !(error instanceof InvalidImageFileError) &&
           !(error instanceof DocxValidationError && error.code === "invalid_docx_package")
         ) {
           reportError(error, {
@@ -1104,6 +1134,7 @@ export async function processUploadJob(
               ? "document_changed"
               : error instanceof DeletedDocumentError ? "document_deleted"
               : error instanceof InvalidPdfFileError ? "invalid_pdf_file"
+              : error instanceof InvalidImageFileError ? "invalid_image_file"
               : error instanceof DocxValidationError ? error.code
               : "processing_failed",
             updated_at: new Date().toISOString(),

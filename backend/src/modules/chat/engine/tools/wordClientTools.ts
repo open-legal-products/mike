@@ -191,6 +191,25 @@ export const WORD_CLIENT_TOOLS: OpenAIToolSchema[] = [
   },
 ];
 
+/**
+ * Outlook compose panes answer only the live read: the email body has no
+ * tracked-change channel, so apply_word_edits is never offered there.
+ */
+export const OUTLOOK_CLIENT_TOOLS: OpenAIToolSchema[] = [
+  {
+    type: "function",
+    function: {
+      name: READ_ACTIVE_DOCUMENT_TOOL_NAME,
+      description:
+        "Read the email the user is composing in Outlook, live: subject, " +
+        "recipients, the body written so far including any quoted thread, " +
+        "and the attachment names. Use it when you need the current text, " +
+        "for example after the user edited the draft.",
+      parameters: { type: "object", properties: {} },
+    },
+  },
+];
+
 const WORD_CLIENT_TOOL_NAMES = new Set(
   WORD_CLIENT_TOOLS.map((tool) => tool.function.name),
 );
@@ -672,8 +691,11 @@ export function createWordClientToolsAdapter(params: {
   nonce?: string;
   /** Test seam; production scales apply deadlines via applyTimeoutMsFor. */
   timeoutMs?: number;
+  /** Office client of the pane; Outlook gets the read tool only. */
+  host?: "word" | "outlook";
 }): ClientToolsAdapter {
   const { userId, write, signal, nonce, timeoutMs } = params;
+  const isOutlook = params.host === "outlook";
 
   // Message-wide flat ordinal for this turn's tool edits. One adapter is one
   // chat request, and the pane counts the same way from the same base.
@@ -872,7 +894,7 @@ export function createWordClientToolsAdapter(params: {
   };
 
   return {
-    schemas: WORD_CLIENT_TOOLS,
+    schemas: isOutlook ? OUTLOOK_CLIENT_TOOLS : WORD_CLIENT_TOOLS,
     owns: isWordClientToolName,
     execute: async (call) => {
       // A pane that stopped answering will not start again mid-turn; keep
@@ -903,6 +925,16 @@ export function createWordClientToolsAdapter(params: {
         };
       }
       if (call.name === APPLY_WORD_EDITS_TOOL_NAME) {
+        if (isOutlook) {
+          return {
+            content: JSON.stringify({
+              error:
+                "Outlook has no edit channel. Put the draft in a text card " +
+                "instead; the user inserts it into the email.",
+            }),
+            events: [],
+          };
+        }
         return executeApplyEdits(call);
       }
       if (call.name === READ_ACTIVE_DOCUMENT_TOOL_NAME) {
