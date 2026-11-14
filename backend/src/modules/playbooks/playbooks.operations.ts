@@ -1471,7 +1471,7 @@ export async function compilePlaybookImport(
         systemPrompt:
           "You compile legal playbooks into auditable structured data. Return only valid JSON and never add legal positions absent from the source.",
         user: compilationPrompt(structure, name),
-        maxTokens: 16_000,
+        maxTokens: 32_000,
         apiKeys,
       }),
       compilationTimeoutMs,
@@ -1491,7 +1491,7 @@ export async function compilePlaybookImport(
             systemPrompt:
               "You compile legal playbooks into auditable structured data. Your previous response failed validation. Return exactly one complete valid JSON object and no other text.",
             user: compilationRetryPrompt(structure, name, validationError),
-            maxTokens: 16_000,
+            maxTokens: 32_000,
             apiKeys,
           }),
           compilationTimeoutMs,
@@ -2270,7 +2270,7 @@ export async function runPlaybookReview(
           model: work.model,
           systemPrompt: REVIEW_SYSTEM_PROMPT,
           user: prompt,
-          maxTokens: 20_000,
+          maxTokens: 32_000,
           apiKeys: keys,
           abortSignal: signal,
         });
