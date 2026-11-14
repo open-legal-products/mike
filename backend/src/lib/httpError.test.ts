@@ -240,3 +240,23 @@ describe("sendUpstreamUnavailable", () => {
     expect(res.body).toMatchObject({ code: "upstream_unavailable" });
   });
 });
+
+describe("withResponseStatus", () => {
+  it("names the status of a failure whose PostgREST body is blank", async () => {
+    const { asReportableError, withResponseStatus } = await import("./httpError.js");
+    const { diagnosticErrorTags } = await import("./observability/sentryPrivacy.js");
+    // The gateway's answer while its upstream restarts (seen live): every
+    // field blank, so the status is the only thing left to report.
+    const blank = { code: "", details: null, hint: null, message: "" };
+    expect(diagnosticErrorTags(asReportableError(blank))).toEqual({});
+    expect(
+      diagnosticErrorTags(asReportableError(withResponseStatus(blank, 503))),
+    ).toEqual({ dependency_status: 503 });
+  });
+
+  it("leaves a coded error alone, so its issues keep their grouping", async () => {
+    const { withResponseStatus } = await import("./httpError.js");
+    const coded = { code: "PGRST202", details: null, hint: null, message: "x" };
+    expect(withResponseStatus(coded, 404)).toBe(coded);
+  });
+});

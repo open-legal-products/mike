@@ -36,7 +36,7 @@ import {
   createPollFailureGate,
   type PollFailureGate,
 } from "../../lib/observability/pollFailureGate";
-import { asReportableError } from "../../lib/httpError";
+import { asReportableError, withResponseStatus } from "../../lib/httpError";
 import { shouldConvertToPdf } from "../../lib/documentTypes";
 import { countPagesWithoutText } from "../../lib/pdfText";
 import { uploadJobWallClockMs } from "../../lib/runtimeConfig";
@@ -1347,7 +1347,7 @@ async function claimNextUploadJob(
   workerId: string,
   maxRunningPerUser: number,
 ) {
-  const { data, error } = await db.rpc("claim_upload_processing_job", {
+  const { data, error, status } = await db.rpc("claim_upload_processing_job", {
     target_worker_id: workerId,
     target_lease_seconds: UPLOAD_JOB_LEASE_SECONDS,
     target_max_running_per_user: maxRunningPerUser,
@@ -1355,7 +1355,7 @@ async function claimNextUploadJob(
   // A PostgREST error is a plain object: give it a stack here and keep its
   // `code` (PGRST202 = RPC missing, i.e. migrations not applied) on the
   // cause chain, where the Sentry boundary reads it into failure_code.
-  if (error) throw asReportableError(error, claimNextUploadJob);
+  if (error) throw asReportableError(withResponseStatus(error, status), claimNextUploadJob);
   return typeof data === "string" && data ? data : null;
 }
 
