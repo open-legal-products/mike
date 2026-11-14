@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { chmodSync, existsSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { spawn } from "node:child_process";
+import { spawn, type ChildProcess } from "node:child_process";
 import { Document, Packer, Paragraph } from "docx";
 import JSZip from "jszip";
 import * as XLSX from "xlsx";
@@ -115,6 +115,28 @@ describe("runIsolatedExtraction", () => {
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
+  });
+
+  // On Linux the parser is launched through prlimit; a host without it got a
+  // bare spawn ENOENT that named neither the parser nor the missing launcher.
+  it("names a parser that could not be started, keeping it retryable with its errno", async () => {
+    const actual = await vi.importActual<typeof import("node:child_process")>("node:child_process");
+    vi.mocked(spawn).mockImplementationOnce(((_command: string, args: string[], options: object) =>
+      actual.spawn(path.join(tmpdir(), "mike-missing-launcher", "prlimit"), args, options)) as unknown as typeof spawn);
+    const error = await runIsolatedExtraction("spreadsheet", async () => workbook()).catch((caught: unknown) => caught);
+    expect(error).not.toBeInstanceOf(ExtractionParseError);
+    expect(diagnosticErrorTags(error)).toMatchObject({ error_kind: "extraction.parser_unavailable", failure_code: "ENOENT" });
+    await expect(runIsolatedExtraction("spreadsheet", async () => workbook())).resolves.toContain("Rent");
+  });
+
+  // An OOM-killer SIGKILL and a native crash looked identical without the signal.
+  it.skipIf(process.platform === "win32")("records the signal that killed the parser mid-parse", async () => {
+    const pending = runIsolatedExtraction("spreadsheet", async () => workbook()).catch((caught: unknown) => caught);
+    await vi.waitFor(() => expect(spawn).toHaveBeenCalled());
+    (vi.mocked(spawn).mock.results.at(-1)!.value as ChildProcess).kill("SIGKILL");
+    const error = await pending;
+    expect(error).not.toBeInstanceOf(ExtractionLimitError);
+    expect(diagnosticErrorTags(error)).toMatchObject({ error_kind: "extraction.process_exited", failure_code: "SIGKILL" });
   });
 
   it("keeps packaged Electron parser children in Node mode without inheriting credentials", async () => {
