@@ -1,0 +1,134 @@
+{
+  "operation": "counterpedia.get_source_presence",
+  "source_id": "TH-S09-SRC-0001",
+  "presence": {
+    "schema_version": "counterpedia.source_presence_projection/v0.1",
+    "identity": {
+      "source_id": "TH-S09-SRC-0001",
+      "slug": "ninth-circuit-amended-opinion-capture",
+      "label": "Ninth Circuit Order and Amended Opinion (captured public document)",
+      "source_type": "filing",
+      "publication_status": "public"
+    },
+    "host": {
+      "status": "unavailable",
+      "reason": "HOST_FACTS_NOT_SUPPLIED"
+    },
+    "reader_access": {
+      "status": "unavailable",
+      "reason": "NO_GOVERNED_SOURCE_PRODUCER_BINDING"
+    },
+    "exposure": {
+      "status": "unavailable",
+      "reason": "EXPOSURE_DECISIONS_NOT_SUPPLIED"
+    },
+    "discovery": {
+      "status": "unavailable",
+      "reason": "NO_GOVERNED_SOURCE_PRODUCER_BINDING"
+    },
+    "custody_observations": {
+      "status": "available",
+      "value": [
+        {
+          "source_ref": "source:theranos:th-s09",
+          "resolution": "RESOLVED_TO_SOURCE_RECORD",
+          "source_record": {
+            "cp_source_id": "TH-S09-SRC-0001",
+            "slug": "ninth-circuit-amended-opinion-capture",
+            "label": "Ninth Circuit Order and Amended Opinion (captured public document)",
+            "source_type": "filing",
+            "publication_status": "public",
+            "capture_integrity_class": "captured_bytes"
+          },
+          "capture_association": {
+            "posture": "RETAINED_CAPTURE_ASSOCIATED",
+            "capture_identity": {
+              "acq_source_id": "src_c5b586b7572fe53c4799f6699d57516f",
+              "acq_capture_id": "cap_11f570f4-0ecc-4264-bb11-eb2ad69bc102"
+            },
+            "retained_capture_occurrence_count": 1,
+            "identity_resolution": {
+              "posture": "RESOLVED",
+              "cp_source_id": "TH-S09-SRC-0001",
+              "crosswalk_id": "crosswalk:95de4f9c915d57577dfcfa32",
+              "not_found_reason": null
+            },
+            "content_availability": "AVAILABLE"
+          },
+          "observations": [
+            {
+              "observation_ref": "page12:theranos:th-s09:http200",
+              "kind": "HTTP_RESPONSE",
+              "locator": "https://cdn.ca9.uscourts.gov/datastore/opinions/2025/12/22/22-10312.pdf",
+              "http_status": 200,
+              "capture_disposition": "CAPTURED"
+            }
+          ]
+        }
+      ]
+    },
+    "family_organizations": {
+      "source_id": "TH-S09-SRC-0001",
+      "family": {
+        "disposition": "classified",
+        "primary": {
+          "family_id": "law_public_authority",
+          "label": "Law & Public Authority"
+        },
+        "secondary": []
+      },
+      "organizations": [
+        {
+          "organization_key": "ca9",
+          "label": "U.S. Court of Appeals for the Ninth Circuit",
+          "role": "origin_authority",
+          "role_label": "Issued by"
+        }
+      ]
+    },
+    "documentary_relations": {
+      "status": "unavailable",
+      "reason": "NO_GOVERNED_ASSOCIATION_REF"
+    },
+    "evidence_relations": {
+      "status": "unavailable",
+      "reason": "CLAIM_SOURCE_READ0_PENDING"
+    },
+    "evidence_relationships": {
+      "status": "unavailable",
+      "reason": "NO_GENERAL_COMMITTED_ADJ1_BINDING_REGISTRY"
+    },
+    "editions_currentness": {
+      "status": "available",
+      "value": {
+        "editions": [
+          {
+            "id": "cp:source-edition:01a10bdb-7c3b-7a5c-9d0c-4e061c2a7b19",
+            "source": "cp:source:01a10bdb-7bf9-7d0d-b308-b6b17d936089",
+            "artifact": "cp:artifact:sha256:b503e976b57ed9c674c8ba263268c2dbb39afc96247de2d9186a5fe754b93fee",
+            "source_dates": [
+              {
+                "kind": "document_date",
+                "value": "2025-12-22"
+              }
+            ],
+            "institutional_posture": {
+              "admissibility": "non_admission",
+              "comparison_only": false,
+              "note": "Byte-exact retained TH-S09 PDF; no disposition asserted."
+            }
+          }
+        ],
+        "currentness": null,
+        "lifecycle_history": {
+          "status": "unavailable",
+          "reason": "NO_COMMITTED_SOURCE_EDITION_LIFECYCLE_LEDGER"
+        }
+      }
+    },
+    "machine_links": {
+      "source_detail": "/sources/TH-S09-SRC-0001",
+      "source_index_api": "/api/sources"
+    }
+  }
+}

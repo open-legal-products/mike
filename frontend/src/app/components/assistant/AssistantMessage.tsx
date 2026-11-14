@@ -43,6 +43,7 @@ import { preprocessCitations, internalCaseHref } from "./message/citationUtils";
 import { useSmoothedReveal } from "./message/useSmoothedReveal";
 import { MarkdownContent } from "./message/MarkdownContent";
 import { CitationsBlock, buildCitationAppendix } from "./message/CitationSources";
+import { SourceLinksBlock } from "./message/SourceLinksBlock";
 import { EditCardsSection } from "./message/EditCardsSection";
 import {
     AskInputsBlock,
@@ -1281,6 +1282,8 @@ function AssistantMessageImpl({
                         <WebSourcesBlock sources={webSources} />
                     </div>
                 )}
+
+                {events && <SourceLinksBlock events={events} isStreaming={isStreaming} />}
 
                 {showCitationBlock && (
                     <CitationsBlock

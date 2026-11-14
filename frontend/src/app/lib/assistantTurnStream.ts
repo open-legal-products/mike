@@ -1,5 +1,6 @@
 "use client";
 import { BACKEND_REPORTING_OWNER } from "@mike/client";
+import { parseMcpSourceLinks } from "./mcpSourceLinks";
 
 import { streamChatTurn } from "@/app/lib/mikeApi";
 import { readSseFrames } from "@/app/lib/sse";
@@ -696,6 +697,9 @@ export async function consumeAssistantTurnStream(
 
         if (data.type === "mcp_tool_result") {
           const openaiToolName = (data.name as string) ?? "";
+          const sourceLinks =
+            data.status === "ok" && data.tool_name === "counterpedia.get_source_presence"
+              ? parseMcpSourceLinks(data.source_links) : [];
           updateMatchingEvent(
             (e) =>
               e.type === "mcp_tool_call" &&
@@ -726,6 +730,7 @@ export async function consumeAssistantTurnStream(
                 typeof data.approval_id === "string"
                   ? (data.approval_id as string)
                   : undefined,
+              ...(sourceLinks.length > 0 ? { source_links: sourceLinks } : {}),
               isStreaming: false,
             }),
           );

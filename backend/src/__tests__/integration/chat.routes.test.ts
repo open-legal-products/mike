@@ -3607,6 +3607,50 @@ describe("server-owned turns: resume, stop, concurrency", () => {
         resetAssistantTurnRunsForTests();
     });
 
+    it("preserves bounded Source-link evidence through SSE, persistence and chat reload", async () => {
+        const link = {
+            source_id: "TH-S09-SRC-0001",
+            label: "Ninth Circuit Order and Amended Opinion (captured public document)",
+            url: "https://cdn.ca9.uscourts.gov/datastore/opinions/2025/12/22/22-10312.pdf",
+            basis: "capture_observation" as const,
+        };
+        const toolEvent: AssistantEvent = {
+            type: "mcp_tool_call",
+            connector_id: "public-source-connector",
+            connector_name: "Counterpedia",
+            tool_name: "counterpedia.get_source_presence",
+            openai_tool_name: "mcp_source_presence",
+            status: "ok",
+            source_links: [link],
+        };
+        const textEvent: AssistantEvent = { type: "content", text: "A recorded original is available." };
+        runLLMStream.mockImplementation(async (params: StreamParams) => {
+            emitFrom(params)({
+                type: "mcp_tool_result",
+                name: "mcp_source_presence",
+                connector_name: "Counterpedia",
+                tool_name: "counterpedia.get_source_presence",
+                status: "ok",
+                source_links: [link],
+            });
+            emitFrom(params)({ type: "content_delta", text: textEvent.text });
+            return { fullText: textEvent.text, events: [toolEvent, textEvent], citations: [] };
+        });
+
+        const response = await request(app).post("/chat")
+            .set("Authorization", "Bearer test").send(VALID_BODY);
+        expect(response.status).toBe(200);
+        expect(response.text).toContain(JSON.stringify([link]));
+        expect(findAssistantUpdate()?.value).toMatchObject({ content: [toolEvent, textEvent] });
+
+        const reloaded = await request(app).get("/chat/chat-1")
+            .set("Authorization", "Bearer test");
+        expect(reloaded.status).toBe(200);
+        expect(JSON.stringify(reloaded.body)).toContain(JSON.stringify([link]));
+        // Reload must retain the exact Source/URL pair, not reconstruct it from prose.
+        expect(reloaded.body.active_turn).toBeNull();
+    });
+
     /** A generation the test releases by hand. */
     function heldGeneration() {
         const held = {

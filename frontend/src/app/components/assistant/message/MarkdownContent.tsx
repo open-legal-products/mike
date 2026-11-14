@@ -287,16 +287,11 @@ function MarkdownContentImpl({
                                     </span>
                                 );
                             }
+                            // Model-authored links are not source evidence.
+                            // Source-bound URLs are rendered only by the
+                            // structured Source Links section.
                             return (
-                                <a
-                                    href={href}
-                                    className="text-blue-600 hover:text-blue-700 underline"
-                                    target="_blank"
-                                    rel="noopener noreferrer"
-                                    {...anchorProps}
-                                >
-                                    {children}
-                                </a>
+                                <span>Source link not established.</span>
                             );
                         }
                         return (
@@ -318,16 +313,7 @@ function MarkdownContentImpl({
                         // Another site's image would load with no click, so
                         // injected text could leak data in its URL.
                         if (!isSameOrigin(src)) {
-                            return (
-                                <a
-                                    href={src}
-                                    className="text-blue-600 hover:text-blue-700 underline [overflow-wrap:anywhere] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500/40"
-                                    target="_blank"
-                                    rel="noopener noreferrer"
-                                >
-                                    {alt?.trim() || src}
-                                </a>
-                            );
+                            return <span>Source link not established.</span>;
                         }
                         return (
                             // eslint-disable-next-line @next/next/no-img-element -- markdown content, not an optimizable page asset

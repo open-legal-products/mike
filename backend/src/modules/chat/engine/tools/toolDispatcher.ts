@@ -665,6 +665,7 @@ export async function runToolCalls(
           tool_title: event.tool_title,
           status: event.status,
           error: event.error,
+          source_links: event.source_links,
         })}\n\n`,
       );
       continue;

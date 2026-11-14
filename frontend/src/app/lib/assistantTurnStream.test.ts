@@ -840,6 +840,51 @@ describe("MCP tool frames", () => {
     ]);
   });
 
+  it("carries only bounded structured source links from successful results", async () => {
+    const events = await eventsOf([
+      { type: "mcp_tool_start", name: "counterpedia_get_source_presence" },
+      {
+        type: "mcp_tool_result",
+        name: "counterpedia_get_source_presence",
+        connector_name: "Counterpedia",
+        tool_name: "counterpedia.get_source_presence",
+        status: "ok",
+        source_links: [
+          {
+            source_id: "TH-S01-SRC-0001",
+            label: "SEC enforcement filing",
+            url: "https://www.sec.gov/litigation/complaints/2018/comp-pr2018-41-theranos-holmes.pdf",
+            basis: "capture_observation",
+          },
+          { source_id: "", label: "invented", url: "https://evil.example", basis: "discovery" },
+        ],
+      },
+    ]);
+    expect(events?.[0]).toMatchObject({
+      type: "mcp_tool_call",
+      status: "ok",
+      source_links: [{
+        source_id: "TH-S01-SRC-0001",
+        label: "SEC enforcement filing",
+        url: "https://www.sec.gov/litigation/complaints/2018/comp-pr2018-41-theranos-holmes.pdf",
+        basis: "capture_observation",
+      }],
+    });
+  });
+
+  it("does not carry source links from an error result", async () => {
+    const events = await eventsOf([
+      { type: "mcp_tool_start", name: "counterpedia_get_source_presence" },
+      {
+        type: "mcp_tool_result",
+        name: "counterpedia_get_source_presence",
+        status: "error",
+        source_links: [{ source_id: "SEC-FAKE", label: "SEC", url: "https://evil.example", basis: "discovery" }],
+      },
+    ]);
+    expect(events?.[0]).not.toHaveProperty("source_links");
+  });
+
   it("falls back to the wire name and an ok status when the result is bare", async () => {
     expect(
       await eventsOf([{ type: "mcp_tool_start" }, { type: "mcp_tool_result" }]),
