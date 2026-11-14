@@ -92,6 +92,11 @@ export function pollFailureClass(error: unknown): string {
     if (!current || typeof current !== "object" || seen.has(current)) break;
     seen.add(current);
     const code = readField(current, "code");
+    // A gateway that has lost its upstream answers a non-2xx with no
+    // PostgREST body, which supabase-js surfaces with every field blank. A
+    // real PostgREST or SQL error always names a code and a message, so the
+    // blank shape can only be the dependency being away.
+    if (code === "" && readField(current, "message") === "") return UNREACHABLE_CLASS;
     if (typeof code === "string" && SAFE_CODE.test(code)) {
       return DEPENDENCY_UNREACHABLE_CODES.has(code) ? UNREACHABLE_CLASS : `${name}:${code}`;
     }

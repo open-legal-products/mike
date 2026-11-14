@@ -76,6 +76,12 @@ describe("createPollFailureGate", () => {
     // loses its pool, then the gateway refuses connections (supabase-js
     // network shape: code '' with the errno only in `details`).
     const restart = [
+      // What the gateway answers while its upstream is gone: a non-2xx with no
+      // PostgREST body, which supabase-js surfaces as an error with every
+      // field blank (seen live as the first failure of a database restart).
+      new Error("Dependency failure (non-Error value)", {
+        cause: { code: "", details: null, hint: null, message: "" },
+      }),
       coded("57P01"),
       coded("PGRST002"),
       {
@@ -87,7 +93,7 @@ describe("createPollFailureGate", () => {
       coded("ECONNREFUSED"),
     ];
     expect(restart.map((error) => g.failure(error).report)).toEqual([
-      true, false, false, false,
+      true, false, false, false, false,
     ]);
   });
 
