@@ -24,11 +24,32 @@
 //   - optionally (repeatWhilePersistingMs), report a class that keeps failing
 //     again once per that window, so a long outage stays on the issue's
 //     timeline. Off by default: a poll loop's backed-off line is enough.
-//
+
+import { diagnosticErrorTags } from "./sentryPrivacy";
+
 // The class key is the error's name plus an allowlist-shaped `code` found on
 // the error or its cause chain (PostgREST, SQLSTATE, errno). An error with no
 // code is keyed by a hash of its message, so the key itself never carries
 // dependency text into the log line.
+//
+// Every "the dependency is unreachable or restarting" code is one class. A
+// single Postgres/gateway restart walks 57P01 → PGRST002 → ECONNREFUSED in
+// seconds, and keyed by raw code that was three "new" reports of one outage
+// (MIKE-BACKEND-EA, 4C, DX). Schema → connectivity stays a change of class.
+
+/** Codes meaning a dependency is unreachable or restarting, not a defect. */
+export const DEPENDENCY_UNREACHABLE_CODES: ReadonlySet<string> = new Set([
+  // errno / undici
+  "ECONNREFUSED", "ECONNRESET", "ETIMEDOUT", "EHOSTUNREACH", "ENETUNREACH",
+  "ENOTFOUND", "EAI_AGAIN", "EPIPE", "UND_ERR_SOCKET", "UND_ERR_CONNECT_TIMEOUT",
+  // Postgres: admin/crash shutdown, cannot connect now, connection exceptions
+  "57P01", "57P02", "57P03", "08001", "08003", "08006",
+  // PostgREST: cannot connect to the database, or timed out on its pool
+  "PGRST000", "PGRST001", "PGRST002", "PGRST003",
+  // diagnosticErrorTags' label for a code-less "fetch failed"
+  "fetch_failed",
+]);
+const UNREACHABLE_CLASS = "dependency_unreachable";
 
 const SAFE_CODE = /^[A-Za-z0-9_]{2,40}$/;
 const CAUSE_DEPTH = 5;
@@ -56,6 +77,12 @@ export function pollFailureClass(error: unknown): string {
   if (!error || typeof error !== "object") {
     return `${typeof error}#${hashText(String(error))}`;
   }
+  // supabase-js's network shape (code '', errno only in `details`) and a
+  // bare "fetch failed" carry no `code`; diagnosticErrorTags reads them.
+  const tagged = diagnosticErrorTags(error).failure_code;
+  if (typeof tagged === "string" && DEPENDENCY_UNREACHABLE_CODES.has(tagged)) {
+    return UNREACHABLE_CLASS;
+  }
   const rawName = readField(error, "name");
   const name =
     typeof rawName === "string" && SAFE_CODE.test(rawName) ? rawName : "Error";
@@ -65,8 +92,13 @@ export function pollFailureClass(error: unknown): string {
     if (!current || typeof current !== "object" || seen.has(current)) break;
     seen.add(current);
     const code = readField(current, "code");
+    // A gateway that has lost its upstream answers a non-2xx with no
+    // PostgREST body, which supabase-js surfaces with every field blank. A
+    // real PostgREST or SQL error always names a code and a message, so the
+    // blank shape can only be the dependency being away.
+    if (code === "" && readField(current, "message") === "") return UNREACHABLE_CLASS;
     if (typeof code === "string" && SAFE_CODE.test(code)) {
-      return `${name}:${code}`;
+      return DEPENDENCY_UNREACHABLE_CODES.has(code) ? UNREACHABLE_CLASS : `${name}:${code}`;
     }
     current = readField(current, "cause");
   }

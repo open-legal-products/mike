@@ -45,6 +45,20 @@ const UPSTREAM_RETRY_AFTER_SECONDS = "5";
 const SAFE_CODE = /^[A-Za-z0-9_]{2,40}$/;
 
 /**
+ * A failed PostgREST call, with the response status added when its error body
+ * names no code. A gateway that has lost its upstream answers a bare 502/503,
+ * which supabase-js surfaces as an error with every field blank; the status
+ * is then the only thing that can say what happened (dependency_status).
+ * A coded error is returned untouched, so its issues keep their grouping.
+ */
+export function withResponseStatus<T extends { code?: unknown }>(
+  error: T,
+  status: number,
+): T | (T & { status: number }) {
+  return typeof error.code === "string" && error.code ? error : { ...error, status };
+}
+
+/**
  * Turn a thrown or returned non-Error (a supabase-js `{ code, message,
  * details, hint }`, a string, a storage SDK's plain object) into an Error
  * that is worth reporting:
