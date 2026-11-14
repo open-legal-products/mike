@@ -6,3 +6,7 @@
 #   git checkout origin/main -- package-lock.json && npm install
 package-lock.json merge=binary
 bun.lock merge=binary
+
+# Shell scripts must keep LF: a CRLF checkout breaks `set -o pipefail` and
+# shebang interpretation when the files are baked into Linux images.
+*.sh text eol=lf
