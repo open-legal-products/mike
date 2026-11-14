@@ -7,6 +7,7 @@ import { app } from "./app";
 import { enforceDocumentLifecycleMigration } from "./lib/dbq/lifecycleGuard";
 import { manifestPublicKey } from "./lib/manifestSigning";
 import {
+  extractionLauncherWarnings,
   storagePublicEndpointWarnings,
   validateRuntimeConfiguration,
 } from "./lib/runtimeConfig";
@@ -42,6 +43,9 @@ async function validateBootConfiguration(): Promise<void> {
     validateRuntimeConfiguration();
     for (const warning of storagePublicEndpointWarnings()) {
       console.warn(`[storage] ${warning}`);
+    }
+    for (const warning of extractionLauncherWarnings()) {
+      console.warn(`[extraction] ${warning}`);
     }
     stage = "manifest-key";
     const signingKey = manifestPublicKey();

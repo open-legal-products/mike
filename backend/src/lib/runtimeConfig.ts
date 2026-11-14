@@ -1,3 +1,7 @@
+import { accessSync, constants, statSync } from "node:fs";
+import path from "node:path";
+import { extractionIsolated, extractionLauncher } from "./extraction/limits";
+
 function required(env: NodeJS.ProcessEnv, names: readonly string[]): string {
   for (const name of names) {
     const value = env[name]?.trim();
@@ -242,6 +246,39 @@ export function storagePublicEndpointWarnings(
     ];
   }
   return [];
+}
+
+/**
+ * Why the isolated document parser cannot be launched, or [] when it can. On
+ * Linux it runs through prlimit; an image without util-linux otherwise boots
+ * cleanly and then fails every extraction and DOCX upload with a bare ENOENT
+ * (MIKE-BACKEND-EC, EE). A warning, not a boot failure: a deployment that
+ * never processes documents still works.
+ */
+export function extractionLauncherWarnings(
+  env: NodeJS.ProcessEnv = process.env,
+  platform: NodeJS.Platform = process.platform,
+): string[] {
+  const launcher = extractionIsolated(env) ? extractionLauncher(platform) : null;
+  if (!launcher || onPath(launcher, env.PATH)) return [];
+  return [
+    `${launcher} was not found on PATH: text extraction and DOCX uploads will fail. Install util-linux (the official backend image includes it; docs/deployment.md). Extraction recovers without a restart once it is on PATH.`,
+  ];
+}
+
+// Resolved the way spawn() will (no shell); empty entries are skipped rather
+// than read as the working directory.
+function onPath(name: string, pathValue = ""): boolean {
+  return pathValue.split(path.delimiter).some((dir) => {
+    if (!dir) return false;
+    try {
+      const file = path.join(dir, name);
+      accessSync(file, constants.X_OK);
+      return statSync(file).isFile();
+    } catch {
+      return false;
+    }
+  });
 }
 
 /**

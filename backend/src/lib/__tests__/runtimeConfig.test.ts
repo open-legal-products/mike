@@ -1,9 +1,13 @@
-import { describe, expect, it } from "vitest";
+import { afterAll, describe, expect, it } from "vitest";
+import { chmodSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import path from "node:path";
 import {
   diagnosticErrorTags,
   diagnosticEvent,
 } from "../observability/sentryPrivacy";
 import {
+  extractionLauncherWarnings,
   uploadConversionTimeoutMs,
   uploadJobWallClockMs,
   uploadProcessingConfiguration,
@@ -313,5 +317,38 @@ describe("storagePublicEndpointWarnings", () => {
     ["https://mike.firm.example", "https://mike.firm.example"],
   ])("is quiet for FRONTEND_URL %s with public storage %s", (frontend, endpoint) => {
     expect(at(frontend, endpoint)).toEqual([]);
+  });
+});
+
+// MIKE-BACKEND-EC/EE: an image without util-linux booted cleanly, then every
+// text extraction and DOCX upload failed with a bare spawn ENOENT.
+describe("extractionLauncherWarnings", () => {
+  const empty = mkdtempSync(path.join(tmpdir(), "mike-path-empty-"));
+  const withLauncher = mkdtempSync(path.join(tmpdir(), "mike-path-prlimit-"));
+  writeFileSync(path.join(withLauncher, "prlimit"), "#!/bin/sh\n");
+  chmodSync(path.join(withLauncher, "prlimit"), 0o755);
+  afterAll(() => {
+    rmSync(empty, { recursive: true, force: true });
+    rmSync(withLauncher, { recursive: true, force: true });
+  });
+  const env = (PATH: string, isolation = "on") =>
+    ({ PATH, EXTRACTION_ISOLATION: isolation }) as NodeJS.ProcessEnv;
+
+  it("warns once on Linux when prlimit is not on PATH", () => {
+    const warnings = extractionLauncherWarnings(env(empty), "linux");
+    expect(warnings).toHaveLength(1);
+    expect(warnings[0]).toMatch(/prlimit.*util-linux/s);
+  });
+
+  it("is quiet when an executable prlimit is on PATH", () => {
+    expect(extractionLauncherWarnings(env(`${empty}${path.delimiter}${withLauncher}`), "linux")).toEqual([]);
+  });
+
+  it("is quiet off Linux, where the parser is not launched through prlimit", () => {
+    expect(extractionLauncherWarnings(env(empty), "darwin")).toEqual([]);
+  });
+
+  it("is quiet when parser isolation is off", () => {
+    expect(extractionLauncherWarnings(env(empty, "off"), "linux")).toEqual([]);
   });
 });

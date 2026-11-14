@@ -29,3 +29,16 @@ export class ExtractionBusyError extends Error {
 export function isAllocationFailure(error: unknown): boolean {
   return error instanceof Error && /array buffer allocation failed|invalid array buffer length|invalid string length|out of memory|\bENOMEM\b/i.test(error.message);
 }
+
+// How the parser child is launched. These live in this import-free file so
+// the startup check in runtimeConfig can ask the same question as
+// isolated.ts without importing the parser (which imports runtimeConfig).
+
+/** The executable the parser child is launched through, or null when it runs directly. */
+export function extractionLauncher(platform: NodeJS.Platform = process.platform): "prlimit" | null {
+  return platform === "linux" ? "prlimit" : null;
+}
+
+export function extractionIsolated(env: NodeJS.ProcessEnv = process.env): boolean {
+  return env.EXTRACTION_ISOLATION !== "off";
+}

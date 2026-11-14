@@ -339,7 +339,8 @@ admission slot instead of holding it indefinitely.
 Generic job concurrency does not create more parser slots.
 
 Linux requires `prlimit` (util-linux), installed by Docker and Nixpacks. Missing
-`prlimit` fails extraction. Defaults:
+`prlimit` fails extraction; the backend and worker log a warning at startup when
+it is not on `PATH`. Defaults:
 
 | Limit | Setting |
 | --- | --- |
