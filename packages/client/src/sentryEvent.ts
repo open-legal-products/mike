@@ -1,4 +1,4 @@
-import { retainExceptionTypes, diagnosticErrorTags } from "./sentryPrivacy";
+import { restoreDomExceptionType, retainExceptionTypes, diagnosticErrorTags } from "./sentryPrivacy";
 
 /**
  * Sentry event hygiene shared by the web app (browser + Next server) and the
@@ -642,6 +642,8 @@ export function createEventScrubber(options?: {
                 event.message = label;
             }
         }
+
+        restoreDomExceptionType(event, reportSource);
 
         event.tags = {
             ...event.tags,
