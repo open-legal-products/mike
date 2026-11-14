@@ -14,6 +14,7 @@
  * included.
  */
 import { streamWordChat, streamWordChatTurn, readSSE } from "./mikeApi";
+import { officeHostKind } from "../lib/officeHost";
 import { responseError } from "./client";
 import {
   WordChatTerminalError,
@@ -262,6 +263,7 @@ export async function streamAssistant(
     // Capability is advertised by the code that can actually honour it, so
     // the flag can never drift from the implementation.
     client_tools: !!params.onClientToolCall,
+    host: officeHostKind(),
     signal: params.signal,
   });
   await consumeTurnStream(res, params, onText, { path: "/word-chat", method: "POST" });

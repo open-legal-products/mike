@@ -323,3 +323,17 @@ Confirm the Word host supports `WordApi 1.6`.
 Confirm the Mike API is reachable at the configured URL, the object-storage
 bucket exists, and the database contains at least one workflow. Check backend
 logs for the underlying request error.
+
+
+## Outlook
+
+The same task pane also runs in Outlook while a message is being written. There is no separate Outlook app: `manifest.outlook.xml` points at the same `taskpane.html` on the same origin, so sign-in (password, Google through the Office dialog, the handoff ticket and the partitioned cookie), chat, history, workflows, playbooks, models, quick actions and settings are the Word add-in's own code and look identical.
+
+What differs is confined to `src/taskpane/lib/officeHost.ts` and `src/taskpane/lib/outlookCompose.ts`:
+
+- **Active document.** In Outlook it is the message being composed: subject, To/Cc, the body (in a reply it includes the quoted thread) and the attachment names. `readDocumentMarkdown` returns that text, so the snapshot and `read_active_document` work as in Word.
+- **Identity and history.** A UUID stored as a custom property of the draft plays the role of the Word document setting; reopening the draft reopens its chats.
+- **Attachments.** The composer's **+** menu adds **Email attachments**: the message's file attachments are read with Office.js and uploaded through the same upload session and chips as desktop files, then read by the model with `read_document`. Cloud-link attachments and attached items are reported, not read.
+- **Writing.** The pane sends `host: "outlook"` to `POST /word-chat`. The backend uses an email prompt and offers only `read_active_document` (no tracked changes in a mail body). The model puts the email body in a text card; under the card the pane shows **Insert into email** (at the cursor) and **Insert at top**. Mike never sends mail.
+
+Local development: `npm run dev` as for Word, then `npm run start:outlook` (or Outlook → Get Add-ins → My add-ins → Add from file → `manifest.outlook.xml`). `npm run build` writes `dist/manifest.outlook.xml` next to the Word manifest; deploy it from the Microsoft 365 admin center. Outlook requires Mailbox 1.8. No extra backend variable is needed: Outlook uses `WORD_ADDIN_URL`.
