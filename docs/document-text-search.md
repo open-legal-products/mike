@@ -10,8 +10,26 @@ activation reuses that version's text. Renames and PDF-rendition updates do not 
 The worker uses the existing PDF, accepted-view DOCX, spreadsheet, and presentation
 readers. Legacy DOC/PPT use LibreOffice. Text is complete, with existing page,
 slide, and spreadsheet markers. PostgreSQL cannot store NUL, so those characters
-are removed. Scanned pages are reported as incomplete OCR coverage; this feature
-does not add OCR. Extraction failures are distinct from successful empty text.
+are removed. When an OCR provider is configured on the backend (`OCR_API_KEY`, `OCR_API_URL` /
+`OCR_BASE_URL`, `OCR_PROVIDER=ollama`, or `MISTRAL_API_KEY`, with `OCR_DISABLED` not
+`true`), `document.extract_text` uploads the complete PDF to the configured OCR
+endpoint (`POST /v1/ocr` for `mistral-ocr` or `POST /v1/chat/completions` for
+`openai-chat` providers such as vLLM, LiteLLM, OpenAI, and OpenRouter) and requests
+transcription of the textless pages only: Mistral receives their page indices, chat
+providers a page-selection instruction. Native-text pages are therefore transmitted
+too, though never replaced; evaluate the endpoint accordingly before processing
+confidential documents. Only requested pages are merged into the page sections, and
+existing native text is always kept. When OCR is not configured, the scanned pages
+remain reported as incomplete OCR coverage. When an OCR request fails (or a chat
+completion is truncated at its token limit) and the document has no native text, the
+attempt fails and is retried, then marked failed for `backfill_document_text` with
+retry; a partially native PDF publishes its native text and reports the OCR pages as
+incomplete coverage. Provider fallback keys (`MISTRAL_API_KEY`, `OPENAI_API_KEY`,
+`AZURE_API_KEY`, ...) are sent only to that provider's own host; Azure presets
+require an explicit Azure endpoint. The `ollama` preset needs a model server that
+accepts PDF `file` content parts; Ollama's own chat API accepts only images, so use it
+for image uploads, or put a PDF-capable gateway in front of it. Extraction failures
+are distinct from successful empty text.
 
 Each source mutation changes `document_versions.text_revision`. Publication locks
 and compares that revision, so late jobs cannot overwrite an edit, repopulate a
