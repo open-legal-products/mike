@@ -16,6 +16,9 @@ export function buildPlaybookModelOptions(
         .filter(
             (model) =>
                 serverAvailable.has(model.id) ||
+                // Declared in MIKE_MODEL_CONFIG_JSON: /models/configured has
+                // already filtered these to usable ones.
+                model.group === "Configured" ||
                 (!!apiKeys && isModelAvailable(model.id, apiKeys)),
         )
         .map((model) => ({

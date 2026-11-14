@@ -65,7 +65,9 @@ import { ModalSelect } from "@/app/components/modals/ModalSelect";
 import { ModalTextInput } from "@/app/components/modals/ModalTextInput";
 import { modelDisplayName, SETTINGS_MODELS } from "@mike/client";
 import { useOllamaModels } from "@/app/hooks/useOllamaModels";
+import { useConfiguredModels } from "@/app/hooks/useConfiguredModels";
 import { useModelApiKeys } from "@/app/hooks/useModelApiKeys";
+import { mergeConfiguredModelOptions } from "@/app/components/assistant/ModelToggle";
 import { buildPlaybookModelOptions } from "@/app/components/playbooks/playbookModelOptions";
 import {
   getDocumentFile,
@@ -209,16 +211,18 @@ function PlaybooksWorkspace() {
   const [savedFilesOpen, setSavedFilesOpen] = useState(false);
   const apiKeys = useModelApiKeys();
   const ollamaModels = useOllamaModels();
+  const configuredModels = useConfiguredModels();
   const configuredModelOptions = useMemo(
-    () => [
-      ...SETTINGS_MODELS,
-      ...ollamaModels.map((model) => ({
-        ...model,
-        label: modelDisplayName(model.id),
-        source: "Local",
-      })),
-    ],
-    [ollamaModels],
+    () =>
+      mergeConfiguredModelOptions(configuredModels, [
+        ...SETTINGS_MODELS,
+        ...ollamaModels.map((model) => ({
+          ...model,
+          label: modelDisplayName(model.id),
+          source: "Local",
+        })),
+      ]),
+    [configuredModels, ollamaModels],
   );
   const [playbooks, setPlaybooks] = useState<Playbook[]>([]);
   // The URL decides which playbook is open; selection follows it at once so
