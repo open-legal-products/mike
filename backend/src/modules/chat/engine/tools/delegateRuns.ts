@@ -60,6 +60,7 @@ const DOCUMENT_TOOL_NAMES: ReadonlySet<string> = new Set([
     "read_document",
     "find_in_document",
     "find_documents",
+    "search_documents_semantic",
     "list_documents",
     "fetch_documents",
     "edit_document",
@@ -79,7 +80,7 @@ export function toolRecord(
 ): SubagentRecord {
     // A project-wide search reads documents its input does not name.
     const named =
-        call.name === "find_documents" && call.input.scope !== "document"
+        (call.name === "find_documents" || call.name === "search_documents_semantic") && call.input.scope !== "document"
             ? []
             : [call.input.doc_id, ...(Array.isArray(call.input.doc_ids) ? call.input.doc_ids : [])];
     const labelFor = createDocLabelResolver(docStore, docIndex);
