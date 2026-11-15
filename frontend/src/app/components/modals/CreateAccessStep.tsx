@@ -136,6 +136,7 @@ export function CreateAccessStep({
                         display_name: member.display_name,
                         profile_photo: member.profile_photo,
                         role: member.role ?? "editor",
+                        pending: member.pending,
                     });
                 }
                 setProjectPeopleState({

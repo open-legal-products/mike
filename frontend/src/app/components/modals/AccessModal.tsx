@@ -250,6 +250,7 @@ export function AccessModal({
             display_name:
                 member?.display_name ?? lookupNames.get(email) ?? null,
             role: recipient.role,
+            pending: member?.pending,
         });
     }
 

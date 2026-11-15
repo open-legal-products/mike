@@ -462,6 +462,57 @@ describe("AccessModal — per-recipient roles", () => {
         );
     });
 
+    it("shows a share still waiting to be claimed as Pending, and removes it", async () => {
+        const user = userEvent.setup();
+        const onRevoke = vi.fn().mockResolvedValue(undefined);
+        render(
+            <AccessModal
+                open
+                onClose={vi.fn()}
+                resource={PROJECT}
+                fetchAccess={() =>
+                    Promise.resolve({
+                        owner: null,
+                        members: [
+                            {
+                                user_id: null,
+                                email: "new@outside.example",
+                                display_name: null,
+                                profile_photo: null,
+                                role: "editor" as const,
+                                pending: true,
+                            },
+                        ],
+                    })
+                }
+                currentUserEmail="me@firm.example"
+                breadcrumb={["Projects", "Matter", "Access"]}
+                access={{
+                    grants: [{ email: "new@outside.example", role: "editor" }],
+                    orgId: null,
+                    canManage: true,
+                    onGrant: vi.fn() as never,
+                    onRevoke,
+                }}
+            />,
+        );
+        await screen.findByLabelText("Role for new@outside.example");
+        const row = screen
+            .getByText("new@outside.example")
+            .closest<HTMLElement>('[role="listitem"]')!;
+        // Plain text where the name goes: no name is known until it is claimed.
+        expect(within(row).getByText("Pending")).toBeInTheDocument();
+        await user.click(
+            within(row).getByRole("button", {
+                name: "Actions for new@outside.example",
+            }),
+        );
+        await user.click(screen.getByRole("menuitem", { name: "Remove" }));
+        await waitFor(() =>
+            expect(onRevoke).toHaveBeenCalledWith("new@outside.example"),
+        );
+    });
+
     it("shows roles read-only to somebody who cannot manage access", async () => {
         renderRoleAware({ canManage: false });
         expect(await screen.findByText("Viewer")).toBeInTheDocument();

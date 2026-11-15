@@ -1666,6 +1666,11 @@ export interface ProjectPeople {
         display_name: string | null;
         profile_photo?: string | null;
         role?: AccessAssignmentRole;
+        /**
+         * Shared, but not yet claimed: nobody with a confirmed account at
+         * this address has signed in since. No name is shown until then.
+         */
+        pending?: boolean;
     }[];
     admin_contacts?: ProjectContact[];
 }

@@ -35,6 +35,8 @@ export interface AccessRow {
     profile_photo?: string | null;
     role: AccessAssignmentRole;
     isCreator?: boolean;
+    /** Shared, but not yet claimed by an account with this address. */
+    pending?: boolean;
 }
 
 export type OrganizationAccessAssignment = AccessRow;
@@ -919,9 +921,13 @@ export function AccessEditor({
                                 (!!normalizedCurrentEmail &&
                                     email.toLowerCase() ===
                                         normalizedCurrentEmail);
+                            // A pending share has no name to show until
+                            // someone confirms the address and claims it.
                             const name = isYou
                                 ? "You"
-                                : entry.display_name?.trim() || "—";
+                                : entry.pending
+                                  ? "Pending"
+                                  : entry.display_name?.trim() || "—";
                             const isPending = pendingEmail === email;
                             return (
                                 <div
