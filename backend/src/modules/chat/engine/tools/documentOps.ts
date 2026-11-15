@@ -10,12 +10,19 @@ import {
 // Tracked-change editing lives in the documents module; the tool dispatcher
 // keeps calling it by its tool-facing name.
 export { applyTrackedEditsToDocument as runEditDocument, loadCurrentVersionBytes };
+import * as storage from "../../../../lib/storage";
 import { downloadFileIfAvailable, extractedTextKey, generatedDocKey, uploadFile } from "../../../../lib/storage";
 import { convertedPdfKey, docxToPdf } from "../../../../lib/convert";
 import { enqueueConversion } from "../../../../lib/queue/conversionQueue";
 import { enqueueDbJob } from "../../../../lib/dbq/enqueue";
 import type { Db } from "../../../../lib/supabase";
 import { buildDownloadUrl } from "../../../../lib/downloadTokens";
+import {
+  generateImageBytes,
+  imageGenerationEnabled,
+  readImageGenConfig,
+} from "../../../../lib/imagegen/imageClient";
+import { AppError } from "../../../../lib/appError";
 import {
   contentSha256,
   loadActiveVersion,
@@ -915,7 +922,7 @@ ${slides
 
 async function persistGeneratedFile(params: {
   title: string;
-  extension: "docx" | "xlsx" | "pptx";
+  extension: "docx" | "xlsx" | "pptx" | "png" | "jpg";
   buffer: Buffer;
   userId: string;
   db: Db;
@@ -931,13 +938,20 @@ async function persistGeneratedFile(params: {
   const docId = crypto.randomUUID().replace(/-/g, "");
   const filename = safeGeneratedFilename(title, extension);
   const key = generatedDocKey(userId, docId, filename);
+  const isGeneratedImage = extension === "png" || extension === "jpg";
+  const contentType =
+    extension === "png"
+      ? "image/png"
+      : extension === "jpg"
+        ? "image/jpeg"
+        : contentTypeForDocumentType(extension);
   await uploadFile(
     key,
     buffer.buffer.slice(
       buffer.byteOffset,
       buffer.byteOffset + buffer.byteLength,
     ) as ArrayBuffer,
-    contentTypeForDocumentType(extension),
+    contentType,
   );
 
   // PPTX is the only generated type that pays for LibreOffice here (XLSX is
@@ -947,9 +961,13 @@ async function persistGeneratedFile(params: {
   // sync path's silent failure mode where a LibreOffice hiccup left the doc
   // permanently rendition-less.
   let pdfStoragePath: string | null = null;
+  // Generated images always take the queue: docxToPdf(buffer) has no file
+  // name for LibreOffice to infer a raster import filter from, while the
+  // conversion job is told the file type.
   const deferRenditionToQueue =
-    shouldConvertToPdf(extension) &&
-    process.env.ASYNC_DOCUMENT_CONVERSION === "true";
+    isGeneratedImage ||
+    (shouldConvertToPdf(extension) &&
+      process.env.ASYNC_DOCUMENT_CONVERSION === "true");
   if (shouldConvertToPdf(extension) && !deferRenditionToQueue) {
     try {
       const pdfBuf = await docxToPdf(buffer);
@@ -980,6 +998,7 @@ async function persistGeneratedFile(params: {
     .select("id")
     .single();
   if (docErr || !docRow) {
+    await storage.deleteFilesBestEffort?.([key, pdfStoragePath], "generated-document-rollback");
     return {
       error: `Failed to record generated document: ${docErr?.message ?? "unknown"}`,
     };
@@ -999,6 +1018,12 @@ async function persistGeneratedFile(params: {
       content_sha256: contentSha256(buffer),
     });
   if (verErr || !versionRow) {
+    await storage.deleteFilesBestEffort?.([key, pdfStoragePath], "generated-document-rollback");
+    await db
+      .from("documents")
+      .delete?.()
+      ?.eq?.("id", documentId)
+      ?.is?.("current_version_id", null);
     return {
       error: `Failed to record generated document version: ${verErr?.message ?? "unknown"}`,
     };
@@ -1036,6 +1061,73 @@ async function persistGeneratedFile(params: {
     version_number: 1,
     storage_path: key,
     message: `Document '${filename}' has been generated successfully.`,
+  };
+}
+
+/**
+ * generate_image: render one image with the deployment's configured image
+ * engine (lib/imagegen) and store it as a first-class generated document, so
+ * it opens in the DocPanel and can be attached or downloaded like a DOCX.
+ * Images are never converted to PDF; documentTypes treats png/jpg as raster.
+ */
+export async function generateImage(
+  title: string,
+  prompt: string,
+  userId: string,
+  db: Db,
+  options?: {
+    size?: unknown;
+    negativePrompt?: string;
+    projectId?: string | null;
+    orgId?: string | null;
+    signal?: AbortSignal;
+  },
+) {
+  const cfg = readImageGenConfig();
+  if (!imageGenerationEnabled(cfg)) {
+    return {
+      error:
+        "Image generation is not configured on this Mike deployment. Tell the user an administrator can enable it (IMAGE_GEN_PROVIDER); do not retry.",
+    };
+  }
+  if (typeof prompt !== "string" || !prompt.trim()) {
+    return { error: "generate_image requires a non-empty prompt" };
+  }
+  let image;
+  try {
+    image = await generateImageBytes(
+      { prompt, size: options?.size, negativePrompt: options?.negativePrompt, signal: options?.signal },
+      cfg,
+    );
+  } catch (err) {
+    const kind = err instanceof AppError ? err.kind : "image_generation.failed";
+    devLog("[generate_image] failed:", kind);
+    return {
+      error:
+        kind === "image_generation.timeout"
+          ? "The image engine did not answer in time. Tell the user and suggest trying again later."
+          : "The image engine could not produce an image for this request. Tell the user; do not retry the same prompt.",
+      error_kind: kind,
+    };
+  }
+  // A turn stopped while the provider was answering must not store the image.
+  if (options?.signal?.aborted) {
+    return { error: "The turn was stopped before the image was saved.", error_kind: "image_generation.cancelled" };
+  }
+  const result = await persistGeneratedFile({
+    title: title || "image",
+    extension: image.extension,
+    buffer: image.bytes,
+    userId,
+    db,
+    projectId: options?.projectId ?? null,
+    orgId: options?.orgId ?? null,
+  });
+  if ("error" in result) return result;
+  return {
+    ...result,
+    ...(image.revisedPrompt ? { revised_prompt: image.revisedPrompt } : {}),
+    message: `Image '${result.filename}' has been generated successfully.`,
   };
 }
 
