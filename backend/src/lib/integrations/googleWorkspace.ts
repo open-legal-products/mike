@@ -6,7 +6,12 @@ import type {
 import { z } from "zod";
 import type { Db } from "../supabase";
 import type { ConnectorOwner } from "../connectorOwner";
-import type { ConnectorCallPlan, McpToolEvent } from "../mcp/types";
+import {
+  type ConnectorCallPlan,
+  type ConnectorToolOptions,
+  type McpToolEvent,
+  offersWriteTools,
+} from "../mcp/types";
 import { withKind, type ErrorKind } from "../appError";
 import { reportError } from "../observability/sentry";
 import {
@@ -81,6 +86,7 @@ export async function workspaceConnectorStatus(
 export async function buildGoogleWorkspaceTools(
   owner: ConnectorOwner,
   db: Db,
+  options: ConnectorToolOptions = {},
 ): Promise<unknown[]> {
   const tools: unknown[] = [];
   for (const provider of Object.keys(GOOGLE_PROVIDERS) as GoogleProvider[]) {
@@ -99,7 +105,10 @@ export async function buildGoogleWorkspaceTools(
         (t) =>
           t.provider === provider &&
           !disabled.includes(t.name) &&
-          (!t.write || (row.write_enabled === true && !row.read_only)),
+          (!t.write ||
+            (row.write_enabled === true &&
+              !row.read_only &&
+              offersWriteTools(row.require_write_approval, options))),
       )) {
         tools.push({
           type: "function",

@@ -436,20 +436,23 @@ export async function runLLMStream(params: {
       : unsafeWrite(sanitizeAssistantSseChunk(chunk));
   const isSubagent = subagentRun !== undefined;
   const researchTools = includeResearchTools ? COURTLISTENER_TOOLS : [];
+  // A subagent's approvals pause its answer, which puts them to the user.
+  const canPauseForApproval =
+    connectorApprovals && (includeAskInputs || isSubagent);
   // The person's own connections for the workspace this conversation is in.
+  // A surface that cannot pause for approval is not shown the write tools
+  // that would need it; the dispatcher still refuses one named anyway.
   const connectorTools =
     subagentRun?.connectorTools ??
     (await (async () => {
       const owner = { userId, orgId: await teamOrgIdOf(db, orgId) };
+      const options = { canAskForApproval: canPauseForApproval };
       return [
-        ...(await buildUserMcpTools(owner, db)),
-        ...(await buildGoogleDriveTools(owner, db)),
-        ...(await buildGoogleWorkspaceTools(owner, db)),
+        ...(await buildUserMcpTools(owner, db, options)),
+        ...(await buildGoogleDriveTools(owner, db, options)),
+        ...(await buildGoogleWorkspaceTools(owner, db, options)),
       ];
     })());
-  // A subagent's approvals pause its answer, which puts them to the user.
-  const canPauseForApproval =
-    connectorApprovals && (includeAskInputs || isSubagent);
   const conversationTools = includeAskInputs
     ? TOOLS
     : TOOLS.filter((tool) => tool.function.name !== "ask_inputs");

@@ -129,6 +129,19 @@ describe("Drive write access", () => {
     expect(await planGoogleDriveCall(personalConnectorOwner("user-1"), "google_drive_search", { query: "x" }, s.db)).toEqual({ type: "run" });
   });
 
+  it("leaves write tools out for a surface that cannot ask for approval, unless approval is off", async () => {
+    const names = async (overrides: Record<string, unknown>, canAskForApproval: boolean) =>
+      JSON.stringify(
+        await buildGoogleDriveTools(personalConnectorOwner("user-1"), store(overrides).db, { canAskForApproval }),
+      );
+    for (const recorded of [{ require_write_approval: true }, { require_write_approval: undefined }]) {
+      expect(await names(recorded, false)).toContain("google_drive_search");
+      expect(await names(recorded, false)).not.toContain("google_drive_create_file");
+      expect(await names(recorded, true)).toContain("google_drive_create_file");
+    }
+    expect(await names({ require_write_approval: false }, false)).toContain("google_drive_create_file");
+  });
+
   it("reads a file's state once for a write that needs no approval", async () => {
     const s = store();
     const result = await executeGoogleDriveToolCall(personalConnectorOwner("user-1"), "google_drive_update_file", { file_id: "file-1", name: "Changed" }, s.db);

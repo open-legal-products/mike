@@ -32,7 +32,12 @@ import {
 import { ConnectorSetupError } from "../mcp/errors";
 import type { Db } from "../supabase";
 import { type ConnectorOwner, workspaceFilter } from "../connectorOwner";
-import type { ConnectorCallPlan, McpToolEvent } from "../mcp/types";
+import {
+    type ConnectorCallPlan,
+    type ConnectorToolOptions,
+    type McpToolEvent,
+    offersWriteTools,
+} from "../mcp/types";
 import {
     connectorSettingsPatch,
     toggleDisabledTool,
@@ -1289,6 +1294,7 @@ export async function executeApprovedGoogleDriveCall(
 export async function buildGoogleDriveTools(
     owner: ConnectorOwner,
     db: Db = createServerSupabase(),
+    options: ConnectorToolOptions = {},
 ): Promise<unknown[]> {
     // A switched-off service has no tools, even for a user who connected it
     // before the switch; the grant stays until they delete it.
@@ -1301,7 +1307,9 @@ export async function buildGoogleDriveTools(
             (tool) =>
                 !disabled.includes(tool.function.name) &&
                 (!driveWriteTool(tool.function.name) ||
-                    (!row.read_only && hasDriveWriteAccess(row))),
+                    (!row.read_only &&
+                        hasDriveWriteAccess(row) &&
+                        offersWriteTools(row.require_write_approval, options))),
         );
     } catch (error) {
         // Returning no tools hides the connector from this turn; the failure

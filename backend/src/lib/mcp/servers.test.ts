@@ -330,6 +330,23 @@ describe("MCP read-only mode", () => {
 });
 
 
+describe("MCP write tools on a surface that cannot ask for approval", () => {
+    const owner = personalConnectorOwner("user-1");
+    const writeTool = { ...makeTool(), annotations: { readOnlyHint: false }, requires_confirmation: true };
+
+    it.each([true, null, undefined])("leaves write tools out when approval is %s", async (require_write_approval) => {
+        const db = makeDb(writeTool, { ...makeConnector(), require_write_approval }, []);
+        expect(await buildUserMcpTools(owner, db, { canAskForApproval: false })).toEqual([]);
+        expect(await buildUserMcpTools(owner, db, { canAskForApproval: true })).toHaveLength(1);
+    });
+
+    it("still offers read tools, and write tools once approval is off", async () => {
+        expect(await buildUserMcpTools(owner, makeDb(makeTool(), makeConnector(), []), { canAskForApproval: false })).toHaveLength(1);
+        const optedOut = makeDb(writeTool, { ...makeConnector(), require_write_approval: false }, []);
+        expect(await buildUserMcpTools(owner, optedOut, { canAskForApproval: false })).toHaveLength(1);
+    });
+});
+
 describe("previously cached tools without annotations", () => {
     it("classifies unknown tools consistently in settings, discovery and execution", async () => {
         const connector = { ...makeConnector(), read_only: false };

@@ -55,6 +55,30 @@ export type ConnectorCallPlan =
     | { type: "approval"; item: Omit<ConnectorApprovalItem, "id"> }
     | { type: "result"; content: string; event: McpToolEvent };
 
+/** What the conversation surface building a turn's connector tools can do. */
+export type ConnectorToolOptions = {
+    /**
+     * The surface can pause the turn and show the approval prompt. Defaults
+     * to true. When false (the Word add-in, tabular chat), a write tool is
+     * offered only on a connection whose approval setting is explicitly off:
+     * any other write would be planned as an approval the surface cannot ask
+     * for, and refused, so the model is not shown it.
+     */
+    canAskForApproval?: boolean;
+};
+
+/**
+ * Whether a connection's write tools are offered to the model. The same
+ * rule for MCP, Google Workspace and Google Drive; the plan functions remain
+ * the authority on whether a call actually runs.
+ */
+export function offersWriteTools(
+    requireWriteApproval: unknown,
+    options: ConnectorToolOptions,
+): boolean {
+    return options.canAskForApproval !== false || requireWriteApproval === false;
+}
+
 export type ConnectorRow = {
     id: string;
     user_id: string;

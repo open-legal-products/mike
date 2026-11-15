@@ -546,6 +546,23 @@ describe("Google write access", () => {
       await planGoogleWorkspaceCall(personalConnectorOwner("u1"), "gmail_search", { query: "x" }, s.db),
     ).toEqual({ type: "run" });
   });
+  it("leaves write tools out for a surface that cannot ask for approval, unless approval is off", async () => {
+    const s = await connected(true);
+    const row = s.tables.user_google_workspace_tokens[0];
+    const names = async (canAskForApproval: boolean) =>
+      JSON.stringify(
+        await buildGoogleWorkspaceTools(personalConnectorOwner("u1"), s.db, { canAskForApproval }),
+      );
+    for (const value of [true, undefined]) {
+      if (value === undefined) delete row.require_write_approval;
+      else row.require_write_approval = value;
+      expect(await names(false)).toContain("gmail_search");
+      expect(await names(false)).not.toContain("gmail_send");
+      expect(await names(true)).toContain("gmail_send");
+    }
+    row.require_write_approval = false;
+    expect(await names(false)).toContain("gmail_send");
+  });
   it("runs a write directly when the user turned approval off", async () => {
     const s = await connected(true);
     s.tables.user_google_workspace_tokens[0].require_write_approval = false;

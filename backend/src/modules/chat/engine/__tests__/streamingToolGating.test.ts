@@ -285,9 +285,30 @@ it("assembles the person's connectors for the organization a conversation is in"
   const fake = scriptedDb([{ table: "organizations", data: { kind: "team" } }]);
   await runLLMStream({ ...baseParams(), db: fake.db, orgId: "firm" });
   const owner = { userId: baseParams().userId, orgId: "firm" };
-  expect(buildUserMcpTools).toHaveBeenCalledWith(owner, fake.db);
-  expect(buildGoogleDriveTools).toHaveBeenCalledWith(owner, fake.db);
-  expect(buildGoogleWorkspaceTools).toHaveBeenCalledWith(owner, fake.db);
+  const options = { canAskForApproval: false };
+  expect(buildUserMcpTools).toHaveBeenCalledWith(owner, fake.db, options);
+  expect(buildGoogleDriveTools).toHaveBeenCalledWith(owner, fake.db, options);
+  expect(buildGoogleWorkspaceTools).toHaveBeenCalledWith(owner, fake.db, options);
   expect(advertisedToolNames()).toContain("mcp_firm_search");
   fake.done();
+});
+
+// Only a surface that can pause the turn and show the approval prompt is
+// offered connector write tools that need approval. The Word add-in and
+// tabular chat have no prompt, so the builders are told to leave those
+// writes out (the dispatcher refuses them either way).
+describe.each([
+  ["web and project chat", { connectorApprovals: true }, true],
+  ["the Word add-in", { includeAskInputs: false }, false],
+  // A Word pane cannot answer ask_inputs, so even a stray flag cannot ask.
+  ["the Word add-in, approvals flag set", { includeAskInputs: false, connectorApprovals: true }, false],
+  ["tabular chat", { extraTools: [] }, false],
+])("connector write tools on %s", (_surface, surface, canAskForApproval) => {
+  it(`builds connector tools with canAskForApproval: ${canAskForApproval}`, async () => {
+    await runLLMStream({ ...baseParams(), ...surface });
+    const owner = { userId: baseParams().userId, orgId: null };
+    for (const build of [buildUserMcpTools, buildGoogleDriveTools, buildGoogleWorkspaceTools]) {
+      expect(build).toHaveBeenCalledWith(owner, expect.anything(), { canAskForApproval });
+    }
+  });
 });

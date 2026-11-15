@@ -44,9 +44,11 @@ import {
     type McpConnectorAuthConfig,
     type McpConnectorSummary,
     type ConnectorCallPlan,
+    type ConnectorToolOptions,
     type McpToolEvent,
     type OAuthTokenRow,
     type ToolCacheRow,
+    offersWriteTools,
 } from "./types";
 
 export { startUserMcpConnectorOAuth };
@@ -438,11 +440,12 @@ export async function setUserMcpToolEnabled(
 export async function buildUserMcpTools(
     owner: ConnectorOwner,
     db: Db = createServerSupabase(),
+    options: ConnectorToolOptions = {},
 ): Promise<OpenAIToolSchema[]> {
     const { data, error } = await db
         .from("user_mcp_connector_tools")
         .select(
-            "openai_tool_name, tool_name, title, description, input_schema, annotations, requires_confirmation, enabled, user_mcp_connectors!inner(id, user_id, org_id, name, enabled, read_only)",
+            "openai_tool_name, tool_name, title, description, input_schema, annotations, requires_confirmation, enabled, user_mcp_connectors!inner(id, user_id, org_id, name, enabled, read_only, require_write_approval)",
         )
         .eq("enabled", true)
         .eq("user_mcp_connectors.user_id", owner.userId)
@@ -467,9 +470,14 @@ export async function buildUserMcpTools(
     }
 
     return (data ?? []).filter((row) => {
-        const joined = row.user_mcp_connectors as { read_only?: boolean } | { read_only?: boolean }[];
+        type Joined = { read_only?: boolean; require_write_approval?: boolean | null };
+        const joined = row.user_mcp_connectors as Joined | Joined[];
         const connector = Array.isArray(joined) ? joined[0] : joined;
-        return !(connector?.read_only && mcpToolRequiresWriteAccess(row));
+        if (!mcpToolRequiresWriteAccess(row)) return true;
+        return (
+            !connector?.read_only &&
+            offersWriteTools(connector?.require_write_approval, options)
+        );
     }).map((row) => {
         const raw = row as Record<string, unknown>;
         const connector = raw.user_mcp_connectors as
