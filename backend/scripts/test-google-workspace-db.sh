@@ -43,12 +43,26 @@ insert into public.user_api_keys(user_id, provider, encrypted_key, iv, auth_tag,
   ('00000000-0000-0000-0000-0000000000a1', 'courtlistener', 'k', 'i', 't', true),
   ('00000000-0000-0000-0000-0000000000a2', 'courtlistener', 'k', 'i', 't', false);
 SQL
-for migration in 20260921_02_google_drive_integration.sql 20260922_01_google_workspace.sql 20261001_01_connector_write_access.sql 20261002_01_google_drive_writes.sql 20261002_02_google_drive_account_email.sql 20261002_03_connector_read_only.sql 20261002_05_mcp_oauth_grants.sql 20261022_01_workspace_connectors.sql; do
+for migration in 20260921_02_google_drive_integration.sql 20260922_01_google_workspace.sql 20261001_01_connector_write_access.sql 20261002_01_google_drive_writes.sql 20261002_02_google_drive_account_email.sql 20261002_03_connector_read_only.sql 20261002_05_mcp_oauth_grants.sql 20261022_01_workspace_connectors.sql 20261115_01_connector_write_approval_default.sql; do
   # Each migration must be safe to replay.
   sql < "$workspace_root/backend/migrations/$migration"
   if [ "$migration" = "20261002_05_mcp_oauth_grants.sql" ]; then
     sql >/dev/null <<'SQL'
 create table mcp_grant_replay as select id, grant_id from public.user_mcp_oauth_tokens;
+SQL
+  fi
+  if [ "$migration" = "20261115_01_connector_write_approval_default.sql" ]; then
+    # The existing connector was backfilled to ask; an opt-out made after the
+    # migration must survive its replay.
+    sql >/dev/null <<'SQL'
+do $$ begin
+  if not (select require_write_approval from public.user_mcp_connectors
+          where id = '00000000-0000-0000-0000-000000000001') then
+    raise exception 'write-approval backfill failed';
+  end if;
+end $$;
+update public.user_mcp_connectors set require_write_approval = false
+  where id = '00000000-0000-0000-0000-000000000001';
 SQL
   fi
   sql < "$workspace_root/backend/migrations/$migration"
@@ -59,6 +73,10 @@ do $$ begin
      or exists (select 1 from public.user_mcp_oauth_tokens t join mcp_grant_replay r using(id)
                 where t.grant_id is distinct from r.grant_id) then
     raise exception 'MCP grant backfill or replay failed';
+  end if;
+  if (select require_write_approval from public.user_mcp_connectors
+      where id = '00000000-0000-0000-0000-000000000001') then
+    raise exception 'write-approval replay overwrote an opt-out';
   end if;
 end $$;
 drop table mcp_grant_replay;
