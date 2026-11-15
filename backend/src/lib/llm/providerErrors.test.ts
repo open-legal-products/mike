@@ -7,6 +7,7 @@ import {
   asProviderStallError,
   ProviderConfigurationError,
   isDeterministicProviderQuota,
+  isDeterministicProviderRefusal,
   isUserProviderRefusal,
   providerFailureKind,
   providerFailureResponse,
@@ -377,6 +378,22 @@ describe("source-owned provider refusals", () => {
     expect(isUserProviderRefusal(personal)).toBe(true);
     const deployment = toProviderStreamError(apiCallError(429, body as string), { ...gemini, keySource: "deployment" });
     expect(providerFailureLevel(deployment)).toBe("error");
+  });
+  it("reads Anthropic's low-credit 400 as an empty account, not a failed request", () => {
+    const claude = { label: "Claude", modelId: "claude-sonnet-4-5", keySource: "user" as const };
+    const body = '{"type":"error","error":{"type":"invalid_request_error","message":"Your credit balance is too low to access the Anthropic API. Please go to Plans & Billing to upgrade or purchase credits."}}';
+    const error = toProviderStreamError(apiCallError(400, body), claude);
+    expect(error).toBeInstanceOf(UserFacingError);
+    expect(error.message).not.toContain("Plans & Billing");
+    expect(providerFailureKind(error)).toBe("chat.provider_out_of_credits");
+    expect(isDeterministicProviderRefusal(error)).toBe(true);
+    expect(providerFailureLevel(error)).toBe("warning");
+    // Any other invalid_request_error is a request we built wrong: still ours.
+    const malformed = apiCallError(400, '{"type":"error","error":{"type":"invalid_request_error","message":"max_tokens: 99999999 > 64000"}}');
+    const other = toProviderStreamError(malformed, claude);
+    expect(other).not.toBeInstanceOf(UserFacingError);
+    expect(providerFailureKind(other)).toBe("chat.stream_failed");
+    expect(providerFailureLevel(other)).toBe("error");
   });
   it.each([
     [403, "Your organization does not have access to this model"],

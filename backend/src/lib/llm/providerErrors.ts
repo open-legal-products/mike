@@ -78,10 +78,25 @@ function responseBodyOf(error: ApiCallErrorLike): string {
   return "";
 }
 
-/** A provider's explicit account verdict, never inferred from HTTP 429 alone. */
+// Anthropic answers an empty prepaid balance with a plain 400
+// invalid_request_error; only this sentence tells it apart from a malformed
+// request, so the message is matched, never shown.
+const ANTHROPIC_LOW_CREDIT = /\byour credit balance is too low\b/i;
+
+/** A provider's explicit account verdict, never inferred from the status alone. */
 function quotaRefusal(error: ApiCallErrorLike): "credits" | "plan" | null {
-  if (error.statusCode !== 429) return null;
   const body = responseBodyOf(error);
+  if (error.statusCode === 400) {
+    try {
+      const parsed = JSON.parse(body) as { error?: { type?: unknown; message?: unknown } };
+      const { type, message } = parsed?.error ?? {};
+      if (type === "invalid_request_error" && typeof message === "string" && ANTHROPIC_LOW_CREDIT.test(message)) {
+        return "credits";
+      }
+    } catch { /* Not Anthropic's JSON error envelope. */ }
+    return null;
+  }
+  if (error.statusCode !== 429) return null;
   try {
     const parsed = JSON.parse(body) as { error?: { code?: unknown; type?: unknown } };
     if (parsed?.error?.code === "insufficient_quota" || parsed?.error?.type === "insufficient_quota") return "credits";
@@ -297,11 +312,10 @@ export function providerFailureKind(error: unknown): ErrorKind {
     if (gatewayRefusalReason(apiError) !== null) return "chat.provider_rejected";
     // OpenRouter (and other prepaid gateways) answer 402 when the account
     // has no credit left: the account's state, like a rejected key.
-    if (response.status === 402) return "chat.provider_out_of_credits";
-    if (response.status === 429) {
-      const quota = quotaRefusal(apiError);
-      return quota === "credits" ? "chat.provider_out_of_credits" : quota === "plan" ? "chat.provider_rejected" : "chat.provider_rate_limited";
-    }
+    const quota = quotaRefusal(apiError);
+    if (response.status === 402 || quota === "credits") return "chat.provider_out_of_credits";
+    if (quota === "plan") return "chat.provider_rejected";
+    if (response.status === 429) return "chat.provider_rate_limited";
     if (response.status >= 500) return "chat.provider_unavailable";
     return "chat.stream_failed";
   }
