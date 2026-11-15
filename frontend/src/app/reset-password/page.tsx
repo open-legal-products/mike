@@ -24,6 +24,7 @@ import {
 } from "@/app/lib/authMessages";
 import { getAuthSession, updateAuthPassword } from "@/app/lib/authApi";
 import { FieldLabel } from "@/app/components/ui/form-field";
+import { MfaVerificationPopup } from "@/app/components/popups/MfaVerificationPopup";
 import {
     describeError,
     supportMailtoFor,
@@ -53,6 +54,7 @@ function ResetPasswordContent() {
     const [success, setSuccess] = useState(false);
     const [error, setError] = useState<string | null>(null);
     const [failure, setFailure] = useState<UserFacingError | null>(null);
+    const [mfaRequired, setMfaRequired] = useState(false);
     const preview =
         process.env.NODE_ENV !== "production"
             ? searchParams.get("preview")
@@ -122,11 +124,21 @@ function ResetPasswordContent() {
             return;
         }
 
+        await savePassword();
+    }
+
+    async function savePassword() {
         setLoading(true);
         try {
             await updateAuthPassword(password, true);
             setSuccess(true);
         } catch (caught) {
+            // An account with an authenticator proves it before its password
+            // changes; the existing verification popup steps the session up.
+            if ((caught as { code?: unknown })?.code === "mfa_verification_required") {
+                setMfaRequired(true);
+                return;
+            }
             const described = describeError(caught, {
                 action: "update your password",
                 codeMessages: RESET_ERROR_MESSAGES,
@@ -284,6 +296,14 @@ function ResetPasswordContent() {
                     )}
                 </div>
             </div>
+            <MfaVerificationPopup
+                open={mfaRequired}
+                onCancel={() => setMfaRequired(false)}
+                onVerified={() => {
+                    setMfaRequired(false);
+                    void savePassword();
+                }}
+            />
         </div>
     );
 }

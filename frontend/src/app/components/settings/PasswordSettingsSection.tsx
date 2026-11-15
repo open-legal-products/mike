@@ -26,6 +26,7 @@ import { SettingsHeading } from "./SettingsHeading";
 import { SettingsRow } from "./SettingsRow";
 import { SettingsDescription, SettingsLabel } from "./SettingsText";
 import { FieldLabel } from "@/app/components/ui/form-field";
+import { MfaVerificationPopup } from "@/app/components/popups/MfaVerificationPopup";
 
 /** The shared auth table with this section's deltas, keyed by the `code`
  *  GoTrue returns from `PATCH /api/auth/password`. */
@@ -46,6 +47,7 @@ export function PasswordSettingsSection() {
     useState<UserFacingError | null>(null);
   const [passwordStatus, setPasswordStatus] = useState<string | null>(null);
   const [passwordResetSending, setPasswordResetSending] = useState(false);
+  const [mfaRequired, setMfaRequired] = useState(false);
 
   const needsInitialPassword =
     user?.createdWithGoogle === true && profile?.passwordSet !== true;
@@ -79,6 +81,14 @@ export function PasswordSettingsSection() {
       setSetPasswordOpen(false);
       setPasswordStatus("Password added to your account.");
     } catch (error) {
+      // An account with an authenticator proves it before a password is
+      // added. As elsewhere in Settings, the form gives way to the existing
+      // verification popup, which steps the session up and retries.
+      if ((error as { code?: unknown })?.code === "mfa_verification_required") {
+        setSetPasswordOpen(false);
+        setMfaRequired(true);
+        return;
+      }
       // GoTrue's own wording ("Password should be at least 6 characters")
       // contradicts Mike's policy, so the code decides the text instead.
       setPasswordSetError(
@@ -230,6 +240,21 @@ export function PasswordSettingsSection() {
           )}
         </div>
       </Modal>
+      <MfaVerificationPopup
+        open={mfaRequired}
+        onCancel={() => {
+          setMfaRequired(false);
+          setPasswordValue("");
+          setConfirmPassword("");
+        }}
+        onVerified={() => {
+          // Back in the form, so a failure of the retry is shown where the
+          // password was typed.
+          setMfaRequired(false);
+          setSetPasswordOpen(true);
+          void addPassword();
+        }}
+      />
     </section>
   );
 }

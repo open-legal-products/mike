@@ -37,6 +37,23 @@ vi.mock("@/app/lib/authApi", () => ({
     requestPasswordReset: state.requestPasswordReset,
 }));
 
+// The real popup lists factors and verifies a code against the auth API;
+// here it is the hand-off point: open, then "verified".
+vi.mock("@/app/components/popups/MfaVerificationPopup", () => ({
+    MfaVerificationPopup: ({
+        open,
+        onVerified,
+    }: {
+        open: boolean;
+        onVerified: () => void;
+    }) =>
+        open ? (
+            <button type="button" onClick={onVerified}>
+                Verify code
+            </button>
+        ) : null,
+}));
+
 describe("PasswordSettingsSection", () => {
     beforeEach(() => {
         state.user.createdWithGoogle = true;
@@ -137,6 +154,25 @@ describe("PasswordSettingsSection", () => {
         expect(
             screen.queryByText(/at least 6 characters/),
         ).not.toBeInTheDocument();
+    });
+
+    it("asks an account with an authenticator for a code, then adds the password", async () => {
+        state.setPassword
+            .mockRejectedValueOnce(
+                Object.assign(new Error("MFA verification required"), {
+                        status: 403,
+                        code: "mfa_verification_required",
+                    }),
+            )
+            .mockResolvedValueOnce(undefined);
+
+        await openAndSubmit("correct-horse-battery");
+        fireEvent.click(await screen.findByRole("button", { name: "Verify code" }));
+
+        expect(
+            await screen.findByText("Password added to your account."),
+        ).toBeInTheDocument();
+        expect(state.setPassword).toHaveBeenCalledTimes(2);
     });
 
     it("refuses a password past bcrypt's limit before calling the API", async () => {
