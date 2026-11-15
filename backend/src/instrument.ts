@@ -13,6 +13,11 @@ import "dotenv/config";
 import path from "node:path";
 import { isMainThread } from "node:worker_threads";
 import { initSentry, type SentryRole } from "./lib/observability/sentry";
+import { installErrorLogRedaction } from "./lib/log";
+
+// Before anything can log: provider errors carry the prompt and the
+// provider's response, and stdout goes to the host's log store.
+installErrorLogRedaction();
 
 function detectRole(): SentryRole {
   const override = process.env.SENTRY_ROLE;
