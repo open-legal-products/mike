@@ -26,11 +26,11 @@ import { ConnectorSetupError } from "../../lib/mcp/errors";
 
 import crypto from "crypto";
 import { Router, type Request, type Response } from "express";
-import rateLimit from "express-rate-limit";
+import { userRateLimiter } from "../../lib/userRateLimit";
 import { requireAuth, requireMfaIfEnrolled } from "../../middleware/auth";
 import { asyncRoute, routerErrorHandler } from "../../middleware/asyncRoute";
 import { createServerSupabase, type Db } from "../../lib/supabase";
-import { rateLimitedBody, sendInternalError } from "../../lib/httpError";
+import { sendInternalError } from "../../lib/httpError";
 import { sendServiceFailure } from "../../lib/serviceResult";
 import { dbJobsEnabled } from "../../lib/dbq/runner";
 import { buildContentDisposition } from "../../lib/storage";
@@ -43,7 +43,7 @@ import {
     listMyInvitations,
 } from "../../lib/orgs";
 import { sendOrgFailure } from "../../lib/orgFailure";
-import { configuredApiPublicUrl, envInt } from "../../lib/runtimeConfig";
+import { configuredApiPublicUrl } from "../../lib/runtimeConfig";
 import { isWebSearchBackend } from "../../lib/webSearch";
 import type { ConnectorOwner } from "../../lib/connectorOwner";
 import {
@@ -293,13 +293,12 @@ userRouter.delete("/profile/photo", requireAuth, asyncRoute(async (_req, res) =>
 // account probe hundreds of addresses, and an office behind one NAT address
 // must not lose its lookups to a single colleague. A person adds sharing
 // recipients one at a time, so this is far above any real use.
-const userLookupLimiter = rateLimit({
-    windowMs: envInt("RATE_LIMIT_USER_LOOKUP_WINDOW_MINUTES", 15) * 60 * 1000,
-    max: envInt("RATE_LIMIT_USER_LOOKUP_MAX", 60),
-    standardHeaders: true,
-    legacyHeaders: false,
-    keyGenerator: (_req, res) => String(res.locals.userId),
-    message: rateLimitedBody("Too many lookups. Please try again later."),
+const userLookupLimiter = userRateLimiter({
+    maxEnv: "RATE_LIMIT_USER_LOOKUP_MAX",
+    defaultMax: 60,
+    windowMinutesEnv: "RATE_LIMIT_USER_LOOKUP_WINDOW_MINUTES",
+    defaultWindowMinutes: 15,
+    message: "Too many lookups. Please try again later.",
 });
 
 // GET /user/lookup?email=person@example.com

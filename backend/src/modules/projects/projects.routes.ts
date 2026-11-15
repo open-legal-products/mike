@@ -6,6 +6,7 @@
 
 import { Router, type Response } from "express";
 import { requireAuth, requireMfaIfEnrolled } from "../../middleware/auth";
+import { directShareLimiter } from "../../lib/userRateLimit";
 import { asyncRoute, routerErrorHandler } from "../../middleware/asyncRoute";
 import { createServerSupabase } from "../../lib/supabase";
 import { sendInternalError } from "../../lib/httpError";
@@ -352,7 +353,7 @@ projectsRouter.get("/:projectId/access", requireAuth, asyncRoute(async (req, res
 }));
 
 // POST /projects/:projectId/access — grant or re-role one recipient.
-projectsRouter.post("/:projectId/access", requireAuth, asyncRoute(async (req, res) => {
+projectsRouter.post("/:projectId/access", requireAuth, directShareLimiter, asyncRoute(async (req, res) => {
   const userId = res.locals.userId as string;
   const userEmail = res.locals.userEmail as string | undefined;
   const { projectId } = req.params;

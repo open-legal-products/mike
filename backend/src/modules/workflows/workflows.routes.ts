@@ -5,6 +5,7 @@
 import { Router, type Request, type Response } from "express";
 import type { ParamsFlatDictionary } from "express-serve-static-core";
 import { requireAuth } from "../../middleware/auth";
+import { directShareLimiter } from "../../lib/userRateLimit";
 import { asyncRoute, routerErrorHandler } from "../../middleware/asyncRoute";
 import { createServerSupabase } from "../../lib/supabase";
 import { parsePaginationQuery } from "../../lib/pagination";
@@ -495,7 +496,7 @@ workflowsRouter.delete("/:workflowId/shares/:shareId", requireAuth, asyncRoute(a
 }));
 
 // POST /workflows/:workflowId/share
-workflowsRouter.post("/:workflowId/share", requireAuth, asyncRoute(async (req, res) => {
+workflowsRouter.post("/:workflowId/share", requireAuth, directShareLimiter, asyncRoute(async (req, res) => {
   const userId = res.locals.userId as string;
   const userEmail = res.locals.userEmail as string | undefined;
   const { workflowId } = req.params;

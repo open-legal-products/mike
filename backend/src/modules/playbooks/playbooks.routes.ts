@@ -1,6 +1,7 @@
 import crypto from "node:crypto";
 import { Router, type Response } from "express";
 import { requireAuth, requireMfaIfEnrolled } from "../../middleware/auth";
+import { directShareLimiter } from "../../lib/userRateLimit";
 import { sendInternalError } from "../../lib/httpError";
 import { pipeToResponse } from "../../lib/pipeToResponse";
 import { setOperation } from "../../lib/observability/sentry";
@@ -502,6 +503,7 @@ playbooksRouter.get("/:playbookId/shares", async (req, res) => {
 
 playbooksRouter.post(
   "/:playbookId/share",
+  directShareLimiter,
   requireMfaIfEnrolled,
   async (req, res) => {
     try {

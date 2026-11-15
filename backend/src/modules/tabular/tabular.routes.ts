@@ -14,6 +14,7 @@ import { BACKEND_REPORTING_OWNER } from "../../lib/reportedUpstreamCodes";
 import { Router, type Response } from "express";
 import { randomUUID } from "node:crypto";
 import { requireAuth } from "../../middleware/auth";
+import { directShareLimiter } from "../../lib/userRateLimit";
 import {
     attachStreamRunSse,
     getActiveStreamRun,
@@ -336,7 +337,7 @@ tabularRouter.get("/:reviewId/access", requireAuth, asyncRoute(async (req, res) 
 }));
 
 // POST /tabular-review/:reviewId/access — grant or re-role one recipient.
-tabularRouter.post("/:reviewId/access", requireAuth, asyncRoute(async (req, res) => {
+tabularRouter.post("/:reviewId/access", requireAuth, directShareLimiter, asyncRoute(async (req, res) => {
     const result = await grantTabularReviewAccess(createServerSupabase(), {
         reviewId: req.params.reviewId,
         userId: res.locals.userId as string,
