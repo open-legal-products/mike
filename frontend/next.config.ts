@@ -57,7 +57,11 @@ const nextConfig: NextConfig = {
     async headers() {
         return [
             {
-                source: "/:path*",
+                // Every path except the /api proxy, which forwards the
+                // backend's own stricter helmet headers (no-referrer on the
+                // OAuth callbacks, default-src 'none'); a rule here would
+                // overwrite them.
+                source: "/:path((?!api(?:/|$)).*)",
                 headers: securityHeaders(process.env.NODE_ENV === "production"),
             },
         ];

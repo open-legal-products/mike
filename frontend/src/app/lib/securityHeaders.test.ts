@@ -2,21 +2,32 @@
 // next.config.ts is a Node module (it imports Sentry's build plugin), so it
 // is loaded here the way `next build` loads it, not inside jsdom.
 import { readFileSync } from "node:fs";
+import { buildCustomRoute } from "next/dist/lib/build-custom-route";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import nextConfig from "../../../next.config";
 
 const PUBLIC_HEADERS_FILE = new URL("../../../public/_headers", import.meta.url);
 
-/** The headers next.config.ts attaches to an ordinary page such as /login. */
-async function pageHeaders(): Promise<Record<string, string>> {
+/**
+ * The headers next.config.ts attaches to `path`. Each rule's source is
+ * compiled the way `next build` writes it into routes-manifest.json, which is
+ * also what OpenNext matches against on Cloudflare.
+ */
+async function headersFor(path: string): Promise<Record<string, string>> {
     expect(nextConfig.headers, "next.config.ts defines no headers()").toBeTypeOf(
         "function",
     );
     const rules = await nextConfig.headers!();
-    const rule = rules.find((r) => r.source === "/:path*");
-    expect(rule, "no header rule covers every path").toBeDefined();
-    return Object.fromEntries(rule!.headers.map((h) => [h.key, h.value]));
+    const matching = rules.filter((rule) =>
+        new RegExp(buildCustomRoute("header", rule).regex).test(path),
+    );
+    return Object.fromEntries(
+        matching.flatMap((rule) => rule.headers.map((h) => [h.key, h.value])),
+    );
 }
+
+/** The headers on an ordinary page such as /login. */
+const pageHeaders = () => headersFor("/login");
 
 /** The header lines public/_headers applies to every static file. */
 function staticFileHeaders(): Record<string, string> {
@@ -59,6 +70,21 @@ describe("web app security headers", () => {
 
         expect(headers["Strict-Transport-Security"]).toBeUndefined();
         expect(headers["X-Frame-Options"]).toBe("DENY");
+    });
+
+    it("leaves the API proxy's own headers alone", async () => {
+        // /api/* is forwarded from the backend, whose helmet headers are
+        // stricter (Referrer-Policy: no-referrer keeps OAuth codes out of
+        // referrers). A page rule would overwrite them.
+        vi.stubEnv("NODE_ENV", "production");
+        expect(await headersFor("/")).toHaveProperty("X-Frame-Options", "DENY");
+        expect(await headersFor("/_next/static/chunks/app.js")).toHaveProperty(
+            "X-Frame-Options",
+            "DENY",
+        );
+        expect(
+            await headersFor("/api/user/integrations/gmail/oauth/callback"),
+        ).toEqual({});
     });
 
     it("does not advertise the framework", () => {
