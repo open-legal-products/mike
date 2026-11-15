@@ -59,4 +59,28 @@ describe("direct-share rate limit", () => {
         // Another user behind the same address still has their own budget.
         expect((await share("colleague", SHARE_PATHS[0])).status).not.toBe(429);
     });
+
+    it("counts every address in an emails array against the same budget", async () => {
+        const batch = (caller: string, count: number) =>
+            request(app)
+                .post(`/workflows/${ID}/share`)
+                .set("Authorization", "Bearer test")
+                .set("X-Test-User", caller)
+                .send({
+                    emails: Array.from({ length: count }, (_, i) => `p${i}@example.com`),
+                    role: "viewer",
+                });
+
+        // Five addresses spend the whole budget of five in one request...
+        expect((await batch("batcher", 5)).status).not.toBe(429);
+        // ...so the next request is refused, however few it carries.
+        const limited = await batch("batcher", 1);
+        expect(limited.status).toBe(429);
+        expect(limited.body.code).toBe("rate_limited");
+
+        // A request carrying more addresses than the budget is refused outright.
+        const oversized = await batch("bulk", 6);
+        expect(oversized.status).toBe(429);
+        expect(oversized.body.code).toBe("rate_limited");
+    });
 });

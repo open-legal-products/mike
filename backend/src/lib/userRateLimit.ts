@@ -1,4 +1,5 @@
-import rateLimit from "express-rate-limit";
+import type { Request, RequestHandler } from "express";
+import rateLimit, { MemoryStore } from "express-rate-limit";
 import { rateLimitedBody } from "./httpError";
 import { envInt } from "./runtimeConfig";
 
@@ -16,17 +17,48 @@ export function userRateLimiter(options: {
     windowMinutesEnv: string;
     defaultWindowMinutes: number;
     message: string;
-}) {
-    return rateLimit({
+    /**
+     * How many attempts one request counts as, when that is more than one
+     * (a request that names several people is that many attempts).
+     */
+    hitsPerRequest?: (req: Request) => number;
+}): RequestHandler {
+    const max = envInt(options.maxEnv, options.defaultMax);
+    const store = new MemoryStore();
+    const limiter = rateLimit({
         windowMs:
             envInt(options.windowMinutesEnv, options.defaultWindowMinutes) *
             60 * 1000,
-        max: envInt(options.maxEnv, options.defaultMax),
+        max,
         standardHeaders: true,
         legacyHeaders: false,
         keyGenerator: (_req, res) => String(res.locals.userId),
         message: rateLimitedBody(options.message),
+        store,
     });
+    const hitsPerRequest = options.hitsPerRequest;
+    if (!hitsPerRequest) return limiter;
+    // The limiter above has already counted this request once; charge the
+    // rest to the same per-user counter, so no request can carry more
+    // attempts than the budget has left.
+    return (req, res, next) =>
+        limiter(req, res, async (error?: unknown) => {
+            if (error) return next(error);
+            try {
+                const key = String(res.locals.userId);
+                let totalHits = 0;
+                for (let i = 1; i < hitsPerRequest(req); i += 1) {
+                    totalHits = (await store.increment(key)).totalHits;
+                }
+                if (totalHits > max) {
+                    res.status(429).json(rateLimitedBody(options.message));
+                    return;
+                }
+                next();
+            } catch (cause) {
+                next(cause);
+            }
+        });
 }
 
 /**
@@ -37,7 +69,9 @@ export function userRateLimiter(options: {
  *
  * 120 an hour by default: the share dialogs send one request per recipient
  * (or role change), so sharing a matter with a 50-person team, and fixing a
- * few roles afterwards, stays well inside it.
+ * few roles afterwards, stays well inside it. The workflow and playbook
+ * endpoints take an `emails` array, so each address in it counts as one
+ * attempt; otherwise one request could carry any number of them.
  */
 export const directShareLimiter = userRateLimiter({
     maxEnv: "RATE_LIMIT_DIRECT_SHARE_MAX",
@@ -45,4 +79,8 @@ export const directShareLimiter = userRateLimiter({
     windowMinutesEnv: "RATE_LIMIT_DIRECT_SHARE_WINDOW_MINUTES",
     defaultWindowMinutes: 60,
     message: "Too many sharing requests. Please try again later.",
+    hitsPerRequest: (req) => {
+        const emails = (req.body as { emails?: unknown } | undefined)?.emails;
+        return Array.isArray(emails) ? Math.max(emails.length, 1) : 1;
+    },
 });
