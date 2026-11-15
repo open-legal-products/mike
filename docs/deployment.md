@@ -144,13 +144,52 @@ the variable; generate a real value for each and restart:
 openssl rand -hex 32   # once per variable
 ```
 
-With `NODE_ENV=production` both variables are required, and the backend also
-refuses the published Supabase demo keys (the anon and service_role JWTs that
-`docker-compose.yml` and `supabase start` ship) in `SUPABASE_SECRET_KEY` and
-`SUPABASE_PUBLISHABLE_KEY`/`SUPABASE_ANON_KEY`. Outside production the two
-secrets may be left unset; the download and API-key features then fail on
-first use. Plan for these effects when replacing existing secrets; changing
-the environment does not re-encrypt stored credentials:
+Releases after v2.1.0 add two more startup checks, applied only with
+`NODE_ENV=production`. Outside production nothing changes: the two secrets may
+be left unset (the download and API-key features then fail on first use), and
+the local demo keys are accepted. A production deployment is affected when:
+
+- `DOWNLOAD_SIGNING_SECRET` or `USER_API_KEYS_ENCRYPTION_SECRET` is unset or
+  empty. Older versions booted and then failed every download link and every
+  saved provider, connector or Google credential. The backend now refuses to
+  start with `<VARIABLE> is required in production`. Generate each value with
+  `openssl rand -hex 32` before upgrading.
+- `SUPABASE_SECRET_KEY`, `SUPABASE_PUBLISHABLE_KEY` or `SUPABASE_ANON_KEY`
+  holds one of Supabase's published demo keys (the anon and service_role JWTs
+  that `docker-compose.yml` and `supabase start` ship, signed with a publicly
+  known JWT secret, so anyone who can reach the Supabase gateway can mint a
+  service_role token). The backend refuses to start with `<VARIABLE> is a
+  published Supabase demo key`. A hosted Supabase project already has its own
+  keys; use them. The bundled Compose Supabase only has the demo keys, so
+  before upgrading give it its own JWT secret and keys:
+
+  1. Generate a JWT secret and mint anon and service_role keys signed with it
+     (any HS256 JWT tool works; this uses Node only):
+
+     ```bash
+     node -e '
+     const c = require("crypto"), s = c.randomBytes(32).toString("hex");
+     const b = (o) => Buffer.from(JSON.stringify(o)).toString("base64url");
+     const now = Math.floor(Date.now() / 1000);
+     const key = (role) => {
+       const h = b({ alg: "HS256", typ: "JWT" });
+       const p = b({ iss: "supabase", role, iat: now, exp: now + 10 * 365 * 86400 });
+       return `${h}.${p}.${c.createHmac("sha256", s).update(`${h}.${p}`).digest("base64url")}`;
+     };
+     console.log(`JWT_SECRET=${s}\nSUPABASE_PUBLISHABLE_KEY=${key("anon")}\nSUPABASE_SECRET_KEY=${key("service_role")}`);'
+     ```
+
+  2. Replace the demo value of `JWT_SECRET`, `GOTRUE_JWT_SECRET` and
+     `PGRST_JWT_SECRET` in `docker-compose.yml` with the new secret (all three
+     must match).
+  3. Put the two keys in the compose-root `.env`, which the backend and
+     `workflow-sync` read in place of their demo defaults.
+  4. Restart the stack. Access tokens issued under the old secret stop
+     validating, so users may have to sign in again; stored data is
+     unaffected.
+
+Plan for these effects when replacing existing secrets; changing the
+environment does not re-encrypt stored credentials:
 
 - Changing `USER_API_KEYS_ENCRYPTION_SECRET` makes stored personal and
   organization provider credentials unreadable. Users must re-enter their
