@@ -26,10 +26,11 @@ import { ConnectorSetupError } from "../../lib/mcp/errors";
 
 import crypto from "crypto";
 import { Router, type Request, type Response } from "express";
+import rateLimit from "express-rate-limit";
 import { requireAuth, requireMfaIfEnrolled } from "../../middleware/auth";
 import { asyncRoute, routerErrorHandler } from "../../middleware/asyncRoute";
 import { createServerSupabase, type Db } from "../../lib/supabase";
-import { sendInternalError } from "../../lib/httpError";
+import { rateLimitedBody, sendInternalError } from "../../lib/httpError";
 import { sendServiceFailure } from "../../lib/serviceResult";
 import { dbJobsEnabled } from "../../lib/dbq/runner";
 import { buildContentDisposition } from "../../lib/storage";
@@ -42,7 +43,7 @@ import {
     listMyInvitations,
 } from "../../lib/orgs";
 import { sendOrgFailure } from "../../lib/orgFailure";
-import { configuredApiPublicUrl } from "../../lib/runtimeConfig";
+import { configuredApiPublicUrl, envInt } from "../../lib/runtimeConfig";
 import { isWebSearchBackend } from "../../lib/webSearch";
 import type { ConnectorOwner } from "../../lib/connectorOwner";
 import {
@@ -288,8 +289,21 @@ userRouter.delete("/profile/photo", requireAuth, asyncRoute(async (_req, res) =>
     res.json(result.data);
 }));
 
+// Keyed by the signed-in user, not the IP: the shared per-IP budget lets one
+// account probe hundreds of addresses, and an office behind one NAT address
+// must not lose its lookups to a single colleague. A person adds sharing
+// recipients one at a time, so this is far above any real use.
+const userLookupLimiter = rateLimit({
+    windowMs: envInt("RATE_LIMIT_USER_LOOKUP_WINDOW_MINUTES", 15) * 60 * 1000,
+    max: envInt("RATE_LIMIT_USER_LOOKUP_MAX", 60),
+    standardHeaders: true,
+    legacyHeaders: false,
+    keyGenerator: (_req, res) => String(res.locals.userId),
+    message: rateLimitedBody("Too many lookups. Please try again later."),
+});
+
 // GET /user/lookup?email=person@example.com
-userRouter.get("/lookup", requireAuth, asyncRoute(async (req, res) => {
+userRouter.get("/lookup", requireAuth, userLookupLimiter, asyncRoute(async (req, res) => {
     const email = typeof req.query.email === "string" ? req.query.email : "";
     if (!email.trim()) {
         return void res.status(400).json({ detail: "email is required" });

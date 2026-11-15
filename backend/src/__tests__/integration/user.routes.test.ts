@@ -3,6 +3,8 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 // The data-deletion limiter counts every DELETE in this file, and the
 // per-workspace cases alone make more requests than its default allows.
 vi.hoisted(() => { process.env.RATE_LIMIT_DATA_DELETE_MAX = "1000"; });
+// Small enough that the per-user lookup limit test can exhaust it quickly.
+vi.hoisted(() => { process.env.RATE_LIMIT_USER_LOOKUP_MAX = "3"; });
 import request from "supertest";
 import { AppError } from "../../lib/appError";
 
@@ -474,6 +476,7 @@ describe("user.routes", () => {
     });
 
     describe("GET /user/lookup", () => {
+        // Each case calls as its own user: the per-user limit is 3 here.
         const lookup = (caller: string, email: string) =>
             request(app)
                 .get("/user/lookup")
@@ -541,6 +544,19 @@ describe("user.routes", () => {
                 email: "self@example.com",
                 display_name: "Sam",
             });
+        });
+
+        it("limits each user separately, so one user cannot spend another's budget on the same IP", async () => {
+            supabaseState.tables.user_profiles = { data: null, error: null };
+            for (let i = 0; i < 3; i += 1) {
+                expect((await lookup("limited", `p${i}@example.com`)).status).toBe(200);
+            }
+
+            const limited = await lookup("limited", "p3@example.com");
+            expect(limited.status).toBe(429);
+            expect(limited.body.code).toBe("rate_limited");
+
+            expect((await lookup("neighbour", "p3@example.com")).status).toBe(200);
         });
     });
 
