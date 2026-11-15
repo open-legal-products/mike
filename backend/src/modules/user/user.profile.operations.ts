@@ -36,21 +36,54 @@ export async function getUserProfile(
     return { ok: true, body: { ...data, apiKeyStatus } };
 }
 
-/** Returns the minimal identity needed to offer a new direct share. */
+/**
+ * Returns the minimal identity needed to label a new direct share.
+ *
+ * Any signed-in user can call this with any address, so it resolves only
+ * people the caller already knows: themselves and members of an organization
+ * they belong to. Every other address, with or without an account, gets the
+ * same unresolved answer, and the share endpoint decides whether it can
+ * receive the share. Otherwise a free account could test a list of addresses
+ * for accounts and collect the names behind them.
+ */
 export async function lookupUserByEmail(
     db: Db,
+    callerId: string,
     email: string,
 ): Promise<{
     exists: boolean;
     email: string;
     display_name: string | null;
 }> {
-    const user = await findProfileUserByEmail(db, email);
-    return {
-        exists: !!user,
-        email: user?.email ?? email.trim().toLowerCase(),
-        display_name: user?.display_name ?? null,
+    const unresolved = {
+        exists: false,
+        email: email.trim().toLowerCase(),
+        display_name: null,
     };
+    const user = await findProfileUserByEmail(db, email);
+    if (!user) return unresolved;
+    if (user.id !== callerId && !(await sharesAnOrganization(db, callerId, user.id)))
+        return unresolved;
+    return { exists: true, email: user.email, display_name: user.display_name };
+}
+
+async function sharesAnOrganization(db: Db, userId: string, otherUserId: string) {
+    const { data: mine, error } = await db
+        .from("org_members")
+        .select("org_id")
+        .eq("user_id", userId);
+    if (error) throw error;
+    const orgIds = ((mine ?? []) as { org_id: string }[]).map((row) => row.org_id);
+    if (orgIds.length === 0) return false;
+
+    const { data: shared, error: sharedError } = await db
+        .from("org_members")
+        .select("org_id")
+        .eq("user_id", otherUserId)
+        .in("org_id", orgIds)
+        .limit(1);
+    if (sharedError) throw sharedError;
+    return (shared ?? []).length > 0;
 }
 
 export async function updateUserProfile(

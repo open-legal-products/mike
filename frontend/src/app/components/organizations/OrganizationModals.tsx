@@ -170,7 +170,7 @@ export function CreateOrganizationModal({
           <div>
             <FieldLabel as="p">Invite members</FieldLabel>
             <AddUserInput
-              requireExistingUser={false}
+              lookupRecipient={false}
               busy={creating || createdOrg !== null}
               placeholder="Add member by email…"
               submitLabel="Add member"
@@ -360,7 +360,7 @@ export function InviteOrganizationMemberModal({
             <FieldLabel as="p">Email address</FieldLabel>
             <AddUserInput
               autoFocus
-              requireExistingUser={false}
+              lookupRecipient={false}
               placeholder="Invite by email…"
               submitLabel="Send invitation"
               onAdd={(user) => invite(user.email)}

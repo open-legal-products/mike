@@ -314,7 +314,10 @@ describe("AccessModal — per-recipient roles", () => {
         );
     });
 
-    it("refuses an address that does not belong to an existing user", async () => {
+    it("leaves an address the lookup does not resolve for the grants API to decide", async () => {
+        // The lookup answers every address outside the caller's
+        // organizations the same way, account or not; the grants API refuses
+        // one with no account, and the next test shows that refusal.
         const user = userEvent.setup();
         const { onGrant } = renderRoleAware();
         vi.mocked(lookupUserByEmail).mockResolvedValueOnce({
@@ -335,12 +338,12 @@ describe("AccessModal — per-recipient roles", () => {
         // mid-word by a slow re-render on a loaded machine.
         await user.paste("newcounsel@outside.example");
         await user.click(screen.getByRole("button", { name: "Add" }));
-        expect(
-            await screen.findByText(
-                "newcounsel@outside.example does not belong to a Mike user.",
+        await waitFor(() =>
+            expect(onGrant).toHaveBeenCalledWith(
+                "newcounsel@outside.example",
+                "viewer",
             ),
-        ).toBeInTheDocument();
-        expect(onGrant).not.toHaveBeenCalled();
+        );
         expect(lookupUserByEmail).toHaveBeenCalledWith(
             "newcounsel@outside.example",
         );

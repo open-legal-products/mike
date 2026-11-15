@@ -29,14 +29,15 @@ interface AddUserInputProps {
     inputEndControl?: ReactNode;
     className?: string;
     /**
-     * Refuse addresses that don't already belong to a Mike account.
+     * Look the address up to label the new recipient with their name.
      *
-     * True is right where the address must resolve to a user immediately.
-     * Organization invitations are the exceptional flow: they are intended
-     * for people who may not have signed up yet, so that caller passes false
-     * and validates the format only.
+     * The lookup names only the caller and their organization's members; any
+     * other address comes back unresolved whether or not it has an account,
+     * so it never refuses an address. The share endpoint does that when the
+     * grant is written. Organization invitations are for people who may not
+     * have signed up yet, so that caller passes false and skips the lookup.
      */
-    requireExistingUser?: boolean;
+    lookupRecipient?: boolean;
 }
 
 export function AddUserInput({
@@ -49,7 +50,7 @@ export function AddUserInput({
     submitVariant = "pill",
     inputEndControl,
     className,
-    requireExistingUser = true,
+    lookupRecipient = true,
 }: AddUserInputProps) {
     const [input, setInput] = useState("");
     const [checking, setChecking] = useState(false);
@@ -76,13 +77,9 @@ export function AddUserInput({
                 return;
             }
 
-            const user = requireExistingUser
+            const user = lookupRecipient
                 ? await lookupUserByEmail(email)
                 : { exists: false, email, display_name: null };
-            if (requireExistingUser && !user.exists) {
-                setError(`${email} does not belong to a Mike user.`);
-                return;
-            }
 
             const result = await onAdd(user);
             if (result !== false) setInput("");

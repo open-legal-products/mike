@@ -400,26 +400,28 @@ describe("NewProjectModal sharing", () => {
         expect(onCreated).toHaveBeenCalled();
     });
 
-    it("does not add an email that has no Mike account", async () => {
+    it("leaves an address the lookup does not resolve for the share endpoint to decide", async () => {
+        // The lookup answers every address outside the caller's
+        // organizations the same way, account or not, so refusing here
+        // would block sharing with outside counsel who do have one.
         vi.mocked(lookupUserByEmail).mockResolvedValueOnce({
             exists: false,
-            email: "future@firm.test",
+            email: "outside@counsel.test",
             display_name: null,
         });
         const user = userEvent.setup({ delay: null });
         renderModal();
 
-        await fillAndAdd(user, "future@firm.test", "viewer");
+        await fillAndAdd(user, "outside@counsel.test", "viewer");
+        await submit(user);
 
-        expect(
-            await screen.findByText(
-                "future@firm.test does not belong to a Mike user.",
+        await waitFor(() =>
+            expect(grantProjectAccess).toHaveBeenCalledWith(
+                "p1",
+                "outside@counsel.test",
+                "viewer",
             ),
-        ).toBeInTheDocument();
-        expect(grantProjectAccess).not.toHaveBeenCalled();
-        expect(
-            screen.queryByRole("button", { name: "Role for future@firm.test" }),
-        ).not.toBeInTheDocument();
+        );
     });
 
     it("hands the list a row that says the creator is its owner", async () => {

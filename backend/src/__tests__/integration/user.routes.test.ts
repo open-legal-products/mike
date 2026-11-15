@@ -219,17 +219,19 @@ vi.mock("../../lib/dbq/runner", async (importOriginal) => {
     return { ...actual, dbJobsEnabled: () => dbJobsEnabled() };
 });
 
-// requireAuth always authenticates u1. requireMfaIfEnrolled is a reconfigurable
+// requireAuth authenticates u1 unless a test names another caller in the
+// X-Test-User header. requireMfaIfEnrolled is a reconfigurable
 // guard so we can drive both the satisfied (next()) and rejected
 // (403 mfa_verification_required) paths.
 vi.mock("../../middleware/auth", () => ({
     requireAuth: (
-        _req: unknown,
+        req: { headers: Record<string, string | undefined> },
         res: { locals: Record<string, unknown> },
         next: () => void,
     ) => {
-        res.locals.userId = "u1";
-        res.locals.userEmail = "u1@test.local";
+        const userId = req.headers["x-test-user"] ?? "u1";
+        res.locals.userId = userId;
+        res.locals.userEmail = `${userId}@test.local`;
         res.locals.token = "test-token";
         next();
     },
@@ -472,21 +474,47 @@ describe("user.routes", () => {
     });
 
     describe("GET /user/lookup", () => {
-        it("does not select or expose an unrelated user's photo", async () => {
-            supabaseState.tables.user_profiles = {
-                data: {
-                    user_id: "unrelated-user",
-                    email: "alice@example.com",
-                    display_name: "Alice",
-                    profile_photo: "data:image/png;base64,iVBORw0KGgo=",
-                },
-                error: null,
-            };
-
-            const res = await request(app)
+        const lookup = (caller: string, email: string) =>
+            request(app)
                 .get("/user/lookup")
-                .query({ email: "ALICE@example.com" })
-                .set(...AUTH);
+                .query({ email })
+                .set(...AUTH)
+                .set("X-Test-User", caller);
+        const alice = {
+            user_id: "alice",
+            email: "alice@example.com",
+            display_name: "Alice",
+            profile_photo: "data:image/png;base64,iVBORw0KGgo=",
+        };
+        const sharedOrg = { data: [{ org_id: ORG_ID }], error: null };
+
+        it("answers a stranger's address the same whether or not it has an account", async () => {
+            supabaseState.tables.user_profiles = { data: alice, error: null };
+            supabaseState.tables.org_members = [
+                sharedOrg,
+                { data: [], error: null },
+            ];
+            const existing = await lookup("stranger-1", "ALICE@example.com");
+
+            resetSupabaseState();
+            supabaseState.tables.user_profiles = { data: null, error: null };
+            const missing = await lookup("stranger-2", "ALICE@example.com");
+
+            expect(existing.status).toBe(200);
+            expect(missing.status).toBe(200);
+            expect(existing.body).toEqual(missing.body);
+            expect(existing.body).toEqual({
+                exists: false,
+                email: "alice@example.com",
+                display_name: null,
+            });
+        });
+
+        it("names a member of an organization the caller belongs to, without a photo", async () => {
+            supabaseState.tables.user_profiles = { data: alice, error: null };
+            supabaseState.tables.org_members = [sharedOrg, sharedOrg];
+
+            const res = await lookup("colleague", "ALICE@example.com");
 
             expect(res.status).toBe(200);
             expect(res.body).toEqual({
@@ -497,6 +525,22 @@ describe("user.routes", () => {
             expect(supabaseState.selects.user_profiles).toEqual([
                 "user_id, email, display_name",
             ]);
+        });
+
+        it("names the caller's own address", async () => {
+            supabaseState.tables.user_profiles = {
+                data: { user_id: "self", email: "self@example.com", display_name: "Sam" },
+                error: null,
+            };
+
+            const res = await lookup("self", "self@example.com");
+
+            expect(res.status).toBe(200);
+            expect(res.body).toEqual({
+                exists: true,
+                email: "self@example.com",
+                display_name: "Sam",
+            });
         });
     });
 

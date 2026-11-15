@@ -296,7 +296,7 @@ userRouter.get("/lookup", requireAuth, asyncRoute(async (req, res) => {
     }
 
     const db = createServerSupabase();
-    res.json(await lookupUserByEmail(db, email));
+    res.json(await lookupUserByEmail(db, res.locals.userId as string, email));
 }));
 
 // ---------------------------------------------------------------------------
