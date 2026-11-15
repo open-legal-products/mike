@@ -8,6 +8,7 @@ import {
   ProviderConfigurationError,
   isDeterministicProviderQuota,
   isDeterministicProviderRefusal,
+  isSelfServiceProviderRefusal,
   isUserProviderRefusal,
   providerFailureKind,
   providerFailureResponse,
@@ -366,8 +367,8 @@ describe("source-owned provider refusals", () => {
     expect(error.message).not.toContain("PRIVATE_MODEL");
   });
   it.each([
-    ['{"error":{"code":"insufficient_quota"}}', "chat.provider_out_of_credits", /Top up/],
-    ['{"error":{"type":"insufficient_quota"}}', "chat.provider_out_of_credits", /Top up/],
+    ['{"error":{"code":"insufficient_quota"}}', "chat.provider_out_of_credits", /Add credits/],
+    ['{"error":{"type":"insufficient_quota"}}', "chat.provider_out_of_credits", /Add credits/],
     ['Quota exceeded, limit: 0, model: example', "chat.provider_rejected", /upgrade/],
   ])("classifies deterministic quota %s before retries", (body, kind, remedy) => {
     const original = apiCallError(429, body as string);
@@ -523,6 +524,32 @@ describe("a failure thrown by the Vercel AI Gateway SDK", () => {
     expect(isUserProviderRefusal(error)).toBe(quiet);
   });
 
+  it.each([
+    ["user", true, /^Your Vercel AI Gateway account is out of credits\. Add credits/],
+    ["org", true, /^Your organization's Vercel AI Gateway account is out of credits\./],
+    ["deployment", false, /^The Vercel AI Gateway account this server uses is out of credits\./],
+  ] as const)("names the owner of a %s gateway key for either kind of account refusal", (keySource, selfService, credits) => {
+    // The key's owner fixes an empty account and a refused one alike; only
+    // the deployment's key leaves support something to do.
+    const empty = toProviderStreamError(gatewayError(402, { message: "PRIVATE_ balance" }), { ...gateway, keySource });
+    expect(empty.message).toMatch(credits);
+    expect(isSelfServiceProviderRefusal(empty)).toBe(selfService);
+    const refused = toProviderStreamError(refusal(), { ...gateway, keySource });
+    expect(refused.message).toContain("refused the request");
+    expect(isSelfServiceProviderRefusal(refused)).toBe(selfService);
+  });
+
+  it("reads Anthropic's low-credit 400 from the body under the gateway's error", () => {
+    const upstream = { message: "Your credit balance is too low to access the Anthropic API.", type: "invalid_request_error" };
+    const error = toProviderStreamError(
+      gatewayError(400, upstream, { name: "GatewayInvalidRequestError", type: "invalid_request_error" }),
+      { ...gateway, keySource: "user" },
+    );
+    expect(error.message).not.toContain("credit balance");
+    expect(providerFailureKind(error)).toBe("chat.provider_out_of_credits");
+    expect(isUserProviderRefusal(error)).toBe(true);
+  });
+
   it.each([500, 503])("keeps a %i an outage, never a refusal", status => {
     const original = gatewayError(status, { message: "PRIVATE_ upstream failed", type: "internal_server_error" });
     const error = toProviderStreamError(original, { ...gateway, keySource: "user" });
@@ -556,7 +583,7 @@ describe("a failure thrown by the Vercel AI Gateway SDK", () => {
       expect(providerFailureLevel(error)).toBe("error");
     }
     const credits = toProviderStreamError(apiCallError(402, "{}"), { label: "OpenRouter", modelId: "m", keySource: "user" });
-    expect(credits.message).toBe("The OpenRouter account is out of credits. Top up, or select another model.");
+    expect(credits.message).toBe("Your OpenRouter account is out of credits. Add credits to it, or change the key in Settings → Bring Your Own Keys.");
   });
 
   it("sends Sentry the kind, status and a reviewed type, never the reason", () => {

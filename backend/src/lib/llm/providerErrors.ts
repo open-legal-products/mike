@@ -329,6 +329,14 @@ export function providerFailureKind(error: unknown): ErrorKind {
   return "chat.stream_failed";
 }
 
+/** Whose key an account refusal (rejected key, model, plan or credits) was for. */
+function accountRefusalSource(error: unknown): ProviderKeySource | undefined {
+  const kind = providerFailureKind(error);
+  return kind === "chat.provider_rejected" || kind === "chat.provider_out_of_credits"
+    ? providerKeySource(error)
+    : undefined;
+}
+
 /**
  * A handled account refusal is quiet only at the boundary showing its remedy.
  * A gateway refusal whose reason we relay without recognizing it is not one
@@ -342,6 +350,16 @@ export function isUserProviderRefusal(error: unknown): boolean {
   if (kind !== "chat.provider_rejected") return false;
   const apiError = findApiCallError(error);
   return !apiError || gatewayRefusalReason(apiError) === null;
+}
+
+/**
+ * An account refusal only the key's owner can fix: the user for their own
+ * key, an organization admin for the organization's. Support cannot, so the
+ * client offers neither it nor a retry.
+ */
+export function isSelfServiceProviderRefusal(error: unknown): boolean {
+  const source = accountRefusalSource(error);
+  return source === "user" || source === "org";
 }
 
 /**
@@ -373,17 +391,26 @@ export function providerFailureLevel(error: unknown): "warning" | "error" {
   }
 }
 
-// "The" rather than "your" key: requiredKey() may fall back to the
-// deployment's key, as noted on InvalidApiKeyError.
+// Out of credits names whoever can top the account up: the user for their
+// own key, an admin for the organization's, support for the deployment's.
+// Without a key source, "the" rather than "your": requiredKey() may fall back
+// to the deployment's key, as noted on InvalidApiKeyError.
+const OUT_OF_CREDITS: Record<ProviderKeySource | "unknown", (label: string) => string> = {
+  user: (label) => `Your ${label} account is out of credits. Add credits to it, or change the key in Settings → Bring Your Own Keys.`,
+  org: (label) => `Your organization's ${label} account is out of credits. Ask an organization admin to add credits or change the key.`,
+  deployment: (label) => `The ${label} account this server uses is out of credits. Select another model, or contact support.`,
+  unknown: (label) => `The ${label} account is out of credits. Top up, or select another model.`,
+};
+
 function accessFailureMessage(
   error: ApiCallErrorLike,
   context: ProviderContext,
 ): string | null {
-  const { label, modelId } = context;
+  const { label, modelId, keySource } = context;
   const { statusCode } = error;
   const quota = quotaRefusal(error);
   if (statusCode === 402 || quota === "credits") {
-    return `The ${label} account is out of credits. Top up, or select another model.`;
+    return OUT_OF_CREDITS[keySource ?? "unknown"](label);
   }
   if (isModelAccessRefusal(error)) {
     return `${modelId} isn't available with the ${label} API key. Select another model.`;
