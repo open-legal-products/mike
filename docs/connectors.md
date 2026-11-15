@@ -175,8 +175,10 @@ credentials, or authorized account invalidates a pending approval. Routine
 OAuth token refresh does not.
 
 Approvals are available in the Mike assistant and project chats. The Word
-add-in and tabular review cannot show them, so a write that needs approval is
-refused there with an explanation.
+add-in and tabular review cannot show them, so they are not offered write tools
+that need approval; read tools, and writes on a connector whose approval setting
+is off, work as usual. A write that needs approval is still refused there if the
+model names it anyway.
 
 Tool results, including connector content, are untrusted: a message or email
 can contain instructions meant for the assistant. Leaving writes unapproved
