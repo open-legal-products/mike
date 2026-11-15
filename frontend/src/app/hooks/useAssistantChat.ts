@@ -634,14 +634,15 @@ export function useAssistantChat({
             //
             // A `safe_to_display` frame is a configuration refusal (no API
             // key, a model this deployment disallows): re-sending it would
-            // fail identically, so it gets support without a Retry.
+            // fail identically, so it gets support without a Retry, unless
+            // its code says the account is the user's or their
+            // organization's to fix.
             notifyError(
               errorFrameFailure(frameMessage, safeToDisplay, { code, requestId, reportingOwner }),
               {
                 action: "get a response",
                 operation: turnOperation,
                 dedupeKey: "assistant-chat",
-          support: true,
                 onRetry: async () => {
                   await retryTurn(retrySnapshot);
                 },
