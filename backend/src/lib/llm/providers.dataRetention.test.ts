@@ -163,6 +163,7 @@ async function streamTurn(model: string, apiKeys: UserApiKeys) {
 
 afterEach(() => {
   vi.unstubAllGlobals();
+  vi.unstubAllEnvs();
 });
 
 describe("OpenAI Responses requests ask OpenAI not to store them", () => {
@@ -327,5 +328,35 @@ describe("providers without a request-level retention control get no new fields"
     const body = sentBodies(fetchMock)[0];
     expect(body).not.toHaveProperty("store");
     expect(body).not.toHaveProperty("provider");
+  });
+});
+
+describe("LLM_PROVIDER_DATA_RETENTION=allow restores the previous request shape", () => {
+  it("leaves OpenAI's store default alone", async () => {
+    vi.stubEnv("LLM_PROVIDER_DATA_RETENTION", "allow");
+    const fetchMock = vi.fn().mockResolvedValue(responsesJson("gpt-6.1-sol"));
+    vi.stubGlobal("fetch", fetchMock);
+
+    await completeWithProvider({
+      model: "gpt-6.1-sol",
+      user: "x",
+      apiKeys: { openai: "test-key" },
+    });
+
+    const body = sentBodies(fetchMock)[0];
+    expect(body).not.toHaveProperty("store");
+    expect(body).not.toHaveProperty("include");
+  });
+
+  it("lets OpenRouter route to any upstream", async () => {
+    vi.stubEnv("LLM_PROVIDER_DATA_RETENTION", "allow");
+    const fetchMock = vi.fn().mockResolvedValue(chatCompletionsStream("ok"));
+    vi.stubGlobal("fetch", fetchMock);
+
+    await streamTurn("openrouter/openai/gpt-4o", { openrouter: "test-key" });
+
+    const body = sentBodies(fetchMock)[0];
+    expect(body).not.toHaveProperty("provider");
+    expect(body.reasoning).toEqual({ effort: "none" });
   });
 });
