@@ -144,9 +144,13 @@ the variable; generate a real value for each and restart:
 openssl rand -hex 32   # once per variable
 ```
 
-Both variables may also be left unset: the download and API-key features then
-fail on first use, as before. Plan for these effects when replacing existing
-secrets; changing the environment does not re-encrypt stored credentials:
+With `NODE_ENV=production` both variables are required, and the backend also
+refuses the published Supabase demo keys (the anon and service_role JWTs that
+`docker-compose.yml` and `supabase start` ship) in `SUPABASE_SECRET_KEY` and
+`SUPABASE_PUBLISHABLE_KEY`/`SUPABASE_ANON_KEY`. Outside production the two
+secrets may be left unset; the download and API-key features then fail on
+first use. Plan for these effects when replacing existing secrets; changing
+the environment does not re-encrypt stored credentials:
 
 - Changing `USER_API_KEYS_ENCRYPTION_SECRET` makes stored personal and
   organization provider credentials unreadable. Users must re-enter their

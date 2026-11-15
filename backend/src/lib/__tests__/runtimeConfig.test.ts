@@ -23,7 +23,17 @@ const validProduction = {
   SUPABASE_SECRET_KEY: "service-role-key",
   FRONTEND_URL: "https://app.example.test",
   API_PUBLIC_URL: "https://app.example.test/api",
+  DOWNLOAD_SIGNING_SECRET: "d".repeat(64),
+  USER_API_KEYS_ENCRYPTION_SECRET: "u".repeat(64),
 } as NodeJS.ProcessEnv;
+
+// The anon and service_role JWTs that docker-compose.yml and `supabase start`
+// ship: signed with Supabase's published demo JWT secret, so anyone can mint
+// an equivalent service_role token for a server that accepts them.
+const SUPABASE_DEMO_ANON_KEY =
+  "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZS1kZW1vIiwicm9sZSI6ImFub24iLCJleHAiOjE5ODM4MTI5OTZ9.CRXP1A7WOeoJeXxjNni43kdQwgnWNReilDMblYTn_I0";
+const SUPABASE_DEMO_SERVICE_ROLE_KEY =
+  "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZS1kZW1vIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImV4cCI6MTk4MzgxMjk5Nn0.EGIM96RAZx35lJzdJsyH-qQwv8Hdp7fsn3W0YpN81IU";
 
 describe("runtime authentication configuration", () => {
   it("accepts a complete production configuration", () => {
@@ -127,11 +137,27 @@ describe("runtime authentication configuration", () => {
       },
     );
 
-    it.each([undefined, ""])("allows an absent or empty value %j", (value) => {
+    // Unset, the consumer fails closed on first use (no fallback key, no
+    // plaintext), so a hosted deployment boots and then breaks downloads or
+    // stored credentials. Production refuses that at boot instead.
+    it.each([undefined, ""])("is required in production (%j)", (value) => {
       expect(() =>
         validateRuntimeConfiguration({ ...validProduction, [name]: value }),
-      ).not.toThrow();
+      ).toThrow(`${name} is required in production`);
     });
+
+    it.each([undefined, ""])(
+      "may be absent outside production (%j)",
+      (value) => {
+        expect(() =>
+          validateRuntimeConfiguration({
+            ...validProduction,
+            NODE_ENV: "development",
+            [name]: value,
+          }),
+        ).not.toThrow();
+      },
+    );
 
     it("accepts a value at the minimum length", () => {
       expect(() =>
@@ -141,6 +167,41 @@ describe("runtime authentication configuration", () => {
         }),
       ).not.toThrow();
     });
+  });
+
+  it.each([
+    ["SUPABASE_SECRET_KEY", { SUPABASE_SECRET_KEY: SUPABASE_DEMO_SERVICE_ROLE_KEY }],
+    ["SUPABASE_PUBLISHABLE_KEY", { SUPABASE_PUBLISHABLE_KEY: SUPABASE_DEMO_ANON_KEY }],
+    [
+      "SUPABASE_ANON_KEY",
+      { SUPABASE_PUBLISHABLE_KEY: undefined, SUPABASE_ANON_KEY: SUPABASE_DEMO_ANON_KEY },
+    ],
+  ])("rejects the published Supabase demo key in %s in production", (name, keys) => {
+    let message = "";
+    try {
+      validateRuntimeConfiguration({ ...validProduction, ...keys });
+    } catch (err) {
+      message = (err as Error).message;
+    }
+    expect(message).toContain(`${name} is a published Supabase demo key`);
+    // Name the variable, never echo the credential.
+    expect(message).not.toContain("eyJ");
+  });
+
+  // docker-compose.yml's backend service: NODE_ENV defaults to development,
+  // the bundled Supabase uses the demo keys, and the two app secrets are
+  // optional. That local stack must keep booting.
+  it("still boots the default local docker compose configuration", () => {
+    expect(() =>
+      validateRuntimeConfiguration({
+        NODE_ENV: "development",
+        FRONTEND_URL: "http://localhost:3000",
+        API_PUBLIC_URL: "http://localhost:3000/api",
+        SUPABASE_URL: "http://gateway:8000",
+        SUPABASE_PUBLISHABLE_KEY: SUPABASE_DEMO_ANON_KEY,
+        SUPABASE_SECRET_KEY: SUPABASE_DEMO_SERVICE_ROLE_KEY,
+      }),
+    ).not.toThrow();
   });
 
   it("accepts the legacy anon key name for the user-session client", () => {
@@ -284,7 +345,7 @@ it("identifies invalid configuration fields without sending their values", () =>
   expect(event.tags).toEqual({
     failure_code: "configuration_invalid",
     configuration_fields:
-      "API_PUBLIC_URL,FRONTEND_URL,SUPABASE_PUBLISHABLE_KEY,SUPABASE_URL",
+      "API_PUBLIC_URL,DOWNLOAD_SIGNING_SECRET,FRONTEND_URL,SUPABASE_PUBLISHABLE_KEY,SUPABASE_URL,USER_API_KEYS_ENCRYPTION_SECRET",
   });
   expect(JSON.stringify(event)).not.toContain("PRIVATE");
 });
