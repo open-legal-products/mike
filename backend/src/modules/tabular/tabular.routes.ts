@@ -60,6 +60,7 @@ import {
     ensureReviewGenerateStopAccess,
     prepareTabularGenerate,
     prepareTabularRunView,
+    runFrameFilterFor,
 } from "./tabular.generate";
 import {
     claimCellsForGeneration,
@@ -779,7 +780,14 @@ tabularRouter.get(
         if (run) {
             const rawFrom = Number.parseInt(String(req.query.from ?? "1"), 10);
             const from = Number.isFinite(rawFrom) && rawFrom > 0 ? rawFrom : 1;
-            return void attachStreamRunSse(res, run, from);
+            // The run's frames are its starter's; this viewer gets only the
+            // rows they can read, as the review read gives them.
+            return void attachStreamRunSse(
+                res,
+                run,
+                from,
+                runFrameFilterFor(view.data.rows),
+            );
         }
 
         // No run here: the async path (the work is the queue's), another
