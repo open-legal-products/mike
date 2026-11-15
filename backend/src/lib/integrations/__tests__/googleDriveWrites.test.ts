@@ -122,6 +122,13 @@ describe("Drive write access", () => {
     expect(vi.mocked(fetch).mock.calls.every(([,init]) => !init?.method || init.method === "GET")).toBe(true);
   });
 
+  it("asks before a write when the connection has no recorded choice, but not before a read", async () => {
+    const s = store();
+    delete s.tokens[0].require_write_approval;
+    expect((await planGoogleDriveCall(personalConnectorOwner("user-1"), "google_drive_create_folder", { name: "Folder" }, s.db)).type).toBe("approval");
+    expect(await planGoogleDriveCall(personalConnectorOwner("user-1"), "google_drive_search", { query: "x" }, s.db)).toEqual({ type: "run" });
+  });
+
   it("reads a file's state once for a write that needs no approval", async () => {
     const s = store();
     const result = await executeGoogleDriveToolCall(personalConnectorOwner("user-1"), "google_drive_update_file", { file_id: "file-1", name: "Changed" }, s.db);

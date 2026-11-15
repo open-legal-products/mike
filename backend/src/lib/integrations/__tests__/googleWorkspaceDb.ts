@@ -127,7 +127,7 @@ export function workspaceDb() {
         // Reconnecting keeps the user's connector settings.
         grants.push({
           enabled: prior?.enabled ?? true,
-          require_write_approval: prior?.require_write_approval ?? false,
+          require_write_approval: prior?.require_write_approval ?? true,
           read_only: prior?.read_only ?? false,
           disabled_tools: prior?.disabled_tools ?? [],
           ...tokens,

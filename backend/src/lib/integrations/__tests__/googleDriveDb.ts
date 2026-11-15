@@ -120,7 +120,7 @@ export function driveDb(
                 const row = {
                     enabled: previous?.enabled ?? true,
                     disabled_tools: previous?.disabled_tools ?? [],
-                    require_write_approval: previous?.require_write_approval ?? false,
+                    require_write_approval: previous?.require_write_approval ?? true,
                     read_only: previous?.read_only ?? false,
                     grant_id: randomUUID(),
                     ...(args.p_tokens as Row),
