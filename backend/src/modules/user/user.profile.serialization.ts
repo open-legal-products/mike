@@ -4,6 +4,7 @@ import { type ApiKeyStatus } from "../../lib/providerCredentials/index";
 import { ROUTER_SLUGS, type RouterModelSelections } from "../../lib/routerModels";
 import { UserProfileRow, MONTHLY_CREDIT_LIMIT } from "./user.profile.storage";
 import { courtlistenerBulkDataEnabled } from "../../lib/courtlistener";
+import { mfaRequiredForEnrolledUsers } from "../../lib/runtimeConfig";
 
 import { ROUTER_PROFILE_FIELDS } from "./user.profile.routerPreferences";
 
@@ -61,7 +62,11 @@ export function serializeProfile(
         lastSelectedReasoningLevel:
             normalizeReasoningLevel(row.last_selected_reasoning_level) ??
             "high",
-        mfaOnLogin: row.mfa_on_login === true,
+        // The web app's login gate sends a session that owes a code to
+        // /verify-mfa when this is on; a deployment that requires every
+        // enrolled factor on every route needs that gate for every user.
+        mfaOnLogin:
+            row.mfa_on_login === true || mfaRequiredForEnrolledUsers(),
         courtlistenerBulkData: courtlistenerBulkDataEnabled(),
         quickActionsVisible: row.quick_actions_visible !== false,
         responseDetailsVisible: row.response_details_visible === true,

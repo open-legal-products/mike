@@ -30,6 +30,21 @@ describe("runtime authentication configuration", () => {
     expect(() => validateRuntimeConfiguration(validProduction)).not.toThrow();
   });
 
+  it("refuses an MFA enforcement switch it cannot read rather than leaving it off", () => {
+    expect(() =>
+      validateRuntimeConfiguration({
+        ...validProduction,
+        MFA_REQUIRE_FOR_ENROLLED_USERS: "yes",
+      }),
+    ).toThrow(/MFA_REQUIRE_FOR_ENROLLED_USERS must be true or false/);
+    expect(() =>
+      validateRuntimeConfiguration({
+        ...validProduction,
+        MFA_REQUIRE_FOR_ENROLLED_USERS: "TRUE",
+      }),
+    ).not.toThrow();
+  });
+
   it("rejects insecure production callback configuration", () => {
     expect(() =>
       validateRuntimeConfiguration({
