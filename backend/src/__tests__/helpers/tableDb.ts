@@ -60,12 +60,13 @@ export function tableDb(
       }
       if (op === "insert" || op === "upsert") {
         const inserted = ((Array.isArray(payload) ? payload : [payload]) as Row[])
-          .map((row) => ({ id: randomUUID(), ...row }));
+          .map((row): Row => ({ id: randomUUID(), ...row }));
         for (const row of inserted) {
           const existing = op === "upsert"
             ? rows.find((r) => conflictColumns.every((column) => r[column] === row[column]))
             : undefined;
-          if (existing) Object.assign(existing, row);
+          // An upsert keeps the row it updates, id included.
+          if (existing) Object.assign(existing, { ...row, id: existing.id });
           else rows.push({ ...row });
         }
         return Promise.resolve({ data: one ? (inserted[0] ?? null) : inserted, error: null });
