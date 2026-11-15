@@ -162,8 +162,9 @@ Existing deployments must apply
 `backend/migrations/20261002_05_mcp_oauth_grants.sql`. Fresh installations
 already include these settings in `backend/schema.sql`.
 
-Turn on **Ask for permission for write actions** in a connector's Manage
-dialog to review each write first. The assistant's turn then pauses with an
+**Ask for permission for write actions** is on by default, so each write is
+reviewed first; a user can turn it off in a connector's Manage dialog. With it
+on, the assistant's turn pauses with an
 approval in the same popup it uses for questions, showing the exact action and
 its arguments. **Approve** runs that action and the turn continues with its
 result; **Reject** tells the assistant it did not run. The server runs the
