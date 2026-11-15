@@ -800,8 +800,12 @@ describe("playbook roles and sharing", () => {
   ];
   const content = blankPlaybookContent("Changed");
 
+  // All four work together, so personal shares between them are written at
+  // once; a share with anyone else waits until it is claimed.
+  const colleagues = people.map((person) => ({ user_id: person.user_id, org_id: OTHER, role: "member" }));
+
   it("gives personal recipients the role they were shared with", async () => {
-    const { db, tables } = database([book()], [], people);
+    const { db, tables } = database([book()], colleagues, people);
     await sharePlaybook(
       "owner",
       "owner@example.com",
@@ -861,11 +865,12 @@ describe("playbook roles and sharing", () => {
     ).rejects.toMatchObject({ status: 404 });
   });
 
-  it("refuses shares with unknown people or the sharer", async () => {
+  it("leaves a share with an unknown address pending, and refuses the sharer", async () => {
     const { db, tables } = database([book()], [], people);
-    await expect(
-      sharePlaybook("owner", "owner@example.com", "book", { emails: ["nobody@example.com"], role: "viewer" }, db),
-    ).rejects.toMatchObject({ status: 400 });
+    await sharePlaybook("owner", "owner@example.com", "book", { emails: ["nobody@example.com"], role: "viewer" }, db);
+    expect(tables.share_invitations).toEqual([
+      expect.objectContaining({ playbook_id: "book", email: "nobody@example.com", role: "viewer", status: "pending" }),
+    ]);
     await expect(
       sharePlaybook("owner", "owner@example.com", "book", { emails: ["Owner@example.com"], role: "viewer" }, db),
     ).rejects.toMatchObject({ status: 400 });

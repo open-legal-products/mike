@@ -2348,6 +2348,7 @@ function makeRbacDb(
         project?: Record<string, unknown>;
         orgMembers?: Record<string, unknown>[];
         profiles?: Record<string, unknown>[];
+        shareInvitations?: Record<string, unknown>[];
         chatWriteError?: string;
     } = {},
 ) {
@@ -2419,6 +2420,8 @@ function makeRbacDb(
                 );
             if (table === "user_profiles")
                 return tableQuery(overrides.profiles ?? [], table);
+            if (table === "share_invitations")
+                return tableQuery(overrides.shareInvitations ?? null, table);
             return tableQuery(null, table);
         }),
         rpc: vi.fn((fn: string, args: unknown) => {
@@ -3005,7 +3008,7 @@ describe("chat grants, deletion and roster", () => {
         ).toBe(true);
     });
 
-    it("400s when a direct grant targets an unknown user", async () => {
+    it("records a direct grant to an address with no account as a pending share", async () => {
         mockedCreate.mockImplementation(
             () =>
                 makeRbacDb(null, "u1", {
@@ -3017,6 +3020,16 @@ describe("chat grants, deletion and roster", () => {
                             display_name: "Current user",
                         },
                     ],
+                    shareInvitations: [
+                        {
+                            id: "si-1",
+                            email: "future@example.com",
+                            role: "viewer",
+                            invited_by: "u1",
+                            created_at: "2026-11-15T00:00:00Z",
+                            expires_at: "2026-11-29T00:00:00Z",
+                        },
+                    ],
                 }) as never,
         );
 
@@ -3025,10 +3038,12 @@ describe("chat grants, deletion and roster", () => {
             .set("Authorization", "Bearer test")
             .send({ email: "future@example.com", role: "viewer" });
 
-        expect(res.status).toBe(400);
-        expect(res.body.detail).toBe(
-            "future@example.com does not belong to a Mike user.",
-        );
+        expect(res.status).toBe(201);
+        expect(res.body).toEqual({
+            email: "future@example.com",
+            role: "viewer",
+            pending: true,
+        });
     });
 
     // The creator's email now comes from one filtered row instead of a scan

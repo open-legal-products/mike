@@ -24,6 +24,7 @@ import {
   listOrgAccessPeople,
   setOrgAccessOverride,
 } from "../../lib/orgAccessOverrides";
+import { listPendingShares, pendingGrantRows } from "../../lib/shareInvitations";
 import { type Db } from "./projects.shared";
 
 // Every refusal the three handlers below can produce. `db_error` carries the
@@ -86,15 +87,22 @@ export async function listProjectAccess(
       },
     };
   }
-  const listed = await listProjectGrants(db, projectId);
+  const [listed, pending] = await Promise.all([
+    listProjectGrants(db, projectId),
+    listPendingShares(db, "project", projectId),
+  ]);
   if (!listed.ok) return { ok: false, kind: "db_error", error: listed.detail };
+  if (!pending.ok) return { ok: false, kind: "db_error", error: pending.detail };
   return {
     ok: true,
     body: {
       scope: "direct",
       org_id: access.project.org_id ?? null,
       access_role: access.projectRole,
-      grants: listed.grants,
+      grants: [
+        ...listed.grants,
+        ...pendingGrantRows(pending.shares),
+      ],
     },
   };
 }
@@ -186,6 +194,7 @@ export async function grantProjectAccess(
     email: body?.email,
     role,
     createdBy: userId,
+    createdByEmail: userEmail ?? null,
     creatorEmail:
       (creatorProfile?.data as { email?: string | null } | null)?.email ?? null,
   });
@@ -254,6 +263,8 @@ export async function revokeProjectAccess(
   const result = await deleteProjectGrant(db, {
     projectId,
     email: targetEmail,
+    actorId: userId,
+    actorEmail: userEmail ?? null,
   });
   if (!result.ok) return { ok: false, kind: "db_error", error: result.detail };
   if (!result.removed)

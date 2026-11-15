@@ -1,6 +1,13 @@
 // workflows sharing — implementation behind the module facade.
 import { type Db } from "../../lib/supabase";
-import { findMissingUserEmails, loadProfileUsersByEmail } from "../../lib/userLookup";
+import { loadProfileUsersByEmail } from "../../lib/userLookup";
+import {
+  cancelPendingShare,
+  createPendingShares,
+  listPendingShares,
+  pendingPeopleRows,
+  planDirectShare,
+} from "../../lib/shareInvitations";
 import { type ProjectRole } from "../../lib/permissions";
 import { deleteOrgAccessOverride, findAssignableOrgMembers, isOrgAssignableRole, listOrgAccessPeople, setOrgAccessOverrides } from "../../lib/orgAccessOverrides";
 import { resolveWorkflowAccess, resolveCreatorScopedWorkflow } from "./workflows.access";
@@ -60,11 +67,15 @@ export async function listWorkflowPeople(
     };
   }
 
-  const { data: shares, error } = await db
-    .from("workflow_shares")
-    .select("shared_with_email, role")
-    .eq("workflow_id", workflowId);
+  const [{ data: shares, error }, pending] = await Promise.all([
+    db
+      .from("workflow_shares")
+      .select("shared_with_email, role")
+      .eq("workflow_id", workflowId),
+    listPendingShares(db, "workflow", workflowId),
+  ]);
   if (error) return { ok: false, kind: "db_error", error };
+  if (!pending.ok) return { ok: false, kind: "db_error", error: pending.detail };
   const { userByEmail, userById } = await loadProfileUsersByEmail(db, {
     userIds: access.workflow.user_id ? [access.workflow.user_id] : [],
     emails: (shares ?? []).map((share) => share.shared_with_email as string),
@@ -97,7 +108,7 @@ export async function listWorkflowPeople(
         display_name:
           userByEmail.get(share.shared_with_email)?.display_name ?? null,
         role: share.role,
-      })),
+      })).concat(pendingPeopleRows(pending.shares)),
     },
   };
 }
@@ -142,14 +153,32 @@ export async function listWorkflowShares(
     };
   }
 
-  const { data: shares, error } = await db
-    .from("workflow_shares")
-    .select("id, shared_with_email, role, created_at")
-    .eq("workflow_id", workflowId)
-    .order("created_at", { ascending: true });
+  const [{ data: shares, error }, pending] = await Promise.all([
+    db
+      .from("workflow_shares")
+      .select("id, shared_with_email, role, created_at")
+      .eq("workflow_id", workflowId)
+      .order("created_at", { ascending: true }),
+    listPendingShares(db, "workflow", workflowId),
+  ]);
   if (error) return { ok: false, kind: "db_error", error };
+  if (!pending.ok) return { ok: false, kind: "db_error", error: pending.detail };
 
-  return { ok: true, shares: shares ?? [] };
+  // A pending share's id is its own: DELETE …/share/:id withdraws it.
+  return {
+    ok: true,
+    shares: [
+      ...(shares ?? []),
+      ...pending.shares.map((share) => ({
+        id: share.id,
+        shared_with_email: share.email,
+        role: share.role,
+        created_at: share.created_at,
+        expires_at: share.expires_at,
+        pending: true,
+      })),
+    ],
+  };
 }
 
 export async function deleteWorkflowShare(
@@ -202,12 +231,22 @@ export async function deleteWorkflowShare(
       .eq("workflow_id", workflowId)
       .select("id");
     if (error) return { ok: false, kind: "db_error", error };
-    if (((removed ?? []) as unknown[]).length === 0)
-      return {
-        ok: false,
-        kind: "share_not_found",
-        detail: "Access grant not found",
-      };
+    if (((removed ?? []) as unknown[]).length === 0) {
+      const pending = await cancelPendingShare(db, {
+        kind: "workflow",
+        resourceId: workflowId,
+        id: shareId,
+        actorId: userId,
+        actorEmail: userEmail ?? null,
+      });
+      if (!pending.ok) return { ok: false, kind: "db_error", error: pending.detail };
+      if (!pending.removed)
+        return {
+          ok: false,
+          kind: "share_not_found",
+          detail: "Access grant not found",
+        };
+    }
   }
   return { ok: true };
 }
@@ -216,7 +255,7 @@ export type ShareWorkflowResult =
   | { ok: true }
   | {
       ok: false;
-      kind: "validation" | "self_share" | "missing_user";
+      kind: "validation" | "self_share";
       detail: string;
     }
   | { ok: false; kind: "not_found" }
@@ -252,8 +291,9 @@ export async function shareWorkflow(
   }
 
   // Any effective Owner may manage access. Personal grants are stored by
-  // normalized email and may only target an existing user; organization
-  // overrides require a current organization member.
+  // normalized email; one for someone outside the sharer's organizations
+  // waits as a pending share. Organization overrides require a current
+  // organization member.
   const wf = await resolveCreatorScopedWorkflow(
     db,
     workflowId,
@@ -309,31 +349,38 @@ export async function shareWorkflow(
       detail: "role must be owner, editor or viewer",
     };
 
-  let missingEmails: string[];
-  try {
-    missingEmails = await findMissingUserEmails(db, normalizedEmails);
-  } catch (error) {
-    return { ok: false, kind: "db_error", error };
+  const plan = await planDirectShare(db, {
+    kind: "workflow",
+    resourceId: workflowId,
+    sharerId: userId,
+    emails: normalizedEmails,
+  });
+  if (!plan.ok) return { ok: false, kind: "db_error", error: plan.detail };
+  if (plan.immediate.length > 0) {
+    const rows = plan.immediate.map((email: string) => ({
+      workflow_id: workflowId,
+      shared_by_user_id: userId,
+      shared_with_email: email,
+      role,
+    }));
+    // Upsert on (workflow_id, shared_with_email) so re-sharing to the same
+    // person updates the existing row instead of stacking duplicates.
+    const { error } = await db
+      .from("workflow_shares")
+      .upsert(rows, { onConflict: "workflow_id,shared_with_email" });
+    if (error) return { ok: false, kind: "db_error", error };
   }
-  if (missingEmails.length > 0)
-    return {
-      ok: false,
-      kind: "missing_user",
-      detail: `${missingEmails[0]} does not belong to a Mike user.`,
-    };
-
-  const rows = normalizedEmails.map((email: string) => ({
-    workflow_id: workflowId,
-    shared_by_user_id: userId,
-    shared_with_email: email,
-    role,
-  }));
-  // Upsert on (workflow_id, shared_with_email) so re-sharing to the same
-  // person updates the existing row instead of stacking duplicates.
-  const { error } = await db
-    .from("workflow_shares")
-    .upsert(rows, { onConflict: "workflow_id,shared_with_email" });
-  if (error) return { ok: false, kind: "db_error", error };
+  if (plan.pending.length > 0) {
+    const pending = await createPendingShares(db, {
+      kind: "workflow",
+      resourceId: workflowId,
+      emails: plan.pending,
+      role,
+      invitedBy: userId,
+      invitedByEmail: userEmail ?? null,
+    });
+    if (!pending.ok) return { ok: false, kind: "db_error", error: pending.detail };
+  }
 
   return { ok: true };
 }

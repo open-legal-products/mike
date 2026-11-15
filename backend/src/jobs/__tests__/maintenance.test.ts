@@ -6,7 +6,7 @@ import { privacyBoundaryIntegration } from "../../lib/observability/sentryPrivac
 import { resetSchemaOutOfDateReportsForTests } from "../../lib/schemaOutOfDate";
 
 const sweeps = vi.hoisted(() => ({
-    text: vi.fn(), documents: vi.fn(), cells: vi.fn(), organizations: vi.fn(), subagents: vi.fn(),
+    text: vi.fn(), documents: vi.fn(), cells: vi.fn(), organizations: vi.fn(), subagents: vi.fn(), shares: vi.fn(),
     captureCleanup: vi.fn(), completeCleanup: vi.fn(),
 }));
 vi.mock("../../modules/documents/documents.service", () => ({
@@ -17,6 +17,7 @@ vi.mock("../../modules/documents/documents.service", () => ({
 }));
 vi.mock("../../modules/tabular/tabular.service", () => ({ sweepStaleGeneratingCells: sweeps.cells }));
 vi.mock("../../modules/chat/chat.service", () => ({ purgeExpiredSubagentRuns: sweeps.subagents }));
+vi.mock("../../lib/shareInvitations", () => ({ expirePendingShares: sweeps.shares }));
 vi.mock("../../modules/orgs/orgs.service", async () => ({
     // Exercise the real archive service through the timer's reporting boundary.
     expireDepartureArchives: (await vi.importActual<typeof import("../../modules/orgs/orgs.retention")>("../../modules/orgs/orgs.retention")).expireDepartureArchives,
@@ -73,7 +74,7 @@ it.each([
     });
     setOperation("outside.sweep");
     const cause = { code: "ECONNRESET", message: PRIVATE };
-    for (const sweep of [sweeps.text, sweeps.cells, sweeps.organizations, sweeps.subagents]) sweep.mockRejectedValue(cause);
+    for (const sweep of [sweeps.text, sweeps.cells, sweeps.organizations, sweeps.subagents, sweeps.shares]) sweep.mockRejectedValue(cause);
     sweeps.documents.mockImplementation(async () => {
         markStage("documents-only");
         await Promise.resolve();
@@ -83,10 +84,11 @@ it.each([
     await expect(runStaleWorkSweep(db as unknown as Db)).resolves.toEqual({ documents: 0, cells: 0 });
     await Sentry.flush(2000);
 
-    expect(events).toHaveLength(6);
+    expect(events).toHaveLength(7);
     expect(events.map(event => event.tags?.operation)).toEqual([
         "maintenance.document_text", "maintenance.documents", "maintenance.cells",
         "maintenance.organization_archives", "maintenance.organizations", "maintenance.subagent_runs",
+        "maintenance.share_invitations",
     ]);
     for (const event of events) {
         expect(event.tags?.component).toBe("stale-sweep");
@@ -115,6 +117,7 @@ it("preserves successful sweep counts and completes archive cleanup", async () =
     await expect(runStaleWorkSweep(db as unknown as Db)).resolves.toEqual({ documents: 7, cells: 9 });
     expect(sweeps.completeCleanup).toHaveBeenCalledWith(db, []);
     expect(sweeps.subagents).toHaveBeenCalledWith(db);
+    expect(sweeps.shares).toHaveBeenCalledWith(db);
     expect(warnings).toEqual([]);
 });
 

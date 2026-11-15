@@ -30,6 +30,7 @@ function makeDb(
         const filters: (
             | { type: "eq"; col: string; val: unknown }
             | { type: "in"; col: string; vals: unknown[] }
+            | { type: "gt"; col: string; val: unknown }
         )[] = [];
         let op: "select" | "insert" | "update" | "delete" | "upsert" = "select";
         let payload: Row | Row[] | null = null;
@@ -41,7 +42,9 @@ function makeDb(
                 filters.every((f) =>
                     f.type === "eq"
                         ? r[f.col] === f.val
-                        : f.vals.includes(r[f.col]),
+                        : f.type === "gt"
+                          ? String(r[f.col]) > String(f.val)
+                          : f.vals.includes(r[f.col]),
                 ),
             );
 
@@ -112,6 +115,10 @@ function makeDb(
                 filters.push({ type: "in", col, vals });
                 return builder;
             },
+            gt: (col: string, val: unknown) => {
+                filters.push({ type: "gt", col, val });
+                return builder;
+            },
             insert: (p: Row | Row[]) => {
                 op = "insert";
                 payload = p;
@@ -170,7 +177,12 @@ const seed = () =>
             { user_id: "gone", email: "gone@x.example", display_name: "Gone" },
             { user_id: "stays", email: "stays@x.example", display_name: "Stays" },
         ],
-        org_members: [],
+        // Everyone here works with the creator, so grants are written at
+        // once; sharing with strangers is covered in directSharePrivacy.test.ts.
+        org_members: ["creator", "counsel", "gone", "stays"].map((user_id) => ({
+            org_id: "firm",
+            user_id,
+        })),
     });
 
 
@@ -246,7 +258,7 @@ describe("project access grants", () => {
         ).resolves.toMatchObject({ ok: false, kind: "validation" });
     });
 
-    it("rejects a grant when the email does not belong to an existing user", async () => {
+    it("leaves a grant for an address with no account pending, not granted", async () => {
         const db = seed();
         await expect(
             upsertProjectGrant(db, {
@@ -256,9 +268,8 @@ describe("project access grants", () => {
                 createdBy: "creator",
             }),
         ).resolves.toEqual({
-            ok: false,
-            kind: "validation",
-            detail: "future@firm.example does not belong to a Mike user.",
+            ok: true,
+            grant: { email: "future@firm.example", role: "viewer", pending: true },
         });
         expect(await grantsOf(db, "p1")).toEqual([]);
     });
@@ -266,7 +277,7 @@ describe("project access grants", () => {
     it("reports whether a revoke actually removed anything", async () => {
         const db = seed();
         await expect(
-            deleteProjectGrant(db, { projectId: "p1", email: "ghost@x.example" }),
+            deleteProjectGrant(db, { projectId: "p1", email: "ghost@x.example", actorId: "creator" }),
         ).resolves.toMatchObject({ ok: true, removed: false });
     });
 

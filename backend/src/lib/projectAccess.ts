@@ -8,9 +8,10 @@
 //
 // Two properties are load-bearing:
 //
-//   * Grants are keyed by normalized email, not user id. A recipient must have
-//     an existing profile when the grant is created; email remains the stable
-//     address used when evaluating access.
+//   * Grants are keyed by normalized email, not user id; email is the stable
+//     address used when evaluating access. A share with someone outside the
+//     sharer's organizations waits as a pending share until a confirmed
+//     account claims it (lib/shareInvitations.ts).
 //   * Direct grants and organization access are mutually exclusive scopes.
 //     Organization content instead uses membership defaults plus explicit
 //     per-resource overrides.
@@ -22,7 +23,14 @@ import type { Db } from "./supabase";
 import { normalizeEmail } from "./access";
 import { isProjectRole, type ProjectRole } from "./permissions";
 import { listOrgAccessPeople } from "./orgAccessOverrides";
-import { findProfileUserByEmail } from "./userLookup";
+import {
+    cancelPendingShare,
+    createPendingShares,
+    listPendingShares,
+    pendingPeopleRows,
+    planDirectShare,
+    type PendingGrantView,
+} from "./shareInvitations";
 
 export type ProjectGrant = {
     id: string;
@@ -63,6 +71,8 @@ export async function listProjectPeople(
               display_name: string | null;
               profile_photo?: string | null;
               role: ProjectRole | "deny";
+              /** Shared, but not yet claimed by a confirmed account. */
+              pending?: boolean;
           }[];
       }
     | { ok: false; detail: string }
@@ -97,8 +107,9 @@ export async function listProjectPeople(
         };
     }
 
-    const [listed, creatorProfile] = await Promise.all([
+    const [listed, pending, creatorProfile] = await Promise.all([
         listProjectGrants(db, project.id),
+        listPendingShares(db, "project", project.id),
         project.user_id
             ? db
                   .from("user_profiles")
@@ -108,6 +119,7 @@ export async function listProjectPeople(
             : Promise.resolve({ data: null, error: null }),
     ]);
     if (!listed.ok) return listed;
+    if (!pending.ok) return pending;
     if (creatorProfile.error)
         return { ok: false, detail: creatorProfile.error.message };
     const emails = listed.grants.map((grant) => grant.email);
@@ -151,7 +163,7 @@ export async function listProjectPeople(
                 profileByEmail.get(grant.email)?.display_name ?? null,
                 profile_photo: profileByEmail.get(grant.email)?.profile_photo ?? null,
             role: grant.role,
-        })),
+        })).concat(pendingPeopleRows(pending.shares)),
     };
 }
 
@@ -183,7 +195,7 @@ export async function listProjectGrants(
 }
 
 export type GrantWriteResult =
-    | { ok: true; grant: ProjectGrant }
+    | { ok: true; grant: ProjectGrant | PendingGrantView }
     | { ok: false; kind: "validation"; detail: string }
     | { ok: false; kind: "db_error"; detail: string };
 
@@ -200,6 +212,7 @@ export async function upsertProjectGrant(
         email: unknown;
         role: unknown;
         createdBy: string;
+        createdByEmail?: string | null;
         /** Emails belonging to the project's creator can't be granted away. */
         creatorEmail?: string | null;
     },
@@ -226,23 +239,24 @@ export async function upsertProjectGrant(
             detail: "The project creator already has owner access",
         };
 
-    try {
-        const recipient = await findProfileUserByEmail(db, email);
-        if (!recipient)
-            return {
-                ok: false,
-                kind: "validation",
-                detail: `${email} does not belong to a Mike user.`,
-            };
-    } catch (error) {
-        return {
-            ok: false,
-            kind: "db_error",
-            detail:
-                error && typeof error === "object" && "message" in error
-                    ? String(error.message)
-                    : "Failed to verify access grant recipient",
-        };
+    const plan = await planDirectShare(db, {
+        kind: "project",
+        resourceId: params.projectId,
+        sharerId: params.createdBy,
+        emails: [email],
+    });
+    if (!plan.ok) return { ok: false, kind: "db_error", detail: plan.detail };
+    if (plan.pending.length > 0) {
+        const pending = await createPendingShares(db, {
+            kind: "project",
+            resourceId: params.projectId,
+            emails: plan.pending,
+            role: params.role,
+            invitedBy: params.createdBy,
+            invitedByEmail: params.createdByEmail,
+        });
+        if (!pending.ok) return { ok: false, kind: "db_error", detail: pending.detail };
+        return { ok: true, grant: { email, role: params.role, pending: true } };
     }
 
     const { data, error } = await db
@@ -270,7 +284,12 @@ export async function upsertProjectGrant(
 
 export async function deleteProjectGrant(
     db: Db,
-    params: { projectId: string; email: string },
+    params: {
+        projectId: string;
+        email: string;
+        actorId: string;
+        actorEmail?: string | null;
+    },
 ): Promise<{ ok: true; removed: boolean } | { ok: false; detail: string }> {
     const email = normalizeEmail(params.email);
     if (!email) return { ok: true, removed: false };
@@ -281,7 +300,19 @@ export async function deleteProjectGrant(
         .eq("email", email)
         .select("id");
     if (error) return { ok: false, detail: error.message };
-    return { ok: true, removed: ((data ?? []) as unknown[]).length > 0 };
+    // Removing someone also withdraws a share still waiting for them.
+    const pending = await cancelPendingShare(db, {
+        kind: "project",
+        resourceId: params.projectId,
+        email,
+        actorId: params.actorId,
+        actorEmail: params.actorEmail,
+    });
+    if (!pending.ok) return pending;
+    return {
+        ok: true,
+        removed: ((data ?? []) as unknown[]).length > 0 || pending.removed,
+    };
 }
 
 export type ProjectContact = {

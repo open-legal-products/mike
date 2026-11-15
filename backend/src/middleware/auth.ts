@@ -2,6 +2,7 @@ import { Request, Response, NextFunction } from "express";
 import type { ParamsFlatDictionary } from "express-serve-static-core";
 import { createServerSupabase, type Db } from "../lib/supabase";
 import { syncProfileEmail } from "../lib/userLookup";
+import { claimPendingSharesQuietly } from "../lib/shareInvitations";
 import { sendInternalError, sendUpstreamUnavailable } from "../lib/httpError";
 import { authErrorShape, isAuthUpstreamFailure } from "../lib/authUpstream";
 import { noteUpstreamReachable } from "../lib/upstreamOutage";
@@ -325,6 +326,13 @@ export async function requireAuth(
   if (!(await enforceLoginMfaIfEnabled(req, res, admin, token))) {
     return;
   }
+  // Shares waiting for this address become grants now, before the request
+  // reads anything. Only a confirmed address claims (userEmail is empty
+  // otherwise), and a failure here never fails the request.
+  await claimPendingSharesQuietly(admin, {
+    userId: user.id,
+    userEmail: res.locals.userEmail,
+  });
   next();
 }
 

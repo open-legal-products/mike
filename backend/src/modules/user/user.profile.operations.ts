@@ -1,6 +1,7 @@
 // user profile operations — implementation behind the module facade.
 import { getUserApiKeyStatus } from "../../lib/providerCredentials/index";
 import { findProfileUserByEmail } from "../../lib/userLookup";
+import { sharesAnOrganization } from "../../lib/shareInvitations";
 import { replaceUserRouterModels, ROUTER_SLUGS, type RouterSlug } from "../../lib/routerModels";
 import { type Db } from "./user.shared";
 import { ensureProfileRow, loadProfile } from "./user.profile.load";
@@ -62,28 +63,9 @@ export async function lookupUserByEmail(
     };
     const user = await findProfileUserByEmail(db, email);
     if (!user) return unresolved;
-    if (user.id !== callerId && !(await sharesAnOrganization(db, callerId, user.id)))
+    if (user.id !== callerId && !(await sharesAnOrganization(db, callerId, [user.id])).has(user.id))
         return unresolved;
     return { exists: true, email: user.email, display_name: user.display_name };
-}
-
-async function sharesAnOrganization(db: Db, userId: string, otherUserId: string) {
-    const { data: mine, error } = await db
-        .from("org_members")
-        .select("org_id")
-        .eq("user_id", userId);
-    if (error) throw error;
-    const orgIds = ((mine ?? []) as { org_id: string }[]).map((row) => row.org_id);
-    if (orgIds.length === 0) return false;
-
-    const { data: shared, error: sharedError } = await db
-        .from("org_members")
-        .select("org_id")
-        .eq("user_id", otherUserId)
-        .in("org_id", orgIds)
-        .limit(1);
-    if (sharedError) throw sharedError;
-    return (shared ?? []).length > 0;
 }
 
 export async function updateUserProfile(

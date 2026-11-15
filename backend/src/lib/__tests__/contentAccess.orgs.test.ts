@@ -4,8 +4,8 @@ import type { Db } from "../supabase";
 
 // What belongs to a team organization is shared inside it only. A chat or
 // review started on its own in an organization's workspace can be given to
-// other members of that organization, and to nobody else; a personal one can
-// still be given to any Mike user.
+// other members of that organization, and to nobody else. (Sharing a
+// personal one is covered in directSharePrivacy.test.ts.)
 
 type Row = Record<string, unknown>;
 
@@ -99,18 +99,4 @@ describe("sharing a chat or review that belongs to an organization", () => {
         ).resolves.toMatchObject({ ok: false, kind: "db_error" });
         expect(fake.upserts).toEqual([]);
     });
-});
-
-describe("sharing a personal chat or review", () => {
-    it.each([null, undefined])(
-        "gives it to any Mike user, without asking about organizations (orgId %j)",
-        async (orgId) => {
-            const fake = makeDb(TABLES);
-            await expect(
-                grant(fake.db, "erin@example.com", orgId),
-            ).resolves.toMatchObject({ ok: true });
-            expect(fake.queried).not.toContain("org_members");
-            expect(fake.upserts).toHaveLength(1);
-        },
-    );
 });

@@ -9,6 +9,7 @@ import { backfillDocumentText, sweepStaleProcessingDocuments } from "../modules/
 import { sweepStaleGeneratingCells } from "../modules/tabular/tabular.service";
 import { expireDepartureArchives, purgeExpiredOrganizations } from "../modules/orgs/orgs.service";
 import { purgeExpiredSubagentRuns } from "../modules/chat/chat.service";
+import { expirePendingShares } from "../lib/shareInvitations";
 
 /** Isolate timer-driven work just as the queue runner isolates each job. */
 function runSweep<T>(operation: Operation, work: () => Promise<T>): Promise<T | undefined> {
@@ -45,5 +46,6 @@ export async function runStaleWorkSweep(
     await runSweep("maintenance.organization_archives", () => expireDepartureArchives(db));
     await runSweep("maintenance.organizations", () => purgeExpiredOrganizations(db));
     await runSweep("maintenance.subagent_runs", () => purgeExpiredSubagentRuns(db));
+    await runSweep("maintenance.share_invitations", () => expirePendingShares(db));
     return { documents: documents ?? 0, cells: cells ?? 0 };
 }

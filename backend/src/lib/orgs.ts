@@ -49,11 +49,9 @@ import {
 } from "./access";
 import { isOrgAccessOverrideRole } from "./orgAccessOverrides";
 import { isPersonalOrgRow } from "./personalOrgs";
+import { invitationExpiry } from "./invitationExpiry";
 
 type DbError = { code?: string; message: string } | null;
-
-/** How long a pending invitation stays acceptable. */
-export const INVITATION_TTL_DAYS = 14;
 
 /**
  * Every table that carries its own `org_id` — the complete inventory of what
@@ -889,12 +887,6 @@ function isExpired(row: { status: string; expires_at: string }): boolean {
  */
 function presentInvitation(row: InvitationRow) {
     return { ...row, status: isExpired(row) ? "expired" : row.status };
-}
-
-function invitationExpiry(): string {
-    return new Date(
-        Date.now() + INVITATION_TTL_DAYS * 24 * 60 * 60 * 1000,
-    ).toISOString();
 }
 
 export async function createInvitation(

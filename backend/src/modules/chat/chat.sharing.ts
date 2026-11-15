@@ -13,7 +13,8 @@
 // DB preparation live here. `prepareChatStream` returns the prepared data the
 // route needs to run the stream; it does not stream.
 import { type Db } from "../../lib/supabase";
-import { deleteContentGrant, listContentGrants, upsertContentGrant, type ContentAccessGrant } from "../../lib/contentAccess";
+import { deleteContentGrant, listContentGrants, upsertContentGrant, type ContentAccessGrant, type ContentGrantWriteResult } from "../../lib/contentAccess";
+import { listPendingShares, pendingGrantRows } from "../../lib/shareInvitations";
 import { listContentPeople, type ResourcePeopleResult } from "../../lib/resourcePeople";
 import { getAccessibleChat, type AccessibleChat } from "./chat.access";
 import { normalizeEmail } from "../../lib/access";
@@ -28,14 +29,22 @@ export async function listChatPeople(
     return listContentPeople(db, "chat", chat);
 }
 
-// GET /chat/:chatId/access — role-aware direct grants.
+// GET /chat/:chatId/access — role-aware direct grants, then the shares
+// still waiting to be claimed.
 export async function listChatGrants(
     db: Db,
     chatId: string,
 ): Promise<
-    { ok: true; grants: ContentAccessGrant[] } | { ok: false; detail: string }
+    | { ok: true; grants: (ContentAccessGrant | ReturnType<typeof pendingGrantRows>[number])[] }
+    | { ok: false; detail: string }
 > {
-    return listContentGrants(db, "chat", chatId);
+    const [listed, pending] = await Promise.all([
+        listContentGrants(db, "chat", chatId),
+        listPendingShares(db, "chat", chatId),
+    ]);
+    if (!listed.ok) return listed;
+    if (!pending.ok) return pending;
+    return { ok: true, grants: [...listed.grants, ...pendingGrantRows(pending.shares)] };
 }
 
 // POST /chat/:chatId/access — grant or re-role one recipient.
@@ -45,14 +54,11 @@ export async function grantChatAccess(
         chatId: string;
         chat: AccessibleChat;
         userId: string;
+        userEmail?: string | null;
         email: unknown;
         role: unknown;
     },
-): Promise<
-    | { ok: true; grant: ContentAccessGrant }
-    | { ok: false; kind: "validation"; detail: string }
-    | { ok: false; kind: "db_error"; detail: string }
-> {
+): Promise<ContentGrantWriteResult> {
     // One creator's email, one row read. This used to scan every profile in
     // the deployment to build two maps and then use a single entry.
     const creatorProfile = args.chat.user_id
@@ -92,6 +98,7 @@ export async function grantChatAccess(
         email: args.email,
         role: args.role,
         createdBy: args.userId,
+        createdByEmail: args.userEmail ?? null,
         orgId,
         creatorEmail:
             (creatorProfile?.data as { email?: string | null } | null)?.email ??
@@ -102,12 +109,14 @@ export async function grantChatAccess(
 // DELETE /chat/:chatId/access/:email — revoke one recipient.
 export async function revokeChatAccess(
     db: Db,
-    args: { chatId: string; email: string },
+    args: { chatId: string; email: string; userId: string; userEmail?: string | null },
 ): Promise<{ ok: true; removed: boolean } | { ok: false; detail: string }> {
     return deleteContentGrant(db, {
         kind: "chat",
         resourceId: args.chatId,
         email: args.email,
+        actorId: args.userId,
+        actorEmail: args.userEmail ?? null,
     });
 }
 

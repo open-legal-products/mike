@@ -4,6 +4,7 @@ import {
     type ContentGrantKind,
 } from "./contentAccess";
 import { listProjectPeople } from "./projectAccess";
+import { listPendingShares, pendingPeopleRows } from "./shareInvitations";
 
 export type ResourcePeopleResult =
     | {
@@ -23,6 +24,8 @@ export type ResourcePeopleResult =
               display_name: string | null;
               profile_photo?: string | null;
               role: "owner" | "editor" | "viewer" | "deny";
+              /** Shared, but not yet claimed by a confirmed account. */
+              pending?: boolean;
           }[];
       }
     | { ok: false; detail: string };
@@ -65,8 +68,12 @@ export async function listContentPeople(
             : people;
     }
 
-    const listed = await listContentGrants(db, kind, row.id);
+    const [listed, pending] = await Promise.all([
+        listContentGrants(db, kind, row.id),
+        listPendingShares(db, kind, row.id),
+    ]);
     if (!listed.ok) return listed;
+    if (!pending.ok) return pending;
     const profileEmails = listed.grants.map((grant) => grant.email);
     const profileIds = row.user_id ? [row.user_id] : [];
     const [{ data: byEmail, error: emailError }, { data: byId, error: idError }] =
@@ -116,6 +123,6 @@ export async function listContentPeople(
                 profileByEmail.get(grant.email)?.display_name ?? null,
             profile_photo: profileByEmail.get(grant.email)?.profile_photo ?? null,
             role: grant.role,
-        })),
+        })).concat(pendingPeopleRows(pending.shares)),
     };
 }

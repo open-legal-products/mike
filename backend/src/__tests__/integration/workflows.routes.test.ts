@@ -583,34 +583,48 @@ describe("workflows.routes", () => {
   });
 
   describe("workflow direct grants", () => {
-    it("rejects a personal grant for an email that has not registered", async () => {
+    it("records a personal grant to someone outside the caller's organizations as pending", async () => {
       supabaseState.tables.workflows = {
         data: { id: "w-personal", user_id: "u1", org_id: null },
         error: null,
       };
+      supabaseState.tables.workflow_shares = { data: [], error: null };
       supabaseState.tables.user_profiles = { data: [], error: null };
+      supabaseState.tables.share_invitations = {
+        data: { id: "si-1", email: "future@firm.test", role: "viewer" },
+        error: null,
+      };
 
       const res = await request(app)
         .post("/workflows/w-personal/share")
         .set(...AUTH)
         .send({ emails: ["future@firm.test"], role: "viewer" });
 
-      expect(res.status).toBe(400);
-      expect(res.body.detail).toBe(
-        "future@firm.test does not belong to a Mike user.",
-      );
+      expect(res.status).toBe(204);
+      expect(supabaseState.operations).toContain("from:share_invitations");
+      expect(supabaseState.inserts).toContainEqual({
+        table: "audit_events",
+        payload: expect.objectContaining({
+          action: "share.invite.created",
+          title: "future@firm.test",
+        }),
+      });
     });
 
-    it("stores a personal grant for an existing user", async () => {
+    it("stores a personal grant for an organization colleague at once", async () => {
       supabaseState.tables.workflows = {
         data: { id: "w-personal", user_id: "u1", org_id: null },
         error: null,
       };
       supabaseState.tables.user_profiles = {
-        data: [{ email: "colleague@firm.test" }],
+        data: [{ user_id: "colleague", email: "colleague@firm.test" }],
         error: null,
       };
-      supabaseState.tables.workflow_shares = { data: null, error: null };
+      supabaseState.tables.org_members = {
+        data: [{ org_id: "org-1", user_id: "colleague" }],
+        error: null,
+      };
+      supabaseState.tables.workflow_shares = { data: [], error: null };
 
       const res = await request(app)
         .post("/workflows/w-personal/share")
@@ -618,6 +632,7 @@ describe("workflows.routes", () => {
         .send({ emails: ["colleague@firm.test"], role: "editor" });
 
       expect(res.status).toBe(204);
+      expect(supabaseState.operations).not.toContain("from:share_invitations");
     });
 
     // Revoking used to fire the delete and ignore its result: a failed

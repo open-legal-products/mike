@@ -515,7 +515,10 @@ describe("user.routes", () => {
 
         it("names a member of an organization the caller belongs to, without a photo", async () => {
             supabaseState.tables.user_profiles = { data: alice, error: null };
-            supabaseState.tables.org_members = [sharedOrg, sharedOrg];
+            supabaseState.tables.org_members = [
+                sharedOrg,
+                { data: [{ org_id: ORG_ID, user_id: "alice" }], error: null },
+            ];
 
             const res = await lookup("colleague", "ALICE@example.com");
 

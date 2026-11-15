@@ -38,6 +38,11 @@ import {
     type ResourcePeopleResult,
 } from "../../lib/resourcePeople";
 import { attachActiveVersionPaths } from "../../lib/documentVersions";
+import {
+    listPendingShares,
+    pendingGrantRows,
+    type PendingGrantView,
+} from "../../lib/shareInvitations";
 import { TABULAR_MODEL_REQUIRED_DETAIL } from "../../lib/modelSelection";
 import { failure, internalFailure } from "../../lib/serviceResult";
 import {
@@ -971,7 +976,8 @@ export type ReviewAccessSummary = {
     inherited_from_project_id?: string;
     org_id: string | null;
     access_role: ProjectRole;
-    grants: ContentAccessGrant[];
+    /** The grants, then the shares still waiting to be claimed. */
+    grants: (ContentAccessGrant | ReturnType<typeof pendingGrantRows>[number])[];
 };
 
 async function ensureReviewAccessManager(
@@ -1025,8 +1031,12 @@ export async function getTabularReviewAccess(
                 grants: [],
             },
         };
-    const listed = await listContentGrants(db, "tabular_review", args.reviewId);
+    const [listed, pending] = await Promise.all([
+        listContentGrants(db, "tabular_review", args.reviewId),
+        listPendingShares(db, "tabular_review", args.reviewId),
+    ]);
     if (!listed.ok) return internalFailure(listed.detail);
+    if (!pending.ok) return internalFailure(pending.detail);
     return {
         ok: true,
         data: {
@@ -1035,7 +1045,7 @@ export async function getTabularReviewAccess(
             // for a personal review, which can be shared with anyone.
             org_id: await teamOrgIdOf(db, review.org_id),
             access_role: projectRole,
-            grants: listed.grants,
+            grants: [...listed.grants, ...pendingGrantRows(pending.shares)],
         },
     };
 }
@@ -1050,7 +1060,7 @@ export async function grantTabularReviewAccess(
         email: unknown;
         role: unknown;
     },
-): Promise<TabularResult<ContentAccessGrant>> {
+): Promise<TabularResult<ContentAccessGrant | PendingGrantView>> {
     const gate = await ensureReviewAccessManager(db, args);
     if (!gate.ok) return gate;
     if (gate.review.project_id)
@@ -1082,6 +1092,7 @@ export async function grantTabularReviewAccess(
         email: args.email,
         role: args.role,
         createdBy: args.userId,
+        createdByEmail: args.userEmail ?? null,
         orgId: await teamOrgIdOf(db, gate.review.org_id),
         creatorEmail: gate.review.user_id
             ? userById.get(gate.review.user_id)?.email
@@ -1117,6 +1128,8 @@ export async function revokeTabularReviewAccess(
         kind: "tabular_review",
         resourceId: args.reviewId,
         email: args.email,
+        actorId: args.userId,
+        actorEmail: args.userEmail ?? null,
     });
     if (!result.ok) return internalFailure(result.detail);
     if (!result.removed) return failure("not_found", "Access grant not found");

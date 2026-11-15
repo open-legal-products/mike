@@ -6,6 +6,12 @@
 import type { Db } from "./supabase";
 import { isProjectRole, type ProjectRole } from "./permissions";
 import { findProfileUserByEmail } from "./userLookup";
+import {
+    cancelPendingShare,
+    createPendingShares,
+    planDirectShare,
+    type PendingGrantView,
+} from "./shareInvitations";
 
 const normalizeEmail = (email: string | null | undefined) => {
     const normalized = (email ?? "").trim().toLowerCase();
@@ -104,7 +110,7 @@ export async function getContentGrantRole(
 }
 
 export type ContentGrantWriteResult =
-    | { ok: true; grant: ContentAccessGrant }
+    | { ok: true; grant: ContentAccessGrant | PendingGrantView }
     | { ok: false; kind: "validation"; detail: string }
     | { ok: false; kind: "db_error"; detail: string };
 
@@ -116,6 +122,7 @@ export async function upsertContentGrant(
         email: unknown;
         role: unknown;
         createdBy: string;
+        createdByEmail?: string | null;
         creatorEmail?: string | null;
         /**
          * The team organization the resource belongs to, when it belongs to
@@ -149,20 +156,19 @@ export async function upsertContentGrant(
         };
 
     try {
-        const recipient = await findProfileUserByEmail(db, email);
-        if (!recipient)
-            return {
-                ok: false,
-                kind: "validation",
-                detail: `${email} does not belong to a Mike user.`,
-            };
         if (params.orgId) {
-            const { data: membership, error: membershipError } = await db
-                .from("org_members")
-                .select("role")
-                .eq("org_id", params.orgId)
-                .eq("user_id", recipient.id)
-                .maybeSingle();
+            // An organization's content is shared only with its members.
+            // "No account" and "not a member" get the same answer, so the
+            // refusal says nothing about anyone outside the organization.
+            const recipient = await findProfileUserByEmail(db, email);
+            const { data: membership, error: membershipError } = recipient
+                ? await db
+                      .from("org_members")
+                      .select("role")
+                      .eq("org_id", params.orgId)
+                      .eq("user_id", recipient.id)
+                      .maybeSingle()
+                : { data: null, error: null };
             if (membershipError) throw membershipError;
             if (!membership)
                 return {
@@ -170,6 +176,26 @@ export async function upsertContentGrant(
                     kind: "validation",
                     detail: `${email} is not a member of this organization.`,
                 };
+        } else {
+            const plan = await planDirectShare(db, {
+                kind: params.kind,
+                resourceId: params.resourceId,
+                sharerId: params.createdBy,
+                emails: [email],
+            });
+            if (!plan.ok) throw new Error(plan.detail);
+            if (plan.pending.length > 0) {
+                const pending = await createPendingShares(db, {
+                    kind: params.kind,
+                    resourceId: params.resourceId,
+                    emails: plan.pending,
+                    role: params.role,
+                    invitedBy: params.createdBy,
+                    invitedByEmail: params.createdByEmail,
+                });
+                if (!pending.ok) throw new Error(pending.detail);
+                return { ok: true, grant: { email, role: params.role, pending: true } };
+            }
         }
     } catch (error) {
         return {
@@ -211,6 +237,8 @@ export async function deleteContentGrant(
         kind: ContentGrantKind;
         resourceId: string;
         email: string;
+        actorId: string;
+        actorEmail?: string | null;
     },
 ): Promise<{ ok: true; removed: boolean } | { ok: false; detail: string }> {
     const email = normalizeEmail(params.email);
@@ -223,7 +251,19 @@ export async function deleteContentGrant(
         .eq("email", email)
         .select("id");
     if (error) return { ok: false, detail: error.message };
-    return { ok: true, removed: ((data ?? []) as unknown[]).length > 0 };
+    // Removing someone also withdraws a share still waiting for them.
+    const pending = await cancelPendingShare(db, {
+        kind: params.kind,
+        resourceId: params.resourceId,
+        email,
+        actorId: params.actorId,
+        actorEmail: params.actorEmail,
+    });
+    if (!pending.ok) return pending;
+    return {
+        ok: true,
+        removed: ((data ?? []) as unknown[]).length > 0 || pending.removed,
+    };
 }
 
 export async function removeContentGrantsForEmail(

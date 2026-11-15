@@ -8,6 +8,7 @@ import { assertStorageConfigured, deleteFile, deleteFileBestEffort, listFiles } 
 import { NonRetryableJobError } from "../../lib/dbq/runner";
 import { removeGrantsForEmail } from "../../lib/projectAccess";
 import { removeContentGrantsForEmail } from "../../lib/contentAccess";
+import { removePendingSharesForEmail } from "../../lib/shareInvitations";
 import { chunkArray } from "../../lib/arrays";
 import { wipeMemoryFiles } from "../../lib/memory/files";
 import { listPersonalOrgIds } from "../../lib/personalOrgs";
@@ -982,6 +983,8 @@ export async function deleteUserAccountData(
         // Chat and review invitations are grant rows too. They can outlive
         // the recipient's account, so remove them explicitly by email.
         removeContentGrantsForEmail(db, userEmail),
+        // So are shares still waiting for this address to claim them.
+        removePendingSharesForEmail(db, userEmail),
         deleteUserExportArtifacts(userId),
     ]);
 

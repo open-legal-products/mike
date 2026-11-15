@@ -11,7 +11,14 @@ import {
   listOrgAccessPeople,
   setOrgAccessOverrides,
 } from "../../lib/orgAccessOverrides";
-import { findMissingUserEmails, loadProfileUsersByEmail } from "../../lib/userLookup";
+import { loadProfileUsersByEmail } from "../../lib/userLookup";
+import {
+  cancelPendingShare,
+  createPendingShares,
+  listPendingShares,
+  pendingPeopleRows,
+  planDirectShare,
+} from "../../lib/shareInvitations";
 import { editablePlaybook, getPlaybook, PlaybookRequestError } from "./playbooks.operations";
 import { type Playbook } from "./playbooks.types";
 import type { PlaybookRole } from "./playbooks.access";
@@ -60,12 +67,16 @@ export async function listPlaybookPeople(
     };
   }
 
-  const { data: shares, error } = await db
-    .from("playbook_shares")
-    .select("shared_with_email, role")
-    .eq("playbook_id", playbookId)
-    .order("created_at", { ascending: true });
+  const [{ data: shares, error }, pending] = await Promise.all([
+    db
+      .from("playbook_shares")
+      .select("shared_with_email, role")
+      .eq("playbook_id", playbookId)
+      .order("created_at", { ascending: true }),
+    listPendingShares(db, "playbook", playbookId),
+  ]);
   if (error) throw error;
+  if (!pending.ok) throw new Error(pending.detail);
   const rows = (shares ?? []) as { shared_with_email: string; role: PlaybookRole }[];
   const { userByEmail, userById } = await loadProfileUsersByEmail(db, {
     userIds: [playbook.userId],
@@ -90,7 +101,7 @@ export async function listPlaybookPeople(
         profile_photo: person?.profile_photo ?? null,
         role: share.role,
       };
-    }),
+    }).concat(pendingPeopleRows(pending.shares)),
   };
 }
 
@@ -101,6 +112,8 @@ export type PlaybookShare = {
   shared_with_email: string;
   display_name?: string | null;
   role: PlaybookRole | "deny";
+  /** Shared, but not yet claimed; `id` is then the pending share's. */
+  pending?: boolean;
 };
 
 /** The grants themselves, for the playbook's owners. */
@@ -126,13 +139,25 @@ export async function listPlaybookShares(
         role: person.role,
       }));
   }
-  const { data, error } = await db
-    .from("playbook_shares")
-    .select("id, shared_with_email, role")
-    .eq("playbook_id", playbookId)
-    .order("created_at", { ascending: true });
+  const [{ data, error }, pending] = await Promise.all([
+    db
+      .from("playbook_shares")
+      .select("id, shared_with_email, role")
+      .eq("playbook_id", playbookId)
+      .order("created_at", { ascending: true }),
+    listPendingShares(db, "playbook", playbookId),
+  ]);
   if (error) throw error;
-  return (data ?? []) as PlaybookShare[];
+  if (!pending.ok) throw new Error(pending.detail);
+  return [
+    ...((data ?? []) as PlaybookShare[]),
+    ...pending.shares.map((share) => ({
+      id: share.id,
+      shared_with_email: share.email,
+      role: share.role,
+      pending: true,
+    })),
+  ];
 }
 
 /**
@@ -199,19 +224,36 @@ export async function sharePlaybook(
 
   if (role !== "owner" && role !== "editor" && role !== "viewer")
     throw new PlaybookRequestError("Choose owner, editor or viewer.");
-  const missing = await findMissingUserEmails(db, emails);
-  if (missing.length)
-    throw new PlaybookRequestError(`${missing[0]} does not belong to a Mike user.`);
-  const { error } = await db.from("playbook_shares").upsert(
-    emails.map((email) => ({
-      playbook_id: playbook.id,
-      shared_by_user_id: userId,
-      shared_with_email: email,
+  const plan = await planDirectShare(db, {
+    kind: "playbook",
+    resourceId: playbook.id,
+    sharerId: userId,
+    emails,
+  });
+  if (!plan.ok) throw new Error(plan.detail);
+  if (plan.immediate.length > 0) {
+    const { error } = await db.from("playbook_shares").upsert(
+      plan.immediate.map((email) => ({
+        playbook_id: playbook.id,
+        shared_by_user_id: userId,
+        shared_with_email: email,
+        role,
+      })),
+      { onConflict: "playbook_id,shared_with_email" },
+    );
+    if (error) throw error;
+  }
+  if (plan.pending.length > 0) {
+    const pending = await createPendingShares(db, {
+      kind: "playbook",
+      resourceId: playbook.id,
+      emails: plan.pending,
       role,
-    })),
-    { onConflict: "playbook_id,shared_with_email" },
-  );
-  if (error) throw error;
+      invitedBy: userId,
+      invitedByEmail: userEmail ?? null,
+    });
+    if (!pending.ok) throw new Error(pending.detail);
+  }
 }
 
 /** Remove one grant: a share id, or a member's user id in an organization. */
@@ -242,6 +284,15 @@ export async function revokePlaybookShare(
     .eq("playbook_id", playbook.id)
     .select("id");
   if (error) throw error;
-  if (!((data ?? []) as unknown[]).length)
+  if (((data ?? []) as unknown[]).length) return;
+  const pending = await cancelPendingShare(db, {
+    kind: "playbook",
+    resourceId: playbook.id,
+    id: shareId,
+    actorId: userId,
+    actorEmail: userEmail ?? null,
+  });
+  if (!pending.ok) throw new Error(pending.detail);
+  if (!pending.removed)
     throw new PlaybookRequestError("That person's access was not found.", 404);
 }

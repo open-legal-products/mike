@@ -48,6 +48,7 @@ export function tableDb(
     let offset = 0;
     let op: TableDbCall["op"] = "select";
     let payload: unknown;
+    let conflictColumns: string[] = ["id"];
     let tooLong = false;
     const inSizes: number[] = [];
     const settle = (one: boolean) => {
@@ -61,11 +62,13 @@ export function tableDb(
         const inserted = ((Array.isArray(payload) ? payload : [payload]) as Row[])
           .map((row) => ({ id: randomUUID(), ...row }));
         for (const row of inserted) {
-          const existing = op === "upsert" ? rows.find((r) => r.id === row.id) : undefined;
+          const existing = op === "upsert"
+            ? rows.find((r) => conflictColumns.every((column) => r[column] === row[column]))
+            : undefined;
           if (existing) Object.assign(existing, row);
           else rows.push({ ...row });
         }
-        return Promise.resolve({ data: inserted, error: null });
+        return Promise.resolve({ data: one ? (inserted[0] ?? null) : inserted, error: null });
       }
       let matched = rows.filter((row) => preds.every((pred) => pred(row)));
       if (op === "delete") {
@@ -73,7 +76,8 @@ export function tableDb(
         const removed = new Set(matched.map((row) => row.id));
         for (const [child, column] of cascade[table] ?? [])
           tables[child] = (tables[child] ?? []).filter((row) => !removed.has(row[column]));
-        return Promise.resolve({ data: null, error: null });
+        // The deleted rows, as `.delete().select()` returns them.
+        return Promise.resolve({ data: matched.map((row) => ({ ...row })), error: null });
       }
       if (op === "update") {
         for (const row of matched) Object.assign(row, payload);
@@ -102,6 +106,7 @@ export function tableDb(
       neq: (c: string, v: unknown) => (preds.push((r) => r[c] !== v), builder),
       gt: (c: string, v: never) => (preds.push((r) => (r[c] as never) > v), builder),
       lt: (c: string, v: never) => (preds.push((r) => (r[c] as never) < v), builder),
+      lte: (c: string, v: never) => (preds.push((r) => (r[c] as never) <= v), builder),
       is: (c: string, v: unknown) => (preds.push((r) => (r[c] ?? null) === v), builder),
       not: (c: string, o: string, v: unknown) =>
         (preds.push((r) => !(o === "is" ? (r[c] ?? null) === v : r[c] === v)), builder),
@@ -120,7 +125,12 @@ export function tableDb(
         settle(false).then(resolve, reject),
     };
     for (const name of ["update", "delete", "insert", "upsert"] as const) {
-      builder[name] = (value?: unknown) => ((op = name), (payload = value), builder);
+      builder[name] = (value?: unknown, options?: { onConflict?: string }) => {
+        op = name;
+        payload = value;
+        if (options?.onConflict) conflictColumns = options.onConflict.split(",");
+        return builder;
+      };
     }
     return builder;
   };

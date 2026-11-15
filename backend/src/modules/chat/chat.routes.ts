@@ -358,6 +358,7 @@ chatRouter.post("/:chatId/access", requireAuth, directShareLimiter, asyncRoute(a
         chatId,
         chat: access.chat,
         userId,
+        userEmail,
         email: req.body?.email,
         role: req.body?.role,
     });
@@ -390,6 +391,8 @@ chatRouter.delete("/:chatId/access/:email", requireAuth, asyncRoute(async (req, 
     const result = await revokeChatAccess(db, {
         chatId,
         email: decodeURIComponent(req.params.email),
+        userId,
+        userEmail,
     });
     if (!result.ok) return void sendInternalError(res, result.detail);
     if (!result.removed)

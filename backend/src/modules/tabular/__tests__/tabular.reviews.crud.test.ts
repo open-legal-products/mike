@@ -861,6 +861,7 @@ describe("tabular review access grants", () => {
             email: "her@example.com",
             role: "editor",
             createdBy: "user-1",
+            createdByEmail: WHO.userEmail,
             creatorEmail: "me@example.com",
             // A personal review can be shared with anyone.
             orgId: null,
