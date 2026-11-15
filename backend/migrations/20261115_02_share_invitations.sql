@@ -61,7 +61,9 @@ create index if not exists idx_share_invitations_invited_by
   on public.share_invitations(invited_by) where invited_by is not null;
 
 alter table public.share_invitations enable row level security;
+-- The backend reads and writes it as service_role; no client role may.
 revoke all on public.share_invitations from anon, authenticated;
+grant select, insert, update, delete on public.share_invitations to service_role;
 
 -- Turn the caller's live pending shares into grants. The address comes from
 -- auth.users and only once it is confirmed, the same rule requireAuth applies
