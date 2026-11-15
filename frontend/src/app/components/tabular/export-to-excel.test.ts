@@ -44,6 +44,24 @@ it("refuses oversized supplied text before creating a download instead of trunca
     expect(createUrl).not.toHaveBeenCalled();
 });
 
+it("refuses form-feed reasoning before serialization or creating a download", async () => {
+    const writeBuffer = vi.spyOn(Object.getPrototypeOf(new ExcelJS.Workbook().xlsx), "writeBuffer");
+    const createUrl = vi.spyOn(URL, "createObjectURL");
+    await expect(download({ ...params, cells: [{ ...cell,
+        content: { ...cell.content!, reasoning: "first\fsecond" },
+    }] })).rejects.toThrow("form-feed");
+    expect(writeBuffer).not.toHaveBeenCalled();
+    expect(createUrl).not.toHaveBeenCalled();
+});
+
+it("preserves ordinary reasoning with tabs, newlines and Unicode", async () => {
+    const reasoning = "FICTIONAL first\tsecond\n日本語 😀";
+    const wb = await download({ ...params, cells: [{ ...cell,
+        content: { ...cell.content!, reasoning },
+    }] });
+    expect(evidenceRecords(wb)[0].Reasoning).toBe(reasoning);
+});
+
 it("downloads unchanged Review answers plus supporting quotations and completion state", async () => {
     const wb = await download();
     expect(wb.worksheets.map((s) => s.name)).toEqual(["Review", "Evidence"]);

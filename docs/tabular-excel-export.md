@@ -28,7 +28,9 @@ Exports exceeding 32,767 UTF-16 units in a cell, 1,048,576 worksheet rows
 (including headers and expanded citations), or 16,384 columns are refused before
 download with an explicit notice rather than silently truncated. Shorten the
 content or use a smaller review before retrying; no continuation sheets or
-background export service are introduced.
+background export service are introduced. Text containing a form-feed character
+(U+000C) is also refused before serialization and download, because the Excel
+writer would silently remove it. Remove that character before exporting.
 
 Limitations: this is a proposed local format, not maintainer-agreed issue closure.
 Only summary citations recognized by the existing `preprocessCitations` helper

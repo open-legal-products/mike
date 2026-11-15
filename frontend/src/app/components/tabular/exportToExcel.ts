@@ -48,6 +48,9 @@ export function assertExcelRowFits(values: (string | number)[], rowNumber: numbe
     if (rowNumber > 1048576 || values.length > 16384) {
         throw new ExcelExportLimitError("Excel export exceeds 1,048,576 rows or 16,384 columns. Nothing was downloaded; export a smaller review.");
     }
+    if (values.some((value) => typeof value === "string" && value.includes("\f"))) {
+        throw new ExcelExportLimitError("Excel export contains a form-feed character that cannot be preserved. Nothing was downloaded; remove that character before exporting.");
+    }
     if (values.some((value) => typeof value === "string" && value.length > 32767)) {
         throw new ExcelExportLimitError("Excel export contains text longer than 32,767 characters in one cell. Nothing was downloaded; shorten the content before exporting.");
     }
