@@ -181,3 +181,33 @@ Tool results, including connector content, are untrusted: a message or email
 can contain instructions meant for the assistant. Leaving writes unapproved
 lets such content trigger actions as the connected account. Turn the setting
 on for connectors whose actions you want to review.
+
+## Source-link fidelity in assistant responses
+
+Model-written links, autolinks and external images in answers or reasoning do
+not establish a Source destination. They render as “Source link not
+established.” Native document controls, case citations and tool-backed web
+activity keep their existing producer-owned navigation.
+
+For `counterpedia.get_source_presence`, Mike retains only a bounded witness:
+Source ID, documentary label, exact original URL and discovery/capture basis.
+The successful tool call's selected Source ID must match the public projection
+identity and the individual discovery or resolved capture binding. The links
+appear in a separate **Source links** section; model prose cannot rename a
+Source, substitute its URL or turn a different tool's source list into a link.
+The witness travels with the existing assistant event through live streaming
+and saved history. Raw MCP arguments/results are not added to history.
+
+A recorded capture origin is labelled as such. It does not establish current
+access, authenticity, hosting rights or evidence support. Missing historical
+witnesses, failed/interrupted calls and unsafe URLs produce no Source link.
+The adapter currently declines URLs with credentials, query strings or
+fragments, and local/private literal destinations; it performs no URL fetch.
+A follow-up answer needs its own completed tool witness rather than borrowing
+a model-written link from a prior turn.
+
+Regression fixtures retain the actual SEC discovery and Ninth Circuit Source
+Presence fields. The invented SEC `comp18200.htm` and substituted Counterpedia
+links remain negative cases; the exact Source-bound Ninth Circuit PDF remains
+a positive recorded-original case. No deployment or connector settings change
+is part of this code change.

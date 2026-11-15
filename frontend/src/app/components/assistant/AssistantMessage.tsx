@@ -43,6 +43,7 @@ import { preprocessCitations, internalCaseHref } from "./message/citationUtils";
 import { useSmoothedReveal } from "./message/useSmoothedReveal";
 import { MarkdownContent } from "./message/MarkdownContent";
 import { CitationsBlock, buildCitationAppendix } from "./message/CitationSources";
+import { SourceLinksBlock } from "./message/SourceLinksBlock";
 import { EditCardsSection } from "./message/EditCardsSection";
 import {
     AskInputsBlock,
@@ -163,6 +164,7 @@ function AssistantMessageImpl({
     resolvedEditStatuses,
 }: Props) {
     const contentDivRef = useRef<HTMLDivElement | null>(null);
+    const sourceLinksRef = useRef<HTMLElement | null>(null);
     const [isCopied, setIsCopied] = useState(false);
     // Per-document override of the download URL, set as Accept/Reject resolves
     // each tracked change and produces a new version.
@@ -325,6 +327,16 @@ function AssistantMessageImpl({
             const appendix = buildCitationAppendix(citations);
             html += appendix.html;
             plainText += appendix.text;
+            // Copy the same validated Source block the reader can see, including
+            // exact URLs in plain text. Never derive links from model prose.
+            if (sourceLinksRef.current) {
+                const sourceBlock = sourceLinksRef.current.cloneNode(true) as HTMLElement;
+                html += sourceBlock.outerHTML;
+                sourceBlock.querySelectorAll("a").forEach((link) => {
+                    link.replaceWith(document.createTextNode(`${link.textContent} (${link.getAttribute("href")})`));
+                });
+                plainText += "\n\n" + Array.from(sourceBlock.querySelectorAll("h3, li, p"), (row) => row.textContent).join("\n");
+            }
             const item = new ClipboardItem({
                 "text/html": new Blob([html], { type: "text/html" }),
                 "text/plain": new Blob([plainText], { type: "text/plain" }),
@@ -1281,6 +1293,8 @@ function AssistantMessageImpl({
                         <WebSourcesBlock sources={webSources} />
                     </div>
                 )}
+
+                {events && <SourceLinksBlock events={events} isStreaming={isStreaming} containerRef={sourceLinksRef} />}
 
                 {showCitationBlock && (
                     <CitationsBlock

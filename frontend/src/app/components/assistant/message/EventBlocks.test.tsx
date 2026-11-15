@@ -342,3 +342,22 @@ describe("event line consistency", () => {
         ).not.toBeNull();
     });
 });
+
+
+describe("Reasoning Source-link fidelity", () => {
+    beforeEach(() => vi.stubGlobal("ResizeObserver", class {
+        observe = vi.fn();
+        disconnect = vi.fn();
+    }));
+    afterEach(() => vi.unstubAllGlobals());
+    it("does not render model-created source links or external images in reasoning", () => {
+        const { container } = render(<ReasoningBlock
+            text="[SEC filing](https://www.sec.gov/litigation/complaints/2018/comp18200.htm) ![Source](https://evil.example/pixel)"
+            isStreaming={false}
+        />);
+        fireEvent.click(screen.getByRole("button", { name: /Thought process/ }));
+        expect(container.querySelector("a")).toBeNull();
+        expect(container.querySelector("img")).toBeNull();
+        expect(screen.getAllByText("Source link not established.")).toHaveLength(2);
+    });
+});

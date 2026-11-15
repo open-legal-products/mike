@@ -4,6 +4,10 @@ const { getTurnReadIdentity, readDocumentContent } = vi.hoisted(() => ({
     getTurnReadIdentity: vi.fn(),
     readDocumentContent: vi.fn(),
 }));
+const { executeMcpToolCallMock, planConnectorToolCallMock } = vi.hoisted(() => ({
+    executeMcpToolCallMock: vi.fn(),
+    planConnectorToolCallMock: vi.fn(),
+}));
 
 vi.mock("../tools/documentOps", async (importOriginal) => {
     const actual = await importOriginal<
@@ -17,6 +21,14 @@ vi.mock("../tools/documentOps", async (importOriginal) => {
             readDocumentContent(...args),
     };
 });
+vi.mock("../../../../lib/mcpConnectors", async (importOriginal) => ({
+    ...(await importOriginal<Record<string, unknown>>()),
+    executeMcpToolCall: (...args: unknown[]) => executeMcpToolCallMock(...args),
+}));
+vi.mock("../tools/connectorApprovals", async (importOriginal) => ({
+    ...(await importOriginal<Record<string, unknown>>()),
+    planConnectorToolCall: (...args: unknown[]) => planConnectorToolCallMock(...args),
+}));
 
 import { spotlight } from "../contextBuilders";
 import { runToolCalls } from "../tools/toolDispatcher";
@@ -182,4 +194,34 @@ describe("document tool spotlighting", () => {
         expect(content).not.toContain('"filename":');
         expect(readDocumentContent).not.toHaveBeenCalled();
     });
+});
+
+it("propagates bounded Source links in the MCP SSE result frame", async () => {
+    planConnectorToolCallMock.mockResolvedValue({ type: "run" });
+    executeMcpToolCallMock.mockResolvedValue({
+        content: JSON.stringify({ ok: true }),
+        event: {
+            type: "mcp_tool_call",
+            connector_id: "connector-1",
+            connector_name: "Counterpedia",
+            tool_name: "counterpedia.get_source_presence",
+            openai_tool_name: "mcp_counterpedia_get_source_presence",
+            status: "ok",
+            source_links: [{
+                source_id: "TH-S01-SRC-0001",
+                label: "SEC filing",
+                url: "https://www.sec.gov/litigation/complaints/2018/comp-pr2018-41-theranos-holmes.pdf",
+                basis: "discovery",
+            }],
+        },
+    });
+    const write = vi.fn();
+    await runToolCalls(
+        [{ id: "source-call", function: { name: "mcp_counterpedia_get_source_presence", arguments: JSON.stringify({ source_id: "TH-S01-SRC-0001" }) } }],
+        new Map(), "user-1", {} as never, write,
+        undefined, undefined, undefined, undefined, undefined, undefined,
+        undefined, undefined, "nonce",
+    );
+    expect(write.mock.calls.map(([chunk]) => String(chunk)).join(""))
+        .toContain('"source_links":[{"source_id":"TH-S01-SRC-0001"');
 });

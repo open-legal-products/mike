@@ -48,6 +48,7 @@ import {
     type OAuthTokenRow,
     type ToolCacheRow,
 } from "./types";
+import { extractCounterpediaSourceLinks } from "./sourceLinks";
 
 export { startUserMcpConnectorOAuth };
 
@@ -790,6 +791,7 @@ async function callResolvedTool(
             };
         }
         const content = stringifyMcpResult(result);
+        const sourceLinks = extractCounterpediaSourceLinks(tool.tool_name, args, result);
         await insertMcpAuditLog(db, {
             user_id: owner.userId,
             connector_id: connector.id,
@@ -810,6 +812,7 @@ async function callResolvedTool(
                 ...(tool.title ? { tool_title: tool.title } : {}),
                 openai_tool_name: tool.openai_tool_name,
                 status: "ok",
+                ...(sourceLinks.length ? { source_links: sourceLinks } : {}),
             },
         };
     } catch (err) {

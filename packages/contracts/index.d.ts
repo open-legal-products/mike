@@ -303,6 +303,15 @@ export type McpToolEvent = {
   approval_id?: string;
   /** Bounded tool output replayed to the model after an approved call. */
   result?: string;
+  /** Explicit, bounded Source links supplied by a matching public producer result. */
+  source_links?: McpSourceLink[];
+};
+
+export type McpSourceLink = {
+  source_id: string;
+  label: string;
+  url: string;
+  basis: "discovery" | "capture_observation";
 };
 
 export type WebSource = { url: string; title?: string };

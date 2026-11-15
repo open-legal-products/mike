@@ -158,6 +158,9 @@ const ReasoningMarkdown = memo(function ReasoningMarkdown({text}: {text: string}
     return (<ReactMarkdown
                         remarkPlugins={[remarkGfm]}
                         components={{
+                            // Reasoning is model text too, never Source-link evidence.
+                            a: () => <span>Source link not established.</span>,
+                            img: () => <span>Source link not established.</span>,
                             code: (props) => (
                                 <code
                                     className="font-serif text-gray-600"
