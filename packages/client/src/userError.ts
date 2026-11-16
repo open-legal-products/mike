@@ -12,7 +12,7 @@
  * framework-free and must not import from an application (`frontend/src/app/` or `word-addin/src/`).
  */
 
-export const SUPPORT_EMAIL = "will@mikeoss.com";
+export const SUPPORT_EMAIL = "support@mikeoss.com";
 
 export type UserErrorKind =
     | "offline"
