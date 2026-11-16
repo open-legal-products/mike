@@ -3,12 +3,21 @@ import { extractPdfTextForIndex } from "../pdfText";
 import { docxToPdf } from "../convert";
 import { extractPresentationText } from "../officeText";
 import { spreadsheetToLLMText } from "../spreadsheet";
-import { isSpreadsheetDocumentType, requiresLibreOfficeTextExtraction } from "../documentTypes";
+import {
+  isImageDocumentType,
+  isSpreadsheetDocumentType,
+  requiresLibreOfficeTextExtraction,
+} from "../documentTypes";
 
 /** Complete text, using the same accepted DOCX view as the edit matcher. */
 export async function extractDocumentText(raw: ArrayBuffer, fileType: string) {
   const type = fileType.toLowerCase();
   if (type === "pdf") return extractPdfTextForIndex(raw);
+  if (isImageDocumentType(type)) {
+    // Raster images have no embedded text layer; `documents.indexing.ts`
+    // populates the single page via Mistral OCR when configured.
+    return { text: "", textlessPageCount: 1 };
+  }
   if (requiresLibreOfficeTextExtraction(type)) {
     const pdf = await docxToPdf(Buffer.from(raw));
     return extractPdfTextForIndex(Uint8Array.from(pdf).buffer);

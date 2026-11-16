@@ -23,6 +23,12 @@ describe("isSupportedDocumentFile", () => {
         }
     });
 
+    it("accepts PNG and JPEG images for OCR", () => {
+        expect(isSupportedDocumentFile(file("photo.png"))).toBe(true);
+        expect(isSupportedDocumentFile(file("scan.JPG"))).toBe(true);
+        expect(isSupportedDocumentFile(file("page.jpeg"))).toBe(true);
+    });
+
     it("is case-insensitive on the extension", () => {
         expect(isSupportedDocumentFile(file("SCAN.PDF"))).toBe(true);
         expect(isSupportedDocumentFile(file("Deed.DocX"))).toBe(true);
@@ -30,7 +36,7 @@ describe("isSupportedDocumentFile", () => {
 
     it("rejects unsupported types", () => {
         expect(isSupportedDocumentFile(file("notes.txt"))).toBe(false);
-        expect(isSupportedDocumentFile(file("photo.png"))).toBe(false);
+        expect(isSupportedDocumentFile(file("photo.gif"))).toBe(false);
         expect(isSupportedDocumentFile(file("archive.zip"))).toBe(false);
     });
 

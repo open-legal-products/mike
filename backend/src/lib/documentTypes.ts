@@ -7,10 +7,13 @@ export const ALLOWED_DOCUMENT_TYPES = new Set([
   "xls",
   "pptx",
   "ppt",
+  "png",
+  "jpg",
+  "jpeg",
 ]);
 
 export const ALLOWED_DOCUMENT_TYPES_LABEL =
-  "pdf, docx, doc, xlsx, xlsm, xls, pptx, ppt";
+  "pdf, docx, doc, xlsx, xlsm, xls, pptx, ppt, png, jpg, jpeg";
 
 // The lowercased extension of a filename, or "" when it has none. Three call
 // sites spelled this out with the same semantics; the other extension readers
@@ -23,6 +26,7 @@ export function documentSuffix(filename: string): string {
 const WORD_TYPES = new Set(["docx", "doc"]);
 const SPREADSHEET_TYPES = new Set(["xlsx", "xlsm", "xls"]);
 const PRESENTATION_TYPES = new Set(["pptx", "ppt"]);
+const IMAGE_TYPES = new Set(["png", "jpg", "jpeg"]);
 
 export function isWordDocumentType(fileType: string | null | undefined) {
   return WORD_TYPES.has((fileType ?? "").toLowerCase());
@@ -36,13 +40,20 @@ export function isPresentationDocumentType(fileType: string | null | undefined) 
   return PRESENTATION_TYPES.has((fileType ?? "").toLowerCase());
 }
 
+export function isImageDocumentType(fileType: string | null | undefined) {
+  return IMAGE_TYPES.has((fileType ?? "").toLowerCase());
+}
+
 export function shouldConvertToPdf(fileType: string | null | undefined) {
   const normalized = (fileType ?? "").toLowerCase();
   // Spreadsheets are intentionally excluded: they are rendered natively as a
   // grid in the frontend (Fortune-sheet) from the raw file bytes rather than a
-  // PDF rendition, which clipped wide/large sheets.
+  // PDF rendition, which clipped wide/large sheets. Images are converted to a
+  // 1-page PDF rendition via LibreOffice so the PDF viewer can display them.
   return (
-    isWordDocumentType(normalized) || isPresentationDocumentType(normalized)
+    isWordDocumentType(normalized) ||
+    isPresentationDocumentType(normalized) ||
+    isImageDocumentType(normalized)
   );
 }
 
@@ -50,9 +61,9 @@ export function shouldConvertToPdf(fileType: string | null | undefined) {
  * The types whose text can only be read by round-tripping the file through
  * LibreOffice. Every other allowed type has an in-process reader — docx via
  * the tracked-changes extractor (mammoth as fallback), pptx via officeText,
- * spreadsheets via SheetJS, pdf via pdfjs — so .doc and .ppt are the only
- * ones read_document pays a subprocess conversion for, and therefore the only
- * ones worth precomputing and caching.
+ * spreadsheets via SheetJS, pdf via pdfjs, images via Mistral OCR — so .doc
+ * and .ppt are the only ones read_document pays a subprocess conversion for,
+ * and therefore the only ones worth precomputing and caching.
  */
 export function requiresLibreOfficeTextExtraction(
   fileType: string | null | undefined,
@@ -79,6 +90,11 @@ export function contentTypeForDocumentType(fileType: string | null | undefined) 
       return "application/vnd.openxmlformats-officedocument.presentationml.presentation";
     case "ppt":
       return "application/vnd.ms-powerpoint";
+    case "png":
+      return "image/png";
+    case "jpg":
+    case "jpeg":
+      return "image/jpeg";
     default:
       return "application/octet-stream";
   }
