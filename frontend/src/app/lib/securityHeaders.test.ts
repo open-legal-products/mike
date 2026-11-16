@@ -5,6 +5,7 @@ import { readFileSync } from "node:fs";
 import { buildCustomRoute } from "next/dist/lib/build-custom-route";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import nextConfig from "../../../next.config";
+import { STANDARD_FONT_DATA_URL } from "../components/shared/views/highlightQuote";
 
 const PUBLIC_HEADERS_FILE = new URL("../../../public/_headers", import.meta.url);
 
@@ -85,6 +86,20 @@ describe("web app security headers", () => {
         expect(
             await headersFor("/api/user/integrations/gmail/oauth/callback"),
         ).toEqual({});
+    });
+
+    it("lets the PDF viewer load pdf.js standard fonts under the report-only policy", async () => {
+        // PdfView passes STANDARD_FONT_DATA_URL to pdf.js, which loads the
+        // standard fonts from that origin; a font-src without it reports (and,
+        // once enforced, would block) them on PDF previews.
+        vi.stubEnv("NODE_ENV", "production");
+        const policy = (await pageHeaders())["Content-Security-Policy-Report-Only"];
+        const fontSrc = policy
+            .split(";")
+            .map((directive) => directive.trim())
+            .find((directive) => directive.startsWith("font-src "));
+
+        expect(fontSrc?.split(" ")).toContain(new URL(STANDARD_FONT_DATA_URL).origin);
     });
 
     it("does not advertise the framework", () => {

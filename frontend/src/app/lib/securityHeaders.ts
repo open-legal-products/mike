@@ -46,6 +46,8 @@ const ENFORCED_CSP = [
  * - static.cloudflareinsights.com: Cloudflare's injected analytics beacon,
  *   which posts back to the same origin (/cdn-cgi/rum).
  * - cdn.jsdelivr.net fonts: the DOCX editor's font fallback.
+ * - unpkg.com fonts: pdf.js standard fonts for PDF previews
+ *   (STANDARD_FONT_DATA_URL in components/shared/views/highlightQuote.ts).
  * - connect-src https:: uploads go straight to the storage provider through a
  *   signed URL whose origin depends on the deployment.
  * - blob:/data:: document previews, downloads and the pdf.js worker.
@@ -62,7 +64,7 @@ function reportOnlyCsp(production: boolean): string {
         ].join(" "),
         "style-src 'self' 'unsafe-inline'",
         "img-src 'self' data: blob: https:",
-        "font-src 'self' data: blob: https://cdn.jsdelivr.net",
+        "font-src 'self' data: blob: https://cdn.jsdelivr.net https://unpkg.com",
         "connect-src 'self' blob: data: https:",
         "media-src 'self' blob: data:",
         "worker-src 'self' blob:",
