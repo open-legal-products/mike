@@ -1,5 +1,5 @@
 import React from "react";
-import { ClipboardCheck, Loader2, Plus, Waypoints } from "lucide-react";
+import { ClipboardCheck, Loader2, Paperclip, Plus, Waypoints } from "lucide-react";
 import { ComposerButton } from "../primitives/ComposerButton";
 import {
   Dropdown,
@@ -18,6 +18,8 @@ interface DocumentSourceMenuProps {
   onWebFiles: () => void;
   onWorkflows: () => void;
   onPlaybooks: () => void;
+  /** Outlook only: upload the message's own attachments. */
+  onEmailAttachments?: () => void;
 }
 
 export function DocumentSourceMenu({
@@ -28,6 +30,7 @@ export function DocumentSourceMenu({
   onWebFiles,
   onWorkflows,
   onPlaybooks,
+  onEmailAttachments,
 }: DocumentSourceMenuProps): React.ReactElement {
   return (
     <Dropdown>
@@ -54,6 +57,12 @@ export function DocumentSourceMenu({
         collisionPadding={12}
         className="min-w-36"
       >
+        {onEmailAttachments && (
+          <DropdownItem onSelect={onEmailAttachments}>
+            <Paperclip aria-hidden="true" className="h-4 w-4 shrink-0 text-gray-500" />
+            Email attachments
+          </DropdownItem>
+        )}
         <DropdownItem onSelect={onLocalFiles}>
           <img
             src={desktopIcon}

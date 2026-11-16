@@ -617,6 +617,8 @@ export async function prepareWordChatStream(
     // answer client_tool_call frames; older panes keep the streamed <EDITS>
     // protocol so they are never handed tool calls they would ignore.
     clientToolsEnabled: boolean;
+    /** Office client of the pane: Word (default) or Outlook compose. */
+    officeHost?: "word" | "outlook";
     requestedModel: string | null | undefined;
     requestedReasoning:
       ReturnType<typeof resolveEffectiveReasoningLevel> | undefined;
@@ -901,7 +903,7 @@ export async function prepareWordChatStream(
       nonce,
     );
     const wordSystemPrompt = [
-      buildWordChatSystemPrompt(args.clientToolsEnabled),
+      buildWordChatSystemPrompt(args.clientToolsEnabled, args.officeHost ?? "word"),
       personalisationPrompt,
     ]
       .filter(Boolean)
