@@ -150,7 +150,7 @@ describe("add-in notify", () => {
         expect(details).toContain("Request ID: req-7");
 
         const opened = open.mock.calls[0]?.[0] as string;
-        expect(opened.startsWith("mailto:will@mikeoss.com?")).toBe(true);
+        expect(opened.startsWith("mailto:support@mikeoss.com?")).toBe(true);
         expect(opened).not.toContain("/support");
         const draft = decodeURIComponent(opened);
         expect(draft).toContain("Client: word-addin");

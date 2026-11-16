@@ -67,6 +67,6 @@ describe("AuthCallbackPage", () => {
         );
         expect(
             screen.getByRole("link", { name: "Contact support" }),
-        ).toHaveAttribute("href", expect.stringContaining("will@mikeoss.com"));
+        ).toHaveAttribute("href", expect.stringContaining("support@mikeoss.com"));
     });
 });
