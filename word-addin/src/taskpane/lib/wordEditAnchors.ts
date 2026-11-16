@@ -131,15 +131,6 @@ export function listAppliedWordEditIds(): ReadonlySet<string> {
   return new Set(readAppliedEditIds(Office.context.document.settings));
 }
 
-/**
- * Record that `stableEditId` now exists in the document as a real revision.
- * Best effort: failing to persist the marker only costs idempotency on a
- * later retry, never the edit itself, so callers do not surface a failure.
- */
-export async function markWordEditApplied(stableEditId: string): Promise<void> {
-  await persistWordEditState([], [stableEditId]);
-}
-
 /** Read/validate once when restoring a whole conversation. */
 export function getWordEditAnchors(): Readonly<Record<string, WordEditAnchor>> {
   return readRegistry(Office.context.document.settings).anchors;
