@@ -24,7 +24,6 @@ import {
 import type {
   ActiveWordTurn,
   Chat,
-  Document,
   Message,
   WordDocumentEdit,
 } from "../types";
@@ -131,30 +130,6 @@ export type {
   UploadProgress,
   UploadRequestOptions,
 } from "./client";
-
-/**
- * List a project's documents (GET /projects/:id/documents). The base client
- * exposes no wrapper for this endpoint (the web app reads project.documents off
- * GET /projects/:id instead), so this thin helper reuses the SAME configured
- * auth + 401-refresh transport as the rest of the client rather than
- * re-declaring a bespoke HTTP layer — and keeps the add-in on the exact same
- * endpoint it has always called.
- */
-export async function listProjectDocuments(
-  projectId: string,
-): Promise<Document[]> {
-  const res = await fetchWithRefresh(
-    `${BASE_URL}/projects/${projectId}/documents`,
-    {
-      cache: "no-store",
-      headers: { Accept: "application/json", ...(await getAuthHeaders()) },
-    },
-  );
-  if (!res.ok) {
-    throw await responseError(res, `/projects/${projectId}/documents`, "GET", "documents.directory");
-  }
-  return res.json() as Promise<Document[]>;
-}
 
 interface OllamaModelOption {
   id: string;
