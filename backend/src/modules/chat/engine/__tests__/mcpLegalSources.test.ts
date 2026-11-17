@@ -130,7 +130,7 @@ describe("MCP source → dispatcher → exact-quote citation", () => {
     expect(result.externalSourceHandles).toEqual(new Map([["call-1", "doc-2"]]));
     expect(f.docStore.get("doc-2")?.external_source).toMatchObject({ provider: "legal_data_hunter", quote_verification: "exact" });
   });
-  it("re-verifies a provider's quotes exactly, by provider rather than by id prefix", async () => {
+  it("re-verifies an exact provider's quotes without tolerance and an upload's with it", async () => {
     const source = "Les contrats légalement formés tiennent lieu de loi à ceux qui les ont faits.";
     const drifted = {
       kind: "document", doc_id: "doc-2",

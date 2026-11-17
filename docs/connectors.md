@@ -163,8 +163,8 @@ Legal Data Hunter is implemented as a *source provider*
 "Provider-backed source documents" in
 [backend-architecture.md](backend-architecture.md)). The chat engine and the
 source panel know only the provider registry, so another document provider is
-one implementation file, one registry entry and its document type in
-`frontend/src/app/components/shared/documentCapabilities.ts`.
+one implementation file and one registry entry; the frontend changes only if
+the provider introduces a new document type.
 
 Mike does not store LDH text. A saved citation keeps the source's reference,
 title, link and quotes; when the source is opened later, the panel reads the

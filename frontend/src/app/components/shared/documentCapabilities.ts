@@ -7,9 +7,11 @@ import type { PanelDocument, PanelDocumentType } from "./types";
  * such document the same way: no permissions, versions, editing, renaming or
  * file download; a text view instead of a file viewer; and a body that may
  * have to be read from the provider when the document opens. Documents saved
- * before the field existed are recognised by these types, which no upload
- * ever has. Adding a provider needs no frontend change unless it introduces
- * a new `SourceDocumentType`, which belongs in this set and in `legalSourceIconKind`.
+ * before the field existed, and the client's own reconstruction of a case
+ * citation, are recognised by these types, which no upload ever has. Adding
+ * a provider needs no frontend change unless it introduces a new
+ * `SourceDocumentType`, which goes into the contract's union, `PANEL_DOCUMENT_TYPES`,
+ * this set and `legalSourceIconKind`.
  */
 const EXTERNAL_SOURCE_TYPES: ReadonlySet<string> = new Set<PanelDocumentType>([
     "case",
@@ -21,6 +23,11 @@ export type LegalSourceIconKind = "case" | "legislation";
 
 export function isExternalSourceType(type: string | null | undefined): boolean {
     return !!type && EXTERNAL_SOURCE_TYPES.has(type);
+}
+
+/** Whether a panel document (if any) was read from a provider rather than uploaded. */
+export function isExternalSourceDocument(document: PanelDocument | null | undefined): boolean {
+    return !!document && documentCapabilities(document).external;
 }
 
 /** The legal-source icon for a document type, or null for file types. */

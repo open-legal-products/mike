@@ -3,7 +3,7 @@
 import { DocumentTabBar } from "@/app/components/shared/DocumentTabBar";
 import { LegalSourceIcon } from "@/app/components/shared/LegalSourceIcon";
 import {
-    isExternalSourceType,
+    isExternalSourceDocument,
     legalSourceIconKind,
 } from "@/app/components/shared/documentCapabilities";
 import type { Document, PanelDocument } from "@/app/components/shared/types";
@@ -58,7 +58,7 @@ export function ProjectDocumentTabs({
                 const document = documents.find(
                     (document) => document.id === tab.documentId,
                 );
-                const legalSource = isExternalSourceType(tab.sourceDocument?.type);
+                const legalSource = isExternalSourceDocument(tab.sourceDocument);
                 const legalIcon = legalSourceIconKind(tab.sourceDocument?.type);
                 return {
                     icon: legalIcon ? <LegalSourceIcon kind={legalIcon} /> : undefined,

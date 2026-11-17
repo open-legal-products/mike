@@ -98,7 +98,7 @@ import type {
     Project,
 } from "@/app/components/shared/types";
 import { panelDocumentFromCitation, panelDocumentFromCaseEvent, panelDocumentType } from "@/app/components/shared/types";
-import { isExternalSourceType } from "@/app/components/shared/documentCapabilities";
+import { isExternalSourceDocument } from "@/app/components/shared/documentCapabilities";
 import { panelDocumentAtVersion } from "@/app/lib/panelDocumentAtVersion";
 import { resolvePanelDocumentVersionResult } from "@/app/components/assistant/panelDocumentVersion";
 import type { DocumentContentMode } from "@/app/components/shared/DocumentContent";
@@ -334,7 +334,7 @@ export default function ProjectAssistantChatPage({ params }: Props) {
     const projectRole = roleFromLoaded(project);
     const canEditContent = can(projectRole, "content.edit");
     const documentPermissions = useDocumentPermissions(
-        tabs.filter((tab) => !isExternalSourceType(tab.sourceDocument?.type))
+        tabs.filter((tab) => !isExternalSourceDocument(tab.sourceDocument))
             .map((tab) => tab.documentId),
         canEditContent,
     );
@@ -1294,7 +1294,7 @@ export default function ProjectAssistantChatPage({ params }: Props) {
     // The document on screen rides along with a message as context.
     const displayedDoc = useMemo(
         () =>
-            !activeTab || isExternalSourceType(activeTab.sourceDocument?.type)
+            !activeTab || isExternalSourceDocument(activeTab.sourceDocument)
                 ? null
                 : {
                       filename: activeTab.filename,

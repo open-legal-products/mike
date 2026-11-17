@@ -388,7 +388,9 @@ law, Legal Data Hunter documents) is a *source provider* in
 - `sourceDocuments.providers.ts` is the registry. `getSourceDocument`
   dispatches a `GET /documents/:id` to the owning provider and deduplicates
   concurrent fetches; `externalSourceFromMcpCall` asks every provider about a
-  successful connector call. Providers are named nowhere else.
+  successful connector call. No other backend production code names a
+  provider; the engine's CourtListener tools predate the registry and keep
+  their own case-citation handling.
 - One `sourceDocuments.<provider>.ts` per provider holds the implementation:
   `sourceDocuments.courtlistener.ts` hydrates `case:*` ids;
   `sourceDocuments.legalDataHunter.ts` owns `mcp:*` ids, recognises complete
@@ -403,12 +405,16 @@ and citable through `createCitation` with verbatim quotes only. Nothing is
 persisted: a citation carries the provider's document id, and the panel reads
 the text again through `getSourceDocument` when the source is opened.
 
-The registry stamps every document it hands out with `provider` and
-`quote_verification`, so the client learns a document's origin from the wire
-rather than from id or type rules. Adding a provider therefore means one
-implementation file and one registry entry; the frontend changes only if the
-provider introduces a new `SourceDocumentType`, which goes into
-`frontend/src/app/components/shared/documentCapabilities.ts`.
+Every provider document the backend emits carries `provider` and
+`quote_verification`: the registry stamps what it hands out, and
+`createCitation` stamps the case citations it assembles (`stampSourceDocument`).
+The client reads origin and highlight exactness from those fields and falls
+back to the legal document types only for documents saved before the fields
+existed. Adding a provider therefore means one implementation file and one
+registry entry. The frontend changes only if the provider introduces a new
+`SourceDocumentType`: add it to the contract's union, to `PANEL_DOCUMENT_TYPES`
+in `frontend/src/app/components/shared/types.ts`, and to the type set and icon
+map in `frontend/src/app/components/shared/documentCapabilities.ts`.
 
 ## Shared API contracts
 

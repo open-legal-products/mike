@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
     documentCapabilities,
+    isExternalSourceDocument,
     isExternalSourceType,
     legalSourceIconKind,
 } from "./documentCapabilities";
@@ -63,6 +64,9 @@ describe("documentCapabilities", () => {
                 document({ type: "case", provider: "courtlistener", quote_verification: "fuzzy" }),
             ).exactQuotes,
         ).toBe(false);
+        expect(isExternalSourceDocument(stamped)).toBe(true);
+        expect(isExternalSourceDocument(document({ type: "docx" }))).toBe(false);
+        expect(isExternalSourceDocument(undefined)).toBe(false);
     });
 
     it("hydrates an external source only until it has a body", () => {

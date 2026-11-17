@@ -109,8 +109,9 @@ describe("useResolvedPanelDocument", () => {
         expect(result.current.error).toBeNull();
     });
     it("shows the endpoint's fixed 400 sentence, not a generic failure", async () => {
+        // MikeApiError carries the body's `detail` as its message and the status.
         const refused = Object.assign(
-            new Error(JSON.stringify({ detail: "Connect the provider in Settings → Connectors." })),
+            new Error("Connect the provider in Settings → Connectors."),
             { status: 400 },
         );
         getPanelDocumentMock.mockRejectedValue(refused);
@@ -195,9 +196,7 @@ describe("useResolvedPanelDocument", () => {
             const connect =
                 "Connect Legal Data Hunter in Settings → Connectors to view this source.";
             // The endpoint answers a missing connection with a fixed 400.
-            getPanelDocumentMock.mockRejectedValue(
-                Object.assign(new Error(JSON.stringify({ detail: connect })), { status: 400 }),
-            );
+            getPanelDocumentMock.mockRejectedValue(Object.assign(new Error(connect), { status: 400 }));
             const { result } = renderHook(() => useResolvedPanelDocument(saved));
             await waitFor(() => expect(result.current.error).toBe(connect));
         });

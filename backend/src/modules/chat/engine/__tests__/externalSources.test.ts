@@ -151,6 +151,18 @@ describe("createCitation for an external source", () => {
     ).toBeNull();
   });
 
+  it("stamps a CourtListener case citation with its provider", () => {
+    const citation = createCitation(
+      cite(`[{"ref":1,"kind":"case","cluster_id":77,"quotes":[{"quote":"Held","opinionId":1}]}]`),
+      {},
+      new Map([[77, { caseName: "A v B", citations: ["1 U.S. 1"], url: null, pdfUrl: null, dateFiled: null }]]),
+    );
+    expect(citation).toMatchObject({
+      kind: "case",
+      document: { document_id: "case:77", provider: "courtlistener", quote_verification: "fuzzy" },
+    });
+  });
+
   it("leaves uploaded-document citations on their existing path", () => {
     const docIndex: DocIndex = {
       "doc-0": { document_id: "11111111-1111-1111-1111-111111111111", filename: "Brief.pdf", version_id: "v1", version_number: 1 },

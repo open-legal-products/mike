@@ -465,12 +465,12 @@ export async function verifyDocumentCitationAnnotation(
     source = "";
   }
 
+  // A provider that verifies quotes exactly gets no fuzzy correction: a
+  // changed legal quotation must never be surfaced as the source's words.
+  const exact =
+    sourceProviderFor(String(record(a.document)?.document_id ?? ""))
+      ?.quoteVerification === "exact";
   const verifiedQuotes = entries.map((entry) => {
-    // A provider that verifies quotes exactly gets no fuzzy correction: a
-    // changed legal quotation must never be surfaced as the source's words.
-    const exact =
-      sourceProviderFor(String(record(a.document)?.document_id ?? ""))
-        ?.quoteVerification === "exact";
     const result = exact
       ? { verified: !!entry.quote.trim() && source.includes(entry.quote), needs_correction: false }
       : verifierFor(source)(entry.quote);

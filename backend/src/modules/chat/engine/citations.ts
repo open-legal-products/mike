@@ -1,5 +1,9 @@
 import { type DocIndex, type DocStore, resolveDoc, resolveDocLabel } from "./types";
-import { isExternalSourceDocumentId } from "../../source-documents/sourceDocuments.service";
+import {
+  isExternalSourceDocumentId,
+  sourceProviderFor,
+  stampSourceDocument,
+} from "../../source-documents/sourceDocuments.service";
 import {
   normalizeCaseDocument,
   sourceDocumentType,
@@ -362,10 +366,12 @@ type CasesByClusterId = Map<number, {
 
 /**
  * A citation of a source read from a provider during this request. The
- * source is not an upload: there is no page, version or fuzzy correction, and
- * a quote is accepted only when it occurs verbatim in the canonical text, so
- * a changed legal quotation can never be surfaced as verified. Returns null
- * when any quote fails that check.
+ * source is not an upload: there is no page or version. A provider that
+ * verifies quotes exactly accepts a quote only when it occurs verbatim in
+ * the canonical text, so a changed legal quotation can never be surfaced as
+ * verified; such a citation is returned null when any quote fails. A
+ * provider that verifies tolerantly leaves its quotes to the end-of-turn
+ * verification, like an upload's.
  */
 function createExternalSourceCitation(
   citation: ParsedDocumentCitation,
@@ -373,13 +379,14 @@ function createExternalSourceCitation(
   document: SourceDocument,
   text: string,
 ) {
-  if (citation.quotes.some(({ quote }) => !quote.trim() || !text.includes(quote))) {
+  const exact = sourceProviderFor(document.document_id)?.quoteVerification !== "fuzzy";
+  if (exact && citation.quotes.some(({ quote }) => !quote.trim() || !text.includes(quote))) {
     return null;
   }
   const subdocumentId = document.subdocuments?.[0]?.document_id;
   const quotes: SourceDocumentQuote[] = citation.quotes.map((quote) => ({
     quote: quote.quote,
-    verification: { verified: true },
+    ...(exact ? { verification: { verified: true } } : {}),
     target: subdocumentId ? { subdocument_id: subdocumentId } : {},
   }));
   return {
@@ -392,7 +399,7 @@ function createExternalSourceCitation(
     version_id: null,
     version_number: null,
     filename: document.title,
-    verified: true,
+    ...(exact ? { verified: true } : {}),
     page: citation.page,
     quote: citation.quote,
     quotes: citation.quotes,
@@ -412,15 +419,19 @@ export function createCitation(
 ) {
   if (citation.kind === "case") {
     const caseRecord = casesByClusterId?.get(citation.cluster_id);
-    const document = normalizeCaseDocument({
-      clusterId: citation.cluster_id,
-      caseName: caseRecord?.caseName,
-      citations: caseRecord?.citations,
-      url: caseRecord?.url,
-      pdfUrl: caseRecord?.pdfUrl,
-      dateFiled: caseRecord?.dateFiled,
-      quotes: citation.quotes,
-    });
+    // Stamped like every registry document, so the client learns the
+    // origin from the wire rather than from the document type.
+    const document = stampSourceDocument(
+      normalizeCaseDocument({
+        clusterId: citation.cluster_id,
+        caseName: caseRecord?.caseName,
+        citations: caseRecord?.citations,
+        url: caseRecord?.url,
+        pdfUrl: caseRecord?.pdfUrl,
+        dateFiled: caseRecord?.dateFiled,
+        quotes: citation.quotes,
+      }),
+    );
     return {
       type: "citation_data",
       kind: "case",

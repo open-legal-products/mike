@@ -36,8 +36,10 @@ export interface SourceProvider {
    * How a cited quote is checked against this provider's text. `exact`
    * accepts only a verbatim occurrence, as a legal quotation must be; `fuzzy`
    * is the uploaded-document matcher that tolerates whitespace and
-   * punctuation drift. Applied by the engine's citation verification and
-   * stamped on the panel document, which highlights quotes the same way.
+   * punctuation drift. Applied when a request-scoped source is cited and when
+   * citations are re-verified at the end of the turn, and stamped on the
+   * panel document as `quote_verification` so the client highlights the same
+   * way.
    */
   readonly quoteVerification: "exact" | "fuzzy";
   /** Reads the document again from the provider for display. */

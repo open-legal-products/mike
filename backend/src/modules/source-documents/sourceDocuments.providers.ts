@@ -57,6 +57,16 @@ function stamped(document: SourceDocument, provider: SourceProvider): SourceDocu
 }
 
 /**
+ * Stamps a document built outside the registry (a case citation the chat
+ * engine assembles from its own turn state) with its provider's identity;
+ * a document no provider owns is returned unchanged.
+ */
+export function stampSourceDocument(document: SourceDocument): SourceDocument {
+  const provider = sourceProviderFor(document.document_id);
+  return provider ? stamped(document, provider) : document;
+}
+
+/**
  * The result allowance a provider grants a call to its own server, for the
  * MCP call options; undefined keeps the general cap.
  */
