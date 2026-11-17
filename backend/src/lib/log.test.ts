@@ -25,10 +25,11 @@ function providerError() {
     error: { type: "invalid_request_error", message: `bad ${SENTINEL}-response` },
   };
   return new APICallError({
-    message: "Bad Request",
+    message: `Bad request: ${SENTINEL}-message`,
     url: `https://api.example.com/v1/messages?key=${SENTINEL}-url`,
     requestBodyValues: {
       model: "claude",
+      input: `${SENTINEL}-input`,
       messages: [{ role: "user", content: `Summarise: ${SENTINEL}-request` }],
     },
     statusCode: 400,
@@ -55,9 +56,22 @@ describe("error logging", () => {
     logError("chat", providerError());
     const out = captured(spy);
     expect(out).not.toContain(SENTINEL);
-    expect(out).toContain("AI_APICallError");
+    expect(out).toContain("AI provider error");
     expect(out).toContain("400");
     expect(out).toContain("invalid_request_error");
+  });
+
+  it("redacts an ordinary cause inside an SDK error", async () => {
+    const { JSONParseError } = await import("ai");
+    const failure = new JSONParseError({
+      text: "malformed output",
+      cause: new SyntaxError(SENTINEL),
+    });
+    const spy = vi.spyOn(console, "error").mockImplementation(() => {});
+    logError("chat", failure);
+    const out = captured(spy);
+    expect(out).toContain("AI provider error");
+    expect(out).not.toContain(SENTINEL);
   });
 
   it("never writes a provider error nested as the cause of an AppError", () => {
@@ -69,10 +83,9 @@ describe("error logging", () => {
     reportModelFailure(failure, {}, "[chat/stream] model stream failed");
     const out = captured(spy);
     expect(out).not.toContain(SENTINEL);
-    // Still debuggable: both classes in the chain, the kind, and the stack.
     expect(out).toContain("AppError");
     expect(out).toContain("provider-rejected");
-    expect(out).toContain("AI_APICallError");
+    expect(out).toContain("AI provider error");
     expect(out).toContain("log.test.ts");
   });
 
