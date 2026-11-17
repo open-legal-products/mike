@@ -22,6 +22,8 @@ import {
 } from "../../lib/webSearch";
 import { resolveRequestTimeZone } from "../../lib/userTime";
 import { createAssistantHistoryLoader, attachPriorReasoning, buildDocContext, buildMessages, buildUserPersonalisationPrompt, devLog, enrichWithPriorEvents, loadUserMessageSentTimes, buildWorkflowStore, appendAskInputsResponseToAssistantMessage, runApprovedConnectorActions, generateSpotlightNonce, type AskInputsResponseRequest, type ChatMessage, type SubagentDefaults } from "./engine/index";
+import type { LegalDataHunterSource } from "../../lib/mcp/sourceDocuments";
+import { registerMcpLegalSource } from "./engine/tools/mcpSourceDocuments";
 import type { McpToolEvent } from "@mike/contracts";
 import { getUserModelSettings, resolveUserChatSelection } from "../user/user.service";
 import {
@@ -396,6 +398,7 @@ export async function prepareChatStream(
     let completedTurnPersisted = true;
     let memoryTurn: MemoryConversationTurn | null = null;
     let approvalEvents: McpToolEvent[] = [];
+    const approvedSources: LegalDataHunterSource[] = [];
     if (args.askInputsResponse) {
         const appendResult = await appendAskInputsResponseToAssistantMessage(
             db,
@@ -440,6 +443,7 @@ export async function prepareChatStream(
             askEventId: args.askInputsResponse.ask_event_id,
             userId,
             orgId: contentOrgId,
+            onLegalSource: (source) => approvedSources.push(source),
         });
     } else if (lastUser) {
         const { error: userMessageError } = await db
@@ -486,6 +490,9 @@ export async function prepareChatStream(
             userEmail,
             history,
         );
+        for (const source of approvedSources) {
+            registerMcpLegalSource(source, docIndex, docStore);
+        }
         const docAvailability = Object.entries(docIndex).map(([doc_id, info]) => ({
             doc_id,
             filename: info.filename,

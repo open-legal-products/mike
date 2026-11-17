@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { getPanelDocument } from "@/app/lib/mikeApi";
 import { useDocumentWorkspace } from "@/app/contexts/WorkspaceContext";
-import type { PanelDocument } from "../shared/types";
+import { embeddedMcpDocumentNeedsText, type PanelDocument } from "../shared/types";
 
 function mergePanelDocuments(
     summary: PanelDocument,
@@ -21,6 +21,10 @@ function mergePanelDocuments(
     };
 }
 
+/** The backend's fixed 400 detail when the viewer has no LDH connection. */
+const LEGAL_DATA_HUNTER_CONNECT_MESSAGE =
+    "Connect Legal Data Hunter in Settings → Connectors to view this source.";
+
 function friendlyDocumentError(message: string): string {
     try {
         const parsed = JSON.parse(message) as { detail?: unknown };
@@ -28,6 +32,7 @@ function friendlyDocumentError(message: string): string {
     } catch {
         // Keep the original message.
     }
+    if (message === LEGAL_DATA_HUNTER_CONNECT_MESSAGE) return message;
     if (message.includes("429") || /rate limit|throttled/i.test(message)) {
         const wait = message.match(/available in\s+(\d+)\s+seconds/i)?.[1];
         return wait
@@ -46,10 +51,11 @@ export function useResolvedPanelDocument(document: PanelDocument): {
     const documentId = document.document_id;
     // The workspace of the chat, review or project the document is opened
     // from (else the active one): a case is read with its CourtListener
-    // connection.
+    // connection, a Legal Data Hunter source with its LDH connection.
     const workspace = useDocumentWorkspace();
     const needsHydration =
-        document.type === "case" && !document.subdocuments?.length;
+        (document.type === "case" && !document.subdocuments?.length) ||
+        embeddedMcpDocumentNeedsText(document);
     const [request, setRequest] = useState<{
         documentId: string;
         loaded: PanelDocument | null;

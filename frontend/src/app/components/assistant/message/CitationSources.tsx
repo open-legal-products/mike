@@ -1,5 +1,6 @@
 import { SvgAssetIcon } from "@/app/components/ui/svg-asset-icon";
 import caseLaw from "../../../../../public/icons/legal-sources/case-law.svg";
+import legislation from "../../../../../public/icons/legal-sources/legislation.svg";
 import { Loader2 } from "lucide-react";
 import { FileTypeIcon } from "../../shared/FileTypeIcon";
 import { displayCitationQuote, formatCitationPage } from "../../shared/types";
@@ -44,17 +45,25 @@ export function citationTooltip(annotation: Citation): string {
     return verification ? `${source} — ${verification}` : source;
 }
 
+function LegalSourceIcon({ type }: { type: "case" | "legislation" }) {
+    return (
+        <SvgAssetIcon
+            src={type === "case" ? caseLaw : legislation}
+            aria-hidden="true"
+            width={14}
+            height={14}
+            className="h-3.5 w-3.5 shrink-0"
+        />
+    );
+}
+
 function CitationSourceIcon({ annotation }: { annotation: Citation }) {
-    if (annotation.kind === "case") {
-        return (
-            <SvgAssetIcon
-                src={caseLaw}
-                aria-hidden="true"
-                width={14}
-                height={14}
-                className="h-3.5 w-3.5 shrink-0"
-            />
-        );
+    if (annotation.kind === "case") return <LegalSourceIcon type="case" />;
+    // Embedded legal sources (e.g. Legal Data Hunter) are titled, not named
+    // like files, so their document type picks the icon, as in the panel.
+    const documentType = annotation.document?.type;
+    if (documentType === "case" || documentType === "legislation") {
+        return <LegalSourceIcon type={documentType} />;
     }
     return (
         <FileTypeIcon fileType={annotation.filename} className="h-3.5 w-3.5" />

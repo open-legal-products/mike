@@ -20,6 +20,11 @@ import {
   normalizeCaseDocument,
   type SourceDocument,
 } from "../../lib/sourceDocuments";
+import {
+  fetchLegalDataHunterSource,
+  parseLegalDataHunterDocumentId,
+} from "../../lib/mcpConnectors";
+import { teamOrgIdOf } from "../../lib/personalOrgs";
 
 export type SourceDocumentResult =
   | { ok: true; document: SourceDocument }
@@ -49,6 +54,45 @@ function isCourtlistenerCredentialError(error: unknown): boolean {
 // upstream fetch; the entry is dropped as soon as that fetch settles.
 const documentFetches = new Map<string, Promise<unknown>>();
 
+export const LEGAL_DATA_HUNTER_CONNECT_DETAIL =
+  "Connect Legal Data Hunter in Settings → Connectors to view this source.";
+
+const legalSourceFetches = new Map<string, Promise<SourceDocumentResult>>();
+
+/**
+ * An embedded Legal Data Hunter source is not stored with the chat: its text
+ * is read again through the viewer's own LDH connection. The document keeps
+ * the id it was cited under, so quote targets in the citation still match.
+ */
+async function getLegalDataHunterDocument(
+  db: Db,
+  args: { userId: string; documentId: string; orgId?: string | null },
+): Promise<SourceDocumentResult> {
+  const reference = parseLegalDataHunterDocumentId(args.documentId);
+  if (!reference) {
+    return { ok: false, kind: "not_found", detail: "Document not found" };
+  }
+  const owner = { userId: args.userId, orgId: await teamOrgIdOf(db, args.orgId) };
+  const fetched = await fetchLegalDataHunterSource(owner, reference, db);
+  if (!fetched.ok) {
+    return fetched.kind === "not_connected"
+      ? { ok: false, kind: "credentials", detail: LEGAL_DATA_HUNTER_CONNECT_DETAIL }
+      : { ok: false, kind: "error", error: new Error("Legal Data Hunter source unavailable") };
+  }
+  const { document } = fetched.source;
+  return {
+    ok: true,
+    document: {
+      ...document,
+      document_id: args.documentId,
+      subdocuments: document.subdocuments?.map((subdocument) => ({
+        ...subdocument,
+        document_id: `${args.documentId}:text`,
+      })),
+    },
+  };
+}
+
 /**
  * Hydrate an opaque source-document id that needs provider-backed content.
  * File documents use the existing single-document viewer endpoints; `case:*`
@@ -66,6 +110,17 @@ export async function getSourceDocument(
     orgId?: string | null;
   },
 ): Promise<SourceDocumentResult> {
+  if (args.documentId.startsWith("mcp:")) {
+    const fetchKey = `${args.userId}:${args.orgId ?? "personal"}:${args.documentId}`;
+    let request = legalSourceFetches.get(fetchKey);
+    if (!request) {
+      request = getLegalDataHunterDocument(db, args)
+        .catch((error: unknown): SourceDocumentResult => ({ ok: false, kind: "error", error }))
+        .finally(() => legalSourceFetches.delete(fetchKey));
+      legalSourceFetches.set(fetchKey, request);
+    }
+    return request;
+  }
   const clusterId = caseClusterId(args.documentId);
   if (!clusterId) {
     return { ok: false, kind: "not_found", detail: "Document not found" };

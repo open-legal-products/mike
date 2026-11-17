@@ -30,7 +30,9 @@ import {
   COURTLISTENER_TOOL_NAMES,
   type CourtlistenerToolEvent,
 } from "./courtlistenerTools";
-import { executeMcpToolCall } from "../../../../lib/mcpConnectors";
+import { executeMcpToolCall, type McpToolEvent } from "../../../../lib/mcpConnectors";
+import { registerMcpLegalSource } from "./mcpSourceDocuments";
+import type { LegalDataHunterSource } from "../../../../lib/mcp/sourceDocuments";
 import {
   APPROVAL_UNAVAILABLE_MESSAGE,
   addApprovalItems,
@@ -611,7 +613,12 @@ export async function runToolCalls(
           name: tc.function.name,
         })}\n\n`,
       );
-      const { content, event } =
+      const result: {
+        content: string;
+        event: McpToolEvent;
+        legalSource?: LegalDataHunterSource | null;
+        truncated?: boolean;
+      } =
         plan.type === "result"
           ? plan
           : plan.type === "approval"
@@ -650,10 +657,19 @@ export async function runToolCalls(
                     args,
                     db,
                   );
+      const { content, event } = result;
+      let sourceCitation = "";
+      if (event.status === "ok" && result.legalSource && docIndex) {
+        const handle = registerMcpLegalSource(result.legalSource, docIndex, docStore);
+        sourceCitation = `\n\nCanonical legal source: {"doc_id":"${handle}"}. Cite an exact quote from this source with that doc_id.`;
+        if (result.truncated) {
+          sourceCitation += ` The result above was cut off before the end of the document. Call read_document with doc_id "${handle}" to read the full text before relying on or quoting any part not shown above.`;
+        }
+      }
       toolResults.push({
         role: "tool",
         tool_call_id: tc.id,
-        content,
+        content: `${content}${sourceCitation}`,
       });
       mcpEvents.push(event);
       write(
@@ -860,8 +876,10 @@ export async function runToolCalls(
       // must enter model context only through read_document/fetch_documents.
       // Those paths emit the visible read lifecycle and nonce-fence the entire
       // body. find_in_document otherwise returns raw, user-controlled snippets
-      // and would silently bypass both guarantees.
-      if (docInfo?.inline_text !== undefined) {
+      // and would silently bypass both guarantees. A retrieved legal source
+      // is searched like any document, with its snippets fenced below.
+      const isLegalSource = !!docInfo?.panel_document;
+      if (docInfo?.inline_text !== undefined && !isLegalSource) {
         toolResults.push({
           role: "tool",
           tool_call_id: tc.id,
@@ -917,7 +935,11 @@ export async function runToolCalls(
           total_matches: totalMatches,
         });
       }
-      toolResults.push({ role: "tool", tool_call_id: tc.id, content });
+      toolResults.push({
+        role: "tool",
+        tool_call_id: tc.id,
+        content: isLegalSource && nonce ? spotlight(content, nonce) : content,
+      });
     } else if (tc.function.name === "list_documents") {
       const list = Array.from(docStore.entries()).map(([doc_id, info]) => ({
         doc_id,

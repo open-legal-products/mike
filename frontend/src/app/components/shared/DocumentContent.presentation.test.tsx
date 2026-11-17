@@ -37,7 +37,6 @@ describe("DocumentTitleRow", () => {
                     version_number: 1,
                 }}
                 isReloading={false}
-                compactActions={false}
             />,
         );
 
@@ -51,7 +50,7 @@ describe("DocumentTitleRow", () => {
         ).toBeInTheDocument();
     });
 
-    it("keeps compact source actions when the side panel is minimized", () => {
+    it("renders source actions as icon-only buttons with fixed names", () => {
         render(
             <DocumentTitleRow
                 document={{
@@ -64,24 +63,21 @@ describe("DocumentTitleRow", () => {
                         {
                             type: "download",
                             url: "https://example.com/opinion.pdf",
-                            label: "Download",
                         },
                         {
                             type: "link",
                             url: "https://example.com/source",
-                            label: "Source",
                         },
                     ],
                 }}
                 isReloading={false}
-                compactActions
             />,
         );
 
         expect(screen.getByRole("link", { name: "Download" })).toHaveClass(
             "w-6",
         );
-        expect(screen.getByRole("link", { name: "Source" })).toHaveClass(
+        expect(screen.getByRole("link", { name: "Open link" })).toHaveClass(
             "w-6",
         );
     });
@@ -91,7 +87,6 @@ describe("case document", () => {
     it("uses the same title row for normalized metadata and actions", () => {
         const { container } = render(
             <DocumentContent
-                compactActions={false}
                 mode={{ kind: "document" }}
                 document={{
                     document_id: "case:123",
@@ -108,12 +103,10 @@ describe("case document", () => {
                         {
                             type: "download",
                             url: "https://example.com/opinion.pdf",
-                            label: "Download",
                         },
                         {
                             type: "link",
                             url: "https://example.com/source",
-                            label: "Link",
                         },
                     ],
                     quotes: [],
@@ -144,7 +137,7 @@ describe("case document", () => {
             "href",
             "https://example.com/opinion.pdf",
         );
-        expect(screen.getByRole("link", { name: "Link" })).toHaveAttribute(
+        expect(screen.getByRole("link", { name: "Open link" })).toHaveAttribute(
             "href",
             "https://example.com/source",
         );

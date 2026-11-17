@@ -54,6 +54,9 @@ export function clearDocxQuoteHighlights(root: HTMLElement): void {
  * letters-only substring matching, so whitespace/punctuation differences
  * between the LLM's quote and the rendered text don't break matching.
  *
+ * `exactMatch` preserves the entire quote, including Unicode and punctuation,
+ * for embedded MCP sources that were verified against canonical plain text.
+ *
  * Returns the first highlight span if any match was found, for
  * scroll-into-view by the caller.
  */
@@ -61,12 +64,14 @@ export function highlightDocxQuote(
     root: HTMLElement,
     quote: string,
     clearExisting = true,
+    exactMatch = false,
 ): HTMLElement | null {
     if (clearExisting) clearDocxQuoteHighlights(root);
     if (!quote) return null;
-    const segments = quote
+    const normalize = exactMatch ? (value: string) => value : onlyLetters;
+    const segments = exactMatch ? [quote] : quote
         .split(/\[\[PAGE_BREAK\]\]|\.{3}|…/)
-        .map(onlyLetters)
+        .map(normalize)
         .filter((s) => s.length > 0);
     if (segments.length === 0) return null;
 
@@ -75,7 +80,7 @@ export function highlightDocxQuote(
     const nodeStrippedLen: number[] = [];
     let fullStripped = "";
     for (const node of textNodes) {
-        const stripped = onlyLetters(node.data);
+        const stripped = normalize(node.data);
         nodeStartInFull.push(fullStripped.length);
         nodeStrippedLen.push(stripped.length);
         fullStripped += stripped;
@@ -85,7 +90,7 @@ export function highlightDocxQuote(
     const ranges: Range[] = [];
 
     for (const segment of segments) {
-        const searchKey = segment.slice(0, 30);
+        const searchKey = exactMatch ? segment : segment.slice(0, 30);
         const matchPos = fullStripped.indexOf(searchKey);
         if (matchPos < 0) continue;
         const matchEnd = matchPos + segment.length;
@@ -98,8 +103,8 @@ export function highlightDocxQuote(
             const localStart = Math.max(0, matchPos - start);
             const localEnd = Math.min(nodeStrippedLen[i], matchEnd - start);
             const text = textNodes[i].data;
-            const origStart = toOrigPos(text, localStart);
-            const origEnd = toOrigPos(text, localEnd);
+            const origStart = exactMatch ? localStart : toOrigPos(text, localStart);
+            const origEnd = exactMatch ? localEnd : toOrigPos(text, localEnd);
             if (origStart >= origEnd) continue;
             ranges.push({ nodeIdx: i, origStart, origEnd });
         }
