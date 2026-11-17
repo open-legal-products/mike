@@ -37,6 +37,7 @@ import {
 import {
   externalSourceFromMcpCall,
   mcpResultCharsFor,
+  stampSourceDocument,
 } from "../../../source-documents/sourceDocuments.service";
 import {
   externalSourceCitationHint,
@@ -1386,15 +1387,17 @@ export async function runToolCalls(
               `data: ${JSON.stringify({
                 type: "case_opinions",
                 cluster_id: clusterId,
-                document: normalizeCaseDocument({
-                  clusterId,
-                  caseName: input.caseName,
-                  citations: input.citations,
-                  url: input.url,
-                  pdfUrl: input.pdfUrl,
-                  dateFiled: input.dateFiled,
-                  opinions: input.opinions,
-                }),
+                document: stampSourceDocument(
+                  normalizeCaseDocument({
+                    clusterId,
+                    caseName: input.caseName,
+                    citations: input.citations,
+                    url: input.url,
+                    pdfUrl: input.pdfUrl,
+                    dateFiled: input.dateFiled,
+                    opinions: input.opinions,
+                  }),
+                ),
               })}\n\n`,
             );
           }

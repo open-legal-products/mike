@@ -189,8 +189,12 @@ describe("subagent run store", () => {
     // An ordinary document, and a connector result that registered nothing, are recorded as before.
     expect(toolRecord({ id: "5", name: "read_document", input: { doc_id: "doc-0" } }, "lease text", docStore, docIndex)).toMatchObject({ result: "lease text", documents: [{ document_id: "doc-a", version_id: "v1" }] });
     expect(toolRecord({ id: "6", name: "mcp_slack_search", input: {} }, "{\"result\":[]}", docStore, docIndex).result).toBe("{\"result\":[]}");
-    // A handle the store does not hold as a source redacts nothing.
+    // A handle the store does not hold as a source redacts nothing and keeps the upload's reference.
     expect(toolRecord({ id: "7", name: "mcp_c1_get_document", input: {} }, connectorResult, docStore, docIndex, "doc-0").result).toBe(connectorResult);
+    expect(toolRecord({ id: "8", name: "read_document", input: { doc_id: "doc-0" } }, "lease text", docStore, docIndex, "doc-0")).toMatchObject({
+      result: "lease text",
+      documents: [{ document_id: "doc-a", version_id: "v1" }],
+    });
   });
 });
 

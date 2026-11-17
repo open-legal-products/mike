@@ -41,6 +41,15 @@ export function registerExternalSource(
   return handle;
 }
 
+/**
+ * The one exact-match rule for a provider that verifies quotes verbatim: the
+ * quote, as the model wrote it, occurs in the canonical text. No whitespace or
+ * punctuation tolerance, so a changed legal quotation never passes.
+ */
+export function quoteOccursVerbatim(text: string, quote: string): boolean {
+  return !!quote.trim() && text.includes(quote);
+}
+
 /** Appended to a connector result that carried a citable source. */
 export function externalSourceCitationHint(
   handle: string,

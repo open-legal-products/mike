@@ -379,7 +379,8 @@ law, Legal Data Hunter documents) is a *source provider* in
 - `sourceDocuments.types.ts` defines `SourceProvider`: which opaque document
   ids it owns (id families must not overlap; `mcp:*` belongs to Legal Data
   Hunter because its ids are keyed by connector), how its quotes are verified
-  (`exact` or `fuzzy`, applied by `verifyCitations` and stamped on the panel
+  (`exact` or `fuzzy`, applied when a request-scoped source is cited and when
+  citations are re-verified by `verifyCitations`, and stamped on the panel
   document as `quote_verification` so the client highlights the same way), how
   to hydrate a document for the panel (`fetch`), and optionally how to
   recognise a complete document inside an MCP tool result (`fromMcpCall`) and
@@ -388,9 +389,10 @@ law, Legal Data Hunter documents) is a *source provider* in
 - `sourceDocuments.providers.ts` is the registry. `getSourceDocument`
   dispatches a `GET /documents/:id` to the owning provider and deduplicates
   concurrent fetches; `externalSourceFromMcpCall` asks every provider about a
-  successful connector call. No other backend production code names a
-  provider; the engine's CourtListener tools predate the registry and keep
-  their own case-citation handling.
+  successful connector call. No other code dispatches on a provider's
+  identity; the engine's CourtListener tools predate the registry and keep
+  their own case-citation handling, stamping the documents they emit through
+  `stampSourceDocument`.
 - One `sourceDocuments.<provider>.ts` per provider holds the implementation:
   `sourceDocuments.courtlistener.ts` hydrates `case:*` ids;
   `sourceDocuments.legalDataHunter.ts` owns `mcp:*` ids, recognises complete
@@ -401,13 +403,15 @@ The chat engine consumes providers only through the facade. A source a
 provider recognises in a connector result is registered for the request by
 `modules/chat/engine/tools/externalSources.ts` (`DocStore.external_source`
 plus `inline_text`), which makes it readable and searchable like an attachment
-and citable through `createCitation` with verbatim quotes only. Nothing is
-persisted: a citation carries the provider's document id, and the panel reads
-the text again through `getSourceDocument` when the source is opened.
+and citable through `createCitation`, with verbatim quotes only when the
+provider verifies exactly. Nothing is persisted: a citation carries the
+provider's document id, and the panel reads the text again through
+`getSourceDocument` when the source is opened.
 
 Every provider document the backend emits carries `provider` and
-`quote_verification`: the registry stamps what it hands out, and
-`createCitation` stamps the case citations it assembles (`stampSourceDocument`).
+`quote_verification`: the registry stamps what it hands out, and the chat
+engine stamps the case documents it assembles itself (`createCitation`, the
+`case_citation` and `case_opinions` events) through `stampSourceDocument`.
 The client reads origin and highlight exactness from those fields and falls
 back to the legal document types only for documents saved before the fields
 existed. Adding a provider therefore means one implementation file and one

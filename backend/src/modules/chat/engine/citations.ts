@@ -4,6 +4,7 @@ import {
   sourceProviderFor,
   stampSourceDocument,
 } from "../../source-documents/sourceDocuments.service";
+import { quoteOccursVerbatim } from "./tools/externalSources";
 import {
   normalizeCaseDocument,
   sourceDocumentType,
@@ -371,7 +372,11 @@ type CasesByClusterId = Map<number, {
  * the canonical text, so a changed legal quotation can never be surfaced as
  * verified; such a citation is returned null when any quote fails. A
  * provider that verifies tolerantly leaves its quotes to the end-of-turn
- * verification, like an upload's.
+ * verification, like an upload's; until that runs they are marked unverified,
+ * so a turn that ends before verification (a stopped stream) never stores
+ * them as verified. A source no provider owns cannot occur in production
+ * (every registered source comes from a provider) and is treated as exact,
+ * the safe default.
  */
 function createExternalSourceCitation(
   citation: ParsedDocumentCitation,
@@ -380,13 +385,13 @@ function createExternalSourceCitation(
   text: string,
 ) {
   const exact = sourceProviderFor(document.document_id)?.quoteVerification !== "fuzzy";
-  if (exact && citation.quotes.some(({ quote }) => !quote.trim() || !text.includes(quote))) {
+  if (exact && citation.quotes.some(({ quote }) => !quoteOccursVerbatim(text, quote))) {
     return null;
   }
   const subdocumentId = document.subdocuments?.[0]?.document_id;
   const quotes: SourceDocumentQuote[] = citation.quotes.map((quote) => ({
     quote: quote.quote,
-    ...(exact ? { verification: { verified: true } } : {}),
+    verification: { verified: exact },
     target: subdocumentId ? { subdocument_id: subdocumentId } : {},
   }));
   return {
@@ -399,7 +404,7 @@ function createExternalSourceCitation(
     version_id: null,
     version_number: null,
     filename: document.title,
-    ...(exact ? { verified: true } : {}),
+    verified: exact,
     page: citation.page,
     quote: citation.quote,
     quotes: citation.quotes,
@@ -408,8 +413,9 @@ function createExternalSourceCitation(
 
 /**
  * Builds the citation annotation for one parsed citation, or null when the
- * citation names a request-scoped external source whose quotes do not occur
- * in it (callers drop those).
+ * citation names a request-scoped external source of an exact provider whose
+ * quotes do not occur verbatim in it, or a provider id that was never read in
+ * this request (callers drop those).
  */
 export function createCitation(
   citation: ParsedCitation,

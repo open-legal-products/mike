@@ -94,11 +94,12 @@ export function toolRecord(
     // source's reference. Such a source exists only in the request that read
     // it, so it is not a document a continuation could recheck access to; the
     // uploaded documents named beside it still are.
-    const externalLabel =
+    const candidate =
         externalSourceHandle ??
         labels.find((label) => label && docStore.get(label)?.external_source) ??
         null;
-    const external = externalLabel ? docStore.get(externalLabel)?.external_source : undefined;
+    const external = candidate ? docStore.get(candidate)?.external_source : undefined;
+    const externalLabel = external ? candidate : null;
     const documents = labels
         .filter((label) => externalLabel === null || label !== externalLabel)
         .map((label) => {

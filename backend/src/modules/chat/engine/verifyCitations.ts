@@ -1,5 +1,6 @@
 import type { QuoteVerification } from "./types";
 import { sourceProviderFor } from "../../source-documents/sourceDocuments.service";
+import { quoteOccursVerbatim } from "./tools/externalSources";
 import { normalizeWithMap, type NormalizeOptions } from "./tools/documentOps";
 
 // Mirrors the frontend: cross-page quotes join two page segments with this
@@ -472,7 +473,7 @@ export async function verifyDocumentCitationAnnotation(
       ?.quoteVerification === "exact";
   const verifiedQuotes = entries.map((entry) => {
     const result = exact
-      ? { verified: !!entry.quote.trim() && source.includes(entry.quote), needs_correction: false }
+      ? { verified: quoteOccursVerbatim(source, entry.quote), needs_correction: false }
       : verifierFor(source)(entry.quote);
     const { needs_correction, ...verification } = result;
     // Swap the exact source text into the displayed quote when it drifted,

@@ -1,6 +1,19 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import type { ExternalSource } from "../../../../lib/sourceDocuments";
+
+// A synthetic provider that verifies tolerantly, beside the real registry.
+vi.mock("../../../source-documents/sourceDocuments.service", async (original) => {
+  const actual = await original<typeof import("../../../source-documents/sourceDocuments.service")>();
+  const tolerant = { id: "tolerant", quoteVerification: "fuzzy" as const };
+  return {
+    ...actual,
+    sourceProviderFor: (id: string) => (id.startsWith("tolerant:") ? tolerant : actual.sourceProviderFor(id)),
+    isExternalSourceDocumentId: (id: string) => id.startsWith("tolerant:") || actual.isExternalSourceDocumentId(id),
+  };
+});
+
 import { createCitation, parseCitations } from "../citations";
+import { caseCitationEventFromRecord } from "../tools/courtlistenerTurnState";
 import {
   externalSourceCitationHint,
   registerExternalSource,
@@ -149,6 +162,43 @@ describe("createCitation for an external source", () => {
         docStore,
       ),
     ).toBeNull();
+  });
+
+  it("leaves a tolerant provider's quotes to end-of-turn verification, unverified until then", () => {
+    const docIndex: DocIndex = {};
+    const docStore: DocStore = new Map();
+    const handle = registerExternalSource(
+      source({ document_id: "tolerant:1", subdocuments: [{ document_id: "tolerant:1:text", title: "Smith v Jones", type: "html" }] }),
+      docIndex,
+      docStore,
+    );
+    const drifted = createCitation(
+      cite(`[{"ref":1,"doc_id":"${handle}","page":1,"quote":"notice  was sufficient"}]`),
+      docIndex,
+      undefined,
+      docStore,
+    );
+    // Not dropped at creation, but never stored as verified by a turn that
+    // ends before verification runs.
+    expect(drifted).toMatchObject({
+      doc_id: handle,
+      document_id: "tolerant:1",
+      verified: false,
+      document: { quotes: [{ quote: "notice  was sufficient", verification: { verified: false } }] },
+    });
+  });
+
+  it("stamps the case documents the engine emits as events", () => {
+    const event = caseCitationEventFromRecord({
+      clusterId: 77,
+      caseName: "A v B",
+      citations: ["1 U.S. 1"],
+      url: "https://www.courtlistener.com/opinion/77/a-v-b/",
+      pdfUrl: null,
+      dateFiled: null,
+      opinions: [],
+    });
+    expect(event?.document).toMatchObject({ document_id: "case:77", provider: "courtlistener", quote_verification: "fuzzy" });
   });
 
   it("stamps a CourtListener case citation with its provider", () => {

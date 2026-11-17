@@ -20,8 +20,9 @@ import type { SourceDocument } from "@mike/contracts";
  * A provider-backed source read during one request, for example a document a
  * connector tool returned. `document` is the panel document without its body;
  * `text` is the complete canonical text, which cited quotes are verified
- * against verbatim and which the panel reads again from the provider when the
- * source is opened later, so no copy is stored with the chat.
+ * against (verbatim for a provider that verifies exactly) and which the panel
+ * reads again from the provider when the source is opened later, so no copy
+ * is stored with the chat.
  */
 export type ExternalSource = { text: string; document: SourceDocument };
 
