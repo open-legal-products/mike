@@ -24,8 +24,13 @@ export type DocStore = Map<
     inline_text?: string;
     /** Search handles pin the source revision and reauthorize every subsequent read. */
     search_source?: { revision: string; userId: string; userEmail?: string | null };
-    /** Complete request-scoped source for the shared citation panel. */
-    panel_document?: SourceDocument;
+    /**
+     * A provider-backed source read during this request (see
+     * tools/externalSources.ts): the panel document without its body, which
+     * `inline_text` holds. Quotes cited from it must occur in that text
+     * verbatim; it has no stored version, permissions or file.
+     */
+    external_source?: SourceDocument;
   }
 >;
 

@@ -27,7 +27,13 @@ import {
 import {
   executeApprovedMcpToolCall,
   planMcpToolCall,
+  type McpToolCallResult,
 } from "../../../../lib/mcpConnectors";
+import type { ExternalSource } from "../../../../lib/sourceDocuments";
+import {
+  externalSourceFromMcpCall,
+  mcpResultCharsFor,
+} from "../../../source-documents/sourceDocuments.service";
 import {
   executeApprovedGoogleWorkspaceCall,
   isGoogleWorkspaceTool,
@@ -38,7 +44,6 @@ import {
   loadAssistantMessage,
 } from "../contextBuilders";
 import { TOOL_ERROR_MESSAGE } from "../types";
-import type { LegalDataHunterSource } from "../../../../lib/mcp/sourceDocuments";
 
 /** Tool output replayed to the model after an approved call, per call. */
 export const MAX_APPROVAL_RESULT_CHARS = 4_000;
@@ -102,8 +107,12 @@ export async function runApprovedConnectorActions(args: {
   askEventId: string;
   userId: string;
   orgId?: string | null;
-  /** In-memory delivery to the resumed request, never persisted in events. */
-  onLegalSource?: (source: LegalDataHunterSource) => void;
+  /**
+   * Receives a complete source document carried in an approved result, for
+   * the resumed request to register. Delivered in memory only: the stored
+   * event keeps its truncated result, never the document.
+   */
+  onExternalSource?: (source: ExternalSource) => void;
 }): Promise<McpToolEvent[]> {
   const { db, chatId, messageId, askEventId, userId } = args;
   const row = await loadAssistantMessage(db, chatId, messageId);
@@ -137,9 +146,11 @@ export async function runApprovedConnectorActions(args: {
     if (!approved.has(item.id)) continue;
     const execution = await executeApprovedItem(owner, item, db);
     const { content: result, event } = execution;
-    if (event.status === "ok" && execution.legalSource) {
-      args.onLegalSource?.(execution.legalSource);
-    }
+    const source =
+      event.status === "ok" && execution.call
+        ? externalSourceFromMcpCall(execution.call)
+        : null;
+    if (source) args.onExternalSource?.(source);
     // These events are stored and streamed outside runLLMStream, so apply its
     // rule here: the user never sees a connector's raw error text.
     events.push({
@@ -172,14 +183,12 @@ async function executeApprovedItem(
   owner: ConnectorOwner,
   item: ConnectorApprovalItem,
   db: Db,
-): Promise<{
-  content: string;
-  event: McpToolEvent;
-  legalSource?: LegalDataHunterSource | null;
-}> {
+): Promise<McpToolCallResult> {
   try {
     if (item.binding.type === "mcp")
-      return await executeApprovedMcpToolCall(owner, item, db);
+      return await executeApprovedMcpToolCall(owner, item, db, {
+        maxResultChars: mcpResultCharsFor,
+      });
     return item.binding.provider === "google-drive"
       ? await executeApprovedGoogleDriveCall(owner, item, db)
       : await executeApprovedGoogleWorkspaceCall(owner, item, db);

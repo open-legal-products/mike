@@ -136,19 +136,15 @@ export type PanelDocumentQuote = SourceDocumentQuote;
 export type PanelSubdocument = SourceSubdocument;
 export type PanelDocument = SourceDocument;
 
-/** MCP citation bodies are embedded sources, not uploaded/versioned files. */
-export function isEmbeddedMcpDocument(document: PanelDocument): boolean {
-  return document.document_id.startsWith("mcp:");
-}
-
-/**
- * Saved citations keep only an embedded source's reference; its text is
- * read again from the provider when the source opens.
- */
-export function embeddedMcpDocumentNeedsText(document: PanelDocument): boolean {
-  return isEmbeddedMcpDocument(document) &&
-    !document.subdocuments?.some((source) => typeof source.text === "string");
-}
+/** Every `SourceDocumentType` the wire contract allows, for runtime checks. */
+export const PANEL_DOCUMENT_TYPES: readonly PanelDocumentType[] = [
+  "docx",
+  "pdf",
+  "spreadsheet",
+  "case",
+  "legislation",
+  "legal_research",
+];
 
 export function isPanelDocument(value: unknown): value is PanelDocument {
   if (!value || typeof value !== "object" || Array.isArray(value)) {
@@ -158,9 +154,7 @@ export function isPanelDocument(value: unknown): value is PanelDocument {
   return (
     typeof document.document_id === "string" &&
     typeof document.title === "string" &&
-    ["docx", "pdf", "spreadsheet", "case", "legislation", "legal_research"].includes(
-      String(document.type),
-    ) &&
+    (PANEL_DOCUMENT_TYPES as readonly string[]).includes(String(document.type)) &&
     Array.isArray(document.metadata) &&
     Array.isArray(document.quotes) &&
     (document.actions === undefined || Array.isArray(document.actions)) &&

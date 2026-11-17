@@ -1,8 +1,5 @@
 "use client";
 
-import { SvgAssetIcon } from "@/app/components/ui/svg-asset-icon";
-import caseLaw from "../../../../public/icons/legal-sources/case-law.svg";
-import legislation from "../../../../public/icons/legal-sources/legislation.svg";
 import { useEffect, useState } from "react";
 import { Download, ExternalLink, SquarePen } from "lucide-react";
 import { downloadDocumentFile } from "@/app/lib/downloadDocument";
@@ -13,11 +10,13 @@ import { FileTypeIcon } from "./FileTypeIcon";
 import { DocumentVersionPicker } from "./DocumentVersionPicker";
 import type { DocumentVersion } from "@/app/lib/mikeApi";
 import { VersionChip } from "./VersionChip";
-import { isEmbeddedMcpDocument, type PanelDocument } from "./types";
+import type { PanelDocument } from "./types";
+import { documentCapabilities } from "./documentCapabilities";
+import { LegalSourceIcon } from "./LegalSourceIcon";
 import type { DocxSaveState } from "./views/DocxRenderer.types";
 import { DocxSaveErrorPopup } from "./views/DocxSaveErrorPopup";
 
-function isSafeMcpSourceUrl(value: string): boolean {
+function isSafeSourceUrl(value: string): boolean {
     try {
         const url = new URL(value);
         return url.protocol === "https:" && !url.username && !url.password;
@@ -44,13 +43,16 @@ export function DocumentTitleRow({
     toolbarVisible?: boolean;
     onToggleToolbar?: () => void;
 }) {
-    const isEmbeddedSource = isEmbeddedMcpDocument(document);
-    const isFile = !isEmbeddedSource && (
-        document.type === "docx" ||
-        document.type === "pdf" ||
-        document.type === "spreadsheet");
-    const actions = (document.actions ?? []).filter((action) =>
-        !isEmbeddedSource || (action.type === "link" && isSafeMcpSourceUrl(action.url)),
+    const { external, legalIcon } = documentCapabilities(document);
+    // Versions and the file download belong to uploads only.
+    const isFile =
+        !external &&
+        (document.type === "docx" ||
+            document.type === "pdf" ||
+            document.type === "spreadsheet");
+    // A provider's links are shown only when credential-free HTTPS.
+    const actions = (document.actions ?? []).filter(
+        (action) => !external || isSafeSourceUrl(action.url),
     );
     const versionNumber = document.version_number;
 
@@ -61,19 +63,8 @@ export function DocumentTitleRow({
             <div className="flex items-center gap-3">
                 <div className="flex min-w-0 flex-1 items-center gap-2">
                     <span className="shrink-0">
-                        {document.type === "case" ||
-                        document.type === "legislation" ? (
-                            <SvgAssetIcon
-                                src={
-                                    document.type === "case"
-                                        ? caseLaw
-                                        : legislation
-                                }
-                                aria-hidden="true"
-                                width={14}
-                                height={14}
-                                className="h-3.5 w-3.5 shrink-0 object-contain"
-                            />
+                        {legalIcon ? (
+                            <LegalSourceIcon kind={legalIcon} />
                         ) : (
                             <FileTypeIcon
                                 fileType={document.title}

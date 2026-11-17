@@ -22,8 +22,8 @@ import {
 } from "../../lib/webSearch";
 import { resolveRequestTimeZone } from "../../lib/userTime";
 import { createAssistantHistoryLoader, attachPriorReasoning, buildDocContext, buildMessages, buildUserPersonalisationPrompt, devLog, enrichWithPriorEvents, loadUserMessageSentTimes, buildWorkflowStore, appendAskInputsResponseToAssistantMessage, runApprovedConnectorActions, generateSpotlightNonce, type AskInputsResponseRequest, type ChatMessage, type SubagentDefaults } from "./engine/index";
-import type { LegalDataHunterSource } from "../../lib/mcp/sourceDocuments";
-import { registerMcpLegalSource } from "./engine/tools/mcpSourceDocuments";
+import type { ExternalSource } from "../../lib/sourceDocuments";
+import { registerExternalSource } from "./engine/tools/externalSources";
 import type { McpToolEvent } from "@mike/contracts";
 import { getUserModelSettings, resolveUserChatSelection } from "../user/user.service";
 import {
@@ -398,7 +398,9 @@ export async function prepareChatStream(
     let completedTurnPersisted = true;
     let memoryTurn: MemoryConversationTurn | null = null;
     let approvalEvents: McpToolEvent[] = [];
-    const approvedSources: LegalDataHunterSource[] = [];
+    // Sources carried in approved connector results, registered once the
+    // request's document context exists.
+    const approvedSources: ExternalSource[] = [];
     if (args.askInputsResponse) {
         const appendResult = await appendAskInputsResponseToAssistantMessage(
             db,
@@ -443,7 +445,7 @@ export async function prepareChatStream(
             askEventId: args.askInputsResponse.ask_event_id,
             userId,
             orgId: contentOrgId,
-            onLegalSource: (source) => approvedSources.push(source),
+            onExternalSource: (source) => approvedSources.push(source),
         });
     } else if (lastUser) {
         const { error: userMessageError } = await db
@@ -491,7 +493,7 @@ export async function prepareChatStream(
             history,
         );
         for (const source of approvedSources) {
-            registerMcpLegalSource(source, docIndex, docStore);
+            registerExternalSource(source, docIndex, docStore);
         }
         const docAvailability = Object.entries(docIndex).map(([doc_id, info]) => ({
             doc_id,

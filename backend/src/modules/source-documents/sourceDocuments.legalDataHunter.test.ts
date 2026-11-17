@@ -1,9 +1,27 @@
-import { describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+import type { Db } from "../../lib/supabase";
+import type { McpCallRecord, McpToolCallResult } from "../../lib/mcpConnectors";
+
+const mocks = vi.hoisted(() => ({
+  executeMcpToolOnServer: vi.fn(),
+  teamOrgIdOf: vi.fn(),
+}));
+vi.mock("../../lib/mcpConnectors", async (original) => ({
+  ...(await original<typeof import("../../lib/mcpConnectors")>()),
+  executeMcpToolOnServer: mocks.executeMcpToolOnServer,
+}));
+vi.mock("../../lib/personalOrgs", () => ({ teamOrgIdOf: mocks.teamOrgIdOf }));
+
 import {
   extractLegalDataHunterSource,
+  LEGAL_DATA_HUNTER_CONNECT_DETAIL,
+  LEGAL_DATA_HUNTER_RESULT_CHARS,
+  LEGAL_DATA_HUNTER_URL,
   legalDataHunterDocumentId,
+  legalDataHunterSourceProvider,
   parseLegalDataHunterDocumentId,
-} from "./sourceDocuments";
+} from "./sourceDocuments.legalDataHunter";
+import { mcpResultCharsFor, sourceProviderFor } from "./sourceDocuments.providers";
 
 const context = {
   connectorId: "connector-1",
@@ -48,11 +66,11 @@ describe("Legal Data Hunter source documents", () => {
         metadata: [],
         quotes: [],
         actions: [{ type: "link", url: payload.url }],
+        // The body is in `text` above, never in the panel document.
         subdocuments: [{
           document_id: "mcp:connector-1:10:legifrance:12:JORFTEXT0001:text",
           title: payload.title,
           type: "html",
-          text: payload.text,
         }],
       },
     });
@@ -126,5 +144,84 @@ describe("Legal Data Hunter document ids", () => {
     "mcp:connector-1:0::12:JORFTEXT0001",
   ])("rejects %s", (documentId) => {
     expect(parseLegalDataHunterDocumentId(documentId)).toBeNull();
+  });
+});
+
+describe("Legal Data Hunter as a source provider", () => {
+  const args = context.arguments;
+  const documentId = legalDataHunterDocumentId("c1", args.source, args.source_id);
+  const db = {} as Db;
+  const call = (overrides: Partial<McpCallRecord> = {}): McpCallRecord => ({
+    connectorId: "c1",
+    serverUrl: LEGAL_DATA_HUNTER_URL,
+    toolName: "get_document",
+    arguments: { ...args, include_full_text: true },
+    result: { structuredContent: payload },
+    ...overrides,
+  });
+  const okResult = (record: McpCallRecord): McpToolCallResult => ({
+    content: "",
+    call: record,
+    event: {
+      type: "mcp_tool_call",
+      connector_id: record.connectorId,
+      connector_name: "Legal Data Hunter",
+      tool_name: "get_document",
+      openai_tool_name: "mcp_c1_get_document",
+      status: "ok",
+    },
+  });
+
+  beforeEach(() => {
+    mocks.executeMcpToolOnServer.mockReset();
+    mocks.teamOrgIdOf.mockReset().mockResolvedValue("org-1");
+  });
+
+  it("owns mcp: ids and verifies quotes exactly", () => {
+    expect(sourceProviderFor(documentId)?.id).toBe("legal_data_hunter");
+    expect(sourceProviderFor(documentId)?.quoteVerification).toBe("exact");
+    // The namespace is claimed whole, so a malformed id never reaches the
+    // uploaded-document paths; fetch answers not_found for it below.
+    expect(sourceProviderFor("mcp:c1:not-a-reference")?.id).toBe("legal_data_hunter");
+    expect(sourceProviderFor("case:1")?.id).toBe("courtlistener");
+  });
+
+  it("grants its own server, and only it, the larger result allowance", () => {
+    expect(mcpResultCharsFor({ serverUrl: LEGAL_DATA_HUNTER_URL, toolName: "get_document" })).toBe(LEGAL_DATA_HUNTER_RESULT_CHARS);
+    expect(mcpResultCharsFor({ serverUrl: `${LEGAL_DATA_HUNTER_URL}/`, toolName: "search" })).toBe(LEGAL_DATA_HUNTER_RESULT_CHARS);
+    expect(LEGAL_DATA_HUNTER_RESULT_CHARS).toBeGreaterThan(60_000);
+    for (const serverUrl of ["https://mcp.slack.com/mcp", "https://legaldatahunter.com.evil.test/mcp", "https://legaldatahunter.com/mcp?x=1"]) {
+      expect(mcpResultCharsFor({ serverUrl, toolName: "get_document" })).toBeUndefined();
+    }
+  });
+
+  it("asks a reader without a connection to connect one", async () => {
+    mocks.executeMcpToolOnServer.mockResolvedValue(null);
+    await expect(legalDataHunterSourceProvider.fetch({ db, userId: "u1", documentId, orgId: "org-1" })).resolves.toEqual({
+      ok: false, kind: "credentials", detail: LEGAL_DATA_HUNTER_CONNECT_DETAIL,
+    });
+    expect(mocks.executeMcpToolOnServer).toHaveBeenCalledWith(
+      { userId: "u1", orgId: "org-1" },
+      { serverUrl: LEGAL_DATA_HUNTER_URL, toolName: "get_document", arguments: { ...args, include_full_text: true }, preferConnectorId: "c1" },
+      db,
+    );
+  });
+
+  it("returns the document under the cited id with its text in place", async () => {
+    mocks.executeMcpToolOnServer.mockResolvedValue(okResult(call({ connectorId: "c2" })));
+    const result = await legalDataHunterSourceProvider.fetch({ db, userId: "u1", documentId, orgId: null });
+    if (!result.ok) throw new Error(result.kind);
+    expect(result.document.document_id).toBe(documentId);
+    expect(result.document.subdocuments).toEqual([{ document_id: `${documentId}:text`, title: payload.title, type: "html", text: payload.text }]);
+  });
+
+  it("treats a failed or unusable answer as an upstream error and a foreign id as not found", async () => {
+    mocks.executeMcpToolOnServer.mockResolvedValue({ ...okResult(call()), event: { ...okResult(call()).event, status: "error", error: "boom" } });
+    expect(await legalDataHunterSourceProvider.fetch({ db, userId: "u1", documentId, orgId: null })).toMatchObject({ ok: false, kind: "error" });
+    mocks.executeMcpToolOnServer.mockResolvedValue(okResult(call({ result: { structuredContent: { ...payload, text_truncated: true } } })));
+    expect(await legalDataHunterSourceProvider.fetch({ db, userId: "u1", documentId, orgId: null })).toMatchObject({ ok: false, kind: "error" });
+    mocks.executeMcpToolOnServer.mockClear();
+    expect(await legalDataHunterSourceProvider.fetch({ db, userId: "u1", documentId: "mcp:c1:broken", orgId: null })).toEqual({ ok: false, kind: "not_found", detail: "Document not found" });
+    expect(mocks.executeMcpToolOnServer).not.toHaveBeenCalled();
   });
 });

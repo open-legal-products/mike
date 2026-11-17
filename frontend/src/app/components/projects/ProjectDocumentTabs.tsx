@@ -1,9 +1,11 @@
 "use client";
 
-import { SvgAssetIcon } from "@/app/components/ui/svg-asset-icon";
-import caseLaw from "../../../../public/icons/legal-sources/case-law.svg";
-import legislation from "../../../../public/icons/legal-sources/legislation.svg";
 import { DocumentTabBar } from "@/app/components/shared/DocumentTabBar";
+import { LegalSourceIcon } from "@/app/components/shared/LegalSourceIcon";
+import {
+    isExternalSourceType,
+    legalSourceIconKind,
+} from "@/app/components/shared/documentCapabilities";
 import type { Document, PanelDocument } from "@/app/components/shared/types";
 import type { TabDropPosition } from "@/app/lib/reorderTabs";
 import type { DocumentPermissions } from "@/app/hooks/useDocumentPermissions";
@@ -56,23 +58,10 @@ export function ProjectDocumentTabs({
                 const document = documents.find(
                     (document) => document.id === tab.documentId,
                 );
-                const sourceType = tab.sourceDocument?.type;
-                const legalSource =
-                    sourceType === "case" || sourceType === "legislation";
+                const legalSource = isExternalSourceType(tab.sourceDocument?.type);
+                const legalIcon = legalSourceIconKind(tab.sourceDocument?.type);
                 return {
-                    icon: legalSource ? (
-                        <SvgAssetIcon
-                            src={
-                                sourceType === "case"
-                                    ? caseLaw
-                                    : legislation
-                            }
-                            aria-hidden="true"
-                            width={14}
-                            height={14}
-                            className="h-3.5 w-3.5 shrink-0 object-contain"
-                        />
-                    ) : undefined,
+                    icon: legalIcon ? <LegalSourceIcon kind={legalIcon} /> : undefined,
                     id: tab.documentId,
                     title: tab.filename,
                     versionNumber:

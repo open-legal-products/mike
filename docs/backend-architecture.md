@@ -370,6 +370,40 @@ caller-specific permissions and response contracts. The rename route and
 folder-service compatibility suites also pass against the pre-consolidation
 PR snapshot (`54d067d3`), so their assertions characterize existing behavior.
 
+### Provider-backed source documents
+
+A source that is read from a provider rather than uploaded (CourtListener case
+law, Legal Data Hunter documents) is a *source provider* in
+`modules/source-documents/`:
+
+- `sourceDocuments.types.ts` defines `SourceProvider`: which opaque document
+  ids it owns, how its quotes are verified (`exact` or `fuzzy`), how to hydrate
+  a document for the panel (`fetch`), and optionally how to recognise a
+  complete document inside an MCP tool result (`fromMcpCall`) and how much of
+  a result from its server the model may see (`mcpResultChars`; every other
+  connector keeps `MAX_MCP_RESULT_CHARS`).
+- `sourceDocuments.providers.ts` is the registry. `getSourceDocument`
+  dispatches a `GET /documents/:id` to the owning provider and deduplicates
+  concurrent fetches; `externalSourceFromMcpCall` asks every provider about a
+  successful connector call. Providers are named nowhere else.
+- One `sourceDocuments.<provider>.ts` per provider holds the implementation:
+  `sourceDocuments.courtlistener.ts` hydrates `case:*` ids;
+  `sourceDocuments.legalDataHunter.ts` owns `mcp:*` ids, recognises complete
+  `get_document` results and reads a document again through the viewer's
+  connector with `executeMcpToolOnServer`.
+
+The chat engine consumes providers only through the facade. A source a
+provider recognises in a connector result is registered for the request by
+`modules/chat/engine/tools/externalSources.ts` (`DocStore.external_source`
+plus `inline_text`), which makes it readable and searchable like an attachment
+and citable through `createCitation` with verbatim quotes only. Nothing is
+persisted: a citation carries the provider's document id, and the panel reads
+the text again through `getSourceDocument` when the source is opened.
+
+Adding a provider therefore means one implementation file, one registry
+entry, and, on the frontend, its `SourceDocumentType` in
+`frontend/src/app/components/shared/documentCapabilities.ts`.
+
 ## Shared API contracts
 
 `packages/contracts` is the common declaration package for serialized assistant

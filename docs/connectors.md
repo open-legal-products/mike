@@ -158,6 +158,14 @@ there is no uploaded-document version to fetch. Exact-quote verification still
 runs against the retrieved text. Treat source content as untrusted, not as
 instructions to execute connector actions.
 
+Legal Data Hunter is implemented as a *source provider*
+(`backend/src/modules/source-documents/sourceDocuments.legalDataHunter.ts`; see
+"Provider-backed source documents" in
+[backend-architecture.md](backend-architecture.md)). The chat engine and the
+source panel know only the provider registry, so another document provider is
+one implementation file, one registry entry and its document type in
+`frontend/src/app/components/shared/documentCapabilities.ts`.
+
 Mike does not store LDH text. A saved citation keeps the source's reference,
 title, link and quotes; when the source is opened later, the panel reads the
 text again through `GET /documents/:id`, which calls `get_document` with the

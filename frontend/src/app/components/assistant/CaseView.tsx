@@ -5,7 +5,6 @@ import DOMPurify from "dompurify";
 import { Loader2 } from "lucide-react";
 import { PillButtonUI, LIQUID_GLASS_FLAT_CLASS } from "@mike/ui";
 import { cn } from "@/app/lib/utils";
-import { isEmbeddedMcpDocument } from "../shared/types";
 import type {
     PanelDocument,
     PanelDocumentQuote,
@@ -122,7 +121,6 @@ export function CaseView({
             null,
     );
     const contentRef = useRef<HTMLElement | null>(null);
-    const isEmbeddedSource = isEmbeddedMcpDocument(document);
 
     useEffect(() => {
         // eslint-disable-next-line react-hooks/set-state-in-effect -- synchronize the first opinion when a new document is supplied
@@ -153,10 +151,12 @@ export function CaseView({
         ) {
             return;
         }
-        const quoteRoot = isEmbeddedSource
-            ? root.querySelector<HTMLElement>("[data-case-text-body]") : root;
-        if (!quoteRoot) return;
-        const match = highlightDocxQuote(quoteRoot, activeQuote.quote, true, isEmbeddedSource);
+        // A subdocument rendered as plain text (a provider's canonical text,
+        // whose quotes were verified verbatim) is highlighted exactly and only
+        // within its body, never its title; HTML opinions keep the tolerant
+        // letters-only match.
+        const textBody = root.querySelector<HTMLElement>("[data-case-text-body]");
+        const match = highlightDocxQuote(textBody ?? root, activeQuote.quote, true, !!textBody);
         if (!match) return;
         root.querySelectorAll(`.${QUOTE_HIGHLIGHT_CLASS}`).forEach((element) =>
             element.classList.add("case-quote-highlight"),
@@ -165,11 +165,11 @@ export function CaseView({
             match.scrollIntoView({ behavior: "smooth", block: "center" });
         }, 50);
         return () => window.clearTimeout(timer);
-    }, [activeQuote, activeSubdocument, isEmbeddedSource, quoteFocusKey]);
+    }, [activeQuote, activeSubdocument, quoteFocusKey]);
 
     const surfaceClassName = LIQUID_GLASS_FLAT_CLASS;
-    // A saved Legal Data Hunter source keeps its subdocument but not its
-    // text, so "loaded" means some subdocument has a body to show.
+    // A source cited by reference keeps its subdocument but not its text
+    // until the provider answers, so "loaded" means a body is here to show.
     const hasContent = subdocuments.some(
         (subdocument) => !!subdocument.html || !!subdocument.text,
     );

@@ -10,7 +10,8 @@ import {
     documentQuoteId,
 } from "../assistant/CitationQuotesSection";
 import { EditCard } from "../assistant/EditCard";
-import { expandDocumentQuoteEntry, isEmbeddedMcpDocument } from "./types";
+import { expandDocumentQuoteEntry } from "./types";
+import { documentCapabilities } from "./documentCapabilities";
 import type { Citation, EditAnnotation, PanelDocument } from "./types";
 import { quoteVerificationState } from "../assistant/message/citationVerification";
 import { CaseView } from "../assistant/CaseView";
@@ -134,7 +135,9 @@ export function DocumentContent({
 
     const documentId = resolvedDocument.document_id;
     const versionId = resolvedDocument.version_id ?? null;
-    const isTextSource = resolvedDocument.type === "case" || isEmbeddedMcpDocument(resolvedDocument);
+    // A provider-backed source renders as text in CaseView; the file viewers,
+    // their quote highlighting and the edit card are for uploads.
+    const isExternalSource = documentCapabilities(resolvedDocument).external;
     const viewType = resolveDocumentViewType({
         filename: resolvedDocument.title,
         fileType: resolvedDocument.type,
@@ -164,7 +167,7 @@ export function DocumentContent({
         : undefined;
 
     const { activeViewerQuotes, activeHighlightCells } = useMemo(() => {
-        if (mode.kind !== "citation" || isTextSource) {
+        if (mode.kind !== "citation" || isExternalSource) {
             return {
                 activeViewerQuotes: undefined,
                 activeHighlightCells: undefined,
@@ -193,7 +196,7 @@ export function DocumentContent({
                       ]
                     : [],
         };
-    }, [activeDocumentQuote, isTextSource, mode.kind]);
+    }, [activeDocumentQuote, isExternalSource, mode.kind]);
 
     useEffect(() => {
         // eslint-disable-next-line react-hooks/set-state-in-effect -- reset quote selection for a newly opened citation without remounting the editor
@@ -232,7 +235,7 @@ export function DocumentContent({
                         onDownload={() => localDownload.current?.()}
                         toolbarVisible={toolbarVisible}
                         onToggleToolbar={
-                            !isTextSource && viewType === "docx" && canEdit
+                            !isExternalSource && viewType === "docx" && canEdit
                                 ? () => setToolbarVisible((visible) => !visible)
                                 : undefined
                         }
@@ -240,7 +243,7 @@ export function DocumentContent({
                 }
                 annotation={
                     mode.kind === "citation" ||
-                    (mode.kind === "edit" && !isTextSource) ? (
+                    (mode.kind === "edit" && !isExternalSource) ? (
                         <>
                             {mode.kind === "citation" && (
                                 <CitationQuotesSection
@@ -264,7 +267,7 @@ export function DocumentContent({
                                 />
                             )}
 
-                            {mode.kind === "edit" && !isTextSource && (
+                            {mode.kind === "edit" && !isExternalSource && (
                                 <div className="px-2 pb-2">
                                     <EditCard
                                         annotation={mode.edit}
@@ -286,7 +289,7 @@ export function DocumentContent({
                     ) : undefined
                 }
             >
-                {isTextSource ? (
+                {isExternalSource ? (
                     <CaseView
                         document={resolvedDocument}
                         activeQuote={active ? activeDocumentQuote : undefined}

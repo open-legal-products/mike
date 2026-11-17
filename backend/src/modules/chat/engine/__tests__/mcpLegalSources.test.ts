@@ -32,9 +32,9 @@ import { readDocumentContent } from "../tools/documentOps";
 import { verifyCitations } from "../verifyCitations";
 import { runLLMStream } from "../streaming";
 import { extractCitations } from "../contextBuilders";
-import { getSourceDocument, LEGAL_DATA_HUNTER_CONNECT_DETAIL } from "../../../source-documents/sourceDocuments.service";
-import { extractLegalDataHunterSource, legalDataHunterDocumentId } from "../../../../lib/mcp/sourceDocuments";
-import { registerMcpLegalSource } from "../tools/mcpSourceDocuments";
+import { externalSourceFromMcpCall, getSourceDocument, LEGAL_DATA_HUNTER_CONNECT_DETAIL } from "../../../source-documents/sourceDocuments.service";
+import { extractLegalDataHunterSource, legalDataHunterDocumentId } from "../../../source-documents/sourceDocuments.legalDataHunter";
+import { registerExternalSource } from "../tools/externalSources";
 
 const args = { source: "legifrance", source_id: "JORFTEXT0001" };
 const payload = {
@@ -148,7 +148,7 @@ describe("MCP source → dispatcher → exact-quote citation", () => {
     expect(content).toContain("Truncated MCP result");
     expect(content).not.toContain(tail);
     expect(content).toContain('Call read_document with doc_id "doc-2"');
-    expect(f.docStore.get("doc-2")).toMatchObject({ inline_text: text, panel_document: { type: "case" } });
+    expect(f.docStore.get("doc-2")).toMatchObject({ inline_text: text, external_source: { type: "case" } });
     const read = (id: string) => readDocumentContent(id, f.docStore, () => {}, f.docIndex, f.db, { emitEvents: false });
     expect(await read("doc-2")).toBe(text);
     // A quote from beyond the cut verifies against the full text; an
@@ -221,9 +221,9 @@ describe("MCP source → dispatcher → exact-quote citation", () => {
     const f = fixture();
     const result = await f.dispatch();
     expect(result.mcpEvents[0].status).toBe("ok");
-    expect((result.toolResults[0] as { content: string }).content).toContain('"doc_id":"doc-2"');
+    expect((result.toolResults[0] as { content: string }).content).toContain('doc_id "doc-2"');
     expect((result.toolResults[0] as { content: string }).content).not.toContain("cut off");
-    expect(f.docStore.get("doc-2")).toMatchObject({ inline_text: payload.text, panel_document: { type } });
+    expect(f.docStore.get("doc-2")).toMatchObject({ inline_text: payload.text, external_source: { type } });
     const source = f.docStore.get("doc-2")!;
     const parsed = parseCitations(`<CITATIONS>${JSON.stringify([
       { ref: 1, doc_id: "doc-2", quote: payload.text },
@@ -236,7 +236,7 @@ describe("MCP source → dispatcher → exact-quote citation", () => {
       caseReader,
     );
     expect(citations[0]).toMatchObject({ kind: "document", verified: true, document: {
-      ...source.panel_document,
+      ...source.external_source,
       quotes: [{ quote: payload.text, target: { subdocument_id: `${f.docIndex["doc-2"].document_id}:text` }, verification: { verified: true } }],
     } });
     expect(citations.filter(Boolean)).toHaveLength(1);
@@ -258,7 +258,7 @@ describe("MCP source → dispatcher → exact-quote citation", () => {
     const result = await f.dispatch(false, failure === "other-user" ? "other" : "u1");
     expect(Object.keys(f.docIndex)).toEqual(["doc-0"]);
     expect(f.docStore.size).toBe(1);
-    expect((result.toolResults[0] as { content: string }).content).not.toContain("Canonical legal source");
+    expect((result.toolResults[0] as { content: string }).content).not.toContain("available in this chat as doc_id");
   });
 
   it("returns a source from the shared approved executor only after reviewed execution", async () => {
@@ -273,15 +273,15 @@ describe("MCP source → dispatcher → exact-quote citation", () => {
     expect(pending.askInputsEvents[0].items[0].kind).toBe("approval");
     const unapproved = await executeMcpToolCall(owner, f.tool.openai_tool_name, args, f.db);
     expect(unapproved.event.status).toBe("error");
-    expect(unapproved.legalSource).toBeNull();
+    expect(unapproved.call).toBeUndefined();
     const plan = await planMcpToolCall(owner, f.tool.openai_tool_name, args, f.db);
     if (plan.type !== "approval") throw new Error("expected approval");
     const result = await executeApprovedMcpToolCall(owner, { ...plan.item, id: "approved" }, f.db);
     expect(result.event).toMatchObject({ status: "ok", approval_id: "approved" });
-    expect(result.legalSource).toMatchObject({ text: payload.text, document: { type: "legislation" } });
+    expect(externalSourceFromMcpCall(result.call!)).toMatchObject({ text: payload.text, document: { type: "legislation" } });
     expect(mocks.callTool).toHaveBeenCalledExactlyOnceWith({ name: "get_document", arguments: args }, undefined, expect.any(Object));
     f.connector.server_url = "https://replacement.example.com/mcp";
-    expect((await executeApprovedMcpToolCall(owner, { ...plan.item, id: "approved" }, f.db)).legalSource).toBeNull();
+    expect((await executeApprovedMcpToolCall(owner, { ...plan.item, id: "approved" }, f.db)).call).toBeUndefined();
     expect(mocks.callTool).toHaveBeenCalledOnce();
   });
 
@@ -297,12 +297,12 @@ describe("MCP source → dispatcher → exact-quote citation", () => {
       { type: "ask_inputs", event_id: "ask1", items: [{ ...plan.item, id: "approved" }] },
       { type: "ask_inputs_response", ask_event_id: "ask1", responses: [{ id: "approved", kind: "approval", decision: "approve" }] },
     ];
-    const onLegalSource = vi.fn();
-    const events = await runApprovedConnectorActions({ db: f.db, chatId: "chat1", messageId: "a1", askEventId: "ask1", userId: "u1", onLegalSource });
-    expect(onLegalSource).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ text: payload.text }));
+    const onExternalSource = vi.fn();
+    const events = await runApprovedConnectorActions({ db: f.db, chatId: "chat1", messageId: "a1", askEventId: "ask1", userId: "u1", onExternalSource });
+    expect(onExternalSource).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ text: payload.text }));
     expect(events[0].status).toBe("ok");
     expect(JSON.stringify(f.row)).not.toContain("subdocuments");
-    expect(JSON.stringify(f.row)).not.toContain("panel_document");
+    expect(JSON.stringify(f.row)).not.toContain("external_source");
   });
 });
 
@@ -358,7 +358,7 @@ describe("legal source identity and search", () => {
   it("drops a citation that names two retrieved sources by their shared title", () => {
     const f = fixture();
     const [first, second] = ["A1", "B2"].map((id) =>
-      registerMcpLegalSource(
+      registerExternalSource(
         extractLegalDataHunterSource(
           { structuredContent: { ...payload, source_id: id, text: `${payload.text} ${id}` } },
           { connectorId: "c1", serverUrl: f.connector.server_url, toolName: "get_document", arguments: { source: args.source, source_id: id } },
