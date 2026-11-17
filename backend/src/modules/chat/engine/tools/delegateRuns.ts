@@ -14,6 +14,7 @@ import { safeError } from "../../../../lib/safeError";
 import type { Db } from "../../../../lib/supabase";
 import { loadAssistantMessage } from "../contextBuilders";
 import { createDocLabelResolver, type DocIndex, type DocStore } from "../types";
+import { externalSourceReference, registeredExternalSourceHandle } from "./externalSources";
 
 type DocumentRef = { document_id: string; version_id: string | null };
 
@@ -83,13 +84,29 @@ export function toolRecord(
             ? []
             : [call.input.doc_id, ...(Array.isArray(call.input.doc_ids) ? call.input.doc_ids : [])];
     const labelFor = createDocLabelResolver(docStore, docIndex);
-    const documents = named
-        .filter((id) => id !== undefined)
-        .map((id) => {
-            const label = typeof id === "string" ? labelFor(id) : null;
-            const doc = label ? docIndex[label] : undefined;
-            return doc && { document_id: doc.document_id, version_id: doc.version_id ?? null };
-        });
+    const labels = named
+        .filter((id): id is string => typeof id === "string")
+        .map((id) => labelFor(id));
+    // A provider's source text is never persisted: a connector result that
+    // registered one, or a read, search or fetch of one, is recorded as the
+    // source's reference. A continuation has no such source until it is read
+    // again, so the record carries no document to recheck either.
+    const externalLabel =
+        labels.find((label) => label && docStore.get(label)?.external_source) ??
+        registeredExternalSourceHandle(result, docStore);
+    const external = externalLabel ? docStore.get(externalLabel)?.external_source : undefined;
+    if (external) {
+        return {
+            tool: call.name,
+            input: JSON.stringify(call.input).slice(0, MAX_INPUT_CHARS),
+            result: externalSourceReference(external, externalLabel ?? undefined),
+            documents: [],
+        };
+    }
+    const documents = labels.map((label) => {
+        const doc = label ? docIndex[label] : undefined;
+        return doc && { document_id: doc.document_id, version_id: doc.version_id ?? null };
+    });
     return {
         tool: call.name,
         input: JSON.stringify(call.input).slice(0, MAX_INPUT_CHARS),

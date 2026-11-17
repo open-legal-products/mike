@@ -285,7 +285,9 @@ describe("MCP source → dispatcher → exact-quote citation", () => {
     expect(mocks.callTool).toHaveBeenCalledOnce();
   });
 
-  it("passes approved sources to the resumed request without persisting panel documents", async () => {
+  it("passes approved sources to the resumed request and stores only the source's reference", async () => {
+    const uncited = "This distinctive uncited sentence must never reach the database.";
+    mocks.callTool.mockResolvedValue({ structuredContent: { ...payload, text: `${payload.text} ${uncited}` } });
     const owner = { userId: "u1", orgId: null };
     const f = fixture();
     f.connector.read_only = false;
@@ -299,10 +301,16 @@ describe("MCP source → dispatcher → exact-quote citation", () => {
     ];
     const onExternalSource = vi.fn();
     const events = await runApprovedConnectorActions({ db: f.db, chatId: "chat1", messageId: "a1", askEventId: "ask1", userId: "u1", onExternalSource });
-    expect(onExternalSource).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ text: payload.text }));
+    expect(onExternalSource).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ text: `${payload.text} ${uncited}` }));
     expect(events[0].status).toBe("ok");
     expect(JSON.stringify(f.row)).not.toContain("subdocuments");
-    expect(JSON.stringify(f.row)).not.toContain("external_source");
+    // The stored event carries the reference, never the provider's text.
+    expect(JSON.stringify(f.row)).not.toContain(uncited);
+    expect(JSON.stringify(f.row)).not.toContain(payload.text);
+    expect(JSON.parse(events[0].result ?? "")).toMatchObject({
+      ok: true,
+      external_source: { document_id: legalDataHunterDocumentId("c1", args.source, args.source_id), title: payload.title },
+    });
   });
 });
 

@@ -6,7 +6,7 @@
 // like an attachment. Nothing is persisted: citations carry the provider's
 // document id and the panel reads the text again from the provider.
 
-import type { ExternalSource } from "../../../../lib/sourceDocuments";
+import type { ExternalSource, SourceDocument } from "../../../../lib/sourceDocuments";
 import type { DocIndex, DocStore } from "../types";
 
 /**
@@ -41,14 +41,53 @@ export function registerExternalSource(
   return handle;
 }
 
+const HINT_PREFIX = "This result is a complete source document, available in this chat as doc_id ";
+
 /** Appended to a connector result that carried a citable source. */
 export function externalSourceCitationHint(
   handle: string,
   truncated: boolean | undefined,
 ): string {
-  let hint = `\n\nThis result is a complete source document, available in this chat as doc_id "${handle}". Cite it with that doc_id and quotes copied exactly from its text.`;
+  let hint = `\n\n${HINT_PREFIX}"${handle}". Cite it with that doc_id and quotes copied exactly from its text.`;
   if (truncated) {
     hint += ` The result above was cut off before the end of the document. Call read_document with doc_id "${handle}" to read the full text before relying on or quoting any part not shown above.`;
   }
   return hint;
+}
+
+/**
+ * The handle of the external source a connector result registered, when the
+ * store still holds it under that handle; null for every other result. Lets a
+ * recorder recognise such a result without keeping the provider's text.
+ */
+export function registeredExternalSourceHandle(
+  content: string,
+  docStore: DocStore,
+): string | null {
+  const at = content.lastIndexOf(HINT_PREFIX);
+  if (at < 0) return null;
+  const match = /^"([^"]+)"/.exec(content.slice(at + HINT_PREFIX.length));
+  const handle = match?.[1];
+  return handle && docStore.get(handle)?.external_source ? handle : null;
+}
+
+/**
+ * What is kept in place of an external source's text wherever a tool result
+ * is persisted (a subagent's transcript, an approval's stored result): the
+ * reference only. The text stays in memory for the request and is read again
+ * from the provider when the source is opened.
+ */
+export function externalSourceReference(
+  document: SourceDocument,
+  handle?: string,
+): string {
+  return JSON.stringify({
+    ok: true,
+    external_source: {
+      document_id: document.document_id,
+      title: document.title,
+      ...(handle ? { doc_id: handle } : {}),
+      note: "Source text is not stored; it is read again from the provider when the source is opened.",
+    },
+  });
 }

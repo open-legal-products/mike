@@ -34,6 +34,7 @@ import {
   externalSourceFromMcpCall,
   mcpResultCharsFor,
 } from "../../../source-documents/sourceDocuments.service";
+import { externalSourceReference } from "./externalSources";
 import {
   executeApprovedGoogleWorkspaceCall,
   isGoogleWorkspaceTool,
@@ -152,12 +153,16 @@ export async function runApprovedConnectorActions(args: {
         : null;
     if (source) args.onExternalSource?.(source);
     // These events are stored and streamed outside runLLMStream, so apply its
-    // rule here: the user never sees a connector's raw error text.
+    // rule here: the user never sees a connector's raw error text. A result
+    // that carried a source document is stored as its reference only: the
+    // resumed request receives the text in memory above, and the provider's
+    // text is never written into chat history.
+    const stored = source ? externalSourceReference(source.document) : result;
     events.push({
       ...event,
       ...(event.error ? { error: TOOL_ERROR_MESSAGE } : {}),
       approval_id: item.id,
-      result: result.slice(0, MAX_APPROVAL_RESULT_CHARS),
+      result: stored.slice(0, MAX_APPROVAL_RESULT_CHARS),
     });
   }
   if (events.length) {
