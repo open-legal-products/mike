@@ -127,6 +127,17 @@ describe("MCP source → dispatcher → exact-quote citation", () => {
   it("suppresses unresolved external document identities", () => {
     expect(extractCitations('<CITATIONS>[{"ref":1,"doc_id":"mcp:unknown","quote":"invented"}]</CITATIONS>', {}, new Map())).toEqual([]);
   });
+  it("gives only the Legal Data Hunter connector the larger result allowance", async () => {
+    const text = "x".repeat(210_000);
+    mocks.callTool.mockResolvedValue({ structuredContent: { ...payload, text } });
+    const other = fixture();
+    other.connector.server_url = "https://mcp.example.com/mcp";
+    const general = ((await other.dispatch()).toolResults[0] as { content: string }).content;
+    expect(general).toContain("[Truncated MCP result to 60000 characters]");
+    expect(general.length).toBeLessThan(61_000);
+    const legal = (((await fixture().dispatch()).toolResults[0]) as { content: string }).content;
+    expect(legal).toContain("[Truncated MCP result to 200000 characters]");
+  });
   it("registers the full source when the model's copy is cut off", async () => {
     const tail = "The court allowed the appeal.";
     const text = `${payload.text} ${"x".repeat(210_000)} ${tail}`;

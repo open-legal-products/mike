@@ -148,7 +148,8 @@ returned by LDH search. The default response may be truncated and is not eligibl
 for an inline source. A complete, matching response from the canonical LDH
 endpoint becomes a request-scoped source with its title, text, and a link to the
 provider's page.
-Mike passes at most 200,000 characters of any MCP tool result to the model. When
+Mike passes at most 60,000 characters of an MCP tool result to the model; for the
+LDH connector alone the limit is 200,000, so a full judgment usually fits. When
 a long LDH document exceeds that, the complete text still becomes the source, and
 the model is told to read it in full with `read_document` before relying on the
 rest. Source text is limited to 1,000,000 characters: a document longer than that
