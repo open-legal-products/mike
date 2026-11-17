@@ -837,7 +837,7 @@ async function callResolvedTool(
             });
             return {
                 content,
-                        event: {
+                event: {
                     type: "mcp_tool_call",
                     connector_id: connector.id,
                     connector_name: connector.name,
@@ -945,7 +945,7 @@ async function callResolvedTool(
         });
         return {
             content,
-                event: {
+            event: {
                 type: "mcp_tool_call",
                 connector_id: connector.id,
                 connector_name: connector.name,

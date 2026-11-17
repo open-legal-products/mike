@@ -1,13 +1,15 @@
 import type { PanelDocument, PanelDocumentType } from "./types";
 
 /**
- * Source types read from a provider (CourtListener case law; Legal Data
- * Hunter case law, legislation and legal research) rather than uploaded to
- * Mike. The web app treats every such document the
- * same way: no permissions, versions, editing, renaming or file download; a
- * text view instead of a file viewer; and a body that may have to be read from
- * the provider when the document opens. Adding a provider type here is the
- * whole of its frontend integration.
+ * A document read from a provider (CourtListener case law; Legal Data Hunter
+ * case law, legislation and legal research) rather than uploaded to Mike
+ * says so on the wire (`SourceDocument.provider`). The web app treats every
+ * such document the same way: no permissions, versions, editing, renaming or
+ * file download; a text view instead of a file viewer; and a body that may
+ * have to be read from the provider when the document opens. Documents saved
+ * before the field existed are recognised by these types, which no upload
+ * ever has. Adding a provider needs no frontend change unless it introduces
+ * a new `SourceDocumentType`, which belongs in this set and in `legalSourceIconKind`.
  */
 const EXTERNAL_SOURCE_TYPES: ReadonlySet<string> = new Set<PanelDocumentType>([
     "case",
@@ -31,18 +33,23 @@ export function legalSourceIconKind(
 }
 
 export type DocumentCapabilities = {
-    /** Read from a provider, not uploaded: see EXTERNAL_SOURCE_TYPES. */
+    /** Read from a provider, not uploaded. */
     external: boolean;
     /**
      * The document has no body yet: a citation carries only the reference and
      * the panel reads the text from the provider when it opens.
      */
     hydrateOnOpen: boolean;
+    /**
+     * Quotes were verified verbatim against the provider's text, so they are
+     * highlighted exactly; otherwise the tolerant letters-only match applies.
+     */
+    exactQuotes: boolean;
     legalIcon: LegalSourceIconKind | null;
 };
 
 export function documentCapabilities(document: PanelDocument): DocumentCapabilities {
-    const external = isExternalSourceType(document.type);
+    const external = !!document.provider || isExternalSourceType(document.type);
     return {
         external,
         hydrateOnOpen:
@@ -50,6 +57,7 @@ export function documentCapabilities(document: PanelDocument): DocumentCapabilit
             !document.subdocuments?.some(
                 (subdocument) => !!subdocument.html || !!subdocument.text,
             ),
+        exactQuotes: document.quote_verification === "exact",
         legalIcon: legalSourceIconKind(document.type),
     };
 }

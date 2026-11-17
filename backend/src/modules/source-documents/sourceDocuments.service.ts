@@ -1,9 +1,9 @@
 // Facade of the source-documents module.
 //
 // Behind sourceDocuments.routes.ts and the chat engine. Provider-backed
-// source documents (case law today) are hydrated by the provider that owns
-// the opaque id; the registry in sourceDocuments.providers.ts is the one
-// place a provider is named. Service code takes an explicit Supabase client
+// source documents (CourtListener case law, Legal Data Hunter documents) are
+// hydrated by the provider that owns the opaque id; the registry in
+// sourceDocuments.providers.ts is the one place a provider is named. Service code takes an explicit Supabase client
 // (`db`) plus request-derived primitives and RETURNS typed results; it never
 // touches req/res.
 //

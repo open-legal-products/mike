@@ -1,4 +1,5 @@
 import type { QuoteVerification } from "./types";
+import { sourceProviderFor } from "../../source-documents/sourceDocuments.service";
 import { normalizeWithMap, type NormalizeOptions } from "./tools/documentOps";
 
 // Mirrors the frontend: cross-page quotes join two page segments with this
@@ -465,9 +466,12 @@ export async function verifyDocumentCitationAnnotation(
   }
 
   const verifiedQuotes = entries.map((entry) => {
-    // External legal sources must match exactly: no fuzzy correction.
-    const external = String(record(a.document)?.document_id ?? "").startsWith("mcp:");
-    const result = external
+    // A provider that verifies quotes exactly gets no fuzzy correction: a
+    // changed legal quotation must never be surfaced as the source's words.
+    const exact =
+      sourceProviderFor(String(record(a.document)?.document_id ?? ""))
+        ?.quoteVerification === "exact";
+    const result = exact
       ? { verified: !!entry.quote.trim() && source.includes(entry.quote), needs_correction: false }
       : verifierFor(source)(entry.quote);
     const { needs_correction, ...verification } = result;

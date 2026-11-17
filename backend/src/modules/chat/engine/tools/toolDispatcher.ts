@@ -673,6 +673,7 @@ export async function runToolCalls(
       if (source && docIndex) {
         const handle = registerExternalSource(source, docIndex, docStore);
         content += externalSourceCitationHint(handle, result.truncated);
+        (results.externalSourceHandles ??= new Map()).set(tc.id, handle);
       }
       toolResults.push({
         role: "tool",

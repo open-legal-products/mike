@@ -124,6 +124,28 @@ describe("MCP source → dispatcher → exact-quote citation", () => {
       if (event.type === "citations" && event.status === "partial") expect(event.citations).toEqual([]);
     }
   });
+  it("reports the handle it registered, so recorders can keep the reference instead of the text", async () => {
+    const f = fixture();
+    const result = await f.dispatch();
+    expect(result.externalSourceHandles).toEqual(new Map([["call-1", "doc-2"]]));
+    expect(f.docStore.get("doc-2")?.external_source).toMatchObject({ provider: "legal_data_hunter", quote_verification: "exact" });
+  });
+  it("re-verifies a provider's quotes exactly, by provider rather than by id prefix", async () => {
+    const source = "Les contrats légalement formés tiennent lieu de loi à ceux qui les ont faits.";
+    const drifted = {
+      kind: "document", doc_id: "doc-2",
+      document: { document_id: legalDataHunterDocumentId("c1", args.source, args.source_id) },
+      // Whitespace drift: tolerated for uploads, never for a provider's text.
+      quotes: [{ quote: "Les contrats  légalement formés tiennent lieu de loi", page: 1 }],
+    };
+    const [exact, fuzzy] = await verifyCitations(
+      [drifted, { ...drifted, document: { document_id: "11111111-1111-1111-1111-111111111111" } }],
+      async () => source,
+      vi.fn(),
+    );
+    expect(exact).toMatchObject({ verified: false, quotes: [{ quote: "Les contrats  légalement formés tiennent lieu de loi", verification: { verified: false } }] });
+    expect(fuzzy).toMatchObject({ verified: true, quotes: [{ verification: { verified: true } }] });
+  });
   it("suppresses unresolved external document identities", () => {
     expect(extractCitations('<CITATIONS>[{"ref":1,"doc_id":"mcp:unknown","quote":"invented"}]</CITATIONS>', {}, new Map())).toEqual([]);
   });

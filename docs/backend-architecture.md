@@ -377,11 +377,14 @@ law, Legal Data Hunter documents) is a *source provider* in
 `modules/source-documents/`:
 
 - `sourceDocuments.types.ts` defines `SourceProvider`: which opaque document
-  ids it owns, how its quotes are verified (`exact` or `fuzzy`), how to hydrate
-  a document for the panel (`fetch`), and optionally how to recognise a
-  complete document inside an MCP tool result (`fromMcpCall`) and how much of
-  a result from its server the model may see (`mcpResultChars`; every other
-  connector keeps `MAX_MCP_RESULT_CHARS`).
+  ids it owns (id families must not overlap; `mcp:*` belongs to Legal Data
+  Hunter because its ids are keyed by connector), how its quotes are verified
+  (`exact` or `fuzzy`, applied by `verifyCitations` and stamped on the panel
+  document as `quote_verification` so the client highlights the same way), how
+  to hydrate a document for the panel (`fetch`), and optionally how to
+  recognise a complete document inside an MCP tool result (`fromMcpCall`) and
+  how much of a result from its server the model may see (`mcpResultChars`;
+  every other connector keeps `MAX_MCP_RESULT_CHARS`).
 - `sourceDocuments.providers.ts` is the registry. `getSourceDocument`
   dispatches a `GET /documents/:id` to the owning provider and deduplicates
   concurrent fetches; `externalSourceFromMcpCall` asks every provider about a
@@ -400,8 +403,11 @@ and citable through `createCitation` with verbatim quotes only. Nothing is
 persisted: a citation carries the provider's document id, and the panel reads
 the text again through `getSourceDocument` when the source is opened.
 
-Adding a provider therefore means one implementation file, one registry
-entry, and, on the frontend, its `SourceDocumentType` in
+The registry stamps every document it hands out with `provider` and
+`quote_verification`, so the client learns a document's origin from the wire
+rather than from id or type rules. Adding a provider therefore means one
+implementation file and one registry entry; the frontend changes only if the
+provider introduces a new `SourceDocumentType`, which goes into
 `frontend/src/app/components/shared/documentCapabilities.ts`.
 
 ## Shared API contracts

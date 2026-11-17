@@ -392,6 +392,8 @@ export async function runLLMStream(params: {
     onToolBatch: (
       calls: NormalizedToolCall[],
       results: NormalizedToolResult[],
+      /** Sources the batch registered, by tool call id; their text is not to be persisted. */
+      externalSourceHandles: ReadonlyMap<string, string>,
     ) => void;
   };
 }): Promise<{
@@ -1182,7 +1184,11 @@ export async function runLLMStream(params: {
         }));
         // Recorded before a pause too, so a continued subagent knows what
         // already ran beside the actions awaiting approval.
-        subagentRun?.onToolBatch(calls, results);
+        subagentRun?.onToolBatch(
+          calls,
+          results,
+          completed.externalSourceHandles ?? new Map(),
+        );
         if (askInputsEvents.length > 0) {
           throw new AssistantStreamAskInputsPause();
         }

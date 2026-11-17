@@ -170,24 +170,27 @@ describe("subagent run store", () => {
       "doc-0": { document_id: "doc-a", filename: "lease.pdf", version_id: "v1" },
       "doc-2": { document_id: external.document_id, filename: "R v X" },
     };
-    const connectorResult = `{"result":{"text":${JSON.stringify(text)}}}\n\nThis result is a complete source document, available in this chat as doc_id "doc-2". Cite it with that doc_id and quotes copied exactly from its text.`;
+    const connectorResult = `{"result":{"text":${JSON.stringify(text)}}}`;
     const records = [
-      toolRecord({ id: "1", name: "mcp_c1_get_document", input: { source: "uk", source_id: "abc" } }, connectorResult, docStore, docIndex),
+      // The dispatcher reports the handle a connector result registered.
+      toolRecord({ id: "1", name: "mcp_c1_get_document", input: { source: "uk", source_id: "abc" } }, connectorResult, docStore, docIndex, "doc-2"),
       toolRecord({ id: "2", name: "read_document", input: { doc_id: "doc-2" } }, `Document filename: R v X\n\n${text}`, docStore, docIndex),
       toolRecord({ id: "3", name: "find_in_document", input: { doc_id: "R v X", query: "appeal" } }, JSON.stringify({ matches: [{ snippet: uncited }] }), docStore, docIndex),
-      toolRecord({ id: "4", name: "fetch_documents", input: { doc_ids: ["doc-0", "mcp:c1:2:uk:3:abc"] } }, `--- doc-0 ---\nlease\n--- doc-2 ---\n${text}`, docStore, docIndex),
     ];
     for (const entry of records) {
       expect(entry.result).not.toContain(uncited);
       expect(entry.documents).toEqual([]);
       expect(JSON.parse(entry.result)).toMatchObject({ ok: true, external_source: { document_id: external.document_id, title: "R v X", doc_id: "doc-2" } });
     }
+    // A fetch that mixes an upload with the source keeps the upload's reference for access rechecks.
+    const mixed = toolRecord({ id: "4", name: "fetch_documents", input: { doc_ids: ["doc-0", "mcp:c1:2:uk:3:abc"] } }, `--- doc-0 ---\nlease\n--- doc-2 ---\n${text}`, docStore, docIndex);
+    expect(mixed.result).not.toContain(uncited);
+    expect(mixed.documents).toEqual([{ document_id: "doc-a", version_id: "v1" }]);
     // An ordinary document, and a connector result that registered nothing, are recorded as before.
     expect(toolRecord({ id: "5", name: "read_document", input: { doc_id: "doc-0" } }, "lease text", docStore, docIndex)).toMatchObject({ result: "lease text", documents: [{ document_id: "doc-a", version_id: "v1" }] });
     expect(toolRecord({ id: "6", name: "mcp_slack_search", input: {} }, "{\"result\":[]}", docStore, docIndex).result).toBe("{\"result\":[]}");
-    // The hint alone does not redact: the handle must name a registered source.
-    const forged = connectorResult.replace('"doc-2"', '"doc-0"');
-    expect(toolRecord({ id: "7", name: "mcp_c1_get_document", input: {} }, forged, docStore, docIndex).result).toBe(forged);
+    // A handle the store does not hold as a source redacts nothing.
+    expect(toolRecord({ id: "7", name: "mcp_c1_get_document", input: {} }, connectorResult, docStore, docIndex, "doc-0").result).toBe(connectorResult);
   });
 });
 

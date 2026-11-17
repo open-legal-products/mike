@@ -57,6 +57,14 @@ export type SourceDocument = {
   document_id: string;
   title: string;
   type: SourceDocumentType;
+  /**
+   * The source provider that issued the document (`courtlistener`,
+   * `legal_data_hunter`), when it was read from a provider rather than
+   * uploaded. Absent on uploads and on documents saved before this field.
+   */
+  provider?: string;
+  /** How the provider's quotes were verified; drives how the panel highlights them. */
+  quote_verification?: "exact" | "fuzzy";
   metadata: SourceDocumentMetadata[];
   actions?: SourceDocumentAction[];
   quotes: SourceDocumentQuote[];

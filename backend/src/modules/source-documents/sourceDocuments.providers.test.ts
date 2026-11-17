@@ -19,6 +19,7 @@ import {
   externalSourceFromMcpCall,
   getSourceDocument,
   isExternalSourceDocumentId,
+  SOURCE_PROVIDERS,
   sourceProviderFor,
 } from "./sourceDocuments.providers";
 import { COURTLISTENER_CREDENTIAL_DETAIL } from "./sourceDocuments.courtlistener";
@@ -30,6 +31,13 @@ describe("source provider registry", () => {
     mocks.getCourtlistenerCaseOpinions.mockReset();
     mocks.getUserModelSettings.mockReset();
     mocks.getUserModelSettings.mockResolvedValue({ api_keys: { courtlistener: "token" } });
+  });
+
+  it("gives every sample id at most one owner", () => {
+    for (const id of ["case:123", "mcp:c1:2:uk:3:abc", "mcp:broken", "doc-1", "11111111-1111-1111-1111-111111111111"]) {
+      const owners = SOURCE_PROVIDERS.filter((provider) => provider.ownsDocumentId(id));
+      expect(owners.length, id).toBeLessThanOrEqual(1);
+    }
   });
 
   it("routes case ids to CourtListener and knows nothing else", () => {
@@ -62,6 +70,8 @@ describe("source provider registry", () => {
     if (!result.ok) return;
     expect(result.document.document_id).toBe("case:123");
     expect(result.document.title).toBe("Example v Example, 1 U.S. 1");
+    // The client learns the origin from the document, not from id rules.
+    expect(result.document).toMatchObject({ provider: "courtlistener", quote_verification: "fuzzy" });
     expect(mocks.getUserModelSettings).toHaveBeenCalledWith("u1", db, { orgId: "org-1" });
     expect(mocks.getCourtlistenerCaseOpinions).toHaveBeenCalledWith(
       expect.objectContaining({ clusterId: 123, apiToken: "token" }),

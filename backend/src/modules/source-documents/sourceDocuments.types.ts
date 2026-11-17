@@ -1,7 +1,8 @@
 // Types shared by the source-documents module's provider implementations.
 //
 // A source provider owns one family of opaque source-document ids (`case:*`
-// for CourtListener) and knows how to hydrate such an id for the panel and,
+// for CourtListener, `mcp:*` for Legal Data Hunter; families must not overlap)
+// and knows how to hydrate such an id for the panel and,
 // when the provider is reached through an MCP connector, how to recognise a
 // complete document inside a tool result so the chat can cite it.
 
@@ -35,7 +36,8 @@ export interface SourceProvider {
    * How a cited quote is checked against this provider's text. `exact`
    * accepts only a verbatim occurrence, as a legal quotation must be; `fuzzy`
    * is the uploaded-document matcher that tolerates whitespace and
-   * punctuation drift.
+   * punctuation drift. Applied by the engine's citation verification and
+   * stamped on the panel document, which highlights quotes the same way.
    */
   readonly quoteVerification: "exact" | "fuzzy";
   /** Reads the document again from the provider for display. */

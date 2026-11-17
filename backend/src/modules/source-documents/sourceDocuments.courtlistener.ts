@@ -81,7 +81,7 @@ async function fetchCase(args: SourceProviderFetchArgs): Promise<SourceDocumentR
 export const courtlistenerSourceProvider: SourceProvider = {
   id: "courtlistener",
   ownsDocumentId: (documentId) => caseClusterId(documentId) !== null,
-  // Case quotes are verified against opinion text by verifyCaseCitationAnnotation.
+  // Case quotes tolerate whitespace and punctuation drift, as uploads do.
   quoteVerification: "fuzzy",
   fetch: fetchCase,
 };

@@ -5,7 +5,7 @@
 // hook all consult this list rather than naming providers.
 
 import type { McpCallRecord } from "../../lib/mcpConnectors";
-import type { ExternalSource } from "../../lib/sourceDocuments";
+import type { ExternalSource, SourceDocument } from "../../lib/sourceDocuments";
 import { courtlistenerSourceProvider } from "./sourceDocuments.courtlistener";
 import { legalDataHunterSourceProvider } from "./sourceDocuments.legalDataHunter";
 import type {
@@ -42,9 +42,18 @@ export function isExternalSourceDocumentId(documentId: string): boolean {
 export function externalSourceFromMcpCall(call: McpCallRecord): ExternalSource | null {
   for (const provider of SOURCE_PROVIDERS) {
     const source = provider.fromMcpCall?.(call);
-    if (source) return source;
+    if (source) return { ...source, document: stamped(source.document, provider) };
   }
   return null;
+}
+
+/** The panel document with its provider's identity, so the client needs no id rules. */
+function stamped(document: SourceDocument, provider: SourceProvider): SourceDocument {
+  return {
+    ...document,
+    provider: provider.id,
+    quote_verification: provider.quoteVerification,
+  };
 }
 
 /**
@@ -92,6 +101,9 @@ export async function getSourceDocument(
   if (!request) {
     request = provider
       .fetch({ db, userId: args.userId, documentId: args.documentId, orgId })
+      .then((result): SourceDocumentResult =>
+        result.ok ? { ok: true, document: stamped(result.document, provider) } : result,
+      )
       .catch((error: unknown): SourceDocumentResult => ({ ok: false, kind: "error", error }))
       .finally(() => documentFetches.delete(fetchKey));
     documentFetches.set(fetchKey, request);

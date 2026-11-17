@@ -5,6 +5,7 @@ import DOMPurify from "dompurify";
 import { Loader2 } from "lucide-react";
 import { PillButtonUI, LIQUID_GLASS_FLAT_CLASS } from "@mike/ui";
 import { cn } from "@/app/lib/utils";
+import { documentCapabilities } from "../shared/documentCapabilities";
 import type {
     PanelDocument,
     PanelDocumentQuote,
@@ -121,6 +122,7 @@ export function CaseView({
             null,
     );
     const contentRef = useRef<HTMLElement | null>(null);
+    const { exactQuotes } = documentCapabilities(document);
 
     useEffect(() => {
         // eslint-disable-next-line react-hooks/set-state-in-effect -- synchronize the first opinion when a new document is supplied
@@ -151,12 +153,13 @@ export function CaseView({
         ) {
             return;
         }
-        // A subdocument rendered as plain text (a provider's canonical text,
-        // whose quotes were verified verbatim) is highlighted exactly and only
-        // within its body, never its title; HTML opinions keep the tolerant
-        // letters-only match.
+        // Quotes the provider verified verbatim are highlighted exactly and
+        // only within the plain-text body, never the title; everything else
+        // (CourtListener opinions, HTML or text) keeps the tolerant
+        // letters-only match its quotes were verified with.
         const textBody = root.querySelector<HTMLElement>("[data-case-text-body]");
-        const match = highlightDocxQuote(textBody ?? root, activeQuote.quote, true, !!textBody);
+        const exact = exactQuotes && !!textBody;
+        const match = highlightDocxQuote(exact ? textBody : root, activeQuote.quote, true, exact);
         if (!match) return;
         root.querySelectorAll(`.${QUOTE_HIGHLIGHT_CLASS}`).forEach((element) =>
             element.classList.add("case-quote-highlight"),
@@ -165,7 +168,7 @@ export function CaseView({
             match.scrollIntoView({ behavior: "smooth", block: "center" });
         }, 50);
         return () => window.clearTimeout(timer);
-    }, [activeQuote, activeSubdocument, quoteFocusKey]);
+    }, [activeQuote, activeSubdocument, exactQuotes, quoteFocusKey]);
 
     const surfaceClassName = LIQUID_GLASS_FLAT_CLASS;
     // A source cited by reference keeps its subdocument but not its text
