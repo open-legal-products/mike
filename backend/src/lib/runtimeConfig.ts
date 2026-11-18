@@ -148,6 +148,20 @@ export function streamChunkTimeouts(env: NodeJS.ProcessEnv = process.env): {
   };
 }
 
+const PROVIDER_DATA_RETENTION_VALUES = ["deny", "allow"] as const;
+
+/**
+ * LLM_PROVIDER_DATA_RETENTION. "deny" (the default) asks every model provider
+ * that takes a per-request setting not to keep or train on prompts; "allow"
+ * sends none of those settings. Anything but "allow" denies, so a typo can
+ * only err on the private side (and validateRuntimeConfiguration rejects it).
+ */
+export function providerDataRetentionAllowed(
+  env: NodeJS.ProcessEnv = process.env,
+): boolean {
+  return env.LLM_PROVIDER_DATA_RETENTION?.trim().toLowerCase() === "allow";
+}
+
 function parsedUrl(value: string, name: string, errors: string[]): URL | null {
   try {
     const url = new URL(value);
@@ -193,19 +207,6 @@ export function authHandoffEncryptionSecret(
     );
   }
   return secret;
-}
-
-/**
- * Whether every verified MFA factor guards every authenticated route, not
- * only the sensitive actions (requireMfaIfEnrolled) and the routes of users
- * who opted into login verification (user_profiles.mfa_on_login). Off by
- * default: the opt-in is a product choice, and the Word add-in has no MFA
- * step, so an enrolled user cannot use it while this is on.
- */
-export function mfaRequiredForEnrolledUsers(
-  env: NodeJS.ProcessEnv = process.env,
-): boolean {
-  return env.MFA_REQUIRE_FOR_ENROLLED_USERS?.trim().toLowerCase() === "true";
 }
 
 const LOOPBACK_HOST = /^(?:localhost|127(?:\.\d{1,3}){3}|\[::1\])$/i;
@@ -354,11 +355,14 @@ export function validateRuntimeConfiguration(
     );
   }
 
-  // A security switch that a typo ("yes", "on") silently leaves off is worse
-  // than a refused boot.
-  const mfaSwitch = env.MFA_REQUIRE_FOR_ENROLLED_USERS?.trim().toLowerCase();
-  if (mfaSwitch && mfaSwitch !== "true" && mfaSwitch !== "false") {
-    errors.push("MFA_REQUIRE_FOR_ENROLLED_USERS must be true or false");
+  const retention = env.LLM_PROVIDER_DATA_RETENTION?.trim().toLowerCase();
+  if (
+    retention &&
+    !(PROVIDER_DATA_RETENTION_VALUES as readonly string[]).includes(retention)
+  ) {
+    errors.push(
+      'LLM_PROVIDER_DATA_RETENTION must be "deny" (the default) or "allow"',
+    );
   }
 
   const errorsBeforeProductionChecks = errors.length;

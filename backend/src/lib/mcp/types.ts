@@ -133,15 +133,71 @@ export type ToolCacheRow = {
     last_seen_at: string;
 };
 
+/**
+ * One successful MCP tool call, as made: the connector it ran on, the tool,
+ * the arguments sent and the raw result. Source providers read it to
+ * recognise a complete document carried in a result.
+ */
+export type McpCallRecord = {
+    connectorId: string;
+    serverUrl: string;
+    toolName: string;
+    arguments: Record<string, unknown>;
+    result: unknown;
+};
+
+/** A read-only tool to run on whichever of the owner's connectors reaches a server. */
+export type McpServerToolRequest = {
+    serverUrl: string;
+    toolName: string;
+    arguments: Record<string, unknown>;
+    /** Used when the owner still has it; otherwise any connector to the server. */
+    preferConnectorId?: string;
+};
+
+/**
+ * Whether two MCP server URLs name the same endpoint: same origin and path,
+ * ignoring a trailing slash. A URL carrying credentials, a query or a
+ * fragment matches nothing, so a lookalike cannot stand in for a provider.
+ */
+export function sameMcpServerUrl(a: string, b: string): boolean {
+    const canonical = (value: string): string | null => {
+        try {
+            const url = new URL(value);
+            if (url.username || url.password || url.search || url.hash) return null;
+            return `${url.origin}${url.pathname.replace(/\/+$/, "")}`;
+        } catch {
+            return null;
+        }
+    };
+    const left = canonical(a);
+    return left !== null && left === canonical(b);
+}
+
+/** Caller-supplied policy for one tool call. */
+export type McpCallOptions = {
+    /**
+     * Characters of the serialized result the model may receive for this
+     * connector and tool, when the caller knows the server deserves more
+     * than MAX_MCP_RESULT_CHARS (a document provider whose results are whole
+     * judgments). Undefined or a smaller value keeps the general cap.
+     */
+    maxResultChars?: (call: Pick<McpCallRecord, "serverUrl" | "toolName">) => number | undefined;
+};
+
+export type McpToolCallResult = {
+    /** The model-facing serialization, cut off at the call's cap (MAX_MCP_RESULT_CHARS unless raised). */
+    content: string;
+    event: McpToolEvent;
+    /** Present only when the call ran and the server answered without error. */
+    call?: McpCallRecord;
+    /** The model received only the first part of the result, up to its cap. */
+    truncated?: boolean;
+};
+
 export const CLIENT_INFO = { name: "mike-mcp-client", version: "1.0.0" };
 /** Characters of one MCP tool result the model receives; the rest is cut off. */
 export const MAX_MCP_RESULT_CHARS = 60000;
-/**
- * The same limit for the Legal Data Hunter connector only. It matches the
- * document-context limit so a full court judgment usually fits; a longer
- * document is cut off here and stays readable in full through read_document.
- */
-export const MAX_LEGAL_DATA_HUNTER_RESULT_CHARS = 200_000;
 export const MCP_REQUEST_TIMEOUT_MS = 30000;
 export const OAUTH_STATE_TTL_MS = 10 * 60 * 1000;
 export const HEADER_NAME_RE = /^[A-Za-z0-9!#$%&'*+\-.^_`|~]+$/;

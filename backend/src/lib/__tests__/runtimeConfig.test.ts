@@ -30,21 +30,6 @@ describe("runtime authentication configuration", () => {
     expect(() => validateRuntimeConfiguration(validProduction)).not.toThrow();
   });
 
-  it("refuses an MFA enforcement switch it cannot read rather than leaving it off", () => {
-    expect(() =>
-      validateRuntimeConfiguration({
-        ...validProduction,
-        MFA_REQUIRE_FOR_ENROLLED_USERS: "yes",
-      }),
-    ).toThrow(/MFA_REQUIRE_FOR_ENROLLED_USERS must be true or false/);
-    expect(() =>
-      validateRuntimeConfiguration({
-        ...validProduction,
-        MFA_REQUIRE_FOR_ENROLLED_USERS: "TRUE",
-      }),
-    ).not.toThrow();
-  });
-
   it("rejects insecure production callback configuration", () => {
     expect(() =>
       validateRuntimeConfiguration({
@@ -166,6 +151,26 @@ describe("runtime authentication configuration", () => {
         SUPABASE_ANON_KEY: "legacy-anon-key",
       }),
     ).not.toThrow();
+  });
+});
+
+describe("LLM_PROVIDER_DATA_RETENTION", () => {
+  it.each(["deny", "allow", "ALLOW", ""])("accepts %j", (value) => {
+    expect(() =>
+      validateRuntimeConfiguration({
+        ...validProduction,
+        LLM_PROVIDER_DATA_RETENTION: value,
+      }),
+    ).not.toThrow();
+  });
+
+  it("rejects a value that is neither deny nor allow", () => {
+    expect(() =>
+      validateRuntimeConfiguration({
+        ...validProduction,
+        LLM_PROVIDER_DATA_RETENTION: "off",
+      }),
+    ).toThrow(/LLM_PROVIDER_DATA_RETENTION must be "deny" \(the default\) or "allow"/);
   });
 });
 

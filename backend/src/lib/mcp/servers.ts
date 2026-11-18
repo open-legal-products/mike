@@ -37,7 +37,6 @@ import {
 } from "./errors";
 import {
     CLIENT_INFO,
-    MAX_LEGAL_DATA_HUNTER_RESULT_CHARS,
     MAX_MCP_RESULT_CHARS,
     MCP_REQUEST_TIMEOUT_MS,
     type ConnectorRow,
@@ -45,24 +44,13 @@ import {
     type McpConnectorAuthConfig,
     type McpConnectorSummary,
     type ConnectorCallPlan,
-    type McpToolEvent,
+    type McpCallOptions,
+    type McpServerToolRequest,
+    type McpToolCallResult,
     type OAuthTokenRow,
     type ToolCacheRow,
+    sameMcpServerUrl,
 } from "./types";
-
-import {
-    extractLegalDataHunterSource,
-    isLegalDataHunterUrl,
-    type LegalDataHunterSource,
-} from "./sourceDocuments";
-
-type McpCallResult = {
-    content: string;
-    event: McpToolEvent;
-    legalSource: LegalDataHunterSource | null;
-    /** The model received only the first part of the result, up to its cap. */
-    truncated?: boolean;
-};
 
 export { startUserMcpConnectorOAuth };
 
@@ -540,7 +528,7 @@ async function resolveCallableTool(
     return { connector, tool: row };
 }
 
-function stringifyMcpResult(result: unknown, maxChars: number): string {
+function stringifyMcpResult(result: unknown, maxChars = MAX_MCP_RESULT_CHARS): string {
     const text = JSON.stringify(
         {
             result,
@@ -556,10 +544,9 @@ function stringifyMcpResult(result: unknown, maxChars: number): string {
 function unavailableTool(
     openaiToolName: string,
     error = "MCP tool is not available or is disabled.",
-): McpCallResult {
+): McpToolCallResult {
     return {
         content: JSON.stringify({ ok: false, error }),
-        legalSource: null,
         event: {
             type: "mcp_tool_call",
             connector_id: "",
@@ -634,7 +621,8 @@ export async function executeMcpToolCall(
     openaiToolName: string,
     args: Record<string, unknown>,
     db: Db = createServerSupabase(),
-): Promise<McpCallResult> {
+    options: McpCallOptions = {},
+): Promise<McpToolCallResult> {
     const resolved = await resolveCallableTool(owner, openaiToolName, db);
     if (!resolved) return unavailableTool(openaiToolName);
     return callResolvedTool(
@@ -643,6 +631,8 @@ export async function executeMcpToolCall(
         resolved.tool,
         args,
         db,
+        undefined,
+        options,
     );
 }
 
@@ -655,7 +645,8 @@ export async function executeApprovedMcpToolCall(
     owner: ConnectorOwner,
     item: ConnectorApprovalItem,
     db: Db = createServerSupabase(),
-): Promise<McpCallResult> {
+    options: McpCallOptions = {},
+): Promise<McpToolCallResult> {
     const resolved =
         item.binding.type === "mcp"
             ? await resolveCallableTool(owner, item.tool_name, db)
@@ -675,6 +666,7 @@ export async function executeApprovedMcpToolCall(
                     item.arguments,
                     db,
                     item.binding.connection_fingerprint,
+                    options,
                 )
             : unavailableTool(
                     item.tool_name,
@@ -683,35 +675,32 @@ export async function executeApprovedMcpToolCall(
     return { ...result, event: { ...result.event, approval_id: item.id } };
 }
 
-export type LegalDataHunterFetchResult =
-    | { ok: true; source: LegalDataHunterSource }
-    | { ok: false; kind: "not_connected" | "unavailable" };
-
 /**
- * Reads one Legal Data Hunter document again, for display, through the
- * viewer's own enabled LDH connection in their workspace. Only the canonical
- * endpoint's read-only `get_document` runs, with the identifiers from the
- * citation, and its result must pass the same extractor as in chat. The
- * connector the citation was read through is preferred when the viewer owns
- * it; otherwise any of theirs serves, since the identifiers are the provider's.
+ * Runs a read-only tool on one of the owner's enabled connectors to a server,
+ * for a source provider reading a document again outside the chat. The
+ * connector a citation was read through is preferred when the owner still
+ * has it; otherwise any of theirs to that server serves, since the
+ * identifiers are the provider's. A write tool is never run this way. Null
+ * means the owner has no such connection in this workspace.
  */
-export async function fetchLegalDataHunterSource(
+export async function executeMcpToolOnServer(
     owner: ConnectorOwner,
-    reference: { connectorId: string; provider: string; providerId: string },
+    request: McpServerToolRequest,
     db: Db = createServerSupabase(),
-): Promise<LegalDataHunterFetchResult> {
+): Promise<McpToolCallResult | null> {
     const { data, error } = await db
         .from("user_mcp_connector_tools")
         .select("*, user_mcp_connectors!inner(*)")
-        .eq("tool_name", "get_document")
+        .eq("tool_name", request.toolName)
         .eq("enabled", true)
         .eq("user_mcp_connectors.user_id", owner.userId)
         .filter(...workspaceFilter(owner, "user_mcp_connectors.org_id"))
         .eq("user_mcp_connectors.enabled", true);
-    if (error) return { ok: false, kind: "unavailable" };
-    const candidates = ((data ?? []) as (ToolCacheRow & {
+    if (error) throw error;
+    const rows = (data ?? []) as (ToolCacheRow & {
         user_mcp_connectors: ConnectorRow | ConnectorRow[];
-    })[])
+    })[];
+    const candidates = rows
         .map((row) => ({
             tool: row,
             connector: Array.isArray(row.user_mcp_connectors)
@@ -721,30 +710,23 @@ export async function fetchLegalDataHunterSource(
         .filter(
             ({ connector, tool }) =>
                 !!connector &&
-                isLegalDataHunterUrl(connector.server_url) &&
+                sameMcpServerUrl(connector.server_url, request.serverUrl) &&
                 !mcpToolRequiresWriteAccess(tool),
         )
         .sort(
             (a, b) =>
-                Number(b.connector.id === reference.connectorId) -
-                Number(a.connector.id === reference.connectorId),
+                Number(b.connector.id === request.preferConnectorId) -
+                Number(a.connector.id === request.preferConnectorId),
         );
     const chosen = candidates[0];
-    if (!chosen) return { ok: false, kind: "not_connected" };
-    const result = await callResolvedTool(
+    if (!chosen) return null;
+    return callResolvedTool(
         owner,
         chosen.connector,
         chosen.tool,
-        {
-            source: reference.provider,
-            source_id: reference.providerId,
-            include_full_text: true,
-        },
+        request.arguments,
         db,
     );
-    return result.event.status === "ok" && result.legalSource
-        ? { ok: true, source: result.legalSource }
-        : { ok: false, kind: "unavailable" };
 }
 
 async function connectionFingerprint(
@@ -766,7 +748,8 @@ async function callResolvedTool(
     args: Record<string, unknown>,
     db: Db,
     approvedFingerprint?: string,
-): Promise<McpCallResult> {
+    options: McpCallOptions = {},
+): Promise<McpToolCallResult> {
     const started = Date.now();
     try {
         const fingerprint =
@@ -854,7 +837,6 @@ async function callResolvedTool(
             });
             return {
                 content,
-                legalSource: null,
                 event: {
                     type: "mcp_tool_call",
                     connector_id: connector.id,
@@ -867,23 +849,16 @@ async function callResolvedTool(
                 },
             };
         }
-        // Only Legal Data Hunter gets the larger allowance; every other
-        // connector keeps the general cap.
-        const maxChars = isLegalDataHunterUrl(connector.server_url)
-            ? MAX_LEGAL_DATA_HUNTER_RESULT_CHARS
-            : MAX_MCP_RESULT_CHARS;
+        // A caller may allow a known document server more than the general
+        // cap; error-path results above and below always keep it.
+        const maxChars = Math.max(
+            MAX_MCP_RESULT_CHARS,
+            options.maxResultChars?.({
+                serverUrl: connector.server_url,
+                toolName: tool.tool_name,
+            }) ?? 0,
+        );
         const content = stringifyMcpResult(result, maxChars);
-        // The serializer appends a marker beyond the cap when truncating.
-        const truncated = content.length > maxChars;
-        // A long document is still registered from the complete result: the
-        // panel and exact-quote verification use the full text, and the model
-        // is told to read the rest with read_document before relying on it.
-        const legalSource = extractLegalDataHunterSource(result, {
-            connectorId: connector.id,
-            serverUrl: connector.server_url,
-            toolName: tool.tool_name,
-            arguments: args,
-        });
         await insertMcpAuditLog(db, {
             user_id: owner.userId,
             connector_id: connector.id,
@@ -896,8 +871,15 @@ async function callResolvedTool(
         });
         return {
             content,
-            legalSource,
-            truncated,
+            call: {
+                connectorId: connector.id,
+                serverUrl: connector.server_url,
+                toolName: tool.tool_name,
+                arguments: args,
+                result,
+            },
+            // The serializer appends a marker beyond the cap when it cuts.
+            truncated: content.length > maxChars,
             event: {
                 type: "mcp_tool_call",
                 connector_id: connector.id,
@@ -963,7 +945,6 @@ async function callResolvedTool(
         });
         return {
             content,
-            legalSource: null,
             event: {
                 type: "mcp_tool_call",
                 connector_id: connector.id,

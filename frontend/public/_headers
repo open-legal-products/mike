@@ -1,3 +1,0 @@
-# Build-hashed assets are immutable; public files without hashes must revalidate.
-/_next/static/*
-  Cache-Control: public, max-age=31536000, immutable

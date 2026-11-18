@@ -279,7 +279,25 @@ export type AiSdkAdapterConfig = {
   defaultMaxOutputTokens?: (
     reasoning: StreamChatParams["reasoning"],
   ) => number | undefined;
+  /**
+   * Provider options every request from this adapter carries, chat and
+   * one-shot alike: the data-retention settings chosen in providers.ts.
+   */
+  requestProviderOptions?: StreamTextProviderOptions;
 };
+
+/** Per-namespace merge: a later set's fields win within a namespace. */
+function mergeProviderOptions(
+  ...sets: Array<StreamTextProviderOptions | undefined>
+): StreamTextProviderOptions {
+  const merged: StreamTextProviderOptions = {};
+  for (const set of sets) {
+    for (const [namespace, options] of Object.entries(set ?? {})) {
+      merged[namespace] = { ...merged[namespace], ...options };
+    }
+  }
+  return merged;
+}
 
 type PendingToolExecution = {
   call: NormalizedToolCall;
@@ -606,9 +624,9 @@ export async function streamAiSdk(
     bedrockCachePoint: config.bedrockCachePoint,
     sourceCachePoint: config.anthropicCachePoint || config.bedrockCachePoint,
   });
-  const providerOptions: StreamTextProviderOptions = {
-    ...(cacheHints.providerOptions ?? {}),
-    ...(config.provider === "openrouter"
+  const providerOptions = mergeProviderOptions(
+    cacheHints.providerOptions,
+    config.provider === "openrouter"
       ? {
           // OpenRouter's adapter does not consume AI SDK's call-level
           // `reasoning` option. Its per-request namespace is merged into the
@@ -617,8 +635,9 @@ export async function streamAiSdk(
             reasoning: { effort: params.reasoning ?? "none" },
           },
         }
-      : {}),
-  };
+      : undefined,
+    config.requestProviderOptions,
+  );
   const rawStreamRecorder = createRawLlmStreamRecorder({
     provider: config.provider,
     model: config.modelId,
@@ -911,6 +930,9 @@ export async function completeAiSdkText(
       reasoning: reasoning as
         | Exclude<NonNullable<StreamChatParams["reasoning"]>, "max">
         | undefined,
+      ...(config.requestProviderOptions
+        ? { providerOptions: config.requestProviderOptions }
+        : {}),
     });
   } catch (error) {
     // The provider's own error, unconverted (callers classify it), with

@@ -1,7 +1,14 @@
 import { type DocIndex, type DocStore, resolveDoc, resolveDocLabel } from "./types";
 import {
+  isExternalSourceDocumentId,
+  sourceProviderFor,
+  stampSourceDocument,
+} from "../../source-documents/sourceDocuments.service";
+import { quoteOccursVerbatim } from "./tools/externalSources";
+import {
   normalizeCaseDocument,
   sourceDocumentType,
+  type SourceDocument,
   type SourceDocumentQuote,
 } from "../../../lib/sourceDocuments";
 
@@ -188,45 +195,6 @@ export const CITATIONS_CLOSE_TAG = "</CITATIONS>";
 export const MAX_PARSED_CITATIONS = 50;
 export const MAX_CITATION_PAYLOAD_BYTES = 5_000_000;
 
-/**
- * Drop the body text of embedded external sources (`mcp:` documents) from
- * citations that leave the turn. Their quotes, verification and links stay;
- * the panel fetches the text again from the provider when the source opens,
- * so a judgment is never stored once per citation in chat history.
- */
-export function withoutEmbeddedSourceText(citations: unknown[]): unknown[] {
-  return citations.map((citation) => {
-    const value =
-      citation && typeof citation === "object" && !Array.isArray(citation)
-        ? (citation as Record<string, unknown>)
-        : null;
-    const document =
-      value?.document && typeof value.document === "object" && !Array.isArray(value.document)
-        ? (value.document as Record<string, unknown>)
-        : null;
-    if (
-      !document ||
-      typeof document.document_id !== "string" ||
-      !document.document_id.startsWith("mcp:") ||
-      !Array.isArray(document.subdocuments)
-    ) {
-      return citation;
-    }
-    return {
-      ...value,
-      document: {
-        ...document,
-        subdocuments: document.subdocuments.map((subdocument) => {
-          if (!subdocument || typeof subdocument !== "object") return subdocument;
-          // eslint-disable-next-line @typescript-eslint/no-unused-vars
-          const { text, ...rest } = subdocument as Record<string, unknown>;
-          return rest;
-        }),
-      },
-    };
-  });
-}
-
 export function limitCitationPayload(citations: unknown[]): unknown[] {
   const limited: unknown[] = [];
   let totalBytes = 2; // JSON array brackets.
@@ -397,6 +365,58 @@ type CasesByClusterId = Map<number, {
   dateFiled: string | null;
 }>;
 
+/**
+ * A citation of a source read from a provider during this request. The
+ * source is not an upload: there is no page or version. A provider that
+ * verifies quotes exactly accepts a quote only when it occurs verbatim in
+ * the canonical text, so a changed legal quotation can never be surfaced as
+ * verified; such a citation is returned null when any quote fails. A
+ * provider that verifies tolerantly leaves its quotes to the end-of-turn
+ * verification, like an upload's; until that runs they are marked unverified,
+ * so a turn that ends before verification (a stopped stream) never stores
+ * them as verified. A source no provider owns cannot occur in production
+ * (every registered source comes from a provider) and is treated as exact,
+ * the safe default.
+ */
+function createExternalSourceCitation(
+  citation: ParsedDocumentCitation,
+  label: string,
+  document: SourceDocument,
+  text: string,
+) {
+  const exact = sourceProviderFor(document.document_id)?.quoteVerification !== "fuzzy";
+  if (exact && citation.quotes.some(({ quote }) => !quoteOccursVerbatim(text, quote))) {
+    return null;
+  }
+  const subdocumentId = document.subdocuments?.[0]?.document_id;
+  const quotes: SourceDocumentQuote[] = citation.quotes.map((quote) => ({
+    quote: quote.quote,
+    verification: { verified: exact },
+    target: subdocumentId ? { subdocument_id: subdocumentId } : {},
+  }));
+  return {
+    type: "citation_data",
+    kind: "document",
+    ref: citation.ref,
+    document: { ...document, quotes },
+    doc_id: label,
+    document_id: document.document_id,
+    version_id: null,
+    version_number: null,
+    filename: document.title,
+    verified: exact,
+    page: citation.page,
+    quote: citation.quote,
+    quotes: citation.quotes,
+  };
+}
+
+/**
+ * Builds the citation annotation for one parsed citation, or null when the
+ * citation names a request-scoped external source of an exact provider whose
+ * quotes do not occur verbatim in it, or a provider id that was never read in
+ * this request (callers drop those).
+ */
 export function createCitation(
   citation: ParsedCitation,
   docIndex: DocIndex,
@@ -405,15 +425,19 @@ export function createCitation(
 ) {
   if (citation.kind === "case") {
     const caseRecord = casesByClusterId?.get(citation.cluster_id);
-    const document = normalizeCaseDocument({
-      clusterId: citation.cluster_id,
-      caseName: caseRecord?.caseName,
-      citations: caseRecord?.citations,
-      url: caseRecord?.url,
-      pdfUrl: caseRecord?.pdfUrl,
-      dateFiled: caseRecord?.dateFiled,
-      quotes: citation.quotes,
-    });
+    // Stamped like every registry document, so the client learns the
+    // origin from the wire rather than from the document type.
+    const document = stampSourceDocument(
+      normalizeCaseDocument({
+        clusterId: citation.cluster_id,
+        caseName: caseRecord?.caseName,
+        citations: caseRecord?.citations,
+        url: caseRecord?.url,
+        pdfUrl: caseRecord?.pdfUrl,
+        dateFiled: caseRecord?.dateFiled,
+        quotes: citation.quotes,
+      }),
+    );
     return {
       type: "citation_data",
       kind: "case",
@@ -429,40 +453,47 @@ export function createCitation(
     };
   }
 
-  // Alternate IDs must resolve through the same request-scoped source, not
-  // fall through to the tolerant uploaded-document citation path.
-  const sourceLabel = docStore ? resolveDocLabel(citation.doc_id, docStore, docIndex) : null;
-  if (sourceLabel && docStore?.get(sourceLabel)?.panel_document) {
+  // An external source may be cited by its handle, its title or the
+  // provider's document id, and must resolve through the request-scoped
+  // store rather than fall through to the tolerant uploaded-document path.
+  const sourceLabel = docStore
+    ? resolveDocLabel(citation.doc_id, docStore, docIndex)
+    : null;
+  const sourceEntry = sourceLabel ? docStore?.get(sourceLabel) : undefined;
+  if (docStore && sourceLabel && sourceEntry?.external_source) {
     // A title names a source only when it names one document: with two
     // sharing it, the first would take quotes meant for the other.
-    if (!docStore.has(citation.doc_id)) {
+    if (!docStore.has(citation.doc_id) && citation.doc_id === sourceEntry.filename) {
       let sameTitle = 0;
-      for (const document of docStore.values()) {
-        if (document.filename === citation.doc_id) sameTitle += 1;
+      for (const entry of docStore.values()) {
+        if (entry.filename === citation.doc_id) sameTitle += 1;
       }
       if (sameTitle > 1) return null;
     }
-    citation = { ...citation, doc_id: sourceLabel };
+    return createExternalSourceCitation(
+      citation,
+      sourceLabel,
+      sourceEntry.external_source,
+      sourceEntry.inline_text ?? "",
+    );
   }
+
   const docInfo = resolveDoc(citation.doc_id, docIndex);
+  // A provider's document id cited without that source having been read in
+  // this request has no text to verify against: it never becomes a citation.
+  if (
+    isExternalSourceDocumentId(citation.doc_id) ||
+    (docInfo && isExternalSourceDocumentId(docInfo.document_id))
+  ) {
+    return null;
+  }
   const requestScopedDocument = docStore?.get(citation.doc_id);
   const documentId = docInfo?.document_id ?? citation.doc_id;
   const filename =
     docInfo?.filename ?? requestScopedDocument?.filename ?? citation.doc_id;
-  const panelDocument = requestScopedDocument?.panel_document;
-  if (!panelDocument && (citation.doc_id.startsWith("mcp:") || docInfo?.document_id.startsWith("mcp:"))) return null;
-  const canonicalText = panelDocument?.subdocuments?.[0]?.text;
-  // External sources are not uploads: no fuzzy correction, omissions, or
-  // cross-page matching may turn a changed legal quote into a verified one.
-  if (panelDocument && (typeof canonicalText !== "string" ||
-      citation.quotes.some(({ quote }) => !quote.trim() || !canonicalText.includes(quote)))) {
-    return null;
-  }
-  const subdocumentId = panelDocument?.subdocuments?.[0]?.document_id;
   const quotes: SourceDocumentQuote[] = citation.quotes.map((quote) => ({
     quote: quote.quote,
-    ...(panelDocument ? { verification: { verified: true } } : {}),
-    target: subdocumentId ? { subdocument_id: subdocumentId } : {
+    target: {
       page: quote.page,
       ...(quote.sheet ? { sheet: quote.sheet } : {}),
       ...(quote.cell ? { cell: quote.cell } : {}),
@@ -472,7 +503,7 @@ export function createCitation(
     type: "citation_data",
     kind: "document",
     ref: citation.ref,
-    document: panelDocument ? { ...panelDocument, quotes } : {
+    document: {
       document_id: documentId,
       title: filename,
       type: sourceDocumentType(filename),
@@ -486,7 +517,6 @@ export function createCitation(
     version_id: docInfo?.version_id ?? null,
     version_number: docInfo?.version_number ?? null,
     filename,
-    ...(panelDocument ? { verified: true } : {}),
     page: citation.page,
     quote: citation.quote,
     sheet: citation.sheet,

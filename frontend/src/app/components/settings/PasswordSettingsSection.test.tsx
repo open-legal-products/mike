@@ -156,24 +156,30 @@ describe("PasswordSettingsSection", () => {
         ).not.toBeInTheDocument();
     });
 
-    it("asks an account with an authenticator for a code, then adds the password", async () => {
-        state.setPassword
-            .mockRejectedValueOnce(
-                Object.assign(new Error("MFA verification required"), {
-                        status: 403,
-                        code: "mfa_verification_required",
+    it.each([
+        [401, "insufficient_aal"],
+        [403, "mfa_verification_required"],
+    ])(
+        "verifies and retries adding a password after %s %s",
+        async (status, code) => {
+            state.setPassword
+                .mockRejectedValueOnce(
+                    Object.assign(new Error("MFA verification required"), {
+                        status,
+                        code,
                     }),
-            )
-            .mockResolvedValueOnce(undefined);
+                )
+                .mockResolvedValueOnce(undefined);
 
-        await openAndSubmit("correct-horse-battery");
-        fireEvent.click(await screen.findByRole("button", { name: "Verify code" }));
+            await openAndSubmit("correct-horse-battery");
+            fireEvent.click(await screen.findByRole("button", { name: "Verify code" }));
 
-        expect(
-            await screen.findByText("Password added to your account."),
-        ).toBeInTheDocument();
-        expect(state.setPassword).toHaveBeenCalledTimes(2);
-    });
+            expect(
+                await screen.findByText("Password added to your account."),
+            ).toBeInTheDocument();
+            expect(state.setPassword).toHaveBeenCalledTimes(2);
+        },
+    );
 
     it("refuses a password past bcrypt's limit before calling the API", async () => {
         const dialog = await openAndSubmit("x".repeat(73));

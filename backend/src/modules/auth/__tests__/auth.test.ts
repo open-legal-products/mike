@@ -69,8 +69,6 @@ vi.mock("../../../middleware/auth", () => ({
     res.locals.authSource = "cookie";
     next();
   },
-  requireMfaIfEnrolled: (_req: unknown, _res: unknown, next: () => void) =>
-    next(),
 }));
 
 import { authRouter } from "../auth.routes";

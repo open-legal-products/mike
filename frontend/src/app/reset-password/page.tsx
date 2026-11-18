@@ -135,7 +135,8 @@ function ResetPasswordContent() {
         } catch (caught) {
             // An account with an authenticator proves it before its password
             // changes; the existing verification popup steps the session up.
-            if ((caught as { code?: unknown })?.code === "mfa_verification_required") {
+            const code = (caught as { code?: unknown })?.code;
+            if (code === "insufficient_aal" || code === "mfa_verification_required") {
                 setMfaRequired(true);
                 return;
             }

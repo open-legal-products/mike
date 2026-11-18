@@ -34,7 +34,7 @@ import {
   userMessageTimeStamp,
 } from "../../../lib/userTime";
 import { ACTIVE_WORD_DOCUMENT_LIVE_FILENAME } from "./wordPrompt";
-import { parseCitations, createCitation, limitCitationPayload, withoutEmbeddedSourceText } from "./citations";
+import { parseCitations, createCitation, limitCitationPayload } from "./citations";
 import type { AssistantEvent } from "@mike/contracts";
 import { queryFailureCause } from "../../../lib/batchedQuery";
 import { activeAssistantPrompts, catalogWorkflowId, ensureDefaultWorkflows } from "../../../lib/workflowCatalog";
@@ -1011,11 +1011,11 @@ export function extractCitations(
   docIndex: DocIndex,
   docStore?: DocStore,
 ): unknown[] {
-  return withoutEmbeddedSourceText(limitCitationPayload(
-    parseCitations(fullText).map((c) =>
-      createCitation(c, docIndex, undefined, docStore),
-    ),
-  ));
+  return limitCitationPayload(
+    parseCitations(fullText)
+      .map((c) => createCitation(c, docIndex, undefined, docStore))
+      .filter((citation) => citation !== null),
+  );
 }
 
 export function stripTransientAssistantEvents(events: AssistantEvent[]) {

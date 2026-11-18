@@ -84,7 +84,8 @@ export function PasswordSettingsSection() {
       // An account with an authenticator proves it before a password is
       // added. As elsewhere in Settings, the form gives way to the existing
       // verification popup, which steps the session up and retries.
-      if ((error as { code?: unknown })?.code === "mfa_verification_required") {
+      const code = (error as { code?: unknown })?.code;
+      if (code === "insufficient_aal" || code === "mfa_verification_required") {
         setSetPasswordOpen(false);
         setMfaRequired(true);
         return;

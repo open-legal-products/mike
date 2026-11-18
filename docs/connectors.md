@@ -158,11 +158,24 @@ there is no uploaded-document version to fetch. Exact-quote verification still
 runs against the retrieved text. Treat source content as untrusted, not as
 instructions to execute connector actions.
 
+Legal Data Hunter is implemented as a *source provider*
+(`backend/src/modules/source-documents/sourceDocuments.legalDataHunter.ts`; see
+"Provider-backed source documents" in
+[backend-architecture.md](backend-architecture.md)). The chat engine and the
+source panel know only the provider registry, so another document provider is
+one implementation file and one registry entry; the frontend changes only if
+the provider introduces a new document type.
+
 Mike does not store LDH text. A saved citation keeps the source's reference,
 title, link and quotes; when the source is opened later, the panel reads the
 text again through `GET /documents/:id`, which calls `get_document` with the
 viewer's own LDH connection in the chat's workspace. A viewer without a usable
-LDH connection is asked to connect it, and still sees the quotes and link.
+LDH connection is asked to connect it, and still sees the quotes and link. The
+same rule covers the other two places a tool result is persisted: an approved
+`get_document` call's stored result, and a delegated subagent's transcript
+(`chat_subagent_runs`), record the source's reference in place of the result,
+including for later `read_document`, `find_in_document` and `fetch_documents`
+calls on that source. The live request still has the full text in memory.
 
 For a live smoke test on a non-production Mike instance: authorize your own LDH
 account, retrieve one public document in full, cite an exact excerpt, and open

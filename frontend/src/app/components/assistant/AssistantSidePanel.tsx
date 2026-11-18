@@ -11,14 +11,12 @@ import { useDocumentViewers } from "@/app/hooks/useDocumentViewers";
 import { useDocumentPermissions } from "@/app/hooks/useDocumentPermissions";
 import { type DocumentActions } from "../shared/DocumentTabActions";
 import type { DocumentVersion } from "@/app/lib/mikeApi";
-import { SvgAssetIcon } from "@/app/components/ui/svg-asset-icon";
-import caseLaw from "../../../../public/icons/legal-sources/case-law.svg";
-import legislation from "../../../../public/icons/legal-sources/legislation.svg";
+import { LegalSourceIcon } from "../shared/LegalSourceIcon";
+import { documentCapabilities } from "../shared/documentCapabilities";
 import { BookOpenText } from "lucide-react";
 import { DocumentContent, type DocumentContentMode } from "@/app/components/shared/DocumentContent";
 import { DocumentTabBar } from "../shared/DocumentTabBar";
 import type { Citation, EditAnnotation, PanelDocument } from "../shared/types";
-import { isEmbeddedMcpDocument } from "../shared/types";
 import { cn } from "@/app/lib/utils";
 import { LIQUID_GLASS_FLOAT_CLASS } from "@/app/components/ui/liquid-surface";
 import { reorderTabs, type TabDropPosition } from "@/app/lib/reorderTabs";
@@ -245,7 +243,7 @@ export function AssistantSidePanel({
     chatCount = 1,
 }: Props) {
     const panelRef = useRef<HTMLDivElement>(null);
-    const permissions = useDocumentPermissions(tabs.filter((tab) => !isEmbeddedMcpDocument(tab.document) && !["case", "legislation"].includes(tab.document.type)).map((tab) => tab.document.document_id), canEdit);
+    const permissions = useDocumentPermissions(tabs.filter((tab) => !documentCapabilities(tab.document).external).map((tab) => tab.document.document_id), canEdit);
     const viewers = useDocumentViewers();
     // One width beside a single chat and another beside two, so closing the
     // second chat gives the panel back the width it had before.
@@ -355,34 +353,19 @@ export function AssistantSidePanel({
                 addLabel="Open Documents"
                 onReorder={onReorderTabs}
                 tabs={tabs.map((tab) => {
-                    const isLegalSource =
-                        isEmbeddedMcpDocument(tab.document) ||
-                        tab.document.type === "case" ||
-                        tab.document.type === "legislation";
-                    const actions = isLegalSource
+                    const { external, legalIcon } = documentCapabilities(tab.document);
+                    const actions = external
                         ? undefined
                         : documentActions?.(tab.document);
                     return {
                         id: tab.id,
                         title: tab.document.title,
                         versionNumber: tab.document.version_number,
-                        icon: isLegalSource ? (
-                            <SvgAssetIcon
-                                src={
-                                    tab.document.type === "case"
-                                        ? caseLaw
-                                        : legislation
-                                }
-                                aria-hidden="true"
-                                width={14}
-                                height={14}
-                                className="h-3.5 w-3.5 shrink-0 object-contain"
-                            />
-                        ) : undefined,
+                        icon: legalIcon ? <LegalSourceIcon kind={legalIcon} /> : undefined,
                         actions: {
                             ...actions,
                             onRename: permissions(tab.document.document_id).canEdit ? actions?.onRename : undefined,
-                            onDownload: isLegalSource ? undefined : () => viewers.download(tab.id, tab.document.document_id, tab.document.version_id, tab.document.title),
+                            onDownload: external ? undefined : () => viewers.download(tab.id, tab.document.document_id, tab.document.version_id, tab.document.title),
                             onDelete: permissions(tab.document.document_id).canDelete ? actions?.onDelete : undefined,
                         },
                     };

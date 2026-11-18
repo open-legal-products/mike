@@ -8,7 +8,6 @@ import { noteUpstreamReachable } from "../lib/upstreamOutage";
 import { clearRequestAuthCookies, createRequestSupabase } from "../lib/authSession";
 import { reportSchemaOutOfDateOnce } from "../lib/schemaOutOfDate";
 import { requestOriginIsTrusted } from "../lib/origins";
-import { mfaRequiredForEnrolledUsers } from "../lib/runtimeConfig";
 import { devLog, isDev } from "../lib/log";
 import { AppError } from "../lib/appError";
 import {
@@ -81,15 +80,14 @@ function reportLoginMfaColumnMissing(error: { code?: string }) {
   });
 }
 
-/**
- * Whether the user opted into login verification: true or false, or null
- * once a response has already been sent.
- */
-async function loginMfaPreferenceOn(
+async function enforceLoginMfaIfEnabled(
   req: Request,
   res: Response,
   admin: Db,
-): Promise<boolean | null> {
+  token: string,
+) {
+  if (isLoginMfaBootstrapRoute(req)) return true;
+
   const { data, error } = await admin
     .from("user_profiles")
     .select("mfa_on_login")
@@ -106,7 +104,7 @@ async function loginMfaPreferenceOn(
     });
     if (error.code === "42703") {
       reportLoginMfaColumnMissing(error);
-      return false;
+      return true;
     }
     sendInternalError(
       res,
@@ -114,34 +112,11 @@ async function loginMfaPreferenceOn(
         cause: error,
       }),
     );
-    return null;
+    return false;
   }
 
   const profile = data as { mfa_on_login?: boolean } | null;
-  return profile?.mfa_on_login === true;
-}
-
-async function enforceLoginMfaIfEnabled(
-  req: Request,
-  res: Response,
-  admin: Db,
-  token: string,
-  user: { factors?: Array<{ status?: string }> },
-) {
-  if (isLoginMfaBootstrapRoute(req)) return true;
-
-  if (mfaRequiredForEnrolledUsers()) {
-    // The deployment requires every enrolled factor on every route. The user
-    // GoTrue just returned is authoritative for its factors, so a user with
-    // none verified costs no second lookup.
-    if (!user.factors?.some((factor) => factor.status === "verified")) {
-      return true;
-    }
-  } else {
-    const optedIn = await loginMfaPreferenceOn(req, res, admin);
-    if (optedIn === null) return false;
-    if (!optedIn) return true;
-  }
+  if (profile?.mfa_on_login !== true) return true;
 
   const { data: assurance, error: assuranceError } =
     await admin.auth.mfa.getAuthenticatorAssuranceLevel(token);
@@ -347,7 +322,7 @@ export async function requireAuth(
       error: syncError.message,
     });
   }
-  if (!(await enforceLoginMfaIfEnabled(req, res, admin, token, user))) {
+  if (!(await enforceLoginMfaIfEnabled(req, res, admin, token))) {
     return;
   }
   next();

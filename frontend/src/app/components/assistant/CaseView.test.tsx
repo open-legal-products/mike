@@ -36,16 +36,25 @@ describe("CaseView", () => {
     ])("highlights only the exact embedded source quote: %s", (text, body) => {
         const quote = { quote: text, verification: { verified: true }, target: { subdocument_id: "mcp:test:text" } };
         const { container } = render(<CaseView document={{ ...document,
-            document_id: "mcp:test", type: "legislation", quotes: [quote],
+            document_id: "mcp:test", type: "legislation", quote_verification: "exact", quotes: [quote],
             subdocuments: [{ document_id: "mcp:test:text", title: "Synthetic source", type: "html", text: body }],
         }} activeQuote={quote} />);
         expect(container.querySelector(".case-quote-highlight")?.textContent).toBe(text);
     });
 
+    it("keeps the tolerant match for a text-only opinion whose quotes were verified tolerantly", () => {
+        const quote = { quote: "Is relief denied?", target: { subdocument_id: "case:9:opinion:1" } };
+        const { container } = render(<CaseView document={{ ...document,
+            document_id: "case:9", quotes: [quote],
+            subdocuments: [{ document_id: "case:9:opinion:1", title: "Lead Opinion", type: "html", text: "Held: is relief denied! Yes." }],
+        }} activeQuote={quote} />);
+        expect(container.querySelector(".case-quote-highlight")?.textContent?.trim()).toBe("is relief denied!");
+    });
+
     it("highlights source body rather than identical provider title metadata", () => {
         const quote = { quote: "Synthetic source", target: { subdocument_id: "mcp:test:text" } };
         const { container } = render(<CaseView document={{ ...document,
-            document_id: "mcp:test", quotes: [quote], subdocuments: [{
+            document_id: "mcp:test", quote_verification: "exact", quotes: [quote], subdocuments: [{
                 document_id: "mcp:test:text", title: quote.quote, type: "html", text: `${quote.quote}. The actual body.`,
             }],
         }} activeQuote={quote} />);
@@ -56,7 +65,7 @@ describe("CaseView", () => {
     it("does not highlight a punctuation-mismatched embedded source quote", () => {
         const quote = { quote: "Is relief denied?", target: { subdocument_id: "mcp:test:text" } };
         const { container } = render(<CaseView document={{ ...document,
-            document_id: "mcp:test", quotes: [quote], subdocuments: [{
+            document_id: "mcp:test", quote_verification: "exact", quotes: [quote], subdocuments: [{
                 document_id: "mcp:test:text", title: "Synthetic source", type: "html", text: "Is relief denied!",
             }],
         }} activeQuote={quote} />);

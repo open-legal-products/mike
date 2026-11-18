@@ -59,11 +59,13 @@ test("LDH Discover preset uses the shared OAuth popup and Installed controls", a
 });
 
 for (const type of ["case", "legislation", "legal_research"] as const) {
-    test(`LDH ${type} citation opens its inline source without uploaded-document requests`, async ({ page }, testInfo) => {
+  for (const storage of ["legacy inline", "provider reference"] as const) {
+    test(`LDH ${type} ${storage} citation opens without uploaded-document requests`, async ({ page }, testInfo) => {
         const title = `Synthetic LDH ${type} source`;
         const quote = "This is a fixture provision, not an actual legal authority.";
         const documentId = "mcp:ldh-browser:7:fixture:1:1";
         const uploadedDocumentRequests: string[] = [];
+        let sourceRequests = 0;
         const errors: string[] = [];
         page.on("pageerror", error => errors.push(error.message));
         const chat = { id: "ldh-citation", title: "LDH citation fixture", user_id: "ldh-ui-user", project_id: null, model: "test-model", created_at: "2026-10-13T00:00:00Z", is_owner: true, access_role: "owner" };
@@ -73,9 +75,12 @@ for (const type of ["case", "legislation", "legal_research"] as const) {
             page: 1, quote, quotes: [{ page: 1, quote, verification: { verified: true } }],
             document: {
                 document_id: documentId, title, type, metadata: [],
+                ...(storage === "provider reference" ? { provider: "legal_data_hunter", quote_verification: "exact" } : {}),
                 actions: [{ type: "link", url: "https://example.com/public-source" }],
                 quotes: [{ quote, verification: { verified: true }, target: { subdocument_id: `${documentId}:text` } }],
-                subdocuments: [{ document_id: `${documentId}:text`, title, type: "html", text: `${quote}\n\n<script>window.ldhInjected = true</script>` }],
+                subdocuments: [{ document_id: `${documentId}:text`, title, type: "html",
+                    ...(storage === "legacy inline" ? { text: `${quote}\n\n<script>window.ldhInjected = true</script>` } : {}),
+                }],
             },
         };
         await page.route("**/api/**", async route => {
@@ -90,6 +95,14 @@ for (const type of ["case", "legislation", "legal_research"] as const) {
                 ],
             } });
             if (path === "/api/chat") return route.fulfill({ json: [chat] });
+            if (storage === "provider reference" && path === `/api/documents/${encodeURIComponent(documentId)}`) {
+                sourceRequests++;
+                return route.fulfill({ json: {
+                    ...citation.document,
+                    quotes: [],
+                    subdocuments: [{ document_id: `${documentId}:text`, title, type: "html", text: `${quote}\n\n<script>window.ldhInjected = true</script>` }],
+                } });
+            }
             if (/\/documents\//.test(path)) {
                 uploadedDocumentRequests.push(path);
                 return route.fulfill({ status: 404, json: { error: "Not an uploaded document" } });
@@ -104,9 +117,19 @@ for (const type of ["case", "legislation", "legal_research"] as const) {
         await expect(article).toContainText(quote);
         await page.getByRole("button", { name: "Citation 1", exact: true }).first().click();
         await expect(article.locator(".case-quote-highlight")).toHaveText(quote);
+        if (storage === "provider reference") {
+            expect(sourceRequests).toBe(1);
+            await page.reload();
+            await page.getByRole("button", { name: title, exact: true }).click();
+            await expect(article).toContainText(quote);
+            await page.getByRole("button", { name: "Citation 1", exact: true }).first().click();
+            await expect(article.locator(".case-quote-highlight")).toHaveText(quote);
+            expect(sourceRequests).toBe(2);
+        }
         expect(await page.evaluate(() => "ldhInjected" in window)).toBe(false);
         expect(uploadedDocumentRequests).toEqual([]);
         expect(errors).toEqual([]);
         await page.screenshot({ path: testInfo.outputPath(`ldh-${type}-source.png`), animations: "disabled" });
     });
+  }
 }

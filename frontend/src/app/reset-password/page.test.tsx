@@ -67,24 +67,30 @@ describe("ResetPasswordPage", () => {
         );
     });
 
-    it("asks an account with an authenticator for a code, then changes the password", async () => {
-        updateAuthPassword
-            .mockRejectedValueOnce(
-                Object.assign(new Error("MFA verification required"), {
-                status: 403,
-                code: "mfa_verification_required",
-            }),
-            )
-            .mockResolvedValueOnce({ user: { id: "user-1" } });
-        render(<ResetPasswordPage />);
+    it.each([
+        [401, "insufficient_aal"],
+        [403, "mfa_verification_required"],
+    ])(
+        "verifies and retries a password reset after %s %s",
+        async (status, code) => {
+            updateAuthPassword
+                .mockRejectedValueOnce(
+                    Object.assign(new Error("MFA verification required"), {
+                        status,
+                        code,
+                    }),
+                )
+                .mockResolvedValueOnce({ user: { id: "user-1" } });
+            render(<ResetPasswordPage />);
 
-        const user = await submitPassword("correct-horse-battery");
-        expect(screen.queryByRole("alert")).not.toBeInTheDocument();
-        await user.click(await screen.findByRole("button", { name: "Verify code" }));
+            const user = await submitPassword("correct-horse-battery");
+            expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+            await user.click(await screen.findByRole("button", { name: "Verify code" }));
 
-        expect(await screen.findByText("Password updated")).toBeInTheDocument();
-        expect(updateAuthPassword).toHaveBeenCalledTimes(2);
-    });
+            expect(await screen.findByText("Password updated")).toBeInTheDocument();
+            expect(updateAuthPassword).toHaveBeenCalledTimes(2);
+        },
+    );
 
     it("refuses a password past bcrypt's limit before calling the API", async () => {
         render(<ResetPasswordPage />);

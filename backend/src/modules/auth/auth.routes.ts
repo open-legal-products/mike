@@ -23,7 +23,7 @@ import { AppError } from "../../lib/appError";
 import { reportError, setOperation } from "../../lib/observability/sentry";
 import { requestOriginIsWordAddin } from "../../lib/origins";
 import { createServerSupabase } from "../../lib/supabase";
-import { requireAuth, requireMfaIfEnrolled } from "../../middleware/auth";
+import { requireAuth } from "../../middleware/auth";
 import { asyncRoute, routerErrorHandler } from "../../middleware/asyncRoute";
 import { requireTrustedOrigin } from "../../middleware/trustedOrigin";
 import {
@@ -467,10 +467,7 @@ authRouter.patch("/email", requireAuth, asyncRoute(async (req, res) => {
   res.json({ user: publicAuthUser(data.user) });
 }));
 
-// A new password replaces the credential the account is protected by. A user
-// with an enrolled authenticator proves it first (aal2), so a password-only
-// session, or a stolen session cookie, cannot lock them out of their account.
-authRouter.patch("/password", requireAuth, requireMfaIfEnrolled, asyncRoute(async (req, res) => {
+authRouter.patch("/password", requireAuth, asyncRoute(async (req, res) => {
   setOperation("auth.session");
   const parsed = passwordSchema.safeParse(req.body);
   if (!parsed.success) return invalidBody(res, parsed.error.issues);
