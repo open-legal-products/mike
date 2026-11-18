@@ -156,17 +156,18 @@ export async function scriptToolFor(
   if (!scriptToolEnabled(env)) return null;
   const inner = scriptInnerTools(activeTools);
   if (!inner.length) return null;
-  let codemode: CodemodeModule;
+  let declarations: string;
   try {
-    codemode = await loadCodemode();
+    const codemode = await loadCodemode();
+    declarations = codemode.renderDeclarations({
+      tools: asCodemodeTools(inner, () => () => undefined),
+    });
   } catch (error) {
-    // Without the sandbox the turn goes on with its ordinary tools.
+    // run_script is optional: whatever goes wrong setting it up, the turn
+    // goes on with its ordinary tools.
     reportSandboxFailure(error);
     return null;
   }
-  const declarations = codemode.renderDeclarations({
-    tools: asCodemodeTools(inner, () => () => undefined),
-  });
   return {
     type: "function",
     function: {
