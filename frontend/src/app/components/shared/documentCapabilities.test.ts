@@ -69,6 +69,14 @@ describe("documentCapabilities", () => {
         expect(isExternalSourceDocument(undefined)).toBe(false);
     });
 
+    it.each(["case", "legislation", "legal_research"] as const)("preserves exact quotes for legacy LDH %s sources", (type) => {
+        const legacy = document({ type, document_id: "mcp:connector:3:law:1:1" });
+        expect(documentCapabilities(legacy).exactQuotes).toBe(true);
+        expect(documentCapabilities({ ...legacy, quote_verification: "fuzzy" }).exactQuotes).toBe(false);
+        expect(documentCapabilities({ ...legacy, provider: "some_provider" }).exactQuotes).toBe(false);
+        expect(documentCapabilities({ ...legacy, document_id: "case:1" }).exactQuotes).toBe(false);
+    });
+
     it("hydrates an external source only until it has a body", () => {
         const withoutBody = document({
             type: "case",

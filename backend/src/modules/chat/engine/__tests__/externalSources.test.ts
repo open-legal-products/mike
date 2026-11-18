@@ -31,7 +31,7 @@ function source(overrides: Partial<ExternalSource["document"]> = {}): ExternalSo
       type: "case",
       metadata: [],
       quotes: [],
-      actions: [{ type: "link", url: "https://example.com/smith", label: "Link" }],
+      actions: [{ type: "link", url: "https://example.com/smith" }],
       subdocuments: [
         { document_id: "prov:abc:text", title: "Smith v Jones", type: "html" },
       ],

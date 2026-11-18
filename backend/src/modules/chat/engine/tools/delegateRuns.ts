@@ -101,10 +101,10 @@ export function toolRecord(
     const external = candidate ? docStore.get(candidate)?.external_source : undefined;
     const externalLabel = external ? candidate : null;
     const documents = labels
-        .filter((label) => externalLabel === null || label !== externalLabel)
+        .filter((label) => !label || !docStore.get(label)?.external_source)
         .map((label) => {
             const doc = label ? docIndex[label] : undefined;
-            return doc && !docStore.get(label!)?.external_source
+            return doc
                 ? { document_id: doc.document_id, version_id: doc.version_id ?? null }
                 : undefined;
         });

@@ -186,6 +186,15 @@ describe("subagent run store", () => {
     const mixed = toolRecord({ id: "4", name: "fetch_documents", input: { doc_ids: ["doc-0", "mcp:c1:2:uk:3:abc"] } }, `--- doc-0 ---\nlease\n--- doc-2 ---\n${text}`, docStore, docIndex);
     expect(mixed.result).not.toContain(uncited);
     expect(mixed.documents).toEqual([{ document_id: "doc-a", version_id: "v1" }]);
+    const secondSource = { ...external, document_id: "mcp:c1:2:uk:3:def", title: "R v Y" };
+    docStore.set("doc-3", { storage_path: "", file_type: "text/plain", filename: secondSource.title, inline_text: text, external_source: secondSource });
+    const multipleSources = toolRecord(
+      { id: "multi", name: "fetch_documents", input: { doc_ids: ["doc-2", "doc-0", "doc-3"] } },
+      `${text}\nlease\n${text}`, docStore,
+      { ...docIndex, "doc-3": { document_id: secondSource.document_id, filename: secondSource.title } },
+    );
+    expect(multipleSources.result).not.toContain(uncited);
+    expect(multipleSources.documents).toEqual([{ document_id: "doc-a", version_id: "v1" }]);
     // An ordinary document, and a connector result that registered nothing, are recorded as before.
     expect(toolRecord({ id: "5", name: "read_document", input: { doc_id: "doc-0" } }, "lease text", docStore, docIndex)).toMatchObject({ result: "lease text", documents: [{ document_id: "doc-a", version_id: "v1" }] });
     expect(toolRecord({ id: "6", name: "mcp_slack_search", input: {} }, "{\"result\":[]}", docStore, docIndex).result).toBe("{\"result\":[]}");

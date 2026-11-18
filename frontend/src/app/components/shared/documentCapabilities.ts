@@ -64,7 +64,12 @@ export function documentCapabilities(document: PanelDocument): DocumentCapabilit
             !document.subdocuments?.some(
                 (subdocument) => !!subdocument.html || !!subdocument.text,
             ),
-        exactQuotes: document.quote_verification === "exact",
+        // LDH citations saved before provider stamps used the reserved mcp:
+        // namespace and already required verbatim quotes. Preserve that
+        // behavior only for legacy documents; an explicit policy wins.
+        exactQuotes: document.quote_verification === "exact" ||
+            (document.quote_verification === undefined && !document.provider &&
+                external && document.document_id.startsWith("mcp:")),
         legalIcon: legalSourceIconKind(document.type),
     };
 }
