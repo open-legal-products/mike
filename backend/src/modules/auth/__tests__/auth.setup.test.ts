@@ -10,7 +10,10 @@ import {
 
 type RpcAnswers = Record<string, { data: unknown; error: unknown }>;
 
-function fakeDb(answers: RpcAnswers, createUser = vi.fn(async () => ({ error: null }))) {
+function fakeDb(
+  answers: RpcAnswers,
+  createUser: (...args: unknown[]) => Promise<unknown> = vi.fn(async () => ({ error: null })),
+) {
   const rpc = vi.fn(async (name: string) => answers[name] ?? { data: null, error: null });
   return {
     db: { rpc, auth: { admin: { createUser } } } as unknown as Db,
