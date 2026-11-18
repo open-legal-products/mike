@@ -3,6 +3,8 @@
  * Mirrored in packages/client/src/sentryPrivacy.ts; the sync test guards drift.
  * Never infer whether arbitrary text is PII. Rebuild diagnostic events from an
  * allowlist and reject every other envelope item, including automatic sessions.
+ * Structured logs and metrics leave only when the runtime opts in (see
+ * telemetryItems), and are rebuilt from their own allowlist.
  */
 type RecordValue = Record<string, unknown>;
 type Envelope = [RecordValue, Array<[{ type: string; [key: string]: unknown }, unknown]>];
@@ -137,6 +139,13 @@ const PROVIDER_REASONS: Array<[string, RegExp]> = [
   // Anthropic answers an empty prepaid balance with a 400 invalid_request_error, not a 402.
   ['credit_balance', /\byour credit balance is too low\b/i],
 ];
+/** The provider_error tag for each provider failure class, keyed by the error's name. */
+const PROVIDER_ERROR_KIND: Readonly<Record<string, string>> = {
+  InvalidApiKeyError: 'invalid_api_key',
+  AI_APICallError: 'api_call',
+  AI_RetryError: 'retry_exhausted',
+  AI_StreamProviderError: 'stream_provider',
+};
 /** @ai-sdk/gateway's own instance marker (GatewayError.isInstance); its classes are not exported. */
 const GATEWAY_ERROR = Symbol.for('vercel.ai.gateway.error');
 
@@ -242,10 +251,8 @@ export function diagnosticErrorTags(error: unknown): Record<string, string | num
         const fields = [...new Set(item.configurationFields.slice(0, 10).filter(field => typeof field === 'string' && CONFIGURATION_FIELDS.has(field)))];
         if (fields.length) tags.configuration_fields = fields.sort().join(',');
       }
-      const providerError = item.name === 'InvalidApiKeyError' ? 'invalid_api_key'
-        : item.name === 'AI_APICallError' ? 'api_call'
-          : item.name === 'AI_RetryError' ? 'retry_exhausted'
-            : item.name === 'AI_StreamProviderError' ? 'stream_provider' : undefined;
+      const providerError = typeof item.name === 'string' && Object.hasOwn(PROVIDER_ERROR_KIND, item.name)
+        ? PROVIDER_ERROR_KIND[item.name] : undefined;
       if (providerError && tags.provider_error === undefined) tags.provider_error = providerError;
       // Recorded by withKeySource (backend/src/lib/llm/providerErrors.ts); admitted only as a registry id.
       if (typeof item.keyProvider === 'string' && ENUMS.provider!.has(item.keyProvider) && tags.provider === undefined) tags.provider = item.keyProvider;
@@ -430,10 +437,96 @@ export function diagnosticEvent(value: unknown): RecordValue {
   return out;
 }
 
-/** Drop all non-error telemetry, even if a future SDK enables it by default. */
-export function diagnosticEnvelope(envelope: Envelope, destination?: string): Envelope | null {
-  const items: Envelope[1] = envelope[1].flatMap(([header, payload]) => header.type === 'event'
-    ? [[{ type: 'event' }, diagnosticEvent(payload)] as Envelope[1][number]] : []);
+export type TelemetryItemType = 'log' | 'trace_metric';
+/** How many of `count` items of this type may leave now; the runtime's volume policy. */
+export type TelemetryBudget = (type: TelemetryItemType, count: number) => number;
+
+const TELEMETRY_CONTENT_TYPE: Record<TelemetryItemType, string> = {
+  log: 'application/vnd.sentry.items.log+json',
+  trace_metric: 'application/vnd.sentry.items.trace-metric+json',
+};
+const LOG_LEVELS = new Set(['trace', 'debug', 'info', 'warn', 'error', 'fatal']);
+const METRIC_TYPES = new Set(['counter', 'gauge', 'distribution']);
+/** `[scope] message`, as lib/log writes it from static source text; `{}` stands where a value was printed. */
+const LOG_BODY = /^\[[A-Za-z][A-Za-z0-9_/.-]{0,39}\] [^\x00-\x1f\x7f]{1,200}$/;
+const METRIC_NAME = /^[a-z][a-z0-9_.]{0,63}$/;
+/**
+ * The attributes a log or metric may carry. A new one is added here, in both
+ * copies of this file, with a reason it cannot hold a client's data: shape
+ * alone does not tell an identifier from a file name or a key.
+ */
+const TELEMETRY_ATTRIBUTES = new Set(['kind', 'tool', 'outcome', 'count']);
+/** An identifier, never a sentence: no spaces, quotes or slashes. */
+const ATTRIBUTE_TEXT = /^[A-Za-z0-9_.:-]{1,64}$/;
+const SDK_ATTRIBUTE_TEXT = /^[A-Za-z0-9_.:@+/-]{1,100}$/;
+
+/**
+ * Attributes rebuilt from an allowlist: only the keys in TELEMETRY_ATTRIBUTES,
+ * each with a number, a boolean or an identifier-shaped string. Everything
+ * else is dropped, including the SDK's own attributes (user.*,
+ * server.address, sentry.*) except environment and release.
+ */
+function telemetryAttributes(input: unknown): RecordValue {
+  const out: RecordValue = {};
+  for (const [key, typed] of Object.entries(record(input))) {
+    const { value, type } = record(typed);
+    if (key === 'sentry.environment' || key === 'sentry.release') {
+      if (typeof value === 'string' && SDK_ATTRIBUTE_TEXT.test(value)) out[key] = { value, type: 'string' };
+      continue;
+    }
+    if (!TELEMETRY_ATTRIBUTES.has(key)) continue;
+    if (typeof value === 'boolean') out[key] = { value, type: 'boolean' };
+    else if (typeof value === 'number' && Number.isFinite(value)) out[key] = { value, type: type === 'integer' && Number.isInteger(value) ? 'integer' : 'double' };
+    else if (typeof value === 'string' && ATTRIBUTE_TEXT.test(value)) out[key] = { value, type: 'string' };
+  }
+  return out;
+}
+
+/** The log or metric items of one container that may leave, each rebuilt field by field. */
+export function telemetryItems(type: TelemetryItemType, payload: unknown): RecordValue[] {
+  const items = record(payload).items;
+  if (!Array.isArray(items)) return [];
+  return items.flatMap(raw => {
+    const item = record(raw);
+    if (typeof item.timestamp !== 'number' || !Number.isFinite(item.timestamp)) return [];
+    const out: RecordValue = { timestamp: item.timestamp };
+    if (typeof item.trace_id === 'string' && HEX_ID.test(item.trace_id)) out.trace_id = item.trace_id;
+    if (type === 'log') {
+      if (typeof item.level !== 'string' || !LOG_LEVELS.has(item.level)) return [];
+      if (typeof item.body !== 'string' || !LOG_BODY.test(item.body)) return [];
+      out.level = item.level;
+      out.body = item.body;
+      if (Number.isInteger(item.severity_number)) out.severity_number = item.severity_number;
+    } else {
+      if (typeof item.name !== 'string' || !METRIC_NAME.test(item.name)) return [];
+      if (typeof item.type !== 'string' || !METRIC_TYPES.has(item.type)) return [];
+      if (typeof item.value !== 'number' || !Number.isFinite(item.value)) return [];
+      // Relay requires a trace id on a metric; one that is not ours to vouch for is not sent.
+      if (out.trace_id === undefined) return [];
+      out.name = item.name;
+      out.type = item.type;
+      out.value = item.value;
+    }
+    out.attributes = telemetryAttributes(item.attributes);
+    return [out];
+  });
+}
+
+/**
+ * Drop all telemetry but error events, even if a future SDK enables more by
+ * default. With a `telemetry` budget, structured logs and metrics leave too,
+ * rebuilt by telemetryItems and limited by that budget.
+ */
+export function diagnosticEnvelope(envelope: Envelope, destination?: string, telemetry?: TelemetryBudget): Envelope | null {
+  const items: Envelope[1] = envelope[1].flatMap(([header, payload]): Envelope[1] => {
+    if (header.type === 'event') return [[{ type: 'event' }, diagnosticEvent(payload)]];
+    if (!telemetry || (header.type !== 'log' && header.type !== 'trace_metric')) return [];
+    const safe = telemetryItems(header.type, payload);
+    const allowed = safe.slice(0, Math.max(0, Math.floor(telemetry(header.type, safe.length))));
+    return allowed.length
+      ? [[{ type: header.type, item_count: allowed.length, content_type: TELEMETRY_CONTENT_TYPE[header.type] }, { version: 2, items: allowed }]]
+      : [];
+  });
   if (!items.length) return null;
   const header: RecordValue = {};
   // Next's tunnel needs a DSN. Use client configuration, never envelope input.
@@ -444,7 +537,7 @@ export function diagnosticEnvelope(envelope: Envelope, destination?: string): En
 }
 
 /** Applies to browser, server, workers and add-in, in both install modes. */
-export function privacyBoundaryIntegration(options: { acceptEvent?: (event: RecordValue) => boolean } = {}) {
+export function privacyBoundaryIntegration(options: { acceptEvent?: (event: RecordValue) => boolean; telemetry?: TelemetryBudget } = {}) {
   return {
     name: 'MikePrivacyBoundary',
     setup(client: {
@@ -457,9 +550,9 @@ export function privacyBoundaryIntegration(options: { acceptEvent?: (event: Reco
       const dsn = client.getDsn?.();
       const destination = dsn?.publicKey ? `${dsn.protocol}://${dsn.publicKey}@${dsn.host}${dsn.port ? `:${dsn.port}` : ''}/${dsn.path ? `${dsn.path}/` : ''}${dsn.projectId}` : undefined;
       transport.send = envelope => {
-        const safe = diagnosticEnvelope(envelope, destination);
+        const safe = diagnosticEnvelope(envelope, destination, options.telemetry);
         if (!safe) return Promise.resolve({});
-        const items = safe[1].filter(([, payload]) => options.acceptEvent?.(record(payload)) ?? true);
+        const items = safe[1].filter(([header, payload]) => header.type !== 'event' || (options.acceptEvent?.(record(payload)) ?? true));
         if (!items.length) return Promise.resolve({});
         return send([safe[0], items]);
       };

@@ -4,6 +4,7 @@ import type { Db } from "../dbq/types";
 import { reportError } from "../observability/sentry";
 import { teamOrgIdOf } from "../personalOrgs";
 import { getMemoryCurrent } from "./files";
+import { log } from "../log";
 
 /**
  * A delimiter the memory body cannot forge that is also stable while the body
@@ -111,7 +112,7 @@ async function buildMemoryDocuments(args: {
             ),
             { level: "warning" },
           );
-          console.warn("[memory-context] scoped memory could not be loaded", {
+          log.warn("memory-context", "scoped memory could not be loaded", {
             scope: candidate.scope,
           });
           return null;

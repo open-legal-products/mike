@@ -26,6 +26,7 @@ import { setOperation } from "../../lib/observability/sentry";
 import { ensureMemoryFile, getMemoryCurrentForFile, MemoryConversationNotQuietError, MemoryDisabledError, MemoryEpochSupersededError, MemoryJobSupersededError, MemoryValidationError, writeMemoryFile, type MemoryFileRow, type MemoryScope, type MemorySurface } from "../../lib/memory/files";
 import { MEMORY_INACTIVITY_MS } from "../../lib/memory/schedule";
 import { teamOrgIdOf } from "../../lib/personalOrgs";
+import { log } from "../../lib/log";
 
 const TRANSCRIPT_MESSAGE_LIMIT = 120;
 const TRANSCRIPT_CHARACTER_LIMIT = 48_000;
@@ -130,7 +131,7 @@ export function memoryCuratorModelForChat(args: {
   if (canonical && hasApiKeyForModel(canonical, args.apiKeys)) {
     return canonical;
   }
-  console.warn("[memory] curator model unavailable; using the chat model", {
+  log.warn("memory", "curator model unavailable; using the chat model", {
     preferred,
   });
   return args.chatModel;

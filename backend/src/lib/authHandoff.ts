@@ -5,6 +5,7 @@ import { authHandoffEncryptionSecret } from "./runtimeConfig";
 import type { Db } from "./supabase";
 import { AppError } from "./appError";
 import { reportError } from "./observability/sentry";
+import { log } from "./log";
 
 const HANDOFF_TABLE = "auth_handoff_tickets";
 const DEFAULT_TTL_SECONDS = 120;
@@ -151,7 +152,7 @@ export async function issueAuthHandoff(input: {
       }),
       { level: "warning" },
     );
-    console.warn("[auth/handoff] expired-ticket cleanup failed", {
+    log.warn("auth/handoff", "expired-ticket cleanup failed", {
       code: cleanup.error.code,
     });
   }

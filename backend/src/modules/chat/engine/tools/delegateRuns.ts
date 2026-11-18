@@ -14,6 +14,7 @@ import { safeError } from "../../../../lib/safeError";
 import type { Db } from "../../../../lib/supabase";
 import { loadAssistantMessage } from "../contextBuilders";
 import { createDocLabelResolver, type DocIndex, type DocStore } from "../types";
+import { log } from "../../../../lib/log";
 import { externalSourceReference } from "./externalSources";
 
 type DocumentRef = { document_id: string; version_id: string | null };
@@ -264,7 +265,7 @@ export function createSubagentRunStore(scope: {
                     }),
                     { tags: { component: "chat-stream", operation: "chat.subagent" } },
                 );
-                console.warn("[subagents] run save failed", safeError(error));
+                log.warn("subagents", "run save failed", safeError(error));
             }
         },
         async load(delegationId) {
@@ -303,7 +304,7 @@ export function createSubagentRunStore(scope: {
                     }),
                     { tags: { component: "chat-stream", operation: "chat.subagent" } },
                 );
-                console.warn("[subagents] run load failed", safeError(error));
+                log.warn("subagents", "run load failed", safeError(error));
                 return null;
             }
         },

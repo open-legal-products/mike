@@ -18,6 +18,7 @@ import {
 import { safeError } from "../../lib/safeError";
 import { deleteFile } from "../../lib/storage";
 import type { PlaybookImportStage } from "./playbooks.types";
+import { log } from "../../lib/log";
 
 export type PlaybookJobKind = "playbook.review" | "playbook.import";
 
@@ -152,7 +153,7 @@ export async function removePlaybookObjects(
     tags: { component: "playbooks", stage: context.stage },
     extra,
   });
-  console.warn("[playbooks] object cleanup failed", {
+  log.warn("playbooks", "object cleanup failed", {
     stage: context.stage,
     error: safeError(failed.reason),
   });

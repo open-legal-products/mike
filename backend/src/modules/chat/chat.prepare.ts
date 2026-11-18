@@ -45,6 +45,7 @@ import { replaysReasoning } from "../../lib/llm/registry";
 import { disownsReplayedToolRecord } from "../../lib/llm/models";
 import { beginMemoryConversationTurn, releaseMemoryConversationTurn, type MemoryConversationTurn } from "../../lib/memory/schedule";
 import { getAccessibleChat, validateAccessibleProjectId } from "./chat.access";
+import { log } from "../../lib/log";
 
 // ---------------------------------------------------------------------------
 // Pre-stream preparation for POST /chat (streaming)
@@ -595,7 +596,7 @@ export async function prepareChatStream(
                     turn: memoryTurn,
                 });
             } catch {
-                console.warn("[memory] chat activity release failed", {
+                log.warn("memory", "chat activity release failed", {
                     chatId,
                 });
             }

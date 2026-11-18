@@ -39,6 +39,7 @@ function sendCatalogFailure(res: Response, failure: CatalogFailure): void {
         // Only the user can fix their endpoint or key, so it is logged at
         // warn (the console bridge files console.error) and not reported.
         if (failure.report === false) {
+            // console.warn, not the central logger, which would forward it with SENTRY_LOGS=on.
             console.warn("[models] catalog request failed", {
                 requestId: res.locals.requestId,
                 path: res.req?.originalUrl?.split("?")[0],

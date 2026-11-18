@@ -55,6 +55,7 @@ import type {
 import { REASONING_LEVELS } from "./types";
 import { vertexAuthClient } from "./vertexAuth";
 import { UserFacingError } from "../userFacingError";
+import { log, tpl } from "../log";
 import { providerDataRetentionAllowed } from "../runtimeConfig";
 
 const OPENROUTER_BASE_URL =
@@ -140,7 +141,7 @@ const ENVIRONMENT_KEY_ALIASES: Record<string, string[]> = {
  * never into a message every user of a hosted deployment can read.
  */
 function keyNotConfigured(label: string, operatorHint: string): UserFacingError {
-  console.warn(`[llm] ${label} API key is not configured. ${operatorHint}`);
+  log.warn(tpl`[llm] ${label} API key is not configured. ${operatorHint}`);
   return new ProviderConfigurationError(
     `The ${label} API key is not configured. Add your own key in Settings → Bring Your Own Keys or contact your administrator.`,
   );

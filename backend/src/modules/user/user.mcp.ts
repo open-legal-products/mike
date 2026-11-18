@@ -22,6 +22,7 @@ import type { ConnectorOwner } from "../../lib/connectorOwner";
 import { withKind, type ErrorKind } from "../../lib/appError";
 import { reportError } from "../../lib/observability/sentry";
 import { type Db } from "./user.shared";
+import { log } from "../../lib/log";
 
 /**
  * The failure as Sentry should see it: `mcp.setup_failed` for managing a
@@ -82,7 +83,7 @@ export async function getMcpConnector(
     } catch (err) {
         // The route answers 404: an unknown or foreign id is the common case
         // here, not a fault, so this is a log line and not an event.
-        console.warn("[user/mcp-connectors] get failed", {
+        log.warn("user/mcp-connectors", "get failed", {
             userId,
             connectorId,
             error: err,

@@ -37,6 +37,7 @@ import { liveDbJobDedupeKeys } from "../../lib/dbq/enqueue";
 import { chunkArray } from "../../lib/arrays";
 import { ID_FILTER_BATCH_SIZE, selectInBatches } from "../../lib/batchedQuery";
 import { mapWithConcurrency } from "../../lib/concurrency";
+import { log } from "../../lib/log";
 
 const DEFAULT_DOC_STALE_MS = 30 * 60 * 1000;
 /** Documents judged per sweep; a larger backlog is visited over later sweeps. */
@@ -170,8 +171,7 @@ export async function sweepStaleProcessingDocuments(
         }
         for (const row of (updated ?? []) as { id: string }[]) {
             flipped += 1;
-            console.warn(
-                "[stale-sweep] stale processing document flipped to error",
+            log.warn("stale-sweep", "stale processing document flipped to error",
                 { documentId: row.id },
             );
         }

@@ -118,6 +118,7 @@ import {
 } from "./courtlistenerTurnState";
 import type { Db } from "../../../../lib/supabase";
 import { renderTableCells } from "./tableCells";
+import { log } from "../../../../lib/log";
 
 /**
  * Report a server-side tool's failure and return what to log for it. The
@@ -847,7 +848,7 @@ export async function runToolCalls(
         // tell a 42883 from a 23505.
         const failureCode =
           result.kind === "error" ? diagnosticErrorTags(result.error).failure_code : undefined;
-        console.warn("[run_tools] find_documents failed", {
+        log.warn("run_tools", "find_documents failed", {
           category: failure.error_code,
           ...(failureCode === undefined ? {} : { failure_code: failureCode }),
         });
@@ -1045,7 +1046,7 @@ export async function runToolCalls(
         });
       } catch (error) {
         reportToolFailure(error);
-        console.warn("[run_tools] list_playbooks failed", safeError(error));
+        log.warn("run_tools", "list_playbooks failed", safeError(error));
         toolResults.push({
           role: "tool",
           tool_call_id: tc.id,
@@ -1180,7 +1181,7 @@ export async function runToolCalls(
           if (error instanceof PlaybookRequestError) fail(error.message);
           else {
             reportToolFailure(error);
-            console.warn("[run_tools] run_playbook failed", safeError(error));
+            log.warn("run_tools", "run_playbook failed", safeError(error));
             fail("The playbook review failed. Try again.");
           }
         } finally {

@@ -5,6 +5,7 @@ import { downloadFile, uploadFile } from "../../lib/storage";
 import { docxToPdf, convertedPdfKey } from "../../lib/convert";
 import { markStage, reportError, setOperation } from "../../lib/observability/sentry";
 import { createServerSupabase, type Db } from "../../lib/supabase";
+import { log } from "../../lib/log";
 
 /**
  * Convert one uploaded DOCX/DOC to PDF and finalize the document.
@@ -116,7 +117,7 @@ export async function runConversionJob(
             );
     }
     if (pdfBuf)
-        console.log("[conversion-worker] converted", { documentId, versionId });
+        log.info("conversion-worker", "converted", { documentId, versionId });
 }
 
 /**

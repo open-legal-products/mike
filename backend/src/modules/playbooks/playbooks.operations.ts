@@ -110,6 +110,7 @@ import {
   type PlaybookReportStage,
 } from "./playbooks.reporting";
 import { markStage } from "../../lib/observability/sentry";
+import { log } from "../../lib/log";
 
 type Db = ReturnType<typeof createServerSupabase>;
 
@@ -1069,7 +1070,7 @@ function keepPlaybookWorkAttended(
             ids: review ? { run_id: id } : { import_id: id },
           });
         }
-        console.warn("[playbooks] heartbeat failed", {
+        log.warn("playbooks", "heartbeat failed", {
           table,
           id,
           error: safeError(error),
@@ -1240,7 +1241,7 @@ async function recordImportFailure(
     reportPlaybookFailure(error, { ...report, stage: importReportStage(stage) });
   // Not console.error: a refusal is not a fault, and a reported failure would
   // be filed again by the console bridge.
-  console.warn("[playbooks] import failed", {
+  log.warn("playbooks", "import failed", {
     attemptId,
     stage,
     error: safeError(error),
@@ -1256,7 +1257,7 @@ async function recordImportFailure(
     });
   } catch (recordError) {
     reportPlaybookFailure(recordError, { ...report, stage: "import.record" });
-    console.warn("[playbooks] failed to record import failure", {
+    log.warn("playbooks", "failed to record import failure", {
       attemptId,
       error: safeError(recordError),
     });
@@ -2361,7 +2362,7 @@ export async function runPlaybookReview(
     // and is recorded below like any other failure.
     if (error instanceof DocumentReviewRetryableError) throw error;
     // Not console.error: see recordImportFailure.
-    console.warn("[playbooks] review failed", { runId, error: safeError(error) });
+    log.warn("playbooks", "review failed", { runId, error: safeError(error) });
     const completedAt = new Date().toISOString();
     const marked = await db
       .from("playbook_runs")
@@ -2377,7 +2378,7 @@ export async function runPlaybookReview(
       .select("id");
     if (marked.error) {
       reportPlaybookFailure(marked.error, { ...report, stage: "review.record" });
-      console.warn("[playbooks] failed to record review failure", {
+      log.warn("playbooks", "failed to record review failure", {
         runId,
         error: safeError(marked.error),
       });

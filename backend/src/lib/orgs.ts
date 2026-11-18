@@ -49,6 +49,7 @@ import {
 } from "./access";
 import { isOrgAccessOverrideRole } from "./orgAccessOverrides";
 import { isPersonalOrgRow } from "./personalOrgs";
+import { log } from "./log";
 
 type DbError = { code?: string; message: string } | null;
 
@@ -481,7 +482,7 @@ async function attachProfiles(
     } catch (error) {
         // Decoration only (some callers run after a committed mutation):
         // degrade to unlabeled rows, as before, but say so.
-        console.warn("[orgs] failed to load member profiles", safeError(error));
+        log.warn("orgs", "failed to load member profiles", safeError(error));
         return byUser;
     }
     for (const p of data) {

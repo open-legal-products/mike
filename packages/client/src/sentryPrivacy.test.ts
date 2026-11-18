@@ -66,6 +66,33 @@ describe('outbound telemetry privacy boundary', () => {
     expect(diagnosticEnvelope([{ trace: { transaction: 'Private.pdf' } }, [[{ type, filename: 'Private.pdf' }, { did: 'private-user' }]]])).toBeNull();
   });
 
+  it('lets logs and metrics leave only with a budget, rebuilt from named attributes and identifier-shaped values', () => {
+    const trace = 'a'.repeat(32);
+    const log = { timestamp: 1, level: 'warn', body: '[dbq] poll failed', trace_id: trace, span_id: 'private', severity_number: 13, attributes: {
+      tool: { value: 'read_document', type: 'string' }, count: { value: 2, type: 'integer' }, ok: { value: true, type: 'boolean' }, api_key: { value: 'sk-private-token', type: 'string' }, matter: { value: 'Private.pdf', type: 'string' },
+      filename: { value: 'Private agreement.pdf', type: 'string' }, 'user.email': { value: 'a@example.com', type: 'string' },
+      'server.address': { value: 'host-1', type: 'string' }, 'sentry.environment': { value: 'production', type: 'string' },
+    } };
+    const envelope = (type: string, items: unknown[]): Parameters<typeof diagnosticEnvelope>[0] => [{ sdk: { name: 'private' } }, [[{ type, item_count: 9, length: 99 }, { version: 2, ingest_settings: { infer_ip: 'auto' }, items }]]];
+    expect(diagnosticEnvelope(envelope('log', [log]))).toBeNull();
+    expect(diagnosticEnvelope(envelope('log', [log]), undefined, () => 0)).toBeNull();
+    expect(diagnosticEnvelope(envelope('log', [log, { ...log, body: 'Private agreement.pdf failed' }, { ...log, level: 'loud' }]), undefined, (_type, count) => count)).toEqual([{}, [[
+      { type: 'log', item_count: 1, content_type: 'application/vnd.sentry.items.log+json' },
+      { version: 2, items: [{ timestamp: 1, trace_id: trace, level: 'warn', body: '[dbq] poll failed', severity_number: 13, attributes: {
+        tool: { value: 'read_document', type: 'string' }, count: { value: 2, type: 'integer' },
+        'sentry.environment': { value: 'production', type: 'string' },
+      } }] },
+    ]]]);
+    const metric = { timestamp: 1, trace_id: trace, name: 'tool_activity', type: 'counter', value: 2, attributes: { outcome: { value: 'refused', type: 'string' } } };
+    const kept = diagnosticEnvelope(envelope('trace_metric', [metric, { ...metric, name: 'Private agreement' }, { ...metric, trace_id: undefined }, { ...metric, value: 'two' }]), undefined, (_type, count) => count);
+    expect(kept).toEqual([{}, [[
+      { type: 'trace_metric', item_count: 1, content_type: 'application/vnd.sentry.items.trace-metric+json' },
+      { version: 2, items: [{ timestamp: 1, trace_id: trace, name: 'tool_activity', type: 'counter', value: 2, attributes: { outcome: { value: 'refused', type: 'string' } } }] },
+    ]]]);
+    expect(JSON.stringify(kept)).not.toContain('Private');
+    expect(JSON.stringify(diagnosticEnvelope(envelope('log', [log]), undefined, (_type, count) => count))).not.toMatch(/sk-private-token|Private\.pdf/);
+  });
+
   it('rebuilds mixed envelopes and removes payload sizes and arbitrary envelope metadata', () => {
     const safe = diagnosticEnvelope([{ event_id: eventId, trace: { transaction: 'Private.pdf' }, private: true }, [[{ type: 'session' }, { did: 'private' }], [{ type: 'event', length: 999, filename: 'Private.pdf' }, { message: 'Private.pdf' }]]]);
     expect(safe).toEqual([{ event_id: eventId }, [[{ type: 'event' }, diagnosticEvent({})]]]);
@@ -281,6 +308,8 @@ it('retains provider categories and retry status without response bodies or cred
   const tags = diagnosticErrorTags(wrapped);
   expect(tags).toEqual({ provider_error: 'invalid_api_key', dependency_status: 401 });
   expect(diagnosticErrorTags(retry)).toEqual({ provider_error: 'retry_exhausted', dependency_status: 401 });
+  // Names are looked up as own keys only, so an inherited Object member is never a category.
+  for (const name of ['constructor', 'toString', '__proto__']) expect(diagnosticErrorTags({ name })).toEqual({});
   expect(diagnosticErrorTags(api)).toEqual({ provider_error: 'api_call', dependency_status: 401 });
   expect(JSON.stringify(diagnosticEvent({ tags, extra: api }))).not.toContain('PRIVATE_');
   const cyclic: { lastError?: unknown } = {};

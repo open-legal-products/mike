@@ -3,6 +3,7 @@ import { ProviderConfigurationError } from "./llm/providerErrors";
 import type { Db } from "./supabase";
 import { ACCOUNT_MODEL_LABELS, resolveModel } from "./llm/models";
 import { getConfiguredModel } from "./llm/registry";
+import { log, tpl } from "./log";
 
 export type RouterSlug =
     | "openrouter"
@@ -113,8 +114,7 @@ export async function resolveRequestedModel(
                 : `Model ${resolved} is not in your saved ${ROUTER_LABELS[router]} models — open ${ROUTER_LABELS[router]} in Settings → Bring Your Own Keys and add it under Model Selections.`,
         );
     }
-    console.warn(
-        `[router-models] user ${userId} requested ${router} model "${resolved}" outside their saved selection; using ${fallback}`,
+    log.warn(tpl`[router-models] user ${userId} requested ${router} model "${resolved}" outside their saved selection; using ${fallback}`,
     );
     return fallback;
 }

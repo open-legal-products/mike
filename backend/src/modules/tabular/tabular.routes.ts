@@ -118,6 +118,7 @@ import {
 } from "../../lib/workspace";
 import { parseTabularReviewSort } from "../../lib/sort";
 import { parseTabularReviewScope } from "./tabular.overview";
+import { log } from "../../lib/log";
 
 export const tabularRouter = Router();
 // The lease timings live in modules/tabular/tabular.shared.ts because the queue
@@ -1052,7 +1053,7 @@ tabularRouter.post("/:reviewId/chat", requireAuth, asyncRoute(async (req, res) =
                 ),
                 { level: "warning" },
             );
-            console.warn("[memory] tabular activity release failed", {
+            log.warn("memory", "tabular activity release failed", {
                 chatId,
             });
         }
@@ -1206,7 +1207,7 @@ tabularRouter.post("/:reviewId/chat", requireAuth, asyncRoute(async (req, res) =
         write("data: [DONE]\n\n");
     } catch (err) {
         if (isAbortError(err)) {
-            console.log("[tabular/chat] turn stopped", { chatId });
+            log.info("tabular/chat", "turn stopped", { chatId });
             if (chatId && err instanceof AssistantStreamError) {
                 const partial = buildStoppedAssistantMessage({
                     stopReason: run?.stopReason,

@@ -1,3 +1,5 @@
+import { redactedProviderError } from "../log";
+
 /**
  * A readable reason for a failed job, whatever was thrown.
  *
@@ -8,6 +10,10 @@
  * this so the row an operator looks at says what actually failed.
  */
 export function jobErrorMessage(err: unknown, fallback = "unknown"): string {
+  // A provider error's message can quote the prompt or the provider's reply,
+  // and this text is both logged and stored as the row's last_error.
+  const redacted = redactedProviderError(err);
+  if (redacted) return redacted;
   if (err instanceof Error) return err.message;
   if (typeof err === "object" && err !== null) {
     const message = (err as { message?: unknown }).message;

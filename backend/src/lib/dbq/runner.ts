@@ -37,6 +37,7 @@ import {
     type PollFailureGate,
 } from "../observability/pollFailureGate";
 import { asReportableError, withResponseStatus } from "../httpError";
+import { log, tpl } from "../log";
 
 /**
  * Poll cadence depends on the driver: with Redis configured, BullMQ delivers
@@ -349,6 +350,7 @@ async function runClaimedJob(
         if (deferred) {
             // Not a failure, and not reported: console.error would reach
             // Sentry through the console bridge as an error event.
+            // Printed only: the central logger would forward it with SENTRY_LOGS=on.
             console.log("[dbq] job deferred", summary);
         } else if (level === null) {
             // Deliberately unreported; console.warn is not forwarded either.
@@ -594,7 +596,7 @@ export function dbJobsEnabled(): boolean {
  */
 export function startDbJobRunner(handlers: DbJobHandlers, failureHooks: Readonly<Record<string, DbJobFailureHook>> = {}): void {
     if (!dbJobsEnabled()) {
-        console.log("[dbq] disabled via DB_JOBS_ENABLED=false");
+        log.info("dbq", "disabled via DB_JOBS_ENABLED=false");
         return;
     }
     if (pollTimer) return;
@@ -620,8 +622,7 @@ export function startDbJobRunner(handlers: DbJobHandlers, failureHooks: Readonly
     sweepTimer.unref();
     setTimeout(sweep, 60_000).unref();
 
-    console.log(
-        `[dbq] runner started (poll ${pollMs()}ms, driver ${redisEnabled() ? "redis" : "postgres"})`,
+    log.info(tpl`[dbq] runner started (poll ${pollMs()}ms, driver ${redisEnabled() ? "redis" : "postgres"})`,
     );
 }
 

@@ -28,6 +28,7 @@ import { createServerSupabase } from "./lib/supabase";
 import { reportError } from "./lib/observability/sentry";
 import { createPollFailureGate } from "./lib/observability/pollFailureGate";
 import { asReportableError } from "./lib/httpError";
+import { log } from "./lib/log";
 
 const SWEEP_INTERVAL_MS = (() => {
     const raw = Number(process.env.STALE_SWEEP_INTERVAL_MS);
@@ -143,7 +144,7 @@ export function startAllWorkers(
         void runStaleWorkSweep()
             .then(({ documents, cells }) => {
                 if (documents || cells)
-                    console.warn("[stale-sweep] flipped", { documents, cells });
+                    log.warn("stale-sweep", "flipped", { documents, cells });
             })
             .catch((err) => {
                 reportError(err, { tags: { component: "stale-sweep" } });

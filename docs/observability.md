@@ -307,9 +307,11 @@ in depth, but neither is the final guarantee: SDK session items bypass
 and rebuilds the complete envelope before serialization. It is installed in
 the backend, Next server/edge, browser, and all Word add-in entries.
 
-- Only error `event` items may leave. Sessions (including authenticated `did`),
-  client reports, attachments, replay, traces, logs, metrics and unknown future
-  item types are dropped locally without a network request.
+- Only error `event` items may leave by default. Sessions (including
+  authenticated `did`), client reports, attachments, replay, traces, logs,
+  metrics and unknown future item types are dropped locally without a network
+  request. The backend can opt in to structured logs and metrics; see
+  [Structured logs and metrics](#structured-logs-and-metrics).
 - Error/console prose is replaced with a description made from approved
   operation, component, stage, error-kind, method, normalized route, status,
   and error-code values. For example:
@@ -385,6 +387,56 @@ The boundary is mirrored in `backend/src/lib/observability/sentryPrivacy.ts`
 and `packages/client/src/sentryPrivacy.ts`, with a synchronization test.
 When adding diagnostics, extend reviewed enum/ID fields and their tests. Do not
 add free-form text just to restore a more detailed exception message.
+
+## Structured logs and metrics
+
+Off by default. With `SENTRY_LOGS=on` the backend also sends its structured
+logs to [Sentry Logs](https://docs.sentry.io/platforms/javascript/guides/node/logs/)
+and its counters to [Sentry's Application Metrics](https://docs.sentry.io/platforms/javascript/guides/node/metrics/),
+to whichever project its error events go to. Error events and their 50-a-day
+ceiling are unaffected. The web app and the Word add-in do not send logs.
+
+The backend's logger is `backend/src/lib/log.ts`:
+
+```ts
+import { countMetric, log, logEvent, tpl } from "../lib/log";
+
+log.warn("dbq", "poll failed", error);                    // "[dbq] poll failed" + error printed
+log.info(tpl`[dbq] runner started (poll ${ms}ms)`);       // values printed, not sent
+logEvent("info", "tool-activity", "counted", { tool, count });
+countMetric("tool_activity", count, { kind, tool, outcome });
+```
+
+Every call prints to the process log exactly as `console.warn` or
+`console.log` would. What goes to Sentry is narrower:
+
+| Part | Printed | Sent to Sentry |
+|---|---|---|
+| Scope and message | yes | yes; both must be literals in the source |
+| A `tpl` line's values | yes | no; each is sent as `{}` |
+| `logEvent` and `countMetric` attributes | yes | only `kind`, `tool`, `outcome` and `count`, each a number, a boolean, or a string shaped like an identifier (letters, digits, `_ . : -`, at most 64 characters) |
+| `detail` arguments (errors, paths, objects) | yes | never |
+
+The privacy boundary enforces this again on the way out: it rebuilds each log
+and metric from those fields, refuses a body that is not `[scope] message` or
+a metric name that is not an identifier, and drops every attribute not named
+in `TELEMETRY_ATTRIBUTES` (`sentryPrivacy.ts`, mirrored in
+`packages/client`), including the SDK's own (`user.*`, `server.address`,
+`sentry.*`) except the environment and release. To send a new attribute, add
+its name there in both copies; a shape check alone cannot tell an identifier
+from a file name or a key.
+`backend/src/__tests__/logContract.test.ts` fails if a scope, message or
+metric name is built at run time, or if code calls `Sentry.logger` or
+`Sentry.metrics` directly. As with diagnostic labels, never put a client's
+words in a scope, a message or a metric name.
+
+At most `SENTRY_MAX_LOGS_PER_DAY` logs and as many metrics (default 5,000
+each) leave one process per UTC day; one `[sentry]` warning marks the limit.
+Logs and metrics are billed by Sentry separately from errors.
+
+`console.error` is not part of this: it is already filed as an error event.
+Warn and info lines that still call `console.warn` or `console.log` directly
+(a message with no `[scope]`, or one built from a variable) are printed only.
 
 ## Configuration
 

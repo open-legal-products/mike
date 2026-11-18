@@ -1,6 +1,7 @@
 // mcpJobs — implementation behind the module facade.
 import { McpOAuthRequiredError, loadOAuthToken, refreshOAuthAccessToken } from "../../lib/mcp/oauth";
 import { type Db, type DbJob } from "../../lib/dbq/types";
+import { log } from "../../lib/log";
 
 /**
  * Refresh an MCP OAuth access token that is about to expire.
@@ -47,8 +48,7 @@ export async function handleMcpRefreshToken(
         // swallow it and let the lazy path surface "reconnect" in the UI the
         // next time the user actually touches this connector.
         if (err instanceof McpOAuthRequiredError && err.permanent) {
-            console.warn(
-                "[mcp.refresh_token] permanent refresh failure; user must reconnect",
+            log.warn("mcp.refresh_token", "permanent refresh failure; user must reconnect",
                 { connectorId, oauthErrorCode: err.oauthErrorCode },
             );
             return;

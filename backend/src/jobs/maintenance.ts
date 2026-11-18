@@ -9,6 +9,7 @@ import { backfillDocumentText, sweepStaleProcessingDocuments } from "../modules/
 import { sweepStaleGeneratingCells } from "../modules/tabular/tabular.service";
 import { expireDepartureArchives, purgeExpiredOrganizations } from "../modules/orgs/orgs.service";
 import { purgeExpiredSubagentRuns } from "../modules/chat/chat.service";
+import { log } from "../lib/log";
 
 /** Isolate timer-driven work just as the queue runner isolates each job. */
 function runSweep<T>(operation: Operation, work: () => Promise<T>): Promise<T | undefined> {
@@ -29,7 +30,7 @@ function runSweep<T>(operation: Operation, work: () => Promise<T>): Promise<T | 
             });
             // Keep a content-free local notice without the error-console bridge
             // filing a second event for an already reported failure.
-            console.warn("[stale-sweep] failed", { operation, ...safeError(cause) });
+            log.warn("stale-sweep", "failed", { operation, ...safeError(cause) });
             return undefined;
         }
     });

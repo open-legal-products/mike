@@ -1,5 +1,6 @@
 import { WORKER_REGISTRY } from "./registry";
 import { closeRedisConnection } from "../lib/queue/connection";
+import { log, tpl } from "../lib/log";
 
 /** True when at least one background worker is enabled by the current config. */
 export function anyWorkerEnabled(): boolean {
@@ -17,7 +18,7 @@ export function startWorkers(): void {
     for (const w of WORKER_REGISTRY) {
         if (!w.enabled()) continue;
         w.create();
-        console.log(`[workers] ${w.name} worker started`);
+        log.info(tpl`[workers] ${w.name} worker started`);
     }
 }
 

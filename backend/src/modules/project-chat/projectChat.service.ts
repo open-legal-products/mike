@@ -62,6 +62,7 @@ import {
 // this reaches chat via `chat.service` and re-exports the function by name —
 // the route imports everything it needs from its own service.
 import { updateChatTitle, type ChatWriteResult } from "../chat/chat.service";
+import { log } from "../../lib/log";
 
 export { updateChatTitle };
 export type { ChatWriteResult };
@@ -617,7 +618,7 @@ export async function prepareProjectChatStream(
                     turn: memoryTurn,
                 });
             } catch {
-                console.warn("[memory] project chat activity release failed", {
+                log.warn("memory", "project chat activity release failed", {
                     chatId,
                 });
             }
