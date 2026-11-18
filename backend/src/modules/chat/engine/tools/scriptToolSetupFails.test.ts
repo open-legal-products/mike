@@ -11,7 +11,7 @@ vi.mock("../../../../lib/observability/sentry", async (importOriginal) => ({
   reportError,
 }));
 vi.mock("@earendil-works/pi-codemode", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("@earendil-works/pi-codemode")>()),
+  ...(await importOriginal<typeof import("@earendil-works/pi-codemode", { with: { "resolution-mode": "import" } })>()),
   renderDeclarations: () => {
     throw new Error("cannot render");
   },
