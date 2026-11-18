@@ -57,6 +57,16 @@ export function MfaVerificationPopup({
         !loading &&
         !!selectedFactorId &&
         code.trim().length === 6;
+    // Counts openings and closings, so a check in flight can tell whether
+    // the prompt it was started from is still the one on screen.
+    const openGeneration = useRef(0);
+
+    useEffect(() => {
+        openGeneration.current += 1;
+        return () => {
+            openGeneration.current += 1;
+        };
+    }, [open]);
 
     useEffect(() => {
         if (!open) return;
@@ -104,10 +114,16 @@ export function MfaVerificationPopup({
         setVerifying(true);
         setError(null);
         devLog("[mfa-popup] verifying code", { factorId: selectedFactorId });
+        const generation = openGeneration.current;
+        // The caller's action runs only from the prompt the user still has
+        // open. One closed while its code was being checked was cancelled,
+        // and whatever it guarded must not happen afterwards.
+        const dismissed = () => openGeneration.current !== generation;
         try {
             await challengeAndVerifyMfa(selectedFactorId, code.trim());
         } catch (verifyError) {
             setVerifying(false);
+            if (dismissed()) return;
             devLog("[mfa-popup] verification failed", {
                 error:
                     verifyError instanceof Error
@@ -119,6 +135,7 @@ export function MfaVerificationPopup({
         }
 
         setVerifying(false);
+        if (dismissed()) return;
         devLog("[mfa-popup] verification succeeded");
         setCode("");
         onVerified();
@@ -129,7 +146,11 @@ export function MfaVerificationPopup({
     return (
         <Modal
             open={open}
-            onClose={onCancel}
+            // Escape, the backdrop and the close button wait for a check in
+            // flight, as the Cancel button already does.
+            onClose={() => {
+                if (!verifying) onCancel();
+            }}
             breadcrumbs={[title]}
             size="sm"
             className="h-auto min-h-[310px] max-h-[min(92vh,400px)]"

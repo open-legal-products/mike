@@ -19,6 +19,23 @@ vi.mock("@/app/components/site-logo", () => ({
     SiteLogo: () => <div>Mike</div>,
 }));
 
+// The real popup lists factors and verifies a code against the auth API;
+// here it is the hand-off point: open, then "verified".
+vi.mock("@/app/components/popups/MfaVerificationPopup", () => ({
+    MfaVerificationPopup: ({
+        open,
+        onVerified,
+    }: {
+        open: boolean;
+        onVerified: () => void;
+    }) =>
+        open ? (
+            <button type="button" onClick={onVerified}>
+                Verify code
+            </button>
+        ) : null,
+}));
+
 async function submitPassword(password: string) {
     const user = userEvent.setup();
     await user.type(await screen.findByLabelText("New password"), password);
@@ -47,6 +64,61 @@ describe("ResetPasswordPage", () => {
 
         expect(await screen.findByRole("alert")).toHaveTextContent(
             "Choose a stronger password: at least 10 characters, mixing letters, numbers, and symbols.",
+        );
+    });
+
+    it.each([
+        [401, "insufficient_aal"],
+        [403, "mfa_verification_required"],
+    ])(
+        "verifies and retries a password reset after %s %s",
+        async (status, code) => {
+            updateAuthPassword
+                .mockRejectedValueOnce(
+                    Object.assign(new Error("MFA verification required"), {
+                        status,
+                        code,
+                    }),
+                )
+                .mockResolvedValueOnce({ user: { id: "user-1" } });
+            render(<ResetPasswordPage />);
+
+            const user = await submitPassword("correct-horse-battery");
+            expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+            await user.click(await screen.findByRole("button", { name: "Verify code" }));
+
+            expect(await screen.findByText("Password updated")).toBeInTheDocument();
+            expect(updateAuthPassword).toHaveBeenCalledTimes(2);
+        },
+    );
+
+    it("retries with the password that was confirmed, not a later edit", async () => {
+        let rejectFirst!: (reason: unknown) => void;
+        updateAuthPassword
+            .mockReturnValueOnce(
+                new Promise((_resolve, reject) => {
+                    rejectFirst = reject;
+                }),
+            )
+            .mockResolvedValueOnce({ user: { id: "user-1" } });
+        render(<ResetPasswordPage />);
+
+        const user = await submitPassword("correct-horse-battery");
+        // Typed while the first request is out: never confirmed.
+        await user.type(screen.getByLabelText("New password"), "-edited");
+        rejectFirst(
+            Object.assign(new Error("MFA verification required"), {
+                status: 401,
+                code: "insufficient_aal",
+            }),
+        );
+        await user.click(await screen.findByRole("button", { name: "Verify code" }));
+
+        expect(await screen.findByText("Password updated")).toBeInTheDocument();
+        expect(updateAuthPassword).toHaveBeenCalledTimes(2);
+        expect(updateAuthPassword).toHaveBeenLastCalledWith(
+            "correct-horse-battery",
+            true,
         );
     });
 
