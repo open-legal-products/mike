@@ -15,5 +15,74 @@
                 ]
             }
         ]
+    },
+    {
+        "ghsa": "GHSA-fc5q-39xc-vjpf",
+        "reason": "picomatch through 4.0.7 backtracks exponentially on single-branch repeated extglob PATTERNS such as +(*); the attacker must supply the glob. No release is patched. No source in backend/, frontend/, word-addin/ or packages/ imports picomatch, micromatch, fast-glob or tinyglobby, and every glob these tools compile comes from build, test or bundler configuration checked into this repository, never from a request or a document. Each scope names its exact dependents, so a new consumer of the package fails the gate. REMOVE WHEN: picomatch publishes a release outside the advisory's affected range and the lockfiles resolve it.",
+        "scopes": [
+            {
+                "workspace": "backend",
+                "package": "picomatch",
+                "version": "4.0.7",
+                "path": "node_modules/picomatch",
+                "dev": true,
+                "dependents": [
+                    "node_modules/fdir",
+                    "node_modules/tinyglobby",
+                    "node_modules/vite",
+                    "node_modules/vitest"
+                ]
+            },
+            {
+                "workspace": "frontend",
+                "package": "picomatch",
+                "version": "2.3.2",
+                "path": "node_modules/micromatch/node_modules/picomatch",
+                "dev": false,
+                "dependents": [
+                    "node_modules/micromatch"
+                ],
+                "productionExposure": "Reached only through @opennextjs/cloudflare -> @opennextjs/aws -> @node-minify/core -> @node-minify/utils -> fast-glob -> micromatch, the Cloudflare deploy build. The Docker image installs it with the rest of node_modules, but no request path loads it."
+            },
+            {
+                "workspace": "frontend",
+                "package": "picomatch",
+                "version": "4.0.7",
+                "path": "node_modules/picomatch",
+                "dev": false,
+                "dependents": [
+                    "node_modules/@ladle/react/node_modules/vite",
+                    "node_modules/@rollup/plugin-commonjs",
+                    "node_modules/@rollup/pluginutils",
+                    "node_modules/fdir",
+                    "node_modules/tinyglobby",
+                    "node_modules/vite",
+                    "node_modules/vitest"
+                ],
+                "productionExposure": "Reached in production only through @sentry/nextjs -> @rollup/plugin-commonjs and @rollup/pluginutils, which run while `next build` bundles the app; the other dependents (vite, vitest, fdir, tinyglobby, @ladle/react) are test and tooling packages. The Docker image installs it with the rest of node_modules, but no request path loads it."
+            },
+            {
+                "workspace": "word-addin",
+                "package": "picomatch",
+                "version": "2.3.2",
+                "path": "node_modules/micromatch/node_modules/picomatch",
+                "dev": true,
+                "dependents": [
+                    "node_modules/micromatch"
+                ]
+            },
+            {
+                "workspace": "word-addin",
+                "package": "picomatch",
+                "version": "4.0.4",
+                "path": "node_modules/picomatch",
+                "dev": true,
+                "dependents": [
+                    "node_modules/fdir",
+                    "node_modules/tinyglobby",
+                    "node_modules/ts-loader"
+                ]
+            }
+        ]
     }
 ]
