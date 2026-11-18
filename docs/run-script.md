@@ -22,7 +22,13 @@ offer it whenever the turn offers at least one of these read-only tools:
 async JavaScript function that calls them as `await tools.<name>(args)` and
 returns a compact result, so a question such as "which of these 80 agreements
 have a change-of-control clause?" costs one model step instead of dozens.
-Subagents are not offered it.
+Subagents are not offered it. Tabular review chats pass the same nonce to
+both their system prompt and the script runner, so spreadsheet-derived script
+results receive the untrusted-content fence too.
+
+The function description stays below Foundry Chat Completions' 1,024-character
+limit. Execution instructions, return shapes and available tool signatures are
+in the `code` parameter description.
 
 What a script can and cannot do:
 
@@ -63,7 +69,10 @@ What a script can and cannot do:
 Limits per script: 200 tool calls, 120 seconds (tool time included), 64 MB of
 VM memory, 20,000 characters of code and 40,000 characters of result (a longer
 result comes back as an error with a preview, itself within the limit). At most 4 scripts run at once
-per process, and at most 2 for one user; another is refused and the model is
+per process, and at most 2 for one user. Each reservation lasts until both its
+worker exits and any active dispatcher call finishes, including after timeout.
+The sandbox deadline stops queued calls, but an already running read can extend
+the wait for the result beyond 120 seconds. Another script is refused and the model is
 told to use the tools directly. Stopping the answer stops the script.
 
 ## Settings
@@ -79,7 +88,9 @@ SCRIPT_TOOL=off   # on to offer run_script
 npm test --prefix backend -- src/modules/chat/engine/tools/scriptTool.test.ts \
   src/modules/chat/engine/__tests__/streamingScriptTool.test.ts \
   src/modules/chat/engine/__tests__/scriptToolDispatcher.test.ts \
-  src/modules/chat/engine/tools/scriptToolUnavailable.test.ts
+  src/modules/chat/engine/tools/scriptToolUnavailable.test.ts \
+  src/modules/chat/engine/tools/scriptToolWasm.test.ts \
+  src/modules/chat/engine/tools/scriptToolLifecycle.test.ts
 ```
 
 The tests run real scripts in the sandbox: limits, timeouts, stops,

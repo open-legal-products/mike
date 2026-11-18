@@ -45,7 +45,7 @@ export const SCRIPT_MAX_TOOL_CALLS = 200;
 /** Wall clock for one script, tool time included. */
 export const SCRIPT_TIMEOUT_MS = 120_000;
 const SCRIPT_MEMORY_LIMIT_BYTES = 64 * 1024 * 1024;
-/** Scripts running at once in this process; each holds a worker thread. */
+/** Scripts with a worker or unfinished dispatcher work in this process. */
 export const SCRIPT_MAX_CONCURRENT = 4;
 /** Of those, how many one user may hold, so one account cannot take them all. */
 export const SCRIPT_MAX_CONCURRENT_PER_USER = 2;
@@ -72,16 +72,18 @@ function loadCodemode(): Promise<CodemodeModule> {
 }
 
 function loadWasm(codemode: CodemodeModule) {
-  quickjsWasm ??= codemode.loadQuickJSWasm().catch((error) => {
-    quickjsWasm = null;
-    throw error;
-  });
+  quickjsWasm ??= Promise.resolve()
+    .then(() => codemode.loadQuickJSWasm())
+    .catch((error) => {
+      quickjsWasm = null;
+      throw error;
+    });
   // The sandbox awaits it later; a rejection is its to report, not unhandled.
   quickjsWasm.catch(() => undefined);
   return quickjsWasm;
 }
 
-let runningWorkers = 0;
+let runningScripts = 0;
 const runningByUser = new Map<string, number>();
 
 /** The sandbox itself failed: reported, and the model is told to carry on without it. */
@@ -169,14 +171,15 @@ export async function scriptToolFor(
     type: "function",
     function: {
       name: SCRIPT_TOOL_NAME,
-      description: SCRIPT_DESCRIPTION + returnsSection(inner) + declarations,
+      // Foundry Chat Completions limits function descriptions to 1,024 characters.
+      // Keep the full execution instructions and signatures with the code input.
+      description: "Run sandboxed JavaScript to loop over the available read-only document tools and return a compact result. Use for repeated lookups across many documents. See the code parameter for tool signatures, return shapes and execution limits.",
       parameters: {
         type: "object",
         properties: {
           code: {
             type: "string",
-            description:
-              "The body of an async JavaScript function. Call tools as `await tools.read_document({ doc_id })` and end with `return <value>`.",
+            description: SCRIPT_DESCRIPTION + returnsSection(inner) + declarations,
             maxLength: MAX_CODE_CHARS,
           },
         },
@@ -393,53 +396,67 @@ export async function runScriptCall(
 
   const TOO_MANY =
     "Too many scripts are running right now. Use the tools directly, or try again shortly.";
-  if (runningWorkers >= limits.maxConcurrent) return failure(TOO_MANY);
+  if (runningScripts >= limits.maxConcurrent) return failure(TOO_MANY);
   const { userId } = context;
   if (userId && (runningByUser.get(userId) ?? 0) >= limits.maxConcurrentPerUser) {
     return failure(
       "You already have scripts running in other conversations. Use the tools directly, or try again shortly.",
     );
   }
-  // Set when the limit is reached between the check above and the worker's start.
-  let refused = false;
-
-  const sandbox = new codemode.CodemodeSandbox({
-    tools: asCodemodeTools(context.innerTools, executeFor),
-    timeoutMs: limits.timeoutMs,
-    memoryLimitBytes: SCRIPT_MEMORY_LIMIT_BYTES,
-    wasm: loadWasm(codemode),
-    acquireWorker: () => {
-      if (runningWorkers >= limits.maxConcurrent) {
-        refused = true;
-        throw new Error("script worker limit reached");
-      }
-      runningWorkers += 1;
-      let released = false;
-      return () => {
-        if (released) return;
-        released = true;
-        runningWorkers -= 1;
-      };
-    },
-  });
-
-  let result: Codemode.CodemodeResult;
+  // Reserve synchronously, before startup can yield. A script occupies its
+  // place until BOTH the worker exits and its host-side dispatch queue drains.
+  runningScripts += 1;
   if (userId) runningByUser.set(userId, (runningByUser.get(userId) ?? 0) + 1);
-  try {
-    result = await sandbox.execute(code, { signal: context.signal });
-  } finally {
+  let workerActive = false;
+  let finished = false;
+  let drained = false;
+  let released = false;
+  const release = () => {
+    if (released || workerActive || !drained) return;
+    released = true;
+    runningScripts -= 1;
     if (userId) {
       const left = (runningByUser.get(userId) ?? 1) - 1;
       if (left > 0) runningByUser.set(userId, left);
       else runningByUser.delete(userId);
     }
-    await sandbox.close();
-    // Queued calls have been refused by now; the one that was already running
-    // finishes before the turn moves on, since the dispatcher's per-turn
-    // state is not built for a call running beside the next step.
-    await queue;
+  };
+
+  let sandbox: Codemode.CodemodeSandbox | undefined;
+  let result: Codemode.CodemodeResult;
+  try {
+    sandbox = new codemode.CodemodeSandbox({
+      tools: asCodemodeTools(context.innerTools, executeFor),
+      timeoutMs: limits.timeoutMs,
+      memoryLimitBytes: SCRIPT_MEMORY_LIMIT_BYTES,
+      wasm: loadWasm(codemode),
+      acquireWorker: () => {
+        // The WASM promise can settle after a startup timeout or abort. Do not
+        // let that late launcher start a worker after we released its place.
+        if (finished) throw new Error("script already ended");
+        workerActive = true;
+        return () => {
+          workerActive = false;
+          release();
+        };
+      },
+    });
+
+    result = await sandbox.execute(code, { signal: context.signal });
+  } catch (error) {
+    reportSandboxFailure(error);
+    return failure(ERROR_MESSAGES.sandbox);
+  } finally {
+    finished = true;
+    try {
+      await sandbox?.close();
+    } finally {
+      // An already running read must finish before the next model step.
+      await queue;
+      drained = true;
+      release();
+    }
   }
-  if (refused) return failure(TOO_MANY);
   // Built from document text: data for the model, never instructions.
   const fenced = (text: string) =>
     context.nonce ? spotlight(text, context.nonce) : text;

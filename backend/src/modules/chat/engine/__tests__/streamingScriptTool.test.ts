@@ -44,7 +44,13 @@ type RunToolsFn = (
 ) => Promise<{ tool_use_id: string; content: string }[]>;
 
 type StreamChatCall = {
-  tools: { function: { name: string; description: string } }[];
+  tools: {
+    function: {
+      name: string;
+      description: string;
+      parameters: { properties: { code: { description: string } } };
+    };
+  }[];
   runTools?: RunToolsFn;
   [key: string]: unknown;
 };
@@ -160,9 +166,10 @@ describe("run_script in a chat turn", () => {
     await runLLMStream(params());
     const script = advertised().find((t) => t.function.name === SCRIPT_TOOL_NAME);
     expect(script).toBeDefined();
-    expect(script!.function.description).toContain("list_documents(");
-    expect(script!.function.description).toContain("read_document(");
-    expect(script!.function.description).not.toContain("edit_document(");
+    expect(script!.function.description.length).toBeLessThanOrEqual(1024);
+    expect(script!.function.parameters.properties.code.description).toContain("list_documents(");
+    expect(script!.function.parameters.properties.code.description).toContain("read_document(");
+    expect(script!.function.parameters.properties.code.description).not.toContain("edit_document(");
   });
 
   it("runs the script, dispatching each call on its own, and answers the model", async () => {

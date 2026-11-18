@@ -20,7 +20,7 @@ import {
   scriptToolFor,
   type ScriptToolDispatch,
 } from "./scriptTool";
-import { PROJECT_EXTRA_TOOLS, TOOLS } from "./toolSchemas";
+import { PROJECT_EXTRA_TOOLS, TABULAR_TOOLS, TOOLS } from "./toolSchemas";
 
 const ACTIVE = [...TOOLS, ...PROJECT_EXTRA_TOOLS] as OpenAIToolSchema[];
 const INNER = scriptInnerTools(ACTIVE);
@@ -96,7 +96,10 @@ describe("scriptToolFor", () => {
   it("declares only allowlisted tools the turn offers", async () => {
     const schema = await scriptToolFor(ACTIVE, { SCRIPT_TOOL: "on" });
     expect(schema?.function.name).toBe(SCRIPT_TOOL_NAME);
-    const description = schema!.function.description;
+    expect(schema!.function.description.length).toBeLessThanOrEqual(1024);
+    const description = (schema!.function.parameters as {
+      properties: { code: { description: string } };
+    }).properties.code.description;
     for (const name of ["read_document", "find_in_document", "list_documents", "fetch_documents", "find_documents"]) {
       expect(description).toContain(`${name}(`);
     }
@@ -106,6 +109,17 @@ describe("scriptToolFor", () => {
     // read_table_cells is allowlisted but not offered in this turn.
     expect(description).not.toContain("read_table_cells(");
     expect(schema!.function.parameters).toMatchObject({ required: ["code"] });
+  });
+
+  it("keeps the description within Foundry's limit with every script tool available", async () => {
+    const schema = await scriptToolFor([...ACTIVE, ...TABULAR_TOOLS], { SCRIPT_TOOL: "on" });
+    expect(schema!.function.description.length).toBeLessThanOrEqual(1024);
+    const code = (schema!.function.parameters as {
+      properties: { code: { description: string } };
+    }).properties.code;
+    expect(code.description).toContain("read_table_cells(");
+    expect(code.description).toContain("What the tools return:");
+    expect(code.description).toContain("200 tool calls");
   });
 
   it("never exposes a writer even if one is offered", () => {
@@ -365,7 +379,7 @@ describe("runScriptCall", () => {
     ).toMatch(/^\{"ok":false/);
   });
 
-  it("says so when the limit is reached between the check and the worker's start", async () => {
+  it("reserves capacity before asynchronous worker startup", async () => {
     const dispatch = (async () => {
       await new Promise((r) => setTimeout(r, 150));
       return "{}";
@@ -426,7 +440,10 @@ describe("runScriptCall", () => {
     expect(second.error).toContain("already have scripts running");
     // Another user is not held up, and the first user's slot comes back.
     expect(other.ok).toBe(true);
-    expect((await start("user-a", "a3")).ok).toBe(true);
+    // The result can precede worker exit; capacity returns only after exit.
+    await vi.waitFor(async () => {
+      expect((await start("user-a", "a3")).ok).toBe(true);
+    });
   });
 
   it("refuses when too many scripts are running", async () => {
