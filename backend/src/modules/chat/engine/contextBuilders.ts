@@ -22,7 +22,10 @@ import {
   MAX_ASK_INPUT_TEXT_LENGTH,
   devLog,
 } from "./types";
-import { buildSystemPrompt } from "./prompts";
+import {
+  buildSystemPrompt,
+  PRIOR_TOOL_ACTIVITY_HEADER,
+} from "./prompts";
 import {
   MESSAGE_TIME_PROMPT,
   answerTimeStamp,
@@ -394,6 +397,58 @@ export function withDelegationEvents<T extends { type?: unknown; events?: unknow
   );
 }
 
+/** At most this many citations of the previous answer are replayed. */
+const MAX_REPLAYED_CITATIONS = 40;
+/** A replayed quote is cut at this length. */
+const MAX_REPLAYED_QUOTE_CHARS = 600;
+
+/**
+ * The <CITATIONS> block the previous answer ended with, rebuilt from what was
+ * stored. The block is stripped from the stored prose, which leaves the
+ * answer's [N] markers pointing at nothing: the model then reads its own
+ * earlier answer as unsupported and withdraws it. Only document citations
+ * whose document is still in this turn's index are replayed, under the
+ * handle that document has now.
+ */
+export function priorCitationsBlock(
+  stored: unknown,
+  slugByDocumentId: ReadonlyMap<string, string>,
+): string | null {
+  if (!Array.isArray(stored)) return null;
+  const entries: { ref: number; doc_id: string; quotes: unknown[] }[] = [];
+  for (const citation of stored as Record<string, unknown>[]) {
+    if (entries.length >= MAX_REPLAYED_CITATIONS) break;
+    if (!citation || typeof citation !== "object") continue;
+    if (typeof citation.ref !== "number") continue;
+    const slug =
+      typeof citation.document_id === "string"
+        ? slugByDocumentId.get(citation.document_id)
+        : undefined;
+    if (!slug || !Array.isArray(citation.quotes)) continue;
+    const quotes = (citation.quotes as Record<string, unknown>[]).flatMap(
+      (quote) => {
+        if (!quote || typeof quote.quote !== "string") return [];
+        const text = quote.quote.slice(0, MAX_REPLAYED_QUOTE_CHARS);
+        const page =
+          typeof quote.page === "number" || typeof quote.page === "string"
+            ? { page: quote.page }
+            : {};
+        const cell =
+          typeof quote.sheet === "string" && typeof quote.cell === "string"
+            ? { sheet: quote.sheet, cell: quote.cell }
+            : {};
+        return [{ ...page, ...cell, quote: text }];
+      },
+    );
+    if (quotes.length === 0) continue;
+    entries.push({ ref: citation.ref, doc_id: slug, quotes });
+  }
+  if (entries.length === 0) return null;
+  // A quote is document text: it must not be able to close the block.
+  const json = JSON.stringify(entries, null, 2).replace(/</g, "\\u003c");
+  return `<CITATIONS>\n${json}\n</CITATIONS>`;
+}
+
 export async function enrichWithPriorEvents(
   messages: ChatMessage[],
   chatId: string | null | undefined,
@@ -411,14 +466,16 @@ export async function enrichWithPriorEvents(
   // otherwise shadow the previous turn's real events here.
   const { data: rows } = await db
     .from(messageTable)
-    .select("content, created_at")
+    .select("content, citations, created_at")
     .eq("chat_id", chatId)
     .eq("role", "assistant")
     .not("content", "is", null)
     .order("created_at", { ascending: false })
     .limit(1);
 
-  const lastRow = rows?.[0] as { content?: unknown } | undefined;
+  const lastRow = rows?.[0] as
+    | { content?: unknown; citations?: unknown }
+    | undefined;
   const content = lastRow?.content;
   if (!Array.isArray(content)) return messages;
 
@@ -628,11 +685,9 @@ export async function enrichWithPriorEvents(
       "- Instruction: do not ask for any skipped input again. If drafting or editing a document, insert a descriptive placeholder in square brackets wherever a skipped value is required.",
     );
   }
-  if (lines.length === 0) return messages;
-  const summary = `\n\n[Tool activity in your previous turn]\n${lines.join("\n")}`;
+  const citations = priorCitationsBlock(lastRow?.citations, slugByDocumentId);
+  if (lines.length === 0 && !citations) return messages;
 
-  // Find the index of the last assistant message and attach the
-  // summary there only.
   let lastAssistantIdx = -1;
   for (let i = messages.length - 1; i >= 0; i--) {
     if (messages[i].role === "assistant") {
@@ -642,11 +697,30 @@ export async function enrichWithPriorEvents(
   }
   if (lastAssistantIdx < 0) return messages;
   const enriched = messages.slice();
+  const record =
+    lines.length > 0 ? `${PRIOR_TOOL_ACTIVITY_HEADER}\n${lines.join("\n")}` : "";
+  // The record goes at the start of the user's next message, not on the
+  // answer: the model takes anything inside its own message for words it
+  // wrote, and disowns a record of tool calls it cannot see as invented.
+  const nextUserIdx = enriched.findIndex(
+    (message, index) => index > lastAssistantIdx && message.role === "user",
+  );
   const target = enriched[lastAssistantIdx];
   enriched[lastAssistantIdx] = {
     ...target,
-    content: (target.content ?? "") + summary,
+    content:
+      (target.content ?? "") +
+      (citations ? `\n\n${citations}` : "") +
+      // Nothing follows the answer (a continuation): keep the record with it.
+      (record && nextUserIdx < 0 ? `\n\n${record}` : ""),
   };
+  if (record && nextUserIdx >= 0) {
+    const next = enriched[nextUserIdx];
+    enriched[nextUserIdx] = {
+      ...next,
+      content: `${record}\n\n${next.content ?? ""}`,
+    };
+  }
   return enriched;
 }
 

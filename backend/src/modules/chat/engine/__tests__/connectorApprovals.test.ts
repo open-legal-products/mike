@@ -389,7 +389,8 @@ describe("approval context replay", () => {
       },
     ]);
 
-    const [assistant] = await enrichWithPriorEvents(
+    // The record opens the user's next message.
+    const [, user] = await enrichWithPriorEvents(
       [
         { role: "assistant", content: "I'll send that." },
         { role: "user", content: "Approved." },
@@ -399,7 +400,7 @@ describe("approval context replay", () => {
       {},
       "nonce1234",
     );
-    const text = assistant.content ?? "";
+    const text = user.content ?? "";
     expect(text).not.toContain("asked user for");
     expect(text).toMatch(/user approved .*gmail_send/s);
     expect(text).toMatch(/approved .*gmail_send.* completed; result: .*sent-1/s);
