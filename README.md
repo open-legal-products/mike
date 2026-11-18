@@ -68,6 +68,10 @@ The bundled credentials and infrastructure are intended for local development
 only. See [Local development](docs/local-development.md) for service endpoints,
 authentication behavior, Ollama setup, and first-run guidance.
 
+To host the web app on Vercel next to a backend you run elsewhere, see
+[Web app on Vercel](docs/deployment.md#web-app-on-vercel) for the one-click
+deploy button and its limits.
+
 ### Telemetry
 
 Mike sends scrubbed error reports (no document content, user identities, or

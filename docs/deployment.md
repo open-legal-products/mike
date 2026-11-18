@@ -882,6 +882,50 @@ Put an HTTPS ingress or reverse proxy in front of port 3200. The included host
 serves `dist/` and streams `/api/*` to the backend while preserving cookies,
 `Set-Cookie`, `Origin`, request bodies, and SSE responses.
 
+## Web app on Vercel
+
+The web app (`frontend/`) is a standard Next.js application and runs on
+Vercel unchanged. The backend does not: it is a long-lived process with
+in-process job workers and LibreOffice, so it stays a container (the published
+`mike-backend` image or Docker Compose). Only the web app moves.
+
+[![Deploy with Vercel](https://vercel.com/button)](https://vercel.com/new/clone?repository-url=https%3A%2F%2Fgithub.com%2Fopen-legal-products%2Fmike&root-directory=frontend&project-name=mike&repository-name=mike&env=API_BASE_URL&envDescription=Origin%20of%20your%20running%20Mike%20backend%2C%20for%20example%20https%3A%2F%2Fapi.example.com&envLink=https%3A%2F%2Fgithub.com%2Fopen-legal-products%2Fmike%2Fblob%2Fmain%2Fdocs%2Fdeployment.md%23web-app-on-vercel)
+
+The button clones the repository into your Git account, creates a Vercel
+project rooted at `frontend/`, and asks for one value:
+
+- `API_BASE_URL`: the origin of your running backend, reachable from the
+  public internet over `https` (for example `https://api.example.com`). The
+  web app's same-origin `/api` gateway forwards every request there.
+
+To set the project up by hand instead, import the repository, set **Root
+Directory** to `frontend`, leave "Include files outside the Root Directory"
+on (the app imports `packages/`), choose Node.js 22, and add `API_BASE_URL`.
+
+Then point the backend at the Vercel origin, exactly as for any other host:
+
+- `FRONTEND_URL` is the web app's public origin and `API_PUBLIC_URL` is that
+  origin plus `/api` (see [Environment](#environment)).
+- Add the origin's `/auth/callback` to the Supabase redirect allow list
+  ([Authentication email](#authentication-email)) and to the object-storage
+  CORS policy ([direct uploads](#object-storage-cors-for-direct-uploads)).
+
+Limits that come from running the gateway as a Vercel Function:
+
+- A request body through `/api` is capped at 4.5 MB (`413`). Document bytes
+  never take that path with S3-compatible storage, because browsers upload
+  straight to the bucket. The filesystem storage driver sends file bytes
+  through `/api` and is therefore not usable behind Vercel.
+- A streamed assistant response ends when the function reaches its maximum
+  duration (300 seconds by default). Raise **Function Max Duration** in the
+  project settings to the most your plan allows; an interrupted turn resumes
+  when the client reconnects.
+- Error reports default to the Mike project's Sentry as for any other
+  install; `SENTRY_DISABLED=true` or `SENTRY_DSN` on the Vercel project
+  changes that ([Error tracking](#error-tracking)). Source maps are uploaded
+  only when the build has `SENTRY_AUTH_TOKEN`, `SENTRY_ORG` and
+  `SENTRY_PROJECT`.
+
 ## Background jobs and Redis
 
 Mike runs durable background jobs (document conversion, tabular extraction,
