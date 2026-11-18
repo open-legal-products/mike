@@ -94,6 +94,19 @@ describe("useSidebarHistory", () => {
         await waitFor(() => expect(result.current.items.map(({ item }) => item.id)).toEqual(["older-review", "chat"]));
     });
 
+    it("cache regression: an authorized status promotion updates loaded history without rereading pages", async () => {
+        vi.mocked(listTabularReviews).mockResolvedValueOnce(Array.from({ length: 31 }, (_, i) => review(`r${i}`)))
+            .mockResolvedValueOnce([review("last")]);
+        const { result } = renderHook(() => useSidebarHistory());
+        await waitFor(() => expect(result.current.loading).toBe(false));
+        await act(() => result.current.loadMore());
+        act(() => notifyTabularReviewsChanged([{ id: "last", updated_at: "2026-10-19T00:00:00Z", title: "Renamed review", project_id: null, org_id: null, is_running: false, is_complete: true }]));
+        await waitFor(() => expect(result.current.items[0].item.id).toBe("last"));
+        expect(listTabularReviews).toHaveBeenCalledTimes(2);
+        expect(result.current.items[0].item).toMatchObject({ title: "Renamed review" });
+        expect(result.current.reviews).toHaveLength(31);
+    });
+
     it("loads both review scopes in the active workspace sorted by update time", async () => {
         vi.mocked(listTabularReviews).mockResolvedValue([review("project", "p1"), review("standalone")]);
         const { result } = renderHook(() => useSidebarHistory());
@@ -102,6 +115,19 @@ describe("useSidebarHistory", () => {
             workspace: "personal", scope: "all", sortKey: "updated", sortDirection: "desc",
         }));
         expect(result.current.items.map(({ item }) => item.id)).toEqual(["project", "standalone"]);
+    });
+
+    it("reloads authorized pages when an activity snapshot moves a review to another workspace", async () => {
+        vi.mocked(listTabularReviews).mockResolvedValueOnce([review("moved")]);
+        const { result } = renderHook(() => useSidebarHistory());
+        await waitFor(() => expect(result.current.loading).toBe(false));
+        vi.mocked(listTabularReviews).mockResolvedValueOnce([]);
+        act(() => notifyTabularReviewsChanged([{
+            id: "moved", updated_at: "2026-10-19T00:00:00Z", title: "Moved",
+            project_id: null, org_id: "other-workspace", is_running: false,
+        }]));
+        await waitFor(() => expect(result.current.reviews).toEqual([]));
+        expect(listTabularReviews).toHaveBeenCalledTimes(2);
     });
 
     it("loads another review page and asks the chat source for more", async () => {

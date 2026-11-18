@@ -134,8 +134,13 @@ export function TRView({ reviewId, projectId }: Props) {
     // Generation and row/column edits can update the review outside PATCH.
     // Refresh History when the authoritative detail reports new activity.
     useEffect(() => {
-        if (review?.updated_at) notifyTabularReviewsChanged();
-    }, [review?.id, review?.updated_at]);
+        if (review?.updated_at) notifyTabularReviewsChanged([{
+            id: review.id, updated_at: review.updated_at, is_running: Boolean(review.is_running),
+            title: review.title, project_id: review.project_id, org_id: review.org_id ?? null,
+            ...(review.is_complete !== undefined && { is_complete: review.is_complete }),
+        }]);
+    }, [review?.id, review?.updated_at, review?.is_running, review?.is_complete,
+        review?.title, review?.project_id, review?.org_id]);
     // Opening a review opens its workspace. One in a project follows its
     // project, which says so itself.
     useItemWorkspace(
@@ -143,6 +148,8 @@ export function TRView({ reviewId, projectId }: Props) {
         review ? (review.org_id ?? null) : undefined,
     );
     const [project, setProject] = useState<Project | null>(null);
+    const confirmedDetail = useRef<Awaited<ReturnType<typeof getTabularReview>> | undefined>(undefined);
+    const detailRequest = useRef(0);
     const [cells, setCells, cellStore] = useReviewCells();
     const [documents, setDocuments] = useState<Document[]>([]);
     const [rows, setRows] = useState<TabularReviewRow[]>([]);
@@ -314,10 +321,14 @@ export function TRView({ reviewId, projectId }: Props) {
         // can resolve AFTER the new one and clobber fresh state with stale
         // data; drop its results instead.
         let cancelled = false;
+        detailRequest.current += 1;
+        confirmedDetail.current = undefined;
         const fetches: Promise<unknown>[] = [
             getTabularReview(reviewId).then(
-                ({ review, cells, rows, documents, active_generation }) => {
+                (detail) => {
                     if (cancelled) return;
+                    confirmedDetail.current = detail;
+                    const { review, cells, rows, documents, active_generation } = detail;
                     setReview(review);
                     setCells(cells);
                     setRows(rows);
@@ -392,6 +403,7 @@ export function TRView({ reviewId, projectId }: Props) {
         });
         return () => {
             cancelled = true;
+            detailRequest.current += 1;
         };
     }, [reviewId, projectId, setCells]);
 
@@ -735,18 +747,26 @@ export function TRView({ reviewId, projectId }: Props) {
         }
     }
 
+    function announceGenerationStart() {
+        notifyTabularReviewsChanged([{
+            id: reviewId, updated_at: review?.updated_at, is_running: true, is_complete: false,
+        }]);
+    }
+
     async function refreshAfterGeneration() {
-        // The full review carries every cell, so it is read once up front
-        // (usually the run has already ended) and once more when it has.
-        // While the run is still going, only its status snapshot is polled.
-        let detail = await getTabularReview(reviewId);
+        const request = ++detailRequest.current;
+        // Reconcile changed cells against the last confirmed server snapshot.
+        // Streamed and optimistic cell updates never become the delta's base.
+        let detail = await getTabularReview(reviewId, confirmedDetail.current);
         for (let attempt = 1; detail.review.is_running; attempt += 1) {
-            if (attempt >= 40) return;
+            if (attempt >= 40 || request !== detailRequest.current) return;
             await new Promise((resolve) => setTimeout(resolve, 250));
             const [status] = await getTabularReviewHistoryStatuses([reviewId]);
             if (status?.is_running) continue;
-            detail = await getTabularReview(reviewId);
+            detail = await getTabularReview(reviewId, detail);
         }
+        if (request !== detailRequest.current) return;
+        confirmedDetail.current = detail;
         setReview(detail.review);
         setCells(detail.cells);
         setRows(detail.rows);
@@ -857,14 +877,13 @@ export function TRView({ reviewId, projectId }: Props) {
             if (!response.ok) {
                 throw new Error(`Resume failed: ${response.status}`);
             }
-            notifyTabularReviewsChanged();
+            announceGenerationStart();
             await consumeGenerationStream(response);
             if (ownedAbort && !ownedAbort.signal.aborted) await refreshAfterGeneration();
         } catch (err) {
             if (!ownedAbort?.signal.aborted) throw err;
         } finally {
             resumeStreamOpenRef.current = false;
-            notifyTabularReviewsChanged();
             if (ownedAbort && generationAbortRef.current === ownedAbort)
                 generationAbortRef.current = null;
             if (ownsToolbar) {
@@ -991,7 +1010,7 @@ export function TRView({ reviewId, projectId }: Props) {
             }
             if (!response.body) throw new Error("No body");
             generationStarted = true;
-            notifyTabularReviewsChanged();
+            announceGenerationStart();
 
             // Optimistically set empty/pending/error cells to generating (skip done cells)
             setCells((prev) => {
@@ -1052,7 +1071,6 @@ export function TRView({ reviewId, projectId }: Props) {
                 });
             }
         } finally {
-            notifyTabularReviewsChanged();
             if (generationAbortRef.current === generationAbort) {
                 if (stopRequestedRef.current || (generationStarted && !generationAbort.signal.aborted)) {
                     try {

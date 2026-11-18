@@ -1,3 +1,4 @@
+import { selectAllByKey, selectInBatches } from "./batchedQuery";
 import type { Db } from "./supabase";
 
 export type WorkflowCatalogContributor = {
@@ -144,6 +145,34 @@ export async function listActiveCatalogWorkflows(
   const { data, error } = await query.order("title", { ascending: true });
   if (error) throw error;
   return (data ?? []) as WorkflowCatalogRow[];
+}
+
+type AssistantCatalogPrompt = {
+  id: string;
+  workflow_key: string;
+  title: string;
+  prompt_md: string | null;
+};
+const promptsByDb = new WeakMap<Db, Map<string, AssistantCatalogPrompt>>();
+
+/** Each catalog version has a distinct id for its content hash. Read the current
+ * membership each turn, then load only bodies not present in the previous catalog. */
+export async function activeAssistantPrompts(db: Db): Promise<AssistantCatalogPrompt[]> {
+  const active = await selectAllByKey<{ id: string }>("active assistant workflows", () =>
+    db.from("mike_workflows").select("id").eq("active", true).eq("type", "assistant"),
+  );
+  const promptCache = promptsByDb.get(db) ?? new Map<string, AssistantCatalogPrompt>();
+  const missing = active.filter(row => !promptCache.has(row.id));
+  const cached = new Map(promptCache);
+  const added = await selectInBatches<AssistantCatalogPrompt>(
+    "assistant workflow prompts",
+    missing.map(row => row.id),
+    batch => db.from("mike_workflows").select("id,workflow_key,title,prompt_md").in("id", batch),
+  );
+  for (const row of added) cached.set(row.id, row);
+  const current = active.flatMap(({ id }) => cached.get(id) ?? []);
+  promptsByDb.set(db, new Map(current.map(row => [row.id, row])));
+  return current;
 }
 
 // Installation markers make the database function a no-op after a user's

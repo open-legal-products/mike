@@ -30,6 +30,8 @@ interface DocRow {
 interface VersionPathRow extends DocRow {
     /** API/client alias for document_versions.filename of the active version. */
     filename?: string | null;
+    /** Source revision, included only for callers that request it. */
+    text_revision?: string | null;
     /** Set from document_versions.storage_path of the active version. */
     storage_path?: string | null;
     /** Set from document_versions.pdf_storage_path of the active version. */
@@ -140,6 +142,7 @@ export function downloadFilenameForVersion(
 export async function attachActiveVersionPaths<T extends VersionPathRow>(
     db: Supa,
     docs: T[],
+    includeTextRevision = false,
 ): Promise<T[]> {
     if (docs.length === 0) return docs;
     const versionIds = docs
@@ -147,6 +150,7 @@ export async function attachActiveVersionPaths<T extends VersionPathRow>(
         .filter((id): id is string => typeof id === "string");
     if (versionIds.length === 0) {
         for (const d of docs) {
+            if (includeTextRevision) d.text_revision = null;
             d.filename = "Untitled document";
             d.storage_path = null;
             d.pdf_storage_path = null;
@@ -168,7 +172,7 @@ export async function attachActiveVersionPaths<T extends VersionPathRow>(
             db
                 .from("document_versions")
                 .select(
-                    "id, storage_path, pdf_storage_path, version_number, filename, source, file_type, size_bytes, page_count, textless_page_count, content_sha256",
+                    "id, storage_path, pdf_storage_path, version_number, filename, source, file_type, size_bytes, page_count, textless_page_count, content_sha256, text_revision",
                 )
                 .in("id", batch)
                 .is("deleted_at", null),
@@ -185,6 +189,7 @@ export async function attachActiveVersionPaths<T extends VersionPathRow>(
             size_bytes: number | null;
             page_count: number | null;
             textless_page_count: number | null;
+            text_revision?: string;
             content_sha256: string | null;
         }
     >();
@@ -199,9 +204,11 @@ export async function attachActiveVersionPaths<T extends VersionPathRow>(
         size_bytes: number | null;
         page_count: number | null;
         textless_page_count: number | null;
+        text_revision?: string;
         content_sha256: string | null;
     }[]) {
         byId.set(r.id, {
+            text_revision: r.text_revision,
             storage_path: r.storage_path ?? null,
             pdf_storage_path: r.pdf_storage_path ?? null,
             version_number: r.version_number ?? null,
@@ -216,6 +223,7 @@ export async function attachActiveVersionPaths<T extends VersionPathRow>(
     }
     for (const d of docs) {
         const v = d.current_version_id ? byId.get(d.current_version_id) : null;
+        if (includeTextRevision) d.text_revision = v?.text_revision ?? null;
         d.storage_path = v?.storage_path ?? null;
         d.pdf_storage_path = v?.pdf_storage_path ?? null;
         d.active_version_number = v?.version_number ?? null;

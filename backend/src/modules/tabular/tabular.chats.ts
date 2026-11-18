@@ -13,6 +13,8 @@ import {
     type MessageTimeContext,
     type TabularCellStore,
 } from "../chat/chat.service";
+import { selectInBatches, selectAllByKey } from "../../lib/batchedQuery";
+import { chunkArray } from "../../lib/arrays";
 import { MESSAGE_TIME_PROMPT, resolveRequestTimeZone } from "../../lib/userTime";
 import { type ReasoningLevel, type UserApiKeys } from "../../lib/llm";
 import { randomUUID } from "node:crypto";
@@ -44,7 +46,7 @@ import {
     titleModelForChat,
 } from "../../lib/modelSelection";
 import { generateChatTitle } from "./tabular.extract";
-import { filterReadableReviewRows, loadReviewCells, loadReviewRows } from "./tabular.rows";
+import { filterReadableReviewRows, loadReviewRows } from "./tabular.rows";
 import {
     parseCellContent,
     statusFailure,
@@ -598,14 +600,9 @@ export async function prepareTabularChat(
         return internalFailure(audienceError);
     }
 
-    // Fetch all cells and logical review rows for this review, narrowed to
-    // the rows whose source documents the caller can read: the model answers
-    // the caller, so it must not be handed filenames or extracted text the
-    // caller could not open themselves (see filterReadableReviewRows).
-    let allCells: Record<string, unknown>[];
+    // Only authorized row labels and column positions are needed to start a turn.
     let rows: Awaited<ReturnType<typeof loadReviewRows>>;
     try {
-        allCells = await loadReviewCells(db, reviewId);
         ({ rows } = await filterReadableReviewRows(
             db,
             await loadReviewRows(db, reviewId),
@@ -616,11 +613,6 @@ export async function prepareTabularChat(
     } catch (error) {
         return internalFailure(error);
     }
-    const visibleRowIds = new Set(rows.map((row) => row.id));
-    const cells = allCells.filter((c: { row_id?: unknown }) =>
-        visibleRowIds.has(c.row_id as string),
-    );
-
     const sortedColumns = (
         (review.columns_config ?? []) as { index: number; name: string }[]
     ).sort((a, b) => a.index - b.index);
@@ -631,12 +623,57 @@ export async function prepareTabularChat(
             id: row.id,
             filename: row.label,
         })),
-        cells: new Map(
-            (cells ?? []).map((c: any) => [
-                `${c.column_index}:${c.row_id}`,
-                parseCellContent(c.content),
-            ]),
-        ),
+        cells: new Map(),
+    };
+    tabularStore.loadCells = async (rowIds, columnIndices) => {
+        if (!rowIds.length || !columnIndices.length) return;
+        const current = await db.from("tabular_reviews").select("*").eq("id", reviewId).single();
+        if (current.error) throw current.error;
+        if (!current.data || !(await ensureReviewAccess(current.data, userId, userEmail, db)).ok) {
+            throw new Error("Review is no longer accessible");
+        }
+        const requested = new Set(rowIds);
+        const latest = (await loadReviewRows(db, reviewId, rowIds)).filter(row => requested.has(row.id));
+        const original = rows.filter(row => requested.has(row.id));
+        // A row can change sources mid-turn. Authorize the sources behind cached
+        // content as well as the current row before returning either one.
+        const readable = await filterReadableReviewRows(db, [...original, ...latest], [], userId, userEmail);
+        if (original.length !== requested.size || latest.length !== requested.size ||
+            readable.rows.length !== original.length + latest.length) {
+            throw new Error("Review rows are no longer accessible");
+        }
+        // Group rows with the same missing columns, including previously absent cells.
+        const groups = new Map<string, { rows: string[]; columns: number[] }>();
+        for (const id of rowIds) {
+            const missing = columnIndices.filter(index => !tabularStore.cells.has(`${index}:${id}`));
+            if (!missing.length) continue;
+            const key = missing.join(",");
+            const group = groups.get(key) ?? { rows: [], columns: missing };
+            group.rows.push(id);
+            groups.set(key, group);
+        }
+        for (const group of groups.values()) {
+            for (const columns of chunkArray(group.columns, 50)) {
+                type Cell = { id: string; row_id: string; column_index: number; content: unknown };
+                const found = await selectInBatches<Cell>(
+                    "review chat cells",
+                    group.rows,
+                    batch => selectAllByKey("review chat cells", () =>
+                        db.from("tabular_cells").select("id,row_id,column_index,content")
+                            .eq("review_id", reviewId).in("row_id", batch).in("column_index", columns),
+                    ),
+                );
+                const wanted = new Set(group.rows);
+                for (const id of group.rows) {
+                    for (const index of columns) tabularStore.cells.set(`${index}:${id}`, null);
+                }
+                for (const cell of found) {
+                    if (wanted.has(cell.row_id) && columns.includes(cell.column_index)) {
+                        tabularStore.cells.set(`${cell.column_index}:${cell.row_id}`, parseCellContent(cell.content));
+                    }
+                }
+            }
+        }
     };
 
     // Create or verify chat record

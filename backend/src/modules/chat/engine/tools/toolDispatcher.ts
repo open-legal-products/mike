@@ -1256,7 +1256,7 @@ export async function runToolCalls(
         content: `${instructions}${assetNotice}`,
       });
     } else if (tc.function.name === "read_table_cells" && tabularStore) {
-      const { label, content } = renderTableCells(
+      const { label, content } = await renderTableCells(
         tabularStore,
         args.col_indices as number[] | undefined,
         args.row_indices as number[] | undefined,

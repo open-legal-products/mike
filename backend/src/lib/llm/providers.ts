@@ -200,6 +200,7 @@ async function createAnthropicAdapter(args: {
     label: args.label,
     model: anthropic(args.model),
     modelId: args.model,
+    anthropicCachePoint: true,
     keySource: args.keySource,
     supportsReasoning: args.supportsReasoning,
     // Only Anthropic itself runs the search; compatible gateways do not.

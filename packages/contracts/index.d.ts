@@ -7,6 +7,10 @@ export type TabularReviewHistoryStatus = {
   id: string;
   is_running: boolean;
   is_complete: boolean;
+  updated_at?: string;
+  title?: string | null;
+  project_id?: string | null;
+  org_id?: string | null;
 };
 
 export type SourceDocumentType =
@@ -385,7 +389,7 @@ export type ResponseDetailsEvent = {
   type: "response_details";
   model: string;
   reasoning?: string;
-  usage?: { input_tokens: number; output_tokens: number };
+  usage?: { input_tokens: number; output_tokens: number; cache_read_tokens?: number; cache_write_tokens?: number };
 };
 
 export type DocumentSearchErrorCode =

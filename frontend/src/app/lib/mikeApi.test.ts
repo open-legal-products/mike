@@ -3871,3 +3871,16 @@ describe("organization private content", () => {
         expect(lastFetchCall()).toMatchObject({ url: "/api/orgs/org-1/private-content/document/doc-1", init: { method: "DELETE" } });
     });
 });
+
+it("cache regression: merges a revision delta against the confirmed grid and accepts full fallback", async () => {
+    const first = { review: { id: "r" }, cells: [{ id: "keep" }, { id: "remove" }], cell_revision: "one" };
+    fetchMock.mockResolvedValueOnce(jsonResponse(first));
+    const previous = await getTabularReview("r");
+    fetchMock.mockResolvedValueOnce(jsonResponse({ ...first, cells: [{ id: "add" }], removed_cell_ids: ["remove"], cell_revision: "two" }));
+    const next = await getTabularReview("r", previous);
+    expect(fetchMock.mock.calls.at(-1)?.[0]).toContain("cell_revision=one");
+    expect(next.cells).toEqual([{ id: "keep" }, { id: "add" }]);
+    expect(previous.cells).toEqual(first.cells);
+    fetchMock.mockResolvedValueOnce(jsonResponse({ ...first, cells: [] }));
+    expect((await getTabularReview("r", next)).cells).toEqual([]);
+});

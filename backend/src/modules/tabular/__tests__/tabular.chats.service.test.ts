@@ -481,7 +481,7 @@ describe("prepareTabularChat", () => {
         expect(fake.calls.some(call => call.op === "insert")).toBe(false);
     });
 
-    it("creates a chat, stores the user turn, and builds the prompt", async () => {
+    it("cache regression: loads a cell only when requested and reuses the slice", async () => {
         const fake = makeFakeDb({
             tables: {
                 tabular_reviews: { data: REVIEW, error: null },
@@ -507,6 +507,14 @@ describe("prepareTabularChat", () => {
         expect(result.data.chatId).toBe("chat-new");
         expect(result.data.isFirstExchange).toBe(true);
         expect(result.data.model).toBe("claude-sonnet-5");
+        expect(callTo(fake.calls, "tabular_cells")).toBeUndefined();
+        const store = result.data.tabularStore;
+        await store.loadCells!(["row-1"], [0]);
+        await store.loadCells!(["row-1"], [0]);
+        expect(fake.calls.filter(call => call.table === "tabular_cells")).toHaveLength(1);
+        expect(callTo(fake.calls, "tabular_cells")?.filters).toEqual({
+            review_id: "rev-1", row_id: ["row-1"], column_index: [0],
+        });
         expect(result.data.tabularStore.cells.get("0:row-1")).toMatchObject({
             summary: "yes",
         });
@@ -557,6 +565,9 @@ describe("prepareTabularChat", () => {
         expect(result.data.tabularStore.documents).toEqual([
             { id: "row-1", filename: "Contract.pdf" },
         ]);
+        await result.data.tabularStore.loadCells!(["row-1"], [0]);
+        filterAccessibleDocumentIds.mockResolvedValue([]);
+        await expect(result.data.tabularStore.loadCells!(["row-1"], [0])).rejects.toThrow("accessible");
         expect([...result.data.tabularStore.cells.keys()]).toEqual(["0:row-1"]);
         expect(JSON.stringify(result.data.apiMessages)).not.toContain(
             "Their secret",

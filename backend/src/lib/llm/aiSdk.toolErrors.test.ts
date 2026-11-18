@@ -71,6 +71,16 @@ describe("success path is untouched", () => {
     expect(model.doStreamCalls.length).toBe(2);
   });
 
+  it("cache regression: preserves provider-reported cache reads and writes", async () => {
+    const end = finish("stop");
+    if (end.type !== "finish") throw Error("expected finish");
+    end.usage = { ...end.usage, inputTokens: { total: 10, noCache: 2, cacheRead: 5, cacheWrite: 3 } };
+    const model = await makeModel([step(...text("done"), end)]);
+    const onUsage = vi.fn();
+    await streamAiSdk({ ...base, callbacks: { onUsage } }, config(model));
+    expect(onUsage).toHaveBeenCalledWith({ inputTokens: 10, outputTokens: 5, cacheReadTokens: 5, cacheWriteTokens: 3 }, "stop");
+  });
+
   it("reports each step's tokens and finish reason to onUsage", async () => {
     const model = await makeModel([
       callStep("c1", "read_document", { doc_id: "doc-0" }),
@@ -85,6 +95,18 @@ describe("success path is untouched", () => {
       [{ inputTokens: 10, outputTokens: 5 }, "tool-calls"],
       [{ inputTokens: 10, outputTokens: 5 }, "stop"],
     ]);
+  });
+
+  it.each([false, true])("sends a source breakpoint only when the adapter supports it (%s)", async (supported) => {
+    const model = await makeModel([textStep("done")]);
+    await streamAiSdk({ ...base, tools: [],
+      messages: [{ role: "user", content: "Source\nInstructions" }], sourcePrefixLength: 6,
+    }, { ...config(model), anthropicCachePoint: supported });
+    const user = model.doStreamCalls[0].prompt.find(message => message.role === "user");
+    expect(user?.content).toEqual(supported ? [
+      { type: "text", text: "Source", providerOptions: { anthropic: { cacheControl: { type: "ephemeral" } } } },
+      { type: "text", text: "\nInstructions" },
+    ] : [{ type: "text", text: "Source\nInstructions" }]);
   });
 
   it("delivers a terminal notice separately from model text when the caller supports it", async () => {

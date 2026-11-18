@@ -31,7 +31,8 @@ import {
 import { ACTIVE_WORD_DOCUMENT_LIVE_FILENAME } from "./wordPrompt";
 import { parseCitations, createCitation, limitCitationPayload, withoutEmbeddedSourceText } from "./citations";
 import type { AssistantEvent } from "@mike/contracts";
-import { catalogWorkflowId, ensureDefaultWorkflows } from "../../../lib/workflowCatalog";
+import { queryFailureCause } from "../../../lib/batchedQuery";
+import { activeAssistantPrompts, catalogWorkflowId, ensureDefaultWorkflows } from "../../../lib/workflowCatalog";
 
 // ---------------------------------------------------------------------------
 // Prompt-injection spotlighting helpers
@@ -1663,27 +1664,8 @@ export async function buildWorkflowStore(
   // deleting them, so the full history — every prompt_md ever shipped —
   // grows with each catalog sync. read_workflow resolves a retired id on
   // demand (findCatalogWorkflow), the rare case that needs one.
-  const { data: catalogWorkflows, error: catalogError } = await db
-    .from("mike_workflows")
-    .select("workflow_key, title, prompt_md, updated_at")
-    .eq("type", "assistant")
-    .eq("active", true)
-    .order("updated_at", { ascending: false });
-  if (catalogError) {
-    const failure = new AppError(
-      "chat.context_failed",
-      "Workflow catalog lookup failed",
-      { cause: catalogError },
-    );
-    reportError(failure, {
-      level: "warning",
-      tags: { component: "chat-stream" },
-    });
-    console.error(
-      "[buildWorkflowStore] workflow catalog lookup failed",
-      failure,
-    );
-  } else {
+  try {
+    const catalogWorkflows = await activeAssistantPrompts(db);
     for (const workflow of catalogWorkflows ?? []) {
       const id = catalogWorkflowId(workflow.workflow_key);
       if (store.has(id) || !workflow.prompt_md) continue;
@@ -1693,6 +1675,20 @@ export async function buildWorkflowStore(
         listed: false,
       });
     }
+  } catch (catalogError) {
+    const failure = new AppError(
+      "chat.context_failed",
+      "Workflow catalog lookup failed",
+      { cause: queryFailureCause(catalogError) },
+    );
+    reportError(failure, {
+      level: "warning",
+      tags: { component: "chat-stream" },
+    });
+    console.error(
+      "[buildWorkflowStore] workflow catalog lookup failed",
+      failure,
+    );
   }
 
   // Only workflows currently authorized in the conversation's workspace.
