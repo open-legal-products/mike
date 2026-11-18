@@ -1,4 +1,4 @@
-import { render, screen, within } from "@testing-library/react";
+import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ToastViewportUI, clearToasts } from "@mike/ui";
@@ -96,12 +96,13 @@ describe("DocumentSidePanel failures", () => {
             .fn()
             .mockRejectedValueOnce(new TypeError("Failed to fetch"))
             .mockResolvedValueOnce(undefined);
-        renderPanel({ onDelete });
+        const { onClose } = renderPanel({ onDelete });
 
         await user.click(screen.getByRole("button", { name: /^Delete$/ }));
         await user.click(await screen.findByRole("button", { name: "Retry" }));
 
         expect(onDelete).toHaveBeenCalledTimes(2);
+        await waitFor(() => expect(onClose).toHaveBeenCalledOnce());
     });
 
     it("reports a failed version delete", async () => {

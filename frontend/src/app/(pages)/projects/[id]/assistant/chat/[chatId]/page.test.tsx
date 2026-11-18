@@ -312,12 +312,12 @@ describe("project document deletion", () => {
         fireEvent.click(await screen.findByRole("menuitem", { name: "Delete file" }));
         expect(state.deleteDocument).not.toHaveBeenCalled();
         expect(state.discardDraft).not.toHaveBeenCalled();
-        fireEvent.click(within(screen.getByRole("dialog", { name: "Delete file?" })).getByRole("button", { name: "Cancel" }));
+        fireEvent.click(within(await screen.findByRole("dialog", { name: "Delete file?" })).getByRole("button", { name: "Cancel" }));
         expect(screen.getByTestId("draft-viewer")).toBeVisible();
         expect(state.discardDraft).not.toHaveBeenCalled();
         fireEvent.contextMenu(screen.getByRole("tab", { name: /Draft.docx/ }));
         fireEvent.click(await screen.findByRole("menuitem", { name: "Delete file" }));
-        fireEvent.click(within(screen.getByRole("dialog", { name: "Delete file?" })).getByRole("button", { name: "Delete file" }));
+        fireEvent.click(within(await screen.findByRole("dialog", { name: "Delete file?" })).getByRole("button", { name: "Delete file" }));
         await waitFor(() => expect(state.deleteDocument).toHaveBeenCalledWith("doc1"));
         await waitFor(() => expect(screen.queryByTestId("draft-viewer")).toBeNull());
         expect(state.discardDraft).toHaveBeenCalledOnce();
