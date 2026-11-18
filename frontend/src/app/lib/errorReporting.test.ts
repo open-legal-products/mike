@@ -43,6 +43,7 @@ import {
     markErrorHandled,
     reportApiFailure,
     reportError,
+    reportGatewayLimit,
     reportingDestination,
     reportNetworkFailure,
     resetApiUnreachableWindow,
@@ -87,6 +88,49 @@ describe("reportError", () => {
             exception: { values: [{ mechanism: { type: "auto.core.capture_console" } }] },
         };
         expect(scrubEvent(consoleCopy, { originalException: error })).toBeNull();
+    });
+
+    it("reports a gateway limit as a warning tagged with its kind and route", () => {
+        state.enabled = false;
+        expect(reportGatewayLimit("stream-incomplete")).toBeNull();
+        expect(Sentry.captureException).not.toHaveBeenCalled();
+
+        state.enabled = true;
+        expect(
+            reportGatewayLimit("payload-too-large", {
+                path: "/projects/3f2b6c1e-9a4d-4c1b-8f7e-2d5a6b7c8d9e/chat",
+                method: "POST",
+                status: 413,
+                requestId: "req-413",
+            }),
+        ).toBe("exc-1");
+        const reported = vi.mocked(Sentry.captureException).mock.calls[0][0] as Error;
+        expect(reported.name).toBe("GatewayPayloadTooLargeError");
+        const scope = state.scopes[0];
+        expect(scope.setLevel).toHaveBeenCalledWith("warning");
+        expect(scope.setTag).toHaveBeenCalledWith("component", "gateway-limit");
+        expect(scope.setTag).toHaveBeenCalledWith("stage", "payload-too-large");
+        expect(scope.setTag).toHaveBeenCalledWith("http_status", 413);
+        // The route is normalised: no identifier reaches a tag.
+        const route = scope.setTag.mock.calls.find(([key]) => key === "http_route")?.[1];
+        expect(String(route)).not.toContain("3f2b6c1e");
+
+        // What survives the privacy boundary is what Sentry receives: the
+        // error type and the labels must still say which limit was hit.
+        const sent = diagnosticEvent({
+            level: "warning",
+            exception: { values: [{ type: reported.name, value: reported.message }] },
+            tags: Object.fromEntries(scope.setTag.mock.calls.filter(([, value]) => value != null)),
+        }) as { tags: Record<string, unknown>; exception: { values: Array<{ type: string }> }; fingerprint: string[] };
+        expect(sent.exception.values[0].type).toBe("GatewayPayloadTooLargeError");
+        expect(sent.tags).toMatchObject({ component: "gateway-limit", stage: "payload-too-large" });
+        expect(sent.fingerprint).toEqual(expect.arrayContaining(["gateway-limit", "payload-too-large"]));
+        expect(JSON.stringify(sent)).not.toContain("3f2b6c1e");
+
+        reportGatewayLimit("stream-incomplete");
+        const second = vi.mocked(Sentry.captureException).mock.calls[1][0] as Error;
+        expect(second.name).toBe("AssistantStreamIncompleteError");
+        expect(state.scopes[1].setTag).toHaveBeenCalledWith("stage", "stream-incomplete");
     });
 
     it("captures with tags, extra, level, and fingerprint when enabled", () => {

@@ -40,6 +40,8 @@ permissions:
 
 jobs:
   gc-regression:
+    # Runs here and in forks; skipped in copies such as the Vercel Deploy button makes (docs/vercel.md).
+    if: github.repository == 'open-legal-products/mike' || github.event.repository.fork
     name: gc fixture test
     runs-on: ubuntu-latest
     timeout-minutes: 15

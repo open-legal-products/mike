@@ -42,6 +42,7 @@ import { hasDirectContentGrants } from "../../lib/contentAccess";
 import { can } from "../../lib/permissions";
 import { resolveEffectiveReasoningLevel } from "../../lib/modelSelection";
 import { replaysReasoning } from "../../lib/llm/registry";
+import { disownsReplayedToolRecord } from "../../lib/llm/models";
 import { beginMemoryConversationTurn, releaseMemoryConversationTurn, type MemoryConversationTurn } from "../../lib/memory/schedule";
 import { getAccessibleChat, validateAccessibleProjectId } from "./chat.access";
 
@@ -504,6 +505,7 @@ export async function prepareChatStream(
             ? await attachPriorReasoning(messages, chatId, db, "chat_messages", history)
             : messages;
         const timeZone = resolveRequestTimeZone(args.requestedTimeZone);
+        const recordForUser = disownsReplayedToolRecord(selectedModel);
         const enrichedMessages = await enrichWithPriorEvents(
             historyMessages,
             chatId,
@@ -512,6 +514,7 @@ export async function prepareChatStream(
             nonce,
             "chat_messages",
             timeZone,
+            recordForUser,
         );
         const {
             api_keys: apiKeys,
@@ -539,6 +542,7 @@ export async function prepareChatStream(
             nonce,
             "append",
             { timeZone, now: new Date(), userSentAt },
+            recordForUser,
         );
 
         const workflowStore = await buildWorkflowStore(userId, userEmail, db, contentOrgId);

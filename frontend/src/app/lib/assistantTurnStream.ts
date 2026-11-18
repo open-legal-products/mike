@@ -3,6 +3,7 @@ import { BACKEND_REPORTING_OWNER } from "@mike/client";
 
 import { streamChatTurn } from "@/app/lib/mikeApi";
 import { readSseFrames } from "@/app/lib/sse";
+import { reportGatewayLimit } from "@/app/lib/errorReporting";
 import { isPanelDocument } from "@/app/components/shared/types";
 import type { AssistantEvent, Citation } from "@/app/components/shared/types";
 import type { AssistantTurnHandle } from "@/app/lib/assistantTurnTypes";
@@ -426,6 +427,12 @@ export async function consumeAssistantTurnStream(
     onEventId: (id) => {
       const seq = Number.parseInt(id, 10);
       if (Number.isFinite(seq)) cursor.lastSeq = seq;
+    },
+    // The turn's stream always ends with [DONE]. Ending without it looks, to
+    // this loop, exactly like a finished reply, so it is the only place the
+    // cut-off can be seen at all.
+    onIncomplete: () => {
+      if (!signal?.aborted) reportGatewayLimit("stream-incomplete");
     },
   })) {
     const data = frame as Record<string, unknown>;
