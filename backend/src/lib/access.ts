@@ -701,13 +701,28 @@ export async function ensureDocAccess(
         : { ok: false };
 }
 
+/**
+ * The key under which one ensureDocAccess verdict may stand for other
+ * documents in the same batch, or null when the verdict is the document's
+ * own. A project or workflow admits or refuses everything in it together,
+ * and the caller's own standalone files turn only on their organization
+ * membership. Someone else's standalone file is reached only through its own
+ * private-content grant, so it never shares a verdict.
+ */
+export function sharedDocAccessKey(
+    doc: Parameters<typeof ensureDocAccess>[0],
+    userId: string,
+): string | null {
+    return doc.project_id ? `project:${doc.project_id}`
+        : doc.workflow_id ? `workflow:${doc.workflow_id}`
+        : doc.user_id === userId && doc.org_id ? `creator-org:${doc.org_id}` : null;
+}
+
 /** Reuse only shared container/membership verdicts within one authorized batch. */
 export function createDocumentAccessChecker(userId: string, userEmail: string | null | undefined, db: Db) {
     const shared = new Map<string, Promise<ResourceAccess>>();
     return async (doc: Parameters<typeof ensureDocAccess>[0]): Promise<ResourceAccess> => {
-        const key = doc.project_id ? `project:${doc.project_id}`
-            : doc.workflow_id ? `workflow:${doc.workflow_id}`
-            : doc.user_id === userId && doc.org_id ? `creator-org:${doc.org_id}` : null;
+        const key = sharedDocAccessKey(doc, userId);
         if (!key) return ensureDocAccess(doc, userId, userEmail, db);
         let pending = shared.get(key);
         if (!pending) { pending = ensureDocAccess(doc, userId, userEmail, db); shared.set(key, pending); }

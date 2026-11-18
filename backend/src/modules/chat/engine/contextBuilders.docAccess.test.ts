@@ -17,7 +17,11 @@ vi.mock("../../../lib/supabase", () => ({ createServerSupabase: vi.fn() }));
 vi.mock("../../../lib/storage", () => ({ downloadFile: vi.fn() }));
 
 const ensureDocAccess = vi.fn(async (..._args: unknown[]) => ({ ok: true }));
-vi.mock("../../../lib/access", () => ({
+vi.mock("../../../lib/access", async (importOriginal) => ({
+  // The real sharing rule, so these tests pin the keying the builder uses.
+  sharedDocAccessKey: (
+    await importOriginal<typeof import("../../../lib/access")>()
+  ).sharedDocAccessKey,
   ensureDocAccess: (...args: unknown[]) => ensureDocAccess(...args),
 }));
 
@@ -273,5 +277,61 @@ describe("buildDocContext access scoping", () => {
       // One verdict per uploader, still not one per document.
       expect(ensureDocAccess).toHaveBeenCalledTimes(2);
     }
+  });
+
+  it("asks per document for a colleague's standalone files, so opening one does not open the rest", async () => {
+    // An organization owner or private-content admin reads a member's
+    // standalone file only through that file's own private-content grant
+    // (hasOrgPrivateContentAccess, per document). Keyed by organization and
+    // uploader, the grant for one of the member's files answered for every
+    // other file of theirs attached in the same turn.
+    ensureDocAccess.mockImplementation(async (doc: unknown) => ({
+      ok: (doc as { id: string }).id === "opened",
+    }));
+    const db = makeDb([
+      { id: "opened", user_id: "u2", project_id: null, org_id: "org-1", status: "ready" },
+      { id: "not-opened", user_id: "u2", project_id: null, org_id: "org-1", status: "ready" },
+    ]);
+
+    for (const order of [
+      ["opened", "not-opened"],
+      ["not-opened", "opened"],
+    ]) {
+      ensureDocAccess.mockClear();
+      const { docIndex } = await buildDocContext(
+        message(order),
+        "u1",
+        db,
+        null,
+        "chat_messages",
+        "u1@test.local",
+      );
+      expect(Object.values(docIndex).map((entry) => entry.document_id)).toEqual([
+        "opened",
+      ]);
+      expect(ensureDocAccess).toHaveBeenCalledTimes(2);
+    }
+  });
+
+  it("still reads every colleague file the caller has opened", async () => {
+    const db = makeDb([
+      { id: "opened-a", user_id: "u2", project_id: null, org_id: "org-1", status: "ready" },
+      { id: "opened-b", user_id: "u2", project_id: null, org_id: "org-1", status: "ready" },
+    ]);
+
+    const { docIndex } = await buildDocContext(
+      message(["opened-a", "opened-b"]),
+      "u1",
+      db,
+      null,
+      "chat_messages",
+      "u1@test.local",
+    );
+
+    expect(
+      Object.values(docIndex)
+        .map((entry) => entry.document_id)
+        .sort(),
+    ).toEqual(["opened-a", "opened-b"]);
   });
 });
