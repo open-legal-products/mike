@@ -2305,6 +2305,110 @@ describe("tabular.routes", () => {
             await firstDone;
         });
 
+        // Review access is not document access: GET /tabular-review/:id
+        // hides a row whose source document the caller cannot open. A
+        // run's frames are the starter's, so a co-editor attaching to it
+        // must get the same narrowing, or the replay hands them text
+        // extracted from a document they cannot open.
+        describe("replay narrowed to the attaching viewer's documents", () => {
+            /** row-1 reads d1, row-2 reads d2; both extract until released. */
+            function startTwoRowRun() {
+                supabaseState.tables.tabular_review_rows = {
+                    data: ["d1", "d2"].map((documentId, index) => ({
+                        id: `row-${index + 1}`,
+                        review_id: "r1",
+                        label: `${documentId}.pdf`,
+                        row_type: "document",
+                        folder_id: null,
+                        library_folder_id: null,
+                        document_id: documentId,
+                        sort_index: index,
+                    })),
+                    error: null,
+                };
+                let release = () => {};
+                const gate = new Promise<void>((done) => {
+                    release = done;
+                });
+                let generating = 0;
+                let bothGenerating = () => {};
+                const started = new Promise<void>((done) => {
+                    bothGenerating = done;
+                });
+                extractRowColumns.mockImplementation(async (raw: unknown) => {
+                    const args = raw as ExtractArgs;
+                    await args.sink.generating(args.row.id, 0);
+                    if (++generating === 2) bothGenerating();
+                    await gate;
+                    await args.sink.done(args.row.id, 0, {
+                        value: `extracted from ${args.row.id}`,
+                    });
+                    return {
+                        processed: args.columns,
+                        received: new Set([0]),
+                        missing: [],
+                    };
+                });
+                const run = startGeneration().then((res) => res);
+                return { run, started, release };
+            }
+
+            const attach = () =>
+                request(app)
+                    .get("/tabular-review/r1/generate/stream?from=1")
+                    .set(...AUTH);
+
+            it("drops frames for rows whose documents the viewer cannot open", async () => {
+                const { run, started, release } = startTwoRowRun();
+                await started;
+
+                // From here on the caller is a co-editor who can open d1
+                // but not d2: the same inputs under which the review read
+                // returns row-1 only.
+                ensureReviewAccess.mockResolvedValue({
+                    ok: true,
+                    isCreator: false,
+                    orgRole: null,
+                    projectRole: "editor",
+                });
+                filterAccessibleDocumentIds.mockImplementation(
+                    async (ids: string[]) => ids.filter((id) => id !== "d2"),
+                );
+                const read = await request(app)
+                    .get("/tabular-review/r1")
+                    .set(...AUTH);
+                expect(read.body.rows.map((row: { id: string }) => row.id)).toEqual(["row-1"]);
+
+                const tail = attach();
+                setTimeout(release, 30);
+                const viewer = records((await tail).text);
+                const starter = records((await run).text);
+
+                expect(viewer.join("\n")).not.toContain("row-2");
+                // Everything else arrives, in the run's order, with the
+                // run's own sequence numbers.
+                expect(viewer).toEqual(
+                    starter.filter((record) => !record.includes("row-2")),
+                );
+                expect(viewer.join("\n")).toContain("extracted from row-1");
+                expect(viewer.at(-1)).toMatch(/data: \[DONE\]$/);
+            });
+
+            it("still replays every frame, in order, to a viewer who can open every document", async () => {
+                const { run, started, release } = startTwoRowRun();
+                await started;
+
+                const tail = attach();
+                setTimeout(release, 30);
+                const viewer = records((await tail).text);
+                const starter = records((await run).text);
+
+                expect(viewer).toEqual(starter);
+                expect(viewer.join("\n")).toContain("extracted from row-1");
+                expect(viewer.join("\n")).toContain("extracted from row-2");
+            });
+        });
+
         it("stops a run through the endpoint: readers see cancelled then [DONE], cells go back to pending", async () => {
             const held = heldExtraction();
             const first = startGeneration();

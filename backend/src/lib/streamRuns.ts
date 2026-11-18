@@ -366,11 +366,19 @@ export function getActiveStreamRun<Meta = Record<string, unknown>>(
  * the streaming routes, so a route that starts a run drives the generation
  * through the run without changing anything else: `write` buffers and fans
  * out, `signal` is the run's (Stop, not socket close), `finish` ends the run.
+ *
+ * `include`, when given, is asked about every chunk this response would
+ * receive (replayed and live) and a chunk it rejects is not sent to THIS
+ * response. A run's frames are written for the user who started it; an
+ * observer whose access is narrower passes the surface's own filter here.
+ * Sequence numbers are untouched, so a filtered reader resumes with `from`
+ * exactly as an unfiltered one does.
  */
 export function attachStreamRunSse(
     res: Response,
     run: StreamRun<unknown>,
     from = 1,
+    include?: (chunk: string) => boolean,
 ): {
     signal: AbortSignal;
     write: (line: string, opts?: StreamRunWriteOptions) => boolean;
@@ -386,6 +394,7 @@ export function attachStreamRunSse(
     const detach = run.subscribe(from, {
         write: (chunk) => {
             if (ended || res.writableEnded) return;
+            if (include && !include(chunk)) return;
             res.write(chunk);
         },
         end: () => {
