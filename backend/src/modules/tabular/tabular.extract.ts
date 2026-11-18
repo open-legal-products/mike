@@ -156,7 +156,8 @@ Rules:
 - The "summary" and "reasoning" string VALUES may use markdown (bullets, bold, italics, etc.) — escape newlines as \\n inside the JSON string. This markdown is rendered in the UI.
 - Output ONLY the JSON lines themselves. Do NOT wrap the response in markdown code fences (e.g. \`\`\`json), and do not add any preamble or summary.`;
 
-    const USER = `Document: ${filename}\n\n${documentText}\n\n---\nColumns to extract:\n${columnsDesc}`;
+    const sourcePrefix = `Document: ${filename}\n\n${documentText}`;
+    const USER = `${sourcePrefix}\n\n---\nColumns to extract:\n${columnsDesc}`;
 
     let contentBuffer = "";
     const pending: Promise<unknown>[] = [];
@@ -198,6 +199,7 @@ Rules:
             model,
             systemPrompt: SYSTEM,
             messages: [{ role: "user", content: USER }],
+            sourcePrefixLength: sourcePrefix.length,
             tools: [],
             apiKeys,
             abortSignal,

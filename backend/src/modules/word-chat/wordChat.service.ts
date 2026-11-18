@@ -48,6 +48,7 @@ import {
   resolveEffectiveReasoningLevel,
 } from "../../lib/modelSelection";
 import { replaysReasoning } from "../../lib/llm/registry";
+import { disownsReplayedToolRecord } from "../../lib/llm/models";
 import {
   getPlaybook,
   PlaybookRequestError,
@@ -884,6 +885,7 @@ export async function prepareWordChatStream(
         )
       : messages;
     const timeZone = resolveRequestTimeZone(args.requestedTimeZone);
+    const recordForUser = disownsReplayedToolRecord(selectedModel);
     const enrichedMessages = await enrichWithPriorEvents(
       historyMessages,
       persistChat ? chatId : null,
@@ -892,6 +894,7 @@ export async function prepareWordChatStream(
       nonce,
       "word_chat_messages",
       timeZone,
+      recordForUser,
     );
     const { api_keys: configuredApiKeys, personalisation } = modelSettings;
     const apiKeys = { ...configuredApiKeys };
@@ -923,6 +926,7 @@ export async function prepareWordChatStream(
       nonce,
       "replace",
       { timeZone, now: new Date(), userSentAt },
+      recordForUser,
     );
     const workflowStore = await buildWorkflowStore(userId, userEmail, db);
 

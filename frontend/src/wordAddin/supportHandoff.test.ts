@@ -126,7 +126,7 @@ describe("supportHandoffResult", () => {
             message: `Email ${SUPPORT_EMAIL} — the details are on your clipboard`,
         });
         // The address comes from the shared constant, never a literal.
-        expect(result.message).toContain("will@mikeoss.com");
+        expect(result.message).toContain("support@mikeoss.com");
         expect(result.details).toBeUndefined();
     });
 

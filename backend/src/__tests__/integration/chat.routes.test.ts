@@ -587,6 +587,44 @@ describe("POST /chat — streaming endpoint", () => {
     expect(releaseMemoryConversationTurn).not.toHaveBeenCalled();
   });
 
+  it("moves the earlier-turn record for Claude Sonnet 5.5 only", async () => {
+    const chatLib = await import("../../modules/chat/engine/index.js");
+    const userSettings = await import("../../modules/user/user.settings.js");
+    runLLMStream.mockResolvedValue({
+      fullText: "hi",
+      events: [{ type: "content", text: "hi" }],
+      citations: [],
+    });
+    for (const [model, expected] of [
+      ["claude-sonnet-5-5", true],
+      ["gemini-3.8-flash", false],
+      ["gpt-6.1-sol", false],
+      ["claude-opus-5-5", false],
+    ] as const) {
+      vi.mocked(userSettings.getUserModelSettings).mockResolvedValueOnce({
+        legal_research_us: false,
+        web_search: DEFAULT_WEB_SEARCH_SETTINGS,
+        title_model: null,
+        memory_curator_model: null,
+        subagent_model: null,
+        subagent_reasoning: null,
+        last_selected_reasoning_level: null,
+        tabular_model: null,
+        last_selected_chat_model: null,
+        api_keys: { claude: "test-key", gemini: "test-key", openai: "test-key" },
+      });
+      const res = await request(app)
+        .post("/chat")
+        .set("Authorization", "Bearer test")
+        .send({ ...VALID_BODY, model });
+      expect(res.status, model).toBe(200);
+      // The same answer goes to both: the record's place and its explanation
+      // in the system prompt must not disagree.
+      expect(vi.mocked(chatLib.enrichWithPriorEvents).mock.calls.at(-1)![7], model).toBe(expected);
+      expect(vi.mocked(chatLib.buildMessages).mock.calls.at(-1)![8], model).toBe(expected);
+    }
+  });
+
   it("gives the model the browser's time zone and today's date", async () => {
     const chatLib = await import("../../modules/chat/engine/index.js");
     runLLMStream.mockResolvedValue({

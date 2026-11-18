@@ -8,7 +8,7 @@ import { loadRowDocumentText, type ReviewRow } from "../tabular.rows";
 import { ExtractionParseError } from "../../../lib/extraction/failure";
 import { createTextExtractionCache } from "../../../lib/textExtractionCache";
 const row = { id: "row", document_id: "doc" } as ReviewRow;
-const fake = () => scriptedDb([{ table: "documents", data: [{ id: "doc", filename: "contract", storage_path: "source", current_version_id: "v", file_type: "docx" }] }]);
+const fake = (text_revision?: string) => scriptedDb([{ table: "documents", data: [{ text_revision, id: "doc", filename: "contract", storage_path: "source", current_version_id: "v", file_type: "docx" }] }]);
 beforeEach(() => { vi.clearAllMocks(); mocks.extract.mockResolvedValue("Parsed"); });
 it("reads indexed text without parsing for repeated generations", async () => {
     mocks.state.mockResolvedValue({ revision: "r1", text: "Stored", textlessPageCount: 0 });
@@ -31,4 +31,15 @@ it("propagates a corrupt DOCX verdict instead of producing an empty model source
     const failure = new ExtractionParseError("extraction.parse_failed", "unreadable docx", { cause: new Error("Corrupted zip") });
     mocks.extract.mockRejectedValueOnce(failure);
     await expect(loadRowDocumentText(fake().db, row)).rejects.toBe(failure);
+});
+
+it("cache regression: transfers ready text once per distinct source revision", async () => {
+    mocks.state.mockResolvedValue({ revision: "r1", text: "One", textlessPageCount: 0 });
+    const cache = createTextExtractionCache();
+    const results = await Promise.all(Array.from({ length: 20 }, () => loadRowDocumentText(fake("r1").db, row, cache)));
+    expect(results.every(result => result.includes("One"))).toBe(true);
+    expect(mocks.state).toHaveBeenCalledTimes(1);
+    mocks.state.mockResolvedValue({ revision: "r2", text: "Two", textlessPageCount: 0 });
+    expect(await loadRowDocumentText(fake("r2").db, row, cache)).toContain("Two");
+    expect(mocks.state).toHaveBeenCalledTimes(2);
 });

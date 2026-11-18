@@ -2669,6 +2669,11 @@ describe("tabular.routes", () => {
                     memorySharedAudience: true,
                 }),
             );
+            const streamed = runLLMStream.mock.calls[0][0];
+            expect(streamed.nonce).toMatch(/^[0-9a-f]{32}$/);
+            expect(streamed.apiMessages[0].content).toContain(
+                `<untrusted-content nonce="${streamed.nonce}">`,
+            );
             const userInsert = supabaseState.inserts.find(
                 ({ table, payload }) =>
                     table === "tabular_review_chat_messages" &&

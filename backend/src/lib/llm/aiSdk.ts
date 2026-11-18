@@ -17,6 +17,10 @@ import type {
 import type { WebSource } from "@mike/contracts";
 import { providerDeadlines } from "./providerDeadlines";
 import {
+  loadToolInputChecker,
+  type ToolInputChecker,
+} from "./toolInputValidation";
+import {
   asProviderStallError,
   isDeterministicProviderQuota,
   streamErrorMessage,
@@ -266,6 +270,8 @@ export type AiSdkAdapterConfig = {
   replayReasoning?: boolean;
   /** Mark the prefix-cache breakpoint with a Bedrock cache point as well. */
   bedrockCachePoint?: boolean;
+  /** The adapter accepts Anthropic cache controls on source text blocks. */
+  anthropicCachePoint?: boolean;
   /**
    * Output ceiling for a chat step at the given reasoning level, for SDKs
    * that send none by default. LLM_MAX_OUTPUT_TOKENS still wins.
@@ -349,6 +355,7 @@ function toAiSdkTools(
   runTools?: StreamChatParams["runTools"],
   sdk?: Pick<typeof AiSdk, "jsonSchema" | "tool">,
   onRunToolsFailure?: (error: unknown) => void,
+  inputChecker?: ToolInputChecker,
 ): ToolSet | undefined {
   if (!schemas.length) return undefined;
   if (!sdk) throw new Error("AI SDK tool helpers are unavailable.");
@@ -358,10 +365,18 @@ function toAiSdkTools(
 
   return Object.fromEntries(
     schemas.map((schema) => {
+      // With a validate function, the SDK refuses a call whose arguments do
+      // not match the schema and answers it with the error, as it does for
+      // unparseable JSON; see toolInputValidation.ts.
+      const validate = inputChecker?.(
+        schema.function.name,
+        schema.function.parameters,
+      );
       const definition = {
         description: schema.function.description,
         inputSchema: sdk.jsonSchema<Record<string, unknown>>(
           schema.function.parameters as never,
+          validate ? { validate } : undefined,
         ),
         ...(batcher
           ? {
@@ -481,7 +496,7 @@ function toModelMessage(
 
 export function withPrefixCacheHints(
   params: StreamChatParams,
-  options: { replayReasoning?: boolean; bedrockCachePoint?: boolean } = {},
+  options: { replayReasoning?: boolean; bedrockCachePoint?: boolean; sourceCachePoint?: boolean } = {},
 ): {
   messages: AiSdk.ModelMessage[];
   providerOptions?: StreamTextProviderOptions;
@@ -492,7 +507,7 @@ export function withPrefixCacheHints(
           toModelMessage(m, options.replayReasoning === true),
         )
       : params.messages;
-  if (!params.conversationId || !messages.length) {
+  if ((!params.conversationId && !params.sourcePrefixLength) || !messages.length) {
     return { messages };
   }
   const last = messages.length - 1;
@@ -502,6 +517,22 @@ export function withPrefixCacheHints(
       ? { bedrock: { cachePoint: { type: "default" } } }
       : {}),
   };
+  const source = messages[0];
+  const end = params.sourcePrefixLength;
+  if (options.sourceCachePoint && end && Number.isSafeInteger(end) &&
+      messages.length === 1 && source.role === "user" && typeof source.content === "string" &&
+      end > 0 && end < source.content.length) {
+    return {
+      messages: [{
+        role: "user",
+        content: [
+          { type: "text", text: source.content.slice(0, end), providerOptions: breakpoint },
+          { type: "text", text: source.content.slice(end) },
+        ],
+      }],
+    };
+  }
+  if (!params.conversationId) return { messages };
   return {
     messages: messages.map((message, index): AiSdk.ModelMessage => {
       if (index !== last) return message;
@@ -531,10 +562,19 @@ export async function streamAiSdk(
   if (params.abortSignal?.aborted) forwardAbort();
   else params.abortSignal?.addEventListener("abort", forwardAbort, { once: true });
   const runToolsFailure: { first: { error: unknown } | null } = { first: null };
-  const functionTools = toAiSdkTools(params.tools ?? [], params.runTools, sdk, (error) => {
-    runToolsFailure.first ??= { error };
-    internalAbort.abort();
-  });
+  const inputChecker = params.tools?.length
+    ? await loadToolInputChecker()
+    : undefined;
+  const functionTools = toAiSdkTools(
+    params.tools ?? [],
+    params.runTools,
+    sdk,
+    (error) => {
+      runToolsFailure.first ??= { error };
+      internalAbort.abort();
+    },
+    inputChecker,
+  );
   const webSearch =
     params.providerWebSearch && config.webSearchTool
       ? {
@@ -564,6 +604,7 @@ export async function streamAiSdk(
   const cacheHints = withPrefixCacheHints(params, {
     replayReasoning: config.replayReasoning,
     bedrockCachePoint: config.bedrockCachePoint,
+    sourceCachePoint: config.anthropicCachePoint || config.bedrockCachePoint,
   });
   const providerOptions: StreamTextProviderOptions = {
     ...(cacheHints.providerOptions ?? {}),
@@ -749,6 +790,10 @@ export async function streamAiSdk(
               {
                 inputTokens: part.usage.inputTokens ?? 0,
                 outputTokens: part.usage.outputTokens ?? 0,
+                ...(part.usage.inputTokenDetails?.cacheReadTokens !== undefined &&
+                  { cacheReadTokens: part.usage.inputTokenDetails.cacheReadTokens }),
+                ...(part.usage.inputTokenDetails?.cacheWriteTokens !== undefined &&
+                  { cacheWriteTokens: part.usage.inputTokenDetails.cacheWriteTokens }),
               },
               part.finishReason,
             );
