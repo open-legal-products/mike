@@ -9,7 +9,9 @@ import {
   buildToolInputCheck,
   describeToolInputErrors,
   loadToolInputChecker,
+  loggablePath,
   toolInputValidationMode,
+  withoutPatterns,
   ToolInputValidationError,
 } from "./toolInputValidation";
 import type { NormalizedToolCall, OpenAIToolSchema } from "./types";
@@ -120,12 +122,102 @@ describe("buildToolInputCheck", () => {
 
   it("leaves a tool unchecked when its schema does not compile, warning once", () => {
     const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
-    const broken = { type: "object", properties: { a: { type: "string", pattern: "(" } } };
-    expect(buildToolInputCheck(compile, "mcp_broken", broken, "enforce")).toBeUndefined();
+    const refuses = (() => {
+      throw new Error("bad schema");
+    }) as unknown as Compile;
+    const broken = { type: "object", properties: { a: { type: "string" } } };
+    expect(buildToolInputCheck(refuses, "mcp_broken", broken, "enforce")).toBeUndefined();
     expect(
-      buildToolInputCheck(compile, "mcp_broken", { ...broken }, "enforce"),
+      buildToolInputCheck(refuses, "mcp_broken", { ...broken }, "enforce"),
     ).toBeUndefined();
     expect(warn).toHaveBeenCalledTimes(1);
+  });
+
+  it("never runs a schema's regular expressions", () => {
+    // A catastrophic pattern from a connector, and an argument that would
+    // take it seconds: checked on this thread, it would stall every request.
+    const schema = {
+      type: "object",
+      properties: {
+        q: { type: "string", pattern: "^(a+)+$" },
+        n: { type: "integer" },
+        // A property that happens to be called `pattern` is not a keyword.
+        pattern: { type: "string" },
+      },
+      patternProperties: { "^(x+)+$": { type: "string" } },
+      additionalProperties: false,
+      required: ["pattern"],
+    };
+    const check = buildToolInputCheck(compile, "mcp_slow", schema, "enforce")!;
+    const started = performance.now();
+    expect(check({ q: `${"a".repeat(40)}!`, pattern: "p", [`${"x".repeat(40)}!`]: "v" }).success).toBe(true);
+    expect(performance.now() - started).toBeLessThan(200);
+    // Everything else in the schema is still checked.
+    expect(check({ q: "a", pattern: "p", n: "3" }).success).toBe(false);
+    expect(check({ q: "a" }).success).toBe(false);
+    expect(check({ pattern: 5 }).success).toBe(false);
+  });
+
+  it("drops patterns only where that cannot refuse a valid call", () => {
+    const plain = { type: "object", properties: { a: { type: "string" } } };
+    expect(withoutPatterns(plain)).toBe(plain);
+    expect(
+      withoutPatterns({
+        type: "object",
+        properties: { a: { anyOf: [{ type: "string", pattern: "^x" }, { type: "null" }] } },
+      }),
+    ).toEqual({
+      type: "object",
+      properties: { a: { anyOf: [{ type: "string" }, { type: "null" }] } },
+    });
+    // Under `not`, a dropped pattern would refuse every value.
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const negated = {
+      type: "object",
+      properties: { a: { type: "string", not: { pattern: "^x" } } },
+    };
+    expect(withoutPatterns(negated)).toBeNull();
+    expect(buildToolInputCheck(compile, "mcp_negated", negated, "enforce")).toBeUndefined();
+    expect(warn).toHaveBeenCalledTimes(1);
+  });
+
+  it("lets the call through when the check itself throws", () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const recursive = { type: "object", properties: { child: { $ref: "#" } } };
+    let nested: Record<string, unknown> = {};
+    for (let i = 0; i < 200_000; i++) nested = { child: nested };
+    for (const mode of ["log", "enforce"] as const) {
+      const check = buildToolInputCheck(compile, "deep", recursive, mode)!;
+      expect(check(nested)).toEqual({ success: true, value: nested });
+    }
+    expect(warn).toHaveBeenCalledTimes(1);
+    expect(String(warn.mock.calls[0][0])).toContain("failed to run");
+  });
+
+  it("logs only the names the schema declares, never a key the model wrote", () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const schema = {
+      type: "object",
+      properties: {
+        fields: { type: "object", additionalProperties: { type: "string" } },
+        rows: { type: "array", items: { type: "object", properties: { n: { type: "integer" } } } },
+      },
+      required: ["doc_id"],
+      additionalProperties: false,
+    };
+    const check = buildToolInputCheck(compile, "t", schema, "log")!;
+    check({
+      fields: { "Jane Doe 123-45-6789": 5 },
+      rows: [{ n: 1 }, { n: "x" }],
+      "privileged note": 1,
+    });
+    const line = String(warn.mock.calls[0][0]);
+    expect(line).not.toContain("Jane");
+    expect(line).not.toContain("privileged");
+    expect(line).toContain("/fields/* type");
+    expect(line).toContain("/rows/1/n type");
+    expect(line).toContain("/doc_id required");
+    expect(loggablePath(schema, "/a~1b")).toBe("/*");
   });
 
   it("fails only the values at a dangling $ref", () => {
