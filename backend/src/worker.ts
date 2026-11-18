@@ -23,6 +23,7 @@ import { enforceDocumentLifecycleMigration } from "./lib/dbq/lifecycleGuard";
 import { extractionLauncherWarnings } from "./lib/runtimeConfig";
 import { startAllWorkers, stopAllWorkers } from "./workerRuntime";
 import { flushSentry, reportError } from "./lib/observability/sentry";
+import { drainStdout } from "./lib/log";
 import { flushToolActivity } from "./lib/toolActivity";
 import { log, tpl } from "./lib/log";
 
@@ -67,6 +68,7 @@ async function shutdown(signal: string) {
     try {
         await stopAllWorkers();
         flushToolActivity();
+        await drainStdout();
         await flushSentry();
         process.exit(0);
     } catch (err) {

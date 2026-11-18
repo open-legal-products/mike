@@ -131,4 +131,8 @@ it("is off unless SENTRY_LOGS=on, with a limit that can be set", () => {
     expect(sentryLogsPerDay({})).toBe(5000);
     expect(sentryLogsPerDay({ SENTRY_MAX_LOGS_PER_DAY: "200" })).toBe(200);
     expect(sentryLogsPerDay({ SENTRY_MAX_LOGS_PER_DAY: "many" })).toBe(5000);
+    // .env.example ships the limit blank: that is the default, not zero.
+    expect(sentryLogsPerDay({ SENTRY_MAX_LOGS_PER_DAY: "" })).toBe(5000);
+    expect(sentryLogsPerDay({ SENTRY_MAX_LOGS_PER_DAY: "  " })).toBe(5000);
+    expect(sentryLogsPerDay({ SENTRY_MAX_LOGS_PER_DAY: "0" })).toBe(0);
 });

@@ -18,6 +18,7 @@ import {
   type WorkerRole,
 } from "./workerRuntime";
 import { reportError } from "./lib/observability/sentry";
+import { drainStdout } from "./lib/log";
 import { flushToolActivity } from "./lib/toolActivity";
 import {
   closeHttpServer,
@@ -173,8 +174,12 @@ async function stopBackgroundWork(): Promise<void> {
   flushToolActivity();
   if (WORKERS_MODE === "inline") {
     await stopAllWorkers();
+    // Inline jobs make tool calls too; log what they counted while stopping.
+    flushToolActivity();
+    await drainStdout();
     return;
   }
+  await drainStdout();
   await Promise.all(
     [...workerThreads.values()].map(
       (thread) =>

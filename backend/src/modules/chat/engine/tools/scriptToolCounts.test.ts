@@ -108,3 +108,23 @@ describe("run_script counts", () => {
     expect(runs("refused_busy")).toBe(1);
   });
 });
+
+describe("run_script counts at cancellation", () => {
+  it("counts a call that was running when the answer was stopped, and not one still queued", async () => {
+    const stop = new AbortController();
+    await run(
+      `await Promise.all([tools.list_documents({}), tools.list_documents({})]); return 1;`,
+      {
+        signal: stop.signal,
+        dispatch: () =>
+          new Promise((_resolve, reject) => {
+            stop.abort();
+            setTimeout(() => reject(new Error("aborted read")), 20);
+          }),
+      },
+    );
+    expect(count("script_tool_call", "list_documents", "stopped")).toBe(1);
+    expect(count("script_tool_call", "list_documents", "failed")).toBe(0);
+    expect(runs("stopped")).toBe(1);
+  });
+});

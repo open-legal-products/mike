@@ -95,7 +95,7 @@ Numbers only: nothing about the user, the code or the documents is logged.
 |---|---|---|
 | `script_run` | `run_script` | One per `run_script` call: `ok`, `ok_result_too_long` (finished, but the result was over 40,000 characters), `script_error`, `timeout`, `stopped` (the answer was stopped), `stopped_over_call_limit`, `sandbox_failed`, `refused_busy` (4 already running), `refused_busy_user` (2 for this user), `rejected_input` (no code, code too long, or no tools to call). |
 | `script_limit` | `run_script` | Once per script that met it: `call_limit` (the 200th call was passed), `argument_too_long`. A script that met the call limit and returned what it had counts here and as `ok`. |
-| `script_tool_call` | the inner tool | Calls that reached the dispatcher: `ok` or `failed`. |
+| `script_tool_call` | the inner tool | Calls that reached the dispatcher: `ok`, `failed`, or `stopped` (it failed as the script was stopped or timed out). A call still queued when the script ended never ran and is not counted. |
 | `script_tool_input` | the inner tool | The schema check of each call: `passed` or `refused`. |
 
 With `SENTRY_LOGS=on` the same counts are in Sentry as the `tool_activity`

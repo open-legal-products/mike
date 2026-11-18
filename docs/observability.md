@@ -414,13 +414,17 @@ Every call prints to the process log exactly as `console.warn` or
 |---|---|---|
 | Scope and message | yes | yes; both must be literals in the source |
 | A `tpl` line's values | yes | no; each is sent as `{}` |
-| `logEvent` and `countMetric` attributes | yes | numbers, booleans, and strings shaped like an identifier (letters, digits, `_ . : -`, at most 64 characters) |
+| `logEvent` and `countMetric` attributes | yes | only `kind`, `tool`, `outcome` and `count`, each a number, a boolean, or a string shaped like an identifier (letters, digits, `_ . : -`, at most 64 characters) |
 | `detail` arguments (errors, paths, objects) | yes | never |
 
 The privacy boundary enforces this again on the way out: it rebuilds each log
 and metric from those fields, refuses a body that is not `[scope] message` or
-a metric name that is not an identifier, and drops the SDK's own attributes
-(`user.*`, `server.address`, `sentry.*`) except the environment and release.
+a metric name that is not an identifier, and drops every attribute not named
+in `TELEMETRY_ATTRIBUTES` (`sentryPrivacy.ts`, mirrored in
+`packages/client`), including the SDK's own (`user.*`, `server.address`,
+`sentry.*`) except the environment and release. To send a new attribute, add
+its name there in both copies; a shape check alone cannot tell an identifier
+from a file name or a key.
 `backend/src/__tests__/logContract.test.ts` fails if a scope, message or
 metric name is built at run time, or if code calls `Sentry.logger` or
 `Sentry.metrics` directly. As with diagnostic labels, never put a client's

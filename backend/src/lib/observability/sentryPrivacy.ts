@@ -450,16 +450,21 @@ const METRIC_TYPES = new Set(['counter', 'gauge', 'distribution']);
 /** `[scope] message`, as lib/log writes it from static source text; `{}` stands where a value was printed. */
 const LOG_BODY = /^\[[A-Za-z][A-Za-z0-9_/.-]{0,39}\] [^\x00-\x1f\x7f]{1,200}$/;
 const METRIC_NAME = /^[a-z][a-z0-9_.]{0,63}$/;
-const ATTRIBUTE_KEY = /^[a-z][a-z0-9_.]{0,39}$/;
+/**
+ * The attributes a log or metric may carry. A new one is added here, in both
+ * copies of this file, with a reason it cannot hold a client's data: shape
+ * alone does not tell an identifier from a file name or a key.
+ */
+const TELEMETRY_ATTRIBUTES = new Set(['kind', 'tool', 'outcome', 'count']);
 /** An identifier, never a sentence: no spaces, quotes or slashes. */
 const ATTRIBUTE_TEXT = /^[A-Za-z0-9_.:-]{1,64}$/;
 const SDK_ATTRIBUTE_TEXT = /^[A-Za-z0-9_.:@+/-]{1,100}$/;
 
 /**
- * Attributes rebuilt from an allowlist of shapes: application keys with a
- * number, a boolean or an identifier-shaped string. The SDK's own attributes
- * (user.*, server.address, sentry.*) are dropped, except environment and
- * release.
+ * Attributes rebuilt from an allowlist: only the keys in TELEMETRY_ATTRIBUTES,
+ * each with a number, a boolean or an identifier-shaped string. Everything
+ * else is dropped, including the SDK's own attributes (user.*,
+ * server.address, sentry.*) except environment and release.
  */
 function telemetryAttributes(input: unknown): RecordValue {
   const out: RecordValue = {};
@@ -469,7 +474,7 @@ function telemetryAttributes(input: unknown): RecordValue {
       if (typeof value === 'string' && SDK_ATTRIBUTE_TEXT.test(value)) out[key] = { value, type: 'string' };
       continue;
     }
-    if (!ATTRIBUTE_KEY.test(key) || /^(?:sentry|user|server|browser)\./.test(key)) continue;
+    if (!TELEMETRY_ATTRIBUTES.has(key)) continue;
     if (typeof value === 'boolean') out[key] = { value, type: 'boolean' };
     else if (typeof value === 'number' && Number.isFinite(value)) out[key] = { value, type: type === 'integer' && Number.isInteger(value) ? 'integer' : 'double' };
     else if (typeof value === 'string' && ATTRIBUTE_TEXT.test(value)) out[key] = { value, type: 'string' };

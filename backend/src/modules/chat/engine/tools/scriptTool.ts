@@ -453,15 +453,22 @@ export async function runScriptCall(
       }
       const callId = `${call.id}:${calls}`;
       let content: string;
+      let dispatched = false;
       try {
         content = await serial(() => {
           // The script has ended (returned, timed out or was stopped) with
           // this call still queued: it must not run on behind the turn.
           if (ended.aborted) throw new ScriptToolError("The script has ended.");
+          dispatched = true;
           return context.dispatch(name, input, callId);
         });
       } catch (error) {
-        if (context.signal?.aborted || ended.aborted) throw error;
+        if (context.signal?.aborted || ended.aborted) {
+          // It reached the dispatcher and failed as the script ended; a call
+          // still queued never ran and is not counted.
+          if (dispatched) countToolActivity("script_tool_call", name, "stopped");
+          throw error;
+        }
         countToolActivity("script_tool_call", name, "failed");
         // The script is told only that the call failed; the failure itself
         // is reported here, where it stops, as the dispatcher reports its own.

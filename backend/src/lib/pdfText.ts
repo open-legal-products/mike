@@ -12,7 +12,6 @@ export const STANDARD_FONT_DATA_URL = (() => {
 import { AppError } from "./appError";
 import { docxToPdf } from "./convert";
 import { orderTextItemLines } from "./pdfTextOrder";
-import { log } from "./log";
 
 type PdfTextItem = {
   str?: string;
@@ -254,7 +253,8 @@ function reportUnreadablePdf(cause: unknown): void {
   // truncated), and the strict index path throws once per document with
   // the kind, which its job reports. Reporting here filed the same file on
   // every lenient read, upload count, row and regenerate.
-  log.warn("pdf-text", "pdf.js could not read the document", {
+  // console.warn, not the central logger, which would forward it with SENTRY_LOGS=on.
+  console.warn("[pdf-text] pdf.js could not read the document", {
     error: new AppError("extraction.pdf_parse_failed", "pdf.js could not read the document", { cause }),
   });
 }

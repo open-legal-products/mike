@@ -350,10 +350,11 @@ async function runClaimedJob(
         if (deferred) {
             // Not a failure, and not reported: console.error would reach
             // Sentry through the console bridge as an error event.
-            log.info("dbq", "job deferred", summary);
+            // Printed only: the central logger would forward it with SENTRY_LOGS=on.
+            console.log("[dbq] job deferred", summary);
         } else if (level === null) {
             // Deliberately unreported; console.warn is not forwarded either.
-            log.warn("dbq", "job permanently failed", summary);
+            console.warn("[dbq] job permanently failed", summary);
         } else {
             // The reported Error rides along so the console bridge recognises
             // it and files no second, context-free "Failure in application"

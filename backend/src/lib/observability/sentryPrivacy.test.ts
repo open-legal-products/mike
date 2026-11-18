@@ -94,10 +94,10 @@ describe('outbound telemetry privacy boundary', () => {
     expect(diagnosticEnvelope([{ trace: { transaction: 'Private.pdf' } }, [[{ type, filename: 'Private.pdf' }, { did: 'private-user' }]]])).toBeNull();
   });
 
-  it('lets logs and metrics leave only with a budget, rebuilt from identifier-shaped fields', () => {
+  it('lets logs and metrics leave only with a budget, rebuilt from named attributes and identifier-shaped values', () => {
     const trace = 'a'.repeat(32);
     const log = { timestamp: 1, level: 'warn', body: '[dbq] poll failed', trace_id: trace, span_id: 'private', severity_number: 13, attributes: {
-      tool: { value: 'read_document', type: 'string' }, count: { value: 2, type: 'integer' }, ok: { value: true, type: 'boolean' },
+      tool: { value: 'read_document', type: 'string' }, count: { value: 2, type: 'integer' }, ok: { value: true, type: 'boolean' }, api_key: { value: 'sk-private-token', type: 'string' }, matter: { value: 'Private.pdf', type: 'string' },
       filename: { value: 'Private agreement.pdf', type: 'string' }, 'user.email': { value: 'a@example.com', type: 'string' },
       'server.address': { value: 'host-1', type: 'string' }, 'sentry.environment': { value: 'production', type: 'string' },
     } };
@@ -107,7 +107,7 @@ describe('outbound telemetry privacy boundary', () => {
     expect(diagnosticEnvelope(envelope('log', [log, { ...log, body: 'Private agreement.pdf failed' }, { ...log, level: 'loud' }]), undefined, (_type, count) => count)).toEqual([{}, [[
       { type: 'log', item_count: 1, content_type: 'application/vnd.sentry.items.log+json' },
       { version: 2, items: [{ timestamp: 1, trace_id: trace, level: 'warn', body: '[dbq] poll failed', severity_number: 13, attributes: {
-        tool: { value: 'read_document', type: 'string' }, count: { value: 2, type: 'integer' }, ok: { value: true, type: 'boolean' },
+        tool: { value: 'read_document', type: 'string' }, count: { value: 2, type: 'integer' },
         'sentry.environment': { value: 'production', type: 'string' },
       } }] },
     ]]]);
@@ -118,6 +118,7 @@ describe('outbound telemetry privacy boundary', () => {
       { version: 2, items: [{ timestamp: 1, trace_id: trace, name: 'tool_activity', type: 'counter', value: 2, attributes: { outcome: { value: 'refused', type: 'string' } } }] },
     ]]]);
     expect(JSON.stringify(kept)).not.toContain('Private');
+    expect(JSON.stringify(diagnosticEnvelope(envelope('log', [log]), undefined, (_type, count) => count))).not.toMatch(/sk-private-token|Private\.pdf/);
   });
 
   it('rebuilds mixed envelopes and removes payload sizes and arbitrary envelope metadata', () => {

@@ -27,7 +27,6 @@ import {
     listXaiModels,
 } from "./models.service";
 import { type CatalogFailure, type CatalogResult } from "./models.types";
-import { log } from "../../lib/log";
 
 export const modelsRouter = Router();
 
@@ -40,7 +39,8 @@ function sendCatalogFailure(res: Response, failure: CatalogFailure): void {
         // Only the user can fix their endpoint or key, so it is logged at
         // warn (the console bridge files console.error) and not reported.
         if (failure.report === false) {
-            log.warn("models", "catalog request failed", {
+            // console.warn, not the central logger, which would forward it with SENTRY_LOGS=on.
+            console.warn("[models] catalog request failed", {
                 requestId: res.locals.requestId,
                 path: res.req?.originalUrl?.split("?")[0],
                 reason: failure.error.message,

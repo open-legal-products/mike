@@ -170,6 +170,27 @@ export const log: { info: Write; warn: Write } = {
 };
 
 /**
+ * Resolves once what has been printed so far is written, or after
+ * `timeoutMs`. For shutdown only: on a pipe stdout is asynchronous and
+ * process.exit() discards what is still queued.
+ */
+export function drainStdout(timeoutMs = 1_000): Promise<void> {
+  return new Promise((resolve) => {
+    const timer = setTimeout(resolve, timeoutMs);
+    timer.unref?.();
+    const done = () => {
+      clearTimeout(timer);
+      resolve();
+    };
+    try {
+      process.stdout.write("", done);
+    } catch {
+      done();
+    }
+  });
+}
+
+/**
  * Exported for call sites that gate WORK (extra lookups, payload assembly)
  * behind dev mode, not just the log line itself.
  */

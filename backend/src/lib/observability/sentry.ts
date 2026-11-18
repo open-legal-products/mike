@@ -903,7 +903,10 @@ export function sentryLogsEnabled(env: NodeJS.ProcessEnv = process.env): boolean
 export const DEFAULT_SENTRY_LOGS_PER_DAY = 5_000;
 
 export function sentryLogsPerDay(env: NodeJS.ProcessEnv = process.env): number {
-  const parsed = Number(env.SENTRY_MAX_LOGS_PER_DAY);
+  // Blank is "not set" (.env.example ships it blank); Number("") would be 0.
+  const raw = env.SENTRY_MAX_LOGS_PER_DAY?.trim();
+  if (!raw) return DEFAULT_SENTRY_LOGS_PER_DAY;
+  const parsed = Number(raw);
   return Number.isInteger(parsed) && parsed >= 0 ? parsed : DEFAULT_SENTRY_LOGS_PER_DAY;
 }
 
