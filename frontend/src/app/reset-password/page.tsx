@@ -54,7 +54,12 @@ function ResetPasswordContent() {
     const [success, setSuccess] = useState(false);
     const [error, setError] = useState<string | null>(null);
     const [failure, setFailure] = useState<UserFacingError | null>(null);
-    const [mfaRequired, setMfaRequired] = useState(false);
+    // The password that passed this form's checks and is waiting for the
+    // authenticator. The retry sends this value, not whatever the fields
+    // hold by then.
+    const [passwordAwaitingMfa, setPasswordAwaitingMfa] = useState<
+        string | null
+    >(null);
     const preview =
         process.env.NODE_ENV !== "production"
             ? searchParams.get("preview")
@@ -124,20 +129,20 @@ function ResetPasswordContent() {
             return;
         }
 
-        await savePassword();
+        await savePassword(password);
     }
 
-    async function savePassword() {
+    async function savePassword(validated: string) {
         setLoading(true);
         try {
-            await updateAuthPassword(password, true);
+            await updateAuthPassword(validated, true);
             setSuccess(true);
         } catch (caught) {
             // An account with an authenticator proves it before its password
             // changes; the existing verification popup steps the session up.
             const code = (caught as { code?: unknown })?.code;
             if (code === "insufficient_aal" || code === "mfa_verification_required") {
-                setMfaRequired(true);
+                setPasswordAwaitingMfa(validated);
                 return;
             }
             const described = describeError(caught, {
@@ -298,11 +303,12 @@ function ResetPasswordContent() {
                 </div>
             </div>
             <MfaVerificationPopup
-                open={mfaRequired}
-                onCancel={() => setMfaRequired(false)}
+                open={passwordAwaitingMfa !== null}
+                onCancel={() => setPasswordAwaitingMfa(null)}
                 onVerified={() => {
-                    setMfaRequired(false);
-                    void savePassword();
+                    const validated = passwordAwaitingMfa;
+                    setPasswordAwaitingMfa(null);
+                    if (validated !== null) void savePassword(validated);
                 }}
             />
         </div>

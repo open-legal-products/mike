@@ -92,6 +92,36 @@ describe("ResetPasswordPage", () => {
         },
     );
 
+    it("retries with the password that was confirmed, not a later edit", async () => {
+        let rejectFirst!: (reason: unknown) => void;
+        updateAuthPassword
+            .mockReturnValueOnce(
+                new Promise((_resolve, reject) => {
+                    rejectFirst = reject;
+                }),
+            )
+            .mockResolvedValueOnce({ user: { id: "user-1" } });
+        render(<ResetPasswordPage />);
+
+        const user = await submitPassword("correct-horse-battery");
+        // Typed while the first request is out: never confirmed.
+        await user.type(screen.getByLabelText("New password"), "-edited");
+        rejectFirst(
+            Object.assign(new Error("MFA verification required"), {
+                status: 401,
+                code: "insufficient_aal",
+            }),
+        );
+        await user.click(await screen.findByRole("button", { name: "Verify code" }));
+
+        expect(await screen.findByText("Password updated")).toBeInTheDocument();
+        expect(updateAuthPassword).toHaveBeenCalledTimes(2);
+        expect(updateAuthPassword).toHaveBeenLastCalledWith(
+            "correct-horse-battery",
+            true,
+        );
+    });
+
     it("refuses a password past bcrypt's limit before calling the API", async () => {
         render(<ResetPasswordPage />);
 
