@@ -51,6 +51,7 @@ import {
 } from "./playbooks.audit";
 
 import { DocumentReviewRetryableError } from "../documents/documents.service";
+import { log } from "../../lib/log";
 
 export const PLAYBOOK_REVIEW_JOB = "playbook.review";
 export const PLAYBOOK_IMPORT_JOB = "playbook.import";
@@ -211,7 +212,7 @@ async function clearStagedImport(payload: PlaybookImportJobPayload) {
       jobKind: "playbook.import",
       ids: { import_id: payload.attemptId },
     });
-    console.warn("[playbooks] staged upload cleanup failed", {
+    log.warn("playbooks", "staged upload cleanup failed", {
       storageKey: payload.storageKey,
       error: safeError(error),
     });
@@ -320,7 +321,7 @@ async function dispatch(
             typeof payload.attemptId === "string" ? payload.attemptId : undefined,
         },
       });
-      console.warn("[playbooks] inline job failed", {
+      log.warn("playbooks", "inline job failed", {
         kind,
         error: safeError(error),
       });
@@ -366,7 +367,7 @@ function reportFailureHookCrash(hookError: unknown, kind: string): void {
       tags: { component: "playbooks", stage: "failure-hook", job_kind: kind },
     },
   );
-  console.warn("[playbooks] job failure hook crashed", {
+  log.warn("playbooks", "job failure hook crashed", {
     kind,
     error: safeError(hookError),
   });

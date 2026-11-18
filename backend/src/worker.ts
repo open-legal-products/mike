@@ -23,6 +23,8 @@ import { enforceDocumentLifecycleMigration } from "./lib/dbq/lifecycleGuard";
 import { extractionLauncherWarnings } from "./lib/runtimeConfig";
 import { startAllWorkers, stopAllWorkers } from "./workerRuntime";
 import { flushSentry, reportError } from "./lib/observability/sentry";
+import { flushToolActivity } from "./lib/toolActivity";
+import { log, tpl } from "./lib/log";
 
 // A worker against an unmigrated database cannot run the cleanup kind at all,
 // so it would fail every row it claims. Say so once, loudly, and stop — and
@@ -31,7 +33,7 @@ import { flushSentry, reportError } from "./lib/observability/sentry";
 async function main(): Promise<void> {
   // Extraction jobs run the parser here when the API runs WORKERS_MODE=none.
   for (const warning of extractionLauncherWarnings()) {
-    console.warn(`[extraction] ${warning}`);
+    log.warn(tpl`[extraction] ${warning}`);
   }
   await enforceDocumentLifecycleMigration();
   startAllWorkers();
@@ -64,6 +66,7 @@ async function shutdown(signal: string) {
     forceExit.unref();
     try {
         await stopAllWorkers();
+        flushToolActivity();
         await flushSentry();
         process.exit(0);
     } catch (err) {

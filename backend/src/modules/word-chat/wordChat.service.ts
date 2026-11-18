@@ -56,6 +56,7 @@ import {
 import type { WordEditApplyMode } from "../chat/chat.service";
 import { withKind, type ErrorKind } from "../../lib/appError";
 import { reportError } from "../../lib/observability/sentry";
+import { log } from "../../lib/log";
 
 /**
  * A lookup that could not be answered. `error` is what the route hands
@@ -964,7 +965,7 @@ export async function prepareWordChatStream(
           withKind(releaseError, "db.rpc_failed", "Word memory turn release failed"),
           { level: "warning", tags: { component: "word-chat" } },
         );
-        console.warn("[memory] Word activity release failed", { chatId });
+        log.warn("memory", "Word activity release failed", { chatId });
       }
     }
     throw error;

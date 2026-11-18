@@ -1,6 +1,8 @@
 import type * as PiSchema from "@earendil-works/pi-schema" with {
   "resolution-mode": "import",
 };
+import { countToolActivity, type ToolActivityKind } from "../toolActivity";
+import { log, tpl } from "../log";
 
 /**
  * Checks a model's tool-call arguments against the tool's JSON Schema before
@@ -23,6 +25,12 @@ import type * as PiSchema from "@earendil-works/pi-schema" with {
  * The check must never cost a turn. Regular expressions from a schema are not
  * run (see withoutPatterns), and a checker that fails to load or throws
  * leaves the call unchecked.
+ *
+ * Every outcome is counted per tool (see ../toolActivity.ts): `passed`,
+ * `mismatch_allowed` (log), `refused` (enforce), `check_failed` (the checker
+ * threw and the call ran unchecked), `schema_unchecked` (a tool offered to
+ * the model with a schema that cannot be checked) and `checker_unavailable`
+ * (pi-schema did not load for one model call).
  */
 export type ToolInputValidationMode = "off" | "log" | "enforce";
 
@@ -280,6 +288,8 @@ export function buildToolInputCheck(
   toolName: string,
   parameters: unknown,
   mode: Exclude<ToolInputValidationMode, "off">,
+  /** Whose calls these are: the model's, or a script's. */
+  kind: Extract<ToolActivityKind, "tool_input" | "script_tool_input"> = "tool_input",
 ): ToolInputCheck | undefined {
   if (!parameters || typeof parameters !== "object" || Array.isArray(parameters)) {
     return undefined;
@@ -289,7 +299,11 @@ export function buildToolInputCheck(
     toolName,
     parameters as Record<string, unknown>,
   );
-  if (!validator) return undefined;
+  if (!validator) {
+    // Counted each time the tool is offered: there is no check to count calls in.
+    countToolActivity(kind, toolName, "schema_unchecked", true);
+    return undefined;
+  }
   return (value) => {
     // The value goes on unchanged: the dispatcher normalises it as before.
     const unchanged = value as Record<string, unknown>;
@@ -304,19 +318,24 @@ export function buildToolInputCheck(
         toolName,
         `[tool-input] the check of ${toolName} failed to run; the call was not validated`,
       );
+      countToolActivity(kind, toolName, "check_failed");
       return { success: true, value: unchanged };
     }
-    if (result.ok) return { success: true, value: unchanged };
+    if (result.ok) {
+      countToolActivity(kind, toolName, "passed", true);
+      return { success: true, value: unchanged };
+    }
     if (mode === "log") {
       const where = result.errors
         .slice(0, MAX_REPORTED_ERRORS)
         .map((e) => `${loggablePath(parameters, e.path, value)} ${e.keyword}`)
         .join(", ");
-      console.warn(
-        `[tool-input] ${toolName} was called with arguments that do not match its schema (${where}); TOOL_INPUT_VALIDATION=enforce would refuse it`,
+      log.warn(tpl`[tool-input] ${toolName} was called with arguments that do not match its schema (${where}); TOOL_INPUT_VALIDATION=enforce would refuse it`,
       );
+      countToolActivity(kind, toolName, "mismatch_allowed");
       return { success: true, value: unchanged };
     }
+    countToolActivity(kind, toolName, "refused");
     return {
       success: false,
       error: new ToolInputValidationError(
@@ -334,6 +353,7 @@ let warnedUnavailable = false;
  */
 export async function loadToolInputChecker(
   mode: ToolInputValidationMode = toolInputValidationMode(),
+  kind: Extract<ToolActivityKind, "tool_input" | "script_tool_input"> = "tool_input",
 ): Promise<ToolInputChecker> {
   if (mode === "off") return () => undefined;
   let compile: Compile;
@@ -342,10 +362,11 @@ export async function loadToolInputChecker(
   } catch {
     if (!warnedUnavailable) {
       warnedUnavailable = true;
-      console.warn("[tool-input] pi-schema could not be loaded; tool calls are not validated");
+      log.warn("tool-input", "pi-schema could not be loaded; tool calls are not validated");
     }
+    countToolActivity(kind, "all", "checker_unavailable");
     return () => undefined;
   }
   return (toolName, parameters) =>
-    buildToolInputCheck(compile, toolName, parameters, mode);
+    buildToolInputCheck(compile, toolName, parameters, mode, kind);
 }

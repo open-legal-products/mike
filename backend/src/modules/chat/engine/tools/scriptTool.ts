@@ -13,6 +13,7 @@ import { toolName } from "./toolSchemas";
 import { spotlight } from "../contextBuilders";
 import { AppError } from "../../../../lib/appError";
 import { reportError } from "../../../../lib/observability/sentry";
+import { countToolActivity } from "../../../../lib/toolActivity";
 
 /**
  * run_script: the model writes a short JavaScript program that calls the
@@ -27,8 +28,35 @@ import { reportError } from "../../../../lib/observability/sentry";
  * are exposed. Nothing that writes, asks the user, or reaches a connector is.
  *
  * Off unless SCRIPT_TOOL=on.
+ *
+ * How each script ended, the limits it met and the calls it made are counted
+ * and logged (see lib/toolActivity.ts and docs/run-script.md).
  */
 export const SCRIPT_TOOL_NAME = "run_script";
+
+/** How one run_script call ended, as counted under `script_run`. */
+export type ScriptRunOutcome =
+  | "ok"
+  | "ok_result_too_long"
+  | "script_error"
+  | "timeout"
+  | "stopped"
+  | "stopped_over_call_limit"
+  | "sandbox_failed"
+  | "refused_busy"
+  | "refused_busy_user"
+  | "rejected_input";
+
+function countRun(outcome: ScriptRunOutcome) {
+  countToolActivity("script_run", SCRIPT_TOOL_NAME, outcome);
+}
+
+const RUN_ERROR_OUTCOMES: Record<Codemode.CodemodeErrorKind, ScriptRunOutcome> = {
+  script: "script_error",
+  timeout: "timeout",
+  aborted: "stopped",
+  sandbox: "sandbox_failed",
+};
 
 /** Read-only server tools a script may call, when the turn offers them. */
 export const SCRIPT_TOOL_ALLOWLIST: ReadonlySet<string> = new Set([
@@ -274,6 +302,7 @@ function capped(
   text: string,
   max: number,
   wrap: (text: string) => string,
+  onTooLong?: () => void,
 ): string {
   // A result already over the limit is not fenced just to be measured:
   // fencing scans it, and it can be as large as the VM's memory.
@@ -281,6 +310,7 @@ function capped(
     const whole = wrap(text);
     if (whole.length <= max) return whole;
   }
+  onTooLong?.();
   const preview = (chars: number) =>
     wrap(
       JSON.stringify({
@@ -330,12 +360,15 @@ export async function runScriptCall(
   };
   const code = call.input.code;
   if (typeof code !== "string" || !code.trim()) {
+    countRun("rejected_input");
     return failure("Pass the script as a non-empty `code` string.");
   }
   if (code.length > MAX_CODE_CHARS) {
+    countRun("rejected_input");
     return failure(`The script is longer than ${MAX_CODE_CHARS} characters.`);
   }
   if (!context.innerTools.length) {
+    countRun("rejected_input");
     return failure("No tools are available to scripts in this conversation.");
   }
 
@@ -344,10 +377,14 @@ export async function runScriptCall(
     codemode = await loadCodemode();
   } catch (error) {
     reportSandboxFailure(error);
+    countRun("sandbox_failed");
     return failure(ERROR_MESSAGES.sandbox);
   }
   // Script calls are new, so they are always held to their schemas.
-  const checker: ToolInputChecker = await loadToolInputChecker("enforce");
+  const checker: ToolInputChecker = await loadToolInputChecker(
+    "enforce",
+    "script_tool_input",
+  );
   const checks = new Map(
     context.innerTools.map((tool) => [
       tool.function.name,
@@ -362,6 +399,7 @@ export async function runScriptCall(
   // loop would otherwise make them without limit.
   let refusedAtLimit = false;
   let endedOverLimit = false;
+  let countedLongArguments = false;
   const overLimit = new AbortController();
   const signal = context.signal
     ? AbortSignal.any([context.signal, overLimit.signal])
@@ -385,6 +423,8 @@ export async function runScriptCall(
         if (refusedAtLimit) {
           endedOverLimit = true;
           overLimit.abort();
+        } else {
+          countToolActivity("script_limit", SCRIPT_TOOL_NAME, "call_limit");
         }
         refusedAtLimit = true;
         throw new ScriptToolError(
@@ -398,6 +438,10 @@ export async function runScriptCall(
           : {};
       // Before the schema check and the dispatcher, which both walk all of it.
       if (!withinArgumentLimit(input, limits.maxCallArgumentChars)) {
+        if (!countedLongArguments) {
+          countedLongArguments = true;
+          countToolActivity("script_limit", SCRIPT_TOOL_NAME, "argument_too_long");
+        }
         throw new ScriptToolError(
           `The arguments of one ${name} call are longer than ${limits.maxCallArgumentChars} characters of JSON. Pass less in each call.`,
         );
@@ -418,6 +462,7 @@ export async function runScriptCall(
         });
       } catch (error) {
         if (context.signal?.aborted || ended.aborted) throw error;
+        countToolActivity("script_tool_call", name, "failed");
         // The script is told only that the call failed; the failure itself
         // is reported here, where it stops, as the dispatcher reports its own.
         if (!reportedToolFailure) {
@@ -431,14 +476,19 @@ export async function runScriptCall(
         }
         throw new ScriptToolError(`${name} failed.`);
       }
+      countToolActivity("script_tool_call", name, "ok", true);
       return parseToolResult(unfenced(content, context.nonce));
     };
 
   const TOO_MANY =
     "Too many scripts are running right now. Use the tools directly, or try again shortly.";
-  if (runningScripts >= limits.maxConcurrent) return failure(TOO_MANY);
+  if (runningScripts >= limits.maxConcurrent) {
+    countRun("refused_busy");
+    return failure(TOO_MANY);
+  }
   const { userId } = context;
   if (userId && (runningByUser.get(userId) ?? 0) >= limits.maxConcurrentPerUser) {
+    countRun("refused_busy_user");
     return failure(
       "You already have scripts running in other conversations. Use the tools directly, or try again shortly.",
     );
@@ -485,6 +535,7 @@ export async function runScriptCall(
     result = await sandbox.execute(code, { signal });
   } catch (error) {
     reportSandboxFailure(error);
+    countRun("sandbox_failed");
     return failure(ERROR_MESSAGES.sandbox);
   } finally {
     finished = true;
@@ -510,13 +561,20 @@ export async function runScriptCall(
     ...(output ? { output } : {}),
   };
   if (result.ok) {
-    return capped(
+    let outcome: ScriptRunOutcome = "ok";
+    const answer = capped(
       JSON.stringify({ ok: true, value: result.value ?? null, ...summary }),
       limits.maxResultChars,
       fenced,
+      () => {
+        outcome = "ok_result_too_long";
+      },
     );
+    countRun(outcome);
+    return answer;
   }
   if (endedOverLimit && !context.signal?.aborted) {
+    countRun("stopped_over_call_limit");
     return capped(
       failure(
         `The script was stopped: it kept calling tools after reaching its limit of ${limits.maxToolCalls} tool calls.`,
@@ -527,6 +585,7 @@ export async function runScriptCall(
     );
   }
   const { kind } = result.error;
+  countRun(RUN_ERROR_OUTCOMES[kind]);
   if (kind === "sandbox") reportSandboxFailure(new Error(result.error.message));
   // A script's own error message is the model's to read: it wrote the code.
   const detail =

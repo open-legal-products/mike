@@ -2,6 +2,7 @@ import { chunkArray } from "./arrays";
 import { selectInBatches } from "./batchedQuery";
 import type { Db } from "./supabase";
 import { safeError } from "./safeError";
+import { log } from "./log";
 
 export type ProfileUserInfo = {
     id: string;
@@ -97,7 +98,7 @@ export async function loadCreatorProfiles(
                     .in("user_id", batch),
         );
     } catch (error) {
-        console.warn("[userLookup] failed to load creator profiles", safeError(error));
+        log.warn("userLookup", "failed to load creator profiles", safeError(error));
         return byUserId;
     }
     for (const row of data) {

@@ -26,7 +26,9 @@ export default defineConfig({
     include: ["src/**/*.test.ts"],
     // Parse documents in-process: module mocks cannot reach into the
     // extraction subprocess. lib/extraction's own tests turn it back on.
-    env: { EXTRACTION_ISOLATION: "off" },
+    // Counts are logged on a timer; lib/toolActivity's own tests and the
+    // suites that assert on counts give it a sink instead.
+    env: { EXTRACTION_ISOLATION: "off", TOOL_ACTIVITY_COUNTS: "off" },
     exclude: ["dist/**", "node_modules/**"],
     // Generous timeouts so cold-start module transform/import latency
     // can't cause spurious timeout failures on a cold CI runner. Warm

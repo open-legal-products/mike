@@ -102,6 +102,7 @@ import {
 } from "../../application/exports/requestExport";
 import { isWorkspaceExportType } from "../../application/exports/exportContracts";
 import { getApiKeyStatus, saveApiKey, setApiKeyEnabled } from "./user.service";
+import { log } from "../../lib/log";
 
 export const userRouter = Router();
 
@@ -970,7 +971,7 @@ userRouter.get(
                 warnGoogleRoute("[google-drive] oauth callback failed", err, "google.auth_failed", {
                     hasCode: !!code,
                 });
-            else console.warn("[google-drive] oauth callback denied", { hasCode: !!code });
+            else log.warn("google-drive", "oauth callback denied", { hasCode: !!code });
             res.status(400)
                 .set(mcpOAuthPopupHeaders(nonce))
                 .type("html")
@@ -1225,7 +1226,7 @@ for (const provider of ["gmail", "google-calendar"] as const) {
                 // the browser verbatim, under their machine-readable code.
                 if (error instanceof ConnectorSetupError) {
                     // Operator setup, not a fault: a log line, never an event.
-                    console.warn("[google-workspace] setup required", {
+                    log.warn("google-workspace", "setup required", {
                         provider,
                     });
                     return void res

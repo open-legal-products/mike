@@ -45,6 +45,7 @@ import { ID_FILTER_BATCH_SIZE, mutateInBatches, selectInBatches } from "../../li
 import { mapWithConcurrency } from "../../lib/concurrency";
 import { AppError } from "../../lib/appError";
 import { reportError } from "../../lib/observability/sentry";
+import { log } from "../../lib/log";
 
 /**
  * A sweep query the database refused. supabase-js resolves these as plain
@@ -211,7 +212,7 @@ export async function sweepStaleGeneratingCells(
         for (const cell of group) {
             if (generationId) touchedGenerations.set(generationId, cell.review_id);
             flipped += 1;
-            console.warn("[stale-sweep] orphaned generating cell flipped to error", {
+            log.warn("stale-sweep", "orphaned generating cell flipped to error", {
                 reviewId: cell.review_id,
                 rowId: cell.row_id,
                 columnIndex: cell.column_index,

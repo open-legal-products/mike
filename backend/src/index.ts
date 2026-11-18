@@ -18,12 +18,14 @@ import {
   type WorkerRole,
 } from "./workerRuntime";
 import { reportError } from "./lib/observability/sentry";
+import { flushToolActivity } from "./lib/toolActivity";
 import {
   closeHttpServer,
   createShutdown,
   failBoot,
   listenOrFail,
 } from "./lib/processLifecycle";
+import { log, tpl } from "./lib/log";
 
 const PORT = process.env.PORT ?? 3001;
 const HOST = process.env.HOST?.trim() || undefined;
@@ -42,10 +44,10 @@ async function validateBootConfiguration(): Promise<void> {
   try {
     validateRuntimeConfiguration();
     for (const warning of storagePublicEndpointWarnings()) {
-      console.warn(`[storage] ${warning}`);
+      log.warn(tpl`[storage] ${warning}`);
     }
     for (const warning of extractionLauncherWarnings()) {
-      console.warn(`[extraction] ${warning}`);
+      log.warn(tpl`[extraction] ${warning}`);
     }
     stage = "manifest-key";
     const signingKey = manifestPublicKey();
@@ -167,6 +169,8 @@ void main();
 // background workers wherever they run, then exit 0. A hard timeout guards
 // against a connection or job that never drains.
 async function stopBackgroundWork(): Promise<void> {
+  // In-flight turns have drained by now: log what they counted.
+  flushToolActivity();
   if (WORKERS_MODE === "inline") {
     await stopAllWorkers();
     return;

@@ -32,6 +32,7 @@ import { type UserApiKeys } from "../../lib/llm";
 import { queryTabularAllColumns } from "./tabular.extract";
 import { loadRowDocumentText, type ReviewRow } from "./tabular.rows";
 import { type CellResult, type Column, type Db } from "./tabular.shared";
+import { log, tpl } from "../../lib/log";
 
 /**
  * Where per-cell transitions are announced. Sync uses this to write SSE frames;
@@ -253,8 +254,7 @@ export async function extractRowColumns(args: {
         // Not console.error: either the query already reported this failure
         // or the queue runner will report the failed attempt.
         if (!abortSignal?.aborted) {
-            console.warn(
-                `[tabular/extract-row] queryTabularAllColumns error row=${row.id}`,
+            log.warn(tpl`[tabular/extract-row] queryTabularAllColumns error row=${row.id}`,
                 err,
             );
         }

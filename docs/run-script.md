@@ -83,11 +83,38 @@ memory and time the VM's own limit does not cover:
 - One call's arguments may be at most 8,000 characters of JSON. A longer call
   is refused before it is checked or dispatched, and still counts as a call.
 
+## Counting what scripts did
+
+How each script ended, the limits it met and the calls it made are counted and
+written to the backend's log as `[tool-activity]` lines, in the format
+described in
+[Tool-call validation](tool-call-validation.md#counting-what-the-check-did).
+Numbers only: nothing about the user, the code or the documents is logged.
+
+| Kind | Tool | Outcome |
+|---|---|---|
+| `script_run` | `run_script` | One per `run_script` call: `ok`, `ok_result_too_long` (finished, but the result was over 40,000 characters), `script_error`, `timeout`, `stopped` (the answer was stopped), `stopped_over_call_limit`, `sandbox_failed`, `refused_busy` (4 already running), `refused_busy_user` (2 for this user), `rejected_input` (no code, code too long, or no tools to call). |
+| `script_limit` | `run_script` | Once per script that met it: `call_limit` (the 200th call was passed), `argument_too_long`. A script that met the call limit and returned what it had counts here and as `ok`. |
+| `script_tool_call` | the inner tool | Calls that reached the dispatcher: `ok` or `failed`. |
+| `script_tool_input` | the inner tool | The schema check of each call: `passed` or `refused`. |
+
+With `SENTRY_LOGS=on` the same counts are in Sentry as the `tool_activity`
+counter: sum it filtered to `kind:script_run` and grouped by `outcome`.
+
+To total how scripts ended from saved logs:
+
+```bash
+grep -h '^\[tool-activity\] ' backend.log | sed 's/^\[tool-activity\] //' \
+  | jq -s 'map(.counts[]) | map(select(.kind == "script_run"))
+      | group_by(.outcome) | map({outcome: .[0].outcome, scripts: (map(.count) | add)})'
+```
+
 ## Settings
 
 ```bash
 # backend/.env
 SCRIPT_TOOL=off   # on to offer run_script
+TOOL_ACTIVITY_COUNTS=on   # off to stop counting
 ```
 
 ## Tests
@@ -98,7 +125,8 @@ npm test --prefix backend -- src/modules/chat/engine/tools/scriptTool.test.ts \
   src/modules/chat/engine/__tests__/scriptToolDispatcher.test.ts \
   src/modules/chat/engine/tools/scriptToolUnavailable.test.ts \
   src/modules/chat/engine/tools/scriptToolWasm.test.ts \
-  src/modules/chat/engine/tools/scriptToolLifecycle.test.ts
+  src/modules/chat/engine/tools/scriptToolLifecycle.test.ts \
+  src/modules/chat/engine/tools/scriptToolCounts.test.ts
 ```
 
 The tests run real scripts in the sandbox: limits, timeouts, stops,

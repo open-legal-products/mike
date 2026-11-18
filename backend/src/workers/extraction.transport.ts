@@ -8,6 +8,7 @@ import { isDeterministicProviderRefusal, providerFailureLevel } from "../lib/llm
 import { markErrorHandled, reportError } from "../lib/observability/sentry";
 import { EXTRACTION_QUEUE, type ExtractionJobData } from "../lib/queue/extractionQueue";
 import { extractionJobOperation, isRefusalShownToUser, runExtractionJob, markExtractionFailed } from "../modules/tabular/tabular.service";
+import { log } from "../lib/log";
 
 /** Terminal resource refusals and exhausted retries both need cell cleanup. */
 export function isPermanentFailure(job: Job<ExtractionJobData>, error?: Error): boolean {
@@ -50,8 +51,7 @@ export function createExtractionWorker(): Worker<ExtractionJobData> {
     );
     watchQueueErrors(worker, "worker");
     worker.on("stalled", (jobId) => {
-        console.warn(
-            "[extraction-worker] job stalled; will be re-queued",
+        log.warn("extraction-worker", "job stalled; will be re-queued",
             { jobId },
         );
     });

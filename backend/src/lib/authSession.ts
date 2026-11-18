@@ -11,6 +11,7 @@ import { supabaseSessionConfiguration } from "./runtimeConfig";
 import { singleFlightRefreshFetch } from "./authRefresh";
 import { AppError } from "./appError";
 import { requestRoutePattern } from "./observability/sentry";
+import { log } from "./log";
 
 const AUTH_COOKIE_BASE_NAME = "mike-session";
 const refreshFetch = singleFlightRefreshFetch();
@@ -119,8 +120,7 @@ export function createRequestSupabase(
         // better than the 500 it replaces. The route is logged so operators
         // can see how often a session is lost this way.
         if (res.headersSent) {
-          console.warn(
-            "[auth] session cookies changed after the response was sent",
+          log.warn("auth", "session cookies changed after the response was sent",
             { route: requestRoutePattern(req) },
             new AppError("auth.cookie_write_after_response", "session cookie write skipped: response already sent"),
           );

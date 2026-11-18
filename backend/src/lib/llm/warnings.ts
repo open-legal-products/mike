@@ -1,5 +1,6 @@
 import { addBreadcrumb } from "@sentry/node";
 import { reportError } from "../observability/sentry";
+import { log } from "../log";
 
 type Warning = { type?: string; feature?: string; setting?: string; message?: string; details?: string };
 type WarningOptions = { warnings?: Warning[]; provider?: string };
@@ -35,7 +36,7 @@ export function logProviderWarnings({ warnings = [], provider }: WarningOptions)
     if (previous !== undefined && now - previous < WARNING_COOLDOWN_MS) continue;
     if (seen.size >= 256) seen.delete(seen.keys().next().value!);
     seen.set(key, now);
-    console.warn("[ai-sdk] provider compatibility warning", warning);
+    log.warn("ai-sdk", "provider compatibility warning", warning);
     if (warning.type === "unsupported" || warning.type === "compatibility") continue;
     const deprecated = warning.type === "deprecated";
     if (deprecated && process.noDeprecation) continue;

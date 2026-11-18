@@ -12,11 +12,12 @@ import "./instrument";
 import { parentPort, workerData } from "node:worker_threads";
 import { startAllWorkers, stopAllWorkers, WORKER_ROLES, type WorkerRole } from "./workerRuntime";
 import { flushSentry, reportError } from "./lib/observability/sentry";
+import { log, tpl } from "./lib/log";
 
 // index.ts starts one thread per role; with no role, this thread runs them all.
 const role = (workerData as { role?: WorkerRole } | null)?.role;
 startAllWorkers(role ? [role] : WORKER_ROLES);
-console.log(`[worker-thread] background workers started (${role ?? "all"})`);
+log.info(tpl`[worker-thread] background workers started (${role ?? "all"})`);
 
 parentPort?.on("message", (message: unknown) => {
     if (message === "shutdown") {

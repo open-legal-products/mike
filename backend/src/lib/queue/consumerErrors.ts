@@ -6,6 +6,7 @@ import {
     createPollFailureGate,
     pollFailureClass,
 } from "../observability/pollFailureGate";
+import { log, tpl } from "../log";
 
 /**
  * Error listeners for BullMQ: the shared consumer connection, each Worker,
@@ -223,7 +224,7 @@ function attachErrorListener(
                     ),
                     { level: "error", tags: { ...tags("connection"), outage_minutes: minutes } },
                 );
-                console.warn(`[queue] redis still unreachable after ${minutes} minutes`, pollFailureClass(error));
+                log.warn(tpl`[queue] redis still unreachable after ${minutes} minutes`, pollFailureClass(error));
             }
             if (!outageGate.failure(error).report) return;
             reportError(
@@ -232,8 +233,7 @@ function attachErrorListener(
                 }),
                 { level: "warning", tags: tags("connection") },
             );
-            console.warn(
-                `[queue] redis ${source === "producer" ? "producer" : "consumer"} error${where}`,
+            log.warn(tpl`[queue] redis ${source === "producer" ? "producer" : "consumer"} error${where}`,
                 pollFailureClass(error),
             );
             return;
@@ -244,7 +244,7 @@ function attachErrorListener(
             level: "error",
             tags: tags(source),
         });
-        console.warn(`[queue] ${source} error${where}`, queueErrorClass(error));
+        log.warn(tpl`[queue] ${source} error${where}`, queueErrorClass(error));
     };
     if (prepend && emitter.prependListener) emitter.prependListener("error", onError);
     else emitter.on("error", onError);
