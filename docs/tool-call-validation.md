@@ -21,13 +21,28 @@ chooses what a mismatch does:
 
 | Value | Effect |
 |---|---|
-| `log` (default) | The call runs exactly as before. A warn-level log line names the tool and each failing path and keyword, never the values. |
+| `log` (default) | The call runs exactly as before. A warn-level log line names the tool and each failing path and keyword, never the values. A path shows only names the schema declares; a key the model wrote is logged as `*`. |
 | `enforce` | The call never runs. The SDK answers it with a message naming each failing path ("Nothing ran. Correct the arguments and call the tool again."), and the model can fix the call in its next step. The turn goes on. |
 | `off` | No check. |
 
 Validation is strict: nothing is coerced, so `"3"` for an integer is a
 mismatch. A schema that does not compile (an MCP server's, for instance)
 leaves that tool unchecked rather than unusable, with one warning per process.
+
+The check cannot cost a turn:
+
+- `pattern` and `patternProperties` are not checked. A connector's schema is
+  another party's input, and one catastrophic regular expression run on the
+  server's thread would stall every request. Where dropping them could refuse
+  a valid call (beneath `not`, `if`, `oneOf`, `contains` or a `$ref`), the tool
+  is left unchecked instead.
+- If pi-schema cannot be loaded, or a check throws, the call runs unchecked
+  with one warning.
+
+`format` is not checked either. OpenAPI's `nullable: true` is not JSON Schema
+and is ignored, so in `enforce` a `null` for such a field is refused; look for
+those tools in the `log` output first.
+
 A schema that declares draft 4–7 in `$schema` (the Google tools do) is read
 with draft-07 semantics; any other with 2020-12.
 
