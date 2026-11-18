@@ -545,6 +545,36 @@ describe("TabularReviewView single-cell regeneration", () => {
         } finally { vi.useRealTimers(); }
     });
 
+    it.each(["background", "reload"])("retry regression: %s failure reloads the current review after navigation", async failure => {
+        const notices = await import("@/app/lib/userFacingError");
+        const notify = vi.spyOn(notices, "notifyError");
+        const { rerender } = render(<TRView reviewId="r1" />);
+        fireEvent.click(await screen.findByRole("button", { name: "Open first cell" }));
+        const regenerate = await screen.findByRole("button", { name: "Regenerate cell" });
+        const { MikeApiError } = await import("@/app/lib/mikeApi");
+        vi.mocked(regenerateTabularCell).mockRejectedValue(new MikeApiError({ message: "running", status: 409, code: "review_running" }));
+        vi.useFakeTimers();
+        try {
+            serverRunsFor(1);
+            if (failure === "reload") vi.mocked(getTabularReview).mockRejectedValueOnce(new Error("offline"));
+            fireEvent.click(regenerate);
+            await act(async () => { await vi.advanceTimersByTimeAsync(0); });
+            if (failure === "background") {
+                vi.mocked(getTabularReview).mockRejectedValueOnce(new Error("offline"));
+                await act(async () => { await vi.advanceTimersByTimeAsync(5000); });
+            }
+            const retry = notify.mock.calls.at(-1)?.[1]?.onRetry;
+            expect(retry).toBeTypeOf("function");
+            vi.mocked(getTabularReview).mockImplementation(async id => ({
+                review: review({ id }), cells: [CELL], rows: [ROW], documents: [], active_generation: null,
+            }));
+            rerender(<TRView reviewId="r2" />);
+            await act(async () => { await vi.advanceTimersByTimeAsync(0); });
+            await act(async () => { retry?.(); await vi.advanceTimersByTimeAsync(0); });
+            expect(getTabularReview).toHaveBeenLastCalledWith("r2");
+        } finally { vi.useRealTimers(); notify.mockRestore(); }
+    });
+
     it("polls the run's status, not the whole review, until the run ends", async () => {
         const regenerate = await openCell();
         vi.mocked(regenerateTabularCell).mockResolvedValue({ summary: "New" } as never);

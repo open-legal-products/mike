@@ -637,7 +637,7 @@ export function TRView({ reviewId, projectId }: Props) {
                 // resend the document set and column config as they were
                 // at drop time, undoing any edit made since.
                 onRetry: () => {
-                    void loadLatestReview();
+                    void retryRef.current?.reloadReview();
                 },
             });
         } finally {
@@ -763,7 +763,7 @@ export function TRView({ reviewId, projectId }: Props) {
                 console.error("Failed to reconcile the running review", error);
                 notifyError(error, {
                     action: "refresh this review",
-                    onRetry: () => { void loadLatestReview(); },
+                    onRetry: () => { void retryRef.current?.reloadReview(); },
                 });
             });
         }, 5000);
@@ -1105,7 +1105,7 @@ export function TRView({ reviewId, projectId }: Props) {
                                 "The table may be out of date. Reload to see the latest results.",
                             dedupeKey: `tr-refresh:${reviewId}`,
                             onRetry: () => {
-                                void loadLatestReview();
+                                void retryRef.current?.reloadReview();
                             },
                         });
                     }
@@ -1170,7 +1170,7 @@ export function TRView({ reviewId, projectId }: Props) {
                 action: "load the latest version of this review",
                 dedupeKey: `tr-latest:${reviewId}`,
                 onRetry: () => {
-                    void loadLatestReview();
+                    void retryRef.current?.reloadReview();
                 },
             });
         } finally {
