@@ -574,6 +574,25 @@ describe("prepareTabularChat", () => {
         );
     });
 
+    it("review regression: reauthorizes the intermediate source behind cached cells", async () => {
+        const row = (source: string) => [{ id: "row-1", label: "Contract.pdf", source_document_ids: [source] }];
+        loadReviewRows.mockResolvedValue(row("A"));
+        filterAccessibleDocumentIds.mockResolvedValue(["A", "B", "C"]);
+        const fake = makeFakeDb({ tables: {
+            tabular_reviews: { data: REVIEW, error: null },
+            tabular_cells: { data: [{ column_index: 0, row_id: "row-1", content: "B secret" }], error: null },
+            tabular_review_chats: { data: { id: "chat-new", title: null }, error: null },
+        } });
+        const result = await prepareTabularChat(fake.db, base);
+        expect(result.ok).toBe(true);
+        if (!result.ok) return;
+        loadReviewRows.mockResolvedValue(row("B"));
+        await result.data.tabularStore.loadCells!(["row-1"], [0]);
+        loadReviewRows.mockResolvedValue(row("C"));
+        filterAccessibleDocumentIds.mockResolvedValue(["A", "C"]);
+        await expect(result.data.tabularStore.loadCells!(["row-1"], [0])).rejects.toThrow("accessible");
+    });
+
     it("refuses to adopt a chat id belonging to another review", async () => {
         const fake = makeFakeDb({
             tables: {

@@ -16,7 +16,7 @@ export function useSidebarHistory() {
         retainOnRefresh: true,
         sort: { key: "updated", direction: "desc" },
     });
-    const { reviews: loaded, retry, setReviews } = reviews;
+    const { reviews: loaded, retry, retryIfPending, setReviews } = reviews;
     useEffect(() => subscribeTabularReviewChanges(statuses => {
         // Membership changes and older-server snapshots require an authorized list read.
         // A promotion within the loaded range cannot displace an unseen review.
@@ -36,9 +36,11 @@ export function useSidebarHistory() {
         const byId = new Map(statuses.map(status => [status.id, status]));
         setReviews(current => current.map(row => {
             const status = byId.get(row.id);
-            return status ? { ...row, ...status, updated_at: status.updated_at ?? row.updated_at } : row;
+            if (!status || (status.updated_at && Date.parse(status.updated_at) < Date.parse(row.updated_at))) return row;
+            return { ...row, ...status, updated_at: status.updated_at ?? row.updated_at };
         }));
-    }), [loaded, retry, setReviews]);
+        retryIfPending();
+    }), [loaded, retry, retryIfPending, setReviews]);
     const runs = usePlaybookRunHistory();
     const refreshRuns = runs.refresh;
     useEffect(

@@ -107,6 +107,33 @@ describe("useSidebarHistory", () => {
         expect(result.current.reviews).toHaveLength(31);
     });
 
+    it("review regression: batched older activity cannot overwrite a newer promotion", async () => {
+        vi.mocked(listTabularReviews).mockResolvedValueOnce([review("r1")]);
+        const { result } = renderHook(() => useSidebarHistory());
+        await waitFor(() => expect(result.current.loading).toBe(false));
+        const activity = { id: "r1", project_id: null, org_id: null, is_running: false };
+        act(() => {
+            notifyTabularReviewsChanged([{ ...activity, title: "New", updated_at: "2026-10-19T00:00:00Z" }]);
+            notifyTabularReviewsChanged([{ ...activity, title: "Old", updated_at: "2026-10-18T00:00:00Z" }]);
+        });
+        expect(result.current.reviews[0]).toMatchObject({ title: "New", updated_at: "2026-10-19T00:00:00Z" });
+        expect(listTabularReviews).toHaveBeenCalledTimes(1);
+    });
+
+    it("review regression: pending refresh cannot replace newer activity", async () => {
+        vi.mocked(listTabularReviews).mockResolvedValueOnce([review("r1")]);
+        const { result } = renderHook(() => useSidebarHistory());
+        await waitFor(() => expect(result.current.loading).toBe(false));
+        let finish!: (rows: TabularReview[]) => void;
+        vi.mocked(listTabularReviews).mockReturnValueOnce(new Promise(resolve => { finish = resolve; }));
+        act(() => notifyTabularReviewsChanged());
+        const newest = { ...review("r1"), title: "New", updated_at: "2026-10-19T00:00:00Z", org_id: null, is_running: false };
+        vi.mocked(listTabularReviews).mockResolvedValueOnce([newest]);
+        act(() => notifyTabularReviewsChanged([newest]));
+        await act(async () => finish([review("r1")]));
+        await waitFor(() => expect(result.current.reviews[0]).toMatchObject({ title: "New", updated_at: newest.updated_at }));
+    });
+
     it("loads both review scopes in the active workspace sorted by update time", async () => {
         vi.mocked(listTabularReviews).mockResolvedValue([review("project", "p1"), review("standalone")]);
         const { result } = renderHook(() => useSidebarHistory());

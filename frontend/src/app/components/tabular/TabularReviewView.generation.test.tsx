@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import {
     getTabularReview,
     getTabularReviewHistoryStatuses,
@@ -468,6 +468,16 @@ describe("TabularReviewView single-cell regeneration", () => {
 
     beforeEach(() => {
         vi.clearAllMocks();
+        window.matchMedia = vi.fn().mockImplementation((query: string) => ({
+            matches: true,
+            media: query,
+            onchange: null,
+            addListener: vi.fn(),
+            removeListener: vi.fn(),
+            addEventListener: vi.fn(),
+            removeEventListener: vi.fn(),
+            dispatchEvent: vi.fn(),
+        }));
         vi.mocked(getTabularReview).mockResolvedValue({
             review: review(),
             cells: [CELL],
@@ -498,6 +508,21 @@ describe("TabularReviewView single-cell regeneration", () => {
         serverRunsFor(0);
         finish({ summary: "New" });
         await waitFor(() => expect(getTabularReview).toHaveBeenCalledTimes(2));
+    });
+
+    it("review regression: reconciles again after the foreground polling limit", async () => {
+        const regenerate = await openCell();
+        vi.mocked(regenerateTabularCell).mockResolvedValue({ summary: "New" } as never);
+        serverRunsFor(45);
+        vi.useFakeTimers();
+        try {
+            fireEvent.click(regenerate);
+            await act(async () => { await vi.advanceTimersByTimeAsync(10_000); });
+            const foregroundReads = vi.mocked(getTabularReview).mock.calls.length;
+            await act(async () => { await vi.advanceTimersByTimeAsync(20_000); });
+            expect(getTabularReview).toHaveBeenCalledTimes(foregroundReads + 2);
+            expect(table.store?.get("row-1", 0)?.content).toEqual(CELL.content);
+        } finally { vi.useRealTimers(); }
     });
 
     it("polls the run's status, not the whole review, until the run ends", async () => {

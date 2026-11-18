@@ -81,6 +81,22 @@ async function dispatchDocumentTool(
     );
 }
 
+it("review regression: a failed cell read preserves completed and remaining tool results", async () => {
+    const loadCells = vi.fn().mockResolvedValueOnce(undefined)
+        .mockRejectedValueOnce(new Error("private database failure")).mockResolvedValueOnce(undefined);
+    const result = await runToolCalls(
+        ["before", "failed", "after"].map(id => ({ id, function: { name: "read_table_cells", arguments: "{}" } })),
+        new Map(), "user-1", {} as never, () => undefined, undefined,
+        { columns: [{ index: 0, name: "Summary" }], documents: [{ id: "row-1", filename: "Contract" }],
+          cells: new Map([["0:row-1", { summary: "Visible" }]]), loadCells },
+    );
+    const results = result.toolResults as { tool_call_id: string; content: string }[];
+    expect(results.map(result => result.tool_call_id)).toEqual(["before", "failed", "after"]);
+    expect(results[1].content).toContain("Unable to read");
+    expect(results[1].content).not.toContain("private database");
+    expect(results[2].content).toContain("Visible");
+});
+
 it("refuses a scoped subagent's search across the project", async () => {
     const result = await runToolCalls(
         [

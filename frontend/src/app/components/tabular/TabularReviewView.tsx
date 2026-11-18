@@ -150,6 +150,7 @@ export function TRView({ reviewId, projectId }: Props) {
     const [project, setProject] = useState<Project | null>(null);
     const confirmedDetail = useRef<Awaited<ReturnType<typeof getTabularReview>> | undefined>(undefined);
     const detailRequest = useRef(0);
+    const reconciliationTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
     const [cells, setCells, cellStore] = useReviewCells();
     const [documents, setDocuments] = useState<Document[]>([]);
     const [rows, setRows] = useState<TabularReviewRow[]>([]);
@@ -404,6 +405,7 @@ export function TRView({ reviewId, projectId }: Props) {
         return () => {
             cancelled = true;
             detailRequest.current += 1;
+            clearTimeout(reconciliationTimer.current);
         };
     }, [reviewId, projectId, setCells]);
 
@@ -755,11 +757,16 @@ export function TRView({ reviewId, projectId }: Props) {
 
     async function refreshAfterGeneration() {
         const request = ++detailRequest.current;
+        clearTimeout(reconciliationTimer.current);
         // Reconcile changed cells against the last confirmed server snapshot.
         // Streamed and optimistic cell updates never become the delta's base.
         let detail = await getTabularReview(reviewId, confirmedDetail.current);
         for (let attempt = 1; detail.review.is_running; attempt += 1) {
-            if (attempt >= 40 || request !== detailRequest.current) return;
+            if (request !== detailRequest.current) return;
+            if (attempt >= 40) {
+                detail = await getTabularReview(reviewId, detail);
+                break;
+            }
             await new Promise((resolve) => setTimeout(resolve, 250));
             const [status] = await getTabularReviewHistoryStatuses([reviewId]);
             if (status?.is_running) continue;
@@ -767,6 +774,18 @@ export function TRView({ reviewId, projectId }: Props) {
         }
         if (request !== detailRequest.current) return;
         confirmedDetail.current = detail;
+        if (detail.review.is_running) {
+            reconciliationTimer.current = setTimeout(() => {
+                if (request !== detailRequest.current) return;
+                void refreshAfterGeneration().catch(error => {
+                    console.error("Failed to reconcile the running review", error);
+                    notifyError(error, {
+                        action: "refresh this review",
+                        onRetry: () => { void loadLatestReview(); },
+                    });
+                });
+            }, 5000);
+        }
         setReview(detail.review);
         setCells(detail.cells);
         setRows(detail.rows);
@@ -1126,9 +1145,13 @@ export function TRView({ reviewId, projectId }: Props) {
     }
 
     async function loadLatestReview() {
+        const request = ++detailRequest.current;
+        clearTimeout(reconciliationTimer.current);
         setReloadingLatestReview(true);
         try {
             const detail = await getTabularReview(reviewId);
+            if (request !== detailRequest.current) return;
+            confirmedDetail.current = detail;
             setReview(detail.review);
             setCells(detail.cells);
             setRows(detail.rows);

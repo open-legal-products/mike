@@ -625,6 +625,7 @@ export async function prepareTabularChat(
         })),
         cells: new Map(),
     };
+    const cellSources = new Map<string, (typeof rows)[number]>();
     tabularStore.loadCells = async (rowIds, columnIndices) => {
         if (!rowIds.length || !columnIndices.length) return;
         const current = await db.from("tabular_reviews").select("*").eq("id", reviewId).single();
@@ -637,9 +638,13 @@ export async function prepareTabularChat(
         const original = rows.filter(row => requested.has(row.id));
         // A row can change sources mid-turn. Authorize the sources behind cached
         // content as well as the current row before returning either one.
-        const readable = await filterReadableReviewRows(db, [...original, ...latest], [], userId, userEmail);
+        const cachedSources = rowIds.flatMap(id => columnIndices.flatMap(index =>
+            cellSources.get(`${index}:${id}`) ?? [],
+        ));
+        const sources = [...original, ...latest, ...cachedSources];
+        const readable = await filterReadableReviewRows(db, sources, [], userId, userEmail);
         if (original.length !== requested.size || latest.length !== requested.size ||
-            readable.rows.length !== original.length + latest.length) {
+            readable.rows.length !== sources.length) {
             throw new Error("Review rows are no longer accessible");
         }
         // Group rows with the same missing columns, including previously absent cells.
@@ -665,7 +670,12 @@ export async function prepareTabularChat(
                 );
                 const wanted = new Set(group.rows);
                 for (const id of group.rows) {
-                    for (const index of columns) tabularStore.cells.set(`${index}:${id}`, null);
+                    const source = latest.find(row => row.id === id)!;
+                    for (const index of columns) {
+                        const key = `${index}:${id}`;
+                        tabularStore.cells.set(key, null);
+                        cellSources.set(key, { ...source, source_document_ids: [...(source.source_document_ids ?? [])] });
+                    }
                 }
                 for (const cell of found) {
                     if (wanted.has(cell.row_id) && columns.includes(cell.column_index)) {
