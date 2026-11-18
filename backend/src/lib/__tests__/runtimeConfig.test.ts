@@ -154,6 +154,26 @@ describe("runtime authentication configuration", () => {
   });
 });
 
+describe("LLM_PROVIDER_DATA_RETENTION", () => {
+  it.each(["deny", "allow", "ALLOW", ""])("accepts %j", (value) => {
+    expect(() =>
+      validateRuntimeConfiguration({
+        ...validProduction,
+        LLM_PROVIDER_DATA_RETENTION: value,
+      }),
+    ).not.toThrow();
+  });
+
+  it("rejects a value that is neither deny nor allow", () => {
+    expect(() =>
+      validateRuntimeConfiguration({
+        ...validProduction,
+        LLM_PROVIDER_DATA_RETENTION: "off",
+      }),
+    ).toThrow(/LLM_PROVIDER_DATA_RETENTION must be "deny" \(the default\) or "allow"/);
+  });
+});
+
 describe("upload-session rate-limit configuration", () => {
   it("uses safe defaults when overrides are absent or invalid", () => {
     expect(

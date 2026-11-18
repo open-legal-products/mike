@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import {
     getTabularReview,
     getTabularReviewHistoryStatuses,
@@ -508,6 +508,35 @@ describe("TabularReviewView single-cell regeneration", () => {
         serverRunsFor(0);
         finish({ summary: "New" });
         await waitFor(() => expect(getTabularReview).toHaveBeenCalledTimes(2));
+    });
+
+    it.each(["delay", "status request"])("stops reconciliation reads when unmounted during the polling %s", async (stage) => {
+        const regenerate = await openCell();
+        vi.mocked(regenerateTabularCell).mockResolvedValue({ summary: "New" } as never);
+        serverRunsFor(1);
+        let finishStatus!: (statuses: Awaited<ReturnType<typeof getTabularReviewHistoryStatuses>>) => void;
+        if (stage === "status request") {
+            vi.mocked(getTabularReviewHistoryStatuses).mockReturnValue(
+                new Promise(resolve => { finishStatus = resolve; }),
+            );
+        }
+        vi.useFakeTimers();
+        try {
+            fireEvent.click(regenerate);
+            await act(async () => { await vi.advanceTimersByTimeAsync(0); });
+            expect(getTabularReview).toHaveBeenCalledTimes(2);
+            if (stage === "status request") {
+                await act(async () => { await vi.advanceTimersByTimeAsync(250); });
+                expect(getTabularReviewHistoryStatuses).toHaveBeenCalledTimes(1);
+            }
+            cleanup();
+            await act(async () => {
+                if (finishStatus) finishStatus([]);
+                await vi.advanceTimersByTimeAsync(5000);
+            });
+            expect(getTabularReviewHistoryStatuses).toHaveBeenCalledTimes(stage === "delay" ? 0 : 1);
+            expect(getTabularReview).toHaveBeenCalledTimes(2);
+        } finally { vi.useRealTimers(); }
     });
 
     it("review regression: reconciles again after the foreground polling limit", async () => {

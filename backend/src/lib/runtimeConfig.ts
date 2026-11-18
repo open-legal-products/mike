@@ -148,6 +148,20 @@ export function streamChunkTimeouts(env: NodeJS.ProcessEnv = process.env): {
   };
 }
 
+const PROVIDER_DATA_RETENTION_VALUES = ["deny", "allow"] as const;
+
+/**
+ * LLM_PROVIDER_DATA_RETENTION. "deny" (the default) asks every model provider
+ * that takes a per-request setting not to keep or train on prompts; "allow"
+ * sends none of those settings. Anything but "allow" denies, so a typo can
+ * only err on the private side (and validateRuntimeConfiguration rejects it).
+ */
+export function providerDataRetentionAllowed(
+  env: NodeJS.ProcessEnv = process.env,
+): boolean {
+  return env.LLM_PROVIDER_DATA_RETENTION?.trim().toLowerCase() === "allow";
+}
+
 function parsedUrl(value: string, name: string, errors: string[]): URL | null {
   try {
     const url = new URL(value);
@@ -338,6 +352,16 @@ export function validateRuntimeConfiguration(
   } else if (env.WORD_ADDIN_URL?.trim()) {
     errors.push(
       "AUTH_HANDOFF_ENCRYPTION_SECRET is required when WORD_ADDIN_URL is set",
+    );
+  }
+
+  const retention = env.LLM_PROVIDER_DATA_RETENTION?.trim().toLowerCase();
+  if (
+    retention &&
+    !(PROVIDER_DATA_RETENTION_VALUES as readonly string[]).includes(retention)
+  ) {
+    errors.push(
+      'LLM_PROVIDER_DATA_RETENTION must be "deny" (the default) or "allow"',
     );
   }
 
