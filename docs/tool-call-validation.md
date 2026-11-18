@@ -21,7 +21,7 @@ chooses what a mismatch does:
 
 | Value | Effect |
 |---|---|
-| `log` (default) | The call runs exactly as before. A warn-level log line names the tool and each failing path and keyword, never the values. A path shows only names the schema declares; a key the model wrote is logged as `*`. |
+| `log` (default) | The call runs exactly as before. A warn-level log line names the tool and each failing path and keyword, never the values. A path shows only names the schema declares and the indexes of arrays; a key the model wrote, numeric or not, is logged as `*`. |
 | `enforce` | The call never runs. The SDK answers it with a message naming each failing path ("Nothing ran. Correct the arguments and call the tool again."), and the model can fix the call in its next step. The turn goes on. |
 | `off` | No check. |
 

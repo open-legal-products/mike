@@ -211,18 +211,27 @@ function describePath(path: string): string {
 }
 
 /**
- * The path for a log line: only names the schema itself declares. Any other
- * segment is a key the model wrote, which may be a client's words, and is
- * logged as `*`.
+ * The path for a log line: only names the schema itself declares, and the
+ * indexes of real arrays. Any other segment is a key the model wrote, which
+ * may be a client's words, and is logged as `*`. `value` is the arguments the
+ * path points into: a schema may carry `items` without requiring an array, so
+ * only the value says whether a numeric segment is an index or an object key
+ * (an account number, say).
  */
-export function loggablePath(schema: unknown, path: string): string {
+export function loggablePath(schema: unknown, path: string, value: unknown): string {
   if (path === "") return describePath(path);
   let at: unknown = schema;
+  let parent: unknown = value;
   const shown = path
     .slice(1)
     .split("/")
     .map((escaped) => {
       const segment = escaped.replace(/~1/g, "/").replace(/~0/g, "~");
+      const inArray = Array.isArray(parent);
+      parent =
+        parent && typeof parent === "object" && Object.hasOwn(parent, segment)
+          ? (parent as Record<string, unknown>)[segment]
+          : undefined;
       const here = isSchemaObject(at) ? at : {};
       const properties = isSchemaObject(here.properties) ? here.properties : {};
       if (Object.hasOwn(properties, segment)) {
@@ -233,7 +242,7 @@ export function loggablePath(schema: unknown, path: string): string {
         at = undefined;
         return escaped;
       }
-      if (/^\d+$/.test(segment) && (here.items !== undefined || here.prefixItems !== undefined)) {
+      if (inArray && /^\d+$/.test(segment)) {
         const tuple = Array.isArray(here.prefixItems)
           ? here.prefixItems
           : Array.isArray(here.items)
@@ -301,7 +310,7 @@ export function buildToolInputCheck(
     if (mode === "log") {
       const where = result.errors
         .slice(0, MAX_REPORTED_ERRORS)
-        .map((e) => `${loggablePath(parameters, e.path)} ${e.keyword}`)
+        .map((e) => `${loggablePath(parameters, e.path, value)} ${e.keyword}`)
         .join(", ");
       console.warn(
         `[tool-input] ${toolName} was called with arguments that do not match its schema (${where}); TOOL_INPUT_VALIDATION=enforce would refuse it`,
