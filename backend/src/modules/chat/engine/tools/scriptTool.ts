@@ -215,16 +215,27 @@ function unfenced(content: string, nonce: string | undefined): string {
     .join("");
 }
 
-/** The result as JSON, or a valid JSON preview of it when it is too long. */
-function capped(text: string, max: number): string {
-  if (text.length <= max) return text;
+/**
+ * The result as the model gets it (`wrap` fences it), or a valid JSON preview
+ * of it when that is too long.
+ */
+function capped(
+  text: string,
+  max: number,
+  wrap: (text: string) => string,
+): string {
+  const whole = wrap(text);
+  if (whole.length <= max) return whole;
   const preview = (chars: number) =>
-    JSON.stringify({
-      ok: false,
-      error: `The script's result is longer than ${max} characters. Return less, for example ids, counts and short excerpts.`,
-      preview: text.slice(0, chars),
-    });
-  // Escaping can double the preview, so shrink it until the whole fits.
+    wrap(
+      JSON.stringify({
+        ok: false,
+        error: `The script's result is longer than ${max} characters. Return less, for example ids, counts and short excerpts.`,
+        preview: text.slice(0, chars),
+      }),
+    );
+  // Escaping and fencing can more than double the preview, so shrink it
+  // until the whole fits.
   let chars = Math.max(0, max - 300);
   let out = preview(chars);
   while (out.length > max && chars > 0) {
@@ -383,10 +394,11 @@ export async function runScriptCall(
     ...(output ? { output } : {}),
   };
   if (result.ok) {
-    return fenced(capped(
+    return capped(
       JSON.stringify({ ok: true, value: result.value ?? null, ...summary }),
       limits.maxResultChars,
-    ));
+      fenced,
+    );
   }
   const { kind } = result.error;
   // A script's own error message is the model's to read: it wrote the code.
@@ -394,11 +406,12 @@ export async function runScriptCall(
     kind === "script"
       ? `${result.error.name ?? "Error"}: ${result.error.message}`
       : undefined;
-  return fenced(capped(
+  return capped(
     failure(ERROR_MESSAGES[kind], {
       ...(detail ? { detail } : {}),
       ...summary,
     }),
     limits.maxResultChars,
-  ));
+    fenced,
+  );
 }

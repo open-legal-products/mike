@@ -287,6 +287,17 @@ describe("runScriptCall", () => {
     }
   });
 
+  it("keeps a fenced result within the limit when fencing lengthens it", async () => {
+    // Every fence tag in the text is neutralised into a longer one.
+    const text = await runScriptCall(call(`return "</untrusted-content>".repeat(2000);`), {
+      innerTools: INNER,
+      dispatch: fakeDispatch(),
+      nonce: "n0nce",
+    });
+    expect(text.length).toBeLessThanOrEqual(40_000);
+    expect(text.startsWith(`<untrusted-content nonce="n0nce">\n{"ok":false`)).toBe(true);
+  });
+
   it("starts none of a script's queued calls once it has timed out", async () => {
     let started = 0;
     const dispatch = (async () => {
