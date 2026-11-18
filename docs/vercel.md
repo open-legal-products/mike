@@ -29,7 +29,8 @@ you create the first account and are signed straight in. That account is
 confirmed without an email, because a new Supabase project cannot send one
 yet. The screen is offered only while the deployment has no accounts at all,
 so open it soon after deploying: whoever opens it first creates the first
-account.
+account. Setup needs no database table: Mike asks Supabase Auth whether any
+account exists. The first account has no special rights.
 
 Then add a model-provider key under **Settings > Bring Your Own Keys**, or set
 `ANTHROPIC_API_KEY`, `OPENAI_API_KEY` or `GEMINI_API_KEY` on the Vercel
@@ -53,10 +54,12 @@ step is idempotent:
 - It creates the private `mike` Storage bucket and selects the Supabase
   Storage driver (`STORAGE_DRIVER=supabase`), unless `R2_ENDPOINT_URL` is set.
 - It generates `DOWNLOAD_SIGNING_SECRET` and `USER_API_KEYS_ENCRYPTION_SECRET`
-  once and keeps them in the `mike_deploy` schema, which the Supabase API does
-  not expose. A value you set on the Vercel project takes precedence. Do not
-  change `USER_API_KEYS_ENCRYPTION_SECRET` afterwards: keys users saved under
-  the old value can no longer be read.
+  once and keeps them in the table `mike_deploy.secrets`, in a schema that the
+  Supabase API does not expose. That table exists only on Vercel deployments:
+  it is created here rather than by a migration, and `backend/schema.sql`
+  does not list it. A value you set on the Vercel project takes precedence.
+  Do not change `USER_API_KEYS_ENCRYPTION_SECRET` afterwards, and do not drop
+  that table: keys users saved under the old value can no longer be read.
 - It turns on first-run setup (`MIKE_FIRST_RUN_SETUP=true`). To create the
   first account without the setup screen instead, set `MIKE_ADMIN_EMAIL` and
   `MIKE_ADMIN_PASSWORD` (at least 10 characters) on the project before the

@@ -7,9 +7,9 @@
 // handed in, and every function returns GoTrue's own `{ data, error }` shape
 // so the route keeps mapping failures exactly as it always has.
 //
-// Auth talks to Supabase GoTrue, not to the application database, with one
-// exception: first-run setup takes its one-time claim through `db: Db`. The
-// cookie/session primitives themselves stay in lib/authSession and
+// Auth talks to Supabase GoTrue, not to the application database. First-run
+// setup uses the service-role client (`db: Db`) only for GoTrue's admin API.
+// The cookie/session primitives themselves stay in lib/authSession and
 // lib/authHandoff because middleware/auth depends on them.
 
 import { z } from "zod";
@@ -395,9 +395,14 @@ export async function signInOptions(
 /** True while first-run setup is enabled and nobody has an account yet. */
 export async function instanceSetupAvailable(db: Db): Promise<boolean> {
   if (!firstRunSetupEnabled()) return false;
-  const { data, error } = await db.rpc("instance_setup_available");
+  return !(await instanceHasAccounts(db));
+}
+
+/** Asks GoTrue for at most one user: any answer at all means setup is done. */
+async function instanceHasAccounts(db: Db): Promise<boolean> {
+  const { data, error } = await db.auth.admin.listUsers({ page: 1, perPage: 1 });
   if (error) throw error;
-  return data === true;
+  return data.users.length > 0;
 }
 
 export type FirstAccountResult =
@@ -411,46 +416,24 @@ export type FirstAccountResult =
  * anyone outside its own team, so this one account is confirmed directly;
  * every later sign-up goes through the normal confirmation email.
  *
- * The claim is taken before the account is created and given back if
- * creation fails, so two visitors racing for setup cannot both get an
- * account this way. A claim whose request died before creating the account
- * lapses after ten minutes.
+ * Offered only while the instance has no account. Two requests arriving in
+ * the same instant on a brand-new deployment could both pass that check and
+ * each create an account. That is accepted: the first account has no
+ * special rights, and closing the gap would need a database claim that
+ * every Mike deployment would carry for a one-time Vercel step.
  */
 export async function createFirstAccount(
   db: Db,
   credentials: Credentials,
 ): Promise<FirstAccountResult> {
   if (!firstRunSetupEnabled()) return { ok: false, reason: "unavailable" };
-  const { data: claimed, error: claimError } = await db.rpc("claim_instance_setup");
-  if (claimError) throw claimError;
-  if (claimed !== true) return { ok: false, reason: "taken" };
+  if (await instanceHasAccounts(db)) return { ok: false, reason: "taken" };
 
-  try {
-    const { error } = await db.auth.admin.createUser({
-      email: credentials.email,
-      password: credentials.password,
-      email_confirm: true,
-    });
-    if (error) {
-      await releaseInstanceSetup(db);
-      return { ok: false, reason: "auth_error", error };
-    }
-  } catch (error) {
-    await releaseInstanceSetup(db);
-    throw error;
-  }
+  const { error } = await db.auth.admin.createUser({
+    email: credentials.email,
+    password: credentials.password,
+    email_confirm: true,
+  });
+  if (error) return { ok: false, reason: "auth_error", error };
   return { ok: true };
-}
-
-/**
- * Give the claim back after a failed attempt. Best effort: if this fails
- * too, the claim lapses on its own after ten minutes (see the migration),
- * and the caller reports the original failure, not this one.
- */
-async function releaseInstanceSetup(db: Db): Promise<void> {
-  try {
-    await db.rpc("release_instance_setup");
-  } catch {
-    // Expires by itself; see above.
-  }
 }

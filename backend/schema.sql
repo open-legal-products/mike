@@ -8152,80 +8152,6 @@ revoke all on function public.list_org_departure_work(uuid,uuid,integer) from pu
 grant execute on function public.list_org_departure_work(uuid,uuid,integer) to service_role;
 
 -- ---------------------------------------------------------------------------
--- First-run setup (backend/migrations/20261117_01_instance_setup.sql)
--- ---------------------------------------------------------------------------
--- First-run setup: on a deployment that starts with no accounts (the Vercel
--- Deploy button, docs/vercel.md), the first visitor creates the first
--- account. The claim is a single row, so two visitors racing for it cannot
--- both win, and it is offered only while auth.users is empty.
-
-create table if not exists public.instance_setup (
-  id boolean primary key default true,
-  claimed_at timestamptz not null default now()
-);
-alter table public.instance_setup drop constraint if exists instance_setup_singleton;
-alter table public.instance_setup add constraint instance_setup_singleton check (id);
-alter table public.instance_setup enable row level security;
-revoke all on table public.instance_setup from public, anon, authenticated;
-grant select, insert, delete on table public.instance_setup to service_role;
-
--- True while the instance has no account and nobody is setting it up. A
--- claim older than ten minutes with still no account belongs to a request
--- that died between claiming and creating the account; it no longer counts.
-create or replace function public.instance_setup_available()
-returns boolean
-language sql
-stable
-security definer
-set search_path = ''
-as $$
-  select not exists (select 1 from auth.users)
-    and not exists (
-      select 1 from public.instance_setup
-      where claimed_at > now() - interval '10 minutes'
-    );
-$$;
-
--- Take the one-time setup claim. Returns false when an account already
--- exists or another request claimed setup in the last ten minutes.
-create or replace function public.claim_instance_setup()
-returns boolean
-language plpgsql
-security definer
-set search_path = ''
-as $$
-begin
-  if exists (select 1 from auth.users) then
-    return false;
-  end if;
-  delete from public.instance_setup
-  where claimed_at <= now() - interval '10 minutes';
-  insert into public.instance_setup (id) values (true)
-  on conflict (id) do nothing;
-  return found;
-end;
-$$;
-
--- Give the claim back when creating the first account failed, so the
--- visitor can try again. Never releases once an account exists.
-create or replace function public.release_instance_setup()
-returns void
-language sql
-security definer
-set search_path = ''
-as $$
-  delete from public.instance_setup
-  where not exists (select 1 from auth.users);
-$$;
-
-revoke all on function public.instance_setup_available() from public, anon, authenticated;
-revoke all on function public.claim_instance_setup() from public, anon, authenticated;
-revoke all on function public.release_instance_setup() from public, anon, authenticated;
-grant execute on function public.instance_setup_available() to service_role;
-grant execute on function public.claim_instance_setup() to service_role;
-grant execute on function public.release_instance_setup() to service_role;
-
--- ---------------------------------------------------------------------------
 -- Migration ledger (backend/migrations/20261009_03_schema_migrations.sql)
 -- ---------------------------------------------------------------------------
 -- One row per file in backend/migrations/ that this database has applied;
@@ -12617,6 +12543,5 @@ insert into public.schema_migrations (filename) values
   ('20261101_22_document_text_unfinished_index.sql'),
   ('20261101_23_document_text_backfill_from_unfinished.sql'),
   ('20261101_24_wipe_memory_files_batch.sql'),
-  ('20261107_01_playbook_review_publication.sql'),
-  ('20261117_01_instance_setup.sql')
+  ('20261107_01_playbook_review_publication.sql')
 on conflict (filename) do nothing;
