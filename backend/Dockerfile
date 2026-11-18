@@ -15,13 +15,15 @@ WORKDIR /app
 # image that crashes at boot (MIKE-BACKEND-3R). `docker compose build --pull`
 # refreshes the base.
 COPY backend/package*.json backend/.npmrc ./
-RUN npm ci
+RUN npm ci && npm cache clean --force
 COPY backend/ ./
 COPY packages/contracts /packages/contracts
 # The compose db-init step (schema.sql, migrations/, scripts/migrate.sh are
 # already here) also needs the ledger-adoption script for pre-ledger volumes.
 COPY docker/db-init/adopt-ledger.sh ./docker/db-init/adopt-ledger.sh
-RUN npm run build
+# Compile, then drop the build and test tooling (TypeScript, Vitest, Stryker):
+# every entrypoint runs compiled dist/ with production dependencies only.
+RUN npm run build && npm prune --omit=dev && npm cache clean --force
 
 # --enable-source-maps: every entrypoint in this image (API, worker,
 # sync:workflows) reports stack frames as src/*.ts lines, not dist/*.js.
