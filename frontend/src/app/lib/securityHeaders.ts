@@ -16,10 +16,6 @@
  * full policy below ships as Content-Security-Policy-Report-Only: browsers
  * log what it would block without blocking it. Only the low-risk directives
  * are enforced.
- *
- * On Cloudflare (OpenNext), static files are served before the Next server
- * runs and never see these headers; public/_headers repeats the ones that
- * matter for them, and securityHeaders.test.ts keeps the two in step.
  */
 
 export type HeaderEntry = { key: string; value: string };
@@ -43,8 +39,6 @@ const ENFORCED_CSP = [
  * - 'unsafe-inline' scripts: Next's inline bootstrap scripts (no nonces yet).
  * - 'wasm-unsafe-eval': the DOCX editor's HarfBuzz text shaper.
  * - apis.google.com, docs.google.com: the Google Picker (lib/googlePicker.ts).
- * - static.cloudflareinsights.com: Cloudflare's injected analytics beacon,
- *   which posts back to the same origin (/cdn-cgi/rum).
  * - cdn.jsdelivr.net fonts: the DOCX editor's font fallback.
  * - unpkg.com fonts: pdf.js standard fonts for PDF previews
  *   (STANDARD_FONT_DATA_URL in components/shared/views/highlightQuote.ts).
@@ -60,7 +54,7 @@ function reportOnlyCsp(production: boolean): string {
             "script-src 'self' 'unsafe-inline' 'wasm-unsafe-eval'",
             // React's development build evaluates code for fast refresh.
             ...(production ? [] : ["'unsafe-eval'"]),
-            "https://apis.google.com https://static.cloudflareinsights.com",
+            "https://apis.google.com",
         ].join(" "),
         "style-src 'self' 'unsafe-inline'",
         "img-src 'self' data: blob: https:",

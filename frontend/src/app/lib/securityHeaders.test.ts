@@ -1,18 +1,14 @@
 // @vitest-environment node
 // next.config.ts is a Node module (it imports Sentry's build plugin), so it
 // is loaded here the way `next build` loads it, not inside jsdom.
-import { readFileSync } from "node:fs";
 import { buildCustomRoute } from "next/dist/lib/build-custom-route";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import nextConfig from "../../../next.config";
 import { STANDARD_FONT_DATA_URL } from "../components/shared/views/highlightQuote";
 
-const PUBLIC_HEADERS_FILE = new URL("../../../public/_headers", import.meta.url);
-
 /**
  * The headers next.config.ts attaches to `path`. Each rule's source is
- * compiled the way `next build` writes it into routes-manifest.json, which is
- * also what OpenNext matches against on Cloudflare.
+ * compiled the way `next build` writes it into routes-manifest.json.
  */
 async function headersFor(path: string): Promise<Record<string, string>> {
     expect(nextConfig.headers, "next.config.ts defines no headers()").toBeTypeOf(
@@ -29,20 +25,6 @@ async function headersFor(path: string): Promise<Record<string, string>> {
 
 /** The headers on an ordinary page such as /login. */
 const pageHeaders = () => headersFor("/login");
-
-/** The header lines public/_headers applies to every static file. */
-function staticFileHeaders(): Record<string, string> {
-    const lines = readFileSync(PUBLIC_HEADERS_FILE, "utf8").split("\n");
-    const start = lines.findIndex((line) => line.trim() === "/*");
-    expect(start, "public/_headers has no /* block").toBeGreaterThanOrEqual(0);
-    const headers: Record<string, string> = {};
-    for (const line of lines.slice(start + 1)) {
-        if (!/^\s+\S/.test(line)) break;
-        const [key, ...value] = line.trim().split(":");
-        headers[key] = value.join(":").trim();
-    }
-    return headers;
-}
 
 afterEach(() => {
     vi.unstubAllEnvs();
@@ -104,23 +86,5 @@ describe("web app security headers", () => {
 
     it("does not advertise the framework", () => {
         expect(nextConfig.poweredByHeader).toBe(false);
-    });
-
-    it("gives static files on Cloudflare the same protections as pages", async () => {
-        // Workers Static Assets serves public/ and /_next/static before the
-        // Next server runs, so next.config.ts headers never reach them.
-        vi.stubEnv("NODE_ENV", "production");
-        const pages = await pageHeaders();
-        const statics = staticFileHeaders();
-
-        for (const key of [
-            "Content-Security-Policy",
-            "X-Frame-Options",
-            "X-Content-Type-Options",
-            "Referrer-Policy",
-            "Strict-Transport-Security",
-        ]) {
-            expect(statics[key], key).toBe(pages[key]);
-        }
     });
 });
