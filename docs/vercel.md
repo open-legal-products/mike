@@ -112,6 +112,10 @@ the button appears on the login page within a minute, with no redeploy.
   Dependabot branch. Dependabot still opens pull requests in your copy;
   disable it under the repository's **Settings > Code security** if you do
   not want them.
+- **No CI in your copy.** The copy includes Mike's GitHub Actions workflows,
+  but every job is skipped unless the repository is
+  `open-legal-products/mike` or a fork of it, so your copy uses no Actions
+  minutes. To run them, remove the `if:` line from the jobs you want.
 - **First request after idle.** The API container stops after five minutes
   without traffic; the next request starts it again, which takes about six
   seconds.
