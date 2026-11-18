@@ -1,6 +1,8 @@
 /// <reference types="office-js" />
 
 import { useCallback, useMemo } from "react";
+import { isOutlookHost } from "../lib/officeHost";
+import { readComposeMarkdown } from "../lib/outlookCompose";
 import { createRevisionIndex, type RevisionIndex } from "../lib/revisionIndex";
 import { createSerialBatcher } from "../lib/serialBatcher";
 import { reportWordFailure } from "../lib/errorReporting";
@@ -2694,7 +2696,10 @@ export function useWordDoc() {
    */
   const readDocumentMarkdown = useCallback(
     (): Promise<string> =>
-      serializeWordMutation(() =>
+      // In Outlook the active document is the message being composed.
+      isOutlookHost()
+        ? readComposeMarkdown()
+        : serializeWordMutation(() =>
         Word.run(async (context) => {
           const body = context.document.body;
           try {

@@ -26,7 +26,10 @@
     "test:e2e:ui": "playwright test --ui",
     "live:login": "node e2e-live/word-web-session.mjs --login",
     "live:word": "node e2e-live/manual-session.mjs",
-    "live:stub": "node e2e-live/anthropic-stub.mjs"
+    "live:stub": "node e2e-live/anthropic-stub.mjs",
+    "start:outlook": "office-addin-debugging start manifest.outlook.xml desktop --app outlook",
+    "stop:outlook": "office-addin-debugging stop manifest.outlook.xml",
+    "validate:outlook": "npx --yes office-addin-manifest validate manifest.outlook.xml"
   },
   "dependencies": {
     "@radix-ui/react-dropdown-menu": "^2.2.1",

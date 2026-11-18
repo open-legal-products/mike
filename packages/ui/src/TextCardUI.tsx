@@ -1,12 +1,21 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import React, { useEffect, useState } from "react";
 import { Check, Copy } from "lucide-react";
 import { LIQUID_GLASS_FLAT_CLASS } from "./LiquidGlassUI";
 import { TextButtonUI } from "./TextButtonUI";
 
 /** Literal copy-ready text; never interpret markup as HTML or Markdown. */
-export function TextCardUI({ title, text }: { title: string; text: string }) {
+export function TextCardUI({
+  title,
+  text,
+  footer,
+}: {
+  title: string;
+  text: string;
+  /** Host actions under the text, e.g. the Outlook pane's "Insert into email". */
+  footer?: React.ReactNode;
+}) {
   const [copied, setCopied] = useState(false);
   const [copyError, setCopyError] = useState(false);
   useEffect(() => {
@@ -55,6 +64,9 @@ export function TextCardUI({ title, text }: { title: string; text: string }) {
       >
         {text}
       </div>
+      {footer && (
+        <div className="flex flex-wrap items-center gap-2 px-3 pb-3">{footer}</div>
+      )}
       <span role="status" className="sr-only">
         {copied ? "Copied to clipboard" : ""}
       </span>

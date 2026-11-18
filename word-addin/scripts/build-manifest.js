@@ -24,18 +24,17 @@ if (
 }
 const publicUrl = parsedPublicUrl.origin;
 
-const sourcePath = path.resolve(__dirname, "../manifest.xml");
 const distPath = path.resolve(__dirname, "../dist");
-const outputPath = path.join(distPath, "manifest.xml");
-const manifest = fs
-  .readFileSync(sourcePath, "utf8")
-  .replaceAll("https://localhost:3200", publicUrl);
-
-if (manifest.includes("https://localhost:3200")) {
-  throw new Error("Production manifest still contains localhost URLs");
+// Word and Outlook share the task pane; each host gets its own manifest.
+for (const name of ["manifest.xml", "manifest.outlook.xml"]) {
+  const manifest = fs
+    .readFileSync(path.resolve(__dirname, "..", name), "utf8")
+    .replaceAll("https://localhost:3200", publicUrl);
+  if (manifest.includes("https://localhost:3200")) {
+    throw new Error(`Production ${name} still contains localhost URLs`);
+  }
+  fs.writeFileSync(path.join(distPath, name), manifest);
 }
-
-fs.writeFileSync(outputPath, manifest);
 
 const assetOutputPath = path.join(distPath, "assets");
 fs.mkdirSync(assetOutputPath, { recursive: true });
@@ -46,4 +45,4 @@ for (const filename of ["icon-16.png", "icon-32.png", "icon-80.png"]) {
   );
 }
 
-console.log(`Wrote production manifest and ribbon icons for ${publicUrl}`);
+console.log(`Wrote production Word and Outlook manifests and ribbon icons for ${publicUrl}`);
