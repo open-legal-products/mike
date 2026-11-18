@@ -80,6 +80,12 @@ function dispatcher() {
           total_matches: hit ? 1 : 0,
         } as never);
       }
+      if (call.function.name === "read_document") {
+        results.docsRead.push({
+          filename: DOCS.find((d) => d.doc_id === input.doc_id)!.filename,
+          document_id: `uuid-${input.doc_id}`,
+        } as never);
+      }
       results.toolResults.push({
         role: "tool",
         tool_call_id: call.id,
@@ -202,6 +208,25 @@ describe("run_script in a chat turn", () => {
     // What the script looked at is part of the stored turn.
     const finds = result.events.filter((e) => e.type === "doc_find");
     expect(finds).toHaveLength(2);
+  });
+
+  it("marks a script's reads so they are not replayed as the model's own", async () => {
+    vi.stubEnv("SCRIPT_TOOL", "on");
+    modelCalls([
+      { id: "r1", name: "read_document", input: { doc_id: "doc-0" } },
+      {
+        id: "s1",
+        name: SCRIPT_TOOL_NAME,
+        input: { code: `await tools.read_document({ doc_id: "doc-1" }); return 1;` },
+      },
+    ]);
+    const result = await runLLMStream(params());
+    const reads = result.events.filter((e) => e.type === "doc_read");
+    expect(reads).toEqual([
+      expect.objectContaining({ filename: "Supply A.docx" }),
+      expect.objectContaining({ filename: "Supply B.docx", by_script: true }),
+    ]);
+    expect(reads[0]).not.toHaveProperty("by_script");
   });
 
   it("hides a failed inner call's internal error from the script", async () => {

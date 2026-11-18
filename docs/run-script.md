@@ -48,14 +48,21 @@ What a script can and cannot do:
   before the turn goes on.
 - A failed call throws in the script with only "`<tool>` failed."; the cause is
   reported to Sentry under `chat.tool_failed` with operation
-  `chat.script_tool`. A script's own error message is returned to the model,
+  `chat.script_tool`, once per script however many of its calls fail.
+- A read a script makes is stored as a `doc_read` event marked `by_script`.
+  On the next turn those are not replayed to the model as its own reads; one
+  line says a script read that many documents.
+- If the sandbox cannot be loaded or fails, the turn goes on without it: the
+  tool is not offered, or the call answers that the sandbox failed, and the
+  failure is reported under `chat.script_sandbox_failed`. A failed load is
+  tried again on the next script. A script's own error message is returned to the model,
   which wrote the code.
 
 Limits per script: 200 tool calls, 120 seconds (tool time included), 64 MB of
 VM memory, 20,000 characters of code and 40,000 characters of result (a longer
 result comes back as an error with a preview, itself within the limit). At most 4 scripts run at once
-per process; another is refused and the model is told to use the tools
-directly. Stopping the answer stops the script.
+per process, and at most 2 for one user; another is refused and the model is
+told to use the tools directly. Stopping the answer stops the script.
 
 ## Settings
 
@@ -69,7 +76,8 @@ SCRIPT_TOOL=off   # on to offer run_script
 ```bash
 npm test --prefix backend -- src/modules/chat/engine/tools/scriptTool.test.ts \
   src/modules/chat/engine/__tests__/streamingScriptTool.test.ts \
-  src/modules/chat/engine/__tests__/scriptToolDispatcher.test.ts
+  src/modules/chat/engine/__tests__/scriptToolDispatcher.test.ts \
+  src/modules/chat/engine/tools/scriptToolUnavailable.test.ts
 ```
 
 The tests run real scripts in the sandbox: limits, timeouts, stops,

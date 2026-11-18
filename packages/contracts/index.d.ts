@@ -445,6 +445,11 @@ export type AssistantEvent =
       document_id?: string;
       version_id?: string | null;
       version_number?: number | null;
+      /**
+       * Read by a run_script script, not by the model: the model saw only
+       * what the script returned, never this document's text.
+       */
+      by_script?: true;
     }
   | {
       type: "doc_find";

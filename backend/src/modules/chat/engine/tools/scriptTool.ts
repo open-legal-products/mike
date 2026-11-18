@@ -47,6 +47,8 @@ export const SCRIPT_TIMEOUT_MS = 120_000;
 const SCRIPT_MEMORY_LIMIT_BYTES = 64 * 1024 * 1024;
 /** Scripts running at once in this process; each holds a worker thread. */
 export const SCRIPT_MAX_CONCURRENT = 4;
+/** Of those, how many one user may hold, so one account cannot take them all. */
+export const SCRIPT_MAX_CONCURRENT_PER_USER = 2;
 /** What the model gets back, at most. */
 export const SCRIPT_MAX_RESULT_CHARS = 40_000;
 const MAX_CODE_CHARS = 20_000;
@@ -59,18 +61,36 @@ type CodemodeModule = typeof Codemode;
 let codemodeModule: Promise<CodemodeModule> | null = null;
 let quickjsWasm: Promise<Codemode.CodemodeWasmModule> | null = null;
 
-// pi-codemode is an ES module and the backend compiles to CommonJS.
+// pi-codemode is an ES module and the backend compiles to CommonJS. A failed
+// load is not kept: the next script tries again.
 function loadCodemode(): Promise<CodemodeModule> {
-  codemodeModule ??= import("@earendil-works/pi-codemode");
+  codemodeModule ??= import("@earendil-works/pi-codemode").catch((error) => {
+    codemodeModule = null;
+    throw error;
+  });
   return codemodeModule;
 }
 
 function loadWasm(codemode: CodemodeModule) {
-  quickjsWasm ??= codemode.loadQuickJSWasm();
+  quickjsWasm ??= codemode.loadQuickJSWasm().catch((error) => {
+    quickjsWasm = null;
+    throw error;
+  });
+  // The sandbox awaits it later; a rejection is its to report, not unhandled.
+  quickjsWasm.catch(() => undefined);
   return quickjsWasm;
 }
 
 let runningWorkers = 0;
+const runningByUser = new Map<string, number>();
+
+/** The sandbox itself failed: reported, and the model is told to carry on without it. */
+function reportSandboxFailure(cause: unknown) {
+  reportError(
+    new AppError("chat.script_sandbox_failed", "Script sandbox failed", { cause }),
+    { tags: { component: "chat-stream", operation: "chat.script_tool" } },
+  );
+}
 
 /** The turn's tools a script may call: allowlisted and offered this turn. */
 export function scriptInnerTools(activeTools: readonly unknown[]): OpenAIToolSchema[] {
@@ -134,7 +154,14 @@ export async function scriptToolFor(
   if (!scriptToolEnabled(env)) return null;
   const inner = scriptInnerTools(activeTools);
   if (!inner.length) return null;
-  const codemode = await loadCodemode();
+  let codemode: CodemodeModule;
+  try {
+    codemode = await loadCodemode();
+  } catch (error) {
+    // Without the sandbox the turn goes on with its ordinary tools.
+    reportSandboxFailure(error);
+    return null;
+  }
   const declarations = codemode.renderDeclarations({
     tools: asCodemodeTools(inner, () => () => undefined),
   });
@@ -170,6 +197,8 @@ export type ScriptRunContext = {
   innerTools: readonly OpenAIToolSchema[];
   dispatch: ScriptToolDispatch;
   signal?: AbortSignal;
+  /** Whose turn this is, for the per-user limit on running scripts. */
+  userId?: string;
   /**
    * The turn's spotlighting nonce. What a script returns is built from
    * document text, so it goes back to the model fenced as untrusted content,
@@ -181,6 +210,7 @@ export type ScriptRunContext = {
     maxToolCalls: number;
     timeoutMs: number;
     maxConcurrent: number;
+    maxConcurrentPerUser: number;
     maxResultChars: number;
   }>;
 };
@@ -224,8 +254,12 @@ function capped(
   max: number,
   wrap: (text: string) => string,
 ): string {
-  const whole = wrap(text);
-  if (whole.length <= max) return whole;
+  // A result already over the limit is not fenced just to be measured:
+  // fencing scans it, and it can be as large as the VM's memory.
+  if (text.length <= max) {
+    const whole = wrap(text);
+    if (whole.length <= max) return whole;
+  }
   const preview = (chars: number) =>
     wrap(
       JSON.stringify({
@@ -268,6 +302,7 @@ export async function runScriptCall(
     maxToolCalls: SCRIPT_MAX_TOOL_CALLS,
     timeoutMs: SCRIPT_TIMEOUT_MS,
     maxConcurrent: SCRIPT_MAX_CONCURRENT,
+    maxConcurrentPerUser: SCRIPT_MAX_CONCURRENT_PER_USER,
     maxResultChars: SCRIPT_MAX_RESULT_CHARS,
     ...context.limits,
   };
@@ -282,7 +317,13 @@ export async function runScriptCall(
     return failure("No tools are available to scripts in this conversation.");
   }
 
-  const codemode = await loadCodemode();
+  let codemode: CodemodeModule;
+  try {
+    codemode = await loadCodemode();
+  } catch (error) {
+    reportSandboxFailure(error);
+    return failure(ERROR_MESSAGES.sandbox);
+  }
   // Script calls are new, so they are always held to their schemas.
   const checker: ToolInputChecker = await loadToolInputChecker("enforce");
   const checks = new Map(
@@ -293,6 +334,9 @@ export async function runScriptCall(
   );
 
   let calls = 0;
+  // A dispatcher that is down fails every call of a loop the same way; one
+  // report per script says so without spending the day's quota on it.
+  let reportedToolFailure = false;
   // One inner call at a time: the dispatcher's per-turn state is not built
   // for concurrent batches, and this bounds a script's load on the database.
   let queue: Promise<unknown> = Promise.resolve();
@@ -333,12 +377,15 @@ export async function runScriptCall(
         if (context.signal?.aborted || ended.aborted) throw error;
         // The script is told only that the call failed; the failure itself
         // is reported here, where it stops, as the dispatcher reports its own.
-        reportError(
-          error instanceof AppError
-            ? error
-            : new AppError("chat.tool_failed", "Tool call failed", { cause: error }),
-          { tags: { component: "chat-stream", operation: "chat.script_tool" } },
-        );
+        if (!reportedToolFailure) {
+          reportedToolFailure = true;
+          reportError(
+            error instanceof AppError
+              ? error
+              : new AppError("chat.tool_failed", "Tool call failed", { cause: error }),
+            { tags: { component: "chat-stream", operation: "chat.script_tool" } },
+          );
+        }
         throw new ScriptToolError(`${name} failed.`);
       }
       return parseToolResult(unfenced(content, context.nonce));
@@ -347,6 +394,12 @@ export async function runScriptCall(
   const TOO_MANY =
     "Too many scripts are running right now. Use the tools directly, or try again shortly.";
   if (runningWorkers >= limits.maxConcurrent) return failure(TOO_MANY);
+  const { userId } = context;
+  if (userId && (runningByUser.get(userId) ?? 0) >= limits.maxConcurrentPerUser) {
+    return failure(
+      "You already have scripts running in other conversations. Use the tools directly, or try again shortly.",
+    );
+  }
   // Set when the limit is reached between the check above and the worker's start.
   let refused = false;
 
@@ -371,9 +424,15 @@ export async function runScriptCall(
   });
 
   let result: Codemode.CodemodeResult;
+  if (userId) runningByUser.set(userId, (runningByUser.get(userId) ?? 0) + 1);
   try {
     result = await sandbox.execute(code, { signal: context.signal });
   } finally {
+    if (userId) {
+      const left = (runningByUser.get(userId) ?? 1) - 1;
+      if (left > 0) runningByUser.set(userId, left);
+      else runningByUser.delete(userId);
+    }
     await sandbox.close();
     // Queued calls have been refused by now; the one that was already running
     // finishes before the turn moves on, since the dispatcher's per-turn
@@ -401,6 +460,7 @@ export async function runScriptCall(
     );
   }
   const { kind } = result.error;
+  if (kind === "sandbox") reportSandboxFailure(new Error(result.error.message));
   // A script's own error message is the model's to read: it wrote the code.
   const detail =
     kind === "script"

@@ -389,6 +389,46 @@ describe("runScriptCall", () => {
     }
   });
 
+  it("reports a failing dispatcher once per script, not once per call", async () => {
+    reportError.mockClear();
+    const dispatch = (async () => {
+      throw new Error("database is down");
+    }) as ScriptToolDispatch;
+    const { result } = await run(
+      `let failed = 0;
+       for (let i = 0; i < 12; i++) { try { await tools.list_documents({}); } catch { failed++; } }
+       return failed;`,
+      { dispatch },
+    );
+    expect(result).toMatchObject({ ok: true, value: 12 });
+    expect(reportError).toHaveBeenCalledTimes(1);
+  });
+
+  it("limits how many scripts one user runs at once", async () => {
+    const dispatch = (async () => {
+      await new Promise((r) => setTimeout(r, 150));
+      return "{}";
+    }) as ScriptToolDispatch;
+    const start = (userId: string, id: string) =>
+      runScriptCall(call(`await tools.read_document({ doc_id: "d" }); return 1;`, id), {
+        innerTools: INNER,
+        dispatch,
+        userId,
+        limits: { maxConcurrentPerUser: 1 },
+      }).then((t) => JSON.parse(t) as { ok: boolean; error?: string });
+    const [first, second, other] = await Promise.all([
+      start("user-a", "a1"),
+      start("user-a", "a2"),
+      start("user-b", "b1"),
+    ]);
+    expect(first.ok).toBe(true);
+    expect(second.ok).toBe(false);
+    expect(second.error).toContain("already have scripts running");
+    // Another user is not held up, and the first user's slot comes back.
+    expect(other.ok).toBe(true);
+    expect((await start("user-a", "a3")).ok).toBe(true);
+  });
+
   it("refuses when too many scripts are running", async () => {
     const { result } = await run(`return 1;`, { limits: { maxConcurrent: 0 } });
     expect(result).toMatchObject({ ok: false });

@@ -834,6 +834,9 @@ export async function runLLMStream(params: {
   // runToolCalls is still awaiting a later call. The catch below records what
   // such a batch finished so far, so a saved edit is in the stored turn.
   const unrecordedBatches = new Set<ToolCallBatchResult>();
+  // Batches a run_script script dispatched: the model was not shown what
+  // they read, and the next turn's replay must not say it read them.
+  const scriptBatches = new WeakSet<ToolCallBatchResult>();
   // Events of the calls that completed, in the order this turn shows
   // tool results. A batch is recorded once: `completed` is what the
   // dispatcher returned for it, which is `batch` itself unless a test
@@ -843,9 +846,11 @@ export async function runLLMStream(params: {
     completed: ToolCallBatchResult = batch,
   ) => {
     if (!unrecordedBatches.delete(batch)) return;
+    const byScript = scriptBatches.has(batch);
     for (const r of completed.docsRead) {
       events.push({
         type: "doc_read",
+        ...(byScript ? { by_script: true as const } : {}),
         filename: r.filename,
         document_id: r.document_id,
         version_id: r.version_id,
@@ -1112,9 +1117,11 @@ export async function runLLMStream(params: {
         const runServerBatch = async (
           batchCalls: ToolCall[],
           readState: TurnReadState,
+          byScript = false,
         ): Promise<ToolCallBatchResult> => {
           const batch = emptyToolCallBatchResult();
           unrecordedBatches.add(batch);
+          if (byScript) scriptBatches.add(batch);
           let completed: ToolCallBatchResult;
           try {
             completed = await runToolCalls(
@@ -1176,10 +1183,12 @@ export async function runLLMStream(params: {
             innerTools: scriptTools,
             signal,
             nonce,
+            userId,
             dispatch: async (name, args, callId) => {
               const inner = await runServerBatch(
                 [{ id: callId, function: { name, arguments: JSON.stringify(args) } }],
                 scriptReadState,
+                true,
               );
               const row = inner.toolResults.find(
                 (r) => (r as { tool_call_id?: string }).tool_call_id === callId,
