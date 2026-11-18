@@ -267,6 +267,15 @@ minified browser frames cannot promise an original TypeScript line without it.
 - Everything else that reaches `console.error`, deduplicated as above. An
   error reported explicitly is also not filed a second time if the same
   object then escapes to the browser's unhandled-error or rejection handler.
+- Limits of whatever sits in front of the API (`component=gateway-limit`,
+  warning). Neither is visible from the gateway or the backend, so the
+  browser reports them: a `413` that carries none of the backend's own codes
+  (`stage=payload-too-large`: a reverse proxy's or serverless host's
+  request-size cap refused the body, one issue per route), and an assistant
+  stream that ended without its `[DONE]` marker (`stage=stream-incomplete`: a
+  proxy or function time limit, or a restart, closed a reply that was still
+  running). The backend's own size limits answer with a `code` and are not
+  reported.
 
 **Word add-in**
 

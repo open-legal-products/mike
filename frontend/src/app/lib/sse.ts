@@ -64,6 +64,14 @@ export async function* readSseFrames(
          * can ask for the ones it has not seen (`from=<last id + 1>`).
          */
         onEventId?: (id: string) => void;
+        /**
+         * Called once when the body reaches its end without `data: [DONE]`.
+         * Our streams always finish with that marker, so an end without it
+         * means something between the server and here closed the response
+         * early (a proxy or platform time limit, a restart). Not called for
+         * an abort, an early `break`, or a failed read.
+         */
+        onIncomplete?: () => void;
     },
 ): AsyncGenerator<unknown> {
     const reader = response.body?.getReader();
@@ -125,7 +133,10 @@ export async function* readSseFrames(
                 yield parsed;
             }
 
-            if (done) break;
+            if (done) {
+                opts?.onIncomplete?.();
+                break;
+            }
         }
     } finally {
         // A stream that ended with [DONE] is read to EOF so the request

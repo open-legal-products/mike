@@ -13,11 +13,13 @@ import { getTabularReviewHistoryStatuses } from "./mikeApi";
 // the reporter's own suite covers what it does with it.
 const reportApiFailure = vi.hoisted(() => vi.fn());
 const reportNetworkFailure = vi.hoisted(() => vi.fn());
+const reportGatewayLimit = vi.hoisted(() => vi.fn());
 const markErrorHandled = vi.hoisted(() => vi.fn());
 vi.mock("@/app/lib/errorReporting", () => ({
     trackPendingRequest: () => () => {},
     markErrorHandled,
     reportApiFailure,
+    reportGatewayLimit,
     reportNetworkFailure,
 }));
 
@@ -550,6 +552,42 @@ describe("apiRequest plumbing (via thin wrappers)", () => {
             status: 409,
             message: "The request could not be completed. Please try again.",
         });
+    });
+
+    it("reports a 413 that is not the backend's own as a limit in front of the API", async () => {
+        // A host or proxy size cap answers before the backend: no JSON, no code.
+        reportGatewayLimit.mockClear();
+        fetchMock.mockResolvedValue(
+            new Response("Request Entity Too Large", {
+                status: 413,
+                headers: { "x-request-id": "req-413" },
+            }),
+        );
+        await expect(getUserProfile()).rejects.toMatchObject({ status: 413 });
+        expect(reportGatewayLimit).toHaveBeenCalledExactlyOnceWith("payload-too-large", {
+            path: "/user/profile",
+            method: "GET",
+            status: 413,
+            requestId: "req-413",
+        });
+
+        // The same cap answering with JSON but none of our codes.
+        reportGatewayLimit.mockClear();
+        fetchMock.mockResolvedValue(jsonResponse({ error: "too large" }, { status: 413 }));
+        await expect(getUserProfile()).rejects.toMatchObject({ status: 413 });
+        expect(reportGatewayLimit).toHaveBeenCalledTimes(1);
+
+        // The backend's own limit is an intended answer and is not reported.
+        reportGatewayLimit.mockClear();
+        fetchMock.mockResolvedValue(
+            jsonResponse(
+                { code: "request_too_large", detail: "The request is too large." },
+                { status: 413 },
+            ),
+        );
+        await expect(getUserProfile()).rejects.toMatchObject({ status: 413, code: "request_too_large" });
+        expect(reportGatewayLimit).not.toHaveBeenCalled();
+        expect(reportApiFailure).not.toHaveBeenCalledWith(expect.objectContaining({ status: 413 }));
     });
 
     it("discards raw JSON details from 5xx responses and keeps the request ID", async () => {

@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import type { AssistantEvent, Message } from "@/app/components/shared/types";
 import type { ConnectorApprovalItem } from "@mike/contracts";
 import { streamChatTurn } from "./mikeApi";
+import { reportGatewayLimit } from "@/app/lib/errorReporting";
 import { beginAssistantTurn } from "./assistantTurns";
 import {
   consumeAssistantTurnStream,
@@ -11,7 +12,9 @@ import {
 } from "./assistantTurnStream";
 
 vi.mock("./mikeApi", () => ({ streamChatTurn: vi.fn(), stopChatTurn: vi.fn() }));
+vi.mock("@/app/lib/errorReporting", () => ({ reportGatewayLimit: vi.fn() }));
 const streamChatTurnMock = vi.mocked(streamChatTurn);
+const reportGatewayLimitMock = vi.mocked(reportGatewayLimit);
 
 /** An SSE body that emits the given chunks; `fail` makes it error out after them. */
 function sseResponse(chunks: string[], opts?: { fail?: boolean; status?: number }) {
@@ -45,6 +48,23 @@ afterEach(() => {
 });
 
 describe("consumeAssistantTurnStream", () => {
+  it("reports a stream that ends without [DONE], and not one that finishes or is stopped", async () => {
+    const consume = async (chunks: string[], signal?: AbortSignal) => {
+      const turn = begin();
+      await consumeAssistantTurnStream(sseResponse(chunks), {
+        turn, sink: createTurnEventSink(turn, []), cursor: createTurnCursor("chat-a"), signal,
+      });
+      turn.finish();
+    };
+
+    await consume([frame(1, { type: "content_delta", text: "Half an ans" })]);
+    expect(reportGatewayLimitMock).toHaveBeenCalledExactlyOnceWith("stream-incomplete");
+
+    reportGatewayLimitMock.mockClear();
+    await consume([frame(1, { type: "content_delta", text: "Done." }), "data: [DONE]\n\n"]);
+    expect(reportGatewayLimitMock).not.toHaveBeenCalled();
+  });
+
   it("keeps text cards between prose segments and ignores malformed cards", async () => {
     const turn = begin();
     const card = { type: "text_card" as const, card_id: "card-1", title: "Draft", text: "First paragraph.\n\nSecond paragraph." };
