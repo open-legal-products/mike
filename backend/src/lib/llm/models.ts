@@ -160,6 +160,23 @@ export function builtInModelIds(): string[] {
 }
 
 // ---------------------------------------------------------------------------
+// Earlier-turn replay
+// ---------------------------------------------------------------------------
+
+/**
+ * Whether this model withdraws its own earlier answer when a later turn shows
+ * it only a text record of that answer's tool calls: it takes the record for
+ * words it wrote and the answer for one it made up. Measured, not assumed:
+ * Claude Sonnet 5.5 did so on every follow-up tried, on any route to it
+ * (direct, Bedrock, Vertex, a router). The other models tried (Claude Fable
+ * 5.1 and Haiku 4.5, GPT 6.1 Sol) did not, and the remedy changes how they
+ * answer, so it is applied to this model only.
+ */
+export function disownsReplayedToolRecord(model: string): boolean {
+    return /claude-sonnet-5[-.]5(?![0-9])/.test(model);
+}
+
+// ---------------------------------------------------------------------------
 // Provider inference
 // ---------------------------------------------------------------------------
 
