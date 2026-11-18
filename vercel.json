@@ -7,8 +7,7 @@
     },
     "api": {
       "root": ".",
-      "entrypoint": "backend/Dockerfile",
-      "command": ["bash", "/app/scripts/vercel-start.sh", "api"]
+      "entrypoint": "backend/Dockerfile#vercel-api"
     }
   },
   "daemons": {

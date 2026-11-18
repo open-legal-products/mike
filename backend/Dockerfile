@@ -1,12 +1,12 @@
 # ponytail: single stage. LibreOffice dwarfs everything, multi-stage saves little.
-FROM node:22-slim
+FROM node:22-slim AS app
 
 # libreoffice-convert shells out to soffice for doc conversion (see src/lib/convert.ts).
 # postgresql-client: docker-compose.yml runs db-init from this image so the
 # schema and migrations applied always belong to the same release as the code
 # (scripts/migrate.sh needs psql).
 RUN apt-get update \
-  && apt-get install -y --no-install-recommends libreoffice util-linux postgresql-client \
+  && apt-get install -y --no-install-recommends libreoffice util-linux postgresql-client ca-certificates \
   && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
@@ -41,3 +41,13 @@ ENV NODE_ENV=production NODE_OPTIONS=--enable-source-maps \
     MIKE_BUILD_SENTRY_DISABLED=$SENTRY_DISABLED MIKE_BUILD_SENTRY_DSN=$SENTRY_DSN
 EXPOSE 3001
 CMD ["npm", "start"]
+
+# Vercel (docs/vercel.md): vercel.json builds `vercel-api` for the API
+# service, which runs scripts/vercel-start.sh (database bootstrap and
+# Supabase variable mapping) before the server. Vercel does not apply a
+# service's `command` to a container service, so the stage sets it.
+FROM app AS vercel-api
+CMD ["bash", "/app/scripts/vercel-start.sh", "api"]
+
+# The default target stays the plain image every other deployment uses.
+FROM app
