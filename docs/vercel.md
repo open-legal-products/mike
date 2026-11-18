@@ -27,10 +27,22 @@ There is nothing to fill in. Open the production URL when the deployment is
 ready: a new deployment has no accounts, so Mike shows **Set up Mike**, where
 you create the first account and are signed straight in. That account is
 confirmed without an email, because a new Supabase project cannot send one
-yet. The screen is offered only while the deployment has no accounts at all,
-so open it soon after deploying: whoever opens it first creates the first
-account. Setup needs no database table: Mike asks Supabase Auth whether any
-account exists. The first account has no special rights.
+yet.
+
+> [!IMPORTANT]
+> Create your account as soon as the deployment is ready. Until the first
+> account exists, anyone who opens your deployment's address sees **Set up
+> Mike** and can create it. The address can be guessed: every deployment
+> from the button is named `mike`, and Vercel adds a suffix that can include
+> your team or account name. Vercel takes you to the site when the build
+> finishes, so you are normally first. To skip the screen entirely, set
+> `MIKE_ADMIN_EMAIL` and `MIKE_ADMIN_PASSWORD` before the first deployment
+> (see below).
+
+Each deployment is independent: its own Vercel project, Supabase database and
+address. Setup closes for good once that deployment has an account, and the
+first account has no special rights. Setup needs no database table: Mike asks
+Supabase Auth whether any account exists.
 
 Then add a model-provider key under **Settings > Bring Your Own Keys**, or set
 `ANTHROPIC_API_KEY`, `OPENAI_API_KEY` or `GEMINI_API_KEY` on the Vercel
