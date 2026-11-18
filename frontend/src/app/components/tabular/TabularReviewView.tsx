@@ -322,12 +322,12 @@ export function TRView({ reviewId, projectId }: Props) {
         // can resolve AFTER the new one and clobber fresh state with stale
         // data; drop its results instead.
         let cancelled = false;
-        detailRequest.current += 1;
+        const request = ++detailRequest.current;
         confirmedDetail.current = undefined;
         const fetches: Promise<unknown>[] = [
             getTabularReview(reviewId).then(
                 (detail) => {
-                    if (cancelled) return;
+                    if (cancelled || request !== detailRequest.current) return;
                     confirmedDetail.current = detail;
                     const { review, cells, rows, documents, active_generation } = detail;
                     setReview(review);
@@ -373,7 +373,7 @@ export function TRView({ reviewId, projectId }: Props) {
                 // Without this the rejection was unhandled: the spinner
                 // cleared and the review read as empty rather than unloaded.
                 .catch((error) => {
-                    if (cancelled) return;
+                    if (cancelled || request !== detailRequest.current) return;
                     notifyError(error, {
                         action: "load this review",
                         dedupeKey: `tr-review:${reviewId}`,

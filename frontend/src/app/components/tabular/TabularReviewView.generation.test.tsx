@@ -575,6 +575,29 @@ describe("TabularReviewView single-cell regeneration", () => {
         } finally { vi.useRealTimers(); notify.mockRestore(); }
     });
 
+    it("initial-load regression: a late initial read cannot overwrite a newer retry", async () => {
+        const notices = await import("@/app/lib/userFacingError");
+        const notify = vi.spyOn(notices, "notifyError");
+        try {
+            vi.mocked(getTabularReview).mockRejectedValueOnce(new Error("offline"));
+            const { rerender } = render(<TRView reviewId="r1" />);
+            await waitFor(() => expect(notify).toHaveBeenCalled());
+            const retry = notify.mock.calls.at(-1)?.[1]?.onRetry;
+            expect(retry).toBeTypeOf("function");
+            type Detail = Awaited<ReturnType<typeof getTabularReview>>;
+            let finishInitial!: (detail: Detail) => void;
+            const fresh = { review: review({ id: "r2" }), cells: [{ ...CELL, content: { summary: "Fresh retry" } }],
+                rows: [ROW], documents: [], active_generation: null };
+            vi.mocked(getTabularReview).mockReturnValueOnce(new Promise(resolve => { finishInitial = resolve; }))
+                .mockResolvedValueOnce(fresh);
+            rerender(<TRView reviewId="r2" />);
+            await act(async () => { await retry?.(); });
+            expect(table.cells?.[0].content).toEqual({ summary: "Fresh retry" });
+            await act(async () => { finishInitial({ ...fresh, cells: [CELL] }); });
+            expect(table.cells?.[0].content).toEqual({ summary: "Fresh retry" });
+        } finally { notify.mockRestore(); }
+    });
+
     it("polls the run's status, not the whole review, until the run ends", async () => {
         const regenerate = await openCell();
         vi.mocked(regenerateTabularCell).mockResolvedValue({ summary: "New" } as never);
