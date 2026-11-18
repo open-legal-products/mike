@@ -1,3 +1,4 @@
+import { backfillDocumentEmbeddings, queueDocumentEmbeddings } from "./documents.embeddings";
 import { createHash } from "node:crypto";
 import { downloadFile } from "../../lib/storage";
 import { EXTRACTION_MAX_BYTES, ExtractionLimitError, ExtractionBusyError, ExtractionParseError, withBackgroundExtraction } from "../../lib/extraction/isolated";
@@ -57,6 +58,8 @@ export async function handleDocumentExtractText(db: Db, job: DbJob): Promise<voi
         p_text: text.replaceAll("\0", ""), p_sha256: hash, p_textless_pages: textlessPageCount,
       });
       if (publishError) throw publishError;
+      // Optional RAG (RAG_ENABLED=true): best effort, never fails extraction.
+      await queueDocumentEmbeddings(db, versionId);
     });
   } catch (error) {
     if (error instanceof ExtractionBusyError) {
@@ -117,5 +120,6 @@ export async function backfillDocumentText(db: Db, options: { limit?: number; re
   });
   if (error) throw error;
   await processDocumentTextInline(db);
+  await backfillDocumentEmbeddings(db, options);
   return Number(data ?? 0);
 }

@@ -124,3 +124,80 @@ begin
 end;
 $$;
 rollback;
+
+begin;
+create function pg_temp.assert_true(value boolean, message text) returns void language plpgsql as $$
+begin if value is distinct from true then raise exception '%',message; end if; end; $$;
+do $$
+declare
+  actor uuid := gen_random_uuid();
+  doc uuid := gen_random_uuid();
+  v1 uuid;
+  v2 uuid;
+  rev1 uuid;
+  rev2 uuid;
+  r jsonb;
+begin
+  insert into auth.users(id, email) values(actor, actor || '@rag.test');
+  insert into public.documents(id, user_id, library_kind, status) values(doc, actor, 'file', 'ready');
+  v1 := (public.create_document_version(doc, '{"filename":"clause.pdf","storage_path":"rag/one.pdf","file_type":"pdf"}', true)->>'id')::uuid;
+  select text_revision into rev1 from public.document_versions where id = v1;
+  perform public.publish_document_text(v1, rev1, '[Page 1]
+Clausola compromissoria arbitrale', 'hash1', 0);
+  perform pg_temp.assert_true(public.queue_document_embeddings(v1, 'bge-m3@2', false), 'queues embedding job for ready version');
+  perform pg_temp.assert_true(public.replace_document_text_chunks(
+    v1, rev1, 'bge-m3@2',
+    '[{"chunk_index":0,"page_start":1,"page_end":1,"start_char":0,"end_char":33,"content":"Clausola compromissoria arbitrale","embedding":"[1,0]"}]'::jsonb
+  ), 'publishes chunks for current revision');
+  r := public.search_document_chunks(actor::text, '', 'personal', 'library', 'arbitrale', '[1,0]', 'bge-m3@2', null, null, 5);
+  perform pg_temp.assert_true(jsonb_array_length(r->'matches') = 1, 'finds embedded chunk on live version');
+
+  -- Soft deletion removes derived chunks and embedding status immediately and refuses late writes.
+  update public.document_versions set deleted_at = now() where id = v1;
+  perform pg_temp.assert_true(not exists(select 1 from public.document_text_chunks where version_id = v1), 'soft delete removes chunks');
+  perform pg_temp.assert_true(not exists(select 1 from public.document_embedding_status where version_id = v1), 'soft delete removes embedding status');
+  perform pg_temp.assert_true(not public.replace_document_text_chunks(v1, rev1, 'bge-m3@2', '[]'::jsonb), 'deleted version rejects late chunk publish');
+  perform pg_temp.assert_true(not public.queue_document_embeddings(v1, 'bge-m3@2', true), 'deleted version rejects embedding queue');
+
+  -- Storage path removal (delete_document_version / replacement) also removes derived chunks and status.
+  v2 := (public.create_document_version(doc, '{"filename":"clause2.pdf","storage_path":"rag/two.pdf","file_type":"pdf"}', true)->>'id')::uuid;
+  select text_revision into rev2 from public.document_versions where id = v2;
+  perform public.publish_document_text(v2, rev2, '[Page 1]
+Secondo documento', 'hash2', 0);
+  perform public.queue_document_embeddings(v2, 'bge-m3@2', false);
+  perform public.replace_document_text_chunks(
+    v2, rev2, 'bge-m3@2',
+    '[{"chunk_index":0,"page_start":1,"page_end":1,"start_char":0,"end_char":17,"content":"Secondo documento","embedding":"[0,1]"}]'::jsonb
+  );
+  -- Negative access tests: another user cannot retrieve personal library or document chunks.
+  r := public.search_document_chunks(gen_random_uuid()::text, '', 'personal', 'library', 'Secondo', '[0,1]', 'bge-m3@2', null, null, 5);
+  perform pg_temp.assert_true(jsonb_array_length(r->'matches') = 0 and (r#>>'{coverage,total_versions}')::int = 0, 'another user cannot semantically search personal library');
+  r := public.search_document_chunks(gen_random_uuid()::text, '', 'personal', 'document', 'Secondo', '[0,1]', 'bge-m3@2', null, doc, 5);
+  perform pg_temp.assert_true(jsonb_array_length(r->'matches') = 0, 'another user cannot semantically search unshared document');
+
+  -- Deleting the text row removes chunks/status and causes replace_document_text_chunks to return false.
+  perform pg_temp.assert_true(exists(select 1 from public.document_text_chunks where version_id = v2), 'chunks exist before text row delete');
+  perform pg_temp.assert_true(exists(select 1 from public.document_embedding_status where version_id = v2), 'embedding status exists before text row delete');
+  delete from public.document_version_texts where version_id = v2;
+  perform pg_temp.assert_true(not exists(select 1 from public.document_text_chunks where version_id = v2), 'text row delete removes chunks');
+  perform pg_temp.assert_true(not exists(select 1 from public.document_embedding_status where version_id = v2), 'text row delete removes embedding status');
+  perform pg_temp.assert_true(not public.replace_document_text_chunks(v2, rev2, 'bge-m3@2', '[]'::jsonb), 'missing text row rejects chunk replacement');
+
+  -- Storage-path removal independently deletes chunks and status on its own populated version.
+  declare v3 uuid; rev3 uuid; begin
+    v3 := (public.create_document_version(doc, '{"filename":"clause3.pdf","storage_path":"rag/three.pdf","file_type":"pdf"}', true)->>'id')::uuid;
+    select text_revision into rev3 from public.document_versions where id = v3;
+    perform public.publish_document_text(v3, rev3, '[Page 1]\nTerzo documento', 'hash3', 0);
+    perform public.queue_document_embeddings(v3, 'bge-m3@2', false);
+    perform public.replace_document_text_chunks(
+      v3, rev3, 'bge-m3@2',
+      '[{"chunk_index":0,"page_start":1,"page_end":1,"start_char":0,"end_char":15,"content":"Terzo documento","embedding":"[0,1]"}]'::jsonb
+    );
+    perform pg_temp.assert_true(exists(select 1 from public.document_text_chunks where version_id = v3), 'v3 chunks exist before storage_path clear');
+    update public.document_versions set storage_path = null where id = v3;
+    perform pg_temp.assert_true(not exists(select 1 from public.document_text_chunks where version_id = v3), 'storage_path removal deletes chunks');
+    perform pg_temp.assert_true(not exists(select 1 from public.document_embedding_status where version_id = v3), 'storage_path removal deletes status');
+  end;
+end;
+$$;
+rollback;

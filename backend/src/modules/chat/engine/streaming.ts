@@ -1,3 +1,4 @@
+import { ragEnabled } from "../../../lib/rag/embeddingClient";
 import { BACKEND_REPORTING_OWNER } from "../../../lib/reportedUpstreamCodes";
 import { AppError } from "../../../lib/appError";
 import { teamOrgIdOf } from "../../../lib/personalOrgs";
@@ -453,9 +454,11 @@ export async function runLLMStream(params: {
   // A subagent's approvals pause its answer, which puts them to the user.
   const canPauseForApproval =
     connectorApprovals && (includeAskInputs || isSubagent);
-  const conversationTools = includeAskInputs
-    ? TOOLS
-    : TOOLS.filter((tool) => tool.function.name !== "ask_inputs");
+  const conversationTools = (
+    includeAskInputs
+      ? TOOLS
+      : TOOLS.filter((tool) => tool.function.name !== "ask_inputs")
+  ).filter((tool) => tool.function.name !== "search_documents_semantic" || ragEnabled());
   const webTools = webToolsFor(webSearch);
   const webSearchAccount = webSearchAccountFor(webSearch, apiKeys);
   const webToolNames = new Set<string>(
