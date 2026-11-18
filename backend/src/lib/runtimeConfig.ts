@@ -295,6 +295,21 @@ function onPath(name: string, pathValue = ""): boolean {
   });
 }
 
+// Every Supabase demo key is a JWT with `iss: "supabase-demo"`, signed with
+// the demo secret published in Supabase's own docs.
+function isSupabaseDemoKey(value: string | undefined): boolean {
+  const payload = value?.trim().split(".")[1];
+  if (!payload) return false;
+  try {
+    return (
+      JSON.parse(Buffer.from(payload, "base64url").toString("utf8"))?.iss ===
+      "supabase-demo"
+    );
+  } catch {
+    return false;
+  }
+}
+
 /**
  * Fail before the HTTP listener starts when the authentication boundary is not
  * usable. This deliberately lives outside app.ts so unit tests can import the
@@ -322,15 +337,21 @@ export function validateRuntimeConfiguration(
   // and blob capability tokens, and USER_API_KEYS_ENCRYPTION_SECRET derives
   // the AES-256-GCM key that protects user-supplied provider API keys at
   // rest. Reject the exact placeholders and anything too short to be a real
-  // secret; leave unset values alone because the consuming code fails on
-  // first use and some local setups do not exercise those features.
+  // secret. Production also requires a value before serving requests.
   const secretChecks: Array<[string, string]> = [
     ["DOWNLOAD_SIGNING_SECRET", "replace-with-a-random-32-byte-hex-string"],
     ["USER_API_KEYS_ENCRYPTION_SECRET", "your-long-random-secret"],
   ];
   for (const [name, placeholder] of secretChecks) {
     const rawValue = env[name];
-    if (!rawValue) continue;
+    if (!rawValue) {
+      if (env.NODE_ENV === "production") {
+        errors.push(
+          `${name} is required in production; generate a unique value (openssl rand -hex 32)`,
+        );
+      }
+      continue;
+    }
     // Consumers use the raw value, so whitespace-only values are configured
     // secrets, not the absent/empty values they reject on first use.
     const value = rawValue.trim();
@@ -353,6 +374,26 @@ export function validateRuntimeConfiguration(
     errors.push(
       "AUTH_HANDOFF_ENCRYPTION_SECRET is required when WORD_ADDIN_URL is set",
     );
+  }
+
+  if (env.NODE_ENV === "production") {
+    // docker-compose.yml and `supabase start` ship anon/service_role JWTs
+    // signed with Supabase's published demo secret. A server that accepts
+    // them accepts a service_role token anyone can mint, which bypasses
+    // row-level security on every document.
+    const supabaseKeyNames = [
+      "SUPABASE_SECRET_KEY",
+      env.SUPABASE_PUBLISHABLE_KEY?.trim()
+        ? "SUPABASE_PUBLISHABLE_KEY"
+        : "SUPABASE_ANON_KEY",
+    ];
+    for (const name of supabaseKeyNames) {
+      if (isSupabaseDemoKey(env[name])) {
+        errors.push(
+          `${name} is a published Supabase demo key; use your Supabase project's own keys in production (for a local run, set NODE_ENV=development; docs/deployment.md)`,
+        );
+      }
+    }
   }
 
   const retention = env.LLM_PROVIDER_DATA_RETENTION?.trim().toLowerCase();
