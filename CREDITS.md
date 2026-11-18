@@ -50,7 +50,7 @@ infrastructure, and development workflow, including optional local integrations.
 | Project | How Mike uses it |
 | --- | --- |
 | [AI SDK](https://github.com/vercel/ai) | Language-model integrations, streaming, and tool calls. |
-| [Pi](https://github.com/earendil-works/pi) (`pi-schema`) | Checking tool-call arguments against their schemas. |
+| [Pi](https://github.com/earendil-works/pi) (`pi-schema`, `pi-codemode`) and [quickjs-wasi](https://github.com/vercel-labs/quickjs-wasi) | Checking tool-call arguments against their schemas, and the sandbox that runs `run_script`. |
 | [Model Context Protocol TypeScript SDK](https://github.com/modelcontextprotocol/typescript-sdk) | Connections to MCP tools and servers. |
 | [Ollama](https://github.com/ollama/ollama) | Optional local language-model inference. |
 | [Zod](https://github.com/colinhacks/zod) | Runtime schema validation. |
