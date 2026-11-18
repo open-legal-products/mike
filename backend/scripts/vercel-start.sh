@@ -91,9 +91,13 @@ SQL
 MIGRATIONS_DIR="$app_dir/migrations" bash "$app_dir/scripts/migrate.sh" up
 
 # --- 4. Bucket, grants and generated secrets --------------------------------
+# Under the same lock as the schema step: Vercel starts several API instances
+# at once on a burst of traffic, and concurrent GRANTs on the same tables fail
+# with "tuple concurrently updated".
 psql_db -v bucket="$bucket" <<'SQL'
 \o /dev/null
 set client_min_messages = warning;
+select pg_advisory_lock(2026111701);
 -- Hosted Supabase always has storage.buckets; a bare Postgres (or an
 -- S3-backed install) does not, and needs no bucket here.
 select to_regclass('storage.buckets') is not null as has_storage \gset
@@ -128,6 +132,7 @@ from unnest(array['DOWNLOAD_SIGNING_SECRET', 'USER_API_KEYS_ENCRYPTION_SECRET'])
 on conflict (name) do nothing;
 
 notify pgrst, 'reload schema';
+select pg_advisory_unlock(2026111701);
 SQL
 
 while IFS='|' read -r name value; do
@@ -157,9 +162,20 @@ case "$role" in
     exec node --enable-source-maps dist/index.js
     ;;
   worker)
-    log "syncing the workflow catalog"
-    node --enable-source-maps dist/jobs/syncWorkflows.js \
-      || log "workflow catalog sync failed; continuing (built-in workflows may be missing until the next start)"
+    # The catalog lives in the database, so a failed sync only delays new
+    # workflows. GitHub's anonymous API limit is shared by Vercel's outbound
+    # addresses and often answers 403, so retry in the background for two
+    # hours instead of holding up the workers (set MIKE_WORKFLOWS_GITHUB_TOKEN
+    # to avoid the limit).
+    (
+      for attempt in 1 2 3 4 5 6; do
+        if node --enable-source-maps dist/jobs/syncWorkflows.js; then
+          exit 0
+        fi
+        log "workflow catalog sync failed (attempt $attempt); retrying in 20 minutes"
+        sleep 1200
+      done
+    ) &
     log "starting background workers"
     exec node --enable-source-maps dist/worker.js
     ;;
