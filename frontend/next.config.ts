@@ -2,6 +2,7 @@ import path from "node:path";
 import type { NextConfig } from "next";
 import { withSentryConfig } from "@sentry/nextjs/config";
 import { releaseName } from "@mike/client";
+import { securityHeaders } from "./src/app/lib/securityHeaders";
 
 // The repository root: the parent of this directory, here and in the Docker
 // image (frontend/Dockerfile mirrors the layout at /app/frontend and
@@ -50,6 +51,20 @@ const nextConfig: NextConfig = {
             path.join(__dirname, "node_modules"),
         ];
         return config;
+    },
+    // Do not advertise the framework and version in every response.
+    poweredByHeader: false,
+    async headers() {
+        return [
+            {
+                // Every path except the /api proxy, which forwards the
+                // backend's own stricter helmet headers (no-referrer on the
+                // OAuth callbacks, default-src 'none'); a rule here would
+                // overwrite them.
+                source: "/:path((?!api(?:/|$)).*)",
+                headers: securityHeaders(process.env.NODE_ENV === "production"),
+            },
+        ];
     },
     async rewrites() {
         return [
