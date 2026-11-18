@@ -578,7 +578,7 @@ export async function runLLMStream(params: {
   // The tokens are this assistant's own, summed over its steps; each
   // subagent reports its own on its delegation event.
   let answerModel: string | null = null;
-  let answerUsage: { input_tokens: number; output_tokens: number } | null = null;
+  let answerUsage: NonNullable<import("@mike/contracts").ResponseDetailsEvent["usage"]> | null = null;
   let fullText = "";
   let iterText = "";
   let iterVisibleText = "";
@@ -973,9 +973,14 @@ export async function runLLMStream(params: {
         onActivity: params.onActivity,
         onUsage: (usage, finishReason) => {
           answerUsage = {
+            ...answerUsage,
             input_tokens: (answerUsage?.input_tokens ?? 0) + usage.inputTokens,
             output_tokens: (answerUsage?.output_tokens ?? 0) + usage.outputTokens,
           };
+          if (usage.cacheReadTokens !== undefined)
+            answerUsage.cache_read_tokens = (answerUsage.cache_read_tokens ?? 0) + usage.cacheReadTokens;
+          if (usage.cacheWriteTokens !== undefined)
+            answerUsage.cache_write_tokens = (answerUsage.cache_write_tokens ?? 0) + usage.cacheWriteTokens;
           subagentRun?.onUsage(usage, finishReason);
         },
         onContentDelta: (delta) => {

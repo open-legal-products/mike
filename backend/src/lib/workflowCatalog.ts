@@ -1,3 +1,4 @@
+import { selectAllByKey, selectInBatches } from "./batchedQuery";
 import type { Db } from "./supabase";
 
 export type WorkflowCatalogContributor = {
@@ -144,6 +145,46 @@ export async function listActiveCatalogWorkflows(
   const { data, error } = await query.order("title", { ascending: true });
   if (error) throw error;
   return (data ?? []) as WorkflowCatalogRow[];
+}
+
+type AssistantCatalogPrompt = {
+  id: string;
+  workflow_key: string;
+  title: string;
+  prompt_md: string | null;
+};
+const promptsByDb = new WeakMap<Db, Map<string, AssistantCatalogPrompt>>();
+const pendingPromptsByDb = new WeakMap<Db, Map<string, Promise<AssistantCatalogPrompt | undefined>>>();
+
+/** Each catalog version has a distinct id for its content hash. Read the current
+ * membership each turn, then load only bodies not present in the previous catalog. */
+export async function activeAssistantPrompts(db: Db): Promise<AssistantCatalogPrompt[]> {
+  const active = await selectAllByKey<{ id: string }>("active assistant workflows", () =>
+    db.from("mike_workflows").select("id").eq("active", true).eq("type", "assistant"),
+  );
+  const promptCache = promptsByDb.get(db) ?? new Map<string, AssistantCatalogPrompt>();
+  promptsByDb.set(db, promptCache);
+  const pending = pendingPromptsByDb.get(db) ?? new Map<string, Promise<AssistantCatalogPrompt | undefined>>();
+  pendingPromptsByDb.set(db, pending);
+  const missing = active.filter(row => !promptCache.has(row.id) && !pending.has(row.id));
+  if (missing.length) {
+    const loading = selectInBatches<AssistantCatalogPrompt>(
+      "assistant workflow prompts",
+      missing.map(row => row.id),
+      batch => db.from("mike_workflows").select("id,workflow_key,title,prompt_md").in("id", batch),
+    );
+    for (const { id } of missing) {
+      pending.set(id, loading.then(rows => rows.find(row => row.id === id))
+        .finally(() => pending.delete(id)));
+    }
+  }
+  // Each caller checks membership independently but shares cold body reads.
+  // Rejected promises are removed so the next turn can retry.
+  const loaded = await Promise.all(active.map(({ id }) => promptCache.get(id) ?? pending.get(id)));
+  const current = loaded.filter((row): row is AssistantCatalogPrompt => row !== undefined);
+  promptCache.clear();
+  for (const row of current) promptCache.set(row.id, row);
+  return current;
 }
 
 // Installation markers make the database function a no-op after a user's

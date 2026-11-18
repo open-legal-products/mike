@@ -1257,23 +1257,32 @@ export async function runToolCalls(
         content: `${instructions}${assetNotice}`,
       });
     } else if (tc.function.name === "read_table_cells" && tabularStore) {
-      const { label, content } = renderTableCells(
-        tabularStore,
-        args.col_indices as number[] | undefined,
-        args.row_indices as number[] | undefined,
-      );
-      write(
-        `data: ${JSON.stringify({ type: "doc_read_start", filename: label })}\n\n`,
-      );
-      write(
-        `data: ${JSON.stringify({ type: "doc_read", filename: label })}\n\n`,
-      );
-      docsRead.push({ filename: label });
-      toolResults.push({
-        role: "tool",
-        tool_call_id: tc.id,
-        content,
-      });
+      try {
+        const { label, content } = await renderTableCells(
+          tabularStore,
+          args.col_indices as number[] | undefined,
+          args.row_indices as number[] | undefined,
+        );
+        write(
+          `data: ${JSON.stringify({ type: "doc_read_start", filename: label })}\n\n`,
+        );
+        write(
+          `data: ${JSON.stringify({ type: "doc_read", filename: label })}\n\n`,
+        );
+        docsRead.push({ filename: label });
+        toolResults.push({
+          role: "tool",
+          tool_call_id: tc.id,
+          content,
+        });
+      } catch (error) {
+        reportToolFailure(error);
+        toolResults.push({
+          role: "tool",
+          tool_call_id: tc.id,
+          content: "Unable to read the requested table cells. They may no longer be accessible. Try another selection or explain that the cells could not be read.",
+        });
+      }
     } else if (tc.function.name === COURTLISTENER_TOOL_NAMES.searchCaseLaw) {
       const query = typeof args.query === "string" ? args.query : "";
       write(

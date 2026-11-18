@@ -4,6 +4,7 @@
 // per document or per folder), rebuilding them when the selection changes, and
 // reconciling the cell grid to the active column set.
 
+import { reviewCellSnapshot } from "./tabular.cellSnapshots";
 import { recordAudit } from "../../lib/audit";
 import { chunkArray } from "../../lib/arrays";
 import { mutateInBatches, selectAllByKey, selectInBatches } from "../../lib/batchedQuery";
@@ -832,6 +833,8 @@ export async function createTabularReview(
 export type ReviewDetail = {
     review: Record<string, unknown>;
     cells: Record<string, unknown>[];
+    cell_revision?: string;
+    removed_cell_ids?: string[];
     rows: ReviewRow[];
     documents: Record<string, unknown>[];
 };
@@ -839,7 +842,7 @@ export type ReviewDetail = {
 /** Load an accessible review with rows, cells and metadata limited to readable sources. */
 export async function getTabularReviewDetail(
     db: Db,
-    args: { reviewId: string; userId: string; userEmail: string | undefined },
+    args: { reviewId: string; userId: string; userEmail: string | undefined; cellRevision?: string },
 ): Promise<TabularResult<ReviewDetail>> {
     const { reviewId, userId, userEmail } = args;
 
@@ -852,10 +855,8 @@ export async function getTabularReviewDetail(
     const access = await ensureReviewAccess(review, userId, userEmail, db);
     if (!access.ok) return failure("not_found", "Review not found");
 
-    let cells: Record<string, unknown>[];
     let allRows: ReviewRow[];
     try {
-        cells = await loadReviewCells(db, reviewId);
         allRows = await loadReviewRows(db, reviewId);
     } catch (loadError) {
         return internalFailure(loadError);
@@ -883,6 +884,12 @@ export async function getTabularReviewDetail(
         return internalFailure(lookupError);
     }
     const visibleRowIds = new Set(rows.map((row) => row.id));
+    let snapshot: Awaited<ReturnType<typeof reviewCellSnapshot>>;
+    try {
+        snapshot = await reviewCellSnapshot(db, reviewId, userId, visibleRowIds, args.cellRevision);
+    } catch (error) {
+        return internalFailure(error);
+    }
     const docIds = allDocIds.filter((id) => readableDocumentIds.has(id));
     const docs: {
         id: string;
@@ -911,8 +918,8 @@ export async function getTabularReviewDetail(
                 access_role: access.projectRole,
                 is_running: isReviewGenerationRunning(review),
             },
-            cells: cells
-                .filter((cell) => visibleRowIds.has(cell.row_id as string))
+            ...snapshot,
+            cells: snapshot.cells
                 .map((cell) => ({
                     ...cell,
                     content: parseCellContent(cell.content),

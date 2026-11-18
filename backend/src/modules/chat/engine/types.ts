@@ -57,6 +57,7 @@ export type DocIndex = Record<
 export type TabularCellStore = {
   columns: { index: number; name: string }[];
   documents: { id: string; filename: string }[];
+  loadCells?: (rowIds: string[], columns: number[]) => Promise<void>;
   /** key: `${colIndex}:${docId}` */
   cells: Map<
     string,

@@ -60,7 +60,7 @@ type StreamChatCall = {
     onToolCallStart?: (call: ReturnType<typeof delegate> & { invalid?: true }) => void;
     onContentDelta?: (text: string) => void;
     onUsage?: (
-      usage: { inputTokens: number; outputTokens: number },
+      usage: { inputTokens: number; outputTokens: number; cacheReadTokens?: number; cacheWriteTokens?: number },
       finishReason: string,
     ) => void;
   };
@@ -326,16 +326,18 @@ describe("runLLMStream delegation", () => {
     });
   });
 
-  it("ends the answer with its own model, reasoning and summed tokens, which no subagent repeats", async () => {
+  it.each([false, true])("ends the answer with its own summed usage, including cache reporting when enabled (%s)", async (cached) => {
     streamChatWithTools.mockImplementation(async (params) => {
       if (isSubagent(params)) {
         params.callbacks?.onUsage?.({ inputTokens: 900, outputTokens: 90 }, "stop");
         params.callbacks?.onContentDelta?.("Brief.");
         return { fullText: "Brief." };
       }
-      params.callbacks?.onUsage?.({ inputTokens: 1000, outputTokens: 50 }, "tool-calls");
+      params.callbacks?.onUsage?.({ inputTokens: 1000, outputTokens: 50,
+        ...(cached && { cacheReadTokens: 300, cacheWriteTokens: 200 }) }, "tool-calls");
       await params.runTools?.([delegate("d1")]);
-      params.callbacks?.onUsage?.({ inputTokens: 1200, outputTokens: 150 }, "stop");
+      params.callbacks?.onUsage?.({ inputTokens: 1200, outputTokens: 150,
+        ...(cached && { cacheReadTokens: 600, cacheWriteTokens: 100 }) }, "stop");
       params.callbacks?.onContentDelta?.("Answer");
       return { fullText: "Answer" };
     });
@@ -349,7 +351,8 @@ describe("runLLMStream delegation", () => {
         type: "response_details",
         model: "gemini-3.8-flash",
         reasoning: "medium",
-        usage: { input_tokens: 2200, output_tokens: 200 },
+        usage: { input_tokens: 2200, output_tokens: 200,
+          ...(cached && { cache_read_tokens: 900, cache_write_tokens: 300 }) },
       },
     ]);
     expect(result.events.at(-1)).toEqual(details[0]);

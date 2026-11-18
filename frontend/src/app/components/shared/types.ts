@@ -924,6 +924,7 @@ export interface ChatDetailOut {
 }
 
 export interface TabularReviewDetailOut {
+  cell_revision?: string;
   review: TabularReview;
   cells: TabularCell[];
   rows: TabularReviewRow[];

@@ -62,7 +62,11 @@ export function useTabularHistoryStatuses(reviews: TabularReview[], activeReview
                     }
                     return next;
                 });
-                if (ids.some(id => !byId.get(id)?.is_running)) notifyTabularReviewsChanged();
+                if (ids.some(id => !byId.has(id))) notifyTabularReviewsChanged();
+                else {
+                    const finished = snapshots.filter(status => !status.is_running);
+                    if (finished.length) notifyTabularReviewsChanged(finished);
+                }
             } catch {
                 // A failed status check is not evidence of completion.
             } finally {

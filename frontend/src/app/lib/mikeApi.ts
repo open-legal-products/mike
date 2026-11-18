@@ -3336,8 +3336,17 @@ export async function createTabularReview(payload: {
 
 export async function getTabularReview(
     reviewId: string,
+    previous?: TabularReviewDetailOut,
 ): Promise<TabularReviewDetailOut> {
-    return apiRequest<TabularReviewDetailOut>("tabular.run", `/tabular-review/${reviewId}`);
+    const base = previous?.review.id === reviewId && previous.cell_revision ? previous : undefined;
+    const query = base ? `?cell_revision=${encodeURIComponent(base.cell_revision!)}` : "";
+    const { removed_cell_ids, ...detail } = await apiRequest<TabularReviewDetailOut & { removed_cell_ids?: string[] }>(
+        "tabular.run", `/tabular-review/${reviewId}${query}`);
+    if (!base || !removed_cell_ids) return detail;
+    const cells = new Map(base.cells.map(cell => [cell.id, cell]));
+    for (const id of removed_cell_ids) cells.delete(id);
+    for (const cell of detail.cells) cells.set(cell.id, cell);
+    return { ...detail, cells: [...cells.values()] };
 }
 
 export async function updateTabularReview(
