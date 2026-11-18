@@ -1,7 +1,7 @@
 export const SUPPORTED_DOCUMENT_ACCEPT =
-    ".pdf,.docx,.doc,.xlsx,.xlsm,.xls,.pptx,.ppt";
+    ".pdf,.docx,.doc,.xlsx,.xlsm,.xls,.pptx,.ppt,.png,.jpg,.jpeg";
 export const UNSUPPORTED_DOCUMENT_WARNING_MESSAGE =
-    "Unsupported file type. Only PDF, Word, Excel, and PowerPoint files can be uploaded.";
+    "Unsupported file type. Only PDF, Word, Excel, and PowerPoint files and PNG or JPEG images can be uploaded.";
 
 const SUPPORTED_DOCUMENT_EXTENSIONS = new Set([
     "pdf",
@@ -12,6 +12,10 @@ const SUPPORTED_DOCUMENT_EXTENSIONS = new Set([
     "xls",
     "pptx",
     "ppt",
+    // Raster images are OCR'd by the backend when an OCR provider is configured.
+    "png",
+    "jpg",
+    "jpeg",
 ]);
 
 export function isSupportedDocumentFile(file: File): boolean {

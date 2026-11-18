@@ -23,8 +23,21 @@ import { extractDocumentText, handleDocumentExtractText, markDocumentTextFailed,
 const job = { id: "job", kind: "document.extract_text", payload: { versionId: "v1", revision: "r1" }, status: "pending", attempts: 0, max_attempts: 3, run_at: "", claimed_at: null, finished_at: null, last_error: null, dedupe_key: null, result: null, created_at: "" } satisfies DbJob;
 const bytes = new TextEncoder().encode("source bytes").buffer;
 const version = { id: "v1", storage_path: "source", file_type: "docx", text_revision: "r1" };
-beforeEach(() => { vi.resetAllMocks(); mocks.download.mockResolvedValue(bytes); mocks.docx.mockResolvedValue("Complete clause\n\nAnother clause"); });
-afterEach(() => { vi.useRealTimers(); vi.unstubAllEnvs(); });
+const OCR_ENV_KEYS = [
+  "OCR_PROVIDER", "OCR_PROTOCOL", "OCR_AUTH_HEADER", "OCR_AUTH_SCHEME", "OCR_MAX_BYTES", "OCR_API_URL", "OCR_BASE_URL", "OCR_API_KEY", "OCR_API_KEY_ENV",
+  "OCR_MODEL", "OCR_ALLOW_UNAUTHENTICATED", "MISTRAL_OCR_URL", "MISTRAL_OCR_MODEL", "MISTRAL_API_KEY",
+  "OLLAMA_BASE_URL", "OLLAMA_API_KEY", "OPENAI_API_KEY", "OPENROUTER_API_KEY", "AZURE_API_KEY", "AZURE_FOUNDRY_API_KEY",
+];
+beforeEach(() => {
+  vi.resetAllMocks(); mocks.download.mockResolvedValue(bytes); mocks.docx.mockResolvedValue("Complete clause\n\nAnother clause");
+  // Deterministic OCR baseline: inherited shell settings never enable OCR,
+  // and no test reaches the network unless it installs its own fetch mock.
+  for (const key of OCR_ENV_KEYS) vi.stubEnv(key, "");
+  delete process.env.OCR_AUTH_SCHEME;
+  vi.stubEnv("OCR_DISABLED", "true");
+  vi.spyOn(globalThis, "fetch").mockRejectedValue(new Error("unexpected network call in unit test"));
+});
+afterEach(() => { vi.useRealTimers(); vi.unstubAllEnvs(); vi.restoreAllMocks(); });
 
 describe("version text extraction", () => {
   it("returns a busy claim to Postgres without download, terminal failure, or spending its last attempt", async () => {
@@ -87,10 +100,265 @@ describe("version text extraction", () => {
     await expect(handleDocumentExtractText(fake.db, job)).rejects.toThrow("source_changed"); expect(mocks.docx).not.toHaveBeenCalled(); fake.done();
   });
   it("preserves successful empty extraction and OCR coverage", async () => {
+    vi.stubEnv("MISTRAL_API_KEY", "");
     mocks.pdf.mockResolvedValue({ text: "", textlessPageCount: 4 });
     const fake = scriptedDb([{ table: "document_versions", data: { ...version, file_type: "pdf" } }, { table: "document_version_texts", op: "update", data: { version_id: "v1" } }, { rpc: "publish_document_text", data: true }]);
     await handleDocumentExtractText(fake.db, job);
     expect(fake.calls[2].args).toMatchObject({ p_text: "", p_textless_pages: 4 }); fake.done();
+  });
+  it("enriches scanned PDF pages via Mistral OCR when MISTRAL_API_KEY is configured", async () => {
+    vi.stubEnv("MISTRAL_API_KEY", "test-mistral-key");
+    vi.stubEnv("OCR_DISABLED", "");
+    mocks.pdf.mockResolvedValue({ text: "", textlessPageCount: 2 });
+    const fetchSpy = vi.spyOn(globalThis, "fetch").mockResolvedValueOnce(
+      new Response(
+        JSON.stringify({
+          pages: [
+            { index: 0, markdown: "Scanned contract page 1" },
+            { index: 1, markdown: "Scanned signature page 2" },
+          ],
+        }),
+        { status: 200, headers: { "Content-Type": "application/json" } },
+      ),
+    );
+    try {
+      const fake = scriptedDb([
+        { table: "document_versions", data: { ...version, file_type: "pdf" } },
+        { table: "document_version_texts", op: "update", data: { version_id: "v1" } },
+        { rpc: "publish_document_text", data: true },
+      ]);
+      await handleDocumentExtractText(fake.db, job);
+      expect(fetchSpy).toHaveBeenCalledOnce();
+      expect(fake.calls[2].args).toMatchObject({
+        p_text: "[Page 1]\nScanned contract page 1\n\n[Page 2]\nScanned signature page 2",
+        p_textless_pages: 0,
+      });
+      fake.done();
+    } finally {
+      fetchSpy.mockRestore();
+    }
+  });
+  it("enriches scanned PDF pages via a custom OpenAI-compatible OCR endpoint when OCR_BASE_URL and OCR_API_KEY are set", async () => {
+    vi.stubEnv("MISTRAL_API_KEY", "");
+    vi.stubEnv("OCR_DISABLED", "");
+    vi.stubEnv("OCR_BASE_URL", "https://ocr.internal.example/v1");
+    vi.stubEnv("OCR_API_KEY", "custom-ocr-token");
+    vi.stubEnv("OCR_PROTOCOL", "openai-chat");
+    vi.stubEnv("OCR_MODEL", "Qwen/Qwen2.5-VL-72B-Instruct");
+    mocks.pdf.mockResolvedValue({ text: "", textlessPageCount: 1 });
+    const fetchSpy = vi.spyOn(globalThis, "fetch").mockResolvedValueOnce(
+      new Response(
+        JSON.stringify({
+          choices: [
+            {
+              index: 0,
+              message: { role: "assistant", content: "[Page 1]\nSentenza Corte di Cassazione" },
+            },
+          ],
+        }),
+        { status: 200, headers: { "Content-Type": "application/json" } },
+      ),
+    );
+    try {
+      const fake = scriptedDb([
+        { table: "document_versions", data: { ...version, file_type: "pdf" } },
+        { table: "document_version_texts", op: "update", data: { version_id: "v1" } },
+        { rpc: "publish_document_text", data: true },
+      ]);
+      await handleDocumentExtractText(fake.db, job);
+      expect(fetchSpy).toHaveBeenCalledOnce();
+      expect(fetchSpy.mock.calls[0]![0]).toBe("https://ocr.internal.example/v1/chat/completions");
+      expect(fake.calls[2].args).toMatchObject({
+        p_text: "[Page 1]\nSentenza Corte di Cassazione",
+        p_textless_pages: 0,
+      });
+      fake.done();
+    } finally {
+      fetchSpy.mockRestore();
+    }
+  });
+  it("publishes pdf.js text and reports a warning when Mistral OCR fails", async () => {
+    vi.stubEnv("MISTRAL_API_KEY", "test-mistral-key");
+    vi.stubEnv("OCR_DISABLED", "");
+    mocks.pdf.mockResolvedValue({ text: "[Page 1]\nNative clause\n\n[Page 2]\n", textlessPageCount: 1 });
+    const fetchSpy = vi.spyOn(globalThis, "fetch").mockResolvedValueOnce(
+      new Response("upstream error", { status: 503 }),
+    );
+    try {
+      const fake = scriptedDb([
+        { table: "document_versions", data: { ...version, file_type: "pdf" } },
+        { table: "document_version_texts", op: "update", data: { version_id: "v1" } },
+        { rpc: "publish_document_text", data: true },
+      ]);
+      await handleDocumentExtractText(fake.db, job);
+      expect(fake.calls[2].args).toMatchObject({
+        p_text: "[Page 1]\nNative clause\n\n[Page 2]\n",
+        p_textless_pages: 1,
+      });
+      expect(sentry.reportError).toHaveBeenCalledOnce();
+      expect(diagnosticErrorTags(sentry.reportError.mock.calls[0]![0])).toMatchObject({
+        error_kind: "ocr.http_failed",
+        dependency_status: 503,
+      });
+      fake.done();
+    } finally {
+      fetchSpy.mockRestore();
+    }
+  });
+  it("fails a fully scanned PDF for retry instead of publishing empty text when OCR fails", async () => {
+    vi.stubEnv("MISTRAL_API_KEY", "test-mistral-key");
+    vi.stubEnv("OCR_DISABLED", "");
+    mocks.pdf.mockResolvedValue({ text: "", textlessPageCount: 2 });
+    const fetchSpy = vi.spyOn(globalThis, "fetch").mockResolvedValueOnce(
+      new Response("rate limited", { status: 429 }),
+    );
+    try {
+      const fake = scriptedDb([
+        { table: "document_versions", data: { ...version, file_type: "pdf" } },
+        { table: "document_version_texts", op: "update", data: { version_id: "v1" } },
+      ]);
+      await expect(handleDocumentExtractText(fake.db, job)).rejects.toMatchObject({ kind: "ocr.http_failed" });
+      expect(fake.calls.some((call) => call.op === "rpc" && call.table === "publish_document_text")).toBe(false);
+    } finally {
+      fetchSpy.mockRestore();
+    }
+  });
+  it("fails a fully scanned PDF above the OCR size limit terminally instead of publishing empty text", async () => {
+    vi.stubEnv("MISTRAL_API_KEY", "test-mistral-key");
+    vi.stubEnv("OCR_DISABLED", "");
+    vi.stubEnv("OCR_MAX_BYTES", "1");
+    mocks.pdf.mockResolvedValue({ text: "", textlessPageCount: 2 });
+    const fake = scriptedDb([
+      { table: "document_versions", data: { ...version, file_type: "pdf" } },
+      { table: "document_version_texts", op: "update", data: { version_id: "v1" } },
+      { table: "document_version_texts", op: "update" },
+    ]);
+    await handleDocumentExtractText(fake.db, job);
+    expect(globalThis.fetch).not.toHaveBeenCalled();
+    expect(fake.calls.some((call) => call.op === "rpc" && call.table === "publish_document_text")).toBe(false);
+    expect(fake.calls[2].payload).toMatchObject({ status: "failed", error_code: "too_large" }); fake.done();
+  });
+  it("routes scanned PDF bytes only to the selected OCR provider and never leaks other provider keys", async () => {
+    vi.stubEnv("OCR_DISABLED", "");
+    vi.stubEnv("OCR_PROVIDER", "openai");
+    vi.stubEnv("OPENAI_API_KEY", "sk-openai-only");
+    vi.stubEnv("MISTRAL_API_KEY", "mistral-must-not-be-used");
+    mocks.pdf.mockResolvedValue({ text: "", textlessPageCount: 1 });
+    const fetchSpy = vi.spyOn(globalThis, "fetch").mockResolvedValueOnce(
+      new Response(
+        JSON.stringify({
+          choices: [{ index: 0, finish_reason: "stop", message: { role: "assistant", content: "[Page 1]\nArbitration clause" } }],
+        }),
+        { status: 200, headers: { "Content-Type": "application/json" } },
+      ),
+    );
+    try {
+      const fake = scriptedDb([
+        { table: "document_versions", data: { ...version, file_type: "pdf" } },
+        { table: "document_version_texts", op: "update", data: { version_id: "v1" } },
+        { rpc: "publish_document_text", data: true },
+      ]);
+      await handleDocumentExtractText(fake.db, job);
+      expect(fetchSpy).toHaveBeenCalledOnce();
+      expect(fetchSpy.mock.calls[0]![0]).toBe("https://api.openai.com/v1/chat/completions");
+      expect((fetchSpy.mock.calls[0]![1]?.headers as Record<string, string>).Authorization).toBe("Bearer sk-openai-only");
+      expect(fake.calls[2].args).toMatchObject({ p_text: "[Page 1]\nArbitration clause", p_textless_pages: 0 });
+      fake.done();
+    } finally {
+      fetchSpy.mockRestore();
+    }
+  });
+  it("skips OCR and publishes native text when OCR configuration is incomplete", async () => {
+    vi.stubEnv("OCR_DISABLED", "");
+    vi.stubEnv("OCR_PROVIDER", "azure");
+    vi.stubEnv("AZURE_API_KEY", "azure-secret-without-endpoint");
+    mocks.pdf.mockResolvedValue({ text: "[Page 1]\nNative header\n\n[Page 2]\n", textlessPageCount: 1 });
+    const fake = scriptedDb([
+      { table: "document_versions", data: { ...version, file_type: "pdf" } },
+      { table: "document_version_texts", op: "update", data: { version_id: "v1" } },
+      { rpc: "publish_document_text", data: true },
+    ]);
+    await handleDocumentExtractText(fake.db, job);
+    expect(globalThis.fetch).not.toHaveBeenCalled();
+    expect(fake.calls[2].args).toMatchObject({
+      p_text: "[Page 1]\nNative header\n\n[Page 2]\n",
+      p_textless_pages: 1,
+    });
+    fake.done();
+  });
+  it("does not call OCR or publish derived text when a scanned PDF source version has been deleted", async () => {
+    vi.stubEnv("OCR_DISABLED", "");
+    vi.stubEnv("MISTRAL_API_KEY", "test-mistral-key");
+    const fake = scriptedDb([
+      { table: "document_versions", data: { ...version, file_type: "pdf", storage_path: null } },
+    ]);
+    await handleDocumentExtractText(fake.db, job);
+    expect(mocks.download).not.toHaveBeenCalled();
+    expect(globalThis.fetch).not.toHaveBeenCalled();
+    expect(fake.calls.some((call) => call.op === "rpc" && call.table === "publish_document_text")).toBe(false);
+    fake.done();
+  });
+  it("transcribes uploaded PNG and JPEG versions with the configured OCR provider", async () => {
+    vi.stubEnv("OCR_DISABLED", "");
+    vi.stubEnv("OCR_PROVIDER", "openai");
+    vi.stubEnv("OPENAI_API_KEY", "sk-image-ocr");
+    vi.stubEnv("MISTRAL_API_KEY", "unused-mistral-key");
+    const pngBytes = new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]).buffer;
+    mocks.download.mockResolvedValue(pngBytes);
+    const fetchSpy = vi.spyOn(globalThis, "fetch").mockResolvedValueOnce(
+      new Response(
+        JSON.stringify({
+          choices: [{ index: 0, finish_reason: "stop", message: { role: "assistant", content: "Tribunale di Milano" } }],
+        }),
+        { status: 200, headers: { "Content-Type": "application/json" } },
+      ),
+    );
+    try {
+      const fake = scriptedDb([
+        { table: "document_versions", data: { ...version, filename: "scan.png", file_type: "png" } },
+        { table: "document_version_texts", op: "update", data: { version_id: "v1" } },
+        { rpc: "publish_document_text", data: true },
+      ]);
+      await handleDocumentExtractText(fake.db, job);
+      expect(fetchSpy).toHaveBeenCalledOnce();
+      expect(fetchSpy.mock.calls[0]![0]).toBe("https://api.openai.com/v1/chat/completions");
+      const body = JSON.parse(String(fetchSpy.mock.calls[0]![1]?.body));
+      expect(body.messages[1].content[1].image_url.url).toMatch(/^data:image\/png;base64,/);
+      expect(fake.calls[2].args).toMatchObject({
+        p_text: "[Page 1]\nTribunale di Milano",
+        p_textless_pages: 0,
+      });
+      fake.done();
+    } finally {
+      fetchSpy.mockRestore();
+    }
+  });
+  it("records an uploaded PNG as needing OCR without calling fetch when OCR configuration is incomplete", async () => {
+    vi.stubEnv("OCR_DISABLED", "");
+    vi.stubEnv("OCR_PROVIDER", "azure");
+    vi.stubEnv("AZURE_API_KEY", "azure-without-url");
+    const pngBytes = new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]).buffer;
+    mocks.download.mockResolvedValue(pngBytes);
+    const fake = scriptedDb([
+      { table: "document_versions", data: { ...version, filename: "scan.png", file_type: "png" } },
+      { table: "document_version_texts", op: "update", data: { version_id: "v1" } },
+      { rpc: "publish_document_text", data: true },
+    ]);
+    await handleDocumentExtractText(fake.db, job);
+    expect(globalThis.fetch).not.toHaveBeenCalled();
+    expect(fake.calls[2].args).toMatchObject({ p_text: "", p_textless_pages: 1 });
+    fake.done();
+  });
+  it("does not download or OCR a deleted image version", async () => {
+    vi.stubEnv("OCR_DISABLED", "");
+    vi.stubEnv("MISTRAL_API_KEY", "test-mistral-key");
+    const fake = scriptedDb([
+      { table: "document_versions", data: { ...version, filename: "scan.png", file_type: "png", storage_path: null } },
+    ]);
+    await handleDocumentExtractText(fake.db, job);
+    expect(mocks.download).not.toHaveBeenCalled();
+    expect(globalThis.fetch).not.toHaveBeenCalled();
+    fake.done();
   });
   it("leaves a newer revision unchanged on terminal failure", async () => {
     const fake = scriptedDb([{ table: "document_version_texts", op: "update" }]);

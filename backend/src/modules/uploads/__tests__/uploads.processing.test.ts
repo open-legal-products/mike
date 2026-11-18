@@ -1839,6 +1839,56 @@ describe("upload processing", () => {
     expect(db.remaining).toHaveLength(0);
   });
 
+
+  it.each([
+    ["png", "scan.png", "image/png", Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0, 0, 0, 0])],
+    ["jpg", "photo.jpg", "image/jpeg", Buffer.from([0xff, 0xd8, 0xff, 0xe0, 0, 0, 0, 0])],
+  ])("validates %s magic bytes, stores the image version, and creates a PDF preview rendition", async (fileType, filename, contentType, imageBytes) => {
+    mocks.createFileReadStream.mockImplementation(() => Readable.from([imageBytes]));
+    const imageFile = {
+      ...baseFile,
+      filename,
+      file_type: fileType,
+      content_type: contentType,
+      expected_size_bytes: imageBytes.length,
+    };
+    const db = fakeDb({ documents: [{ data: { id: imageFile.resource_id, user_id: baseSession.user_id } }] });
+    const result = await processUploadFile(db as never, baseSession, imageFile);
+    expect(result).toMatchObject({ id: imageFile.resource_id, filename });
+    expect(mocks.copyFile).toHaveBeenCalledWith(
+      imageFile.sealed_storage_path,
+      expect.stringContaining(`source.${fileType}`),
+    );
+    expect(mocks.officeFileToPdf).toHaveBeenCalledOnce();
+    expect(mocks.uploadFileFromPath).toHaveBeenCalledWith(
+      expect.stringMatching(/^converted-pdfs\//),
+      expect.any(String),
+      "application/pdf",
+    );
+  });
+
+  it.each([
+    ["png", "fake.png", "image/png", Buffer.from("not a png")],
+    ["jpg", "fake.jpg", "image/jpeg", Buffer.from("not a jpeg")],
+  ])("rejects an invalid %s upload before destination writes and cleans up temporary files", async (fileType, filename, contentType, badBytes) => {
+    mocks.createFileReadStream.mockImplementation(() => Readable.from([badBytes]));
+    const db = fakeDb();
+    await expect(
+      processUploadFile(db as never, baseSession, {
+        ...baseFile,
+        filename,
+        file_type: fileType,
+        content_type: contentType,
+        expected_size_bytes: badBytes.length,
+      }),
+    ).rejects.toThrow("invalid_image_file");
+    expect(db.from).not.toHaveBeenCalled();
+    expect(db.rpc).not.toHaveBeenCalled();
+    expect(mocks.copyFile).not.toHaveBeenCalled();
+    expect(mocks.officeFileToPdf).not.toHaveBeenCalled();
+    expect(await readdir(processingTempRoot)).toEqual([]);
+  });
+
   // A document uploaded on its own is filed under the workspace its session
   // named; inside a project or a workflow, that decides.
   describe("the organization a new document is filed under", () => {
