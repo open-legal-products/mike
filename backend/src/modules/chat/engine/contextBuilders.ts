@@ -24,7 +24,9 @@ import {
 } from "./types";
 import {
   buildSystemPrompt,
+  EARLIER_TURNS_PROMPT,
   PRIOR_TOOL_ACTIVITY_HEADER,
+  PRIOR_TOOL_ACTIVITY_RECORD_HEADER,
 } from "./prompts";
 import {
   MESSAGE_TIME_PROMPT,
@@ -458,6 +460,13 @@ export async function enrichWithPriorEvents(
   messageTable = "chat_messages",
   /** When set, the user's answers are stamped with when they responded. */
   timeZone?: string,
+  /**
+   * For a model that disowns the record when it sits in its own message (see
+   * disownsReplayedToolRecord): the record opens the user's next message
+   * instead, and the answer gets its citations back. Pass the same value to
+   * buildMessages, which explains the record in the system prompt.
+   */
+  recordForUser = false,
 ): Promise<ChatMessage[]> {
   if (!chatId) return messages;
   // Skip streaming reservations: routeStreaming inserts the assistant row
@@ -685,7 +694,9 @@ export async function enrichWithPriorEvents(
       "- Instruction: do not ask for any skipped input again. If drafting or editing a document, insert a descriptive placeholder in square brackets wherever a skipped value is required.",
     );
   }
-  const citations = priorCitationsBlock(lastRow?.citations, slugByDocumentId);
+  const citations = recordForUser
+    ? priorCitationsBlock(lastRow?.citations, slugByDocumentId)
+    : null;
   if (lines.length === 0 && !citations) return messages;
 
   let lastAssistantIdx = -1;
@@ -697,15 +708,26 @@ export async function enrichWithPriorEvents(
   }
   if (lastAssistantIdx < 0) return messages;
   const enriched = messages.slice();
+  const target = enriched[lastAssistantIdx];
+  if (!recordForUser) {
+    // Attach the summary to the last assistant message only.
+    enriched[lastAssistantIdx] = {
+      ...target,
+      content: `${target.content ?? ""}\n\n${PRIOR_TOOL_ACTIVITY_HEADER}\n${lines.join("\n")}`,
+    };
+    return enriched;
+  }
+
   const record =
-    lines.length > 0 ? `${PRIOR_TOOL_ACTIVITY_HEADER}\n${lines.join("\n")}` : "";
+    lines.length > 0
+      ? `${PRIOR_TOOL_ACTIVITY_RECORD_HEADER}\n${lines.join("\n")}`
+      : "";
   // The record goes at the start of the user's next message, not on the
-  // answer: the model takes anything inside its own message for words it
+  // answer: this model takes anything inside its own message for words it
   // wrote, and disowns a record of tool calls it cannot see as invented.
   const nextUserIdx = enriched.findIndex(
     (message, index) => index > lastAssistantIdx && message.role === "user",
   );
-  const target = enriched[lastAssistantIdx];
   enriched[lastAssistantIdx] = {
     ...target,
     content:
@@ -807,6 +829,8 @@ export function buildMessages(
   nonce?: string,
   systemPromptMode: "append" | "replace" = "append",
   time?: MessageTimeContext,
+  /** The value enrichWithPriorEvents was given as `recordForUser`. */
+  recordForUser = false,
 ) {
   const formatted: unknown[] = [];
   let systemContent =
@@ -814,6 +838,9 @@ export function buildMessages(
       ? (systemPromptExtra?.trim() ?? "")
       : buildSystemPrompt(includeResearchTools);
 
+  if (recordForUser && systemContent) {
+    systemContent += `\n\n${EARLIER_TURNS_PROMPT}`;
+  }
   if (systemPromptMode === "append" && systemPromptExtra) {
     systemContent += `\n\n${systemPromptExtra.trim()}`;
   }

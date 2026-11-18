@@ -1,11 +1,14 @@
 /**
- * What a later turn is shown of the previous answer: its tool activity and
- * the citations it ended with. Without the citations the answer's [N] markers
- * point at nothing, and the model withdraws a correct answer as unsupported.
+ * What a later turn is shown of the previous answer. Claude Sonnet 5.5
+ * withdraws a correct earlier answer when the record of its tool calls sits
+ * in its own message and its [N] markers point at nothing, so that model is
+ * shown them differently. Every other model must see exactly what it did
+ * before: the remedy changes how they answer.
  */
 import { describe, expect, it } from "vitest";
 
 import {
+    buildMessages,
     enrichWithPriorEvents,
     priorCitationsBlock,
 } from "../contextBuilders";
@@ -13,7 +16,9 @@ import {
     buildSystemPrompt,
     EARLIER_TURNS_PROMPT,
     PRIOR_TOOL_ACTIVITY_HEADER,
+    PRIOR_TOOL_ACTIVITY_RECORD_HEADER,
 } from "../prompts";
+import { disownsReplayedToolRecord } from "../../../../lib/llm/models";
 import type { ChatMessage } from "../types";
 import { buildWordChatSystemPrompt } from "../wordPrompt";
 
@@ -98,6 +103,37 @@ describe("priorCitationsBlock", () => {
     });
 });
 
+describe("disownsReplayedToolRecord", () => {
+    it("is true for Claude Sonnet 5.5 on any route to it", () => {
+        for (const model of [
+            "claude-sonnet-5-5",
+            "bedrock/us.anthropic.claude-sonnet-5-5",
+            "vertex/claude-sonnet-5-5@20261001",
+            "openrouter/anthropic/claude-sonnet-5.5",
+            "vercel/anthropic/claude-sonnet-5.5",
+        ]) {
+            expect(disownsReplayedToolRecord(model), model).toBe(true);
+        }
+    });
+
+    it("is false for every model the remedy was not measured to help", () => {
+        for (const model of [
+            "claude-fable-5-1",
+            "claude-opus-5-5",
+            "claude-haiku-4-5",
+            "claude-sonnet-5",
+            "claude-sonnet-5-50",
+            "gpt-6.1-sol",
+            "gemini-3.8-flash",
+            "mistral-small-2603",
+            "openrouter/openai/gpt-6.1-sol",
+            "",
+        ]) {
+            expect(disownsReplayedToolRecord(model), model).toBe(false);
+        }
+    });
+});
+
 describe("enrichWithPriorEvents", () => {
     const index = { "doc-1": { document_id: "document-2", filename: "A.docx" } };
     const history = [
@@ -105,88 +141,124 @@ describe("enrichWithPriorEvents", () => {
         { role: "assistant", content: "Clause 3.2 allows termination [1]." },
         { role: "user", content: "And?" },
     ] as ChatMessage[];
-
-    it("ends the answer with its citations and starts the user's next message with the record", async () => {
-        const enriched = await enrichWithPriorEvents(
-            history,
+    const read = { type: "doc_read", document_id: "document-2", filename: "A.docx" };
+    const enrich = (
+        messages: ChatMessage[],
+        row: Record<string, unknown>,
+        recordForUser?: boolean,
+    ) =>
+        enrichWithPriorEvents(
+            messages,
             "chat-1",
-            dbWith({
-                content: [
-                    { type: "doc_read", document_id: "document-2", filename: "A.docx" },
-                ],
+            dbWith(row),
+            index,
+            undefined,
+            "chat_messages",
+            undefined,
+            recordForUser,
+        );
+
+    describe("for every other model", () => {
+        it("appends the record to the answer and replays no citations, as before", async () => {
+            for (const flag of [undefined, false]) {
+                const enriched = await enrich(history, { content: [read], citations: stored }, flag);
+                expect(enriched[1].content).toBe(
+                    `Clause 3.2 allows termination [1].\n\n[Tool activity in your previous turn]\n- read_document → doc-1 ("A.docx")`,
+                );
+                expect(enriched[0]).toBe(history[0]);
+                expect(enriched[2]).toBe(history[2]);
+            }
+            expect(PRIOR_TOOL_ACTIVITY_HEADER).toBe("[Tool activity in your previous turn]");
+        });
+
+        it("leaves a turn with citations but no tool activity alone", async () => {
+            const enriched = await enrich(history, {
+                content: [{ type: "content", text: "x" }],
                 citations: stored,
-            }),
-            index,
-        );
-        const answer = enriched[1].content ?? "";
-        expect(answer.startsWith("Clause 3.2 allows termination [1].\n\n<CITATIONS>")).toBe(true);
-        expect(answer.endsWith("</CITATIONS>")).toBe(true);
-        expect(answer).toContain('"doc_id": "doc-1"');
-        // The model disowns a record inside its own message as invented.
-        expect(answer).not.toContain(PRIOR_TOOL_ACTIVITY_HEADER);
-        expect(enriched[2].content).toBe(
-            `${PRIOR_TOOL_ACTIVITY_HEADER}\n- read_document → doc-1 ("A.docx")\n\nAnd?`,
-        );
-        expect(enriched[0]).toBe(history[0]);
-        expect(history[2].content).toBe("And?");
+            });
+            expect(enriched).toBe(history);
+        });
     });
 
-    it("keeps the record with the answer when no user message follows it", async () => {
-        const enriched = await enrichWithPriorEvents(
-            history.slice(0, 2),
-            "chat-1",
-            dbWith({
-                content: [
-                    { type: "doc_read", document_id: "document-2", filename: "A.docx" },
-                ],
-                citations: null,
-            }),
-            index,
-        );
-        expect(enriched[1].content).toBe(
-            `Clause 3.2 allows termination [1].\n\n${PRIOR_TOOL_ACTIVITY_HEADER}\n- read_document → doc-1 ("A.docx")`,
-        );
-    });
+    describe("for a model that disowns the record", () => {
+        it("ends the answer with its citations and starts the user's next message with the record", async () => {
+            const enriched = await enrich(history, { content: [read], citations: stored }, true);
+            const answer = enriched[1].content ?? "";
+            expect(answer.startsWith("Clause 3.2 allows termination [1].\n\n<CITATIONS>")).toBe(true);
+            expect(answer.endsWith("</CITATIONS>")).toBe(true);
+            expect(answer).toContain('"doc_id": "doc-1"');
+            expect(answer).not.toContain("previous turn");
+            expect(enriched[2].content).toBe(
+                `${PRIOR_TOOL_ACTIVITY_RECORD_HEADER}\n- read_document → doc-1 ("A.docx")\n\nAnd?`,
+            );
+            expect(enriched[0]).toBe(history[0]);
+            expect(history[2].content).toBe("And?");
+        });
 
-    it("replays the citations of a turn that recorded no tool activity", async () => {
-        const enriched = await enrichWithPriorEvents(
-            history,
-            "chat-1",
-            dbWith({ content: [{ type: "content", text: "x" }], citations: stored }),
-            index,
-        );
-        expect(enriched[1].content).toContain("<CITATIONS>");
-        expect(enriched[2]).toBe(history[2]);
-    });
+        it("keeps the record with the answer when no user message follows it", async () => {
+            const enriched = await enrich(history.slice(0, 2), { content: [read], citations: null }, true);
+            expect(enriched[1].content).toBe(
+                `Clause 3.2 allows termination [1].\n\n${PRIOR_TOOL_ACTIVITY_RECORD_HEADER}\n- read_document → doc-1 ("A.docx")`,
+            );
+        });
 
-    it("leaves the history alone when there is nothing to replay", async () => {
-        const enriched = await enrichWithPriorEvents(
-            history,
-            "chat-1",
-            dbWith({ content: [{ type: "content", text: "x" }], citations: null }),
-            index,
-        );
-        expect(enriched).toBe(history);
+        it("replays the citations of a turn that recorded no tool activity", async () => {
+            const enriched = await enrich(
+                history,
+                { content: [{ type: "content", text: "x" }], citations: stored },
+                true,
+            );
+            expect(enriched[1].content).toContain("<CITATIONS>");
+            expect(enriched[2]).toBe(history[2]);
+        });
+
+        it("leaves the history alone when there is nothing to replay", async () => {
+            const enriched = await enrich(
+                history,
+                { content: [{ type: "content", text: "x" }], citations: null },
+                true,
+            );
+            expect(enriched).toBe(history);
+        });
     });
 });
 
 describe("the system prompt", () => {
-    it("says what the replayed record is and that the earlier answer stands", () => {
-        expect(EARLIER_TURNS_PROMPT).toContain(PRIOR_TOOL_ACTIVITY_HEADER);
-        expect(EARLIER_TURNS_PROMPT).toContain(
-            "Do not withdraw or disown an earlier answer",
-        );
-        for (const prompt of [buildSystemPrompt(true), buildSystemPrompt(false)]) {
-            expect(prompt.split(EARLIER_TURNS_PROMPT)).toHaveLength(2);
+    const system = (mode: "append" | "replace", recordForUser?: boolean) =>
+        (
+            buildMessages(
+                [],
+                [],
+                mode === "replace" ? buildWordChatSystemPrompt() : "EXTRA",
+                undefined,
+                false,
+                undefined,
+                mode,
+                undefined,
+                recordForUser,
+            )[0] as { content: string }
+        ).content;
+
+    it("is unchanged for every other model", () => {
+        expect(buildSystemPrompt(true)).not.toContain("EARLIER TURNS");
+        expect(buildSystemPrompt(false)).not.toContain("EARLIER TURNS");
+        expect(buildWordChatSystemPrompt()).not.toContain("EARLIER TURNS");
+        for (const mode of ["append", "replace"] as const) {
+            expect(system(mode)).toBe(system(mode, false));
+            expect(system(mode)).not.toContain("EARLIER TURNS");
         }
     });
 
-    it("gives the Word add-in's prompt the same account", () => {
-        for (const prompt of [
-            buildWordChatSystemPrompt(false),
-            buildWordChatSystemPrompt(true),
-        ]) {
-            expect(prompt.split(EARLIER_TURNS_PROMPT)).toHaveLength(2);
+    it("explains the record to a model that disowns it, in chat and in Word", () => {
+        expect(EARLIER_TURNS_PROMPT).toContain(PRIOR_TOOL_ACTIVITY_RECORD_HEADER);
+        expect(EARLIER_TURNS_PROMPT).toContain(
+            "Do not withdraw or disown an earlier answer",
+        );
+        for (const mode of ["append", "replace"] as const) {
+            const withAccount = system(mode, true);
+            expect(withAccount.split(EARLIER_TURNS_PROMPT)).toHaveLength(2);
+            // Nothing else about the prompt differs.
+            expect(withAccount.replace(`\n\n${EARLIER_TURNS_PROMPT}`, "")).toBe(system(mode));
         }
     });
 });

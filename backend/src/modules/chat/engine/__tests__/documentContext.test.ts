@@ -257,12 +257,10 @@ describe("null-content assistant reservations", () => {
             { "doc-0": { document_id: "doc-uuid-1", filename: "Brief.docx" } },
         );
 
-        // The record opens the user's next message, not the answer.
-        expect(enriched[1].content).toBe("Done.");
-        expect(enriched[2].content).toContain(
-            "[Application record of the tool calls that ran in your previous turn.",
+        expect(enriched[1].content).toContain(
+            "[Tool activity in your previous turn]",
         );
-        expect(enriched[2].content).toContain(
+        expect(enriched[1].content).toContain(
             '- generated_document → doc-0 ("Brief.docx")',
         );
     });
@@ -313,11 +311,11 @@ describe("null-content assistant reservations", () => {
             {},
         );
 
-    expect(enriched[1].content).toContain(
+    expect(enriched[0].content).toContain(
       'user selected: "Audit rights", "Non-solicitation"',
     );
-    expect(enriched[1].content).toContain('user skipped: "Governing law?"');
-    expect(enriched[1].content).toMatch(
+    expect(enriched[0].content).toContain('user skipped: "Governing law?"');
+    expect(enriched[0].content).toMatch(
       /Instruction: do not ask for any skipped input again.*placeholder in square brackets/,
     );
   });

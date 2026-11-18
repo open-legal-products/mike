@@ -1,5 +1,3 @@
-import { EARLIER_TURNS_PROMPT } from "./prompts";
-
 const WORD_EDITS_PROTOCOL = `<EDITS>
 [
   {"type":"edit_data","kind":"edit","deleted_text":"exact text copied from the active Word document","inserted_text":"replacement text","reason":"one short sentence explaining the change"},
@@ -114,6 +112,7 @@ ${WORD_CHAT_CITATIONS_SECTION}`;
  * cannot answer client_tool_call frames is never handed one.
  */
 export function buildWordChatSystemPrompt(clientTools = false): string {
-  // The add-in's turns are replayed the same record of earlier tool calls.
-  return `${clientTools ? WORD_CHAT_CLIENT_TOOLS_INSTRUCTIONS : WORD_CHAT_INSTRUCTIONS}\n\n${EARLIER_TURNS_PROMPT}`;
+  return clientTools
+    ? WORD_CHAT_CLIENT_TOOLS_INSTRUCTIONS
+    : WORD_CHAT_INSTRUCTIONS;
 }
