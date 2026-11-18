@@ -50,7 +50,7 @@ describe("SupportPage", () => {
         );
         expect(
             screen.getByRole("link", { name: "Email support directly" }),
-        ).toHaveAttribute("href", expect.stringContaining("will@mikeoss.com"));
+        ).toHaveAttribute("href", expect.stringContaining("support@mikeoss.com"));
 
         // The form keeps what was typed, so Submit is the retry.
         await user.click(screen.getByRole("button", { name: "Submit" }));

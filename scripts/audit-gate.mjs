@@ -28,6 +28,10 @@ const allowlist = JSON.parse(readFileSync(allowlistPath, "utf8"));
 // name or an environment variable supplied by the caller.
 // Scope fields are exact matches. `dev` is npm's lockfile classification;
 // the reason must separately assess exposure in the shipped image/bundle.
+// A production copy (`dev: false`) is admitted only with its own written
+// `productionExposure`: npm classes build-time tools reached through a
+// production dependency (a bundler plugin under a framework SDK) as
+// production, and the scope must say why the shipped app never runs it.
 const workspace = relative(
   realpathSync(join(dirname(allowlistPath), "..")), realpathSync("."),
 ).replaceAll("\\", "/") || ".";
@@ -36,7 +40,9 @@ for (const entry of allowlist) {
       !entry.scopes.every((scope) =>
         typeof scope.workspace === "string" && typeof scope.package === "string" &&
         typeof scope.version === "string" && typeof scope.path === "string" &&
-        scope.dev === true && Array.isArray(scope.dependents) && scope.dependents.length > 0 &&
+        (scope.dev === true || (scope.dev === false &&
+          typeof scope.productionExposure === "string" && scope.productionExposure.trim() !== "")) &&
+        Array.isArray(scope.dependents) && scope.dependents.length > 0 &&
         scope.dependents.every((parent) => typeof parent === "string"))) {
     throw new Error(`Invalid scoped audit exception: ${entry.ghsa ?? "unknown"}`);
   }
@@ -102,7 +108,7 @@ function isAllowed(exception, matches) {
     return copies.length > 0 && copies.every((copy) => exception.scopes.some((scope) => {
       const parents = [...(dependents.get(copy.path) ?? [])];
       return scope.workspace === workspace && scope.package === copy.name &&
-        scope.version === copy.version && scope.path === copy.path && copy.dev &&
+        scope.version === copy.version && scope.path === copy.path && scope.dev === copy.dev &&
         parents.length > 0 && parents.every((parent) => scope.dependents.includes(parent));
     }));
   }));
@@ -413,6 +419,11 @@ for (const [ghsa, adv] of advisories) {
   if (!adv.unmatched && isAllowed(allowed.get(ghsa), adv.matches)) {
     console.log(`ALLOWLISTED ${adv.severity}: ${ghsa} — ${adv.title}`);
     console.log(`  reason: ${allowed.get(ghsa).reason}`);
+    for (const scope of allowed.get(ghsa).scopes) {
+      if (scope.workspace === workspace && scope.dev === false) {
+        console.log(`  production copy ${scope.path}@${scope.version}: ${scope.productionExposure}`);
+      }
+    }
   } else {
     blocking.push(`${adv.severity}: ${ghsa} — ${adv.title} (${adv.url})${allowed.has(ghsa) ? " — outside the approved dependency scope" : ""}`);
   }

@@ -78,7 +78,12 @@ export type StreamCallbacks = {
     onUsage?: (usage: TokenUsage, finishReason: string) => void;
 };
 
-export type TokenUsage = { inputTokens: number; outputTokens: number };
+export type TokenUsage = {
+    inputTokens: number;
+    outputTokens: number;
+    cacheReadTokens?: number;
+    cacheWriteTokens?: number;
+};
 
 export type ProviderWebSearchEvent =
     | { kind: "search_started"; id: string; query?: string }
@@ -190,6 +195,8 @@ export type StreamChatParams = {
      * one-shot calls such as the memory curator.
      */
     conversationId?: string | null;
+    /** Length of the reusable source prefix in a single extraction message. */
+    sourcePrefixLength?: number;
     /**
      * Offer the provider's own web search tool, when the adapter has one, for
      * at most `maxSearches` searches in each request.

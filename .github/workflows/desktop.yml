@@ -53,6 +53,8 @@ concurrency:
 
 jobs:
   unit:
+    # Runs here and in forks; skipped in copies such as the Vercel Deploy button makes (docs/vercel.md).
+    if: github.repository == 'open-legal-products/mike' || github.event.repository.fork
     name: Desktop unit and upgrade tests
     runs-on: macos-15
     timeout-minutes: 20
@@ -96,6 +98,8 @@ jobs:
         run: MIKE_REQUIRE_LOCAL_STACK=1 npm test
 
   packaged:
+    # Runs here and in forks; skipped in copies such as the Vercel Deploy button makes (docs/vercel.md).
+    if: github.repository == 'open-legal-products/mike' || github.event.repository.fork
     name: Packaged app first run and returning user
     runs-on: macos-15
     timeout-minutes: 45

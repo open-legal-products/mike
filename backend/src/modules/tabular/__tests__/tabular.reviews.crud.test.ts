@@ -464,6 +464,32 @@ describe("getTabularReviewDetail", () => {
         );
     });
 
+    it("cache regression: returns changed cell bodies and removes deleted or inaccessible cells", async () => {
+        const rows = [{ id: "visible" }, { id: "revoked" }];
+        loadReviewRows.mockResolvedValue(rows);
+        const cell = (id: string, row_id = "visible", cache_revision = "first") =>
+            ({ id, row_id, cache_revision, content: id });
+        const initial = [cell("keep"), cell("edit"), cell("delete"), cell("private", "revoked")];
+        const current = [cell("keep"), cell("edit", "visible", "second"), cell("added"), cell("private", "revoked")];
+        const fake = makeFakeDb({ tables: {
+            tabular_reviews: { data: { id: "review", document_ids: [] }, error: null },
+            tabular_cells: [initial, current, [current[1], current[2]], current].map(data => ({ data, error: null })),
+        } });
+        const args = { reviewId: "review", ...WHO };
+        const first = await getTabularReviewDetail(fake.db, args);
+        expect(first.ok).toBe(true);
+        if (!first.ok) throw Error("missing detail");
+        expect(first.data.cell_revision).toEqual(expect.any(String));
+        loadReviewRows.mockResolvedValue([rows[0]]);
+        const delta = await getTabularReviewDetail(fake.db, { ...args, cellRevision: first.data.cell_revision });
+        expect(delta.ok && delta.data.cells.map(cell => cell.id)).toEqual(["edit", "added"]);
+        expect(delta.ok && delta.data.removed_cell_ids).toEqual(["delete", "private"]);
+        expect(callTo(fake.calls, "tabular_cells", 2)?.filters.id).toEqual(["edit", "added"]);
+        const other = await getTabularReviewDetail(fake.db, { ...args, userId: "other", cellRevision: first.data.cell_revision });
+        expect(other.ok && other.data.removed_cell_ids).toBeUndefined();
+        expect(other.ok && other.data.cells.map(cell => cell.id)).toEqual(["keep", "edit", "added"]);
+    });
+
     it("parses each cell's stored content", async () => {
         loadReviewRows.mockResolvedValue([
             { id: "row-1", label: "Doc", source_document_ids: [] },

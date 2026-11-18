@@ -134,7 +134,14 @@ export type ToolCacheRow = {
 };
 
 export const CLIENT_INFO = { name: "mike-mcp-client", version: "1.0.0" };
+/** Characters of one MCP tool result the model receives; the rest is cut off. */
 export const MAX_MCP_RESULT_CHARS = 60000;
+/**
+ * The same limit for the Legal Data Hunter connector only. It matches the
+ * document-context limit so a full court judgment usually fits; a longer
+ * document is cut off here and stays readable in full through read_document.
+ */
+export const MAX_LEGAL_DATA_HUNTER_RESULT_CHARS = 200_000;
 export const MCP_REQUEST_TIMEOUT_MS = 30000;
 export const OAUTH_STATE_TTL_MS = 10 * 60 * 1000;
 export const HEADER_NAME_RE = /^[A-Za-z0-9!#$%&'*+\-.^_`|~]+$/;

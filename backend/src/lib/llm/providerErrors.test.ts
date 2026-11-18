@@ -399,3 +399,163 @@ describe("source-owned provider refusals", () => {
     expect(providerFailureLevel(new UserFacingError("some other failure"))).toBe("error");
   });
 });
+
+describe("a failure thrown by the Vercel AI Gateway SDK", () => {
+  const gateway = { label: "Vercel AI Gateway", modelId: "vercel/openai/gpt-5", provider: "vercel" };
+
+  // @ai-sdk/gateway wraps the APICallError: its own class carries the status
+  // and the gateway's message, and the response body stays on the cause. A
+  // type it does not know becomes GatewayInternalServerError, whatever the status.
+  function gatewayError(
+    statusCode: number,
+    upstream: { message: string; type?: string },
+    wrapper: { name: string; type: string } = { name: "GatewayInternalServerError", type: "internal_server_error" },
+  ) {
+    const body = { error: upstream };
+    const cause = Object.assign(new Error(JSON.stringify(body)), {
+      name: "AI_APICallError", statusCode, responseBody: JSON.stringify(body), data: body,
+    });
+    return Object.assign(new Error(upstream.message, { cause }), {
+      [Symbol.for("vercel.ai.gateway.error")]: true, ...wrapper, statusCode,
+    });
+  }
+  const forbidden = { name: "GatewayForbiddenError", type: "forbidden" };
+  const refusal = (message = "AI Gateway requires a valid payment method on file.", type = "PRIVATE_unknown_type") =>
+    gatewayError(403, { message, type });
+
+  it("shows the owner of the key the gateway's own reason and reports a warning", () => {
+    const error = toProviderStreamError(refusal(), { ...gateway, keySource: "user" });
+    expect(error).toBeInstanceOf(UserFacingError);
+    expect(error.message).toBe(
+      'Vercel AI Gateway refused the request: "AI Gateway requires a valid payment method on file." ' +
+        "Check your Vercel AI Gateway account settings and billing, or select another model.",
+    );
+    expect(providerFailureKind(error)).toBe("chat.provider_rejected");
+    expect(providerFailureLevel(error)).toBe("warning");
+    // The reason is relayed, not recognized: the turn does not go quiet.
+    expect(isUserProviderRefusal(error)).toBe(false);
+    expect(providerFailureResponse(error)).toEqual({ status: 403, body: expect.stringContaining("payment method") });
+  });
+
+  it.each(["org", "deployment", undefined] as const)("keeps a shared account's reason from the user (%s key)", keySource => {
+    const error = toProviderStreamError(refusal("PRIVATE_ team acme has no payment method"), { ...gateway, keySource });
+    expect(error).toBeInstanceOf(UserFacingError);
+    expect(error.message).toBe(
+      "Vercel AI Gateway refused the request. Ask an administrator to check the Vercel AI Gateway account, or select another model.",
+    );
+    expect(providerFailureKind(error)).toBe("chat.provider_rejected");
+    expect(providerFailureLevel(error)).toBe("error");
+    expect(isUserProviderRefusal(error)).toBe(false);
+  });
+
+  it("reads a policy refusal the SDK does know the same way", () => {
+    const error = toProviderStreamError(
+      gatewayError(403, { message: "Request blocked by a routing rule.", type: "forbidden" }, forbidden),
+      { ...gateway, keySource: "user" },
+    );
+    expect(error.message).toContain('refused the request: "Request blocked by a routing rule."');
+    expect(providerFailureKind(error)).toBe("chat.provider_rejected");
+  });
+
+  it.each([
+    ["a gateway key", "Key vck_1a2B3c4D5e6F7g8H9i0J is not allowed.", "Key [redacted] is not allowed."],
+    ["a bearer token", "Authorization: Bearer abc.def-123 refused", "Authorization: [redacted] refused"],
+    ["a provider key", "Upstream key sk-proj-A1b2C3d4E5 was refused", "Upstream key [redacted] was refused"],
+    ["an unbroken token", "Token 9f8e7d6c5b4a39281706f5e4d3c2b1a0 refused", "Token [redacted] refused"],
+    ["a joined token", "Secret Ab12_Cd34-Ef56_Gh78-Ij90_Kl refused", "Secret [redacted] refused"],
+    ["a key split by invisible characters", "Key vck_\u200b1a2B3c4D\u200d5e6F7g8H refused", "Key [redacted] refused"],
+  ])("never shows %s", (_name, message, shown) => {
+    const error = toProviderStreamError(refusal(message), { ...gateway, keySource: "user" });
+    expect(error.message).toContain(`"${shown}"`);
+  });
+
+  it("shows the reason as one bounded line and leaves ordinary text readable", () => {
+    const readable = "Model anthropic/claude-sonnet-4-5-20250929 needs billing.\r\n\tSee https://vercel.com/docs/ai-gateway/authentication\u0000\u001b[31m";
+    expect(toProviderStreamError(refusal(readable), { ...gateway, keySource: "user" }).message).toContain(
+      '"Model anthropic/claude-sonnet-4-5-20250929 needs billing. See https://vercel.com/docs/ai-gateway/authentication [31m"',
+    );
+    const long = toProviderStreamError(refusal("word ".repeat(200)), { ...gateway, keySource: "user" }).message;
+    expect(long).toMatch(/word…" Check your/);
+    expect(long.length).toBeLessThan(450);
+    expect(toProviderStreamError(refusal("\n \u200b"), { ...gateway, keySource: "user" }).message).toBe(
+      "Vercel AI Gateway refused the request. Check your Vercel AI Gateway account settings and billing, or select another model.",
+    );
+  });
+
+  it("still treats a 401 as the rejected key", () => {
+    const error = toProviderStreamError(
+      gatewayError(401, { message: "Invalid API key", type: "authentication_error" }, { name: "GatewayAuthenticationError", type: "authentication_error" }),
+      { ...gateway, keySource: "user" },
+    );
+    expect(error).toBeInstanceOf(InvalidApiKeyError);
+    expect(error.message).not.toContain("refused the request");
+    expect(isUserProviderRefusal(error)).toBe(true);
+  });
+
+  it.each([
+    [402, { message: "PRIVATE_ balance", type: "PRIVATE_type" }, "chat.provider_out_of_credits", /out of credits/, true],
+    [429, { message: "PRIVATE_ slow down", type: "rate_limit_exceeded" }, "chat.provider_rate_limited", /rate limit or quota reached/, false],
+    [429, { message: "PRIVATE_", type: "insufficient_quota" }, "chat.provider_out_of_credits", /out of credits/, true],
+    [404, { message: "PRIVATE_ no such model", type: "model_not_found" }, "chat.provider_rejected", /isn't available with the Vercel AI Gateway API key/, true],
+  ] as const)("chooses the existing message for a %i through the gateway", (status, upstream, kind, message, quiet) => {
+    const error = toProviderStreamError(gatewayError(status, upstream), { ...gateway, keySource: "user" });
+    expect(error).toBeInstanceOf(UserFacingError);
+    expect(error.message).toMatch(message);
+    expect(error.message).not.toContain("PRIVATE_");
+    expect(providerFailureKind(error)).toBe(kind);
+    expect(isUserProviderRefusal(error)).toBe(quiet);
+  });
+
+  it.each([500, 503])("keeps a %i an outage, never a refusal", status => {
+    const original = gatewayError(status, { message: "PRIVATE_ upstream failed", type: "internal_server_error" });
+    const error = toProviderStreamError(original, { ...gateway, keySource: "user" });
+    expect(error).toBe(original);
+    expect(providerFailureKind(error)).toBe("chat.provider_unavailable");
+    expect(providerFailureLevel(error)).toBe("warning");
+  });
+
+  it("leaves a 4xx that is not an account verdict unexplained", () => {
+    // Our own malformed request, and a 403 whose body is not the gateway's error envelope.
+    const invalid = gatewayError(400, { message: "PRIVATE_ bad tool schema", type: "invalid_request_error" }, { name: "GatewayInvalidRequestError", type: "invalid_request_error" });
+    const opaque = Object.assign(new Error("Invalid error response format: Gateway request failed", {
+      cause: apiCallError(403, "<html>PRIVATE_WAF</html>"),
+    }), { [Symbol.for("vercel.ai.gateway.error")]: true, name: "GatewayResponseError", type: "response_error", statusCode: 403 });
+    for (const original of [invalid, opaque]) {
+      const error = toProviderStreamError(original, { ...gateway, keySource: "user" });
+      expect(error).toBe(original);
+      expect(providerFailureKind(error)).toBe("chat.stream_failed");
+      expect(providerFailureLevel(error)).toBe("error");
+    }
+  });
+
+  it("does not read a direct provider's or OpenRouter's 403 as an account refusal", () => {
+    // The same body without the gateway's marker: it may be a WAF, a region or a wrong endpoint.
+    const body = '{"error":{"message":"AI Gateway requires a valid payment method on file.","type":"PRIVATE_unknown_type"}}';
+    for (const context of [gemini, { label: "OpenRouter", modelId: "openrouter/openai/gpt-5", provider: "openrouter" }]) {
+      const original = apiCallError(403, body);
+      const error = toProviderStreamError(original, { ...context, keySource: "user" });
+      expect(error).toBe(original);
+      expect(providerFailureKind(error)).toBe("chat.stream_failed");
+      expect(providerFailureLevel(error)).toBe("error");
+    }
+    const credits = toProviderStreamError(apiCallError(402, "{}"), { label: "OpenRouter", modelId: "m", keySource: "user" });
+    expect(credits.message).toBe("The OpenRouter account is out of credits. Top up, or select another model.");
+  });
+
+  it("sends Sentry the kind, status and a reviewed type, never the reason", () => {
+    const tagsFor = (type: string, keySource: "user" | "deployment") => {
+      const wrapped = toProviderStreamError(refusal("PRIVATE_ reason", type), { ...gateway, keySource });
+      return diagnosticErrorTags(new AppError(providerFailureKind(wrapped), "Model stream failed", { cause: wrapped }));
+    };
+    expect(tagsFor("permission_error", "user")).toEqual({
+      error_kind: "chat.provider_rejected", provider: "vercel", provider_error: "api_call",
+      provider_error_type: "permission_error", dependency_status: 403,
+    });
+    // A type outside the reviewed list is not forwarded, and neither is the SDK class's catch-all type.
+    const unknown = tagsFor("PRIVATE_unknown_type", "deployment");
+    expect(unknown).toEqual({
+      error_kind: "chat.provider_rejected", provider: "vercel", provider_error: "api_call", dependency_status: 403,
+    });
+    expect(JSON.stringify(unknown)).not.toContain("PRIVATE_");
+  });
+});

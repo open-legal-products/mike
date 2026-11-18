@@ -14,7 +14,7 @@ export const Notifications = () => {
                 title: "Couldn't save your changes",
                 message: "Mike couldn't reach the server. Check your connection and try again.",
                 actions: [{ label: "Retry", onClick: () => { showToast({ tone: "success", message: "Changes saved" }); } }],
-                supportHref: "mailto:will@mikeoss.com",
+                supportHref: "mailto:support@mikeoss.com",
             })}>Show error</PillButtonUI>
             <PillButtonUI tone="white" onClick={() => showToast({ tone: "success", message: "Changes saved" })}>Show success</PillButtonUI>
             <PillButtonUI tone="white" onClick={() => showToast({ tone: "info", message: "Your export is ready" })}>Show information</PillButtonUI>

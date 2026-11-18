@@ -264,8 +264,15 @@ export function usePaginatedTabularReviews(options: {
         sortKey,
     ]);
     const retry = useCallback(() => {
+        // Supersede pending responses immediately, including before React runs
+        // the refresh effect after several activity notifications in one tick.
+        requestVersionRef.current += 1;
+        refreshingRef.current = true;
         setRetryVersion((current) => current + 1);
     }, []);
+    const retryIfPending = useCallback(() => {
+        if (refreshingRef.current || loadingMoreRef.current) retry();
+    }, [retry]);
 
     // Selects every review matching the current filters, not just the page(s)
     // already loaded — a plain "select loaded rows" checkbox is misleading
@@ -343,6 +350,7 @@ export function usePaginatedTabularReviews(options: {
         loadMoreError,
         loadMore,
         retry,
+        retryIfPending,
         selectedReviewIds,
         setSelectedReviewIds,
         selectAllMatching,

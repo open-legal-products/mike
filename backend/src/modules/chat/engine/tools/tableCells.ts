@@ -9,11 +9,11 @@ import type { TabularCellStore } from "../types";
  * from maps built once, so the work is O(columns + rows + emitted cells)
  * rather than a findIndex per emitted cell (O(C·R²) on a large review).
  */
-export function renderTableCells(
+export async function renderTableCells(
   store: TabularCellStore,
   colIndices: number[] | undefined,
   rowIndices: number[] | undefined,
-): { label: string; content: string } {
+): Promise<{ label: string; content: string }> {
   const wantedCols = colIndices?.length ? new Set(colIndices) : null;
   const wantedRows = rowIndices?.length ? new Set(rowIndices) : null;
 
@@ -35,6 +35,7 @@ export function renderTableCells(
     ? store.documents.filter((_, i) => wantedRows.has(i))
     : store.documents;
 
+  await store.loadCells?.(docs.map(doc => doc.id), cols.map(col => col.index));
   const label = `${cols.length} ${cols.length === 1 ? "column" : "columns"} × ${docs.length} ${docs.length === 1 ? "row" : "rows"}`;
 
   const lines: string[] = [];
