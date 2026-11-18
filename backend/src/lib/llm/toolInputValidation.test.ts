@@ -134,8 +134,8 @@ describe("buildToolInputCheck", () => {
   });
 
   it("never runs a schema's regular expressions", () => {
-    // A catastrophic pattern from a connector, and an argument that would
-    // take it seconds: checked on this thread, it would stall every request.
+    // A connector's pattern could be catastrophic: checked on this thread, it
+    // would stall every request. So no pattern may reach the validator at all.
     const schema = {
       type: "object",
       properties: {
@@ -148,11 +148,33 @@ describe("buildToolInputCheck", () => {
       additionalProperties: false,
       required: ["pattern"],
     };
-    const check = buildToolInputCheck(compile, "mcp_slow", schema, "enforce")!;
-    const started = performance.now();
-    expect(check({ q: `${"a".repeat(40)}!`, pattern: "p", [`${"x".repeat(40)}!`]: "v" }).success).toBe(true);
-    expect(performance.now() - started).toBeLessThan(200);
-    // Everything else in the schema is still checked.
+    const compiledSchemas: unknown[] = [];
+    const recording = ((given, options) => {
+      compiledSchemas.push(given);
+      return compile(given, options);
+    }) as Compile;
+    expect(buildToolInputCheck(recording, "mcp_slow", schema, "enforce")).toBeDefined();
+    expect(compiledSchemas).toEqual([
+      {
+        type: "object",
+        properties: {
+          q: { type: "string" },
+          n: { type: "integer" },
+          pattern: { type: "string" },
+        },
+        required: ["pattern"],
+      },
+    ]);
+
+    // With harmless patterns, through the real validator: values the patterns
+    // would refuse are accepted, and everything else is still checked.
+    const safe = {
+      ...schema,
+      properties: { ...schema.properties, q: { type: "string", pattern: "^a+$" } },
+      patternProperties: { "^x+$": { type: "integer" } },
+    };
+    const check = buildToolInputCheck(compile, "mcp_safe", safe, "enforce")!;
+    expect(check({ q: "a!", pattern: "p", xx: "not an integer" }).success).toBe(true);
     expect(check({ q: "a", pattern: "p", n: "3" }).success).toBe(false);
     expect(check({ q: "a" }).success).toBe(false);
     expect(check({ pattern: 5 }).success).toBe(false);
@@ -225,7 +247,28 @@ describe("buildToolInputCheck", () => {
     expect(line).toContain("/fields/* type");
     expect(line).toContain("/rows/1/n type");
     expect(line).toContain("/doc_id required");
-    expect(loggablePath(schema, "/a~1b")).toBe("/*");
+    expect(loggablePath(schema, "/a~1b", {})).toBe("/*");
+  });
+
+  it("masks a numeric key of an object even when the schema carries items", () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    // `items` does not make the value an array: nothing here says `type`.
+    const schema = {
+      type: "object",
+      properties: {
+        accounts: { items: { type: "string" }, additionalProperties: false },
+        rows: { type: "array", items: { type: "object", properties: { n: { type: "integer" } } } },
+      },
+    };
+    const check = buildToolInputCheck(compile, "numeric", schema, "log")!;
+    check({ accounts: { "4111111111111111": "x" }, rows: [{ n: 1 }, { n: "x" }] });
+    const line = String(warn.mock.calls[0][0]);
+    expect(line).not.toContain("4111111111111111");
+    expect(line).toContain("/accounts/* ");
+    expect(line).toContain("/rows/1/n type");
+    // The same path, read against an array and against an object.
+    expect(loggablePath(schema, "/accounts/7", { accounts: ["a"] })).toBe("/accounts/7");
+    expect(loggablePath(schema, "/accounts/7", { accounts: { 7: "a" } })).toBe("/accounts/*");
   });
 
   it("leaves a tool with a dangling $ref unchecked rather than uncallable", () => {
