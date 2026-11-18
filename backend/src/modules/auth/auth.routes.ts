@@ -22,6 +22,7 @@ import { isAuthUpstreamFailure } from "../../lib/authUpstream";
 import { AppError } from "../../lib/appError";
 import { reportError, setOperation } from "../../lib/observability/sentry";
 import { requestOriginIsWordAddin } from "../../lib/origins";
+import { createServerSupabase } from "../../lib/supabase";
 import { requireAuth } from "../../middleware/auth";
 import { asyncRoute, routerErrorHandler } from "../../middleware/asyncRoute";
 import { requireTrustedOrigin } from "../../middleware/trustedOrigin";
@@ -31,6 +32,7 @@ import {
   challengeAndVerifyMfa,
   challengeMfaFactor,
   consumeWordHandoff,
+  createFirstAccount,
   credentialsSchema,
   currentUser,
   emailSchema,
@@ -46,6 +48,7 @@ import {
   passwordSchema,
   sendPasswordReset,
   signInWithPassword,
+  signInOptions,
   signOut,
   signUpWithPassword,
   startGoogleOAuth,
@@ -159,6 +162,57 @@ authRouter.post("/signup", asyncRoute(async (req, res) => {
       user: publicAuthUser(data.user),
       requiresEmailConfirmation: !data.session,
     });
+  } catch (error) {
+    authError(res, error);
+  }
+}));
+
+// Which sign-in routes to offer, and whether this instance still needs its
+// first account. Public: the login page asks before anyone is signed in.
+authRouter.get("/options", asyncRoute(async (_req, res) => {
+  setOperation("auth.options");
+  try {
+    res.json(await signInOptions(createServerSupabase()));
+  } catch (error) {
+    sendInternalError(
+      res,
+      new AppError("auth.options_failed", "Sign-in options could not be read", {
+        cause: error,
+      }),
+    );
+  }
+}));
+
+// First-run setup: create the instance's first account and sign it in.
+authRouter.post("/setup", asyncRoute(async (req, res) => {
+  setOperation("auth.setup");
+  const parsed = signupSchema.safeParse(req.body);
+  if (!parsed.success) return invalidBody(res, parsed.error.issues);
+
+  let result: Awaited<ReturnType<typeof createFirstAccount>>;
+  try {
+    result = await createFirstAccount(createServerSupabase(), parsed.data);
+  } catch (error) {
+    return sendInternalError(
+      res,
+      new AppError("auth.setup_failed", "First-run setup could not be completed", {
+        cause: error,
+      }),
+    );
+  }
+  if (!result.ok) {
+    if (result.reason === "auth_error") return authError(res, result.error);
+    return res.status(409).json({
+      code: "setup_complete",
+      detail: "This Mike instance is already set up. Log in instead.",
+    });
+  }
+
+  try {
+    const client = createRequestSupabase(req, res);
+    const { data, error } = await signInWithPassword(client, parsed.data);
+    if (error || !data.user || !data.session) return authError(res, error);
+    res.status(201).json({ user: publicAuthUser(data.user) });
   } catch (error) {
     authError(res, error);
   }

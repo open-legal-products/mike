@@ -162,6 +162,25 @@ export async function signup(email: string, password: string, next: string) {
     });
 }
 
+/** Which sign-in routes this deployment offers, and whether it still needs its first account. */
+export interface SignInOptions {
+    google: boolean;
+    sso: boolean;
+    setupRequired: boolean;
+}
+
+export async function getSignInOptions() {
+    return authRequest<SignInOptions>("auth.options", "/options");
+}
+
+/** First-run setup: create this deployment's first account and sign it in. */
+export async function setupFirstAccount(email: string, password: string) {
+    return authRequest<{ user: AuthUser }>("auth.setup", "/setup", {
+        method: "POST",
+        body: JSON.stringify({ email, password }),
+    });
+}
+
 export async function startGoogleOAuth(next: string) {
     return authRequest<{ url: string }>("auth.signin", "/oauth", {
         method: "POST",

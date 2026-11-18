@@ -59,8 +59,23 @@ vi.mock("@/app/components/site-logo", () => ({
     SiteLogo: () => <div>Mike</div>,
 }));
 
+const signInOptions = vi.hoisted(() => ({
+    current: {
+        options: { google: true, sso: true, setupRequired: false },
+        loaded: true,
+    },
+}));
+
+vi.mock("@/app/hooks/useSignInOptions", () => ({
+    useSignInOptions: () => signInOptions.current,
+}));
+
 describe("LoginPage", () => {
     beforeEach(() => {
+        signInOptions.current = {
+            options: { google: true, sso: true, setupRequired: false },
+            loaded: true,
+        };
         authState.error = null;
         retrySession.mockReset();
         login.mockReset();
@@ -171,6 +186,36 @@ describe("LoginPage", () => {
                 Node.DOCUMENT_POSITION_FOLLOWING,
         ).toBeTruthy();
     });
+    it("offers only the providers the deployment has configured", () => {
+        signInOptions.current = {
+            options: { google: false, sso: false, setupRequired: false },
+            loaded: true,
+        };
+        render(<LoginPage />);
+        expect(screen.getByRole("button", { name: "Log in" })).toBeInTheDocument();
+        expect(screen.queryByRole("button", { name: "Continue with Google" })).toBeNull();
+        expect(screen.queryByRole("button", { name: "Continue with SSO" })).toBeNull();
+    });
+
+    it("shows no provider buttons until the deployment has said which it offers", () => {
+        signInOptions.current = {
+            options: { google: true, sso: true, setupRequired: false },
+            loaded: false,
+        };
+        render(<LoginPage />);
+        expect(screen.queryByRole("button", { name: "Continue with Google" })).toBeNull();
+        expect(screen.queryByRole("button", { name: "Continue with SSO" })).toBeNull();
+    });
+
+    it("sends the first visitor of a new deployment to setup", () => {
+        signInOptions.current = {
+            options: { google: false, sso: false, setupRequired: true },
+            loaded: true,
+        };
+        render(<LoginPage />);
+        expect(replace).toHaveBeenCalledWith("/setup");
+    });
+
     it("hides the guest button outside the Mac desktop shell", async () => {
         // window.mikeDesktop only exists inside the Electron shell, and only
         // its local ("everything on this Mac") mode answers with credentials.

@@ -19,7 +19,9 @@
 #   4. Creates the private storage bucket, and generates the backend's own
 #      signing/encryption secrets once, keeping them in a schema PostgREST
 #      does not expose, so they survive redeploys and are never in the repo.
-#   5. Creates the deployer's account (scripts/vercel-admin-user.mjs).
+#   5. Turns on first-run setup, so the first visitor creates the first
+#      account in the app; MIKE_ADMIN_EMAIL/MIKE_ADMIN_PASSWORD, when set,
+#      create it here instead (scripts/vercel-admin-user.mjs).
 #
 # Every step is idempotent; a start with nothing to do costs a few queries.
 set -euo pipefail
@@ -66,6 +68,9 @@ if [ -z "${STORAGE_DRIVER:-}" ] && [ -z "${R2_ENDPOINT_URL:-}" ]; then
   export STORAGE_DRIVER=supabase
 fi
 bucket="${SUPABASE_STORAGE_BUCKET:-mike}"
+# A new deployment has no accounts: the first visitor creates one on the
+# setup screen (backend/src/modules/auth, docs/vercel.md).
+export MIKE_FIRST_RUN_SETUP="${MIKE_FIRST_RUN_SETUP:-true}"
 
 # --- 3. Database ------------------------------------------------------------
 psql_db() {

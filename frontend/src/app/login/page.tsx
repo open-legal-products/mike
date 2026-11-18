@@ -18,6 +18,7 @@ import { useAuth } from "@/app/contexts/AuthContext";
 import { cn } from "@/app/lib/utils";
 import { SsoAuthButton } from "@/app/components/auth/SsoAuthButton";
 import { GoogleAuthButton } from "@/app/components/auth/GoogleAuthButton";
+import { useSignInOptions } from "@/app/hooks/useSignInOptions";
 import { FieldLabel } from "@/app/components/ui/form-field";
 import { WarningPopup } from "@/app/components/popups/WarningPopup";
 import {
@@ -107,12 +108,24 @@ export default function LoginPage() {
     }
     const [loginMode, setLoginMode] = useState<"account" | "guest" | null>(null);
     const [guest, setGuest] = useState<GuestCredentials | null>(null);
+    const { options: signInOptions, loaded: signInOptionsLoaded } =
+        useSignInOptions();
 
     useEffect(() => {
         if (!authLoading && isAuthenticated) {
             router.replace("/onboarding/profile");
         }
     }, [authLoading, isAuthenticated, router]);
+
+    // A new deployment has no accounts yet: its first visitor creates one.
+    useEffect(() => {
+        if (signInOptions.setupRequired) router.replace("/setup");
+    }, [router, signInOptions.setupRequired]);
+
+    // Offer only the providers this deployment has configured, and none
+    // until it has said which, so a button never appears and then vanishes.
+    const showGoogle = signInOptionsLoaded && signInOptions.google;
+    const showSso = signInOptionsLoaded && signInOptions.sso;
 
     useEffect(() => {
         let cancelled = false;
@@ -334,18 +347,22 @@ export default function LoginPage() {
                                     {loading ? "Logging in..." : "Log in"}
                                 </PillButtonUI>
                             </div>
-                            {!guest && (
+                            {!guest && (showGoogle || showSso) && (
                                 <>
                                     <AuthDividerUI />
-                                    <GoogleAuthButton
-                                        onError={(nextError) => {
-                                            setLoginMode(null);
-                                            setError(nextError);
-                                        }}
-                                        disabled={loading}
-                                        onLoadingChange={setLoading}
-                                    />
-                                    <SsoAuthButton disabled={loading} />
+                                    {showGoogle && (
+                                        <GoogleAuthButton
+                                            onError={(nextError) => {
+                                                setLoginMode(null);
+                                                setError(nextError);
+                                            }}
+                                            disabled={loading}
+                                            onLoadingChange={setLoading}
+                                        />
+                                    )}
+                                    {showSso && (
+                                        <SsoAuthButton disabled={loading} />
+                                    )}
                                 </>
                             )}
                         </form>

@@ -7,9 +7,10 @@
 // handed in, and every function returns GoTrue's own `{ data, error }` shape
 // so the route keeps mapping failures exactly as it always has.
 //
-// There is no `db: Db` here — auth talks to Supabase GoTrue, not to the
-// application database. The cookie/session primitives themselves stay in
-// lib/authSession and lib/authHandoff because middleware/auth depends on them.
+// Auth talks to Supabase GoTrue, not to the application database, with one
+// exception: first-run setup takes its one-time claim through `db: Db`. The
+// cookie/session primitives themselves stay in lib/authSession and
+// lib/authHandoff because middleware/auth depends on them.
 
 import { z } from "zod";
 import {
@@ -19,6 +20,9 @@ import {
 } from "./auth.messages";
 import type { Session, SupabaseClient, User } from "@supabase/supabase-js";
 import { consumeAuthHandoff, issueAuthHandoff } from "../../lib/authHandoff";
+import type { Db } from "../../lib/supabase";
+import { supabaseSessionConfiguration } from "../../lib/runtimeConfig";
+import { ssoConfiguration } from "../../lib/ssoConfig";
 
 // ---------------------------------------------------------------------------
 // Request payload schemas
@@ -291,4 +295,126 @@ export function unenrollMfaFactor(
   args: { factorId: string },
 ) {
   return client.auth.mfa.unenroll(args);
+}
+
+// ---------------------------------------------------------------------------
+// Sign-in options and first-run setup
+// ---------------------------------------------------------------------------
+
+/**
+ * First-run setup is offered only where the deployment asks for it
+ * (backend/scripts/vercel-start.sh sets MIKE_FIRST_RUN_SETUP=true): an
+ * install that creates its accounts some other way never exposes it.
+ */
+export function firstRunSetupEnabled(env: NodeJS.ProcessEnv = process.env): boolean {
+  return env.MIKE_FIRST_RUN_SETUP?.trim().toLowerCase() === "true";
+}
+
+const PROVIDER_SETTINGS_TTL_MS = 60_000;
+let cachedGoogleEnabled: { value: boolean; expiresAt: number } | undefined;
+
+/**
+ * Whether Supabase Auth has the Google provider switched on, from GoTrue's
+ * public settings endpoint. Cached for a minute. When the answer cannot be
+ * read the button stays visible, as it always was, rather than hiding a
+ * provider that may well work.
+ */
+async function googleSignInEnabled(fetchImpl: typeof fetch): Promise<boolean> {
+  const now = Date.now();
+  if (cachedGoogleEnabled && cachedGoogleEnabled.expiresAt > now) {
+    return cachedGoogleEnabled.value;
+  }
+  let value = true;
+  try {
+    const { url, key } = supabaseSessionConfiguration();
+    const response = await fetchImpl(`${url.replace(/\/+$/, "")}/auth/v1/settings`, {
+      headers: { apikey: key },
+      signal: AbortSignal.timeout(5_000),
+    });
+    if (response.ok) {
+      const settings = (await response.json()) as { external?: { google?: unknown } };
+      value = settings.external?.google === true;
+    }
+  } catch {
+    // Unknown: keep the button (see above).
+  }
+  cachedGoogleEnabled = { value, expiresAt: now + PROVIDER_SETTINGS_TTL_MS };
+  return value;
+}
+
+/** Test seam: forget the cached provider settings. */
+export function resetSignInOptionsCache(): void {
+  cachedGoogleEnabled = undefined;
+}
+
+export type SignInOptions = {
+  google: boolean;
+  sso: boolean;
+  setupRequired: boolean;
+};
+
+/** Which sign-in routes the login page should offer, and whether this instance still needs its first account. */
+export async function signInOptions(
+  db: Db,
+  fetchImpl: typeof fetch = fetch,
+): Promise<SignInOptions> {
+  const [google, setupRequired] = await Promise.all([
+    googleSignInEnabled(fetchImpl),
+    instanceSetupAvailable(db),
+  ]);
+  return { google, sso: ssoConfiguration().enabled, setupRequired };
+}
+
+/** True while first-run setup is enabled and nobody has an account yet. */
+export async function instanceSetupAvailable(db: Db): Promise<boolean> {
+  if (!firstRunSetupEnabled()) return false;
+  const { data, error } = await db.rpc("instance_setup_available");
+  if (error) throw error;
+  return data === true;
+}
+
+export type FirstAccountResult =
+  | { ok: true }
+  | { ok: false; reason: "unavailable" | "taken" }
+  | { ok: false; reason: "auth_error"; error: unknown };
+
+/**
+ * Create the instance's first account, confirmed, through the Auth admin
+ * API. A Marketplace Supabase project cannot email a confirmation link to
+ * anyone outside its own team, so this one account is confirmed directly;
+ * every later sign-up goes through the normal confirmation email.
+ *
+ * The claim is taken before the account is created and given back if
+ * creation fails, so two visitors racing for setup cannot both get an
+ * account this way.
+ */
+export async function createFirstAccount(
+  db: Db,
+  credentials: Credentials,
+): Promise<FirstAccountResult> {
+  if (!firstRunSetupEnabled()) return { ok: false, reason: "unavailable" };
+  const { data: claimed, error: claimError } = await db.rpc("claim_instance_setup");
+  if (claimError) throw claimError;
+  if (claimed !== true) return { ok: false, reason: "taken" };
+
+  try {
+    const { error } = await db.auth.admin.createUser({
+      email: credentials.email,
+      password: credentials.password,
+      email_confirm: true,
+    });
+    if (error) {
+      await releaseInstanceSetup(db);
+      return { ok: false, reason: "auth_error", error };
+    }
+  } catch (error) {
+    await releaseInstanceSetup(db);
+    throw error;
+  }
+  return { ok: true };
+}
+
+async function releaseInstanceSetup(db: Db): Promise<void> {
+  const { error } = await db.rpc("release_instance_setup");
+  if (error) throw error;
 }

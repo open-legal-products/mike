@@ -4,7 +4,7 @@ Mike can run entirely on Vercel, with a Supabase project from the Vercel
 Marketplace for the database, sign-in and file storage. There is nothing else
 to host, no Docker to install and no keys to copy by hand.
 
-[![Deploy with Vercel](https://vercel.com/button)](https://vercel.com/new/clone?repository-url=https%3A%2F%2Fgithub.com%2Fopen-legal-products%2Fmike&project-name=mike&repository-name=mike&env=MIKE_ADMIN_EMAIL%2CMIKE_ADMIN_PASSWORD&envDescription=The%20email%20and%20password%20%28at%20least%2010%20characters%29%20of%20the%20first%20Mike%20account%2C%20created%20for%20you%20on%20first%20start&envLink=https%3A%2F%2Fgithub.com%2Fopen-legal-products%2Fmike%2Fblob%2Fmain%2Fdocs%2Fvercel.md&stores=%5B%7B%22type%22%3A%22integration%22%2C%22integrationSlug%22%3A%22supabase%22%2C%22productSlug%22%3A%22supabase%22%2C%22protocol%22%3A%22storage%22%7D%5D&demo-title=Mike&demo-description=Your%20own%20Mike%3A%20the%20open-source%20legal%20AI%20workspace%2C%20on%20your%20Vercel%20account%20with%20a%20Supabase%20database.&demo-url=https%3A%2F%2Fgithub.com%2Fopen-legal-products%2Fmike)
+[![Deploy with Vercel](https://vercel.com/button)](https://vercel.com/new/clone?repository-url=https%3A%2F%2Fgithub.com%2Fopen-legal-products%2Fmike&project-name=mike&repository-name=mike&stores=%5B%7B%22type%22%3A%22integration%22%2C%22integrationSlug%22%3A%22supabase%22%2C%22productSlug%22%3A%22supabase%22%2C%22protocol%22%3A%22storage%22%7D%5D&demo-title=Mike&demo-description=Your%20own%20Mike%3A%20the%20open-source%20legal%20AI%20workspace%2C%20on%20your%20Vercel%20account%20with%20a%20Supabase%20database.&demo-url=https%3A%2F%2Fgithub.com%2Fopen-legal-products%2Fmike)
 
 > Vercel's Services, Container runtime and Daemons, which this deployment
 > uses, are in beta.
@@ -14,10 +14,7 @@ to host, no Docker to install and no keys to copy by hand.
 1. Copies the repository into your Git account and creates a Vercel project.
 2. Creates a Supabase project through the Marketplace and connects it, which
    gives the project its database, Auth and Storage variables.
-3. Asks for `MIKE_ADMIN_EMAIL` and `MIKE_ADMIN_PASSWORD` (at least 10
-   characters). That account is created, already confirmed, the first time the
-   backend starts, so you can sign in as soon as the deployment is ready.
-4. Builds and deploys the stack described in `vercel.json`:
+3. Builds and deploys the stack described in `vercel.json`:
 
 | Part | Runs as | Source |
 |---|---|---|
@@ -26,10 +23,20 @@ to host, no Docker to install and no keys to copy by hand.
 | Background jobs | Daemon `worker` (one instance, `iad1`) | `backend/Dockerfile` |
 | Database, Auth, files | Supabase | Marketplace integration |
 
-Open the production URL and sign in with the admin email and password. Add
-a model-provider key under **Settings > Bring Your Own Keys**, or set
+There is nothing to fill in. Open the production URL when the deployment is
+ready: a new deployment has no accounts, so Mike shows **Set up Mike**, where
+you create the first account and are signed straight in. That account is
+confirmed without an email, because a new Supabase project cannot send one
+yet. The screen is offered only while the deployment has no accounts at all,
+so open it soon after deploying: whoever opens it first creates the first
+account.
+
+Then add a model-provider key under **Settings > Bring Your Own Keys**, or set
 `ANTHROPIC_API_KEY`, `OPENAI_API_KEY` or `GEMINI_API_KEY` on the Vercel
 project and redeploy.
+
+The login page offers Google and SSO only once they are configured (see
+below), so a new deployment shows email and password alone.
 
 ## What happens on start
 
@@ -50,9 +57,11 @@ step is idempotent:
   not expose. A value you set on the Vercel project takes precedence. Do not
   change `USER_API_KEYS_ENCRYPTION_SECRET` afterwards: keys users saved under
   the old value can no longer be read.
-- It creates the admin account (`backend/scripts/vercel-admin-user.mjs`). An
-  existing account is never changed, so you can remove
-  `MIKE_ADMIN_PASSWORD` from the project after the first sign-in.
+- It turns on first-run setup (`MIKE_FIRST_RUN_SETUP=true`). To create the
+  first account without the setup screen instead, set `MIKE_ADMIN_EMAIL` and
+  `MIKE_ADMIN_PASSWORD` (at least 10 characters) on the project before the
+  first deployment; `backend/scripts/vercel-admin-user.mjs` creates it,
+  confirmed, and never changes an existing account.
 
 Any variable you set on the Vercel project wins over the derived one, so the
 rest of [Environment](deployment.md#environment) applies unchanged.
@@ -68,8 +77,10 @@ messages an hour. Before inviting anyone:
    redirect URLs.
 2. **Authentication > Emails > SMTP Settings**: add your own SMTP provider.
 
-See [Authentication email](deployment.md#authentication-email) and
-[Google authentication](deployment.md#google-authentication) for the details.
+See [Authentication email](deployment.md#authentication-email) for the
+details. To add **Continue with Google**, enable the Google provider in
+Supabase as described in [Google authentication](deployment.md#google-authentication);
+the button appears on the login page within a minute, with no redeploy.
 
 ## Limits
 
@@ -87,8 +98,12 @@ See [Authentication email](deployment.md#authentication-email) and
   it runs out. The API also processes jobs while it is serving traffic, so
   uploads and reviews keep working, but jobs started just before the API
   scales down wait for the next request. Use Pro for a team.
-- **Previews.** Daemons run only in production, and the backend trusts only
-  the production domain, so use the production deployment.
+- **Production only.** `vercel.json` deploys only the `main` branch: Daemons
+  run only in production and the backend trusts only the production domain,
+  and the copy the button makes would otherwise build a preview for every
+  Dependabot branch. Dependabot still opens pull requests in your copy;
+  disable it under the repository's **Settings > Code security** if you do
+  not want them.
 - **First request after idle.** The API container stops after five minutes
   without traffic; the next request starts it again, which takes about six
   seconds.
@@ -105,8 +120,7 @@ See [Authentication email](deployment.md#authentication-email) and
    root.
 2. In the project's **Storage** tab, create or connect a Supabase database
    for all environments.
-3. Add `MIKE_ADMIN_EMAIL` and `MIKE_ADMIN_PASSWORD`, then deploy to
-   production.
+3. Deploy to production and open the URL to create the first account.
 
 To use an S3-compatible bucket instead of Supabase Storage, set the `R2_*`
 variables described in [Environment](deployment.md#environment) and its
