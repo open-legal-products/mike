@@ -10,6 +10,7 @@ import {
   type ToolInputChecker,
 } from "../../../../lib/llm/toolInputValidation";
 import { toolName } from "./toolSchemas";
+import { spotlight } from "../contextBuilders";
 import { AppError } from "../../../../lib/appError";
 import { reportError } from "../../../../lib/observability/sentry";
 
@@ -93,11 +94,34 @@ function asCodemodeTools(
 
 const SCRIPT_DESCRIPTION = `Run a short JavaScript program that calls the document tools below in a loop and returns a compact result. Use it when a question needs the same lookup across many documents (for example, "which of these 80 agreements have a change-of-control clause?"), instead of calling the tools one at a time.
 
-The code is the body of an async function: use await and return a JSON-serialisable value. Call tools as \`await tools.<name>(args)\`; each returns the tool's normal result (parsed JSON where it is JSON). A call that fails throws an Error you can catch. Use console.log for progress notes. There is no network, file system, timers or modules. At most ${SCRIPT_MAX_TOOL_CALLS} tool calls and ${SCRIPT_TIMEOUT_MS / 1000} seconds per script.
+The code is the body of an async function: use await and return a JSON-serialisable value. Call tools as \`await tools.<name>(args)\`; what each returns is listed below. A call that fails throws an Error you can catch. Use console.log for progress notes. There is no network, file system, timers or modules. At most ${SCRIPT_MAX_TOOL_CALLS} tool calls and ${SCRIPT_TIMEOUT_MS / 1000} seconds per script.
 
-Return only what you need (document ids, short excerpts, counts), not whole documents. Documents a script reads are not shown to you in full: before quoting or citing a document, read it or search it with the normal tools. Available tools:
+Return only what you need (document ids, short excerpts, counts), not whole documents. Documents a script reads are not shown to you in full: before quoting or citing a document, read it or search it with the normal tools.
 
 `;
+
+/** What each tool resolves to in a script, as the dispatcher really answers. */
+const SCRIPT_TOOL_RETURNS: Record<string, string> = {
+  list_documents: "an array of { doc_id, filename, file_type }",
+  find_documents:
+    "{ ok: true, matches: [{ doc_id, filename, ... }], next_offset, coverage }, or { ok: false, error }",
+  find_in_document:
+    "{ ok: true, filename, total_matches, returned, truncated, hits: [{ index, excerpt, context }] }, or { ok: false, error }",
+  read_document:
+    "a string: a short header, then the document's text. Keep it: reading the same document again in one script can return a notice in place of the text",
+  fetch_documents:
+    "one string holding every requested document, each under a `--- <doc_id> ---` line",
+  read_table_cells: "a string: the requested cells as text",
+};
+
+function returnsSection(inner: readonly OpenAIToolSchema[]): string {
+  const lines = inner
+    .map((tool) => tool.function.name)
+    .filter((name) => SCRIPT_TOOL_RETURNS[name])
+    .map((name) => `- ${name}: ${SCRIPT_TOOL_RETURNS[name]}`);
+  return `What the tools return:\n${lines.join("\n")}\n\nAvailable tools:\n\n`;
+}
+
 
 /**
  * The run_script schema for this turn, or null when it is off or there is
@@ -118,7 +142,7 @@ export async function scriptToolFor(
     type: "function",
     function: {
       name: SCRIPT_TOOL_NAME,
-      description: SCRIPT_DESCRIPTION + declarations,
+      description: SCRIPT_DESCRIPTION + returnsSection(inner) + declarations,
       parameters: {
         type: "object",
         properties: {
@@ -146,6 +170,12 @@ export type ScriptRunContext = {
   innerTools: readonly OpenAIToolSchema[];
   dispatch: ScriptToolDispatch;
   signal?: AbortSignal;
+  /**
+   * The turn's spotlighting nonce. What a script returns is built from
+   * document text, so it goes back to the model fenced as untrusted content,
+   * and the fences on the tools' own results are removed for the script.
+   */
+  nonce?: string;
   /** Test seams. */
   limits?: Partial<{
     maxToolCalls: number;
@@ -171,14 +201,37 @@ function parseToolResult(content: string): unknown {
   }
 }
 
+/**
+ * A tool result as the script should see it: without the fences the
+ * dispatcher puts around document text for the model. The script's own
+ * result is fenced as a whole on its way back.
+ */
+function unfenced(content: string, nonce: string | undefined): string {
+  if (!nonce) return content;
+  return content
+    .split(`<untrusted-content nonce="${nonce}">\n`)
+    .join("")
+    .split(`\n</untrusted-content nonce="${nonce}">`)
+    .join("");
+}
+
 /** The result as JSON, or a valid JSON preview of it when it is too long. */
 function capped(text: string, max: number): string {
   if (text.length <= max) return text;
-  return JSON.stringify({
-    ok: false,
-    error: `The script's result is longer than ${max} characters. Return less, for example ids, counts and short excerpts.`,
-    preview: text.slice(0, Math.max(0, max - 300)),
-  });
+  const preview = (chars: number) =>
+    JSON.stringify({
+      ok: false,
+      error: `The script's result is longer than ${max} characters. Return less, for example ids, counts and short excerpts.`,
+      preview: text.slice(0, chars),
+    });
+  // Escaping can double the preview, so shrink it until the whole fits.
+  let chars = Math.max(0, max - 300);
+  let out = preview(chars);
+  while (out.length > max && chars > 0) {
+    chars = Math.max(0, chars - (out.length - max));
+    out = preview(chars);
+  }
+  return out;
 }
 
 function failure(
@@ -240,7 +293,7 @@ export async function runScriptCall(
 
   const executeFor =
     (name: string): Codemode.CodemodeTool["execute"] =>
-    async (args) => {
+    async (args, { signal: ended }) => {
       if (calls >= limits.maxToolCalls) {
         throw new ScriptToolError(
           `This script reached its limit of ${limits.maxToolCalls} tool calls.`,
@@ -259,9 +312,14 @@ export async function runScriptCall(
       const callId = `${call.id}:${calls}`;
       let content: string;
       try {
-        content = await serial(() => context.dispatch(name, input, callId));
+        content = await serial(() => {
+          // The script has ended (returned, timed out or was stopped) with
+          // this call still queued: it must not run on behind the turn.
+          if (ended.aborted) throw new ScriptToolError("The script has ended.");
+          return context.dispatch(name, input, callId);
+        });
       } catch (error) {
-        if (context.signal?.aborted) throw error;
+        if (context.signal?.aborted || ended.aborted) throw error;
         // The script is told only that the call failed; the failure itself
         // is reported here, where it stops, as the dispatcher reports its own.
         reportError(
@@ -272,14 +330,14 @@ export async function runScriptCall(
         );
         throw new ScriptToolError(`${name} failed.`);
       }
-      return parseToolResult(content);
+      return parseToolResult(unfenced(content, context.nonce));
     };
 
-  if (runningWorkers >= limits.maxConcurrent) {
-    return failure(
-      "Too many scripts are running right now. Use the tools directly, or try again shortly.",
-    );
-  }
+  const TOO_MANY =
+    "Too many scripts are running right now. Use the tools directly, or try again shortly.";
+  if (runningWorkers >= limits.maxConcurrent) return failure(TOO_MANY);
+  // Set when the limit is reached between the check above and the worker's start.
+  let refused = false;
 
   const sandbox = new codemode.CodemodeSandbox({
     tools: asCodemodeTools(context.innerTools, executeFor),
@@ -288,6 +346,7 @@ export async function runScriptCall(
     wasm: loadWasm(codemode),
     acquireWorker: () => {
       if (runningWorkers >= limits.maxConcurrent) {
+        refused = true;
         throw new Error("script worker limit reached");
       }
       runningWorkers += 1;
@@ -305,7 +364,15 @@ export async function runScriptCall(
     result = await sandbox.execute(code, { signal: context.signal });
   } finally {
     await sandbox.close();
+    // Queued calls have been refused by now; the one that was already running
+    // finishes before the turn moves on, since the dispatcher's per-turn
+    // state is not built for a call running beside the next step.
+    await queue;
   }
+  if (refused) return failure(TOO_MANY);
+  // Built from document text: data for the model, never instructions.
+  const fenced = (text: string) =>
+    context.nonce ? spotlight(text, context.nonce) : text;
 
   const output = result.output
     .filter((item): item is Extract<typeof item, { type: "text" }> => item.type === "text")
@@ -316,10 +383,10 @@ export async function runScriptCall(
     ...(output ? { output } : {}),
   };
   if (result.ok) {
-    return capped(
+    return fenced(capped(
       JSON.stringify({ ok: true, value: result.value ?? null, ...summary }),
       limits.maxResultChars,
-    );
+    ));
   }
   const { kind } = result.error;
   // A script's own error message is the model's to read: it wrote the code.
@@ -327,11 +394,11 @@ export async function runScriptCall(
     kind === "script"
       ? `${result.error.name ?? "Error"}: ${result.error.message}`
       : undefined;
-  return capped(
+  return fenced(capped(
     failure(ERROR_MESSAGES[kind], {
       ...(detail ? { detail } : {}),
       ...summary,
     }),
     limits.maxResultChars,
-  );
+  ));
 }

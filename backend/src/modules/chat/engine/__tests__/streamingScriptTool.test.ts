@@ -63,10 +63,14 @@ function dispatcher() {
     for (const call of calls) {
       const input = JSON.parse(call.function.arguments) as Record<string, unknown>;
       let content: unknown = { ok: true };
-      if (call.function.name === "list_documents") content = { documents: DOCS };
+      if (call.function.name === "list_documents") content = DOCS;
       if (call.function.name === "find_in_document") {
         const hit = input.doc_id === "doc-1";
-        content = { total_matches: hit ? 1 : 0, matches: hit ? [{ page: 4 }] : [] };
+        content = {
+          ok: true,
+          total_matches: hit ? 1 : 0,
+          hits: hit ? [{ index: 4, excerpt: "x", context: "x" }] : [],
+        };
         results.docsFound.push({
           filename: DOCS.find((d) => d.doc_id === input.doc_id)!.filename,
           document_id: `uuid-${input.doc_id}`,
@@ -103,7 +107,7 @@ const advertised = () =>
   (streamChatWithTools.mock.calls[0]?.[0] as StreamChatCall).tools;
 
 const SCRIPT = `
-  const { documents } = await tools.list_documents({});
+  const documents = await tools.list_documents({});
   const hits = [];
   for (const d of documents) {
     const r = await tools.find_in_document({ doc_id: d.doc_id, query: "change of control" });
@@ -133,6 +137,7 @@ afterEach(() => {
 
 describe("run_script in a chat turn", () => {
   it("is not offered, and not callable, unless SCRIPT_TOOL=on", async () => {
+    vi.stubEnv("SCRIPT_TOOL", "off");
     modelCalls([{ id: "s1", name: SCRIPT_TOOL_NAME, input: { code: SCRIPT } }]);
     await runLLMStream(params());
     expect(advertised().map((t) => t.function.name)).not.toContain(SCRIPT_TOOL_NAME);

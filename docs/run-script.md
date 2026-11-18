@@ -39,6 +39,13 @@ What a script can and cannot do:
   any other read. A script keeps its own record of what it read: the model has
   not seen that text, so its own `read_document` still returns the full
   document, which it needs before quoting or citing.
+- A script gets each tool's result without the untrusted-content fences
+  the model would see, so JSON results parse. Whatever the script returns is
+  built from document text, so it goes back to the model inside one such
+  fence, as data and never as instructions.
+- Once a script has ended (returned, timed out or been stopped), none of the
+  calls it still had queued start. A call that was already running finishes
+  before the turn goes on.
 - A failed call throws in the script with only "`<tool>` failed."; the cause is
   reported to Sentry under `chat.tool_failed` with operation
   `chat.script_tool`. A script's own error message is returned to the model,
@@ -46,7 +53,7 @@ What a script can and cannot do:
 
 Limits per script: 200 tool calls, 120 seconds (tool time included), 64 MB of
 VM memory, 20,000 characters of code and 40,000 characters of result (a longer
-result comes back as an error with a preview). At most 4 scripts run at once
+result comes back as an error with a preview, itself within the limit). At most 4 scripts run at once
 per process; another is refused and the model is told to use the tools
 directly. Stopping the answer stops the script.
 
@@ -61,9 +68,12 @@ SCRIPT_TOOL=off   # on to offer run_script
 
 ```bash
 npm test --prefix backend -- src/modules/chat/engine/tools/scriptTool.test.ts \
-  src/modules/chat/engine/__tests__/streamingScriptTool.test.ts
+  src/modules/chat/engine/__tests__/streamingScriptTool.test.ts \
+  src/modules/chat/engine/__tests__/scriptToolDispatcher.test.ts
 ```
 
 The tests run real scripts in the sandbox: limits, timeouts, stops,
 unexposed tools, what reaches the model, and how a script's calls go through
-the chat engine's dispatcher.
+the chat engine's dispatcher. `scriptToolDispatcher.test.ts` in the same
+`__tests__` directory runs scripts against the real dispatcher, so the result
+shapes the model is told about stay the ones the tools return.

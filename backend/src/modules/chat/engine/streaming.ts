@@ -1175,6 +1175,7 @@ export async function runLLMStream(params: {
           const content = await runScriptCall(call, {
             innerTools: scriptTools,
             signal,
+            nonce,
             dispatch: async (name, args, callId) => {
               const inner = await runServerBatch(
                 [{ id: callId, function: { name, arguments: JSON.stringify(args) } }],
