@@ -35,6 +35,8 @@ export type SourceDocument = {
     id: string;
     filename: string;
     file_type: string | null;
+    storage_path?: string | null;
+    text_revision?: string | null;
     current_version_id?: string | null;
     project_id?: string | null;
     folder_id?: string | null;
@@ -44,6 +46,7 @@ export type SourceDocument = {
 export async function fetchSourceDocuments(
     db: Db,
     documentIds: string[],
+    includeTextRevision = false,
 ): Promise<SourceDocument[]> {
     if (documentIds.length === 0) return [];
     const data = await selectInBatches("source documents", documentIds, (batch) =>
@@ -61,7 +64,7 @@ export async function fetchSourceDocuments(
         filename?: string | null;
         file_type?: string | null;
     })[];
-    await attachActiveVersionPaths(db, docs);
+    await attachActiveVersionPaths(db, docs, includeTextRevision);
     const position = new Map(documentIds.map((id, index) => [id, index]));
     return docs
         .map((doc) => ({
@@ -116,12 +119,12 @@ export async function filterReadableReviewRows(
 export async function loadReviewRows(
     db: Db,
     reviewId: string,
+    selectedIds?: string[],
 ): Promise<ReviewRow[]> {
-    const rows = await selectAllByKey<ReviewRow>("review rows", () =>
-          db
-            .from("tabular_review_rows")
-            .select("*")
-            .eq("review_id", reviewId));
+    const query = () => db.from("tabular_review_rows").select("*").eq("review_id", reviewId);
+    const rows = selectedIds
+        ? await selectInBatches<ReviewRow>("selected review rows", selectedIds, batch => query().in("id", batch))
+        : await selectAllByKey<ReviewRow>("review rows", query);
     if (!rows.length) return rows;
     rows.sort((a, b) => a.sort_index - b.sort_index || a.id.localeCompare(b.id));
     type Source = { row_id: string; document_id: string; sort_index: number };
@@ -212,25 +215,26 @@ export async function loadRowDocumentText(
 ): Promise<string> {
     const sourceIds =
         row.source_document_ids ?? (row.document_id ? [row.document_id] : []);
-    const docs = await fetchSourceDocuments(db, sourceIds);
+    const docs = await fetchSourceDocuments(db, sourceIds, true);
     const sections: string[] = [];
     for (const doc of docs) {
-        const storagePath = (doc as SourceDocument & { storage_path?: string })
-            .storage_path;
+        const storagePath = doc.storage_path;
         let markdown = "";
         if (storagePath) {
             try {
-                const stored = doc.current_version_id
-                    ? await loadVersionTextState(db, doc.id, doc.current_version_id, storagePath) : null;
-                if (stored?.text !== null && stored?.text !== undefined) {
-                    markdown = cachedTextForModel(stored);
-                } else {
-                    const load = () => extractDocumentMarkdown(() => downloadFile(storagePath), doc.file_type);
-                    // Without a revision we cannot safely reuse a mutable path.
-                    markdown = stored
-                        ? await textCache(`${doc.id}:${doc.current_version_id}:${stored.revision}:${storagePath}`, load)
-                        : await load();
-                }
+                const readSource = async () => {
+                    const stored = doc.current_version_id
+                        ? await loadVersionTextState(db, doc.id, doc.current_version_id, storagePath) : null;
+                    if (stored?.text != null) return cachedTextForModel(stored);
+                    const extract = () => extractDocumentMarkdown(() => downloadFile(storagePath), doc.file_type);
+                    // Older callers without batched revision metadata still coalesce cold parses.
+                    return !doc.text_revision && stored
+                        ? textCache(JSON.stringify([doc.id, doc.current_version_id, stored.revision, storagePath]), extract)
+                        : extract();
+                };
+                markdown = doc.text_revision
+                    ? await textCache(JSON.stringify([1, doc.id, doc.current_version_id, doc.text_revision, storagePath]), readSource)
+                    : await readSource();
             } catch (error) {
                 // Do not ask the model to fill cells from a source we refused.
                 if (error instanceof ExtractionBusyError || error instanceof ExtractionLimitError || error instanceof ExtractionParseError) throw error;

@@ -294,6 +294,7 @@ tabularRouter.get("/:reviewId", requireAuth, asyncRoute(async (req, res) => {
     const { reviewId } = req.params;
     const result = await getTabularReviewDetail(createServerSupabase(), {
         reviewId,
+        cellRevision: typeof req.query.cell_revision === "string" ? req.query.cell_revision : undefined,
         userId: res.locals.userId as string,
         userEmail: res.locals.userEmail as string | undefined,
     });
@@ -1010,6 +1011,7 @@ tabularRouter.post("/:reviewId/chat", requireAuth, asyncRoute(async (req, res) =
         memorySharedAudience,
         memoryTurn,
         model: selectedChatModel,
+        nonce,
         orgId,
         readableMemoryProjectId,
         reasoningLevel: selectedReasoningLevel,
@@ -1104,6 +1106,7 @@ tabularRouter.post("/:reviewId/chat", requireAuth, asyncRoute(async (req, res) =
             db,
             write,
             extraTools: TABULAR_TOOLS,
+            nonce,
             includeResearchTools: false,
             tabularStore,
             buildCitations: (text) =>

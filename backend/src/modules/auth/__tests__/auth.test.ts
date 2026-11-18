@@ -380,6 +380,25 @@ describe("auth routes", () => {
     expect(authClient.auth.signUp).not.toHaveBeenCalled();
   });
 
+  it("refuses sign-up on a first-run deployment until email is configured", async () => {
+    process.env.MIKE_FIRST_RUN_SETUP = "true";
+    try {
+      const response = await request(app)
+        .post("/auth/signup")
+        .set("Origin", origin)
+        .send({ email: user.email, password: "correct-horse-battery" });
+
+      expect(response.status).toBe(403);
+      expect(response.body).toEqual({
+        code: "signup_email_not_configured",
+        detail: expect.stringContaining("can't send confirmation emails"),
+      });
+      expect(authClient.auth.signUp).not.toHaveBeenCalled();
+    } finally {
+      delete process.env.MIKE_FIRST_RUN_SETUP;
+    }
+  });
+
   it("enforces the sign-up minimum length on the API, not only in the form", async () => {
     const response = await request(app)
       .post("/auth/signup")

@@ -29,6 +29,40 @@ describe("CaseView", () => {
         Element.prototype.scrollIntoView = vi.fn();
     });
 
+    it.each([
+        ["This is a fixture provision, not an actual legal authority.", "This is a fixture provision, not an actual legal authority.\n\n<script>literal</script>"],
+        ["Le créancier peut exiger l’exécution…", "Le créancier peut exiger l’exécution…\nAutre texte."],
+        ["The court considers this long common prefix and grants relief.", "The court considers this long common prefix and denies relief. The court considers this long common prefix and grants relief."],
+    ])("highlights only the exact embedded source quote: %s", (text, body) => {
+        const quote = { quote: text, verification: { verified: true }, target: { subdocument_id: "mcp:test:text" } };
+        const { container } = render(<CaseView document={{ ...document,
+            document_id: "mcp:test", type: "legislation", quotes: [quote],
+            subdocuments: [{ document_id: "mcp:test:text", title: "Synthetic source", type: "html", text: body }],
+        }} activeQuote={quote} />);
+        expect(container.querySelector(".case-quote-highlight")?.textContent).toBe(text);
+    });
+
+    it("highlights source body rather than identical provider title metadata", () => {
+        const quote = { quote: "Synthetic source", target: { subdocument_id: "mcp:test:text" } };
+        const { container } = render(<CaseView document={{ ...document,
+            document_id: "mcp:test", quotes: [quote], subdocuments: [{
+                document_id: "mcp:test:text", title: quote.quote, type: "html", text: `${quote.quote}. The actual body.`,
+            }],
+        }} activeQuote={quote} />);
+        expect(container.querySelector(".case-quote-highlight")?.textContent).toBe(quote.quote);
+        expect(container.querySelector(".case-quote-highlight")?.closest("h3")).toBeNull();
+    });
+
+    it("does not highlight a punctuation-mismatched embedded source quote", () => {
+        const quote = { quote: "Is relief denied?", target: { subdocument_id: "mcp:test:text" } };
+        const { container } = render(<CaseView document={{ ...document,
+            document_id: "mcp:test", quotes: [quote], subdocuments: [{
+                document_id: "mcp:test:text", title: "Synthetic source", type: "html", text: "Is relief denied!",
+            }],
+        }} activeQuote={quote} />);
+        expect(container.querySelector(".case-quote-highlight")).toBeNull();
+    });
+
     it("renders already-hydrated subdocuments and sanitizes their HTML", () => {
         const { container } = render(<CaseView document={document} />);
 
@@ -125,5 +159,60 @@ describe("CaseView", () => {
         expect(highlightedText).toBe(
             "thecourtthereforeconcludesthatreliefisdenied",
         );
+    });
+
+    describe("a saved Legal Data Hunter source without its text", () => {
+        const saved = {
+            ...document,
+            document_id: "mcp:test",
+            type: "case" as const,
+            subdocuments: [
+                { document_id: "mcp:test:text", title: "R v X", type: "html" as const },
+            ],
+        };
+
+        it("shows a spinner, not an empty body, while the text loads", () => {
+            render(<CaseView document={saved} isLoading />);
+            expect(
+                screen.getByRole("status", { name: "Loading document" }),
+            ).toBeInTheDocument();
+            expect(
+                screen.queryByText("No document text returned."),
+            ).not.toBeInTheDocument();
+        });
+
+        it("shows the load error with a retry instead of an empty body", () => {
+            const onRetry = vi.fn();
+            render(
+                <CaseView
+                    document={saved}
+                    error="Connect Legal Data Hunter in Settings → Connectors to view this source."
+                    onRetry={onRetry}
+                />,
+            );
+            expect(
+                screen.getByText(
+                    "Connect Legal Data Hunter in Settings → Connectors to view this source.",
+                ),
+            ).toBeInTheDocument();
+            expect(
+                screen.queryByText("No document text returned."),
+            ).not.toBeInTheDocument();
+            fireEvent.click(screen.getByRole("button", { name: "Try again" }));
+            expect(onRetry).toHaveBeenCalledOnce();
+        });
+
+        it("shows the text once it has loaded", () => {
+            render(
+                <CaseView
+                    document={{
+                        ...saved,
+                        subdocuments: [{ ...saved.subdocuments[0], text: "Held, the appeal is allowed." }],
+                    }}
+                />,
+            );
+            expect(screen.getByText("Held, the appeal is allowed.")).toBeInTheDocument();
+            expect(screen.queryByRole("status", { name: "Loading document" })).not.toBeInTheDocument();
+        });
     });
 });

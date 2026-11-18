@@ -65,10 +65,23 @@ function providerKeySource(error: unknown): ProviderKeySource | undefined {
 
 type ApiCallErrorLike = Error & { statusCode: number; responseBody?: string };
 
+/**
+ * The body of the provider's answer. A plain API call error carries it; the
+ * Vercel AI Gateway SDK throws its own error class with the status and keeps
+ * the body on the API call error underneath, as its cause.
+ */
+function responseBodyOf(error: ApiCallErrorLike): string {
+  for (const current of failureChain(error)) {
+    const body = (current as { responseBody?: unknown }).responseBody;
+    if (typeof body === "string") return body;
+  }
+  return "";
+}
+
 /** A provider's explicit account verdict, never inferred from HTTP 429 alone. */
 function quotaRefusal(error: ApiCallErrorLike): "credits" | "plan" | null {
   if (error.statusCode !== 429) return null;
-  const body = error.responseBody ?? "";
+  const body = responseBodyOf(error);
   try {
     const parsed = JSON.parse(body) as { error?: { code?: unknown; type?: unknown } };
     if (parsed?.error?.code === "insufficient_quota" || parsed?.error?.type === "insufficient_quota") return "credits";
@@ -98,7 +111,7 @@ const MODEL_ACCESS_CODES = new Set([
  */
 function isModelAccessRefusal(error: ApiCallErrorLike): boolean {
   if (error.statusCode !== 403 && error.statusCode !== 404) return false;
-  const body = error.responseBody ?? "";
+  const body = responseBodyOf(error);
   try {
     const parsed = JSON.parse(body) as {
       error?: { code?: unknown; type?: unknown; message?: unknown };
@@ -124,6 +137,71 @@ function isModelAccessRefusal(error: ApiCallErrorLike): boolean {
   return /(?:\b(?:do(?:es)? not|don't|doesn't) have access to (?:(?:the|this|requested) )?model\b|(?<![/\w.-])models?\b[^\n]{0,160}\b(?:not found|not available|does not exist|do(?:es)? not have access)\b|\bno endpoints found for\b)/i.test(body);
 }
 
+// Set by @ai-sdk/gateway on every error it throws.
+const GATEWAY_ERROR = Symbol.for("vercel.ai.gateway.error");
+
+/**
+ * The reason a gateway gave for refusing a request its key was allowed to
+ * make: a 403 with the gateway's own JSON error, which is neither a rejected
+ * key nor a model verdict (no payment method, the product not enabled, a
+ * policy rule). The SDK maps every error type it does not know to its
+ * internal-server-error class, so the class says nothing here; the status and
+ * the body do. A direct provider's 403 is not read this way: without the
+ * gateway's envelope it can as well be a WAF, a region or a wrong endpoint,
+ * and stays an unexplained failure.
+ */
+function gatewayRefusalReason(error: ApiCallErrorLike): string | null {
+  if (error.statusCode !== 403) return null;
+  if ((error as unknown as Record<symbol, unknown>)[GATEWAY_ERROR] !== true) return null;
+  if (isInvalidApiKeyError(error) || isModelAccessRefusal(error)) return null;
+  try {
+    const parsed = JSON.parse(responseBodyOf(error)) as { error?: { message?: unknown } };
+    const message = parsed?.error?.message;
+    return typeof message === "string" && message.trim() ? message : null;
+  } catch {
+    return null;
+  }
+}
+
+const REASON_LIMIT = 300;
+
+/**
+ * A provider's stated reason made fit to show the owner of the refused key:
+ * one line, no control or invisible formatting characters, nothing shaped
+ * like a credential, and bounded. Provider text is otherwise never shown.
+ */
+function displayableReason(reason: string): string {
+  const line = reason
+    .replace(/\p{Cf}+/gu, "")
+    .replace(/[\p{Cc}\p{Zl}\p{Zp}\s]+/gu, " ")
+    .replace(/\bBearer\s+\S+/gi, "[redacted]")
+    // Gateway keys (vck_), the sk-/pk- family, GitHub and Slack tokens, Google keys, JWTs.
+    .replace(/\b(?:vck|sk|pk|rk|ghp|gho|ghs|xox[a-z])[_-][\w-]{8,}|\bAIza[\w-]{16,}|\beyJ[\w-]{8,}(?:\.[\w-]+)*/g, "[redacted]")
+    // Any other long token: an unbroken run, or one joined by "_"/"-" with a
+    // digit and an upper-case letter or underscore. Lower-case hyphenated
+    // model ids, slugs and UUIDs are left readable.
+    .replace(/[A-Za-z0-9+=]{24,}/g, "[redacted]")
+    .replace(/[\w-]{24,}/g, run => (/\d/.test(run) && /[A-Z_]/.test(run) ? "[redacted]" : run))
+    .trim();
+  return line.length > REASON_LIMIT ? `${line.slice(0, REASON_LIMIT).trimEnd()}…` : line;
+}
+
+/**
+ * What the user is told about a gateway's account refusal. The owner of the
+ * key reads the provider's own reason; anyone else is using an account that
+ * is not theirs, so its details stay with whoever administers it.
+ */
+function gatewayRefusalMessage(reason: string, { label, keySource }: ProviderContext): string {
+  if (keySource !== "user") {
+    return `${label} refused the request. Ask an administrator to check the ${label} account, or select another model.`;
+  }
+  const shown = displayableReason(reason);
+  const remedy = `Check your ${label} account settings and billing, or select another model.`;
+  return shown
+    ? `${label} refused the request: "${shown}" ${remedy}`
+    : `${label} refused the request. ${remedy}`;
+}
+
 // The AI SDK is ESM-only here, so match its error shapes rather than importing
 // APICallError / RetryError classes. Retried failures (e.g. 429s) arrive as a
 // RetryError whose status code lives on `lastError`.
@@ -144,7 +222,7 @@ export function providerFailureResponse(
   error: unknown,
 ): { status: number; body: string } | null {
   const apiError = findApiCallError(error);
-  return apiError ? { status: apiError.statusCode, body: apiError.responseBody ?? "" } : null;
+  return apiError ? { status: apiError.statusCode, body: responseBodyOf(apiError) } : null;
 }
 
 /**
@@ -214,6 +292,9 @@ export function providerFailureKind(error: unknown): ErrorKind {
   if (response) {
     const apiError = findApiCallError(error)!;
     if (isInvalidApiKeyError(apiError) || isModelAccessRefusal(apiError)) return "chat.provider_rejected";
+    // The account behind the key was refused: the same condition and the same
+    // owner as a rejected key, told apart by dependency_status and provider_error_type.
+    if (gatewayRefusalReason(apiError) !== null) return "chat.provider_rejected";
     // OpenRouter (and other prepaid gateways) answer 402 when the account
     // has no credit left: the account's state, like a rejected key.
     if (response.status === 402) return "chat.provider_out_of_credits";
@@ -234,11 +315,19 @@ export function providerFailureKind(error: unknown): ErrorKind {
   return "chat.stream_failed";
 }
 
-/** A handled account refusal is quiet only at the boundary showing its remedy. */
+/**
+ * A handled account refusal is quiet only at the boundary showing its remedy.
+ * A gateway refusal whose reason we relay without recognizing it is not one
+ * of these: it stays reported (a warning for the user's own key) until its
+ * type is known well enough to name the remedy ourselves.
+ */
 export function isUserProviderRefusal(error: unknown): boolean {
   const kind = providerFailureKind(error);
-  return providerKeySource(error) === "user" &&
-    (kind === "chat.provider_rejected" || kind === "chat.provider_out_of_credits");
+  if (providerKeySource(error) !== "user") return false;
+  if (kind === "chat.provider_out_of_credits") return true;
+  if (kind !== "chat.provider_rejected") return false;
+  const apiError = findApiCallError(error);
+  return !apiError || gatewayRefusalReason(apiError) === null;
 }
 
 /**
@@ -261,7 +350,7 @@ export function providerFailureLevel(error: unknown): "warning" | "error" {
   switch (providerFailureKind(error)) {
     case "chat.provider_rejected":
     case "chat.provider_out_of_credits":
-      return isUserProviderRefusal(error) ? "warning" : "error";
+      return providerKeySource(error) === "user" ? "warning" : "error";
     case "chat.provider_rate_limited":
     case "chat.provider_unavailable":
       return "warning";
@@ -274,8 +363,9 @@ export function providerFailureLevel(error: unknown): "warning" | "error" {
 // deployment's key, as noted on InvalidApiKeyError.
 function accessFailureMessage(
   error: ApiCallErrorLike,
-  { label, modelId }: ProviderContext,
+  context: ProviderContext,
 ): string | null {
+  const { label, modelId } = context;
   const { statusCode } = error;
   const quota = quotaRefusal(error);
   if (statusCode === 402 || quota === "credits") {
@@ -289,6 +379,8 @@ function accessFailureMessage(
       ? `The ${label} plan doesn't include ${modelId}. Select another model, or upgrade the ${label} plan.`
       : `${label} rate limit or quota reached. Wait a moment and try again, or select another model.`;
   }
+  const refusal = gatewayRefusalReason(error);
+  if (refusal !== null) return gatewayRefusalMessage(refusal, context);
   return null;
 }
 

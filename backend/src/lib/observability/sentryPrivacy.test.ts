@@ -361,8 +361,13 @@ it('names a Vercel AI Gateway refusal by its type, preferring the upstream body 
   });
   const forbidden = { name: 'AssistantStreamError', cause: gatewayError('GatewayForbiddenError', 'forbidden', 'forbidden') };
   expect(diagnosticErrorTags(forbidden)).toMatchObject({ provider_error_type: 'forbidden', dependency_status: 403 });
-  // An upstream type the gateway does not know is mapped to its internal_server_error class, keeping the 403.
-  expect(diagnosticErrorTags(gatewayError('GatewayInternalServerError', 'internal_server_error', 'PRIVATE_type')).provider_error_type).toBe('internal_server_error');
+  // The SDK maps an upstream type it does not know to its internal_server_error class, keeping the 403.
+  // That class default is not the gateway's verdict on a 4xx, so the refusal carries its status and no type.
+  const unknown = diagnosticErrorTags(gatewayError('GatewayInternalServerError', 'internal_server_error', 'PRIVATE_type'));
+  expect(unknown).toMatchObject({ dependency_status: 403 });
+  expect(unknown).not.toHaveProperty('provider_error_type');
+  expect(diagnosticErrorTags({ ...gatewayError('GatewayInternalServerError', 'internal_server_error', 'PRIVATE_type'), statusCode: 500 }).provider_error_type).toBe('internal_server_error');
+  expect(diagnosticErrorTags(gatewayError('GatewayInternalServerError', 'internal_server_error', 'internal_server_error')).provider_error_type).toBe('internal_server_error');
   expect(diagnosticErrorTags(gatewayError('GatewayInternalServerError', 'internal_server_error', 'permission_error')).provider_error_type).toBe('permission_error');
   const event = diagnosticEvent({ tags: { component: 'chat-stream', ...diagnosticErrorTags(forbidden) } });
   expect(event.tags).toMatchObject({ provider_error_type: 'forbidden' });

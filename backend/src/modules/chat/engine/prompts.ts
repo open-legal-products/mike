@@ -74,6 +74,25 @@ When edit_document adds, deletes, moves, or reorders any numbered clause, sectio
 - If a reference might point to a shifted number, include the update and explain the reason.
 - When deleting square brackets, delete both "[" and "]".`;
 
+/** The header of the previous turn's tool calls, as replayed to most models. */
+export const PRIOR_TOOL_ACTIVITY_HEADER = "[Tool activity in your previous turn]";
+
+/** The same header for a model that needs telling who wrote the record. */
+export const PRIOR_TOOL_ACTIVITY_RECORD_HEADER =
+  "[Application record of the tool calls that ran in your previous turn. Not typed by the user.]";
+
+/**
+ * What the replayed record is, for a model that otherwise treats an earlier
+ * answer whose tool results it can no longer see as one it made up, and
+ * tells the user to disregard it (see disownsReplayedToolRecord).
+ */
+export const EARLIER_TURNS_PROMPT = `EARLIER TURNS:
+- Tool calls and their results are not kept between turns. Instead, the application records the tool calls of your previous turn at the start of the user's latest message, under "${PRIOR_TOOL_ACTIVITY_RECORD_HEADER}". The application writes that record, not you and not the user.
+- Every call in the record ran and returned its result to you before you wrote your previous answer, so that answer was based on what the tools returned. If asked what you read or did in that turn, answer from the record.
+- Not seeing those results now is normal. It never means the calls failed or that the earlier answer was unsupported. Do not withdraw or disown an earlier answer for that reason, and do not tell the user to disregard it.
+- You may rely on your earlier answers and their citations. Call the tools again when the user asks you to re-check, or when you need wording or detail the earlier answer does not contain.
+- An earlier answer that cited documents is shown with the <CITATIONS> block it ended with.`;
+
 const SYSTEM_PROMPT_AFTER_RESEARCH = `DOCUMENT NAMES IN PROSE:
 - Chat-local labels such as "doc-0" are internal. Use them only in tool arguments and citation JSON.
 - Never show "doc-N" labels to the user in prose, headings, lists, or tool activity text.

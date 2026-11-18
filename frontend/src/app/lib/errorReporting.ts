@@ -135,6 +135,58 @@ export function reportApiFailure(failure: {
 }
 
 /**
+ * A limit of whatever sits in front of the API (a reverse proxy, or the host
+ * running the web app's /api gateway) seen from the browser. Neither kind is
+ * visible anywhere else: a request the proxy refuses never reaches the
+ * gateway or the backend, and a response it cuts off ends like a finished
+ * one. Reported at warning level, because the cause is the deployment's
+ * configuration rather than a fault in the code. The privacy boundary groups
+ * by component, stage and route, so an oversized request is one issue per
+ * route (which says what to shrink) and a cut-off stream is one issue.
+ *
+ * - `payload-too-large`: a 413 that carries none of the backend's own codes,
+ *   so the body was refused before the backend saw it (for example a
+ *   serverless function's request-size cap).
+ * - `stream-incomplete`: an assistant stream that ended without its `[DONE]`
+ *   marker (for example a function time limit closing a long reply).
+ */
+class GatewayPayloadTooLargeError extends Error {
+    override name = "GatewayPayloadTooLargeError";
+    constructor() {
+        super("A request was refused as too large before it reached the API.");
+    }
+}
+
+class AssistantStreamIncompleteError extends Error {
+    override name = "AssistantStreamIncompleteError";
+    constructor() {
+        super("An assistant stream ended before the turn finished.");
+    }
+}
+
+export function reportGatewayLimit(
+    kind: "payload-too-large" | "stream-incomplete",
+    details: { path?: string; method?: string; status?: number; requestId?: string | null } = {},
+): string | null {
+    if (!Sentry.isEnabled()) return null;
+    const error =
+        kind === "payload-too-large"
+            ? new GatewayPayloadTooLargeError()
+            : new AssistantStreamIncompleteError();
+    return reportError(error, {
+        level: "warning",
+        tags: {
+            component: "gateway-limit",
+            stage: kind,
+            http_status: details.status,
+            http_method: details.method,
+            http_route: details.path ? normalizeApiPath(details.path) : undefined,
+            request_id: details.requestId,
+        },
+    });
+}
+
+/**
  * When the page started to go away (reload, link to another document, tab
  * close), or null while it is live. A browser rejects every fetch still in
  * flight at that moment with the same bare "Failed to fetch" TypeError an

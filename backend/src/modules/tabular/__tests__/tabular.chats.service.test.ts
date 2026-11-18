@@ -481,7 +481,7 @@ describe("prepareTabularChat", () => {
         expect(fake.calls.some(call => call.op === "insert")).toBe(false);
     });
 
-    it("creates a chat, stores the user turn, and builds the prompt", async () => {
+    it("cache regression: loads a cell only when requested and reuses the slice", async () => {
         const fake = makeFakeDb({
             tables: {
                 tabular_reviews: { data: REVIEW, error: null },
@@ -505,8 +505,21 @@ describe("prepareTabularChat", () => {
         expect(result.ok).toBe(true);
         if (!result.ok) return;
         expect(result.data.chatId).toBe("chat-new");
+        expect(result.data.nonce).toMatch(/^[0-9a-f]{32}$/);
+        expect(JSON.stringify(result.data.apiMessages)).toContain("UNTRUSTED CONTENT POLICY");
+        expect((result.data.apiMessages[0] as { content: string }).content).toContain(
+            `<untrusted-content nonce="${result.data.nonce}">`,
+        );
         expect(result.data.isFirstExchange).toBe(true);
         expect(result.data.model).toBe("claude-sonnet-5");
+        expect(callTo(fake.calls, "tabular_cells")).toBeUndefined();
+        const store = result.data.tabularStore;
+        await store.loadCells!(["row-1"], [0]);
+        await store.loadCells!(["row-1"], [0]);
+        expect(fake.calls.filter(call => call.table === "tabular_cells")).toHaveLength(1);
+        expect(callTo(fake.calls, "tabular_cells")?.filters).toEqual({
+            review_id: "rev-1", row_id: ["row-1"], column_index: [0],
+        });
         expect(result.data.tabularStore.cells.get("0:row-1")).toMatchObject({
             summary: "yes",
         });
@@ -557,10 +570,48 @@ describe("prepareTabularChat", () => {
         expect(result.data.tabularStore.documents).toEqual([
             { id: "row-1", filename: "Contract.pdf" },
         ]);
+        await result.data.tabularStore.loadCells!(["row-1"], [0]);
+        filterAccessibleDocumentIds.mockResolvedValue([]);
+        await expect(result.data.tabularStore.loadCells!(["row-1"], [0])).rejects.toThrow("accessible");
         expect([...result.data.tabularStore.cells.keys()]).toEqual(["0:row-1"]);
         expect(JSON.stringify(result.data.apiMessages)).not.toContain(
             "Their secret",
         );
+    });
+
+    it("review regression: reauthorizes the intermediate source behind cached cells", async () => {
+        const row = (source: string) => [{ id: "row-1", label: "Contract.pdf", source_document_ids: [source] }];
+        loadReviewRows.mockResolvedValue(row("A"));
+        filterAccessibleDocumentIds.mockResolvedValue(["A", "B", "C"]);
+        const fake = makeFakeDb({ tables: {
+            tabular_reviews: { data: REVIEW, error: null },
+            tabular_cells: { data: [{ column_index: 0, row_id: "row-1", content: "B secret" }], error: null },
+            tabular_review_chats: { data: { id: "chat-new", title: null }, error: null },
+        } });
+        const result = await prepareTabularChat(fake.db, base);
+        expect(result.ok).toBe(true);
+        if (!result.ok) return;
+        loadReviewRows.mockResolvedValue(row("B"));
+        await result.data.tabularStore.loadCells!(["row-1"], [0]);
+        loadReviewRows.mockResolvedValue(row("C"));
+        filterAccessibleDocumentIds.mockResolvedValue(["A", "C"]);
+        await expect(result.data.tabularStore.loadCells!(["row-1"], [0])).rejects.toThrow("accessible");
+    });
+
+    it("follow-up regression: rejects a source change during the cell fetch before caching", async () => {
+        const row = (source: string) => [{ id: "row-1", label: "Contract.pdf", source_document_ids: [source] }];
+        loadReviewRows.mockResolvedValueOnce(row("A")).mockResolvedValueOnce(row("A")).mockResolvedValue(row("B"));
+        filterAccessibleDocumentIds.mockResolvedValue(["A"]);
+        const fake = makeFakeDb({ tables: {
+            tabular_reviews: { data: REVIEW, error: null },
+            tabular_cells: { data: [{ column_index: 0, row_id: "row-1", content: "B secret" }], error: null },
+            tabular_review_chats: { data: { id: "chat-new", title: null }, error: null },
+        } });
+        const result = await prepareTabularChat(fake.db, base);
+        expect(result.ok).toBe(true);
+        if (!result.ok) return;
+        await expect(result.data.tabularStore.loadCells!(["row-1"], [0])).rejects.toThrow("accessible");
+        expect(result.data.tabularStore.cells.size).toBe(0);
     });
 
     it("refuses to adopt a chat id belonging to another review", async () => {
