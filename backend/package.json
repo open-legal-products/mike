@@ -32,6 +32,7 @@
     "@ai-sdk/xai": "^5.0.46",
     "@aws-sdk/client-s3": "^3.1169.0",
     "@aws-sdk/s3-request-presigner": "^3.1169.0",
+    "@earendil-works/pi-schema": "1.5.2",
     "@modelcontextprotocol/sdk": "^1.32.2",
     "@openrouter/ai-sdk-provider": "3.1.0",
     "@sentry/node": "11.12.0",

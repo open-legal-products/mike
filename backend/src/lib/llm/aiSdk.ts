@@ -17,6 +17,10 @@ import type {
 import type { WebSource } from "@mike/contracts";
 import { providerDeadlines } from "./providerDeadlines";
 import {
+  loadToolInputChecker,
+  type ToolInputChecker,
+} from "./toolInputValidation";
+import {
   asProviderStallError,
   isDeterministicProviderQuota,
   streamErrorMessage,
@@ -349,6 +353,7 @@ function toAiSdkTools(
   runTools?: StreamChatParams["runTools"],
   sdk?: Pick<typeof AiSdk, "jsonSchema" | "tool">,
   onRunToolsFailure?: (error: unknown) => void,
+  inputChecker?: ToolInputChecker,
 ): ToolSet | undefined {
   if (!schemas.length) return undefined;
   if (!sdk) throw new Error("AI SDK tool helpers are unavailable.");
@@ -358,10 +363,18 @@ function toAiSdkTools(
 
   return Object.fromEntries(
     schemas.map((schema) => {
+      // With a validate function, the SDK refuses a call whose arguments do
+      // not match the schema and answers it with the error, as it does for
+      // unparseable JSON; see toolInputValidation.ts.
+      const validate = inputChecker?.(
+        schema.function.name,
+        schema.function.parameters,
+      );
       const definition = {
         description: schema.function.description,
         inputSchema: sdk.jsonSchema<Record<string, unknown>>(
           schema.function.parameters as never,
+          validate ? { validate } : undefined,
         ),
         ...(batcher
           ? {
@@ -531,10 +544,19 @@ export async function streamAiSdk(
   if (params.abortSignal?.aborted) forwardAbort();
   else params.abortSignal?.addEventListener("abort", forwardAbort, { once: true });
   const runToolsFailure: { first: { error: unknown } | null } = { first: null };
-  const functionTools = toAiSdkTools(params.tools ?? [], params.runTools, sdk, (error) => {
-    runToolsFailure.first ??= { error };
-    internalAbort.abort();
-  });
+  const inputChecker = params.tools?.length
+    ? await loadToolInputChecker()
+    : undefined;
+  const functionTools = toAiSdkTools(
+    params.tools ?? [],
+    params.runTools,
+    sdk,
+    (error) => {
+      runToolsFailure.first ??= { error };
+      internalAbort.abort();
+    },
+    inputChecker,
+  );
   const webSearch =
     params.providerWebSearch && config.webSearchTool
       ? {
