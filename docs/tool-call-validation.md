@@ -26,15 +26,17 @@ chooses what a mismatch does:
 | `off` | No check. |
 
 Validation is strict: nothing is coerced, so `"3"` for an integer is a
-mismatch. A schema that does not compile (an MCP server's, for instance)
-leaves that tool unchecked rather than unusable, with one warning per process.
+mismatch. A schema that does not compile, or has a `$ref` that points
+nowhere (an MCP server's, for instance), leaves that tool unchecked rather
+than unusable, with one warning per process.
 
 The check cannot cost a turn:
 
 - `pattern` and `patternProperties` are not checked. A connector's schema is
   another party's input, and one catastrophic regular expression run on the
   server's thread would stall every request. Where dropping them could refuse
-  a valid call (beneath `not`, `if`, `oneOf`, `contains` or a `$ref`), the tool
+  a valid call (beneath `not`, `if`, `oneOf`, `contains` or a `$ref`, or beside
+  `unevaluatedProperties`), the tool
   is left unchecked instead.
 - If pi-schema cannot be loaded, or a check throws, the call runs unchecked
   with one warning.
