@@ -957,6 +957,7 @@ export async function runToolCalls(
       const docIds = rawDocIds.map((id) => labelFor(id) ?? id);
       const parts: string[] = [];
       for (const docId of docIds) {
+        if (stopped()) break;
         const readIdentity = await getTurnReadIdentity({
           docLabel: docId,
           docStore,
