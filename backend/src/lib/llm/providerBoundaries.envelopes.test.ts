@@ -115,3 +115,38 @@ it("sends distinct known deprecation diagnoses through the final privacy boundar
   expect(sent.every(event => event.exception?.values?.some(value => value.stacktrace?.frames?.length))).toBe(true);
   expect(JSON.stringify(sent)).not.toContain("PRIVATE_");
 });
+
+it.each([
+  ["user", "warning", /refused the request: "Add a payment method to use AI Gateway\." Check your Vercel AI Gateway account/],
+  ["env", "error", /^Vercel AI Gateway refused the request\. Ask an administrator/],
+] as const)("relays a gateway account refusal to the key's owner and reports it without its text (%s key)", async (source, level, message) => {
+  // The real @ai-sdk/gateway client: an error type it does not know arrives as its internal-server-error class with the 403.
+  const fetch = vi.fn(async () => Response.json(
+    { error: { message: "Add a payment method to use AI Gateway.", type: "PRIVATE_unknown_type" } }, { status: 403 },
+  ));
+  vi.stubGlobal("fetch", fetch);
+  // The user's saved gateway models: the one row set this turn reads.
+  const db = { from: (table: string) => {
+    const q = emptyDb();
+    if (table === "user_router_models") q.then = (resolve: (value: unknown) => unknown) => Promise.resolve({ data: [{ model_id: "openai/gpt-5" }], error: null }).then(resolve);
+    return q;
+  } };
+  const error = await runLLMStream({
+    apiMessages: [{ role: "user", content: "hello" }], docStore: new Map(), docIndex: {}, userId: "test-user",
+    db: db as never, write: vi.fn(), model: "vercel/openai/gpt-5",
+    apiKeys: { vercel: "PRIVATE_KEY", keySources: { vercel: source } }, emitDone: false,
+  }).catch(error => error);
+  expect(error).toBeInstanceOf(AssistantStreamError);
+  expect(fetch).toHaveBeenCalledTimes(1);
+  const payload = assistantStreamErrorPayload(error);
+  expect(payload).toMatchObject({ safe_to_display: true, reporting_owner: "backend" });
+  expect(payload.message).toMatch(message);
+  await Sentry.flush(2000);
+  expect(sent).toHaveLength(1);
+  expect(sent[0]?.level).toBe(level);
+  expect(sent[0]?.tags).toMatchObject({
+    error_kind: "chat.provider_rejected", provider: "vercel", provider_error: "api_call", dependency_status: 403,
+  });
+  expect(sent[0]?.tags).not.toHaveProperty("provider_error_type");
+  expect(JSON.stringify(sent)).not.toMatch(/PRIVATE_|payment method|internal_server_error/);
+});
