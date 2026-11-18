@@ -593,6 +593,22 @@ describe("prepareTabularChat", () => {
         await expect(result.data.tabularStore.loadCells!(["row-1"], [0])).rejects.toThrow("accessible");
     });
 
+    it("follow-up regression: rejects a source change during the cell fetch before caching", async () => {
+        const row = (source: string) => [{ id: "row-1", label: "Contract.pdf", source_document_ids: [source] }];
+        loadReviewRows.mockResolvedValueOnce(row("A")).mockResolvedValueOnce(row("A")).mockResolvedValue(row("B"));
+        filterAccessibleDocumentIds.mockResolvedValue(["A"]);
+        const fake = makeFakeDb({ tables: {
+            tabular_reviews: { data: REVIEW, error: null },
+            tabular_cells: { data: [{ column_index: 0, row_id: "row-1", content: "B secret" }], error: null },
+            tabular_review_chats: { data: { id: "chat-new", title: null }, error: null },
+        } });
+        const result = await prepareTabularChat(fake.db, base);
+        expect(result.ok).toBe(true);
+        if (!result.ok) return;
+        await expect(result.data.tabularStore.loadCells!(["row-1"], [0])).rejects.toThrow("accessible");
+        expect(result.data.tabularStore.cells.size).toBe(0);
+    });
+
     it("refuses to adopt a chat id belonging to another review", async () => {
         const fake = makeFakeDb({
             tables: {

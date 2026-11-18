@@ -755,6 +755,20 @@ export function TRView({ reviewId, projectId }: Props) {
         }]);
     }
 
+    function scheduleReconciliation(request: number) {
+        clearTimeout(reconciliationTimer.current);
+        reconciliationTimer.current = setTimeout(() => {
+            if (request !== detailRequest.current) return;
+            void refreshAfterGeneration().catch(error => {
+                console.error("Failed to reconcile the running review", error);
+                notifyError(error, {
+                    action: "refresh this review",
+                    onRetry: () => { void loadLatestReview(); },
+                });
+            });
+        }, 5000);
+    }
+
     async function refreshAfterGeneration() {
         const request = ++detailRequest.current;
         clearTimeout(reconciliationTimer.current);
@@ -774,18 +788,8 @@ export function TRView({ reviewId, projectId }: Props) {
         }
         if (request !== detailRequest.current) return;
         confirmedDetail.current = detail;
-        if (detail.review.is_running) {
-            reconciliationTimer.current = setTimeout(() => {
-                if (request !== detailRequest.current) return;
-                void refreshAfterGeneration().catch(error => {
-                    console.error("Failed to reconcile the running review", error);
-                    notifyError(error, {
-                        action: "refresh this review",
-                        onRetry: () => { void loadLatestReview(); },
-                    });
-                });
-            }, 5000);
-        }
+        if (detail.review.is_running) scheduleReconciliation(request);
+        else setGenerationGuard(null);
         setReview(detail.review);
         setCells(detail.cells);
         setRows(detail.rows);
@@ -1152,6 +1156,7 @@ export function TRView({ reviewId, projectId }: Props) {
             const detail = await getTabularReview(reviewId);
             if (request !== detailRequest.current) return;
             confirmedDetail.current = detail;
+            if (detail.review.is_running) scheduleReconciliation(request);
             setReview(detail.review);
             setCells(detail.cells);
             setRows(detail.rows);

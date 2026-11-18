@@ -647,6 +647,7 @@ export async function prepareTabularChat(
             readable.rows.length !== sources.length) {
             throw new Error("Review rows are no longer accessible");
         }
+        const latestById = new Map(latest.map(row => [row.id, row]));
         // Group rows with the same missing columns, including previously absent cells.
         const groups = new Map<string, { rows: string[]; columns: number[] }>();
         for (const id of rowIds) {
@@ -668,9 +669,22 @@ export async function prepareTabularChat(
                             .eq("review_id", reviewId).in("row_id", batch).in("column_index", columns),
                     ),
                 );
+                // Source membership can change while the cell query is in flight.
+                // Reject that slice before caching any body under the old sources.
                 const wanted = new Set(group.rows);
+                const after = (await loadReviewRows(db, reviewId, group.rows)).filter(row => wanted.has(row.id));
+                const afterById = new Map(after.map(row => [row.id, row]));
+                const stillReadable = await filterReadableReviewRows(db, after, [], userId, userEmail);
+                if (stillReadable.rows.length !== after.length || group.rows.some(id => {
+                    const before = latestById.get(id);
+                    const current = afterById.get(id);
+                    return !before || !current ||
+                        JSON.stringify(before.source_document_ids ?? []) !== JSON.stringify(current.source_document_ids ?? []);
+                })) {
+                    throw new Error("Review rows are no longer accessible");
+                }
                 for (const id of group.rows) {
-                    const source = latest.find(row => row.id === id)!;
+                    const source = latestById.get(id)!;
                     for (const index of columns) {
                         const key = `${index}:${id}`;
                         tabularStore.cells.set(key, null);

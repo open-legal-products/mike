@@ -525,6 +525,26 @@ describe("TabularReviewView single-cell regeneration", () => {
         } finally { vi.useRealTimers(); }
     });
 
+    it("follow-up regression: Check again keeps reconciling a running review", async () => {
+        const regenerate = await openCell();
+        const { MikeApiError } = await import("@/app/lib/mikeApi");
+        vi.mocked(regenerateTabularCell).mockRejectedValue(new MikeApiError({ message: "running", status: 409, code: "review_running" }));
+        vi.useFakeTimers();
+        try {
+            serverRunsFor(100);
+            fireEvent.click(regenerate);
+            await act(async () => { await vi.advanceTimersByTimeAsync(0); });
+            serverRunsFor(1);
+            fireEvent.click(screen.getByRole("button", { name: "Check again" }));
+            await act(async () => { await vi.advanceTimersByTimeAsync(0); });
+            const reads = vi.mocked(getTabularReview).mock.calls.length;
+            serverRunsFor(0);
+            await act(async () => { await vi.advanceTimersByTimeAsync(6000); });
+            expect(getTabularReview).toHaveBeenCalledTimes(reads + 1);
+            expect(screen.queryByRole("button", { name: "Check again" })).not.toBeInTheDocument();
+        } finally { vi.useRealTimers(); }
+    });
+
     it("polls the run's status, not the whole review, until the run ends", async () => {
         const regenerate = await openCell();
         vi.mocked(regenerateTabularCell).mockResolvedValue({ summary: "New" } as never);
