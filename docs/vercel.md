@@ -90,8 +90,13 @@ See [Authentication email](deployment.md#authentication-email) and
 - **Previews.** Daemons run only in production, and the backend trusts only
   the production domain, so use the production deployment.
 - **First request after idle.** The API container stops after five minutes
-  without traffic; the next request starts it again, which takes a few
+  without traffic; the next request starts it again, which takes about six
   seconds.
+- **Built-in workflows.** The worker loads the workflow catalog from GitHub
+  when it starts. GitHub's anonymous API limit is shared by Vercel's outbound
+  addresses, so the download can be refused; the worker retries for two
+  hours. Set `MIKE_WORKFLOWS_GITHUB_TOKEN` (a token with no scopes is enough)
+  to avoid the limit.
 
 ## Setting it up by hand
 
