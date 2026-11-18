@@ -171,8 +171,15 @@ export interface SignInOptions {
     signup: boolean;
 }
 
+/**
+ * Bounded: the login page holds its provider buttons back until this
+ * answers, so a hung request must fall back to showing them (see
+ * useSignInOptions) rather than leave them missing.
+ */
 export async function getSignInOptions() {
-    return authRequest<SignInOptions>("auth.options", "/options");
+    return authRequest<SignInOptions>("auth.options", "/options", {
+        signal: AbortSignal.timeout(8_000),
+    });
 }
 
 /** First-run setup: create this deployment's first account and sign it in. */

@@ -19,6 +19,11 @@ export function stripApiPathPrefix(rawPrefix: string | undefined): RequestHandle
     if (url === prefix || url.startsWith(`${prefix}/`) || url.startsWith(`${prefix}?`)) {
       const rest = url.slice(prefix.length);
       req.url = rest.startsWith("/") ? rest : `/${rest}`;
+      // Express copied the incoming path to originalUrl before this ran, and
+      // code that matches whole paths reads it (the login-MFA bootstrap
+      // routes in middleware/auth.ts, request diagnostics): make it the path
+      // a gateway would have forwarded, so behaviour matches every other host.
+      req.originalUrl = req.url;
     }
     next();
   };

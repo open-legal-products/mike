@@ -14,7 +14,9 @@ alter table public.instance_setup enable row level security;
 revoke all on table public.instance_setup from public, anon, authenticated;
 grant select, insert, delete on table public.instance_setup to service_role;
 
--- True while the instance has no account and nobody has started setting it up.
+-- True while the instance has no account and nobody is setting it up. A
+-- claim older than ten minutes with still no account belongs to a request
+-- that died between claiming and creating the account; it no longer counts.
 create or replace function public.instance_setup_available()
 returns boolean
 language sql
@@ -23,11 +25,14 @@ security definer
 set search_path = ''
 as $$
   select not exists (select 1 from auth.users)
-    and not exists (select 1 from public.instance_setup);
+    and not exists (
+      select 1 from public.instance_setup
+      where claimed_at > now() - interval '10 minutes'
+    );
 $$;
 
 -- Take the one-time setup claim. Returns false when an account already
--- exists or another request holds the claim.
+-- exists or another request claimed setup in the last ten minutes.
 create or replace function public.claim_instance_setup()
 returns boolean
 language plpgsql
@@ -38,6 +43,8 @@ begin
   if exists (select 1 from auth.users) then
     return false;
   end if;
+  delete from public.instance_setup
+  where claimed_at <= now() - interval '10 minutes';
   insert into public.instance_setup (id) values (true)
   on conflict (id) do nothing;
   return found;

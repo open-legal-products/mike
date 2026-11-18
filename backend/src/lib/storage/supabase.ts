@@ -52,6 +52,17 @@ export function isMissingObject(error: unknown): boolean {
   return statusCode === "404" || status === 404 || text === "object not found";
 }
 
+/** Supabase Storage's answer when the destination of a write already exists. */
+function isExistingObject(error: unknown): boolean {
+  if (!error || typeof error !== "object") return false;
+  const { status, statusCode, message } = error as StorageErrorShape;
+  return (
+    status === 409 ||
+    statusCode === "409" ||
+    (typeof message === "string" && /already exists/i.test(message))
+  );
+}
+
 /** A fetch Response that is not 2xx, as a StorageApiError-shaped error. */
 async function responseError(response: Response): Promise<Error> {
   let body: Record<string, unknown> = {};
@@ -215,12 +226,17 @@ export function createSupabaseStorageAdapter(): StorageAdapter {
     },
 
     async copyFile(sourceKey, targetKey) {
-      // Copy refuses an existing destination; the facade's callers copy to a
-      // fresh key or retry after a crash, so make the target replaceable.
+      if (sourceKey === targetKey) return;
+      const { error } = await files().copy(sourceKey, targetKey);
+      if (!error) return;
+      // Copy refuses an existing destination. Callers copy to a fresh key or
+      // retry after a crash left the target behind, so replace it then; any
+      // other failure leaves the target untouched.
+      if (!isExistingObject(error)) throw error;
       const { error: removeError } = await files().remove([targetKey]);
       if (removeError) throw removeError;
-      const { error } = await files().copy(sourceKey, targetKey);
-      if (error) throw error;
+      const { error: retryError } = await files().copy(sourceKey, targetKey);
+      if (retryError) throw retryError;
     },
 
     async deleteFile(key) {

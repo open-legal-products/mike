@@ -154,6 +154,37 @@ describe("Supabase storage adapter", () => {
     ]);
   });
 
+  it("copies without touching the target, and replaces it only when it already exists", async () => {
+    const adapter = createSupabaseStorageAdapter();
+    respond = () => json(200, { Key: "mike/b" });
+    await adapter.copyFile("a", "b");
+    expect(calls.map((c) => c.url.pathname)).toEqual(["/storage/v1/object/copy"]);
+
+    calls = [];
+    let copies = 0;
+    respond = (call) => {
+      if (call.url.pathname === "/storage/v1/object/copy") {
+        copies += 1;
+        return copies === 1
+          ? json(400, { statusCode: "409", error: "Duplicate", message: "The resource already exists" })
+          : json(200, { Key: "mike/b" });
+      }
+      return json(200, [{ name: "b" }]);
+    };
+    await adapter.copyFile("a", "b");
+    expect(calls.map((c) => c.url.pathname)).toEqual([
+      "/storage/v1/object/copy",
+      "/storage/v1/object/mike",
+      "/storage/v1/object/copy",
+    ]);
+  });
+
+  it("never deletes the target when a copy fails for another reason", async () => {
+    respond = () => json(400, { statusCode: "404", error: "not_found", message: "Object not found" });
+    await expect(createSupabaseStorageAdapter().copyFile("missing", "b")).rejects.toThrow();
+    expect(calls.map((c) => c.method)).toEqual(["POST"]);
+  });
+
   it("treats deleting a missing key as done but a failed delete as an error", async () => {
     const adapter = createSupabaseStorageAdapter();
     respond = () => json(200, []);

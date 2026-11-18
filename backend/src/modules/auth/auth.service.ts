@@ -413,7 +413,8 @@ export type FirstAccountResult =
  *
  * The claim is taken before the account is created and given back if
  * creation fails, so two visitors racing for setup cannot both get an
- * account this way.
+ * account this way. A claim whose request died before creating the account
+ * lapses after ten minutes.
  */
 export async function createFirstAccount(
   db: Db,
@@ -441,7 +442,15 @@ export async function createFirstAccount(
   return { ok: true };
 }
 
+/**
+ * Give the claim back after a failed attempt. Best effort: if this fails
+ * too, the claim lapses on its own after ten minutes (see the migration),
+ * and the caller reports the original failure, not this one.
+ */
 async function releaseInstanceSetup(db: Db): Promise<void> {
-  const { error } = await db.rpc("release_instance_setup");
-  if (error) throw error;
+  try {
+    await db.rpc("release_instance_setup");
+  } catch {
+    // Expires by itself; see above.
+  }
 }
