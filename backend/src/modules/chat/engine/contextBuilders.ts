@@ -482,10 +482,16 @@ export async function enrichWithPriorEvents(
         : `- ran ${label}`,
     ];
   };
+  // Documents a run_script script read. They are not replayed as the model's
+  // own reads: it was returned whatever the script returned, which may or may
+  // not have been their text. One line says the script ran and what it called.
+  let scriptReads = 0;
   for (const ev of content as Record<string, unknown>[]) {
     const docLines = documentLines(ev);
     if (docLines) {
       lines.push(...docLines);
+    } else if (ev?.type === "doc_read" && ev.by_script === true) {
+      scriptReads += 1;
     } else if (ev?.type === "doc_read") {
       // Live Word reads have no doc_id and belong to a different tool;
       // labeling them read_document would name a handle that doesn't exist.
@@ -611,6 +617,11 @@ export async function enrichWithPriorEvents(
         }
       }
     }
+  }
+  if (scriptReads > 0) {
+    lines.push(
+      `- run_script → your script ran and called read_document on ${scriptReads} document${scriptReads === 1 ? "" : "s"}; what the script returned came back to you`,
+    );
   }
   for (const id of approvedIds) {
     if (approvalOutcomes.has(id)) continue;

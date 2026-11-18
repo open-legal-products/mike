@@ -505,6 +505,11 @@ describe("prepareTabularChat", () => {
         expect(result.ok).toBe(true);
         if (!result.ok) return;
         expect(result.data.chatId).toBe("chat-new");
+        expect(result.data.nonce).toMatch(/^[0-9a-f]{32}$/);
+        expect(JSON.stringify(result.data.apiMessages)).toContain("UNTRUSTED CONTENT POLICY");
+        expect((result.data.apiMessages[0] as { content: string }).content).toContain(
+            `<untrusted-content nonce="${result.data.nonce}">`,
+        );
         expect(result.data.isFirstExchange).toBe(true);
         expect(result.data.model).toBe("claude-sonnet-5");
         expect(result.data.tabularStore.cells.get("0:row-1")).toMatchObject({
