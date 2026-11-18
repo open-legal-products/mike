@@ -318,6 +318,8 @@ it('retains provider categories and retry status without response bodies or cred
   const tags = diagnosticErrorTags(wrapped);
   expect(tags).toEqual({ provider_error: 'invalid_api_key', dependency_status: 401 });
   expect(diagnosticErrorTags(retry)).toEqual({ provider_error: 'retry_exhausted', dependency_status: 401 });
+  // Names are looked up as own keys only, so an inherited Object member is never a category.
+  for (const name of ['constructor', 'toString', '__proto__']) expect(diagnosticErrorTags({ name })).toEqual({});
   expect(diagnosticErrorTags(api)).toEqual({ provider_error: 'api_call', dependency_status: 401 });
   expect(JSON.stringify(diagnosticEvent({ tags, extra: api }))).not.toContain('PRIVATE_');
   const cyclic: { lastError?: unknown } = {};

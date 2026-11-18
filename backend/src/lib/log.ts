@@ -9,14 +9,34 @@ import { diagnosticErrorTags } from "./observability/sentryPrivacy";
 const AI_SDK_ERROR = Symbol.for("vercel.ai.error");
 const AI_GATEWAY_ERROR = Symbol.for("vercel.ai.gateway.error");
 
+// An SDK class name such as AI_JSONParseError; anything else is not printed.
+const SDK_ERROR_NAME = /^[A-Za-z_]{1,64}$/;
+
+/**
+ * A log-safe stand-in for an AI SDK or gateway error, or undefined for any
+ * other value. Provider errors and their causes can contain prompts, model
+ * output, headers and request URLs, so only the class name and allowlisted
+ * diagnostic tags survive.
+ */
+export function redactedProviderError(error: unknown): string | undefined {
+  if (error === null || typeof error !== "object") return undefined;
+  const marked = error as Record<symbol, unknown>;
+  if (marked[AI_SDK_ERROR] !== true && marked[AI_GATEWAY_ERROR] !== true) {
+    return undefined;
+  }
+  const name = (error as { name?: unknown }).name;
+  const label =
+    typeof name === "string" && SDK_ERROR_NAME.test(name)
+      ? `AI provider error ${name}`
+      : "AI provider error";
+  return `${label} ${inspect(diagnosticErrorTags(error))}`;
+}
+
 /** Provider errors and their causes can contain prompts or model output. */
 export function installErrorLogRedaction(): void {
   Object.defineProperty(Error.prototype, inspect.custom, {
-    value(this: Error & { [AI_SDK_ERROR]?: boolean; [AI_GATEWAY_ERROR]?: boolean }) {
-      if (this[AI_SDK_ERROR] === true || this[AI_GATEWAY_ERROR] === true) {
-        return `AI provider error ${inspect(diagnosticErrorTags(this))}`;
-      }
-      return this;
+    value(this: Error) {
+      return redactedProviderError(this) ?? this;
     },
     configurable: true,
     writable: true,

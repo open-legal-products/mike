@@ -6,7 +6,8 @@ import type { APICallError as ApiCallErrorClass } from "ai" with {
 };
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { AppError } from "./appError";
-import { logError } from "./log";
+import { jobErrorMessage } from "./dbq/jobError";
+import { logError, redactedProviderError } from "./log";
 import { reportModelFailure } from "./llm/providerFailureReport";
 
 // What a lawyer's prompt looks like on the way to a provider: document text
@@ -70,8 +71,24 @@ describe("error logging", () => {
     const spy = vi.spyOn(console, "error").mockImplementation(() => {});
     logError("chat", failure);
     const out = captured(spy);
-    expect(out).toContain("AI provider error");
+    expect(out).toContain("AI provider error AI_JSONParseError");
     expect(out).not.toContain(SENTINEL);
+  });
+
+  it("names the SDK class but never a name that is not a class name", () => {
+    const failure = providerError();
+    expect(redactedProviderError(failure)).toMatch(/^AI provider error AI_APICallError /);
+    failure.name = `${SENTINEL} prompt text`;
+    const out = redactedProviderError(failure);
+    expect(out).toMatch(/^AI provider error \{/);
+    expect(out).not.toContain(SENTINEL);
+  });
+
+  it("leaves values that are not provider errors to normal formatting", () => {
+    expect(redactedProviderError(new Error("plain"))).toBeUndefined();
+    expect(redactedProviderError({ message: "plain" })).toBeUndefined();
+    expect(redactedProviderError(null)).toBeUndefined();
+    expect(redactedProviderError("text")).toBeUndefined();
   });
 
   it("never writes a provider error nested as the cause of an AppError", () => {
@@ -97,5 +114,20 @@ describe("error logging", () => {
     expect(out).toContain("queue row 42 missing");
     expect(out).toContain("log.test.ts");
     expect(out).toContain("j1");
+  });
+});
+
+describe("job error messages", () => {
+  it("never records a provider error's text as a job's last_error", () => {
+    const message = jobErrorMessage(providerError());
+    expect(message).not.toContain(SENTINEL);
+    expect(message).toContain("AI provider error AI_APICallError");
+    expect(message).toContain("invalid_request_error");
+  });
+
+  it("keeps the reason for every other failure", () => {
+    expect(jobErrorMessage(new Error("queue row 42 missing"))).toBe("queue row 42 missing");
+    expect(jobErrorMessage({ message: "permission denied", code: "42501" })).toBe("permission denied");
+    expect(jobErrorMessage(undefined, "cleanup_failed")).toBe("cleanup_failed");
   });
 });
