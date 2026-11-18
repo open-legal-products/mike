@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { Db } from "../../../lib/supabase";
 import {
   createFirstAccount,
+  emailSignupOpen,
   firstRunSetupEnabled,
   resetSignInOptionsCache,
   signInOptions,
@@ -39,6 +40,19 @@ describe("firstRunSetupEnabled", () => {
     expect(firstRunSetupEnabled({ MIKE_FIRST_RUN_SETUP: "TRUE " })).toBe(true);
     expect(firstRunSetupEnabled({})).toBe(false);
     expect(firstRunSetupEnabled({ MIKE_FIRST_RUN_SETUP: "1" })).toBe(false);
+  });
+});
+
+describe("emailSignupOpen", () => {
+  it("leaves sign-up open on installs without first-run setup", () => {
+    expect(emailSignupOpen({})).toBe(true);
+  });
+
+  it("keeps sign-up closed on a first-run deployment until email is configured", () => {
+    expect(emailSignupOpen({ MIKE_FIRST_RUN_SETUP: "true" })).toBe(false);
+    expect(
+      emailSignupOpen({ MIKE_FIRST_RUN_SETUP: "true", MIKE_SIGNUP_EMAIL_CONFIGURED: "true" }),
+    ).toBe(true);
   });
 });
 
@@ -98,6 +112,7 @@ describe("signInOptions", () => {
       google: false,
       sso: false,
       setupRequired: true,
+      signup: false,
     });
     expect(fetchImpl).toHaveBeenCalledWith(
       "https://project.supabase.test/auth/v1/settings",
@@ -110,7 +125,7 @@ describe("signInOptions", () => {
     const { db } = fakeDb({ instance_setup_available: { data: false, error: null } });
     await expect(
       signInOptions(db, settingsFetch({ external: { google: true } })),
-    ).resolves.toEqual({ google: true, sso: true, setupRequired: false });
+    ).resolves.toEqual({ google: true, sso: true, setupRequired: false, signup: false });
   });
 
   it("keeps Google visible when Auth's settings cannot be read", async () => {

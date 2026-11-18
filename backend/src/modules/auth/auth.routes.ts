@@ -33,6 +33,8 @@ import {
   challengeMfaFactor,
   consumeWordHandoff,
   createFirstAccount,
+  emailSignupOpen,
+  SIGNUP_EMAIL_NOT_CONFIGURED_DETAIL,
   credentialsSchema,
   currentUser,
   emailSchema,
@@ -147,6 +149,13 @@ authRouter.post("/login", asyncRoute(async (req, res) => {
 
 authRouter.post("/signup", asyncRoute(async (req, res) => {
   setOperation("auth.signup");
+  // Refuse before GoTrue creates an account that can never be confirmed.
+  if (!emailSignupOpen()) {
+    return res.status(403).json({
+      code: "signup_email_not_configured",
+      detail: SIGNUP_EMAIL_NOT_CONFIGURED_DETAIL,
+    });
+  }
   const parsed = signupSchema.safeParse(req.body);
   if (!parsed.success) return invalidBody(res, parsed.error.issues);
 

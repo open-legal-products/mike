@@ -11,7 +11,7 @@ const { setupFirstAccount, refreshSession, replace, push, signInOptions } = vi.h
     push: vi.fn(),
     signInOptions: {
         current: {
-            options: { google: false, sso: false, setupRequired: true },
+            options: { google: false, sso: false, setupRequired: true, signup: true },
             loaded: true,
         },
     },
@@ -50,7 +50,7 @@ describe("SetupPage", () => {
     beforeEach(() => {
         vi.clearAllMocks();
         signInOptions.current = {
-            options: { google: false, sso: false, setupRequired: true },
+            options: { google: false, sso: false, setupRequired: true, signup: true },
             loaded: true,
         };
         setupFirstAccount.mockResolvedValue({ user: { id: "u1" } });
@@ -88,7 +88,7 @@ describe("SetupPage", () => {
 
     it("sends visitors to log in once the instance is set up", () => {
         signInOptions.current = {
-            options: { google: false, sso: false, setupRequired: false },
+            options: { google: false, sso: false, setupRequired: false, signup: true },
             loaded: true,
         };
         render(<SetupPage />);

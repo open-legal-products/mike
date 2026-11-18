@@ -167,6 +167,8 @@ export interface SignInOptions {
     google: boolean;
     sso: boolean;
     setupRequired: boolean;
+    /** False while email sign-up cannot work on this deployment (no email configured). */
+    signup: boolean;
 }
 
 export async function getSignInOptions() {

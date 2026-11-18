@@ -61,7 +61,7 @@ vi.mock("@/app/components/site-logo", () => ({
 
 const signInOptions = vi.hoisted(() => ({
     current: {
-        options: { google: true, sso: true, setupRequired: false },
+        options: { google: true, sso: true, setupRequired: false, signup: true },
         loaded: true,
     },
 }));
@@ -73,7 +73,7 @@ vi.mock("@/app/hooks/useSignInOptions", () => ({
 describe("LoginPage", () => {
     beforeEach(() => {
         signInOptions.current = {
-            options: { google: true, sso: true, setupRequired: false },
+            options: { google: true, sso: true, setupRequired: false, signup: true },
             loaded: true,
         };
         authState.error = null;
@@ -188,7 +188,7 @@ describe("LoginPage", () => {
     });
     it("offers only the providers the deployment has configured", () => {
         signInOptions.current = {
-            options: { google: false, sso: false, setupRequired: false },
+            options: { google: false, sso: false, setupRequired: false, signup: true },
             loaded: true,
         };
         render(<LoginPage />);
@@ -199,7 +199,7 @@ describe("LoginPage", () => {
 
     it("shows no provider buttons until the deployment has said which it offers", () => {
         signInOptions.current = {
-            options: { google: true, sso: true, setupRequired: false },
+            options: { google: true, sso: true, setupRequired: false, signup: true },
             loaded: false,
         };
         render(<LoginPage />);
@@ -209,7 +209,7 @@ describe("LoginPage", () => {
 
     it("sends the first visitor of a new deployment to setup", () => {
         signInOptions.current = {
-            options: { google: false, sso: false, setupRequired: true },
+            options: { google: false, sso: false, setupRequired: true, signup: true },
             loaded: true,
         };
         render(<LoginPage />);

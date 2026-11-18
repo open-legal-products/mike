@@ -36,7 +36,7 @@ vi.mock("@/app/components/site-logo", () => ({
 
 const signInOptions = vi.hoisted(() => ({
     current: {
-        options: { google: true, sso: true, setupRequired: false },
+        options: { google: true, sso: true, setupRequired: false, signup: true },
         loaded: true,
     },
 }));
@@ -48,7 +48,7 @@ vi.mock("@/app/hooks/useSignInOptions", () => ({
 describe("SignupPage", () => {
     beforeEach(() => {
         signInOptions.current = {
-            options: { google: true, sso: true, setupRequired: false },
+            options: { google: true, sso: true, setupRequired: false, signup: true },
             loaded: true,
         };
         signup.mockReset();
@@ -207,7 +207,7 @@ describe("SignupPage", () => {
 
     it("hides Google when the deployment has not configured it", () => {
         signInOptions.current = {
-            options: { google: false, sso: false, setupRequired: false },
+            options: { google: false, sso: false, setupRequired: false, signup: true },
             loaded: true,
         };
         render(<SignupPage />);
@@ -215,9 +215,23 @@ describe("SignupPage", () => {
         expect(screen.queryByRole("button", { name: "Continue with Google" })).toBeNull();
     });
 
+    it("explains that sign-up is closed instead of showing a form that cannot work", () => {
+        signInOptions.current = {
+            options: { google: false, sso: false, setupRequired: false, signup: false },
+            loaded: true,
+        };
+        render(<SignupPage />);
+        expect(
+            screen.getByRole("heading", { name: "Sign-up isn't open yet" }),
+        ).toBeInTheDocument();
+        expect(screen.getByText(/can't send confirmation emails/)).toBeInTheDocument();
+        expect(screen.getByRole("link", { name: "Log in" })).toHaveAttribute("href", "/login");
+        expect(screen.queryByRole("button", { name: "Sign up" })).toBeNull();
+    });
+
     it("sends the first visitor of a new deployment to setup", () => {
         signInOptions.current = {
-            options: { google: false, sso: false, setupRequired: true },
+            options: { google: false, sso: false, setupRequired: true, signup: true },
             loaded: true,
         };
         render(<SignupPage />);

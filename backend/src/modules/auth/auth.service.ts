@@ -310,6 +310,26 @@ export function firstRunSetupEnabled(env: NodeJS.ProcessEnv = process.env): bool
   return env.MIKE_FIRST_RUN_SETUP?.trim().toLowerCase() === "true";
 }
 
+/**
+ * Whether people can sign up with email and password. A deployment that
+ * uses first-run setup starts on a Supabase project that cannot send them a
+ * working confirmation email (no Site URL for this deployment, and a mailer
+ * that delivers only to the project's own team), so sign-up stays closed
+ * there until the operator configures email and sets
+ * MIKE_SIGNUP_EMAIL_CONFIGURED=true (docs/vercel.md). Every other install is
+ * unchanged.
+ */
+export function emailSignupOpen(env: NodeJS.ProcessEnv = process.env): boolean {
+  if (!firstRunSetupEnabled(env)) return true;
+  return env.MIKE_SIGNUP_EMAIL_CONFIGURED?.trim().toLowerCase() === "true";
+}
+
+/** The sentence a would-be user sees while sign-up is closed. */
+export const SIGNUP_EMAIL_NOT_CONFIGURED_DETAIL =
+  "Sign-up isn't open on this Mike deployment yet, because it can't send " +
+  "confirmation emails. Ask the person who set it up to configure email, or " +
+  "log in if you already have an account.";
+
 const PROVIDER_SETTINGS_TTL_MS = 60_000;
 let cachedGoogleEnabled: { value: boolean; expiresAt: number } | undefined;
 
@@ -351,6 +371,8 @@ export type SignInOptions = {
   google: boolean;
   sso: boolean;
   setupRequired: boolean;
+  /** False while email sign-up cannot work (see emailSignupOpen). */
+  signup: boolean;
 };
 
 /** Which sign-in routes the login page should offer, and whether this instance still needs its first account. */
@@ -362,7 +384,12 @@ export async function signInOptions(
     googleSignInEnabled(fetchImpl),
     instanceSetupAvailable(db),
   ]);
-  return { google, sso: ssoConfiguration().enabled, setupRequired };
+  return {
+    google,
+    sso: ssoConfiguration().enabled,
+    setupRequired,
+    signup: emailSignupOpen(),
+  };
 }
 
 /** True while first-run setup is enabled and nobody has an account yet. */

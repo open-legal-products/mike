@@ -5,13 +5,14 @@ import { getSignInOptions, type SignInOptions } from "@/app/lib/authApi";
 
 /**
  * What the sign-in screens offered before the deployment could say: both
- * provider buttons, no setup screen. Used while the answer is unknown or
+ * provider buttons, the sign-up form, no setup screen. Used while the answer is unknown or
  * could not be read, so a failed check never hides a working provider.
  */
 export const DEFAULT_SIGN_IN_OPTIONS: SignInOptions = {
     google: true,
     sso: true,
     setupRequired: false,
+    signup: true,
 };
 
 /**

@@ -70,12 +70,17 @@ rest of [Environment](deployment.md#environment) applies unchanged.
 
 A Marketplace Supabase project does not know your deployment's URL, and its
 built-in mailer sends only to members of the Supabase project, at most two
-messages an hour. Before inviting anyone:
+messages an hour, so a confirmation email could not reach a new user. Until
+you set it up, the sign-up page says sign-up isn't open yet (and the API
+refuses sign-ups with the same message), rather than creating accounts that
+can never be confirmed. To open it:
 
 1. In Supabase, **Authentication > URL Configuration**: set the Site URL to
    your production URL and add `https://<your-domain>/auth/callback` to the
    redirect URLs.
 2. **Authentication > Emails > SMTP Settings**: add your own SMTP provider.
+3. On the Vercel project, set `MIKE_SIGNUP_EMAIL_CONFIGURED=true` and
+   redeploy.
 
 See [Authentication email](deployment.md#authentication-email) for the
 details. To add **Continue with Google**, enable the Google provider in

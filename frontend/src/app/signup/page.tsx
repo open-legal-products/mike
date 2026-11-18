@@ -35,6 +35,17 @@ function localSignupError(message: string): UserFacingError {
 }
 
 /**
+ * Shown instead of the form while this deployment cannot send confirmation
+ * emails (a new Vercel deployment before its operator configures email):
+ * an account created now could never be confirmed. Same sentence as the
+ * API's `signup_email_not_configured` refusal.
+ */
+const SIGNUP_CLOSED_MESSAGE =
+    "Sign-up isn't open on this Mike deployment yet, because it can't send " +
+    "confirmation emails. Ask the person who set it up to configure email, or " +
+    "log in if you already have an account.";
+
+/**
  * The shared auth table with this screen's deltas. Anything not listed
  * falls through to `describeError` so a 429, a 5xx, or a dropped connection
  * still says what actually happened.
@@ -45,6 +56,7 @@ const SIGNUP_ERROR_MESSAGES = authMessages({
     over_email_send_rate_limit:
         "Too many signup emails have been requested. Wait a few minutes and try again.",
     request_timeout: "The signup request timed out. Try again.",
+    signup_email_not_configured: SIGNUP_CLOSED_MESSAGE,
 });
 
 /** Classify a signup failure into text a person can act on. */
@@ -185,6 +197,36 @@ function SignupContent() {
                             })}
                         >
                             Continue
+                        </Link>
+                    </div>
+                </div>
+            </div>
+        );
+    }
+
+    if (signInOptionsLoaded && !signInOptions.signup) {
+        return (
+            <div className="relative flex min-h-dvh items-center justify-center bg-gray-50/80 px-6 py-24">
+                <div className="absolute top-4 md:top-8 left-1/2 -translate-x-1/2">
+                    <SiteLogo size="lg" asLink />
+                </div>
+                <div className="w-full max-w-md">
+                    <div className={authGlassCardUIClassName}>
+                        <h1 className="font-serif text-2xl font-medium text-gray-950">
+                            Sign-up isn&apos;t open yet
+                        </h1>
+                        <p className="mt-3 text-sm leading-relaxed text-gray-600">
+                            {SIGNUP_CLOSED_MESSAGE}
+                        </p>
+                        <Link
+                            href="/login"
+                            className={pillButtonUIClassName({
+                                tone: "black",
+                                size: "normal",
+                                className: "mt-6",
+                            })}
+                        >
+                            Log in
                         </Link>
                     </div>
                 </div>
