@@ -69,13 +69,14 @@ bucket="${SUPABASE_STORAGE_BUCKET:-mike}"
 
 # --- 3. Database ------------------------------------------------------------
 psql_db() {
-  psql -d "$DATABASE_URL" -X -q -v ON_ERROR_STOP=1 "$@"
+  PGOPTIONS="-c client_min_messages=warning" psql -d "$DATABASE_URL" -X -q -v ON_ERROR_STOP=1 "$@"
 }
 
 # One session holds the lock while it decides whether the database is new and
 # loads schema.sql if so; a second instance waits here, then sees the schema.
 log "checking database schema"
 psql_db -v schema_file="$app_dir/schema.sql" <<'SQL'
+\o /dev/null
 select pg_advisory_lock(2026111701);
 select to_regclass('public.user_profiles') is null as fresh \gset
 \if :fresh
@@ -89,9 +90,15 @@ MIGRATIONS_DIR="$app_dir/migrations" bash "$app_dir/scripts/migrate.sh" up
 
 # --- 4. Bucket, grants and generated secrets --------------------------------
 psql_db -v bucket="$bucket" <<'SQL'
+\o /dev/null
+-- Hosted Supabase always has storage.buckets; a bare Postgres (or an
+-- S3-backed install) does not, and needs no bucket here.
+select to_regclass('storage.buckets') is not null as has_storage \gset
+\if :has_storage
 insert into storage.buckets (id, name, public)
 values (:'bucket', :'bucket', false)
 on conflict (id) do nothing;
+\endif
 
 grant usage on schema public to service_role;
 grant all privileges on all tables in schema public to service_role;
