@@ -1,3 +1,5 @@
+import type { SourceDocument } from "@mike/contracts";
+
 // Re-exported so the chat modules that already import it from here keep
 // working; the definition lives in lib/log.ts.
 export { devLog } from "../../../lib/log";
@@ -22,6 +24,13 @@ export type DocStore = Map<
     inline_text?: string;
     /** Search handles pin the source revision and reauthorize every subsequent read. */
     search_source?: { revision: string; userId: string; userEmail?: string | null };
+    /**
+     * A provider-backed source read during this request (see
+     * tools/externalSources.ts): the panel document without its body, which
+     * `inline_text` holds. Quotes cited from it must occur in that text
+     * verbatim; it has no stored version, permissions or file.
+     */
+    external_source?: SourceDocument;
   }
 >;
 
@@ -53,6 +62,7 @@ export type DocIndex = Record<
 export type TabularCellStore = {
   columns: { index: number; name: string }[];
   documents: { id: string; filename: string }[];
+  loadCells?: (rowIds: string[], columns: number[]) => Promise<void>;
   /** key: `${colIndex}:${docId}` */
   cells: Map<
     string,

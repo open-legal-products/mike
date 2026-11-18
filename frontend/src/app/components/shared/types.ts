@@ -136,6 +136,16 @@ export type PanelDocumentQuote = SourceDocumentQuote;
 export type PanelSubdocument = SourceSubdocument;
 export type PanelDocument = SourceDocument;
 
+/** Every `SourceDocumentType` the wire contract allows, for runtime checks. */
+export const PANEL_DOCUMENT_TYPES: readonly PanelDocumentType[] = [
+  "docx",
+  "pdf",
+  "spreadsheet",
+  "case",
+  "legislation",
+  "legal_research",
+];
+
 export function isPanelDocument(value: unknown): value is PanelDocument {
   if (!value || typeof value !== "object" || Array.isArray(value)) {
     return false;
@@ -144,9 +154,7 @@ export function isPanelDocument(value: unknown): value is PanelDocument {
   return (
     typeof document.document_id === "string" &&
     typeof document.title === "string" &&
-    ["docx", "pdf", "spreadsheet", "case", "legislation"].includes(
-      String(document.type),
-    ) &&
+    (PANEL_DOCUMENT_TYPES as readonly string[]).includes(String(document.type)) &&
     Array.isArray(document.metadata) &&
     Array.isArray(document.quotes) &&
     (document.actions === undefined || Array.isArray(document.actions)) &&
@@ -542,21 +550,12 @@ export function panelDocumentFromCitation(
       actions: [
         ...(citation.pdfUrl
           ? [
-              {
-                type: "download" as const,
-                url: citation.pdfUrl,
-                label: "Download",
-              },
+              { type: "download" as const, url: citation.pdfUrl },
             ]
           : []),
         ...(citation.url
           ? [
-              {
-                type: "link" as const,
-                url: citation.url,
-                label: "Link",
-                title: "Link",
-              },
+              { type: "link" as const, url: citation.url },
             ]
           : []),
       ],
@@ -919,6 +918,7 @@ export interface ChatDetailOut {
 }
 
 export interface TabularReviewDetailOut {
+  cell_revision?: string;
   review: TabularReview;
   cells: TabularCell[];
   rows: TabularReviewRow[];

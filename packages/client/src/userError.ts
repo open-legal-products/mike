@@ -12,7 +12,7 @@
  * framework-free and must not import from an application (`frontend/src/app/` or `word-addin/src/`).
  */
 
-export const SUPPORT_EMAIL = "will@mikeoss.com";
+export const SUPPORT_EMAIL = "support@mikeoss.com";
 
 export type UserErrorKind =
     | "offline"
@@ -186,6 +186,9 @@ export const CODE_KINDS: Readonly<Record<string, UserErrorKind>> = {
     email_address_invalid: "validation",
     upload_incomplete: "validation",
     missing_api_key: "validation",
+    // The provider refused an account the user or their organization owns
+    // (out of credits, a model or plan it lacks); only they can fix it.
+    provider_account_refused: "validation",
     model_unavailable: "validation",
     model_required: "validation",
     // Identity
@@ -202,6 +205,8 @@ export const CODE_KINDS: Readonly<Record<string, UserErrorKind>> = {
     memory_revision_conflict: "conflict",
     upload_target_busy: "conflict",
     access_inherited: "conflict",
+    setup_complete: "conflict",
+    signup_email_not_configured: "forbidden",
     ask_inputs_stale: "conflict",
     // Ours, not theirs
     internal_error: "server",

@@ -294,7 +294,7 @@ export function toConnectorSummary(
         serverUrl: connector.server_url,
         authType: connector.auth_type ?? "none",
         enabled: connector.enabled,
-        requireWriteApproval: connector.require_write_approval === true,
+        requireWriteApproval: connector.require_write_approval !== false,
         readOnly: connector.read_only === true,
         hasAuthConfig: !!connector.encrypted_auth_config,
         customHeaderKeys: Object.keys(authConfig.headers ?? {}),

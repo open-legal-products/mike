@@ -220,7 +220,11 @@ type SubagentSpawn = {
     signal: AbortSignal;
     onToolStart: (name: string) => void;
     onUsage: (usage: TokenUsage, finishReason: string) => void;
-    onToolBatch: (calls: NormalizedToolCall[], results: NormalizedToolResult[]) => void;
+    onToolBatch: (
+        calls: NormalizedToolCall[],
+        results: NormalizedToolResult[],
+        externalSourceHandles: ReadonlyMap<string, string>,
+    ) => void;
     askParent: (question: unknown) => void;
 };
 
@@ -664,9 +668,11 @@ export async function runDelegateCall(
                     stopper.stop("budget");
                 }
             },
-            onToolBatch: (calls, results) => {
+            onToolBatch: (calls, results, externalSourceHandles) => {
                 calls.forEach((c, i) =>
-                    records.push(toolRecord(c, results[i].content, docStore, docIndex)),
+                    records.push(
+                        toolRecord(c, results[i].content, docStore, docIndex, externalSourceHandles.get(c.id)),
+                    ),
                 );
             },
             askParent: (asked) => {

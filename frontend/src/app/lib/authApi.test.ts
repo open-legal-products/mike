@@ -10,10 +10,12 @@ import {
     exchangeAuthCode,
     getAuthSession,
     getMfaAssurance,
+    getSignInOptions,
     listMfaFactors,
     login,
     logout,
     requestPasswordReset,
+    setupFirstAccount,
     signup,
     startGoogleOAuth,
     startSso,
@@ -221,6 +223,40 @@ describe("cookie auth client", () => {
         expect(
             (fetchMock.mock.calls[0][1] as RequestInit).headers,
         ).not.toHaveProperty("Authorization");
+    });
+
+    it("reads the sign-in options with a bounded request", async () => {
+        const options = { google: false, sso: false, setupRequired: true, signup: false };
+        fetchMock.mockResolvedValue(
+            new Response(JSON.stringify(options), {
+                status: 200,
+                headers: { "Content-Type": "application/json" },
+            }),
+        );
+
+        await expect(getSignInOptions()).resolves.toEqual(options);
+        expect(fetchMock).toHaveBeenCalledWith(
+            "/api/auth/options",
+            expect.objectContaining({ signal: expect.any(AbortSignal) }),
+        );
+    });
+
+    it("creates the first account through first-run setup", async () => {
+        fetchMock.mockResolvedValue(
+            new Response(JSON.stringify({ user }), {
+                status: 201,
+                headers: { "Content-Type": "application/json" },
+            }),
+        );
+
+        await expect(setupFirstAccount(user.email, "correct horse")).resolves.toEqual({ user });
+        expect(fetchMock).toHaveBeenCalledWith(
+            "/api/auth/setup",
+            expect.objectContaining({
+                method: "POST",
+                body: JSON.stringify({ email: user.email, password: "correct horse" }),
+            }),
+        );
     });
 
     it("maps an expired cookie session to a signed-out state", async () => {

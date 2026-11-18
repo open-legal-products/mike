@@ -3,7 +3,9 @@
  *
  * The transport lives behind the StorageAdapter interface
  * (./storage/adapter.ts); the default is the S3-protocol adapter
- * (./storage/s3.ts — Cloudflare R2, RustFS, MinIO). This module owns the
+ * (./storage/s3.ts — Cloudflare R2, RustFS, MinIO); STORAGE_DRIVER selects
+ * ./storage/filesystem.ts ("fs") or ./storage/supabase.ts ("supabase")
+ * instead. This module owns the
  * policy every backend shares: not-configured degradation (reads return
  * null/empty, writes throw), error logging, StorageOperationError wrapping,
  * Content-Disposition building, and the storage-key layout.
@@ -21,6 +23,7 @@ import type {
 } from "./storage/adapter";
 import { createS3StorageAdapter } from "./storage/s3";
 import { createFilesystemStorageAdapter } from "./storage/filesystem";
+import { createSupabaseStorageAdapter } from "./storage/supabase";
 import { buildContentDisposition } from "./storage/filenames";
 import { storageReadTimeoutMs } from "./storage/timeouts";
 export { BlobUploadSizeError } from "./storage/filesystem";
@@ -33,9 +36,18 @@ export {
 
 export type { StorageAdapter, StoredObjectMetadata } from "./storage/adapter";
 
-let adapter: StorageAdapter = process.env.STORAGE_DRIVER === "fs"
-  ? createFilesystemStorageAdapter()
-  : createS3StorageAdapter();
+function createConfiguredAdapter(): StorageAdapter {
+  switch (process.env.STORAGE_DRIVER) {
+    case "fs":
+      return createFilesystemStorageAdapter();
+    case "supabase":
+      return createSupabaseStorageAdapter();
+    default:
+      return createS3StorageAdapter();
+  }
+}
+
+let adapter: StorageAdapter = createConfiguredAdapter();
 
 export let storageEnabled = adapter.enabled;
 

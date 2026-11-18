@@ -16,6 +16,16 @@ import type { SourceSubdocument } from "@mike/contracts";
 export type { SourceDocument } from "@mike/contracts";
 import type { SourceDocument } from "@mike/contracts";
 
+/**
+ * A provider-backed source read during one request, for example a document a
+ * connector tool returned. `document` is the panel document without its body;
+ * `text` is the complete canonical text, which cited quotes are verified
+ * against (verbatim for a provider that verifies exactly) and which the panel
+ * reads again from the provider when the source is opened later, so no copy
+ * is stored with the chat.
+ */
+export type ExternalSource = { text: string; document: SourceDocument };
+
 type UnknownRecord = Record<string, unknown>;
 
 function record(value: unknown): UnknownRecord | null {
@@ -136,16 +146,11 @@ export function normalizeCaseDocument(args: {
   const actions: SourceDocumentAction[] = [];
   const pdfUrl = stringValue(args.pdfUrl);
   if (pdfUrl) {
-    actions.push({ type: "download", url: pdfUrl, label: "Download" });
+    actions.push({ type: "download", url: pdfUrl });
   }
   const sourceUrl = stringValue(args.url);
   if (sourceUrl) {
-    actions.push({
-      type: "link",
-      url: sourceUrl,
-      label: "Link",
-      title: "Link",
-    });
+    actions.push({ type: "link", url: sourceUrl });
   }
 
   const orderedOpinions = (args.opinions ?? [])

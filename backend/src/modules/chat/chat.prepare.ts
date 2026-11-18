@@ -22,6 +22,8 @@ import {
 } from "../../lib/webSearch";
 import { resolveRequestTimeZone } from "../../lib/userTime";
 import { createAssistantHistoryLoader, attachPriorReasoning, buildDocContext, buildMessages, buildUserPersonalisationPrompt, devLog, enrichWithPriorEvents, loadUserMessageSentTimes, buildWorkflowStore, appendAskInputsResponseToAssistantMessage, runApprovedConnectorActions, generateSpotlightNonce, type AskInputsResponseRequest, type ChatMessage, type SubagentDefaults } from "./engine/index";
+import type { ExternalSource } from "../../lib/sourceDocuments";
+import { registerExternalSource } from "./engine/tools/externalSources";
 import type { McpToolEvent } from "@mike/contracts";
 import { getUserModelSettings, resolveUserChatSelection } from "../user/user.service";
 import {
@@ -40,6 +42,7 @@ import { hasDirectContentGrants } from "../../lib/contentAccess";
 import { can } from "../../lib/permissions";
 import { resolveEffectiveReasoningLevel } from "../../lib/modelSelection";
 import { replaysReasoning } from "../../lib/llm/registry";
+import { disownsReplayedToolRecord } from "../../lib/llm/models";
 import { beginMemoryConversationTurn, releaseMemoryConversationTurn, type MemoryConversationTurn } from "../../lib/memory/schedule";
 import { getAccessibleChat, validateAccessibleProjectId } from "./chat.access";
 
@@ -396,6 +399,9 @@ export async function prepareChatStream(
     let completedTurnPersisted = true;
     let memoryTurn: MemoryConversationTurn | null = null;
     let approvalEvents: McpToolEvent[] = [];
+    // Sources carried in approved connector results, registered once the
+    // request's document context exists.
+    const approvedSources: ExternalSource[] = [];
     if (args.askInputsResponse) {
         const appendResult = await appendAskInputsResponseToAssistantMessage(
             db,
@@ -440,6 +446,7 @@ export async function prepareChatStream(
             askEventId: args.askInputsResponse.ask_event_id,
             userId,
             orgId: contentOrgId,
+            onExternalSource: (source) => approvedSources.push(source),
         });
     } else if (lastUser) {
         const { error: userMessageError } = await db
@@ -486,6 +493,9 @@ export async function prepareChatStream(
             userEmail,
             history,
         );
+        for (const source of approvedSources) {
+            registerExternalSource(source, docIndex, docStore);
+        }
         const docAvailability = Object.entries(docIndex).map(([doc_id, info]) => ({
             doc_id,
             filename: info.filename,
@@ -497,6 +507,7 @@ export async function prepareChatStream(
             ? await attachPriorReasoning(messages, chatId, db, "chat_messages", history)
             : messages;
         const timeZone = resolveRequestTimeZone(args.requestedTimeZone);
+        const recordForUser = disownsReplayedToolRecord(selectedModel);
         const enrichedMessages = await enrichWithPriorEvents(
             historyMessages,
             chatId,
@@ -505,6 +516,7 @@ export async function prepareChatStream(
             nonce,
             "chat_messages",
             timeZone,
+            recordForUser,
         );
         const {
             api_keys: apiKeys,
@@ -532,6 +544,7 @@ export async function prepareChatStream(
             nonce,
             "append",
             { timeZone, now: new Date(), userSentAt },
+            recordForUser,
         );
 
         const workflowStore = await buildWorkflowStore(userId, userEmail, db, contentOrgId);

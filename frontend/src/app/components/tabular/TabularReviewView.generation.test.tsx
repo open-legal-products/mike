@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import {
     getTabularReview,
     getTabularReviewHistoryStatuses,
@@ -468,6 +468,16 @@ describe("TabularReviewView single-cell regeneration", () => {
 
     beforeEach(() => {
         vi.clearAllMocks();
+        window.matchMedia = vi.fn().mockImplementation((query: string) => ({
+            matches: true,
+            media: query,
+            onchange: null,
+            addListener: vi.fn(),
+            removeListener: vi.fn(),
+            addEventListener: vi.fn(),
+            removeEventListener: vi.fn(),
+            dispatchEvent: vi.fn(),
+        }));
         vi.mocked(getTabularReview).mockResolvedValue({
             review: review(),
             cells: [CELL],
@@ -498,6 +508,151 @@ describe("TabularReviewView single-cell regeneration", () => {
         serverRunsFor(0);
         finish({ summary: "New" });
         await waitFor(() => expect(getTabularReview).toHaveBeenCalledTimes(2));
+    });
+
+    it.each(["delay", "status request"])("stops reconciliation reads when unmounted during the polling %s", async (stage) => {
+        const regenerate = await openCell();
+        vi.mocked(regenerateTabularCell).mockResolvedValue({ summary: "New" } as never);
+        serverRunsFor(1);
+        let finishStatus!: (statuses: Awaited<ReturnType<typeof getTabularReviewHistoryStatuses>>) => void;
+        if (stage === "status request") {
+            vi.mocked(getTabularReviewHistoryStatuses).mockReturnValue(
+                new Promise(resolve => { finishStatus = resolve; }),
+            );
+        }
+        vi.useFakeTimers();
+        try {
+            fireEvent.click(regenerate);
+            await act(async () => { await vi.advanceTimersByTimeAsync(0); });
+            expect(getTabularReview).toHaveBeenCalledTimes(2);
+            if (stage === "status request") {
+                await act(async () => { await vi.advanceTimersByTimeAsync(250); });
+                expect(getTabularReviewHistoryStatuses).toHaveBeenCalledTimes(1);
+            }
+            cleanup();
+            await act(async () => {
+                if (finishStatus) finishStatus([]);
+                await vi.advanceTimersByTimeAsync(5000);
+            });
+            expect(getTabularReviewHistoryStatuses).toHaveBeenCalledTimes(stage === "delay" ? 0 : 1);
+            expect(getTabularReview).toHaveBeenCalledTimes(2);
+        } finally { vi.useRealTimers(); }
+    });
+
+    it("review regression: reconciles again after the foreground polling limit", async () => {
+        const regenerate = await openCell();
+        vi.mocked(regenerateTabularCell).mockResolvedValue({ summary: "New" } as never);
+        serverRunsFor(45);
+        vi.useFakeTimers();
+        try {
+            fireEvent.click(regenerate);
+            await act(async () => { await vi.advanceTimersByTimeAsync(10_000); });
+            const foregroundReads = vi.mocked(getTabularReview).mock.calls.length;
+            await act(async () => { await vi.advanceTimersByTimeAsync(20_000); });
+            expect(getTabularReview).toHaveBeenCalledTimes(foregroundReads + 2);
+            expect(table.store?.get("row-1", 0)?.content).toEqual(CELL.content);
+        } finally { vi.useRealTimers(); }
+    });
+
+    it("follow-up regression: Check again keeps reconciling a running review", async () => {
+        const regenerate = await openCell();
+        const { MikeApiError } = await import("@/app/lib/mikeApi");
+        vi.mocked(regenerateTabularCell).mockRejectedValue(new MikeApiError({ message: "running", status: 409, code: "review_running" }));
+        vi.useFakeTimers();
+        try {
+            serverRunsFor(100);
+            fireEvent.click(regenerate);
+            await act(async () => { await vi.advanceTimersByTimeAsync(0); });
+            serverRunsFor(1);
+            fireEvent.click(screen.getByRole("button", { name: "Check again" }));
+            await act(async () => { await vi.advanceTimersByTimeAsync(0); });
+            const reads = vi.mocked(getTabularReview).mock.calls.length;
+            serverRunsFor(0);
+            await act(async () => { await vi.advanceTimersByTimeAsync(6000); });
+            expect(getTabularReview).toHaveBeenCalledTimes(reads + 1);
+            expect(screen.queryByRole("button", { name: "Check again" })).not.toBeInTheDocument();
+        } finally { vi.useRealTimers(); }
+    });
+
+    it.each(["background", "reload"])("retry regression: %s failure reloads the current review after navigation", async failure => {
+        const notices = await import("@/app/lib/userFacingError");
+        const notify = vi.spyOn(notices, "notifyError");
+        const { rerender } = render(<TRView reviewId="r1" />);
+        fireEvent.click(await screen.findByRole("button", { name: "Open first cell" }));
+        const regenerate = await screen.findByRole("button", { name: "Regenerate cell" });
+        const { MikeApiError } = await import("@/app/lib/mikeApi");
+        vi.mocked(regenerateTabularCell).mockRejectedValue(new MikeApiError({ message: "running", status: 409, code: "review_running" }));
+        vi.useFakeTimers();
+        try {
+            serverRunsFor(1);
+            if (failure === "reload") vi.mocked(getTabularReview).mockRejectedValueOnce(new Error("offline"));
+            fireEvent.click(regenerate);
+            await act(async () => { await vi.advanceTimersByTimeAsync(0); });
+            if (failure === "background") {
+                vi.mocked(getTabularReview).mockRejectedValueOnce(new Error("offline"));
+                await act(async () => { await vi.advanceTimersByTimeAsync(5000); });
+            }
+            const retry = notify.mock.calls.at(-1)?.[1]?.onRetry;
+            expect(retry).toBeTypeOf("function");
+            vi.mocked(getTabularReview).mockImplementation(async id => ({
+                review: review({ id }), cells: [CELL], rows: [ROW], documents: [], active_generation: null,
+            }));
+            rerender(<TRView reviewId="r2" />);
+            await act(async () => { await vi.advanceTimersByTimeAsync(0); });
+            await act(async () => { retry?.(); await vi.advanceTimersByTimeAsync(0); });
+            expect(getTabularReview).toHaveBeenLastCalledWith("r2");
+        } finally { vi.useRealTimers(); notify.mockRestore(); }
+    });
+
+    it("initial-load regression: a late initial read cannot overwrite a newer retry", async () => {
+        const notices = await import("@/app/lib/userFacingError");
+        const notify = vi.spyOn(notices, "notifyError");
+        try {
+            vi.mocked(getTabularReview).mockRejectedValueOnce(new Error("offline"));
+            const { rerender } = render(<TRView reviewId="r1" />);
+            await waitFor(() => expect(notify).toHaveBeenCalled());
+            const retry = notify.mock.calls.at(-1)?.[1]?.onRetry;
+            expect(retry).toBeTypeOf("function");
+            type Detail = Awaited<ReturnType<typeof getTabularReview>>;
+            let finishInitial!: (detail: Detail) => void;
+            const fresh = { review: review({ id: "r2" }), cells: [{ ...CELL, content: { summary: "Fresh retry" } }],
+                rows: [ROW], documents: [], active_generation: null };
+            vi.mocked(getTabularReview).mockReturnValueOnce(new Promise(resolve => { finishInitial = resolve; }))
+                .mockResolvedValueOnce(fresh);
+            rerender(<TRView reviewId="r2" />);
+            await act(async () => { await retry?.(); });
+            expect(table.cells?.[0].content).toEqual({ summary: "Fresh retry" });
+            await act(async () => { finishInitial({ ...fresh, cells: [CELL] }); });
+            expect(table.cells?.[0].content).toEqual({ summary: "Fresh retry" });
+        } finally { notify.mockRestore(); }
+    });
+
+    it("active-retry regression: the winning retry attaches to a stoppable generation", async () => {
+        const notices = await import("@/app/lib/userFacingError");
+        const notify = vi.spyOn(notices, "notifyError");
+        const stream = openStream();
+        try {
+            vi.mocked(getTabularReview).mockRejectedValueOnce(new Error("offline"));
+            const { rerender } = render(<TRView reviewId="r1" />);
+            await waitFor(() => expect(notify).toHaveBeenCalled());
+            const retry = notify.mock.calls.at(-1)?.[1]?.onRetry;
+            type Detail = Awaited<ReturnType<typeof getTabularReview>>;
+            let finishInitial!: (detail: Detail) => void;
+            const running = { review: review({ id: "r2", is_running: true }), cells: [CELL],
+                rows: [ROW], documents: [], active_generation: { id: "gen-2", seq: 4 } };
+            vi.mocked(getTabularReview).mockReturnValueOnce(new Promise(resolve => { finishInitial = resolve; }))
+                .mockResolvedValueOnce(running);
+            vi.mocked(streamTabularGenerationResume).mockResolvedValue(stream.response);
+            rerender(<TRView reviewId="r2" />);
+            await act(async () => { await retry?.(); });
+            expect(streamTabularGenerationResume).toHaveBeenCalledWith("r2", expect.any(AbortSignal), 1);
+            expect(screen.getByTitle("Stop generation")).toBeInTheDocument();
+            await act(async () => { finishInitial(running); });
+            expect(streamTabularGenerationResume).toHaveBeenCalledTimes(1);
+        } finally {
+            await act(async () => { stream.done(); });
+            notify.mockRestore();
+        }
     });
 
     it("polls the run's status, not the whole review, until the run ends", async () => {

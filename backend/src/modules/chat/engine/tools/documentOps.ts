@@ -1120,6 +1120,17 @@ export async function getTurnReadIdentity(params: {
   if (!docInfo) return null;
 
   const documentId = docIndex?.[docLabel]?.document_id;
+  if (docInfo.external_source) {
+    // A provider-backed source has no stored version or file: within the
+    // request it is identified by the provider's document id alone.
+    return {
+      key: `external:${docInfo.external_source.document_id}`,
+      docLabel,
+      filename: docInfo.filename,
+      documentId,
+      storagePath: "",
+    };
+  }
   if (docInfo.search_source) {
     const indexed = docIndex?.[docLabel];
     return {

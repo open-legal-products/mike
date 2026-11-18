@@ -51,7 +51,7 @@ organization can supply a CourtListener token for its members; see
 Most hosted MCP servers support OAuth Dynamic Client Registration (DCR). A
 user clicks **Add** in Discover and completes the provider's consent screen;
 the Mike deployment does not need provider-specific credentials. Airtable,
-Lawve, Linear, and Notion use this pathway.
+Lawve, Legal Data Hunter, Linear, and Notion use this pathway.
 
 Servers that use a bearer token or custom headers can be added through
 **+ Custom**. Credentials are encrypted at rest. Failed registration does not
@@ -134,6 +134,56 @@ Google MCP endpoint paths may be versioned. Use the provider's documented URL;
 for example, the Drive endpoint is
 `https://drivemcp.googleapis.com/mcp/v1`, not `/mcp`.
 
+## Legal Data Hunter
+
+In **Settings > Connectors > Discover**, choose **Add Legal Data Hunter** and
+complete LDH's OAuth consent. It uses `https://legaldatahunter.com/mcp` and the
+standard MCP callback above; do not put an LDH token in frontend configuration.
+Manage the connection, individual tools, and Read-only/approval settings in the
+same **Installed > Manage** dialog as other connectors.
+
+For a citation with a readable source, retrieve the document with
+`get_document(source, source_id, include_full_text: true)`, using identifiers
+returned by LDH search. The default response may be truncated and is not eligible
+for an inline source. A complete, matching response from the canonical LDH
+endpoint becomes a request-scoped source with its title, text, and a link to the
+provider's page.
+Mike passes at most 60,000 characters of an MCP tool result to the model; for the
+LDH connector alone the limit is 200,000, so a full judgment usually fits. When
+a long LDH document exceeds that, the complete text still becomes the source, and
+the model is told to read it in full with `read_document` before relying on the
+rest. Source text is limited to 1,000,000 characters: a document longer than that
+is not registered as a source and cannot be cited. Case law, legislation, and doctrine use Mike's existing citation and source panel;
+there is no uploaded-document version to fetch. Exact-quote verification still
+runs against the retrieved text. Treat source content as untrusted, not as
+instructions to execute connector actions.
+
+Legal Data Hunter is implemented as a *source provider*
+(`backend/src/modules/source-documents/sourceDocuments.legalDataHunter.ts`; see
+"Provider-backed source documents" in
+[backend-architecture.md](backend-architecture.md)). The chat engine and the
+source panel know only the provider registry, so another document provider is
+one implementation file and one registry entry; the frontend changes only if
+the provider introduces a new document type.
+
+Mike does not store LDH text. A saved citation keeps the source's reference,
+title, link and quotes; when the source is opened later, the panel reads the
+text again through `GET /documents/:id`, which calls `get_document` with the
+viewer's own LDH connection in the chat's workspace. A viewer without a usable
+LDH connection is asked to connect it, and still sees the quotes and link. The
+same rule covers the other two places a tool result is persisted: an approved
+`get_document` call's stored result, and a delegated subagent's transcript
+(`chat_subagent_runs`), record the source's reference in place of the result,
+including for later `read_document`, `find_in_document` and `fetch_documents`
+calls on that source. The live request still has the full text in memory.
+
+For a live smoke test on a non-production Mike instance: authorize your own LDH
+account, retrieve one public document in full, cite an exact excerpt, and open
+both the citation and its source title. Confirm the panel shows the retrieved
+text and the link, then reload the chat and confirm the source opens again
+from LDH rather than from stored text. Automated fixtures
+cannot establish live provider authorization, retrieval, or model accuracy.
+
 ## Security and tool controls
 
 - Connector bearer tokens, custom headers, and OAuth tokens are encrypted at
@@ -162,8 +212,9 @@ Existing deployments must apply
 `backend/migrations/20261002_05_mcp_oauth_grants.sql`. Fresh installations
 already include these settings in `backend/schema.sql`.
 
-Turn on **Ask for permission for write actions** in a connector's Manage
-dialog to review each write first. The assistant's turn then pauses with an
+**Ask for permission for write actions** is on by default, so each write is
+reviewed first; a user can turn it off in a connector's Manage dialog. With it
+on, the assistant's turn pauses with an
 approval in the same popup it uses for questions, showing the exact action and
 its arguments. **Approve** runs that action and the turn continues with its
 result; **Reject** tells the assistant it did not run. The server runs the

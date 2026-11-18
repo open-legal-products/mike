@@ -40,7 +40,9 @@ describe("assistant workspace boundaries", () => {
   it("loads only current authorized workflows and their assets, with global built-ins exempt", async () => {
     const fake = scriptedDb([
       { table: "organizations", data: { kind: "team" } },
-      { table: "mike_workflows", data: [{ workflow_key: "global", title: "Built-in", prompt_md: "Global" }] },
+      { table: "mike_workflows", data: [{ id: "version" }] },
+      { table: "mike_workflows", data: [] },
+      { table: "mike_workflows", data: [{ id: "version", workflow_key: "global", title: "Built-in", prompt_md: "Global" }] },
       // The catalog itself applies current authorization. The loader only
       // normalizes workspace placement; execution still rechecks below.
       { rpc: "get_workflows_overview", data: [{ id: "allowed", org_id: "firm", title: "Here", prompt_md: "Local" }] },
@@ -50,9 +52,38 @@ describe("assistant workspace boundaries", () => {
     ]);
     const store = await buildWorkflowStore("u", "u@example.com", fake.db, "firm");
     expect([...store.keys()]).toEqual([catalogWorkflowId("global"), "allowed"]);
-    expect(fake.calls[2].args).toMatchObject({ p_workspace: "firm" });
+    expect(fake.calls.find(call => call.table === "get_workflows_overview")?.args).toMatchObject({ p_workspace: "firm" });
     expect(fake.calls.at(-1)?.filters).toContainEqual(["in", "workflow_id", ["allowed"]]);
     fake.done();
+  });
+
+  it("cache regression: transfers global prompt bodies once per active version", async () => {
+    let version = "one", bodies = 0;
+    const db = {
+      rpc: async () => ({ data: [], error: null }),
+      from: () => {
+        let columns = "", continuation = false;
+        const query = {
+          select(value: string) { columns = value; return query; },
+          eq: () => query, order: () => query, limit: () => query, in: () => query,
+          gt() { continuation = true; return query; },
+          then(resolve: (value: unknown) => void) {
+            const body = columns.includes("prompt_md");
+            if (!continuation && body) bodies++;
+            resolve({ data: continuation ? [] : [{ id: version, workflow_key: "global",
+              ...(body && { title: "Global", prompt_md: version }) }], error: null });
+          },
+        };
+        return query;
+      },
+    } as unknown as import("../../../../lib/supabase").Db;
+    for (let turn = 0; turn < 2; turn++) {
+      expect((await buildWorkflowStore("u", undefined, db)).get(catalogWorkflowId("global"))?.skill_md).toBe("one");
+    }
+    expect(bodies).toBe(1);
+    version = "two";
+    expect((await buildWorkflowStore("u", undefined, db)).get(catalogWorkflowId("global"))?.skill_md).toBe("two");
+    expect(bodies).toBe(2);
   });
 
   it("loads only active catalog versions per turn and resolves a retired one on demand", async () => {
@@ -92,14 +123,16 @@ describe("assistant workspace boundaries", () => {
     await runToolCalls([{ id: "call", function: { name, arguments: "{}" } }], new Map(), "u", fake.db, vi.fn(), undefined, undefined, undefined, undefined, undefined, undefined, undefined, undefined, undefined, { orgId: "firm" });
     const owner = { userId: "u", orgId: "firm" };
     expect(connectors[family].plan).toHaveBeenCalledWith(owner, name, {}, fake.db);
-    expect(connectors[family].execute).toHaveBeenCalledWith(owner, name, {}, fake.db);
+    // MCP calls also carry the source providers' result-cap policy.
+    const callOptions = family === "mcp" ? [{ maxResultChars: expect.any(Function) }] : [];
+    expect(connectors[family].execute).toHaveBeenCalledWith(owner, name, {}, fake.db, ...callOptions);
     fake.done();
   });
 
   it("runs connector tools on Personal connections in a person's own organization", async () => {
     const fake = scriptedDb([{ table: "organizations", data: { kind: "personal" } }]);
     await runToolCalls([{ id: "call", function: { name: "mcp_search", arguments: "{}" } }], new Map(), "u", fake.db, vi.fn(), undefined, undefined, undefined, undefined, undefined, undefined, undefined, undefined, undefined, { orgId: "mine" });
-    expect(connectors.mcp.execute).toHaveBeenCalledWith({ userId: "u", orgId: null }, "mcp_search", {}, fake.db);
+    expect(connectors.mcp.execute).toHaveBeenCalledWith({ userId: "u", orgId: null }, "mcp_search", {}, fake.db, { maxResultChars: expect.any(Function) });
     fake.done();
   });
 });

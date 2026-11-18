@@ -64,6 +64,41 @@ describe("readSseFrames", () => {
         ).resolves.toEqual([{ n: 1 }]);
     });
 
+    it("says so when the body ends without [DONE], and only then", async () => {
+        const run = async (chunks: string[]) => {
+            const onIncomplete = vi.fn();
+            const frames: unknown[] = [];
+            for await (const frame of readSseFrames(sseResponse(chunks), { onIncomplete })) {
+                frames.push(frame);
+            }
+            return { frames, onIncomplete };
+        };
+
+        // Cut off mid-turn: the frames that arrived are still delivered.
+        const cut = await run(['data: {"n":1}\n\n', 'data: {"n":2}']);
+        expect(cut.frames).toEqual([{ n: 1 }, { n: 2 }]);
+        expect(cut.onIncomplete).toHaveBeenCalledTimes(1);
+
+        const finished = await run(['data: {"n":1}\n\n', "data: [DONE]\n\n"]);
+        expect(finished.onIncomplete).not.toHaveBeenCalled();
+    });
+
+    it("does not call an abort an incomplete stream", async () => {
+        const controller = new AbortController();
+        const onIncomplete = vi.fn();
+        const read = (async () => {
+            for await (const frame of readSseFrames(sseResponse(['data: {"n":1}\n\n']), {
+                signal: controller.signal,
+                onIncomplete,
+            })) {
+                void frame;
+                controller.abort();
+            }
+        })();
+        await expect(read).rejects.toMatchObject({ name: "AbortError" });
+        expect(onIncomplete).not.toHaveBeenCalled();
+    });
+
     it("warns about malformed JSON and keeps consuming", async () => {
         const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
 

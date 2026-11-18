@@ -49,6 +49,8 @@ concurrency:
 
 jobs:
   synthetic:
+    # Runs here and in forks; skipped in copies such as the Vercel Deploy button makes (docs/vercel.md).
+    if: github.repository == 'open-legal-products/mike' || github.event.repository.fork
     # The Playwright `synthetic` project (assistant-streaming and
     # tabular-chat-lifecycle) mocks every /api call inside the browser, so it
     # needs only the web app: no Supabase, backend or account. Running it here
@@ -133,6 +135,8 @@ jobs:
           if-no-files-found: ignore
 
   playwright:
+    # Runs here and in forks; skipped in copies such as the Vercel Deploy button makes (docs/vercel.md).
+    if: github.repository == 'open-legal-products/mike' || github.event.repository.fork
     name: ${{ matrix.renderer == 'production' && 'playwright' || 'Playwright (development stress)' }}
     timeout-minutes: 60
     strategy:

@@ -7,6 +7,10 @@ export type TabularReviewHistoryStatus = {
   id: string;
   is_running: boolean;
   is_complete: boolean;
+  updated_at?: string;
+  title?: string | null;
+  project_id?: string | null;
+  org_id?: string | null;
 };
 
 export type SourceDocumentType =
@@ -14,7 +18,8 @@ export type SourceDocumentType =
   | "pdf"
   | "spreadsheet"
   | "case"
-  | "legislation";
+  | "legislation"
+  | "legal_research";
 
 export type SourceDocumentMetadata = {
   label: string;
@@ -22,11 +27,10 @@ export type SourceDocumentMetadata = {
   format?: "date";
 };
 
+/** Rendered as icon-only controls whose names are fixed per `type`. */
 export type SourceDocumentAction = {
   type: "download" | "link";
   url: string;
-  label: string;
-  title?: string;
 };
 
 export type SourceDocumentQuote = {
@@ -57,6 +61,14 @@ export type SourceDocument = {
   document_id: string;
   title: string;
   type: SourceDocumentType;
+  /**
+   * The source provider that issued the document (`courtlistener`,
+   * `legal_data_hunter`), when it was read from a provider rather than
+   * uploaded. Absent on uploads and on documents saved before this field.
+   */
+  provider?: string;
+  /** How the provider's quotes were verified; drives how the panel highlights them. */
+  quote_verification?: "exact" | "fuzzy";
   metadata: SourceDocumentMetadata[];
   actions?: SourceDocumentAction[];
   quotes: SourceDocumentQuote[];
@@ -385,7 +397,7 @@ export type ResponseDetailsEvent = {
   type: "response_details";
   model: string;
   reasoning?: string;
-  usage?: { input_tokens: number; output_tokens: number };
+  usage?: { input_tokens: number; output_tokens: number; cache_read_tokens?: number; cache_write_tokens?: number };
 };
 
 export type DocumentSearchErrorCode =
@@ -445,6 +457,11 @@ export type AssistantEvent =
       document_id?: string;
       version_id?: string | null;
       version_number?: number | null;
+      /**
+       * Read by a run_script script, not by the model: the model saw only
+       * what the script returned, never this document's text.
+       */
+      by_script?: true;
     }
   | {
       type: "doc_find";
@@ -522,6 +539,9 @@ export type AssistantEvent =
       /**
        * Machine-readable cause, when the client can offer a specific remedy.
        * "invalid_api_key": the provider rejected the caller's key.
+       * "provider_account_refused": the provider refused the account behind
+       * a key the user or their organization owns (out of credits, a model
+       * or plan it lacks); only that owner can fix it.
        */
       code?: AssistantErrorCode;
       /**
@@ -534,7 +554,7 @@ export type AssistantEvent =
       reporting_owner?: ReportingOwner;
     };
 
-export type AssistantErrorCode = "invalid_api_key";
+export type AssistantErrorCode = "invalid_api_key" | "provider_account_refused";
 
 export type WordEditApplyMode = "direct" | "approval";
 

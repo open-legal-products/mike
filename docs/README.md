@@ -26,6 +26,10 @@
   reading, keys, and safety
 - [Subagents](subagents.md) — delegated tasks, what they may do, approvals,
   and limits
+- [Tool-call validation](tool-call-validation.md) — schema checks on the
+  model's tool calls
+- [run_script](run-script.md) — scripted, sandboxed lookups across many
+  documents in one model step
 - [Microsoft Word add-in](../word-addin/README.md) — concise setup and command
   reference
 - [Word add-in development and deployment](word-addin-development.md) — manual

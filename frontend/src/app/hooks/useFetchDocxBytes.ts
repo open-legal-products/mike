@@ -16,7 +16,26 @@ export interface FetchDocxResult {
 // unstable prop upstream) don't cause a refetch as long as the tuple is
 // unchanged. Promises are cached too, so concurrent mounts for the same
 // key share a single in-flight request.
+const previewByteBudget = 64 * 1024 * 1024;
 const bytesCache = new Map<string, ArrayBuffer>();
+let retainedBytes = 0;
+
+function forgetBytes(key: string) {
+    retainedBytes -= bytesCache.get(key)?.byteLength ?? 0;
+    bytesCache.delete(key);
+}
+
+function retainBytes(key: string, bytes: ArrayBuffer) {
+    forgetBytes(key);
+    if (bytes.byteLength > previewByteBudget) return;
+    while (retainedBytes + bytes.byteLength > previewByteBudget) {
+        const oldest = bytesCache.keys().next();
+        if (oldest.done) break;
+        forgetBytes(oldest.value);
+    }
+    bytesCache.set(key, bytes);
+    retainedBytes += bytes.byteLength;
+}
 const inFlight = new Map<string, Promise<ArrayBuffer>>();
 const generations = new Map<string, number>();
 
@@ -26,7 +45,7 @@ function cacheKey(
     refetchKey?: number | string,
     sourceUrl?: string | null,
 ): string {
-    return `${sourceUrl ?? documentId}:${versionId ?? ""}:${refetchKey ?? ""}`;
+    return `${documentId}:${versionId ?? ""}:${JSON.stringify([refetchKey, sourceUrl])}`;
 }
 
 /**
@@ -64,6 +83,8 @@ export function useFetchDocxBytes(
         // Cache hit: reuse bytes synchronously, no network, no spinner.
         const cached = cacheBytes ? bytesCache.get(key) : undefined;
         if (cached) {
+            bytesCache.delete(key);
+            bytesCache.set(key, cached);
             setBytes(cached);
             setLoading(false);
             setError(null);
@@ -86,7 +107,7 @@ export function useFetchDocxBytes(
                 });
                 if (!bin.ok) throw new Error(`HTTP ${bin.status}`);
                 const buf = await bin.arrayBuffer();
-                if (cacheBytes && generation === (generations.get(documentId) ?? 0)) bytesCache.set(key, buf);
+                if (cacheBytes && generation === (generations.get(documentId) ?? 0)) retainBytes(key, buf);
                 return buf;
             })();
         if (cacheBytes && !inFlight.has(key)) inFlight.set(key, pending);
@@ -136,12 +157,12 @@ export function invalidateDocxBytes(
     if (versionId !== undefined) {
         for (const key of Array.from(bytesCache.keys())) {
             if (key.startsWith(`${documentId}:${versionId ?? ""}:`)) {
-                bytesCache.delete(key);
+                forgetBytes(key);
             }
         }
         return;
     }
     for (const key of Array.from(bytesCache.keys())) {
-        if (key.startsWith(`${documentId}:`)) bytesCache.delete(key);
+        if (key.startsWith(`${documentId}:`)) forgetBytes(key);
     }
 }

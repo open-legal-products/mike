@@ -245,6 +245,7 @@ describe("runApprovedConnectorActions", () => {
       { userId: "user-1", orgId: "firm" },
       slackItem,
       db,
+      { maxResultChars: expect.any(Function) },
     );
   });
 

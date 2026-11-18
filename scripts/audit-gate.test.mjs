@@ -409,6 +409,57 @@ for (const source of ["npm", "OSV"]) {
     });
 }
 
+// A production copy reached only through build tooling: npm classes it as
+// production because its parent is a production dependency.
+const PROD_LOCK = structuredClone(SCOPED_LOCK);
+delete PROD_LOCK.packages[MSAL_PARENT].dev;
+delete PROD_LOCK.packages[MSAL_PATH].dev;
+const PROD_SCOPE = {
+    workspace: "word-addin", package: MSAL_NAME, version: "6.0.1", path: MSAL_PATH,
+    dev: false, productionExposure: "Runs only during the build.", dependents: [MSAL_PARENT],
+};
+const prodAllowlist = (scope = PROD_SCOPE) => [{ ghsa: MSAL_GHSA, reason: "Build tooling only", scopes: [scope] }];
+
+for (const source of ["npm", "OSV"]) {
+    test(`${source}: allows a production copy whose scope states its exposure`, async () => {
+        respondWithMsalAdvisory(source);
+        const result = await runGate(PROD_LOCK, { workspace: "word-addin", allowlist: prodAllowlist() });
+        strictEqual(result.status, 0, result.stderr);
+        strictEqual(result.stdout.includes(`production copy ${MSAL_PATH}@6.0.1: Runs only during the build.`), true, result.stdout);
+    });
+
+    const outsideProductionScope = [
+        ["a development copy under a production scope", SCOPED_LOCK],
+        ["an additional production consumer", (() => {
+            const lock = structuredClone(PROD_LOCK);
+            lock.packages["node_modules/runtime"] = { version: "1.0.0", dependencies: { [MSAL_NAME]: "^6.0.0" } };
+            return lock;
+        })()],
+    ];
+    for (const [description, lock] of outsideProductionScope) {
+        test(`${source}: blocks ${description}`, async () => {
+            respondWithMsalAdvisory(source);
+            const result = await runGate(lock, { workspace: "word-addin", allowlist: prodAllowlist() });
+            notStrictEqual(result.status, 0, result.stdout);
+            strictEqual(result.stderr.includes("outside the approved dependency scope"), true, result.stderr);
+        });
+    }
+}
+
+for (const [description, scope] of [
+    ["no stated exposure", { ...PROD_SCOPE, productionExposure: undefined }],
+    ["a blank stated exposure", { ...PROD_SCOPE, productionExposure: "  " }],
+    ["a dev flag that is not a boolean", { ...PROD_SCOPE, dev: "false" }],
+]) {
+    test(`rejects a production scope with ${description} before consulting any service`, async () => {
+        requests.length = 0;
+        const result = await runGate(PROD_LOCK, { workspace: "word-addin", allowlist: prodAllowlist(scope) });
+        notStrictEqual(result.status, 0);
+        strictEqual(result.stderr.includes("Invalid scoped audit exception"), true, result.stderr);
+        deepStrictEqual(requests, []);
+    });
+}
+
 test("rejects an advisory-only exception before consulting any service", async () => {
     requests.length = 0;
     const result = await runGate(SCOPED_LOCK, {

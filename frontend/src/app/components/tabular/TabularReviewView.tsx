@@ -134,8 +134,13 @@ export function TRView({ reviewId, projectId }: Props) {
     // Generation and row/column edits can update the review outside PATCH.
     // Refresh History when the authoritative detail reports new activity.
     useEffect(() => {
-        if (review?.updated_at) notifyTabularReviewsChanged();
-    }, [review?.id, review?.updated_at]);
+        if (review?.updated_at) notifyTabularReviewsChanged([{
+            id: review.id, updated_at: review.updated_at, is_running: Boolean(review.is_running),
+            title: review.title, project_id: review.project_id, org_id: review.org_id ?? null,
+            ...(review.is_complete !== undefined && { is_complete: review.is_complete }),
+        }]);
+    }, [review?.id, review?.updated_at, review?.is_running, review?.is_complete,
+        review?.title, review?.project_id, review?.org_id]);
     // Opening a review opens its workspace. One in a project follows its
     // project, which says so itself.
     useItemWorkspace(
@@ -143,6 +148,9 @@ export function TRView({ reviewId, projectId }: Props) {
         review ? (review.org_id ?? null) : undefined,
     );
     const [project, setProject] = useState<Project | null>(null);
+    const confirmedDetail = useRef<Awaited<ReturnType<typeof getTabularReview>> | undefined>(undefined);
+    const detailRequest = useRef(0);
+    const reconciliationTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
     const [cells, setCells, cellStore] = useReviewCells();
     const [documents, setDocuments] = useState<Document[]>([]);
     const [rows, setRows] = useState<TabularReviewRow[]>([]);
@@ -314,10 +322,14 @@ export function TRView({ reviewId, projectId }: Props) {
         // can resolve AFTER the new one and clobber fresh state with stale
         // data; drop its results instead.
         let cancelled = false;
+        const request = ++detailRequest.current;
+        confirmedDetail.current = undefined;
         const fetches: Promise<unknown>[] = [
             getTabularReview(reviewId).then(
-                ({ review, cells, rows, documents, active_generation }) => {
-                    if (cancelled) return;
+                (detail) => {
+                    if (cancelled || request !== detailRequest.current) return;
+                    confirmedDetail.current = detail;
+                    const { review, cells, rows, documents, active_generation } = detail;
                     setReview(review);
                     setCells(cells);
                     setRows(rows);
@@ -361,7 +373,7 @@ export function TRView({ reviewId, projectId }: Props) {
                 // Without this the rejection was unhandled: the spinner
                 // cleared and the review read as empty rather than unloaded.
                 .catch((error) => {
-                    if (cancelled) return;
+                    if (cancelled || request !== detailRequest.current) return;
                     notifyError(error, {
                         action: "load this review",
                         dedupeKey: `tr-review:${reviewId}`,
@@ -392,6 +404,8 @@ export function TRView({ reviewId, projectId }: Props) {
         });
         return () => {
             cancelled = true;
+            detailRequest.current += 1;
+            clearTimeout(reconciliationTimer.current);
         };
     }, [reviewId, projectId, setCells]);
 
@@ -623,7 +637,7 @@ export function TRView({ reviewId, projectId }: Props) {
                 // resend the document set and column config as they were
                 // at drop time, undoing any edit made since.
                 onRetry: () => {
-                    void loadLatestReview();
+                    void retryRef.current?.reloadReview();
                 },
             });
         } finally {
@@ -735,18 +749,49 @@ export function TRView({ reviewId, projectId }: Props) {
         }
     }
 
+    function announceGenerationStart() {
+        notifyTabularReviewsChanged([{
+            id: reviewId, updated_at: review?.updated_at, is_running: true, is_complete: false,
+        }]);
+    }
+
+    function scheduleReconciliation(request: number) {
+        clearTimeout(reconciliationTimer.current);
+        reconciliationTimer.current = setTimeout(() => {
+            if (request !== detailRequest.current) return;
+            void refreshAfterGeneration().catch(error => {
+                console.error("Failed to reconcile the running review", error);
+                notifyError(error, {
+                    action: "refresh this review",
+                    onRetry: () => { void retryRef.current?.reloadReview(); },
+                });
+            });
+        }, 5000);
+    }
+
     async function refreshAfterGeneration() {
-        // The full review carries every cell, so it is read once up front
-        // (usually the run has already ended) and once more when it has.
-        // While the run is still going, only its status snapshot is polled.
-        let detail = await getTabularReview(reviewId);
+        const request = ++detailRequest.current;
+        clearTimeout(reconciliationTimer.current);
+        // Reconcile changed cells against the last confirmed server snapshot.
+        // Streamed and optimistic cell updates never become the delta's base.
+        let detail = await getTabularReview(reviewId, confirmedDetail.current);
         for (let attempt = 1; detail.review.is_running; attempt += 1) {
-            if (attempt >= 40) return;
+            if (request !== detailRequest.current) return;
+            if (attempt >= 40) {
+                detail = await getTabularReview(reviewId, detail);
+                break;
+            }
             await new Promise((resolve) => setTimeout(resolve, 250));
+            if (request !== detailRequest.current) return;
             const [status] = await getTabularReviewHistoryStatuses([reviewId]);
+            if (request !== detailRequest.current) return;
             if (status?.is_running) continue;
-            detail = await getTabularReview(reviewId);
+            detail = await getTabularReview(reviewId, detail);
         }
+        if (request !== detailRequest.current) return;
+        confirmedDetail.current = detail;
+        if (detail.review.is_running) scheduleReconciliation(request);
+        else setGenerationGuard(null);
         setReview(detail.review);
         setCells(detail.cells);
         setRows(detail.rows);
@@ -857,14 +902,13 @@ export function TRView({ reviewId, projectId }: Props) {
             if (!response.ok) {
                 throw new Error(`Resume failed: ${response.status}`);
             }
-            notifyTabularReviewsChanged();
+            announceGenerationStart();
             await consumeGenerationStream(response);
             if (ownedAbort && !ownedAbort.signal.aborted) await refreshAfterGeneration();
         } catch (err) {
             if (!ownedAbort?.signal.aborted) throw err;
         } finally {
             resumeStreamOpenRef.current = false;
-            notifyTabularReviewsChanged();
             if (ownedAbort && generationAbortRef.current === ownedAbort)
                 generationAbortRef.current = null;
             if (ownsToolbar) {
@@ -991,7 +1035,7 @@ export function TRView({ reviewId, projectId }: Props) {
             }
             if (!response.body) throw new Error("No body");
             generationStarted = true;
-            notifyTabularReviewsChanged();
+            announceGenerationStart();
 
             // Optimistically set empty/pending/error cells to generating (skip done cells)
             setCells((prev) => {
@@ -1052,7 +1096,6 @@ export function TRView({ reviewId, projectId }: Props) {
                 });
             }
         } finally {
-            notifyTabularReviewsChanged();
             if (generationAbortRef.current === generationAbort) {
                 if (stopRequestedRef.current || (generationStarted && !generationAbort.signal.aborted)) {
                     try {
@@ -1064,7 +1107,7 @@ export function TRView({ reviewId, projectId }: Props) {
                                 "The table may be out of date. Reload to see the latest results.",
                             dedupeKey: `tr-refresh:${reviewId}`,
                             onRetry: () => {
-                                void loadLatestReview();
+                                void retryRef.current?.reloadReview();
                             },
                         });
                     }
@@ -1108,15 +1151,28 @@ export function TRView({ reviewId, projectId }: Props) {
     }
 
     async function loadLatestReview() {
+        const request = ++detailRequest.current;
+        clearTimeout(reconciliationTimer.current);
         setReloadingLatestReview(true);
         try {
             const detail = await getTabularReview(reviewId);
+            if (request !== detailRequest.current) return;
+            confirmedDetail.current = detail;
+            if (detail.review.is_running) scheduleReconciliation(request);
             setReview(detail.review);
             setCells(detail.cells);
             setRows(detail.rows);
             setDocuments(detail.documents);
             setColumns(detail.review.columns_config || []);
-            setGenerationGuard(detail.review.is_running ? "running" : null);
+            setGenerationGuard(detail.review.is_running && !detail.active_generation ? "running" : null);
+            // A retry can win over the initial load. Preserve its ability to
+            // attach to and stop a generation owned by this server.
+            if (detail.active_generation && !resumeStreamOpenRef.current && !generationAbortRef.current) {
+                lastFrameIdRef.current = 0;
+                retryRef.current?.resume({ stoppable: true }).catch(err =>
+                    console.error("Generation resume failed", err),
+                );
+            }
         } catch (err) {
             // Both callers are "Check again"/"Load latest" buttons in a
             // blocking popup that otherwise just stops responding.
@@ -1124,7 +1180,7 @@ export function TRView({ reviewId, projectId }: Props) {
                 action: "load the latest version of this review",
                 dedupeKey: `tr-latest:${reviewId}`,
                 onRetry: () => {
-                    void loadLatestReview();
+                    void retryRef.current?.reloadReview();
                 },
             });
         } finally {

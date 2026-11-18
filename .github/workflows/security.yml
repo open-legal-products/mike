@@ -29,6 +29,8 @@ jobs:
   # broken gate is legible as a broken gate rather than as four failing
   # workspace audits.
   audit-gate-tests:
+    # Runs here and in forks; skipped in copies such as the Vercel Deploy button makes (docs/vercel.md).
+    if: github.repository == 'open-legal-products/mike' || github.event.repository.fork
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -47,6 +49,8 @@ jobs:
   # would hide new advisories too); Dependabot (added in this PR) surfaces
   # the upstream releases that let entries be removed.
   dependency-audit:
+    # Runs here and in forks; skipped in copies such as the Vercel Deploy button makes (docs/vercel.md).
+    if: github.repository == 'open-legal-products/mike' || github.event.repository.fork
     runs-on: ubuntu-latest
     strategy:
       # Report every affected workspace; one vulnerable tree must not cancel

@@ -32,6 +32,8 @@ concurrency:
 
 jobs:
   backend:
+    # Runs here and in forks; skipped in copies such as the Vercel Deploy button makes (docs/vercel.md).
+    if: github.repository == 'open-legal-products/mike' || github.event.repository.fork
     name: Backend build and tests
     runs-on: ubuntu-latest
     defaults:
@@ -81,6 +83,8 @@ jobs:
         run: bash scripts/test-google-workspace-db.sh
 
   frontend:
+    # Runs here and in forks; skipped in copies such as the Vercel Deploy button makes (docs/vercel.md).
+    if: github.repository == 'open-legal-products/mike' || github.event.repository.fork
     name: Frontend build and tests
     runs-on: ubuntu-latest
     defaults:

@@ -44,9 +44,12 @@ import {
     type McpConnectorAuthConfig,
     type McpConnectorSummary,
     type ConnectorCallPlan,
-    type McpToolEvent,
+    type McpCallOptions,
+    type McpServerToolRequest,
+    type McpToolCallResult,
     type OAuthTokenRow,
     type ToolCacheRow,
+    sameMcpServerUrl,
 } from "./types";
 
 export { startUserMcpConnectorOAuth };
@@ -525,7 +528,7 @@ async function resolveCallableTool(
     return { connector, tool: row };
 }
 
-function stringifyMcpResult(result: unknown): string {
+function stringifyMcpResult(result: unknown, maxChars = MAX_MCP_RESULT_CHARS): string {
     const text = JSON.stringify(
         {
             result,
@@ -534,14 +537,14 @@ function stringifyMcpResult(result: unknown): string {
         null,
         2,
     );
-    if (text.length <= MAX_MCP_RESULT_CHARS) return text;
-    return `${text.slice(0, MAX_MCP_RESULT_CHARS)}\n\n[Truncated MCP result to ${MAX_MCP_RESULT_CHARS} characters]`;
+    if (text.length <= maxChars) return text;
+    return `${text.slice(0, maxChars)}\n\n[Truncated MCP result to ${maxChars} characters]`;
 }
 
 function unavailableTool(
     openaiToolName: string,
     error = "MCP tool is not available or is disabled.",
-): { content: string; event: McpToolEvent } {
+): McpToolCallResult {
     return {
         content: JSON.stringify({ ok: false, error }),
         event: {
@@ -574,7 +577,7 @@ export async function planMcpToolCall(
     const { connector, tool } = resolved;
     if (
         !mcpToolRequiresWriteAccess(tool) ||
-        connector.require_write_approval !== true
+        connector.require_write_approval === false
     )
         return { type: "run" };
     if (JSON.stringify(args).length > MAX_APPROVAL_ARGUMENT_CHARS) {
@@ -618,10 +621,8 @@ export async function executeMcpToolCall(
     openaiToolName: string,
     args: Record<string, unknown>,
     db: Db = createServerSupabase(),
-): Promise<{
-    content: string;
-    event: McpToolEvent;
-}> {
+    options: McpCallOptions = {},
+): Promise<McpToolCallResult> {
     const resolved = await resolveCallableTool(owner, openaiToolName, db);
     if (!resolved) return unavailableTool(openaiToolName);
     return callResolvedTool(
@@ -630,6 +631,8 @@ export async function executeMcpToolCall(
         resolved.tool,
         args,
         db,
+        undefined,
+        options,
     );
 }
 
@@ -642,7 +645,8 @@ export async function executeApprovedMcpToolCall(
     owner: ConnectorOwner,
     item: ConnectorApprovalItem,
     db: Db = createServerSupabase(),
-): Promise<{ content: string; event: McpToolEvent }> {
+    options: McpCallOptions = {},
+): Promise<McpToolCallResult> {
     const resolved =
         item.binding.type === "mcp"
             ? await resolveCallableTool(owner, item.tool_name, db)
@@ -662,12 +666,67 @@ export async function executeApprovedMcpToolCall(
                     item.arguments,
                     db,
                     item.binding.connection_fingerprint,
+                    options,
                 )
             : unavailableTool(
                     item.tool_name,
                     "This connector tool was changed, turned off, or removed after it was reviewed.",
                 );
     return { ...result, event: { ...result.event, approval_id: item.id } };
+}
+
+/**
+ * Runs a read-only tool on one of the owner's enabled connectors to a server,
+ * for a source provider reading a document again outside the chat. The
+ * connector a citation was read through is preferred when the owner still
+ * has it; otherwise any of theirs to that server serves, since the
+ * identifiers are the provider's. A write tool is never run this way. Null
+ * means the owner has no such connection in this workspace.
+ */
+export async function executeMcpToolOnServer(
+    owner: ConnectorOwner,
+    request: McpServerToolRequest,
+    db: Db = createServerSupabase(),
+): Promise<McpToolCallResult | null> {
+    const { data, error } = await db
+        .from("user_mcp_connector_tools")
+        .select("*, user_mcp_connectors!inner(*)")
+        .eq("tool_name", request.toolName)
+        .eq("enabled", true)
+        .eq("user_mcp_connectors.user_id", owner.userId)
+        .filter(...workspaceFilter(owner, "user_mcp_connectors.org_id"))
+        .eq("user_mcp_connectors.enabled", true);
+    if (error) throw error;
+    const rows = (data ?? []) as (ToolCacheRow & {
+        user_mcp_connectors: ConnectorRow | ConnectorRow[];
+    })[];
+    const candidates = rows
+        .map((row) => ({
+            tool: row,
+            connector: Array.isArray(row.user_mcp_connectors)
+                ? row.user_mcp_connectors[0]
+                : row.user_mcp_connectors,
+        }))
+        .filter(
+            ({ connector, tool }) =>
+                !!connector &&
+                sameMcpServerUrl(connector.server_url, request.serverUrl) &&
+                !mcpToolRequiresWriteAccess(tool),
+        )
+        .sort(
+            (a, b) =>
+                Number(b.connector.id === request.preferConnectorId) -
+                Number(a.connector.id === request.preferConnectorId),
+        );
+    const chosen = candidates[0];
+    if (!chosen) return null;
+    return callResolvedTool(
+        owner,
+        chosen.connector,
+        chosen.tool,
+        request.arguments,
+        db,
+    );
 }
 
 async function connectionFingerprint(
@@ -689,7 +748,8 @@ async function callResolvedTool(
     args: Record<string, unknown>,
     db: Db,
     approvedFingerprint?: string,
-): Promise<{ content: string; event: McpToolEvent }> {
+    options: McpCallOptions = {},
+): Promise<McpToolCallResult> {
     const started = Date.now();
     try {
         const fingerprint =
@@ -715,7 +775,7 @@ async function callResolvedTool(
                     );
                 if (
                     mcpToolRequiresWriteAccess(current.tool) &&
-                    current.connector.require_write_approval &&
+                    current.connector.require_write_approval !== false &&
                     !approvedFingerprint
                 )
                     throw new Error(
@@ -760,7 +820,7 @@ async function callResolvedTool(
                 ok: false,
                 error: toolError,
                 serverResult: result,
-            });
+            }, MAX_MCP_RESULT_CHARS);
             await insertMcpAuditLog(db, {
                 user_id: owner.userId,
                 connector_id: connector.id,
@@ -789,7 +849,16 @@ async function callResolvedTool(
                 },
             };
         }
-        const content = stringifyMcpResult(result);
+        // A caller may allow a known document server more than the general
+        // cap; error-path results above and below always keep it.
+        const maxChars = Math.max(
+            MAX_MCP_RESULT_CHARS,
+            options.maxResultChars?.({
+                serverUrl: connector.server_url,
+                toolName: tool.tool_name,
+            }) ?? 0,
+        );
+        const content = stringifyMcpResult(result, maxChars);
         await insertMcpAuditLog(db, {
             user_id: owner.userId,
             connector_id: connector.id,
@@ -802,6 +871,15 @@ async function callResolvedTool(
         });
         return {
             content,
+            call: {
+                connectorId: connector.id,
+                serverUrl: connector.server_url,
+                toolName: tool.tool_name,
+                arguments: args,
+                result,
+            },
+            // The serializer appends a marker beyond the cap when it cuts.
+            truncated: content.length > maxChars,
             event: {
                 type: "mcp_tool_call",
                 connector_id: connector.id,
@@ -853,7 +931,7 @@ async function callResolvedTool(
             ...(diagnostic.serverError
                 ? { serverError: diagnostic.serverError }
                 : {}),
-        });
+        }, MAX_MCP_RESULT_CHARS);
         await insertMcpAuditLog(db, {
             user_id: owner.userId,
             connector_id: connector.id,

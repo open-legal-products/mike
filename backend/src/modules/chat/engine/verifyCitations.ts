@@ -1,4 +1,6 @@
 import type { QuoteVerification } from "./types";
+import { sourceProviderFor } from "../../source-documents/sourceDocuments.service";
+import { quoteOccursVerbatim } from "./tools/externalSources";
 import { normalizeWithMap, type NormalizeOptions } from "./tools/documentOps";
 
 // Mirrors the frontend: cross-page quotes join two page segments with this
@@ -464,8 +466,15 @@ export async function verifyDocumentCitationAnnotation(
     source = "";
   }
 
+  // A provider that verifies quotes exactly gets no fuzzy correction: a
+  // changed legal quotation must never be surfaced as the source's words.
+  const exact =
+    sourceProviderFor(String(record(a.document)?.document_id ?? ""))
+      ?.quoteVerification === "exact";
   const verifiedQuotes = entries.map((entry) => {
-    const result = verifierFor(source)(entry.quote);
+    const result = exact
+      ? { verified: quoteOccursVerbatim(source, entry.quote), needs_correction: false }
+      : verifierFor(source)(entry.quote);
     const { needs_correction, ...verification } = result;
     // Swap the exact source text into the displayed quote when it drifted,
     // so a drifted quote is never surfaced as the source's words.

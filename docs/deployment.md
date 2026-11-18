@@ -3,6 +3,9 @@
 Use this path when connecting Mike to managed Supabase and S3-compatible
 storage instead of the infrastructure bundled with Docker Compose.
 
+To run everything on Vercel with a Marketplace Supabase project instead, see
+[Deploy on Vercel](vercel.md).
+
 ## Prerequisites
 
 - Node.js 22.19 or newer. The backend's HTTP client (undici 8) needs it;

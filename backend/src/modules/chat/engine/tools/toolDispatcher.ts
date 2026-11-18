@@ -30,7 +30,19 @@ import {
   COURTLISTENER_TOOL_NAMES,
   type CourtlistenerToolEvent,
 } from "./courtlistenerTools";
-import { executeMcpToolCall } from "../../../../lib/mcpConnectors";
+import {
+  executeMcpToolCall,
+  type McpToolCallResult,
+} from "../../../../lib/mcpConnectors";
+import {
+  externalSourceFromMcpCall,
+  mcpResultCharsFor,
+  stampSourceDocument,
+} from "../../../source-documents/sourceDocuments.service";
+import {
+  externalSourceCitationHint,
+  registerExternalSource,
+} from "./externalSources";
 import {
   APPROVAL_UNAVAILABLE_MESSAGE,
   addApprovalItems,
@@ -611,7 +623,7 @@ export async function runToolCalls(
           name: tc.function.name,
         })}\n\n`,
       );
-      const { content, event } =
+      const result: McpToolCallResult =
         plan.type === "result"
           ? plan
           : plan.type === "approval"
@@ -636,6 +648,7 @@ export async function runToolCalls(
                   tc.function.name,
                   args,
                   db,
+                  { maxResultChars: mcpResultCharsFor },
                 )
               : isGoogleWorkspaceTool(tc.function.name)
                 ? await executeGoogleWorkspaceToolCall(
@@ -650,6 +663,19 @@ export async function runToolCalls(
                     args,
                     db,
                   );
+      const { event } = result;
+      let content = result.content;
+      // A complete document in the result becomes a citable source for the
+      // rest of the request; the model is told the handle to cite it by.
+      const source =
+        event.status === "ok" && result.call && docIndex
+          ? externalSourceFromMcpCall(result.call)
+          : null;
+      if (source && docIndex) {
+        const handle = registerExternalSource(source, docIndex, docStore);
+        content += externalSourceCitationHint(handle, result.truncated);
+        (results.externalSourceHandles ??= new Map()).set(tc.id, handle);
+      }
       toolResults.push({
         role: "tool",
         tool_call_id: tc.id,
@@ -860,8 +886,10 @@ export async function runToolCalls(
       // must enter model context only through read_document/fetch_documents.
       // Those paths emit the visible read lifecycle and nonce-fence the entire
       // body. find_in_document otherwise returns raw, user-controlled snippets
-      // and would silently bypass both guarantees.
-      if (docInfo?.inline_text !== undefined) {
+      // and would silently bypass both guarantees. A provider-backed source
+      // is searched like any document, with its snippets fenced below.
+      const isExternalSource = !!docInfo?.external_source;
+      if (docInfo?.inline_text !== undefined && !isExternalSource) {
         toolResults.push({
           role: "tool",
           tool_call_id: tc.id,
@@ -917,7 +945,11 @@ export async function runToolCalls(
           total_matches: totalMatches,
         });
       }
-      toolResults.push({ role: "tool", tool_call_id: tc.id, content });
+      toolResults.push({
+        role: "tool",
+        tool_call_id: tc.id,
+        content: isExternalSource && nonce ? spotlight(content, nonce) : content,
+      });
     } else if (tc.function.name === "list_documents") {
       const list = Array.from(docStore.entries()).map(([doc_id, info]) => ({
         doc_id,
@@ -935,6 +967,7 @@ export async function runToolCalls(
       const docIds = rawDocIds.map((id) => labelFor(id) ?? id);
       const parts: string[] = [];
       for (const docId of docIds) {
+        if (stopped()) break;
         const readIdentity = await getTurnReadIdentity({
           docLabel: docId,
           docStore,
@@ -1234,23 +1267,32 @@ export async function runToolCalls(
         content: `${instructions}${assetNotice}`,
       });
     } else if (tc.function.name === "read_table_cells" && tabularStore) {
-      const { label, content } = renderTableCells(
-        tabularStore,
-        args.col_indices as number[] | undefined,
-        args.row_indices as number[] | undefined,
-      );
-      write(
-        `data: ${JSON.stringify({ type: "doc_read_start", filename: label })}\n\n`,
-      );
-      write(
-        `data: ${JSON.stringify({ type: "doc_read", filename: label })}\n\n`,
-      );
-      docsRead.push({ filename: label });
-      toolResults.push({
-        role: "tool",
-        tool_call_id: tc.id,
-        content,
-      });
+      try {
+        const { label, content } = await renderTableCells(
+          tabularStore,
+          args.col_indices as number[] | undefined,
+          args.row_indices as number[] | undefined,
+        );
+        write(
+          `data: ${JSON.stringify({ type: "doc_read_start", filename: label })}\n\n`,
+        );
+        write(
+          `data: ${JSON.stringify({ type: "doc_read", filename: label })}\n\n`,
+        );
+        docsRead.push({ filename: label });
+        toolResults.push({
+          role: "tool",
+          tool_call_id: tc.id,
+          content,
+        });
+      } catch (error) {
+        reportToolFailure(error);
+        toolResults.push({
+          role: "tool",
+          tool_call_id: tc.id,
+          content: "Unable to read the requested table cells. They may no longer be accessible. Try another selection or explain that the cells could not be read.",
+        });
+      }
     } else if (tc.function.name === COURTLISTENER_TOOL_NAMES.searchCaseLaw) {
       const query = typeof args.query === "string" ? args.query : "";
       write(
@@ -1355,15 +1397,17 @@ export async function runToolCalls(
               `data: ${JSON.stringify({
                 type: "case_opinions",
                 cluster_id: clusterId,
-                document: normalizeCaseDocument({
-                  clusterId,
-                  caseName: input.caseName,
-                  citations: input.citations,
-                  url: input.url,
-                  pdfUrl: input.pdfUrl,
-                  dateFiled: input.dateFiled,
-                  opinions: input.opinions,
-                }),
+                document: stampSourceDocument(
+                  normalizeCaseDocument({
+                    clusterId,
+                    caseName: input.caseName,
+                    citations: input.citations,
+                    url: input.url,
+                    pdfUrl: input.pdfUrl,
+                    dateFiled: input.dateFiled,
+                    opinions: input.opinions,
+                  }),
+                ),
               })}\n\n`,
             );
           }
