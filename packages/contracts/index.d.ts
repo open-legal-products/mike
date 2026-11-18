@@ -7,6 +7,10 @@ export type TabularReviewHistoryStatus = {
   id: string;
   is_running: boolean;
   is_complete: boolean;
+  updated_at?: string;
+  title?: string | null;
+  project_id?: string | null;
+  org_id?: string | null;
 };
 
 export type SourceDocumentType =
@@ -14,7 +18,8 @@ export type SourceDocumentType =
   | "pdf"
   | "spreadsheet"
   | "case"
-  | "legislation";
+  | "legislation"
+  | "legal_research";
 
 export type SourceDocumentMetadata = {
   label: string;
@@ -22,11 +27,10 @@ export type SourceDocumentMetadata = {
   format?: "date";
 };
 
+/** Rendered as icon-only controls whose names are fixed per `type`. */
 export type SourceDocumentAction = {
   type: "download" | "link";
   url: string;
-  label: string;
-  title?: string;
 };
 
 export type SourceDocumentQuote = {
@@ -385,7 +389,7 @@ export type ResponseDetailsEvent = {
   type: "response_details";
   model: string;
   reasoning?: string;
-  usage?: { input_tokens: number; output_tokens: number };
+  usage?: { input_tokens: number; output_tokens: number; cache_read_tokens?: number; cache_write_tokens?: number };
 };
 
 export type DocumentSearchErrorCode =
@@ -445,6 +449,11 @@ export type AssistantEvent =
       document_id?: string;
       version_id?: string | null;
       version_number?: number | null;
+      /**
+       * Read by a run_script script, not by the model: the model saw only
+       * what the script returned, never this document's text.
+       */
+      by_script?: true;
     }
   | {
       type: "doc_find";

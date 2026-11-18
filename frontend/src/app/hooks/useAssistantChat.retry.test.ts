@@ -41,6 +41,9 @@ vi.mock("@/app/lib/errorReporting", () => {
         trackPendingRequest: () => () => {},
         reportNetworkFailure: (error: unknown) => mark(error),
         reportApiFailure: vi.fn(),
+        // These tests end their streams without [DONE]; what that reports is
+        // covered in assistantTurnStream.test.ts.
+        reportGatewayLimit: vi.fn(),
         isReported: (error: unknown) => {
             let current = error;
             for (let depth = 0; depth < 8 && current && typeof current === "object"; depth++) {

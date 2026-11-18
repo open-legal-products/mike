@@ -51,6 +51,7 @@ import {
     resolveEffectiveReasoningLevel,
 } from "../../lib/modelSelection";
 import { replaysReasoning } from "../../lib/llm/registry";
+import { disownsReplayedToolRecord } from "../../lib/llm/models";
 import {
     beginMemoryConversationTurn,
     releaseMemoryConversationTurn,
@@ -497,6 +498,7 @@ export async function prepareProjectChatStream(
             ? await attachPriorReasoning(messages, chatId, db)
             : messages;
         const timeZone = resolveRequestTimeZone(args.requestedTimeZone);
+        const recordForUser = disownsReplayedToolRecord(selectedModel);
         const enrichedMessages = await enrichWithPriorEvents(
             historyMessages,
             chatId,
@@ -505,6 +507,7 @@ export async function prepareProjectChatStream(
             nonce,
             "chat_messages",
             timeZone,
+            recordForUser,
         );
         const messagesForLLM: ChatMessage[] = displayed_doc
             ? enrichedMessages.map((m, i) => {
@@ -566,6 +569,7 @@ export async function prepareProjectChatStream(
             nonce,
             "append",
             { timeZone, now: new Date(), userSentAt },
+            recordForUser,
         );
 
         const workflowStore = await buildWorkflowStore(userId, userEmail, db, projectAccess.project.org_id ?? null);

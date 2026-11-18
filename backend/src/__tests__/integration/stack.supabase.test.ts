@@ -157,14 +157,18 @@ maybeDescribe("Supabase stack — auth contract + RLS deny-all firewall", () => 
         expect(result.error).toBeNull();
         return result.data;
       };
-      expect(await snapshot()).toEqual([{ id: oldId, is_running: false, is_complete: false }]);
+      expect(await snapshot()).toEqual([{
+        id: oldId, is_running: false, is_complete: false,
+        title: "Old review updated", project_id: projectId, org_id: null,
+        updated_at: "2099-10-15T00:00:00+00:00",
+      }]);
       expect((await admin.from("tabular_review_rows").insert({ id: rowId, review_id: oldId, label: "Synthetic folder", row_type: "folder" })).error).toBeNull();
       // Missing cells cannot count as a finished table.
       expect((await snapshot())[0].is_complete).toBe(false);
       expect((await admin.from("tabular_cells").insert({ review_id: oldId, row_id: rowId, column_index: 0, status: "done", content: "Synthetic result" })).error).toBeNull();
       expect((await snapshot())[0].is_complete).toBe(true);
       expect((await admin.from("tabular_reviews").update({ active_generation_id: randomUUID(), generation_lease_expires_at: "2099-10-16T00:00:00Z" }).eq("id", oldId)).error).toBeNull();
-      expect(await snapshot()).toEqual([{ id: oldId, is_running: true, is_complete: false }]);
+      expect(await snapshot()).toEqual([expect.objectContaining({ id: oldId, is_running: true, is_complete: false })]);
       expect((await admin.from("tabular_reviews").update({ active_generation_id: null, generation_lease_expires_at: null }).eq("id", oldId)).error).toBeNull();
       expect((await admin.from("tabular_cells").update({ status: "error" }).eq("review_id", oldId)).error).toBeNull();
       expect((await snapshot())[0].is_complete).toBe(false);

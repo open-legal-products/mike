@@ -1,4 +1,4 @@
-import type { PanelDocument } from "../shared/types";
+import { isEmbeddedMcpDocument, type PanelDocument } from "../shared/types";
 import {
     listDocumentVersions,
     MikeApiError,
@@ -46,7 +46,7 @@ export async function resolvePanelDocumentVersionResult(
     loadVersions: (documentId: string) => Promise<VersionList> =
         listDocumentVersions,
 ): Promise<PanelDocumentResolution> {
-    if (document.type === "case" || document.version_id)
+    if (document.type === "case" || isEmbeddedMcpDocument(document) || document.version_id)
         return { status: "resolved", document };
 
     let result: VersionList;

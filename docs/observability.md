@@ -180,7 +180,13 @@ however many users hit it.
   Rate limits and dependency outages are warnings; unexplained failures and
   rejected deployment credentials are errors. Unknown credential ownership
   stays visible. A chat turn may mark a known user-account refusal handled
-  when it returns the remedy to that user. Background memory jobs and tabular
+  when it returns the remedy to that user. A Vercel AI Gateway 403 carrying
+  the gateway's own error is a `chat.provider_rejected` account refusal,
+  read from the status and the body under the SDK's error class: the turn
+  shows the gateway's sanitized reason to the owner of a personal key and a
+  fixed sentence to everyone else, and it stays reported (warning for a
+  personal key, error for a shared one) because the reason is relayed, not
+  recognized. Background memory jobs and tabular
   cells retain reports because they do not own that interaction. Deterministic
   provider refusals end memory retries; no available model leaves the curator
   idle for a later turn. Repeat sampling belongs to the final transport, never
@@ -267,6 +273,15 @@ minified browser frames cannot promise an original TypeScript line without it.
 - Everything else that reaches `console.error`, deduplicated as above. An
   error reported explicitly is also not filed a second time if the same
   object then escapes to the browser's unhandled-error or rejection handler.
+- Limits of whatever sits in front of the API (`component=gateway-limit`,
+  warning). Neither is visible from the gateway or the backend, so the
+  browser reports them: a `413` that carries none of the backend's own codes
+  (`stage=payload-too-large`: a reverse proxy's or serverless host's
+  request-size cap refused the body, one issue per route), and an assistant
+  stream that ended without its `[DONE]` marker (`stage=stream-incomplete`: a
+  proxy or function time limit, or a restart, closed a reply that was still
+  running). The backend's own size limits answer with a `code` and are not
+  reported.
 
 **Word add-in**
 
@@ -342,7 +357,9 @@ the backend, Next server/edge, browser, and all Word add-in entries.
 - Provider diagnostics retain reviewed `provider_error_type` and
   `provider_reason` values alongside status. Quota/account verdicts are
   classified locally; response bodies and credential ownership data are not
-  transmitted.
+  transmitted. A gateway 4xx whose type is outside the reviewed list carries
+  no `provider_error_type`: neither the unreviewed string nor the SDK's
+  catch-all `internal_server_error` class stands in for it.
 - Invalid configuration reports may name approved environment **fields**, never
   their values. Converter failures distinguish missing binary, timeout and
   nonzero exit without sending stderr or document paths.
@@ -926,6 +943,6 @@ Provider quota exhaustion and zero-allocation responses are deterministic
 refusals: neither the SDK nor memory jobs retry them. Shared deployment or
 organization credentials make these operator-actionable errors. A recognized
 personal-key refusal is handled where shown to the user; an opaque 403/404
-remains visible. Locally authored missing-key/model configuration refusals are
+remains visible, as does a gateway account refusal whose reason is only relayed. Locally authored missing-key/model configuration refusals are
 warnings. Deployment-specific configuration problems still require operators
 to correct their settings.

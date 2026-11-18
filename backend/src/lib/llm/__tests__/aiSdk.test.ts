@@ -8,6 +8,25 @@ const messages = [
 ];
 
 describe("withPrefixCacheHints", () => {
+  it("cache regression: places the extraction breakpoint before changing column instructions", () => {
+    const prefix = "Document: Terms\nsource text";
+    for (const instruction of ["Price", "Party"]) {
+      const hints = withPrefixCacheHints({ model: "model", systemPrompt: "system",
+        messages: [{ role: "user", content: prefix + instruction }], sourcePrefixLength: prefix.length },
+        { sourceCachePoint: true });
+      expect(hints.messages[0].content).toEqual([
+        { type: "text", text: prefix, providerOptions: { anthropic: { cacheControl: { type: "ephemeral" } } } },
+        { type: "text", text: instruction },
+      ]);
+    }
+  });
+
+  it("preserves the original source message for adapters without explicit source caching", () => {
+    const source = [{ role: "user" as const, content: "Source\nInstructions" }];
+    expect(withPrefixCacheHints({ model: "model", systemPrompt: "system", messages: source,
+      sourcePrefixLength: 6 }).messages).toBe(source);
+  });
+
   it("sends no cache hints for one-shot calls", () => {
     const hints = withPrefixCacheHints({
       model: "gpt-5",
