@@ -598,6 +598,34 @@ describe("TabularReviewView single-cell regeneration", () => {
         } finally { notify.mockRestore(); }
     });
 
+    it("active-retry regression: the winning retry attaches to a stoppable generation", async () => {
+        const notices = await import("@/app/lib/userFacingError");
+        const notify = vi.spyOn(notices, "notifyError");
+        const stream = openStream();
+        try {
+            vi.mocked(getTabularReview).mockRejectedValueOnce(new Error("offline"));
+            const { rerender } = render(<TRView reviewId="r1" />);
+            await waitFor(() => expect(notify).toHaveBeenCalled());
+            const retry = notify.mock.calls.at(-1)?.[1]?.onRetry;
+            type Detail = Awaited<ReturnType<typeof getTabularReview>>;
+            let finishInitial!: (detail: Detail) => void;
+            const running = { review: review({ id: "r2", is_running: true }), cells: [CELL],
+                rows: [ROW], documents: [], active_generation: { id: "gen-2", seq: 4 } };
+            vi.mocked(getTabularReview).mockReturnValueOnce(new Promise(resolve => { finishInitial = resolve; }))
+                .mockResolvedValueOnce(running);
+            vi.mocked(streamTabularGenerationResume).mockResolvedValue(stream.response);
+            rerender(<TRView reviewId="r2" />);
+            await act(async () => { await retry?.(); });
+            expect(streamTabularGenerationResume).toHaveBeenCalledWith("r2", expect.any(AbortSignal), 1);
+            expect(screen.getByTitle("Stop generation")).toBeInTheDocument();
+            await act(async () => { finishInitial(running); });
+            expect(streamTabularGenerationResume).toHaveBeenCalledTimes(1);
+        } finally {
+            await act(async () => { stream.done(); });
+            notify.mockRestore();
+        }
+    });
+
     it("polls the run's status, not the whole review, until the run ends", async () => {
         const regenerate = await openCell();
         vi.mocked(regenerateTabularCell).mockResolvedValue({ summary: "New" } as never);

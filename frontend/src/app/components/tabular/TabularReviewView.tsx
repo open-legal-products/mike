@@ -1162,7 +1162,15 @@ export function TRView({ reviewId, projectId }: Props) {
             setRows(detail.rows);
             setDocuments(detail.documents);
             setColumns(detail.review.columns_config || []);
-            setGenerationGuard(detail.review.is_running ? "running" : null);
+            setGenerationGuard(detail.review.is_running && !detail.active_generation ? "running" : null);
+            // A retry can win over the initial load. Preserve its ability to
+            // attach to and stop a generation owned by this server.
+            if (detail.active_generation && !resumeStreamOpenRef.current && !generationAbortRef.current) {
+                lastFrameIdRef.current = 0;
+                retryRef.current?.resume({ stoppable: true }).catch(err =>
+                    console.error("Generation resume failed", err),
+                );
+            }
         } catch (err) {
             // Both callers are "Check again"/"Load latest" buttons in a
             // blocking popup that otherwise just stops responding.
