@@ -230,6 +230,54 @@ describe("runScriptCall", () => {
     });
   });
 
+  it("ends a script that keeps calling after it was told it is out of calls", async () => {
+    const { result, dispatch } = await run(
+      `for (;;) { try { await tools.list_documents({}); } catch {} }`,
+      { limits: { maxToolCalls: 3 } },
+    );
+    expect(result).toMatchObject({
+      ok: false,
+      error:
+        "The script was stopped: it kept calling tools after reaching its limit of 3 tool calls.",
+    });
+    expect(dispatch.calls).toHaveLength(3);
+  });
+
+  it("ends a script that floods calls past its limit in one batch", async () => {
+    const { result, dispatch } = await run(
+      `for (;;) {
+         const batch = [];
+         for (let i = 0; i < 500; i++) batch.push(tools.list_documents({}).catch(() => 0));
+         await Promise.all(batch);
+       }`,
+      { limits: { maxToolCalls: 3 } },
+    );
+    expect(result).toMatchObject({ ok: false });
+    expect(String(result.error)).toContain("kept calling tools");
+    expect(dispatch.calls).toHaveLength(3);
+  });
+
+  it("refuses a call whose arguments are too large, before it is dispatched", async () => {
+    const { result, dispatch } = await run(
+      `try { await tools.fetch_documents({ doc_ids: Array(100000).fill("x") }); }
+       catch (e) { return e.message; }`,
+    );
+    expect(result.value).toBe(
+      "The arguments of one fetch_documents call are longer than 8000 characters of JSON. Pass less in each call.",
+    );
+    expect(dispatch.calls).toHaveLength(0);
+  });
+
+  it("counts oversized calls toward the limit", async () => {
+    const { result, dispatch } = await run(
+      `const big = { doc_ids: Array(100).fill("x") };
+       for (;;) { try { await tools.fetch_documents(big); } catch {} }`,
+      { limits: { maxToolCalls: 3, maxCallArgumentChars: 50 } },
+    );
+    expect(String(result.error)).toContain("kept calling tools");
+    expect(dispatch.calls).toHaveLength(0);
+  });
+
   it("reports a script's own error with its message", async () => {
     const { result } = await run(`throw new RangeError("no documents matched");`);
     expect(result).toMatchObject({

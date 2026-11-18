@@ -75,6 +75,14 @@ The sandbox deadline stops queued calls, but an already running read can extend
 the wait for the result beyond 120 seconds. Another script is refused and the model is
 told to use the tools directly. Stopping the answer stops the script.
 
+The limits a script meets are enforced on the host, where its calls cost
+memory and time the VM's own limit does not cover:
+
+- A call past the 200th is refused with an error the script can catch, so it
+  can return what it has. A script that calls again after that is stopped.
+- One call's arguments may be at most 8,000 characters of JSON. A longer call
+  is refused before it is checked or dispatched, and still counts as a call.
+
 ## Settings
 
 ```bash

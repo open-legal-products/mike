@@ -42,6 +42,12 @@ export const SCRIPT_TOOL_ALLOWLIST: ReadonlySet<string> = new Set([
 
 /** Tool calls one script may make. */
 export const SCRIPT_MAX_TOOL_CALLS = 200;
+/**
+ * The arguments of one tool call a script makes, as JSON, at most. The model's
+ * own calls are bounded by its output; a script can build an argument as large
+ * as its memory, and the dispatcher does work for every item of it.
+ */
+export const SCRIPT_MAX_CALL_ARGUMENT_CHARS = 8_000;
 /** Wall clock for one script, tool time included. */
 export const SCRIPT_TIMEOUT_MS = 120_000;
 const SCRIPT_MEMORY_LIMIT_BYTES = 64 * 1024 * 1024;
@@ -116,7 +122,7 @@ function asCodemodeTools(
 
 const SCRIPT_DESCRIPTION = `Run a short JavaScript program that calls the document tools below in a loop and returns a compact result. Use it when a question needs the same lookup across many documents (for example, "which of these 80 agreements have a change-of-control clause?"), instead of calling the tools one at a time.
 
-The code is the body of an async function: use await and return a JSON-serialisable value. Call tools as \`await tools.<name>(args)\`; what each returns is listed below. A call that fails throws an Error you can catch. Use console.log for progress notes. There is no network, file system, timers or modules. At most ${SCRIPT_MAX_TOOL_CALLS} tool calls and ${SCRIPT_TIMEOUT_MS / 1000} seconds per script.
+The code is the body of an async function: use await and return a JSON-serialisable value. Call tools as \`await tools.<name>(args)\`; what each returns is listed below. A call that fails throws an Error you can catch. Use console.log for progress notes. There is no network, file system, timers or modules. At most ${SCRIPT_MAX_TOOL_CALLS} tool calls and ${SCRIPT_TIMEOUT_MS / 1000} seconds per script; a script that keeps calling past the limit is stopped.
 
 Return only what you need (document ids, short excerpts, counts), not whole documents. Documents a script reads are not shown to you in full: before quoting or citing a document, read it or search it with the normal tools.
 
@@ -212,6 +218,7 @@ export type ScriptRunContext = {
   /** Test seams. */
   limits?: Partial<{
     maxToolCalls: number;
+    maxCallArgumentChars: number;
     timeoutMs: number;
     maxConcurrent: number;
     maxConcurrentPerUser: number;
@@ -232,6 +239,16 @@ function parseToolResult(content: string): unknown {
     return JSON.parse(content);
   } catch {
     return content;
+  }
+}
+
+/** Whether a call's arguments, as the JSON the dispatcher is handed, fit in `max` characters. */
+function withinArgumentLimit(input: Record<string, unknown>, max: number): boolean {
+  try {
+    return JSON.stringify(input).length <= max;
+  } catch {
+    // Not JSON at all (a cycle, a BigInt): nothing the dispatcher can take.
+    return false;
   }
 }
 
@@ -304,6 +321,7 @@ export async function runScriptCall(
 ): Promise<string> {
   const limits = {
     maxToolCalls: SCRIPT_MAX_TOOL_CALLS,
+    maxCallArgumentChars: SCRIPT_MAX_CALL_ARGUMENT_CHARS,
     timeoutMs: SCRIPT_TIMEOUT_MS,
     maxConcurrent: SCRIPT_MAX_CONCURRENT,
     maxConcurrentPerUser: SCRIPT_MAX_CONCURRENT_PER_USER,
@@ -338,6 +356,16 @@ export async function runScriptCall(
   );
 
   let calls = 0;
+  // A script is told once that it is out of calls, so it can return what it
+  // has. One that calls again is ended: every call, refused or not, costs the
+  // host a message and a record, and a script that catches the refusal in a
+  // loop would otherwise make them without limit.
+  let refusedAtLimit = false;
+  let endedOverLimit = false;
+  const overLimit = new AbortController();
+  const signal = context.signal
+    ? AbortSignal.any([context.signal, overLimit.signal])
+    : overLimit.signal;
   // A dispatcher that is down fails every call of a loop the same way; one
   // report per script says so without spending the day's quota on it.
   let reportedToolFailure = false;
@@ -354,6 +382,11 @@ export async function runScriptCall(
     (name: string): Codemode.CodemodeTool["execute"] =>
     async (args, { signal: ended }) => {
       if (calls >= limits.maxToolCalls) {
+        if (refusedAtLimit) {
+          endedOverLimit = true;
+          overLimit.abort();
+        }
+        refusedAtLimit = true;
         throw new ScriptToolError(
           `This script reached its limit of ${limits.maxToolCalls} tool calls.`,
         );
@@ -363,6 +396,12 @@ export async function runScriptCall(
         args && typeof args === "object" && !Array.isArray(args)
           ? (args as Record<string, unknown>)
           : {};
+      // Before the schema check and the dispatcher, which both walk all of it.
+      if (!withinArgumentLimit(input, limits.maxCallArgumentChars)) {
+        throw new ScriptToolError(
+          `The arguments of one ${name} call are longer than ${limits.maxCallArgumentChars} characters of JSON. Pass less in each call.`,
+        );
+      }
       const check = checks.get(name);
       const checked = check?.(input);
       if (checked && !checked.success) {
@@ -443,7 +482,7 @@ export async function runScriptCall(
       },
     });
 
-    result = await sandbox.execute(code, { signal: context.signal });
+    result = await sandbox.execute(code, { signal });
   } catch (error) {
     reportSandboxFailure(error);
     return failure(ERROR_MESSAGES.sandbox);
@@ -473,6 +512,16 @@ export async function runScriptCall(
   if (result.ok) {
     return capped(
       JSON.stringify({ ok: true, value: result.value ?? null, ...summary }),
+      limits.maxResultChars,
+      fenced,
+    );
+  }
+  if (endedOverLimit && !context.signal?.aborted) {
+    return capped(
+      failure(
+        `The script was stopped: it kept calling tools after reaching its limit of ${limits.maxToolCalls} tool calls.`,
+        summary,
+      ),
       limits.maxResultChars,
       fenced,
     );
