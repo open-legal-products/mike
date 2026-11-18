@@ -782,7 +782,9 @@ export function TRView({ reviewId, projectId }: Props) {
                 break;
             }
             await new Promise((resolve) => setTimeout(resolve, 250));
+            if (request !== detailRequest.current) return;
             const [status] = await getTabularReviewHistoryStatuses([reviewId]);
+            if (request !== detailRequest.current) return;
             if (status?.is_running) continue;
             detail = await getTabularReview(reviewId, detail);
         }
