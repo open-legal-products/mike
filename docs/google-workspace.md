@@ -113,7 +113,7 @@ Code entry points:
 Apply `backend/migrations/20261002_01_google_drive_writes.sql` to existing
 installations. Fresh installs include it in `backend/schema.sql`. It adds a
 connection identity and the same `require_write_approval` setting used by the
-other connectors. The default is off; users can turn on **Ask for permission for
+other connectors. The default is on; users can turn off **Ask for permission for
 write actions** in the connector's Manage dialog. Reconnecting rotates the
 connection identity and keeps all tool/approval settings.
 
@@ -387,7 +387,7 @@ Workspace administrators and Google Cloud audience settings can restrict which a
 
 Mike asks Google for read and write access on every connect. Google's consent screen lets the user untick permissions, and Workspace administrators can block them; if write access is withheld, the connection works read-only and the write tools are hidden from the assistant. To gain write access, delete the connector in the Manage dialog and connect it again.
 
-By default the assistant runs write actions directly, as it does for every connector. Turn on **Ask for permission for write actions** in the connector's Manage dialog to review each one first. The assistant's turn then pauses with an approval in the same popup it uses for questions: it shows the exact account, recipients, content, and affected item. **Approve** runs that action and the turn continues with its result; **Reject** tells the assistant it did not run. The approval is part of the conversation, so it survives a reload. An action a [subagent](subagents.md) asks for reaches the user the same way, marked with the subagent's task, and pauses the whole answer. Individual tools can also be switched off in the Manage dialog.
+By default the assistant asks before every write action, as it does for every connector; turning off **Ask for permission for write actions** in the connector's Manage dialog lets it run writes directly. With the setting on, the assistant's turn pauses with an approval in the same popup it uses for questions: it shows the exact account, recipients, content, and affected item. **Approve** runs that action and the turn continues with its result; **Reject** tells the assistant it did not run. The approval is part of the conversation, so it survives a reload. An action a [subagent](subagents.md) asks for reaches the user the same way, marked with the subagent's task, and pauses the whole answer. Individual tools can also be switched off in the Manage dialog.
 
 | Service | Reads | Changes |
 | --- | --- | --- |

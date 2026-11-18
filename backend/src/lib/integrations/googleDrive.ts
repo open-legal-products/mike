@@ -525,7 +525,7 @@ export async function getGoogleDriveStatus(
                 schemaReady: false,
                 enabled: true,
                 writeEnabled: false,
-                requireWriteApproval: false,
+                requireWriteApproval: true,
                 readOnly: false,
                 pickerAvailable: available && googleDrivePickerAvailable(null),
                 tools: googleDriveToolList(null),
@@ -541,7 +541,7 @@ export async function getGoogleDriveStatus(
         schemaReady: true,
         enabled: row?.enabled !== false,
         writeEnabled: hasDriveWriteAccess(row),
-        requireWriteApproval: row?.require_write_approval === true,
+        requireWriteApproval: row?.require_write_approval !== false,
         readOnly: row?.read_only === true,
         pickerAvailable: available && googleDrivePickerAvailable(row),
         ...(row?.grant_id ? { grantId: row.grant_id } : {}),
@@ -1188,7 +1188,7 @@ async function recheckDriveWrite(
         throw new GoogleDriveUserError(
             "The Google Drive connection changed. Review the action again.",
         );
-    if (!approved && row.require_write_approval)
+    if (!approved && row.require_write_approval !== false)
         throw new GoogleDriveUserError(
             "This Google Drive action requires approval in the assistant.",
         );
@@ -1208,7 +1208,7 @@ export async function planGoogleDriveCall(
             input,
             db,
         );
-        if (!row.require_write_approval) return { type: "run" };
+        if (row.require_write_approval === false) return { type: "run" };
         const grantId = row.grant_id!;
         const token = await getAccessToken(owner, db, grantId);
         const action = await prepareDriveWrite(name, args, token);
@@ -1353,7 +1353,7 @@ export async function executeGoogleDriveToolCall(
                 args,
                 db,
             );
-            if (row.require_write_approval)
+            if (row.require_write_approval !== false)
                 throw new GoogleDriveUserError(
                     "This Google Drive action requires approval in the assistant.",
                 );

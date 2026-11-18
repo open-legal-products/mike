@@ -899,7 +899,7 @@ create table if not exists public.user_mcp_connectors (
   enabled boolean not null default true,
   -- Write tools (user_mcp_connector_tools.requires_confirmation) wait for the
   -- user's approval in the assistant turn when this is set.
-  require_write_approval boolean not null default false,
+  require_write_approval boolean not null default true,
   read_only boolean not null default false,
   tool_policy jsonb not null default '{}'::jsonb,
   encrypted_auth_config text,
@@ -7667,7 +7667,7 @@ CREATE TABLE IF NOT EXISTS public.user_google_drive_tokens (
   expires_at timestamptz,
   enabled boolean NOT NULL DEFAULT true,
   grant_id uuid NOT NULL DEFAULT gen_random_uuid(),
-  require_write_approval boolean NOT NULL DEFAULT false,
+  require_write_approval boolean NOT NULL DEFAULT true,
   read_only boolean NOT NULL DEFAULT false,
   disabled_tools text[] NOT NULL DEFAULT '{}',
   -- The Google account this connection signed in as; display only.
@@ -7774,7 +7774,7 @@ create table if not exists public.user_google_workspace_tokens (
   scope text not null, expires_at timestamptz not null,
   write_enabled boolean not null default false,
   enabled boolean not null default true,
-  require_write_approval boolean not null default false,
+  require_write_approval boolean not null default true,
   read_only boolean not null default false,
   disabled_tools text[] not null default '{}',
   constraint user_google_workspace_tokens_pkey primary key (id),
@@ -12556,5 +12556,6 @@ insert into public.schema_migrations (filename) values
   ('20261101_23_document_text_backfill_from_unfinished.sql'),
   ('20261101_24_wipe_memory_files_batch.sql'),
   ('20261107_01_playbook_review_publication.sql'),
-  ('20261116_01_tabular_cache_revisions.sql')
+  ('20261116_01_tabular_cache_revisions.sql'),
+  ('20261118_01_connector_write_approval_default.sql')
 on conflict (filename) do nothing;
