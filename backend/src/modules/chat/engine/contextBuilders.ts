@@ -482,8 +482,9 @@ export async function enrichWithPriorEvents(
         : `- ran ${label}`,
     ];
   };
-  // Documents a run_script script read. The model never saw their text, so
-  // they are not replayed as its own reads; one line says what happened.
+  // Documents a run_script script read. They are not replayed as the model's
+  // own reads: it was returned whatever the script returned, which may or may
+  // not have been their text. One line says the script ran and what it called.
   let scriptReads = 0;
   for (const ev of content as Record<string, unknown>[]) {
     const docLines = documentLines(ev);
@@ -619,7 +620,7 @@ export async function enrichWithPriorEvents(
   }
   if (scriptReads > 0) {
     lines.push(
-      `- run_script → a script read ${scriptReads} document${scriptReads === 1 ? "" : "s"}; you saw only what it returned, not their text`,
+      `- run_script → your script ran and called read_document on ${scriptReads} document${scriptReads === 1 ? "" : "s"}; what the script returned came back to you`,
     );
   }
   for (const id of approvedIds) {

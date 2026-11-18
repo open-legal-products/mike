@@ -203,7 +203,7 @@ describe("spotlight (prompt-injection fence)", () => {
         expect(content.match(/read_document →/g)).toHaveLength(1);
         expect(content).not.toContain("Scripted");
         expect(content).toContain(
-            "run_script → a script read 40 documents; you saw only what it returned, not their text",
+            "run_script → your script ran and called read_document on 40 documents; what the script returned came back to you",
         );
     });
 

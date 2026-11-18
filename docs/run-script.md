@@ -51,7 +51,9 @@ What a script can and cannot do:
   `chat.script_tool`, once per script however many of its calls fail.
 - A read a script makes is stored as a `doc_read` event marked `by_script`.
   On the next turn those are not replayed to the model as its own reads; one
-  line says a script read that many documents.
+  line says its script ran and called `read_document` on that many documents.
+  The line does not say what the model saw, because a script may return a
+  document's text or only a result computed from it.
 - If the sandbox cannot be loaded or fails, the turn goes on without it: the
   tool is not offered, or the call answers that the sandbox failed, and the
   failure is reported under `chat.script_sandbox_failed`. A failed load is
