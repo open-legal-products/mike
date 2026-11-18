@@ -202,6 +202,8 @@ export const CODE_KINDS: Readonly<Record<string, UserErrorKind>> = {
     memory_revision_conflict: "conflict",
     upload_target_busy: "conflict",
     access_inherited: "conflict",
+    setup_complete: "conflict",
+    signup_email_not_configured: "forbidden",
     ask_inputs_stale: "conflict",
     // Ours, not theirs
     internal_error: "server",

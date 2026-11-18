@@ -68,6 +68,14 @@ The bundled credentials and infrastructure are intended for local development
 only. See [Local development](docs/local-development.md) for service endpoints,
 authentication behavior, Ollama setup, and first-run guidance.
 
+### Deploy on Vercel
+
+To run Mike without Docker or servers of your own, deploy it to Vercel with a
+Marketplace Supabase project for the database, sign-in and files. See
+[Deploy on Vercel](docs/vercel.md) for the one-click button and its limits.
+Open your new deployment as soon as it is ready: its first visitor creates
+the first account.
+
 ### Telemetry
 
 Mike sends scrubbed error reports (no document content, user identities, or
