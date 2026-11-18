@@ -1,4 +1,4 @@
-import { BACKEND_REPORTING_OWNER } from "@mike/client";
+import { BACKEND_REPORTING_OWNER, CODE_KINDS } from "@mike/client";
 import { UserVisibleError, describeError } from "@/app/lib/userFacingError";
 
 // What a chat surface says, and offers, when a turn fails. The assistant chat
@@ -35,8 +35,11 @@ export function errorFrameFailure(
         safeToDisplay && typeof message === "string" && message.trim()
             ? message.trim()
             : null;
+    // A safe frame's code may say whose problem it is: a refused account
+    // the user or their organization owns is not one support can fix.
+    const codeKind = verbatim && typeof frame.code === "string" ? CODE_KINDS[frame.code] : undefined;
     const failure = new UserVisibleError(verbatim ?? TURN_FAILED_MESSAGE, {
-        kind: "server",
+        kind: codeKind ?? "server",
         retryable: !verbatim,
     });
     // The frame's code and request id ride on the error the way they ride on

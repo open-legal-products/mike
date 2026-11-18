@@ -423,6 +423,27 @@ describe("useAssistantChat retry", () => {
         expect(toast?.supportHref).toMatch(/^mailto:/);
     });
 
+    it("offers neither retry nor support when the user's own provider account refused", async () => {
+        fetchMock.mockResolvedValueOnce(
+            sseResponse([
+                'data: {"type":"error","message":"Your Claude account is out of credits.","safe_to_display":true,"code":"provider_account_refused"}\n\n',
+            ]),
+        );
+        const { result } = renderHook(() => ({
+            chat: useAssistantChat(),
+            toasts: useToasts(),
+        }));
+        await act(async () => {
+            await result.current.chat.handleChat(userMessage());
+        });
+
+        const toast = result.current.toasts[0];
+        expect(toast?.message).toBe("Your Claude account is out of credits.");
+        expect(retryAction(toast)).toBeUndefined();
+        // Only the key's owner can add credits; support cannot.
+        expect(toast?.supportHref).toBeUndefined();
+    });
+
     it("still offers a retry for an unsafe server failure", async () => {
         fetchMock.mockResolvedValueOnce(
             sseResponse([

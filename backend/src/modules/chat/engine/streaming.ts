@@ -20,7 +20,7 @@ import {
 import { UserFacingError } from "../../../lib/userFacingError";
 import { InvalidApiKeyError } from "../../../lib/llm/apiKeyErrors";
 import { markStage, markErrorHandled, reportError, isReported } from "../../../lib/observability/sentry";
-import { ProviderConfigurationError, isUserProviderRefusal, providerFailureKind } from "../../../lib/llm/providerErrors";
+import { ProviderConfigurationError, isSelfServiceProviderRefusal, isUserProviderRefusal, providerFailureKind } from "../../../lib/llm/providerErrors";
 import { reportModelFailure } from "../../../lib/llm/providerFailureReport";
 import { safeError } from "../../../lib/safeError";
 import type { Db } from "../../../lib/supabase";
@@ -201,10 +201,14 @@ function modelFailureEvent(
     message: safeToDisplay ? err.message : ASSISTANT_ERROR_MESSAGE,
     ...(safeToDisplay ? { safe_to_display: true } : {}),
     // A rejected key is worth naming: the client turns this into a prompt
-    // to go fix the key rather than a suggestion to retry.
+    // to go fix the key rather than a suggestion to retry. An account the
+    // user or their organization owns is named too, so the client does not
+    // send them to support for something only they can fix.
     ...(err instanceof InvalidApiKeyError
       ? { code: "invalid_api_key" as const }
-      : {}),
+      : safeToDisplay && isSelfServiceProviderRefusal(err)
+        ? { code: "provider_account_refused" as const }
+        : {}),
   };
 }
 
