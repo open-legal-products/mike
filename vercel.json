@@ -1,0 +1,27 @@
+{
+  "$schema": "https://openapi.vercel.sh/vercel.json",
+  "services": {
+    "web": {
+      "root": "frontend",
+      "framework": "nextjs"
+    },
+    "api": {
+      "root": ".",
+      "entrypoint": "backend/Dockerfile",
+      "command": ["bash", "/app/scripts/vercel-start.sh", "api"]
+    }
+  },
+  "daemons": {
+    "worker": {
+      "root": ".",
+      "entrypoint": "backend/Dockerfile",
+      "command": ["bash", "/app/scripts/vercel-start.sh", "worker"],
+      "instances": { "iad1": 1 },
+      "resources": { "requests": { "memory": "2Gi" } }
+    }
+  },
+  "rewrites": [
+    { "source": "/api/(.*)", "destination": { "service": "api" } },
+    { "source": "/(.*)", "destination": { "service": "web" } }
+  ]
+}

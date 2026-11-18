@@ -38,6 +38,7 @@ import {
 } from "./middleware/internalErrorResponse";
 import { configuredAllowedOrigins } from "./lib/origins";
 import { envInt } from "./lib/runtimeConfig";
+import { stripApiPathPrefix } from "./middleware/apiPathPrefix";
 import { requestDiagnostics } from "./middleware/requestDiagnostics";
 
 export const app = express();
@@ -201,6 +202,7 @@ const authMfaLimiter = makeLimiter({
 
 app.disable("x-powered-by");
 app.set("trust proxy", envInt("TRUST_PROXY_HOPS", 1));
+app.use(stripApiPathPrefix(process.env.API_PATH_PREFIX));
 app.use(requestDiagnostics);
 app.use(protectInternalErrorResponses);
 
