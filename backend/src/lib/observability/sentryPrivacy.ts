@@ -137,6 +137,13 @@ const PROVIDER_REASONS: Array<[string, RegExp]> = [
   // Anthropic answers an empty prepaid balance with a 400 invalid_request_error, not a 402.
   ['credit_balance', /\byour credit balance is too low\b/i],
 ];
+/** The provider_error tag for each provider failure class, keyed by the error's name. */
+const PROVIDER_ERROR_KIND: Readonly<Record<string, string>> = {
+  InvalidApiKeyError: 'invalid_api_key',
+  AI_APICallError: 'api_call',
+  AI_RetryError: 'retry_exhausted',
+  AI_StreamProviderError: 'stream_provider',
+};
 /** @ai-sdk/gateway's own instance marker (GatewayError.isInstance); its classes are not exported. */
 const GATEWAY_ERROR = Symbol.for('vercel.ai.gateway.error');
 
@@ -242,10 +249,8 @@ export function diagnosticErrorTags(error: unknown): Record<string, string | num
         const fields = [...new Set(item.configurationFields.slice(0, 10).filter(field => typeof field === 'string' && CONFIGURATION_FIELDS.has(field)))];
         if (fields.length) tags.configuration_fields = fields.sort().join(',');
       }
-      const providerError = item.name === 'InvalidApiKeyError' ? 'invalid_api_key'
-        : item.name === 'AI_APICallError' ? 'api_call'
-          : item.name === 'AI_RetryError' ? 'retry_exhausted'
-            : item.name === 'AI_StreamProviderError' ? 'stream_provider' : undefined;
+      const providerError = typeof item.name === 'string' && Object.hasOwn(PROVIDER_ERROR_KIND, item.name)
+        ? PROVIDER_ERROR_KIND[item.name] : undefined;
       if (providerError && tags.provider_error === undefined) tags.provider_error = providerError;
       // Recorded by withKeySource (backend/src/lib/llm/providerErrors.ts); admitted only as a registry id.
       if (typeof item.keyProvider === 'string' && ENUMS.provider!.has(item.keyProvider) && tags.provider === undefined) tags.provider = item.keyProvider;
