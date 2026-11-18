@@ -1,7 +1,38 @@
-import type { SourceDocument } from "@mike/contracts";
-import { isDeepStrictEqual } from "node:util";
+// Legal Data Hunter (https://legaldatahunter.com/mcp) as a source provider.
+//
+// Legal Data Hunter is an MCP connector whose `get_document` tool returns a
+// complete case, statute or piece of legal research. Such a result becomes a
+// citable source for the request (see sourceDocuments.providers.ts); the
+// citation carries only this provider's document id, and the panel reads the
+// document again through the viewer's own connection when it is opened.
 
-const LEGAL_DATA_HUNTER_URL = "https://legaldatahunter.com/mcp";
+import { isDeepStrictEqual } from "node:util";
+import {
+  executeMcpToolOnServer,
+  sameMcpServerUrl,
+  type McpCallRecord,
+} from "../../lib/mcpConnectors";
+import { teamOrgIdOf } from "../../lib/personalOrgs";
+import type { ExternalSource } from "../../lib/sourceDocuments";
+import type {
+  SourceDocumentResult,
+  SourceProvider,
+  SourceProviderFetchArgs,
+} from "./sourceDocuments.types";
+
+export const LEGAL_DATA_HUNTER_URL = "https://legaldatahunter.com/mcp";
+export const LEGAL_DATA_HUNTER_CONNECT_DETAIL =
+  "Connect Legal Data Hunter in Settings → Connectors to view this source.";
+/**
+ * Characters of a Legal Data Hunter result the model receives, in place of
+ * the general MAX_MCP_RESULT_CHARS. It matches the document-context limit so
+ * a full court judgment usually fits; a longer document is cut off there and
+ * stays readable in full through read_document. No other connector is
+ * affected.
+ */
+export const LEGAL_DATA_HUNTER_RESULT_CHARS = 200_000;
+
+const DOCUMENT_TOOL = "get_document";
 const MAX_SOURCE_TEXT_CHARS = 1_000_000;
 type RecordValue = Record<string, unknown>;
 type SourceContext = {
@@ -10,7 +41,6 @@ type SourceContext = {
   toolName: string;
   arguments: Record<string, unknown>;
 };
-export type LegalDataHunterSource = { text: string; document: SourceDocument };
 
 function record(value: unknown): RecordValue | null {
   return value && typeof value === "object" && !Array.isArray(value)
@@ -62,14 +92,9 @@ export function parseLegalDataHunterDocumentId(
 }
 
 export function isLegalDataHunterUrl(value: string): boolean {
-  try {
-    const url = new URL(value);
-    return !url.username && !url.password && !url.search && !url.hash &&
-      `${url.origin}${url.pathname.replace(/\/+$/, "")}` === LEGAL_DATA_HUNTER_URL;
-  } catch {
-    return false;
-  }
+  return sameMcpServerUrl(value, LEGAL_DATA_HUNTER_URL);
 }
+
 function resultPayload(result: unknown): RecordValue | null {
   const root = record(result);
   const structured = record(root?.structuredContent);
@@ -90,12 +115,16 @@ function resultPayload(result: unknown): RecordValue | null {
   return payload;
 }
 
-/** Accept only complete, identity-bound documents from the canonical connector. */
+/**
+ * Accept only complete, identity-bound documents from the canonical
+ * connector. The body travels in `text`, not in the panel document, so a
+ * citation never carries it; the panel reads it again when the source opens.
+ */
 export function extractLegalDataHunterSource(
   result: unknown,
   context: SourceContext,
-): LegalDataHunterSource | null {
-  if (!isLegalDataHunterUrl(context.serverUrl) || context.toolName !== "get_document" ||
+): ExternalSource | null {
+  if (!isLegalDataHunterUrl(context.serverUrl) || context.toolName !== DOCUMENT_TOOL ||
       record(result)?.isError === true) return null;
   const payload = resultPayload(result);
   const provider = identifier(payload?.source);
@@ -125,8 +154,72 @@ export function extractLegalDataHunterSource(
     document: {
       document_id: documentId, title, type, metadata: [], quotes: [],
       actions: [{ type: "link", url: officialUrl }],
-      // `text`, not `html`: the shared panel renders this as plain text.
-      subdocuments: [{ document_id: `${documentId}:text`, title, type: "html", text: body }],
+      // `text`, not `html`: the shared panel renders this as plain text once
+      // the body is read again from the provider.
+      subdocuments: [{ document_id: `${documentId}:text`, title, type: "html" }],
     },
   };
 }
+
+async function fetchDocument(args: SourceProviderFetchArgs): Promise<SourceDocumentResult> {
+  const reference = parseLegalDataHunterDocumentId(args.documentId);
+  if (!reference) {
+    return { ok: false, kind: "not_found", detail: "Document not found" };
+  }
+  const owner = { userId: args.userId, orgId: await teamOrgIdOf(args.db, args.orgId) };
+  const result = await executeMcpToolOnServer(
+    owner,
+    {
+      serverUrl: LEGAL_DATA_HUNTER_URL,
+      toolName: DOCUMENT_TOOL,
+      arguments: {
+        source: reference.provider,
+        source_id: reference.providerId,
+        include_full_text: true,
+      },
+      preferConnectorId: reference.connectorId,
+    },
+    args.db,
+  );
+  if (!result) {
+    return { ok: false, kind: "credentials", detail: LEGAL_DATA_HUNTER_CONNECT_DETAIL };
+  }
+  const source =
+    result.event.status === "ok" && result.call
+      ? extractLegalDataHunterSource(result.call.result, result.call)
+      : null;
+  if (!source) {
+    return {
+      ok: false,
+      kind: "error",
+      error: new Error("Legal Data Hunter source unavailable"),
+    };
+  }
+  // The document keeps the id it was cited under, so the citation's quote
+  // targets still match whichever connector served it this time.
+  return {
+    ok: true,
+    document: {
+      ...source.document,
+      document_id: args.documentId,
+      subdocuments: source.document.subdocuments?.map((subdocument) => ({
+        ...subdocument,
+        document_id: `${args.documentId}:text`,
+        text: source.text,
+      })),
+    },
+  };
+}
+
+export const legalDataHunterSourceProvider: SourceProvider = {
+  id: "legal_data_hunter",
+  // The whole `mcp:` namespace is this provider's: a malformed id is still
+  // not an upload, so it fails closed as not found rather than falling
+  // through to the uploaded-document paths.
+  ownsDocumentId: (documentId) => documentId.startsWith("mcp:"),
+  quoteVerification: "exact",
+  fetch: fetchDocument,
+  fromMcpCall: (call: McpCallRecord) => extractLegalDataHunterSource(call.result, call),
+  mcpResultChars: (call) =>
+    isLegalDataHunterUrl(call.serverUrl) ? LEGAL_DATA_HUNTER_RESULT_CHARS : undefined,
+};

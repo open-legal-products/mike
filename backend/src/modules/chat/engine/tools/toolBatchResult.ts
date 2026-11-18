@@ -41,6 +41,12 @@ export type ToolCallBatchResult = {
   courtlistenerEvents: CourtlistenerToolEvent[];
   caseCitationEvents: CaseCitationEvent[];
   mcpEvents: McpToolEvent[];
+  /**
+   * The request-scoped source each connector result registered, by tool call
+   * id (see tools/externalSources.ts). A recorder that persists tool results
+   * keeps the source's reference in place of that result's text.
+   */
+  externalSourceHandles?: Map<string, string>;
 };
 
 /** An empty result, to pass to `runToolCalls` as its `results` option. */
@@ -59,5 +65,6 @@ export function emptyToolCallBatchResult(): ToolCallBatchResult {
     courtlistenerEvents: [],
     caseCitationEvents: [],
     mcpEvents: [],
+    externalSourceHandles: new Map(),
   };
 }

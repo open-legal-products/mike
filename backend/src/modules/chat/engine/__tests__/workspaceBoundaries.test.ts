@@ -123,14 +123,16 @@ describe("assistant workspace boundaries", () => {
     await runToolCalls([{ id: "call", function: { name, arguments: "{}" } }], new Map(), "u", fake.db, vi.fn(), undefined, undefined, undefined, undefined, undefined, undefined, undefined, undefined, undefined, { orgId: "firm" });
     const owner = { userId: "u", orgId: "firm" };
     expect(connectors[family].plan).toHaveBeenCalledWith(owner, name, {}, fake.db);
-    expect(connectors[family].execute).toHaveBeenCalledWith(owner, name, {}, fake.db);
+    // MCP calls also carry the source providers' result-cap policy.
+    const callOptions = family === "mcp" ? [{ maxResultChars: expect.any(Function) }] : [];
+    expect(connectors[family].execute).toHaveBeenCalledWith(owner, name, {}, fake.db, ...callOptions);
     fake.done();
   });
 
   it("runs connector tools on Personal connections in a person's own organization", async () => {
     const fake = scriptedDb([{ table: "organizations", data: { kind: "personal" } }]);
     await runToolCalls([{ id: "call", function: { name: "mcp_search", arguments: "{}" } }], new Map(), "u", fake.db, vi.fn(), undefined, undefined, undefined, undefined, undefined, undefined, undefined, undefined, undefined, { orgId: "mine" });
-    expect(connectors.mcp.execute).toHaveBeenCalledWith({ userId: "u", orgId: null }, "mcp_search", {}, fake.db);
+    expect(connectors.mcp.execute).toHaveBeenCalledWith({ userId: "u", orgId: null }, "mcp_search", {}, fake.db, { maxResultChars: expect.any(Function) });
     fake.done();
   });
 });

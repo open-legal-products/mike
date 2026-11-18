@@ -30,9 +30,19 @@ import {
   COURTLISTENER_TOOL_NAMES,
   type CourtlistenerToolEvent,
 } from "./courtlistenerTools";
-import { executeMcpToolCall, type McpToolEvent } from "../../../../lib/mcpConnectors";
-import { registerMcpLegalSource } from "./mcpSourceDocuments";
-import type { LegalDataHunterSource } from "../../../../lib/mcp/sourceDocuments";
+import {
+  executeMcpToolCall,
+  type McpToolCallResult,
+} from "../../../../lib/mcpConnectors";
+import {
+  externalSourceFromMcpCall,
+  mcpResultCharsFor,
+  stampSourceDocument,
+} from "../../../source-documents/sourceDocuments.service";
+import {
+  externalSourceCitationHint,
+  registerExternalSource,
+} from "./externalSources";
 import {
   APPROVAL_UNAVAILABLE_MESSAGE,
   addApprovalItems,
@@ -613,12 +623,7 @@ export async function runToolCalls(
           name: tc.function.name,
         })}\n\n`,
       );
-      const result: {
-        content: string;
-        event: McpToolEvent;
-        legalSource?: LegalDataHunterSource | null;
-        truncated?: boolean;
-      } =
+      const result: McpToolCallResult =
         plan.type === "result"
           ? plan
           : plan.type === "approval"
@@ -643,6 +648,7 @@ export async function runToolCalls(
                   tc.function.name,
                   args,
                   db,
+                  { maxResultChars: mcpResultCharsFor },
                 )
               : isGoogleWorkspaceTool(tc.function.name)
                 ? await executeGoogleWorkspaceToolCall(
@@ -657,19 +663,23 @@ export async function runToolCalls(
                     args,
                     db,
                   );
-      const { content, event } = result;
-      let sourceCitation = "";
-      if (event.status === "ok" && result.legalSource && docIndex) {
-        const handle = registerMcpLegalSource(result.legalSource, docIndex, docStore);
-        sourceCitation = `\n\nCanonical legal source: {"doc_id":"${handle}"}. Cite an exact quote from this source with that doc_id.`;
-        if (result.truncated) {
-          sourceCitation += ` The result above was cut off before the end of the document. Call read_document with doc_id "${handle}" to read the full text before relying on or quoting any part not shown above.`;
-        }
+      const { event } = result;
+      let content = result.content;
+      // A complete document in the result becomes a citable source for the
+      // rest of the request; the model is told the handle to cite it by.
+      const source =
+        event.status === "ok" && result.call && docIndex
+          ? externalSourceFromMcpCall(result.call)
+          : null;
+      if (source && docIndex) {
+        const handle = registerExternalSource(source, docIndex, docStore);
+        content += externalSourceCitationHint(handle, result.truncated);
+        (results.externalSourceHandles ??= new Map()).set(tc.id, handle);
       }
       toolResults.push({
         role: "tool",
         tool_call_id: tc.id,
-        content: `${content}${sourceCitation}`,
+        content,
       });
       mcpEvents.push(event);
       write(
@@ -876,10 +886,10 @@ export async function runToolCalls(
       // must enter model context only through read_document/fetch_documents.
       // Those paths emit the visible read lifecycle and nonce-fence the entire
       // body. find_in_document otherwise returns raw, user-controlled snippets
-      // and would silently bypass both guarantees. A retrieved legal source
+      // and would silently bypass both guarantees. A provider-backed source
       // is searched like any document, with its snippets fenced below.
-      const isLegalSource = !!docInfo?.panel_document;
-      if (docInfo?.inline_text !== undefined && !isLegalSource) {
+      const isExternalSource = !!docInfo?.external_source;
+      if (docInfo?.inline_text !== undefined && !isExternalSource) {
         toolResults.push({
           role: "tool",
           tool_call_id: tc.id,
@@ -938,7 +948,7 @@ export async function runToolCalls(
       toolResults.push({
         role: "tool",
         tool_call_id: tc.id,
-        content: isLegalSource && nonce ? spotlight(content, nonce) : content,
+        content: isExternalSource && nonce ? spotlight(content, nonce) : content,
       });
     } else if (tc.function.name === "list_documents") {
       const list = Array.from(docStore.entries()).map(([doc_id, info]) => ({
@@ -1387,15 +1397,17 @@ export async function runToolCalls(
               `data: ${JSON.stringify({
                 type: "case_opinions",
                 cluster_id: clusterId,
-                document: normalizeCaseDocument({
-                  clusterId,
-                  caseName: input.caseName,
-                  citations: input.citations,
-                  url: input.url,
-                  pdfUrl: input.pdfUrl,
-                  dateFiled: input.dateFiled,
-                  opinions: input.opinions,
-                }),
+                document: stampSourceDocument(
+                  normalizeCaseDocument({
+                    clusterId,
+                    caseName: input.caseName,
+                    citations: input.citations,
+                    url: input.url,
+                    pdfUrl: input.pdfUrl,
+                    dateFiled: input.dateFiled,
+                    opinions: input.opinions,
+                  }),
+                ),
               })}\n\n`,
             );
           }

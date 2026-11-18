@@ -108,6 +108,25 @@ describe("useResolvedPanelDocument", () => {
         expect(getPanelDocumentMock).toHaveBeenCalledTimes(2);
         expect(result.current.error).toBeNull();
     });
+    it("shows the endpoint's fixed 400 sentence, not a generic failure", async () => {
+        // MikeApiError carries the body's `detail` as its message and the status.
+        const refused = Object.assign(
+            new Error("Connect the provider in Settings → Connectors."),
+            { status: 400 },
+        );
+        getPanelDocumentMock.mockRejectedValue(refused);
+        const { result } = renderHook(() => useResolvedPanelDocument(summary));
+        await waitFor(() => expect(result.current.error).not.toBeNull());
+        expect(result.current.error).toBe("Connect the provider in Settings → Connectors.");
+
+        getPanelDocumentMock.mockRejectedValue(
+            Object.assign(new Error(JSON.stringify({ detail: "upstream exploded" })), { status: 502 }),
+        );
+        act(() => result.current.retry());
+        await waitFor(() =>
+            expect(result.current.error).toBe("Could not load this document. Please try again shortly."),
+        );
+    });
     it("reads the case in the workspace of the item it is opened from", async () => {
         getPanelDocumentMock.mockResolvedValue({ ...summary, subdocuments: [] });
         const wrapper = ({ children }: { children: ReactNode }) => (
@@ -176,7 +195,8 @@ describe("useResolvedPanelDocument", () => {
         it("tells a viewer without Legal Data Hunter to connect it", async () => {
             const connect =
                 "Connect Legal Data Hunter in Settings → Connectors to view this source.";
-            getPanelDocumentMock.mockRejectedValue(new Error(connect));
+            // The endpoint answers a missing connection with a fixed 400.
+            getPanelDocumentMock.mockRejectedValue(Object.assign(new Error(connect), { status: 400 }));
             const { result } = renderHook(() => useResolvedPanelDocument(saved));
             await waitFor(() => expect(result.current.error).toBe(connect));
         });

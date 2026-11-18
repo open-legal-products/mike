@@ -78,7 +78,6 @@ import {
   createCitation,
   CITATIONS_OPEN_TAG,
   limitCitationPayload,
-  withoutEmbeddedSourceText,
 } from "./citations";
 import { runToolCalls } from "./tools/toolDispatcher";
 import {
@@ -403,6 +402,8 @@ export async function runLLMStream(params: {
     onToolBatch: (
       calls: NormalizedToolCall[],
       results: NormalizedToolResult[],
+      /** Sources the batch registered, by tool call id; their text is not to be persisted. */
+      externalSourceHandles: ReadonlyMap<string, string>,
     ) => void;
   };
 }): Promise<{
@@ -621,12 +622,12 @@ export async function runLLMStream(params: {
     const completed = citationParser.push(delta);
     let added = false;
     for (const c of completed) {
-      // External legal sources are verified only against the final block.
+      // A provider-backed source is cited only from the final block, once
+      // its quotes have been checked against the complete text.
       if (
         c.kind === "document" &&
-        (c.doc_id.startsWith("mcp:") ||
-          docStore.get(resolveDocLabel(c.doc_id, docStore, docIndex) ?? c.doc_id)
-            ?.panel_document)
+        docStore.get(resolveDocLabel(c.doc_id, docStore, docIndex) ?? c.doc_id)
+          ?.external_source
       ) {
         continue;
       }
@@ -1251,7 +1252,11 @@ export async function runLLMStream(params: {
         }));
         // Recorded before a pause too, so a continued subagent knows what
         // already ran beside the actions awaiting approval.
-        subagentRun?.onToolBatch(calls, results);
+        subagentRun?.onToolBatch(
+          calls,
+          results,
+          completed.externalSourceHandles ?? new Map(),
+        );
         if (askInputsEvents.length > 0) {
           throw new AssistantStreamAskInputsPause();
         }
@@ -1333,14 +1338,18 @@ export async function runLLMStream(params: {
     // Custom builders (tabular) bypass document-citation verification.
     citations = buildCitations(fullText);
   } else {
-    const rawCitations = limitCitationPayload(parsedCitations.map((c) =>
-      createCitation(
-        c,
-        docIndex,
-        courtlistenerTurnState.casesByClusterId,
-        docStore,
-      ),
-    ));
+    const rawCitations = limitCitationPayload(
+      parsedCitations
+        .map((c) =>
+          createCitation(
+            c,
+            docIndex,
+            courtlistenerTurnState.casesByClusterId,
+            docStore,
+          ),
+        )
+        .filter((citation) => citation !== null),
+    );
     // Server-side quote verification. Fetch each document's extracted source
     // text at most once per turn (memoized by doc_id), reading only bytes
     // already in storage with emitEvents:false. Case citations are matched
@@ -1367,8 +1376,7 @@ export async function runLLMStream(params: {
         getCachedCaseOpinionTexts(courtlistenerTurnState, clusterId),
     );
   }
-  // Verified against the full text above; only the reference leaves the turn.
-  citations = withoutEmbeddedSourceText(limitCitationPayload(citations));
+  citations = limitCitationPayload(citations);
   devLog("[chat/stream] final citations", {
     hasCitationsBlock: citationDiagnostics.hasBlock,
     citationsBlockLength: citationDiagnostics.rawLength,
