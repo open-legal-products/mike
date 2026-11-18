@@ -86,8 +86,6 @@ const SUBSCHEMAS = new Set([
   "prefixItems",
   "additionalItems",
   "additionalProperties",
-  "unevaluatedItems",
-  "unevaluatedProperties",
   "propertyNames",
   "allOf",
   "anyOf",
@@ -95,7 +93,9 @@ const SUBSCHEMAS = new Set([
 /**
  * Where accepting more inside can make the whole schema accept less, so a
  * pattern cannot simply be dropped. `$ref` is here because its target may sit
- * under any of the others.
+ * under any of the others, and the `unevaluated*` keywords because they count
+ * what subschemas anywhere beside them matched: a `patternProperties` dropped
+ * from an `allOf` branch would leave its names "unevaluated" and refused.
  */
 const NOT_LOOSENABLE = new Set([
   "not",
@@ -105,6 +105,8 @@ const NOT_LOOSENABLE = new Set([
   "oneOf",
   "contains",
   "dependencies",
+  "unevaluatedProperties",
+  "unevaluatedItems",
   "$ref",
   "$dynamicRef",
   "$recursiveRef",
@@ -148,10 +150,7 @@ function stripPatterns(schema: unknown, found: Omit<Stripped, "schema">): unknow
     }
   }
   // Names the dropped patterns allowed must not now count as "additional".
-  if (droppedPatternProperties) {
-    delete out.additionalProperties;
-    delete out.unevaluatedProperties;
-  }
+  if (droppedPatternProperties) delete out.additionalProperties;
   return out;
 }
 
@@ -190,8 +189,10 @@ function validatorFor(
     if (!checkable) throw new Error("patterns cannot be dropped");
     validator = compile(checkable, {
       draft: draftOf(parameters),
-      // A dangling $ref fails only the values at that place.
-      unresolvedRefs: "reject",
+      // A dangling $ref is the schema's fault, not the model's: compiling
+      // throws and the tool is left unchecked, rather than refusing every
+      // value at that place and making the tool uncallable.
+      unresolvedRefs: "throw",
     });
   } catch {
     validator = null;

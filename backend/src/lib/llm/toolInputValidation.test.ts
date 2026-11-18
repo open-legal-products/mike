@@ -170,6 +170,14 @@ describe("buildToolInputCheck", () => {
       type: "object",
       properties: { a: { anyOf: [{ type: "string" }, { type: "null" }] } },
     });
+    // `unevaluatedProperties` counts what the allOf branch matched: with its
+    // patternProperties dropped, { xa: 1 } would be refused.
+    expect(
+      withoutPatterns({
+        allOf: [{ patternProperties: { "^x": {} } }],
+        unevaluatedProperties: false,
+      }),
+    ).toBeNull();
     // Under `not`, a dropped pattern would refuse every value.
     const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
     const negated = {
@@ -220,18 +228,21 @@ describe("buildToolInputCheck", () => {
     expect(loggablePath(schema, "/a~1b")).toBe("/*");
   });
 
-  it("fails only the values at a dangling $ref", () => {
-    const check = buildToolInputCheck(
-      compile,
-      "t",
-      {
-        type: "object",
-        properties: { a: { $ref: "#/$defs/missing" }, b: { type: "string" } },
-      },
-      "enforce",
-    )!;
-    expect(check({ b: "x" }).success).toBe(true);
-    expect(check({ a: 1 }).success).toBe(false);
+  it("leaves a tool with a dangling $ref unchecked rather than uncallable", () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    expect(
+      buildToolInputCheck(
+        compile,
+        "mcp_dangling",
+        {
+          type: "object",
+          properties: { a: { $ref: "#/$defs/missing" }, b: { type: "string" } },
+          required: ["a"],
+        },
+        "enforce",
+      ),
+    ).toBeUndefined();
+    expect(warn).toHaveBeenCalledTimes(1);
   });
 
   it("reads a draft-07 schema with draft-07 semantics", () => {
