@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import {
   DEFAULT_MAX_ITERATIONS,
   maxOutputTokensFor,
+  openCodeGoHeaders,
   stopNotice,
 } from "./aiSdk";
 
@@ -69,5 +70,26 @@ describe("stopNotice", () => {
   it("stays quiet below the cap", () => {
     expect(stopNotice(1, DEFAULT_MAX_ITERATIONS, "tool-calls")).toBe("");
     expect(stopNotice(0, DEFAULT_MAX_ITERATIONS, undefined)).toBe("");
+  });
+});
+
+describe("openCodeGoHeaders", () => {
+  it("sends the conversation id as the OpenCode Go session and a Mike user agent", () => {
+    const headers = openCodeGoHeaders("opencode-go", "chat-123");
+    expect(headers?.["x-opencode-session"]).toBe("chat-123");
+    expect(headers?.["User-Agent"]).toMatch(/^Mike\//);
+  });
+
+  it("gives one-shot calls a fresh session id", () => {
+    const a = openCodeGoHeaders("opencode-go")?.["x-opencode-session"];
+    const b = openCodeGoHeaders("opencode-go", null)?.["x-opencode-session"];
+    expect(a).toMatch(/^[0-9a-f-]{36}$/);
+    expect(b).toMatch(/^[0-9a-f-]{36}$/);
+    expect(a).not.toBe(b);
+  });
+
+  it("adds nothing for other providers", () => {
+    expect(openCodeGoHeaders("openai", "chat-123")).toBeUndefined();
+    expect(openCodeGoHeaders("openrouter", "chat-123")).toBeUndefined();
   });
 });
