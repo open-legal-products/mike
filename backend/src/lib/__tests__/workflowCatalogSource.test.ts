@@ -2,7 +2,8 @@ import { mkdtemp, readdir, readFile, rm } from "fs/promises";
 import { tmpdir } from "os";
 import path from "path";
 import JSZip from "jszip";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { resetDefaultWorkflowsCache } from "../defaultWorkflows";
 import {
   prepareWorkflowCatalog,
   removePreparedWorkflowCatalog,
@@ -193,6 +194,69 @@ describe("GitHub workflow catalog preparation", () => {
         prepareWorkflowCatalog({ temporaryRoot, fetchImpl }),
       ).rejects.toThrow("10 MB compressed limit");
       await expect(readdir(temporaryRoot)).resolves.toEqual([]);
+    } finally {
+      await rm(temporaryRoot, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("configured default workflows", () => {
+  async function proofreadOnlyArchive() {
+    const zip = new JSZip();
+    zip.file(
+      "mike-workflows-test/assistant-workflows/proofread/SKILL.md",
+      skill({ key: "proofread", title: "Proofread", type: "assistant" }),
+    );
+    return Buffer.from(await zip.generateAsync({ type: "nodebuffer" }));
+  }
+
+  afterEach(() => {
+    delete process.env.MIKE_DEFAULT_WORKFLOWS_JSON;
+    resetDefaultWorkflowsCache();
+  });
+
+  it("refuses an archive that lacks a configured default", async () => {
+    process.env.MIKE_DEFAULT_WORKFLOWS_JSON =
+      '[{"key":"proofread"},{"key":"missing-one"}]';
+    resetDefaultWorkflowsCache();
+    const temporaryRoot = await mkdtemp(
+      path.join(tmpdir(), "catalog-source-test-"),
+    );
+    try {
+      await expect(
+        prepareWorkflowCatalog({
+          temporaryRoot,
+          fetchImpl: githubFetch(await proofreadOnlyArchive()),
+        }),
+      ).rejects.toThrow(
+        "Workflow archive is missing required default 'missing-one'",
+      );
+    } finally {
+      await rm(temporaryRoot, { recursive: true, force: true });
+    }
+  });
+
+  it("accepts an archive that holds every configured default", async () => {
+    process.env.MIKE_DEFAULT_WORKFLOWS_JSON = '[{"key":"proofread"}]';
+    resetDefaultWorkflowsCache();
+    const temporaryRoot = await mkdtemp(
+      path.join(tmpdir(), "catalog-source-test-"),
+    );
+    try {
+      const prepared = await prepareWorkflowCatalog({
+        temporaryRoot,
+        fetchImpl: githubFetch(await proofreadOnlyArchive()),
+      });
+      const document = validateWorkflowCatalogDocument(
+        JSON.parse(await readFile(prepared.catalogPath, "utf8")) as unknown,
+      );
+      expect(document.workflows).toHaveLength(1);
+      expect(document.workflows[0]).toMatchObject({
+        workflow_key: "proofread",
+        distribution: "default",
+        default_sort_order: 0,
+      });
+      await removePreparedWorkflowCatalog(prepared);
     } finally {
       await rm(temporaryRoot, { recursive: true, force: true });
     }
