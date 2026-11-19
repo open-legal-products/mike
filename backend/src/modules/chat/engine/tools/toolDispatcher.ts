@@ -35,7 +35,7 @@ import {
   type McpToolCallResult,
 } from "../../../../lib/mcpConnectors";
 import {
-  externalSourceFromMcpCall,
+  externalSourcesFromMcpCall,
   mcpResultCharsFor,
   stampSourceDocument,
 } from "../../../source-documents/sourceDocuments.service";
@@ -666,16 +666,18 @@ export async function runToolCalls(
                   );
       const { event } = result;
       let content = result.content;
-      // A complete document in the result becomes a citable source for the
-      // rest of the request; the model is told the handle to cite it by.
-      const source =
+      // Each complete document in the result becomes a citable source for
+      // the rest of the request; the model is told the handles to cite by.
+      const sources =
         event.status === "ok" && result.call && docIndex
-          ? externalSourceFromMcpCall(result.call)
-          : null;
-      if (source && docIndex) {
-        const handle = registerExternalSource(source, docIndex, docStore);
-        content += externalSourceCitationHint(handle, result.truncated);
-        (results.externalSourceHandles ??= new Map()).set(tc.id, handle);
+          ? externalSourcesFromMcpCall(result.call)
+          : [];
+      if (sources.length > 0 && docIndex) {
+        const handles = sources.map((source) =>
+          registerExternalSource(source, docIndex, docStore),
+        );
+        content += externalSourceCitationHint(handles, result.truncated);
+        (results.externalSourceHandles ??= new Map()).set(tc.id, handles);
       }
       toolResults.push({
         role: "tool",

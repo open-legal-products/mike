@@ -17,7 +17,7 @@ export type {
   SourceProviderFetchArgs,
 } from "./sourceDocuments.types";
 export {
-  externalSourceFromMcpCall,
+  externalSourcesFromMcpCall,
   getSourceDocument,
   isExternalSourceDocumentId,
   mcpResultCharsFor,

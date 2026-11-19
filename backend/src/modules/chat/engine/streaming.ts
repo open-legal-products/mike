@@ -404,7 +404,7 @@ export async function runLLMStream(params: {
       calls: NormalizedToolCall[],
       results: NormalizedToolResult[],
       /** Sources the batch registered, by tool call id; their text is not to be persisted. */
-      externalSourceHandles: ReadonlyMap<string, string>,
+      externalSourceHandles: ReadonlyMap<string, readonly string[]>,
     ) => void;
   };
 }): Promise<{

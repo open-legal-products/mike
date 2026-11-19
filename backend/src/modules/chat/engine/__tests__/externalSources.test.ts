@@ -16,6 +16,7 @@ import { createCitation, parseCitations } from "../citations";
 import { caseCitationEventFromRecord } from "../tools/courtlistenerTurnState";
 import {
   externalSourceCitationHint,
+  externalSourceReference,
   registerExternalSource,
 } from "../tools/externalSources";
 import type { DocIndex, DocStore } from "../types";
@@ -72,9 +73,39 @@ describe("registerExternalSource", () => {
   });
 
   it("tells the model the handle and, when cut off, to read the rest first", () => {
-    expect(externalSourceCitationHint("doc-3", false)).toContain('doc_id "doc-3"');
-    expect(externalSourceCitationHint("doc-3", false)).not.toContain("read_document");
-    expect(externalSourceCitationHint("doc-3", true)).toContain("read_document");
+    expect(externalSourceCitationHint(["doc-3"], false)).toContain('doc_id "doc-3"');
+    expect(externalSourceCitationHint(["doc-3"], false)).not.toContain("read_document");
+    expect(externalSourceCitationHint(["doc-3"], true)).toContain('Call read_document with doc_id "doc-3"');
+  });
+
+  it("names several sources' handles in the order the result lists them", () => {
+    const hint = externalSourceCitationHint(["doc-3", "doc-4", "doc-5"], false);
+    expect(hint).toContain('3 complete source documents, available in this chat as doc_id "doc-3", "doc-4" and "doc-5", in the order they appear above');
+    expect(hint).not.toContain("read_document");
+    expect(externalSourceCitationHint(["doc-3", "doc-4"], true)).toContain("Call read_document with a document's doc_id");
+  });
+});
+
+describe("externalSourceReference", () => {
+  it("keeps one source's reference in its established shape", () => {
+    expect(JSON.parse(externalSourceReference([{ document: source().document, handle: "doc-1" }]))).toEqual({
+      ok: true,
+      external_source: { document_id: "prov:abc", title: "Smith v Jones", doc_id: "doc-1", note: expect.any(String) },
+    });
+  });
+
+  it("keeps every source's reference, and no text, for a result that carried several", () => {
+    const second = source({ document_id: "prov:def", title: "Jones v Smith" }).document;
+    const stored = externalSourceReference([{ document: source().document }, { document: second, handle: "doc-2" }]);
+    expect(stored).not.toContain(TEXT);
+    expect(JSON.parse(stored)).toEqual({
+      ok: true,
+      external_sources: [
+        { document_id: "prov:abc", title: "Smith v Jones" },
+        { document_id: "prov:def", title: "Jones v Smith", doc_id: "doc-2" },
+      ],
+      note: expect.any(String),
+    });
   });
 });
 

@@ -16,7 +16,7 @@ vi.mock("../user/user.service", () => ({
 
 import { COURTLISTENER_TOKEN_REQUIRED_MESSAGE } from "../../lib/courtlistener";
 import {
-  externalSourceFromMcpCall,
+  externalSourcesFromMcpCall,
   getSourceDocument,
   isExternalSourceDocumentId,
   SOURCE_PROVIDERS,
@@ -122,13 +122,13 @@ describe("source provider registry", () => {
 
   it("recognises no citable source in an MCP result until a provider claims it", () => {
     expect(
-      externalSourceFromMcpCall({
+      externalSourcesFromMcpCall({
         connectorId: "c1",
         serverUrl: "https://example.com/mcp",
         toolName: "get_document",
         arguments: {},
         result: { content: [{ type: "text", text: "{}" }] },
       }),
-    ).toBeNull();
+    ).toEqual([]);
   });
 });

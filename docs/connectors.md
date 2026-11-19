@@ -142,19 +142,28 @@ standard MCP callback above; do not put an LDH token in frontend configuration.
 Manage the connection, individual tools, and Read-only/approval settings in the
 same **Installed > Manage** dialog as other connectors.
 
-For a citation with a readable source, retrieve the document with
-`get_document(source, source_id, include_full_text: true)`, using identifiers
-returned by LDH search. The default response may be truncated and is not eligible
-for an inline source. A complete, matching response from the canonical LDH
-endpoint becomes a request-scoped source with its title, text, and a link to the
-provider's page.
+For a citation with a readable source, retrieve the document in full with
+either `get_document(source, source_id, include_full_text: true)`, using
+identifiers returned by LDH search, or `resolve_reference(reference,
+include_full_text: true)` for a known citation such as `547 U.S. 388 (2006)`.
+Without `include_full_text`, LDH returns the first 2 KB of a longer document
+with `text_truncated: true`; such a snippet is not eligible for an inline source.
+A complete response from the canonical LDH endpoint becomes a request-scoped
+source with its title, text, and a link to the provider's page. A `get_document`
+response must be the document that was requested. A `resolve_reference`
+response becomes one source per document it lists, in order, under the
+`source` and `source_id` LDH reports for each. If any listed document is a
+snippet, is unusable or repeats another, none of them becomes a source; each
+can still be cited once it is fetched in full with `get_document`.
 Mike passes at most 60,000 characters of an MCP tool result to the model; for the
 LDH connector alone the limit is 200,000, so a full judgment usually fits. When
 a long LDH document exceeds that, the complete text still becomes the source, and
 the model is told to read it in full with `read_document` before relying on the
 rest. Source text is limited to 1,000,000 characters: a document longer than that
-is not registered as a source and cannot be cited. Case law, legislation, and doctrine use Mike's existing citation and source panel;
-there is no uploaded-document version to fetch. Exact-quote verification still
+is not registered as a source and cannot be cited, and neither are the other
+documents of a `resolve_reference` response that lists it. Case law,
+legislation, and doctrine use Mike's existing citation and source panel; there
+is no uploaded-document version to fetch. Exact-quote verification still
 runs against the retrieved text. Treat source content as untrusted, not as
 instructions to execute connector actions.
 
@@ -169,13 +178,16 @@ the provider introduces a new document type.
 Mike does not store LDH text. A saved citation keeps the source's reference,
 title, link and quotes; when the source is opened later, the panel reads the
 text again through `GET /documents/:id`, which calls `get_document` with the
-viewer's own LDH connection in the chat's workspace. A viewer without a usable
+viewer's own LDH connection in the chat's workspace. This holds for a source
+first read through `resolve_reference` too: LDH reports the same identity and
+text for it through `get_document`. A viewer without a usable
 LDH connection is asked to connect it, and still sees the quotes and link. The
 same rule covers the other two places a tool result is persisted: an approved
-`get_document` call's stored result, and a delegated subagent's transcript
-(`chat_subagent_runs`), record the source's reference in place of the result,
-including for later `read_document`, `find_in_document` and `fetch_documents`
-calls on that source. The live request still has the full text in memory.
+`get_document` or `resolve_reference` call's stored result, and a delegated
+subagent's transcript (`chat_subagent_runs`), record the sources' references in
+place of the result, including for later `read_document`, `find_in_document` and
+`fetch_documents` calls on a source. The live request still has the full text in
+memory.
 
 For a live smoke test on a non-production Mike instance: authorize your own LDH
 account, retrieve one public document in full, cite an exact excerpt, and open

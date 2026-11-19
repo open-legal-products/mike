@@ -45,10 +45,11 @@ export interface SourceProvider {
   /** Reads the document again from the provider for display. */
   fetch(args: SourceProviderFetchArgs): Promise<SourceDocumentResult>;
   /**
-   * A complete, identity-bound document carried in an MCP tool result, or
-   * null when the call is not this provider's or the result is unusable.
+   * The complete, identity-bound documents carried in an MCP tool result, in
+   * the order the result lists them; empty when the call is not this
+   * provider's or the result is unusable.
    */
-  fromMcpCall?(call: McpCallRecord): ExternalSource | null;
+  fromMcpCall?(call: McpCallRecord): ExternalSource[];
   /**
    * Characters of a tool result from this provider's server the model may
    * receive, when whole documents deserve more than the general MCP cap.

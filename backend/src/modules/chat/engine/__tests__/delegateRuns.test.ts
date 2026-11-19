@@ -173,7 +173,7 @@ describe("subagent run store", () => {
     const connectorResult = `{"result":{"text":${JSON.stringify(text)}}}`;
     const records = [
       // The dispatcher reports the handle a connector result registered.
-      toolRecord({ id: "1", name: "mcp_c1_get_document", input: { source: "uk", source_id: "abc" } }, connectorResult, docStore, docIndex, "doc-2"),
+      toolRecord({ id: "1", name: "mcp_c1_get_document", input: { source: "uk", source_id: "abc" } }, connectorResult, docStore, docIndex, ["doc-2"]),
       toolRecord({ id: "2", name: "read_document", input: { doc_id: "doc-2" } }, `Document filename: R v X\n\n${text}`, docStore, docIndex),
       toolRecord({ id: "3", name: "find_in_document", input: { doc_id: "R v X", query: "appeal" } }, JSON.stringify({ matches: [{ snippet: uncited }] }), docStore, docIndex),
     ];
@@ -195,12 +195,28 @@ describe("subagent run store", () => {
     );
     expect(multipleSources.result).not.toContain(uncited);
     expect(multipleSources.documents).toEqual([{ document_id: "doc-a", version_id: "v1" }]);
+    // A connector result that registered several sources keeps every one's reference.
+    const resolved = toolRecord(
+      { id: "resolve", name: "mcp_c1_resolve_reference", input: { reference: "R v X" } },
+      `{"result":{"documents":[{"text":${JSON.stringify(text)}},{"text":${JSON.stringify(text)}}]}}`, docStore,
+      { ...docIndex, "doc-3": { document_id: secondSource.document_id, filename: secondSource.title } },
+      ["doc-2", "doc-3"],
+    );
+    expect(resolved.result).not.toContain(uncited);
+    expect(resolved.documents).toEqual([]);
+    expect(JSON.parse(resolved.result)).toMatchObject({
+      ok: true,
+      external_sources: [
+        { document_id: external.document_id, title: "R v X", doc_id: "doc-2" },
+        { document_id: secondSource.document_id, title: "R v Y", doc_id: "doc-3" },
+      ],
+    });
     // An ordinary document, and a connector result that registered nothing, are recorded as before.
     expect(toolRecord({ id: "5", name: "read_document", input: { doc_id: "doc-0" } }, "lease text", docStore, docIndex)).toMatchObject({ result: "lease text", documents: [{ document_id: "doc-a", version_id: "v1" }] });
     expect(toolRecord({ id: "6", name: "mcp_slack_search", input: {} }, "{\"result\":[]}", docStore, docIndex).result).toBe("{\"result\":[]}");
     // A handle the store does not hold as a source redacts nothing and keeps the upload's reference.
-    expect(toolRecord({ id: "7", name: "mcp_c1_get_document", input: {} }, connectorResult, docStore, docIndex, "doc-0").result).toBe(connectorResult);
-    expect(toolRecord({ id: "8", name: "read_document", input: { doc_id: "doc-0" } }, "lease text", docStore, docIndex, "doc-0")).toMatchObject({
+    expect(toolRecord({ id: "7", name: "mcp_c1_get_document", input: {} }, connectorResult, docStore, docIndex, ["doc-0"]).result).toBe(connectorResult);
+    expect(toolRecord({ id: "8", name: "read_document", input: { doc_id: "doc-0" } }, "lease text", docStore, docIndex, ["doc-0"])).toMatchObject({
       result: "lease text",
       documents: [{ document_id: "doc-a", version_id: "v1" }],
     });

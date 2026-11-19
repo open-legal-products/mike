@@ -223,7 +223,7 @@ type SubagentSpawn = {
     onToolBatch: (
         calls: NormalizedToolCall[],
         results: NormalizedToolResult[],
-        externalSourceHandles: ReadonlyMap<string, string>,
+        externalSourceHandles: ReadonlyMap<string, readonly string[]>,
     ) => void;
     askParent: (question: unknown) => void;
 };

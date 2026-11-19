@@ -78,8 +78,8 @@ export function toolRecord(
     result: string,
     docStore: DocStore,
     docIndex: DocIndex,
-    /** The request-scoped source this call's result registered, if any. */
-    externalSourceHandle?: string,
+    /** The request-scoped sources this call's result registered, if any. */
+    externalSourceHandles: readonly string[] = [],
 ): SubagentRecord {
     // A project-wide search reads documents its input does not name.
     const named =
@@ -91,16 +91,19 @@ export function toolRecord(
         .filter((id): id is string => typeof id === "string")
         .map((id) => labelFor(id));
     // A provider's source text is never persisted: a connector result that
-    // registered one, or a read, search or fetch of one, is recorded as the
-    // source's reference. Such a source exists only in the request that read
-    // it, so it is not a document a continuation could recheck access to; the
-    // uploaded documents named beside it still are.
-    const candidate =
-        externalSourceHandle ??
-        labels.find((label) => label && docStore.get(label)?.external_source) ??
-        null;
-    const external = candidate ? docStore.get(candidate)?.external_source : undefined;
-    const externalLabel = external ? candidate : null;
+    // registered sources is recorded as their references, and a read, search
+    // or fetch of one as its reference. Such a source exists only in the
+    // request that read it, so it is not a document a continuation could
+    // recheck access to; the uploaded documents named beside it still are.
+    const sourceAt = (handle: string | null | undefined) => {
+        if (!handle) return [];
+        const document = docStore.get(handle)?.external_source;
+        return document ? [{ document, handle }] : [];
+    };
+    const registered = externalSourceHandles.flatMap(sourceAt);
+    const external = registered.length > 0
+        ? registered
+        : sourceAt(labels.find((label) => label && docStore.get(label)?.external_source));
     const documents = labels
         .filter((label) => !label || !docStore.get(label)?.external_source)
         .map((label) => {
@@ -112,7 +115,7 @@ export function toolRecord(
     return {
         tool: call.name,
         input: JSON.stringify(call.input).slice(0, MAX_INPUT_CHARS),
-        result: external ? externalSourceReference(external, externalLabel ?? undefined) : result,
+        result: external.length > 0 ? externalSourceReference(external) : result,
         // Without every document it read, a later turn could not recheck access.
         documents: documents.every((doc): doc is DocumentRef => doc !== undefined) ? documents : [],
     };

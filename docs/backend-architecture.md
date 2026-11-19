@@ -388,18 +388,19 @@ law, Legal Data Hunter documents) is a *source provider* in
   every other connector keeps `MAX_MCP_RESULT_CHARS`).
 - `sourceDocuments.providers.ts` is the registry. `getSourceDocument`
   dispatches a `GET /documents/:id` to the owning provider and deduplicates
-  concurrent fetches; `externalSourceFromMcpCall` asks every provider about a
-  successful connector call. No other code dispatches on a provider's
+  concurrent fetches; `externalSourcesFromMcpCall` asks every provider about a
+  successful connector call, which can carry several documents. No other code dispatches on a provider's
   identity; the engine's CourtListener tools predate the registry and keep
   their own case-citation handling, stamping the documents they emit through
   `stampSourceDocument`.
 - One `sourceDocuments.<provider>.ts` per provider holds the implementation:
   `sourceDocuments.courtlistener.ts` hydrates `case:*` ids;
   `sourceDocuments.legalDataHunter.ts` owns `mcp:*` ids, recognises complete
-  `get_document` results and reads a document again through the viewer's
-  connector with `executeMcpToolOnServer`.
+  `get_document` and `resolve_reference` results and reads a document again
+  through the viewer's connector with `get_document` via
+  `executeMcpToolOnServer`.
 
-The chat engine consumes providers only through the facade. A source a
+The chat engine consumes providers only through the facade. Each source a
 provider recognises in a connector result is registered for the request by
 `modules/chat/engine/tools/externalSources.ts` (`DocStore.external_source`
 plus `inline_text`), which makes it readable and searchable like an attachment

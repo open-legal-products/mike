@@ -31,7 +31,7 @@ import {
 } from "../../../../lib/mcpConnectors";
 import type { ExternalSource } from "../../../../lib/sourceDocuments";
 import {
-  externalSourceFromMcpCall,
+  externalSourcesFromMcpCall,
   mcpResultCharsFor,
 } from "../../../source-documents/sourceDocuments.service";
 import { externalSourceReference } from "./externalSources";
@@ -109,9 +109,9 @@ export async function runApprovedConnectorActions(args: {
   userId: string;
   orgId?: string | null;
   /**
-   * Receives a complete source document carried in an approved result, for
-   * the resumed request to register. Delivered in memory only: the stored
-   * event keeps its truncated result, never the document.
+   * Receives each complete source document carried in an approved result, in
+   * order, for the resumed request to register. Delivered in memory only: the
+   * stored event keeps the sources' references, never the documents.
    */
   onExternalSource?: (source: ExternalSource) => void;
 }): Promise<McpToolEvent[]> {
@@ -147,17 +147,17 @@ export async function runApprovedConnectorActions(args: {
     if (!approved.has(item.id)) continue;
     const execution = await executeApprovedItem(owner, item, db);
     const { content: result, event } = execution;
-    const source =
+    const sources =
       event.status === "ok" && execution.call
-        ? externalSourceFromMcpCall(execution.call)
-        : null;
-    if (source) args.onExternalSource?.(source);
+        ? externalSourcesFromMcpCall(execution.call)
+        : [];
+    for (const source of sources) args.onExternalSource?.(source);
     // These events are stored and streamed outside runLLMStream, so apply its
     // rule here: the user never sees a connector's raw error text. A result
-    // that carried a source document is stored as its reference only: the
+    // that carried source documents is stored as their references only: the
     // resumed request receives the text in memory above, and the provider's
     // text is never written into chat history.
-    const stored = source ? externalSourceReference(source.document) : result;
+    const stored = sources.length > 0 ? externalSourceReference(sources) : result;
     events.push({
       ...event,
       ...(event.error ? { error: TOOL_ERROR_MESSAGE } : {}),

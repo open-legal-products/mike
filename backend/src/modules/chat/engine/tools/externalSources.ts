@@ -50,35 +50,52 @@ export function quoteOccursVerbatim(text: string, quote: string): boolean {
   return !!quote.trim() && text.includes(quote);
 }
 
-/** Appended to a connector result that carried a citable source. */
+/**
+ * Appended to a connector result that carried citable sources, given their
+ * handles in the order the result lists the documents. Only handles are
+ * named: titles are provider text and stay inside the fenced result.
+ */
 export function externalSourceCitationHint(
-  handle: string,
+  handles: readonly string[],
   truncated: boolean | undefined,
 ): string {
-  let hint = `\n\nThis result is a complete source document, available in this chat as doc_id "${handle}". Cite it with that doc_id and quotes copied exactly from its text.`;
+  const quoted = handles.map((handle) => `"${handle}"`);
+  if (quoted.length === 1) {
+    let hint = `\n\nThis result is a complete source document, available in this chat as doc_id ${quoted[0]}. Cite it with that doc_id and quotes copied exactly from its text.`;
+    if (truncated) {
+      hint += ` The result above was cut off before the end of the document. Call read_document with doc_id ${quoted[0]} to read the full text before relying on or quoting any part not shown above.`;
+    }
+    return hint;
+  }
+  const list = `${quoted.slice(0, -1).join(", ")} and ${quoted[quoted.length - 1]}`;
+  let hint = `\n\nThis result contains ${quoted.length} complete source documents, available in this chat as doc_id ${list}, in the order they appear above. Cite each with its own doc_id and quotes copied exactly from its text.`;
   if (truncated) {
-    hint += ` The result above was cut off before the end of the document. Call read_document with doc_id "${handle}" to read the full text before relying on or quoting any part not shown above.`;
+    hint += " The result above was cut off before the end. Call read_document with a document's doc_id to read its full text before relying on or quoting any part not shown above.";
   }
   return hint;
 }
 
+const REFERENCE_NOTE =
+  "Source text is not stored; it is read again from the provider when the source is opened.";
+
 /**
- * What is kept in place of an external source's text wherever a tool result
- * is persisted (a subagent's transcript, an approval's stored result): the
- * reference only. The text stays in memory for the request and is read again
- * from the provider when the source is opened.
+ * What is kept in place of external sources' text wherever a tool result is
+ * persisted (a subagent's transcript, an approval's stored result): their
+ * references only, under `external_source` for one source and
+ * `external_sources` for several. The text stays in memory for the request
+ * and is read again from the provider when a source is opened.
  */
 export function externalSourceReference(
-  document: SourceDocument,
-  handle?: string,
+  sources: readonly { document: SourceDocument; handle?: string }[],
 ): string {
-  return JSON.stringify({
-    ok: true,
-    external_source: {
-      document_id: document.document_id,
-      title: document.title,
-      ...(handle ? { doc_id: handle } : {}),
-      note: "Source text is not stored; it is read again from the provider when the source is opened.",
-    },
-  });
+  const references = sources.map(({ document, handle }) => ({
+    document_id: document.document_id,
+    title: document.title,
+    ...(handle ? { doc_id: handle } : {}),
+  }));
+  return JSON.stringify(
+    references.length === 1
+      ? { ok: true, external_source: { ...references[0], note: REFERENCE_NOTE } }
+      : { ok: true, external_sources: references, note: REFERENCE_NOTE },
+  );
 }

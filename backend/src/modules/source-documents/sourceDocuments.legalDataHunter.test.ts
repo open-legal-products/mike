@@ -14,6 +14,7 @@ vi.mock("../../lib/personalOrgs", () => ({ teamOrgIdOf: mocks.teamOrgIdOf }));
 
 import {
   extractLegalDataHunterSource,
+  extractLegalDataHunterSources,
   LEGAL_DATA_HUNTER_CONNECT_DETAIL,
   LEGAL_DATA_HUNTER_RESULT_CHARS,
   LEGAL_DATA_HUNTER_URL,
@@ -116,6 +117,103 @@ describe("Legal Data Hunter source documents", () => {
   });
 });
 
+describe("Legal Data Hunter resolve_reference results", () => {
+  const resolveContext = {
+    connectorId: "connector-1",
+    serverUrl: LEGAL_DATA_HUNTER_URL,
+    toolName: "resolve_reference",
+    arguments: { reference: "547 U.S. 388 (2006)", hint_country: "US", hint_type: "case_law", include_full_text: true },
+  };
+  // The live endpoint's shape: a JSON text block without structured content,
+  // and no `text_truncated` on a full text.
+  const ebay = {
+    source: "US/CaselawAccessProject",
+    source_id: "us_547/html/0388-01.html",
+    data_type: "case_law",
+    title: "EBAY INC. et al. v. MERCEXCHANGE, L. L. C.",
+    text: "According to well-established principles of equity, a plaintiff seeking a permanent injunction must satisfy a four-factor test before a court may grant such relief.",
+    url: "https://www.courtlistener.com/c/us/547/388/",
+    country: "US",
+    court: "US courts (Harvard Caselaw Access Project)",
+    court_tier: 1,
+    meta: { case_number: "05-130" },
+  };
+  const statute = {
+    source: "US/USCode", source_id: "usc-2024-t35-s283", data_type: "legislation",
+    title: "§283. Injunction",
+    text: "The several courts having jurisdiction of cases under this title may grant injunctions in accordance with the principles of equity.",
+    url: "https://uscode.house.gov/view.xhtml?req=granuleid:USC-prelim-title35-section283",
+  };
+  const resolved = (documents: unknown) => ({
+    content: [{ type: "text", text: JSON.stringify({ resolved: true, engine: "v2", match_type: "exact", documents, elapsed_ms: 2686 }) }],
+  });
+  const sources = (result: unknown, overrides: Partial<typeof resolveContext> = {}) =>
+    extractLegalDataHunterSources(result, { ...resolveContext, ...overrides });
+
+  it("makes a complete resolved document the same source get_document would", () => {
+    const fromGetDocument = extractLegalDataHunterSource(
+      { content: [{ type: "text", text: JSON.stringify(ebay) }] },
+      { ...resolveContext, toolName: "get_document", arguments: { source: ebay.source, source_id: ebay.source_id, include_full_text: true } },
+    );
+    expect(fromGetDocument).not.toBeNull();
+    expect(sources(resolved([ebay]))).toEqual([fromGetDocument]);
+    expect(sources({ structuredContent: { resolved: true, documents: [ebay] } })).toEqual([fromGetDocument]);
+    // Bound to the identity LDH reports, which a saved citation re-reads.
+    expect(sources(resolved([ebay]))[0].document).toMatchObject({
+      document_id: legalDataHunterDocumentId("connector-1", ebay.source, ebay.source_id),
+      type: "case",
+      actions: [{ type: "link", url: ebay.url }],
+    });
+  });
+
+  it("makes each of several complete documents a source, in the order listed", () => {
+    expect(sources(resolved([ebay, statute])).map((source) => [source.document.title, source.document.type, source.text])).toEqual([
+      [ebay.title, "case", ebay.text],
+      [statute.title, "legislation", statute.text],
+    ]);
+  });
+
+  it.each([
+    ["a snippet", [{ ...ebay, text_truncated: true, full_text_size: 18_309 }]],
+    ["a snippet beside a complete document", [statute, { ...ebay, text_truncated: true }]],
+    ["an unusable document beside a complete one", [ebay, { ...statute, url: "http://example.com/law" }]],
+    ["a document over the source limit", [ebay, { ...statute, text: "a".repeat(1_000_001) }]],
+    ["the same document twice", [ebay, { ...ebay, text: `${ebay.text} Amended.` }]],
+    ["a non-object entry", [ebay, "not a document"]],
+  ])("registers nothing for a result with %s", (_label, documents) => {
+    expect(sources(resolved(documents))).toEqual([]);
+  });
+
+  it("registers nothing for an unresolved, empty, malformed or failed result", () => {
+    for (const result of [
+      { content: [{ type: "text", text: JSON.stringify({ resolved: false, engine: "v2", match_type: "not_found", elapsed_ms: 2000 }) }] },
+      resolved([]),
+      resolved("not a list"),
+      resolved({ 0: ebay }),
+      { content: [{ type: "text", text: "not JSON" }] },
+      { ...resolved([ebay]), isError: true },
+      // A get_document payload is not a resolved list.
+      { content: [{ type: "text", text: JSON.stringify(ebay) }] },
+    ]) {
+      expect(sources(result)).toEqual([]);
+    }
+  });
+
+  it("accepts only the canonical endpoint's resolve_reference and get_document tools", () => {
+    for (const serverUrl of ["https://legaldatahunter.com.evil.test/mcp", "https://legaldatahunter.com/mcp?variant=other", "http://legaldatahunter.com/mcp"]) {
+      expect(sources(resolved([ebay]), { serverUrl })).toEqual([]);
+    }
+    expect(sources(resolved([ebay]), { toolName: "search" })).toEqual([]);
+    // The single-document extractor, which the panel re-read uses, stays get_document only.
+    expect(extractLegalDataHunterSource(resolved([ebay]), resolveContext)).toBeNull();
+  });
+
+  it("keeps get_document results bound to the requested identity", () => {
+    expect(extractLegalDataHunterSources({ structuredContent: payload }, context)).toEqual([extract()]);
+    expect(extractLegalDataHunterSources({ structuredContent: payload }, { ...context, arguments: { ...context.arguments, source_id: "other" } })).toEqual([]);
+  });
+});
+
 describe("Legal Data Hunter document ids", () => {
   it.each([
     ["legifrance", "JORFTEXT0001"],
@@ -213,6 +311,25 @@ describe("Legal Data Hunter as a source provider", () => {
     if (!result.ok) throw new Error(result.kind);
     expect(result.document.document_id).toBe(documentId);
     expect(result.document.subdocuments).toEqual([{ document_id: `${documentId}:text`, title: payload.title, type: "html", text: payload.text }]);
+  });
+
+  it("reopens a source resolved by resolve_reference through get_document", async () => {
+    const resolvedCall = call({
+      toolName: "resolve_reference",
+      arguments: { reference: "art. 1103 code civil", hint_country: "FR", include_full_text: true },
+      result: { content: [{ type: "text", text: JSON.stringify({ resolved: true, match_type: "exact", documents: [payload] }) }] },
+    });
+    const [source] = legalDataHunterSourceProvider.fromMcpCall?.(resolvedCall) ?? [];
+    expect(source?.document.document_id).toBe(documentId);
+    mocks.executeMcpToolOnServer.mockResolvedValue(okResult(call()));
+    const result = await legalDataHunterSourceProvider.fetch({ db, userId: "u1", documentId: source.document.document_id, orgId: null });
+    if (!result.ok) throw new Error(result.kind);
+    expect(mocks.executeMcpToolOnServer).toHaveBeenCalledWith(
+      { userId: "u1", orgId: "org-1" },
+      { serverUrl: LEGAL_DATA_HUNTER_URL, toolName: "get_document", arguments: { ...args, include_full_text: true }, preferConnectorId: "c1" },
+      db,
+    );
+    expect(result.document.subdocuments?.[0]).toMatchObject({ document_id: `${documentId}:text`, text: source.text });
   });
 
   it("treats a failed or unusable answer as an upstream error and a foreign id as not found", async () => {

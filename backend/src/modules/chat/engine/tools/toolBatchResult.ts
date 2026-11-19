@@ -42,11 +42,12 @@ export type ToolCallBatchResult = {
   caseCitationEvents: CaseCitationEvent[];
   mcpEvents: McpToolEvent[];
   /**
-   * The request-scoped source each connector result registered, by tool call
-   * id (see tools/externalSources.ts). A recorder that persists tool results
-   * keeps the source's reference in place of that result's text.
+   * The request-scoped sources each connector result registered, by tool call
+   * id, in the order the result lists them (see tools/externalSources.ts). A
+   * recorder that persists tool results keeps the sources' references in
+   * place of that result's text.
    */
-  externalSourceHandles?: Map<string, string>;
+  externalSourceHandles?: Map<string, string[]>;
 };
 
 /** An empty result, to pass to `runToolCalls` as its `results` option. */

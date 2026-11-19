@@ -34,17 +34,20 @@ export function isExternalSourceDocumentId(documentId: string): boolean {
 }
 
 /**
- * A complete document carried in a successful MCP tool call, from whichever
- * provider recognises the call. Providers bind the document to the canonical
- * server and the requested identity, so an unrelated server cannot plant a
+ * The complete documents carried in a successful MCP tool call, from
+ * whichever provider recognises the call, in the order the result lists them.
+ * Providers bind each document to the canonical server and to the identity it
+ * was requested or resolved under, so an unrelated server cannot plant a
  * citable source.
  */
-export function externalSourceFromMcpCall(call: McpCallRecord): ExternalSource | null {
+export function externalSourcesFromMcpCall(call: McpCallRecord): ExternalSource[] {
   for (const provider of SOURCE_PROVIDERS) {
-    const source = provider.fromMcpCall?.(call);
-    if (source) return { ...source, document: stamped(source.document, provider) };
+    const sources = provider.fromMcpCall?.(call) ?? [];
+    if (sources.length > 0) {
+      return sources.map((source) => ({ ...source, document: stamped(source.document, provider) }));
+    }
   }
-  return null;
+  return [];
 }
 
 /** The panel document with its provider's identity, so the client needs no id rules. */

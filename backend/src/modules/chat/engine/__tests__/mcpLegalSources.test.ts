@@ -32,7 +32,7 @@ import { readDocumentContent } from "../tools/documentOps";
 import { verifyCitations } from "../verifyCitations";
 import { runLLMStream } from "../streaming";
 import { extractCitations } from "../contextBuilders";
-import { externalSourceFromMcpCall, getSourceDocument, LEGAL_DATA_HUNTER_CONNECT_DETAIL } from "../../../source-documents/sourceDocuments.service";
+import { externalSourcesFromMcpCall, getSourceDocument, LEGAL_DATA_HUNTER_CONNECT_DETAIL } from "../../../source-documents/sourceDocuments.service";
 import { extractLegalDataHunterSource, legalDataHunterDocumentId } from "../../../source-documents/sourceDocuments.legalDataHunter";
 import { registerExternalSource } from "../tools/externalSources";
 
@@ -87,8 +87,8 @@ function fixture() {
   } as unknown as Db;
   const docIndex: DocIndex = { "doc-0": { document_id: "existing", filename: "existing.pdf" } };
   const docStore: DocStore = new Map([["doc-1", { filename: "inline.txt", storage_path: "", file_type: "text/plain", inline_text: "unrelated" }]]);
-  const dispatch = (approvals = false, userId = "u1") => runToolCalls(
-    [{ id: "call-1", function: { name: tool.openai_tool_name, arguments: JSON.stringify(args) } }],
+  const dispatch = (approvals = false, userId = "u1", input: Record<string, unknown> = args) => runToolCalls(
+    [{ id: "call-1", function: { name: tool.openai_tool_name, arguments: JSON.stringify(input) } }],
     docStore, userId, db, () => {}, undefined, undefined, docIndex,
     undefined, undefined, undefined, undefined, undefined, undefined,
     { connectorApprovals: approvals },
@@ -127,7 +127,7 @@ describe("MCP source → dispatcher → exact-quote citation", () => {
   it("reports the handle it registered, so recorders can keep the reference instead of the text", async () => {
     const f = fixture();
     const result = await f.dispatch();
-    expect(result.externalSourceHandles).toEqual(new Map([["call-1", "doc-2"]]));
+    expect(result.externalSourceHandles).toEqual(new Map([["call-1", ["doc-2"]]]));
     expect(f.docStore.get("doc-2")?.external_source).toMatchObject({ provider: "legal_data_hunter", quote_verification: "exact" });
   });
   it("re-verifies an exact provider's quotes without tolerance and an upload's with it", async () => {
@@ -300,7 +300,7 @@ describe("MCP source → dispatcher → exact-quote citation", () => {
     if (plan.type !== "approval") throw new Error("expected approval");
     const result = await executeApprovedMcpToolCall(owner, { ...plan.item, id: "approved" }, f.db);
     expect(result.event).toMatchObject({ status: "ok", approval_id: "approved" });
-    expect(externalSourceFromMcpCall(result.call!)).toMatchObject({ text: payload.text, document: { type: "legislation" } });
+    expect(externalSourcesFromMcpCall(result.call!)).toMatchObject([{ text: payload.text, document: { type: "legislation" } }]);
     expect(mocks.callTool).toHaveBeenCalledExactlyOnceWith({ name: "get_document", arguments: args }, undefined, expect.any(Object));
     f.connector.server_url = "https://replacement.example.com/mcp";
     expect((await executeApprovedMcpToolCall(owner, { ...plan.item, id: "approved" }, f.db)).call).toBeUndefined();
@@ -332,6 +332,121 @@ describe("MCP source → dispatcher → exact-quote citation", () => {
     expect(JSON.parse(events[0].result ?? "")).toMatchObject({
       ok: true,
       external_source: { document_id: legalDataHunterDocumentId("c1", args.source, args.source_id), title: payload.title },
+    });
+  });
+});
+
+describe("MCP resolve_reference → dispatcher → exact-quote citation", () => {
+  const reference = { reference: "547 U.S. 388 (2006)", hint_country: "US", hint_type: "case_law", include_full_text: true };
+  const ebay = {
+    source: "US/CaselawAccessProject", source_id: "us_547/html/0388-01.html", data_type: "case_law",
+    title: "EBAY INC. et al. v. MERCEXCHANGE, L. L. C.",
+    text: "According to well-established principles of equity, a plaintiff seeking a permanent injunction must satisfy a four-factor test before a court may grant such relief.",
+    url: "https://www.courtlistener.com/c/us/547/388/",
+  };
+  const statute = {
+    source: "US/USCode", source_id: "usc-2024-t35-s283", data_type: "legislation",
+    title: "§283. Injunction",
+    text: "The several courts having jurisdiction of cases under this title may grant injunctions in accordance with the principles of equity.",
+    url: "https://uscode.house.gov/view.xhtml?req=granuleid:USC-prelim-title35-section283",
+  };
+  const ebayId = legalDataHunterDocumentId("c1", ebay.source, ebay.source_id);
+  // LDH answers in a JSON text block without structured content; get_document
+  // returns the same document resolve_reference listed.
+  const answer = (value: unknown) => ({ content: [{ type: "text", text: JSON.stringify(value) }] });
+  function resolving(documents: Record<string, unknown>[]) {
+    const f = fixture();
+    f.tool.tool_name = "resolve_reference";
+    f.tool.openai_tool_name = "mcp_c1_resolve_reference";
+    mocks.callTool.mockImplementation(async ({ name, arguments: input }: { name: string; arguments: Record<string, unknown> }) =>
+      name === "resolve_reference"
+        ? answer({ resolved: true, engine: "v2", match_type: "exact", documents, elapsed_ms: 2_000 })
+        : answer(documents.find((d) => d.source === input.source && d.source_id === input.source_id)));
+    return f;
+  }
+  const cite = (f: ReturnType<typeof fixture>, doc_id: string, quote: string) =>
+    createCitation(parseCitations(`<CITATIONS>${JSON.stringify([{ ref: 1, doc_id, quote }])}</CITATIONS>`)[0], f.docIndex, undefined, f.docStore);
+
+  it("cites a judgment read only through resolve_reference, and reopens it with get_document", async () => {
+    const f = resolving([ebay]);
+    const quote = "a plaintiff seeking a permanent injunction must satisfy a four-factor test";
+    mocks.stream.mockImplementationOnce(async (params) => {
+      if (!params.runTools) throw new Error("runTools missing");
+      const results = await params.runTools([{ id: "call-1", name: f.tool.openai_tool_name, input: reference }]);
+      expect(JSON.stringify(results)).toContain('available in this chat as doc_id \\"doc-2\\"');
+      const fullText = `The Court required the four-factor test [1].<CITATIONS>${JSON.stringify([{ ref: 1, doc_id: "doc-2", quote }])}</CITATIONS>`;
+      params.callbacks?.onContentDelta?.(fullText);
+      return { fullText };
+    });
+    const result = await runLLMStream({ model: "gemini-3.8-flash", apiMessages: [{ role: "user", content: "Quote eBay v. MercExchange" }], docIndex: f.docIndex, docStore: f.docStore, userId: "u1", db: f.db, write: () => {} });
+    expect(result.citations).toMatchObject([{
+      doc_id: "doc-2", verified: true,
+      document: {
+        document_id: ebayId, type: "case", provider: "legal_data_hunter", quote_verification: "exact",
+        actions: [{ type: "link", url: ebay.url }],
+        subdocuments: [{ document_id: `${ebayId}:text` }],
+        quotes: [{ quote, verification: { verified: true } }],
+      },
+    }]);
+    expect(JSON.stringify(result.citations)).not.toContain(ebay.text);
+    expect(mocks.callTool).toHaveBeenCalledExactlyOnceWith({ name: "resolve_reference", arguments: reference }, undefined, expect.any(Object));
+
+    // The saved citation reopens through the same connector's get_document.
+    f.tool.tool_name = "get_document";
+    const reopened = await getSourceDocument(f.db, { userId: "u1", documentId: ebayId, orgId: null });
+    expect(reopened).toMatchObject({ ok: true, document: { document_id: ebayId, subdocuments: [{ document_id: `${ebayId}:text`, text: ebay.text }] } });
+    expect(mocks.callTool).toHaveBeenLastCalledWith(
+      { name: "get_document", arguments: { source: ebay.source, source_id: ebay.source_id, include_full_text: true } },
+      undefined,
+      expect.any(Object),
+    );
+  });
+
+  it("registers every document a resolved citation lists under its own handle, in order", async () => {
+    const f = resolving([ebay, statute]);
+    const result = await f.dispatch(false, "u1", reference);
+    expect(result.externalSourceHandles).toEqual(new Map([["call-1", ["doc-2", "doc-3"]]]));
+    expect((result.toolResults[0] as { content: string }).content).toContain('available in this chat as doc_id "doc-2" and "doc-3", in the order they appear above');
+    expect(f.docStore.get("doc-2")).toMatchObject({ inline_text: ebay.text, external_source: { type: "case", provider: "legal_data_hunter" } });
+    expect(f.docStore.get("doc-3")).toMatchObject({ inline_text: statute.text, external_source: { type: "legislation" } });
+    expect(cite(f, "doc-3", "may grant injunctions in accordance with the principles of equity")).toMatchObject({ verified: true, document: { title: statute.title } });
+    // Each quote verifies against its own document only.
+    expect(cite(f, "doc-2", "may grant injunctions in accordance with the principles of equity")).toBeNull();
+  });
+
+  it.each([
+    ["snippets", [{ ...ebay, text: ebay.text.slice(0, 40), text_truncated: true, full_text_size: 18_309 }]],
+    ["a snippet beside a full text", [statute, { ...ebay, text_truncated: true }]],
+  ])("registers nothing when resolve_reference returns %s", async (_label, documents) => {
+    const f = resolving(documents);
+    const result = await f.dispatch(false, "u1", { ...reference, include_full_text: false });
+    expect(result.mcpEvents[0].status).toBe("ok");
+    expect(Object.keys(f.docIndex)).toEqual(["doc-0"]);
+    expect(result.externalSourceHandles ?? new Map()).toEqual(new Map());
+    expect((result.toolResults[0] as { content: string }).content).not.toContain("available in this chat as doc_id");
+  });
+
+  it("stores only the references of the sources an approved resolve_reference returned", async () => {
+    const f = resolving([ebay, statute]);
+    f.connector.read_only = false;
+    f.tool.annotations.readOnlyHint = false;
+    f.tool.requires_confirmation = true;
+    const plan = await planMcpToolCall({ userId: "u1", orgId: null }, f.tool.openai_tool_name, reference, f.db);
+    if (plan.type !== "approval") throw new Error("expected approval");
+    f.row.content = [
+      { type: "ask_inputs", event_id: "ask1", items: [{ ...plan.item, id: "approved" }] },
+      { type: "ask_inputs_response", ask_event_id: "ask1", responses: [{ id: "approved", kind: "approval", decision: "approve" }] },
+    ];
+    const onExternalSource = vi.fn();
+    const events = await runApprovedConnectorActions({ db: f.db, chatId: "chat1", messageId: "a1", askEventId: "ask1", userId: "u1", onExternalSource });
+    expect(onExternalSource.mock.calls.map(([source]) => source.text)).toEqual([ebay.text, statute.text]);
+    for (const text of [ebay.text, statute.text]) expect(JSON.stringify(f.row)).not.toContain(text);
+    expect(JSON.parse(events[0].result ?? "")).toMatchObject({
+      ok: true,
+      external_sources: [
+        { document_id: ebayId, title: ebay.title },
+        { document_id: legalDataHunterDocumentId("c1", statute.source, statute.source_id), title: statute.title },
+      ],
     });
   });
 });
