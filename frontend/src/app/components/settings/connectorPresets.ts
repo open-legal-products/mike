@@ -8,6 +8,7 @@ export const CONNECTOR_PRESETS: ReadonlyArray<{
     { name: "Linear", serverUrl: "https://mcp.linear.app/mcp" },
     { name: "Lawve", serverUrl: "https://mcp.lawve.ai" },
     { name: "Legal Data Hunter", serverUrl: "https://legaldatahunter.com/mcp" },
+    { name: "LawgiSkill", serverUrl: "https://connect.lawgi.tech/mcp" },
 ];
 
 /**
