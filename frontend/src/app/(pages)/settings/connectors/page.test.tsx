@@ -727,6 +727,49 @@ describe("ConnectorsPage suggested connectors", () => {
         ).toBeNull();
     });
 
+    it("adds the LawgiSkill DCR preset with one click", async () => {
+        const lawgiskill = makeSummary({
+            id: "lawgiskill-1",
+            name: "LawgiSkill",
+            serverUrl: "https://connect.lawgi.tech/mcp",
+            authType: "oauth",
+        });
+        vi.mocked(createMcpConnector).mockResolvedValue({
+            connector: lawgiskill,
+            oauthRequired: true,
+        });
+        vi.mocked(refreshMcpConnectorTools).mockResolvedValue(lawgiskill);
+
+        render(<ConnectorsPage />);
+        await act(async () => {
+            await flushMicrotasks();
+        });
+
+        await act(async () => {
+            fireEvent.click(
+                screen.getByRole("button", {
+                    name: "Add LawgiSkill connector",
+                }),
+            );
+            await flushMicrotasks();
+        });
+
+        expect(createMcpConnector).toHaveBeenCalledWith(
+            {
+                name: "LawgiSkill",
+                serverUrl: "https://connect.lawgi.tech/mcp",
+                bearerToken: null,
+            },
+            "personal",
+        );
+        expect(startMcpConnectorOAuth).toHaveBeenCalledWith("lawgiskill-1");
+        expect(refreshMcpConnectorTools).toHaveBeenCalledTimes(1);
+        // Once installed, the preset leaves Discover.
+        expect(
+            screen.queryByRole("button", { name: "Add LawgiSkill connector" }),
+        ).toBeNull();
+    });
+
     it("adds the Linear DCR preset with one click", async () => {
         const linear = makeSummary({
             id: "linear-1",

@@ -243,6 +243,19 @@ function connectorPlaceholderClassName(connector: McpConnectorSummary) {
 }
 
 function ConnectorBrandIcon({ name }: { name: string }) {
+  if (name === "LawgiSkill") {
+    return (
+      <Image
+        src="/icons/integrations/lawgiskill.png"
+        alt=""
+        aria-hidden="true"
+        width={20}
+        height={20}
+        unoptimized
+        className="h-5 w-5 object-contain"
+      />
+    );
+  }
   if (name === "Legal Data Hunter") {
     return <Scale className="h-5 w-5 text-foreground" aria-hidden="true" />;
   }

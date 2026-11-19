@@ -51,7 +51,7 @@ organization can supply a CourtListener token for its members; see
 Most hosted MCP servers support OAuth Dynamic Client Registration (DCR). A
 user clicks **Add** in Discover and completes the provider's consent screen;
 the Mike deployment does not need provider-specific credentials. Airtable,
-Lawve, Legal Data Hunter, Linear, and Notion use this pathway.
+LawgiSkill, Lawve, Legal Data Hunter, Linear, and Notion use this pathway.
 
 Servers that use a bearer token or custom headers can be added through
 **+ Custom**. Credentials are encrypted at rest. Failed registration does not

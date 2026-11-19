@@ -15,3 +15,7 @@ Project's CourtListener repository
 (`cl/assets/static-global/svg/favicon.svg` at
 https://github.com/freelawproject/courtlistener). The CourtListener mark
 belongs to Free Law Project.
+
+`lawgiskill.png` is LawgiSkill's 64×64 favicon, unmodified, from
+https://lawgi.tech/favicon-64.png. The LawgiSkill mark belongs to Online
+Solution Attorney SRL.
