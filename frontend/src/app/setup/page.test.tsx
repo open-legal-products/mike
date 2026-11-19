@@ -13,6 +13,7 @@ const { setupFirstAccount, refreshSession, replace, push, signInOptions } = vi.h
         current: {
             options: { google: false, sso: false, setupRequired: true, signup: true },
             loaded: true,
+            providersKnown: true,
         },
     },
 }));
@@ -52,6 +53,7 @@ describe("SetupPage", () => {
         signInOptions.current = {
             options: { google: false, sso: false, setupRequired: true, signup: true },
             loaded: true,
+            providersKnown: true,
         };
         setupFirstAccount.mockResolvedValue({ user: { id: "u1" } });
         refreshSession.mockResolvedValue(undefined);
@@ -90,6 +92,7 @@ describe("SetupPage", () => {
         signInOptions.current = {
             options: { google: false, sso: false, setupRequired: false, signup: true },
             loaded: true,
+            providersKnown: true,
         };
         render(<SetupPage />);
         expect(replace).toHaveBeenCalledWith("/login");
