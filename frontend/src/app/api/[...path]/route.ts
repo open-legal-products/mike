@@ -1,5 +1,6 @@
 import { BACKEND_REPORTING_OWNER } from "@mike/client";
 import { randomUUID } from "node:crypto";
+import { backendOrigin } from "@/app/lib/backendOrigin";
 import { reportError } from "@/app/lib/errorReporting";
 import { diagnosticErrorTags, diagnosticRoute } from "@mike/client";
 import type { NextRequest } from "next/server";
@@ -13,19 +14,6 @@ import {
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
-
-function backendOrigin() {
-    const configuredUrl = process.env.API_BASE_URL?.trim();
-    if (!configuredUrl && process.env.NODE_ENV === "production") {
-        throw new Error("API_BASE_URL is required at runtime.");
-    }
-
-    const backendUrl = new URL(configuredUrl || "http://localhost:3001");
-    if (!["http:", "https:"].includes(backendUrl.protocol)) {
-        throw new Error("API_BASE_URL must use http or https.");
-    }
-    return backendUrl.toString().replace(/\/$/, "");
-}
 
 type RouteContext = { params: Promise<{ path: string[] }> };
 
