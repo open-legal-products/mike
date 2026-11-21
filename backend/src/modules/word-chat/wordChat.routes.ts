@@ -887,7 +887,8 @@ wordChatRouter.post("/", requireAuth, asyncRoute(async (req, res) => {
       reasoning: selectedReasoningLevel,
       apiKeys,
       // The chat's organization: its keys and models, its memory, where
-      // generated documents are filed, and no personal connectors in it.
+      // generated documents are filed, and the user's connections for that
+      // workspace rather than their Personal ones.
       orgId,
       signal: stream.signal,
       conversationId: persistChat ? chatId : null,
