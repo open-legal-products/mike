@@ -108,8 +108,7 @@ export default function LoginPage() {
     }
     const [loginMode, setLoginMode] = useState<"account" | "guest" | null>(null);
     const [guest, setGuest] = useState<GuestCredentials | null>(null);
-    const { options: signInOptions, loaded: signInOptionsLoaded } =
-        useSignInOptions();
+    const { options: signInOptions, providersKnown } = useSignInOptions();
 
     useEffect(() => {
         if (!authLoading && isAuthenticated) {
@@ -124,8 +123,10 @@ export default function LoginPage() {
 
     // Offer only the providers this deployment has configured, and none
     // until it has said which, so a button never appears and then vanishes.
-    const showGoogle = signInOptionsLoaded && signInOptions.google;
-    const showSso = signInOptionsLoaded && signInOptions.sso;
+    // The server's hint (login/layout.tsx) normally says so before the first
+    // paint, which keeps the card from growing once the browser has asked.
+    const showGoogle = providersKnown && signInOptions.google;
+    const showSso = providersKnown && signInOptions.sso;
 
     useEffect(() => {
         let cancelled = false;

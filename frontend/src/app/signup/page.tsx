@@ -95,9 +95,12 @@ function SignupContent() {
     const isAccountCreatedPreview =
         process.env.NODE_ENV !== "production" &&
         searchParams.get("preview") === "account-created";
-    const { options: signInOptions, loaded: signInOptionsLoaded } =
-        useSignInOptions();
-    const showGoogle = signInOptionsLoaded && signInOptions.google;
+    const {
+        options: signInOptions,
+        loaded: signInOptionsLoaded,
+        providersKnown,
+    } = useSignInOptions();
+    const showGoogle = providersKnown && signInOptions.google;
 
     // A new deployment has no accounts yet: its first account is created on
     // the setup screen, which needs no confirmation email.
